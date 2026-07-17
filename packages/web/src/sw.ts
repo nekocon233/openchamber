@@ -25,6 +25,38 @@ type PushPayload = {
   badge?: string;
 };
 
+type NotificationData = {
+  url?: string;
+  sessionId?: string;
+  type?: string;
+};
+
+const SESSION_TAG_PREFIXES = ['ready-', 'error-', 'question-', 'permission-', 'goal-'] as const;
+
+const getNotificationSessionId = (data: NotificationData | null, tag: string): string | undefined => {
+  const explicitSessionId = data?.sessionId?.trim();
+  if (explicitSessionId) return explicitSessionId;
+
+  const prefix = SESSION_TAG_PREFIXES.find((candidate) => tag.startsWith(candidate));
+  if (!prefix) return undefined;
+
+  const taggedSessionId = tag.slice(prefix.length).split(':', 1)[0]?.trim();
+  return taggedSessionId || undefined;
+};
+
+const getNotificationTargetUrl = (data: NotificationData | null, tag: string): string | null => {
+  const sessionId = getNotificationSessionId(data, tag);
+  const rawUrl = data?.url?.trim() || (sessionId ? `/?session=${encodeURIComponent(sessionId)}` : '');
+  if (!rawUrl) return null;
+
+  try {
+    const target = new URL(rawUrl, self.location.origin);
+    return target.origin === self.location.origin ? target.href : null;
+  } catch {
+    return null;
+  }
+};
+
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
 });
@@ -64,8 +96,36 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
-  const data = (event.notification.data ?? null) as { url?: string } | null;
-  const url = data?.url ?? '/';
+  const data = (event.notification.data ?? null) as NotificationData | null;
+  const targetUrl = getNotificationTargetUrl(data, event.notification.tag ?? '');
 
-  event.waitUntil(self.clients.openWindow(url));
+  event.waitUntil((async () => {
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const orderedClients = [
+      ...clients.filter((client) => client.focused),
+      ...clients.filter((client) => !client.focused && client.visibilityState === 'visible'),
+      ...clients.filter((client) => !client.focused && client.visibilityState !== 'visible'),
+    ];
+
+    for (const candidate of orderedClients) {
+      let client = candidate;
+      if (targetUrl) {
+        try {
+          client = await candidate.navigate(targetUrl) ?? candidate;
+        } catch {
+          // Uncontrolled clients may reject navigation but can still be focused.
+        }
+      }
+
+      try {
+        await client.focus();
+        return;
+      } catch {
+        // The window may have closed after matchAll; try the next one.
+      }
+    }
+
+    const fallbackUrl = targetUrl ?? new URL('/', self.location.origin).href;
+    await self.clients.openWindow(fallbackUrl);
+  })());
 });

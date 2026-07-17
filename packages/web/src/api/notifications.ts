@@ -96,6 +96,17 @@ const getNotificationRegistration = async (): Promise<ServiceWorkerRegistration 
   }
 };
 
+const getNotificationData = (payload?: NotificationPayload): Record<string, string> | undefined => {
+  const sessionId = payload?.sessionId?.trim();
+  if (!sessionId) return undefined;
+
+  return {
+    url: `/?session=${encodeURIComponent(sessionId)}`,
+    sessionId,
+    ...(payload?.kind ? { type: payload.kind } : {}),
+  };
+};
+
 const notifyWithServiceWorker = async (payload?: NotificationPayload): Promise<boolean> => {
   const registration = await getNotificationRegistration();
   if (!registration || typeof registration.showNotification !== 'function') {
@@ -106,6 +117,7 @@ const notifyWithServiceWorker = async (payload?: NotificationPayload): Promise<b
     await registration.showNotification(payload?.title ?? 'OpenChamber', {
       body: payload?.body,
       tag: payload?.tag,
+      data: getNotificationData(payload),
     });
     return true;
   } catch (error) {

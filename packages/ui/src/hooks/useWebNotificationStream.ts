@@ -12,7 +12,7 @@ const isFocused = () => {
   return document.visibilityState === 'visible' && document.hasFocus();
 };
 
-const toNotificationPayload = (value: unknown): NotificationPayload | null => {
+export const toNotificationPayload = (value: unknown): NotificationPayload | null => {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const properties = record.properties && typeof record.properties === 'object'
@@ -23,6 +23,10 @@ const toNotificationPayload = (value: unknown): NotificationPayload | null => {
     title: typeof properties.title === 'string' ? properties.title : undefined,
     body: typeof properties.body === 'string' ? properties.body : undefined,
     tag: typeof properties.tag === 'string' ? properties.tag : undefined,
+    kind: typeof properties.kind === 'string' ? properties.kind : undefined,
+    sessionId: typeof properties.sessionId === 'string' ? properties.sessionId : undefined,
+    directory: typeof properties.directory === 'string' ? properties.directory : undefined,
+    requireHidden: properties.requireHidden === true,
   };
 };
 
