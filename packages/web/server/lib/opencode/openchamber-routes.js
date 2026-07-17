@@ -1,3 +1,5 @@
+import { DISTRIBUTION_POLICY } from '../distribution-policy.js';
+
 export const registerOpenChamberRoutes = (app, dependencies) => {
   const {
     fs,
@@ -15,7 +17,6 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
 
   app.get('/api/openchamber/update-check', async (req, res) => {
     try {
-      const { checkForUpdates } = await import('../package-manager.js');
       const parseString = (value) => (typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined);
       const parseReportUsage = (value) => {
         if (typeof value !== 'string') return true;
@@ -31,9 +32,24 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         return 'desktop';
       };
       const userAgent = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : '';
+      const appType = parseString(req.query.appType) || 'web';
+
+      if (appType === 'web' && DISTRIBUTION_POLICY.webUpdateMode === 'external') {
+        const { getCurrentVersion } = await import('../package-manager.js');
+        return res.json({
+          available: false,
+          currentVersion: parseString(req.query.currentVersion) || getCurrentVersion(),
+          updatePolicy: 'external',
+          distribution: DISTRIBUTION_POLICY.id,
+          repositoryUrl: DISTRIBUTION_POLICY.repositoryUrl,
+          nextSuggestedCheckInSec: 7 * 24 * 60 * 60,
+        });
+      }
+
+      const { checkForUpdates } = await import('../package-manager.js');
 
       const updateInfo = await checkForUpdates({
-        appType: parseString(req.query.appType),
+        appType,
         deviceClass: parseString(req.query.deviceClass) || inferDeviceClass(userAgent),
         platform: parseString(req.query.platform),
         arch: parseString(req.query.arch),
@@ -53,6 +69,15 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
   });
 
   app.post('/api/openchamber/update-install', async (_req, res) => {
+    if (DISTRIBUTION_POLICY.webUpdateMode === 'external') {
+      return res.status(403).json({
+        error: 'Self-update is disabled for this distribution',
+        updatePolicy: 'external',
+        distribution: DISTRIBUTION_POLICY.id,
+        repositoryUrl: DISTRIBUTION_POLICY.repositoryUrl,
+      });
+    }
+
     try {
       const { spawn: spawnChild } = await import('child_process');
       const {

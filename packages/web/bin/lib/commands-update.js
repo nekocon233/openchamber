@@ -16,10 +16,9 @@ import {
   logStatus,
 } from '../cli-output.js';
 
-function createUpdateCommand({ importFromFilePath, packageManagerPath, serveCommand }) {
+function createUpdateCommand({ importFromFilePath, packageManagerPath, serveCommand, distributionPolicy }) {
   return async function updateCommand(options = {}) {
     const showOutput = shouldRenderHumanOutput(options);
-    const updateSpin = createSpinner(options);
 
     const {
       checkForUpdates,
@@ -27,9 +26,36 @@ function createUpdateCommand({ importFromFilePath, packageManagerPath, serveComm
       detectPackageManager,
       getCurrentVersion,
     } = await importFromFilePath(packageManagerPath);
-
-    const runningInstances = await discoverRunningInstances();
     const currentVersion = getCurrentVersion();
+
+    if (distributionPolicy?.webUpdateMode === 'external') {
+      if (isJsonMode(options)) {
+        printJson({
+          currentVersion,
+          latestVersion: currentVersion,
+          updated: false,
+          selfUpdate: 'external',
+          distribution: distributionPolicy.id,
+          repositoryUrl: distributionPolicy.repositoryUrl,
+        });
+        return;
+      }
+
+      if (isQuietMode(options)) {
+        process.stdout.write(`managed-externally ${currentVersion} ${distributionPolicy.repositoryUrl}\n`);
+        return;
+      }
+
+      if (showOutput) {
+        clackIntro('OpenChamber Update');
+        logStatus('info', '[FORK_UPDATE]', `Updates are managed from ${distributionPolicy.repositoryUrl}`);
+        clackOutro('self-update disabled');
+      }
+      return;
+    }
+
+    const updateSpin = createSpinner(options);
+    const runningInstances = await discoverRunningInstances();
 
     if (showOutput) {
       clackIntro('OpenChamber Update');

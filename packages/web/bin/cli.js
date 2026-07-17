@@ -34,6 +34,7 @@ import { startupCommand } from './lib/commands-startup.js';
 import { logsCommand } from './lib/commands-logs.js';
 import { statusCommand } from './lib/commands-status.js';
 import { createUpdateCommand } from './lib/commands-update.js';
+import { DISTRIBUTION_POLICY } from '../server/lib/distribution-policy.js';
 import { createConnectUrlCommand } from './lib/commands-connect-url.js';
 import { createLifecycleCommands } from './lib/commands-lifecycle.js';
 import { createServeCommand } from './lib/commands-serve.js';
@@ -215,6 +216,7 @@ commands.update = createUpdateCommand({
   importFromFilePath,
   packageManagerPath: path.join(__dirname, '..', 'server', 'lib', 'package-manager.js'),
   serveCommand: commands.serve.bind(commands),
+  distributionPolicy: DISTRIBUTION_POLICY,
 });
 
 async function main() {
