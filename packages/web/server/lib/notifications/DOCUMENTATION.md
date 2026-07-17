@@ -64,6 +64,13 @@ This module provides notification message preparation utilities for the web serv
   - `isAnyUiVisible()`
   - `isUiVisible(token)`
 
+### Web notification click behavior
+- Push and foreground service-worker notifications carry the session ID and a same-origin `/?session=...` deep link.
+- Clicking a notification prefers an existing focused or visible Web/PWA window, navigates it to the target session, and focuses it.
+- A new window is opened only when no existing window can be focused.
+- Legacy notifications without `data` recover the session ID from `ready-`, `error-`, `question-`, `permission-`, and `goal-` tags.
+- Notifications without a session target focus the existing app without resetting its current route.
+
 ### APNs runtime API (apns-runtime.js)
 - `createApnsRuntime(dependencies)`: creates runtime for native iOS APNs push and device-token state. Dependencies: `fsPromises`, `path`, `crypto`, `http2`, `APNS_TOKENS_FILE_PATH`, `readSettingsFromDiskMigrated`, `writeSettingsToDisk` (persists the auto-generated relay signing keypair).
 - Returned API:

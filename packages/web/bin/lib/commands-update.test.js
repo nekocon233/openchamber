@@ -47,4 +47,48 @@ describe('update command', () => {
       }
     });
   });
+
+  it('does not invoke the official updater for externally managed distributions', async () => {
+    await withTempOpenChamberDataDir(async () => {
+      const originalWrite = process.stdout.write;
+      let output = '';
+      process.stdout.write = vi.fn((chunk) => {
+        output += String(chunk);
+        return true;
+      });
+      const checkForUpdates = vi.fn();
+      const executeUpdate = vi.fn();
+      const updateCommand = createUpdateCommand({
+        packageManagerPath: '/fake/package-manager.js',
+        serveCommand: vi.fn(),
+        distributionPolicy: {
+          id: 'nekocon233/openchamber',
+          repositoryUrl: 'https://github.com/nekocon233/openchamber',
+          webUpdateMode: 'external',
+        },
+        importFromFilePath: vi.fn(async () => ({
+          checkForUpdates,
+          detectPackageManager: vi.fn(),
+          executeUpdate,
+          getCurrentVersion: vi.fn(() => '1.16.1'),
+        })),
+      });
+
+      try {
+        await updateCommand({ json: true });
+
+        expect(JSON.parse(output)).toMatchObject({
+          status: 'ok',
+          currentVersion: '1.16.1',
+          updated: false,
+          selfUpdate: 'external',
+          distribution: 'nekocon233/openchamber',
+        });
+        expect(checkForUpdates).not.toHaveBeenCalled();
+        expect(executeUpdate).not.toHaveBeenCalled();
+      } finally {
+        process.stdout.write = originalWrite;
+      }
+    });
+  });
 });

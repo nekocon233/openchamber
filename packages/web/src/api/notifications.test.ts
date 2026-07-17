@@ -57,8 +57,20 @@ describe('web notifications API', () => {
     const { createWebNotificationsAPI } = await import('./notifications');
     const api = createWebNotificationsAPI();
 
-    await expect(api.notifyAgentCompletion({ title: 'Ready', body: 'Done', tag: 'ready-session' })).resolves.toBe(true);
-    await expect(api.notifyAgentCompletion({ title: 'Ready', body: 'Done', tag: 'ready-session' })).resolves.toBe(true);
+    await expect(api.notifyAgentCompletion({
+      title: 'Ready',
+      body: 'Done',
+      tag: 'ready-session',
+      kind: 'ready',
+      sessionId: 'session',
+    })).resolves.toBe(true);
+    await expect(api.notifyAgentCompletion({
+      title: 'Ready',
+      body: 'Done',
+      tag: 'ready-session',
+      kind: 'ready',
+      sessionId: 'session',
+    })).resolves.toBe(true);
 
     expect(created).toHaveLength(1);
     expect(created[0]?.title).toBe('Ready');
@@ -99,7 +111,13 @@ describe('web notifications API', () => {
     const { createWebNotificationsAPI } = await import('./notifications');
     const api = createWebNotificationsAPI();
 
-    await expect(api.notifyAgentCompletion({ title: 'Ready', body: 'Done', tag: 'ready-session' })).resolves.toBe(true);
+    await expect(api.notifyAgentCompletion({
+      title: 'Ready',
+      body: 'Done',
+      tag: 'ready-session',
+      kind: 'ready',
+      sessionId: 'session',
+    })).resolves.toBe(true);
 
     expect(showNotification).not.toHaveBeenCalled();
     expect(created).toHaveLength(0);
@@ -107,10 +125,24 @@ describe('web notifications API', () => {
     visibilityState = 'visible';
     focused = true;
 
-    await expect(api.notifyAgentCompletion({ title: 'Ready', body: 'Done', tag: 'ready-session' })).resolves.toBe(true);
+    await expect(api.notifyAgentCompletion({
+      title: 'Ready',
+      body: 'Done',
+      tag: 'ready-session',
+      kind: 'ready',
+      sessionId: 'session',
+    })).resolves.toBe(true);
 
     expect(showNotification).toHaveBeenCalledTimes(1);
-    expect(showNotification).toHaveBeenCalledWith('Ready', expect.objectContaining({ body: 'Done', tag: 'ready-session' }));
+    expect(showNotification).toHaveBeenCalledWith('Ready', expect.objectContaining({
+      body: 'Done',
+      tag: 'ready-session',
+      data: {
+        url: '/?session=session',
+        sessionId: 'session',
+        type: 'ready',
+      },
+    }));
     expect(created).toHaveLength(0);
   });
 });
