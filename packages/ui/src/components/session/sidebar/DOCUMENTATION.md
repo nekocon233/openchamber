@@ -3,7 +3,7 @@
 ## Refactor result
 
 - `SessionSidebar.tsx` now acts mainly as orchestration; core logic moved to focused hooks/components.
-- Desktop sidebar is a single multi-project tree: independently configurable `pinned` and `recent` top sections, then projects, then worktrees/archived groups, then sessions. The dedicated mobile sheet also renders `pinned` before `recent`; both intentionally duplicate rows from the project tree.
+- Desktop sidebar is a single multi-project tree: independently configurable `pinned` and `recent` top sections, then projects, then worktrees/archived groups, then sessions. The dedicated mobile sheet also renders `pinned` before `recent`, uses the same persisted visibility preferences from its project editor, and remembers each activity section's expanded state; both intentionally duplicate rows from the project tree.
 - `NavRail` is no longer part of sidebar/navigation flow.
 - Project headers now own root sessions directly; there is no separate rendered `project root` subgroup.
 - Active/hover row styling is text-first; selected sessions use primary text instead of background fills.

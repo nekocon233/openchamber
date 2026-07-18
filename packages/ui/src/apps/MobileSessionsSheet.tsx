@@ -40,6 +40,7 @@ import {
   sortSessionsByActivity,
 } from '@/components/session/sidebar/activitySections';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
 import { toast } from '@/components/ui';
@@ -55,6 +56,7 @@ import { mergeLiveSessionWithGlobalSession, refreshGlobalSessions, useGlobalSess
 import { useMobileSessionExpansionStore } from '@/stores/useMobileSessionExpansionStore';
 import { useMobileSessionTreeStore } from '@/stores/useMobileSessionTreeStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
+import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { orderWorktrees, useWorktreeOrderStore } from '@/stores/useWorktreeOrderStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -514,12 +516,13 @@ const ShowFewerRow: React.FC<{
 const MobileSessionActivityGroup: React.FC<{
   title: string;
   sessions: Session[];
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
   renderSession: (session: Session) => React.ReactNode;
-}> = ({ title, sessions, renderSession }) => {
+}> = ({ title, sessions, expanded, onExpandedChange, renderSession }) => {
   const { t } = useI18n();
   const headingId = React.useId();
   const contentId = React.useId();
-  const [expanded, setExpanded] = React.useState(true);
   const [visibleCount, setVisibleCount] = React.useState(SESSIONS_PER_BUCKET);
 
   if (sessions.length === 0) return null;
@@ -541,7 +544,7 @@ const MobileSessionActivityGroup: React.FC<{
             : t('sessions.sidebar.group.expandAria', { label: title })
         }
         onClick={() => {
-          setExpanded((value) => !value);
+          onExpandedChange(!expanded);
           setVisibleCount(SESSIONS_PER_BUCKET);
         }}
         style={{ touchAction: 'manipulation' }}
@@ -679,7 +682,13 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
   const { git } = useRuntimeAPIs();
   const liveSessions = useAllLiveSessions();
   const authoritativeLiveSessionIds = useAllAuthoritativeLiveSessionIds();
-  const messageActivityBySessionId = useAllSessionMessageActivity(open);
+  const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
+  const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
+  const setShowPinnedSection = useSessionDisplayStore((state) => state.setShowPinnedSection);
+  const setShowRecentSection = useSessionDisplayStore((state) => state.setShowRecentSection);
+  const messageActivityBySessionId = useAllSessionMessageActivity(
+    open && (showPinnedSection || showRecentSection),
+  );
   const sessionStatuses = useAllSessionStatuses();
   const globalResolvedStatusById = useGlobalSessionStatusStore((state) => state.resolvedStatusById);
   const globalActiveSessions = useGlobalSessionsStore((state) => state.activeSessions);
@@ -700,8 +709,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
   const removeProject = useProjectsStore((state) => state.removeProject);
   const projectExpandedMap = useMobileSessionTreeStore((state) => state.projectExpanded);
   const worktreeExpandedMap = useMobileSessionTreeStore((state) => state.worktreeExpanded);
+  const pinnedSectionExpanded = useMobileSessionTreeStore((state) => state.pinnedSectionExpanded);
+  const recentSectionExpanded = useMobileSessionTreeStore((state) => state.recentSectionExpanded);
   const setProjectExpanded = useMobileSessionTreeStore((state) => state.setProjectExpanded);
   const setWorktreeExpanded = useMobileSessionTreeStore((state) => state.setWorktreeExpanded);
+  const setPinnedSectionExpanded = useMobileSessionTreeStore((state) => state.setPinnedSectionExpanded);
+  const setRecentSectionExpanded = useMobileSessionTreeStore((state) => state.setRecentSectionExpanded);
   const worktreeOrderByProject = useWorktreeOrderStore((state) => state.orderByProject);
   const expandedParents = useMobileSessionExpansionStore((state) => state.expandedParents);
   const toggleParent = useMobileSessionExpansionStore((state) => state.toggleParent);
@@ -936,17 +949,25 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
   );
 
   const pinnedSessions = React.useMemo(() => {
-    if (!open || normalizedQuery || editingOrder) return [];
+    if (!open || !showPinnedSection || normalizedQuery || editingOrder) return [];
     return sortSessionsByActivity(
       sessions.filter((session) => pinnedSessionIds.has(session.id)),
       messageActivityBySessionId,
     );
-  }, [editingOrder, messageActivityBySessionId, normalizedQuery, open, pinnedSessionIds, sessions]);
+  }, [
+    editingOrder,
+    messageActivityBySessionId,
+    normalizedQuery,
+    open,
+    pinnedSessionIds,
+    sessions,
+    showPinnedSection,
+  ]);
 
   const recentSessions = React.useMemo(() => {
-    if (!open || normalizedQuery || editingOrder) return [];
+    if (!open || !showRecentSection || normalizedQuery || editingOrder) return [];
     return deriveRecentSessions(sessions, recentNow, messageActivityBySessionId);
-  }, [editingOrder, messageActivityBySessionId, normalizedQuery, open, recentNow, sessions]);
+  }, [editingOrder, messageActivityBySessionId, normalizedQuery, open, recentNow, sessions, showRecentSection]);
 
   const projectNodes = React.useMemo<ProjectNode[]>(() => {
     const nodes: ProjectNode[] = projectsMeta.map((project) => ({
@@ -1447,6 +1468,52 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
             </div>
           ) : editingOrder ? (
             <div className="flex flex-col gap-2 px-3 py-2">
+              <div className="flex flex-col border-b border-border/30 pb-2">
+                <div
+                  className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2 transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={showPinnedSection}
+                  onClick={() => setShowPinnedSection(!showPinnedSection)}
+                  onKeyDown={(event) => {
+                    if (event.key === ' ' || event.key === 'Enter') {
+                      event.preventDefault();
+                      setShowPinnedSection(!showPinnedSection);
+                    }
+                  }}
+                >
+                  <Checkbox
+                    checked={showPinnedSection}
+                    onChange={setShowPinnedSection}
+                    ariaLabel={t('sessions.sidebar.header.displayMode.showPinned')}
+                  />
+                  <span className="typography-ui-label text-foreground">
+                    {t('sessions.sidebar.header.displayMode.showPinned')}
+                  </span>
+                </div>
+                <div
+                  className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2 transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={showRecentSection}
+                  onClick={() => setShowRecentSection(!showRecentSection)}
+                  onKeyDown={(event) => {
+                    if (event.key === ' ' || event.key === 'Enter') {
+                      event.preventDefault();
+                      setShowRecentSection(!showRecentSection);
+                    }
+                  }}
+                >
+                  <Checkbox
+                    checked={showRecentSection}
+                    onChange={setShowRecentSection}
+                    ariaLabel={t('sessions.sidebar.header.displayMode.showRecent')}
+                  />
+                  <span className="typography-ui-label text-foreground">
+                    {t('sessions.sidebar.header.displayMode.showRecent')}
+                  </span>
+                </div>
+              </div>
               <p className="px-1 typography-micro text-muted-foreground">
                 {t('mobile.sessions.editOrderHint')}
               </p>
@@ -1479,11 +1546,15 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
               <MobileSessionActivityGroup
                 title={t('mobile.sessions.section.pinned')}
                 sessions={pinnedSessions}
+                expanded={pinnedSectionExpanded}
+                onExpandedChange={setPinnedSectionExpanded}
                 renderSession={renderActivitySession}
               />
               <MobileSessionActivityGroup
                 title={t('sessions.sidebar.activity.recentTitle')}
                 sessions={recentSessions}
+                expanded={recentSectionExpanded}
+                onExpandedChange={setRecentSectionExpanded}
                 renderSession={renderActivitySession}
               />
 
