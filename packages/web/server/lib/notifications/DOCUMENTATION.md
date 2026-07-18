@@ -65,8 +65,10 @@ This module provides notification message preparation utilities for the web serv
   - `isUiVisible(token)`
 
 ### Web notification click behavior
-- Push and foreground service-worker notifications carry the session ID and a same-origin `/?session=...` deep link.
+- Push and foreground service-worker notifications carry the session ID, owning directory when known, and a same-origin `/?session=...` deep link.
 - Clicking a notification prefers an existing focused or visible Web/PWA window, navigates it to the target session, and focuses it.
+- Before navigation, the service worker also posts a typed session intent to a top-level app client. The in-app deep-link handler uses this path when installed-PWA navigation is rejected or ignored, resolves the owning directory, closes obstructing settings/mobile surfaces, and switches to chat.
+- Native APNs keeps its relay payload opaque (`sessionId` only). On tap, the app refreshes the authenticated global session index before selecting an otherwise unknown session, rather than exposing a filesystem directory through the relay.
 - A new window is opened only when no existing window can be focused.
 - Legacy notifications without `data` recover the session ID from `ready-`, `error-`, `question-`, `permission-`, and `goal-` tags.
 - Notifications without a session target focus the existing app without resetting its current route.

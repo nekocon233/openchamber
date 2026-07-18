@@ -21,7 +21,7 @@ type ActivityItem = {
 };
 
 type ActivitySection = {
-  key: 'active-now';
+  key: 'pinned' | 'active-now';
   title: string;
   items: ActivityItem[];
 };
@@ -35,7 +35,7 @@ type Props = {
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: 'project' | 'recent' | 'pinned',
     renderExtras?: SessionNodeRenderExtras,
   ) => React.ReactNode;
   currentSessionId: string | null;
@@ -100,12 +100,15 @@ export function SidebarActivitySections({
     });
   }, [batchSize]);
 
-  const buildRenderExtras = React.useCallback((nodes: SessionNode[]) => {
+  const buildRenderExtras = React.useCallback((
+    nodes: SessionNode[],
+    renderContext: 'recent' | 'pinned',
+  ) => {
     const subtreeContainsActive = new Set<string>();
     collectSubtreeContainingId(nodes, currentSessionId, subtreeContainsActive);
     const subtreeContainsEditing = new Set<string>();
     collectSubtreeContainingId(nodes, editingId, subtreeContainsEditing);
-    const menuOpenSessionId = resolveMenuOpenSessionId(nodes, openSidebarMenuKey, 'recent', false);
+    const menuOpenSessionId = resolveMenuOpenSessionId(nodes, openSidebarMenuKey, renderContext, false);
     const nodeStructureKeyByNode = new WeakMap<SessionNode, string>();
     const visit = (node: SessionNode): void => {
       nodeStructureKeyByNode.set(node, computeNodeStructureKey(node));
@@ -146,7 +149,8 @@ export function SidebarActivitySections({
         const visibleItems = section.items.slice(0, visibleLimit);
         const remainingCount = section.items.length - visibleItems.length;
         const canShowFewer = !flatVariant && section.items.length > initialVisibleCount && remainingCount === 0;
-        const getRenderExtras = buildRenderExtras(visibleItems.map((item) => item.node));
+        const renderContext = section.key === 'pinned' ? 'pinned' : 'recent';
+        const getRenderExtras = buildRenderExtras(visibleItems.map((item) => item.node), renderContext);
         const renderItem = (item: ActivityItem) => renderSessionNode(
           item.node,
           0,
@@ -154,7 +158,7 @@ export function SidebarActivitySections({
           item.projectId,
           false,
           item.secondaryMeta,
-          'recent',
+          renderContext,
           getRenderExtras(item.node),
         );
 

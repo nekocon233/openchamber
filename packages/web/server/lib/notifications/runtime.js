@@ -130,11 +130,13 @@ export const createNotificationTriggerRuntime = (deps) => {
     }
   };
 
-  const buildSessionDeepLinkUrl = (sessionId) => {
+  const buildSessionDeepLinkUrl = (sessionId, directory) => {
     if (!sessionId || typeof sessionId !== 'string') {
       return '/';
     }
-    return `/?session=${encodeURIComponent(sessionId)}`;
+    const search = new URLSearchParams({ session: sessionId });
+    if (typeof directory === 'string' && directory.trim()) search.set('directory', directory.trim());
+    return `/?${search.toString()}`;
   };
 
   const getSessionParentCacheKey = (sessionId, directory) => `${directory || ''}\0${sessionId}`;
@@ -421,8 +423,9 @@ export const createNotificationTriggerRuntime = (deps) => {
             body,
             tag: `ready-${sessionId}`,
             data: {
-              url: buildSessionDeepLinkUrl(sessionId),
+              url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
               sessionId,
+              directory: notificationDirectory,
               sessionName,
               type: 'ready',
             },
@@ -491,8 +494,9 @@ export const createNotificationTriggerRuntime = (deps) => {
             body,
             tag: `error-${sessionId}`,
             data: {
-              url: buildSessionDeepLinkUrl(sessionId),
+              url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
               sessionId,
+              directory: notificationDirectory,
               sessionName,
               type: 'error',
             },
@@ -570,8 +574,9 @@ export const createNotificationTriggerRuntime = (deps) => {
             body,
             tag: `question-${sessionId}`,
             data: {
-              url: buildSessionDeepLinkUrl(sessionId),
+              url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
               sessionId,
+              directory: notificationDirectory,
               sessionName,
               type: 'question',
             },
@@ -693,8 +698,9 @@ export const createNotificationTriggerRuntime = (deps) => {
             body,
             tag: `permission-${sessionId}`,
             data: {
-              url: buildSessionDeepLinkUrl(sessionId),
+              url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
               sessionId,
+              directory: notificationDirectory,
               sessionName,
               type: 'permission',
             },
@@ -734,8 +740,9 @@ export const createNotificationTriggerRuntime = (deps) => {
         body,
         tag: `goal-${sessionId}`,
         data: {
-          url: buildSessionDeepLinkUrl(sessionId),
+          url: buildSessionDeepLinkUrl(sessionId, directory),
           sessionId,
+          directory,
           sessionName,
           type,
         },

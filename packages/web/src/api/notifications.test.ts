@@ -63,6 +63,7 @@ describe('web notifications API', () => {
       tag: 'ready-session',
       kind: 'ready',
       sessionId: 'session',
+      directory: '/workspace',
     })).resolves.toBe(true);
     await expect(api.notifyAgentCompletion({
       title: 'Ready',
@@ -70,6 +71,7 @@ describe('web notifications API', () => {
       tag: 'ready-session',
       kind: 'ready',
       sessionId: 'session',
+      directory: '/workspace',
     })).resolves.toBe(true);
 
     expect(created).toHaveLength(1);
@@ -117,6 +119,7 @@ describe('web notifications API', () => {
       tag: 'ready-session',
       kind: 'ready',
       sessionId: 'session',
+      directory: '/workspace',
     })).resolves.toBe(true);
 
     expect(showNotification).not.toHaveBeenCalled();
@@ -131,6 +134,7 @@ describe('web notifications API', () => {
       tag: 'ready-session',
       kind: 'ready',
       sessionId: 'session',
+      directory: '/workspace',
     })).resolves.toBe(true);
 
     expect(showNotification).toHaveBeenCalledTimes(1);
@@ -138,8 +142,9 @@ describe('web notifications API', () => {
       body: 'Done',
       tag: 'ready-session',
       data: {
-        url: '/?session=session',
+        url: '/?session=session&directory=%2Fworkspace',
         sessionId: 'session',
+        directory: '/workspace',
         type: 'ready',
       },
     }));

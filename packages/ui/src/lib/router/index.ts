@@ -5,7 +5,7 @@
  * Works across web, desktop, and VS Code (state-only mode).
  *
  * URL Schema:
- * - `?session=<id>` - Navigate to specific session
+ * - `?session=<id>&directory=<path>` - Navigate to a session, with an optional cold-start directory hint
  * - `?tab=<chat|git|diff|terminal|files>` - Active main tab
  * - `?settings=<section>` - Open settings to specific section
  * - `?file=<path>` - Diff view with file selected

@@ -125,6 +125,35 @@ export function parseDeepLink(raw: string | null | undefined): DeepLinkIntent | 
   }
 }
 
+export function parseServiceWorkerNotificationClick(
+  data: unknown,
+  currentUrl: string,
+): DeepLinkIntent | null {
+  if (!data || typeof data !== 'object') return null;
+  const message = data as { type?: unknown; sessionId?: unknown; directory?: unknown; url?: unknown };
+  if (message.type !== 'openchamber:notification-click') return null;
+
+  const explicitSessionId = typeof message.sessionId === 'string' ? message.sessionId.trim() : '';
+  const directory = typeof message.directory === 'string' ? message.directory.trim() : '';
+  if (explicitSessionId) {
+    return { type: 'session', sessionId: explicitSessionId, directory: directory || undefined };
+  }
+  if (typeof message.url !== 'string' || !message.url.trim()) return null;
+
+  try {
+    const current = new URL(currentUrl);
+    const target = new URL(message.url, current);
+    if (target.origin !== current.origin) return null;
+    const sessionId = target.searchParams.get('session')?.trim() ?? '';
+    const targetDirectory = target.searchParams.get('directory')?.trim() ?? '';
+    return sessionId
+      ? { type: 'session', sessionId, directory: targetDirectory || undefined }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build a canonical `openchamber://…` URL for an intent. Used by anything that needs to hand
  * a deep link to iOS — notification payloads, `widgetURL(...)`, Live Activity tap targets —

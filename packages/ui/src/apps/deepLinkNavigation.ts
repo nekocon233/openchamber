@@ -3,8 +3,16 @@ import React from 'react';
 import { isCapacitorApp } from '@/lib/platform';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useUIStore } from '@/stores/useUIStore';
+import { ensureGlobalSessionsLoaded } from '@/stores/useGlobalSessionsStore';
 
-import { buildDeepLink, parseDeepLink, type DeepLinkIntent, type SessionsFilter, type ViewTarget } from './deepLinks';
+import {
+  buildDeepLink,
+  parseDeepLink,
+  parseServiceWorkerNotificationClick,
+  type DeepLinkIntent,
+  type SessionsFilter,
+  type ViewTarget,
+} from './deepLinks';
 
 /**
  * Navigation layer for {@link DeepLinkIntent}s — the only place that knows how to *apply* a
@@ -20,6 +28,8 @@ import { buildDeepLink, parseDeepLink, type DeepLinkIntent, type SessionsFilter,
  */
 
 export interface DeepLinkHandlers {
+  /** Close shell-local surfaces that would obscure a newly selected session. */
+  prepareForSession?: () => void;
   /** Open the sessions sheet, optionally pre-filtered (filter support is best-effort for now). */
   openSessions?: (filter?: SessionsFilter) => void;
   /** Open a non-session surface (files / mcp / instances / update). */
@@ -33,11 +43,38 @@ export interface DeepLinkHandlers {
 let handlers: DeepLinkHandlers = {};
 let ready = false;
 let pending: DeepLinkIntent | null = null;
+let intentRevision = 0;
 
 const execute = (intent: DeepLinkIntent): boolean => {
   switch (intent.type) {
     case 'session':
-      void useSessionUIStore.getState().setCurrentSession(intent.sessionId, intent.directory ?? null);
+      handlers.prepareForSession?.();
+      useUIStore.getState().setSettingsDialogOpen(false);
+      useUIStore.getState().setActiveMainTab('chat');
+      {
+        const revision = intentRevision;
+        const store = useSessionUIStore.getState();
+        const knownDirectory = intent.directory ?? store.getDirectoryForSession(intent.sessionId);
+        if (knownDirectory) {
+          void store.setCurrentSession(intent.sessionId, knownDirectory);
+          return true;
+        }
+        void (async () => {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            await ensureGlobalSessionsLoaded();
+            if (revision !== intentRevision) return;
+            const currentStore = useSessionUIStore.getState();
+            const directory = currentStore.getDirectoryForSession(intent.sessionId);
+            if (directory) {
+              void currentStore.setCurrentSession(intent.sessionId, directory);
+              return;
+            }
+            if (attempt < 2) {
+              await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+            }
+          }
+        })();
+      }
       return true;
 
     case 'new-session': {
@@ -94,6 +131,7 @@ const flush = (): void => {
 
 /** Apply an intent now if possible, otherwise stash it until the app is ready / a handler appears. */
 export const applyDeepLinkIntent = (intent: DeepLinkIntent): void => {
+  intentRevision += 1;
   pending = intent;
   flush();
 };
@@ -143,6 +181,17 @@ export const useDeepLinkSource = (options: { ready: boolean }): void => {
   }, [isReady]);
 
   React.useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const handleMessage = (event: MessageEvent<unknown>) => {
+      const currentUrl = typeof window !== 'undefined' ? window.location.href : 'http://localhost/';
+      const intent = parseServiceWorkerNotificationClick(event.data, currentUrl);
+      if (intent) applyDeepLinkIntent(intent);
+    };
+    navigator.serviceWorker.addEventListener('message', handleMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', handleMessage);
+  }, []);
+
+  React.useEffect(() => {
     if (!isCapacitorApp()) return;
     let disposed = false;
     const cleanup: Array<() => void> = [];
@@ -175,7 +224,8 @@ export const useDeepLinkSource = (options: { ready: boolean }): void => {
           }
           const sessionId = typeof data?.sessionId === 'string' ? data.sessionId : undefined;
           if (sessionId) {
-            applyDeepLinkIntent({ type: 'session', sessionId });
+            const directory = typeof data?.directory === 'string' ? data.directory : undefined;
+            applyDeepLinkIntent({ type: 'session', sessionId, directory });
           }
         });
         if (disposed) {

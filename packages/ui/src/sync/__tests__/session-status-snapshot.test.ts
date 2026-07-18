@@ -9,8 +9,13 @@ import {
   needsSnapshotAfterStatusPoll,
   shouldTriggerStaleResync,
 } from "../sync-context"
+import {
+  getGlobalSessionStatusRevision,
+  resetGlobalSessionStatuses,
+  setGlobalSessionStatus,
+} from "../global-session-status"
 
-type StatusSnapshot = Record<string, { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; next?: number }>
+type StatusSnapshot = Record<string, SessionStatus>
 
 function createDirectoryStore(initial: Partial<State>): StoreApi<DirectoryStore> {
   return create<DirectoryStore>()((set) => ({
@@ -85,6 +90,52 @@ describe("applySessionStatusSnapshot", () => {
       const changed = applySessionStatusSnapshot(store, {} as StatusSnapshot, ["ses_a"], "authoritative")
       expect(changed).toBe(true)
       expect(store.getState().session_status.ses_a).toEqual({ type: "idle" })
+    })
+
+    test("does not overwrite a child status changed after the request baseline", () => {
+      const store = createDirectoryStore({ session_status: { ses_a: BUSY } })
+      const baseline = new Map([["ses_a", store.getState().session_status.ses_a]])
+      const retry: SessionStatus = { type: "retry", attempt: 2, message: "retrying", next: 30 }
+      store.setState({ session_status: { ses_a: retry } })
+
+      const changed = applySessionStatusSnapshot(store, {}, ["ses_a"], "authoritative", baseline)
+
+      expect(changed).toBe(false)
+      expect(store.getState().session_status.ses_a).toEqual(retry)
+    })
+
+    test("does not overwrite a child after a newer equivalent status event", () => {
+      resetGlobalSessionStatuses()
+      setGlobalSessionStatus("ses_a", "/project", "busy")
+      const baselineRevision = getGlobalSessionStatusRevision()
+      const store = createDirectoryStore({ session_status: { ses_a: BUSY } })
+      const baseline = new Map([["ses_a", store.getState().session_status.ses_a]])
+      setGlobalSessionStatus("ses_a", "/project", "busy")
+
+      const changed = applySessionStatusSnapshot(
+        store,
+        {},
+        ["ses_a"],
+        "authoritative",
+        baseline,
+        baselineRevision,
+      )
+
+      expect(changed).toBe(false)
+      expect(store.getState().session_status.ses_a).toEqual(BUSY)
+      resetGlobalSessionStatuses()
+    })
+
+    test("does not lower optimistic busy state during its snapshot grace period", () => {
+      resetGlobalSessionStatuses()
+      setGlobalSessionStatus("ses_a", "/project", "busy", { optimistic: true })
+      const store = createDirectoryStore({ session_status: { ses_a: BUSY } })
+
+      const changed = applySessionStatusSnapshot(store, {}, ["ses_a"], "authoritative")
+
+      expect(changed).toBe(false)
+      expect(store.getState().session_status.ses_a).toEqual(BUSY)
+      resetGlobalSessionStatuses()
     })
   })
 })

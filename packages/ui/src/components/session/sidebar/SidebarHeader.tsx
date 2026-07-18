@@ -63,9 +63,11 @@ export function SidebarHeader(props: Props): React.ReactNode {
   } = props;
 
   const displayMode = useSessionDisplayStore((state) => state.displayMode);
+  const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
   const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
   const showArchivedSessions = useSessionDisplayStore((state) => state.showArchivedSessions);
   const setDisplayMode = useSessionDisplayStore((state) => state.setDisplayMode);
+  const togglePinnedSection = useSessionDisplayStore((state) => state.togglePinnedSection);
   const toggleRecentSection = useSessionDisplayStore((state) => state.toggleRecentSection);
   const toggleArchivedSessions = useSessionDisplayStore((state) => state.toggleArchivedSessions);
   const projectSortOrder = useSessionDisplayStore((state) => state.projectSortOrder);
@@ -268,6 +270,13 @@ export function SidebarHeader(props: Props): React.ReactNode {
                 {showRecentControls ? (
                   <>
                     {showDisplayModeToggle ? <DropdownMenuSeparator /> : null}
+                    <DropdownMenuItem
+                      onClick={togglePinnedSection}
+                      className="flex items-center justify-between"
+                    >
+                      <span>{t('sessions.sidebar.header.displayMode.showPinned')}</span>
+                      {showPinnedSection ? <Icon name="check" className="h-4 w-4 text-primary" /> : null}
+                    </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={toggleRecentSection}
                       className="flex items-center justify-between"

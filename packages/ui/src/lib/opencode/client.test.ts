@@ -8,6 +8,8 @@ const configResolvers: Array<(response: ConfigResponse) => void> = [];
 let configCalls = 0;
 const promptAsyncCalls: unknown[][] = [];
 const promptAsyncResults: Array<unknown> = [];
+const sessionStatusCalls: unknown[][] = [];
+let sessionStatusResult: unknown = { data: {} };
 
 const promptAsyncMock = mock(async (...args: unknown[]) => {
   promptAsyncCalls.push(args);
@@ -28,6 +30,10 @@ mock.module('@opencode-ai/sdk/v2', () => ({
     },
     session: {
       promptAsync: promptAsyncMock,
+      status: mock(async (...args: unknown[]) => {
+        sessionStatusCalls.push(args);
+        return sessionStatusResult;
+      }),
     },
   })),
 }));
@@ -62,6 +68,31 @@ const { opencodeClient } = await import(`./client?cache-test=${Date.now()}`);
 beforeEach(() => {
   promptAsyncCalls.length = 0;
   promptAsyncResults.length = 0;
+  sessionStatusCalls.length = 0;
+  sessionStatusResult = { data: {} };
+});
+
+describe('opencodeClient session status', () => {
+  test('forwards directory and abort signal through the SDK', async () => {
+    const controller = new AbortController();
+
+    await opencodeClient.getSessionStatusForDirectory('/workspace/project', { signal: controller.signal });
+
+    expect(sessionStatusCalls).toEqual([
+      [{ directory: '/workspace/project' }, { signal: controller.signal }],
+    ]);
+  });
+
+  test('rejects malformed payloads instead of treating them as authoritative empty state', async () => {
+    sessionStatusResult = { data: [] };
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+
+    sessionStatusResult = { data: { error: { message: 'upstream failed' } } };
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+
+    sessionStatusResult = { data: { ses_retry: { type: 'retry', attempt: '1' } } };
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+  });
 });
 
 describe('opencodeClient getConfig cache', () => {

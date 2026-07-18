@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import type { Session } from "@opencode-ai/sdk/v2"
 
-import { shouldSkipStaleSessionEvent } from "../session-event-freshness"
+import {
+  getSessionRemovalRevision,
+  recordSessionRemoval,
+  resetSessionRemovalHistory,
+  shouldSkipStaleSessionEvent,
+  wasSessionRemovedSince,
+} from "../session-event-freshness"
 
 const buildSession = (title: string, time: Partial<NonNullable<Session["time"]>>): Session => ({
   id: "ses_1",
@@ -29,5 +35,17 @@ describe("shouldSkipStaleSessionEvent", () => {
     const incoming = buildSession("Incoming", { created: 10 })
 
     expect(shouldSkipStaleSessionEvent(current, incoming)).toBe(true)
+  })
+})
+
+describe("session removal revisions", () => {
+  test("records a removal even when no local session row exists", () => {
+    resetSessionRemovalHistory()
+    const baseline = getSessionRemovalRevision()
+
+    recordSessionRemoval("ses_missing")
+
+    expect(wasSessionRemovedSince("ses_missing", baseline)).toBe(true)
+    expect(wasSessionRemovedSince("ses_other", baseline)).toBe(false)
   })
 })

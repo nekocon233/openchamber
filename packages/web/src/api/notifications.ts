@@ -99,10 +99,14 @@ const getNotificationRegistration = async (): Promise<ServiceWorkerRegistration 
 const getNotificationData = (payload?: NotificationPayload): Record<string, string> | undefined => {
   const sessionId = payload?.sessionId?.trim();
   if (!sessionId) return undefined;
+  const directory = payload?.directory?.trim();
+  const search = new URLSearchParams({ session: sessionId });
+  if (directory) search.set('directory', directory);
 
   return {
-    url: `/?session=${encodeURIComponent(sessionId)}`,
+    url: `/?${search.toString()}`,
     sessionId,
+    ...(directory ? { directory } : {}),
     ...(payload?.kind ? { type: payload.kind } : {}),
   };
 };

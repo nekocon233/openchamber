@@ -19,6 +19,7 @@ type PushPayload = {
   data?: {
     url?: string;
     sessionId?: string;
+    directory?: string;
     type?: string;
   };
   icon?: string;
@@ -28,7 +29,15 @@ type PushPayload = {
 type NotificationData = {
   url?: string;
   sessionId?: string;
+  directory?: string;
   type?: string;
+};
+
+type NotificationClickMessage = {
+  type: 'openchamber:notification-click';
+  url?: string;
+  sessionId?: string;
+  directory?: string;
 };
 
 const SESSION_TAG_PREFIXES = ['ready-', 'error-', 'question-', 'permission-', 'goal-'] as const;
@@ -97,10 +106,13 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const data = (event.notification.data ?? null) as NotificationData | null;
+  const sessionId = getNotificationSessionId(data, event.notification.tag ?? '');
+  const directory = data?.directory?.trim() || undefined;
   const targetUrl = getNotificationTargetUrl(data, event.notification.tag ?? '');
 
   event.waitUntil((async () => {
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const clients = allClients.filter((client) => client.frameType === undefined || client.frameType === 'top-level');
     const orderedClients = [
       ...clients.filter((client) => client.focused),
       ...clients.filter((client) => !client.focused && client.visibilityState === 'visible'),
@@ -108,6 +120,20 @@ self.addEventListener('notificationclick', (event) => {
     ];
 
     for (const candidate of orderedClients) {
+      if ((targetUrl || sessionId) && typeof candidate.postMessage === 'function') {
+        const message: NotificationClickMessage = {
+          type: 'openchamber:notification-click',
+          ...(targetUrl ? { url: targetUrl } : {}),
+          ...(sessionId ? { sessionId } : {}),
+          ...(directory ? { directory } : {}),
+        };
+        try {
+          candidate.postMessage(message);
+        } catch {
+          // The client may have closed; navigation/focus below remain the fallback.
+        }
+      }
+
       let client = candidate;
       if (targetUrl) {
         try {

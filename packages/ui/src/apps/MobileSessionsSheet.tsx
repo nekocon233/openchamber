@@ -34,6 +34,11 @@ import { CSS } from '@dnd-kit/utilities';
 import { DirectoryExplorerDialog } from '@/components/session/DirectoryExplorerDialog';
 import { Icon } from '@/components/icon/Icon';
 import { NewWorktreeDialog } from '@/components/session/NewWorktreeDialog';
+import {
+  deriveRecentSessions,
+  getSessionActivityTimestamp,
+  sortSessionsByActivity,
+} from '@/components/session/sidebar/activitySections';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
@@ -41,6 +46,7 @@ import { toast } from '@/components/ui';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n } from '@/lib/i18n';
+import { opencodeClient } from '@/lib/opencode/client';
 import { PROJECT_COLOR_MAP, PROJECT_ICON_MAP, ProjectIconImage } from '@/lib/projectMeta';
 import { cn } from '@/lib/utils';
 import { listProjectWorktrees } from '@/lib/worktrees/worktreeManager';
@@ -49,9 +55,20 @@ import { mergeLiveSessionWithGlobalSession, refreshGlobalSessions, useGlobalSess
 import { useMobileSessionExpansionStore } from '@/stores/useMobileSessionExpansionStore';
 import { useMobileSessionTreeStore } from '@/stores/useMobileSessionTreeStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
+import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { orderWorktrees, useWorktreeOrderStore } from '@/stores/useWorktreeOrderStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useAllLiveSessions } from '@/sync/sync-context';
+import {
+  useAllAuthoritativeLiveSessionIds,
+  useAllLiveSessions,
+  useAllSessionMessageActivity,
+  useAllSessionStatuses,
+} from '@/sync/sync-context';
+import {
+  applyGlobalSessionStatusSnapshot,
+  getGlobalSessionStatusRevision,
+  useGlobalSessionStatusStore,
+} from '@/sync/global-session-status';
 import type { WorktreeMetadata } from '@/types/worktree';
 
 import { MobileProjectEditSurface } from './MobileProjectEditSurface';
@@ -98,12 +115,17 @@ type ProjectNode = {
 };
 
 const SESSIONS_PER_BUCKET = 7;
+const STATUS_POLL_DIRECTORY_LIMIT = 12;
+const STATUS_POLL_INTERVAL_MS = 5_000;
+const STATUS_POLL_REQUEST_TIMEOUT_MS = 4_000;
+const RECENT_CLOCK_INTERVAL_MS = 60_000;
 
 // Left padding for session rows so the title's first letter aligns with its
 // parent label. Root/project-level sessions align with the project label;
 // worktree sessions sit one level deeper. SessionRow adds 16px (dot + gap) on top.
 const PROJECT_SESSION_INDENT = 36;
 const WORKTREE_SESSION_INDENT = 52;
+const ACTIVITY_SESSION_INDENT = 24;
 // Extra left padding applied to each nested subsession level.
 const CHILD_INDENT_STEP = 18;
 
@@ -132,6 +154,23 @@ const getSessionTimestamp = (session: Session): number => {
   const raw = session.time?.updated ?? session.time?.created;
   const value = typeof raw === 'number' ? raw : Number(raw);
   return Number.isFinite(value) && value > 0 ? value : 0;
+};
+
+const fetchSessionStatusSnapshot = async (
+  directory: string,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<typeof opencodeClient.getSessionStatusForDirectory>>> => {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  const timeout = setTimeout(() => controller.abort(), STATUS_POLL_REQUEST_TIMEOUT_MS);
+  try {
+    return await opencodeClient.getSessionStatusForDirectory(directory, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', abort);
+  }
 };
 
 const formatRelativeShort = (timestamp: number): string => {
@@ -267,6 +306,9 @@ const SessionRow: React.FC<{
   session: Session;
   active: boolean;
   indent: number;
+  activityTimestamp?: number;
+  statusType?: 'busy' | 'retry' | 'idle';
+  pinned?: boolean;
   /** When provided, shown as a small second-line subtitle below the title (e.g. "Project · branch"). */
   contextLabel?: string;
   /** When true, the row shows the two-step archive confirmation. */
@@ -276,6 +318,7 @@ const SessionRow: React.FC<{
   expanded?: boolean;
   onToggleChildren?: () => void;
   onSelect: () => void;
+  onTogglePinned?: () => void;
   /** When provided, an archive affordance is shown; first tap arms confirm, X cancels. */
   onRequestArchive?: () => void;
   onConfirmArchive?: () => void;
@@ -283,18 +326,23 @@ const SessionRow: React.FC<{
   session,
   active,
   indent,
+  activityTimestamp,
+  statusType = 'idle',
+  pinned = false,
   contextLabel,
   confirmingArchive = false,
   hasChildren = false,
   expanded = false,
   onToggleChildren,
   onSelect,
+  onTogglePinned,
   onRequestArchive,
   onConfirmArchive,
 }) => {
   const { t } = useI18n();
-  const time = formatRelativeShort(getSessionTimestamp(session));
+  const time = formatRelativeShort(activityTimestamp ?? getSessionTimestamp(session));
   const title = session.title?.trim() || t('mobile.sessions.untitled');
+  const isRunning = statusType === 'busy' || statusType === 'retry';
   return (
     <div
       className={cn(
@@ -328,6 +376,7 @@ const SessionRow: React.FC<{
         style={{ paddingLeft: indent, touchAction: 'manipulation' }}
         onClick={onSelect}
         disabled={confirmingArchive}
+        aria-current={active ? 'page' : undefined}
       >
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-2.5">
@@ -346,6 +395,15 @@ const SessionRow: React.FC<{
             >
               {title}
             </span>
+            {isRunning ? (
+              <span
+                className="flex size-5 shrink-0 items-center justify-center text-[var(--status-info)]"
+                aria-label={t('mobile.sessions.status.running')}
+                title={t('mobile.sessions.status.running')}
+              >
+                <Icon name="loader-4" className="size-3.5 animate-spin motion-reduce:animate-none" />
+              </span>
+            ) : null}
             {time ? (
               <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{time}</span>
             ) : null}
@@ -355,6 +413,35 @@ const SessionRow: React.FC<{
           ) : null}
         </span>
       </button>
+      {onTogglePinned && !confirmingArchive ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            'size-11 rounded-xl',
+            pinned ? 'text-primary' : 'text-muted-foreground/70',
+          )}
+          aria-label={t(
+            pinned
+              ? 'sessions.sidebar.session.menu.unpin'
+              : 'sessions.sidebar.session.menu.pin',
+          )}
+          title={t(
+            pinned
+              ? 'sessions.sidebar.session.menu.unpin'
+              : 'sessions.sidebar.session.menu.pin',
+          )}
+          aria-pressed={pinned}
+          onClick={(event) => {
+            event.stopPropagation();
+            onTogglePinned();
+          }}
+          style={{ touchAction: 'manipulation' }}
+        >
+          <Icon name={pinned ? 'unpin' : 'pushpin'} className="size-4" />
+        </Button>
+      ) : null}
       {onRequestArchive ? (
         <>
           {confirmingArchive ? (
@@ -421,6 +508,75 @@ const ShowFewerRow: React.FC<{
       <RiArrowUpSLine className="size-4" />
       <span className="typography-micro">{t('sessions.sidebar.group.showFewer')}</span>
     </button>
+  );
+};
+
+const MobileSessionActivityGroup: React.FC<{
+  title: string;
+  sessions: Session[];
+  renderSession: (session: Session) => React.ReactNode;
+}> = ({ title, sessions, renderSession }) => {
+  const { t } = useI18n();
+  const headingId = React.useId();
+  const contentId = React.useId();
+  const [expanded, setExpanded] = React.useState(true);
+  const [visibleCount, setVisibleCount] = React.useState(SESSIONS_PER_BUCKET);
+
+  if (sessions.length === 0) return null;
+
+  const visibleSessions = sessions.slice(0, visibleCount);
+  const remainingSessions = sessions.length - visibleSessions.length;
+  const canShowFewer = sessions.length > SESSIONS_PER_BUCKET && remainingSessions === 0;
+
+  return (
+    <section aria-labelledby={headingId} className="border-b border-border/30 pb-2">
+      <button
+        type="button"
+        className="flex min-h-11 w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        aria-label={
+          expanded
+            ? t('sessions.sidebar.group.collapseAria', { label: title })
+            : t('sessions.sidebar.group.expandAria', { label: title })
+        }
+        onClick={() => {
+          setExpanded((value) => !value);
+          setVisibleCount(SESSIONS_PER_BUCKET);
+        }}
+        style={{ touchAction: 'manipulation' }}
+      >
+        <ChevronToggle expanded={expanded} />
+        <span id={headingId} className="block min-w-0 flex-1 truncate typography-ui-label font-semibold text-foreground">
+          {title}
+        </span>
+        <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
+          {sessions.length}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div id={contentId}>
+          {visibleSessions.map((session) => (
+            <React.Fragment key={session.id}>{renderSession(session)}</React.Fragment>
+          ))}
+          {remainingSessions > 0 ? (
+            <ShowMoreRow
+              indent={ACTIVITY_SESSION_INDENT}
+              onClick={() => setVisibleCount((count) => (
+                Math.min(sessions.length, count + SESSIONS_PER_BUCKET)
+              ))}
+            />
+          ) : null}
+          {canShowFewer ? (
+            <ShowFewerRow
+              indent={ACTIVITY_SESSION_INDENT}
+              onClick={() => setVisibleCount(SESSIONS_PER_BUCKET)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   );
 };
 
@@ -514,11 +670,23 @@ const SortableProjectRow: React.FC<{
   );
 };
 
-export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange, variant = 'sheet' }) => {
+export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
+  open,
+  onOpenChange,
+  variant = 'sheet',
+}) => {
   const { t } = useI18n();
   const { git } = useRuntimeAPIs();
   const liveSessions = useAllLiveSessions();
+  const authoritativeLiveSessionIds = useAllAuthoritativeLiveSessionIds();
+  const messageActivityBySessionId = useAllSessionMessageActivity(open);
+  const sessionStatuses = useAllSessionStatuses();
+  const globalResolvedStatusById = useGlobalSessionStatusStore((state) => state.resolvedStatusById);
   const globalActiveSessions = useGlobalSessionsStore((state) => state.activeSessions);
+  const globalArchivedSessions = useGlobalSessionsStore((state) => state.archivedSessions);
+  const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.hasAuthoritativeSnapshot);
+  const pinnedSessionIds = useSessionPinnedStore((state) => state.ids);
+  const togglePinnedSession = useSessionPinnedStore((state) => state.toggle);
   const projects = useProjectsStore((state) => state.projects);
   const activeProjectId = useProjectsStore((state) => state.activeProjectId);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
@@ -538,6 +706,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   const expandedParents = useMobileSessionExpansionStore((state) => state.expandedParents);
   const toggleParent = useMobileSessionExpansionStore((state) => state.toggleParent);
   const [query, setQuery] = React.useState('');
+  const [recentNow, setRecentNow] = React.useState(() => Date.now());
   const [editingProjectId, setEditingProjectId] = React.useState<string | null>(null);
   const [confirmingArchiveSessionId, setConfirmingArchiveSessionId] = React.useState<string | null>(null);
   // Bumped to force a re-list of worktrees (e.g. after one is deleted in the editor).
@@ -549,6 +718,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   const [gitProjectPaths, setGitProjectPaths] = React.useState<Set<string>>(new Set());
   const [editingOrder, setEditingOrder] = React.useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = React.useState<string | null>(null);
+  const statusPollTargetsRef = React.useRef<Array<[string, string[]]>>([]);
+  const statusLastPolledAtRef = React.useRef<Map<string, number>>(new Map());
   // Per-bucket count of sessions revealed past the default page. Ephemeral —
   // resets when the sheet closes or when a group/project is toggled. Expand
   // state itself lives in useMobileSessionTreeStore (persisted).
@@ -568,6 +739,13 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     void refreshGlobalSessions(liveSessions);
     // intentionally only on open transition — live overlay handles updates after that
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setRecentNow(Date.now());
+    const interval = window.setInterval(() => setRecentNow(Date.now()), RECENT_CLOCK_INTERVAL_MS);
+    return () => window.clearInterval(interval);
   }, [open]);
 
   React.useEffect(() => {
@@ -633,18 +811,142 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
    */
   const sessions = React.useMemo(() => {
     const liveById = new Map(liveSessions.map((session) => [session.id, session]));
+    const archivedIds = new Set(globalArchivedSessions.map((session) => session.id));
     const merged = globalActiveSessions.map((session) => {
       const liveSession = liveById.get(session.id);
       return liveSession ? mergeLiveSessionWithGlobalSession(liveSession, session) : session;
     });
     const seenIds = new Set(merged.map((session) => session.id));
     for (const session of liveSessions) {
-      if (!seenIds.has(session.id)) merged.push(session);
+      if (
+        !seenIds.has(session.id)
+        && !archivedIds.has(session.id)
+        && (!hasAuthoritativeGlobalSessions || authoritativeLiveSessionIds.has(session.id))
+      ) {
+        merged.push(session);
+      }
     }
     return merged;
-  }, [globalActiveSessions, liveSessions]);
+  }, [
+    authoritativeLiveSessionIds,
+    globalActiveSessions,
+    globalArchivedSessions,
+    hasAuthoritativeGlobalSessions,
+    liveSessions,
+  ]);
 
   const normalizedQuery = query.trim().toLowerCase();
+
+  const statusPollTargets = React.useMemo(() => {
+    if (!open) return new Map<string, string[]>();
+    const queryMatchIds = new Set<string>();
+    if (normalizedQuery) {
+      for (const session of sessions) {
+        const directory = getSessionDirectory(session);
+        const project = findExactProjectMatch(projectsMeta, directory);
+        if (sessionMatchesQuery(session, project?.label ?? '', normalizedQuery)) {
+          queryMatchIds.add(session.id);
+        }
+      }
+    }
+    const ordered = [...sessions].sort((a, b) => {
+      const queryDifference = Number(queryMatchIds.has(b.id)) - Number(queryMatchIds.has(a.id));
+      if (normalizedQuery && queryDifference !== 0) return queryDifference;
+      const pinnedDifference = Number(pinnedSessionIds.has(b.id)) - Number(pinnedSessionIds.has(a.id));
+      if (pinnedDifference !== 0) return pinnedDifference;
+      return getSessionTimestamp(b) - getSessionTimestamp(a);
+    });
+    const targets = new Map<string, string[]>();
+    for (const session of ordered) {
+      const directory = getSessionDirectory(session);
+      if (!directory) continue;
+      const sessionIds = targets.get(directory) ?? [];
+      sessionIds.push(session.id);
+      targets.set(directory, sessionIds);
+    }
+    return targets;
+  }, [normalizedQuery, open, pinnedSessionIds, projectsMeta, sessions]);
+
+  React.useEffect(() => {
+    statusPollTargetsRef.current = [...statusPollTargets.entries()];
+    const activeDirectories = new Set(statusPollTargets.keys());
+    for (const directory of statusLastPolledAtRef.current.keys()) {
+      if (!activeDirectories.has(directory)) statusLastPolledAtRef.current.delete(directory);
+    }
+  }, [statusPollTargets]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    let disposed = false;
+    let inFlight = false;
+    const activeRequests = new Set<AbortController>();
+    const lastPolledAt = statusLastPolledAtRef.current;
+    const refresh = async () => {
+      if (inFlight) return;
+      const targets = statusPollTargetsRef.current;
+      if (targets.length === 0) return;
+      inFlight = true;
+      try {
+        const batch = targets
+          .map((target, index) => ({ target, index, lastPolledAt: lastPolledAt.get(target[0]) ?? 0 }))
+          .sort((a, b) => a.lastPolledAt - b.lastPolledAt || a.index - b.index)
+          .slice(0, STATUS_POLL_DIRECTORY_LIMIT)
+          .map(({ target }) => target);
+        const pollStartedAt = Date.now();
+        for (const [directory] of batch) lastPolledAt.set(directory, pollStartedAt);
+        await Promise.all(batch.map(async ([directory, sessionIds]) => {
+          const baselineRevision = getGlobalSessionStatusRevision();
+          const controller = new AbortController();
+          activeRequests.add(controller);
+          try {
+            const snapshot = await fetchSessionStatusSnapshot(directory, controller.signal);
+            if (!disposed && snapshot !== null) {
+              applyGlobalSessionStatusSnapshot(directory, snapshot, sessionIds, baselineRevision);
+            }
+          } finally {
+            activeRequests.delete(controller);
+          }
+        }));
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), STATUS_POLL_INTERVAL_MS);
+    return () => {
+      disposed = true;
+      for (const controller of activeRequests) controller.abort();
+      activeRequests.clear();
+      lastPolledAt.clear();
+      window.clearInterval(interval);
+    };
+  }, [open]);
+
+  const getSessionStatusType = React.useCallback((sessionId: string): 'busy' | 'retry' | 'idle' => {
+    const globalStatus = globalResolvedStatusById.get(sessionId);
+    if (globalStatus) return globalStatus;
+    const liveStatus = sessionStatuses[sessionId]?.type;
+    if (liveStatus === 'busy' || liveStatus === 'retry') return liveStatus;
+    return 'idle';
+  }, [globalResolvedStatusById, sessionStatuses]);
+
+  const getActivityTimestamp = React.useCallback(
+    (session: Session) => getSessionActivityTimestamp(session, messageActivityBySessionId),
+    [messageActivityBySessionId],
+  );
+
+  const pinnedSessions = React.useMemo(() => {
+    if (!open || normalizedQuery || editingOrder) return [];
+    return sortSessionsByActivity(
+      sessions.filter((session) => pinnedSessionIds.has(session.id)),
+      messageActivityBySessionId,
+    );
+  }, [editingOrder, messageActivityBySessionId, normalizedQuery, open, pinnedSessionIds, sessions]);
+
+  const recentSessions = React.useMemo(() => {
+    if (!open || normalizedQuery || editingOrder) return [];
+    return deriveRecentSessions(sessions, recentNow, messageActivityBySessionId);
+  }, [editingOrder, messageActivityBySessionId, normalizedQuery, open, recentNow, sessions]);
 
   const projectNodes = React.useMemo<ProjectNode[]>(() => {
     const nodes: ProjectNode[] = projectsMeta.map((project) => ({
@@ -788,11 +1090,15 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             session={session}
             active={currentSessionId === session.id}
             indent={rowIndent}
+            activityTimestamp={getActivityTimestamp(session)}
+            statusType={getSessionStatusType(session.id)}
+            pinned={pinnedSessionIds.has(session.id)}
             hasChildren={hasChildren}
             expanded={expanded}
             onToggleChildren={hasChildren ? () => toggleParent(session.id) : undefined}
             confirmingArchive={confirmingArchiveSessionId === session.id}
             onSelect={() => handleSelectSession(session)}
+            onTogglePinned={() => togglePinnedSession(session.id)}
             onRequestArchive={() => handleRequestArchive(session.id)}
             onConfirmArchive={() => void handleConfirmArchive(session)}
           />
@@ -905,6 +1211,23 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     setActiveProject(project.id);
     onOpenChange(false);
   };
+
+  const renderActivitySession = (session: Session): React.ReactNode => (
+    <SessionRow
+      session={session}
+      active={currentSessionId === session.id}
+      indent={ACTIVITY_SESSION_INDENT}
+      activityTimestamp={getActivityTimestamp(session)}
+      statusType={getSessionStatusType(session.id)}
+      pinned={pinnedSessionIds.has(session.id)}
+      contextLabel={buildSessionContextLabel(session)}
+      confirmingArchive={confirmingArchiveSessionId === session.id}
+      onSelect={() => handleSelectSession(session)}
+      onTogglePinned={() => togglePinnedSession(session.id)}
+      onRequestArchive={() => handleRequestArchive(session.id)}
+      onConfirmArchive={() => void handleConfirmArchive(session)}
+    />
+  );
 
   const filteredNodes = React.useMemo(() => {
     if (!normalizedQuery) return projectNodes;
@@ -1067,8 +1390,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                           session={session}
                           active={currentSessionId === session.id}
                           indent={12}
+                          activityTimestamp={getActivityTimestamp(session)}
+                          statusType={getSessionStatusType(session.id)}
+                          pinned={pinnedSessionIds.has(session.id)}
                           contextLabel={buildSessionContextLabel(session)}
                           onSelect={() => handleSelectSession(session)}
+                          onTogglePinned={() => togglePinnedSession(session.id)}
                         />
                       </div>
                     ))}
@@ -1149,6 +1476,17 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             </div>
           ) : (
             <div className="flex flex-col">
+              <MobileSessionActivityGroup
+                title={t('mobile.sessions.section.pinned')}
+                sessions={pinnedSessions}
+                renderSession={renderActivitySession}
+              />
+              <MobileSessionActivityGroup
+                title={t('sessions.sidebar.activity.recentTitle')}
+                sessions={recentSessions}
+                renderSession={renderActivitySession}
+              />
+
               {orderedNodes.map((node, nodeIndex) => {
                 const projectExpanded = isProjectExpanded(node);
                 const buckets = normalizedQuery

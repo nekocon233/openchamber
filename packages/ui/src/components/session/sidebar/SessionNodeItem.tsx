@@ -95,11 +95,11 @@ type Props = {
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: SecondaryMeta | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: 'project' | 'recent' | 'pinned',
     renderExtras?: SessionNodeRenderExtras,
   ) => React.ReactNode;
   secondaryMeta?: SecondaryMeta | null;
-  renderContext?: 'project' | 'recent';
+  renderContext?: 'project' | 'recent' | 'pinned';
   /**
    * Precomputed set of session IDs whose subtree contains the current
    * active session. Computed once per SessionGroupSection render (when

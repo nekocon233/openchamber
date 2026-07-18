@@ -2181,6 +2181,20 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
   // new-session intents resolve directly against the store, so they aren't wired here.
   const deepLinkHandlers = React.useMemo(
     () => ({
+      prepareForSession: () => {
+        setSessionsSheetOpen(false);
+        setFilesOpen(false);
+        setChangesOpen(false);
+        setTerminalOpen(false);
+        setMcpOpen(false);
+        setInstancesOpen(false);
+        setSettingsOpen(false);
+        setUpdateOpen(false);
+        setOverflowOpen(false);
+        setIpadRightPanel(null);
+        setPendingChangesDiff(null);
+        if (isPortrait) setIpadSidebarOpen(false);
+      },
       openSessions: () => {
         if (isIPad) setIpadSidebarOpen(true);
         else setSessionsSheetOpen(true);
@@ -2200,7 +2214,7 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
         setSettingsOpen(true);
       },
     }),
-    [isIPad, openChangesSurface, openFilesSurface, setSettingsPage],
+    [isIPad, isPortrait, openChangesSurface, openFilesSurface, setSettingsPage],
   );
   useDeepLinkHandlers(deepLinkHandlers);
 
@@ -2430,18 +2444,20 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
               )}
               style={{ width: 'var(--oc-ipad-sidebar-width)', overflowX: 'hidden' }}
             >
-              <ErrorBoundary>
-                <MobileSessionsSheet
-                  open
-                  variant="sidebar"
-                  // The surface asks to close after picking a session/project or
-                  // creating a worktree; the persistent landscape sidebar stays
-                  // put, portrait gives the space back to the chat.
-                  onOpenChange={(value) => {
-                    if (!value && isPortrait) setIpadSidebarOpen(false);
-                  }}
-                />
-              </ErrorBoundary>
+              {ipadSidebarOpen ? (
+                <ErrorBoundary>
+                  <MobileSessionsSheet
+                    open
+                    variant="sidebar"
+                    // The surface asks to close after picking a session/project or
+                    // creating a worktree; the persistent landscape sidebar stays
+                    // put, portrait gives the space back to the chat.
+                    onOpenChange={(value) => {
+                      if (!value && isPortrait) setIpadSidebarOpen(false);
+                    }}
+                  />
+                </ErrorBoundary>
+              ) : null}
             </div>
           </aside>
         ) : null}
@@ -3021,7 +3037,7 @@ export function MobileApp({ apis }: MobileAppProps) {
   // scheme (widgets, Live Activities, external links). Registered unconditionally so a
   // cold-launch tap/open isn't lost on the connect/splash screen; intents stash until
   // the app is ready (connected + initialized) and shell handlers are registered.
-  useDeepLinkSource({ ready: isNativeMobileApp && isConnected && isInitialized });
+  useDeepLinkSource({ ready: isConnected && isInitialized });
   const fontsReady = useFontsReady();
 
   // `isConnected` is a LIVE flag that flips false on every transient SSE/WS drop and
