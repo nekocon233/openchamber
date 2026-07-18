@@ -20,6 +20,7 @@ import {
   clearSessionPrefetch,
 } from "./session-prefetch-cache"
 import { getSessionMaterializationStatus, materializeSessionSnapshots } from "./materialization"
+import { removeSessionMessageActivity } from "./session-message-activity"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 const INITIAL_MESSAGE_PAGE_SIZE = 50
@@ -691,6 +692,7 @@ export function useSync() {
       delete part[input.messageID]
 
       targetStore.setState({ message, part })
+      removeSessionMessageActivity(input.sessionID, input.messageID)
     },
     [clearOptimistic, getOptimisticStore],
   )

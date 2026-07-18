@@ -28,6 +28,7 @@ import {
   type SessionMetadataRecord,
 } from "@/lib/sessionReviewMetadata"
 import { withContextObligatoryMessage, type ContextObligatoryMessage } from "@/lib/contextObligatoryMessages"
+import { setGlobalSessionStatus } from "./global-session-status"
 
 const MESSAGE_REFETCH_LIMIT = 100
 const SEND_CONFIRMATION_REFETCH_LIMIT = 30
@@ -785,6 +786,7 @@ export async function optimisticSend(input: {
       [input.sessionId]: { type: "busy" as const },
     },
   })
+  setGlobalSessionStatus(input.sessionId, targetDirectory, "busy", { optimistic: true })
 
   try {
     await input.send(messageID)
@@ -816,6 +818,7 @@ export async function optimisticSend(input: {
         [input.sessionId]: { type: "idle" as const },
       },
     })
+    setGlobalSessionStatus(input.sessionId, targetDirectory, "idle")
     throw error
   }
 }

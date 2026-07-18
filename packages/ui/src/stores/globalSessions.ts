@@ -10,6 +10,34 @@ export type GlobalSessionRecord = Session & {
     } | null;
 };
 
+export function reconcileSessionListWithConcurrentChanges<T extends Session>(
+    authoritative: T[],
+    baseline: T[],
+    current: T[],
+    removedSinceBaseline: ReadonlySet<string> = new Set(),
+): T[] {
+    const baselineById = new Map(baseline.map((session) => [session.id, session]));
+    const currentById = new Map(current.map((session) => [session.id, session]));
+    const concurrentById = new Map<string, T>();
+
+    for (const session of current) {
+        if (baselineById.get(session.id) !== session) concurrentById.set(session.id, session);
+    }
+
+    const next: T[] = [];
+    const seen = new Set<string>();
+    for (const session of authoritative) {
+        if (removedSinceBaseline.has(session.id) && !currentById.has(session.id)) continue;
+        if (baselineById.has(session.id) && !currentById.has(session.id)) continue;
+        next.push(concurrentById.get(session.id) ?? session);
+        seen.add(session.id);
+    }
+    for (const [sessionId, session] of concurrentById) {
+        if (!seen.has(sessionId)) next.push(session);
+    }
+    return next;
+}
+
 const toNumber = (value: string | null): number | null => {
     if (!value) {
         return null;

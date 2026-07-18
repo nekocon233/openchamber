@@ -373,8 +373,11 @@ const resolveSessionDirectory = (
   }
   const sessions = getAllSyncSessions()
   const target = sessions.find((s) => s.id === sessionId)
-  if (!target) return null
-  return resolveDirectoryKey(target)
+  if (target) return resolveDirectoryKey(target)
+  const global = useGlobalSessionsStore.getState()
+  const globalSession = [...global.activeSessions, ...global.archivedSessions]
+    .find((session) => session.id === sessionId)
+  return globalSession ? resolveGlobalSessionDirectory(globalSession) : null
 }
 
 const activateConfigForDirectory = async (directory: string | null | undefined): Promise<void> => {

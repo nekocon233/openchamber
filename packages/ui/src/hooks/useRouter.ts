@@ -70,7 +70,8 @@ export function useRouter(): void {
         if (route.sessionId) {
           const currentSessionId = useSessionUIStore.getState().currentSessionId;
           if (route.sessionId !== currentSessionId) {
-            const directoryHint = useSessionUIStore.getState().getDirectoryForSession(route.sessionId);
+            const directoryHint = route.sessionDirectory
+              ?? useSessionUIStore.getState().getDirectoryForSession(route.sessionId);
             setCurrentSession(route.sessionId, directoryHint);
           }
         }

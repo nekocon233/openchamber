@@ -7,7 +7,11 @@ import { isDesktopShell } from '@/lib/desktop';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { formatDirectoryName, cn } from '@/lib/utils';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useAllLiveSessions } from '@/sync/sync-context';
+import {
+  useAllAuthoritativeLiveSessionIds,
+  useAllLiveSessions,
+  useAllSessionMessageActivity,
+} from '@/sync/sync-context';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSync } from '@/sync/use-sync';
 import { useSessionPrefetch } from './sidebar/hooks/useSessionPrefetch';
@@ -63,6 +67,7 @@ import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { type SessionGroup, type SessionNode } from './sidebar/types';
 import {
   deriveRecentSessions,
+  sortSessionsByActivity,
 } from './sidebar/activitySections';
 import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import {
@@ -93,6 +98,7 @@ const PROJECT_ACTIVE_SESSION_STORAGE_KEY = 'oc.sessions.activeSessionByProject';
 const SESSION_EXPANDED_STORAGE_KEY = 'oc.sessions.expandedParents.v2';
 const LEGACY_SESSION_EXPANDED_STORAGE_KEY = 'oc.sessions.expandedParents';
 const SESSION_PINNED_STORAGE_KEY = 'oc.sessions.pinned';
+const RECENT_CLOCK_INTERVAL_MS = 60_000;
 
 type PrVisualState = 'draft' | 'open' | 'blocked' | 'merged' | 'closed';
 
@@ -316,8 +322,21 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
 
   const sync = useSync();
   const liveSessions = useAllLiveSessions();
+  const authoritativeLiveSessionIds = useAllAuthoritativeLiveSessionIds();
   const isVSCode = React.useMemo(() => isVSCodeRuntime(), []);
-  const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.status === 'ready');
+  const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
+  const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
+  const messageActivityBySessionId = useAllSessionMessageActivity(
+    !isVSCode && (showPinnedSection || showRecentSection),
+  );
+  const [recentNow, setRecentNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (isVSCode || !showRecentSection) return;
+    setRecentNow(Date.now());
+    const interval = window.setInterval(() => setRecentNow(Date.now()), RECENT_CLOCK_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [isVSCode, showRecentSection]);
+  const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.hasAuthoritativeSnapshot);
   const globalActiveSessions = useGlobalSessionsStore((state) => state.activeSessions);
   const archivedSessions = useGlobalSessionsStore((state) => state.archivedSessions);
   const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
@@ -360,6 +379,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
 
   const sessions = React.useMemo(() => {
     const liveById = new Map(liveSessions.map((session) => [session.id, session]));
+    const archivedIds = new Set(archivedSessions.map((session) => session.id));
     const merged = globalActiveSessions.map((session) => {
       const liveSession = liveById.get(session.id);
       return liveSession ? mergeLiveSessionWithGlobalSession(liveSession, session) : session;
@@ -367,7 +387,11 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     const seenIds = new Set(merged.map((session) => session.id));
 
     liveSessions.forEach((session) => {
-      if (seenIds.has(session.id)) {
+      if (
+        seenIds.has(session.id)
+        || archivedIds.has(session.id)
+        || (hasAuthoritativeGlobalSessions && !authoritativeLiveSessionIds.has(session.id))
+      ) {
         return;
       }
       merged.push(session);
@@ -377,7 +401,15 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       allowUnknownDirectory: !isVSCode,
       allowEmptyDirectorySet: !isVSCode,
     }));
-  }, [globalActiveSessions, isVSCode, knownSessionDirectories, liveSessions]);
+  }, [
+    archivedSessions,
+    authoritativeLiveSessionIds,
+    globalActiveSessions,
+    hasAuthoritativeGlobalSessions,
+    isVSCode,
+    knownSessionDirectories,
+    liveSessions,
+  ]);
 
   const persistenceSessions = React.useMemo(
     () => [...globalActiveSessions, ...archivedSessions],
@@ -749,7 +781,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   // Auto-expand parent session when navigating to a subagent (child) session.
   // We don't know which render context the user will look at the parent in
   // (Recent, project root, archived bucket, ...), so fan out across all
-  // four combinations to ensure it's expanded wherever it appears.
+  // render/bucket combinations to ensure it's expanded wherever it appears.
   React.useEffect(() => {
     if (!currentSessionId) return;
     const current = sessions.find((s) => s.id === currentSessionId);
@@ -760,6 +792,8 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       `project:archived:${parentID}`,
       `recent:active:${parentID}`,
       `recent:archived:${parentID}`,
+      `pinned:active:${parentID}`,
+      `pinned:archived:${parentID}`,
     ];
     setExpandedParents((prev) => {
       if (keysToAdd.every((k) => prev.has(k))) return prev;
@@ -1015,7 +1049,6 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     lastRepoStatusRef.current = Boolean(projectRepoStatus.get(activeProjectId));
   }
 
-  const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
   const showArchivedSessions = useSessionDisplayStore((state) => state.showArchivedSessions);
   const projectSortOrder = useSessionDisplayStore((state) => state.projectSortOrder);
   const manualProjectOrder = useProjectsStore((state) => state.manualProjectOrder);
@@ -1175,9 +1208,16 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       return [];
     }
 
-    return deriveRecentSessions(sessions)
-      .sort((a, b) => compareSessionsByPinnedAndTime(a, b, pinnedSessionIds));
-  }, [isVSCode, pinnedSessionIds, sessions, showRecentSection]);
+    return deriveRecentSessions(sessions, recentNow, messageActivityBySessionId);
+  }, [isVSCode, messageActivityBySessionId, recentNow, sessions, showRecentSection]);
+
+  const pinnedActivitySessions = React.useMemo(() => {
+    if (!showPinnedSection || isVSCode) return [];
+    return sortSessionsByActivity(
+      sessions.filter((session) => pinnedSessionIds.has(session.id)),
+      messageActivityBySessionId,
+    );
+  }, [isVSCode, messageActivityBySessionId, pinnedSessionIds, sessions, showPinnedSection]);
 
   // Prefetch is wired below, after recentSessionIds is computed.
 
@@ -1185,11 +1225,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     // VS Code renders the full grouped project view (one group per open
     // workspace, folders + pinned native); the flat "recent" activity list is
     // web/desktop-only.
-    if (isVSCode || !showRecentSection) {
+    if (isVSCode || (!showPinnedSection && !showRecentSection)) {
       return [];
     }
-
-    const recentSessions = activeNowSessions;
 
     const toItem = (session: Session) => {
       const existing = sessionSidebarMetaById.get(session.id);
@@ -1216,14 +1254,30 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       };
     };
 
-    const items = recentSessions
+    const toItems = (items: Session[]) => items
       .map(toItem)
       .filter((item): item is NonNullable<ReturnType<typeof toItem>> => item !== null);
 
     return [
-      { key: 'active-now' as const, title: t('sessions.sidebar.activity.recentTitle'), items },
+      ...(showPinnedSection
+        ? [{ key: 'pinned' as const, title: t('sessions.sidebar.activity.pinnedTitle'), items: toItems(pinnedActivitySessions) }]
+        : []),
+      ...(showRecentSection
+        ? [{ key: 'active-now' as const, title: t('sessions.sidebar.activity.recentTitle'), items: toItems(activeNowSessions) }]
+        : []),
     ];
-  }, [activeNowSessions, filterSessionNodesForSearch, hasSessionSearchQuery, isVSCode, normalizedSessionSearchQuery, sessionSidebarMetaById, showRecentSection, t]);
+  }, [
+    activeNowSessions,
+    filterSessionNodesForSearch,
+    hasSessionSearchQuery,
+    isVSCode,
+    normalizedSessionSearchQuery,
+    pinnedActivitySessions,
+    sessionSidebarMetaById,
+    showPinnedSection,
+    showRecentSection,
+    t,
+  ]);
 
   const hasActivitySectionItems = React.useMemo(
     () => activitySections.some((section) => section.items.length > 0),
@@ -1232,8 +1286,8 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
 
 
   const recentSessionIds = React.useMemo(() => {
-    return new Set(activeNowSessions.map((session) => session.id));
-  }, [activeNowSessions]);
+    return new Set([...pinnedActivitySessions, ...activeNowSessions].map((session) => session.id));
+  }, [activeNowSessions, pinnedActivitySessions]);
 
   const recentSessionIdsList = React.useMemo(() => [...recentSessionIds], [recentSessionIds]);
 
@@ -1373,7 +1427,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       projectId?: string | null,
       archivedBucket: boolean = false,
       secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
-      renderContext: 'project' | 'recent' = 'project',
+      renderContext: 'project' | 'recent' | 'pinned' = 'project',
       renderExtras?: SessionNodeRenderExtras,
     ): React.ReactNode => (
       <SessionNodeItem
@@ -1558,7 +1612,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     ],
   );
 
-  const topContent = (!isVSCode && showRecentSection && !hasSessionSearchQuery) ? (
+  const topContent = (!isVSCode && (showPinnedSection || showRecentSection) && !hasSessionSearchQuery) ? (
     <SidebarActivitySections
       sections={activitySections}
       renderSessionNode={renderSessionNode}

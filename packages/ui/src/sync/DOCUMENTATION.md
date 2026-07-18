@@ -82,13 +82,19 @@ Current consumers:
 
 Cross-directory selectors subscribe to the narrow child-store field they aggregate. Session aggregation listens to `state.session`; per-session status listens only to that session's `state.session_status` entry. Unrelated streaming events such as `message.part.delta` must not trigger global session/status scans.
 
+Recent-session ordering combines cached child-store `message.time.created` watermarks with global `message.updated` event watermarks. This covers optimistic user sends, rollback, assistant replies, and unopened directories without fetching message history per global session. `message.part.*` events never update this ordering source; missing message activity falls back to session metadata time.
+
+Cross-directory running indicators combine child-store status with the global status event store. Directory status snapshots carry both a global revision baseline and per-session child-status references so delayed HTTP responses cannot overwrite newer events or optimistic send/rollback transitions. Optimistic sends receive a short grace period against an overtaking idle snapshot; failed sends still clear immediately. Authoritative reconnect snapshots may clear missing sessions; monotonic periodic watchdog checks publish only active `busy`/`retry` entries and never infer idle from absence. Bootstrap and watchdog status requests are scoped, validated, time-bounded, and cancelled or ignored across runtime changes. Runtime reset advances the revision floor against late responses, and inactive status history is capped.
+
+`State.sessionsLoaded` is the authority marker for each child store's session list; `status === "complete"` only means the critical bootstrap phase finished. Session-list HTTP responses reconcile creates, updates, archives, and deletes that arrived through SSE while the request was in flight. Reconnect materialization and global list loads use the same concurrent-change rule and reject responses from an obsolete runtime or SDK transport.
+
 Imperative cross-directory session lookups use the cached ID index from `getAllSyncSessionMap()`. The index is rebuilt only when a child store's `state.session` reference changes; permission lineage checks must reuse it instead of rebuilding a full session map per call.
 
 VS Code does not run the server permission-auto-accept runtime. The extension host persists and broadcasts authoritative policy, while its foreground UI runtime resolves missing child-session lineage through the OpenCode API before deciding whether to suppress and answer a `permission.asked` event. Enabling the policy and reconnect/bootstrap both reconcile pending requests in the session directory, including requests inherited by child sessions. Unknown lineage and exhausted reply retries fail closed and leave the request available for manual action. With every OpenChamber webview closed or suspended no responder runs; this is an intentional VS Code limitation. Other runtimes remain fully server-owned.
 
 ### Mutation responsibility
 
-`useGlobalSessionsStore` is not maintained by SSE directly. It is kept correct by:
+`useGlobalSessionsStore` is kept correct by:
 
 1. shared global fetch/reconciliation via `loadSessions()` / `refreshGlobalSessions()`
 2. direct mutation from session actions after successful SDK calls:
@@ -99,10 +105,11 @@ VS Code does not run the server permission-auto-accept runtime. The extension ho
    - archive
    - delete
    - retention cleanup batch archive/delete
+3. freshness-checked `session.created`, `session.updated`, and `session.deleted` events
 
 This keeps cold/global lists responsive without requiring a refetch after every change.
 
-Live activity/status indicators must not depend on this cache. They must derive from aggregated child-store state.
+Live activity/status indicators must not depend on this cache. They derive from live child stores and the global event-backed activity/status stores.
 
 ## Session action rules
 

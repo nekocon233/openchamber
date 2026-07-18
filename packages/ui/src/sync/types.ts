@@ -50,6 +50,7 @@ export type State = {
   config: Config
   path: Path
   session: Session[]
+  sessionsLoaded: boolean
   sessionTotal: number
   session_status: Record<string, SessionStatus>
   session_diff: Record<string, FileDiff[]>
@@ -120,6 +121,7 @@ export const INITIAL_STATE: State = {
   agent: [],
   command: [],
   session: [],
+  sessionsLoaded: false,
   sessionTotal: 0,
   session_status: {},
   session_diff: {},

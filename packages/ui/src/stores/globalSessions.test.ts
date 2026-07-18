@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { OpencodeClient } from '@opencode-ai/sdk/v2'
+import type { OpencodeClient, Session } from '@opencode-ai/sdk/v2'
 
-import { listGlobalSessionPages } from './globalSessions'
+import { listGlobalSessionPages, reconcileSessionListWithConcurrentChanges } from './globalSessions'
 
 describe('listGlobalSessionPages', () => {
   test('sanitizes session list records before returning them', async () => {
@@ -94,5 +94,43 @@ describe('listGlobalSessionPages', () => {
     expect(calls[0]).toEqual({ directory: '/repo', archived: false, roots: false, limit: 2 })
     expect(calls[1]).toEqual({ directory: '/repo', archived: false, roots: false, limit: 2, cursor: 10 })
     expect(sessions.map((session) => session.id)).toEqual(['ses_root', 'ses_child_1', 'ses_child_2'])
+  })
+})
+
+describe('reconcileSessionListWithConcurrentChanges', () => {
+  const session = (id: string, updated: number): Session => ({
+    id,
+    title: id,
+    time: { created: 1, updated },
+  } as Session)
+
+  test('preserves concurrent creates and updates while honoring concurrent deletes', () => {
+    const unchanged = session('ses_unchanged', 1)
+    const deleted = session('ses_deleted', 1)
+    const updated = session('ses_updated', 1)
+    const baseline = [unchanged, deleted, updated]
+    const currentUpdated = session('ses_updated', 3)
+    const created = session('ses_created', 3)
+
+    const reconciled = reconcileSessionListWithConcurrentChanges(
+      [session('ses_unchanged', 2), session('ses_deleted', 2), session('ses_updated', 2)],
+      baseline,
+      [unchanged, currentUpdated, created],
+    )
+
+    expect(reconciled.map((item) => `${item.id}:${item.time.updated}`)).toEqual([
+      'ses_unchanged:2',
+      'ses_updated:3',
+      'ses_created:3',
+    ])
+  })
+
+  test('does not resurrect a session created and removed during the request', () => {
+    expect(reconcileSessionListWithConcurrentChanges(
+      [session('ses_transient', 2)],
+      [],
+      [],
+      new Set(['ses_transient']),
+    )).toEqual([])
   })
 })

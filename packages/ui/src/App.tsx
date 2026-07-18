@@ -17,6 +17,7 @@ import { useWebNotificationStream } from '@/hooks/useWebNotificationStream';
 import { usePwaInstallPrompt } from '@/hooks/usePwaInstallPrompt';
 import { useWindowTitle } from '@/hooks/useWindowTitle';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useDeepLinkSource } from '@/apps/deepLinkNavigation';
 import { hasModifier } from '@/lib/utils';
 import { isDesktopLocalOriginActive, isDesktopShell, restartDesktopApp, invokeDesktop } from '@/lib/desktop';
 import {
@@ -216,6 +217,7 @@ function App({ apis }: AppProps) {
   const initializeApp = useConfigStore((s) => s.initializeApp);
   const isInitialized = useConfigStore((s) => s.isInitialized);
   const isConnected = useConfigStore((s) => s.isConnected);
+  useDeepLinkSource({ ready: isConnected && isInitialized });
   const providersCount = useConfigStore((state) => state.providers.length);
   const agentsCount = useConfigStore((state) => state.agents.length);
   const loadProviders = useConfigStore((state) => state.loadProviders);

@@ -5,7 +5,11 @@ import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { desktopHostsGet, getDesktopHostApiUrl, locationMatchesHost, redactSensitiveUrl } from '@/lib/desktopHosts';
 import { getSyncChildStores, getAllSyncSessions } from '@/sync/sync-refs';
 import { opencodeClient } from '@/lib/opencode/client';
-import { useGlobalSessionStatusStore, applyGlobalSessionStatusSnapshot } from '@/sync/global-session-status';
+import {
+  useGlobalSessionStatusStore,
+  applyGlobalSessionStatusSnapshot,
+  getGlobalSessionStatusRevision,
+} from '@/sync/global-session-status';
 import { useNotificationStore } from '@/sync/notification-store';
 import { respondToPermission } from '@/sync/session-actions';
 import {
@@ -448,11 +452,12 @@ export const useTraySync = (): void => {
     const refreshGlobalStatus = async () => {
       const targets = collectStatusPollDirectories();
       await Promise.all([...targets.entries()].map(async ([directory, sessionIds]) => {
+        const baselineRevision = getGlobalSessionStatusRevision();
         // null = fetch failed → keep that directory's current entries;
         // {} = authoritative "everything here is idle".
         const raw = await opencodeClient.getSessionStatusForDirectory(directory).catch(() => null);
         if (disposed || raw === null) return;
-        applyGlobalSessionStatusSnapshot(directory, raw, sessionIds);
+        applyGlobalSessionStatusSnapshot(directory, raw, sessionIds, baselineRevision);
       }));
     };
 

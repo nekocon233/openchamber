@@ -23,6 +23,7 @@ describe('useGlobalSessionsStore', () => {
       archivedSessions: [],
       sessionsByDirectory: new Map(),
       hasLoaded: false,
+      hasAuthoritativeSnapshot: false,
       status: 'idle',
     });
   });
@@ -104,5 +105,20 @@ describe('mergeLiveSessionWithGlobalSession', () => {
 
     const merged = mergeLiveSessionWithGlobalSession(live, global);
     expect(resolveGlobalSessionDirectory(merged)).toBe('/repo/worktree');
+  });
+
+  test('prefers newer global metadata over a stale live cache entry', () => {
+    const live = buildSession('https://live.example/s', {
+      title: 'Stale title',
+      time: { created: 1, updated: 3 },
+    });
+    const global = buildSession('https://global.example/s', {
+      title: 'Fresh title',
+      time: { created: 1, updated: 8 },
+    });
+
+    const merged = mergeLiveSessionWithGlobalSession(live, global);
+    expect(merged.title).toBe('Fresh title');
+    expect(merged.time?.updated).toBe(8);
   });
 });

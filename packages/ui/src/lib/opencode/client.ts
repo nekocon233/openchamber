@@ -1,5 +1,5 @@
 import { createOpencodeClient, OpencodeClient } from "@opencode-ai/sdk/v2";
-import type { PermissionV2Request, PermissionV2Effect, PermissionV2Source } from "@opencode-ai/sdk/v2/client";
+import type { PermissionV2Request, PermissionV2Effect, PermissionV2Source, SessionStatus } from "@opencode-ai/sdk/v2/client";
 import type { FilesAPI } from "../api/types";
 import { getDesktopHomeDirectory } from "../desktop";
 import type {
@@ -41,6 +41,23 @@ import {
 const DEFAULT_BASE_URL = import.meta.env.VITE_OPENCODE_URL || "/api";
 const CONFIG_CACHE_TTL_MS = 10_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 4_000;
+
+type SessionStatusSnapshot = Record<string, SessionStatus>;
+
+export const parseSessionStatusSnapshot = (value: unknown): SessionStatusSnapshot | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const snapshot = value as Record<string, unknown>;
+  const isValid = Object.values(snapshot).every((rawStatus) => {
+    if (!rawStatus || typeof rawStatus !== "object" || Array.isArray(rawStatus)) return false;
+    const status = rawStatus as Record<string, unknown>;
+    if (status.type === "idle" || status.type === "busy") return true;
+    return status.type === "retry"
+      && typeof status.attempt === "number"
+      && typeof status.message === "string"
+      && typeof status.next === "number";
+  });
+  return isValid ? snapshot as SessionStatusSnapshot : null;
+};
 
 /**
  * Render an SDK error payload into a short string for Error messages.
@@ -1035,18 +1052,17 @@ class OpencodeService {
    * not be conflated with that — return `null` so the caller can preserve state.
    */
   async getSessionStatusForDirectory(
-    directory: string | null | undefined
-  ): Promise<Record<string, { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; next?: number }> | null> {
+    directory: string | null | undefined,
+    options?: { signal?: AbortSignal },
+  ): Promise<SessionStatusSnapshot | null> {
     try {
       const trimmedDirectory = typeof directory === "string" ? directory.trim() : "";
-      const result = await this.client.session.status(trimmedDirectory ? { directory: trimmedDirectory } : undefined);
-      if (result.error || !result.data || typeof result.data !== "object") {
-        return null;
-      }
-      return result.data as Record<
-        string,
-        { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; next?: number }
-      >;
+      const result = await this.client.session.status(
+        trimmedDirectory ? { directory: trimmedDirectory } : undefined,
+        options?.signal ? { signal: options.signal } : undefined,
+      );
+      if (result.error) return null;
+      return parseSessionStatusSnapshot(result.data);
     } catch {
       return null;
     }

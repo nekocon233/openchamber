@@ -2,9 +2,15 @@ import type { OpencodeClient, PermissionRequest, Project, QuestionRequest } from
 import { retry } from "./retry"
 import type { GlobalState, State } from "./types"
 import { runtimeFetch } from "../lib/runtime-fetch"
+import { parseSessionStatusSnapshot } from "../lib/opencode/client"
 import { emitSyncConfigChanged } from "./sync-refs"
+import {
+  applyGlobalSessionStatusSnapshot,
+  getGlobalSessionStatusRevision,
+} from "./global-session-status"
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+const SESSION_STATUS_REQUEST_TIMEOUT_MS = 4_000
 
 /**
  * SDK returns `{ data, error, response }` without throwing on non-2xx.
@@ -127,8 +133,16 @@ export async function bootstrapDirectory(input: {
     projects: Project[]
   }
   loadSessions: (directory: string) => Promise<void> | void
+  isCurrent?: () => boolean
 }) {
-  const { directory, sdk, getState, set, global: g } = input
+  const { directory, sdk, getState, set: commit, global: g } = input
+  const isCurrent = () => input.isCurrent?.() !== false
+  const set = (patch: Partial<State>): boolean => {
+    if (!isCurrent()) return false
+    commit(patch)
+    return true
+  }
+  if (!isCurrent()) return
   const state = getState()
   const loading = state.status !== "complete"
 
@@ -137,8 +151,7 @@ export async function bootstrapDirectory(input: {
   if (seededProject) set({ project: seededProject })
   if (Object.keys(state.config ?? {}).length === 0 && Object.keys(g.config ?? {}).length > 0) {
     const seededConfig = g.config as State["config"]
-    set({ config: seededConfig })
-    emitSyncConfigChanged(directory, seededConfig)
+    if (set({ config: seededConfig })) emitSyncConfigChanged(directory, seededConfig)
   }
   if (loading) set({ status: "partial" })
 
@@ -146,14 +159,15 @@ export async function bootstrapDirectory(input: {
   // Phase 1: Critical path — block until these resolve so the UI can render.
   // These are the minimum data needed to show a functional chat interface.
   // ---------------------------------------------------------------------------
+  const statusBaselineRevision = getGlobalSessionStatusRevision()
+  const statusBaseline = state.session_status
   const phase1Results = await Promise.allSettled([
     seededProject
       ? Promise.resolve()
       : retry(() => sdk.project.current().then((x) => set({ project: unwrap(x, "project.current").id }))),
     retry(() => sdk.config.get().then((x) => {
       const config = unwrap(x, "config.get")
-      set({ config })
-      emitSyncConfigChanged(directory, config)
+      if (set({ config })) emitSyncConfigChanged(directory, config)
     })),
     retry(() =>
       sdk.path.get().then((x) => {
@@ -163,8 +177,28 @@ export async function bootstrapDirectory(input: {
         if (next) set({ project: next })
       }),
     ),
-    retry(() => sdk.session.status().then((x) => set({ session_status: unwrap(x, "session.status") }))),
+    retry(async () => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), SESSION_STATUS_REQUEST_TIMEOUT_MS)
+      try {
+        const result = await sdk.session.status({ directory }, { signal: controller.signal })
+        if (result.error) unwrap(result, "session.status")
+        const status = parseSessionStatusSnapshot(result.data)
+        if (!status) throw new Error("session.status returned malformed data")
+        if (!isCurrent()) return
+        const currentStatus = getState().session_status
+        set({
+          session_status: currentStatus === statusBaseline
+            ? status
+            : { ...status, ...currentStatus },
+        })
+        applyGlobalSessionStatusSnapshot(directory, status, undefined, statusBaselineRevision)
+      } finally {
+        clearTimeout(timeout)
+      }
+    }),
   ])
+  if (!isCurrent()) return
 
   const phase1Errors = phase1Results
     .filter((r): r is PromiseRejectedResult => r.status === "rejected")
@@ -270,6 +304,7 @@ export async function bootstrapDirectory(input: {
       set({ permission: merged })
     }),
   ]).then((results) => {
+    if (!isCurrent()) return
     const errors = results
       .filter((r): r is PromiseRejectedResult => r.status === "rejected")
       .map((r) => r.reason)
@@ -281,7 +316,8 @@ export async function bootstrapDirectory(input: {
   // ---------------------------------------------------------------------------
   // Phase 3: Lazy — session list can be large; don't block on it.
   // ---------------------------------------------------------------------------
+  if (!isCurrent()) return
   void Promise.resolve(input.loadSessions(directory)).catch((err) => {
-    console.error(`[bootstrap] session load failed for ${directory}`, err)
+    if (isCurrent()) console.error(`[bootstrap] session load failed for ${directory}`, err)
   })
 }

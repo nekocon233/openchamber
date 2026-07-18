@@ -7,7 +7,11 @@ import {
   findLiveSession,
   findLiveSessionStatus,
 } from '../live-aggregate.ts'
-import { deriveRecentSessions, RECENT_SESSION_MAX_AGE_MS } from '../../components/session/sidebar/activitySections.ts'
+import {
+  deriveRecentSessions,
+  RECENT_SESSION_MAX_AGE_MS,
+  sortSessionsByActivity,
+} from '../../components/session/sidebar/activitySections.ts'
 
 const session = (id, directory, updated, extra = {}) => ({
   id,
@@ -108,5 +112,47 @@ describe('live aggregate', () => {
 
     // ses-3 archived, ses-4 subtask, ses-5 older than 48h -> excluded; rest newest-first
     expect(recent.map((item) => item.id)).toEqual(['ses-2', 'ses-1'])
+  })
+
+  it('orders recent sessions by latest message activity and admits replied older sessions', () => {
+    const now = 1_000_000_000
+    const sessions = [
+      session('ses-metadata', '/a', now - 100),
+      session('ses-sent', '/b', now - 1_000),
+      session('ses-replied', '/c', now - RECENT_SESSION_MAX_AGE_MS - 1),
+    ]
+    const messageActivity = new Map([
+      ['ses-sent', now - 20],
+      ['ses-replied', now - 10],
+    ])
+
+    const recent = deriveRecentSessions(sessions, now, messageActivity)
+
+    expect(recent.map((item) => item.id)).toEqual(['ses-replied', 'ses-sent', 'ses-metadata'])
+  })
+
+  it('uses the same message activity ordering for pinned group candidates without a cutoff', () => {
+    const sessions = [
+      session('ses-1', '/a', 100),
+      session('ses-2', '/b', 200),
+    ]
+
+    const sorted = sortSessionsByActivity(sessions, new Map([['ses-1', 300]]))
+
+    expect(sorted.map((item) => item.id)).toEqual(['ses-1', 'ses-2'])
+  })
+
+  it('uses session metadata only as a fallback when message activity is known', () => {
+    const now = 1_000_000_000
+    const sessions = [
+      session('ses-known-old', '/a', now - 10),
+      session('ses-fallback', '/b', now - 20),
+    ]
+    const oldMessageAt = now - RECENT_SESSION_MAX_AGE_MS - 1
+    const messageActivity = new Map([['ses-known-old', oldMessageAt]])
+
+    const recent = deriveRecentSessions(sessions, now, messageActivity)
+
+    expect(recent.map((item) => item.id)).toEqual(['ses-fallback'])
   })
 })

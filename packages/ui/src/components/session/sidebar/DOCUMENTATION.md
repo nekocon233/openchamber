@@ -3,7 +3,7 @@
 ## Refactor result
 
 - `SessionSidebar.tsx` now acts mainly as orchestration; core logic moved to focused hooks/components.
-- Sidebar is now a single multi-project tree: `recent` top section, then projects, then worktrees/archived groups, then sessions.
+- Desktop sidebar is a single multi-project tree: independently configurable `pinned` and `recent` top sections, then projects, then worktrees/archived groups, then sessions. The dedicated mobile sheet also renders `pinned` before `recent`, uses the same persisted visibility preferences from its project editor, and remembers each activity section's expanded state; both intentionally duplicate rows from the project tree.
 - `NavRail` is no longer part of sidebar/navigation flow.
 - Project headers now own root sessions directly; there is no separate rendered `project root` subgroup.
 - Active/hover row styling is text-first; selected sessions use primary text instead of background fills.
@@ -25,7 +25,8 @@
 ### Components
 
 - `SidebarHeader.tsx`: Top header UI for add-project, session search, and display mode.
-- `SidebarActivitySections.tsx`: Global top section renderer; currently used for the `recent` section only.
+- `SidebarActivitySections.tsx`: Desktop global top section renderer for independently visible `pinned` and `recent` sections.
+- A session may intentionally appear in both top sections and in its project tree. Each copy uses a distinct render context so menus and parent expansion remain independent.
 - `SidebarFooter.tsx`: Static footer with icon-only settings, shortcuts, and about actions.
 - `SidebarProjectsList.tsx`: Main scrollable tree renderer for projects, root sessions, worktrees/groups, and empty/search states.
 - `SessionGroupSection.tsx`: Renders a single worktree/archived group, collapse/expand, folder subtree, and group-level controls.
@@ -54,5 +55,7 @@
 ### Types and utilities
 
 - `types.ts`: Shared sidebar types (`SessionNode`, `SessionGroup`, summary/search metadata).
-- `activitySections.ts`: Persisted top-section storage/helpers for the current `recent` session list.
+- `activitySections.ts`: Shared message-activity ordering helpers for desktop/mobile `recent` and `pinned` groups. Cached messages and global `message.updated` events outrank session metadata timestamps; missing message activity falls back to session timestamps.
+- Active global session metadata wins over an older child-store cache entry. Once the global list is authoritative, live-only rows are admitted only from child stores that completed bootstrap; this preserves externally created sessions without resurrecting deleted cached sessions.
+- The mobile sheet combines live child-store status, global status events, and a bounded, abortable, revision-gated per-directory status reconciliation while open. Rendering a row never bootstraps a directory or fetches message history, and the phone/iPad surface unmounts when closed so hidden subscriptions and status requests do not remain active.
 - `utils.tsx`: Shared sidebar utilities (path normalization, sorting, dedupe, archived scope keys, project relation checks, text highlight, labels, compact/default date formatting).
