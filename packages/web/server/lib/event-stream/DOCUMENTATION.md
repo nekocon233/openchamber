@@ -37,6 +37,7 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 
 ## Runtime behavior
 - Browser clients connect to the WS endpoints above.
+- Managed/public and Private Relay upgrades always require an allowlisted URL token plus the normal origin check, independent of UI-password enablement. Direct local passwordless upgrades remain intentional.
 - OpenChamber still fetches OpenCode upstream event streams over SSE.
 - The web server creates one shared global message-stream hub. OpenCode watcher side effects and global WS clients subscribe to that hub, so there is one upstream `/global/event` SSE reader for both server-side processing and browser fan-out.
 - The global hub keeps a bounded replay buffer keyed by SSE `eventId` so reconnecting browser clients can receive buffered events after their requested `Last-Event-ID`.
@@ -46,6 +47,7 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 - Health checks are reserved for initial upstream connect failures and explicit upstream-unavailable responses, not for ordinary stall recovery on an already-established stream.
 - Global synthetic events such as `openchamber:session-status`, `openchamber:session-activity`, `openchamber:notification`, and `openchamber:heartbeat` are preserved on the WS path, but heartbeat frames are emitted only while an upstream SSE stream is actively attached.
 - Global UI broadcasts are fan-out capable across both SSE and WS clients.
+- Authenticated browser sockets retain only an opaque auth descriptor. Identity revocation or expiry closes matching global/directory sockets with policy code `1008`; URL-token invalidation prevents reconnect with the revoked identity.
 - The reusable upstream reader centralizes SSE fetch/parsing/reconnect behavior for the WS runtime and OpenCode watcher. Additional event consumers should move to it only with parity tests for their lifecycle and error semantics.
 - Browser transport concerns live in the WS bridge modules; server-side global stream ownership lives in `global-hub.js`.
 

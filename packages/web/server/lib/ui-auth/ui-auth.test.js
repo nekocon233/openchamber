@@ -2,6 +2,11 @@ import { afterAll, describe, expect, it } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  createClientNotificationAuth,
+  invalidateNotificationAuth,
+  subscribeNotificationAuthInvalidation,
+} from '../notifications/auth-runtime.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-ui-auth-test-'));
 process.env.OPENCHAMBER_DATA_DIR = dataDir;
@@ -54,7 +59,12 @@ describe('ui auth client credential seam', () => {
       },
     });
 
-    const req = { method: 'GET', headers: { authorization: 'Bearer client-token' } };
+    const req = {
+      method: 'GET',
+      path: '/api/notifications/stream',
+      url: '/api/notifications/stream',
+      headers: { authorization: 'Bearer client-token' },
+    };
     const res = createResponse();
     let called = false;
 
@@ -102,6 +112,20 @@ describe('ui auth client credential seam', () => {
       sessionCalled = true;
     });
     expect(sessionCalled).toBe(true);
+
+    const streamReq = {
+      method: 'GET',
+      path: '/api/notifications/stream',
+      url: '/api/notifications/stream',
+      headers: { cookie: sessionCookie },
+    };
+    const expectedToken = decodeURIComponent(sessionCookie.slice(sessionCookie.indexOf('=') + 1));
+    expect(await auth.ensureSessionToken(streamReq, createResponse())).toBe(expectedToken);
+    const notificationAuth = await auth.resolveNotificationAuth(streamReq, createResponse());
+    expect(notificationAuth.kind).toBe('ui-session');
+    expect(typeof notificationAuth.identity).toBe('string');
+    expect(notificationAuth.identity.startsWith('notify:ui:')).toBe(true);
+    expect(notificationAuth.identity === expectedToken).toBe(false);
   });
 
   it('can require bearer client credentials when UI password is disabled', async () => {
@@ -127,6 +151,106 @@ describe('ui auth client credential seam', () => {
     await auth.requireAuth(deniedReq, deniedRes, () => {});
     expect(deniedRes.statusCode).toBe(401);
     expect(deniedRes.body).toEqual({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
+
+    const relayDeniedRes = createResponse();
+    await auth.requireClientAuth({
+      method: 'GET',
+      headers: {
+        authorization: 'Bearer invalid-client-token',
+        'x-openchamber-relay-connection': 'relay-connection',
+      },
+    }, relayDeniedRes, () => {});
+    expect(relayDeniedRes.statusCode).toBe(401);
+    expect(relayDeniedRes.getHeader('set-cookie')).toBeUndefined();
+  });
+
+  it('invalidates UI notification auth when global session auth is reset', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({ password: 'secret' });
+    const invalidations = [];
+    const unsubscribe = subscribeNotificationAuthInvalidation((selector) => invalidations.push(selector));
+    const loginRes = createResponse();
+    await auth.handleSessionCreate({ headers: {}, body: { password: 'secret' } }, loginRes);
+    const sessionCookie = String(loginRes.getHeader('set-cookie') || '').split(';', 1)[0];
+    const notificationAuth = await auth.resolveNotificationAuth({
+      method: 'GET',
+      headers: { cookie: sessionCookie },
+    }, createResponse());
+    expect(await auth.validateNotificationAuth(notificationAuth)).toBe(true);
+    const res = createResponse();
+
+    auth.handleResetAuth({ headers: {} }, res);
+
+    expect(res.body.signedOutEverywhere).toBe(true);
+    expect(invalidations).toContainEqual({ kind: 'ui-session' });
+    expect(await auth.validateNotificationAuth(notificationAuth)).toBe(false);
+    unsubscribe();
+    auth.dispose();
+  });
+
+  it('does not reuse passwordless notification generations across restart or password policy changes', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const passwordless = createUiAuth();
+    const passwordlessAuth = await passwordless.resolveNotificationAuth(
+      { method: 'GET', headers: {} },
+      createResponse(),
+    );
+    expect(await passwordless.validateNotificationAuth(passwordlessAuth)).toBe(true);
+
+    const restartedPasswordless = createUiAuth();
+    expect(await restartedPasswordless.validateNotificationAuth(passwordlessAuth)).toBe(false);
+
+    const passwordProtected = createUiAuth({ password: 'new-password' });
+    expect(await passwordProtected.validateNotificationAuth(passwordlessAuth)).toBe(false);
+
+    const loginRes = createResponse();
+    await passwordProtected.handleSessionCreate(
+      { method: 'POST', headers: {}, body: { password: 'new-password' } },
+      loginRes,
+    );
+    const passwordAuth = await passwordProtected.resolveNotificationAuth({
+      method: 'GET',
+      headers: { cookie: String(loginRes.getHeader('set-cookie')).split(';', 1)[0] },
+    }, createResponse());
+    const changedPassword = createUiAuth({ password: 'changed-password' });
+    expect(await changedPassword.validateNotificationAuth(passwordAuth)).toBe(false);
+
+    passwordless.dispose();
+    restartedPasswordless.dispose();
+    passwordProtected.dispose();
+    changedPassword.dispose();
+  });
+
+  it('invalidates bearer-derived URL auth when the client identity is revoked', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({
+      clientAuthController: {
+        authenticateBearerToken: async (token) => token === 'url-client-token'
+          ? { ok: true, clientId: 'url-client-revoked' }
+          : null,
+      },
+    });
+    const mintRes = createResponse();
+    await auth.handleUrlAuthToken({
+      method: 'POST',
+      path: '/auth/url-token',
+      headers: { authorization: 'Bearer url-client-token' },
+    }, mintRes);
+    const request = {
+      method: 'GET',
+      path: '/api/global/event/ws',
+      url: `/api/global/event/ws?oc_url_token=${encodeURIComponent(mintRes.body.token)}`,
+      headers: { upgrade: 'websocket' },
+    };
+    expect(await auth.resolveUrlAuth(request)).toMatchObject({
+      kind: 'client',
+      clientId: 'url-client-revoked',
+    });
+
+    invalidateNotificationAuth(createClientNotificationAuth('url-client-revoked'));
+
+    expect(await auth.resolveUrlAuth(request)).toBe(null);
+    auth.dispose();
   });
 
   it('reports authenticated client session status with bearer credentials', async () => {
@@ -181,6 +305,15 @@ describe('ui auth client credential seam', () => {
     expect(urlCalled).toBe(true);
     expect(await auth.ensureSessionToken(urlReq, urlRes)).toBe('client:device-1');
     expect(await auth.resolveAuthContext(urlReq, urlRes, { allowUrlToken: false })).toBe(null);
+
+    const tunnelUrlToken = auth.issueUrlAuthTokenForSession('tunnel:session-1').token;
+    const tunnelWsReq = {
+      method: 'GET',
+      path: '/api/global/event/ws',
+      url: `/api/global/event/ws?oc_url_token=${encodeURIComponent(tunnelUrlToken)}`,
+      headers: { upgrade: 'websocket' },
+    };
+    expect(await auth.ensureSessionToken(tunnelWsReq, null)).toBe('client:tunnel:session-1');
 
     const serveReq = { method: 'GET', path: '/api/fs/serve/tmp/index.html', url: `/api/fs/serve/tmp/index.html?oc_url_token=${encodeURIComponent(urlToken)}`, headers: {} };
     const serveRes = createResponse();

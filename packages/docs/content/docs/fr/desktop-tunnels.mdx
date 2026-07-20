@@ -1,6 +1,6 @@
 ---
 title: Tunnels desktop
-description: Créez des tunnels Cloudflare ou Ngrok depuis l’application desktop.
+description: Créez des tunnels Cloudflare, Ngrok ou FRPC depuis l’application desktop.
 ---
 
 # Tunnels desktop
@@ -9,7 +9,7 @@ L’application desktop peut créer un tunnel public depuis **Paramètres → Op
 
 ## Installer un fournisseur
 
-OpenChamber démarre la CLI du fournisseur sur votre machine. Installez d’abord le fournisseur que vous voulez utiliser :
+OpenChamber démarre la CLI du fournisseur sur votre machine. Pour Cloudflare ou Ngrok, installez d’abord le fournisseur que vous voulez utiliser :
 
 ```bash
 brew install cloudflared
@@ -22,14 +22,25 @@ Cloudflare utilise `cloudflared`. Ngrok nécessite un compte ngrok et un authtok
 ngrok config add-authtoken <your-ngrok-token>
 ```
 
+FRPC ne nécessite aucune installation manuelle. OpenChamber télécharge et gère automatiquement FRPC 0.70.0.
+
 ## Démarrer depuis l’application
 
 1. Ouvrez **Paramètres → OpenChamber → Tunnel**.
-2. Choisissez **Cloudflare** ou **Ngrok**.
-3. Démarrez un tunnel rapide.
+2. Choisissez **Cloudflare**, **Ngrok** ou **FRPC**.
+3. Démarrez un tunnel rapide avec Cloudflare ou Ngrok, ou configurez FRPC.
 4. Scannez le QR code généré depuis votre téléphone.
 
-Ngrok prend actuellement en charge les tunnels rapides. Cloudflare prend en charge les tunnels rapides et les modes Cloudflare gérés.
+Ngrok prend actuellement en charge les tunnels rapides. Cloudflare prend en charge les tunnels rapides et les modes Cloudflare gérés. FRPC prend en charge les endpoints TCP et hôte virtuel HTTP en mode `managed-remote` via votre serveur FRPS.
+
+## Configurer FRPC
+
+Les paramètres FRPC proposent **TCP** ou **Hôte virtuel HTTP** comme type de proxy. Renseignez l’adresse FRPS, le port de contrôle, le fichier de certificat d’AC de confiance et le token partagé dans le champ de token privé. OpenChamber fournit automatiquement son port local pour les deux types. FRPS doit présenter un certificat dont le SAN correspond à l’adresse FRPS ; OpenChamber vérifie cette identité et ne désactive jamais la vérification du certificat.
+
+- **TCP :** renseignez le port distant du mappage et l’origine HTTPS publique externe exacte. FRPC transmet du HTTP non chiffré sur le port mappé ; limitez ce port FRPS à l’interface de bouclage et placez Caddy ou un autre terminateur TLS à l’URL déclarée. OpenChamber rejette les URL HTTP, mal formées ou qui ne sont pas une origine seule, et ne déduit jamais le TLS du navigateur de l’adresse de contrôle FRPS.
+- **Hôte virtuel HTTP :** renseignez l’hôte de routage FRPS (custom domain) et le hostname public externe. L’URL publique est `https://<hostname>`. Caddy termine HTTPS sur le port `443`, transmet au port HTTP des hôtes virtuels FRPS, définit `Host` sur le custom domain et `X-Forwarded-Host` sur le hostname public.
+
+Un token FRPS partagé authentifie les clients FRPC, mais n’assure pas l’isolation entre les hôtes virtuels HTTP.
 
 ## Protection de l’accès
 
@@ -37,5 +48,5 @@ Même lorsque l’URL du fournisseur est publique, OpenChamber protège toujours
 
 ## Pages liées
 
-- [Tunnels](/tunnels/) — utilisation des tunnels CLI et modes Cloudflare gérés
+- [Tunnels](/tunnels/) — utilisation des tunnels CLI et modes gérés Cloudflare et FRPC
 - [PWA et mobile](/mobile/) — joindre OpenChamber depuis votre téléphone

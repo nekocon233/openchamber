@@ -111,7 +111,7 @@ export const MobileProjectEditSurface: React.FC<MobileProjectEditSurfaceProps> =
   const updateProjectMeta = useProjectsStore((state) => state.updateProjectMeta);
   const discoverProjectIcon = useProjectsStore((state) => state.discoverProjectIcon);
   const removeProjectIcon = useProjectsStore((state) => state.removeProjectIcon);
-  const setWorktreeOrder = useWorktreeOrderStore((state) => state.setWorktreeOrder);
+  const moveWorktree = useWorktreeOrderStore((state) => state.moveWorktree);
   // Read the live icon image from the store so discover/remove reflect instantly.
   const currentIconImage = useProjectsStore((state) =>
     project ? state.projects.find((entry) => entry.id === project.id)?.iconImage ?? null : null,
@@ -206,9 +206,11 @@ export const MobileProjectEditSurface: React.FC<MobileProjectEditSurfaceProps> =
     const [moved] = next.splice(fromIndex, 1);
     next.splice(toIndex, 0, moved);
     setOrderedWorktrees(next);
-    setWorktreeOrder(
+    moveWorktree(
       project.id,
-      next.map((worktree) => normalizePath(worktree.path)),
+      moved.path,
+      toIndex,
+      orderedWorktrees.map((worktree) => normalizePath(worktree.path)),
     );
   };
 

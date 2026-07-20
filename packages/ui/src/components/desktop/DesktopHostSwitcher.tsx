@@ -19,6 +19,7 @@ import {
   desktopHostProbe,
   desktopHostsGet,
   desktopHostsSet,
+  desktopActivateWindowRuntime,
   desktopLocalClientTokenGet,
   desktopOpenNewWindowAtUrl,
   desktopOpenNewWindowForHost,
@@ -542,12 +543,23 @@ export function DesktopHostSwitcherDialog({
       if (!apiOrigin && !host.relay) return;
       setSwitchingHostId(host.id);
       const clientToken = host.id === LOCAL_HOST_ID ? await getLocalClientToken() : (host.clientToken || '');
+      const activateMainRuntime = async () => {
+        const activated = await desktopActivateWindowRuntime(host.id).catch(() => false);
+        if (!activated) {
+          toast.error(t('desktopHostSwitcher.toast.instanceUnreachable', { host: redactSensitiveUrl(host.label) }));
+        }
+        return activated;
+      };
 
       // The dropdown already probed every host when it opened — act on that
       // result instead of re-probing (re-probes doubled the switch latency and
       // flashed transient Unreachable states over a known-good host).
       const cached = statusById[host.id];
       if (cached?.status === 'ok') {
+        if (!await activateMainRuntime()) {
+          setSwitchingHostId(null);
+          return;
+        }
         if (cached.via === 'relay' && host.relay) {
           activateRelay(host.relay);
         } else if (apiOrigin) {
@@ -584,6 +596,11 @@ export function DesktopHostSwitcherDialog({
 
       if (!transport) {
         toast.error(t('desktopHostSwitcher.toast.instanceUnreachable', { host: redactSensitiveUrl(host.label) }));
+        setSwitchingHostId(null);
+        return;
+      }
+      if (!await activateMainRuntime()) {
+        relayProbeTunnel?.close();
         setSwitchingHostId(null);
         return;
       }
@@ -778,6 +795,7 @@ export function DesktopHostSwitcherDialog({
     const localTarget = toNavigationUrl(localOrigin);
     if (isElectronShell()) {
       const clientToken = await getLocalClientToken();
+      if (!await desktopActivateWindowRuntime(LOCAL_HOST_ID).catch(() => false)) return;
       switchRuntimeEndpoint({ apiBaseUrl: localOrigin, clientToken: clientToken || null, runtimeKey: 'local' });
       onHostSwitched?.();
       return;

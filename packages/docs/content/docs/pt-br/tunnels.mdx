@@ -11,7 +11,7 @@ Um túnel é um link público para o seu OpenChamber, para que você possa acess
 
 ## Pré-requisitos
 
-O OpenChamber inicia o CLI do provedor de túnel na sua máquina. Instale primeiro o provedor que você quer usar:
+O OpenChamber inicia o CLI do provedor de túnel na sua máquina. Para Cloudflare ou Ngrok, instale primeiro o provedor que você quer usar:
 
 ```bash
 brew install cloudflared
@@ -23,6 +23,8 @@ Os túneis rápidos da Cloudflare funcionam com `cloudflared`. O Ngrok exige uma
 ```bash
 ngrok config add-authtoken <your-ngrok-token>
 ```
+
+O FRPC não requer instalação manual. O OpenChamber baixa e gerencia automaticamente o FRPC 0.70.0.
 
 ## Início rápido
 
@@ -60,6 +62,7 @@ Por padrão, o OpenChamber imprime um QR code em sessões TTY interativas. Use `
 
 - `cloudflare`: modos quick, managed remote e managed local
 - `ngrok`: modo quick
+- `frpc`: modo managed remote com endpoint TCP ou host virtual HTTP pelo seu próprio servidor FRPS
 
 ## Modos gerenciados
 
@@ -79,6 +82,45 @@ Use uma configuração local do `cloudflared`:
 openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.cloudflared/config.yml
 ```
 
+### FRPC (managed-remote)
+
+O FRPC conecta a porta local ativa do OpenChamber ao seu próprio servidor FRPS. O OpenChamber fornece automaticamente sua porta de escuta local para os dois tipos de endpoint.
+
+Também é necessário um arquivo de certificado de CA. O FRPS deve apresentar um certificado cujo SAN corresponda a `--frps-address`; o OpenChamber verifica essa identidade e nunca desativa a verificação do certificado.
+
+#### Mapeamento TCP
+
+Use `--remote-port` para criar um mapeamento TCP e declare a origem HTTPS externa exata com `--public-url`:
+
+```bash
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+```
+
+O FRPC encaminha HTTP sem criptografia pelo mapeamento TCP, portanto o OpenChamber nunca deduz uma URL de navegador a partir do endereço FRPS. `--public-url` deve ser uma origem `https://` em que o Caddy ou outro terminador TLS escuta e encaminha para a porta de loopback do FRPS. URLs HTTP, com credenciais, caminho, consulta ou malformadas são rejeitadas antes da emissão de um token de conexão.
+
+#### Host virtual HTTP
+
+Use `--custom-domain <frps-routing-host>` junto com `--hostname <external-public-host>`:
+
+```bash
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+```
+
+O FRPC gera um proxy `type = "http"`. O Caddy encerra o HTTPS público na porta `443` e encaminha para a porta HTTP de hosts virtuais do FRPS. Ele deve enviar o custom domain como `Host`, para o FRPS escolher o proxy, e o hostname externo como `X-Forwarded-Host`. Por exemplo, se a porta HTTP de hosts virtuais do FRPS for `8080`:
+
+```caddyfile
+app.example.com {
+  reverse_proxy 127.0.0.1:8080 {
+    header_up Host openchamber.internal
+    header_up X-Forwarded-Host app.example.com
+  }
+}
+```
+
+A URL pública tem o formato `https://<hostname>`; neste exemplo, ela é `https://app.example.com`. Um token FRPS compartilhado autentica os clientes FRPC, mas não isola este host virtual HTTP de outros clientes que usam o mesmo token.
+
+Com `openchamber tunnel`, o FRPC aceita tokens somente por `--token-file`, `--token-stdin` ou pela solicitação interativa privada; `--token` é rejeitado. Os perfis criados por uma dessas entradas podem ser reutilizados.
+
 ## Perfis (managed-remote)
 
 Salve um perfil reutilizável:
@@ -87,11 +129,57 @@ Salve um perfil reutilizável:
 openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token-file ~/.secrets/cf-token
 ```
 
-Inicie usando o perfil salvo:
+Para FRPC TCP, salve também as configurações do servidor e da porta remota:
+
+```bash
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-tcp --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+```
+
+Para o host virtual HTTP do FRPC:
+
+```bash
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+```
+
+Inicie usando um dos perfis salvos:
 
 ```bash
 openchamber tunnel start --profile prod-main
+openchamber tunnel start --profile frpc-tcp
+openchamber tunnel start --profile frpc-http
 ```
+
+## Ambiente de inicialização direta
+
+A inicialização direta usa as configurações comuns do servidor FRPC e o token. Escolha exatamente um endpoint: `OPENCHAMBER_TUNNEL_REMOTE_PORT` com `OPENCHAMBER_TUNNEL_PUBLIC_URL` para TCP, ou `OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN` e `OPENCHAMBER_TUNNEL_HOSTNAME` juntos para o host virtual HTTP.
+
+**TCP:**
+
+```yaml
+OPENCHAMBER_TUNNEL_PROVIDER: frpc
+OPENCHAMBER_TUNNEL_MODE: managed-remote
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
+OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
+OPENCHAMBER_TUNNEL_REMOTE_PORT: 20000
+OPENCHAMBER_TUNNEL_PUBLIC_URL: https://app.example.com:20000
+OPENCHAMBER_TUNNEL_TOKEN: <token>
+```
+
+**Host virtual HTTP:**
+
+```yaml
+OPENCHAMBER_TUNNEL_PROVIDER: frpc
+OPENCHAMBER_TUNNEL_MODE: managed-remote
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
+OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
+OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: openchamber.internal
+OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com
+OPENCHAMBER_TUNNEL_TOKEN: <token>
+```
+
+A porta local do OpenChamber continua automática.
 
 ## Comandos úteis
 
@@ -99,8 +187,10 @@ openchamber tunnel start --profile prod-main
 openchamber tunnel providers
 openchamber tunnel ready --provider cloudflare
 openchamber tunnel ready --provider ngrok
+openchamber tunnel ready --provider frpc
 openchamber tunnel doctor --provider cloudflare
 openchamber tunnel doctor --provider ngrok
+openchamber tunnel doctor --provider frpc
 openchamber tunnel stop --port 3000
 ```
 

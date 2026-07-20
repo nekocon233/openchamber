@@ -586,8 +586,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     isVSCode,
   });
 
-  const { scheduleCollapsedProjectsPersist } = useSidebarPersistence({
-    isVSCode,
+  useSidebarPersistence({
     hasAuthoritativeGlobalSessions,
     safeStorage,
     keys: {
@@ -891,12 +890,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       try {
         safeStorage.setItem(PROJECT_COLLAPSE_STORAGE_KEY, JSON.stringify(Array.from(allIds)));
       } catch { /* ignored */ }
-      if (!isVSCode) {
-        scheduleCollapsedProjectsPersist(allIds);
-      }
       return allIds;
     });
-  }, [projects, isVSCode, safeStorage, scheduleCollapsedProjectsPersist]);
+  }, [projects, safeStorage]);
 
   const expandAllProjects = React.useCallback(() => {
     ignoreIntersectionUntil.current = Date.now() + 150;
@@ -906,12 +902,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       try {
         safeStorage.setItem(PROJECT_COLLAPSE_STORAGE_KEY, JSON.stringify([]));
       } catch { /* ignored */ }
-      if (!isVSCode) {
-        scheduleCollapsedProjectsPersist(empty);
-      }
       return empty;
     });
-  }, [isVSCode, safeStorage, scheduleCollapsedProjectsPersist]);
+  }, [safeStorage]);
 
   const toggleProject = React.useCallback((projectId: string) => {
     // Ignore intersection events for a short period after toggling
@@ -928,13 +921,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         safeStorage.setItem(PROJECT_COLLAPSE_STORAGE_KEY, JSON.stringify(Array.from(next)));
       } catch { /* ignored */ }
 
-      // Persist collapse state to server settings (web + desktop local/remote).
-      if (!isVSCode) {
-        scheduleCollapsedProjectsPersist(next);
-      }
       return next;
     });
-  }, [isVSCode, resetProjectSessionLimits, safeStorage, scheduleCollapsedProjectsPersist]);
+  }, [resetProjectSessionLimits, safeStorage]);
 
   const normalizedProjects = React.useMemo(() => {
     return projects

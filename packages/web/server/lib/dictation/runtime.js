@@ -22,6 +22,7 @@
 
 import { WebSocketServer } from 'ws';
 
+import { authorizeWebSocketUpgrade } from '../ui-auth/channel-auth.js';
 import { DictationStreamManager } from './stream-manager.js';
 import { createDictationService } from './service.js';
 
@@ -43,8 +44,10 @@ export function createDictationRuntime({
   server,
   express,
   uiAuthController,
+  tunnelAuthController,
   isRequestOriginAllowed,
   rejectWebSocketUpgrade,
+  trackAuthChannel,
   modelsDir,
 }) {
   const service = createDictationService({ modelsDir });
@@ -121,7 +124,10 @@ export function createDictationRuntime({
     maxPayload: DICTATION_WS_MAX_PAYLOAD_BYTES,
   });
 
-  wsServer.on('connection', (socket) => {
+  wsServer.on('connection', (socket, req) => {
+    const untrackAuth = trackAuthChannel?.(req?.openchamberAuthIdentity, () => {
+      socket.close(1008, 'Authentication expired or revoked');
+    }) ?? (() => {});
     const send = (msg) => {
       if (socket.readyState !== 1) {
         return;
@@ -213,6 +219,7 @@ export function createDictationRuntime({
     });
 
     socket.on('close', () => {
+      untrackAuth();
       clearInterval(heartbeatInterval);
       manager.cleanupAll();
     });
@@ -230,19 +237,17 @@ export function createDictationRuntime({
 
     const handleUpgrade = async () => {
       try {
-        if (uiAuthController?.enabled) {
-          const sessionToken = await uiAuthController?.ensureSessionToken?.(req, null);
-          if (!sessionToken) {
-            rejectWebSocketUpgrade(socket, 401, 'UI authentication required');
-            return;
-          }
-
-          const originAllowed = await isRequestOriginAllowed(req);
-          if (!originAllowed) {
-            rejectWebSocketUpgrade(socket, 403, 'Invalid origin');
-            return;
-          }
+        const authorization = await authorizeWebSocketUpgrade({
+          req,
+          uiAuthController,
+          tunnelAuthController,
+          isRequestOriginAllowed,
+        });
+        if (!authorization.ok) {
+          rejectWebSocketUpgrade(socket, authorization.statusCode, authorization.reason);
+          return;
         }
+        req.openchamberAuthIdentity = authorization.auth;
 
         wsServer.handleUpgrade(req, socket, head, (ws) => {
           wsServer.emit('connection', ws, req);

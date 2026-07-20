@@ -1,22 +1,41 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createPushRuntime } from './push-runtime.js';
+import {
+  configureNotificationAuthValidator,
+  createClientNotificationAuth,
+  createUiSessionNotificationAuth,
+} from './auth-runtime.js';
 
-const createRuntime = () => createPushRuntime({
-  fsPromises: {
+const createRuntimeHarness = (initialStore = { version: 2, registrationsByIdentity: {} }) => {
+  let content = JSON.stringify(initialStore);
+  const fsPromises = {
     mkdir: vi.fn(async () => {}),
-    readFile: vi.fn(async () => JSON.stringify({ version: 1, subscriptionsBySession: {} })),
-    writeFile: vi.fn(async () => {}),
-  },
-  path: { dirname: () => '/tmp' },
-  webPush: {
+    readFile: vi.fn(async () => content),
+    writeFile: vi.fn(async (_path, value) => {
+      content = String(value);
+    }),
+  };
+  const webPush = {
     generateVAPIDKeys: vi.fn(() => ({ publicKey: 'public', privateKey: 'private' })),
     sendNotification: vi.fn(async () => {}),
     setVapidDetails: vi.fn(),
-  },
-  PUSH_SUBSCRIPTIONS_FILE_PATH: '/tmp/push-subscriptions.json',
-  readSettingsFromDiskMigrated: vi.fn(async () => ({})),
-  writeSettingsToDisk: vi.fn(async () => {}),
+  };
+  const runtime = createPushRuntime({
+    fsPromises,
+    path: { dirname: () => '/tmp' },
+    webPush,
+    PUSH_SUBSCRIPTIONS_FILE_PATH: '/tmp/push-subscriptions.json',
+    readSettingsFromDiskMigrated: vi.fn(async () => ({})),
+    writeSettingsToDisk: vi.fn(async () => {}),
+  });
+  return { runtime, webPush, fsPromises, getContent: () => content };
+};
+
+const createRuntime = () => createRuntimeHarness().runtime;
+
+beforeEach(() => {
+  configureNotificationAuthValidator(async () => true);
 });
 
 afterEach(() => {
@@ -30,17 +49,19 @@ describe('push runtime visibility tracking', () => {
 
     const runtime = createRuntime();
 
-    runtime.updateUiVisibility('visible-client', true);
-    runtime.updateUiVisibility('hidden-client', false);
+    const visibleClient = createClientNotificationAuth('visible-client');
+    const hiddenClient = createClientNotificationAuth('hidden-client');
+    runtime.updateUiVisibility(visibleClient, true);
+    runtime.updateUiVisibility(hiddenClient, false);
 
     expect(runtime.isAnyUiVisible()).toBe(true);
-    expect(runtime.isUiVisible('visible-client')).toBe(true);
-    expect(runtime.isUiVisible('hidden-client')).toBe(false);
+    expect(runtime.isUiVisible(visibleClient)).toBe(true);
+    expect(runtime.isUiVisible(hiddenClient)).toBe(false);
 
     vi.advanceTimersByTime(30_001);
 
     expect(runtime.isAnyUiVisible()).toBe(false);
-    expect(runtime.isUiVisible('visible-client')).toBe(false);
+    expect(runtime.isUiVisible(visibleClient)).toBe(false);
   });
 
   it('treats only mobile platforms as non-interactive for isAnyInteractiveClientVisible', () => {
@@ -50,20 +71,20 @@ describe('push runtime visibility tracking', () => {
     const runtime = createRuntime();
 
     // Only the phone (foreground) is connected → no interactive client to absorb the notification.
-    runtime.updateUiVisibility('phone', true, 'ios');
+    runtime.updateUiVisibility(createClientNotificationAuth('phone'), true, 'ios');
     expect(runtime.isAnyUiVisible()).toBe(true);
     expect(runtime.isAnyInteractiveClientVisible()).toBe(false);
 
     // A visible desktop counts as interactive → suppress mobile push.
-    runtime.updateUiVisibility('desktop', true, 'desktop');
+    runtime.updateUiVisibility(createClientNotificationAuth('desktop'), true, 'desktop');
     expect(runtime.isAnyInteractiveClientVisible()).toBe(true);
 
     // Desktop hidden again → back to mobile-only, push should flow to the phone.
-    runtime.updateUiVisibility('desktop', false, 'desktop');
+    runtime.updateUiVisibility(createClientNotificationAuth('desktop'), false, 'desktop');
     expect(runtime.isAnyInteractiveClientVisible()).toBe(false);
 
     // A client that never reported a platform is treated as interactive (conservative).
-    runtime.updateUiVisibility('legacy', true);
+    runtime.updateUiVisibility(createClientNotificationAuth('legacy'), true);
     expect(runtime.isAnyInteractiveClientVisible()).toBe(true);
   });
 
@@ -72,8 +93,96 @@ describe('push runtime visibility tracking', () => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
 
     const runtime = createRuntime();
-    runtime.updateUiVisibility('phone', true, 'android');
-    runtime.updateUiVisibility('phone', true); // heartbeat without platform
+    const phone = createClientNotificationAuth('phone');
+    runtime.updateUiVisibility(phone, true, 'android');
+    runtime.updateUiVisibility(phone, true); // heartbeat without platform
     expect(runtime.isAnyInteractiveClientVisible()).toBe(false);
+  });
+});
+
+describe('push runtime auth association', () => {
+  it('persists only an opaque identity instead of the UI session credential', async () => {
+    const { runtime, getContent } = createRuntimeHarness();
+    const rawSession = 'header.payload.signature-secret';
+    const auth = createUiSessionNotificationAuth(rawSession, Date.now() + 60_000);
+
+    await runtime.addOrUpdatePushSubscription(auth, {
+      endpoint: 'https://push.example/subscription',
+      p256dh: 'p256dh',
+      auth: 'push-auth',
+    });
+
+    const persisted = getContent();
+    expect(persisted).not.toContain(rawSession);
+    expect(persisted).toContain(auth.identity);
+    expect(JSON.parse(persisted).version).toBe(2);
+  });
+
+  it('does not deliver and removes a registration after its auth expires', async () => {
+    const { runtime, webPush, getContent } = createRuntimeHarness();
+    const auth = createUiSessionNotificationAuth('expired-session', Date.now() - 1);
+    await runtime.addOrUpdatePushSubscription(auth, {
+      endpoint: 'https://push.example/expired',
+      p256dh: 'p256dh',
+      auth: 'push-auth',
+    });
+
+    await runtime.sendPushToAllUiSessions({ title: 'Ready' });
+
+    expect(webPush.sendNotification).not.toHaveBeenCalled();
+    expect(JSON.parse(getContent()).registrationsByIdentity).toEqual({});
+  });
+
+  it('sanitizes legacy credential-keyed records without delivering them', async () => {
+    const rawSession = 'legacy.jwt.session-secret';
+    const { runtime, webPush, getContent } = createRuntimeHarness({
+      version: 1,
+      subscriptionsBySession: {
+        [rawSession]: [{ endpoint: 'https://push.example/legacy', p256dh: 'p', auth: 'a' }],
+      },
+    });
+
+    await runtime.sendPushToAllUiSessions({ title: 'Ready' });
+
+    expect(webPush.sendNotification).not.toHaveBeenCalled();
+    expect(getContent()).not.toContain(rawSession);
+    expect(JSON.parse(getContent())).toEqual({ version: 2, registrationsByIdentity: {} });
+  });
+
+  it('fails closed and preserves an unknown future schema version', async () => {
+    const futureStore = {
+      version: 3,
+      registrationsByIdentity: {
+        future: { unsupported: true },
+      },
+    };
+    const { runtime, webPush, fsPromises, getContent } = createRuntimeHarness(futureStore);
+    const original = getContent();
+
+    await expect(runtime.sendPushToAllUiSessions({ title: 'Ready' })).rejects.toThrow(
+      'Unsupported push subscriptions schema version',
+    );
+
+    expect(webPush.sendNotification).not.toHaveBeenCalled();
+    expect(fsPromises.writeFile).not.toHaveBeenCalled();
+    expect(getContent()).toBe(original);
+  });
+
+  it('keeps records but skips delivery when authoritative auth validation is unavailable', async () => {
+    const { runtime, webPush, getContent } = createRuntimeHarness();
+    const auth = createClientNotificationAuth('validation-error');
+    await runtime.addOrUpdatePushSubscription(auth, {
+      endpoint: 'https://push.example/unknown',
+      p256dh: 'p256dh',
+      auth: 'push-auth',
+    });
+    configureNotificationAuthValidator(async () => {
+      throw new Error('auth store unavailable');
+    });
+
+    await runtime.sendPushToAllUiSessions({ title: 'Ready' });
+
+    expect(webPush.sendNotification).not.toHaveBeenCalled();
+    expect(JSON.parse(getContent()).registrationsByIdentity[auth.identity]).toBeTruthy();
   });
 });

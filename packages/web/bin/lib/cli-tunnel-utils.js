@@ -121,10 +121,18 @@ function buildTunnelStartReplayCommand({
   profileName,
   configPath,
   hostname,
+  customDomain,
+  serverAddress,
+  serverPort,
+  trustedCaFile,
+  remotePort,
+  publicUrl,
   connectTtlMs,
   sessionTtlMs,
   qr,
   noQr,
+  json,
+  quiet,
   includeTokenPlaceholder,
   tokenViaStdin,
   tokenFileProvided,
@@ -145,8 +153,26 @@ function buildTunnelStartReplayCommand({
   if (typeof configPath === 'string' && configPath.trim().length > 0) {
     parts.push('--config', shellQuote(configPath));
   }
+  if (typeof customDomain === 'string' && customDomain.trim().length > 0) {
+    parts.push('--custom-domain', shellQuote(customDomain));
+  }
   if (typeof hostname === 'string' && hostname.trim().length > 0) {
     parts.push('--hostname', shellQuote(hostname));
+  }
+  if (typeof serverAddress === 'string' && serverAddress.trim().length > 0) {
+    parts.push('--frps-address', shellQuote(serverAddress));
+  }
+  if (Number.isInteger(serverPort)) {
+    parts.push('--frps-port', String(serverPort));
+  }
+  if (typeof trustedCaFile === 'string' && trustedCaFile.trim().length > 0) {
+    parts.push('--frps-ca-file', shellQuote(trustedCaFile));
+  }
+  if (Number.isInteger(remotePort)) {
+    parts.push('--remote-port', String(remotePort));
+  }
+  if (typeof publicUrl === 'string' && publicUrl.trim().length > 0) {
+    parts.push('--public-url', shellQuote(publicUrl));
   }
   const connectTtl = formatDurationForCli(connectTtlMs);
   if (connectTtl) {
@@ -158,21 +184,25 @@ function buildTunnelStartReplayCommand({
   }
   if (qr) parts.push('--qr');
   if (noQr) parts.push('--no-qr');
+  if (json) {
+    parts.push('--json');
+  } else if (quiet) {
+    parts.push('--quiet');
+  }
 
   if (includeTokenPlaceholder) {
     if (tokenViaStdin) {
       parts.push('--token-stdin');
     } else if (tokenFileProvided) {
       parts.push('--token-file', '<redacted>');
-    } else {
-      parts.push('--token', '<redacted>');
     }
   }
 
   return parts.join(' ');
 }
 
-function buildTunnelProfileAddCommand({ provider, hostname }) {
+function buildTunnelProfileAddCommand({ provider, hostname, customDomain, serverAddress, serverPort, trustedCaFile, remotePort, publicUrl }) {
+  const isFrpc = provider === 'frpc';
   const parts = [
     'openchamber',
     'tunnel',
@@ -184,11 +214,28 @@ function buildTunnelProfileAddCommand({ provider, hostname }) {
     'managed-remote',
     '--name',
     '<name>',
-    '--hostname',
-    shellQuote(hostname || '<hostname>'),
-    '--token',
-    '<token>',
   ];
+  if (isFrpc) {
+    parts.push(
+      '--frps-address', shellQuote(serverAddress || '<address>'),
+      '--frps-port', String(serverPort || 7000),
+      '--frps-ca-file', shellQuote(trustedCaFile || '<ca-file>'),
+    );
+    if (customDomain) {
+      parts.push(
+        '--custom-domain', shellQuote(customDomain),
+        '--hostname', shellQuote(hostname || '<public-hostname>'),
+      );
+    } else {
+      parts.push(
+        '--remote-port', String(remotePort || '<remote-port>'),
+        '--public-url', shellQuote(publicUrl || '<https-origin>'),
+      );
+    }
+  } else {
+    parts.push('--hostname', shellQuote(hostname || '<hostname>'));
+  }
+  parts.push('--token-file', '<path>');
   return parts.join(' ');
 }
 

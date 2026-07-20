@@ -1,17 +1,18 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
-import { getDeferredSafeStorage } from './utils/safeStorage';
-import { isVSCodeRuntime } from '@/lib/desktop';
-import { runtimeFetch } from '@/lib/runtime-fetch';
 
-// --- Types ---
+import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import type { SidebarStateOperation } from '@/lib/api/types';
+import { normalizeSidebarFolderScope } from '@/lib/sidebarState';
+import { useSidebarStateStore } from './useSidebarStateStore';
+import { getDeferredSafeStorage } from './utils/safeStorage';
 
 export interface SessionFolder {
   id: string;
   name: string;
   sessionIds: string[];
   createdAt: number;
-  /** If set, this folder is a sub-folder of the parent folder with this id */
+  /** If set, this folder is a sub-folder of the parent folder with this id. */
   parentId?: string | null;
 }
 
@@ -38,99 +39,58 @@ interface SessionFoldersActions {
 
 type SessionFoldersStore = SessionFoldersState & SessionFoldersActions;
 
-// --- Storage ---
-
 const FOLDERS_STORAGE_KEY = 'oc.sessions.folders';
 const COLLAPSED_STORAGE_KEY = 'oc.sessions.folderCollapse';
-const SESSION_FOLDERS_API_PATH = '/api/session-folders';
-const DISK_WRITE_DEBOUNCE_MS = 250;
 const ARCHIVED_SCOPE_PREFIX = '__archived__:';
+const LOCAL_PERSIST_DEBOUNCE_MS = 300;
 
 const safeStorage = getDeferredSafeStorage();
-let diskWriteTimer: ReturnType<typeof setTimeout> | null = null;
-let diskHydrated = false;
-let diskHydrationInFlight = false;
 let persistFoldersTimer: ReturnType<typeof setTimeout> | undefined;
 let persistCollapsedTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingFoldersMap: SessionFoldersMap | null = null;
 let pendingCollapsedIds: Set<string> | null = null;
 
-const isVSCodeWebview = (): boolean => {
-  if (typeof window === 'undefined') {
-    return false;
+const usesAuthoritativeSidebarState = (): boolean => (
+  getRegisteredRuntimeAPIs()?.sidebarState?.supported === true
+);
+
+const normalizeScopeKey = (scopeKey: string): string | null => {
+  try {
+    return normalizeSidebarFolderScope(scopeKey);
+  } catch {
+    return null;
   }
-
-  if (isVSCodeRuntime()) {
-    return true;
-  }
-
-  return (window as { __VSCODE_CONFIG__?: unknown }).__VSCODE_CONFIG__ !== undefined;
-};
-
-const schedulePersistToDisk = (foldersMap: SessionFoldersMap, collapsedFolderIds: Set<string>): void => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  if (isVSCodeWebview()) {
-    return;
-  }
-
-  if (diskWriteTimer) {
-    clearTimeout(diskWriteTimer);
-  }
-
-  const foldersSnapshot = JSON.parse(JSON.stringify(foldersMap)) as SessionFoldersMap;
-  const collapsedSnapshot = Array.from(collapsedFolderIds);
-
-  diskWriteTimer = setTimeout(() => {
-    diskWriteTimer = null;
-    const payload = {
-      version: 1,
-      foldersMap: foldersSnapshot,
-      collapsedFolderIds: collapsedSnapshot,
-      updatedAt: Date.now(),
-    };
-    void runtimeFetch(SESSION_FOLDERS_API_PATH, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch(() => { /* best-effort */ });
-  }, DISK_WRITE_DEBOUNCE_MS);
 };
 
 const readPersistedFolders = (): SessionFoldersMap => {
   try {
     const raw = safeStorage.getItem(FOLDERS_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
     const result: SessionFoldersMap = {};
-    for (const [scopeKey, value] of Object.entries(parsed)) {
-      if (!Array.isArray(value)) {
-        continue;
-      }
+    for (const [rawScopeKey, value] of Object.entries(parsed)) {
+      if (!Array.isArray(value)) continue;
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      if (!scopeKey) continue;
       const folders: SessionFolder[] = [];
       for (const entry of value) {
-        if (!entry || typeof entry !== 'object') continue;
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
         const candidate = entry as Record<string, unknown>;
         const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
         const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
-        const createdAt = typeof candidate.createdAt === 'number' ? candidate.createdAt : 0;
+        const createdAt = typeof candidate.createdAt === 'number' && Number.isFinite(candidate.createdAt)
+          ? candidate.createdAt
+          : 0;
         if (!id || !name) continue;
         const sessionIds = Array.isArray(candidate.sessionIds)
-          ? (candidate.sessionIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+          ? candidate.sessionIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
           : [];
         const parentId = typeof candidate.parentId === 'string' ? candidate.parentId : null;
         folders.push({ id, name, sessionIds, createdAt, parentId });
       }
-      if (folders.length > 0) {
-        result[scopeKey] = folders;
-      }
+      if (folders.length > 0) result[scopeKey] = folders;
     }
     return result;
   } catch {
@@ -141,14 +101,11 @@ const readPersistedFolders = (): SessionFoldersMap => {
 const readPersistedCollapsed = (): Set<string> => {
   try {
     const raw = safeStorage.getItem(COLLAPSED_STORAGE_KEY);
-    if (!raw) {
-      return new Set();
-    }
+    if (!raw) return new Set();
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return new Set();
-    }
-    return new Set(parsed.filter((v): v is string => typeof v === 'string'));
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((value): value is string => typeof value === 'string'))
+      : new Set();
   } catch {
     return new Set();
   }
@@ -159,12 +116,12 @@ const persistFolders = (foldersMap: SessionFoldersMap): void => {
   clearTimeout(persistFoldersTimer);
   persistFoldersTimer = setTimeout(() => {
     try {
-      safeStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(foldersMap));
-      pendingFoldersMap = null;
+      safeStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(pendingFoldersMap));
     } catch {
       // ignored
     }
-  }, 300);
+    pendingFoldersMap = null;
+  }, LOCAL_PERSIST_DEBOUNCE_MS);
 };
 
 const persistCollapsed = (collapsedFolderIds: Set<string>): void => {
@@ -172,38 +129,41 @@ const persistCollapsed = (collapsedFolderIds: Set<string>): void => {
   clearTimeout(persistCollapsedTimer);
   persistCollapsedTimer = setTimeout(() => {
     try {
-      safeStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(Array.from(collapsedFolderIds)));
-      pendingCollapsedIds = null;
+      safeStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(Array.from(pendingCollapsedIds ?? [])));
     } catch {
       // ignored
     }
-  }, 300);
+    pendingCollapsedIds = null;
+  }, LOCAL_PERSIST_DEBOUNCE_MS);
+};
+
+const persistLocalState = (foldersMap: SessionFoldersMap, collapsedFolderIds: Set<string>): void => {
+  if (!usesAuthoritativeSidebarState()) persistFolders(foldersMap);
+  persistCollapsed(collapsedFolderIds);
 };
 
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => {
-    if (pendingFoldersMap !== null) {
+    if (pendingFoldersMap) {
       clearTimeout(persistFoldersTimer);
       try {
         safeStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(pendingFoldersMap));
-      } catch { /* ignored */ }
+      } catch {
+        // ignored
+      }
       pendingFoldersMap = null;
     }
-    if (pendingCollapsedIds !== null) {
+    if (pendingCollapsedIds) {
       clearTimeout(persistCollapsedTimer);
       try {
         safeStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(Array.from(pendingCollapsedIds)));
-      } catch { /* ignored */ }
+      } catch {
+        // ignored
+      }
       pendingCollapsedIds = null;
     }
   });
 }
-
-const persistState = (foldersMap: SessionFoldersMap, collapsedFolderIds: Set<string>): void => {
-  persistFolders(foldersMap);
-  persistCollapsed(collapsedFolderIds);
-  schedulePersistToDisk(foldersMap, collapsedFolderIds);
-};
 
 const createFolderId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -212,379 +172,279 @@ const createFolderId = (): string => {
   return `folder_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 };
 
-const syncCollapsedAfterFolderCleanup = (
-  prevFolders: SessionFolder[],
-  nextFolders: SessionFolder[],
+const cleanFolderHierarchy = (folders: SessionFolder[]): SessionFolder[] => {
+  let result = folders;
+  let changed = true;
+  while (changed) {
+    const folderIds = new Set(result.map((folder) => folder.id));
+    const next = result.filter((folder) => !folder.parentId || folderIds.has(folder.parentId));
+    changed = next.length !== result.length;
+    result = next;
+  }
+  return result;
+};
+
+const removeCollapsedFolderIds = (
   collapsedFolderIds: Set<string>,
+  removedFolderIds: Set<string>,
 ): Set<string> | null => {
-  const nextFolderIds = new Set(nextFolders.map((folder) => folder.id));
-  let nextCollapsed: Set<string> | null = null;
-
-  for (const folder of prevFolders) {
-    if (!nextFolderIds.has(folder.id) && collapsedFolderIds.has(folder.id)) {
-      if (!nextCollapsed) {
-        nextCollapsed = new Set(collapsedFolderIds);
-      }
-      nextCollapsed.delete(folder.id);
-    }
-  }
-
-  return nextCollapsed;
+  if (![...removedFolderIds].some((folderId) => collapsedFolderIds.has(folderId))) return null;
+  const next = new Set(collapsedFolderIds);
+  removedFolderIds.forEach((folderId) => next.delete(folderId));
+  return next;
 };
 
-const pruneEmptyArchivedFolders = (scopeKey: string, folders: SessionFolder[]): SessionFolder[] => {
-  if (!scopeKey.startsWith(ARCHIVED_SCOPE_PREFIX)) {
-    return folders;
-  }
-
-  return folders.filter((folder) => folder.sessionIds.length > 0);
+const submitSidebarOperation = (operation: SidebarStateOperation): void => {
+  if (!usesAuthoritativeSidebarState()) return;
+  void useSidebarStateStore.getState().mutate(operation).catch(() => {});
 };
-
-// --- Store ---
 
 export const useSessionFoldersStore = create<SessionFoldersStore>()(
-  devtools(
-    (set, get) => ({
-      foldersMap: readPersistedFolders(),
-      collapsedFolderIds: readPersistedCollapsed(),
+  devtools((set, get) => ({
+    foldersMap: readPersistedFolders(),
+    collapsedFolderIds: readPersistedCollapsed(),
 
-      getFoldersForScope: (scopeKey: string): SessionFolder[] => {
-        if (!scopeKey) return [];
-        return get().foldersMap[scopeKey] ?? [];
-      },
+    getFoldersForScope: (rawScopeKey) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      return scopeKey ? get().foldersMap[scopeKey] ?? [] : [];
+    },
 
-      createFolder: (scopeKey: string, name: string, parentId?: string | null): SessionFolder => {
-        const trimmed = name.trim() || 'New folder';
-        const folder: SessionFolder = {
-          id: createFolderId(),
-          name: trimmed,
-          sessionIds: [],
-          createdAt: Date.now(),
-          parentId: parentId ?? null,
-        };
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey] ?? [];
-        const nextMap: SessionFoldersMap = {
-          ...current,
-          [scopeKey]: [...scopeFolders, folder],
-        };
-        set({ foldersMap: nextMap });
-        persistState(nextMap, get().collapsedFolderIds);
-        return folder;
-      },
+    createFolder: (rawScopeKey, name, parentId) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey) ?? rawScopeKey;
+      const folder: SessionFolder = {
+        id: createFolderId(),
+        name: name.trim() || 'New folder',
+        sessionIds: [],
+        createdAt: Date.now(),
+        parentId: parentId ?? null,
+      };
+      const current = get().foldersMap;
+      const nextMap = {
+        ...current,
+        [scopeKey]: [...(current[scopeKey] ?? []), folder],
+      };
+      set({ foldersMap: nextMap });
+      persistLocalState(nextMap, get().collapsedFolderIds);
+      submitSidebarOperation({
+        type: 'folder.create',
+        scopeKey,
+        folder: {
+          id: folder.id,
+          name: folder.name,
+          createdAt: folder.createdAt,
+          parentId: folder.parentId ?? null,
+        },
+      });
+      return folder;
+    },
 
-      renameFolder: (scopeKey: string, folderId: string, name: string): void => {
-        const trimmed = name.trim();
-        if (!trimmed || !scopeKey) return;
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey];
-        if (!scopeFolders) return;
-        const nextFolders = scopeFolders.map((folder) =>
-          folder.id === folderId ? { ...folder, name: trimmed } : folder,
-        );
-        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
-        set({ foldersMap: nextMap });
-        persistState(nextMap, get().collapsedFolderIds);
-      },
+    renameFolder: (rawScopeKey, folderId, name) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      const trimmed = name.trim();
+      if (!scopeKey || !trimmed) return;
+      const current = get().foldersMap;
+      const folders = current[scopeKey];
+      const folder = folders?.find((entry) => entry.id === folderId);
+      if (!folder || folder.name === trimmed) return;
+      const nextMap = {
+        ...current,
+        [scopeKey]: folders.map((entry) => entry.id === folderId ? { ...entry, name: trimmed } : entry),
+      };
+      set({ foldersMap: nextMap });
+      persistLocalState(nextMap, get().collapsedFolderIds);
+      submitSidebarOperation({ type: 'folder.rename', scopeKey, folderId, name: trimmed });
+    },
 
-      deleteFolder: (scopeKey: string, folderId: string): void => {
-        if (!scopeKey) return;
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey];
-        if (!scopeFolders) return;
-        // Also delete all sub-folders of this folder
-        const idsToDelete = new Set<string>([folderId]);
-        let changed = true;
-        while (changed) {
-          changed = false;
-          for (const f of scopeFolders) {
-            if (f.parentId && idsToDelete.has(f.parentId) && !idsToDelete.has(f.id)) {
-              idsToDelete.add(f.id);
-              changed = true;
-            }
-          }
-        }
-        const nextFolders = scopeFolders.filter((folder) => !idsToDelete.has(folder.id));
-        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
-        set({ foldersMap: nextMap });
-        persistState(nextMap, get().collapsedFolderIds);
+    deleteFolder: (rawScopeKey, folderId) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      if (!scopeKey) return;
+      const current = get().foldersMap;
+      const folders = current[scopeKey];
+      if (!folders?.some((folder) => folder.id === folderId)) return;
 
-        // Clean up collapsed state for all deleted folders
-        const collapsed = get().collapsedFolderIds;
-        const hasStale = Array.from(idsToDelete).some((id) => collapsed.has(id));
-        if (hasStale) {
-          const nextCollapsed = new Set(collapsed);
-          idsToDelete.forEach((id) => nextCollapsed.delete(id));
-          set({ collapsedFolderIds: nextCollapsed });
-          persistState(nextMap, nextCollapsed);
-        }
-      },
-
-      addSessionToFolder: (scopeKey: string, folderId: string, sessionId: string): void => {
-        if (!scopeKey || !folderId || !sessionId) return;
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey];
-        if (!scopeFolders) return;
-
-        const targetFolder = scopeFolders.find((folder) => folder.id === folderId);
-        if (!targetFolder) return;
-
-        const sessionFolderCount = scopeFolders.reduce(
-          (count, folder) => count + (folder.sessionIds.includes(sessionId) ? 1 : 0),
-          0,
-        );
-        if (targetFolder.sessionIds.includes(sessionId) && sessionFolderCount === 1) {
-          return;
-        }
-
-        // Remove session from any existing folder first, then add to target
-        const nextFolders = scopeFolders.map((folder) => {
-          const withoutSession = folder.sessionIds.filter((id) => id !== sessionId);
-          if (folder.id === folderId) {
-            return { ...folder, sessionIds: [...withoutSession, sessionId] };
-          }
-          if (withoutSession.length !== folder.sessionIds.length) {
-            return { ...folder, sessionIds: withoutSession };
-          }
-          return folder;
-        });
-
-        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
-        const nextCollapsed = syncCollapsedAfterFolderCleanup(scopeFolders, nextFolders, get().collapsedFolderIds);
-
-        set(nextCollapsed
-          ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
-          : { foldersMap: nextMap });
-        persistState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
-      },
-
-      addSessionsToFolder: (scopeKey: string, folderId: string, sessionIds: string[]): void => {
-        if (!scopeKey || !folderId || sessionIds.length === 0) return;
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey];
-        if (!scopeFolders) return;
-
-        const idSet = new Set(sessionIds.filter((id) => typeof id === 'string' && id.length > 0));
-        if (idSet.size === 0) return;
-
-        const targetFolder = scopeFolders.find((folder) => folder.id === folderId);
-        if (!targetFolder) return;
-
-        let changed = false;
-        for (const folder of scopeFolders) {
-          for (const id of idSet) {
-            if (!folder.sessionIds.includes(id)) continue;
-            if (folder.id !== folderId || !targetFolder.sessionIds.includes(id)) {
-              changed = true;
-              break;
-            }
-          }
-          if (changed) break;
-        }
-        if (!changed) {
-          for (const id of idSet) {
-            if (!targetFolder.sessionIds.includes(id)) {
-              changed = true;
-              break;
-            }
-          }
-        }
-        if (!changed) return;
-
-        const nextFolders = scopeFolders.map((folder) => {
-          const withoutSessions = folder.sessionIds.filter((id) => !idSet.has(id));
-          if (folder.id === folderId) {
-            return { ...folder, sessionIds: [...withoutSessions, ...idSet] };
-          }
-          if (withoutSessions.length !== folder.sessionIds.length) {
-            return { ...folder, sessionIds: withoutSessions };
-          }
-          return folder;
-        });
-
-        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
-        const nextCollapsed = syncCollapsedAfterFolderCleanup(scopeFolders, nextFolders, get().collapsedFolderIds);
-
-        set(nextCollapsed
-          ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
-          : { foldersMap: nextMap });
-        persistState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
-      },
-
-      removeSessionsFromFolders: (scopeKey: string, sessionIds: string[]): void => {
-        if (!scopeKey || sessionIds.length === 0) return;
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey];
-        if (!scopeFolders) return;
-
-        const idSet = new Set(sessionIds.filter((id) => typeof id === 'string' && id.length > 0));
-        if (idSet.size === 0) return;
-
-        let changed = false;
-        const nextFolders = scopeFolders.map((folder) => {
-          const filtered = folder.sessionIds.filter((id) => !idSet.has(id));
-          if (filtered.length !== folder.sessionIds.length) {
+      const removedFolderIds = new Set([folderId]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const folder of folders) {
+          if (folder.parentId && removedFolderIds.has(folder.parentId) && !removedFolderIds.has(folder.id)) {
+            removedFolderIds.add(folder.id);
             changed = true;
-            return { ...folder, sessionIds: filtered };
-          }
-          return folder;
-        });
-
-        if (!changed) return;
-        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
-        const nextCollapsed = syncCollapsedAfterFolderCleanup(scopeFolders, nextFolders, get().collapsedFolderIds);
-
-        set(nextCollapsed
-          ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
-          : { foldersMap: nextMap });
-        persistState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
-      },
-
-      removeSessionFromFolder: (scopeKey: string, sessionId: string): void => {
-        if (!scopeKey || !sessionId) return;
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey];
-        if (!scopeFolders) return;
-
-        let changed = false;
-        const nextFolders = scopeFolders.map((folder) => {
-          const filtered = folder.sessionIds.filter((id) => id !== sessionId);
-          if (filtered.length !== folder.sessionIds.length) {
-            changed = true;
-            return { ...folder, sessionIds: filtered };
-          }
-          return folder;
-        });
-
-        if (!changed) return;
-        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
-        const nextCollapsed = syncCollapsedAfterFolderCleanup(scopeFolders, nextFolders, get().collapsedFolderIds);
-
-        set(nextCollapsed
-          ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
-          : { foldersMap: nextMap });
-        persistState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
-      },
-
-      toggleFolderCollapse: (folderId: string): void => {
-        const collapsed = get().collapsedFolderIds;
-        const next = new Set(collapsed);
-        if (next.has(folderId)) {
-          next.delete(folderId);
-        } else {
-          next.add(folderId);
-        }
-        set({ collapsedFolderIds: next });
-        persistState(get().foldersMap, next);
-      },
-
-      cleanupSessions: (scopeKey: string, existingSessionIds: Set<string>): void => {
-        if (!scopeKey) return;
-        const current = get().foldersMap;
-        const scopeFolders = current[scopeKey];
-        if (!scopeFolders || scopeFolders.length === 0) return;
-
-        let changed = false;
-        const filteredFolders = scopeFolders.map((folder) => {
-          const filtered = folder.sessionIds.filter((id) => existingSessionIds.has(id));
-          if (filtered.length !== folder.sessionIds.length) {
-            changed = true;
-            return { ...folder, sessionIds: filtered };
-          }
-          return folder;
-        });
-
-        const nextFolders = pruneEmptyArchivedFolders(scopeKey, filteredFolders);
-        if (nextFolders.length !== filteredFolders.length) {
-          changed = true;
-        }
-
-        if (!changed) return;
-        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
-        const nextCollapsed = syncCollapsedAfterFolderCleanup(scopeFolders, nextFolders, get().collapsedFolderIds);
-
-        set(nextCollapsed
-          ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
-          : { foldersMap: nextMap });
-        persistState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
-      },
-
-      getSessionFolderId: (scopeKey: string, sessionId: string): string | null => {
-        if (!scopeKey || !sessionId) return null;
-        const scopeFolders = get().foldersMap[scopeKey];
-        if (!scopeFolders) return null;
-        for (const folder of scopeFolders) {
-          if (folder.sessionIds.includes(sessionId)) {
-            return folder.id;
           }
         }
-        return null;
-      },
-    }),
-    { name: 'session-folders-store' },
-  ),
+      }
+      const remaining = folders.filter((folder) => !removedFolderIds.has(folder.id));
+      const nextMap = { ...current };
+      if (remaining.length > 0) nextMap[scopeKey] = remaining;
+      else delete nextMap[scopeKey];
+      const nextCollapsed = removeCollapsedFolderIds(get().collapsedFolderIds, removedFolderIds);
+      set(nextCollapsed
+        ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
+        : { foldersMap: nextMap });
+      persistLocalState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
+      submitSidebarOperation({ type: 'folder.delete', scopeKey, folderId });
+    },
+
+    addSessionToFolder: (scopeKey, folderId, sessionId) => {
+      get().addSessionsToFolder(scopeKey, folderId, [sessionId]);
+    },
+
+    addSessionsToFolder: (rawScopeKey, folderId, sessionIds) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      if (!scopeKey || !folderId) return;
+      const ids = [...new Set(sessionIds.map((id) => id.trim()).filter(Boolean))];
+      if (ids.length === 0) return;
+      const current = get().foldersMap;
+      const folders = current[scopeKey];
+      const target = folders?.find((folder) => folder.id === folderId);
+      if (!folders || !target) return;
+
+      const assignedIds = new Set(ids);
+      const alreadyAssignedOnlyToTarget = ids.every((sessionId) => (
+        target.sessionIds.includes(sessionId)
+        && folders.every((folder) => folder.id === folderId || !folder.sessionIds.includes(sessionId))
+      ));
+      if (alreadyAssignedOnlyToTarget) return;
+
+      const nextFolders = folders.map((folder) => {
+        const remaining = folder.sessionIds.filter((sessionId) => !assignedIds.has(sessionId));
+        return folder.id === folderId
+          ? { ...folder, sessionIds: [...remaining, ...ids] }
+          : remaining.length === folder.sessionIds.length ? folder : { ...folder, sessionIds: remaining };
+      });
+      const nextMap = { ...current, [scopeKey]: nextFolders };
+      set({ foldersMap: nextMap });
+      persistLocalState(nextMap, get().collapsedFolderIds);
+      submitSidebarOperation({ type: 'folder.assign', scopeKey, folderId, sessionIds: ids });
+    },
+
+    removeSessionFromFolder: (scopeKey, sessionId) => {
+      get().removeSessionsFromFolders(scopeKey, [sessionId]);
+    },
+
+    removeSessionsFromFolders: (rawScopeKey, sessionIds) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      if (!scopeKey) return;
+      const ids = [...new Set(sessionIds.map((id) => id.trim()).filter(Boolean))];
+      if (ids.length === 0) return;
+      const current = get().foldersMap;
+      const folders = current[scopeKey];
+      if (!folders) return;
+
+      const removedIds = new Set(ids);
+      let changed = false;
+      const nextFolders = folders.map((folder) => {
+        const remaining = folder.sessionIds.filter((sessionId) => !removedIds.has(sessionId));
+        if (remaining.length === folder.sessionIds.length) return folder;
+        changed = true;
+        return { ...folder, sessionIds: remaining };
+      });
+      if (!changed) return;
+      const nextMap = { ...current, [scopeKey]: nextFolders };
+      set({ foldersMap: nextMap });
+      persistLocalState(nextMap, get().collapsedFolderIds);
+      submitSidebarOperation({ type: 'folder.unassign', scopeKey, sessionIds: ids });
+    },
+
+    toggleFolderCollapse: (folderId) => {
+      const next = new Set(get().collapsedFolderIds);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      set({ collapsedFolderIds: next });
+      persistCollapsed(next);
+    },
+
+    cleanupSessions: (rawScopeKey, existingSessionIds) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      if (!scopeKey) return;
+      const current = get().foldersMap;
+      const folders = current[scopeKey];
+      if (!folders?.length) return;
+
+      const pruneEmpty = scopeKey.startsWith(ARCHIVED_SCOPE_PREFIX);
+      let changed = false;
+      let nextFolders = folders.map((folder) => {
+        const sessionIds = folder.sessionIds.filter((sessionId) => existingSessionIds.has(sessionId));
+        if (sessionIds.length === folder.sessionIds.length) return folder;
+        changed = true;
+        return { ...folder, sessionIds };
+      });
+      if (pruneEmpty) {
+        const nonEmpty = nextFolders.filter((folder) => folder.sessionIds.length > 0);
+        if (nonEmpty.length !== nextFolders.length) changed = true;
+        nextFolders = cleanFolderHierarchy(nonEmpty);
+      }
+      if (!changed) return;
+
+      const remainingIds = new Set(nextFolders.map((folder) => folder.id));
+      const removedFolderIds = new Set(folders.filter((folder) => !remainingIds.has(folder.id)).map((folder) => folder.id));
+      const nextMap = { ...current };
+      if (nextFolders.length > 0) nextMap[scopeKey] = nextFolders;
+      else delete nextMap[scopeKey];
+      const nextCollapsed = removeCollapsedFolderIds(get().collapsedFolderIds, removedFolderIds);
+      set(nextCollapsed
+        ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
+        : { foldersMap: nextMap });
+      persistLocalState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
+      submitSidebarOperation({
+        type: 'folder.cleanup',
+        scopeKey,
+        existingSessionIds: [...existingSessionIds],
+        pruneEmpty,
+      });
+    },
+
+    getSessionFolderId: (rawScopeKey, sessionId) => {
+      const scopeKey = normalizeScopeKey(rawScopeKey);
+      if (!scopeKey || !sessionId) return null;
+      return get().foldersMap[scopeKey]?.find((folder) => folder.sessionIds.includes(sessionId))?.id ?? null;
+    },
+  }), { name: 'session-folders-store' }),
 );
 
-const hydrateSessionFoldersFromDisk = async (): Promise<void> => {
-  if (diskHydrated || diskHydrationInFlight || typeof window === 'undefined') {
-    return;
-  }
+const foldersEqual = (left: SessionFolder[], right: SessionFolder[]): boolean => (
+  left.length === right.length && left.every((folder, index) => {
+    const candidate = right[index];
+    return candidate
+      && folder.id === candidate.id
+      && folder.name === candidate.name
+      && folder.createdAt === candidate.createdAt
+      && (folder.parentId ?? null) === (candidate.parentId ?? null)
+      && folder.sessionIds.length === candidate.sessionIds.length
+      && folder.sessionIds.every((sessionId, sessionIndex) => sessionId === candidate.sessionIds[sessionIndex]);
+  })
+);
 
-  if (isVSCodeWebview()) {
-    diskHydrated = true;
-    return;
-  }
-
-  diskHydrationInFlight = true;
-
-  try {
-    const response = await runtimeFetch(SESSION_FOLDERS_API_PATH).catch(() => null);
-    if (!response || !response.ok) {
-      return;
-    }
-
-    const parsed = await response.json().catch(() => null) as {
-      foldersMap?: SessionFoldersMap;
-      collapsedFolderIds?: string[];
-    } | null;
-
-    if (!parsed) {
-      return;
-    }
-
-    const diskFolders = parsed.foldersMap && typeof parsed.foldersMap === 'object'
-      ? parsed.foldersMap
-      : {};
-    const diskCollapsed = Array.isArray(parsed.collapsedFolderIds)
-      ? new Set(parsed.collapsedFolderIds.filter((value): value is string => typeof value === 'string'))
-      : new Set<string>();
-
-    const hasDiskData = Object.keys(diskFolders).length > 0 || diskCollapsed.size > 0;
-    if (!hasDiskData) {
-      return;
-    }
-
-    useSessionFoldersStore.setState({
-      foldersMap: diskFolders,
-      collapsedFolderIds: diskCollapsed,
-    });
-
-    persistFolders(diskFolders);
-    persistCollapsed(diskCollapsed);
-  } catch {
-    // ignored
-  } finally {
-    diskHydrationInFlight = false;
-    diskHydrated = true;
-  }
+const folderMapsEqual = (left: SessionFoldersMap, right: SessionFoldersMap): boolean => {
+  const leftScopes = Object.keys(left);
+  const rightScopes = Object.keys(right);
+  return leftScopes.length === rightScopes.length
+    && leftScopes.every((scopeKey) => Boolean(right[scopeKey]) && foldersEqual(left[scopeKey], right[scopeKey]));
 };
 
-const bootstrapSessionFoldersDiskHydration = (): void => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  void hydrateSessionFoldersFromDisk();
+const synchronizeFoldersFromSidebarState = (): void => {
+  const snapshot = useSidebarStateStore.getState().snapshot;
+  if (!snapshot) return;
+  const current = useSessionFoldersStore.getState();
+  const nextMap: SessionFoldersMap = snapshot.sessionFoldersByScope;
+  const validFolderIds = new Set(Object.values(nextMap).flat().map((folder) => folder.id));
+  const nextCollapsed = new Set([...current.collapsedFolderIds].filter((folderId) => validFolderIds.has(folderId)));
+  const mapChanged = !folderMapsEqual(current.foldersMap, nextMap);
+  const collapsedChanged = nextCollapsed.size !== current.collapsedFolderIds.size;
+  if (!mapChanged && !collapsedChanged) return;
+  useSessionFoldersStore.setState({
+    ...(mapChanged ? { foldersMap: nextMap } : {}),
+    ...(collapsedChanged ? { collapsedFolderIds: nextCollapsed } : {}),
+  });
+  if (collapsedChanged) persistCollapsed(nextCollapsed);
 };
 
-bootstrapSessionFoldersDiskHydration();
+useSidebarStateStore.subscribe((state, previousState) => {
+  if (state.snapshot) {
+    synchronizeFoldersFromSidebarState();
+    return;
+  }
+  if (state.runtimeKey !== previousState.runtimeKey && previousState.snapshot) {
+    useSessionFoldersStore.setState({ foldersMap: {} });
+  }
+});

@@ -34,6 +34,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { DirectoryExplorerDialog } from '@/components/session/DirectoryExplorerDialog';
 import { Icon } from '@/components/icon/Icon';
 import { NewWorktreeDialog } from '@/components/session/NewWorktreeDialog';
+import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import {
   deriveRecentSessions,
   getSessionActivityTimestamp,
@@ -398,13 +399,10 @@ const SessionRow: React.FC<{
               {title}
             </span>
             {isRunning ? (
-              <span
-                className="flex size-5 shrink-0 items-center justify-center text-[var(--status-info)]"
-                aria-label={t('mobile.sessions.status.running')}
-                title={t('mobile.sessions.status.running')}
-              >
-                <Icon name="loader-4" className="size-3.5 animate-spin motion-reduce:animate-none" />
-              </span>
+              <SessionRunningIndicator
+                label={t('mobile.sessions.status.running')}
+                className="size-5"
+              />
             ) : null}
             {time ? (
               <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{time}</span>

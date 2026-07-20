@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
+import { authorizeWebSocketUpgrade } from '../ui-auth/channel-auth.js';
 import {
   TERMINAL_WS_MAX_PAYLOAD_BYTES,
   TERMINAL_WS_PATH,
@@ -26,9 +27,9 @@ const trimHistory = (history) => {
 };
 
 export function createTerminalRuntime({
-  app, server, fs, path, uiAuthController, buildAugmentedPath, searchPathFor, isExecutable,
+  app, server, fs, path, uiAuthController, tunnelAuthController, buildAugmentedPath, searchPathFor, isExecutable,
   isRequestOriginAllowed, rejectWebSocketUpgrade, TERMINAL_INPUT_WS_HEARTBEAT_INTERVAL_MS,
-  loadPtyProvider, terminalTerminationGraceMs = TERMINATION_GRACE_MS,
+  loadPtyProvider, terminalTerminationGraceMs = TERMINATION_GRACE_MS, trackAuthChannel,
 }) {
   const sessions = new Map();
   const pendingSessionCreates = new Map();
@@ -234,9 +235,12 @@ export function createTerminalRuntime({
     finally { if (pendingSessionCreates.get(id) === pendingEntry) pendingSessionCreates.delete(id); }
   };
 
-  wsServer.on('connection', (socket) => {
+  wsServer.on('connection', (socket, req) => {
     const connection = { socket, attachments: new Map() };
     connections.add(connection);
+    const untrackAuth = trackAuthChannel?.(req?.openchamberAuthIdentity, () => {
+      socket.close(1008, 'Authentication expired or revoked');
+    }) ?? (() => {});
     send(socket, { t: 'hello', v: 3 });
     const heartbeat = setInterval(() => { try { socket.ping(); } catch { /* closed */ } }, TERMINAL_INPUT_WS_HEARTBEAT_INTERVAL_MS);
     socket.on('message', (raw, isBinary) => {
@@ -265,7 +269,7 @@ export function createTerminalRuntime({
         try { session.process.write(message.d); session.lastActivity = Date.now(); } catch { send(socket, { t: 'error', v: 3, s: id, code: 'WRITE_FAILED', message: 'Failed to write to terminal', fatal: false }); }
       }
     });
-    const cleanup = () => { clearInterval(heartbeat); connection.attachments.clear(); connections.delete(connection); };
+    const cleanup = () => { untrackAuth(); clearInterval(heartbeat); connection.attachments.clear(); connections.delete(connection); };
     socket.on('close', cleanup); socket.on('error', () => {});
   });
 
@@ -273,10 +277,14 @@ export function createTerminalRuntime({
     if (parseRequestPathname(req.url) !== TERMINAL_WS_PATH) return;
     void (async () => {
       try {
-        if (uiAuthController?.enabled) {
-          if (!await uiAuthController.ensureSessionToken(req, null)) { rejectWebSocketUpgrade(socket, 401, 'UI authentication required'); return; }
-          if (!await isRequestOriginAllowed(req)) { rejectWebSocketUpgrade(socket, 403, 'Invalid origin'); return; }
-        }
+        const authorization = await authorizeWebSocketUpgrade({
+          req,
+          uiAuthController,
+          tunnelAuthController,
+          isRequestOriginAllowed,
+        });
+        if (!authorization.ok) { rejectWebSocketUpgrade(socket, authorization.statusCode, authorization.reason); return; }
+        req.openchamberAuthIdentity = authorization.auth;
         if (!wsServer) { rejectWebSocketUpgrade(socket, 500, 'Terminal WebSocket unavailable'); return; }
         wsServer.handleUpgrade(req, socket, head, (ws) => wsServer.emit('connection', ws, req));
       } catch { rejectWebSocketUpgrade(socket, 500, 'Upgrade failed'); }

@@ -3,7 +3,14 @@ import React from 'react';
 import { isCapacitorApp } from '@/lib/platform';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useUIStore } from '@/stores/useUIStore';
-import { ensureGlobalSessionsLoaded } from '@/stores/useGlobalSessionsStore';
+import {
+  ensureGlobalSessionsLoaded,
+  refreshGlobalSessions,
+  resolveGlobalSessionDirectory,
+  useGlobalSessionsStore,
+} from '@/stores/useGlobalSessionsStore';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { getPWADisplayMode } from '@/lib/pwa';
 
 import {
   buildDeepLink,
@@ -42,40 +49,117 @@ export interface DeepLinkHandlers {
 
 let handlers: DeepLinkHandlers = {};
 let ready = false;
-let pending: DeepLinkIntent | null = null;
-let intentRevision = 0;
+type PendingDeepLink = {
+  intent: DeepLinkIntent;
+  prepareSession: boolean;
+};
 
-const execute = (intent: DeepLinkIntent): boolean => {
+let pending: PendingDeepLink | null = null;
+let intentRevision = 0;
+let resolvingSessionRevision: number | null = null;
+let unsubscribePendingSession: (() => void) | null = null;
+
+const stopPendingSessionWatch = (): void => {
+  const unsubscribe = unsubscribePendingSession;
+  unsubscribePendingSession = null;
+  unsubscribe?.();
+};
+
+const watchForPendingSession = (
+  navigation: PendingDeepLink,
+  revision: number,
+  runtimeKey: string,
+): void => {
+  stopPendingSessionWatch();
+  const tryResolve = (state: ReturnType<typeof useGlobalSessionsStore.getState>): boolean => {
+    if (revision !== intentRevision || runtimeKey !== getRuntimeKey()) {
+      stopPendingSessionWatch();
+      return true;
+    }
+    const sessionIntent = navigation.intent;
+    if (sessionIntent.type !== 'session') return true;
+    const session = [...state.activeSessions, ...state.archivedSessions]
+      .find((candidate) => candidate.id === sessionIntent.sessionId);
+    const directory = session ? resolveGlobalSessionDirectory(session) : null;
+    if (!directory) return false;
+
+    pending = {
+      ...navigation,
+      intent: { ...sessionIntent, directory },
+    };
+    stopPendingSessionWatch();
+    flush();
+    return true;
+  };
+
+  if (tryResolve(useGlobalSessionsStore.getState())) return;
+  unsubscribePendingSession = useGlobalSessionsStore.subscribe((state) => {
+    tryResolve(state);
+  });
+};
+
+const execute = ({ intent, prepareSession }: PendingDeepLink): boolean => {
   switch (intent.type) {
     case 'session':
-      handlers.prepareForSession?.();
-      useUIStore.getState().setSettingsDialogOpen(false);
-      useUIStore.getState().setActiveMainTab('chat');
       {
         const revision = intentRevision;
+        const runtimeKey = getRuntimeKey();
         const store = useSessionUIStore.getState();
-        const knownDirectory = intent.directory ?? store.getDirectoryForSession(intent.sessionId);
+        const isProvisionalCurrentSession = store.restoredSessionPendingValidation
+          && store.currentSessionId === intent.sessionId;
+        const knownDirectory = intent.directory
+          ?? (isProvisionalCurrentSession ? null : store.getDirectoryForSession(intent.sessionId));
         if (knownDirectory) {
+          if (prepareSession) {
+            handlers.prepareForSession?.();
+            useUIStore.getState().setSettingsDialogOpen(false);
+            useUIStore.getState().setActiveMainTab('chat');
+          }
           void store.setCurrentSession(intent.sessionId, knownDirectory);
           return true;
         }
-        void (async () => {
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            await ensureGlobalSessionsLoaded();
-            if (revision !== intentRevision) return;
-            const currentStore = useSessionUIStore.getState();
-            const directory = currentStore.getDirectoryForSession(intent.sessionId);
-            if (directory) {
-              void currentStore.setCurrentSession(intent.sessionId, directory);
-              return;
+        if (resolvingSessionRevision !== revision) {
+          stopPendingSessionWatch();
+          resolvingSessionRevision = revision;
+          void (async () => {
+            try {
+              for (let attempt = 0; attempt < 3; attempt += 1) {
+                if (attempt === 0) await ensureGlobalSessionsLoaded();
+                else await refreshGlobalSessions();
+                if (revision !== intentRevision || runtimeKey !== getRuntimeKey()) return;
+                const currentStore = useSessionUIStore.getState();
+                const globalState = useGlobalSessionsStore.getState();
+                const globalSession = [...globalState.activeSessions, ...globalState.archivedSessions]
+                  .find((session) => session.id === intent.sessionId);
+                const isStillProvisional = currentStore.restoredSessionPendingValidation
+                  && currentStore.currentSessionId === intent.sessionId;
+                const directory = globalSession
+                  ? resolveGlobalSessionDirectory(globalSession)
+                  : isStillProvisional ? null : currentStore.getDirectoryForSession(intent.sessionId);
+                if (directory) {
+                  pending = {
+                    intent: { ...intent, directory },
+                    prepareSession,
+                  };
+                  flush();
+                  return;
+                }
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+              }
+              if (revision === intentRevision && runtimeKey === getRuntimeKey()) {
+                watchForPendingSession({ intent, prepareSession }, revision, runtimeKey);
+              }
+            } finally {
+              if (resolvingSessionRevision === revision) {
+                resolvingSessionRevision = null;
+              }
             }
-            if (attempt < 2) {
-              await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
-            }
-          }
-        })();
+          })();
+        }
       }
-      return true;
+      return false;
 
     case 'new-session': {
       const store = useSessionUIStore.getState();
@@ -120,19 +204,23 @@ const execute = (intent: DeepLinkIntent): boolean => {
 
 const flush = (): void => {
   if (!ready || !pending) return;
-  const intent = pending;
+  const navigation = pending;
   // Drop the stash before executing; if the handler isn't registered yet, execute() returns
   // false and we re-stash so a later registerDeepLinkHandlers() flush can retry it.
   pending = null;
-  if (!execute(intent)) {
-    pending = intent;
+  if (!execute(navigation)) {
+    pending = navigation;
   }
 };
 
 /** Apply an intent now if possible, otherwise stash it until the app is ready / a handler appears. */
-export const applyDeepLinkIntent = (intent: DeepLinkIntent): void => {
+export const applyDeepLinkIntent = (
+  intent: DeepLinkIntent,
+  options: { prepareSession?: boolean } = {},
+): void => {
   intentRevision += 1;
-  pending = intent;
+  stopPendingSessionWatch();
+  pending = { intent, prepareSession: options.prepareSession !== false };
   flush();
 };
 
@@ -178,14 +266,28 @@ export const useDeepLinkSource = (options: { ready: boolean }): void => {
 
   React.useEffect(() => {
     setReady(isReady);
+    return () => setReady(false);
   }, [isReady]);
 
   React.useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
     const handleMessage = (event: MessageEvent<unknown>) => {
+      if (
+        !event.data
+        || typeof event.data !== 'object'
+        || (event.data as { type?: unknown }).type !== 'openchamber:notification-click'
+      ) {
+        return;
+      }
       const currentUrl = typeof window !== 'undefined' ? window.location.href : 'http://localhost/';
       const intent = parseServiceWorkerNotificationClick(event.data, currentUrl);
       if (intent) applyDeepLinkIntent(intent);
+      const responsePort = event.ports?.[0];
+      responsePort?.postMessage({
+        type: 'openchamber:notification-click-ack',
+        installed: getPWADisplayMode() !== 'browser',
+      });
+      responsePort?.close();
     };
     navigator.serviceWorker.addEventListener('message', handleMessage);
     return () => navigator.serviceWorker.removeEventListener('message', handleMessage);

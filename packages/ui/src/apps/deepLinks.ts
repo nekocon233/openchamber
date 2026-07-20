@@ -134,24 +134,28 @@ export function parseServiceWorkerNotificationClick(
   if (message.type !== 'openchamber:notification-click') return null;
 
   const explicitSessionId = typeof message.sessionId === 'string' ? message.sessionId.trim() : '';
-  const directory = typeof message.directory === 'string' ? message.directory.trim() : '';
-  if (explicitSessionId) {
-    return { type: 'session', sessionId: explicitSessionId, directory: directory || undefined };
-  }
-  if (typeof message.url !== 'string' || !message.url.trim()) return null;
+  const explicitDirectory = typeof message.directory === 'string' ? message.directory.trim() : '';
+  let urlSessionId = '';
+  let urlDirectory = '';
 
-  try {
-    const current = new URL(currentUrl);
-    const target = new URL(message.url, current);
-    if (target.origin !== current.origin) return null;
-    const sessionId = target.searchParams.get('session')?.trim() ?? '';
-    const targetDirectory = target.searchParams.get('directory')?.trim() ?? '';
-    return sessionId
-      ? { type: 'session', sessionId, directory: targetDirectory || undefined }
-      : null;
-  } catch {
-    return null;
+  if (typeof message.url === 'string' && message.url.trim()) {
+    try {
+      const current = new URL(currentUrl);
+      const target = new URL(message.url, current);
+      if (target.origin !== current.origin) return null;
+      urlSessionId = target.searchParams.get('session')?.trim() ?? '';
+      urlDirectory = target.searchParams.get('directory')?.trim() ?? '';
+    } catch {
+      return null;
+    }
   }
+
+  const sessionId = explicitSessionId || urlSessionId;
+  const hasConflictingUrlSession = Boolean(explicitSessionId && urlSessionId && urlSessionId !== explicitSessionId);
+  const directory = explicitDirectory || (hasConflictingUrlSession ? '' : urlDirectory);
+  return sessionId
+    ? { type: 'session', sessionId, directory: directory || undefined }
+    : null;
 }
 
 /**

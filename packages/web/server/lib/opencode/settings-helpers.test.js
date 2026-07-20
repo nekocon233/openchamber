@@ -2,8 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { createSettingsHelpers } from './settings-helpers.js';
 import { createSettingsNormalizationRuntime } from './settings-normalization-runtime.js';
+import {
+  normalizeFrpcRemotePort,
+  normalizeFrpcPublicUrl,
+  normalizeFrpcServerAddress,
+  normalizeFrpcServerPort,
+  normalizeFrpcTrustedCaFile,
+} from '../tunnels/frpc-client.js';
 
-const createTestHelpers = () => createSettingsHelpers({
+const createTestHelpers = (overrides = {}) => createSettingsHelpers({
   normalizePathForPersistence: (value) => value,
   normalizeDirectoryPath: (value) => value,
   normalizeTunnelBootstrapTtlMs: (value) => value,
@@ -14,11 +21,17 @@ const createTestHelpers = () => createSettingsHelpers({
   normalizeManagedRemoteTunnelHostname: (value) => value,
   normalizeManagedRemoteTunnelPresets: () => undefined,
   normalizeManagedRemoteTunnelPresetTokens: () => undefined,
+  normalizeFrpcServerAddress,
+  normalizeFrpcServerPort,
+  normalizeFrpcTrustedCaFile,
+  normalizeFrpcRemotePort,
+  normalizeFrpcPublicUrl,
   sanitizeTypographySizesPartial: () => undefined,
   normalizeStringArray: (input) => input,
   sanitizeModelRefs: () => undefined,
   sanitizeSkillCatalogs: () => undefined,
   sanitizeProjects: () => undefined,
+  ...overrides,
 });
 
 const createTestHelpersWithRealSanitizers = () => {
@@ -46,9 +59,14 @@ const createTestHelpersWithRealSanitizers = () => {
     normalizeTunnelProvider: (value) => value,
     normalizeTunnelMode: (value) => value,
     normalizeOptionalPath: (value) => value,
-    normalizeManagedRemoteTunnelHostname: (value) => value,
+    normalizeManagedRemoteTunnelHostname: runtime.normalizeManagedRemoteTunnelHostname,
     normalizeManagedRemoteTunnelPresets: () => undefined,
     normalizeManagedRemoteTunnelPresetTokens: () => undefined,
+    normalizeFrpcServerAddress,
+    normalizeFrpcServerPort,
+    normalizeFrpcTrustedCaFile,
+    normalizeFrpcRemotePort,
+    normalizeFrpcPublicUrl,
     sanitizeTypographySizesPartial: () => undefined,
     normalizeStringArray: runtime.normalizeStringArray,
     sanitizeModelRefs: runtime.sanitizeModelRefs,
@@ -58,6 +76,69 @@ const createTestHelpersWithRealSanitizers = () => {
 };
 
 describe('settings helpers', () => {
+  it('sanitizes FRPC TCP and HTTP endpoint settings without accepting a token', () => {
+    const helpers = createTestHelpersWithRealSanitizers();
+
+    expect(helpers.sanitizeSettingsUpdate({
+      frpcProxyType: 'http',
+      frpcServerAddress: ' 203.0.113.10 ',
+      frpcServerPort: 7000,
+      frpcTrustedCaFile: '/home/testuser/frp/ca.crt',
+      frpcRemotePort: 18080,
+      frpcPublicUrl: ' HTTPS://Public.Example.com:18080/ ',
+      frpcCustomDomain: ' https://VHOST.Example.com/path ',
+      frpcPublicHostname: ' Public.Example.com ',
+      frpcToken: 'must-not-be-persisted',
+    })).toEqual({
+      frpcProxyType: 'http',
+      frpcServerAddress: '203.0.113.10',
+      frpcServerPort: 7000,
+      frpcTrustedCaFile: '/home/testuser/frp/ca.crt',
+      frpcRemotePort: 18080,
+      frpcPublicUrl: 'https://public.example.com:18080',
+      frpcCustomDomain: 'vhost.example.com',
+      frpcPublicHostname: 'public.example.com',
+    });
+  });
+
+  it('omits invalid FRPC proxy and hostname settings while allowing explicit clears', () => {
+    const helpers = createTestHelpersWithRealSanitizers();
+
+    expect(helpers.sanitizeSettingsUpdate({
+      frpcProxyType: 'udp',
+      frpcCustomDomain: 'not a hostname',
+      frpcPublicHostname: 'http://[invalid',
+      frpcPublicUrl: 'http://public.example.com:18080',
+    })).toEqual({});
+    expect(helpers.sanitizeSettingsUpdate({
+      frpcCustomDomain: null,
+      frpcPublicHostname: '',
+      frpcPublicUrl: '',
+    })).toEqual({
+      frpcCustomDomain: null,
+      frpcPublicHostname: null,
+      frpcPublicUrl: null,
+    });
+  });
+
+  it('removes tunnel token fields from settings responses', () => {
+    const secret = 'frpc-secret-SHOULD-NOT-LEAK';
+    const helpers = createTestHelpers({
+      normalizeManagedRemoteTunnelPresetTokens: (value) => value,
+    });
+
+    const response = helpers.formatSettingsResponse({
+      managedRemoteTunnelToken: secret,
+      managedRemoteTunnelPresetTokens: { main: secret },
+      frpcToken: secret,
+    });
+
+    expect(JSON.stringify(response)).not.toContain(secret);
+    expect(response).not.toHaveProperty('managedRemoteTunnelToken');
+    expect(response).not.toHaveProperty('managedRemoteTunnelPresetTokens');
+    expect(response).not.toHaveProperty('frpcToken');
+  });
+
   it('accepts messageStreamTransport as a persisted shared setting', () => {
     const helpers = createTestHelpers();
 

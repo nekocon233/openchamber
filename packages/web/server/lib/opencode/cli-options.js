@@ -19,6 +19,12 @@ export const parseServeCliOptions = ({
     : undefined;
   const envTunnelToken = env.OPENCHAMBER_TUNNEL_TOKEN || undefined;
   const envTunnelHostname = env.OPENCHAMBER_TUNNEL_HOSTNAME || undefined;
+  const envTunnelPublicUrl = env.OPENCHAMBER_TUNNEL_PUBLIC_URL || undefined;
+  const envTunnelCustomDomain = env.OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN || undefined;
+  const envTunnelServerAddress = env.OPENCHAMBER_TUNNEL_SERVER_ADDRESS || undefined;
+  const envTunnelTrustedCaFile = env.OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE || undefined;
+  const envTunnelServerPort = Number.parseInt(env.OPENCHAMBER_TUNNEL_SERVER_PORT || '', 10);
+  const envTunnelRemotePort = Number.parseInt(env.OPENCHAMBER_TUNNEL_REMOTE_PORT || '', 10);
   const envApiOnly = env.OPENCHAMBER_API_ONLY === '1' || env.OPENCHAMBER_API_ONLY === 'true';
 
   const options = {
@@ -31,6 +37,12 @@ export const parseServeCliOptions = ({
     tunnelConfigPath: envTunnelConfig,
     tunnelToken: envTunnelToken,
     tunnelHostname: envTunnelHostname,
+    tunnelPublicUrl: envTunnelPublicUrl,
+    tunnelCustomDomain: envTunnelCustomDomain,
+    tunnelServerAddress: envTunnelServerAddress,
+    tunnelTrustedCaFile: envTunnelTrustedCaFile,
+    tunnelServerPort: Number.isInteger(envTunnelServerPort) ? envTunnelServerPort : undefined,
+    tunnelRemotePort: Number.isInteger(envTunnelRemotePort) ? envTunnelRemotePort : undefined,
     apiOnly: envApiOnly,
   };
 
@@ -119,6 +131,48 @@ export const parseServeCliOptions = ({
       const { value, nextIndex } = consumeValue(i, inlineValue);
       i = nextIndex;
       options.tunnelHostname = typeof value === 'string' ? value : options.tunnelHostname;
+      continue;
+    }
+
+    if (optionName === 'tunnel-public-url') {
+      const { value, nextIndex } = consumeValue(i, inlineValue);
+      i = nextIndex;
+      options.tunnelPublicUrl = typeof value === 'string' ? value : options.tunnelPublicUrl;
+      continue;
+    }
+
+    if (optionName === 'tunnel-custom-domain') {
+      const { value, nextIndex } = consumeValue(i, inlineValue);
+      i = nextIndex;
+      options.tunnelCustomDomain = typeof value === 'string' ? value : options.tunnelCustomDomain;
+      continue;
+    }
+
+    if (optionName === 'tunnel-server-address') {
+      const { value, nextIndex } = consumeValue(i, inlineValue);
+      i = nextIndex;
+      options.tunnelServerAddress = typeof value === 'string' ? value : options.tunnelServerAddress;
+      continue;
+    }
+
+    if (optionName === 'tunnel-trusted-ca-file') {
+      const { value, nextIndex } = consumeValue(i, inlineValue);
+      i = nextIndex;
+      options.tunnelTrustedCaFile = typeof value === 'string' ? value : options.tunnelTrustedCaFile;
+      continue;
+    }
+
+    if (optionName === 'tunnel-server-port' || optionName === 'tunnel-remote-port') {
+      const { value, nextIndex } = consumeValue(i, inlineValue);
+      i = nextIndex;
+      const parsed = Number.parseInt(value ?? '', 10);
+      if (Number.isInteger(parsed)) {
+        if (optionName === 'tunnel-server-port') {
+          options.tunnelServerPort = parsed;
+        } else {
+          options.tunnelRemotePort = parsed;
+        }
+      }
       continue;
     }
 

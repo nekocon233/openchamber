@@ -12,6 +12,7 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     sessionGoalRuntime,
     contextObligatoryRuntime,
     scheduledTasksRuntime,
+    disposeAuthChannels,
     getHealthCheckInterval,
     clearHealthCheckInterval,
     getTerminalRuntime,
@@ -48,6 +49,7 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     sessionGoalRuntime?.stop?.();
     contextObligatoryRuntime?.stop?.();
     scheduledTasksRuntime?.stop?.();
+    disposeAuthChannels?.();
 
     const healthCheckInterval = getHealthCheckInterval();
     if (healthCheckInterval) {
@@ -130,9 +132,16 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     const activeTunnelController = getActiveTunnelController();
     if (activeTunnelController) {
       console.log('Stopping active tunnel...');
-      activeTunnelController.stop();
-      setActiveTunnelController(null);
-      tunnelAuthController.clearActiveTunnel();
+      try {
+        await activeTunnelController.stop();
+        setActiveTunnelController(null);
+        tunnelAuthController.clearActiveTunnel();
+      } catch (error) {
+        console.warn('Failed to confirm active tunnel termination during shutdown');
+        if (!exitProcess) {
+          throw error;
+        }
+      }
     }
 
     console.log('Graceful shutdown complete');

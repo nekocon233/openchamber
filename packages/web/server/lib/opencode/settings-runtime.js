@@ -799,8 +799,7 @@ export const createSettingsRuntime = (deps) => {
     return { settings: next, changed: true };
   };
 
-  const readSettingsFromDiskMigrated = async () => {
-    const current = await readSettingsFromDisk();
+  const migrateSettingsFromDiskSnapshot = async (current) => {
     const migration1 = await migrateSettingsFromLegacyLastDirectory(current);
     const migration2 = await migrateSettingsFromLegacyThemePreferences(migration1.settings);
     const migration3 = await migrateSettingsFromLegacyCollapsedProjects(migration2.settings);
@@ -813,6 +812,14 @@ export const createSettingsRuntime = (deps) => {
       await writeSettingsToDisk(migration8.settings);
     }
     return migration8.settings;
+  };
+
+  const readSettingsFromDiskMigrated = async () => {
+    return migrateSettingsFromDiskSnapshot(await readSettingsFromDisk());
+  };
+
+  const readSettingsFromDiskMigratedStrict = async () => {
+    return migrateSettingsFromDiskSnapshot(await readSettingsFromDiskStrict());
   };
 
   const persistSettings = async (changes) => {
@@ -896,6 +903,7 @@ export const createSettingsRuntime = (deps) => {
     readSettingsFromDisk,
     readSettingsFromDiskStrict,
     readSettingsFromDiskMigrated,
+    readSettingsFromDiskMigratedStrict,
     writeSettingsToDisk,
     persistSettings,
   };

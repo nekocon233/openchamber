@@ -4,12 +4,11 @@ export const registerProjectIconRoutes = (app, dependencies) => {
     path,
     crypto,
     openchamberDataDir,
-    sanitizeProjects,
     readSettingsFromDiskMigrated,
-    persistSettings,
     createFsSearchRuntime,
     spawn,
     resolveGitBinaryForSpawn,
+    sidebarStateRuntime,
   } = dependencies;
 
   const projectIconsDirPath = path.join(openchamberDataDir, 'project-icons');
@@ -160,13 +159,60 @@ export const registerProjectIconRoutes = (app, dependencies) => {
     return `${svgMarkup.slice(0, svgOpenTagEndIndex + 1)}${overrideStyle}${svgMarkup.slice(svgOpenTagEndIndex + 1)}`;
   };
 
-  const findProjectById = (settings, projectId) => {
-    const projects = sanitizeProjects(settings?.projects) || [];
+  const findProjectById = (projects, projectId) => {
     const index = projects.findIndex((project) => project.id === projectId);
     if (index === -1) {
       return { projects, index: -1, project: null };
     }
     return { projects, index, project: projects[index] };
+  };
+
+  let iconMutationQueue = Promise.resolve();
+  const enqueueIconMutation = (task) => {
+    const result = iconMutationQueue.then(task, task);
+    iconMutationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const readProjectFiles = async (projectId) => {
+    const files = new Map();
+    for (const candidatePath of projectIconPathCandidates(projectId)) {
+      try {
+        files.set(candidatePath, await fsPromises.readFile(candidatePath));
+      } catch (error) {
+        if (!error || typeof error !== 'object' || error.code !== 'ENOENT') throw error;
+      }
+    }
+    return files;
+  };
+
+  const restoreProjectFiles = async (projectId, files) => {
+    await removeProjectIconFiles(projectId);
+    if (files.size === 0) return;
+    await fsPromises.mkdir(projectIconsDirPath, { recursive: true });
+    for (const [filePath, bytes] of files) {
+      await fsPromises.writeFile(filePath, bytes);
+    }
+  };
+
+  const readProjectSnapshot = async (projectId) => {
+    const snapshot = await sidebarStateRuntime.readSnapshot();
+    return {
+      snapshot,
+      ...findProjectById(snapshot.projects, projectId),
+    };
+  };
+
+  const updateProjectIconMetadata = (projectId, iconImage) => sidebarStateRuntime.applyOperation({
+    type: 'project.update',
+    projectId,
+    patch: { iconImage },
+  });
+
+  const buildMutationResponse = async (projectId, result) => {
+    const project = result.snapshot.projects.find((entry) => entry.id === projectId) || null;
+    const settings = await readSettingsFromDiskMigrated();
+    return { project, settings, snapshot: result.snapshot };
   };
 
   const fsSearchRuntime = createFsSearchRuntime({
@@ -183,8 +229,7 @@ export const registerProjectIconRoutes = (app, dependencies) => {
     }
 
     try {
-      const settings = await readSettingsFromDiskMigrated();
-      const { project } = findProjectById(settings, projectId);
+      const { project } = await readProjectSnapshot(projectId);
       if (!project) {
         return res.status(404).json({ error: 'Project not found' });
       }
@@ -255,32 +300,30 @@ export const registerProjectIconRoutes = (app, dependencies) => {
     }
 
     try {
-      const settings = await readSettingsFromDiskMigrated();
-      const { projects, project } = findProjectById(settings, projectId);
-      if (!project) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-
-      const iconPath = projectIconPathForMime(projectId, parsed.mime);
-      if (!iconPath) {
-        return res.status(400).json({ error: 'Unsupported icon format' });
-      }
-
-      await fsPromises.mkdir(projectIconsDirPath, { recursive: true });
-      await fsPromises.writeFile(iconPath, parsed.bytes);
-      await removeProjectIconFiles(projectId, iconPath);
-
-      const updatedAt = Date.now();
-      const nextProjects = projects.map((entry) => (
-        entry.id === projectId
-          ? { ...entry, iconImage: { mime: parsed.mime, updatedAt, source: 'custom' } }
-          : entry
-      ));
-      const updatedSettings = await persistSettings({ projects: nextProjects });
-      const updatedProject = (updatedSettings.projects || []).find((entry) => entry.id === projectId) || null;
-
-      return res.json({ project: updatedProject, settings: updatedSettings });
+      const result = await enqueueIconMutation(async () => {
+        const { project } = await readProjectSnapshot(projectId);
+        if (!project) return null;
+        const iconPath = projectIconPathForMime(projectId, parsed.mime);
+        if (!iconPath) throw Object.assign(new Error('Unsupported icon format'), { status: 400 });
+        const previousFiles = await readProjectFiles(projectId);
+        try {
+          await fsPromises.mkdir(projectIconsDirPath, { recursive: true });
+          await fsPromises.writeFile(iconPath, parsed.bytes);
+          await removeProjectIconFiles(projectId, iconPath);
+          return await updateProjectIconMetadata(projectId, {
+            mime: parsed.mime,
+            updatedAt: Date.now(),
+            source: 'custom',
+          });
+        } catch (error) {
+          await restoreProjectFiles(projectId, previousFiles);
+          throw error;
+        }
+      });
+      if (!result) return res.status(404).json({ error: 'Project not found' });
+      return res.json(await buildMutationResponse(projectId, result));
     } catch (error) {
+      if (error?.status === 400) return res.status(400).json({ error: error.message });
       console.warn('Failed to upload project icon:', error);
       return res.status(500).json({ error: 'Failed to upload project icon' });
     }
@@ -293,23 +336,20 @@ export const registerProjectIconRoutes = (app, dependencies) => {
     }
 
     try {
-      const settings = await readSettingsFromDiskMigrated();
-      const { projects, project } = findProjectById(settings, projectId);
-      if (!project) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-
-      await removeProjectIconFiles(projectId);
-
-      const nextProjects = projects.map((entry) => (
-        entry.id === projectId
-          ? { ...entry, iconImage: null }
-          : entry
-      ));
-      const updatedSettings = await persistSettings({ projects: nextProjects });
-      const updatedProject = (updatedSettings.projects || []).find((entry) => entry.id === projectId) || null;
-
-      return res.json({ project: updatedProject, settings: updatedSettings });
+      const result = await enqueueIconMutation(async () => {
+        const { project } = await readProjectSnapshot(projectId);
+        if (!project) return null;
+        const previousFiles = await readProjectFiles(projectId);
+        try {
+          await removeProjectIconFiles(projectId);
+          return await updateProjectIconMetadata(projectId, null);
+        } catch (error) {
+          await restoreProjectFiles(projectId, previousFiles);
+          throw error;
+        }
+      });
+      if (!result) return res.status(404).json({ error: 'Project not found' });
+      return res.json(await buildMutationResponse(projectId, result));
     } catch (error) {
       console.warn('Failed to remove project icon:', error);
       return res.status(500).json({ error: 'Failed to remove project icon' });
@@ -323,73 +363,60 @@ export const registerProjectIconRoutes = (app, dependencies) => {
     }
 
     try {
-      const settings = await readSettingsFromDiskMigrated();
-      const { projects, project } = findProjectById(settings, projectId);
-      if (!project) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-
       const force = req.body?.force === true;
-      if (project.iconImage?.source === 'custom' && !force) {
-        return res.json({
-          project,
-          skipped: true,
-          reason: 'custom-icon-present',
+      const payload = await enqueueIconMutation(async () => {
+        const { project } = await readProjectSnapshot(projectId);
+        if (!project) return { status: 404, error: 'Project not found' };
+        if (project.iconImage?.source === 'custom' && !force) {
+          return { project, skipped: true, reason: 'custom-icon-present' };
+        }
+
+        const faviconCandidates = await fsSearchRuntime.searchFilesystemFiles(project.path, {
+          limit: 200,
+          query: 'favicon',
+          includeHidden: true,
+          respectGitignore: false,
         });
-      }
+        const selected = faviconCandidates
+          .filter((entry) => /(^|\/)favicon\.(ico|png|svg|jpg|jpeg|webp)$/i.test(entry.path))
+          .sort((a, b) => a.path.length - b.path.length)[0];
+        if (!selected) return { status: 404, error: 'No favicon found in project' };
 
-      const faviconCandidates = await fsSearchRuntime.searchFilesystemFiles(project.path, {
-        limit: 200,
-        query: 'favicon',
-        includeHidden: true,
-        respectGitignore: false,
+        const ext = path.extname(selected.path).slice(1).toLowerCase();
+        const mime = projectIconExtensionToMime[ext] || null;
+        if (!mime) return { status: 415, error: 'Unsupported favicon format' };
+        const bytes = await fsPromises.readFile(selected.path);
+        if (bytes.length === 0) return { status: 400, error: 'Discovered icon is empty' };
+        if (bytes.length > projectIconMaxBytes) {
+          return { status: 400, error: 'Discovered icon exceeds size limit (5 MB)' };
+        }
+        const iconPath = projectIconPathForMime(projectId, mime);
+        if (!iconPath) return { status: 415, error: 'Unsupported favicon format' };
+
+        const previousFiles = await readProjectFiles(projectId);
+        try {
+          await fsPromises.mkdir(projectIconsDirPath, { recursive: true });
+          await fsPromises.writeFile(iconPath, bytes);
+          await removeProjectIconFiles(projectId, iconPath);
+          const result = await updateProjectIconMetadata(projectId, {
+            mime,
+            updatedAt: Date.now(),
+            source: 'auto',
+          });
+          return {
+            result,
+            discoveredPath: selected.path,
+          };
+        } catch (error) {
+          await restoreProjectFiles(projectId, previousFiles);
+          throw error;
+        }
       });
-
-      const filtered = faviconCandidates
-        .filter((entry) => /(^|\/)favicon\.(ico|png|svg|jpg|jpeg|webp)$/i.test(entry.path))
-        .sort((a, b) => a.path.length - b.path.length);
-
-      const selected = filtered[0];
-      if (!selected) {
-        return res.status(404).json({ error: 'No favicon found in project' });
-      }
-
-      const ext = path.extname(selected.path).slice(1).toLowerCase();
-      const mime = projectIconExtensionToMime[ext] || null;
-      if (!mime) {
-        return res.status(415).json({ error: 'Unsupported favicon format' });
-      }
-
-      const bytes = await fsPromises.readFile(selected.path);
-      if (bytes.length === 0) {
-        return res.status(400).json({ error: 'Discovered icon is empty' });
-      }
-      if (bytes.length > projectIconMaxBytes) {
-        return res.status(400).json({ error: 'Discovered icon exceeds size limit (5 MB)' });
-      }
-
-      const iconPath = projectIconPathForMime(projectId, mime);
-      if (!iconPath) {
-        return res.status(415).json({ error: 'Unsupported favicon format' });
-      }
-
-      await fsPromises.mkdir(projectIconsDirPath, { recursive: true });
-      await fsPromises.writeFile(iconPath, bytes);
-      await removeProjectIconFiles(projectId, iconPath);
-
-      const updatedAt = Date.now();
-      const nextProjects = projects.map((entry) => (
-        entry.id === projectId
-          ? { ...entry, iconImage: { mime, updatedAt, source: 'auto' } }
-          : entry
-      ));
-      const updatedSettings = await persistSettings({ projects: nextProjects });
-      const updatedProject = (updatedSettings.projects || []).find((entry) => entry.id === projectId) || null;
-
+      if (payload.status) return res.status(payload.status).json({ error: payload.error });
+      if (!payload.result) return res.json(payload);
       return res.json({
-        project: updatedProject,
-        settings: updatedSettings,
-        discoveredPath: selected.path,
+        ...await buildMutationResponse(projectId, payload.result),
+        discoveredPath: payload.discoveredPath,
       });
     } catch (error) {
       console.warn('Failed to discover project icon:', error);

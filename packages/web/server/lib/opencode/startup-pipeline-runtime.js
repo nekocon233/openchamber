@@ -14,6 +14,7 @@ export const createStartupPipelineRuntime = (dependencies) => {
       fs,
       path,
       uiAuthController,
+      trackAuthChannel,
       buildAugmentedPath,
       searchPathFor,
       isExecutable,
@@ -63,6 +64,8 @@ export const createStartupPipelineRuntime = (dependencies) => {
       fs,
       path,
       uiAuthController,
+      tunnelAuthController,
+      trackAuthChannel,
       buildAugmentedPath,
       searchPathFor,
       isExecutable,
@@ -78,6 +81,8 @@ export const createStartupPipelineRuntime = (dependencies) => {
       server,
       express,
       uiAuthController,
+      tunnelAuthController,
+      trackAuthChannel,
       isRequestOriginAllowed,
       rejectWebSocketUpgrade,
       modelsDir: dictationModelsDir,
@@ -86,6 +91,8 @@ export const createStartupPipelineRuntime = (dependencies) => {
     const messageStreamRuntime = createMessageStreamWsRuntime({
       server,
       uiAuthController,
+      tunnelAuthController,
+      trackAuthChannel,
       isRequestOriginAllowed,
       rejectWebSocketUpgrade,
       buildOpenCodeUrl,
@@ -130,6 +137,7 @@ export const createStartupPipelineRuntime = (dependencies) => {
       bindHost,
       startupTunnelRequest,
       onTunnelReady,
+      onPortReady: tunnelRuntimeContext.setActivePort,
     });
     tunnelRuntimeContext.setActivePort(startupResult.activePort);
 

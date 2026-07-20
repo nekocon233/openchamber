@@ -31,12 +31,16 @@ openchamber startup status           # Show startup service status
 openchamber startup disable          # Remove startup service
 openchamber tunnel help              # Tunnel lifecycle commands
 openchamber tunnel providers         # Show provider capabilities
-openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token <token>
+openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token-file ~/.secrets/cf-token
 openchamber tunnel start --profile prod-main
+openchamber tunnel start --provider frpc --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 openchamber tunnel start --provider cloudflare --mode quick --qr
 openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.cloudflared/config.yml
 openchamber tunnel status --all      # Show tunnel state across instances
 openchamber tunnel stop --port 3000  # Stop tunnel only (server stays running)
+openchamber tunnel stop --all --force # Stop tunnels on every CLI instance
 openchamber connect-url --port 3000  # Add this server to OpenChamber Desktop
 openchamber connect-url --server http://host:3000 --qr
 openchamber connect-url --port 3000 --qr
@@ -55,6 +59,11 @@ openchamber update                   # Update to latest version
 - Starting a different tunnel mode/provider on the same instance replaces the active tunnel.
 - Replacing or stopping a tunnel revokes existing connect links and invalidates remote tunnel sessions.
 - Connect links are one-time tokens; generating a new link revokes the previous unused link.
+- FRPC TCP uses `--remote-port` for raw HTTP forwarding and requires the exact externally TLS-terminated origin through `--public-url`. Bind the FRPS proxy port to loopback; OpenChamber rejects non-HTTPS, credential-bearing, path-bearing, or malformed public URLs instead of inferring TLS from the FRPS address.
+- FRPC HTTP vhost uses `--custom-domain <frps-routing-host>` with `--hostname <external-public-host>` and publishes `https://<hostname>`. Caddy terminates HTTPS on `443`, forwards to the FRPS vhost HTTP port, sets `Host` to the custom domain, and sets `X-Forwarded-Host` to the public hostname.
+- A shared FRPS token authenticates FRPC clients; it does not isolate HTTP vhosts. With `openchamber tunnel`, provide FRPC tokens only by file, stdin, or the private interactive prompt; inline `--token` is rejected. Profiles created through one of those inputs can be reused.
+- FRPC requires `--frps-ca-file`. Configure FRPS with a certificate whose SAN matches `--frps-address`; OpenChamber verifies that identity and never enables insecure certificate verification.
+- The Docker FRPS example in the tunnel guide writes and starts the same `/etc/frp/frps.toml` path; do not mount a generated config at a different container location.
 
 ### Connect other OpenChamber apps
 
@@ -150,6 +159,36 @@ environment:
 
 Managed-local path note: `OPENCHAMBER_TUNNEL_CONFIG` must use a container path under `/home/openchamber/...`. If the config file references `credentials-file`, ensure that JSON path is also mounted and reachable inside the container.
 
+For a managed FRPC TCP mapping, set:
+
+```yaml
+environment:
+  OPENCHAMBER_TUNNEL_PROVIDER: frpc
+  OPENCHAMBER_TUNNEL_MODE: managed-remote
+  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+  OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
+  OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
+  OPENCHAMBER_TUNNEL_REMOTE_PORT: 20000
+  OPENCHAMBER_TUNNEL_PUBLIC_URL: https://app.example.com:20000
+  OPENCHAMBER_TUNNEL_TOKEN: <token>
+```
+
+For a managed FRPC HTTP-vhost endpoint, set:
+
+```yaml
+environment:
+  OPENCHAMBER_TUNNEL_PROVIDER: frpc
+  OPENCHAMBER_TUNNEL_MODE: managed-remote
+  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+  OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
+  OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
+  OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: openchamber.internal
+  OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com
+  OPENCHAMBER_TUNNEL_TOKEN: <token>
+```
+
+The local OpenChamber port is supplied automatically for both endpoint types. Direct startup reads `OPENCHAMBER_TUNNEL_TOKEN`; the `openchamber tunnel` command instead accepts FRPC tokens only through `--token-file`, `--token-stdin`, or the private interactive prompt. Profiles created through one of those inputs can be reused.
+
 **Data directory:** mount `data/` for persistent storage. Ensure permissions:
 ```bash
 mkdir -p data/openchamber data/opencode/share data/opencode/config data/ssh
@@ -225,13 +264,13 @@ systemctl --user enable --now opencode openchamber
 
 ## What makes the web version special
 
-- **Remote access** - Cloudflare tunnel with QR onboarding. Scan from your phone, start coding.
+- **Remote access** - Cloudflare, FRPC, or Ngrok tunnel access with QR onboarding.
 - **Mobile-first PWA** - optimized chat controls, keyboard-safe layouts, drag-to-reorder projects
 - **Background notifications** - know when your agent finishes, even from another tab
 - **Self-update** - update and restart from the UI, server settings stay intact
 - **Cross-tab tracking** - session activity stays in sync across browser tabs
 
-- Cloudflare tunnel access with quick, managed-remote, and managed-local modes
+- Provider-aware tunnel access with Cloudflare, managed FRPC TCP and HTTP-vhost endpoints, and Ngrok
 - One-scan onboarding with tunnel QR + password URL helpers
 - Mobile-first experience: optimized chat controls, keyboard-safe layouts, and attachment-friendly UI
 - Background notifications plus reliable cross-tab session activity tracking

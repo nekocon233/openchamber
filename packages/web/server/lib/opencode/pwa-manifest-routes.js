@@ -223,6 +223,7 @@ export const registerPwaManifestRoute = (app, dependencies) => {
       scope: '/',
       display: 'standalone',
       display_override: ['window-controls-overlay'],
+      launch_handler: { client_mode: 'navigate-existing' },
       background_color: '#151313',
       theme_color: '#edb449',
       ...(manifestOrientation ? { orientation: manifestOrientation } : {}),

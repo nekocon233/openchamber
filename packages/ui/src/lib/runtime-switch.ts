@@ -89,19 +89,22 @@ export const initializeRuntimeEndpoint = (options: { apiBaseUrl?: string | null;
   }
 
   const apiBaseUrl = options.apiBaseUrl?.trim() || readInjectedApiBaseUrl();
-  if (!apiBaseUrl) {
+  const runtimeKey = options.runtimeKey?.trim() || '';
+  if (!apiBaseUrl && !runtimeKey) {
     return;
   }
 
   activeApiBaseUrl = apiBaseUrl;
-  activeRuntimeKey = options.runtimeKey?.trim() || (sameOrigin(apiBaseUrl, readInjectedLocalOrigin()) ? 'local' : normalizeRuntimeUrlKey(apiBaseUrl));
+  activeRuntimeKey = runtimeKey || (sameOrigin(apiBaseUrl, readInjectedLocalOrigin()) ? 'local' : normalizeRuntimeUrlKey(apiBaseUrl));
 };
 
 export const switchRuntimeEndpoint = (options: { apiBaseUrl: string; clientToken?: string | null; runtimeKey?: string | null; requestHeaders?: Record<string, string> | null; relay?: RelayRuntimeDescriptor | null }): void => {
   const apiBaseUrl = options.apiBaseUrl.trim();
   const previousApiBaseUrl = getRuntimeApiBaseUrl();
   const previousRuntimeKey = getRuntimeKey();
-  const runtimeKey = options.runtimeKey?.trim() || normalizeRuntimeUrlKey(apiBaseUrl);
+  const runtimeKey = options.runtimeKey?.trim()
+    || (apiBaseUrl === previousApiBaseUrl ? previousRuntimeKey : '')
+    || normalizeRuntimeUrlKey(apiBaseUrl);
   const detail = { apiBaseUrl, previousApiBaseUrl, runtimeKey, previousRuntimeKey };
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent<RuntimeEndpointChangedDetail>(RUNTIME_ENDPOINT_WILL_CHANGE_EVENT, { detail }));

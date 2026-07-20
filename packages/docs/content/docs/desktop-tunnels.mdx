@@ -1,6 +1,6 @@
 ---
 title: Desktop Tunnels
-description: Create Cloudflare or Ngrok tunnels from the desktop app.
+description: Create Cloudflare, FRPC, or Ngrok tunnels from the desktop app.
 ---
 
 # Desktop Tunnels
@@ -22,14 +22,25 @@ Cloudflare uses `cloudflared`. Ngrok requires an ngrok account and an authtoken 
 ngrok config add-authtoken <your-ngrok-token>
 ```
 
+FRPC requires no manual client installation. OpenChamber downloads and verifies its pinned FRPC 0.70.0 binary automatically.
+
 ## Start from the app
 
 1. Open **Settings → OpenChamber → Tunnel**.
-2. Choose **Cloudflare** or **Ngrok**.
-3. Start a quick tunnel.
+2. Choose **Cloudflare**, **FRPC**, or **Ngrok**.
+3. Start a supported tunnel mode.
 4. Scan the generated QR code from your phone.
 
-Ngrok currently supports quick tunnels. Cloudflare supports quick tunnels and managed Cloudflare modes.
+Ngrok currently supports quick tunnels. Cloudflare supports quick tunnels and managed Cloudflare modes. FRPC supports managed-remote TCP and HTTP-vhost endpoints through your own FRPS server.
+
+## Configure FRPC
+
+Settings offers **TCP** and **HTTP vhost** as the FRPC proxy type. Enter the FRPS address, control port, trusted CA certificate file, and shared token in the private token field. OpenChamber supplies its local port automatically for either type. FRPS must present a certificate whose SAN matches the FRPS address; OpenChamber verifies that identity and never disables certificate verification.
+
+- **TCP:** enter the remote mapping port and the exact external public HTTPS origin. FRPC forwards plain HTTP on the mapped port, so keep that FRPS port loopback-only and place Caddy or another TLS terminator at the declared URL. OpenChamber rejects HTTP, malformed, or non-origin URLs and never infers browser TLS from the FRPS control address.
+- **HTTP vhost:** enter the FRPS routing host (custom domain) and the external public hostname. The public URL is `https://<hostname>`. Caddy terminates HTTPS on `443`, forwards to the FRPS vhost HTTP port, sets `Host` to the custom domain, and sets `X-Forwarded-Host` to the public hostname.
+
+A shared FRPS token authenticates FRPC clients; it does not provide isolation between HTTP vhosts.
 
 ## Access protection
 

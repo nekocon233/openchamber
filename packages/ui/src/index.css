@@ -1651,6 +1651,12 @@ input[aria-label="Terminal input"] {
     animation: none;
   }
 
+  .session-running-spinner {
+    animation: none !important;
+    transform: none !important;
+    will-change: auto !important;
+  }
+
 }
 
 /* Settings dialog: hide the overlay scrollbar; wheel/keyboard scroll still works. */

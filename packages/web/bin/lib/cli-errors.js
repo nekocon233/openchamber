@@ -8,10 +8,11 @@ const EXIT_CODE = {
 };
 
 class TunnelCliError extends Error {
-  constructor(message, exitCode = EXIT_CODE.GENERAL_ERROR) {
+  constructor(message, exitCode = EXIT_CODE.GENERAL_ERROR, { reported = false } = {}) {
     super(message);
     this.name = 'TunnelCliError';
     this.exitCode = exitCode;
+    this.reported = reported;
   }
 }
 

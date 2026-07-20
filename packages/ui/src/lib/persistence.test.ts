@@ -216,6 +216,42 @@ describe('updateDesktopSettings', () => {
     expect(secondResolved).toBe(true);
   });
 
+  test('drops legacy sidebar fields from coalesced saves without clearing local collapse state', async () => {
+    const collapseKey = 'oc.sessions.projectCollapse';
+    localStorage.setItem(collapseKey, JSON.stringify(['project-one']));
+    const saveCalls: Array<Partial<SettingsPayload>> = [];
+    registerSettingsSave(async (changes) => {
+      saveCalls.push(changes);
+      if ('projects' in changes || 'activeProjectId' in changes) {
+        throw new Error('legacy sidebar settings rejected');
+      }
+      return {
+        ...changes,
+        projects: [{ id: 'project-one', path: '/workspace/project', label: 'Project' }],
+      };
+    });
+
+    try {
+      const first = updateDesktopSettings({
+        projects: [{
+          id: 'project-one',
+          path: '/workspace/project',
+          label: 'Project',
+          sidebarCollapsed: false,
+        }],
+        activeProjectId: 'project-one',
+        showReasoningTraces: false,
+      });
+      const second = updateDesktopSettings({ showDeletionDialog: false });
+      await Promise.all([first, second]);
+
+      expect(saveCalls).toEqual([{ showReasoningTraces: false, showDeletionDialog: false }]);
+      expect(localStorage.getItem(collapseKey)).toBe(JSON.stringify(['project-one']));
+    } finally {
+      localStorage.removeItem(collapseKey);
+    }
+  });
+
   test('drains a pending save to the previous runtime and ignores its stale response', async () => {
     switchRuntimeEndpoint({ apiBaseUrl: 'https://settings-a.example', runtimeKey: 'settings-a' });
     const saveResult = deferred<SettingsPayload>();
@@ -330,6 +366,102 @@ describe('updateDesktopSettings', () => {
 
     expect(useUIStore.getState().terminalShell).toBe('zsh');
     expect(useUIStore.getState().terminalLoginShells).toEqual(['zsh', 'fish']);
+  });
+
+  test('sanitizes managed FRPC HTTP settings loaded from shared settings', async () => {
+    const syncedSettings: SettingsPayload[] = [];
+    const onSettingsSynced = (event: Event) => {
+      syncedSettings.push((event as CustomEvent<SettingsPayload>).detail);
+    };
+    getWindow().addEventListener('openchamber:settings-synced', onSettingsSynced);
+    registerSettingsApi(async () => ({}), async () => ({
+      settings: {
+        frpcProxyType: 'http',
+        frpcServerAddress: ' frps.example.com ',
+        frpcServerPort: 7000,
+        frpcTrustedCaFile: ' /home/openchamber/frp/ca.crt ',
+        frpcRemotePort: 18080,
+        frpcPublicUrl: ' HTTPS://Public.Example.com:18080/ ',
+        frpcCustomDomain: 'https://VHOST.Example.com/path',
+        frpcPublicHostname: ' Public.Example.com ',
+        frpcToken: 'must-not-reach-shared-settings',
+        draftStartersCraftGoalAdded: true,
+      },
+      source: 'web',
+    }));
+
+    try {
+      await syncDesktopSettings();
+    } finally {
+      getWindow().removeEventListener('openchamber:settings-synced', onSettingsSynced);
+    }
+
+    const synced = syncedSettings.at(-1);
+    expect({
+      frpcProxyType: synced?.frpcProxyType,
+      frpcServerAddress: synced?.frpcServerAddress,
+      frpcServerPort: synced?.frpcServerPort,
+      frpcTrustedCaFile: synced?.frpcTrustedCaFile,
+      frpcRemotePort: synced?.frpcRemotePort,
+      frpcPublicUrl: synced?.frpcPublicUrl,
+      frpcCustomDomain: synced?.frpcCustomDomain,
+      frpcPublicHostname: synced?.frpcPublicHostname,
+    }).toEqual({
+      frpcProxyType: 'http',
+      frpcServerAddress: 'frps.example.com',
+      frpcServerPort: 7000,
+      frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
+      frpcRemotePort: 18080,
+      frpcPublicUrl: 'https://public.example.com:18080',
+      frpcCustomDomain: 'vhost.example.com',
+      frpcPublicHostname: 'public.example.com',
+    });
+    expect(synced?.frpcToken).toBe(undefined);
+  });
+
+  test('resets missing notification settings to active-runtime defaults after a switch', async () => {
+    getWindow();
+    switchRuntimeEndpoint({ apiBaseUrl: 'https://notifications-a.example', runtimeKey: 'notifications-a' });
+    registerSettingsApi(async () => ({}), async () => ({
+      settings: {
+        nativeNotificationsEnabled: true,
+        notificationMode: 'always',
+        notifyOnCompletion: false,
+        notifyOnError: false,
+        notificationTemplates: {
+          completion: { title: 'Runtime A', message: 'Done' },
+          error: { title: 'Runtime A error', message: 'Failed' },
+          question: { title: 'Runtime A question', message: 'Input' },
+          subtask: { title: 'Runtime A subtask', message: 'Done' },
+        },
+        draftStartersCraftGoalAdded: true,
+      },
+      source: 'web',
+    }));
+    await syncDesktopSettings();
+    expect(useUIStore.getState().notificationMode).toBe('always');
+    expect(useUIStore.getState().notifyOnCompletion).toBe(false);
+
+    switchRuntimeEndpoint({ apiBaseUrl: 'https://notifications-b.example', runtimeKey: 'notifications-b' });
+    registerSettingsApi(async () => ({}), async () => ({
+      settings: { draftStartersCraftGoalAdded: true },
+      source: 'web',
+    }));
+    await syncDesktopSettings();
+
+    const state = useUIStore.getState();
+    expect(state.nativeNotificationsEnabled).toBe(false);
+    expect(state.notificationMode).toBe('hidden-only');
+    expect(state.notifyOnSubtasks).toBe(true);
+    expect(state.notifyOnCompletion).toBe(true);
+    expect(state.notifyOnError).toBe(true);
+    expect(state.notifyOnQuestion).toBe(true);
+    expect(state.notificationTemplates).toEqual({
+      completion: { title: '', message: '' },
+      error: { title: '', message: '' },
+      question: { title: '', message: '' },
+      subtask: { title: '', message: '' },
+    });
   });
 
   test('autosaves all model selector settings fields', async () => {

@@ -1,4 +1,10 @@
 import crypto from 'crypto';
+import {
+  NOTIFICATION_AUTH_KIND_TUNNEL_SESSION,
+  createTunnelSessionNotificationAuth,
+  invalidateNotificationAuth,
+  normalizeNotificationAuth,
+} from '../notifications/auth-runtime.js';
 
 const BOOTSTRAP_TOKEN_COOKIE_SAFE_BYTES = 32;
 const TUNNEL_SESSION_COOKIE_NAME = 'oc_tunnel_session';
@@ -258,10 +264,9 @@ export const createTunnelAuth = () => {
       return 'local';
     }
 
-    if (!activeTunnelId) {
-      return 'local';
-    }
-
+    // A public peer never inherits loopback/passwordless trust, even when no
+    // managed tunnel is currently active. Active tunnel state only identifies
+    // the expected public host; it is not the boundary between local and remote.
     return 'unknown-public';
   };
 
@@ -285,6 +290,8 @@ export const createTunnelAuth = () => {
       if (record.tunnelId === tunnelId && !record.revokedAt) {
         record.revokedAt = revokedAt;
         record.revokedReason = reason;
+        const notificationAuth = createTunnelSessionNotificationAuth(record.sessionId, record.expiresAt);
+        if (notificationAuth) invalidateNotificationAuth(notificationAuth);
         count += 1;
       }
     }
@@ -443,6 +450,8 @@ export const createTunnelAuth = () => {
     if (session.expiresAt <= nowTs()) {
       if (!session.expiredAt) {
         session.expiredAt = nowTs();
+        const notificationAuth = createTunnelSessionNotificationAuth(session.sessionId, session.expiresAt);
+        if (notificationAuth) invalidateNotificationAuth(notificationAuth);
       }
       return null;
     }
@@ -543,6 +552,8 @@ export const createTunnelAuth = () => {
       const isExpired = record.expiresAt <= now;
       if (isExpired && !record.expiredAt) {
         record.expiredAt = now;
+        const notificationAuth = createTunnelSessionNotificationAuth(record.sessionId, record.expiresAt);
+        if (notificationAuth) invalidateNotificationAuth(notificationAuth);
       }
 
       const active = !record.revokedAt && !isExpired && record.tunnelId === activeTunnelId;
@@ -567,6 +578,20 @@ export const createTunnelAuth = () => {
     return sessions;
   };
 
+  const validateNotificationAuth = (authValue) => {
+    const auth = normalizeNotificationAuth(authValue);
+    if (!auth || auth.kind !== NOTIFICATION_AUTH_KIND_TUNNEL_SESSION) return null;
+    const now = nowTs();
+    for (const record of tunnelSessions.values()) {
+      const recordAuth = createTunnelSessionNotificationAuth(record.sessionId, record.expiresAt);
+      if (recordAuth?.identity !== auth.identity) continue;
+      return !record.revokedAt
+        && record.expiresAt > now
+        && record.tunnelId === activeTunnelId;
+    }
+    return false;
+  };
+
   return {
     classifyRequestScope,
     setActiveTunnel,
@@ -578,6 +603,7 @@ export const createTunnelAuth = () => {
     getTunnelSessionFromRequest,
     exchangeBootstrapToken,
     listTunnelSessions,
+    validateNotificationAuth,
     clearTunnelSessionCookie,
     getActiveTunnelId: () => activeTunnelId,
     getActiveTunnelHost: () => activeTunnelHost,

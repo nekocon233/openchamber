@@ -1,3 +1,13 @@
+import {
+  NOTIFICATION_AUTH_KIND_TUNNEL_SESSION,
+  configureNotificationAuthValidator,
+  createTunnelSessionNotificationAuth,
+  createUiSessionNotificationAuth,
+  notificationAuthMatchesSelector,
+  subscribeNotificationAuthInvalidation,
+  validateNotificationAuth,
+} from './auth-runtime.js';
+
 const parsePushSubscribeBody = (body) => {
   if (!body || typeof body !== 'object') return null;
   const endpoint = body.endpoint;
@@ -27,6 +37,7 @@ export const NOTIFICATION_SSE_HEARTBEAT_INTERVAL_MS = 20_000;
 export const registerNotificationRoutes = (app, dependencies) => {
   const {
     uiAuthController,
+    tunnelAuthController,
     ensurePushInitialized,
     ensureGlobalWatcherStarted,
     getOrCreateVapidKeys,
@@ -54,6 +65,74 @@ export const registerNotificationRoutes = (app, dependencies) => {
     setAutoAcceptSession,
   } = dependencies;
 
+  const notificationStreams = new Map();
+
+  configureNotificationAuthValidator(async (auth) => {
+    if (auth.kind === NOTIFICATION_AUTH_KIND_TUNNEL_SESSION) {
+      return typeof tunnelAuthController?.validateNotificationAuth === 'function'
+        ? tunnelAuthController.validateNotificationAuth(auth)
+        : null;
+    }
+    return typeof uiAuthController?.validateNotificationAuth === 'function'
+      ? uiAuthController.validateNotificationAuth(auth)
+      : null;
+  });
+
+  subscribeNotificationAuthInvalidation((selector) => {
+    for (const stream of notificationStreams.values()) {
+      if (notificationAuthMatchesSelector(stream.auth, selector)) stream.revoke();
+    }
+    if (typeof removePushSubscription === 'function') {
+      void Promise.resolve(removePushSubscription(selector)).catch(() => {});
+    }
+    if (typeof removeApnsToken === 'function') {
+      void Promise.resolve(removeApnsToken(selector)).catch(() => {});
+    }
+  });
+
+  const resolveNotificationAuth = async (req, res) => {
+    const relayMarker = req?.headers?.['x-openchamber-relay-connection'];
+    const isPrivateRelay = Array.isArray(relayMarker)
+      ? relayMarker.some((entry) => typeof entry === 'string' && entry.length > 0)
+      : typeof relayMarker === 'string' && relayMarker.length > 0;
+    if (isPrivateRelay) {
+      return typeof uiAuthController?.resolveNotificationAuth === 'function'
+        ? uiAuthController.resolveNotificationAuth(req, res, {
+            allowUrlToken: false,
+            allowSessionCreation: false,
+            clientOnly: true,
+          })
+        : null;
+    }
+
+    const requestScope = typeof tunnelAuthController?.classifyRequestScope === 'function'
+      ? tunnelAuthController.classifyRequestScope(req)
+      : 'local';
+    if (
+      (requestScope === 'tunnel' || requestScope === 'unknown-public')
+      && typeof tunnelAuthController?.getTunnelSessionFromRequest === 'function'
+    ) {
+      const tunnelSession = tunnelAuthController.getTunnelSessionFromRequest(req);
+      if (typeof tunnelSession?.sessionId === 'string' && tunnelSession.sessionId) {
+        return createTunnelSessionNotificationAuth(tunnelSession.sessionId, tunnelSession.expiresAt);
+      }
+    }
+
+    if (typeof uiAuthController?.resolveNotificationAuth === 'function') {
+      return uiAuthController.resolveNotificationAuth(req, res, {
+        allowUrlToken: true,
+        allowSessionCreation: requestScope === 'local',
+        clientOnly: requestScope !== 'local' && uiAuthController.enabled === false,
+      });
+    }
+
+    if (requestScope !== 'local') return null;
+    const uiSessionToken = uiAuthController?.ensureSessionToken
+      ? await uiAuthController.ensureSessionToken(req, res)
+      : getUiSessionTokenFromRequest(req);
+    return createUiSessionNotificationAuth(uiSessionToken);
+  };
+
   const ensureSessionWatcher = async () => {
     if (typeof ensureGlobalWatcherStarted !== 'function') {
       return;
@@ -77,15 +156,12 @@ export const registerNotificationRoutes = (app, dependencies) => {
   });
 
   app.post('/api/push/subscribe', async (req, res) => {
-    await ensurePushInitialized();
-    await ensureSessionWatcher();
-
-    const uiToken = uiAuthController?.ensureSessionToken
-      ? await uiAuthController.ensureSessionToken(req, res)
-      : getUiSessionTokenFromRequest(req);
-    if (!uiToken) {
+    const notificationAuth = await resolveNotificationAuth(req, res);
+    if (!notificationAuth) {
       return res.status(401).json({ error: 'UI session missing' });
     }
+    await ensurePushInitialized();
+    await ensureSessionWatcher();
 
     const parsed = parsePushSubscribeBody(req.body);
     if (!parsed) {
@@ -111,7 +187,7 @@ export const registerNotificationRoutes = (app, dependencies) => {
 
     const platform = typeof req.body?.platform === 'string' ? req.body.platform : undefined;
     await addOrUpdatePushSubscription(
-      uiToken,
+      notificationAuth,
       {
         endpoint,
         p256dh: keys.p256dh,
@@ -125,12 +201,8 @@ export const registerNotificationRoutes = (app, dependencies) => {
   });
 
   app.delete('/api/push/subscribe', async (req, res) => {
-    await ensurePushInitialized();
-
-    const uiToken = uiAuthController?.ensureSessionToken
-      ? await uiAuthController.ensureSessionToken(req, res)
-      : getUiSessionTokenFromRequest(req);
-    if (!uiToken) {
+    const notificationAuth = await resolveNotificationAuth(req, res);
+    if (!notificationAuth) {
       return res.status(401).json({ error: 'UI session missing' });
     }
 
@@ -139,22 +211,19 @@ export const registerNotificationRoutes = (app, dependencies) => {
       return res.status(400).json({ error: 'Invalid body' });
     }
 
-    await removePushSubscription(uiToken, parsed.endpoint);
+    await removePushSubscription(notificationAuth, parsed.endpoint);
     return res.json({ ok: true });
   });
 
   // Native iOS APNs device token registration (mirrors /api/push/subscribe). The token
-  // is a hex APNs device token from @capacitor/push-notifications, scoped to the UI
-  // session like web-push subscriptions.
+  // is a hex APNs device token from @capacitor/push-notifications, scoped to the
+  // same opaque auth identity as web-push subscriptions.
   app.post('/api/push/apns-token', async (req, res) => {
-    await ensureSessionWatcher();
-
-    const uiToken = uiAuthController?.ensureSessionToken
-      ? await uiAuthController.ensureSessionToken(req, res)
-      : getUiSessionTokenFromRequest(req);
-    if (!uiToken) {
+    const notificationAuth = await resolveNotificationAuth(req, res);
+    if (!notificationAuth) {
       return res.status(401).json({ error: 'UI session missing' });
     }
+    await ensureSessionWatcher();
 
     const deviceToken = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
     if (!deviceToken) {
@@ -163,16 +232,14 @@ export const registerNotificationRoutes = (app, dependencies) => {
 
     const platform = req.body?.platform === 'android' ? 'android' : 'ios';
     if (typeof addOrUpdateApnsToken === 'function') {
-      await addOrUpdateApnsToken(uiToken, deviceToken, req.headers['user-agent'], platform);
+      await addOrUpdateApnsToken(notificationAuth, deviceToken, req.headers['user-agent'], platform);
     }
     return res.json({ ok: true });
   });
 
   app.delete('/api/push/apns-token', async (req, res) => {
-    const uiToken = uiAuthController?.ensureSessionToken
-      ? await uiAuthController.ensureSessionToken(req, res)
-      : getUiSessionTokenFromRequest(req);
-    if (!uiToken) {
+    const notificationAuth = await resolveNotificationAuth(req, res);
+    if (!notificationAuth) {
       return res.status(401).json({ error: 'UI session missing' });
     }
 
@@ -182,46 +249,45 @@ export const registerNotificationRoutes = (app, dependencies) => {
     }
 
     if (typeof removeApnsToken === 'function') {
-      await removeApnsToken(uiToken, deviceToken);
+      await removeApnsToken(notificationAuth, deviceToken);
     }
     return res.json({ ok: true });
   });
 
   app.post('/api/push/visibility', async (req, res) => {
-    const uiToken = uiAuthController?.ensureSessionToken
-      ? await uiAuthController.ensureSessionToken(req, res)
-      : getUiSessionTokenFromRequest(req);
-    if (!uiToken) {
+    const notificationAuth = await resolveNotificationAuth(req, res);
+    if (!notificationAuth) {
       return res.status(401).json({ error: 'UI session missing' });
     }
 
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const platform = typeof body.platform === 'string' ? body.platform : undefined;
-    updateUiVisibility(uiToken, body.visible === true, platform);
+    updateUiVisibility(notificationAuth, body.visible === true, platform);
     return res.json({ ok: true });
   });
 
-  app.get('/api/push/visibility', (req, res) => {
-    const uiToken = getUiSessionTokenFromRequest(req);
-    if (!uiToken) {
+  app.get('/api/push/visibility', async (req, res) => {
+    const notificationAuth = await resolveNotificationAuth(req, res);
+    if (!notificationAuth) {
       return res.status(401).json({ error: 'UI session missing' });
     }
 
     return res.json({
       ok: true,
-      visible: isUiVisible(uiToken),
+      visible: isUiVisible(notificationAuth),
     });
   });
 
   app.get('/api/notifications/stream', async (req, res) => {
-    await ensureSessionWatcher();
-
-    const uiToken = uiAuthController?.ensureSessionToken
-      ? await uiAuthController.ensureSessionToken(req, res)
-      : getUiSessionTokenFromRequest(req);
-    if (!uiToken) {
-      return;
+    const notificationAuth = await resolveNotificationAuth(req, res);
+    if (!notificationAuth) {
+      return res.status(401).json({ error: 'UI session missing' });
     }
+    const initialAuthStatus = await validateNotificationAuth(notificationAuth);
+    if (initialAuthStatus !== 'active') {
+      return res.status(401).json({ error: 'UI session unavailable' });
+    }
+    await ensureSessionWatcher();
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -234,6 +300,13 @@ export const registerNotificationRoutes = (app, dependencies) => {
 
     let closed = false;
     let heartbeatTimer = null;
+    let expiryTimer = null;
+    let validatingHeartbeat = false;
+
+    const removeListener = (target, event, listener) => {
+      if (typeof target?.off === 'function') target.off(event, listener);
+      else if (typeof target?.removeListener === 'function') target.removeListener(event, listener);
+    };
 
     const cleanup = () => {
       if (closed) {
@@ -244,33 +317,78 @@ export const registerNotificationRoutes = (app, dependencies) => {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
+      if (expiryTimer) {
+        clearTimeout(expiryTimer);
+        expiryTimer = null;
+      }
       clients.delete(res);
+      notificationStreams.delete(res);
+      removeListener(req, 'close', cleanup);
+      removeListener(res, 'close', cleanup);
+      removeListener(res, 'error', cleanup);
+    };
+
+    const revoke = () => {
+      if (closed) return;
+      cleanup();
+      if (!res.writableEnded && !res.destroyed) {
+        try {
+          res.end?.();
+        } catch {
+          res.destroy?.();
+        }
+      }
     };
 
     req.on('close', cleanup);
+    res.on('close', cleanup);
     res.on('error', cleanup);
+    notificationStreams.set(res, { auth: notificationAuth, revoke });
 
     const flushSse = () => {
       res.flush?.();
     };
 
-    heartbeatTimer = setInterval(() => {
+    const scheduleExpiry = () => {
+      if (notificationAuth.expiresAt === null || closed) return;
+      const remaining = notificationAuth.expiresAt - Date.now();
+      if (remaining <= 0) {
+        revoke();
+        return;
+      }
+      expiryTimer = setTimeout(scheduleExpiry, Math.min(remaining, 2_147_483_647));
+      expiryTimer.unref?.();
+    };
+    scheduleExpiry();
+
+    heartbeatTimer = setInterval(async () => {
       if (closed || res.writableEnded || res.destroyed) {
         cleanup();
         return;
       }
+      if (validatingHeartbeat) return;
+      validatingHeartbeat = true;
       try {
+        const authStatus = await validateNotificationAuth(notificationAuth);
+        if (authStatus !== 'active') {
+          revoke();
+          return;
+        }
+        if (closed || res.writableEnded || res.destroyed) return;
         res.write(':heartbeat\n\n');
         flushSse();
       } catch {
-        cleanup();
+        revoke();
+      } finally {
+        validatingHeartbeat = false;
       }
     }, NOTIFICATION_SSE_HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref?.();
 
     try {
       writeSseEvent(res, {
         type: 'openchamber:notification-stream-ready',
-        properties: { uiToken },
+        properties: {},
       });
       flushSse();
     } catch {

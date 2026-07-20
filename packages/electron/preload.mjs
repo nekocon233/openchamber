@@ -18,6 +18,10 @@ const runtimeHeadersRaw = readArgValue('--openchamber-runtime-headers');
 const homeDirectory = readArgValue('--openchamber-home');
 const macosMajorRaw = readArgValue('--openchamber-macos-major');
 const macosMajor = Number.parseInt(macosMajorRaw, 10);
+const windowRoleRaw = readArgValue('--openchamber-window-role');
+const windowRole = ['main', 'additional', 'mini-chat'].includes(windowRoleRaw)
+  ? windowRoleRaw
+  : undefined;
 const macVibrancySupported = process.platform === 'darwin';
 // Effective state for this window (main process resolves the saved preference
 // and passes it in). Defaults on when supported unless explicitly '0'.
@@ -58,6 +62,13 @@ if (apiBaseUrl) {
   contextBridge.exposeInMainWorld('__OPENCHAMBER_API_BASE_URL__', apiBaseUrl);
 }
 
+const runtimeKey = readArgValue('--openchamber-runtime-key');
+if (runtimeKey) {
+  // This is a main-owned namespace hint, not renderer authority. Main still
+  // resolves notification identity from the live BrowserWindow and URL.
+  contextBridge.exposeInMainWorld('__OPENCHAMBER_RUNTIME_KEY__', runtimeKey);
+}
+
 if (clientToken && isLocalPage) {
   contextBridge.exposeInMainWorld('__OPENCHAMBER_CLIENT_TOKEN__', clientToken);
 }
@@ -95,6 +106,7 @@ if (Number.isFinite(macosMajor) && macosMajor > 0) {
 
 contextBridge.exposeInMainWorld('__OPENCHAMBER_ELECTRON__', {
   runtime: 'electron',
+  windowRole,
   macVibrancy: hasMacVibrancy,
   macVibrancySupported,
 });

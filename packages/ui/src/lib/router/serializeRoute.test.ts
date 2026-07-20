@@ -97,6 +97,19 @@ describe('updateBrowserURL embedded-session-chat guard', () => {
     const writtenURL = historyOf().lastURL ?? '';
     expect(writtenURL).toContain('session=ses_main');
   });
+
+  test('keeps an explicit cold-start directory until the target is applied', () => {
+    installWindow('http://127.0.0.1:5173/app');
+
+    updateBrowserURL({
+      ...sessionState('ses_notification'),
+      sessionDirectory: 'C:\\work\\project',
+    }, { replace: true, force: true });
+
+    const writtenURL = new URL(historyOf().lastURL ?? '', 'http://127.0.0.1:5173');
+    expect(writtenURL.searchParams.get('session')).toBe('ses_notification');
+    expect(writtenURL.searchParams.get('directory')).toBe('C:\\work\\project');
+  });
 });
 
 describe('isEmbeddedSessionChat caching', () => {

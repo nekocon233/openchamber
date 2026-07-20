@@ -11,8 +11,22 @@ let questionReplyError: unknown | null = null
 let questionRejectError: unknown | null = null
 let sessionShareResult: { data?: unknown; error?: unknown; response?: { status?: number } } = {}
 let sessionUpdateResult: { data?: unknown; error?: unknown; response?: { status?: number } } = {}
+let sessionUpdatePromise: Promise<Session> | null = null
 let sessionMessagesResult: { data?: unknown; error?: unknown; response?: { status?: number } } = { data: [] }
+let sessionDeleteResult: Promise<boolean> = Promise.resolve(true)
+let sessionGetResult: Promise<Session> | null = null
 const globalUpsertedSessions: unknown[] = []
+const sessionDeleteCalls: Array<{ sessionId: string; directory?: string | null }> = []
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 const mockScopedClient = {
   permission: {
@@ -123,7 +137,15 @@ mock.module("@/lib/opencode/client", () => ({
     }),
     updateSession: mock((sessionId: string, changes: Record<string, unknown>, directory?: string | null) => {
       replyCalls.push({ method: "session.update", params: { sessionID: sessionId, ...changes, directory } })
-      return Promise.resolve(sessionUpdateResult.data)
+      return sessionUpdatePromise ?? Promise.resolve(sessionUpdateResult.data)
+    }),
+    getSession: mock(() => {
+      if (sessionGetResult) return sessionGetResult
+      return Promise.reject(new Error("session not found"))
+    }),
+    deleteSession: mock((sessionId: string, directory?: string | null) => {
+      sessionDeleteCalls.push({ sessionId, directory })
+      return sessionDeleteResult
     }),
   },
 }))
@@ -139,15 +161,22 @@ mock.module("@/stores/useConfigStore", () => ({
 }))
 
 // Mock useSessionUIStore
+const sessionUIState = {
+  currentSessionId: null as string | null,
+  getDirectoryForSession: (sessionId: string) => {
+    if (sessionId === "session-a") return "/test/project"
+    if (sessionId === "session-b") return "/other/project"
+    return null
+  },
+  setCurrentSession: (sessionId: string | null) => {
+    sessionUIState.currentSessionId = sessionId
+  },
+  setWorktreeMetadata: () => {},
+}
+
 mock.module("./session-ui-store", () => ({
   useSessionUIStore: {
-    getState: () => ({
-      getDirectoryForSession: (sessionId: string) => {
-        if (sessionId === "session-a") return "/test/project"
-        if (sessionId === "session-b") return "/other/project"
-        return null
-      },
-    }),
+    getState: () => sessionUIState,
   },
 }))
 
@@ -184,9 +213,13 @@ mock.module("@/stores/useGlobalSessionsStore", () => ({
   },
   useGlobalSessionsStore: {
     getState: () => ({
+      activeSessions: [],
+      archivedSessions: [],
       upsertSession: (session: unknown) => {
         globalUpsertedSessions.push(session)
       },
+      removeSessions: () => {},
+      archiveSessions: () => {},
     }),
   },
 }))
@@ -350,6 +383,149 @@ describe("shareSession live state", () => {
     expect(storedDiff.after).toBe(undefined)
     expect(globalDiff.before).toBe(undefined)
     expect(resultDiff.after).toBe(undefined)
+  })
+})
+
+describe("session removal navigation runtime scope", () => {
+  beforeEach(() => {
+    replyCalls.length = 0
+    sessionDeleteCalls.length = 0
+    sessionDeleteResult = Promise.resolve(true)
+    sessionGetResult = null
+    sessionUpdatePromise = null
+    globalUpsertedSessions.length = 0
+    sessionUIState.currentSessionId = null
+  })
+
+  test("does not send a delete through the replacement runtime while prerequisite work is pending", async () => {
+    const getSession = deferred<Session>()
+    sessionGetResult = getSession.promise
+    const oldSession = { id: "session-a", time: { created: 1 } } as Session
+    const oldStore = createStore({}, { session: [oldSession] })
+    const newSession = { id: "session-a", title: "New runtime", time: { created: 2 } } as Session
+    const newStore = createStore({}, { session: [newSession] })
+    const { switchRuntimeEndpoint } = await import("../lib/runtime-switch")
+    const { deleteSession, setActionRefs } = await import("./session-actions")
+
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-prerequisite-a.test", runtimeKey: "runtime-prerequisite-a" })
+    setActionRefs(
+      mockSdk as unknown as OpencodeClient,
+      createChildStores([["/test/project", oldStore]]),
+      () => "/test/project",
+    )
+    const deletion = deleteSession("session-a")
+    await Promise.resolve()
+
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-prerequisite-b.test", runtimeKey: "runtime-prerequisite-b" })
+    setActionRefs(
+      mockSdk as unknown as OpencodeClient,
+      createChildStores([["/test/project", newStore]]),
+      () => "/test/project",
+    )
+    getSession.resolve(oldSession)
+
+    expect(await deletion).toBe(false)
+    expect(sessionDeleteCalls).toEqual([])
+    expect(newStore.getState().session).toEqual([newSession])
+  })
+
+  test("rolls back only the removed session and preserves concurrent session updates", async () => {
+    const target = { id: "session-a", title: "Target", time: { created: 1 } } as Session
+    const existing = { id: "existing", title: "Existing", time: { created: 2 } } as Session
+    const concurrent = { id: "concurrent", title: "Concurrent", time: { created: 3 } } as Session
+    const store = createStore({}, { session: [target, existing] })
+    const deletionResult = deferred<boolean>()
+    sessionDeleteResult = deletionResult.promise
+    const { switchRuntimeEndpoint } = await import("../lib/runtime-switch")
+    const { deleteSession, setActionRefs } = await import("./session-actions")
+
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-rollback.test", runtimeKey: "runtime-rollback" })
+    setActionRefs(
+      mockSdk as unknown as OpencodeClient,
+      createChildStores([["/test/project", store]]),
+      () => "/test/project",
+    )
+    const deletion = deleteSession("session-a")
+    while (sessionDeleteCalls.length === 0) await Promise.resolve()
+
+    store.setState({ session: [concurrent, existing] })
+    deletionResult.reject(new Error("injected delete failure"))
+
+    expect(await deletion).toBe(false)
+    expect(store.getState().session.map((session) => session.id)).toEqual([
+      "session-a",
+      "concurrent",
+      "existing",
+    ])
+    expect(store.getState().session[1]).toBe(concurrent)
+    expect(store.getState().session[2]).toBe(existing)
+  })
+
+  test("does not write an archived response into stores rebound to another runtime", async () => {
+    const archiveResult = deferred<Session>()
+    sessionUpdatePromise = archiveResult.promise
+    const oldSession = { id: "session-a", title: "Old runtime", time: { created: 1 } } as Session
+    const oldStore = createStore({}, { session: [oldSession] })
+    const newSession = { id: "session-a", title: "New runtime", time: { created: 2 } } as Session
+    const newStore = createStore({}, { session: [newSession] })
+    const { switchRuntimeEndpoint } = await import("../lib/runtime-switch")
+    const { archiveSession, setActionRefs } = await import("./session-actions")
+
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-archive-a.test", runtimeKey: "runtime-archive-a" })
+    setActionRefs(
+      mockSdk as unknown as OpencodeClient,
+      createChildStores([["/test/project", oldStore]]),
+      () => "/test/project",
+    )
+    const archive = archiveSession("session-a")
+    while (!replyCalls.some((call) => call.method === "session.update")) await Promise.resolve()
+
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-archive-b.test", runtimeKey: "runtime-archive-b" })
+    setActionRefs(
+      mockSdk as unknown as OpencodeClient,
+      createChildStores([["/test/project", newStore]]),
+      () => "/test/project",
+    )
+    archiveResult.resolve({ id: "session-a", title: "Archived old runtime", time: { created: 1, archived: 3 } } as Session)
+
+    expect(await archive).toBe(true)
+    expect(globalUpsertedSessions).toEqual([])
+    expect(newStore.getState().session).toEqual([newSession])
+  })
+
+  test("cleans the initiating runtime after a runtime switch without clearing the new runtime", async () => {
+    let resolveDelete!: (value: boolean) => void
+    sessionDeleteResult = new Promise<boolean>((resolve) => {
+      resolveDelete = resolve
+    })
+    const { getRuntimeKey, switchRuntimeEndpoint } = await import("../lib/runtime-switch")
+    const {
+      clearPersistedSessionNavigation,
+      persistSessionNavigation,
+      readPersistedSessionNavigation,
+    } = await import("./session-navigation")
+    const { deleteSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(mockSdk as unknown as OpencodeClient, createChildStores([]), () => "/test/project")
+
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-delete-a.test", runtimeKey: "runtime-delete-a" })
+    persistSessionNavigation("session-a", "/test/project", getRuntimeKey())
+    const deletion = deleteSession("session-a")
+    while (sessionDeleteCalls.length === 0) await Promise.resolve()
+
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-delete-b.test", runtimeKey: "runtime-delete-b" })
+    persistSessionNavigation("session-a", "/other/project", getRuntimeKey())
+    sessionUIState.currentSessionId = "session-a"
+    resolveDelete(true)
+
+    try {
+      expect(await deletion).toBe(true)
+      expect(readPersistedSessionNavigation("runtime-delete-a")).toBeNull()
+      expect(readPersistedSessionNavigation("runtime-delete-b")?.directory).toBe("/other/project")
+      expect(sessionUIState.currentSessionId).toBe("session-a")
+    } finally {
+      clearPersistedSessionNavigation(null, "runtime-delete-a")
+      clearPersistedSessionNavigation(null, "runtime-delete-b")
+    }
   })
 })
 

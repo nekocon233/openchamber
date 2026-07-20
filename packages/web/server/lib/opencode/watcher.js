@@ -29,6 +29,12 @@ export const createOpenCodeWatcherRuntime = (deps) => {
     return eventData;
   };
 
+  const normalizeEventDirectory = (directory) => (
+    typeof directory === 'string' && directory.length > 0 && directory !== 'global'
+      ? directory
+      : undefined
+  );
+
   const start = async () => {
     if (abortController) {
       return;
@@ -45,7 +51,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
         if (!payload || typeof payload !== 'object') {
           return;
         }
-        onPayload(payload);
+        onPayload(payload, normalizeEventDirectory(event.directory));
       });
       unsubscribeStatus = globalEventHub.subscribeStatus((status) => {
         if (signal.aborted) {
@@ -78,7 +84,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
         if (!payload || typeof payload !== 'object') {
           return;
         }
-        onPayload(payload);
+        onPayload(payload, normalizeEventDirectory(event.directory));
       },
       onError(error) {
         if (signal.aborted) {

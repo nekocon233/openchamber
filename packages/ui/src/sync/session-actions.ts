@@ -29,6 +29,8 @@ import {
 } from "@/lib/sessionReviewMetadata"
 import { withContextObligatoryMessage, type ContextObligatoryMessage } from "@/lib/contextObligatoryMessages"
 import { setGlobalSessionStatus } from "./global-session-status"
+import { clearPersistedSessionNavigation } from "./session-navigation"
+import { getRuntimeKey } from "@/lib/runtime-switch"
 
 const MESSAGE_REFETCH_LIMIT = 100
 const SEND_CONFIRMATION_REFETCH_LIMIT = 30
@@ -42,6 +44,7 @@ const UNREVERT_REFETCH_RETRY_MS = 150
 let _sdk: OpencodeClient | null = null
 let _childStores: ChildStoreManager | null = null
 let _getDirectory: () => string = () => ""
+let _actionGeneration = 0
 type OptimisticAddInput = { sessionID: string; directory?: string | null; message: Message; parts: Part[] }
 type OptimisticRemoveInput = { sessionID: string; directory?: string | null; messageID: string }
 type OptimisticConfirmInput = OptimisticRemoveInput
@@ -99,9 +102,11 @@ export function setActionRefs(
   childStores: ChildStoreManager,
   getDirectory: () => string,
 ) {
+  const runtimeRefsChanged = _sdk !== sdk || _childStores !== childStores
   _sdk = sdk
   _childStores = childStores
   _getDirectory = getDirectory
+  if (runtimeRefsChanged) _actionGeneration += 1
 }
 
 export function setOptimisticRefs(
@@ -258,12 +263,45 @@ export async function waitForConnectionOrThrow(): Promise<void> {
   throw connectionLostError()
 }
 
-type SessionListSnapshot = {
+type RemovedSessionSnapshot = {
   directory: string
-  sessions: Session[]
+  store: DirectoryStoreApi
+  session: Session
+  index: number
 }
 
 type DirectoryStoreApi = ReturnType<ChildStoreManager["ensureChild"]>
+
+type SessionActionRuntimeContext = {
+  runtimeKey: string
+  generation: number
+  childStores: ChildStoreManager | null
+}
+
+class SessionActionRuntimeChangedError extends Error {
+  constructor() {
+    super("Session operation cancelled because the runtime changed")
+    this.name = "SessionActionRuntimeChangedError"
+  }
+}
+
+function captureSessionActionRuntime(): SessionActionRuntimeContext {
+  return {
+    runtimeKey: getRuntimeKey(),
+    generation: _actionGeneration,
+    childStores: _childStores,
+  }
+}
+
+function isSessionActionRuntimeCurrent(context: SessionActionRuntimeContext): boolean {
+  return getRuntimeKey() === context.runtimeKey
+    && _actionGeneration === context.generation
+    && _childStores === context.childStores
+}
+
+function assertSessionActionRuntimeCurrent(context: SessionActionRuntimeContext): void {
+  if (!isSessionActionRuntimeCurrent(context)) throw new SessionActionRuntimeChangedError()
+}
 
 function getGlobalSessionSnapshot(sessionId: string): Session | null {
   const global = useGlobalSessionsStore.getState()
@@ -272,6 +310,8 @@ function getGlobalSessionSnapshot(sessionId: string): Session | null {
 
 function restoreGlobalSessionSnapshot(session: Session | null): void {
   if (!session) return
+  const current = getGlobalSessionSnapshot(session.id)
+  if (current && Boolean(current.time?.archived) === Boolean(session.time?.archived)) return
   useGlobalSessionsStore.getState().upsertSession(session)
 }
 
@@ -469,11 +509,16 @@ export async function patchSessionMetadata(
   sessionId: string,
   directory: string | null | undefined,
   updater: (metadata: SessionMetadataRecord) => SessionMetadataRecord,
+  runtimeContext = captureSessionActionRuntime(),
 ): Promise<Session> {
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const targetDirectory = directory ?? getSessionDirectory(sessionId)
   const current = await opencodeClient.getSession(sessionId, targetDirectory)
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const nextMetadata = updater(getSessionMetadata(current))
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const updated = await opencodeClient.updateSession(sessionId, { metadata: nextMetadata }, targetDirectory)
+  assertSessionActionRuntimeCurrent(runtimeContext)
   useGlobalSessionsStore.getState().upsertSession(updated)
   const sessionDirectory = (updated as { directory?: string | null }).directory ?? targetDirectory
   if (sessionDirectory) registerSessionDirectory(updated.id, sessionDirectory)
@@ -493,11 +538,18 @@ export async function setContextObligatoryMessage(
   return updated
 }
 
-async function cleanupReviewMetadataBeforeDelete(sessionId: string, directory?: string | null): Promise<void> {
+async function cleanupReviewMetadataBeforeDelete(
+  sessionId: string,
+  directory: string | null | undefined,
+  runtimeContext: SessionActionRuntimeContext,
+): Promise<void> {
   let session: Session
   try {
+    assertSessionActionRuntimeCurrent(runtimeContext)
     session = await opencodeClient.getSession(sessionId, directory ?? getSessionDirectory(sessionId))
-  } catch {
+    assertSessionActionRuntimeCurrent(runtimeContext)
+  } catch (error) {
+    if (error instanceof SessionActionRuntimeChangedError) throw error
     return
   }
   if (!isReviewSession(session)) return
@@ -506,8 +558,10 @@ async function cleanupReviewMetadataBeforeDelete(sessionId: string, directory?: 
   try {
     await patchSessionMetadata(originalSessionID, directory ?? getSessionDirectory(originalSessionID), (metadata) =>
       withoutReviewSessionLink(metadata, sessionId),
+      runtimeContext,
     )
   } catch (error) {
+    if (error instanceof SessionActionRuntimeChangedError) throw error
     const message = error instanceof Error ? error.message : String(error)
     if (/not found/i.test(message)) return
     console.warn("[session-actions] review metadata cleanup failed before delete", error)
@@ -515,44 +569,49 @@ async function cleanupReviewMetadataBeforeDelete(sessionId: string, directory?: 
 }
 
 /** Optimistically remove a session from every live child store that has it. */
-function optimisticRemoveSession(sessionId: string, preferredDirectory?: string): SessionListSnapshot[] {
-  if (!_childStores) return []
+function optimisticRemoveSession(
+  childStores: ChildStoreManager | null,
+  sessionId: string,
+  preferredDirectory?: string,
+): RemovedSessionSnapshot[] {
+  if (!childStores) return []
 
-  const snapshots: SessionListSnapshot[] = []
+  const snapshots: RemovedSessionSnapshot[] = []
   const visited = new Set<string>()
   const candidates: Array<[string, DirectoryStoreApi]> = []
 
   if (preferredDirectory) {
-    const preferredStore = _childStores.children.get(preferredDirectory)
+    const preferredStore = childStores.children.get(preferredDirectory)
     if (preferredStore) {
       candidates.push([preferredDirectory, preferredStore])
       visited.add(preferredDirectory)
     }
   }
 
-  for (const entry of _childStores.children.entries()) {
+  for (const entry of childStores.children.entries()) {
     if (visited.has(entry[0])) continue
     candidates.push(entry)
   }
 
   for (const [directory, store] of candidates) {
     const current = store.getState()
-    if (!current.session.some((session) => session.id === sessionId)) {
-      continue
-    }
-    snapshots.push({ directory, sessions: current.session })
+    const index = current.session.findIndex((session) => session.id === sessionId)
+    if (index < 0) continue
+    snapshots.push({ directory, store, session: current.session[index], index })
     store.setState({ session: current.session.filter((session) => session.id !== sessionId) })
   }
 
   return snapshots
 }
 
-function restoreSessionListSnapshots(snapshots: SessionListSnapshot[]): void {
-  if (!_childStores) return
+function restoreRemovedSessions(snapshots: RemovedSessionSnapshot[]): void {
   for (const snapshot of snapshots) {
-    const store = _childStores.children.get(snapshot.directory)
-    if (!store) continue
-    store.setState({ session: snapshot.sessions })
+    snapshot.store.setState((state) => {
+      if (state.session.some((session) => session.id === snapshot.session.id)) return state
+      const sessions = [...state.session]
+      sessions.splice(Math.min(snapshot.index, sessions.length), 0, snapshot.session)
+      return { session: sessions }
+    })
   }
 }
 
@@ -560,92 +619,123 @@ function cleanupSessionWorktreeMetadata(sessionId: string): void {
   useSessionUIStore.getState().setWorktreeMetadata(sessionId, null)
 }
 
+function cleanupSessionNavigation(
+  sessionId: string,
+  runtimeContext: SessionActionRuntimeContext,
+  clearWorktreeMetadata = false,
+): void {
+  clearPersistedSessionNavigation(sessionId, runtimeContext.runtimeKey)
+  if (!isSessionActionRuntimeCurrent(runtimeContext)) return
+  const ui = useSessionUIStore.getState()
+  if (ui.currentSessionId === sessionId) ui.setCurrentSession(null)
+  if (clearWorktreeMetadata) cleanupSessionWorktreeMetadata(sessionId)
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function deleteSession(sessionId: string, _options?: Record<string, unknown>): Promise<boolean> {
+  const runtimeContext = captureSessionActionRuntime()
   const sessionDirectory = getSessionDirectory(sessionId)
-  const snapshots = optimisticRemoveSession(sessionId, sessionDirectory)
+  const snapshots = optimisticRemoveSession(runtimeContext.childStores, sessionId, sessionDirectory)
   const globalSnapshot = getGlobalSessionSnapshot(sessionId)
   useGlobalSessionsStore.getState().removeSessions([sessionId])
+  let remoteMutationStarted = false
 
-  const ui = useSessionUIStore.getState()
-  if (ui.currentSessionId === sessionId) {
-    ui.setCurrentSession(null)
-  }
   try {
-    await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory)
+    await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory, runtimeContext)
+    assertSessionActionRuntimeCurrent(runtimeContext)
+    remoteMutationStarted = true
     const deleted = await opencodeClient.deleteSession(sessionId, sessionDirectory)
+    if (!isSessionActionRuntimeCurrent(runtimeContext)) {
+      if (deleted === true) cleanupSessionNavigation(sessionId, runtimeContext, true)
+      return deleted === true
+    }
     if (deleted !== true) {
       throw new Error("session.delete failed: server did not confirm deletion")
     }
     useGlobalSessionsStore.getState().removeSessions([sessionId])
-    cleanupSessionWorktreeMetadata(sessionId)
+    cleanupSessionNavigation(sessionId, runtimeContext, true)
     return true
   } catch (error) {
     console.error("[session-actions] deleteSession failed", error)
     // The server cascade-deletes child sessions when the parent is removed.
     // Subsequent delete attempts for those children return 404; treat as
     // success since the session was already deleted by the cascade.
-    if ((error as { status?: number })?.status === 404) {
-      cleanupSessionWorktreeMetadata(sessionId)
+    if (remoteMutationStarted && (error as { status?: number })?.status === 404) {
+      cleanupSessionNavigation(sessionId, runtimeContext, true)
       return true
     }
-    restoreSessionListSnapshots(snapshots)
-    restoreGlobalSessionSnapshot(globalSnapshot)
+    if (isSessionActionRuntimeCurrent(runtimeContext)) {
+      restoreRemovedSessions(snapshots)
+      restoreGlobalSessionSnapshot(globalSnapshot)
+    }
     return false
   }
 }
 
 /** Delete a session specifying which directory it lives in. Used by agent groups for cross-directory deletes. */
 export async function deleteSessionInDirectory(sessionId: string, directory: string): Promise<boolean> {
-  if (!_childStores) return false
-  const snapshots = optimisticRemoveSession(sessionId, directory)
+  const runtimeContext = captureSessionActionRuntime()
+  if (!runtimeContext.childStores) return false
+  const snapshots = optimisticRemoveSession(runtimeContext.childStores, sessionId, directory)
   const globalSnapshot = getGlobalSessionSnapshot(sessionId)
   useGlobalSessionsStore.getState().removeSessions([sessionId])
-  const ui = useSessionUIStore.getState()
-  if (ui.currentSessionId === sessionId) ui.setCurrentSession(null)
+  let remoteMutationStarted = false
   try {
-    await cleanupReviewMetadataBeforeDelete(sessionId, directory)
+    await cleanupReviewMetadataBeforeDelete(sessionId, directory, runtimeContext)
+    assertSessionActionRuntimeCurrent(runtimeContext)
+    remoteMutationStarted = true
     const deleted = await opencodeClient.deleteSession(sessionId, directory)
+    if (!isSessionActionRuntimeCurrent(runtimeContext)) {
+      if (deleted === true) cleanupSessionNavigation(sessionId, runtimeContext, true)
+      return deleted === true
+    }
     if (deleted !== true) {
       throw new Error("session.delete failed: server did not confirm deletion")
     }
     useGlobalSessionsStore.getState().removeSessions([sessionId])
-    cleanupSessionWorktreeMetadata(sessionId)
+    cleanupSessionNavigation(sessionId, runtimeContext, true)
     return true
   } catch (error) {
     console.error("[session-actions] deleteSessionInDirectory failed", error)
-    if ((error as { status?: number })?.status === 404) {
-      cleanupSessionWorktreeMetadata(sessionId)
+    if (remoteMutationStarted && (error as { status?: number })?.status === 404) {
+      cleanupSessionNavigation(sessionId, runtimeContext, true)
       return true
     }
-    restoreSessionListSnapshots(snapshots)
-    restoreGlobalSessionSnapshot(globalSnapshot)
+    if (isSessionActionRuntimeCurrent(runtimeContext)) {
+      restoreRemovedSessions(snapshots)
+      restoreGlobalSessionSnapshot(globalSnapshot)
+    }
     return false
   }
 }
 
 export async function archiveSession(sessionId: string): Promise<boolean> {
+  const runtimeContext = captureSessionActionRuntime()
   const sessionDirectory = getSessionDirectory(sessionId)
-  const snapshots = optimisticRemoveSession(sessionId, sessionDirectory)
+  const snapshots = optimisticRemoveSession(runtimeContext.childStores, sessionId, sessionDirectory)
   const globalSnapshot = getGlobalSessionSnapshot(sessionId)
   const archivedAt = Date.now()
   useGlobalSessionsStore.getState().archiveSessions([sessionId], archivedAt)
-  const ui = useSessionUIStore.getState()
-  if (ui.currentSessionId === sessionId) {
-    ui.setCurrentSession(null)
-  }
   try {
-    await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory)
+    await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory, runtimeContext)
+    assertSessionActionRuntimeCurrent(runtimeContext)
     const archived = await opencodeClient.updateSession(sessionId, { time: { archived: archivedAt } }, sessionDirectory)
+    if (!isSessionActionRuntimeCurrent(runtimeContext)) {
+      if (archived) cleanupSessionNavigation(sessionId, runtimeContext)
+      return Boolean(archived)
+    }
     if (!archived) {
       throw new Error("session.update failed: server did not return the archived session")
     }
     useGlobalSessionsStore.getState().upsertSession(archived)
+    cleanupSessionNavigation(sessionId, runtimeContext)
     return true
   } catch (error) {
     console.error("[session-actions] archiveSession failed", error)
-    restoreSessionListSnapshots(snapshots)
-    restoreGlobalSessionSnapshot(globalSnapshot)
+    if (isSessionActionRuntimeCurrent(runtimeContext)) {
+      restoreRemovedSessions(snapshots)
+      restoreGlobalSessionSnapshot(globalSnapshot)
+    }
     return false
   }
 }

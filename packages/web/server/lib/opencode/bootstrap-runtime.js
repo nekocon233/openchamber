@@ -105,6 +105,7 @@ export const createBootstrapRuntime = (dependencies) => {
 
     registerNotificationRoutes(app, {
       uiAuthController,
+      tunnelAuthController,
       ensurePushInitialized,
       ensureGlobalWatcherStarted,
       getOrCreateVapidKeys,

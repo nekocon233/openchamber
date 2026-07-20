@@ -133,12 +133,19 @@ export const createNotificationTemplateRuntime = (deps) => {
     return '';
   };
 
-  const fetchLastAssistantMessageText = async (sessionId, messageId, maxLength = NOTIFICATION_BODY_MAX_CHARS) => {
+  const fetchLastAssistantMessageText = async (
+    sessionId,
+    messageId,
+    maxLength = NOTIFICATION_BODY_MAX_CHARS,
+    directory,
+  ) => {
     if (!sessionId) return '';
 
     try {
       const url = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}/message`, '');
-      const response = await fetch(`${url}?limit=5`, {
+      const search = new URLSearchParams({ limit: '5' });
+      if (typeof directory === 'string' && directory.trim()) search.set('directory', directory.trim());
+      const response = await fetch(`${url}?${search.toString()}`, {
         method: 'GET',
         headers: {
           Accept: 'application/json',
@@ -193,7 +200,7 @@ export const createNotificationTemplateRuntime = (deps) => {
     cacheSessionTitle(info.id, info.title);
   };
 
-  const fetchSessionInfo = async (sessionId) => {
+  const fetchSessionInfo = async (sessionId, directory) => {
     if (!sessionId) return null;
 
     const cached = sessionInfoCache.get(sessionId);
@@ -202,7 +209,10 @@ export const createNotificationTemplateRuntime = (deps) => {
     }
 
     try {
-      const url = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, '');
+      const baseUrl = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, '');
+      const url = typeof directory === 'string' && directory.trim()
+        ? `${baseUrl}?directory=${encodeURIComponent(directory.trim())}`
+        : baseUrl;
       const response = await fetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json' },
@@ -224,7 +234,7 @@ export const createNotificationTemplateRuntime = (deps) => {
     }
   };
 
-  const buildTemplateVariables = async (payload, sessionId) => {
+  const buildTemplateVariables = async (payload, sessionId, directoryHint) => {
     const info = payload?.properties?.info || {};
 
     let sessionTitle = payload?.properties?.sessionTitle || payload?.properties?.session?.title || (typeof info.sessionTitle === 'string' ? info.sessionTitle : '') || '';
@@ -238,7 +248,7 @@ export const createNotificationTemplateRuntime = (deps) => {
 
     let sessionInfo = null;
     if (!sessionTitle && sessionId) {
-      sessionInfo = await fetchSessionInfo(sessionId);
+      sessionInfo = await fetchSessionInfo(sessionId, directoryHint);
       if (sessionInfo && typeof sessionInfo.title === 'string') {
         sessionTitle = sessionInfo.title;
         cacheSessionTitle(sessionId, sessionTitle);
@@ -264,12 +274,12 @@ export const createNotificationTemplateRuntime = (deps) => {
 
     let projectName = '';
     let branch = '';
-    let worktreeDir = '';
+    let worktreeDir = typeof directoryHint === 'string' ? directoryHint.trim() : '';
 
     const infoPath = info.path;
-    if (typeof infoPath?.root === 'string' && infoPath.root.length > 0) {
+    if (!worktreeDir && typeof infoPath?.root === 'string' && infoPath.root.length > 0) {
       worktreeDir = infoPath.root;
-    } else if (typeof infoPath?.cwd === 'string' && infoPath.cwd.length > 0) {
+    } else if (!worktreeDir && typeof infoPath?.cwd === 'string' && infoPath.cwd.length > 0) {
       worktreeDir = infoPath.cwd;
     }
 

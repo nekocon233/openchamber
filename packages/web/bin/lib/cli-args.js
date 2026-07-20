@@ -72,6 +72,11 @@ function parseArgs(argv = process.argv.slice(2)) {
     tokenFile: undefined,
     tokenStdin: false,
     hostname: undefined,
+    publicUrl: undefined,
+    customDomain: undefined,
+    serverAddress: undefined,
+    serverPort: undefined,
+    remotePort: undefined,
     server: undefined,
     connectTtl: undefined,
     sessionTtl: undefined,
@@ -173,13 +178,19 @@ function parseArgs(argv = process.argv.slice(2)) {
       case 'provider': {
         const { value, nextIndex } = consumeValue(i, inlineValue);
         i = nextIndex;
-        options.provider = typeof value === 'string' ? value : options.provider;
+        if (typeof value !== 'string' || value.trim().length === 0) {
+          throw new TunnelCliError('Missing value for --provider.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.provider = value.trim();
         break;
       }
       case 'mode': {
         const { value, nextIndex } = consumeValue(i, inlineValue);
         i = nextIndex;
-        options.mode = typeof value === 'string' ? value : options.mode;
+        if (typeof value !== 'string' || value.trim().length === 0) {
+          throw new TunnelCliError('Missing value for --mode.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.mode = value.trim();
         break;
       }
       case 'profile': {
@@ -219,6 +230,61 @@ function parseArgs(argv = process.argv.slice(2)) {
         const { value, nextIndex } = consumeValue(i, inlineValue);
         i = nextIndex;
         options.hostname = typeof value === 'string' ? value : options.hostname;
+        break;
+      }
+      case 'public-url': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        if (typeof value !== 'string' || value.trim().length === 0) {
+          throw new TunnelCliError('Missing value for --public-url.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.publicUrl = value.trim();
+        break;
+      }
+      case 'custom-domain': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        if (typeof value !== 'string' || value.trim().length === 0) {
+          throw new TunnelCliError('Missing value for --custom-domain.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.customDomain = value.trim();
+        break;
+      }
+      case 'frps-address': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        if (typeof value !== 'string' || value.trim().length === 0) {
+          throw new TunnelCliError('Missing value for --frps-address.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.serverAddress = value.trim();
+        break;
+      }
+      case 'frps-ca-file': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        if (typeof value !== 'string' || value.trim().length === 0) {
+          throw new TunnelCliError('Missing value for --frps-ca-file.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.trustedCaFile = value.trim();
+        break;
+      }
+      case 'frps-port':
+      case 'remote-port': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        const flagName = `--${name}`;
+        if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) {
+          throw new TunnelCliError(`Invalid value for ${flagName}.`, EXIT_CODE.USAGE_ERROR);
+        }
+        const parsed = Number.parseInt(value, 10);
+        if (parsed < 1 || parsed > 65535) {
+          throw new TunnelCliError(`${flagName} must be between 1 and 65535.`, EXIT_CODE.USAGE_ERROR);
+        }
+        if (name === 'frps-port') {
+          options.serverPort = parsed;
+        } else {
+          options.remotePort = parsed;
+        }
         break;
       }
       case 'server':
@@ -511,16 +577,23 @@ COMMON OPTIONS:
   --api-only              Start API routes only when auto-starting an instance
   --json                  Output machine-readable JSON
   --all                   Apply to all running instances (doctor default, stop)
+  --force                 Required for non-interactive/JSON/quiet stop --all
 
 START OPTIONS:
   --provider <id>         Tunnel provider id (default: cloudflare)
   --mode <id>             Tunnel mode (default: quick)
   --profile <name>        Start tunnel from saved profile name
   --config [path]         Managed-local config path (optional)
-  --token <token>         Managed-remote token (visible in process list)
+  --token <token>         Cloudflare token (visible in process list; FRPC rejects this form)
   --token-file <path>     Read token from file (recommended)
   --token-stdin           Read token from stdin
-  --hostname <hostname>   Managed-remote hostname
+  --hostname <hostname>   Managed-remote public hostname
+  --public-url <url>      Externally TLS-terminated HTTPS origin for FRPC TCP
+  --custom-domain <host>  FRPC HTTP-vhost custom domain
+  --frps-address <host>   FRPC server IP address or hostname
+  --frps-port <port>      FRPS control port (for example 7000)
+  --frps-ca-file <path>   CA certificate used to verify the FRPS identity
+  --remote-port <port>    FRPS TCP port mapped to the local OpenChamber port
   --connect-ttl <value>   Connect-link TTL (e.g. 30m, 24h, 1d)
   --session-ttl <value>   Session TTL (e.g. 8h, 24h, 1d)
   --qr                    Print QR code for resulting tunnel URL
@@ -528,7 +601,6 @@ START OPTIONS:
   --dry-run               Validate inputs without applying changes
 
 OUTPUT OPTIONS:
-  --show-secrets          Show full tokens in output (default: redacted)
   --plain                 Disable colors and decorations
   -q, --quiet             Suppress non-essential output
   --json                  Output machine-readable JSON
@@ -537,12 +609,14 @@ BEHAVIOR NOTES:
   - One active tunnel per OpenChamber instance.
   - Starting a different mode/provider replaces the current tunnel and revokes old connect links/sessions.
   - Connect links are one-time; generating a new link revokes the previous unused link.
+  - Stop attempts every selected instance and exits non-zero if any stop fails.
 
 PROFILE USAGE:
   openchamber tunnel profile list [--provider <id>] [--json]
   openchamber tunnel profile show --name <name> [--provider <id>] [--json]
-  openchamber tunnel profile add --provider <id> --mode managed-remote --name <name> --hostname <host> --token <token> [--force] [--json]
-  openchamber tunnel profile add --provider <id> --mode managed-remote --name <name> --hostname <host> --token-file <path> [--force] [--json]
+  openchamber tunnel profile add --provider cloudflare --mode managed-remote --name <name> --hostname <host> --token-file <path> [--force] [--json]
+  openchamber tunnel profile add --provider frpc --mode managed-remote --name <name> --frps-address <host> --frps-port <port> --frps-ca-file <path> --remote-port <port> --public-url <https-origin> --token-file <path> [--force] [--json]
+  openchamber tunnel profile add --provider frpc --mode managed-remote --name <name> --frps-address <host> --frps-port <port> --frps-ca-file <path> --custom-domain <host> --hostname <public-host> --token-file <path> [--force] [--json]
   openchamber tunnel profile remove --name <name> [--provider <id>] [--json]
 
 SHELL COMPLETION:
@@ -558,12 +632,15 @@ EXAMPLES:
   openchamber tunnel start --qr
   openchamber tunnel start --profile prod-main
   openchamber tunnel start --provider cloudflare --mode managed-remote --token-file ~/.secrets/cf-token --hostname app.example.com
+  openchamber tunnel start --provider frpc --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 18080 --public-url https://app.example.com:18080 --token-file ~/.secrets/frp-token
+  openchamber tunnel start --provider frpc --frps-address frps.example.com --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
   openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.cloudflared/config.yml
   openchamber tunnel start --dry-run --provider cloudflare --mode managed-remote --token-file ~/.secrets/cf-token --hostname app.example.com
   echo "$TOKEN" | openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token-stdin
   openchamber tunnel profile list --provider cloudflare
-  openchamber tunnel profile list --json --show-secrets
+  openchamber tunnel profile list --json
   openchamber tunnel stop --port 3000
+  openchamber tunnel stop --all --force
 `);
 }
 
@@ -574,7 +651,7 @@ function generateCompletionScript(shell) {
     return `# Bash completion for openchamber tunnel
 # Add to ~/.bashrc: eval "$(openchamber tunnel completion bash)"
 _openchamber_tunnel() {
-  local cur prev commands tunnel_commands profile_commands common_flags start_flags
+  local cur prev commands tunnel_commands profile_commands common_flags start_flags profile_add_flags
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
@@ -582,8 +659,9 @@ _openchamber_tunnel() {
   commands="serve stop restart status tunnel logs update"
   tunnel_commands="help providers ready doctor status start stop profile completion"
   profile_commands="list show add remove"
-  common_flags="--port --foreground --no-daemon --json --all --help --version --plain --quiet"
-  start_flags="--provider --mode --profile --config --token --token-file --token-stdin --hostname --connect-ttl --session-ttl --qr --no-qr --dry-run --show-secrets"
+  common_flags="--port --foreground --no-daemon --json --all --force --help --version --plain --quiet"
+  start_flags="--provider --mode --profile --config --token --token-file --token-stdin --hostname --public-url --custom-domain --frps-address --frps-port --frps-ca-file --remote-port --connect-ttl --session-ttl --qr --no-qr --dry-run"
+  profile_add_flags="--provider --mode --name --token --token-file --token-stdin --hostname --public-url --custom-domain --frps-address --frps-port --frps-ca-file --remote-port --force --dry-run"
 
   if [[ \${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") )
@@ -605,6 +683,10 @@ _openchamber_tunnel() {
     fi
     if [[ "\${COMP_WORDS[2]}" == "start" ]]; then
       COMPREPLY=( $(compgen -W "\${start_flags} \${common_flags}" -- "\${cur}") )
+      return 0
+    fi
+    if [[ "\${COMP_WORDS[2]}" == "profile" && "\${COMP_WORDS[3]}" == "add" ]]; then
+      COMPREPLY=( $(compgen -W "\${profile_add_flags} \${common_flags}" -- "\${cur}") )
       return 0
     fi
     COMPREPLY=( $(compgen -W "\${common_flags}" -- "\${cur}") )
@@ -656,6 +738,10 @@ _openchamber() {
   )
 
   _arguments -C \\
+    '--custom-domain[FRPC HTTP-vhost custom domain]:hostname:' \\
+    '--public-url[Externally TLS-terminated HTTPS origin for FRPC TCP]:url:' \\
+    '--frps-ca-file[CA certificate used to verify FRPS]:file:_files' \\
+    '--force[Confirm destructive or multi-target operation]' \\
     '1:command:->command' \\
     '*::arg:->args'
 
@@ -714,9 +800,19 @@ complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_
 complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l token -d 'Token'
 complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l token-file -d 'Token file path'
 complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l token-stdin -d 'Read token from stdin'
-complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l hostname -d 'Hostname'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l hostname -d 'Public hostname'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l public-url -d 'Externally TLS-terminated HTTPS origin for FRPC TCP'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l custom-domain -d 'FRPC HTTP-vhost custom domain'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l frps-address -d 'FRPS server address'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l frps-port -d 'FRPS control port'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l frps-ca-file -d 'FRPS trusted CA certificate file'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l remote-port -d 'FRPS remote mapping port'
 complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l dry-run -d 'Validate without applying'
 complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from start' -l qr -d 'Show QR code'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from stop' -l force -d 'Confirm stop on all instances'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from profile; and __fish_seen_subcommand_from add' -l custom-domain -d 'FRPC HTTP-vhost custom domain'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from profile; and __fish_seen_subcommand_from add' -l public-url -d 'Externally TLS-terminated HTTPS origin for FRPC TCP'
+complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and __fish_seen_subcommand_from profile; and __fish_seen_subcommand_from add' -l frps-ca-file -d 'FRPS trusted CA certificate file'
 `;
   }
 

@@ -228,8 +228,10 @@ This module provides OpenCode server integration utilities for the web server ru
   - `POST /api/system/shutdown`
   - `GET /api/system/info`
  - `registerAuthAndAccessRoutes(app, dependencies)`: registers browser auth/session exchange and API access middleware:
+   - Managed tunnel and unknown-public requests accept a valid tunnel session, configured UI-password session, or trusted-client bearer. When UI password protection is disabled, external requests require a tunnel session or client bearer and can never inherit direct-loopback passwordless trust. This applies before protected route registration, including shutdown and custom `/api` routes. Private Relay auth-protected HTTP/SSE requests are identified on the loopback hop by the host-stamped relay marker and require the originating client's bearer; pairing redemption and the public `/health` identity probe remain pre-bearer.
    - `GET /auth/session`
    - `POST /auth/session`
+   - `POST /auth/url-token` (UI/client auth and authenticated tunnel sessions can mint the same short-lived, path-scoped browser transport token)
    - `GET /auth/passkey/status`
    - `POST /auth/passkey/authenticate/options`
    - `POST /auth/passkey/authenticate/verify`
@@ -252,7 +254,7 @@ This module provides OpenCode server integration utilities for the web server ru
 ## Public exports (cli-options.js)
 - `parseServeCliOptions(options)`: parses serve CLI flags and environment-derived defaults:
   - Port/host/ui-password
-  - Tunnel provider/mode/config/token/hostname
+  - Tunnel provider/mode/config/token/hostname and FRPC server/control/trusted-CA/remote-port/public-HTTPS-URL mapping
   - Legacy `--tunnel` shorthand normalization
 
 ## Public exports (cli-entry-runtime.js)
@@ -271,7 +273,7 @@ This module provides OpenCode server integration utilities for the web server ru
   - `setupProxy(app)`
 
 ## Public exports (shutdown-runtime.js)
-- `createGracefulShutdownRuntime(dependencies)`: creates graceful shutdown runtime for managed OpenCode and web server teardown sequencing.
+- `createGracefulShutdownRuntime(dependencies)`: creates graceful shutdown runtime for managed OpenCode and web server teardown sequencing. Auth-bound channels are closed before transport teardown, and active tunnel termination is awaited before the controller and tunnel-auth state are cleared.
 - Returned API:
   - `gracefulShutdown(options?)`
 
@@ -315,7 +317,7 @@ This module provides OpenCode server integration utilities for the web server ru
   - `GET /api/zen/models`
 
 ## Public exports (pwa-manifest-routes.js)
-- `registerPwaManifestRoute(app, dependencies)`: registers PWA manifest endpoint with dynamic app-name resolution and recent-session shortcuts:
+- `registerPwaManifestRoute(app, dependencies)`: registers the PWA manifest endpoint with dynamic app-name resolution, recent-session shortcuts, and `navigate-existing` launch handling so notification and shortcut launches reuse the active desktop PWA window:
   - `GET /manifest.webmanifest`
 
 ## Public exports (project-icon-routes.js)
@@ -339,6 +341,7 @@ This module provides OpenCode server integration utilities for the web server ru
   - Generic `/api/*` forwarding with hop-by-hop header filtering
   - Windows `/session` merge fallback path behavior
   - OpenCode readiness gate for proxied `/api` requests
+  - Auth-lifecycle ownership for established event SSE responses; revocation/expiry aborts the upstream reader and ends the downstream response.
 
 ## Public exports (watcher.js)
 - `createOpenCodeWatcherRuntime(dependencies)`: creates global event watcher runtime backed by the shared upstream SSE reader.
@@ -365,4 +368,4 @@ This module provides OpenCode server integration utilities for the web server ru
 - All file writes include automatic backup before modification.
 - Config merging follows priority: custom > project > user.
 - UI auth uses scrypt for password hashing with constant-time comparison.
-- Tunnel auth treats `host.docker.internal` as local-only when the socket remote IP is private/loopback.
+- Tunnel auth treats `host.docker.internal` as local-only when the socket remote IP is private/loopback. A non-local peer is `unknown-public` even when no managed tunnel is active.

@@ -42,7 +42,7 @@ So:
 | Layer / Store | Owns | Scope |
 |---|---|---|
 | child directory stores in `sync-context.tsx` | `session`, `message`, `part`, `permission`, `question`, etc. | One directory |
-| `session-ui-store.ts` | Session selection, draft lifecycle, abort prompts, worktree metadata, SDK-facing action entrypoints | App UI state |
+| `session-ui-store.ts` | Session selection, draft lifecycle, abort prompts, worktree metadata, SDK-facing action entrypoints | App UI state; last selected session is persisted per runtime for cold-start continuity |
 | `useGlobalSessionsStore.ts` | Global active sessions, global archived sessions, `sessionsByDirectory` | All opened project/worktree session lists |
 | `viewport-store.ts` | Scroll anchors, session memory, loading indicators | App UI state |
 | `input-store.ts` | Draft input state, attached files, synthetic parts | App UI state |
@@ -84,7 +84,9 @@ Cross-directory selectors subscribe to the narrow child-store field they aggrega
 
 Recent-session ordering combines cached child-store `message.time.created` watermarks with global `message.updated` event watermarks. This covers optimistic user sends, rollback, assistant replies, and unopened directories without fetching message history per global session. `message.part.*` events never update this ordering source; missing message activity falls back to session metadata time.
 
-Cross-directory running indicators combine child-store status with the global status event store. Directory status snapshots carry both a global revision baseline and per-session child-status references so delayed HTTP responses cannot overwrite newer events or optimistic send/rollback transitions. Optimistic sends receive a short grace period against an overtaking idle snapshot; failed sends still clear immediately. Authoritative reconnect snapshots may clear missing sessions; monotonic periodic watchdog checks publish only active `busy`/`retry` entries and never infer idle from absence. Bootstrap and watchdog status requests are scoped, validated, time-bounded, and cancelled or ignored across runtime changes. Runtime reset advances the revision floor against late responses, and inactive status history is capped.
+Cross-directory running indicators combine child-store status with the global status event store. Directory status snapshots carry both a global revision baseline and per-session child-status references so delayed HTTP responses cannot overwrite newer events or optimistic send/rollback transitions. Optimistic sends receive a short grace period against an overtaking idle snapshot; failed sends still clear immediately. Authoritative reconnect snapshots may clear missing sessions; monotonic periodic watchdog checks publish only active `busy`/`retry` entries and never infer idle from absence. Explicit global `idle` overrides stale child activity while retained in the bounded recent-resolution history, and authoritative snapshots also clear child state. Compaction removes the oldest terminal history first and never evicts genuinely active entries to satisfy the 2,000-entry history limit. Bootstrap and watchdog status requests are scoped, validated, time-bounded, and cancelled or ignored across runtime changes. Runtime reset clears active entries, retained idle resolutions, and per-session revisions, then advances the revision floor against late responses.
+
+Mobile cold starts, installed-PWA cold starts, and desktop main-window cold starts restore the last selected session ID and directory from a versioned record keyed by stable runtime identity. Ordinary browser tabs, additional desktop windows, and Mini Chat do not consume that primary-surface restoration. The record contains no messages, draft text, credentials, or other session content. An unsent new-session draft does not replace the last conversation; selecting another real session does. Restored selections remain provisional until a successful authoritative global active-session snapshot confirms them, so fetch failure preserves continuity while a confirmed archive/delete clears the record for the runtime that initiated the action. Late mutation completion after a runtime switch cannot clear the new runtime's persisted or live selection. Explicit user navigation, deep links, and native notification targets cancel provisional restoration and cannot be overwritten by delayed validation from another runtime.
 
 `State.sessionsLoaded` is the authority marker for each child store's session list; `status === "complete"` only means the critical bootstrap phase finished. Session-list HTTP responses reconcile creates, updates, archives, and deletes that arrived through SSE while the request was in flight. Reconnect materialization and global list loads use the same concurrent-change rule and reject responses from an obsolete runtime or SDK transport.
 
@@ -120,6 +122,8 @@ Rules:
 1. If an action mutates session list membership or visible session metadata, update `useGlobalSessionsStore` there.
 2. If an action targets a session by ID, resolve the **session's own directory**. Do not assume the current directory is correct.
 3. `session-ui-store.ts` should delegate to `session-actions.ts` for these mutations instead of duplicating SDK calls.
+4. Destructive actions capture the initiating runtime and action generation. Recheck them before each remote mutation and before any live/global store write; a late confirmed response may clear only that runtime's persisted navigation.
+5. Failed optimistic archive/delete actions restore only the affected session at its prior position. Never restore a captured whole list over concurrent events or newly created sessions.
 
 Examples of global-store updates performed in `session-actions.ts`:
 

@@ -808,7 +808,15 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'tunnel',
     titleKey: 'settings.openchamber.tunnel.field.provider',
     descriptionKey: 'settings.openchamber.tunnel.description',
-    keywords: ['remote access', 'cloudflare', 'ngrok'],
+    keywords: ['remote access', 'cloudflare', 'frpc', 'frps', 'ngrok'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
+    id: 'tunnel.frpc',
+    page: 'tunnel',
+    titleKey: 'settings.openchamber.tunnel.field.frpcProxyType',
+    descriptionKey: 'settings.openchamber.tunnel.note.frpcProxyTypes',
+    keywords: ['frpc', 'frps', 'server ip', 'control port', 'remote port', 'tcp mapping', 'http vhost', 'custom domain', 'public hostname', 'trusted ca', 'tls certificate', 'server identity', 'caddy', 'reverse proxy', 'token'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {

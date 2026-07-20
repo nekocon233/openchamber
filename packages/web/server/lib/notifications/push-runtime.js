@@ -1,4 +1,11 @@
-const PUSH_SUBSCRIPTIONS_VERSION = 1;
+import {
+  normalizeNotificationAuth,
+  notificationAuthMatchesSelector,
+  validateNotificationAuth,
+} from './auth-runtime.js';
+
+const PUSH_SUBSCRIPTIONS_VERSION = 2;
+const UNSUPPORTED_PUSH_SUBSCRIPTIONS_VERSION = 'UNSUPPORTED_PUSH_SUBSCRIPTIONS_VERSION';
 const UI_VISIBILITY_TTL_MS = 30_000;
 
 const isLoopbackHttpOrigin = (value) => {
@@ -22,13 +29,19 @@ export const createPushRuntime = (deps) => {
   } = deps;
 
   let persistPushSubscriptionsLock = Promise.resolve();
+  let legacySanitizationPromise = null;
   let pushInitialized = false;
 
-  const uiVisibilityByToken = new Map();
+  const emptyStore = () => ({
+    version: PUSH_SUBSCRIPTIONS_VERSION,
+    registrationsByIdentity: {},
+  });
+
+  const uiVisibilityByIdentity = new Map();
   const pruneUiVisibility = (now = Date.now()) => {
-    for (const [token, state] of uiVisibilityByToken) {
+    for (const [identity, state] of uiVisibilityByIdentity) {
       if (!state || now - state.updatedAt > UI_VISIBILITY_TTL_MS) {
-        uiVisibilityByToken.delete(token);
+        uiVisibilityByIdentity.delete(identity);
       }
     }
   };
@@ -38,24 +51,40 @@ export const createPushRuntime = (deps) => {
       const raw = await fsPromises.readFile(PUSH_SUBSCRIPTIONS_FILE_PATH, 'utf8');
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object') {
-        return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: {} };
+        return emptyStore();
       }
-      if (typeof parsed.version !== 'number' || parsed.version !== PUSH_SUBSCRIPTIONS_VERSION) {
-        return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: {} };
+      if (parsed.version === 1) {
+        if (!legacySanitizationPromise) {
+          legacySanitizationPromise = (async () => {
+            const sanitized = emptyStore();
+            await fsPromises.mkdir(path.dirname(PUSH_SUBSCRIPTIONS_FILE_PATH), { recursive: true });
+            await fsPromises.writeFile(PUSH_SUBSCRIPTIONS_FILE_PATH, JSON.stringify(sanitized, null, 2), 'utf8');
+          })().finally(() => {
+            legacySanitizationPromise = null;
+          });
+        }
+        await legacySanitizationPromise;
+        return emptyStore();
+      }
+      if (parsed.version !== PUSH_SUBSCRIPTIONS_VERSION) {
+        const error = new Error('Unsupported push subscriptions schema version');
+        error.code = UNSUPPORTED_PUSH_SUBSCRIPTIONS_VERSION;
+        throw error;
       }
 
-      const subscriptionsBySession =
-        parsed.subscriptionsBySession && typeof parsed.subscriptionsBySession === 'object'
-          ? parsed.subscriptionsBySession
+      const registrationsByIdentity =
+        parsed.registrationsByIdentity && typeof parsed.registrationsByIdentity === 'object'
+          ? parsed.registrationsByIdentity
           : {};
 
-      return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession };
+      return { version: PUSH_SUBSCRIPTIONS_VERSION, registrationsByIdentity };
     } catch (error) {
+      if (error?.code === UNSUPPORTED_PUSH_SUBSCRIPTIONS_VERSION) throw error;
       if (error && typeof error === 'object' && error.code === 'ENOENT') {
-        return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: {} };
+        return emptyStore();
       }
       console.warn('Failed to read push subscriptions file:', error);
-      return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: {} };
+      return emptyStore();
     }
   };
 
@@ -65,18 +94,18 @@ export const createPushRuntime = (deps) => {
   };
 
   const persistPushSubscriptionUpdate = async (mutate) => {
-    persistPushSubscriptionsLock = persistPushSubscriptionsLock.then(async () => {
+    const operation = persistPushSubscriptionsLock.catch(() => {}).then(async () => {
       await fsPromises.mkdir(path.dirname(PUSH_SUBSCRIPTIONS_FILE_PATH), { recursive: true });
       const current = await readPushSubscriptionsFromDisk();
       const next = mutate({
         version: PUSH_SUBSCRIPTIONS_VERSION,
-        subscriptionsBySession: current.subscriptionsBySession || {},
+        registrationsByIdentity: current.registrationsByIdentity || {},
       });
       await writePushSubscriptionsToDisk(next);
       return next;
     });
-
-    return persistPushSubscriptionsLock;
+    persistPushSubscriptionsLock = operation.catch(() => {});
+    return operation;
   };
 
   const getOrCreateVapidKeys = async () => {
@@ -115,24 +144,36 @@ export const createPushRuntime = (deps) => {
           p256dh,
           auth,
           createdAt: typeof entry.createdAt === 'number' ? entry.createdAt : null,
+          lastSeenAt: typeof entry.lastSeenAt === 'number' ? entry.lastSeenAt : null,
+          userAgent: typeof entry.userAgent === 'string' ? entry.userAgent : undefined,
           platform: typeof entry.platform === 'string' ? entry.platform : undefined,
         };
       })
       .filter(Boolean);
   };
 
-  const addOrUpdatePushSubscription = async (uiSessionToken, subscription, userAgent, platform) => {
-    if (!uiSessionToken) {
-      return;
-    }
+  const normalizeRegistration = (record) => {
+    if (!record || typeof record !== 'object') return null;
+    const auth = normalizeNotificationAuth(record.auth);
+    if (!auth) return null;
+    return {
+      auth,
+      subscriptions: normalizePushSubscriptions(record.subscriptions),
+    };
+  };
+
+  const addOrUpdatePushSubscription = async (authValue, subscription, userAgent, platform) => {
+    const auth = normalizeNotificationAuth(authValue);
+    if (!auth) return;
 
     await ensurePushInitialized();
 
     const now = Date.now();
 
     await persistPushSubscriptionUpdate((current) => {
-      const subsBySession = { ...(current.subscriptionsBySession || {}) };
-      const existing = Array.isArray(subsBySession[uiSessionToken]) ? subsBySession[uiSessionToken] : [];
+      const registrationsByIdentity = { ...(current.registrationsByIdentity || {}) };
+      const registration = normalizeRegistration(registrationsByIdentity[auth.identity]);
+      const existing = registration?.subscriptions || [];
 
       const filtered = existing.filter((entry) => entry && typeof entry.endpoint === 'string' && entry.endpoint !== subscription.endpoint);
 
@@ -153,47 +194,63 @@ export const createPushRuntime = (deps) => {
               : undefined,
       });
 
-      subsBySession[uiSessionToken] = filtered.slice(0, 10);
+      registrationsByIdentity[auth.identity] = {
+        auth,
+        subscriptions: filtered.slice(0, 10),
+      };
 
-      return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: subsBySession };
+      return { version: PUSH_SUBSCRIPTIONS_VERSION, registrationsByIdentity };
     });
   };
 
-  const removePushSubscription = async (uiSessionToken, endpoint) => {
-    if (!uiSessionToken || !endpoint) return;
+  const removePushSubscription = async (authOrSelector, endpoint) => {
+    if (!authOrSelector) return;
 
-    await ensurePushInitialized();
+    if (!endpoint) {
+      for (const [identity, state] of uiVisibilityByIdentity) {
+        if (notificationAuthMatchesSelector(state?.auth, authOrSelector)) {
+          uiVisibilityByIdentity.delete(identity);
+        }
+      }
+    }
 
     await persistPushSubscriptionUpdate((current) => {
-      const subsBySession = { ...(current.subscriptionsBySession || {}) };
-      const existing = Array.isArray(subsBySession[uiSessionToken]) ? subsBySession[uiSessionToken] : [];
-      const filtered = existing.filter((entry) => entry && typeof entry.endpoint === 'string' && entry.endpoint !== endpoint);
-      if (filtered.length === 0) {
-        delete subsBySession[uiSessionToken];
-      } else {
-        subsBySession[uiSessionToken] = filtered;
+      const registrationsByIdentity = { ...(current.registrationsByIdentity || {}) };
+      for (const [identity, rawRegistration] of Object.entries(registrationsByIdentity)) {
+        const registration = normalizeRegistration(rawRegistration);
+        if (!registration || !notificationAuthMatchesSelector(registration.auth, authOrSelector)) continue;
+        if (!endpoint) {
+          delete registrationsByIdentity[identity];
+          uiVisibilityByIdentity.delete(identity);
+          continue;
+        }
+        const filtered = registration.subscriptions.filter((entry) => entry.endpoint !== endpoint);
+        if (filtered.length === 0) delete registrationsByIdentity[identity];
+        else registrationsByIdentity[identity] = { auth: registration.auth, subscriptions: filtered };
       }
-      return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: subsBySession };
+      return { version: PUSH_SUBSCRIPTIONS_VERSION, registrationsByIdentity };
     });
   };
 
   const removePushSubscriptionFromAllSessions = async (endpoint) => {
     if (!endpoint) return;
 
-    await ensurePushInitialized();
-
     await persistPushSubscriptionUpdate((current) => {
-      const subsBySession = { ...(current.subscriptionsBySession || {}) };
-      for (const [token, entries] of Object.entries(subsBySession)) {
-        if (!Array.isArray(entries)) continue;
-        const filtered = entries.filter((entry) => entry && typeof entry.endpoint === 'string' && entry.endpoint !== endpoint);
+      const registrationsByIdentity = { ...(current.registrationsByIdentity || {}) };
+      for (const [identity, rawRegistration] of Object.entries(registrationsByIdentity)) {
+        const registration = normalizeRegistration(rawRegistration);
+        if (!registration) {
+          delete registrationsByIdentity[identity];
+          continue;
+        }
+        const filtered = registration.subscriptions.filter((entry) => entry.endpoint !== endpoint);
         if (filtered.length === 0) {
-          delete subsBySession[token];
+          delete registrationsByIdentity[identity];
         } else {
-          subsBySession[token] = filtered;
+          registrationsByIdentity[identity] = { auth: registration.auth, subscriptions: filtered };
         }
       }
-      return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: subsBySession };
+      return { version: PUSH_SUBSCRIPTIONS_VERSION, registrationsByIdentity };
     });
   };
 
@@ -224,19 +281,28 @@ export const createPushRuntime = (deps) => {
   const sendPushToAllUiSessions = async (payload, options = {}) => {
     const requireNoSse = options.requireNoSse === true;
     const store = await readPushSubscriptionsFromDisk();
-    const sessions = store.subscriptionsBySession || {};
+    const registrations = store.registrationsByIdentity || {};
     const subscriptionsByEndpoint = new Map();
+    const inactiveAuth = [];
 
-    for (const record of Object.values(sessions)) {
-      const subscriptions = normalizePushSubscriptions(record);
-      if (subscriptions.length === 0) continue;
+    await Promise.all(Object.values(registrations).map(async (rawRegistration) => {
+      const registration = normalizeRegistration(rawRegistration);
+      if (!registration || registration.subscriptions.length === 0) return;
+      const authStatus = await validateNotificationAuth(registration.auth);
+      if (authStatus === 'inactive') {
+        inactiveAuth.push(registration.auth);
+        return;
+      }
+      if (authStatus !== 'active') return;
 
-      for (const sub of subscriptions) {
+      for (const sub of registration.subscriptions) {
         if (!subscriptionsByEndpoint.has(sub.endpoint)) {
           subscriptionsByEndpoint.set(sub.endpoint, sub);
         }
       }
-    }
+    }));
+
+    await Promise.all(inactiveAuth.map((auth) => removePushSubscription(auth).catch(() => {})));
 
     await Promise.all(Array.from(subscriptionsByEndpoint.values()).map(async (sub) => {
       if (requireNoSse) {
@@ -257,20 +323,26 @@ export const createPushRuntime = (deps) => {
   const MOBILE_PLATFORMS = new Set(['ios', 'android']);
   const isMobilePlatform = (platform) => typeof platform === 'string' && MOBILE_PLATFORMS.has(platform);
 
-  const updateUiVisibility = (token, visible, platform) => {
-    if (!token) return;
+  const updateUiVisibility = (authValue, visible, platform) => {
+    const auth = normalizeNotificationAuth(authValue);
+    if (!auth) return;
     const now = Date.now();
     const nextVisible = Boolean(visible);
-    const existing = uiVisibilityByToken.get(token);
+    const existing = uiVisibilityByIdentity.get(auth.identity);
     // Keep the last known platform if this beacon didn't carry one (e.g. a heartbeat).
     const nextPlatform = typeof platform === 'string' && platform ? platform : existing?.platform;
-    uiVisibilityByToken.set(token, { visible: nextVisible, updatedAt: now, platform: nextPlatform });
+    uiVisibilityByIdentity.set(auth.identity, {
+      auth,
+      visible: nextVisible,
+      updatedAt: now,
+      platform: nextPlatform,
+    });
   };
 
   const isAnyUiVisible = () => {
     const now = Date.now();
     pruneUiVisibility(now);
-    for (const state of uiVisibilityByToken.values()) {
+    for (const state of uiVisibilityByIdentity.values()) {
       if (state.visible === true && now - state.updatedAt <= UI_VISIBILITY_TTL_MS) {
         return true;
       }
@@ -285,7 +357,7 @@ export const createPushRuntime = (deps) => {
   const isAnyInteractiveClientVisible = () => {
     const now = Date.now();
     pruneUiVisibility(now);
-    for (const state of uiVisibilityByToken.values()) {
+    for (const state of uiVisibilityByIdentity.values()) {
       if (
         state.visible === true &&
         now - state.updatedAt <= UI_VISIBILITY_TTL_MS &&
@@ -297,10 +369,12 @@ export const createPushRuntime = (deps) => {
     return false;
   };
 
-  const isUiVisible = (token) => {
+  const isUiVisible = (authValue) => {
+    const auth = normalizeNotificationAuth(authValue);
+    if (!auth) return false;
     const now = Date.now();
     pruneUiVisibility(now);
-    const state = uiVisibilityByToken.get(token);
+    const state = uiVisibilityByIdentity.get(auth.identity);
     return state?.visible === true && now - state.updatedAt <= UI_VISIBILITY_TTL_MS;
   };
 

@@ -4,15 +4,23 @@ import os from 'os';
 import path from 'path';
 import { createServer } from 'http';
 import net from 'net';
-import { spawn } from 'child_process';
-import { pathToFileURL } from 'url';
+import { spawn, spawnSync } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 import { isModuleCliExecution, normalizeCliEntryPath } from './cli-entry.js';
 import { requestJson } from './lib/cli-http.js';
+import { getTunnelProfilesFilePath } from './lib/cli-paths.js';
+import {
+  createTunnelAutoStartOptions,
+  FRPC_START_SERVER_BUDGET_MS,
+  TUNNEL_START_REQUEST_TIMEOUT_MS,
+  TUNNEL_STOP_REQUEST_TIMEOUT_MS,
+} from './lib/commands-tunnel.js';
 import { inspectTunnelAttachability } from './lib/cli-lifecycle.js';
 import { DEFAULT_TUNNEL_PROVIDER_CAPABILITIES } from './lib/cli-tunnel-capabilities.js';
 import {
   TUNNEL_PROVIDER_CLOUDFLARE,
+  TUNNEL_PROVIDER_FRPC,
   TUNNEL_PROVIDER_NGROK,
 } from '../server/lib/tunnels/types.js';
 import {
@@ -23,6 +31,7 @@ import {
   discoverRunningInstances,
   discoverUnconfirmedRegistryInstanceOnPort,
   ensureTunnelProfilesMigrated,
+  generateCompletionScript,
   getInstanceFilePath,
   getPidFilePath,
   isOpenchamberCmdline,
@@ -71,15 +80,109 @@ async function captureStdout(fn) {
   }
 }
 
+async function captureCommandOutput(fn) {
+  const originalStdoutWrite = process.stdout.write;
+  const originalStderrWrite = process.stderr.write;
+  let stdout = '';
+  let stderr = '';
+  process.stdout.write = (chunk, encoding, callback) => {
+    stdout += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    if (typeof encoding === 'function') encoding();
+    if (typeof callback === 'function') callback();
+    return true;
+  };
+  process.stderr.write = (chunk, encoding, callback) => {
+    stderr += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    if (typeof encoding === 'function') encoding();
+    if (typeof callback === 'function') callback();
+    return true;
+  };
+  try {
+    let value;
+    let error;
+    try {
+      value = await fn();
+    } catch (caught) {
+      error = caught;
+    }
+    return { stdout, stderr, value, error };
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+    process.stderr.write = originalStderrWrite;
+  }
+}
+
+async function runCliProcess(args, env = {}) {
+  const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+  const child = spawn(process.execPath, [cliPath, ...args], {
+    env: { ...process.env, ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const result = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  return { ...result, stdout, stderr };
+}
+
 async function startMockOpenChamberServer(options = {}) {
   const runtime = options.runtime || 'web';
   const pid = Number.isFinite(options.pid) ? options.pid : null;
   let shutdownRequested = false;
+  let tunnelStartBody = null;
+  let tunnelTokenSyncBody = null;
   let closed = false;
   const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/api/system/info') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ runtime, pid }));
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/openchamber/tunnel/start' && options.tunnelStartResponse) {
+      let rawBody = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        rawBody += chunk;
+      });
+      req.on('end', () => {
+        tunnelStartBody = JSON.parse(rawBody);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(options.tunnelStartResponse));
+      });
+      return;
+    }
+
+    if (req.method === 'PUT' && req.url === '/api/openchamber/tunnel/managed-remote-token' && options.tunnelTokenSyncResponse) {
+      let rawBody = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        rawBody += chunk;
+      });
+      req.on('end', () => {
+        tunnelTokenSyncBody = JSON.parse(rawBody);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(options.tunnelTokenSyncResponse));
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/openchamber/tunnel/stop' && options.tunnelStopResponse) {
+      const status = Number.isInteger(options.tunnelStopStatus) ? options.tunnelStopStatus : 200;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(options.tunnelStopResponse));
       return;
     }
 
@@ -108,6 +211,12 @@ async function startMockOpenChamberServer(options = {}) {
     port,
     get shutdownRequested() {
       return shutdownRequested;
+    },
+    get tunnelStartBody() {
+      return tunnelStartBody;
+    },
+    get tunnelTokenSyncBody() {
+      return tunnelTokenSyncBody;
     },
     close: async () => {
       if (closed || !server.listening) return;
@@ -181,8 +290,128 @@ describe('cli args', () => {
   it('loads fallback tunnel provider capabilities for CLI startup', () => {
     expect(DEFAULT_TUNNEL_PROVIDER_CAPABILITIES.map((provider) => provider.provider)).toEqual([
       TUNNEL_PROVIDER_CLOUDFLARE,
+      TUNNEL_PROVIDER_FRPC,
       TUNNEL_PROVIDER_NGROK,
     ]);
+  });
+
+  it('parses FRPC server and remote mapping options', () => {
+    const parsed = parseArgs([
+      'tunnel', 'start',
+      '--provider', 'frpc',
+      '--frps-address', '203.0.113.10',
+      '--frps-port', '7000',
+      '--frps-ca-file', '/home/openchamber/frp/ca.crt',
+      '--remote-port', '18080',
+      '--public-url', 'https://app.example.com:18080',
+    ]);
+
+    expect(parsed.options).toMatchObject({
+      provider: 'frpc',
+      serverAddress: '203.0.113.10',
+      serverPort: 7000,
+      trustedCaFile: '/home/openchamber/frp/ca.crt',
+      remotePort: 18080,
+      publicUrl: 'https://app.example.com:18080',
+    });
+  });
+
+  it('parses FRPC HTTP-vhost endpoint options', () => {
+    const parsed = parseArgs([
+      'tunnel', 'start',
+      '--provider', 'frpc',
+      '--frps-address', 'frps.example.com',
+      '--frps-port', '7000',
+      '--custom-domain', 'openchamber.internal',
+      '--hostname', 'app.example.com',
+    ]);
+
+    expect(parsed.options).toMatchObject({
+      provider: 'frpc',
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      customDomain: 'openchamber.internal',
+      hostname: 'app.example.com',
+    });
+    expect(parsed.options.remotePort).toBeUndefined();
+  });
+
+  it('allows the FRPC download deadline plus proxy startup before timing out', () => {
+    expect(FRPC_START_SERVER_BUDGET_MS).toBe(120000 + 120000 + 20000);
+    expect(TUNNEL_START_REQUEST_TIMEOUT_MS).toBe(FRPC_START_SERVER_BUDGET_MS + 40000);
+    expect(TUNNEL_STOP_REQUEST_TIMEOUT_MS).toBe(317000);
+  });
+
+  it('silences nested server auto-start output in JSON and quiet tunnel flows', () => {
+    expect(createTunnelAutoStartOptions({
+      json: true,
+      quiet: false,
+      provider: 'frpc',
+      mode: 'managed-remote',
+      apiOnly: true,
+    }, { port: 3003 })).toMatchObject({
+      json: false,
+      quiet: true,
+      suppressQuietOutput: true,
+      suppressStartupSummary: true,
+      provider: 'frpc',
+      mode: 'managed-remote',
+      apiOnly: true,
+      port: 3003,
+    });
+  });
+
+  it('rejects a missing --custom-domain value', () => {
+    expect(() => parseArgs(['tunnel', 'start', '--custom-domain'])).toThrow(/Missing value for --custom-domain/);
+  });
+
+  it('rejects missing explicit provider and mode values', () => {
+    expect(() => parseArgs(['tunnel', 'start', '--provider'])).toThrow(/Missing value for --provider/);
+    expect(() => parseArgs(['tunnel', 'start', '--mode'])).toThrow(/Missing value for --mode/);
+  });
+
+  it('renders parse-time provider and mode failures in the raw requested output mode', async () => {
+    for (const args of [
+      ['tunnel', 'start', '--json', '--provider'],
+      ['tunnel', 'start', '--provider', '--json'],
+      ['tunnel', 'start', '--json', '--mode'],
+      ['tunnel', 'start', '--mode', '--json'],
+    ]) {
+      const result = await runCliProcess(args, { NO_COLOR: '1' });
+      expect(result.code).toBe(2);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        status: 'error',
+        error: { message: expect.stringMatching(/Missing value for --(?:provider|mode)/) },
+      });
+    }
+
+    for (const args of [
+      ['tunnel', 'start', '--quiet', '--provider'],
+      ['tunnel', 'start', '--mode', '-q'],
+    ]) {
+      const result = await runCliProcess(args, { NO_COLOR: '1' });
+      expect(result.code).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toMatch(/Missing value for --(?:provider|mode)/);
+    }
+
+    const nonTty = await runCliProcess(['tunnel', 'start', '--provider'], { NO_COLOR: '1' });
+    expect(nonTty.code).toBe(2);
+    expect(nonTty.stdout).toBe('');
+    expect(nonTty.stderr).toMatch(/Missing value for --provider/);
+  });
+
+  it('includes FRPC endpoint and stop safety flags in bash, zsh, and fish completions', () => {
+    expect(generateCompletionScript('bash')).toContain('--custom-domain');
+    expect(generateCompletionScript('zsh')).toContain('--custom-domain');
+    expect(generateCompletionScript('fish')).toContain('-l custom-domain');
+    expect(generateCompletionScript('bash')).toContain('--public-url');
+    expect(generateCompletionScript('zsh')).toContain('--public-url');
+    expect(generateCompletionScript('fish')).toContain('-l public-url');
+    expect(generateCompletionScript('bash')).toContain('--force');
+    expect(generateCompletionScript('zsh')).toContain('--force');
+    expect(generateCompletionScript('fish')).toContain('-l force');
   });
 
   it('accepts legacy daemon flags as no-ops', () => {
@@ -327,7 +556,7 @@ describe('compatibility exports', () => {
     await withTempOpenChamberDataDir(async () => {
       const store = ensureTunnelProfilesMigrated();
 
-      expect(store).toEqual({ version: 1, profiles: [] });
+      expect(store).toEqual({ version: 2, profiles: [] });
     });
   });
 
@@ -363,6 +592,698 @@ describe('compatibility exports', () => {
         provider: 'ngrok',
         mode: 'quick',
       }));
+    });
+  });
+
+  it('uses the CLI ownership id when syncing and starting a Cloudflare profile', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const tokenFile = path.join(dir, 'cloudflare-token');
+      fs.writeFileSync(tokenFile, 'cloudflare-secret', { mode: 0o600 });
+      const addOutput = await captureStdout(() => commands.tunnel({
+        provider: 'cloudflare',
+        mode: 'managed-remote',
+        name: 'cloudflare-main',
+        hostname: 'cli.example.com',
+        tokenFile,
+        json: true,
+      }, 'profile', 'add'));
+      const profile = JSON.parse(addOutput).profile;
+      const ownedId = `cli-profile:${profile.id}`;
+      const server = await startMockOpenChamberServer({
+        runtime: 'web',
+        pid: process.pid,
+        tunnelTokenSyncResponse: { ok: true },
+        tunnelStartResponse: {
+          ok: true,
+          provider: 'cloudflare',
+          mode: 'managed-remote',
+          url: 'https://cli.example.com',
+        },
+      });
+      fs.writeFileSync(await getPidFilePath(server.port), String(process.pid));
+      fs.writeFileSync(await getInstanceFilePath(server.port), JSON.stringify({
+        port: server.port,
+        pid: process.pid,
+        runtime: 'web',
+        launchMode: 'daemon',
+      }));
+
+      try {
+        await captureStdout(() => commands.tunnel({
+          profile: 'cloudflare-main',
+          explicitPort: true,
+          port: server.port,
+          json: true,
+        }, 'start'));
+
+        expect(server.tunnelTokenSyncBody).toMatchObject({ presetId: ownedId });
+        expect(server.tunnelStartBody).toMatchObject({
+          managedRemoteTunnelPresetId: ownedId,
+          managedRemoteTunnelPresetName: 'cloudflare-main',
+        });
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
+  it('rejects explicit unknown providers and unsupported provider modes in every output mode', async () => {
+    for (const outputMode of [{}, { quiet: true }, { json: true }]) {
+      await expect(commands.tunnel({
+        ...outputMode,
+        dryRun: true,
+        explicitPort: true,
+        port: 3003,
+        provider: 'invalid-provider',
+        mode: 'quick',
+      }, 'start')).rejects.toMatchObject({
+        name: 'TunnelCliError',
+        exitCode: 2,
+        message: expect.stringMatching(/Unsupported tunnel provider/),
+      });
+      await expect(commands.tunnel({
+        ...outputMode,
+        dryRun: true,
+        explicitPort: true,
+        port: 3003,
+        provider: 'frpc',
+        mode: 'quick',
+      }, 'start')).rejects.toMatchObject({
+        name: 'TunnelCliError',
+        exitCode: 2,
+        message: expect.stringMatching(/does not support mode/),
+      });
+    }
+    await expect(commands.tunnel({
+      json: true,
+      provider: 'invalid-provider',
+    }, 'status')).rejects.toMatchObject({
+      name: 'TunnelCliError',
+      exitCode: 2,
+    });
+  });
+
+  it('keeps invalid-provider errors JSON-only and quiet-output safe at the CLI boundary', () => {
+    const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+    const jsonResult = spawnSync(process.execPath, [
+      cliPath,
+      'tunnel',
+      'start',
+      '--provider',
+      'invalid-provider',
+      '--mode',
+      'quick',
+      '--dry-run',
+      '--json',
+    ], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+    const quietResult = spawnSync(process.execPath, [
+      cliPath,
+      'tunnel',
+      'start',
+      '--provider',
+      'invalid-provider',
+      '--mode',
+      'quick',
+      '--dry-run',
+      '--quiet',
+    ], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+    const modeJsonResult = spawnSync(process.execPath, [
+      cliPath,
+      'tunnel',
+      'start',
+      '--json',
+      '--provider',
+      'cloudflare',
+      '--mode',
+      'invalid-mode',
+      '--dry-run',
+    ], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+    const nonTtyResult = spawnSync(process.execPath, [
+      cliPath,
+      'tunnel',
+      'start',
+      '--provider',
+      'invalid-provider',
+      '--dry-run',
+    ], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+
+    expect(jsonResult.status).toBe(2);
+    expect(jsonResult.stderr).toBe('');
+    expect(JSON.parse(jsonResult.stdout)).toMatchObject({
+      status: 'error',
+      error: { message: expect.stringMatching(/Unsupported tunnel provider/) },
+    });
+    expect(quietResult.status).toBe(2);
+    expect(quietResult.stdout).toBe('');
+    expect(quietResult.stderr).toMatch(/Unsupported tunnel provider/);
+    expect(modeJsonResult.status).toBe(2);
+    expect(modeJsonResult.stderr).toBe('');
+    expect(JSON.parse(modeJsonResult.stdout)).toMatchObject({
+      status: 'error',
+      error: { message: expect.stringMatching(/Unsupported tunnel mode/) },
+    });
+    expect(nonTtyResult.status).toBe(2);
+    expect(nonTtyResult.stdout).toBe('');
+    expect(nonTtyResult.stderr).toMatch(/Unsupported tunnel provider/);
+  });
+});
+
+describe('tunnel stop safety and exit semantics', () => {
+  it('requires --force for stop --all outside interactive human mode', async () => {
+    for (const outputMode of [{ json: true }, { quiet: true }]) {
+      await expect(commands.tunnel({ all: true, ...outputMode }, 'stop')).rejects.toMatchObject({
+        name: 'TunnelCliError',
+        exitCode: 2,
+        message: expect.stringMatching(/requires --force/),
+      });
+    }
+
+    const jsonResult = await runCliProcess(['tunnel', 'stop', '--all', '--json'], { NO_COLOR: '1' });
+    expect(jsonResult.code).toBe(2);
+    expect(jsonResult.stderr).toBe('');
+    expect(JSON.parse(jsonResult.stdout)).toMatchObject({
+      status: 'error',
+      error: { message: expect.stringMatching(/requires --force/) },
+    });
+
+    const nonInteractiveResult = await runCliProcess(['tunnel', 'stop', '--all'], { NO_COLOR: '1' });
+    expect(nonInteractiveResult.code).toBe(2);
+    expect(nonInteractiveResult.stdout).toBe('');
+    expect(nonInteractiveResult.stderr).toMatch(/requires --force/);
+  });
+
+  it('reports every partial stop result before returning failure in JSON, quiet, and human modes', async () => {
+    await withTempOpenChamberDataDir(async () => {
+      const successServer = await startMockOpenChamberServer({
+        pid: process.pid,
+        tunnelStopResponse: { ok: true, revokedBootstrapCount: 1, invalidatedSessionCount: 2 },
+      });
+      const failureServer = await startMockOpenChamberServer({
+        pid: process.pid,
+        tunnelStopStatus: 500,
+        tunnelStopResponse: { ok: false, error: 'simulated stop failure' },
+      });
+      try {
+        for (const server of [successServer, failureServer]) {
+          fs.writeFileSync(await getPidFilePath(server.port), String(process.pid));
+          fs.writeFileSync(await getInstanceFilePath(server.port), JSON.stringify({
+            port: server.port,
+            host: '127.0.0.1',
+            launchMode: 'daemon',
+          }, null, 2));
+        }
+
+        const jsonResult = await captureCommandOutput(() => commands.tunnel({
+          all: true,
+          force: true,
+          json: true,
+        }, 'stop'));
+        expect(jsonResult.error).toMatchObject({
+          name: 'TunnelCliError',
+          exitCode: 5,
+          reported: true,
+        });
+        expect(jsonResult.stderr).toBe('');
+        const jsonPayload = JSON.parse(jsonResult.stdout);
+        expect(jsonPayload).toMatchObject({ status: 'error', ok: false });
+        expect(jsonPayload.instances).toHaveLength(2);
+        expect(jsonPayload.instances).toEqual(expect.arrayContaining([
+          expect.objectContaining({ port: successServer.port, result: expect.objectContaining({ ok: true }) }),
+          expect.objectContaining({ port: failureServer.port, error: 'simulated stop failure' }),
+        ]));
+
+        const quietResult = await captureCommandOutput(() => commands.tunnel({
+          all: true,
+          force: true,
+          quiet: true,
+        }, 'stop'));
+        expect(quietResult.error).toMatchObject({ exitCode: 5, reported: true });
+        expect(quietResult.stdout).toContain(`port ${successServer.port} stopped`);
+        expect(quietResult.stderr).toContain(`port ${failureServer.port} failed: simulated stop failure`);
+
+        const humanResult = await captureCommandOutput(() => commands.tunnel({
+          all: true,
+          force: true,
+          plain: true,
+        }, 'stop'));
+        expect(humanResult.error).toMatchObject({ exitCode: 5, reported: true });
+        expect(`${humanResult.stdout}${humanResult.stderr}`).toContain(`port ${successServer.port} stopped`);
+        expect(`${humanResult.stdout}${humanResult.stderr}`).toContain(`port ${failureServer.port} failed`);
+      } finally {
+        await successServer.close();
+        await failureServer.close();
+      }
+    });
+  });
+
+  it('exits non-zero with one JSON document for a single stop failure', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const server = await startMockOpenChamberServer({
+        pid: process.pid,
+        tunnelStopStatus: 500,
+        tunnelStopResponse: { ok: false, error: 'single stop failure' },
+      });
+      try {
+        fs.writeFileSync(await getPidFilePath(server.port), String(process.pid));
+        fs.writeFileSync(await getInstanceFilePath(server.port), JSON.stringify({
+          port: server.port,
+          host: '127.0.0.1',
+          launchMode: 'daemon',
+        }, null, 2));
+
+        const result = await runCliProcess([
+          'tunnel',
+          'stop',
+          '--port',
+          String(server.port),
+          '--json',
+        ], {
+          OPENCHAMBER_DATA_DIR: dir,
+          NO_COLOR: '1',
+        });
+
+        expect(result.code).toBe(5);
+        expect(result.stderr).toBe('');
+        const payload = JSON.parse(result.stdout);
+        expect(payload).toMatchObject({ status: 'error', ok: false });
+        expect(payload.instances).toEqual([
+          expect.objectContaining({ port: server.port, error: 'single stop failure' }),
+        ]);
+      } finally {
+        await server.close();
+      }
+    });
+  });
+});
+
+describe('FRPC endpoint CLI', () => {
+  it('rejects mixed and incomplete endpoints in normal, quiet, JSON, and dry-run modes', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const tokenFile = path.join(dir, 'frpc-token');
+      const trustedCaFile = path.join(dir, 'frps-ca.crt');
+      fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
+      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
+      const outputModes = [
+        {},
+        { quiet: true },
+        { json: true },
+        { dryRun: true },
+        { quiet: true, dryRun: true },
+        { json: true, dryRun: true },
+      ];
+
+      for (const outputMode of outputModes) {
+        const startBase = {
+          provider: 'frpc',
+          mode: 'managed-remote',
+          serverAddress: 'frps.example.com',
+          serverPort: 7000,
+          trustedCaFile,
+          tokenFile,
+          explicitPort: true,
+          port: 3000,
+          ...outputMode,
+        };
+        await expect(commands.tunnel({
+          ...startBase,
+          remotePort: 18080,
+          customDomain: 'openchamber.internal',
+          hostname: 'app.example.com',
+        }, 'start')).rejects.toThrow(/mutually exclusive/);
+        await expect(commands.tunnel({
+          ...startBase,
+          customDomain: 'openchamber.internal',
+        }, 'start')).rejects.toThrow(/requires both --custom-domain.*--hostname/);
+
+        const profileBase = {
+          provider: 'frpc',
+          mode: 'managed-remote',
+          name: 'http-main',
+          serverAddress: 'frps.example.com',
+          serverPort: 7000,
+          trustedCaFile,
+          tokenFile,
+          ...outputMode,
+        };
+        await expect(commands.tunnel({
+          ...profileBase,
+          remotePort: 18080,
+          customDomain: 'openchamber.internal',
+          hostname: 'app.example.com',
+        }, 'profile', 'add')).rejects.toThrow(/mutually exclusive/);
+        await expect(commands.tunnel({
+          ...profileBase,
+          hostname: 'app.example.com',
+        }, 'profile', 'add')).rejects.toThrow(/requires both --custom-domain.*--hostname/);
+      }
+    });
+  });
+
+  it('requires and canonicalizes an externally terminated HTTPS origin for TCP', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const tokenFile = path.join(dir, 'frpc-token');
+      const trustedCaFile = path.join(dir, 'frps-ca.crt');
+      fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
+      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
+      const base = {
+        provider: 'frpc',
+        mode: 'managed-remote',
+        serverAddress: 'frps.example.com',
+        serverPort: 7000,
+        trustedCaFile,
+        remotePort: 18080,
+        tokenFile,
+        explicitPort: true,
+        port: 3000,
+        dryRun: true,
+        json: true,
+      };
+
+      for (const publicUrl of [undefined, 'http://app.example.com:18080', 'https://app.example.com:18080/path', 'not a URL']) {
+        await expect(commands.tunnel({ ...base, publicUrl }, 'start')).rejects.toMatchObject({
+          name: 'TunnelCliError',
+          exitCode: 2,
+          message: expect.stringMatching(/public-url/),
+        });
+      }
+
+      const output = await captureStdout(() => commands.tunnel({
+        ...base,
+        publicUrl: 'HTTPS://App.Example.com:18080/',
+      }, 'start'));
+      expect(JSON.parse(output)).toMatchObject({
+        remotePort: 18080,
+        publicUrl: 'https://app.example.com:18080',
+      });
+    });
+  });
+
+  it('fails a legacy TCP profile without guessing a browser URL', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const trustedCaFile = path.join(dir, 'frps-ca.crt');
+      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
+      const profilesPath = getTunnelProfilesFilePath();
+      fs.mkdirSync(path.dirname(profilesPath), { recursive: true });
+      fs.writeFileSync(profilesPath, JSON.stringify({
+        version: 2,
+        profiles: [{
+          id: 'legacy-tcp',
+          name: 'legacy-tcp',
+          provider: 'frpc',
+          mode: 'managed-remote',
+          serverAddress: 'frps.example.com',
+          serverPort: 7000,
+          trustedCaFile,
+          remotePort: 18080,
+          token: 'not-a-secret',
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      }), { mode: 0o600 });
+
+      await expect(commands.tunnel({
+        profile: 'legacy-tcp',
+        explicitPort: true,
+        port: 3000,
+        dryRun: true,
+        json: true,
+      }, 'start')).rejects.toMatchObject({
+        name: 'TunnelCliError',
+        exitCode: 2,
+        message: expect.stringMatching(/public-url/),
+      });
+    });
+  });
+
+  it('emits canonical HTTP-vhost dry-run JSON without exposing the token', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const tokenFile = path.join(dir, 'frpc-token');
+      const trustedCaFile = path.join(dir, 'frps-ca.crt');
+      fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
+      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
+
+      const output = await captureStdout(() => commands.tunnel({
+        provider: 'frpc',
+        mode: 'managed-remote',
+        serverAddress: 'frps.example.com',
+        serverPort: 7000,
+        trustedCaFile,
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+        tokenFile,
+        explicitPort: true,
+        port: 3000,
+        dryRun: true,
+        json: true,
+      }, 'start'));
+
+      expect(JSON.parse(output)).toEqual(expect.objectContaining({
+        ok: true,
+        dryRun: true,
+        provider: 'frpc',
+        mode: 'managed-remote',
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+        remotePort: null,
+        hasToken: true,
+      }));
+      expect(output).not.toContain('not-a-secret');
+    });
+  });
+
+  it('continues to reject inline FRPC tokens', async () => {
+    await expect(commands.tunnel({
+      provider: 'frpc',
+      mode: 'managed-remote',
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      remotePort: 18080,
+      token: 'not-a-secret',
+      explicitPort: true,
+      port: 3000,
+      dryRun: true,
+      json: true,
+    }, 'start')).rejects.toThrow(/FRPC tokens cannot be passed with --token/);
+  });
+
+  it('rejects an explicit invalid FRPS address before a saved profile can replace it in every output mode', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const tokenFile = path.join(dir, 'frpc-token');
+      const trustedCaFile = path.join(dir, 'frps-ca.crt');
+      fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
+      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
+      await captureStdout(() => commands.tunnel({
+        provider: 'frpc',
+        mode: 'managed-remote',
+        name: 'saved-frpc',
+        serverAddress: 'frps.example.com',
+        serverPort: 7000,
+          trustedCaFile,
+          remotePort: 18080,
+          publicUrl: 'https://saved.example.com:18080',
+          tokenFile,
+        json: true,
+      }, 'profile', 'add'));
+
+      for (const outputMode of [
+        {},
+        { quiet: true },
+        { json: true },
+        { dryRun: true },
+        { quiet: true, dryRun: true },
+        { json: true, dryRun: true },
+      ]) {
+        await expect(commands.tunnel({
+          profile: 'saved-frpc',
+          serverAddress: 'https://invalid.example.com',
+          explicitPort: true,
+          port: 3000,
+          ...outputMode,
+        }, 'start')).rejects.toMatchObject({
+          name: 'TunnelCliError',
+          exitCode: 2,
+          message: expect.stringMatching(/Invalid --frps-address/),
+        });
+      }
+    });
+  });
+
+  it('requires a readable trusted CA file for FRPS identity verification', async () => {
+    await expect(commands.tunnel({
+      provider: 'frpc',
+      mode: 'managed-remote',
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      remotePort: 18080,
+      explicitPort: true,
+      port: 3000,
+      dryRun: true,
+      json: true,
+    }, 'start')).rejects.toThrow(/frps-ca-file/);
+  });
+
+  it('round-trips HTTP-vhost profile add, list, show, and selected-profile start', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const tokenFile = path.join(dir, 'frpc-token');
+      const trustedCaFile = path.join(dir, 'frps-ca.crt');
+      fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
+      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
+      const addOptions = {
+        provider: 'frpc',
+        mode: 'managed-remote',
+        name: 'http-main',
+        serverAddress: 'frps.example.com',
+        serverPort: 7000,
+        trustedCaFile,
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+        tokenFile,
+        json: true,
+      };
+
+      const dryRunOutput = await captureStdout(() => commands.tunnel({
+        ...addOptions,
+        dryRun: true,
+      }, 'profile', 'add'));
+      const dryRunProfile = JSON.parse(dryRunOutput).profile;
+      expect(dryRunProfile).toEqual(expect.objectContaining({
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+        hasToken: true,
+      }));
+      expect(dryRunProfile).not.toHaveProperty('remotePort');
+      expect(dryRunOutput).not.toContain('not-a-secret');
+
+      const addOutput = await captureStdout(() => commands.tunnel(addOptions, 'profile', 'add'));
+      const added = JSON.parse(addOutput).profile;
+      expect(added).toEqual(expect.objectContaining({
+        name: 'http-main',
+        provider: 'frpc',
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+        hasToken: true,
+      }));
+      expect(added).not.toHaveProperty('remotePort');
+      expect(addOutput).not.toContain('not-a-secret');
+
+      const listOutput = await captureStdout(() => commands.tunnel({ json: true }, 'profile', 'list'));
+      const listed = JSON.parse(listOutput).profiles[0];
+      expect(listed).toEqual(expect.objectContaining({
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+      }));
+      expect(listed).not.toHaveProperty('remotePort');
+
+      const showOutput = await captureStdout(() => commands.tunnel({
+        json: true,
+        name: 'http-main',
+        provider: 'frpc',
+      }, 'profile', 'show'));
+      expect(JSON.parse(showOutput).profile).toEqual(expect.objectContaining({
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+        hasToken: true,
+      }));
+      expect(showOutput).not.toContain('not-a-secret');
+
+      const quietOutput = await captureStdout(() => commands.tunnel({ quiet: true }, 'profile', 'list'));
+      expect(quietOutput).toContain('http:openchamber.internal public:app.example.com');
+      expect(quietOutput).not.toContain('not-a-secret');
+
+      const startOutput = await captureStdout(() => commands.tunnel({
+        profile: 'http-main',
+        explicitPort: true,
+        port: 3000,
+        dryRun: true,
+        json: true,
+      }, 'start'));
+      expect(JSON.parse(startOutput)).toEqual(expect.objectContaining({
+        profile: 'http-main',
+        customDomain: 'openchamber.internal',
+        hostname: 'app.example.com',
+        remotePort: null,
+      }));
+
+      const tcpOverrideOutput = await captureStdout(() => commands.tunnel({
+        profile: 'http-main',
+        remotePort: 19090,
+        publicUrl: 'https://tcp.example.com:19090',
+        explicitPort: true,
+        port: 3000,
+        dryRun: true,
+        json: true,
+      }, 'start'));
+      expect(JSON.parse(tcpOverrideOutput)).toEqual(expect.objectContaining({
+        remotePort: 19090,
+        publicUrl: 'https://tcp.example.com:19090',
+        customDomain: null,
+        hostname: null,
+      }));
+    });
+  });
+
+  it('sends a canonical run-once HTTP-vhost payload and safe replay command', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const server = await startMockOpenChamberServer({
+        runtime: 'web',
+        pid: process.pid,
+        tunnelStartResponse: {
+          ok: true,
+          provider: 'frpc',
+          mode: 'managed-remote',
+          url: 'https://app.example.com',
+        },
+      });
+      const tokenFile = path.join(dir, 'frpc-token');
+      const trustedCaFile = path.join(dir, 'frps-ca.crt');
+      fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
+      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
+      fs.writeFileSync(await getPidFilePath(server.port), String(process.pid));
+      fs.writeFileSync(await getInstanceFilePath(server.port), JSON.stringify({
+        port: server.port,
+        pid: process.pid,
+        runtime: 'web',
+        launchMode: 'daemon',
+      }));
+
+      try {
+        const output = await captureStdout(() => commands.tunnel({
+          provider: 'frpc',
+          mode: 'managed-remote',
+          serverAddress: 'frps.example.com',
+          serverPort: 7000,
+          trustedCaFile,
+          customDomain: 'openchamber.internal',
+          hostname: 'app.example.com',
+          tokenFile,
+          explicitPort: true,
+          port: server.port,
+          json: true,
+        }, 'start'));
+
+        expect(server.tunnelStartBody).toEqual({
+          provider: 'frpc',
+          mode: 'managed-remote',
+          token: 'not-a-secret',
+          serverAddress: 'frps.example.com',
+          serverPort: 7000,
+          trustedCaFile,
+          customDomain: 'openchamber.internal',
+          hostname: 'app.example.com',
+        });
+        expect(server.tunnelStartBody).not.toHaveProperty('remotePort');
+
+        const result = JSON.parse(output);
+        expect(result.customDomain).toBe('openchamber.internal');
+        expect(result.hostname).toBe('app.example.com');
+        expect(result).not.toHaveProperty('remotePort');
+        expect(result.replayCommand).toContain('--custom-domain openchamber.internal');
+        expect(result.replayCommand).toContain('--hostname app.example.com');
+        expect(result.replayCommand).not.toContain('--remote-port');
+        expect(output).not.toContain('not-a-secret');
+      } finally {
+        await server.close();
+      }
     });
   });
 });

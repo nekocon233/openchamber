@@ -24,7 +24,7 @@ Host side (`packages/web/server/lib/relay/`):
 - `signing-key.js` — storage/derivation of the signing keypair and the routing id, shared with the notifications runtime.
 - `host-client.js` — the long-lived connection manager: one outbound control connection to the relay, a per-client data connection for each connected device, reconnect/backoff, and the E2EE responder handshake per connection.
 - `host-lock.js` — the per-machine host claim. Every local instance sharing the data dir shares the relay identity (same serverId), so concurrent relay hosts evict each other at the relay worker (`4001: Control replaced`) and paired devices land on whichever local process won last. The claim file (`<data-dir>/relay-host.lock`, `{ pid }`) makes this deterministic: `service.js` only starts the host when no LIVE process holds the claim (stale claims from dead pids are ignored), goes to `standby` otherwise, and a 30s watcher both takes over when the claimant dies and stands down when another process claims. Explicit user intent — creating a pairing link or hitting `/relay/enable` — force-claims; the previous holder's watcher sees the takeover and backs off instead of fighting. The claim is cooperative (the relay worker still enforces the single host slot); it only decides which process keeps retrying.
-- `tunnel-host.js` — the per-connection dispatcher: decrypts tunnel frames and forwards HTTP/SSE/WS to the local server over loopback, then streams responses back. Enforces a path allowlist and never injects credentials.
+- `tunnel-host.js` — the per-connection dispatcher: decrypts tunnel frames and forwards HTTP/SSE/WS to the local server over loopback, then streams responses back. Enforces a path allowlist, preserves the client's bearer, stamps an internal relay-connection marker, and never injects credentials.
 - `e2ee.js`, `tunnel-codec.js` — host-side (JS) mirrors of the shared crypto and framing (see "Two implementations" below).
 
 Client side (`packages/ui/src/lib/relay/`):
@@ -49,6 +49,7 @@ The host dispatcher restricts tunneled traffic to explicit path allowlists (one 
 
 - The tunnel is **transport only**. The OpenChamber server still authenticates every tunneled request exactly as it authenticates a direct remote client. The relay path grants reachability, not authorization.
 - Clients carry their normal credential. HTTP and SSE requests authenticate with the client's bearer token (a header). **WebSocket upgrades cannot send headers**, so they authenticate with a short-lived URL-scoped token minted beforehand and passed as a query parameter. This asymmetry is important when adding new WebSocket features (see the skill).
+- Because the host's final hop is loopback, the dispatcher overwrites `x-openchamber-relay-connection` and the server treats auth-protected HTTP/SSE traffic carrying that marker as bearer-only remote traffic. It must never fall through to local passwordless UI auth. Relay-originated WebSocket upgrades require an allowlisted URL token minted from that bearer plus the normal loopback-origin check, regardless of whether UI password auth is enabled. Pairing redemption remains guarded by its one-time secret and rate limit; `/health` remains the intentionally public identity probe.
 - The host authenticates itself to the relay with a signed handshake using its long-lived signing key.
 - Enabling the relay is explicit opt-in and disabled by default; disabling it severs all relay reachability immediately.
 
@@ -91,7 +92,8 @@ Relay mode plugs into the existing client transport layer rather than a parallel
 
 - The relay never sees plaintext application traffic; it sees only routing metadata (routing id, connection identifiers, timestamps, coarse counts).
 - Pairing secrets travel in URL fragments only, never in query strings, never logged.
-- The host dispatcher never injects credentials; the server authenticates each tunneled request.
+- The host dispatcher never injects credentials; it preserves the client bearer and the server authenticates each tunneled request. The internal relay marker can only make a request stricter, never grant access.
+- Revoking or expiring the originating client identity closes established relay event, terminal, and dictation sockets and invalidates their remaining URL-token lifetime. Direct local passwordless sockets intentionally have no remote identity lifecycle.
 - The tunnel is transparent to the app: adding relay support to a feature should not require the feature to know the relay exists — it goes through the shared runtime transport helpers.
 - The two implementations stay byte-compatible and the wire format is versioned/negotiated so mixed client/host app versions degrade gracefully rather than break.
 

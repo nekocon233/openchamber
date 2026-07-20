@@ -20,6 +20,13 @@
 - VS Code groups strictly **by open workspace**: `useSessionGrouping` funnels every non-archived session into the project's root group and emits **no per-worktree subgroups** (worktrees aren't registered in VS Code). `getSessionsForProject` buckets sessions to a workspace by exact directory match, so only sessions whose directory is an open workspace folder appear.
 - VS Code passes `hideDirectoryControls` (clean workspace headers, no worktree/close chrome) and no longer passes `showOnlyMainWorkspace`/`sharedSessionsOnly`. Folders and pinning therefore work natively, scoped to the workspace root.
 
+## Persistence boundary
+
+- Web, desktop, hosted mobile, and Capacitor mobile share project structure, project order, pinned sessions, worktree order, session folders, and folder assignments through the revisioned `sidebarState` runtime API.
+- Active project/session selection, recency, project/worktree/folder collapse, activity-section expansion, width, search, and display preferences remain device-local.
+- VS Code intentionally keeps project structure, pins, and folders workspace-local because its runtime API declares authoritative sidebar state unsupported.
+- Views call the existing projection-store actions; those stores submit semantic mutations and reconcile authoritative snapshots. They must not POST the legacy whole-file session-folder payload.
+
 ## File summaries
 
 ### Components
@@ -46,7 +53,7 @@
 - `hooks/useProjectSessionSelection.ts`: Resolves active/current project-session selection logic and session-directory context.
 - `hooks/useGroupOrdering.ts`: Applies persisted/custom group order with stable fallback ordering; archived groups are reorderable.
 - `hooks/useArchivedAutoFolders.ts`: Maintains archived auto-folder structure and assignment behavior.
-- `hooks/useSidebarPersistence.ts`: Persists sidebar UI state (expanded/collapsed/pinned/group order/active session) to storage + desktop settings.
+- `hooks/useSidebarPersistence.ts`: Restores and persists device-local sidebar UI state in browser storage and prunes stale pins after authoritative session loading. Project collapse never writes legacy settings fields.
 - `hooks/useProjectRepoStatus.ts`: Tracks per-project git-repo state and root branch metadata.
 - `hooks/useProjectSessionLists.ts`: Reads live and archived project buckets from the shared ownership index.
 - `hooks/useSessionFolderCleanup.ts`: Cleans stale folder session IDs by reconciling known sessions/archived scopes.
@@ -58,4 +65,6 @@
 - `activitySections.ts`: Shared message-activity ordering helpers for desktop/mobile `recent` and `pinned` groups. Cached messages and global `message.updated` events outrank session metadata timestamps; missing message activity falls back to session timestamps.
 - Active global session metadata wins over an older child-store cache entry. Once the global list is authoritative, live-only rows are admitted only from child stores that completed bootstrap; this preserves externally created sessions without resurrecting deleted cached sessions.
 - The mobile sheet combines live child-store status, global status events, and a bounded, abortable, revision-gated per-directory status reconciliation while open. Rendering a row never bootstraps a directory or fetches message history, and the phone/iPad surface unmounts when closed so hidden subscriptions and status requests do not remain active.
+- Desktop session rows, the header switcher, and command-palette session results resolve each session from the global event-backed status first and the initialized child-store status second. `busy` and `retry` use the shared rotating loader while explicit global `idle` overrides stale child activity. These surfaces subscribe per session and do not copy the mobile sheet's polling into permanently mounted desktop UI.
+- Archived rows are historical: they neither bootstrap their referenced directory nor subscribe to live status/permission state.
 - `utils.tsx`: Shared sidebar utilities (path normalization, sorting, dedupe, archived scope keys, project relation checks, text highlight, labels, compact/default date formatting).

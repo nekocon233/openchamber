@@ -20,6 +20,7 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     refreshOpenCodeAfterConfigChange,
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
+    sidebarStateRuntime,
   } = dependencies;
 
   let authLibrary = null;
@@ -295,9 +296,13 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
 
   app.put('/api/config/settings', async (req, res) => {
     try {
+      sidebarStateRuntime.assertSettingsWriteAllowed(req.body ?? {});
       const updated = await persistSettings(req.body ?? {});
       res.json(updated);
     } catch (error) {
+      if (error?.code === 'SIDEBAR_STATE_LEGACY_WRITE_REJECTED') {
+        return res.status(409).json({ error: error.message, code: error.code });
+      }
       console.error('[API:PUT /api/config/settings] Failed to save settings:', error);
       console.error('[API:PUT /api/config/settings] Error stack:', error.stack);
       res.status(500).json({ error: 'Failed to save settings' });
@@ -485,29 +490,23 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
       }
 
       const resolvedPath = validated.directory;
-      const currentSettings = await readSettingsFromDisk();
-      const existingProjects = sanitizeProjects(currentSettings.projects) || [];
+      const currentSnapshot = await sidebarStateRuntime.readSnapshot();
+      const existingProjects = currentSnapshot.projects;
       const existing = existingProjects.find((project) => project.path === resolvedPath) || null;
+      const projectId = existing?.id ?? createProjectIdFromPath(resolvedPath);
+      if (!existing) {
+        await sidebarStateRuntime.applyOperation({
+          type: 'project.add',
+          project: {
+            id: projectId,
+            path: resolvedPath,
+            addedAt: Date.now(),
+          },
+        });
+      }
 
-      const nextProjects = existing
-        ? existingProjects
-        : [
-            ...existingProjects,
-            {
-              id: createProjectIdFromPath(resolvedPath),
-              path: resolvedPath,
-              addedAt: Date.now(),
-              lastOpenedAt: Date.now(),
-            },
-          ];
-
-      const activeProjectId = existing ? existing.id : nextProjects[nextProjects.length - 1].id;
-
-      const updated = await persistSettings({
-        projects: nextProjects,
-        activeProjectId,
-        lastDirectory: resolvedPath,
-      });
+      await persistSettings({ lastDirectory: resolvedPath });
+      const updated = await sidebarStateRuntime.projectSettingsProjection(await readSettingsFromDisk());
 
       return res.json({
         success: true,

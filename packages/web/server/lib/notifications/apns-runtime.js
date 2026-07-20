@@ -1,6 +1,7 @@
 // APNs (Apple Push Notification service) runtime for the native iOS mobile app.
 //
-// Device tokens are persisted per UI session (mirrors push-runtime.js). Delivery has two
+// Device tokens are persisted under opaque notification auth identities (mirrors
+// push-runtime.js). Delivery has two
 // modes, chosen at send time:
 //   - Relay (default): POST tokens + generic text to the central Cloudflare relay, which
 //     holds the single project APNs key and signs+sends — so users configure nothing.
@@ -13,8 +14,14 @@ import {
   getOrCreateRelaySigningKeypair,
   signRelayMessage as signRelayMessageShared,
 } from '../relay/signing-key.js';
+import {
+  normalizeNotificationAuth,
+  notificationAuthMatchesSelector,
+  validateNotificationAuth,
+} from './auth-runtime.js';
 
-const APNS_TOKENS_VERSION = 1;
+const APNS_TOKENS_VERSION = 2;
+const UNSUPPORTED_APNS_TOKENS_VERSION = 'UNSUPPORTED_APNS_TOKENS_VERSION';
 const APNS_HOST_PRODUCTION = 'https://api.push.apple.com';
 const APNS_HOST_SANDBOX = 'https://api.sandbox.push.apple.com';
 // APNs rejects auth tokens older than 1h; refresh well inside that window.
@@ -47,6 +54,7 @@ export const createApnsRuntime = (deps) => {
   } = deps;
 
   let persistLock = Promise.resolve();
+  let legacySanitizationPromise = null;
   let cachedJwt = null; // { token, issuedAtMs, keyId }
   let cachedRelayKey = null; // { privateKey, publicJwk }
   let warnedUnconfigured = false;
@@ -99,19 +107,40 @@ export const createApnsRuntime = (deps) => {
   // Token persistence (same shape + write-lock pattern as push-runtime.js)
   // ---------------------------------------------------------------------------
 
-  const emptyStore = () => ({ version: APNS_TOKENS_VERSION, tokensBySession: {} });
+  const emptyStore = () => ({ version: APNS_TOKENS_VERSION, registrationsByIdentity: {} });
 
   const readTokensFromDisk = async () => {
     try {
       const raw = await fsPromises.readFile(APNS_TOKENS_FILE_PATH, 'utf8');
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || parsed.version !== APNS_TOKENS_VERSION) {
+      if (!parsed || typeof parsed !== 'object') {
         return emptyStore();
       }
-      const tokensBySession =
-        parsed.tokensBySession && typeof parsed.tokensBySession === 'object' ? parsed.tokensBySession : {};
-      return { version: APNS_TOKENS_VERSION, tokensBySession };
+      if (parsed.version === 1) {
+        if (!legacySanitizationPromise) {
+          legacySanitizationPromise = (async () => {
+            const sanitized = emptyStore();
+            await fsPromises.mkdir(path.dirname(APNS_TOKENS_FILE_PATH), { recursive: true });
+            await fsPromises.writeFile(APNS_TOKENS_FILE_PATH, JSON.stringify(sanitized, null, 2), 'utf8');
+          })().finally(() => {
+            legacySanitizationPromise = null;
+          });
+        }
+        await legacySanitizationPromise;
+        return emptyStore();
+      }
+      if (parsed.version !== APNS_TOKENS_VERSION) {
+        const error = new Error('Unsupported APNs tokens schema version');
+        error.code = UNSUPPORTED_APNS_TOKENS_VERSION;
+        throw error;
+      }
+      const registrationsByIdentity =
+        parsed.registrationsByIdentity && typeof parsed.registrationsByIdentity === 'object'
+          ? parsed.registrationsByIdentity
+          : {};
+      return { version: APNS_TOKENS_VERSION, registrationsByIdentity };
     } catch (error) {
+      if (error?.code === UNSUPPORTED_APNS_TOKENS_VERSION) throw error;
       if (error && typeof error === 'object' && error.code === 'ENOENT') {
         return emptyStore();
       }
@@ -126,13 +155,17 @@ export const createApnsRuntime = (deps) => {
   };
 
   const persistTokenUpdate = async (mutate) => {
-    persistLock = persistLock.then(async () => {
+    const operation = persistLock.catch(() => {}).then(async () => {
       const current = await readTokensFromDisk();
-      const next = mutate({ version: APNS_TOKENS_VERSION, tokensBySession: current.tokensBySession || {} });
+      const next = mutate({
+        version: APNS_TOKENS_VERSION,
+        registrationsByIdentity: current.registrationsByIdentity || {},
+      });
       await writeTokensToDisk(next);
       return next;
     });
-    return persistLock;
+    persistLock = operation.catch(() => {});
+    return operation;
   };
 
   const normalizeTokens = (record) => {
@@ -154,19 +187,31 @@ export const createApnsRuntime = (deps) => {
       .filter(Boolean);
   };
 
+  const normalizeRegistration = (record) => {
+    if (!record || typeof record !== 'object') return null;
+    const auth = normalizeNotificationAuth(record.auth);
+    if (!auth) return null;
+    return {
+      auth,
+      tokens: normalizeTokens(record.tokens),
+    };
+  };
+
   // Normalize an incoming platform hint to the two we support; default to APNs/iOS since that
   // was the only registrant before Android/FCM existed.
   const normalizePlatform = (platform) => (platform === 'android' ? 'android' : 'ios');
 
-  const addOrUpdateApnsToken = async (uiSessionToken, deviceToken, userAgent, platform) => {
-    if (!uiSessionToken || typeof deviceToken !== 'string' || deviceToken.trim().length === 0) return;
+  const addOrUpdateApnsToken = async (authValue, deviceToken, userAgent, platform) => {
+    const auth = normalizeNotificationAuth(authValue);
+    if (!auth || typeof deviceToken !== 'string' || deviceToken.trim().length === 0) return;
     const token = deviceToken.trim();
     const tokenPlatform = normalizePlatform(platform);
     const now = Date.now();
 
     await persistTokenUpdate((current) => {
-      const tokensBySession = { ...(current.tokensBySession || {}) };
-      const existing = normalizeTokens(tokensBySession[uiSessionToken]);
+      const registrationsByIdentity = { ...(current.registrationsByIdentity || {}) };
+      const registration = normalizeRegistration(registrationsByIdentity[auth.identity]);
+      const existing = registration?.tokens || [];
       const filtered = existing.filter((entry) => entry.deviceToken !== token);
       filtered.unshift({
         deviceToken: token,
@@ -175,8 +220,11 @@ export const createApnsRuntime = (deps) => {
         userAgent: typeof userAgent === 'string' && userAgent.length > 0 ? userAgent : undefined,
         platform: tokenPlatform,
       });
-      tokensBySession[uiSessionToken] = filtered.slice(0, MAX_TOKENS_PER_SESSION);
-      return { version: APNS_TOKENS_VERSION, tokensBySession };
+      registrationsByIdentity[auth.identity] = {
+        auth,
+        tokens: filtered.slice(0, MAX_TOKENS_PER_SESSION),
+      };
+      return { version: APNS_TOKENS_VERSION, registrationsByIdentity };
     });
 
     // (Re)bind this token to our server on the relay so only we can push to it. The device
@@ -187,29 +235,40 @@ export const createApnsRuntime = (deps) => {
     await registerTokenWithRelay(token, tokenPlatform);
   };
 
-  const removeApnsToken = async (uiSessionToken, deviceToken) => {
-    if (!uiSessionToken || !deviceToken) return;
+  const removeApnsToken = async (authOrSelector, deviceToken) => {
+    if (!authOrSelector) return;
     await persistTokenUpdate((current) => {
-      const tokensBySession = { ...(current.tokensBySession || {}) };
-      const filtered = normalizeTokens(tokensBySession[uiSessionToken]).filter(
-        (entry) => entry.deviceToken !== deviceToken,
-      );
-      if (filtered.length === 0) delete tokensBySession[uiSessionToken];
-      else tokensBySession[uiSessionToken] = filtered;
-      return { version: APNS_TOKENS_VERSION, tokensBySession };
+      const registrationsByIdentity = { ...(current.registrationsByIdentity || {}) };
+      for (const [identity, rawRegistration] of Object.entries(registrationsByIdentity)) {
+        const registration = normalizeRegistration(rawRegistration);
+        if (!registration || !notificationAuthMatchesSelector(registration.auth, authOrSelector)) continue;
+        if (!deviceToken) {
+          delete registrationsByIdentity[identity];
+          continue;
+        }
+        const filtered = registration.tokens.filter((entry) => entry.deviceToken !== deviceToken);
+        if (filtered.length === 0) delete registrationsByIdentity[identity];
+        else registrationsByIdentity[identity] = { auth: registration.auth, tokens: filtered };
+      }
+      return { version: APNS_TOKENS_VERSION, registrationsByIdentity };
     });
   };
 
   const removeApnsTokenFromAllSessions = async (deviceToken) => {
     if (!deviceToken) return;
     await persistTokenUpdate((current) => {
-      const tokensBySession = { ...(current.tokensBySession || {}) };
-      for (const [session, entries] of Object.entries(tokensBySession)) {
-        const filtered = normalizeTokens(entries).filter((entry) => entry.deviceToken !== deviceToken);
-        if (filtered.length === 0) delete tokensBySession[session];
-        else tokensBySession[session] = filtered;
+      const registrationsByIdentity = { ...(current.registrationsByIdentity || {}) };
+      for (const [identity, rawRegistration] of Object.entries(registrationsByIdentity)) {
+        const registration = normalizeRegistration(rawRegistration);
+        if (!registration) {
+          delete registrationsByIdentity[identity];
+          continue;
+        }
+        const filtered = registration.tokens.filter((entry) => entry.deviceToken !== deviceToken);
+        if (filtered.length === 0) delete registrationsByIdentity[identity];
+        else registrationsByIdentity[identity] = { auth: registration.auth, tokens: filtered };
       }
-      return { version: APNS_TOKENS_VERSION, tokensBySession };
+      return { version: APNS_TOKENS_VERSION, registrationsByIdentity };
     });
   };
 
@@ -477,14 +536,24 @@ export const createApnsRuntime = (deps) => {
     const store = await readTokensFromDisk();
     const deviceTokens = [];
     const seen = new Set();
-    for (const record of Object.values(store.tokensBySession || {})) {
-      for (const entry of normalizeTokens(record)) {
+    const inactiveAuth = [];
+    await Promise.all(Object.values(store.registrationsByIdentity || {}).map(async (rawRegistration) => {
+      const registration = normalizeRegistration(rawRegistration);
+      if (!registration || registration.tokens.length === 0) return;
+      const authStatus = await validateNotificationAuth(registration.auth);
+      if (authStatus === 'inactive') {
+        inactiveAuth.push(registration.auth);
+        return;
+      }
+      if (authStatus !== 'active') return;
+      for (const entry of registration.tokens) {
         if (!seen.has(entry.deviceToken)) {
           seen.add(entry.deviceToken);
           deviceTokens.push(entry.deviceToken);
         }
       }
-    }
+    }));
+    await Promise.all(inactiveAuth.map((auth) => removeApnsToken(auth).catch(() => {})));
     if (deviceTokens.length === 0) return;
 
     const relay = resolveRelayConfig();

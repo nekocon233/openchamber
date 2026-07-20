@@ -1,6 +1,6 @@
 ---
 title: 桌面端隧道
-description: 从桌面应用创建 Cloudflare 或 Ngrok 隧道。
+description: 从桌面应用创建 Cloudflare、Ngrok 或 FRPC 隧道。
 ---
 
 # 桌面端隧道
@@ -9,7 +9,7 @@ description: 从桌面应用创建 Cloudflare 或 Ngrok 隧道。
 
 ## 安装提供商
 
-OpenChamber 会在你的机器上启动提供商 CLI。请先安装你想使用的提供商：
+OpenChamber 会在你的机器上启动提供商 CLI。如果使用 Cloudflare 或 Ngrok，请先安装相应的提供商：
 
 ```bash
 brew install cloudflared
@@ -22,14 +22,25 @@ Cloudflare 使用 `cloudflared`。Ngrok 需要 ngrok 账号，以及从 ngrok da
 ngrok config add-authtoken <your-ngrok-token>
 ```
 
+FRPC 无需手动安装。OpenChamber 会自动下载并管理 FRPC 0.70.0。
+
 ## 从应用启动
 
 1. 打开 **Settings → OpenChamber → Tunnel**。
-2. 选择 **Cloudflare** 或 **Ngrok**。
-3. 启动 quick tunnel。
+2. 选择 **Cloudflare**、**Ngrok** 或 **FRPC**。
+3. 使用 Cloudflare 或 Ngrok 启动快速隧道，或者配置 FRPC。
 4. 用手机扫描生成的二维码。
 
-Ngrok 目前支持 quick tunnels。Cloudflare 支持 quick tunnels 和 Cloudflare 托管模式。
+Ngrok 目前支持快速隧道。Cloudflare 支持快速隧道和 Cloudflare 托管模式。FRPC 通过你的 FRPS 服务器支持 `managed-remote` TCP 和 HTTP 虚拟主机端点。
+
+## 配置 FRPC
+
+FRPC 设置提供 **TCP** 和 **HTTP 虚拟主机** 两种代理类型。在私密令牌字段中输入 FRPS 地址、控制端口、受信任的 CA 证书文件和共享令牌。两种类型的本地端口都由 OpenChamber 自动提供。FRPS 必须提供 SAN 与 FRPS 地址匹配的证书；OpenChamber 会验证该身份，绝不会禁用证书验证。
+
+- **TCP：**输入远程映射端口和确切的外部公网 HTTPS 源地址。FRPC 会通过映射端口转发明文 HTTP；请仅在回环地址开放该 FRPS 端口，并在声明的 URL 上配置 Caddy 或其他 TLS 终止器。OpenChamber 会拒绝 HTTP、格式错误或并非纯源地址的 URL，绝不会根据 FRPS 控制地址推断浏览器 TLS。
+- **HTTP 虚拟主机：**输入 FRPS 路由主机（custom domain）和外部公开 hostname。公开 URL 为 `https://<hostname>`。Caddy 在 `443` 端口终止 HTTPS，转发到 FRPS 的 HTTP 虚拟主机端口，把 `Host` 设为 custom domain，并把 `X-Forwarded-Host` 设为公开 hostname。
+
+共享 FRPS 令牌用于验证 FRPC 客户端，但不能在 HTTP 虚拟主机之间提供隔离。
 
 ## 访问保护
 
@@ -37,5 +48,5 @@ Ngrok 目前支持 quick tunnels。Cloudflare 支持 quick tunnels 和 Cloudflar
 
 ## 相关内容
 
-- [隧道](/zh-cn/tunnels/) — CLI 隧道用法和 Cloudflare 托管模式
+- [隧道](/zh-cn/tunnels/) — CLI 隧道用法以及 Cloudflare 和 FRPC 托管模式
 - [PWA 与移动访问](/zh-cn/mobile/) — 从手机访问 OpenChamber

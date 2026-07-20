@@ -51,7 +51,7 @@ describe('MobileSessionsSheet activity sections', () => {
   test('uses authoritative running status and exposes pin actions on mobile rows', () => {
     expect(source).toContain('useAllSessionStatuses()');
     expect(source).toContain("statusType === 'busy' || statusType === 'retry'");
-    expect(source).toContain('name="loader-4"');
+    expect(source).toContain('<SessionRunningIndicator');
     expect(source).toContain("t('mobile.sessions.status.running')");
     expect(source).toContain('onTogglePinned={() => togglePinnedSession(session.id)}');
     expect(source).toContain("<Icon name={pinned ? 'unpin' : 'pushpin'}");

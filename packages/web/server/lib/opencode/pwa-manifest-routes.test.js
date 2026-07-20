@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { registerPwaManifestRoute } from './pwa-manifest-routes.js';
+
+const indexHtml = readFileSync(new URL('../../../index.html', import.meta.url), 'utf8');
 
 const createResponse = () => ({
   headers: new Map(),
@@ -64,6 +67,8 @@ describe('PWA manifest route', () => {
 
       const manifest = JSON.parse(res.body);
       expect(fetchCalls).toHaveLength(2);
+      expect(manifest.launch_handler).toEqual({ client_mode: 'navigate-existing' });
+      expect(indexHtml).toContain("launch_handler: { client_mode: 'navigate-existing' }");
       expect(manifest.shortcuts).toEqual([
         {
           name: 'Appearance Settings',

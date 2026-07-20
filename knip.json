@@ -21,6 +21,7 @@
     },
     "packages/web": {
       "entry": [
+        "bin/**/*.{test,spec}.{js,cjs,mjs}",
         "src/mobile-main.tsx",
         "src/mini-chat-main.tsx",
         "src/sw.ts",
@@ -51,6 +52,7 @@
     "packages/vscode": {
       "entry": [
         "src/**/*.{test,spec}.{js,cjs,mjs,ts,tsx}",
+        "webview/main.tsx",
         "webview/**/*.{test,spec}.{js,cjs,mjs,ts,tsx}"
       ],
       "project": [

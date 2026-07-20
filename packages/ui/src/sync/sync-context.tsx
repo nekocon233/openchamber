@@ -6,6 +6,12 @@ import type { StoreApi } from "zustand"
 import { useStore } from "zustand"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client"
 import { createEventPipeline } from "./event-pipeline"
+import {
+  handleSidebarStateGlobalEvent,
+  notifySidebarStateTransportReady,
+  useSidebarStateStore,
+  type SidebarStateRuntimeContext,
+} from "@/stores/useSidebarStateStore"
 import { isVSCodeRuntime } from "@/lib/desktop"
 import { isMobileSurfaceRuntime } from "@/lib/runtimeSurface"
 import { reduceGlobalEvent, applyGlobalProject, applyDirectoryEvent, type SessionMaterializationReason } from "./event-reducer"
@@ -46,6 +52,8 @@ import {
   getGlobalSessionStatusRevision,
   hasGlobalSessionStatusChangedSince,
   isGlobalSessionStatusOptimisticallyProtected,
+  resolveSessionStatusType,
+  useGlobalSessionStatusStore,
 } from "./global-session-status"
 import {
   aggregateSessionMessageActivity,
@@ -176,18 +184,32 @@ function useLiveSyncSelector<T>(
 // ---------------------------------------------------------------------------
 
 /** Read status for a session across all directories */
-export function useGlobalSessionStatus(sessionId: string): SessionStatus | undefined {
+export function useGlobalSessionStatus(sessionId: string, enabled = true): SessionStatus | undefined {
   return useLiveSyncSelector(
-    useCallback((states) => findLiveSessionStatus(states, sessionId), [sessionId]),
+    useCallback((states) => enabled ? findLiveSessionStatus(states, sessionId) : undefined, [enabled, sessionId]),
     Object.is,
     useCallback(
-      (childStores: ChildStoreManager, notify: () => void) => childStores.subscribeAllSelected(
-        (state: State) => state.session_status?.[sessionId],
-        notify,
-      ),
-      [sessionId],
+      (childStores: ChildStoreManager, notify: () => void) => enabled
+        ? childStores.subscribeAllSelected(
+            (state: State) => state.session_status?.[sessionId],
+            notify,
+          )
+        : () => {},
+      [enabled, sessionId],
     ),
   )
+}
+
+/** Resolve the latest display status for one session across global events and live child stores. */
+export function useResolvedSessionStatusType(sessionId: string, enabled = true): SessionStatus["type"] {
+  const childStatus = useGlobalSessionStatus(sessionId, enabled)
+  const globalStatus = useGlobalSessionStatusStore(
+    useCallback(
+      (state) => enabled ? state.resolvedStatusById.get(sessionId) : undefined,
+      [enabled, sessionId],
+    ),
+  )
+  return resolveSessionStatusType(globalStatus, childStatus?.type)
 }
 
 /** Read all session statuses (for sidebar) */
@@ -1518,10 +1540,9 @@ function handleEvent(
   }
 
   applySessionEventToGlobalSessions(payload)
-  // Keep the cross-project status map current for ALL directories (mirrors the
-  // global-session handling above). Child stores remain the primary source for
-  // synced directories; this map covers sessions a child store doesn't list
-  // (unopened directories, or list/status races for just-created sessions).
+  // Keep the cross-project status map current for ALL directories. Display
+  // consumers prefer this revision-ordered state once observed, with child
+  // stores as the cold/bootstrap fallback for sessions not seen globally yet.
   applyGlobalSessionStatusEvent(directory, payload)
   applySessionMessageActivityEvent(payload)
 
@@ -1879,6 +1900,7 @@ export function SyncProvider(props: {
   const pipelineHasConnectedRef = useRef(false)
   const pipelineDisconnectedBeforeFirstConnectRef = useRef(false)
   const runtimeKey = getRuntimeKey()
+  const sidebarStateGeneration = useSidebarStateStore((state) => state.generation)
 
   useEffect(() => {
     resyncingDirectoriesRef.current.clear()
@@ -2080,6 +2102,10 @@ export function SyncProvider(props: {
   // Event pipeline — created once per mount. No class, no start/stop.
   // Abort controller owned by the pipeline closure. Cleanup aborts + flushes.
   useEffect(() => {
+    const sidebarRuntimeContext: SidebarStateRuntimeContext = {
+      runtimeKey,
+      generation: sidebarStateGeneration,
+    }
     const pipeline = createEventPipeline({
       sdk: props.sdk,
       transport: messageStreamTransport,
@@ -2094,6 +2120,7 @@ export function SyncProvider(props: {
         // heartbeats here caused issue #1656: the stale timer fired for any
         // quiet session, triggering redundant full resyncs every ~15s.
         lastStreamActivityAtRef.current = Date.now()
+        handleSidebarStateGlobalEvent(payload, sidebarRuntimeContext)
         dispatchVSCodeRuntimeNotificationEvent(directory, payload)
         if (payload.type === "installation.update-available") {
           const version = typeof (payload.properties as { version?: unknown })?.version === "string"
@@ -2106,6 +2133,7 @@ export function SyncProvider(props: {
         handleEvent(directory, payload, childStores, routingIndex)
       },
       onReconnect: () => {
+        notifySidebarStateTransportReady(sidebarRuntimeContext)
         useConfigStore.setState({
           isConnected: true,
           hasEverConnected: true,
@@ -2135,6 +2163,7 @@ export function SyncProvider(props: {
         })
       },
       onTransportSwitch: () => {
+        notifySidebarStateTransportReady(sidebarRuntimeContext)
         // Transport changes are gap-prone in real networks. Treat them like a
         // reconnect and refresh active session snapshots from HTTP.
         useConfigStore.setState({
@@ -2154,7 +2183,7 @@ export function SyncProvider(props: {
       }
       pipeline.cleanup()
     }
-  }, [props.sdk, childStores, routingIndex, messageStreamTransport, triggerDirectoryResync])
+  }, [props.sdk, childStores, routingIndex, messageStreamTransport, runtimeKey, sidebarStateGeneration, triggerDirectoryResync])
 
   useEffect(() => {
     let stopped = false
@@ -2434,16 +2463,21 @@ export function useSessionStatus(sessionID: string, directory?: string) {
 }
 
 /** Get permissions for a specific session */
-export function useSessionPermissions(sessionID: string, directory?: string) {
-  const store = useDirectoryStore(directory)
+export function useSessionPermissions(
+  sessionID: string,
+  directory?: string,
+  options?: { enabled?: boolean },
+) {
+  const enabled = options?.enabled !== false
+  const store = useDirectoryStore(directory, { bootstrap: enabled })
   const getSnapshot = useCallback(() => {
-    if (!sessionID) return EMPTY_PERMISSION_REQUESTS
+    if (!enabled || !sessionID) return EMPTY_PERMISSION_REQUESTS
     return store.getState().permission[sessionID] ?? EMPTY_PERMISSION_REQUESTS
-  }, [sessionID, store])
+  }, [enabled, sessionID, store])
   const subscribe = useCallback((notify: () => void) => {
-    if (!sessionID) return () => undefined
+    if (!enabled || !sessionID) return () => undefined
     return store.subscribe(notify)
-  }, [sessionID, store])
+  }, [enabled, sessionID, store])
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 

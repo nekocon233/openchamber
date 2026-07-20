@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   getRuntimeApiBaseUrl,
   getRuntimeKey,
+  initializeRuntimeEndpoint,
   subscribeRuntimeEndpointChanged,
   subscribeRuntimeEndpointWillChange,
   switchRuntimeEndpoint,
@@ -9,6 +10,13 @@ import {
 import { clearRuntimeUrlAuthToken, setRuntimeExtraHeaders } from './runtime-auth';
 
 describe('runtime endpoint switching', () => {
+  test('initializes a main-owned runtime key before a relay API is available', () => {
+    initializeRuntimeEndpoint({ runtimeKey: 'host:relay' });
+
+    expect(getRuntimeKey()).toBe('host:relay');
+    expect(getRuntimeApiBaseUrl()).toBe('');
+  });
+
   test('notifies listeners before and after mutating the active endpoint', () => {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     const previousFetch = globalThis.fetch;
@@ -42,6 +50,9 @@ describe('runtime endpoint switching', () => {
       ]);
       unsubscribeWillChange();
       unsubscribeChanged();
+
+      switchRuntimeEndpoint({ apiBaseUrl: 'https://runtime-b.example', clientToken: 'refreshed-token' });
+      expect(getRuntimeKey()).toBe('runtime-b');
     } finally {
       globalThis.fetch = previousFetch;
       if (previousWindow) {

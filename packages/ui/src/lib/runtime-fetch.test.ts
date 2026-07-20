@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { buildRuntimeFetchUrl, isLatin1Safe, runtimeFetch, sanitizeHeadersForBrowser } from './runtime-fetch';
 import { clearRuntimeAuthCredentialProvider, setRuntimeBearerToken } from './runtime-auth';
+import { adoptRelayTunnel, deactivateRelayTunnel } from './relay/runtime-tunnel';
+import type { RelayTunnelClient } from './relay/tunnel-client';
 import { configureRuntimeUrlResolver, getRuntimeUrlResolver, setRuntimeUrlResolver } from './runtime-url';
 
 const originalFetch = globalThis.fetch;
@@ -283,6 +285,52 @@ describe('runtimeFetch transport contract', () => {
     } finally {
       setRuntimeUrlResolver(previous);
       globalThis.fetch = originalFetch;
+      clearRuntimeAuthCredentialProvider();
+    }
+  });
+
+  test('carries notification SSE bearer auth and streaming through the active private relay', async () => {
+    const controller = new AbortController();
+    const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = [];
+    const relay = {
+      async fetch(input: string | URL | Request, init?: RequestInit) {
+        calls.push({ input, init });
+        return new Response('data: {"type":"openchamber:notification-stream-ready"}\n\n', {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      },
+      openWebSocket() {
+        throw new Error('Unexpected WebSocket request');
+      },
+      getStatus: () => ({ state: 'connected' as const }),
+      subscribeStatus: () => () => {},
+      close: () => {},
+    } satisfies RelayTunnelClient;
+
+    try {
+      setRuntimeBearerToken('relay-client-token');
+      adoptRelayTunnel({
+        relayUrl: 'wss://relay.example/ws',
+        serverId: 'server-1',
+        hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
+      }, relay);
+
+      const response = await runtimeFetch('/api/notifications/stream', {
+        headers: { Accept: 'text/event-stream' },
+        signal: controller.signal,
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.input).toBe('/api/notifications/stream');
+      const headers = new Headers(calls[0]?.init?.headers);
+      expect(headers.get('accept')).toBe('text/event-stream');
+      expect(headers.get('authorization')).toBe('Bearer relay-client-token');
+      expect(calls[0]?.init?.signal).toBe(controller.signal);
+      expect(response.headers.get('content-type')).toBe('text/event-stream');
+      expect(await response.text()).toContain('openchamber:notification-stream-ready');
+    } finally {
+      deactivateRelayTunnel();
       clearRuntimeAuthCredentialProvider();
     }
   });

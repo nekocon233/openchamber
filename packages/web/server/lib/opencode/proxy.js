@@ -186,6 +186,8 @@ export const registerOpenCodeProxy = (app, deps) => {
     getOpenCodeAuthHeaders,
     buildOpenCodeUrl,
     ensureOpenCodeApiPrefix,
+    readAuthoritativeProjects,
+    trackAuthChannel,
   } = deps;
 
   if (app.get('opencodeProxyConfigured')) {
@@ -337,6 +339,20 @@ export const registerOpenCodeProxy = (app, deps) => {
   const forwardSseRequest = async (req, res) => {
     const abortController = new AbortController();
     const closeUpstream = () => abortController.abort();
+    const closeForAuthInvalidation = () => {
+      closeUpstream();
+      if (!res.writableEnded && !res.destroyed) {
+        try {
+          res.end();
+        } catch {
+          res.destroy?.();
+        }
+      }
+    };
+    const untrackAuth = trackAuthChannel?.(
+      req.openchamberAuthIdentity,
+      closeForAuthInvalidation,
+    ) ?? (() => {});
     let upstream = null;
     let reader = null;
     let heartbeatTimer = null;
@@ -451,6 +467,7 @@ export const registerOpenCodeProxy = (app, deps) => {
         res.end();
       }
     } finally {
+      untrackAuth();
       if (heartbeatTimer) {
         clearTimeout(heartbeatTimer);
         heartbeatTimer = null;
@@ -623,12 +640,10 @@ export const registerOpenCodeProxy = (app, deps) => {
           return null;
         });
 
-        const settingsPath = path.join(os.homedir(), '.config', 'openchamber', 'settings.json');
         let projectDirs = [];
         try {
-          const settingsRaw = fs.readFileSync(settingsPath, 'utf8');
-          const settings = JSON.parse(settingsRaw);
-          projectDirs = (settings.projects || [])
+          const projects = await readAuthoritativeProjects();
+          projectDirs = projects
             .map((project) => (typeof project?.path === 'string' ? project.path.trim() : ''))
             .filter(Boolean);
         } catch {

@@ -116,6 +116,14 @@ export type DesktopSettings = {
   managedRemoteTunnelPresets?: ManagedRemoteTunnelPreset[];
   managedRemoteTunnelSelectedPresetId?: string;
   managedRemoteTunnelPresetTokens?: Record<string, string>;
+  frpcProxyType?: 'tcp' | 'http';
+  frpcServerAddress?: string | null;
+  frpcServerPort?: number | null;
+  frpcTrustedCaFile?: string | null;
+  frpcRemotePort?: number | null;
+  frpcPublicUrl?: string | null;
+  frpcCustomDomain?: string | null;
+  frpcPublicHostname?: string | null;
   defaultModel?: string; // format: "provider/model"
   defaultVariant?: string;
   defaultAgent?: string;
@@ -222,6 +230,7 @@ type DesktopBridgeGlobal = {
 
 type ElectronRuntimeGlobal = {
   runtime?: string;
+  windowRole?: 'main' | 'additional' | 'mini-chat';
   macVibrancy?: boolean;
   macVibrancySupported?: boolean;
 };

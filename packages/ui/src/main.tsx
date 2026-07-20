@@ -14,6 +14,8 @@ import { startTypographyWatcher } from './lib/typographyWatcher'
 import { startModelPrefsAutoSave } from './lib/modelPrefsAutoSave'
 import { initializeLocale, I18nProvider } from './lib/i18n'
 import type { RuntimeAPIs } from './lib/api/types'
+import { getPWADisplayMode } from './lib/pwa'
+import { useSessionUIStore } from './sync/session-ui-store'
 
 declare global {
   interface Window {
@@ -24,6 +26,17 @@ declare global {
 const runtimeAPIs = (typeof window !== 'undefined' && window.__OPENCHAMBER_RUNTIME_APIS__) || (() => {
   throw new Error('Runtime APIs not provided for legacy UI entrypoint.');
 })();
+
+const shouldRestorePrimaryNavigation = typeof window !== 'undefined' && (
+  window.__OPENCHAMBER_ELECTRON__?.windowRole === 'main'
+  || getPWADisplayMode() !== 'browser'
+);
+
+if (shouldRestorePrimaryNavigation) {
+  // Restore before React mounts so the automatic draft startup cannot replace
+  // the primary surface's last real conversation. Secondary windows stay fresh.
+  useSessionUIStore.getState().restoreForRuntimeSwitch();
+}
 
 initializeLocale();
 

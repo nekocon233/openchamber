@@ -122,6 +122,7 @@ const startLoopbackOrigin = () =>
           ok: true,
           service: 'stub',
           relayConn: req.headers['x-openchamber-relay-connection'] || null,
+          authorization: req.headers.authorization || null,
           origin: req.headers.origin,
         }));
         return;
@@ -209,7 +210,10 @@ const runScriptedClient = async ({ relayUrl, serverId, hostEncPubJwk }) => {
           method: 'GET',
           path: '/health',
           query: '',
-          headers: { accept: 'application/json' },
+          headers: {
+            accept: 'application/json',
+            authorization: 'Bearer client-credential',
+          },
         }));
         ws.send(await channel.encryptor.encrypt(req), { binary: true });
         ws.send(await channel.encryptor.encrypt(encodeTunnelFrame(TunnelFrameType.StreamEnd, 1, new Uint8Array(0))), { binary: true });
@@ -280,6 +284,7 @@ describe('relay host-client integration', () => {
     expect(result.status).toBe(200);
     expect(result.body.ok).toBe(true);
     expect(result.body.relayConn).toBe('conn-test-1');
+    expect(result.body.authorization).toBe('Bearer client-credential');
     expect(result.body.origin).toBe(`http://127.0.0.1:${origin.port}`);
 
     // Every forwarded frame after the two plaintext handshake frames (client

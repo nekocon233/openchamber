@@ -1,4 +1,7 @@
 import { create } from 'zustand';
+
+import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import { useSidebarStateStore } from './useSidebarStateStore';
 import { getDeferredSafeStorage } from './utils/safeStorage';
 
 const SESSION_PINNED_STORAGE_KEY = 'oc.sessions.pinned';
@@ -23,6 +26,14 @@ const persistPinned = (storage: Storage, ids: Set<string>): void => {
   }
 };
 
+const setsEqual = (left: Set<string>, right: Set<string>): boolean => (
+  left.size === right.size && [...left].every((id) => right.has(id))
+);
+
+const usesAuthoritativeSidebarState = (): boolean => (
+  getRegisteredRuntimeAPIs()?.sidebarState?.supported === true
+);
+
 type SessionPinnedStore = {
   ids: Set<string>;
   setIds: (next: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
@@ -36,8 +47,23 @@ export const useSessionPinnedStore = create<SessionPinnedStore>((set, get) => ({
   setIds: (next) => {
     const current = get().ids;
     const resolved = typeof next === 'function' ? next(current) : next;
-    if (resolved === current) return;
+    if (resolved === current || setsEqual(resolved, current)) return;
     set({ ids: resolved });
+
+    if (usesAuthoritativeSidebarState()) {
+      for (const sessionId of current) {
+        if (!resolved.has(sessionId)) {
+          void useSidebarStateStore.getState().mutate({ type: 'session.unpin', sessionId }).catch(() => {});
+        }
+      }
+      for (const sessionId of resolved) {
+        if (!current.has(sessionId)) {
+          void useSidebarStateStore.getState().mutate({ type: 'session.pin', sessionId }).catch(() => {});
+        }
+      }
+      return;
+    }
+
     persistPinned(safeStorage, resolved);
   },
   toggle: (sessionId) => {
@@ -48,7 +74,26 @@ export const useSessionPinnedStore = create<SessionPinnedStore>((set, get) => ({
     } else {
       next.add(sessionId);
     }
-    set({ ids: next });
-    persistPinned(safeStorage, next);
+    get().setIds(next);
   },
 }));
+
+const synchronizePinnedSessionsFromSidebarState = (): void => {
+  const snapshot = useSidebarStateStore.getState().snapshot;
+  if (!snapshot) return;
+  const current = useSessionPinnedStore.getState().ids;
+  const next = new Set(snapshot.pinnedSessionIds);
+  if (!setsEqual(current, next)) {
+    useSessionPinnedStore.setState({ ids: next });
+  }
+};
+
+useSidebarStateStore.subscribe((state, previousState) => {
+  if (state.snapshot) {
+    synchronizePinnedSessionsFromSidebarState();
+    return;
+  }
+  if (state.runtimeKey !== previousState.runtimeKey && previousState.snapshot) {
+    useSessionPinnedStore.setState({ ids: new Set() });
+  }
+});

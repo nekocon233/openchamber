@@ -237,6 +237,7 @@
           scope: `${baseUrl}/`,
           display: 'standalone',
           display_override: ['window-controls-overlay'],
+          launch_handler: { client_mode: 'navigate-existing' },
           ...(manifestOrientation ? { orientation: manifestOrientation } : {}),
           background_color: '#151313',
           theme_color: '#edb449',

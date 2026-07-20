@@ -7,9 +7,10 @@ import { normalizeProjectPath } from '@/lib/projectResolution';
 // this store preserves those events independently of child-store lifecycle so
 // cross-project consumers can reconcile status consistently.
 //
-// Only non-idle entries are kept; absence means idle. Entries carry their
-// directory so a polled per-directory snapshot can reconcile that directory's
-// slice (the server omits idle sessions from snapshots).
+// `statusById` keeps only non-idle entries. `resolvedStatusById` also retains a
+// bounded history of explicit idle tombstones so recent idle events override a
+// stale child store without accumulating every session ever observed. Active
+// entries carry their directory so a polled snapshot can reconcile a slice.
 
 type ActiveStatusType = 'busy' | 'retry';
 
@@ -67,6 +68,11 @@ export const hasGlobalSessionStatusChangedSince = (sessionId: string, baselineRe
 const normalizeStatusType = (type: unknown): ActiveStatusType | 'idle' =>
   type === 'busy' ? 'busy' : type === 'retry' ? 'retry' : 'idle';
 
+export const resolveSessionStatusType = (
+  globalStatus: ActiveStatusType | 'idle' | undefined,
+  childStatus: ActiveStatusType | 'idle' | undefined,
+): ActiveStatusType | 'idle' => globalStatus ?? childStatus ?? 'idle';
+
 // Both write paths normalize the directory key, so a polled snapshot can
 // authoritatively replace entries written by events (and vice versa) even when
 // the two sources format the same path differently (trailing slash, …).
@@ -75,20 +81,33 @@ const normalizeDirectory = (directory: string): string =>
 
 const trimStatusHistory = (
   revisionById: Map<string, number>,
-  resolvedStatusById: Map<string, ActiveStatusType | 'idle'>,
   activeStatusById: Map<string, GlobalSessionStatusEntry>,
+  initialResolvedStatusById: Map<string, ActiveStatusType | 'idle'>,
   initialRevisionFloor: number,
-): number => {
+): {
+  resolvedStatusById: Map<string, ActiveStatusType | 'idle'>;
+  revisionFloor: number;
+} => {
   let revisionFloor = initialRevisionFloor;
-  if (revisionById.size <= MAX_STATUS_HISTORY_ENTRIES) return revisionFloor;
+  let resolvedStatusById = initialResolvedStatusById;
+  let terminalEntryCount = revisionById.size - activeStatusById.size;
+  if (terminalEntryCount <= MAX_STATUS_HISTORY_ENTRIES) {
+    return { resolvedStatusById, revisionFloor };
+  }
   for (const [sessionId, revision] of revisionById) {
-    if (revisionById.size <= MAX_STATUS_HISTORY_ENTRIES) break;
+    if (terminalEntryCount <= MAX_STATUS_HISTORY_ENTRIES) break;
     if (activeStatusById.has(sessionId)) continue;
     revisionById.delete(sessionId);
-    resolvedStatusById.delete(sessionId);
+    terminalEntryCount -= 1;
     revisionFloor = Math.max(revisionFloor, revision);
+    if (resolvedStatusById.has(sessionId)) {
+      if (resolvedStatusById === initialResolvedStatusById) {
+        resolvedStatusById = new Map(resolvedStatusById);
+      }
+      resolvedStatusById.delete(sessionId);
+    }
   }
-  return revisionFloor;
+  return { resolvedStatusById, revisionFloor };
 };
 
 const setStatus = (
@@ -130,12 +149,28 @@ const setStatus = (
 
     let revisionFloor = state.revisionFloor;
     if (revisionById.size > MAX_STATUS_HISTORY_ENTRIES) {
-      if (resolvedStatusById === state.resolvedStatusById) {
-        resolvedStatusById = new Map(resolvedStatusById);
-      }
-      revisionFloor = trimStatusHistory(revisionById, resolvedStatusById, statusById, revisionFloor);
+      const trimmed = trimStatusHistory(revisionById, statusById, resolvedStatusById, revisionFloor);
+      resolvedStatusById = trimmed.resolvedStatusById;
+      revisionFloor = trimmed.revisionFloor;
     }
 
+    return { statusById, resolvedStatusById, revision, revisionById, revisionFloor };
+  });
+};
+
+const removeStatus = (sessionId: string): void => {
+  useGlobalSessionStatusStore.setState((state) => {
+    const revision = state.revision + 1;
+    const statusById = new Map(state.statusById);
+    let resolvedStatusById = new Map(state.resolvedStatusById);
+    const revisionById = new Map(state.revisionById);
+    statusById.delete(sessionId);
+    resolvedStatusById.delete(sessionId);
+    revisionById.delete(sessionId);
+    revisionById.set(sessionId, revision);
+    const trimmed = trimStatusHistory(revisionById, statusById, resolvedStatusById, state.revisionFloor);
+    resolvedStatusById = trimmed.resolvedStatusById;
+    const revisionFloor = trimmed.revisionFloor;
     return { statusById, resolvedStatusById, revision, revisionById, revisionFloor };
   });
 };
@@ -172,13 +207,13 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
     case 'session.updated': {
       const props = payload.properties as { sessionID?: string; info?: { id?: string; time?: { archived?: number | null } } };
       const sessionId = props.sessionID ?? props.info?.id;
-      if (sessionId && props.info?.time?.archived) setStatus(sessionId, '', 'idle');
+      if (sessionId && props.info?.time?.archived) removeStatus(sessionId);
       return;
     }
     case 'session.deleted': {
       const props = payload.properties as { sessionID?: string; info?: { id?: string } };
       const sessionId = props.sessionID ?? props.info?.id;
-      if (sessionId) setStatus(sessionId, '', 'idle');
+      if (sessionId) removeStatus(sessionId);
       return;
     }
     default:
@@ -282,10 +317,9 @@ export const applyGlobalSessionStatusSnapshot = (
     const statusById = statusChanged ? next : state.statusById;
     let revisionFloor = state.revisionFloor;
     if (revisionById.size > MAX_STATUS_HISTORY_ENTRIES) {
-      if (resolvedStatusById === state.resolvedStatusById) {
-        resolvedStatusById = new Map(resolvedStatusById);
-      }
-      revisionFloor = trimStatusHistory(revisionById, resolvedStatusById, statusById, revisionFloor);
+      const trimmed = trimStatusHistory(revisionById, statusById, resolvedStatusById, revisionFloor);
+      resolvedStatusById = trimmed.resolvedStatusById;
+      revisionFloor = trimmed.revisionFloor;
     }
     return {
       statusById,

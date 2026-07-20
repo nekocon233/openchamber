@@ -46,6 +46,7 @@ describe('createOpenCodeWatcherRuntime', () => {
   it('waits for OpenCode readiness and forwards unwrapped global SSE payloads', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const payloads = [];
+    const directories = [];
     const fetchCalls = [];
 
     const watcher = createOpenCodeWatcherRuntime({
@@ -54,8 +55,9 @@ describe('createOpenCodeWatcherRuntime', () => {
       },
       buildOpenCodeUrl: (path) => `http://127.0.0.1:4096${path}`,
       getOpenCodeAuthHeaders: () => ({ Authorization: 'Bearer test-token' }),
-      onPayload(payload) {
+      onPayload(payload, directory) {
         payloads.push(payload);
+        directories.push(directory);
         watcher.stop();
       },
       fetchImpl: async (url, options) => {
@@ -91,6 +93,7 @@ describe('createOpenCodeWatcherRuntime', () => {
         },
       },
     ]);
+    expect(directories).toEqual(['/tmp/project']);
   });
 
   it('resumes watcher reconnects with Last-Event-ID after a stalled upstream stream', async () => {
@@ -144,6 +147,7 @@ describe('createOpenCodeWatcherRuntime', () => {
   it('subscribes to a shared global event hub instead of opening its own upstream stream', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const payloads = [];
+    const directories = [];
     let hubFetchCalls = 0;
     let watcherFetchCalls = 0;
 
@@ -157,7 +161,7 @@ describe('createOpenCodeWatcherRuntime', () => {
           signal: options.signal,
           holdOpen: true,
           blocks: [
-            'id: evt-1\ndata: {"payload":{"type":"session.updated","properties":{"sessionID":"ses_1"}}}\n\n',
+            'id: evt-1\ndata: {"directory":"/tmp/hub","payload":{"type":"session.updated","properties":{"sessionID":"ses_1"}}}\n\n',
           ],
         });
       },
@@ -168,8 +172,9 @@ describe('createOpenCodeWatcherRuntime', () => {
       buildOpenCodeUrl: (path) => `http://127.0.0.1:4096${path}`,
       getOpenCodeAuthHeaders: () => ({}),
       globalEventHub,
-      onPayload(payload) {
+      onPayload(payload, directory) {
         payloads.push(payload);
+        directories.push(directory);
         watcher.stop();
       },
       fetchImpl: async () => {
@@ -191,6 +196,7 @@ describe('createOpenCodeWatcherRuntime', () => {
         },
       },
     ]);
+    expect(directories).toEqual(['/tmp/hub']);
   });
 
   it('does not stop a shared global event hub when the watcher stops', async () => {
