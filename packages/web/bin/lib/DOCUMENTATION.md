@@ -47,6 +47,9 @@ Command modules implement user-facing commands and preserve output contracts acr
 - `commands-tunnel.js`
   - Implements `openchamber tunnel` and its subcommands: `profile`, `providers`, `ready`, `doctor`, `status`, `start`, `stop`, and `completion`.
   - Owns tunnel-specific command flow, interactive prompt decisions, managed-local/managed-remote startup, QR display rules, tunnel start/stop API calls, and tunnel profile command handling.
+  - Validates explicit providers, modes, FRPC addresses, and readable CA files before profile fallback in every output mode. Tunnel start requests use a 300-second HTTP budget, covering the 120-second install-lock wait, 120-second download, 20-second provider startup, and bounded overhead. An HTTP timeout aborts the server request so a pending FRPC start cannot later become active unexpectedly.
+  - Tunnel stop requests allow 317 seconds so the server can finish the bounded pending-start cleanup contract. `tunnel stop --all` requires `--force` in non-interactive, JSON, and quiet modes; interactive multi-instance use retains confirmation. Every target is attempted, every result is rendered, and any single or partial failure exits non-zero without emitting duplicate JSON or human output.
+  - Internal server auto-start always runs silently and defers the single final result to the tunnel command, preserving JSON-only and quiet output. Generated retry commands retain normalized provider, mode, endpoint, and output-mode flags.
   - Receives `serveCommand` and `stopCommand` by dependency injection. Do not reach back into `cli.js` command globals from this module.
 
 ## Shared Helper Modules
@@ -54,10 +57,10 @@ Command modules implement user-facing commands and preserve output contracts acr
 These modules hold reusable, non-presentational logic for commands.
 
 - `cli-args.js`
-  - Argument parsing, defaults, help text, completion script generation, and typo suggestions.
+  - Argument parsing, defaults, help text, completion script generation, and typo suggestions. The CLI boundary detects raw `--json` and `--quiet` flags before parsing so missing-value failures preserve the requested output contract regardless of flag order.
 
 - `cli-errors.js`
-  - CLI exit codes and typed tunnel CLI errors.
+  - CLI exit codes and typed tunnel CLI errors, including already-reported failures that preserve one-document JSON and non-duplicated human output while exiting non-zero.
 
 - `cli-paths.js`
   - Data, run, log, settings, tunnel profile, and managed-local config paths.
@@ -87,7 +90,11 @@ These modules hold reusable, non-presentational logic for commands.
   - Native startup service detection, install/uninstall/status helpers, and platform-specific startup command execution.
 
 - `cli-tunnel-profiles.js`
-  - Tunnel profile normalization, token resolution/redaction, profile storage, migration, file-permission warnings, and managed-remote pair persistence.
+  - Provider-discriminated tunnel profile normalization, token resolution/redaction, profile storage, migration, file-permission enforcement, and Cloudflare managed-remote pair compatibility.
+  - FRPC profiles store server address, control port, trusted CA file, and exactly one TCP or HTTP-vhost endpoint. TCP requires an explicit origin-only HTTPS `publicUrl`; legacy TCP profiles without it remain inspectable but cannot start until an explicit `--public-url` is supplied. Legacy FRPC profiles without a trust anchor are omitted rather than reused. Output exposes only `hasToken`; FRPC rejects inline `--token` and accepts file/stdin/prompt sources.
+  - Profile and compatibility credential files use atomic replacement as one transaction. Credential publication happens first; any later profile failure restores both previous files.
+  - CLI-owned Cloudflare compatibility credentials use `cli-profile:<profile-id>`. Existing raw IDs are treated as legacy CLI ownership only when linked to a previous/current CLI profile; unlinked raw records are not imported because they may be Settings-owned. Persistence merges Settings/server records verbatim and updates or removes only credentials owned by affected CLI profiles.
+  - Only a missing profile file is treated as an empty store. Malformed or unreadable storage fails explicitly so later commands cannot overwrite credentials based on a false empty state.
 
 - `cli-tunnel-utils.js`
   - Tunnel-specific command string builders, TTL parsing/formatting, and replay command helpers.

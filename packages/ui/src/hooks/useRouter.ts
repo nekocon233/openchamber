@@ -6,6 +6,7 @@ import type { RouteState, AppRouteState } from '@/lib/router';
 import type { MainTab } from '@/stores/useUIStore';
 import { resolveSettingsSlug } from '@/lib/settings/metadata';
 import { isEmbeddedSessionChat } from '@/components/layout/contextPanelEmbeddedChat';
+import { applyDeepLinkIntent } from '@/apps/deepLinkNavigation';
 
 /**
  * Check if running in VS Code webview context.
@@ -68,11 +69,22 @@ export function useRouter(): void {
       try {
         // 1. Apply session first (may trigger async operations)
         if (route.sessionId) {
-          const currentSessionId = useSessionUIStore.getState().currentSessionId;
-          if (route.sessionId !== currentSessionId) {
-            const directoryHint = route.sessionDirectory
-              ?? useSessionUIStore.getState().getDirectoryForSession(route.sessionId);
+          const sessionState = useSessionUIStore.getState();
+          const isProvisionalCurrentSession = sessionState.restoredSessionPendingValidation
+            && sessionState.currentSessionId === route.sessionId;
+          const directoryHint = route.sessionDirectory
+            ?? (isProvisionalCurrentSession ? null : sessionState.getDirectoryForSession(route.sessionId));
+          if (isVSCode || isEmbeddedChat) {
             setCurrentSession(route.sessionId, directoryHint);
+          } else {
+            const shouldPrepareSession = !route.settingsPath
+              && !route.diffFile
+              && (!route.tab || route.tab === 'chat');
+            applyDeepLinkIntent({
+              type: 'session',
+              sessionId: route.sessionId,
+              directory: directoryHint ?? undefined,
+            }, { prepareSession: shouldPrepareSession });
           }
         }
 
@@ -102,7 +114,7 @@ export function useRouter(): void {
         isApplyingRouteRef.current = false;
       }
     },
-    [setCurrentSession, setActiveMainTab, setSettingsDialogOpen, setSettingsPage, navigateToDiff]
+    [isEmbeddedChat, isVSCode, setCurrentSession, setActiveMainTab, setSettingsDialogOpen, setSettingsPage, navigateToDiff]
   );
 
   /**
@@ -163,6 +175,7 @@ export function useRouter(): void {
         updateBrowserURL({
           ...getCurrentAppState(),
           sessionId: route.sessionId ?? useSessionUIStore.getState().currentSessionId,
+          sessionDirectory: route.sessionDirectory,
           tab: route.tab ?? useUIStore.getState().activeMainTab,
           settingsPath: route.settingsPath ?? useUIStore.getState().settingsPage,
           diffFile: route.diffFile ?? useUIStore.getState().pendingDiffFile,

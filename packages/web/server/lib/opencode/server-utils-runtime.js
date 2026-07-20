@@ -14,6 +14,7 @@ export const createServerUtilsRuntime = (dependencies) => {
     buildOpenCodeUrl,
     ensureOpenCodeApiPrefix,
     getUiNotificationClients,
+    trackAuthChannel,
     getOpenCodePort,
     setOpenCodePortState,
     syncToHmrState,
@@ -21,6 +22,7 @@ export const createServerUtilsRuntime = (dependencies) => {
     setOpenCodeNotReadySince,
     clearLastOpenCodeError,
     getLoginShellPath,
+    readAuthoritativeProjects,
   } = dependencies;
 
   const setOpenCodePort = (port) => {
@@ -213,6 +215,8 @@ export const createServerUtilsRuntime = (dependencies) => {
       buildOpenCodeUrl,
       ensureOpenCodeApiPrefix,
       getUiNotificationClients,
+      trackAuthChannel,
+      readAuthoritativeProjects,
     });
   };
 

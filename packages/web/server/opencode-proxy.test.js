@@ -4,6 +4,13 @@ import express from 'express';
 import path from 'path';
 
 import { createSseBoundaryTracker, registerOpenCodeProxy, writeSseChunkWithBackpressure } from './lib/opencode/proxy.js';
+import { createAuthChannelLifecycle } from './lib/ui-auth/channel-auth.js';
+import {
+  createClientNotificationAuth,
+  invalidateNotificationAuth,
+  notificationAuthMatchesSelector,
+  subscribeNotificationAuthInvalidation,
+} from './lib/notifications/auth-runtime.js';
 
 const listen = (app, host = '127.0.0.1') => new Promise((resolve, reject) => {
   const server = app.listen(0, host, () => resolve(server));
@@ -80,6 +87,64 @@ describe('OpenCode proxy SSE forwarding', () => {
     expect(response.headers.get('x-upstream-test')).toBe('ok');
     expect(await response.text()).toBe('data: {"ok":true}\n\n');
     expect(seenAuthorization).toBe('Bearer test-token');
+  });
+
+  it('terminates an established global event stream when its auth identity is revoked', async () => {
+    const upstream = express();
+    upstream.get('/global/event', (_req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.write('data: {"type":"ready"}\n\n');
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const auth = createClientNotificationAuth('proxy-sse-revoked');
+    const lifecycle = createAuthChannelLifecycle({
+      subscribeInvalidation: subscribeNotificationAuthInvalidation,
+      matchesSelector: notificationAuthMatchesSelector,
+    });
+
+    const app = express();
+    app.use((req, _res, next) => {
+      req.openchamberAuthIdentity = auth;
+      next();
+    });
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+      trackAuthChannel: lifecycle.track,
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/api/global/event`, {
+        headers: { Accept: 'text/event-stream' },
+      });
+      const reader = response.body.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain('"type":"ready"');
+
+      invalidateNotificationAuth(auth);
+
+      const closed = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('stream did not close')), 1000)),
+      ]);
+      expect(closed.done).toBe(true);
+    } finally {
+      lifecycle.dispose();
+    }
   });
 
   it('holds a request through OpenCode warmup and succeeds once ready (no 503/backoff)', async () => {

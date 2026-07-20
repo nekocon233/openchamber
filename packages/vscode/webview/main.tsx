@@ -1043,6 +1043,13 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 
+  if (pathname === '/api/sidebar-state' || pathname === '/api/sidebar-state/mutations') {
+    return new Response(JSON.stringify({
+      error: 'Server sidebar state is not supported in the VS Code runtime',
+      code: 'SIDEBAR_STATE_UNSUPPORTED',
+    }), { status: 501, headers: { 'Content-Type': 'application/json' } });
+  }
+
   if (pathname === '/api/quota/providers') {
     try {
       const data = await sendBridgeMessage('api:quota:providers');

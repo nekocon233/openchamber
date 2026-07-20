@@ -50,6 +50,10 @@ Examples:
 
 These stores coordinate persistent project/session metadata across multiple views.
 
+`useSidebarStateStore.ts` is the revisioned client for shared sidebar structure on web, desktop, hosted mobile, and Capacitor mobile. It owns authoritative snapshot loading, optimistic semantic mutations, conflict retries, runtime rebinding, and revision-hint refreshes. Revision hints coalesce while a load is active, and failed or stale responses trigger serialized, backed-off reloads until the hinted revision is reached. A standalone initial bootstrap gets a bounded exponential retry budget; authoritative success, explicit reinitialization/transport readiness, and runtime rebinding cancel stale timers and reset that budget. Mutations issued before the first snapshot remain pending across transient load failures; they are applied after bootstrap or rejected on an explicit mutation failure/runtime change, never rolled back against a fabricated empty snapshot. The visible optimistic snapshot retains the last successful authoritative revision. Runtime identity and generation gate every deferred request and response, including project-icon snapshots. `useProjectsStore`, `useSessionPinnedStore`, `useWorktreeOrderStore`, and `useSessionFoldersStore` project their shared fields from that snapshot while preserving device-local navigation and collapse/expansion intent even while child rows are unloaded. VS Code exposes `sidebarState.supported = false`, so those projection stores retain their workspace-local persistence there.
+
+Do not reintroduce direct settings writes or whole-file folder writes for shared sidebar structure. Mutation failures must roll optimistic projections back to the last authoritative snapshot, and successful empty snapshots must remain distinct from fetch failures.
+
 ## Git / PR Stores
 
 The Git and PR stores are the most important stores to understand before editing this directory.

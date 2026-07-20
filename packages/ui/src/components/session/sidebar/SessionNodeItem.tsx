@@ -19,9 +19,10 @@ import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Icon } from "@/components/icon/Icon";
+import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { buildExportFilename, downloadAsMarkdown, formatSessionAsMarkdown, getExportRevealLabelKey, revealExportedMarkdown, saveAsMarkdownDesktop } from '@/lib/exportSession';
 import type { ChildSessionExport } from '@/lib/exportSession';
-import { buildSessionMessageRecordsSnapshot, useDirectoryStore, useGlobalSessionStatus, useSessionPermissions } from '@/sync/sync-context';
+import { buildSessionMessageRecordsSnapshot, useDirectoryStore, useResolvedSessionStatusType, useSessionPermissions } from '@/sync/sync-context';
 import { useSync } from '@/sync/use-sync';
 import { useViewportStore, viewportSessionKey } from '@/sync/viewport-store';
 import { DraggableSessionRow } from './sessionFolderDnd';
@@ -353,8 +354,12 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   const isZombie = useViewportStore(
     React.useCallback((state) => Boolean(state.sessionMemoryState.get(viewportSessionKey(session.id))?.isZombie), [session.id]),
   );
-  const sessionStatus = useGlobalSessionStatus(session.id);
-  const sessionPermissions = useSessionPermissions(session.id, sessionDirectory ?? undefined);
+  const sessionStatusType = useResolvedSessionStatusType(session.id, !archivedBucket);
+  const sessionPermissions = useSessionPermissions(
+    session.id,
+    sessionDirectory ?? undefined,
+    { enabled: !archivedBucket },
+  );
   const sessionGoal = getSessionGoal(resolvedSession);
   const sessionGoalGlyph = sessionGoal ? (
     <span
@@ -575,18 +580,13 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
     );
   }
 
-  const statusType = sessionStatus?.type ?? 'idle';
-  const isStreaming = statusType === 'busy' || statusType === 'retry';
+  const isStreaming = sessionStatusType === 'busy' || sessionStatusType === 'retry';
   const pendingPermissionCount = sessionPermissions.length;
   const showUnreadStatus = !isStreaming && needsAttention && !isActive;
   const showStatusMarker = isStreaming || showUnreadStatus;
   const statusMarkerContent = isStreaming
     ? (
-        <span
-          className="h-1.5 w-1.5 rounded-full bg-primary animate-busy-pulse"
-          aria-label={t('sessions.sidebar.session.status.active')}
-          title={t('sessions.sidebar.session.status.active')}
-        />
+        <SessionRunningIndicator label={t('sessions.sidebar.session.status.active')} />
       )
     : (
         <span
@@ -1042,6 +1042,7 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
                   >
                     <div className={cn('flex w-full items-center min-w-0 flex-1 overflow-hidden', isMinimalMode ? 'gap-1' : 'gap-1')}>
                       <div className={cn('block min-w-0 flex-1 truncate typography-ui-label font-normal', isActive ? 'text-primary' : 'text-foreground')}>{renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}</div>
+                      {isStreaming ? <span className="sr-only">{t('sessions.sidebar.session.status.active')}</span> : null}
                       {alwaysShowActions ? (
                         <span className="ml-2 inline-flex flex-shrink-0 items-center gap-1 text-[0.72rem] text-muted-foreground/75">
                           {sessionGoalGlyph}
@@ -1112,6 +1113,7 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
               >
                 <div className={cn('flex w-full items-center min-w-0 flex-1 overflow-hidden', isMinimalMode ? 'gap-1' : 'gap-1')}>
                     <div className={cn('block min-w-0 flex-1 truncate typography-ui-label font-normal', isActive ? 'text-primary' : 'text-foreground')}>{renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}</div>
+                    {isStreaming ? <span className="sr-only">{t('sessions.sidebar.session.status.active')}</span> : null}
                     {pendingPermissionCount > 0 ? (
                       <span className="inline-flex items-center gap-1 rounded bg-destructive/10 px-1 py-0.5 text-[0.7rem] text-destructive flex-shrink-0" title={t('sessions.sidebar.session.status.permissionRequired')} aria-label={t('sessions.sidebar.session.status.permissionRequired')}>
                         <Icon name="shield" className="h-3 w-3" />

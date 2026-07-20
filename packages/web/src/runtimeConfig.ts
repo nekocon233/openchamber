@@ -38,6 +38,8 @@ export const createConfiguredWebAPIs = () => {
   const localOrigin = typeof window.__OPENCHAMBER_LOCAL_ORIGIN__ === 'string'
     ? window.__OPENCHAMBER_LOCAL_ORIGIN__.trim()
     : '';
+  const injectedRuntimeKey = (window as typeof window & { __OPENCHAMBER_RUNTIME_KEY__?: string }).__OPENCHAMBER_RUNTIME_KEY__;
+  const runtimeKey = typeof injectedRuntimeKey === 'string' ? injectedRuntimeKey.trim() : '';
 
   const urls = configureRuntimeUrlResolver({
     apiBaseUrl: apiBaseUrl || undefined,
@@ -45,7 +47,7 @@ export const createConfiguredWebAPIs = () => {
   });
   initializeRuntimeEndpoint({
     apiBaseUrl,
-    runtimeKey: sameOrigin(apiBaseUrl, localOrigin) ? 'local' : null,
+    runtimeKey: runtimeKey || (sameOrigin(apiBaseUrl, localOrigin) ? 'local' : null),
   });
   setRuntimeBearerToken(clientToken || null);
   setRuntimeExtraHeaders(window.__OPENCHAMBER_RUNTIME_HEADERS__ || null);

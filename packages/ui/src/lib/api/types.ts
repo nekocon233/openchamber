@@ -617,6 +617,71 @@ export interface ProjectEntry {
   sidebarCollapsed?: boolean;
 }
 
+export type SidebarProjectEntry = Omit<ProjectEntry, 'lastOpenedAt' | 'sidebarCollapsed'>;
+
+export interface SidebarSessionFolder {
+  id: string;
+  name: string;
+  sessionIds: string[];
+  createdAt: number;
+  parentId: string | null;
+}
+
+export interface SidebarStateSnapshot {
+  schemaVersion: 1;
+  revision: number;
+  projects: SidebarProjectEntry[];
+  pinnedSessionIds: string[];
+  worktreeOrderByProject: Record<string, string[]>;
+  sessionFoldersByScope: Record<string, SidebarSessionFolder[]>;
+}
+
+export type SidebarProjectPatch = Partial<{
+  path: string;
+  label: string | null;
+  icon: string | null;
+  iconImage: ProjectEntry['iconImage'];
+  iconBackground: string | null;
+  color: string | null;
+  defaultModel: string | null;
+  addedAt: number | null;
+}>;
+
+export type SidebarStateOperation =
+  | { type: 'project.add'; project: SidebarProjectEntry; index?: number }
+  | { type: 'project.remove'; projectId: string }
+  | { type: 'project.update'; projectId: string; patch: SidebarProjectPatch }
+  | { type: 'project.move'; projectId: string; toIndex: number }
+  | { type: 'session.pin' | 'session.unpin'; sessionId: string }
+  | { type: 'worktree.move'; projectId: string; path: string; toIndex: number; orderedPaths: string[] }
+  | { type: 'worktree.clearOrder'; projectId: string }
+  | { type: 'folder.create'; scopeKey: string; folder: Omit<SidebarSessionFolder, 'sessionIds'> }
+  | { type: 'folder.rename'; scopeKey: string; folderId: string; name: string }
+  | { type: 'folder.delete'; scopeKey: string; folderId: string }
+  | { type: 'folder.assign'; scopeKey: string; folderId: string; sessionIds: string[] }
+  | { type: 'folder.unassign'; scopeKey: string; sessionIds: string[] }
+  | { type: 'folder.cleanup'; scopeKey: string; existingSessionIds: string[]; pruneEmpty: boolean };
+
+export interface SidebarStateMutationRequest {
+  baseRevision: number;
+  clientMutationId: string;
+  operation: SidebarStateOperation;
+}
+
+export interface SidebarStateMutationResult {
+  snapshot: SidebarStateSnapshot;
+  applied: boolean;
+  deduplicated: boolean;
+  mutationRevision: number;
+}
+
+export interface SidebarStateAPI {
+  /** False only for runtimes, currently VS Code, that intentionally keep workspace-local structure. */
+  supported: boolean;
+  load(options?: { signal?: AbortSignal }): Promise<SidebarStateSnapshot | null>;
+  mutate(request: SidebarStateMutationRequest, options?: { signal?: AbortSignal }): Promise<SidebarStateMutationResult | null>;
+}
+
 export interface SettingsPayload {
   themeId?: string;
   useSystemTheme?: boolean;
@@ -638,6 +703,18 @@ export interface SettingsPayload {
   autoDeleteEnabled?: boolean;
   autoDeleteAfterDays?: number;
   sessionRetentionAction?: 'archive' | 'delete';
+  tunnelProvider?: string;
+  tunnelMode?: 'quick' | 'managed-remote' | 'managed-local';
+  tunnelBootstrapTtlMs?: number | null;
+  tunnelSessionTtlMs?: number;
+  frpcProxyType?: 'tcp' | 'http';
+  frpcServerAddress?: string | null;
+  frpcServerPort?: number | null;
+  frpcTrustedCaFile?: string | null;
+  frpcRemotePort?: number | null;
+  frpcPublicUrl?: string | null;
+  frpcCustomDomain?: string | null;
+  frpcPublicHostname?: string | null;
   followUpBehavior?: 'steer' | 'queue';
   queueModeEnabled?: boolean;
   gitmojiEnabled?: boolean;
@@ -1195,6 +1272,7 @@ export interface RuntimeAPIs {
   git: GitAPI;
   files: FilesAPI;
   settings: SettingsAPI;
+  sidebarState: SidebarStateAPI;
   permissions: PermissionsAPI;
   notifications: NotificationsAPI;
   github?: GitHubAPI;

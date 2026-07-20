@@ -17,6 +17,18 @@ export interface StartWebUiServerOptions {
   attachSignals?: boolean;
   exitOnShutdown?: boolean;
   uiPassword?: string | null;
+  tryCfTunnel?: boolean;
+  tunnelProvider?: string;
+  tunnelMode?: string;
+  tunnelConfigPath?: string | null;
+  tunnelToken?: string;
+  tunnelHostname?: string;
+  tunnelPublicUrl?: string;
+  tunnelCustomDomain?: string;
+  tunnelServerAddress?: string;
+  tunnelTrustedCaFile?: string;
+  tunnelServerPort?: number;
+  tunnelRemotePort?: number;
 }
 
 export declare function startWebUiServer(
@@ -36,4 +48,10 @@ export declare function parseArgs(argv?: string[]): {
   tunnelConfigPath?: string | null;
   tunnelToken?: string;
   tunnelHostname?: string;
+  tunnelPublicUrl?: string;
+  tunnelCustomDomain?: string;
+  tunnelServerAddress?: string;
+  tunnelTrustedCaFile?: string;
+  tunnelServerPort?: number;
+  tunnelRemotePort?: number;
 };

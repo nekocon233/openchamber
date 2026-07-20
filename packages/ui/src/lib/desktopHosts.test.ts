@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { desktopHostProbe, desktopHostsGet, desktopHostsSet, redactSensitiveUrl, resolveDesktopHostUrl } from './desktopHosts';
+import { desktopActivateWindowRuntime, desktopHostProbe, desktopHostsGet, desktopHostsSet, redactSensitiveUrl, resolveDesktopHostUrl } from './desktopHosts';
 
 const withDesktopBridge = async <T>(handler: (cmd: string, args: Record<string, unknown>) => unknown | Promise<unknown>, run: () => Promise<T>): Promise<T> => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -55,6 +55,21 @@ describe('resolveDesktopHostUrl', () => {
 });
 
 describe('desktop host runtime headers', () => {
+  test('requests a main-validated runtime activation by host id', async () => {
+    const calls: Array<{ cmd: string; args: Record<string, unknown> }> = [];
+    await withDesktopBridge(async (cmd, args) => {
+      calls.push({ cmd, args });
+      return { runtimeKey: 'host:remote-1' };
+    }, async () => {
+      expect(await desktopActivateWindowRuntime(' remote-1 ')).toBe(true);
+    });
+
+    expect(calls).toEqual([{
+      cmd: 'desktop_runtime_activate',
+      args: { hostId: 'remote-1' },
+    }]);
+  });
+
   test('parses persisted request headers from desktop config', async () => {
     await withDesktopBridge(async (cmd) => {
       expect(cmd).toBe('desktop_hosts_get');

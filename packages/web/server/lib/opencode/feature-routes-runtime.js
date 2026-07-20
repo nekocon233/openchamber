@@ -6,6 +6,7 @@ import { registerGitHubRoutes } from '../github/routes.js';
 import { registerGitRoutes } from '../git/routes.js';
 import { registerMagicPromptRoutes } from '../magic-prompts/routes.js';
 import { registerSessionFoldersRoutes } from '../session-folders/routes.js';
+import { registerSidebarStateRoutes } from '../sidebar-state/routes.js';
 import { registerPermissionAutoAcceptRoutes } from '../permission-auto-accept/runtime.js';
 import { registerConfigEntityRoutes } from './config-entity-routes.js';
 import { registerSettingsUtilityRoutes } from './core-routes.js';
@@ -100,7 +101,10 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       getOpenChamberEventClients,
       writeSseEvent,
       permissionAutoAcceptRuntime,
+      sidebarStateRuntime,
     } = routeDependencies;
+
+    registerSidebarStateRoutes(app, sidebarStateRuntime);
 
     registerSettingsUtilityRoutes(app, {
       readCustomThemesFromDisk,
@@ -118,6 +122,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       readSettingsFromDisk,
       readSettingsFromDiskMigrated,
       persistSettings,
+      sidebarStateRuntime,
       sanitizeProjects,
       validateDirectoryPath,
       resolveProjectDirectory,
@@ -139,6 +144,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       createFsSearchRuntime,
       spawn,
       resolveGitBinaryForSpawn,
+      sidebarStateRuntime,
     });
 
     registerScheduledTaskRoutes(app, {
@@ -250,9 +256,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       openchamberDataDir,
     });
     registerSessionFoldersRoutes(app, {
-      fsPromises,
-      path,
-      openchamberDataDir,
+      sidebarStateRuntime,
     });
     registerFsRoutes(app, {
       os,

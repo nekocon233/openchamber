@@ -40,7 +40,13 @@ type NotificationClickMessage = {
   directory?: string;
 };
 
+type NotificationClickAck = {
+  type: 'openchamber:notification-click-ack';
+  installed?: boolean;
+};
+
 const SESSION_TAG_PREFIXES = ['ready-', 'error-', 'question-', 'permission-', 'goal-'] as const;
+const NOTIFICATION_CLICK_ACK_TIMEOUT_MS = 300;
 
 const getNotificationSessionId = (data: NotificationData | null, tag: string): string | undefined => {
   const explicitSessionId = data?.sessionId?.trim();
@@ -55,14 +61,65 @@ const getNotificationSessionId = (data: NotificationData | null, tag: string): s
 
 const getNotificationTargetUrl = (data: NotificationData | null, tag: string): string | null => {
   const sessionId = getNotificationSessionId(data, tag);
-  const rawUrl = data?.url?.trim() || (sessionId ? `/?session=${encodeURIComponent(sessionId)}` : '');
+  const fallbackUrl = (() => {
+    if (!sessionId) return '';
+    const search = new URLSearchParams({ session: sessionId });
+    if (data?.directory?.trim()) search.set('directory', data.directory.trim());
+    return `/?${search.toString()}`;
+  })();
+  const rawUrl = data?.url?.trim() || fallbackUrl;
   if (!rawUrl) return null;
 
   try {
     const target = new URL(rawUrl, self.location.origin);
-    return target.origin === self.location.origin ? target.href : null;
+    if (target.origin !== self.location.origin) return null;
+    if (sessionId) {
+      const urlSessionId = target.searchParams.get('session')?.trim() ?? '';
+      target.searchParams.set('session', sessionId);
+      if (data?.directory?.trim()) {
+        target.searchParams.set('directory', data.directory.trim());
+      } else if (urlSessionId && urlSessionId !== sessionId) {
+        target.searchParams.delete('directory');
+      }
+    }
+    return target.href;
   } catch {
     return null;
+  }
+};
+
+const postNotificationClickIntent = (
+  client: WindowClient,
+  message: NotificationClickMessage,
+): Promise<NotificationClickAck | null> => new Promise((resolve) => {
+  const channel = new MessageChannel();
+  let settled = false;
+  const finish = (acknowledgement: NotificationClickAck | null) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    channel.port1.onmessage = null;
+    channel.port1.close();
+    resolve(acknowledgement);
+  };
+  const timeout = setTimeout(() => finish(null), NOTIFICATION_CLICK_ACK_TIMEOUT_MS);
+  channel.port1.onmessage = (event: MessageEvent<NotificationClickAck>) => {
+    finish(event.data?.type === 'openchamber:notification-click-ack' ? event.data : null);
+  };
+  channel.port1.start();
+
+  try {
+    client.postMessage(message, [channel.port2]);
+  } catch {
+    finish(null);
+  }
+});
+
+const focusWindowClient = async (client: WindowClient): Promise<boolean> => {
+  try {
+    return Boolean(await client.focus());
+  } catch {
+    return false;
   }
 };
 
@@ -82,8 +139,10 @@ self.addEventListener('push', (event) => {
     }
 
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const hasVisibleClient = clients.some((client) => client.visibilityState === 'visible' || client.focused);
-    if (hasVisibleClient) {
+    const hasFocusedTopLevelClient = clients.some((client) => (
+      (client.frameType === undefined || client.frameType === 'top-level') && client.focused
+    ));
+    if (hasFocusedTopLevelClient) {
       return;
     }
 
@@ -119,39 +178,67 @@ self.addEventListener('notificationclick', (event) => {
       ...clients.filter((client) => !client.focused && client.visibilityState !== 'visible'),
     ];
 
-    for (const candidate of orderedClients) {
-      if ((targetUrl || sessionId) && typeof candidate.postMessage === 'function') {
-        const message: NotificationClickMessage = {
-          type: 'openchamber:notification-click',
-          ...(targetUrl ? { url: targetUrl } : {}),
-          ...(sessionId ? { sessionId } : {}),
-          ...(directory ? { directory } : {}),
-        };
-        try {
-          candidate.postMessage(message);
-        } catch {
-          // The client may have closed; navigation/focus below remain the fallback.
-        }
-      }
-
-      let client = candidate;
-      if (targetUrl) {
-        try {
-          client = await candidate.navigate(targetUrl) ?? candidate;
-        } catch {
-          // Uncontrolled clients may reject navigation but can still be focused.
-        }
-      }
-
-      try {
-        await client.focus();
-        return;
-      } catch {
-        // The window may have closed after matchAll; try the next one.
-      }
+    const fallbackUrl = targetUrl ?? new URL('/', self.location.origin).href;
+    if (orderedClients.length === 0) {
+      await self.clients.openWindow(fallbackUrl).catch(() => null);
+      return;
     }
 
-    const fallbackUrl = targetUrl ?? new URL('/', self.location.origin).href;
-    await self.clients.openWindow(fallbackUrl);
+    // A targetless notification is informational. Reuse the existing app as-is;
+    // posting an empty navigation intent or opening `/` can clear its selected
+    // session when an installed PWA routes the launch into that same window.
+    if (!sessionId) {
+      for (const candidate of orderedClients) {
+        if (await focusWindowClient(candidate)) return;
+      }
+      await self.clients.openWindow(fallbackUrl).catch(() => null);
+      return;
+    }
+
+    const message: NotificationClickMessage = {
+      type: 'openchamber:notification-click',
+      ...(targetUrl ? { url: targetUrl } : {}),
+      sessionId,
+      ...(directory ? { directory } : {}),
+    };
+
+    for (const candidate of orderedClients) {
+      if (typeof candidate.postMessage === 'function') {
+        const acknowledgement = await postNotificationClickIntent(candidate, message);
+
+        // Chromium grants one window-interaction allowance per notification click.
+        // Installed PWAs use openWindow so Windows can route through the app launcher;
+        // browser tabs use focus. Never chain both operations for one candidate.
+        // Older app bundles acknowledged without an `installed` field. Prefer the
+        // launcher-safe path for that upgrade window; only an explicit false is a
+        // browser tab that should consume the allowance with focus().
+        if (acknowledgement && acknowledgement.installed !== false) {
+          await self.clients.openWindow(fallbackUrl).catch(() => null);
+          return;
+        }
+        if (acknowledgement && await focusWindowClient(candidate)) return;
+        if (!acknowledgement) {
+          await self.clients.openWindow(fallbackUrl).catch(() => null);
+          return;
+        }
+        continue;
+      }
+
+      if (targetUrl) {
+        let navigatedClient: WindowClient | null = null;
+        try {
+          navigatedClient = await candidate.navigate(targetUrl);
+        } catch {
+          // Uncontrolled legacy clients may reject navigation.
+        }
+        if (navigatedClient && await focusWindowClient(navigatedClient)) return;
+        await self.clients.openWindow(fallbackUrl).catch(() => null);
+        return;
+      }
+
+      if (await focusWindowClient(candidate)) return;
+    }
+
+    await self.clients.openWindow(fallbackUrl).catch(() => null);
   })());
 });

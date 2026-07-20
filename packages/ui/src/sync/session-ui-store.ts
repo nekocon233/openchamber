@@ -1,13 +1,15 @@
 /**
- * Session UI Store — ephemeral UI state only.
+ * Session UI Store — live UI state with minimal navigation continuity.
  *
  * Domain data (sessions, messages, parts, permissions, questions, status)
- * lives in sync child stores. This store owns ONLY transient UI concerns:
+ * lives in sync child stores. This store owns UI concerns:
  * current selection, draft state, viewport anchors, model/agent preferences,
  * voice state, abort prompts, attached files, worktree metadata.
  *
  * Session↔worktree attachments are the authoritative exception: they live in
  * session-worktree-store (shared sync), and session-ui-store routes through it.
+ * The last selected session ID and directory are persisted separately per
+ * runtime; no messages, draft text, or other domain data are persisted here.
  *
  * SDK-calling actions that need domain data read it from sync-refs.
  */
@@ -66,7 +68,12 @@ import { useSelectionStore } from "./selection-store"
 import { getViewportSessionMemory, useViewportStore, viewportSessionKey } from "./viewport-store"
 import { useSessionWorktreeStore } from "./session-worktree-store"
 import { getAttachedSessionDirectory } from "./session-worktree-contract"
-import { setSessionOpener } from "./session-navigation"
+import {
+  clearPersistedSessionNavigation,
+  persistSessionNavigation,
+  readPersistedSessionNavigation,
+  setSessionOpener,
+} from "./session-navigation"
 import { getRuntimeKey } from "@/lib/runtime-switch"
 import { rememberRuntimeLiveStatus } from "./runtime-live-memory"
 
@@ -229,6 +236,8 @@ export type SessionHistoryMeta = {
 export type SessionUIState = {
   currentSessionId: string | null
   currentSessionDirectory: string | null
+  restoredSessionPendingValidation: boolean
+  restoredSessionRuntimeKey: string | null
   newSessionDraft: NewSessionDraftState
   abortPromptSessionId: string | null
   abortPromptExpiresAt: number | null
@@ -254,6 +263,7 @@ export type SessionUIState = {
   setCurrentSession: (id: string | null, directoryHint?: string | null) => void
   prepareForRuntimeSwitch: (apiBaseUrl?: string | null) => void
   restoreForRuntimeSwitch: (apiBaseUrl?: string | null) => void
+  reconcileRestoredSession: (session: Session | null) => void
   openNewSessionDraft: (options?: Partial<NewSessionDraftState>) => void
   closeNewSessionDraft: () => void
   setNewSessionDraftTarget: (target: { projectId?: string | null; selectedProjectId?: string | null; directoryOverride?: string | null }, options?: { force?: boolean }) => void
@@ -557,6 +567,8 @@ const PERSISTED_WORKTREE_MAP = loadPersistedWorktreeMap()
 export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   currentSessionId: null,
   currentSessionDirectory: null,
+  restoredSessionPendingValidation: false,
+  restoredSessionRuntimeKey: null,
   newSessionDraft: { ...DEFAULT_DRAFT },
   abortPromptSessionId: null,
   abortPromptExpiresAt: null,
@@ -603,8 +615,15 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
 
     // Set the directory together with the session id so chat hooks read the
     // same child store that send/SSE events will update during startup races.
-    set({ currentSessionId: id, currentSessionDirectory: id ? resolvedDir ?? null : null })
+    set({
+      currentSessionId: id,
+      currentSessionDirectory: id ? resolvedDir ?? null : null,
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+    })
     writeRuntimeSessionMemory(key, { sessionId: id, directory: resolvedDir ?? null })
+    if (id) persistSessionNavigation(id, resolvedDir, key)
+    else if (previousSessionId) clearPersistedSessionNavigation(previousSessionId, key)
 
     // Kick off the message fetch on the same tick, before React commits the
     // state change and fires ChatContainer.useEffect. The fetch is
@@ -669,15 +688,30 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   restoreForRuntimeSwitch: (apiBaseUrl?: string | null) => {
     const key = runtimeMemoryKey(apiBaseUrl)
     const memory = runtimeSessionMemory.get(key)
-    const restoredSessionId = memory?.sessionId ?? activeSessionByRuntime.get(key) ?? null
+    const hasActiveMemory = activeSessionByRuntime.has(key)
+    const persisted = memory || hasActiveMemory ? null : readPersistedSessionNavigation(key)
+    const restoredSessionId = memory
+      ? memory.sessionId
+      : hasActiveMemory
+        ? activeSessionByRuntime.get(key) ?? null
+        : persisted?.sessionId ?? null
     const restoredDraft = memory?.draft ? cloneDraft(memory.draft) : { ...DEFAULT_DRAFT }
-    const restoredDirectory = memory?.directory ?? null
+    const restoredDirectory = memory?.directory ?? persisted?.directory ?? null
     if (restoredDirectory) {
       useDirectoryStore.getState().setDirectory(restoredDirectory, { showOverlay: false })
+      opencodeClient.setDirectory(restoredDirectory)
     }
+    writeRuntimeSessionMemory(key, {
+      sessionId: restoredSessionId,
+      directory: restoredSessionId ? restoredDirectory : null,
+      draft: restoredSessionId ? { ...DEFAULT_DRAFT } : restoredDraft,
+    })
+    activeSessionByRuntime.set(key, restoredSessionId)
     set({
       currentSessionId: restoredSessionId,
       currentSessionDirectory: restoredSessionId ? restoredDirectory : null,
+      restoredSessionPendingValidation: Boolean(persisted && restoredSessionId),
+      restoredSessionRuntimeKey: persisted && restoredSessionId ? key : null,
       newSessionDraft: restoredSessionId ? { ...DEFAULT_DRAFT } : restoredDraft,
       abortPromptSessionId: null,
       abortPromptExpiresAt: null,
@@ -690,6 +724,34 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     } else {
       setActiveSession("", "")
     }
+  },
+
+  reconcileRestoredSession: (session) => {
+    const state = get()
+    const key = runtimeMemoryKey()
+    if (
+      !state.restoredSessionPendingValidation
+      || !state.currentSessionId
+      || state.restoredSessionRuntimeKey !== key
+    ) return
+
+    if (!session || session.id !== state.currentSessionId) {
+      clearPersistedSessionNavigation(state.currentSessionId, key)
+      activeSessionByRuntime.set(key, null)
+      writeRuntimeSessionMemory(key, { sessionId: null, directory: null })
+      set({
+        currentSessionId: null,
+        currentSessionDirectory: null,
+        restoredSessionPendingValidation: false,
+        restoredSessionRuntimeKey: null,
+      })
+      setActiveSession("", "")
+      return
+    }
+
+    const authoritativeDirectory = resolveGlobalSessionDirectory(session)
+    set({ restoredSessionPendingValidation: false, restoredSessionRuntimeKey: null })
+    get().setCurrentSession(session.id, authoritativeDirectory ?? state.currentSessionDirectory)
   },
 
   // ---------------------------------------------------------------------------
@@ -761,6 +823,8 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       },
       currentSessionId: null,
       currentSessionDirectory: null,
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
       error: null,
     })
 

@@ -35,6 +35,7 @@ import { canUseElectronDesktopIPC, invokeDesktop, isDesktopShell, isVSCodeRuntim
 import { SETTINGS_PAGE_METADATA, type SettingsRuntimeContext } from '@/lib/settings/metadata';
 import { getSettingsNavIcon } from '@/components/views/SettingsView';
 import { Icon } from "@/components/icon/Icon";
+import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { McpIcon } from '@/components/icons/McpIcon';
 import { scoreByFuzzyQuery } from '@/lib/search/fuzzySearch';
 import { truncatePathMiddle } from '@/lib/utils';
@@ -42,6 +43,7 @@ import { useI18n } from '@/lib/i18n';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { buildCommandPaletteFileSearchKey, scoreCommandPaletteFiles } from './commandPaletteFilesState';
+import { useResolvedSessionStatusType } from '@/sync/sync-context';
 
 type CommandEntry = {
   id: string;
@@ -53,6 +55,42 @@ type CommandEntry = {
 };
 
 type FileHit = { path: string; name: string; relativePath: string };
+
+type SessionResultItemProps = {
+  session: Session;
+  title: string;
+  branch: string | null;
+  onSelect: (session: Session) => void;
+};
+
+const SessionResultItem: React.FC<SessionResultItemProps> = ({ session, title, branch, onSelect }) => {
+  const { t } = useI18n();
+  const statusType = useResolvedSessionStatusType(session.id);
+  const isRunning = statusType === 'busy' || statusType === 'retry';
+
+  return (
+    <CommandItem
+      value={`session:${session.id}`}
+      onSelect={() => onSelect(session)}
+    >
+      {isRunning ? (
+        <SessionRunningIndicator
+          label={t('sessions.sidebar.session.status.active')}
+          className="mr-2 size-4"
+        />
+      ) : (
+        <Icon name="chat-ai-3" className="mr-2 h-4 w-4" />
+      )}
+      <span className="truncate">{title}</span>
+      {branch ? (
+        <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground typography-meta">
+          <Icon name="git-branch" className="h-3 w-3" />
+          <span className="truncate max-w-[160px]">{branch}</span>
+        </span>
+      ) : null}
+    </CommandItem>
+  );
+};
 
 const normalizePath = (value: string): string => {
   if (!value) return '';
@@ -526,20 +564,13 @@ export const CommandPalette: React.FC = () => {
                       const dir = resolveGlobalSessionDirectory(session);
                       const branch = branchForSession(session.id, dir);
                       return (
-                        <CommandItem
+                        <SessionResultItem
                           key={session.id}
-                          value={`session:${session.id}`}
-                          onSelect={() => handleOpenSession(session)}
-                        >
-                          <Icon name="chat-ai-3" className="mr-2 h-4 w-4" />
-                          <span className="truncate">{title}</span>
-                          {branch ? (
-                            <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground typography-meta">
-                              <Icon name="git-branch" className="h-3 w-3" />
-                              <span className="truncate max-w-[160px]">{branch}</span>
-                            </span>
-                          ) : null}
-                        </CommandItem>
+                          session={session}
+                          title={title}
+                          branch={branch}
+                          onSelect={handleOpenSession}
+                        />
                       );
                     })}
                   </CommandGroup>

@@ -79,6 +79,15 @@ describe('notification template message extraction', () => {
       },
     ])));
 
-    await expect(runtime.fetchLastAssistantMessageText('session-1', 'msg-1')).resolves.toBe('final answer');
+    await expect(runtime.fetchLastAssistantMessageText(
+      'session-1',
+      'msg-1',
+      undefined,
+      'C:\\work\\project',
+    )).resolves.toBe('final answer');
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/session/session-1/message?limit=5&directory=C%3A%5Cwork%5Cproject',
+      expect.objectContaining({ method: 'GET' }),
+    );
   });
 });

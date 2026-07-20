@@ -13,6 +13,7 @@ import { useSessionStatusBootstrap } from '@/hooks/useSessionStatusBootstrap';
 import { useTraySync } from '@/hooks/useTraySync';
 import { useRouter } from '@/hooks/useRouter';
 import { usePushVisibilityBeacon } from '@/hooks/usePushVisibilityBeacon';
+import { useBrowserPushSubscriptionReconciliation } from '@/hooks/useBrowserPushSubscriptionReconciliation';
 import { useWebNotificationStream } from '@/hooks/useWebNotificationStream';
 import { usePwaInstallPrompt } from '@/hooks/usePwaInstallPrompt';
 import { useWindowTitle } from '@/hooks/useWindowTitle';
@@ -61,6 +62,7 @@ import { resetAppForRuntimeEndpointChange } from '@/apps/runtimeEndpointReset';
 import { useAppFontEffects } from '@/apps/useAppFontEffects';
 import { OpenCodeUpdateToast } from '@/components/update/OpenCodeUpdateToast';
 import { markStartupTrace, startupTraceEnabled } from '@/lib/startupTrace';
+import { initializeSidebarStateSync } from '@/stores/useSidebarStateStore';
 
 // Lazy-loaded heavy views — loaded on demand to reduce initial bundle size.
 const OnboardingScreen = lazyWithChunkRecovery(() =>
@@ -308,6 +310,7 @@ function App({ apis }: AppProps) {
 
   React.useEffect(() => {
     registerRuntimeAPIs(apis);
+    void initializeSidebarStateSync();
     return () => registerRuntimeAPIs(null);
   }, [apis]);
 
@@ -600,18 +603,35 @@ function App({ apis }: AppProps) {
     if (typeof window === 'undefined') return;
 
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId?: string; directory?: string }>).detail;
+      const detail = (event as CustomEvent<{ sessionId?: string; directory?: string; runtimeKey?: string }>).detail;
       const sessionId = typeof detail?.sessionId === 'string' ? detail.sessionId.trim() : '';
       if (!sessionId) return;
+      const runtimeKey = typeof detail?.runtimeKey === 'string' ? detail.runtimeKey.trim() : '';
+      if (runtimeKey && runtimeKey !== getRuntimeKey()) return;
       const directory = typeof detail?.directory === 'string' && detail.directory.trim().length > 0
         ? detail.directory.trim()
         : null;
-      useUIStore.getState().setActiveMainTab('chat');
+      const uiStore = useUIStore.getState();
+      uiStore.setSettingsDialogOpen(false);
+      uiStore.setActiveMainTab('chat');
       void useSessionUIStore.getState().setCurrentSession(sessionId, directory);
     };
 
     window.addEventListener('openchamber:open-session', handler as EventListener);
-    return () => window.removeEventListener('openchamber:open-session', handler as EventListener);
+    let unsubscribeRuntimeChanged: (() => void) | null = null;
+    if (isDesktopShell()) {
+      const markRendererReady = () => {
+        void invokeDesktop('desktop_renderer_ready').catch((error) => {
+          console.warn('Failed to mark desktop renderer ready', error);
+        });
+      };
+      markRendererReady();
+      unsubscribeRuntimeChanged = subscribeRuntimeEndpointChanged(markRendererReady);
+    }
+    return () => {
+      unsubscribeRuntimeChanged?.();
+      window.removeEventListener('openchamber:open-session', handler as EventListener);
+    };
   }, []);
 
   // Open a draft Mini Chat window from the native File menu / tray. Uses a
@@ -684,6 +704,7 @@ function App({ apis }: AppProps) {
   // Session attention now handled by notification-store via SSE events (session.idle/session.error)
 
   usePushVisibilityBeacon({ enabled: embeddedBackgroundWorkEnabled });
+  useBrowserPushSubscriptionReconciliation({ enabled: embeddedBackgroundWorkEnabled });
   useWebNotificationStream({ enabled: embeddedBackgroundWorkEnabled });
   usePwaInstallPrompt();
 

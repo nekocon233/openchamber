@@ -1,7 +1,12 @@
 import crypto from 'node:crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApnsRuntime } from './apns-runtime.js';
+import {
+  configureNotificationAuthValidator,
+  createClientNotificationAuth,
+  createUiSessionNotificationAuth,
+} from './auth-runtime.js';
 
 // A real P-256 key so the ES256 signing path (direct mode) runs for real.
 const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
@@ -9,8 +14,8 @@ const P8 = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 const APNS_CONFIG = { keyId: 'KEY123', teamId: 'TEAM123', p8: P8, bundleId: 'com.openchamber.app', environment: 'sandbox' };
 
 // In-memory fs so add-then-read reflects within a test.
-const createMemoryFs = () => {
-  let content = null;
+const createMemoryFs = (initialContent = null) => {
+  let content = initialContent;
   return {
     mkdir: vi.fn(async () => {}),
     readFile: vi.fn(async () => {
@@ -24,6 +29,7 @@ const createMemoryFs = () => {
     writeFile: vi.fn(async (_path, data) => {
       content = data;
     }),
+    getContent: () => content,
   };
 };
 
@@ -71,6 +77,10 @@ afterEach(() => {
   delete process.env.OPENCHAMBER_PUSH_RELAY_DISABLED;
 });
 
+beforeEach(() => {
+  configureNotificationAuthValidator(async () => true);
+});
+
 describe('apns runtime relay mode (default)', () => {
   it('registers tokens (signed) and posts signed generic text, dropping dead tokens', async () => {
     const fetchMock = vi.fn(async (url) =>
@@ -87,8 +97,8 @@ describe('apns runtime relay mode (default)', () => {
     process.env.OPENCHAMBER_PUSH_RELAY_URL = 'https://relay.test/v1/push/send';
 
     const runtime = createApnsRuntime(makeDeps());
-    await runtime.addOrUpdateApnsToken('s1', 'tokenA');
-    await runtime.addOrUpdateApnsToken('s2', 'tokenDead');
+    await runtime.addOrUpdateApnsToken(createClientNotificationAuth('s1'), 'tokenA');
+    await runtime.addOrUpdateApnsToken(createClientNotificationAuth('s2'), 'tokenDead');
 
     // Each new token is bound on the relay with a signed register-token call.
     const registerCalls = fetchMock.mock.calls.filter(isRegister);
@@ -134,7 +144,7 @@ describe('apns runtime relay mode (default)', () => {
 
     const deps = makeDeps();
     const runtime = createApnsRuntime(deps);
-    await runtime.addOrUpdateApnsToken('s1', 'tokenA');
+    await runtime.addOrUpdateApnsToken(createClientNotificationAuth('s1'), 'tokenA');
     await runtime.sendApnsToAllUiSessions({ title: 't', body: 'b', tag: 'x' }, {});
 
     const keys = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body).publicKeyJwk);
@@ -181,7 +191,7 @@ describe('apns runtime direct fallback (relay disabled)', () => {
     const runtime = createApnsRuntime(
       makeDeps({ http2, readSettingsFromDiskMigrated: vi.fn(async () => ({ apnsConfig: APNS_CONFIG })) }),
     );
-    await runtime.addOrUpdateApnsToken('s', 'tokenDirect');
+    await runtime.addOrUpdateApnsToken(createClientNotificationAuth('s'), 'tokenDirect');
     await runtime.sendApnsToAllUiSessions({ title: 't', body: 'b', tag: 'ready-x' });
     expect(targeted).toEqual(['tokenDirect']);
   });
@@ -192,5 +202,67 @@ describe('apns runtime direct fallback (relay disabled)', () => {
     expect(parts).toHaveLength(3);
     expect(JSON.parse(Buffer.from(parts[0], 'base64url').toString())).toEqual({ alg: 'ES256', kid: 'KEY123' });
     expect(JSON.parse(Buffer.from(parts[1], 'base64url').toString()).iss).toBe('TEAM123');
+  });
+});
+
+describe('apns runtime auth association', () => {
+  it('persists an opaque identity and removes an expired auth registration before delivery', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, results: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.OPENCHAMBER_PUSH_RELAY_URL = 'https://relay.test/v1/push/send';
+    const deps = makeDeps();
+    const runtime = createApnsRuntime(deps);
+    const rawSession = 'raw-ui-session-secret';
+    const auth = createUiSessionNotificationAuth(rawSession, Date.now() - 1);
+
+    await runtime.addOrUpdateApnsToken(auth, 'expired-device-token');
+    expect(String(deps.fsPromises.getContent())).not.toContain(rawSession);
+    expect(String(deps.fsPromises.getContent())).toContain(auth.identity);
+
+    fetchMock.mockClear();
+    await runtime.sendApnsToAllUiSessions({ title: 'Ready' });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.parse(deps.fsPromises.getContent()).registrationsByIdentity).toEqual({});
+  });
+
+  it('sanitizes legacy session-keyed APNs records without delivery', async () => {
+    const rawSession = 'legacy-apns-session-secret';
+    const fsPromises = createMemoryFs(JSON.stringify({
+      version: 1,
+      tokensBySession: {
+        [rawSession]: [{ deviceToken: 'legacy-device-token' }],
+      },
+    }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const runtime = createApnsRuntime(makeDeps({ fsPromises }));
+
+    await runtime.sendApnsToAllUiSessions({ title: 'Ready' });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(String(fsPromises.getContent())).not.toContain(rawSession);
+    expect(JSON.parse(fsPromises.getContent())).toEqual({ version: 2, registrationsByIdentity: {} });
+  });
+
+  it('fails closed and preserves an unknown future schema version', async () => {
+    const futureStore = JSON.stringify({
+      version: 3,
+      registrationsByIdentity: {
+        future: { unsupported: true },
+      },
+    });
+    const fsPromises = createMemoryFs(futureStore);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const runtime = createApnsRuntime(makeDeps({ fsPromises }));
+
+    await expect(runtime.sendApnsToAllUiSessions({ title: 'Ready' })).rejects.toThrow(
+      'Unsupported APNs tokens schema version',
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fsPromises.writeFile).not.toHaveBeenCalled();
+    expect(fsPromises.getContent()).toBe(futureStore);
   });
 });

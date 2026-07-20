@@ -277,6 +277,14 @@ export const desktopLocalClientTokenGet = async (): Promise<string> => {
   return typeof raw === 'string' ? raw.trim() : '';
 };
 
+export const desktopActivateWindowRuntime = async (hostId: string): Promise<boolean> => {
+  const invoke = getInvoke();
+  const normalizedHostId = hostId.trim();
+  if (!invoke || !normalizedHostId) return false;
+  const raw = await invoke('desktop_runtime_activate', { hostId: normalizedHostId });
+  return isRecord(raw) && typeof raw.runtimeKey === 'string' && raw.runtimeKey.trim().length > 0;
+};
+
 /**
  * Stable per-install identifier for this desktop. Used as the client dedupe key
  * so re-pairing or re-authenticating this desktop reuses its single device

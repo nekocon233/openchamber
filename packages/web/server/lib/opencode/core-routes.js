@@ -1,3 +1,9 @@
+import {
+  createClientNotificationAuth,
+  createTunnelSessionNotificationAuth,
+  invalidateNotificationAuth,
+} from '../notifications/auth-runtime.js';
+
 const parseLoopbackUrl = (rawUrl) => {
   if (typeof rawUrl !== 'string') {
     return null;
@@ -56,6 +62,133 @@ const getCookieValue = (req, name) => {
 const hasPreviewProxyCredential = (req) => {
   if (!getRequestPathname(req).startsWith('/api/preview/proxy/')) return false;
   return Boolean(getQueryParam(req, 'oc_preview_token') || getCookieValue(req, 'oc_preview_token'));
+};
+
+const isPrivateRelayRequest = (req) => {
+  const value = req?.headers?.['x-openchamber-relay-connection'];
+  if (Array.isArray(value)) return value.some((entry) => typeof entry === 'string' && entry.length > 0);
+  return typeof value === 'string' && value.length > 0;
+};
+
+const isExternalScope = (scope) => scope === 'tunnel' || scope === 'unknown-public';
+
+const requiresExternalAuth = (req) => {
+  const pathname = getRequestPathname(req);
+  if (req.method === 'POST' && pathname === '/api/client-auth/pairing/redeem') return false;
+  if (pathname === '/api/version') return false;
+  if (pathname === '/api' || pathname.startsWith('/api/')) return true;
+  return pathname === '/auth/url-token'
+    || (req.method === 'GET' && pathname === '/auth/session');
+};
+
+const sendClientAuthRequired = (res) => (
+  res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true })
+);
+
+const runUiAuthGate = async ({
+  req,
+  res,
+  uiAuthController,
+  gate,
+  clientOnly = false,
+  requireIdentity = false,
+}) => {
+  if (typeof gate !== 'function') return false;
+  let allowed = false;
+  await gate(req, res, () => {
+    allowed = true;
+  });
+  if (!allowed || req.method === 'OPTIONS') return allowed;
+
+  if (typeof uiAuthController?.resolveChannelAuth === 'function') {
+    const auth = await uiAuthController.resolveChannelAuth(req, res, {
+      allowUrlToken: !clientOnly,
+      allowSessionCreation: false,
+      clientOnly,
+    });
+    if (!auth && requireIdentity) {
+      sendClientAuthRequired(res);
+      return false;
+    }
+    if (auth) req.openchamberAuthIdentity = auth;
+  }
+  return true;
+};
+
+const enforceExternalRequestAuth = async ({
+  req,
+  res,
+  next,
+  tunnelAuthController,
+  uiAuthController,
+}) => {
+  if (req.openchamberExternalAuthenticated === true) return next();
+
+  if (isPrivateRelayRequest(req)) {
+    if (req.method === 'POST' && getRequestPathname(req) === '/api/client-auth/pairing/redeem') {
+      return next();
+    }
+    const allowed = await runUiAuthGate({
+      req,
+      res,
+      uiAuthController,
+      gate: uiAuthController?.requireClientAuth,
+      clientOnly: true,
+      requireIdentity: true,
+    });
+    if (!allowed) {
+      if (!res.headersSent && typeof uiAuthController?.requireClientAuth !== 'function') {
+        sendClientAuthRequired(res);
+      }
+      return;
+    }
+    req.openchamberRelayClientAuthenticated = true;
+    req.openchamberExternalAuthenticated = true;
+    return next();
+  }
+
+  if (!requiresExternalAuth(req)) return next();
+  const requestScope = typeof tunnelAuthController?.classifyRequestScope === 'function'
+    ? tunnelAuthController.classifyRequestScope(req)
+    : 'local';
+  if (!isExternalScope(requestScope)) return next();
+
+  const tunnelSession = typeof tunnelAuthController?.getTunnelSessionFromRequest === 'function'
+    ? tunnelAuthController.getTunnelSessionFromRequest(req)
+    : null;
+  if (tunnelSession?.sessionId) {
+    req.openchamberTunnelAuthenticated = true;
+    req.openchamberTunnelSession = tunnelSession;
+    req.openchamberAuthIdentity = createTunnelSessionNotificationAuth(
+      tunnelSession.sessionId,
+      tunnelSession.expiresAt,
+    );
+    req.openchamberExternalAuthenticated = true;
+    return next();
+  }
+
+  // Password and passkey login routes remain reachable when UI auth is enabled.
+  // Every protected request still passes through the normal UI auth gate.
+  if (uiAuthController?.enabled === true && getRequestPathname(req) === '/auth/session') {
+    return next();
+  }
+  const clientOnly = uiAuthController?.enabled !== true;
+  const allowed = await runUiAuthGate({
+    req,
+    res,
+    uiAuthController,
+    gate: clientOnly ? uiAuthController?.requireClientAuth : uiAuthController?.requireAuth,
+    clientOnly,
+    requireIdentity: true,
+  });
+  if (!allowed) {
+    if (!res.headersSent && (clientOnly ? typeof uiAuthController?.requireClientAuth : typeof uiAuthController?.requireAuth) !== 'function') {
+      sendClientAuthRequired(res);
+    }
+    return;
+  }
+  req.openchamberExternalAuthenticated = true;
+  return next();
 };
 
 export const registerServerStatusRoutes = (app, dependencies) => {
@@ -245,6 +378,14 @@ export const registerServerStatusRoutes = (app, dependencies) => {
     });
   });
 
+  app.use(async (req, res, next) => {
+    try {
+      await enforceExternalRequestAuth({ req, res, next, tunnelAuthController, uiAuthController });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/version', async (_req, res) => {
     const serverId = await resolveServerId();
     res.json({
@@ -258,17 +399,27 @@ export const registerServerStatusRoutes = (app, dependencies) => {
   });
 
   const requireShutdownAuth = async (req, res, next) => {
+    if (req.openchamberExternalAuthenticated === true) return next();
     if (!uiAuthController || typeof uiAuthController.requireAuth !== 'function') {
       return next();
+    }
+    if (isPrivateRelayRequest(req)) {
+      if (typeof uiAuthController.requireClientAuth !== 'function') {
+        return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
+      }
+      return uiAuthController.requireClientAuth(req, res, next);
     }
     const requestScope = typeof tunnelAuthController?.classifyRequestScope === 'function'
       ? tunnelAuthController.classifyRequestScope(req)
       : 'local';
-    if (
-      (requestScope === 'tunnel' || requestScope === 'unknown-public')
-      && typeof tunnelAuthController?.requireTunnelSession === 'function'
-    ) {
-      return tunnelAuthController.requireTunnelSession(req, res, next);
+    if (isExternalScope(requestScope)) {
+      const tunnelSession = typeof tunnelAuthController?.getTunnelSessionFromRequest === 'function'
+        ? tunnelAuthController.getTunnelSessionFromRequest(req)
+        : null;
+      if (tunnelSession) return next();
+      if (uiAuthController.enabled !== true && typeof uiAuthController.requireClientAuth === 'function') {
+        return uiAuthController.requireClientAuth(req, res, next);
+      }
     }
     return uiAuthController.requireAuth(req, res, next);
   };
@@ -410,6 +561,10 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
 
   const runWithUiAuth = async (req, res, next, handler, options = {}) => {
     try {
+      if (req.openchamberTunnelAuthenticated === true) {
+        await handler();
+        return;
+      }
       const requireAuth = options.sessionOnly === true && typeof uiAuthController.requireSessionAuth === 'function'
         ? uiAuthController.requireSessionAuth
         : uiAuthController.requireAuth;
@@ -423,6 +578,10 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
 
   const runWithClientManagementAuth = async (req, res, next, handler) => {
     try {
+      if (req.openchamberTunnelAuthenticated === true) {
+        await handler({ type: 'session' });
+        return;
+      }
       if (typeof uiAuthController.resolveAuthContext === 'function') {
         const context = await uiAuthController.resolveAuthContext(req, res, {
           allowClientAuth: true,
@@ -444,6 +603,10 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
 
   const runWithClientCreateAuth = async (req, res, next, handler) => {
     try {
+      if (req.openchamberTunnelAuthenticated === true) {
+        await handler({ type: 'session' });
+        return;
+      }
       if (typeof uiAuthController.resolveAuthContext === 'function') {
         const context = await uiAuthController.resolveAuthContext(req, res, {
           allowClientAuth: true,
@@ -592,7 +755,20 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     res.status(statusCode).json({ error: 'Invalid or expired pairing session' });
   };
 
+  // The relay host dials this server over loopback, so socket/Host-based scope
+  // classification alone would incorrectly grant local passwordless access.
+  // The host-stamped marker makes those requests bearer-only. Pairing redeem is
+  // the one pre-bearer operation and remains protected by its one-time secret.
+  app.use(async (req, res, next) => {
+    try {
+      await enforceExternalRequestAuth({ req, res, next, tunnelAuthController, uiAuthController });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   const requireApiAuth = async (req, res, next) => {
+    if (req.openchamberExternalAuthenticated === true) return next();
     // Preview proxy requests carry a target-scoped capability token that the
     // preview proxy validates against the registered target id/TTL. Let those
     // requests reach that stricter check instead of failing the global UI auth
@@ -600,12 +776,35 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     if (hasPreviewProxyCredential(req)) {
       return next();
     }
+    if (isPrivateRelayRequest(req)) {
+      if (req.openchamberRelayClientAuthenticated === true) return next();
+      if (typeof uiAuthController.requireClientAuth !== 'function') {
+        return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
+      }
+      return uiAuthController.requireClientAuth(req, res, next);
+    }
 
     const requestScope = tunnelAuthController.classifyRequestScope(req);
-    if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
-      return tunnelAuthController.requireTunnelSession(req, res, next);
+    if (isExternalScope(requestScope)) {
+      const tunnelSession = tunnelAuthController.getTunnelSessionFromRequest(req);
+      if (tunnelSession) {
+        req.openchamberAuthIdentity = createTunnelSessionNotificationAuth(
+          tunnelSession.sessionId,
+          tunnelSession.expiresAt,
+        );
+        return next();
+      }
+      if (uiAuthController.enabled !== true) {
+        return uiAuthController.requireClientAuth(req, res, next);
+      }
     }
-    return uiAuthController.requireAuth(req, res, next);
+    const allowed = await runUiAuthGate({
+      req,
+      res,
+      uiAuthController,
+      gate: uiAuthController.requireAuth,
+    });
+    if (allowed) return next();
   };
 
   app.get('/auth/session', async (req, res) => {
@@ -615,8 +814,6 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       if (tunnelSession) {
         return res.json({ authenticated: true, scope: 'tunnel' });
       }
-      tunnelAuthController.clearTunnelSessionCookie(req, res);
-      return res.status(401).json({ authenticated: false, locked: true, tunnelLocked: true });
     }
 
     try {
@@ -627,15 +824,22 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
   });
 
   app.post('/auth/session', (req, res) => {
-    const requestScope = tunnelAuthController.classifyRequestScope(req);
-    if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
-      return res.status(403).json({ error: 'Password login is disabled for tunnel scope', tunnelLocked: true });
-    }
     return uiAuthController.handleSessionCreate(req, res);
   });
 
   app.post('/auth/url-token', async (req, res, next) => {
     try {
+      const requestScope = tunnelAuthController.classifyRequestScope(req);
+      if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
+        const tunnelSession = tunnelAuthController.getTunnelSessionFromRequest(req);
+        if (tunnelSession?.sessionId && typeof uiAuthController.issueUrlAuthTokenForSession === 'function') {
+          res.setHeader('Cache-Control', 'no-store');
+          return res.json(uiAuthController.issueUrlAuthTokenForSession(
+            `tunnel:${tunnelSession.sessionId}`,
+            createTunnelSessionNotificationAuth(tunnelSession.sessionId, tunnelSession.expiresAt),
+          ));
+        }
+      }
       await uiAuthController.handleUrlAuthToken(req, res);
     } catch (error) {
       next(error);
@@ -781,6 +985,8 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       if (!result.revoked) {
         return res.status(404).json({ revoked: false, error: 'Client not found' });
       }
+      const notificationAuth = createClientNotificationAuth(result.client?.id || req.params?.id);
+      if (notificationAuth) invalidateNotificationAuth(notificationAuth);
       void reconcileRelay();
       res.json(result);
     });
@@ -1052,6 +1258,18 @@ export const registerCommonRequestMiddleware = (app, dependencies) => {
         return res.status(413).json({ error: 'Content exceeds maximum size of 1048576 bytes' });
       }
       express.json({ limit: '1mb' })(req, res, next);
+    } else if (req.path === '/api/sidebar-state/mutations') {
+      const contentLength = parseInt(req.headers['content-length'] || '0', 10);
+      if (contentLength > 256 * 1024) {
+        return res.status(413).json({ error: 'Sidebar mutation exceeds maximum size of 262144 bytes' });
+      }
+      express.json({ limit: '256kb' })(req, res, (error) => {
+        if (!error) return next();
+        if (error.type === 'entity.too.large') {
+          return res.status(413).json({ error: 'Sidebar mutation exceeds maximum size of 262144 bytes' });
+        }
+        return res.status(400).json({ error: 'Sidebar mutation body must be valid JSON' });
+      });
     } else if (
       req.path.startsWith('/api/config/agents') ||
       req.path.startsWith('/api/config/commands') ||

@@ -8,8 +8,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Icon } from '@/components/icon/Icon';
+import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useGlobalSessionStatus } from '@/sync/sync-context';
+import { useResolvedSessionStatusType } from '@/sync/sync-context';
 import { useSessionUnseenCount } from '@/sync/notification-store';
 import { useSwitcherItems, type SwitcherItem } from '@/components/session/sidebar/hooks/useSwitcherItems';
 import { useUIStore } from '@/stores/useUIStore';
@@ -191,15 +192,14 @@ function SwitcherRow({ session, depth, variant, secondaryMeta, hasChildren, isEx
   const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
   const notifyOnSubtasks = useUIStore((state) => state.notifyOnSubtasks);
 
-  const sessionStatus = useGlobalSessionStatus(session.id);
+  const sessionStatusType = useResolvedSessionStatusType(session.id);
   const unseenCount = useSessionUnseenCount(session.id);
 
   const isActive = currentSessionId === session.id;
   const sessionTitle = session.title?.trim() || t('sessions.sidebar.session.untitled');
   const isSubtask = Boolean((session as Session & { parentID?: string | null }).parentID);
   const needsAttention = unseenCount > 0 && (!isSubtask || notifyOnSubtasks);
-  const statusType = sessionStatus?.type ?? 'idle';
-  const isStreaming = statusType === 'busy' || statusType === 'retry';
+  const isStreaming = sessionStatusType === 'busy' || sessionStatusType === 'retry';
   const showUnreadDot = !isStreaming && needsAttention && !isActive;
 
   const timestamp = session.time?.updated || session.time?.created || Date.now();
@@ -291,13 +291,9 @@ function SwitcherRow({ session, depth, variant, secondaryMeta, hasChildren, isEx
       </div>
 
       {isStreaming || showUnreadDot ? (
-        <span className="flex h-3 w-3 flex-shrink-0 items-center justify-center self-center">
+        <span className="flex size-3.5 flex-shrink-0 items-center justify-center self-center">
           {isStreaming ? (
-            <span
-              className="h-1.5 w-1.5 rounded-full bg-primary animate-busy-pulse"
-              aria-label={t('sessions.sidebar.session.status.active')}
-              title={t('sessions.sidebar.session.status.active')}
-            />
+            <SessionRunningIndicator label={t('sessions.sidebar.session.status.active')} />
           ) : (
             <span
               className="h-1.5 w-1.5 rounded-full bg-[var(--status-info)]"

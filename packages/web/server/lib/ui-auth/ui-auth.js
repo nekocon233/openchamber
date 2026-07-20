@@ -4,12 +4,23 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { createUiPasskeys } from './ui-passkeys.js';
+import {
+  NOTIFICATION_AUTH_KIND_CLIENT,
+  NOTIFICATION_AUTH_KIND_UI_SESSION,
+  createClientNotificationAuth,
+  createUiSessionNotificationAuth,
+  invalidateNotificationAuth,
+  notificationAuthMatchesSelector,
+  normalizeNotificationAuth,
+  subscribeNotificationAuthInvalidation,
+} from '../notifications/auth-runtime.js';
 
 const SESSION_COOKIE_NAME = 'oc_ui_session';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const TRUSTED_DEVICE_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const URL_AUTH_TOKEN_TTL_MS = 60 * 1000;
 const URL_AUTH_TOKEN_PREFIX = 'oc_url_';
+const RESOLVED_CLIENT_AUTH = Symbol('openchamberResolvedClientAuth');
 
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const RATE_LIMIT_MAX_ATTEMPTS = Number(process.env.OPENCHAMBER_RATE_LIMIT_MAX_ATTEMPTS) || 10;
@@ -404,6 +415,12 @@ function persistJwtSecret(secret) {
   return new TextEncoder().encode(secret);
 }
 
+const derivePasswordNotificationAuthGeneration = (jwtSecret, passwordBinding) => (
+  crypto.createHmac('sha256', jwtSecret)
+    .update(`openchamber-notification-auth:${passwordBinding}`)
+    .digest('base64url')
+);
+
 export const createUiAuth = ({
   password,
   cookieName = SESSION_COOKIE_NAME,
@@ -413,7 +430,24 @@ export const createUiAuth = ({
   requireClientAuth = false,
 } = {}) => {
   const normalizedPassword = normalizePassword(password);
+  // Passwordless browser cookies are not independently verifiable. Keep their
+  // notification associations process-scoped so a restart or policy change
+  // cannot revive a passwordless-era subscription.
+  let notificationAuthGeneration = normalizedPassword ? null : crypto.randomUUID();
+  const resolveNotificationAuthGeneration = () => {
+    if (!notificationAuthGeneration) {
+      throw new Error('Notification auth generation is unavailable');
+    }
+    return notificationAuthGeneration;
+  };
   const urlAuthTokens = new Map();
+  const unsubscribeNotificationAuthInvalidation = subscribeNotificationAuthInvalidation((selector) => {
+    for (const [token, entry] of urlAuthTokens) {
+      if (notificationAuthMatchesSelector(entry?.notificationAuth, selector)) {
+        urlAuthTokens.delete(token);
+      }
+    }
+  });
 
   const sweepUrlAuthTokens = () => {
     const now = Date.now();
@@ -424,11 +458,15 @@ export const createUiAuth = ({
     }
   };
 
-  const issueUrlAuthTokenForSession = (sessionToken) => {
+  const issueUrlAuthTokenForSession = (sessionToken, notificationAuth = null) => {
     sweepUrlAuthTokens();
     const token = `${URL_AUTH_TOKEN_PREFIX}${crypto.randomBytes(24).toString('base64url')}`;
     const expiresAt = Date.now() + URL_AUTH_TOKEN_TTL_MS;
-    urlAuthTokens.set(token, { sessionToken, expiresAt });
+    urlAuthTokens.set(token, {
+      sessionToken,
+      notificationAuth: normalizeNotificationAuth(notificationAuth),
+      expiresAt,
+    });
     return { token, expiresAt };
   };
 
@@ -441,7 +479,20 @@ export const createUiAuth = ({
       urlAuthTokens.delete(token);
       return null;
     }
-    return { ok: true, sessionToken: entry.sessionToken || 'url:authenticated' };
+    if (typeof entry.notificationAuth?.expiresAt === 'number' && entry.notificationAuth.expiresAt <= Date.now()) {
+      urlAuthTokens.delete(token);
+      return null;
+    }
+    return {
+      ok: true,
+      sessionToken: entry.sessionToken || 'url:authenticated',
+      notificationAuth: entry.notificationAuth || null,
+    };
+  };
+
+  const resolveUrlAuth = async (req) => {
+    const result = authenticateUrlAuthToken(req);
+    return normalizeNotificationAuth(result?.notificationAuth);
   };
 
   const authenticateClientRequest = async (req, { allowUrlToken = true } = {}) => {
@@ -449,6 +500,7 @@ export const createUiAuth = ({
       const urlAuth = authenticateUrlAuthToken(req);
       if (urlAuth) return urlAuth;
     }
+    if (req?.[RESOLVED_CLIENT_AUTH]) return req[RESOLVED_CLIENT_AUTH];
     const token = getBearerTokenFromRequest(req);
     if (!token || typeof clientAuthController?.authenticateBearerToken !== 'function') {
       return null;
@@ -456,6 +508,11 @@ export const createUiAuth = ({
     try {
       const result = await clientAuthController.authenticateBearerToken(token, req);
       if (result?.ok) {
+        try {
+          Object.defineProperty(req, RESOLVED_CLIENT_AUTH, { value: result });
+        } catch {
+          // Request wrappers may be non-extensible; authentication still succeeds.
+        }
         return result;
       }
       return null;
@@ -482,6 +539,28 @@ export const createUiAuth = ({
     clientId: clientAuthClientId(clientAuth),
     client: clientAuth?.client || null,
   });
+
+  const notificationAuthForClient = (clientAuth) => {
+    const clientId = clientAuthClientId(clientAuth);
+    if (!clientId) return null;
+    const expiresAt = Date.parse(clientAuth?.client?.expiresAt || '');
+    return createClientNotificationAuth(clientId, Number.isFinite(expiresAt) ? expiresAt : null);
+  };
+
+  const validateClientNotificationAuth = async (auth) => {
+    if (typeof clientAuthController?.listClients !== 'function') return null;
+    try {
+      const clients = await clientAuthController.listClients();
+      const client = Array.isArray(clients)
+        ? clients.find((entry) => entry?.id === auth.clientId)
+        : null;
+      if (!client || client.revokedAt) return false;
+      const expiresAt = Date.parse(client.expiresAt || '');
+      return !Number.isFinite(expiresAt) || expiresAt > Date.now();
+    } catch {
+      return null;
+    }
+  };
 
   if (!normalizedPassword) {
     const setSessionCookie = (req, res, token, ttlMs = sessionTtlMs) => {
@@ -520,6 +599,17 @@ export const createUiAuth = ({
       return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
     };
 
+    const requireBearerClientAuth = async (req, res, next) => {
+      if (req.method === 'OPTIONS') {
+        return next();
+      }
+      const clientAuth = await authenticateClientRequest(req, { allowUrlToken: false });
+      if (clientAuth) {
+        return next();
+      }
+      return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
+    };
+
     const requireSessionAuth = async (req, res, next) => {
       if (!requireClientAuth) {
         return next();
@@ -546,11 +636,53 @@ export const createUiAuth = ({
       return null;
     };
 
+    const resolveNotificationAuth = async (
+      req,
+      res,
+      { allowUrlToken = true, allowSessionCreation = true, clientOnly = false } = {},
+    ) => {
+      if (allowUrlToken) {
+        const urlAuth = authenticateUrlAuthToken(req);
+        if (urlAuth?.notificationAuth) return urlAuth.notificationAuth;
+      }
+
+      const clientAuth = await authenticateClientRequest(req, { allowUrlToken: false });
+      if (clientAuth) return notificationAuthForClient(clientAuth);
+      if (clientOnly) return null;
+
+      const cookies = parseCookies(req.headers.cookie);
+      let token = cookies[cookieName] || null;
+      if (!token && allowSessionCreation) {
+        token = await ensureSessionToken(req, res);
+      }
+      return token
+        ? createUiSessionNotificationAuth(token, null, resolveNotificationAuthGeneration())
+        : null;
+    };
+
+    const validateNotificationAuth = async (authValue) => {
+      const auth = normalizeNotificationAuth(authValue);
+      if (!auth) return false;
+      if (auth.kind === NOTIFICATION_AUTH_KIND_CLIENT) {
+        return validateClientNotificationAuth(auth);
+      }
+      if (auth.kind === NOTIFICATION_AUTH_KIND_UI_SESSION) {
+        return auth.generation === resolveNotificationAuthGeneration()
+          && (auth.expiresAt === null || auth.expiresAt > Date.now());
+      }
+      return null;
+    };
+
     return {
       enabled: false,
       requireAuth,
+      requireClientAuth: requireBearerClientAuth,
       requireSessionAuth,
       resolveAuthContext,
+      resolveNotificationAuth,
+      resolveChannelAuth: resolveNotificationAuth,
+      resolveUrlAuth,
+      validateNotificationAuth,
       handleSessionStatus: async (req, res) => {
         if (requireClientAuth) {
           const clientAuth = await authenticateClientRequest(req);
@@ -568,15 +700,22 @@ export const createUiAuth = ({
         const clientAuth = await authenticateClientRequest(req, { allowUrlToken: false });
         if (clientAuth) {
           res.setHeader('Cache-Control', 'no-store');
-          return res.json(issueUrlAuthTokenForSession(clientSessionToken(clientAuth)));
+          return res.json(issueUrlAuthTokenForSession(
+            clientSessionToken(clientAuth),
+            notificationAuthForClient(clientAuth),
+          ));
         }
         if (requireClientAuth) {
           return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
         }
         const sessionToken = await ensureSessionToken(req, res);
         res.setHeader('Cache-Control', 'no-store');
-        return res.json(issueUrlAuthTokenForSession(sessionToken));
+        return res.json(issueUrlAuthTokenForSession(
+          sessionToken,
+          createUiSessionNotificationAuth(sessionToken, null, resolveNotificationAuthGeneration()),
+        ));
       },
+      issueUrlAuthTokenForSession,
       handlePasskeyStatus: (_req, res) => {
         res.json({ enabled: false, hasPasskeys: false, passkeyCount: 0, rpID: null });
       },
@@ -607,7 +746,8 @@ export const createUiAuth = ({
         return ensureSessionToken(req, res);
       },
       dispose: () => {
-
+        unsubscribeNotificationAuthInvalidation();
+        urlAuthTokens.clear();
       },
     };
   }
@@ -616,6 +756,7 @@ export const createUiAuth = ({
   const expectedHash = crypto.scryptSync(normalizedPassword, salt, 64);
   let jwtSecret = getOrCreateJwtSecret();
   let passwordBinding = crypto.createHmac('sha256', jwtSecret).update(normalizedPassword).digest('hex');
+  notificationAuthGeneration = derivePasswordNotificationAuthGeneration(jwtSecret, passwordBinding);
   const resolveSessionTtlMs = (trustDevice) => (trustDevice ? TRUSTED_DEVICE_SESSION_TTL_MS : sessionTtlMs);
   let passkeyController = createUiPasskeys({
     passwordBinding,
@@ -636,6 +777,7 @@ export const createUiAuth = ({
     jwtSecret = persistJwtSecret(nextSecret);
     urlAuthTokens.clear();
     rebuildPasskeyController();
+    notificationAuthGeneration = derivePasswordNotificationAuthGeneration(jwtSecret, passwordBinding);
   };
 
   const getTokenFromRequest = (req) => {
@@ -697,6 +839,19 @@ export const createUiAuth = ({
     }
   };
 
+  const notificationAuthForSession = async (token) => {
+    if (!token) return null;
+    try {
+      const verified = await jwtVerify(token, jwtSecret);
+      const expiresAt = typeof verified.payload?.exp === 'number'
+        ? verified.payload.exp * 1000
+        : null;
+      return createUiSessionNotificationAuth(token, expiresAt, resolveNotificationAuthGeneration());
+    } catch {
+      return null;
+    }
+  };
+
   const issueSession = async (req, res, { trustDevice = false } = {}) => {
     const ttlMs = resolveSessionTtlMs(trustDevice);
     const token = await new SignJWT({ type: 'ui-session' })
@@ -734,6 +889,17 @@ export const createUiAuth = ({
     }
     clearSessionCookie(req, res);
     return respondUnauthorized(req, res);
+  };
+
+  const requireBearerClientAuth = async (req, res, next) => {
+    if (req.method === 'OPTIONS') {
+      return next();
+    }
+    const clientAuth = await authenticateClientRequest(req, { allowUrlToken: false });
+    if (clientAuth) {
+      return next();
+    }
+    return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
   };
 
   const requireSessionAuth = async (req, res, next) => {
@@ -782,14 +948,55 @@ export const createUiAuth = ({
     return clientAuth ? clientAuthContext(clientAuth) : null;
   };
 
+  const resolveNotificationAuth = async (
+    req,
+    _res,
+    { allowUrlToken = true, clientOnly = false } = {},
+  ) => {
+    if (allowUrlToken) {
+      const urlAuth = authenticateUrlAuthToken(req);
+      if (urlAuth?.notificationAuth) return urlAuth.notificationAuth;
+    }
+
+    if (!clientOnly) {
+      const sessionAuth = await notificationAuthForSession(getTokenFromRequest(req));
+      if (sessionAuth) return sessionAuth;
+    }
+    const clientAuth = await authenticateClientRequest(req, { allowUrlToken: false });
+    return clientAuth ? notificationAuthForClient(clientAuth) : null;
+  };
+
+  const validateNotificationAuth = async (authValue) => {
+    const auth = normalizeNotificationAuth(authValue);
+    if (!auth) return false;
+    if (auth.kind === NOTIFICATION_AUTH_KIND_CLIENT) {
+      return validateClientNotificationAuth(auth);
+    }
+    if (auth.kind === NOTIFICATION_AUTH_KIND_UI_SESSION) {
+      return auth.generation === resolveNotificationAuthGeneration()
+        && (auth.expiresAt === null || auth.expiresAt > Date.now());
+    }
+    return null;
+  };
+
   const handleUrlAuthToken = async (req, res) => {
-    const sessionToken = await resolveAuthenticatedSessionToken(req, { allowUrlToken: false });
+    const cookieToken = getTokenFromRequest(req);
+    const sessionAuth = await notificationAuthForSession(cookieToken);
+    const clientAuth = sessionAuth
+      ? null
+      : await authenticateClientRequest(req, { allowUrlToken: false });
+    const sessionToken = sessionAuth
+      ? cookieToken
+      : clientAuth
+        ? clientSessionToken(clientAuth)
+        : null;
     if (!sessionToken) {
       clearSessionCookie(req, res);
       return respondUnauthorized(req, res);
     }
+    const notificationAuth = sessionAuth || notificationAuthForClient(clientAuth);
     res.setHeader('Cache-Control', 'no-store');
-    return res.json(issueUrlAuthTokenForSession(sessionToken));
+    return res.json(issueUrlAuthTokenForSession(sessionToken, notificationAuth));
   };
 
   const handleSessionCreate = async (req, res) => {
@@ -932,7 +1139,11 @@ export const createUiAuth = ({
   const handleResetAuth = (req, res) => {
     try {
       const passkeyResult = passkeyController.clearAllPasskeys();
-      rotateJwtSecret();
+      try {
+        rotateJwtSecret();
+      } finally {
+        invalidateNotificationAuth({ kind: NOTIFICATION_AUTH_KIND_UI_SESSION });
+      }
       clearSessionCookie(req, res);
       res.json({
         cleared: true,
@@ -951,16 +1162,24 @@ export const createUiAuth = ({
       rateLimitCleanupTimer = null;
     }
     passkeyController.dispose();
+    unsubscribeNotificationAuthInvalidation();
+    urlAuthTokens.clear();
   };
 
   return {
     enabled: true,
     requireAuth,
+    requireClientAuth: requireBearerClientAuth,
     requireSessionAuth,
     resolveAuthContext,
+    resolveNotificationAuth,
+    resolveChannelAuth: resolveNotificationAuth,
+    resolveUrlAuth,
+    validateNotificationAuth,
     handleSessionStatus,
     handleSessionCreate,
     handleUrlAuthToken,
+    issueUrlAuthTokenForSession,
     handlePasskeyStatus,
     handlePasskeyRegistrationOptions,
     handlePasskeyRegistrationVerify,

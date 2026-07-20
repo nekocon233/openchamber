@@ -10,6 +10,11 @@ export const createSettingsHelpers = (dependencies) => {
     normalizeManagedRemoteTunnelHostname,
     normalizeManagedRemoteTunnelPresets,
     normalizeManagedRemoteTunnelPresetTokens,
+    normalizeFrpcServerAddress,
+    normalizeFrpcServerPort,
+    normalizeFrpcTrustedCaFile,
+    normalizeFrpcRemotePort,
+    normalizeFrpcPublicUrl,
     sanitizeTypographySizesPartial,
     normalizeStringArray,
     sanitizeModelRefs,
@@ -392,6 +397,103 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.managedRemoteTunnelSelectedPresetId === 'string') {
       const id = candidate.managedRemoteTunnelSelectedPresetId.trim();
       result.managedRemoteTunnelSelectedPresetId = id || undefined;
+    }
+    if (candidate.frpcProxyType === 'tcp' || candidate.frpcProxyType === 'http') {
+      result.frpcProxyType = candidate.frpcProxyType;
+    }
+    if (candidate.frpcServerAddress === null) {
+      result.frpcServerAddress = null;
+    } else if (typeof candidate.frpcServerAddress === 'string') {
+      const value = candidate.frpcServerAddress.trim();
+      if (!value) {
+        result.frpcServerAddress = null;
+      } else {
+        try {
+          result.frpcServerAddress = normalizeFrpcServerAddress(value);
+        } catch {
+          // Invalid values are rejected by omission, matching other settings sanitizers.
+        }
+      }
+    }
+    if (candidate.frpcServerPort === null) {
+      result.frpcServerPort = null;
+    } else if (Number.isInteger(candidate.frpcServerPort)) {
+      try {
+        result.frpcServerPort = normalizeFrpcServerPort(candidate.frpcServerPort);
+      } catch {
+        // Invalid values are rejected by omission, matching other settings sanitizers.
+      }
+    }
+    if (candidate.frpcTrustedCaFile === null) {
+      result.frpcTrustedCaFile = null;
+    } else if (typeof candidate.frpcTrustedCaFile === 'string') {
+      const value = candidate.frpcTrustedCaFile.trim();
+      if (!value) {
+        result.frpcTrustedCaFile = null;
+      } else {
+        try {
+          result.frpcTrustedCaFile = normalizeFrpcTrustedCaFile(value);
+        } catch {
+          // Invalid values are rejected by omission, matching other settings sanitizers.
+        }
+      }
+    }
+    if (candidate.frpcRemotePort === null) {
+      result.frpcRemotePort = null;
+    } else if (Number.isInteger(candidate.frpcRemotePort)) {
+      try {
+        result.frpcRemotePort = normalizeFrpcRemotePort(candidate.frpcRemotePort);
+      } catch {
+        // Invalid values are rejected by omission, matching other settings sanitizers.
+      }
+    }
+    if (candidate.frpcPublicUrl === null) {
+      result.frpcPublicUrl = null;
+    } else if (typeof candidate.frpcPublicUrl === 'string') {
+      const value = candidate.frpcPublicUrl.trim();
+      if (!value) {
+        result.frpcPublicUrl = null;
+      } else {
+        try {
+          result.frpcPublicUrl = normalizeFrpcPublicUrl(value);
+        } catch {
+          // Invalid values are rejected by omission, matching other settings sanitizers.
+        }
+      }
+    }
+    if (candidate.frpcCustomDomain === null) {
+      result.frpcCustomDomain = null;
+    } else if (typeof candidate.frpcCustomDomain === 'string') {
+      const value = candidate.frpcCustomDomain.trim();
+      if (!value) {
+        result.frpcCustomDomain = null;
+      } else {
+        try {
+          const hostname = normalizeManagedRemoteTunnelHostname(value);
+          if (hostname) {
+            result.frpcCustomDomain = hostname;
+          }
+        } catch {
+          // Invalid values are rejected by omission, matching other settings sanitizers.
+        }
+      }
+    }
+    if (candidate.frpcPublicHostname === null) {
+      result.frpcPublicHostname = null;
+    } else if (typeof candidate.frpcPublicHostname === 'string') {
+      const value = candidate.frpcPublicHostname.trim();
+      if (!value) {
+        result.frpcPublicHostname = null;
+      } else {
+        try {
+          const hostname = normalizeManagedRemoteTunnelHostname(value);
+          if (hostname) {
+            result.frpcPublicHostname = hostname;
+          }
+        } catch {
+          // Invalid values are rejected by omission, matching other settings sanitizers.
+        }
+      }
     }
 
     const typography = sanitizeTypographySizesPartial(candidate.typographySizes);
@@ -851,6 +953,7 @@ export const createSettingsHelpers = (dependencies) => {
   const formatSettingsResponse = (settings) => {
     const sanitized = sanitizeSettingsUpdate(settings);
     delete sanitized.managedRemoteTunnelToken;
+    delete sanitized.managedRemoteTunnelPresetTokens;
     const bookmarks = normalizeStringArray(settings.securityScopedBookmarks);
     const hasManagedRemoteTunnelToken = typeof settings?.managedRemoteTunnelToken === 'string' && settings.managedRemoteTunnelToken.trim().length > 0;
     const pwaAppName = normalizePwaAppName(settings?.pwaAppName, '');

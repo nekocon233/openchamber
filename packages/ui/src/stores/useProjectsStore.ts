@@ -2,9 +2,14 @@ import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { opencodeClient } from '@/lib/opencode/client';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
-import type { ProjectEntry } from '@/lib/api/types';
+import type {
+  ProjectEntry,
+  SidebarProjectEntry,
+  SidebarProjectPatch,
+  SidebarStateOperation,
+  SidebarStateSnapshot,
+} from '@/lib/api/types';
 import type { DesktopSettings } from '@/lib/desktop';
-import { updateDesktopSettings } from '@/lib/persistence';
 import { createProjectIdFromPath } from '@/lib/projectId';
 import { getDeferredSafeStorage } from './utils/safeStorage';
 import { useDirectoryStore } from './useDirectoryStore';
@@ -12,7 +17,12 @@ import { streamDebugEnabled } from '@/stores/utils/streamDebug';
 import { PROJECT_COLORS } from '@/lib/projectMeta';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { runtimeFetch } from '@/lib/runtime-fetch';
-import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { normalizeSidebarPath } from '@/lib/sidebarState';
+import {
+  useSidebarStateStore,
+  type SidebarStateRuntimeContext,
+} from './useSidebarStateStore';
 
 /** Pick a color key that's least used among existing projects */
 const pickAutoColor = (projects: ProjectEntry[]): string => {
@@ -81,11 +91,7 @@ const getLocalRuntimeOrigin = (): string => {
   return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
 };
 
-const getProjectsStorageNamespace = (): string => {
-  const apiBaseUrl = getRuntimeApiBaseUrl().trim().replace(/\/+$/, '');
-  if (!apiBaseUrl) return '';
-  return apiBaseUrl;
-};
+const getProjectsStorageNamespace = (): string => getRuntimeKey().trim();
 
 const getProjectsStorageKey = (): string => {
   const namespace = getProjectsStorageNamespace();
@@ -99,9 +105,9 @@ const getActiveProjectStorageKey = (): string => {
 
 const shouldReadLegacyProjectsCache = (): boolean => {
   const namespace = getProjectsStorageNamespace();
-  if (!namespace) return true;
+  if (!namespace || namespace === 'local') return true;
   const localOrigin = getLocalRuntimeOrigin();
-  return Boolean(localOrigin && namespace === localOrigin);
+  return Boolean(localOrigin && namespace === `url:${localOrigin}`);
 };
 
 const resolveTildePath = (value: string, homeDir?: string | null): string => {
@@ -158,11 +164,11 @@ const normalizeProjectPath = (value: string): string => {
   const homeDirectory = safeStorage.getItem('homeDirectory') || useDirectoryStore.getState().homeDirectory || '';
   const expanded = resolveTildePath(trimmed, homeDirectory);
 
-  const normalized = expanded.replace(/\\/g, '/');
-  if (normalized === '/') {
-    return '/';
+  try {
+    return normalizeSidebarPath(expanded);
+  } catch {
+    return '';
   }
-  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
 };
 
 const deriveProjectLabel = (path: string): string => {
@@ -364,8 +370,28 @@ const persistProjects = (projects: ProjectEntry[], activeProjectId: string | nul
   if (manualOrder) {
     persistManualProjectOrder(manualOrder);
   }
-  void updateDesktopSettings({ projects, activeProjectId: activeProjectId ?? undefined });
 };
+
+const submitSidebarOperation = (
+  operation: SidebarStateOperation,
+): Promise<SidebarStateSnapshot> => useSidebarStateStore.getState().mutate(operation);
+
+const captureSidebarRuntimeContext = (): SidebarStateRuntimeContext => {
+  const state = useSidebarStateStore.getState();
+  return { runtimeKey: state.runtimeKey, generation: state.generation };
+};
+
+const isSidebarRuntimeContextCurrent = (context: SidebarStateRuntimeContext): boolean => {
+  const state = useSidebarStateStore.getState();
+  return state.runtimeKey === context.runtimeKey
+    && state.generation === context.generation
+    && (getRuntimeKey().trim() || 'default') === context.runtimeKey;
+};
+
+const projectIconRuntimeChangedResult = (): { ok: false; error: string } => ({
+  ok: false,
+  error: 'Project icon operation cancelled because the runtime changed',
+});
 
 const persistManualProjectOrder = (manualOrder: string[]) => {
   try {
@@ -593,7 +619,7 @@ export const useProjectsStore = create<ProjectsStore>()(
 
       const now = Date.now();
       const label = options?.label?.trim() || deriveProjectLabel(normalizedPath);
-      const id = createProjectIdFromPath(normalizedPath);
+      const id = options?.id?.trim() || createProjectIdFromPath(normalizedPath);
       const entry: ProjectEntry = {
         id,
         path: normalizedPath,
@@ -611,7 +637,16 @@ export const useProjectsStore = create<ProjectsStore>()(
       }
 
       get().setActiveProject(entry.id);
-      void get().discoverProjectIcon(entry.id);
+      void submitSidebarOperation({
+        type: 'project.add',
+        project: {
+          id: entry.id,
+          path: entry.path,
+          label: entry.label,
+          color: entry.color,
+          addedAt: entry.addedAt,
+        },
+       }).then(() => get().discoverProjectIcon(entry.id)).catch(() => {});
       return entry;
     },
 
@@ -631,6 +666,7 @@ export const useProjectsStore = create<ProjectsStore>()(
       const nextManualOrder = get().manualProjectOrder.filter((oid) => oid !== id);
       set({ projects: nextProjects, activeProjectId: nextActiveId, manualProjectOrder: nextManualOrder });
       persistProjects(nextProjects, nextActiveId, nextManualOrder);
+      void submitSidebarOperation({ type: 'project.remove', projectId: id }).catch(() => {});
 
       // Clean up worktree entries for the removed project
       if (project) {
@@ -715,6 +751,7 @@ export const useProjectsStore = create<ProjectsStore>()(
       );
       set({ projects: nextProjects });
       persistProjects(nextProjects, activeProjectId, get().manualProjectOrder);
+      void submitSidebarOperation({ type: 'project.update', projectId: id, patch: { label: trimmed } }).catch(() => {});
     },
 
     updateProjectMeta: (id: string, meta: {
@@ -752,6 +789,15 @@ export const useProjectsStore = create<ProjectsStore>()(
       });
       set({ projects: nextProjects });
       persistProjects(nextProjects, activeProjectId, get().manualProjectOrder);
+      const patch: SidebarProjectPatch = {};
+      if (meta.label !== undefined && meta.label.trim()) patch.label = meta.label.trim();
+      if (meta.icon !== undefined) patch.icon = meta.icon;
+      if (meta.color !== undefined) patch.color = meta.color;
+      if (meta.iconBackground !== undefined) patch.iconBackground = normalizeIconBackground(meta.iconBackground);
+      if (meta.defaultModel !== undefined) patch.defaultModel = normalizeDefaultModel(meta.defaultModel) ?? null;
+      if (Object.keys(patch).length > 0) {
+        void submitSidebarOperation({ type: 'project.update', projectId: id, patch }).catch(() => {});
+      }
     },
 
     uploadProjectIcon: async (id: string, file: File) => {
@@ -770,8 +816,10 @@ export const useProjectsStore = create<ProjectsStore>()(
         return { ok: false, error: 'Icon exceeds size limit (5 MB)' };
       }
 
+      const runtimeContext = captureSidebarRuntimeContext();
       try {
         const dataUrl = await readFileAsDataUrl(file);
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
         const normalizedDataUrl = dataUrl.replace(/^data:[^;]+;/i, `data:${mime};`);
 
         const response = await runtimeFetch(`/api/projects/${encodeURIComponent(id)}/icon`, {
@@ -782,15 +830,20 @@ export const useProjectsStore = create<ProjectsStore>()(
           },
           body: JSON.stringify({ dataUrl: normalizedDataUrl }),
         });
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
 
         if (!response.ok) {
           const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
           return { ok: false, error: payload?.error || 'Failed to upload project icon' };
         }
 
-        const payload = (await response.json().catch(() => null)) as { settings?: DesktopSettings } | null;
-        if (payload?.settings) {
-          get().synchronizeFromSettings(payload.settings);
+        const payload = (await response.json().catch(() => null)) as { snapshot?: unknown } | null;
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
+        if (payload?.snapshot) {
+          if (!useSidebarStateStore.getState().installAuthoritativeSnapshot(payload.snapshot, runtimeContext)) {
+            return projectIconRuntimeChangedResult();
+          }
         }
         return { ok: true };
       } catch (error) {
@@ -804,22 +857,29 @@ export const useProjectsStore = create<ProjectsStore>()(
         return { ok: false, error: 'Custom icons are not supported in this runtime' };
       }
 
+      const runtimeContext = captureSidebarRuntimeContext();
       try {
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
         const response = await runtimeFetch(`/api/projects/${encodeURIComponent(id)}/icon`, {
           method: 'DELETE',
           headers: {
             Accept: 'application/json',
           },
         });
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
 
         if (!response.ok) {
           const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
           return { ok: false, error: payload?.error || 'Failed to remove project icon' };
         }
 
-        const payload = (await response.json().catch(() => null)) as { settings?: DesktopSettings } | null;
-        if (payload?.settings) {
-          get().synchronizeFromSettings(payload.settings);
+        const payload = (await response.json().catch(() => null)) as { snapshot?: unknown } | null;
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
+        if (payload?.snapshot) {
+          if (!useSidebarStateStore.getState().installAuthoritativeSnapshot(payload.snapshot, runtimeContext)) {
+            return projectIconRuntimeChangedResult();
+          }
         }
         return { ok: true };
       } catch (error) {
@@ -833,7 +893,9 @@ export const useProjectsStore = create<ProjectsStore>()(
         return { ok: false, error: 'Custom icons are not supported in this runtime' };
       }
 
+      const runtimeContext = captureSidebarRuntimeContext();
       try {
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
         const response = await runtimeFetch(`/api/projects/${encodeURIComponent(id)}/icon/discover`, {
           method: 'POST',
           headers: {
@@ -842,20 +904,24 @@ export const useProjectsStore = create<ProjectsStore>()(
           },
           body: JSON.stringify({ force: options?.force === true }),
         });
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
 
         const payload = (await response.json().catch(() => null)) as {
           error?: string;
           skipped?: boolean;
           reason?: string;
-          settings?: DesktopSettings;
+          snapshot?: unknown;
         } | null;
+        if (!isSidebarRuntimeContextCurrent(runtimeContext)) return projectIconRuntimeChangedResult();
 
         if (!response.ok) {
           return { ok: false, error: payload?.error || 'Failed to discover project icon' };
         }
 
-        if (payload?.settings) {
-          get().synchronizeFromSettings(payload.settings);
+        if (payload?.snapshot) {
+          if (!useSidebarStateStore.getState().installAuthoritativeSnapshot(payload.snapshot, runtimeContext)) {
+            return projectIconRuntimeChangedResult();
+          }
         }
 
         return {
@@ -891,6 +957,7 @@ export const useProjectsStore = create<ProjectsStore>()(
       const newOrder = nextProjects.map((p) => p.id);
       set({ projects: nextProjects, manualProjectOrder: newOrder });
       persistProjects(nextProjects, activeProjectId, newOrder);
+      void submitSidebarOperation({ type: 'project.move', projectId: moved.id, toIndex }).catch(() => {});
     },
 
     resetForRuntimeSwitch: () => {
@@ -909,52 +976,9 @@ export const useProjectsStore = create<ProjectsStore>()(
       if (isVSCodeProjectsRuntime) {
         return;
       }
-      const incomingProjects = sanitizeProjects(settings.projects ?? []);
-      const incomingActive = typeof settings.activeProjectId === 'string' && settings.activeProjectId.trim()
-        ? settings.activeProjectId.trim()
-        : null;
-
-      const current = get();
-
-      // Race guard: settings load can return empty projects during app
-      // rebuild/reinstall or an incomplete settings read. Don't clobber
-      // a populated cache with empty — the sidebar would go blank and
-      // localStorage would be overwritten, losing the list entirely.
-      if (incomingProjects.length === 0 && current.projects.length > 0) {
-        if (incomingActive !== current.activeProjectId) {
-          // Active project may still be valid within the cached list.
-          const activeExists = incomingActive
-            ? current.projects.some((project) => project.id === incomingActive)
-            : true;
-          if (activeExists) {
-            set({ activeProjectId: incomingActive });
-            cacheProjects(current.projects, incomingActive);
-            persistManualProjectOrder(get().manualProjectOrder);
-          }
-        }
-        return;
-      }
-
-      const projectsChanged = JSON.stringify(current.projects) !== JSON.stringify(incomingProjects);
-      const activeChanged = current.activeProjectId !== incomingActive;
-
-      if (!projectsChanged && !activeChanged) {
-        return;
-      }
-
-      const incomingIds = new Set(incomingProjects.map((p) => p.id));
-      const cleanedOrder = get().manualProjectOrder.filter((id) => incomingIds.has(id));
-      set({ projects: incomingProjects, activeProjectId: incomingActive, manualProjectOrder: cleanedOrder });
-      cacheProjects(incomingProjects, incomingActive);
-      persistManualProjectOrder(cleanedOrder);
-
-      if (incomingActive) {
-        const activeProject = incomingProjects.find((project) => project.id === incomingActive);
-        if (activeProject) {
-          opencodeClient.setDirectory(activeProject.path);
-          useDirectoryStore.getState().setDirectory(activeProject.path, { showOverlay: false });
-        }
-      }
+      // Projects and active navigation no longer come from server settings.
+      // The sidebar-state projection and runtime-scoped local cache own them.
+      void settings;
     },
 
     syncVSCodeWorkspaceFolders: (folders, activePath) => {
@@ -1002,6 +1026,66 @@ export const useProjectsStore = create<ProjectsStore>()(
 
   }), { name: 'projects-store' })
 );
+
+const sidebarProjectMatchesLocal = (local: ProjectEntry, shared: SidebarProjectEntry): boolean => (
+  local.id === shared.id
+  && local.path === shared.path
+  && local.label === shared.label
+  && local.icon === shared.icon
+  && local.iconBackground === shared.iconBackground
+  && local.color === shared.color
+  && local.defaultModel === shared.defaultModel
+  && local.addedAt === shared.addedAt
+  && local.iconImage?.mime === shared.iconImage?.mime
+  && local.iconImage?.updatedAt === shared.iconImage?.updatedAt
+  && local.iconImage?.source === shared.iconImage?.source
+);
+
+const synchronizeProjectsFromSidebarState = (): void => {
+  if (isVSCodeProjectsRuntime) return;
+  const snapshot = useSidebarStateStore.getState().snapshot;
+  if (!snapshot) return;
+  const current = useProjectsStore.getState();
+  const localById = new Map(current.projects.map((project) => [project.id, project]));
+  const projects: ProjectEntry[] = snapshot.projects.map((project) => {
+    const local = localById.get(project.id);
+    const projected = {
+      ...project,
+      ...(local?.lastOpenedAt !== undefined ? { lastOpenedAt: local.lastOpenedAt } : {}),
+      ...(local?.sidebarCollapsed !== undefined ? { sidebarCollapsed: local.sidebarCollapsed } : {}),
+    };
+    return local && sidebarProjectMatchesLocal(local, project) ? local : projected;
+  });
+  const activeProjectId = projects.some((project) => project.id === current.activeProjectId)
+    ? current.activeProjectId
+    : projects[0]?.id ?? null;
+  const manualProjectOrder = projects.map((project) => project.id);
+  const projectsChanged = projects.length !== current.projects.length
+    || projects.some((project, index) => project !== current.projects[index]);
+  const manualOrderChanged = manualProjectOrder.length !== current.manualProjectOrder.length
+    || manualProjectOrder.some((projectId, index) => projectId !== current.manualProjectOrder[index]);
+  if (!projectsChanged && activeProjectId === current.activeProjectId && !manualOrderChanged) return;
+  const nextProjects = projectsChanged ? projects : current.projects;
+  useProjectsStore.setState({ projects: nextProjects, activeProjectId, manualProjectOrder });
+  if (projectsChanged || activeProjectId !== current.activeProjectId) {
+    cacheProjects(nextProjects, activeProjectId);
+  }
+  if (manualOrderChanged) persistManualProjectOrder(manualProjectOrder);
+  if (activeProjectId !== current.activeProjectId) {
+    const activeProject = activeProjectId
+      ? nextProjects.find((project) => project.id === activeProjectId) ?? null
+      : null;
+    if (activeProject) {
+      opencodeClient.setDirectory(activeProject.path);
+      useDirectoryStore.getState().setDirectory(activeProject.path, { showOverlay: false });
+    } else {
+      void useDirectoryStore.getState().goHome();
+    }
+  }
+};
+
+useSidebarStateStore.subscribe(synchronizeProjectsFromSidebarState);
+synchronizeProjectsFromSidebarState();
 
 if (typeof window !== 'undefined') {
   window.addEventListener('openchamber:settings-synced', (event: Event) => {

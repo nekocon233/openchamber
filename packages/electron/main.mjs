@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net as electron
 import contextMenu from 'electron-context-menu';
 import log from 'electron-log/main.js';
 import dgram from 'node:dgram';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -17,6 +18,15 @@ import { sanitizeRuntimeRequestHeaders } from './runtime-request-headers.mjs';
 import { assertUpdaterCapability } from './updater-capability.mjs';
 import { checkForDesktopUpdate } from './updater-check.mjs';
 import { resolveUpdaterFeed } from './updater-feed.mjs';
+import { createMainWindowSessionNavigation } from './main-window-session-navigation.mjs';
+import { createWindowRuntimeIdentityController } from './window-runtime-identity.mjs';
+import {
+  WINDOWS_NOTIFICATION_TARGET_LIMIT,
+  buildWindowsProtocolToastXml,
+  getWindowsNotificationTarget,
+  removeWindowsNotificationTarget,
+  storeWindowsNotificationTarget,
+} from './windows-notification-protocol.mjs';
 import { mintOutsideFileGrant } from '@openchamber/web/server/lib/fs/routes.js';
 
 const execFileAsync = promisify(execFile);
@@ -107,6 +117,14 @@ log.transports.console.level = isDev ? 'debug' : 'warn';
 // diagnostics are persisted.
 Object.assign(console, log.functions);
 
+const isDeepLinkProtocolAvailable = () => {
+  try {
+    return app.isDefaultProtocolClient(DEEP_LINK_PROTOCOL);
+  } catch {
+    return false;
+  }
+};
+
 const LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 try {
   const logPath = log.transports.file.getFile().path;
@@ -130,7 +148,6 @@ try {
     app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL);
   }
 } catch (error) {
-  // log.* not yet initialized at this point; fall back to console.
   console.warn('[electron] failed to register deep-link protocol:', error);
 }
 
@@ -190,6 +207,7 @@ const state = {
   serverHandle: null,
   sidecarUrl: null,
   localOrigin: null,
+  localUiOrigin: null,
   apiBaseUrl: null,
   clientToken: null,
   requestHeaders: {},
@@ -599,13 +617,14 @@ const buildRendererRuntimeConfig = (uiUrl, runtimeConfig = {}) => {
   const apiBaseUrl = typeof runtimeConfig.apiBaseUrl === 'string' ? runtimeConfig.apiBaseUrl : (state.apiBaseUrl || '');
   const clientToken = typeof runtimeConfig.clientToken === 'string' ? runtimeConfig.clientToken : (state.clientToken || '');
   const requestHeaders = sanitizeRuntimeRequestHeaders(runtimeConfig.requestHeaders || state.requestHeaders || {});
+  const runtimeHostId = typeof runtimeConfig.runtimeHostId === 'string' ? runtimeConfig.runtimeHostId : '';
   // Relay-capable hosts have no injectable HTTP base: the renderer reads this
   // host id, probes the direct leg, and falls back to the E2EE tunnel itself.
   const relayHostId = typeof runtimeConfig.relayHostId === 'string' ? runtimeConfig.relayHostId : '';
   if (shouldUseSameOriginDevProxy(uiUrl, apiBaseUrl)) {
-    return { apiBaseUrl: '', clientToken: '', requestHeaders: {}, relayHostId };
+    return { apiBaseUrl: '', clientToken: '', requestHeaders: {}, runtimeHostId, relayHostId };
   }
-  return { apiBaseUrl, clientToken, requestHeaders, relayHostId };
+  return { apiBaseUrl, clientToken, requestHeaders, runtimeHostId, relayHostId };
 };
 
 const readDesktopLocalClientToken = () => {
@@ -1114,13 +1133,17 @@ const focusForegroundWindow = () => {
 // click events to silently stop firing after ~1 min.
 // See https://blog.bloomca.me/2025/02/22/electron-mac-notifications
 const activeNotifications = new Set();
+const timedOutWindowsNotifications = new Set();
+const nativeNotificationTargets = new Map();
+const consumedNativeNotificationTargetIds = new Set();
 const nativeNotificationClaims = new Map();
 const NATIVE_NOTIFICATION_DEDUPE_TTL_MS = 5000;
 
 const getNativeNotificationClaimKey = (payload) => {
   const tag = typeof payload?.tag === 'string' ? payload.tag.trim() : '';
-  if (tag) return tag;
-  return [payload?.sessionId, payload?.kind, payload?.title, payload?.body]
+  const runtimeKey = typeof payload?.runtimeKey === 'string' ? payload.runtimeKey.trim() : '';
+  if (tag) return [runtimeKey, tag].filter(Boolean).join('|');
+  return [runtimeKey, payload?.sessionId, payload?.kind, payload?.title, payload?.body]
     .filter((value) => typeof value === 'string' && value.trim())
     .map((value) => value.trim())
     .join('|');
@@ -1146,7 +1169,54 @@ const claimNativeNotification = (payload) => {
   return true;
 };
 
-const maybeShowNativeNotification = (rawInput) => {
+const notificationTargetsFilePath = () => path.join(app.getPath('userData'), 'notification-targets.json');
+let notificationTargetsMutationChain = Promise.resolve();
+
+const readNotificationTargetsRoot = () => readJsonFile(notificationTargetsFilePath());
+
+const mutateNotificationTargetsRoot = (mutator) => {
+  const next = notificationTargetsMutationChain.then(async () => {
+    const current = readNotificationTargetsRoot();
+    await writeJsonFile(notificationTargetsFilePath(), mutator(current));
+  });
+  notificationTargetsMutationChain = next.catch(() => {});
+  return next;
+};
+
+const rememberNativeNotificationTarget = (target) => {
+  nativeNotificationTargets.set(target.id, target);
+  while (nativeNotificationTargets.size > WINDOWS_NOTIFICATION_TARGET_LIMIT) {
+    const oldestId = nativeNotificationTargets.keys().next().value;
+    if (!oldestId) break;
+    nativeNotificationTargets.delete(oldestId);
+  }
+  return mutateNotificationTargetsRoot((root) => storeWindowsNotificationTarget(root, target));
+};
+
+const removeNativeNotificationTarget = (notificationId) => {
+  if (!notificationId) return;
+  nativeNotificationTargets.delete(notificationId);
+  void mutateNotificationTargetsRoot((root) => removeWindowsNotificationTarget(root, notificationId)).catch((error) => {
+    log.warn('[electron] failed to remove native notification target', error);
+  });
+};
+
+const consumeNativeNotificationTarget = (notificationId) => {
+  if (!notificationId || consumedNativeNotificationTargetIds.has(notificationId)) return null;
+  const target = nativeNotificationTargets.get(notificationId)
+    ?? getWindowsNotificationTarget(readNotificationTargetsRoot(), notificationId);
+  if (!target) return null;
+  consumedNativeNotificationTargetIds.add(notificationId);
+  while (consumedNativeNotificationTargetIds.size > WINDOWS_NOTIFICATION_TARGET_LIMIT) {
+    const oldestId = consumedNativeNotificationTargetIds.values().next().value;
+    if (!oldestId) break;
+    consumedNativeNotificationTargetIds.delete(oldestId);
+  }
+  removeNativeNotificationTarget(notificationId);
+  return target;
+};
+
+const maybeShowNativeNotification = (rawInput, sourceRuntimeKey = null) => {
   const payload = normalizeNotificationInput(rawInput);
   const requireHidden = Boolean(payload.requireHidden ?? payload.require_hidden);
 
@@ -1155,10 +1225,6 @@ const maybeShowNativeNotification = (rawInput) => {
   }
 
   if (!Notification.isSupported()) {
-    return;
-  }
-
-  if (!claimNativeNotification(payload)) {
     return;
   }
 
@@ -1172,28 +1238,92 @@ const maybeShowNativeNotification = (rawInput) => {
   const directory = typeof payload.directory === 'string' && payload.directory.trim()
     ? payload.directory.trim()
     : null;
+  const runtimeKeyCandidate = typeof sourceRuntimeKey === 'string' && sourceRuntimeKey.trim()
+    ? sourceRuntimeKey
+    : payload.runtimeKey;
+  const runtimeKey = typeof runtimeKeyCandidate === 'string' && runtimeKeyCandidate.trim().length <= 2_048
+    ? runtimeKeyCandidate.trim()
+    : null;
+  const scopedSessionId = runtimeKey ? sessionId : null;
+  const scopedDirectory = scopedSessionId ? directory : null;
+
+  if (!claimNativeNotification({ ...payload, runtimeKey })) {
+    return;
+  }
+
+  const notificationId = process.platform === 'win32' && runtimeKey && isDeepLinkProtocolAvailable()
+    ? randomUUID()
+    : null;
+  const notificationTarget = notificationId
+    ? { id: notificationId, runtimeKey, sessionId: scopedSessionId, directory: scopedDirectory, createdAt: Date.now() }
+    : null;
 
   const notification = new Notification({
     title,
     body,
     silent: false,
     ...(process.platform === 'darwin' ? { sound: 'Glass' } : {}),
+    ...(notificationId ? {
+      toastXml: buildWindowsProtocolToastXml({ notificationId, title, body }),
+    } : {}),
   });
 
   activeNotifications.add(notification);
-  const release = () => { activeNotifications.delete(notification); };
+  const release = () => {
+    activeNotifications.delete(notification);
+    timedOutWindowsNotifications.delete(notification);
+  };
 
   notification.on('click', () => {
-    focusForegroundWindow();
-    if (sessionId) {
-      emitToAllWindows('openchamber:open-session', { sessionId, directory });
+    const target = notificationId
+      ? consumeNativeNotificationTarget(notificationId)
+      : { runtimeKey, sessionId: scopedSessionId, directory: scopedDirectory };
+    if (!target) {
+      release();
+      return;
     }
+    void focusMainWindowWithSession(target.sessionId, target.directory || '', target.runtimeKey).catch((error) => {
+      log.warn('[electron] failed to open native notification target', error);
+    });
     release();
   });
-  notification.on('close', release);
-  notification.on('failed', release);
+  notification.on('close', (event) => {
+    if (process.platform === 'win32' && event?.reason === 'timedOut') {
+      // Protocol activation owns persisted Action Center clicks. Keep a
+      // bounded live-instance fallback for running installs whose protocol
+      // association is unavailable or stale.
+      timedOutWindowsNotifications.add(notification);
+      while (timedOutWindowsNotifications.size > WINDOWS_NOTIFICATION_TARGET_LIMIT) {
+        const oldest = timedOutWindowsNotifications.values().next().value;
+        if (!oldest) break;
+        timedOutWindowsNotifications.delete(oldest);
+        activeNotifications.delete(oldest);
+      }
+      return;
+    }
+    removeNativeNotificationTarget(notificationId);
+    release();
+  });
+  notification.on('failed', () => {
+    removeNativeNotificationTarget(notificationId);
+    release();
+  });
 
-  notification.show();
+  if (notificationTarget) {
+    void rememberNativeNotificationTarget(notificationTarget)
+      .catch((error) => {
+        notification.toastXml = '';
+        log.warn('[electron] failed to persist native notification target', error);
+      })
+      .finally(() => notification.show())
+      .catch((error) => {
+        removeNativeNotificationTarget(notificationId);
+        release();
+        log.warn('[electron] failed to show native notification', error);
+      });
+  } else {
+    notification.show();
+  }
 };
 
 const mapUpdaterProgressEvent = (payload) => ({
@@ -1385,7 +1515,7 @@ const spawnLocalServer = async () => {
     attachSignals: false,
     exitOnShutdown: false,
     apiOnly: false,
-    onDesktopNotification: (payload) => maybeShowNativeNotification(payload),
+    onDesktopNotification: (payload) => maybeShowNativeNotification(payload, 'local'),
     getIsWindowFocused: isAnyWindowFocused,
     getDesktopRuntimeConfig: () => ({
       apiBaseUrl: state.apiBaseUrl || '',
@@ -1510,18 +1640,19 @@ const macosMajorVersion = () => {
   return major === 10 ? minor : major;
 };
 
-const buildInitScript = (localOrigin, bootOutcome, apiBaseUrl = '', clientToken = '', requestHeaders = {}) => {
+const buildInitScript = (localOrigin, bootOutcome, apiBaseUrl = '', clientToken = '', requestHeaders = {}, runtimeKey = '') => {
   const home = JSON.stringify(os.homedir() || '');
   const local = JSON.stringify(localOrigin || '');
   const apiBase = JSON.stringify(apiBaseUrl || '');
   const token = JSON.stringify(clientToken || '');
   const headers = JSON.stringify(sanitizeRuntimeRequestHeaders(requestHeaders));
+  const key = JSON.stringify(runtimeKey || '');
   const packagedOrigin = JSON.stringify(packagedUiOrigin());
   const macVersion = macosMajorVersion();
   const outcome = JSON.stringify(bootOutcome ?? null);
   return [
     '(function(){',
-    `try{var __oc_local=${local};var __oc_api=${apiBase};var __oc_headers=${headers};var __oc_packaged=${packagedOrigin};var __oc_origin=window.location&&window.location.origin||'';var __oc_is_packaged=__oc_origin===__oc_packaged;var __oc_is_local=__oc_local&&__oc_origin===new URL(__oc_local).origin;window.__OPENCHAMBER_MACOS_MAJOR__=${macVersion};window.__OPENCHAMBER_LOCAL_ORIGIN__=__oc_local;window.__OPENCHAMBER_API_BASE_URL__=__oc_api;if(__oc_is_local||__oc_is_packaged){window.__OPENCHAMBER_HOME__=${home};window.__OPENCHAMBER_RUNTIME_HEADERS__=__oc_headers;}if((__oc_is_local||__oc_is_packaged)&&${token}){window.__OPENCHAMBER_CLIENT_TOKEN__=${token};}var __oc_bo=${outcome};if(__oc_bo){window.__OPENCHAMBER_DESKTOP_BOOT_OUTCOME__=__oc_bo;}}catch(_e){}`,
+    `try{var __oc_local=${local};var __oc_api=${apiBase};var __oc_headers=${headers};var __oc_packaged=${packagedOrigin};var __oc_origin=window.location&&window.location.origin||'';var __oc_is_packaged=__oc_origin===__oc_packaged;var __oc_is_local=__oc_local&&__oc_origin===new URL(__oc_local).origin;window.__OPENCHAMBER_MACOS_MAJOR__=${macVersion};window.__OPENCHAMBER_LOCAL_ORIGIN__=__oc_local;window.__OPENCHAMBER_API_BASE_URL__=__oc_api;window.__OPENCHAMBER_RUNTIME_KEY__=${key};if(__oc_is_local||__oc_is_packaged){window.__OPENCHAMBER_HOME__=${home};window.__OPENCHAMBER_RUNTIME_HEADERS__=__oc_headers;}if((__oc_is_local||__oc_is_packaged)&&${token}){window.__OPENCHAMBER_CLIENT_TOKEN__=${token};}var __oc_bo=${outcome};if(__oc_bo){window.__OPENCHAMBER_DESKTOP_BOOT_OUTCOME__=__oc_bo;}}catch(_e){}`,
     '}())',
   ].join('');
 };
@@ -1777,6 +1908,68 @@ const emitToAllWindows = (event, detail) => {
   }
 };
 
+const normalizeRuntimeUrlKey = (value) => {
+  const normalized = normalizeHostUrl(value);
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    url.hash = '';
+    url.search = '';
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return `url:${url.toString().replace(/\/+$/, '')}`;
+  } catch {
+    return null;
+  }
+};
+
+const configuredHostRuntimeKey = (rawHostId) => {
+  const hostId = typeof rawHostId === 'string' ? rawHostId.trim() : '';
+  if (!hostId) return null;
+  if (hostId === LOCAL_HOST_ID) return LOCAL_HOST_ID;
+  return readDesktopHostsConfig().hosts.some((host) => host.id === hostId)
+    ? `host:${hostId}`
+    : null;
+};
+
+const runtimeKeyFromWindowConfig = (runtimeConfig = {}) => {
+  const configuredRuntimeKey = configuredHostRuntimeKey(runtimeConfig.runtimeHostId || runtimeConfig.relayHostId);
+  if (configuredRuntimeKey) return configuredRuntimeKey;
+  const apiBaseUrl = normalizeHostUrl(runtimeConfig.apiBaseUrl || '');
+  if (!apiBaseUrl) return null;
+  return isLocalRuntimeUrl(apiBaseUrl) ? LOCAL_HOST_ID : normalizeRuntimeUrlKey(apiBaseUrl);
+};
+
+const runtimeKeyFromCommittedUrl = (rawUrl, runtimeConfig = {}) => {
+  const hostId = typeof runtimeConfig.runtimeHostId === 'string' ? runtimeConfig.runtimeHostId.trim() : '';
+  if (hostId && hostId !== LOCAL_HOST_ID) {
+    const host = readDesktopHostsConfig().hosts.find((entry) => entry.id === hostId);
+    if (host && [host.url, host.apiUrl].some((candidate) => sameOrigin(candidate, rawUrl))) {
+      return `host:${hostId}`;
+    }
+  }
+  return normalizeRuntimeUrlKey(rawUrl);
+};
+
+const configuredHostIdFromRuntimeKey = (rawRuntimeKey) => {
+  const runtimeKey = typeof rawRuntimeKey === 'string' ? rawRuntimeKey.trim() : '';
+  if (runtimeKey === LOCAL_HOST_ID) return LOCAL_HOST_ID;
+  if (!runtimeKey.startsWith('host:')) return '';
+  const hostId = runtimeKey.slice('host:'.length);
+  return configuredHostRuntimeKey(hostId) === runtimeKey ? hostId : '';
+};
+
+const windowRuntimeIdentity = createWindowRuntimeIdentityController({
+  isLocalSender: (webContentsValue) => isLocalSender(webContentsValue),
+  runtimeKeyFromConfig: runtimeKeyFromWindowConfig,
+  runtimeKeyFromUrl: runtimeKeyFromCommittedUrl,
+});
+
+const mainWindowSessionNavigation = createMainWindowSessionNavigation({
+  getMainWindow: () => state.mainWindow,
+  getWindowRuntimeKey: (browserWindow) => windowRuntimeIdentity.get(browserWindow),
+  emitToWindow,
+});
+
 // macOS vibrancy: the native NSVisualEffectView needs a moment to settle after
 // the window is shown/restored. Until then the renderer keeps the sidebar solid
 // to avoid a flash of raw transparency; once ready it switches to the
@@ -1998,7 +2191,16 @@ const switchToHostById = async (rawId) => {
     ? { target: 'local', status: 'ok' }
     : { target: 'remote', status: 'ok', hostId: id, url: apiBaseUrl };
   log.info('[electron] switching to host', { id, bootOutcome });
-  await activateMainWindow(targetUrl, state.localOrigin, bootOutcome, { apiBaseUrl, clientToken, requestHeaders });
+  const relayHostId = id === LOCAL_HOST_ID
+    ? ''
+    : config.hosts.find((host) => host.id === id)?.relay ? id : '';
+  await activateMainWindow(targetUrl, state.localOrigin, bootOutcome, {
+    apiBaseUrl,
+    clientToken,
+    requestHeaders,
+    runtimeHostId: id,
+    relayHostId,
+  });
 };
 
 const confirmConnectDeepLink = async (payload) => {
@@ -2068,6 +2270,15 @@ const dispatchDeepLink = (link) => {
       return;
     }
     log.warn('[electron] invalid connect deep-link payload');
+    return;
+  }
+  if (link.type === 'notification' && link.value) {
+    const target = consumeNativeNotificationTarget(link.value);
+    if (target) {
+      void focusMainWindowWithSession(target.sessionId, target.directory || '', target.runtimeKey).catch((error) => {
+        log.warn('[electron] failed to open notification deep-link target', error);
+      });
+    }
     return;
   }
   if (link.type === 'session' && link.value) {
@@ -2199,7 +2410,7 @@ const canUseTitleBarOverlay = (browserWindow) => (
   !browserWindow.isDestroyed()
 );
 
-const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }) => {
+const createBrowserWindow = ({ label, windowRole = 'additional', restoreGeometry, url, runtimeConfig = {} }) => {
   const saved = restoreGeometry ? readWindowState() : null;
   const useSaved = saved && typeof saved.width === 'number' && typeof saved.height === 'number';
   const restoredBounds = useSaved ? clampWindowBoundsToVisibleWorkArea(saved) : null;
@@ -2208,6 +2419,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
   const desktopApiBaseUrl = rendererRuntimeConfig.apiBaseUrl;
   const desktopClientToken = rendererRuntimeConfig.clientToken;
   const desktopRequestHeaders = rendererRuntimeConfig.requestHeaders || {};
+  const desktopRuntimeKey = runtimeKeyFromWindowConfig(rendererRuntimeConfig) || '';
   const desktopHome = os.homedir() || '';
   const desktopMacosMajor = String(macosMajorVersion());
   const usesFramelessChrome = process.platform === 'win32' || process.platform === 'linux';
@@ -2246,11 +2458,13 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
         `--openchamber-api-base-url=${desktopApiBaseUrl}`,
         `--openchamber-client-token=${desktopClientToken}`,
         `--openchamber-runtime-headers=${JSON.stringify(desktopRequestHeaders)}`,
+        `--openchamber-runtime-key=${desktopRuntimeKey}`,
         `--openchamber-home=${desktopHome}`,
         `--openchamber-macos-major=${desktopMacosMajor}`,
         `--openchamber-mac-vibrancy=${useVibrancy ? '1' : '0'}`,
         `--openchamber-boot-outcome=${JSON.stringify(state.bootOutcome || null)}`,
         `--openchamber-relay-host-id=${rendererRuntimeConfig.relayHostId || ''}`,
+        `--openchamber-window-role=${windowRole}`,
       ],
       preload: isDev ? path.join(__dirname, 'preload.mjs') : path.join(app.getAppPath(), 'preload.mjs'),
       backgroundThrottling: false,
@@ -2267,8 +2481,9 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
 
   const browserWindow = new BrowserWindow(options);
   browserWindow.__ocLabel = label || nextWindowLabel();
-  browserWindow.__ocRuntimeConfig = { apiBaseUrl: desktopApiBaseUrl, clientToken: desktopClientToken, requestHeaders: desktopRequestHeaders };
-  browserWindow.__ocInitScript = buildInitScript(desktopLocalOrigin, state.bootOutcome, desktopApiBaseUrl, desktopClientToken, desktopRequestHeaders);
+  browserWindow.__ocRuntimeConfig = rendererRuntimeConfig;
+  windowRuntimeIdentity.reset(browserWindow);
+  browserWindow.__ocInitScript = buildInitScript(desktopLocalOrigin, state.bootOutcome, desktopApiBaseUrl, desktopClientToken, desktopRequestHeaders, desktopRuntimeKey);
   browserWindow.__ocTitleBarOverlayEnabled = titleBarOverlayEnabled;
 
   if (useSaved && saved.maximized) {
@@ -2436,6 +2651,11 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
     }
   });
 
+  browserWindow.webContents.on('did-start-loading', () => {
+    mainWindowSessionNavigation.markLoading(browserWindow);
+    windowRuntimeIdentity.reset(browserWindow);
+  });
+
   browserWindow.webContents.on('did-finish-load', () => {
     browserWindow.webContents.setZoomFactor(1);
     if (state.mainWindow && browserWindow.id === state.mainWindow.id && pendingDeepLinks.length > 0) {
@@ -2470,6 +2690,7 @@ const activateMainWindow = async (url, localOrigin, bootOutcome, runtimeConfig =
   state.requestHeaders = sanitizeRuntimeRequestHeaders(runtimeConfig.requestHeaders || {});
   state.bootOutcome = bootOutcome ?? null;
   const rendererRuntimeConfig = buildRendererRuntimeConfig(url, {
+    ...runtimeConfig,
     apiBaseUrl: state.apiBaseUrl || '',
     clientToken: state.clientToken || '',
     requestHeaders: state.requestHeaders || {},
@@ -2480,11 +2701,13 @@ const activateMainWindow = async (url, localOrigin, bootOutcome, runtimeConfig =
     rendererRuntimeConfig.apiBaseUrl,
     rendererRuntimeConfig.clientToken,
     rendererRuntimeConfig.requestHeaders,
+    runtimeKeyFromWindowConfig(rendererRuntimeConfig) || '',
   );
 
   const mainWindow = state.mainWindow;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.__ocRuntimeConfig = rendererRuntimeConfig;
+    windowRuntimeIdentity.reset(mainWindow);
     mainWindow.__ocInitScript = state.initScript;
     await navigateWindow(mainWindow, url, { allowAbort: true });
     mainWindow.show();
@@ -2494,17 +2717,18 @@ const activateMainWindow = async (url, localOrigin, bootOutcome, runtimeConfig =
 
   state.mainWindow = createBrowserWindow({
     label: 'main',
+    windowRole: 'main',
     restoreGeometry: true,
     url,
-    runtimeConfig,
+    runtimeConfig: rendererRuntimeConfig,
   });
   return state.mainWindow;
 };
 
 const openMainWindow = async () => {
   if (!state.localOrigin) {
-    const { initialUrl, localOrigin, bootOutcome, apiBaseUrl, clientToken, requestHeaders } = await resolveInitialUrl();
-    return activateMainWindow(initialUrl, localOrigin, bootOutcome, { apiBaseUrl, clientToken, requestHeaders });
+    const { initialUrl, localOrigin, bootOutcome, apiBaseUrl, clientToken, requestHeaders, runtimeHostId, relayHostId } = await resolveInitialUrl();
+    return activateMainWindow(initialUrl, localOrigin, bootOutcome, { apiBaseUrl, clientToken, requestHeaders, runtimeHostId, relayHostId });
   }
 
   const config = readDesktopHostsConfig();
@@ -2524,6 +2748,8 @@ const openMainWindow = async () => {
       apiBaseUrl: localApiBaseUrl,
       clientToken: localToken,
       requestHeaders: {},
+      runtimeHostId: relayHost.id,
+      relayHostId: relayHost.id,
     });
   }
   const apiBaseUrl = host?.apiUrl || host?.url || state.sidecarUrl || state.apiBaseUrl || '';
@@ -2532,7 +2758,12 @@ const openMainWindow = async () => {
   const targetUrl = host?.url && apiBaseUrl && !state.unreachableHosts.has(apiBaseUrl)
     ? (shouldUsePackagedUi() ? buildPackagedUiUrl('/index.html') : host.url)
     : localUiUrl;
-  return activateMainWindow(targetUrl, state.localOrigin, state.bootOutcome, { apiBaseUrl, clientToken, requestHeaders });
+  return activateMainWindow(targetUrl, state.localOrigin, state.bootOutcome, {
+    apiBaseUrl,
+    clientToken,
+    requestHeaders,
+    runtimeHostId: host?.id || (isLocalRuntimeUrl(apiBaseUrl) ? LOCAL_HOST_ID : ''),
+  });
 };
 
 const createAdditionalWindow = async (url, runtimeConfig = {}) => {
@@ -2541,6 +2772,7 @@ const createAdditionalWindow = async (url, runtimeConfig = {}) => {
   }
   const browserWindow = createBrowserWindow({
     label: nextWindowLabel(),
+    windowRole: 'additional',
     restoreGeometry: false,
     url,
     runtimeConfig,
@@ -2563,7 +2795,9 @@ const buildMiniChatUrl = ({ mode, sessionId, directory, projectId }) => {
 };
 
 const miniChatSessionWindowKey = (runtimeConfig, sessionId) => {
-  const runtimeKey = normalizeHostUrl(runtimeConfig?.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.sidecarUrl || '') || 'local';
+  const runtimeKey = runtimeKeyFromWindowConfig(runtimeConfig)
+    || normalizeHostUrl(runtimeConfig?.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.sidecarUrl || '')
+    || LOCAL_HOST_ID;
   return `${runtimeKey}\n${sessionId}`;
 };
 
@@ -2587,6 +2821,7 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
     apiBaseUrl: normalizeHostUrl(runtimeConfig.apiBaseUrl || state.apiBaseUrl || state.localOrigin || state.sidecarUrl || ''),
     clientToken: sanitizeClientTokenForStorage(runtimeConfig.clientToken || state.clientToken || ''),
     requestHeaders: sanitizeRuntimeRequestHeaders(runtimeConfig.requestHeaders || state.requestHeaders || {}),
+    runtimeHostId: typeof runtimeConfig.runtimeHostId === 'string' ? runtimeConfig.runtimeHostId : '',
   };
   const sessionWindowKey = mode === 'session' && sessionId ? miniChatSessionWindowKey(effectiveRuntimeConfig, sessionId) : '';
   if (mode === 'session' && sessionId) {
@@ -2604,6 +2839,7 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
   const desktopApiBaseUrl = effectiveRuntimeConfig.apiBaseUrl || '';
   const desktopClientToken = effectiveRuntimeConfig.clientToken || '';
   const desktopRequestHeaders = effectiveRuntimeConfig.requestHeaders || {};
+  const desktopRuntimeKey = runtimeKeyFromWindowConfig(effectiveRuntimeConfig) || '';
   const desktopHome = os.homedir() || '';
   const desktopMacosMajor = String(macosMajorVersion());
   const usesFramelessChrome = process.platform === 'win32' || process.platform === 'linux';
@@ -2632,8 +2868,10 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
         `--openchamber-api-base-url=${desktopApiBaseUrl}`,
         `--openchamber-client-token=${desktopClientToken}`,
         `--openchamber-runtime-headers=${JSON.stringify(desktopRequestHeaders)}`,
+        `--openchamber-runtime-key=${desktopRuntimeKey}`,
         `--openchamber-home=${desktopHome}`,
         `--openchamber-macos-major=${desktopMacosMajor}`,
+        '--openchamber-window-role=mini-chat',
       ],
       preload: isDev ? path.join(__dirname, 'preload.mjs') : path.join(app.getAppPath(), 'preload.mjs'),
       backgroundThrottling: false,
@@ -2646,7 +2884,8 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
   });
   browserWindow.__ocLabel = nextWindowLabel();
   browserWindow.__ocRuntimeConfig = effectiveRuntimeConfig;
-  browserWindow.__ocInitScript = buildInitScript(desktopLocalOrigin, state.bootOutcome, desktopApiBaseUrl, desktopClientToken, desktopRequestHeaders);
+  windowRuntimeIdentity.reset(browserWindow);
+  browserWindow.__ocInitScript = buildInitScript(desktopLocalOrigin, state.bootOutcome, desktopApiBaseUrl, desktopClientToken, desktopRequestHeaders, desktopRuntimeKey);
   browserWindow.__ocMiniChat = true;
   browserWindow.__ocMiniChatSessionId = sessionWindowKey;
   browserWindow.__ocPinned = false;
@@ -2742,6 +2981,7 @@ const resolveMiniChatRuntimeConfig = (browserWindow, args = {}) => {
     apiBaseUrl: targetUrl,
     clientToken: providedToken || windowToken || storedToken || '',
     requestHeaders: sanitizeRuntimeRequestHeaders(args.requestHeaders || windowHeaders || {}),
+    runtimeHostId: configuredHostIdFromRuntimeKey(windowRuntimeIdentity.get(browserWindow)),
   };
 };
 
@@ -2759,6 +2999,11 @@ const resolveInitialUrl = async () => {
     : isDev && await waitForHealth(hmrUiUrl, 8_000, 100)
     ? hmrUiUrl
     : localUrl;
+  try {
+    state.localUiOrigin = new URL(localUiUrl).origin;
+  } catch {
+    state.localUiOrigin = null;
+  }
 
   state.sidecarUrl = localUrl;
   const localAvailable = Boolean(localUrl);
@@ -2768,6 +3013,8 @@ const resolveInitialUrl = async () => {
   let apiBaseUrl = localUrl;
   let clientToken = readDesktopLocalClientToken();
   let requestHeaders = {};
+  let runtimeHostId = LOCAL_HOST_ID;
+  let relayHostId = '';
   let remoteProbe = null;
 
   const envTarget = normalizeHostUrl(process.env.OPENCHAMBER_SERVER_URL || '');
@@ -2776,10 +3023,13 @@ const resolveInitialUrl = async () => {
     apiBaseUrl = envTarget;
     clientToken = '';
     requestHeaders = {};
+    runtimeHostId = '';
     initialUrl = shouldUsePackagedUi() ? localUiUrl : envTarget;
   } else if (config.defaultHostId && config.defaultHostId !== LOCAL_HOST_ID) {
     const host = config.hosts.find((entry) => entry.id === config.defaultHostId);
     if (host?.url) {
+      runtimeHostId = host.id;
+      if (host.relay) relayHostId = host.id;
       apiBaseUrl = host.apiUrl || host.url;
       clientToken = host.clientToken || '';
       requestHeaders = sanitizeRuntimeRequestHeaders(host.requestHeaders || {});
@@ -2797,6 +3047,7 @@ const resolveInitialUrl = async () => {
       apiBaseUrl = localUrl;
       clientToken = readDesktopLocalClientToken();
       requestHeaders = {};
+      runtimeHostId = relayHostId || LOCAL_HOST_ID;
       initialUrl = localUiUrl;
     }
   }
@@ -2808,7 +3059,7 @@ const resolveInitialUrl = async () => {
     localAvailable,
   });
 
-  return { initialUrl, localOrigin, localUiUrl, bootOutcome, apiBaseUrl, clientToken, requestHeaders };
+  return { initialUrl, localOrigin, localUiUrl, bootOutcome, apiBaseUrl, clientToken, requestHeaders, runtimeHostId, relayHostId };
 };
 
 const compareSemver = (left, right) => {
@@ -3622,7 +3873,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     }
 
     case 'desktop_notify':
-      maybeShowNativeNotification(args);
+      maybeShowNativeNotification(args, windowRuntimeIdentity.get(browserWindow));
       return null;
 
     case 'desktop_tray_update':
@@ -3827,7 +4078,14 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         config: updatedConfig,
         localAvailable: Boolean(state.sidecarUrl || state.localOrigin),
       });
-      state.initScript = buildInitScript(state.localOrigin, state.bootOutcome, state.apiBaseUrl, state.clientToken, state.requestHeaders || {});
+      state.initScript = buildInitScript(
+        state.localOrigin,
+        state.bootOutcome,
+        state.apiBaseUrl,
+        state.clientToken,
+        state.requestHeaders || {},
+        windowRuntimeIdentity.get(state.mainWindow) || '',
+      );
       log.info('[electron] hosts config updated, recomputed bootOutcome', state.bootOutcome);
       return null;
     }
@@ -4029,6 +4287,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         apiBaseUrl: state.sidecarUrl || state.localOrigin || '',
         clientToken: readDesktopLocalClientToken(),
         requestHeaders: {},
+        runtimeHostId: LOCAL_HOST_ID,
       };
       if (config.defaultHostId && config.defaultHostId !== LOCAL_HOST_ID) {
         const host = config.hosts.find((entry) => entry.id === config.defaultHostId);
@@ -4039,6 +4298,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
             apiBaseUrl: normalizeHostUrl(apiUrl),
             clientToken: sanitizeClientTokenForStorage(host.clientToken),
             requestHeaders: sanitizeRuntimeRequestHeaders(host.requestHeaders),
+            runtimeHostId: host.id,
           };
         }
       }
@@ -4061,6 +4321,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
           apiBaseUrl: '',
           clientToken: host.clientToken || '',
           requestHeaders: sanitizeRuntimeRequestHeaders(host.requestHeaders || {}),
+          runtimeHostId: host.id,
           relayHostId: host.id,
         });
         return null;
@@ -4072,6 +4333,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         apiBaseUrl: targetUrl,
         clientToken: host.clientToken || '',
         requestHeaders: sanitizeRuntimeRequestHeaders(host.requestHeaders || {}),
+        runtimeHostId: host.id,
       });
       return null;
     }
@@ -4082,11 +4344,17 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         throw new Error('Invalid URL');
       }
       const config = readDesktopHostsConfig();
+      const configuredHost = config.hosts.find((host) => normalizeHostUrl(host.apiUrl || host.url) === targetUrl);
       const providedToken = typeof args.clientToken === 'string' ? args.clientToken : '';
       const clientToken = sanitizeClientTokenForStorage(providedToken) || resolveStoredClientTokenForUrl(targetUrl, config);
-      const requestHeaders = sanitizeRuntimeRequestHeaders(args.requestHeaders || config.hosts.find((host) => normalizeHostUrl(host.apiUrl || host.url) === targetUrl)?.requestHeaders || {});
+      const requestHeaders = sanitizeRuntimeRequestHeaders(args.requestHeaders || configuredHost?.requestHeaders || {});
       let windowUrl = targetUrl;
-      const runtimeConfig = { apiBaseUrl: targetUrl, clientToken, requestHeaders };
+      const runtimeConfig = {
+        apiBaseUrl: targetUrl,
+        clientToken,
+        requestHeaders,
+        runtimeHostId: configuredHost?.id || (isLocalRuntimeUrl(targetUrl) ? LOCAL_HOST_ID : ''),
+      };
       if (shouldUsePackagedUi()) {
         windowUrl = buildPackagedUiUrl('/index.html');
       }
@@ -4115,6 +4383,21 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     case 'desktop_get_window_pinned':
       return { pinned: Boolean(browserWindow?.__ocPinned) };
 
+    case 'desktop_runtime_activate': {
+      if (!browserWindow || !isLocalSender(browserWindow.webContents)) {
+        throw new Error('Runtime activation is only available to the local desktop UI');
+      }
+      const runtimeKey = configuredHostRuntimeKey(args.hostId);
+      if (!runtimeKey) throw new Error('Runtime host is not configured');
+      mainWindowSessionNavigation.markLoading(browserWindow);
+      windowRuntimeIdentity.set(browserWindow, runtimeKey);
+      return { runtimeKey };
+    }
+
+    case 'desktop_renderer_ready':
+      mainWindowSessionNavigation.markReady(browserWindow);
+      return null;
+
     case 'desktop_focus_main_window': {
       const sessionId = typeof args.sessionId === 'string' ? args.sessionId.trim() : '';
       const directory = typeof args.directory === 'string' ? args.directory.trim() : '';
@@ -4122,12 +4405,15 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       const projectId = typeof args.projectId === 'string' ? args.projectId.trim() : '';
       const hasMainWindow = state.mainWindow && !state.mainWindow.isDestroyed();
 
+      if (sessionId) {
+        await focusMainWindowWithSession(sessionId, directory);
+        return { focused: true };
+      }
+
       // No live main window (e.g. "Open in main window" from a mini-chat after
-      // the main window was closed): create one and open the session in it. A
-      // fresh window can't take an immediate emit, so queue the session as a
-      // pending deep-link and let did-finish-load flush it once ready.
+      // the main window was closed): create one. Session targets take the
+      // renderer-ready path above so their navigation cannot be emitted early.
       if (!hasMainWindow) {
-        if (sessionId) pendingDeepLinks.push({ type: 'session', value: sessionId });
         await openMainWindow();
         return { focused: true };
       }
@@ -4135,9 +4421,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       if (state.mainWindow.isMinimized()) state.mainWindow.restore();
       state.mainWindow.show();
       state.mainWindow.focus();
-      if (sessionId) {
-        emitToWindow(state.mainWindow, 'openchamber:open-session', { sessionId, directory });
-      } else if (mode === 'draft') {
+      if (mode === 'draft') {
         emitToWindow(state.mainWindow, 'openchamber:open-draft-session', { directory, projectId });
       }
       return { focused: true };
@@ -4487,6 +4771,7 @@ const isLocalSender = (webContents) => {
     const url = new URL(raw);
     if (url.protocol === `${UI_PROTOCOL}:` && url.hostname === 'app') return true;
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    if (state.localUiOrigin && state.localUiOrigin === url.origin) return true;
     if (state.localOrigin) {
       try {
         const allowed = new URL(state.localOrigin);
@@ -4507,6 +4792,8 @@ const isLocalSender = (webContents) => {
   }
 };
 
+// `desktop_runtime_activate` is intentionally excluded: only the trusted local
+// shell may move a window to a main-validated configured host identity.
 const COMMANDS_SAFE_FOR_REMOTE = new Set([
   'desktop_hosts_get',
   'desktop_host_probe',
@@ -4525,6 +4812,7 @@ const COMMANDS_SAFE_FOR_REMOTE = new Set([
   'desktop_get_lan_address',
   'desktop_capture_page_rect',
   'desktop_tray_update',
+  'desktop_renderer_ready',
 ]);
 
 ipcMain.handle('openchamber:invoke', async (event, command, args) => {
@@ -4710,20 +4998,26 @@ const revealMainWindow = async () => {
 
 // Open a session in the main window, creating one first if none is alive. A
 // freshly created window can't receive an immediate emit (its renderer hasn't
-// mounted its listeners yet), so we queue the session as a pending deep-link —
-// the did-finish-load handler flushes it once the window is ready.
-const focusMainWindowWithSession = async (sessionId, directory) => {
-  if (state.mainWindow && !state.mainWindow.isDestroyed()) {
-    if (state.mainWindow.isMinimized()) state.mainWindow.restore();
-    state.mainWindow.show();
-    state.mainWindow.focus();
-    if (sessionId) {
-      emitToWindow(state.mainWindow, 'openchamber:open-session', { sessionId, directory: directory || '' });
-    }
-    return;
+// mounted its listeners yet), so queue it until the renderer explicitly marks
+// its session listener ready.
+const focusMainWindowWithSession = async (sessionId, directory, runtimeKey = null) => {
+  const hasQueuedSession = sessionId
+    ? mainWindowSessionNavigation.queue(sessionId, directory, runtimeKey)
+    : false;
+  let target = state.mainWindow;
+  if (!target || target.isDestroyed()) {
+    target = await openMainWindow().catch(() => null) || state.mainWindow;
   }
-  if (sessionId) pendingDeepLinks.push({ type: 'session', value: sessionId });
-  await openMainWindow();
+  if (!target || target.isDestroyed()) return;
+
+  if (process.platform === 'darwin') app.focus({ steal: true });
+  if (target.isMinimized()) target.restore();
+  target.show();
+  target.focus();
+  if (typeof target.moveTop === 'function') target.moveTop();
+  if (hasQueuedSession) {
+    mainWindowSessionNavigation.flush(target);
+  }
 };
 
 const dispatchTrayAction = async (action) => {
@@ -4898,6 +5192,7 @@ app.whenReady().then(async () => {
 
   state.mainWindow = createBrowserWindow({
     label: 'main',
+    windowRole: 'main',
     restoreGeometry: true,
     url: null,
   });
@@ -4905,8 +5200,8 @@ app.whenReady().then(async () => {
   const initial = extractInitialDeepLinks();
   if (initial.length > 0) handleDeepLinks(initial);
 
-  const { initialUrl, localOrigin, bootOutcome, apiBaseUrl, clientToken, requestHeaders } = await resolveInitialUrl();
-  await activateMainWindow(initialUrl, localOrigin, bootOutcome, { apiBaseUrl, clientToken, requestHeaders });
+  const { initialUrl, localOrigin, bootOutcome, apiBaseUrl, clientToken, requestHeaders, runtimeHostId, relayHostId } = await resolveInitialUrl();
+  await activateMainWindow(initialUrl, localOrigin, bootOutcome, { apiBaseUrl, clientToken, requestHeaders, runtimeHostId, relayHostId });
 
   // Notify renderer on OS wake-from-sleep so the SSE event pipeline can
   // reconnect immediately instead of waiting for the heartbeat watchdog.

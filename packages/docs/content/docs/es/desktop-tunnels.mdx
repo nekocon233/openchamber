@@ -1,6 +1,6 @@
 ---
 title: Túneles de escritorio
-description: Crea túneles de Cloudflare o Ngrok desde la app de escritorio.
+description: Crea túneles de Cloudflare, Ngrok o FRPC desde la app de escritorio.
 ---
 
 # Túneles de escritorio
@@ -9,7 +9,7 @@ La app de escritorio puede crear un túnel público desde **Settings → OpenCha
 
 ## Instala un proveedor
 
-OpenChamber inicia el CLI del proveedor en tu máquina. Instala primero el proveedor que quieras usar:
+OpenChamber inicia el CLI del proveedor en tu máquina. Para Cloudflare o Ngrok, instala primero el proveedor que quieras usar:
 
 ```bash
 brew install cloudflared
@@ -22,14 +22,25 @@ Cloudflare usa `cloudflared`. Ngrok requiere una cuenta de ngrok y un authtoken 
 ngrok config add-authtoken <your-ngrok-token>
 ```
 
+FRPC no requiere instalación manual. OpenChamber descarga y gestiona automáticamente FRPC 0.70.0.
+
 ## Inicia desde la app
 
 1. Abre **Settings → OpenChamber → Tunnel**.
-2. Elige **Cloudflare** o **Ngrok**.
-3. Inicia un quick tunnel.
+2. Elige **Cloudflare**, **Ngrok** o **FRPC**.
+3. Inicia un quick tunnel con Cloudflare o Ngrok, o configura FRPC.
 4. Escanea el código QR generado desde tu teléfono.
 
-Ngrok actualmente soporta quick tunnels. Cloudflare soporta quick tunnels y modos gestionados de Cloudflare.
+Ngrok actualmente soporta quick tunnels. Cloudflare soporta quick tunnels y modos gestionados de Cloudflare. FRPC admite endpoints TCP y de host virtual HTTP en modo `managed-remote` mediante tu servidor FRPS.
+
+## Configura FRPC
+
+Los ajustes de FRPC ofrecen **TCP** y **Host virtual HTTP** como tipo de proxy. Introduce la dirección FRPS, el puerto de control, el archivo de certificado de CA de confianza y el token compartido en el campo privado de token. OpenChamber proporciona automáticamente su puerto local para ambos tipos. FRPS debe presentar un certificado cuyo SAN coincida con la dirección FRPS; OpenChamber verifica esa identidad y nunca desactiva la verificación del certificado.
+
+- **TCP:** introduce el puerto remoto de la asignación y el origen HTTPS público externo exacto. FRPC reenvía HTTP sin cifrar por el puerto asignado; mantén ese puerto FRPS solo en loopback y coloca Caddy u otro terminador TLS en la URL declarada. OpenChamber rechaza URL HTTP, mal formadas o que no sean solo un origen, y nunca deduce TLS del navegador a partir de la dirección de control FRPS.
+- **Host virtual HTTP:** introduce el host de enrutamiento de FRPS (custom domain) y el hostname público externo. La URL pública es `https://<hostname>`. Caddy termina HTTPS en el puerto `443`, reenvía al puerto HTTP de hosts virtuales de FRPS, configura `Host` con el custom domain y `X-Forwarded-Host` con el hostname público.
+
+Un token FRPS compartido autentica a los clientes FRPC, pero no proporciona aislamiento entre hosts virtuales HTTP.
 
 ## Protección de acceso
 
@@ -37,5 +48,5 @@ Aunque la URL del proveedor sea pública, OpenChamber sigue protegiendo el acces
 
 ## Relacionado
 
-- [Túneles](/es/tunnels/) — uso de túneles por CLI y modos gestionados de Cloudflare
+- [Túneles](/es/tunnels/) — uso de túneles por CLI y modos gestionados de Cloudflare y FRPC
 - [PWA y acceso móvil](/es/mobile/) — accede a OpenChamber desde tu teléfono

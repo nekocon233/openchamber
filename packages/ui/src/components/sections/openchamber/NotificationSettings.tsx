@@ -7,8 +7,18 @@ import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { getClientPlatform } from '@/lib/platform';
 import { useI18n } from '@/lib/i18n';
+import {
+  base64UrlToUint8Array,
+  getBrowserPushRegistrationState,
+  markBrowserPushSubscriptionRemoved,
+  reconcileBrowserPushSubscription,
+  subscribeBrowserPushRegistrationState,
+  unsubscribeBrowserPushSubscription,
+} from '@/lib/browserPushRegistration';
+import { useSessionUIStore } from '@/sync/session-ui-store';
+import { useDirectoryStore } from '@/stores/useDirectoryStore';
+import { buildTestNotificationPayload } from './notificationTestPayload';
 
 const DEFAULT_NOTIFICATION_TEMPLATES = {
   completion: {
@@ -63,16 +73,24 @@ export const NotificationSettings: React.FC = () => {
   const setNotifyOnQuestion = useUIStore(state => state.setNotifyOnQuestion);
   const notificationTemplates = useUIStore(state => state.notificationTemplates);
   const setNotificationTemplates = useUIStore(state => state.setNotificationTemplates);
+  const currentSessionId = useSessionUIStore(state => state.currentSessionId);
+  const currentSessionDirectory = useSessionUIStore(state => state.currentSessionDirectory);
+  const currentDirectory = useDirectoryStore(state => state.currentDirectory);
 
   const [notificationPermission, setNotificationPermission] = React.useState<NotificationPermission>('default');
   const [pushSupported, setPushSupported] = React.useState(false);
-  const [pushSubscribed, setPushSubscribed] = React.useState(false);
   const [pushBusy, setPushBusy] = React.useState(false);
+  const pushRegistration = React.useSyncExternalStore(
+    subscribeBrowserPushRegistrationState,
+    getBrowserPushRegistrationState,
+    getBrowserPushRegistrationState,
+  );
+  const pushSubscribed = pushRegistration.status === 'confirmed';
+  const pushOperationBusy = pushBusy || pushRegistration.status === 'reconciling';
 
   React.useEffect(() => {
     if (!isBrowser) {
       setPushSupported(false);
-      setPushSubscribed(false);
       return;
     }
 
@@ -85,27 +103,6 @@ export const NotificationSettings: React.FC = () => {
       && 'PushManager' in window
       && 'Notification' in window;
     setPushSupported(supported);
-
-    const refresh = async () => {
-      if (!supported) {
-        setPushSubscribed(false);
-        return;
-      }
-
-      try {
-        const registration = await navigator.serviceWorker.getRegistration();
-        if (!registration) {
-          setPushSubscribed(false);
-          return;
-        }
-        const subscription = await registration.pushManager.getSubscription();
-        setPushSubscribed(Boolean(subscription));
-      } catch {
-        setPushSubscribed(false);
-      }
-    };
-
-    void refresh();
   }, [isBrowser]);
 
   const handleToggleChange = async (checked: boolean) => {
@@ -154,19 +151,6 @@ export const NotificationSettings: React.FC = () => {
         [field]: value,
       },
     });
-  };
-
-  const base64UrlToUint8Array = (base64Url: string): Uint8Array<ArrayBuffer> => {
-    const padding = '='.repeat((4 - (base64Url.length % 4)) % 4);
-    const base64 = (base64Url + padding)
-      .replace(/-/g, '+')
-      .replace(/_/g, '/');
-    const raw = atob(base64);
-    const output = new Uint8Array(raw.length) as Uint8Array<ArrayBuffer>;
-    for (let i = 0; i < raw.length; i += 1) {
-      output[i] = raw.charCodeAt(i);
-    }
-    return output;
   };
 
   const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
@@ -305,11 +289,13 @@ export const NotificationSettings: React.FC = () => {
     }
 
     try {
-      const success = await apis.notifications.notifyAgentCompletion({
+      const success = await apis.notifications.notifyAgentCompletion(buildTestNotificationPayload({
         title: t('settings.notifications.page.testNotification.title'),
         body: t('settings.notifications.page.testNotification.body'),
-        tag: 'openchamber-test',
-      });
+        sessionId: currentSessionId,
+        sessionDirectory: currentSessionDirectory,
+        currentDirectory,
+      }));
 
       if (success) {
         toast.success(t('settings.notifications.page.toast.testNotificationSent'));
@@ -363,12 +349,11 @@ export const NotificationSettings: React.FC = () => {
       const registration = await getServiceWorkerRegistration();
       await waitForSwActive(registration);
 
-      const existing = await registration.pushManager.getSubscription();
-
       if (!('pushManager' in registration) || !registration.pushManager) {
         throw new Error('PushManager unavailable (requires installed PWA + iOS 16.4+)');
       }
 
+      const existing = await registration.pushManager.getSubscription();
       const subscription = existing ?? await withTimeout(
         registration.pushManager.subscribe({
           userVisibleOnly: true,
@@ -385,25 +370,16 @@ export const NotificationSettings: React.FC = () => {
       }
 
       const ok = await withTimeout(
-        apis.push.subscribe({
-          endpoint: json.endpoint,
-          keys: {
-            p256dh: keys.p256dh,
-            auth: keys.auth,
-          },
-          origin: typeof window !== 'undefined' ? window.location.origin : undefined,
-          platform: getClientPlatform(),
-        }),
+        reconcileBrowserPushSubscription(),
         15000,
         'Push subscribe request timed out'
       );
 
-      if (!ok?.ok) {
+      if (!ok) {
         toast.error(t('settings.notifications.page.toast.enableBackgroundFailed'));
         return;
       }
 
-      setPushSubscribed(true);
       toast.success(t('settings.notifications.page.toast.backgroundEnabled'));
     } catch (error) {
       console.error('[Push] Enable failed:', error);
@@ -418,7 +394,7 @@ export const NotificationSettings: React.FC = () => {
 
   const handleDisableBackgroundNotifications = async () => {
     if (!pushSupported) {
-      setPushSubscribed(false);
+      markBrowserPushSubscriptionRemoved();
       return;
     }
 
@@ -433,15 +409,24 @@ export const NotificationSettings: React.FC = () => {
       const registration = await getServiceWorkerRegistration();
       const subscription = await registration.pushManager.getSubscription();
       if (!subscription) {
-        setPushSubscribed(false);
+        markBrowserPushSubscriptionRemoved();
         return;
       }
 
-      const endpoint = subscription.endpoint;
-      await subscription.unsubscribe();
-      await apis.push.unsubscribe({ endpoint });
-      setPushSubscribed(false);
+      const result = await unsubscribeBrowserPushSubscription(subscription, apis.push);
+      if (result === 'local-failed') {
+        toast.error(t('settings.notifications.page.toast.disableBackgroundFailed'));
+        return;
+      }
+      if (result === 'server-failed') {
+        toast.error(t('settings.notifications.page.toast.backgroundDisabledCleanupFailed'));
+        return;
+      }
       toast.success(t('settings.notifications.page.toast.backgroundDisabled'));
+    } catch (error) {
+      console.error('[Push] Disable failed:', error);
+      await reconcileBrowserPushSubscription().catch(() => false);
+      toast.error(t('settings.notifications.page.toast.disableBackgroundFailed'));
     } finally {
       setPushBusy(false);
     }
@@ -698,7 +683,7 @@ export const NotificationSettings: React.FC = () => {
               <div className="flex items-start gap-2 py-1.5">
                 <Checkbox
                   checked={pushSupported ? pushSubscribed : false}
-                  disabled={!pushSupported || pushBusy}
+                  disabled={!pushSupported || pushOperationBusy}
                   onChange={(checked: boolean) => {
                     if (checked) {
                       void handleEnableBackgroundNotifications();
@@ -718,7 +703,7 @@ export const NotificationSettings: React.FC = () => {
                       : t('settings.notifications.page.push.supportedHint')}
                   </span>
                 </div>
-                {pushBusy && (
+                {pushOperationBusy && (
                   <div className="pt-0.5 text-muted-foreground">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-busy-pulse" aria-label={t('settings.notifications.page.push.loadingAria')} />
                   </div>

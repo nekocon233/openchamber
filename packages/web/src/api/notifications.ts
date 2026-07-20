@@ -1,4 +1,5 @@
 import type { NotificationPayload, NotificationsAPI } from '@openchamber/ui/lib/api/types';
+import { isBrowserPushRegistrationConfirmed } from '@openchamber/ui/lib/browserPushRegistration';
 
 const SW_READY_TIMEOUT_MS = 1500;
 const NOTIFICATION_DEDUPE_TTL_MS = 5000;
@@ -8,7 +9,7 @@ const notificationClaims = new Map<string, number>();
 
 const isClientFocused = (): boolean => {
   if (typeof document === 'undefined') return true;
-  return document.visibilityState === 'visible' && document.hasFocus();
+  return document.hasFocus();
 };
 
 const getNotificationClaimKey = (payload?: NotificationPayload): string => {
@@ -130,14 +131,15 @@ const notifyWithServiceWorker = async (payload?: NotificationPayload): Promise<b
   }
 };
 
-const hasActivePushSubscription = async (): Promise<boolean> => {
+const hasConfirmedActivePushSubscription = async (): Promise<boolean> => {
   const registration = await getNotificationRegistration();
   if (!registration || !('pushManager' in registration) || !registration.pushManager) {
     return false;
   }
 
   try {
-    return Boolean(await registration.pushManager.getSubscription());
+    const subscription = await registration.pushManager.getSubscription();
+    return Boolean(subscription && isBrowserPushRegistrationConfirmed(subscription.endpoint));
   } catch {
     return false;
   }
@@ -166,10 +168,10 @@ const notifyWithWebAPI = async (payload?: NotificationPayload): Promise<boolean>
     return false;
   }
 
-  // Background push is the delivery channel when the web/PWA client is not
-  // focused. Keep the main notification toggle and templates enabled, but avoid
-  // also showing the same foreground notification from a hidden page.
-  if (!isClientFocused() && await hasActivePushSubscription()) {
+  // Background push is the delivery channel only after the active runtime has
+  // acknowledged this browser subscription. A local-only or failed registration
+  // must keep SSE-driven local delivery eligible instead of dropping the event.
+  if (!isClientFocused() && await hasConfirmedActivePushSubscription()) {
     return true;
   }
 
@@ -184,10 +186,27 @@ const notifyWithWebAPI = async (payload?: NotificationPayload): Promise<boolean>
       return true;
     }
 
-    new Notification(payload?.title ?? 'OpenChamber', {
+    const notification = new Notification(payload?.title ?? 'OpenChamber', {
       body: payload?.body,
       tag: payload?.tag,
     });
+    const targetUrl = getNotificationData(payload)?.url;
+    notification.onclick = () => {
+      notification.close();
+      if (typeof window === 'undefined') return;
+      try {
+        window.focus();
+      } catch {
+        // Focus is best-effort; navigation can still recover the target.
+      }
+      if (targetUrl) {
+        try {
+          window.location.assign(targetUrl);
+        } catch {
+          // The notification remains informational if the page can no longer navigate.
+        }
+      }
+    };
     return true;
   } catch (error) {
     console.warn('Failed to send notification', error);

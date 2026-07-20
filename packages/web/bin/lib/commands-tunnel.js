@@ -15,17 +15,24 @@ import {
 } from './cli-lifecycle.js';
 import {
   normalizeProfileProvider,
-  normalizeProfileMode,
   normalizeProfileName,
   normalizeProfileHostname,
+  normalizeProfileCustomDomain,
+  normalizeProfilePublicHostname,
+  normalizeProfilePublicUrl,
+  normalizeProfileServerAddress,
+  normalizeProfileServerPort,
+  normalizeProfileTrustedCaFile,
+  normalizeProfileRemotePort,
   normalizeProfileToken,
   suggestProfileNameFromHostname,
   resolveToken,
   redactProfileForOutput,
   redactProfilesForOutput,
   formatProfileTokenStatus,
-  writeTunnelProfilesToDisk,
-  writeManagedRemotePairsToDiskFromProfiles,
+  formatProfileEndpoint,
+  getCliManagedRemoteCredentialId,
+  persistTunnelProfilesToDisk,
   resolveProfileByName,
 } from './cli-tunnel-profiles.js';
 import {
@@ -34,6 +41,12 @@ import {
   resolveTunnelTtlOverrides,
 } from './cli-tunnel-utils.js';
 import { DEFAULT_TUNNEL_PROVIDER_CAPABILITIES } from './cli-tunnel-capabilities.js';
+import {
+  FRPC_DEFAULT_DOWNLOAD_TIMEOUT_MS,
+  FRPC_DEFAULT_LOCK_TIMEOUT_MS,
+} from '../../server/lib/tunnels/frpc-binary-manager.js';
+import { FRPC_DEFAULT_STARTUP_TIMEOUT_MS } from '../../server/lib/tunnels/frpc-client.js';
+import { TUNNEL_PENDING_START_SETTLE_TIMEOUT_MS } from '../../server/lib/tunnels/index.js';
 import { assertSafeBrowserPort, buildLocalUrl, isUnsafeBrowserPort } from './cli-network.js';
 import {
   readLastManagedLocalConfigPath,
@@ -61,7 +74,309 @@ import {
   formatProviderWithIcon as clackFormatProviderWithIcon,
 } from '../cli-output.js';
 
-const TUNNEL_PROFILES_VERSION = 1;
+const TUNNEL_PROFILES_VERSION = 2;
+const FRPC_PROVIDER = 'frpc';
+const FRPC_START_SERVER_BUDGET_MS = FRPC_DEFAULT_LOCK_TIMEOUT_MS
+  + FRPC_DEFAULT_DOWNLOAD_TIMEOUT_MS
+  + FRPC_DEFAULT_STARTUP_TIMEOUT_MS;
+const TUNNEL_START_REQUEST_TIMEOUT_MS = FRPC_START_SERVER_BUDGET_MS + 40000;
+const TUNNEL_STOP_REQUEST_TIMEOUT_MS = TUNNEL_PENDING_START_SETTLE_TIMEOUT_MS + 10000;
+
+const TUNNEL_PROVIDER_CAPABILITIES_BY_ID = new Map(
+  DEFAULT_TUNNEL_PROVIDER_CAPABILITIES.map((capabilities) => [capabilities.provider, capabilities])
+);
+
+function normalizeCliTunnelProvider(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  const provider = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!provider || !TUNNEL_PROVIDER_CAPABILITIES_BY_ID.has(provider)) {
+    throw new TunnelCliError(
+      `Unsupported tunnel provider: ${provider || String(value) || '(empty)'}`,
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  return provider;
+}
+
+function normalizeCliTunnelMode(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  const supported = DEFAULT_TUNNEL_PROVIDER_CAPABILITIES.some(
+    (capabilities) => capabilities.modes?.some((entry) => entry?.key === mode)
+  );
+  if (!mode || !supported) {
+    throw new TunnelCliError(
+      `Unsupported tunnel mode: ${mode || String(value) || '(empty)'}`,
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  return mode;
+}
+
+function assertCliProviderMode(provider, mode) {
+  const capabilities = TUNNEL_PROVIDER_CAPABILITIES_BY_ID.get(provider);
+  if (!capabilities?.modes?.some((entry) => entry?.key === mode)) {
+    throw new TunnelCliError(
+      `Provider '${provider}' does not support mode '${mode}'.`,
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+}
+
+function createTunnelAutoStartOptions(options, overrides = {}) {
+  return {
+    ...options,
+    ...overrides,
+    json: false,
+    quiet: true,
+    suppressQuietOutput: true,
+    suppressUnsafePortWarning: true,
+    suppressUiPasswordWarning: true,
+    suppressStartupSummary: true,
+  };
+}
+
+function hasNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeExplicitFrpcServerAddress(options) {
+  const normalized = normalizeProfileServerAddress(options.serverAddress);
+  if (options.serverAddress !== undefined && !normalized) {
+    throw new TunnelCliError(
+      'Invalid --frps-address. Provide an IP address or bare hostname without a scheme, port, or path.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  return normalized;
+}
+
+function normalizeExplicitFrpcTrustedCaFile(options) {
+  const normalized = normalizeProfileTrustedCaFile(options.trustedCaFile);
+  if (options.trustedCaFile !== undefined && (!normalized || !isReadableRegularFile(normalized))) {
+    throw new TunnelCliError(
+      'Invalid --frps-ca-file. Provide a readable CA certificate file.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  return normalized;
+}
+
+function getFrpcEndpointKind({ remotePort, customDomain, hostname, publicUrl }) {
+  const hasRemotePort = remotePort !== undefined && remotePort !== null;
+  const hasCustomDomain = hasNonEmptyString(customDomain);
+  const hasHostname = hasNonEmptyString(hostname);
+  const hasPublicUrl = hasNonEmptyString(publicUrl);
+
+  if (hasRemotePort && (hasCustomDomain || hasHostname)) {
+    throw new TunnelCliError(
+      'FRPC endpoint options are mutually exclusive: use --remote-port for TCP or --custom-domain with --hostname for HTTP, not both.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  if (hasPublicUrl && (hasCustomDomain || hasHostname)) {
+    throw new TunnelCliError(
+      'FRPC endpoint options are mutually exclusive: use --remote-port with --public-url for TCP or --custom-domain with --hostname for HTTP, not both.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  if (hasRemotePort || hasPublicUrl) return 'tcp';
+  if (hasCustomDomain || hasHostname) return 'http';
+  return null;
+}
+
+function normalizeFrpcEndpointOrThrow(endpoint) {
+  const kind = getFrpcEndpointKind(endpoint);
+  if (!kind) {
+    throw new TunnelCliError(
+      'FRPC requires exactly one endpoint: --remote-port <port> with --public-url <https-origin> for TCP, or --custom-domain <hostname> with --hostname <hostname> for HTTP.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+
+  if (kind === 'tcp') {
+    const remotePort = normalizeProfileRemotePort(endpoint.remotePort);
+    if (!remotePort) {
+      throw new TunnelCliError('--remote-port must be between 1 and 65535.', EXIT_CODE.USAGE_ERROR);
+    }
+    const publicUrl = normalizeProfilePublicUrl(endpoint.publicUrl);
+    if (!publicUrl) {
+      throw new TunnelCliError(
+        'FRPC TCP requires --public-url with an origin-only https:// URL whose TLS endpoint forwards to the FRPS remote port.',
+        EXIT_CODE.USAGE_ERROR,
+      );
+    }
+    return { kind, remotePort, publicUrl };
+  }
+
+  if (!hasNonEmptyString(endpoint.customDomain) || !hasNonEmptyString(endpoint.hostname)) {
+    throw new TunnelCliError(
+      'FRPC HTTP endpoint requires both --custom-domain <hostname> and --hostname <hostname>.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  const customDomain = normalizeProfileCustomDomain(endpoint.customDomain);
+  if (!customDomain) {
+    throw new TunnelCliError(
+      'Invalid FRPC custom domain. Provide a bare hostname with --custom-domain <hostname>.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  const hostname = normalizeProfilePublicHostname(endpoint.hostname);
+  if (!hostname) {
+    throw new TunnelCliError(
+      'Invalid FRPC public hostname. Provide a bare hostname with --hostname <hostname>.',
+      EXIT_CODE.USAGE_ERROR,
+    );
+  }
+  return { kind, customDomain, hostname };
+}
+
+function getFrpcEndpointFields(endpoint) {
+  return endpoint.kind === 'tcp'
+    ? { remotePort: endpoint.remotePort, publicUrl: endpoint.publicUrl }
+    : { customDomain: endpoint.customDomain, hostname: endpoint.hostname };
+}
+
+function resolveFrpcEndpointInput(options, profile) {
+  const hasRemotePortOverride = options.remotePort !== undefined && options.remotePort !== null;
+  const hasPublicUrlOverride = hasNonEmptyString(options.publicUrl);
+  const hasCustomDomainOverride = hasNonEmptyString(options.customDomain);
+  const hasHostnameOverride = hasNonEmptyString(options.hostname);
+  const hasEndpointOverride = hasRemotePortOverride || hasPublicUrlOverride || hasCustomDomainOverride || hasHostnameOverride;
+
+  if (!profile || !hasEndpointOverride) {
+    const source = profile || options;
+    return {
+      remotePort: source.remotePort,
+      publicUrl: source.publicUrl,
+      customDomain: source.customDomain,
+      hostname: source.hostname,
+    };
+  }
+
+  if (hasRemotePortOverride || hasPublicUrlOverride) {
+    const profileIsTcp = profile.remotePort !== undefined && profile.remotePort !== null;
+    return {
+      remotePort: hasRemotePortOverride ? options.remotePort : (profileIsTcp ? profile.remotePort : undefined),
+      publicUrl: hasPublicUrlOverride ? options.publicUrl : (profileIsTcp ? profile.publicUrl : undefined),
+      customDomain: hasCustomDomainOverride ? options.customDomain : undefined,
+      hostname: hasHostnameOverride ? options.hostname : undefined,
+    };
+  }
+
+  const profileIsHttp = hasNonEmptyString(profile.customDomain) && hasNonEmptyString(profile.hostname);
+  return {
+    remotePort: undefined,
+    publicUrl: undefined,
+    customDomain: hasCustomDomainOverride
+      ? options.customDomain
+      : (profileIsHttp ? profile.customDomain : undefined),
+    hostname: hasHostnameOverride
+      ? options.hostname
+      : (profileIsHttp ? profile.hostname : undefined),
+  };
+}
+
+async function promptForFrpcEndpoint({ options, input, existingProfile, cancellationMessage }) {
+  let { remotePort, publicUrl, customDomain, hostname } = input;
+  let kind = getFrpcEndpointKind({ remotePort, publicUrl, customDomain, hostname });
+
+  if (!kind && canPrompt(options)) {
+    const existingKind = hasNonEmptyString(existingProfile?.customDomain) ? 'http' : 'tcp';
+    const selectedKind = await clackSelect({
+      message: 'Select FRPC endpoint type',
+      options: [
+        { value: 'tcp', label: 'TCP port mapping', hint: 'Expose server-address:remote-port' },
+        { value: 'http', label: 'HTTP vhost', hint: 'Route a custom domain to a public hostname' },
+      ],
+      initialValue: existingKind,
+    });
+    if (clackIsCancel(selectedKind)) {
+      clackCancel(cancellationMessage);
+      return null;
+    }
+    kind = selectedKind;
+  }
+
+  if (kind === 'tcp') {
+    customDomain = undefined;
+    hostname = undefined;
+    if (remotePort === undefined && canPrompt(options)) {
+      const enteredPort = await clackText({
+        message: 'FRPS remote mapping port',
+        placeholder: String(existingProfile?.remotePort || 18080),
+        initialValue: String(existingProfile?.remotePort || 18080),
+        validate(value) {
+          return normalizeProfileRemotePort(value) ? undefined : 'Port must be between 1 and 65535.';
+        },
+      });
+      if (clackIsCancel(enteredPort)) {
+        clackCancel(cancellationMessage);
+        return null;
+      }
+      remotePort = normalizeProfileRemotePort(enteredPort);
+    }
+    if (!hasNonEmptyString(publicUrl) && canPrompt(options)) {
+      const suggestedPublicUrl = existingProfile?.publicUrl || `https://app.example.com:${remotePort || 18080}`;
+      const enteredPublicUrl = await clackText({
+        message: 'Externally TLS-terminated public HTTPS URL',
+        placeholder: suggestedPublicUrl,
+        initialValue: suggestedPublicUrl,
+        validate(value) {
+          return normalizeProfilePublicUrl(value) ? undefined : 'An origin-only https:// URL is required.';
+        },
+      });
+      if (clackIsCancel(enteredPublicUrl)) {
+        clackCancel(cancellationMessage);
+        return null;
+      }
+      publicUrl = enteredPublicUrl;
+    }
+  } else if (kind === 'http') {
+    remotePort = undefined;
+    publicUrl = undefined;
+    if (!hasNonEmptyString(customDomain) && canPrompt(options)) {
+      const suggestedCustomDomain = existingProfile?.customDomain || 'openchamber.internal';
+      const enteredCustomDomain = await clackText({
+        message: 'FRPC HTTP-vhost custom domain',
+        placeholder: suggestedCustomDomain,
+        initialValue: suggestedCustomDomain,
+        validate(value) {
+          return normalizeProfileCustomDomain(value) ? undefined : 'A valid bare hostname is required.';
+        },
+      });
+      if (clackIsCancel(enteredCustomDomain)) {
+        clackCancel(cancellationMessage);
+        return null;
+      }
+      customDomain = enteredCustomDomain;
+    }
+
+    if (!hasNonEmptyString(hostname) && canPrompt(options)) {
+      const suggestedHostname = existingProfile?.hostname || 'app.example.com';
+      const enteredHostname = await clackText({
+        message: 'External public hostname',
+        placeholder: suggestedHostname,
+        initialValue: suggestedHostname,
+        validate(value) {
+          return normalizeProfilePublicHostname(value) ? undefined : 'A valid bare hostname is required.';
+        },
+      });
+      if (clackIsCancel(enteredHostname)) {
+        clackCancel(cancellationMessage);
+        return null;
+      }
+      hostname = enteredHostname;
+    }
+  }
+
+  return normalizeFrpcEndpointOrThrow({ remotePort, publicUrl, customDomain, hostname });
+}
 
 function getDefaultCloudflaredConfigPath() {
   return path.join(os.homedir(), '.cloudflared', 'config.yml');
@@ -176,16 +491,13 @@ async function resolveTargetInstance({
     }
 
     if (allowAutoStart) {
-      await serveCommand({
+      await serveCommand(createTunnelAutoStartOptions(options, {
         port: options.port,
         explicitPort: true,
         host: options.host,
         uiPassword: options.uiPassword,
         apiOnly: options.apiOnly,
-        suppressUnsafePortWarning: true,
-        suppressUiPasswordWarning: true,
-        suppressStartupSummary: true,
-      });
+      }));
       running = await discoverRunningInstances();
       const started = running.find((entry) => entry.port === options.port);
       if (started) return { ...started, autoStarted: true };
@@ -216,13 +528,9 @@ async function resolveTargetInstance({
     }
 
     if (allowAutoStart) {
-      const startedPort = await serveCommand({
-        ...options,
+      const startedPort = await serveCommand(createTunnelAutoStartOptions(options, {
         explicitPort: false,
-        suppressUnsafePortWarning: true,
-        suppressUiPasswordWarning: true,
-        suppressStartupSummary: true,
-      });
+      }));
       running = await discoverRunningInstances();
       const started = running.find((entry) => entry.port === startedPort) || getLatestInstance(running);
       if (started) return { ...started, autoStarted: true };
@@ -241,12 +549,9 @@ async function resolveTargetInstance({
 
   if (running.length === 0) {
     if (allowAutoStart) {
-      const startedPort = await serveCommand({
-        ...options,
+      const startedPort = await serveCommand(createTunnelAutoStartOptions(options, {
         explicitPort: false,
-        suppressUnsafePortWarning: true,
-        suppressUiPasswordWarning: true,
-      });
+      }));
       running = await discoverRunningInstances();
       const started = running.find((entry) => entry.port === startedPort) || getLatestInstance(running);
       if (started) return { ...started, autoStarted: true };
@@ -315,6 +620,7 @@ function annotateTunnelProvidersForOutput(providers) {
 
 async function handleTunnelProfileSubcommand(options, action, { boldText, ensureTunnelProfilesMigrated }) {
   const sub = typeof action === 'string' ? action.trim().toLowerCase() : '';
+  const requestedProvider = normalizeCliTunnelProvider(options.provider);
   const store = ensureTunnelProfilesMigrated();
 
   if (!sub) {
@@ -331,7 +637,7 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
       logStatus('info', 'Available subcommands', 'list, show, add, remove');
       clackLog.step('List profiles: `openchamber tunnel profile list`');
       clackLog.step('Show one profile: `openchamber tunnel profile show --name <name>`');
-      clackLog.step('Add profile: `openchamber tunnel profile add --provider cloudflare --mode managed-remote --name <name> --hostname <host> --token <token>`');
+      clackLog.step('Add profile: `openchamber tunnel profile add --provider cloudflare --mode managed-remote --name <name> --hostname <host> --token-file <path>`');
       clackLog.step('Remove profile: `openchamber tunnel profile remove --name <name>`');
       clackOutro('Choose a subcommand');
     }
@@ -339,25 +645,25 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
   }
 
   if (sub === 'list') {
-    const providerFilter = normalizeProfileProvider(options.provider);
+    const providerFilter = requestedProvider;
     const profiles = providerFilter
       ? store.profiles.filter((entry) => entry.provider === providerFilter)
       : store.profiles;
     if (isJsonMode(options)) {
-      printJson({ profiles: redactProfilesForOutput(profiles, options.showSecrets) });
+      printJson({ profiles: redactProfilesForOutput(profiles) });
       return;
     }
 
     if (isQuietMode(options)) {
       for (const profile of profiles) {
-        process.stdout.write(`${profile.name} ${profile.provider}/${profile.mode} ${profile.hostname}\n`);
+        process.stdout.write(`${profile.name} ${profile.provider}/${profile.mode} ${formatProfileEndpoint(profile)}\n`);
       }
       return;
     }
 
     clackIntro('Tunnel Profiles');
     for (const profile of profiles) {
-      logStatus('success', `${profile.name} (${profile.provider}/${profile.mode})`, `${profile.hostname} ${formatProfileTokenStatus(profile, options.showSecrets)}`);
+      logStatus('success', `${profile.name} (${profile.provider}/${profile.mode})`, `${formatProfileEndpoint(profile)} ${formatProfileTokenStatus(profile)}`);
     }
     clackOutro(`${profiles.length} profile(s)`);
     return;
@@ -368,29 +674,36 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
     if (!name) {
       throw new Error('`tunnel profile show` requires --name <name>.');
     }
-    const { profile, error } = resolveProfileByName(store.profiles, name, options.provider);
+    const { profile, error } = resolveProfileByName(store.profiles, name, requestedProvider);
     if (!profile) {
       throw new Error(error);
     }
     if (isJsonMode(options)) {
-      printJson({ profile: redactProfileForOutput(profile, options.showSecrets) });
+      printJson({ profile: redactProfileForOutput(profile) });
       return;
     }
     if (isQuietMode(options)) {
-      process.stdout.write(`${profile.name} ${profile.provider}/${profile.mode} ${profile.hostname} ${formatProfileTokenStatus(profile, options.showSecrets)}\n`);
+      process.stdout.write(`${profile.name} ${profile.provider}/${profile.mode} ${formatProfileEndpoint(profile)} ${formatProfileTokenStatus(profile)}\n`);
       return;
     }
     clackIntro('Tunnel Profile');
-    logStatus('success', `${profile.name} (${profile.provider}/${profile.mode})`, `${profile.hostname} ${formatProfileTokenStatus(profile, options.showSecrets)}`);
+    logStatus('success', `${profile.name} (${profile.provider}/${profile.mode})`, `${formatProfileEndpoint(profile)} ${formatProfileTokenStatus(profile)}`);
     clackOutro('show complete');
     return;
   }
 
   if (sub === 'add') {
-    let provider = normalizeProfileProvider(options.provider);
-    let mode = normalizeProfileMode(options.mode);
+    let provider = requestedProvider;
+    let mode = normalizeCliTunnelMode(options.mode);
     let name = normalizeProfileName(options.name);
     let hostname = normalizeProfileHostname(options.hostname);
+    let publicUrl = typeof options.publicUrl === 'string' ? options.publicUrl : undefined;
+    let customDomain = typeof options.customDomain === 'string' ? options.customDomain : undefined;
+    let serverAddress = normalizeExplicitFrpcServerAddress(options);
+    let serverPort = normalizeProfileServerPort(options.serverPort);
+    let trustedCaFile = normalizeExplicitFrpcTrustedCaFile(options);
+    let remotePort = normalizeProfileRemotePort(options.remotePort);
+    let frpcEndpoint = null;
     const resolvedTokenValue = resolveToken(options);
     let token = normalizeProfileToken(resolvedTokenValue);
 
@@ -443,7 +756,75 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
         ? store.profiles.find((entry) => entry.provider === provider && entry.name.toLowerCase() === name.toLowerCase())
         : null;
 
-      if (!hostname) {
+      if (provider === FRPC_PROVIDER && typeof options.token === 'string' && options.token.trim().length > 0) {
+        throw new TunnelCliError(
+          'FRPC tokens cannot be passed with --token. Use --token-file, --token-stdin, or the interactive password prompt.',
+          EXIT_CODE.USAGE_ERROR,
+        );
+      }
+
+      if (provider === FRPC_PROVIDER && !serverAddress) {
+        const enteredAddress = await clackText({
+          message: 'FRPS server IP address or hostname',
+          placeholder: '203.0.113.10',
+          validate(value) {
+            return normalizeProfileServerAddress(value) ? undefined : 'A valid FRPS server address is required.';
+          },
+        });
+        if (clackIsCancel(enteredAddress)) {
+          clackCancel('Profile add cancelled.');
+          return;
+        }
+        serverAddress = normalizeProfileServerAddress(enteredAddress);
+      }
+
+      if (provider === FRPC_PROVIDER && !serverPort) {
+        const enteredPort = await clackText({
+          message: 'FRPS control port',
+          placeholder: String(existingProfile?.serverPort || 7000),
+          initialValue: String(existingProfile?.serverPort || 7000),
+          validate(value) {
+            return normalizeProfileServerPort(value) ? undefined : 'Port must be between 1 and 65535.';
+          },
+        });
+        if (clackIsCancel(enteredPort)) {
+          clackCancel('Profile add cancelled.');
+          return;
+        }
+        serverPort = normalizeProfileServerPort(enteredPort);
+      }
+
+      if (provider === FRPC_PROVIDER && !trustedCaFile) {
+        const enteredTrustedCaFile = await clackText({
+          message: 'FRPS trusted CA certificate file',
+          placeholder: existingProfile?.trustedCaFile || '~/.config/frp/ca.crt',
+          validate(value) {
+            const filePath = normalizeProfileTrustedCaFile(value);
+            return filePath && isReadableRegularFile(filePath) ? undefined : 'A readable CA certificate file is required.';
+          },
+        });
+        if (clackIsCancel(enteredTrustedCaFile)) {
+          clackCancel('Profile add cancelled.');
+          return;
+        }
+        trustedCaFile = normalizeProfileTrustedCaFile(enteredTrustedCaFile);
+      }
+
+      if (provider === FRPC_PROVIDER) {
+        frpcEndpoint = await promptForFrpcEndpoint({
+          options,
+          input: { remotePort, publicUrl, customDomain, hostname },
+          existingProfile,
+          cancellationMessage: 'Profile add cancelled.',
+        });
+        if (!frpcEndpoint) return;
+        remotePort = frpcEndpoint.remotePort;
+        publicUrl = frpcEndpoint.publicUrl;
+        customDomain = frpcEndpoint.customDomain;
+        hostname = frpcEndpoint.hostname;
+      }
+
+      if (provider !== FRPC_PROVIDER && !hostname) {
         const enteredHostname = await clackText({
           message: 'Tunnel hostname (Enter to accept/edit)',
           placeholder: existingProfile?.hostname || 'app.example.com',
@@ -474,8 +855,26 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
       }
     }
 
-    if (!provider || !mode || !name || !hostname) {
-      throw new Error('`tunnel profile add` requires --provider, --mode managed-remote, --name, and --hostname.');
+    if (provider === FRPC_PROVIDER && typeof options.token === 'string' && options.token.trim().length > 0) {
+      throw new TunnelCliError(
+        'FRPC tokens cannot be passed with --token. Use --token-file, --token-stdin, or the interactive password prompt.',
+        EXIT_CODE.USAGE_ERROR,
+      );
+    }
+    if (provider === FRPC_PROVIDER && !frpcEndpoint) {
+      frpcEndpoint = normalizeFrpcEndpointOrThrow({ remotePort, publicUrl, customDomain, hostname });
+      remotePort = frpcEndpoint.remotePort;
+      publicUrl = frpcEndpoint.publicUrl;
+      customDomain = frpcEndpoint.customDomain;
+      hostname = frpcEndpoint.hostname;
+    }
+    const endpointReady = provider === FRPC_PROVIDER
+      ? Boolean(serverAddress && serverPort && trustedCaFile && frpcEndpoint)
+      : Boolean(hostname);
+    if (!provider || !mode || !name || !endpointReady) {
+      throw new Error(provider === FRPC_PROVIDER
+        ? '`tunnel profile add` requires --provider frpc, --name, --frps-address, --frps-port, --frps-ca-file, and one FRPC endpoint.'
+        : '`tunnel profile add` requires --provider, --mode managed-remote, --name, and --hostname.');
     }
 
     if (!token) {
@@ -490,12 +889,16 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
         token = normalizeProfileToken(entered.trim());
       }
       if (!token) {
-        throw new Error('`tunnel profile add` requires a token (--token, --token-file, or --token-stdin).');
+        throw new Error('`tunnel profile add` requires a token (--token-file, --token-stdin, or interactive prompt).');
       }
     }
     if (mode !== 'managed-remote') {
       throw new Error('`tunnel profile add` currently supports only --mode managed-remote.');
     }
+    assertCliProviderMode(provider, mode);
+    const profileEndpointFields = provider === FRPC_PROVIDER
+      ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+      : { hostname };
 
     const existingIndex = store.profiles.findIndex(
       (entry) => entry.provider === provider && entry.name.toLowerCase() === name.toLowerCase()
@@ -520,13 +923,19 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
         ok: true,
         dryRun: true,
         action: existingIndex >= 0 ? 'overwrite' : 'create',
-        profile: redactProfileForOutput({ name, provider, mode, hostname, token }, options.showSecrets),
+        profile: redactProfileForOutput({
+          name,
+          provider,
+          mode,
+          ...profileEndpointFields,
+          token,
+        }),
       };
       if (isJsonMode(options)) {
         printJson(dryRunResult);
       } else if (!isQuietMode(options)) {
         clackIntro('Tunnel Profile Add (dry-run)');
-        logStatus('info', `Would ${existingIndex >= 0 ? 'overwrite' : 'create'}: ${name} (${provider}/${mode})`, `${hostname} ${formatProfileTokenStatus({ token }, options.showSecrets)}`);
+        logStatus('info', `Would ${existingIndex >= 0 ? 'overwrite' : 'create'}: ${name} (${provider}/${mode})`, `${formatProfileEndpoint({ provider, ...profileEndpointFields })} ${formatProfileTokenStatus({ token })}`);
         clackOutro('dry-run complete (no changes applied)');
       }
       return;
@@ -537,10 +946,13 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
     if (existingIndex >= 0) {
       const current = next[existingIndex];
       next[existingIndex] = {
-        ...current,
+        id: current.id,
+        name,
+        provider,
         mode,
-        hostname,
+        ...profileEndpointFields,
         token,
+        createdAt: current.createdAt,
         updatedAt: now,
       };
     } else {
@@ -549,7 +961,7 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
         name,
         provider,
         mode,
-        hostname,
+        ...profileEndpointFields,
         token,
         createdAt: now,
         updatedAt: now,
@@ -557,23 +969,22 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
     }
 
     const persisted = { version: TUNNEL_PROFILES_VERSION, profiles: next };
-    writeTunnelProfilesToDisk(persisted);
-    writeManagedRemotePairsToDiskFromProfiles(persisted);
+    persistTunnelProfilesToDisk(persisted);
     const added = persisted.profiles.find((entry) => entry.provider === provider && entry.name.toLowerCase() === name.toLowerCase());
 
     if (isJsonMode(options)) {
-      printJson({ ok: true, profile: redactProfileForOutput(added, options.showSecrets) });
+      printJson({ ok: true, profile: redactProfileForOutput(added) });
       return;
     }
 
     if (isQuietMode(options)) {
-      process.stdout.write(`saved ${added.name} ${added.provider}/${added.mode} ${added.hostname}\n`);
+      process.stdout.write(`saved ${added.name} ${added.provider}/${added.mode} ${formatProfileEndpoint(added)}\n`);
       return;
     }
 
     console.log('');
     clackIntro(boldText('Tunnel Profile Saved'));
-    logStatus('success', `${added.name} (${added.provider}/${added.mode})`, `${added.hostname} ${formatProfileTokenStatus(added, options.showSecrets)}`);
+    logStatus('success', `${added.name} (${added.provider}/${added.mode})`, `${formatProfileEndpoint(added)} ${formatProfileTokenStatus(added)}`);
     clackOutro('save complete');
     logStatus('info', '[START_PROFILE]', `openchamber tunnel start --profile ${added.name}`);
     clackOutro('');
@@ -585,28 +996,27 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
     if (!name) {
       throw new Error('`tunnel profile remove` requires --name <name>.');
     }
-    const { profile, error } = resolveProfileByName(store.profiles, name, options.provider);
+    const { profile, error } = resolveProfileByName(store.profiles, name, requestedProvider);
     if (!profile) {
       throw new Error(error);
     }
 
     const next = store.profiles.filter((entry) => entry.id !== profile.id);
     const persisted = { version: TUNNEL_PROFILES_VERSION, profiles: next };
-    writeTunnelProfilesToDisk(persisted);
-    writeManagedRemotePairsToDiskFromProfiles(persisted);
+    persistTunnelProfilesToDisk(persisted);
 
     if (isJsonMode(options)) {
-      printJson({ ok: true, removed: redactProfileForOutput(profile, options.showSecrets) });
+      printJson({ ok: true, removed: redactProfileForOutput(profile) });
       return;
     }
 
     if (isQuietMode(options)) {
-      process.stdout.write(`removed ${profile.name} ${profile.provider}/${profile.mode} ${profile.hostname}\n`);
+      process.stdout.write(`removed ${profile.name} ${profile.provider}/${profile.mode} ${formatProfileEndpoint(profile)}\n`);
       return;
     }
 
     clackIntro('Tunnel Profile Removed');
-    logStatus('success', `${profile.name} (${profile.provider}/${profile.mode})`, profile.hostname);
+    logStatus('success', `${profile.name} (${profile.provider}/${profile.mode})`, formatProfileEndpoint(profile));
     clackOutro('remove complete');
     return;
   }
@@ -627,6 +1037,11 @@ function createTunnelCommand(deps) {
 
 async function tunnelCommand(options, subcommand, action, deps) {
     const { serveCommand, stopCommand, setCancelCleanup, boldText, ensureTunnelProfilesMigrated } = deps;
+    const explicitProvider = normalizeCliTunnelProvider(options.provider);
+    const explicitMode = normalizeCliTunnelMode(options.mode);
+    if (explicitProvider && explicitMode) {
+      assertCliProviderMode(explicitProvider, explicitMode);
+    }
     switch (subcommand) {
       case 'help':
         showTunnelHelp();
@@ -668,10 +1083,8 @@ async function tunnelCommand(options, subcommand, action, deps) {
         return;
       }
       case 'ready': {
+        const provider = normalizeCliTunnelProvider(options.provider) || 'cloudflare';
         const entries = await resolveTunnelReadEntries(options);
-        const provider = typeof options.provider === 'string' && options.provider.trim().length > 0
-          ? options.provider.trim().toLowerCase()
-          : 'cloudflare';
 
         const results = [];
         for (const entry of entries) {
@@ -776,6 +1189,8 @@ async function tunnelCommand(options, subcommand, action, deps) {
         return;
       }
       case 'doctor': {
+        const requestedDoctorProvider = normalizeCliTunnelProvider(options.provider);
+        const requestedDoctorMode = normalizeCliTunnelMode(options.mode);
         const doctorSpin = createSpinner(options);
         doctorSpin?.start('Running tunnel diagnostics...');
 
@@ -784,19 +1199,23 @@ async function tunnelCommand(options, subcommand, action, deps) {
 
         // Phase 2: Provider diagnostics via the doctor endpoint
         doctorSpin?.message('Checking provider...');
-        let providerOption = typeof options.provider === 'string' && options.provider.trim().length > 0
-          ? options.provider.trim().toLowerCase()
-          : '';
+        let providerOption = requestedDoctorProvider;
 
         let doctorProfile = null;
         let doctorHostnameOverride = typeof options.hostname === 'string' ? options.hostname.trim() : '';
+        let doctorCustomDomain = typeof options.customDomain === 'string' ? options.customDomain.trim() : '';
+        let doctorServerAddress = normalizeExplicitFrpcServerAddress(options);
+        let doctorServerPort = normalizeProfileServerPort(options.serverPort);
+        let doctorTrustedCaFile = normalizeExplicitFrpcTrustedCaFile(options);
+        let doctorRemotePort = normalizeProfileRemotePort(options.remotePort);
+        let doctorPublicUrl = typeof options.publicUrl === 'string' ? options.publicUrl.trim() : '';
         const explicitHostnameProvided = doctorHostnameOverride.length > 0;
         const explicitTokenProvided = Boolean(options.tokenStdin)
           || (typeof options.token === 'string' && options.token.trim().length > 0)
           || (typeof options.tokenFile === 'string' && options.tokenFile.trim().length > 0);
         let doctorTokenValue = resolveToken(options);
         let hasSavedManagedRemoteProfile = false;
-        const normalizedMode = typeof options.mode === 'string' ? options.mode.trim().toLowerCase() : '';
+        const normalizedMode = requestedDoctorMode;
 
         if (typeof options.profile === 'string' && options.profile.trim().length > 0) {
           const store = ensureTunnelProfilesMigrated();
@@ -815,7 +1234,14 @@ async function tunnelCommand(options, subcommand, action, deps) {
           hasSavedManagedRemoteProfile = remoteProfiles.some((entry) => {
             const savedHostname = normalizeProfileHostname(entry.hostname);
             const savedToken = normalizeProfileToken(entry.token);
-            return Boolean(savedHostname && savedToken);
+            const savedFrpcEndpoint = entry.provider === FRPC_PROVIDER
+              && normalizeProfileServerAddress(entry.serverAddress)
+              && normalizeProfileServerPort(entry.serverPort)
+              && (
+                (normalizeProfileRemotePort(entry.remotePort) && normalizeProfilePublicUrl(entry.publicUrl))
+                || (normalizeProfileCustomDomain(entry.customDomain) && normalizeProfilePublicHostname(entry.hostname))
+              );
+            return Boolean((savedHostname || savedFrpcEndpoint) && savedToken);
           });
           if (remoteProfiles.length === 1) {
             doctorProfile = remoteProfiles[0];
@@ -823,13 +1249,55 @@ async function tunnelCommand(options, subcommand, action, deps) {
         }
 
         if (doctorProfile) {
-          providerOption = providerOption || doctorProfile.provider;
-          if (!doctorHostnameOverride && typeof doctorProfile.hostname === 'string') {
+          providerOption = providerOption || normalizeCliTunnelProvider(doctorProfile.provider);
+          if (providerOption !== FRPC_PROVIDER && !doctorHostnameOverride && typeof doctorProfile.hostname === 'string') {
             doctorHostnameOverride = doctorProfile.hostname.trim();
           }
           if ((!doctorTokenValue || doctorTokenValue.trim().length === 0) && typeof doctorProfile.token === 'string') {
             doctorTokenValue = doctorProfile.token.trim();
           }
+          doctorServerAddress = doctorServerAddress || doctorProfile.serverAddress;
+          doctorServerPort = doctorServerPort || doctorProfile.serverPort;
+          doctorTrustedCaFile = doctorTrustedCaFile || doctorProfile.trustedCaFile;
+          if (providerOption === FRPC_PROVIDER) {
+            const endpointInput = resolveFrpcEndpointInput(options, doctorProfile);
+            doctorRemotePort = endpointInput.remotePort;
+            doctorPublicUrl = endpointInput.publicUrl || '';
+            doctorCustomDomain = endpointInput.customDomain || '';
+            doctorHostnameOverride = endpointInput.hostname || '';
+          }
+        }
+
+        if (providerOption && normalizedMode) {
+          assertCliProviderMode(providerOption, normalizedMode);
+        }
+
+        if (providerOption === FRPC_PROVIDER) {
+          const doctorEndpointKind = getFrpcEndpointKind({
+            remotePort: doctorRemotePort,
+            publicUrl: doctorPublicUrl,
+            customDomain: doctorCustomDomain,
+            hostname: doctorHostnameOverride,
+          });
+          if (doctorEndpointKind) {
+            const doctorEndpoint = normalizeFrpcEndpointOrThrow({
+              remotePort: doctorRemotePort,
+              publicUrl: doctorPublicUrl,
+              customDomain: doctorCustomDomain,
+              hostname: doctorHostnameOverride,
+            });
+            doctorRemotePort = doctorEndpoint.remotePort;
+            doctorPublicUrl = doctorEndpoint.publicUrl || '';
+            doctorCustomDomain = doctorEndpoint.customDomain || '';
+            doctorHostnameOverride = doctorEndpoint.hostname || '';
+          }
+        }
+
+        if (providerOption === FRPC_PROVIDER && typeof options.token === 'string' && options.token.trim().length > 0) {
+          throw new TunnelCliError(
+            'FRPC tokens cannot be passed with --token. Use --token-file, --token-stdin, or a saved profile.',
+            EXIT_CODE.USAGE_ERROR,
+          );
         }
 
         let doctorResult = null;
@@ -838,13 +1306,21 @@ async function tunnelCommand(options, subcommand, action, deps) {
         if (diagnosticsEntries.length > 0) {
           const query = new URLSearchParams();
           if (providerOption) query.set('provider', providerOption);
-          if (typeof options.mode === 'string' && options.mode.trim().length > 0) {
-            query.set('mode', options.mode.trim().toLowerCase());
+          if (normalizedMode) {
+            query.set('mode', normalizedMode);
           }
           if (typeof options.configPath === 'string') query.set('configPath', options.configPath);
-          if (doctorHostnameOverride.length > 0) {
+          if (providerOption === FRPC_PROVIDER && doctorHostnameOverride) {
+            query.set('hostname', doctorHostnameOverride);
+          } else if (doctorHostnameOverride.length > 0) {
             query.set('managedRemoteTunnelHostname', doctorHostnameOverride);
           }
+          if (doctorCustomDomain) query.set('customDomain', doctorCustomDomain);
+          if (doctorServerAddress) query.set('serverAddress', doctorServerAddress);
+          if (doctorServerPort) query.set('serverPort', String(doctorServerPort));
+          if (doctorTrustedCaFile) query.set('trustedCaFile', doctorTrustedCaFile);
+          if (doctorRemotePort) query.set('remotePort', String(doctorRemotePort));
+          if (doctorPublicUrl) query.set('publicUrl', doctorPublicUrl);
           if (hasSavedManagedRemoteProfile) {
             query.set('hasSavedManagedRemoteProfile', '1');
           }
@@ -1076,7 +1552,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
               || line.includes('connection refused')
               || line.includes('dial tcp'));
 
-            if (isManagedRemote && (hasPortOrOriginIssue || hasTokenIssue)) {
+            if (doctorResult.provider === 'cloudflare' && isManagedRemote && (hasPortOrOriginIssue || hasTokenIssue)) {
               troubleshootingHints.push({
                 key: 'managed-remote-port',
                 code: '[PORT_MISMATCH]',
@@ -1125,15 +1601,18 @@ async function tunnelCommand(options, subcommand, action, deps) {
         return;
       }
       case 'start': {
-        let provider = typeof options.provider === 'string' && options.provider.trim().length > 0
-          ? options.provider.trim().toLowerCase()
-          : '';
-        let mode = typeof options.mode === 'string' && options.mode.trim().length > 0
-          ? options.mode.trim().toLowerCase()
-          : '';
+        let provider = normalizeCliTunnelProvider(options.provider);
+        let mode = normalizeCliTunnelMode(options.mode);
         let resolvedTokenValue = resolveToken(options);
         let token = typeof resolvedTokenValue === 'string' ? resolvedTokenValue : undefined;
         let hostname = typeof options.hostname === 'string' ? options.hostname : undefined;
+        let publicUrl = typeof options.publicUrl === 'string' ? options.publicUrl : undefined;
+        let customDomain = typeof options.customDomain === 'string' ? options.customDomain : undefined;
+        let serverAddress = normalizeExplicitFrpcServerAddress(options);
+        let serverPort = normalizeProfileServerPort(options.serverPort);
+        let trustedCaFile = normalizeExplicitFrpcTrustedCaFile(options);
+        let remotePort = normalizeProfileRemotePort(options.remotePort);
+        let frpcEndpoint = null;
         let selectedProfile = null;
 
         if (options.explicitPort) {
@@ -1147,10 +1626,12 @@ async function tunnelCommand(options, subcommand, action, deps) {
             throw new Error(resolved.error);
           }
           selectedProfile = resolved.profile;
-          provider = provider || selectedProfile.provider;
-          mode = mode || selectedProfile.mode;
+          provider = provider || normalizeCliTunnelProvider(selectedProfile.provider);
+          mode = mode || normalizeCliTunnelMode(selectedProfile.mode);
           token = (typeof token === 'string' && token.trim().length > 0) ? token : selectedProfile.token;
-          hostname = typeof options.hostname === 'string' && options.hostname.trim().length > 0 ? options.hostname : selectedProfile.hostname;
+          serverAddress = serverAddress || selectedProfile.serverAddress;
+          serverPort = serverPort || selectedProfile.serverPort;
+          trustedCaFile = trustedCaFile || selectedProfile.trustedCaFile;
         }
 
         // Interactive profile selection when no profile/mode specified in TTY
@@ -1164,7 +1645,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
                 ...store.profiles.map((p) => ({
                   value: p.id,
                   label: `${p.name} (${p.provider}/${p.mode})`,
-                  hint: p.hostname,
+                  hint: formatProfileEndpoint(p),
                 })),
               ],
             });
@@ -1175,24 +1656,41 @@ async function tunnelCommand(options, subcommand, action, deps) {
             if (profileChoice !== '__mode__') {
               selectedProfile = store.profiles.find((p) => p.id === profileChoice);
               if (selectedProfile) {
-                provider = provider || selectedProfile.provider;
-                mode = mode || selectedProfile.mode;
+                provider = provider || normalizeCliTunnelProvider(selectedProfile.provider);
+                mode = mode || normalizeCliTunnelMode(selectedProfile.mode);
                 token = (typeof token === 'string' && token.trim().length > 0) ? token : selectedProfile.token;
-                hostname = typeof options.hostname === 'string' && options.hostname.trim().length > 0 ? options.hostname : selectedProfile.hostname;
+                serverAddress = serverAddress || selectedProfile.serverAddress;
+                serverPort = serverPort || selectedProfile.serverPort;
+                trustedCaFile = trustedCaFile || selectedProfile.trustedCaFile;
               }
             }
           }
         }
 
         provider = provider || 'cloudflare';
+        if (provider === FRPC_PROVIDER) {
+          const endpointInput = resolveFrpcEndpointInput(options, selectedProfile);
+          remotePort = endpointInput.remotePort;
+          publicUrl = endpointInput.publicUrl;
+          customDomain = endpointInput.customDomain;
+          hostname = endpointInput.hostname;
+        } else if (selectedProfile && !hasNonEmptyString(options.hostname)) {
+          hostname = selectedProfile.hostname;
+        }
+        if (provider === FRPC_PROVIDER && typeof options.token === 'string' && options.token.trim().length > 0) {
+          throw new TunnelCliError(
+            'FRPC tokens cannot be passed with --token. Use --token-file, --token-stdin, a saved profile, or the interactive password prompt.',
+            EXIT_CODE.USAGE_ERROR,
+          );
+        }
 
         // Interactive mode selection when mode not yet resolved in TTY
+        const providerCaps = TUNNEL_PROVIDER_CAPABILITIES_BY_ID.get(provider);
         if (!mode && canPrompt(options)) {
-          const providerCaps = DEFAULT_TUNNEL_PROVIDER_CAPABILITIES.find(
-            (cap) => cap.provider === provider
-          );
           const modes = providerCaps?.modes || [];
-          if (modes.length > 1) {
+          if (modes.length === 1) {
+            mode = modes[0].key;
+          } else if (modes.length > 1) {
             const modeChoice = await clackSelect({
               message: `Select tunnel mode for ${clackFormatProviderWithIcon(provider)}`,
               options: modes.map((m) => ({
@@ -1209,9 +1707,88 @@ async function tunnelCommand(options, subcommand, action, deps) {
           }
         }
 
-        mode = mode || 'quick';
+        mode = mode || providerCaps?.defaults?.mode || 'quick';
+        assertCliProviderMode(provider, mode);
         if (mode === 'managed-remote') {
-          if (!(typeof hostname === 'string' && hostname.trim().length > 0)) {
+          if (provider === FRPC_PROVIDER && !serverAddress) {
+            if (canPrompt(options)) {
+              const enteredAddress = await clackText({
+                message: 'FRPS server IP address or hostname',
+                placeholder: '203.0.113.10',
+                validate(value) {
+                  return normalizeProfileServerAddress(value) ? undefined : 'A valid FRPS server address is required.';
+                },
+              });
+              if (clackIsCancel(enteredAddress)) {
+                clackCancel('Tunnel start cancelled.');
+                return;
+              }
+              serverAddress = normalizeProfileServerAddress(enteredAddress);
+            } else {
+              throw new Error('FRPC requires --frps-address <address>.');
+            }
+          }
+
+          if (provider === FRPC_PROVIDER && !serverPort) {
+            if (canPrompt(options)) {
+              const enteredPort = await clackText({
+                message: 'FRPS control port',
+                placeholder: String(selectedProfile?.serverPort || 7000),
+                initialValue: String(selectedProfile?.serverPort || 7000),
+                validate(value) {
+                  return normalizeProfileServerPort(value) ? undefined : 'Port must be between 1 and 65535.';
+                },
+              });
+              if (clackIsCancel(enteredPort)) {
+                clackCancel('Tunnel start cancelled.');
+                return;
+              }
+              serverPort = normalizeProfileServerPort(enteredPort);
+            } else {
+              throw new Error('FRPC requires --frps-port <port>.');
+            }
+          }
+
+          if (provider === FRPC_PROVIDER) {
+            if (trustedCaFile && !isReadableRegularFile(trustedCaFile)) {
+              throw new TunnelCliError('FRPS trusted CA certificate file is not readable.', EXIT_CODE.USAGE_ERROR);
+            }
+            if (!trustedCaFile) {
+              if (canPrompt(options)) {
+                const enteredTrustedCaFile = await clackText({
+                  message: 'FRPS trusted CA certificate file',
+                  placeholder: '~/.config/frp/ca.crt',
+                  validate(value) {
+                    const filePath = normalizeProfileTrustedCaFile(value);
+                    return filePath && isReadableRegularFile(filePath) ? undefined : 'A readable CA certificate file is required.';
+                  },
+                });
+                if (clackIsCancel(enteredTrustedCaFile)) {
+                  clackCancel('Tunnel start cancelled.');
+                  return;
+                }
+                trustedCaFile = normalizeProfileTrustedCaFile(enteredTrustedCaFile);
+              } else {
+                throw new Error('FRPC requires --frps-ca-file <path>.');
+              }
+            }
+          }
+
+          if (provider === FRPC_PROVIDER) {
+            frpcEndpoint = await promptForFrpcEndpoint({
+              options,
+              input: { remotePort, publicUrl, customDomain, hostname },
+              existingProfile: selectedProfile,
+              cancellationMessage: 'Tunnel start cancelled.',
+            });
+            if (!frpcEndpoint) return;
+            remotePort = frpcEndpoint.remotePort;
+            publicUrl = frpcEndpoint.publicUrl;
+            customDomain = frpcEndpoint.customDomain;
+            hostname = frpcEndpoint.hostname;
+          }
+
+          if (provider !== FRPC_PROVIDER && !(typeof hostname === 'string' && hostname.trim().length > 0)) {
             if (canPrompt(options)) {
               const profilesStore = ensureTunnelProfilesMigrated();
               const lastManagedRemoteProfile = [...profilesStore.profiles]
@@ -1268,7 +1845,9 @@ async function tunnelCommand(options, subcommand, action, deps) {
             }
 
             if (runChoice === 'save-run') {
-              const suggestedName = suggestProfileNameFromHostname(hostname);
+              const suggestedName = suggestProfileNameFromHostname(
+                provider === FRPC_PROVIDER && frpcEndpoint?.kind === 'tcp' ? serverAddress : hostname,
+              );
               const enteredProfileName = await clackText({
                 message: 'Profile name',
                 placeholder: suggestedName,
@@ -1304,10 +1883,15 @@ async function tunnelCommand(options, subcommand, action, deps) {
               if (existingIndex >= 0) {
                 const current = nextProfiles[existingIndex];
                 nextProfiles[existingIndex] = {
-                  ...current,
+                  id: current.id,
+                  name: desiredName,
+                  provider,
                   mode: 'managed-remote',
-                  hostname,
+                  ...(provider === FRPC_PROVIDER
+                    ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+                    : { hostname }),
                   token,
+                  createdAt: current.createdAt,
                   updatedAt: now,
                 };
               } else {
@@ -1316,7 +1900,9 @@ async function tunnelCommand(options, subcommand, action, deps) {
                   name: desiredName,
                   provider,
                   mode: 'managed-remote',
-                  hostname,
+                  ...(provider === FRPC_PROVIDER
+                    ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+                    : { hostname }),
                   token,
                   createdAt: now,
                   updatedAt: now,
@@ -1324,8 +1910,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
               }
 
               const persisted = { version: TUNNEL_PROFILES_VERSION, profiles: nextProfiles };
-              writeTunnelProfilesToDisk(persisted);
-              writeManagedRemotePairsToDiskFromProfiles(persisted);
+              persistTunnelProfilesToDisk(persisted);
 
               selectedProfile = persisted.profiles.find(
                 (entry) => entry.provider === provider && entry.name.toLowerCase() === desiredName.toLowerCase()
@@ -1340,6 +1925,14 @@ async function tunnelCommand(options, subcommand, action, deps) {
               'Security Warning',
             );
           }
+        }
+
+        if (provider === FRPC_PROVIDER && !frpcEndpoint) {
+          frpcEndpoint = normalizeFrpcEndpointOrThrow({ remotePort, publicUrl, customDomain, hostname });
+          remotePort = frpcEndpoint.remotePort;
+          publicUrl = frpcEndpoint.publicUrl;
+          customDomain = frpcEndpoint.customDomain;
+          hostname = frpcEndpoint.hostname;
         }
 
         if (mode === 'managed-local') {
@@ -1406,6 +1999,29 @@ async function tunnelCommand(options, subcommand, action, deps) {
           return;
         }
         const { connectTtlMs, sessionTtlMs } = ttlOverrides;
+        const buildReplayCommandForPort = (port) => buildTunnelStartReplayCommand({
+          port,
+          provider,
+          mode,
+          profileName: selectedProfile?.name,
+          configPath: options.configPath,
+          hostname,
+          customDomain,
+          serverAddress,
+          serverPort,
+          trustedCaFile,
+          remotePort,
+          publicUrl,
+          connectTtlMs,
+          sessionTtlMs,
+          qr: options.qr === true,
+          noQr: options.noQr === true,
+          json: isJsonMode(options),
+          quiet: isQuietMode(options),
+          includeTokenPlaceholder: !selectedProfile && mode === 'managed-remote' && typeof token === 'string' && token.trim().length > 0,
+          tokenViaStdin: options.tokenStdin === true,
+          tokenFileProvided: typeof options.tokenFile === 'string' && options.tokenFile.trim().length > 0,
+        });
 
         if (options.dryRun) {
           const dryRunResult = {
@@ -1414,6 +2030,12 @@ async function tunnelCommand(options, subcommand, action, deps) {
             provider,
             mode,
             hostname: hostname || null,
+            customDomain: customDomain || null,
+            serverAddress: serverAddress || null,
+            serverPort: serverPort || null,
+            trustedCaFile: trustedCaFile || null,
+            remotePort: remotePort || null,
+            publicUrl: publicUrl || null,
             hasToken: typeof token === 'string' && token.trim().length > 0,
             profile: selectedProfile ? selectedProfile.name : null,
             configPath: options.configPath || null,
@@ -1424,7 +2046,9 @@ async function tunnelCommand(options, subcommand, action, deps) {
             printJson(dryRunResult);
           } else if (!isQuietMode(options)) {
             clackIntro('Tunnel Start (dry-run)');
-            logStatus('info', `Would start ${clackFormatProviderWithIcon(provider)}/${mode}`, hostname || '(ephemeral URL)');
+            logStatus('info', `Would start ${clackFormatProviderWithIcon(provider)}/${mode}`, provider === FRPC_PROVIDER
+              ? formatProfileEndpoint({ provider, serverAddress, serverPort, ...getFrpcEndpointFields(frpcEndpoint) })
+              : (hostname || '(ephemeral URL)'));
             clackOutro('dry-run complete (no changes applied)');
           }
           return;
@@ -1486,7 +2110,12 @@ async function tunnelCommand(options, subcommand, action, deps) {
         if (instance?.autoStarted) {
           setCancelCleanup(async () => {
             try {
-              await stopCommand({ explicitPort: true, port: instance.port });
+              await stopCommand({
+                explicitPort: true,
+                port: instance.port,
+                quiet: true,
+                suppressQuietOutput: true,
+              });
             } catch {
             }
           });
@@ -1522,16 +2151,16 @@ async function tunnelCommand(options, subcommand, action, deps) {
             throw new Error(
               `OpenChamber on port ${instance.port} is still starting after 60s. Startup time can vary by machine performance. ` +
               `Wait another minute, then check health with \`curl -fsS ${buildLocalUrl(instance.port, '/health')}\`. ` +
-              `If health is OK, retry tunnel start with \`openchamber tunnel start --port ${instance.port}\`. ` +
+              `If health is OK, retry with \`${buildReplayCommandForPort(instance.port)}\`. ` +
               `For diagnostics run \`openchamber logs -p ${instance.port}\`.`
             );
           }
           healthProgress?.stop(`Instance ${instance.port} is healthy`);
         }
 
-        if (selectedProfile && mode === 'managed-remote') {
+        if (selectedProfile && provider === 'cloudflare' && mode === 'managed-remote') {
           const tokenSyncPayload = {
-            presetId: selectedProfile.id,
+            presetId: getCliManagedRemoteCredentialId(selectedProfile.id),
             presetName: selectedProfile.name,
             managedRemoteTunnelHostname: hostname,
             managedRemoteTunnelToken: token,
@@ -1553,9 +2182,13 @@ async function tunnelCommand(options, subcommand, action, deps) {
           ...(options.configPath === null ? { configPath: null } : {}),
           ...(typeof options.configPath === 'string' ? { configPath: options.configPath } : {}),
           ...(typeof token === 'string' ? { token } : {}),
-          ...(typeof hostname === 'string' ? { hostname } : {}),
+          ...(provider === FRPC_PROVIDER
+            ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+            : (typeof hostname === 'string' ? { hostname } : {})),
           ...(selectedProfile ? {
-            managedRemoteTunnelPresetId: selectedProfile.id,
+            managedRemoteTunnelPresetId: provider === 'cloudflare'
+              ? getCliManagedRemoteCredentialId(selectedProfile.id)
+              : selectedProfile.id,
             managedRemoteTunnelPresetName: selectedProfile.name,
           } : {}),
         };
@@ -1569,13 +2202,14 @@ async function tunnelCommand(options, subcommand, action, deps) {
           ({ response, body } = await requestJson(instance.port, '/api/openchamber/tunnel/start', {
             method: 'POST',
             body: JSON.stringify(payload),
-            timeoutMs: 60000,
+            timeoutMs: TUNNEL_START_REQUEST_TIMEOUT_MS,
           }));
         } catch (error) {
           if (error instanceof Error && /\/api\/openchamber\/tunnel\/start/.test(error.message) && /timed out/.test(error.message)) {
             spin?.error('Tunnel start timed out');
             throw new Error(
-              `Tunnel start timed out after 60s. cloudflared may still be starting; check with \`openchamber tunnel status --port ${instance.port}\`. Run \`openchamber logs -p ${instance.port}\` for details.`
+              `Tunnel start timed out after ${TUNNEL_START_REQUEST_TIMEOUT_MS / 1000}s and cancellation was requested. ` +
+              `Retry with \`${buildReplayCommandForPort(instance.port)}\`. Run \`openchamber logs -p ${instance.port}\` for details.`
             );
           }
           spin?.error('Tunnel start failed');
@@ -1597,24 +2231,15 @@ async function tunnelCommand(options, subcommand, action, deps) {
         // the subsequent structured success section.
         spin?.clear();
 
-        const replayCommand = buildTunnelStartReplayCommand({
-          port: instance.port,
-          provider,
-          mode,
-          profileName: selectedProfile?.name,
-          configPath: options.configPath,
-          hostname,
-          connectTtlMs,
-          sessionTtlMs,
-          qr: options.qr === true,
-          noQr: options.noQr === true,
-          includeTokenPlaceholder: !selectedProfile && mode === 'managed-remote' && typeof token === 'string' && token.trim().length > 0,
-          tokenViaStdin: options.tokenStdin === true,
-          tokenFileProvided: typeof options.tokenFile === 'string' && options.tokenFile.trim().length > 0,
-        });
+        const replayCommand = buildReplayCommandForPort(instance.port);
 
         if (isJsonMode(options)) {
-          printJson({ port: instance.port, replayCommand, ...body });
+          printJson({
+            port: instance.port,
+            replayCommand,
+            ...body,
+            ...(provider === FRPC_PROVIDER ? getFrpcEndpointFields(frpcEndpoint) : {}),
+          });
         } else if (isQuietMode(options)) {
           const quietUrl = body.connectUrl || body.url || 'n/a';
           process.stdout.write(`port ${instance.port} ${quietUrl}\n`);
@@ -1641,9 +2266,21 @@ async function tunnelCommand(options, subcommand, action, deps) {
             { line: 'If needed, repeat with same settings', detail: replayCommand },
           ];
 
-          if (!selectedProfile && mode === 'managed-remote' && typeof hostname === 'string' && hostname.trim().length > 0) {
-            const profileSaveCommand = buildTunnelProfileAddCommand({ provider, hostname });
-            optionalTips.push({ line: 'Optional: save reusable profile (stores hostname + token locally)', detail: profileSaveCommand });
+          const hasReusableEndpoint = provider === FRPC_PROVIDER
+            ? Boolean(serverAddress && serverPort && frpcEndpoint)
+            : typeof hostname === 'string' && hostname.trim().length > 0;
+          if (!selectedProfile && mode === 'managed-remote' && hasReusableEndpoint) {
+            const profileSaveCommand = buildTunnelProfileAddCommand({
+              provider,
+              hostname,
+              customDomain,
+              serverAddress,
+              serverPort,
+              trustedCaFile,
+              remotePort,
+              publicUrl,
+            });
+            optionalTips.push({ line: 'Optional: save reusable profile (stores endpoint + token locally)', detail: profileSaveCommand });
             optionalTips.push({ line: 'Start from saved profile', detail: 'openchamber tunnel start --profile <name>' });
           }
 
@@ -1666,6 +2303,17 @@ async function tunnelCommand(options, subcommand, action, deps) {
         return;
       }
       case 'stop': {
+        if (
+          options.all
+          && !options.force
+          && (isJsonMode(options) || isQuietMode(options) || !canPrompt(options))
+        ) {
+          throw new TunnelCliError(
+            '`tunnel stop --all` requires --force when input is non-interactive or output uses --json/--quiet.',
+            EXIT_CODE.USAGE_ERROR,
+          );
+        }
+
         let entries;
         if (options.all) {
           entries = await resolveTargetInstance({ options, serveCommand, allowAutoStart: false, requireAll: true });
@@ -1689,8 +2337,9 @@ async function tunnelCommand(options, subcommand, action, deps) {
           try {
             const { response, body } = await requestJson(entry.port, '/api/openchamber/tunnel/stop', {
               method: 'POST',
+              timeoutMs: TUNNEL_STOP_REQUEST_TIMEOUT_MS,
             });
-            if (!response.ok) {
+            if (!response.ok || body?.ok === false) {
               tunnelStopSpin?.error(`Failed to stop tunnel on port ${entry.port}`);
               results.push({ port: entry.port, error: body?.error || `stop ${response.status}` });
               continue;
@@ -1703,12 +2352,12 @@ async function tunnelCommand(options, subcommand, action, deps) {
           }
         }
 
-        if (isJsonMode(options)) {
-          printJson({ instances: results });
-          return;
-        }
+        const failureCount = results.filter((result) => result.error).length;
+        const hasFailures = failureCount > 0;
 
-        if (isQuietMode(options)) {
+        if (isJsonMode(options)) {
+          printJson({ status: hasFailures ? 'error' : 'ok', ok: !hasFailures, instances: results });
+        } else if (isQuietMode(options)) {
           for (const result of results) {
             if (result.error) {
               process.stderr.write(`port ${result.port} failed: ${result.error}\n`);
@@ -1716,18 +2365,27 @@ async function tunnelCommand(options, subcommand, action, deps) {
             }
             process.stdout.write(`port ${result.port} stopped\n`);
           }
-          return;
+        } else {
+          clackIntro('Tunnel Stop');
+          for (const result of results) {
+            if (result.error) {
+              logStatus('error', `port ${result.port} failed`, result.error);
+              continue;
+            }
+            logStatus('success', `port ${result.port} stopped`, `revoked ${result.result?.revokedBootstrapCount || 0}, invalidated ${result.result?.invalidatedSessionCount || 0}`);
+          }
+          clackOutro(hasFailures
+            ? `${failureCount} of ${results.length} instance(s) failed`
+            : `${results.length} instance(s)`);
         }
 
-        clackIntro('Tunnel Stop');
-        for (const result of results) {
-          if (result.error) {
-            logStatus('error', `port ${result.port} failed`, result.error);
-            continue;
-          }
-          logStatus('success', `port ${result.port} stopped`, `revoked ${result.result?.revokedBootstrapCount || 0}, invalidated ${result.result?.invalidatedSessionCount || 0}`);
+        if (hasFailures) {
+          throw new TunnelCliError(
+            `${failureCount} tunnel stop operation(s) failed`,
+            EXIT_CODE.NETWORK_RUNTIME_ERROR,
+            { reported: true },
+          );
         }
-        clackOutro(`${results.length} instance(s)`);
         return;
       }
       case 'completion': {
@@ -1758,4 +2416,8 @@ export {
   createTunnelCommand,
   isValidTunnelDoctorResponse,
   shouldDisplayTunnelQr,
+  createTunnelAutoStartOptions,
+  FRPC_START_SERVER_BUDGET_MS,
+  TUNNEL_START_REQUEST_TIMEOUT_MS,
+  TUNNEL_STOP_REQUEST_TIMEOUT_MS,
 };

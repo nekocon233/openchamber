@@ -66,6 +66,9 @@ import { autoConnectLastInstance, connectionDisplayUrl, getAutoConnectTargetLabe
 import { isRelayModeActive } from '@/lib/relay/runtime-tunnel';
 import { isQrScanSupported, parseConnectionPayload, scanConnectionQr } from './mobileQrScan';
 import { reconnectAppForTransportSwitch, resetAppForRuntimeEndpointChange } from './runtimeEndpointReset';
+import { initializeSidebarStateSync } from '@/stores/useSidebarStateStore';
+import { useBrowserPushSubscriptionReconciliation } from '@/hooks/useBrowserPushSubscriptionReconciliation';
+import { useWebNotificationStream } from '@/hooks/useWebNotificationStream';
 import { useAppFontEffects } from './useAppFontEffects';
 import { useFontsReady } from './useFontsReady';
 import { useDeepLinkHandlers, useDeepLinkSource } from './deepLinkNavigation';
@@ -2839,8 +2842,12 @@ export function MobileApp({ apis }: MobileAppProps) {
 
   React.useEffect(() => {
     registerRuntimeAPIs(apis);
+    void initializeSidebarStateSync();
     return () => registerRuntimeAPIs(null);
   }, [apis]);
+
+  useBrowserPushSubscriptionReconciliation({ enabled: isConnected });
+  useWebNotificationStream();
 
   // Switching instances (or disconnecting) only changes the runtime endpoint; the
   // stores still hold the previous instance's data. Mirror the web App.tsx reset

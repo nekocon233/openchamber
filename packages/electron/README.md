@@ -119,7 +119,7 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 
 - Floating Mini Chat windows.
 - Multiple native windows.
-- Native notifications.
+- Native notifications. Windows toast bodies activate an opaque `openchamber://notification/<id>` deep link, so Action Center clicks can restart the app, recreate the main window, and defer exact session navigation until the renderer listener is ready. Actionable targets carry their source runtime identity and are rejected if the main renderer has switched to another runtime before the click. Readiness carries no renderer-supplied identity: main derives remote identity from the committed document URL, verifies configured-host identity against that origin, and tracks local-shell host switches only after validating the configured host in main. Main also injects the validated configured-host key at boot so direct and relay hosts keep the same identity across restart.
 - One-click open/reveal/open-in-app actions.
 - Desktop host switcher and deep-link imports.
 - Local and remote instance handling.
@@ -143,6 +143,8 @@ Add new native capabilities in this order:
 Electron uses `electron-log`. In development, console logs are also visible in the terminal. In packaged apps, logs are written through the platform log path for the `OpenChamber` app name.
 
 Development builds use a separate user data directory named `OpenChamber Dev`, so dev state does not overwrite normal packaged app state.
+
+Windows notification deep links contain only a random opaque ID. The matching source runtime identity, session ID, and directory are stored in Electron-owned `notification-targets.json` under the app user-data directory, capped at 64 entries, expired after 30 days, and removed after activation or definitive dismissal. Old records without a runtime identity are ignored. Notification titles, bodies, credentials, and message content are never stored in that record.
 
 ## Things To Be Careful With
 

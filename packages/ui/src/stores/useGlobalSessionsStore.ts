@@ -109,13 +109,9 @@ export const mergeSessionDirectoryMetadata = (incoming: Session, existing?: Sess
 
   if (!incomingWorktree && existingWorktree) {
     next.project = {
-      ...(existingRecord.project ?? {}),
       ...(incomingRecord.project ?? {}),
       worktree: existingRecord.project?.worktree,
     };
-    changed = true;
-  } else if (!incomingRecord.project && existingRecord.project) {
-    next.project = existingRecord.project;
     changed = true;
   }
 

@@ -18,6 +18,7 @@ import { startModelPrefsAutoSave } from '@/lib/modelPrefsAutoSave';
 import { startTypographyWatcher } from '@/lib/typographyWatcher';
 import { preloadMarkdownRenderer } from '@/components/chat/markdownRendererLoader';
 import { SessionAuthGate } from '@/components/auth/SessionAuthGate';
+import { useSessionUIStore } from '@/sync/session-ui-store';
 import { MobileApp } from './MobileApp';
 
 const initializeSharedPreferences = () => {
@@ -46,6 +47,9 @@ const initializeSharedPreferences = () => {
 export function renderMobileApp(apis: RuntimeAPIs) {
   preloadMarkdownRenderer();
   initializeSharedPreferences();
+  // Restore the last conversation before React mounts so ChatContainer does
+  // not replace it with the automatic new-session draft on the first effect.
+  useSessionUIStore.getState().restoreForRuntimeSwitch();
 
   // Expose the widget snapshot builder so the native shell can read the session overview
   // (attention count + recent sessions) and feed the home/lock-screen/Control Center widgets.

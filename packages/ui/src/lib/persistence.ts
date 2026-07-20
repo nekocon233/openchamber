@@ -55,33 +55,12 @@ const persistToLocalStorage = (settings: DesktopSettings) => {
     localStorage.setItem('homeDirectory', settings.homeDirectory);
     applyPersistedHomeDirectoryToWindow(settings.homeDirectory);
   }
-  if (Array.isArray(settings.projects) && settings.projects.length > 0) {
-    localStorage.setItem('projects', JSON.stringify(settings.projects));
-  } else {
-    localStorage.removeItem('projects');
-  }
-  if (settings.activeProjectId) {
-    localStorage.setItem('activeProjectId', settings.activeProjectId);
-  } else {
-    localStorage.removeItem('activeProjectId');
-  }
   if (Array.isArray(settings.pinnedDirectories) && settings.pinnedDirectories.length > 0) {
     localStorage.setItem('pinnedDirectories', JSON.stringify(settings.pinnedDirectories));
   } else {
     localStorage.removeItem('pinnedDirectories');
   }
 
-  if (Array.isArray(settings.projects) && settings.projects.length > 0) {
-    const collapsed = settings.projects
-      .filter((project) => (project as unknown as { sidebarCollapsed?: boolean }).sidebarCollapsed === true)
-      .map((project) => project.id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    if (collapsed.length > 0) {
-      localStorage.setItem('oc.sessions.projectCollapse', JSON.stringify(collapsed));
-    } else {
-      localStorage.removeItem('oc.sessions.projectCollapse');
-    }
-  }
   if (typeof settings.gitmojiEnabled === 'boolean') {
     localStorage.setItem('gitmojiEnabled', String(settings.gitmojiEnabled));
   } else {
@@ -378,6 +357,46 @@ const sanitizeManagedRemoteTunnelPresetTokens = (value: unknown): DesktopSetting
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
+const normalizeManagedRemoteTunnelHostname = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const parsed = trimmed.includes('://') ? new URL(trimmed) : new URL(`https://${trimmed}`);
+    return parsed.hostname.trim().toLowerCase() || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const normalizeFrpcPublicUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value.trim());
+    if (
+      parsed.protocol !== 'https:'
+      || parsed.username
+      || parsed.password
+      || parsed.pathname !== '/'
+      || parsed.search
+      || parsed.hash
+      || parsed.origin === 'null'
+    ) {
+      return undefined;
+    }
+    return parsed.origin;
+  } catch {
+    return undefined;
+  }
+};
+
 const sanitizeModelRefs = (value: unknown, limit: number): Array<{ providerID: string; modelID: string }> | undefined => {
   if (!Array.isArray(value)) {
     return undefined;
@@ -412,8 +431,42 @@ const getPersistApi = (): PersistApi | undefined => {
 
 const getRuntimeSettingsAPI = () => getRegisteredRuntimeAPIs()?.settings ?? null;
 
-const applyDesktopUiPreferences = (settings: DesktopSettings) => {
+const DEFAULT_RUNTIME_NOTIFICATION_SETTINGS = {
+  nativeNotificationsEnabled: false,
+  notificationMode: 'hidden-only' as const,
+  notifyOnSubtasks: true,
+  notifyOnCompletion: true,
+  notifyOnError: true,
+  notifyOnQuestion: true,
+  notificationTemplates: {
+    completion: { title: '', message: '' },
+    error: { title: '', message: '' },
+    question: { title: '', message: '' },
+    subtask: { title: '', message: '' },
+  },
+  summarizeLastMessage: false,
+  summaryThreshold: 200,
+  summaryLength: 100,
+  maxLastMessageLength: 250,
+} satisfies DesktopSettings;
+
+const applyDesktopUiPreferences = (
+  settings: DesktopSettings,
+  options: { authoritativeNotifications?: boolean } = {},
+) => {
   const store = useUIStore.getState();
+  const notificationSettings: DesktopSettings = options.authoritativeNotifications
+    ? {
+        ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS,
+        ...settings,
+        notificationTemplates: settings.notificationTemplates ?? {
+          completion: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.completion },
+          error: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.error },
+          question: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.question },
+          subtask: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.subtask },
+        },
+      }
+    : settings;
   const configStore = typeof window !== 'undefined'
     ? window.__zustand_config_store__?.getState?.() ?? null
     : null;
@@ -471,40 +524,40 @@ const applyDesktopUiPreferences = (settings: DesktopSettings) => {
   if (typeof settings.showDeletionDialog === 'boolean' && settings.showDeletionDialog !== store.showDeletionDialog) {
     store.setShowDeletionDialog(settings.showDeletionDialog);
   }
-  if (typeof settings.nativeNotificationsEnabled === 'boolean' && settings.nativeNotificationsEnabled !== store.nativeNotificationsEnabled) {
-    store.setNativeNotificationsEnabled(settings.nativeNotificationsEnabled);
+  if (typeof notificationSettings.nativeNotificationsEnabled === 'boolean' && notificationSettings.nativeNotificationsEnabled !== store.nativeNotificationsEnabled) {
+    store.setNativeNotificationsEnabled(notificationSettings.nativeNotificationsEnabled);
   }
-  if (typeof settings.notificationMode === 'string' && (settings.notificationMode === 'always' || settings.notificationMode === 'hidden-only')) {
-    if (settings.notificationMode !== store.notificationMode) {
-      store.setNotificationMode(settings.notificationMode);
+  if (typeof notificationSettings.notificationMode === 'string' && (notificationSettings.notificationMode === 'always' || notificationSettings.notificationMode === 'hidden-only')) {
+    if (notificationSettings.notificationMode !== store.notificationMode) {
+      store.setNotificationMode(notificationSettings.notificationMode);
     }
   }
-  if (typeof settings.notifyOnSubtasks === 'boolean' && settings.notifyOnSubtasks !== store.notifyOnSubtasks) {
-    store.setNotifyOnSubtasks(settings.notifyOnSubtasks);
+  if (typeof notificationSettings.notifyOnSubtasks === 'boolean' && notificationSettings.notifyOnSubtasks !== store.notifyOnSubtasks) {
+    store.setNotifyOnSubtasks(notificationSettings.notifyOnSubtasks);
   }
-  if (typeof settings.notifyOnCompletion === 'boolean' && settings.notifyOnCompletion !== store.notifyOnCompletion) {
-    store.setNotifyOnCompletion(settings.notifyOnCompletion);
+  if (typeof notificationSettings.notifyOnCompletion === 'boolean' && notificationSettings.notifyOnCompletion !== store.notifyOnCompletion) {
+    store.setNotifyOnCompletion(notificationSettings.notifyOnCompletion);
   }
-  if (typeof settings.notifyOnError === 'boolean' && settings.notifyOnError !== store.notifyOnError) {
-    store.setNotifyOnError(settings.notifyOnError);
+  if (typeof notificationSettings.notifyOnError === 'boolean' && notificationSettings.notifyOnError !== store.notifyOnError) {
+    store.setNotifyOnError(notificationSettings.notifyOnError);
   }
-  if (typeof settings.notifyOnQuestion === 'boolean' && settings.notifyOnQuestion !== store.notifyOnQuestion) {
-    store.setNotifyOnQuestion(settings.notifyOnQuestion);
+  if (typeof notificationSettings.notifyOnQuestion === 'boolean' && notificationSettings.notifyOnQuestion !== store.notifyOnQuestion) {
+    store.setNotifyOnQuestion(notificationSettings.notifyOnQuestion);
   }
-  if (settings.notificationTemplates && typeof settings.notificationTemplates === 'object') {
-    store.setNotificationTemplates(settings.notificationTemplates);
+  if (notificationSettings.notificationTemplates && typeof notificationSettings.notificationTemplates === 'object') {
+    store.setNotificationTemplates(notificationSettings.notificationTemplates);
   }
-  if (typeof settings.summarizeLastMessage === 'boolean' && settings.summarizeLastMessage !== store.summarizeLastMessage) {
-    store.setSummarizeLastMessage(settings.summarizeLastMessage);
+  if (typeof notificationSettings.summarizeLastMessage === 'boolean' && notificationSettings.summarizeLastMessage !== store.summarizeLastMessage) {
+    store.setSummarizeLastMessage(notificationSettings.summarizeLastMessage);
   }
-  if (typeof settings.summaryThreshold === 'number' && Number.isFinite(settings.summaryThreshold)) {
-    store.setSummaryThreshold(settings.summaryThreshold);
+  if (typeof notificationSettings.summaryThreshold === 'number' && Number.isFinite(notificationSettings.summaryThreshold)) {
+    store.setSummaryThreshold(notificationSettings.summaryThreshold);
   }
-  if (typeof settings.summaryLength === 'number' && Number.isFinite(settings.summaryLength)) {
-    store.setSummaryLength(settings.summaryLength);
+  if (typeof notificationSettings.summaryLength === 'number' && Number.isFinite(notificationSettings.summaryLength)) {
+    store.setSummaryLength(notificationSettings.summaryLength);
   }
-  if (typeof settings.maxLastMessageLength === 'number' && Number.isFinite(settings.maxLastMessageLength)) {
-    store.setMaxLastMessageLength(settings.maxLastMessageLength);
+  if (typeof notificationSettings.maxLastMessageLength === 'number' && Number.isFinite(notificationSettings.maxLastMessageLength)) {
+    store.setMaxLastMessageLength(notificationSettings.maxLastMessageLength);
   }
   if (typeof settings.inputSpellcheckEnabled === 'boolean' && settings.inputSpellcheckEnabled !== store.inputSpellcheckEnabled) {
     store.setInputSpellcheckEnabled(settings.inputSpellcheckEnabled);
@@ -907,6 +960,70 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
   const managedRemoteTunnelPresetTokens = sanitizeManagedRemoteTunnelPresetTokens(candidate.managedRemoteTunnelPresetTokens);
   if (managedRemoteTunnelPresetTokens) {
     result.managedRemoteTunnelPresetTokens = managedRemoteTunnelPresetTokens;
+  }
+  if (candidate.frpcProxyType === 'tcp' || candidate.frpcProxyType === 'http') {
+    result.frpcProxyType = candidate.frpcProxyType;
+  }
+  if (candidate.frpcServerAddress === null) {
+    result.frpcServerAddress = null;
+  } else if (typeof candidate.frpcServerAddress === 'string') {
+    const value = candidate.frpcServerAddress.trim();
+    result.frpcServerAddress = value || null;
+  }
+  if (candidate.frpcServerPort === null) {
+    result.frpcServerPort = null;
+  } else if (typeof candidate.frpcServerPort === 'number' && Number.isInteger(candidate.frpcServerPort) && candidate.frpcServerPort >= 1 && candidate.frpcServerPort <= 65535) {
+    result.frpcServerPort = candidate.frpcServerPort;
+  }
+  if (candidate.frpcTrustedCaFile === null) {
+    result.frpcTrustedCaFile = null;
+  } else if (typeof candidate.frpcTrustedCaFile === 'string') {
+    const value = candidate.frpcTrustedCaFile.trim();
+    result.frpcTrustedCaFile = value || null;
+  }
+  if (candidate.frpcRemotePort === null) {
+    result.frpcRemotePort = null;
+  } else if (typeof candidate.frpcRemotePort === 'number' && Number.isInteger(candidate.frpcRemotePort) && candidate.frpcRemotePort >= 1 && candidate.frpcRemotePort <= 65535) {
+    result.frpcRemotePort = candidate.frpcRemotePort;
+  }
+  if (candidate.frpcPublicUrl === null) {
+    result.frpcPublicUrl = null;
+  } else if (typeof candidate.frpcPublicUrl === 'string') {
+    const value = candidate.frpcPublicUrl.trim();
+    if (!value) {
+      result.frpcPublicUrl = null;
+    } else {
+      const publicUrl = normalizeFrpcPublicUrl(value);
+      if (publicUrl) {
+        result.frpcPublicUrl = publicUrl;
+      }
+    }
+  }
+  if (candidate.frpcCustomDomain === null) {
+    result.frpcCustomDomain = null;
+  } else if (typeof candidate.frpcCustomDomain === 'string') {
+    const value = candidate.frpcCustomDomain.trim();
+    if (!value) {
+      result.frpcCustomDomain = null;
+    } else {
+      const hostname = normalizeManagedRemoteTunnelHostname(value);
+      if (hostname) {
+        result.frpcCustomDomain = hostname;
+      }
+    }
+  }
+  if (candidate.frpcPublicHostname === null) {
+    result.frpcPublicHostname = null;
+  } else if (typeof candidate.frpcPublicHostname === 'string') {
+    const value = candidate.frpcPublicHostname.trim();
+    if (!value) {
+      result.frpcPublicHostname = null;
+    } else {
+      const hostname = normalizeManagedRemoteTunnelHostname(value);
+      if (hostname) {
+        result.frpcPublicHostname = hostname;
+      }
+    }
   }
   if (typeof candidate.defaultModel === 'string' && candidate.defaultModel.length > 0) {
     result.defaultModel = candidate.defaultModel;
@@ -1487,7 +1604,7 @@ export const syncDesktopSettings = async (): Promise<void> => {
     await waitForHydration();
     if (!isSettingsRuntimeContextCurrent(context)) return;
     try {
-      applyDesktopUiPreferences(settings);
+      applyDesktopUiPreferences(settings, { authoritativeNotifications: true });
     } catch (error) {
       console.warn('applyDesktopUiPreferences failed:', error);
     }
@@ -1580,6 +1697,12 @@ export const updateDesktopSettings = async (changes: Partial<DesktopSettings>): 
   if (typeof window === 'undefined') {
     return;
   }
+  const writableChanges: Partial<DesktopSettings> & { sidebarCollapsed?: unknown } = { ...changes };
+  delete writableChanges.projects;
+  delete writableChanges.activeProjectId;
+  delete writableChanges.sidebarCollapsed;
+  if (Object.keys(writableChanges).length === 0) return;
+
   ensureSettingsRuntimeLifecycle();
   const context = captureSettingsRuntimeContext();
 
@@ -1588,7 +1711,7 @@ export const updateDesktopSettings = async (changes: Partial<DesktopSettings>): 
     void _flushSettingsUpdate();
   }
 
-  _pendingSettingsChanges = { ...(_pendingSettingsChanges ?? {}), ...changes };
+  _pendingSettingsChanges = { ...(_pendingSettingsChanges ?? {}), ...writableChanges };
   _pendingSettingsContext = context;
 
   if (_settingsFlushTimer) {

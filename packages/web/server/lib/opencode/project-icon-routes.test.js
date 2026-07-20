@@ -80,7 +80,6 @@ describe('project icon routes', () => {
       path,
       crypto,
       openchamberDataDir: '/tmp/openchamber-test',
-      sanitizeProjects: (projects) => projects,
       readSettingsFromDiskMigrated: async () => ({
         projects: [{
           id: 'proj-1',
@@ -88,7 +87,15 @@ describe('project icon routes', () => {
           iconImage: { mime: 'image/png', updatedAt: 1, source: 'custom' },
         }],
       }),
-      persistSettings: async () => ({}),
+      sidebarStateRuntime: {
+        readSnapshot: async () => ({
+          projects: [{
+            id: 'proj-1',
+            path: '/repo',
+            iconImage: { mime: 'image/png', updatedAt: 1, source: 'custom' },
+          }],
+        }),
+      },
       createFsSearchRuntime: () => ({ searchFilesystemFiles: async () => [] }),
       spawn: vi.fn(),
       resolveGitBinaryForSpawn: vi.fn(),

@@ -8,6 +8,14 @@ import { setActionRefs, setOptimisticRefs } from './session-actions';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useCommandsStore } from '@/stores/useCommandsStore';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import {
+  clearPersistedSessionNavigation,
+  parsePersistedSessionNavigation,
+  persistSessionNavigation,
+  readPersistedSessionNavigation,
+  openSessionFromToast,
+} from './session-navigation';
 
 /**
  * Unit tests for session worktree routing through the authoritative store.
@@ -194,6 +202,160 @@ describe('session-worktree-store worktree routing', () => {
     const attachment = store.getAttachment('session-not-repo');
     expect(attachment).toBeDefined();
     expect(attachment.worktreeStatus).toBe('not-a-repo');
+  });
+});
+
+describe('persisted current session navigation', () => {
+  const runtimeA = 'test:session-navigation-a';
+  const runtimeB = 'test:session-navigation-b';
+
+  beforeEach(() => {
+    clearPersistedSessionNavigation(null, runtimeA);
+    clearPersistedSessionNavigation(null, runtimeB);
+    clearPersistedSessionNavigation();
+    useSessionUIStore.setState({
+      currentSessionId: null,
+      currentSessionDirectory: null,
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+      newSessionDraft: { open: false, directoryOverride: null, parentID: null },
+    });
+  });
+
+  afterEach(() => {
+    clearPersistedSessionNavigation(null, runtimeA);
+    clearPersistedSessionNavigation(null, runtimeB);
+    clearPersistedSessionNavigation();
+  });
+
+  test('rejects malformed and version-mismatched records', () => {
+    expect(parsePersistedSessionNavigation('{')).toBeNull();
+    expect(parsePersistedSessionNavigation(JSON.stringify({ version: 2, sessionId: 'session-a' }))).toBeNull();
+    expect(parsePersistedSessionNavigation(JSON.stringify({ version: 1, sessionId: '' }))).toBeNull();
+    expect(parsePersistedSessionNavigation(JSON.stringify({
+      version: 1,
+      sessionId: ' session-a ',
+      directory: '/repo/project/',
+    }))).toEqual({
+      version: 1,
+      sessionId: 'session-a',
+      directory: '/repo/project',
+    });
+  });
+
+  test('restores independent conversations for each runtime', () => {
+    persistSessionNavigation('session-a', '/repo/a', runtimeA);
+    persistSessionNavigation('session-b', '/repo/b', runtimeB);
+
+    useSessionUIStore.getState().restoreForRuntimeSwitch(runtimeA);
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: 'session-a',
+      currentSessionDirectory: '/repo/a',
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeA,
+    });
+
+    useSessionUIStore.getState().restoreForRuntimeSwitch(runtimeB);
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: 'session-b',
+      currentSessionDirectory: '/repo/b',
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeB,
+    });
+  });
+
+  test('only clears the persisted conversation when the session matches', () => {
+    persistSessionNavigation('session-a', '/repo/a', runtimeA);
+
+    clearPersistedSessionNavigation('session-b', runtimeA);
+    expect(readPersistedSessionNavigation(runtimeA)?.sessionId).toBe('session-a');
+
+    clearPersistedSessionNavigation('session-a', runtimeA);
+    expect(readPersistedSessionNavigation(runtimeA)).toBeNull();
+  });
+
+  test('clears a restored conversation after an authoritative active list excludes it', () => {
+    const runtimeKey = getRuntimeKey();
+    persistSessionNavigation('session-gone', '/repo/gone', runtimeKey);
+    useSessionUIStore.setState({
+      currentSessionId: 'session-gone',
+      currentSessionDirectory: '/repo/gone',
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeKey,
+    });
+
+    useSessionUIStore.getState().reconcileRestoredSession(null);
+
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: null,
+      currentSessionDirectory: null,
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+    });
+    expect(readPersistedSessionNavigation(runtimeKey)).toBeNull();
+  });
+
+  test('replaces a stale saved directory with the authoritative session directory', () => {
+    const runtimeKey = getRuntimeKey();
+    persistSessionNavigation('session-active', '/repo/stale', runtimeKey);
+    useSessionUIStore.setState({
+      currentSessionId: 'session-active',
+      currentSessionDirectory: '/repo/stale',
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeKey,
+    });
+
+    useSessionUIStore.getState().reconcileRestoredSession({
+      id: 'session-active',
+      directory: '/repo/authoritative',
+      time: { created: 1 },
+    });
+
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: 'session-active',
+      currentSessionDirectory: '/repo/authoritative',
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+    });
+    expect(readPersistedSessionNavigation(runtimeKey)?.directory).toBe('/repo/authoritative');
+  });
+
+  test('keeps the last conversation when an unsent new-session draft is opened', () => {
+    useSessionUIStore.getState().setCurrentSession('session-last', '/repo/last');
+    expect(readPersistedSessionNavigation()).toEqual({
+      version: 1,
+      sessionId: 'session-last',
+      directory: '/repo/last',
+    });
+
+    useSessionUIStore.getState().openNewSessionDraft({ directoryOverride: '/repo/last' });
+
+    expect(useSessionUIStore.getState().currentSessionId).toBeNull();
+    expect(readPersistedSessionNavigation()?.sessionId).toBe('session-last');
+  });
+
+  test('lets an explicit notification target replace provisional cold-start restoration', () => {
+    const runtimeKey = getRuntimeKey();
+    persistSessionNavigation('session-restored', '/repo/restored', runtimeKey);
+    useSessionUIStore.setState({
+      currentSessionId: 'session-restored',
+      currentSessionDirectory: '/repo/restored',
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeKey,
+    });
+
+    openSessionFromToast('session-notification', '/repo/notification');
+
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: 'session-notification',
+      currentSessionDirectory: '/repo/notification',
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+    });
+    expect(readPersistedSessionNavigation(runtimeKey)).toMatchObject({
+      sessionId: 'session-notification',
+      directory: '/repo/notification',
+    });
   });
 });
 

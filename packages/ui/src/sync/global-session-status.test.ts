@@ -6,6 +6,7 @@ import {
   applyGlobalSessionStatusSnapshot,
   getGlobalSessionStatusRevision,
   resetGlobalSessionStatuses,
+  resolveSessionStatusType,
   setGlobalSessionStatus,
   useGlobalSessionStatusStore,
 } from './global-session-status';
@@ -17,7 +18,9 @@ const statusEvent = (sessionID: string, type: 'busy' | 'retry' | 'idle'): Event 
 } as Event);
 
 describe('global session status', () => {
-  beforeEach(() => resetGlobalSessionStatuses());
+  beforeEach(() => {
+    resetGlobalSessionStatuses();
+  });
 
   test('seeds running state from events and clears it with an authoritative empty snapshot', () => {
     applyGlobalSessionStatusEvent('/project', statusEvent('ses-1', 'busy'));
@@ -27,6 +30,14 @@ describe('global session status', () => {
     applyGlobalSessionStatusSnapshot('/project', {}, ['ses-1']);
     expect(useGlobalSessionStatusStore.getState().statusById.has('ses-1')).toBe(false);
     expect(useGlobalSessionStatusStore.getState().resolvedStatusById.get('ses-1')).toBe('idle');
+  });
+
+  test('resolves global status before child status and falls back deterministically', () => {
+    expect(resolveSessionStatusType('busy', undefined)).toBe('busy');
+    expect(resolveSessionStatusType('retry', 'idle')).toBe('retry');
+    expect(resolveSessionStatusType('idle', 'busy')).toBe('idle');
+    expect(resolveSessionStatusType(undefined, 'busy')).toBe('busy');
+    expect(resolveSessionStatusType(undefined, undefined)).toBe('idle');
   });
 
   test('clears running state when a session is archived', () => {
@@ -41,6 +52,7 @@ describe('global session status', () => {
     } as Event);
 
     expect(useGlobalSessionStatusStore.getState().statusById.has('ses-1')).toBe(false);
+    expect(useGlobalSessionStatusStore.getState().resolvedStatusById.has('ses-1')).toBe(false);
   });
 
   test('does not let a delayed empty snapshot erase a newer busy event', () => {
@@ -64,8 +76,15 @@ describe('global session status', () => {
   });
 
   test('does not let a snapshot from a previous runtime repopulate reset state', () => {
+    setGlobalSessionStatus('ses-retained-active', '/old-project', 'busy');
+    setGlobalSessionStatus('ses-retained-idle', '/old-project', 'idle');
     const baselineRevision = getGlobalSessionStatusRevision();
     resetGlobalSessionStatuses();
+
+    const resetState = useGlobalSessionStatusStore.getState();
+    expect(resetState.statusById.size).toBe(0);
+    expect(resetState.resolvedStatusById.size).toBe(0);
+    expect(resetState.revisionById.size).toBe(0);
 
     applyGlobalSessionStatusSnapshot(
       '/project',
@@ -118,14 +137,48 @@ describe('global session status', () => {
     }
   });
 
-  test('bounds inactive status and revision history', () => {
+  test('bounds all historical status maps across more than 2000 sessions', () => {
     for (let index = 0; index < 2_100; index += 1) {
       setGlobalSessionStatus(`ses-${index}`, '/project', 'idle');
     }
 
     const state = useGlobalSessionStatusStore.getState();
-    expect(state.resolvedStatusById.size <= 2_000).toBe(true);
-    expect(state.revisionById.size <= 2_000).toBe(true);
+    const maxEntries = 2_000 + state.statusById.size;
+    expect(state.statusById.size).toBe(0);
+    expect(state.resolvedStatusById.size <= maxEntries).toBe(true);
+    expect(state.revisionById.size <= maxEntries).toBe(true);
     expect(state.revisionFloor).toBeGreaterThan(0);
+    expect(state.resolvedStatusById.has('ses-0')).toBe(false);
+    expect(state.resolvedStatusById.get('ses-2099')).toBe('idle');
+    expect([...state.resolvedStatusById.values()].every((status) => status === 'idle')).toBe(true);
+  });
+
+  test('retains live activity and refreshes its explicit idle clearing through compaction', () => {
+    const activeIds = Array.from({ length: 25 }, (_, index) => `ses-active-${index}`);
+    for (const sessionId of activeIds) {
+      setGlobalSessionStatus(sessionId, '/project', 'busy');
+    }
+
+    for (let index = 0; index < 2_100; index += 1) {
+      setGlobalSessionStatus(`ses-inactive-${index}`, '/project', 'idle');
+    }
+
+    const compacted = useGlobalSessionStatusStore.getState();
+    for (const sessionId of activeIds) {
+      expect(compacted.statusById.get(sessionId)?.status).toBe('busy');
+      expect(compacted.resolvedStatusById.get(sessionId)).toBe('busy');
+      expect(compacted.revisionById.has(sessionId)).toBe(true);
+    }
+
+    setGlobalSessionStatus(activeIds[0], '/project', 'idle');
+    const state = useGlobalSessionStatusStore.getState();
+    expect(state.statusById.has(activeIds[0])).toBe(false);
+    expect(state.resolvedStatusById.size <= 2_000 + state.statusById.size).toBe(true);
+    expect(state.revisionById.size <= 2_000 + state.statusById.size).toBe(true);
+    expect(useGlobalSessionStatusStore.getState().resolvedStatusById.get(activeIds[0])).toBe('idle');
+    expect(resolveSessionStatusType(
+      useGlobalSessionStatusStore.getState().resolvedStatusById.get(activeIds[0]),
+      'busy',
+    )).toBe('idle');
   });
 });

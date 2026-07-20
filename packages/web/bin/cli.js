@@ -73,7 +73,11 @@ const __dirname = path.dirname(__filename);
 const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 
 let onCancelCleanup = null;
-let activeCommandOptions = null;
+const rawCliArgs = process.argv.slice(2);
+let activeCommandOptions = {
+  json: rawCliArgs.some((arg) => arg === '--json' || arg.startsWith('--json=')),
+  quiet: rawCliArgs.some((arg) => arg === '--quiet' || arg === '-q' || arg.startsWith('--quiet=')),
+};
 let foregroundServerActive = false;
 let foregroundShutdown = null;
 
@@ -354,7 +358,9 @@ if (isCliExecution) {
 
   main().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
-    if (isJsonMode(activeCommandOptions)) {
+    if (error?.reported === true) {
+      // The command already rendered its complete mode-specific result.
+    } else if (isJsonMode(activeCommandOptions)) {
       printJson({
         status: 'error',
         error: {

@@ -4,8 +4,10 @@ import { usePwaManifestSync } from '@/hooks/usePwaManifestSync';
 import { useQueuedMessageAutoSend } from '@/hooks/useQueuedMessageAutoSend';
 import { useSessionAutoCleanup } from '@/hooks/useSessionAutoCleanup';
 import { useWindowControlsOverlayLayout } from '@/hooks/useWindowControlsOverlayLayout';
+import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { setOptimisticRefs } from '@/sync/session-actions';
 import { markSessionViewed } from '@/sync/notification-store';
+import { useSessionUIStore } from '@/sync/session-ui-store';
 import { setExternallyViewedSession } from '@/sync/sync-context';
 import { useSync } from '@/sync/use-sync';
 
@@ -62,6 +64,25 @@ const MiniChatPresenceBridge: React.FC = () => {
   return null;
 };
 
+const PersistedSessionRestoreBridge: React.FC = () => {
+  const sessionId = useSessionUIStore((state) => state.currentSessionId);
+  const pendingValidation = useSessionUIStore((state) => state.restoredSessionPendingValidation);
+  const hasAuthoritativeSnapshot = useGlobalSessionsStore((state) => state.hasAuthoritativeSnapshot);
+  const authoritativeSession = useGlobalSessionsStore(React.useCallback(
+    (state) => pendingValidation && sessionId
+      ? state.activeSessions.find((session) => session.id === sessionId) ?? null
+      : null,
+    [pendingValidation, sessionId],
+  ));
+
+  React.useEffect(() => {
+    if (!pendingValidation || !sessionId || !hasAuthoritativeSnapshot) return;
+    useSessionUIStore.getState().reconcileRestoredSession(authoritativeSession);
+  }, [authoritativeSession, hasAuthoritativeSnapshot, pendingValidation, sessionId]);
+
+  return null;
+};
+
 export function SyncRuntimeEffects({ embeddedBackgroundWorkEnabled }: {
   embeddedBackgroundWorkEnabled: boolean;
 }) {
@@ -81,6 +102,7 @@ export function SyncAppEffects({ embeddedBackgroundWorkEnabled }: {
   return (
     <>
       <SyncRuntimeEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
+      <PersistedSessionRestoreBridge />
       <MiniChatPresenceBridge />
     </>
   );

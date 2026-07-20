@@ -56,6 +56,7 @@ openaiCompatible?: { baseUrl, model, apiKey } }`.
 ## Invariants
 
 - Never load `sherpa-onnx-node` in the main server process.
+- Managed/public and Private Relay upgrades require an allowlisted URL token and the normal origin check even when UI password auth is disabled. Revocation/expiry closes the matching remote socket and runs normal stream-manager cleanup; direct local passwordless sockets remain intentional.
 - The stream manager acks only the highest contiguous seq; the client is
   expected to retain unacked segments for retry/replay.
 - Silence-only segments (peak < 300) are cleared, never committed, so

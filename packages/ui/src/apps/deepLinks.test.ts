@@ -1,9 +1,19 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 
 import { parseServiceWorkerNotificationClick } from './deepLinks';
 import { parseRoute } from '@/lib/router';
 
+const navigationSource = readFileSync(new URL('./deepLinkNavigation.ts', import.meta.url), 'utf8');
+
 describe('service worker notification deep links', () => {
+  test('reports installed display mode in the click acknowledgement', () => {
+    expect(navigationSource).toContain("installed: getPWADisplayMode() !== 'browser'");
+    expect(navigationSource.indexOf('if (intent) applyDeepLinkIntent(intent);')).toBeLessThan(
+      navigationSource.indexOf("type: 'openchamber:notification-click-ack'"),
+    );
+  });
+
   test('prefers the explicit session ID', () => {
     expect(parseServiceWorkerNotificationClick({
       type: 'openchamber:notification-click',
@@ -25,6 +35,18 @@ describe('service worker notification deep links', () => {
       type: 'session',
       sessionId: 'ses_url',
       directory: '/repo',
+    });
+  });
+
+  test('does not combine an explicit session with another URL session directory', () => {
+    expect(parseServiceWorkerNotificationClick({
+      type: 'openchamber:notification-click',
+      sessionId: 'ses_direct',
+      url: '/?session=ses_url&directory=%2Furl-workspace',
+    }, 'https://openchamber.example/')).toEqual({
+      type: 'session',
+      sessionId: 'ses_direct',
+      directory: undefined,
     });
   });
 

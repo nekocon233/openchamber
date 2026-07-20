@@ -2,8 +2,17 @@ export const createManagedTunnelConfigRuntime = (deps) => {
   const {
     fsPromises,
     path,
+    crypto,
     normalizeManagedRemoteTunnelHostname,
     normalizeManagedRemoteTunnelPresets,
+    normalizeFrpcServerAddress,
+    normalizeFrpcServerPort,
+    normalizeFrpcTrustedCaFile,
+    normalizeFrpcRemotePort,
+    normalizeFrpcCustomDomain,
+    normalizeFrpcPublicHostname,
+    normalizeFrpcPublicUrl,
+    normalizeFrpcToken,
     constants,
   } = deps;
 
@@ -11,9 +20,12 @@ export const createManagedTunnelConfigRuntime = (deps) => {
     CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH,
     CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH,
     CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION,
+    FRPC_MANAGED_TUNNEL_FILE_PATH,
+    FRPC_MANAGED_TUNNEL_VERSION,
   } = constants;
 
   let persistManagedRemoteTunnelConfigLock = Promise.resolve();
+  let persistFrpcTunnelConfigLock = Promise.resolve();
 
   const sanitizeManagedRemoteTunnelConfigEntries = (value) => {
     if (!Array.isArray(value)) {
@@ -192,10 +204,145 @@ export const createManagedTunnelConfigRuntime = (deps) => {
     return '';
   };
 
+  const sanitizeFrpcTunnelConfig = (value) => {
+    if (!value || typeof value !== 'object') {
+      throw new Error('FRPC tunnel config has an unsupported format');
+    }
+
+    if (value.version === 1) {
+      throw new Error('FRPC version-1 tunnel config does not define a trusted CA file');
+    }
+
+    if (value.version !== FRPC_MANAGED_TUNNEL_VERSION) {
+      throw new Error('FRPC tunnel config has an unsupported format');
+    }
+
+    const common = {
+      version: FRPC_MANAGED_TUNNEL_VERSION,
+      serverAddress: normalizeFrpcServerAddress(value.serverAddress),
+      serverPort: normalizeFrpcServerPort(value.serverPort),
+      trustedCaFile: normalizeFrpcTrustedCaFile(value.trustedCaFile),
+      token: normalizeFrpcToken(value.token),
+      updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
+    };
+
+    const proxyType = typeof value.proxyType === 'string' ? value.proxyType.trim().toLowerCase() : '';
+    if (proxyType === 'tcp') {
+      if (
+        (value.customDomain !== undefined && value.customDomain !== null)
+        || (value.hostname !== undefined && value.hostname !== null)
+      ) {
+        throw new Error('FRPC TCP tunnel config contains HTTP endpoint fields');
+      }
+      return {
+        ...common,
+        proxyType,
+        remotePort: normalizeFrpcRemotePort(value.remotePort),
+        publicUrl: normalizeFrpcPublicUrl(value.publicUrl),
+      };
+    }
+    if (proxyType === 'http') {
+      if (
+        (value.remotePort !== undefined && value.remotePort !== null)
+        || (value.publicUrl !== undefined && value.publicUrl !== null)
+      ) {
+        throw new Error('FRPC HTTP tunnel config contains TCP endpoint fields');
+      }
+      return {
+        ...common,
+        proxyType,
+        customDomain: normalizeFrpcCustomDomain(value.customDomain),
+        hostname: normalizeFrpcPublicHostname(value.hostname),
+      };
+    }
+
+    throw new Error('FRPC tunnel config has an unsupported proxy type');
+  };
+
+  const readFrpcTunnelConfigFromDisk = async () => {
+    try {
+      const raw = await fsPromises.readFile(FRPC_MANAGED_TUNNEL_FILE_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
+      return sanitizeFrpcTunnelConfig(parsed);
+    } catch (error) {
+      if (error && typeof error === 'object' && error.code === 'ENOENT') {
+        return null;
+      }
+      throw new Error('Failed to read FRPC tunnel config', { cause: error });
+    }
+  };
+
+  const writeFrpcTunnelConfigToDisk = async (config) => {
+    const sanitized = sanitizeFrpcTunnelConfig(config);
+    const directory = path.dirname(FRPC_MANAGED_TUNNEL_FILE_PATH);
+    const tempPath = `${FRPC_MANAGED_TUNNEL_FILE_PATH}.${crypto.randomUUID()}.tmp`;
+    await fsPromises.mkdir(directory, { recursive: true });
+    try {
+      await fsPromises.writeFile(tempPath, JSON.stringify(sanitized, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      await fsPromises.chmod(tempPath, 0o600);
+      await fsPromises.rename(tempPath, FRPC_MANAGED_TUNNEL_FILE_PATH);
+    } catch (error) {
+      await fsPromises.rm(tempPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  };
+
+  const upsertFrpcTunnelConfig = async ({
+    serverAddress,
+    serverPort,
+    trustedCaFile,
+    proxyType,
+    remotePort,
+    publicUrl,
+    customDomain,
+    hostname,
+    token,
+  }) => {
+    const next = sanitizeFrpcTunnelConfig({
+      version: FRPC_MANAGED_TUNNEL_VERSION,
+      serverAddress,
+      serverPort,
+      trustedCaFile,
+      proxyType,
+      remotePort,
+      publicUrl,
+      customDomain,
+      hostname,
+      token,
+      updatedAt: Date.now(),
+    });
+    const operation = persistFrpcTunnelConfigLock
+      .catch(() => undefined)
+      .then(() => writeFrpcTunnelConfigToDisk(next));
+    persistFrpcTunnelConfigLock = operation;
+    return operation;
+  };
+
+  const resolveFrpcTunnelToken = async ({ serverAddress, serverPort }) => {
+    const config = await readFrpcTunnelConfigFromDisk();
+    if (!config) {
+      return '';
+    }
+    let normalizedAddress;
+    let normalizedPort;
+    try {
+      normalizedAddress = normalizeFrpcServerAddress(serverAddress);
+      normalizedPort = normalizeFrpcServerPort(serverPort);
+    } catch {
+      return '';
+    }
+    return config.serverAddress === normalizedAddress && config.serverPort === normalizedPort
+      ? config.token
+      : '';
+  };
+
   return {
     readManagedRemoteTunnelConfigFromDisk,
     syncManagedRemoteTunnelConfigWithPresets,
     upsertManagedRemoteTunnelToken,
     resolveManagedRemoteTunnelToken,
+    readFrpcTunnelConfigFromDisk,
+    upsertFrpcTunnelConfig,
+    resolveFrpcTunnelToken,
   };
 };

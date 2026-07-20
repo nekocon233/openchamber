@@ -11,11 +11,23 @@ import os from 'os';
 import crypto from 'crypto';
 import http2 from 'node:http2';
 import { createUiAuth } from './lib/ui-auth/ui-auth.js';
+import { createAuthChannelLifecycle } from './lib/ui-auth/channel-auth.js';
 import { createTunnelAuth } from './lib/opencode/tunnel-auth.js';
 import { createManagedTunnelConfigRuntime } from './lib/tunnels/managed-config.js';
 import { createTunnelProviderRegistry } from './lib/tunnels/registry.js';
 import { createCloudflareTunnelProvider } from './lib/tunnels/providers/cloudflare.js';
+import { createFrpcTunnelProvider } from './lib/tunnels/providers/frpc.js';
 import { createNgrokTunnelProvider } from './lib/tunnels/providers/ngrok.js';
+import {
+  normalizeFrpcCustomDomain,
+  normalizeFrpcPublicHostname,
+  normalizeFrpcPublicUrl,
+  normalizeFrpcRemotePort,
+  normalizeFrpcServerAddress,
+  normalizeFrpcServerPort,
+  normalizeFrpcTrustedCaFile,
+  normalizeFrpcToken,
+} from './lib/tunnels/frpc-client.js';
 import { createRequestSecurityRuntime } from './lib/security/request-security.js';
 import {
   getUnauthenticatedLanErrorMessage,
@@ -27,6 +39,7 @@ import {
   TUNNEL_MODE_MANAGED_REMOTE,
   TUNNEL_MODE_QUICK,
   TUNNEL_PROVIDER_CLOUDFLARE,
+  TUNNEL_PROVIDER_FRPC,
   TunnelServiceError,
   isSupportedTunnelMode,
   normalizeOptionalPath,
@@ -86,6 +99,10 @@ import { createNotificationTriggerRuntime } from './lib/notifications/runtime.js
 import { createPushRuntime } from './lib/notifications/push-runtime.js';
 import { createApnsRuntime } from './lib/notifications/apns-runtime.js';
 import { createNotificationTemplateRuntime } from './lib/notifications/template-runtime.js';
+import {
+  notificationAuthMatchesSelector,
+  subscribeNotificationAuthInvalidation,
+} from './lib/notifications/auth-runtime.js';
 import { createPermissionAutoAcceptRuntime } from './lib/permission-auto-accept/runtime.js';
 import { createGracefulShutdownRuntime } from './lib/opencode/shutdown-runtime.js';
 import { createProjectConfigRuntime } from './lib/projects/project-config.js';
@@ -95,6 +112,7 @@ import { createPreviewProxyRuntime } from './lib/preview/proxy-runtime.js';
 import { attachRealtimeProxy } from './lib/realtime-proxy.js';
 import { createRelayService } from './lib/relay/service.js';
 import { createRelayHostLock } from './lib/relay/host-lock.js';
+import { createSidebarStateServerRuntime } from './lib/sidebar-state/index.js';
 import { createProxyMiddleware, responseInterceptor } from 'http-proxy-middleware';
 import webPush from 'web-push';
 
@@ -106,6 +124,11 @@ const DESKTOP_NOTIFY_PREFIX = '[OpenChamberDesktopNotify] ';
 const uiNotificationClients = new Set();
 const uiNotificationWsClients = new Set();
 const uiOpenChamberEventClients = new Set();
+const authChannelLifecycle = createAuthChannelLifecycle({
+  subscribeInvalidation: subscribeNotificationAuthInvalidation,
+  matchesSelector: notificationAuthMatchesSelector,
+});
+const trackAuthChannel = (...args) => authChannelLifecycle.track(...args);
 const HEALTH_CHECK_INTERVAL = 15000;
 const SHUTDOWN_TIMEOUT = 10000;
 const MODELS_DEV_API_URL = 'https://models.dev/api.json';
@@ -288,16 +311,29 @@ const CLIENT_PAIRING_SESSIONS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'clien
 const CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'cloudflare-managed-remote-tunnels.json');
 const CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'cloudflare-named-tunnels.json');
 const CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION = 1;
+const FRPC_MANAGED_TUNNEL_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'frpc-managed-tunnel.json');
+const FRPC_MANAGED_TUNNEL_VERSION = 2;
 
 const managedTunnelConfigRuntime = createManagedTunnelConfigRuntime({
   fsPromises,
   path,
+  crypto,
   normalizeManagedRemoteTunnelHostname,
   normalizeManagedRemoteTunnelPresets,
+  normalizeFrpcServerAddress,
+  normalizeFrpcServerPort,
+  normalizeFrpcTrustedCaFile,
+  normalizeFrpcRemotePort,
+  normalizeFrpcCustomDomain,
+  normalizeFrpcPublicHostname,
+  normalizeFrpcPublicUrl,
+  normalizeFrpcToken,
   constants: {
     CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH,
     CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH,
     CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION,
+    FRPC_MANAGED_TUNNEL_FILE_PATH,
+    FRPC_MANAGED_TUNNEL_VERSION,
   },
 });
 
@@ -305,6 +341,9 @@ const readManagedRemoteTunnelConfigFromDisk = (...args) => managedTunnelConfigRu
 const syncManagedRemoteTunnelConfigWithPresets = (...args) => managedTunnelConfigRuntime.syncManagedRemoteTunnelConfigWithPresets(...args);
 const upsertManagedRemoteTunnelToken = (...args) => managedTunnelConfigRuntime.upsertManagedRemoteTunnelToken(...args);
 const resolveManagedRemoteTunnelToken = (...args) => managedTunnelConfigRuntime.resolveManagedRemoteTunnelToken(...args);
+const readFrpcTunnelConfigFromDisk = (...args) => managedTunnelConfigRuntime.readFrpcTunnelConfigFromDisk(...args);
+const upsertFrpcTunnelConfig = (...args) => managedTunnelConfigRuntime.upsertFrpcTunnelConfig(...args);
+const resolveFrpcTunnelToken = (...args) => managedTunnelConfigRuntime.resolveFrpcTunnelToken(...args);
 
 const settingsHelpers = createSettingsHelpers({
   normalizePathForPersistence,
@@ -315,8 +354,15 @@ const settingsHelpers = createSettingsHelpers({
   normalizeTunnelMode,
   normalizeOptionalPath,
   normalizeManagedRemoteTunnelHostname,
+  normalizeFrpcCustomDomain,
+  normalizeFrpcPublicHostname,
+  normalizeFrpcPublicUrl,
   normalizeManagedRemoteTunnelPresets,
   normalizeManagedRemoteTunnelPresetTokens,
+  normalizeFrpcServerAddress,
+  normalizeFrpcServerPort,
+  normalizeFrpcTrustedCaFile,
+  normalizeFrpcRemotePort,
   sanitizeTypographySizesPartial,
   normalizeStringArray,
   sanitizeModelRefs,
@@ -362,11 +408,26 @@ const settingsRuntime = createSettingsRuntime({
   upsertManagedRemoteTunnelToken,
 });
 
-const readSettingsFromDiskMigrated = (...args) => settingsRuntime.readSettingsFromDiskMigrated(...args);
+const readSettingsFromDiskMigratedRaw = (...args) => settingsRuntime.readSettingsFromDiskMigrated(...args);
+const readSettingsFromDiskMigratedStrictRaw = (...args) => settingsRuntime.readSettingsFromDiskMigratedStrict(...args);
 const readSettingsFromDisk = (...args) => settingsRuntime.readSettingsFromDisk(...args);
 const readSettingsFromDiskStrict = (...args) => settingsRuntime.readSettingsFromDiskStrict(...args);
 const writeSettingsToDisk = (...args) => settingsRuntime.writeSettingsToDisk(...args);
-const persistSettings = (...args) => settingsRuntime.persistSettings(...args);
+const sidebarStateRuntime = createSidebarStateServerRuntime({
+  fsPromises,
+  path,
+  filePath: path.join(OPENCHAMBER_DATA_DIR, 'sidebar-state.json'),
+  legacyFoldersFilePath: path.join(OPENCHAMBER_DATA_DIR, 'sessions-directories.json'),
+  readSettingsFromDiskMigratedStrict: readSettingsFromDiskMigratedStrictRaw,
+  broadcastGlobalUiEvent: (...args) => broadcastGlobalUiEvent(...args),
+});
+const readSettingsFromDiskMigrated = async (...args) => sidebarStateRuntime.projectSettingsProjection(
+  await readSettingsFromDiskMigratedRaw(...args),
+);
+const persistSettings = (changes, ...args) => {
+  sidebarStateRuntime.assertSettingsWriteAllowed(changes);
+  return settingsRuntime.persistSettings(changes, ...args);
+};
 
 const requestSecurityRuntime = createRequestSecurityRuntime({
   readSettingsFromDiskMigrated,
@@ -496,6 +557,7 @@ let activeTunnelController = null;
 let globalWatcherStartPromise = null;
 const tunnelProviderRegistry = createTunnelProviderRegistry([
   createCloudflareTunnelProvider(),
+  createFrpcTunnelProvider(),
   createNgrokTunnelProvider(),
 ]);
 tunnelProviderRegistry.seal();
@@ -796,9 +858,9 @@ const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
   getOpenCodeAuthHeaders,
   parseSseDataPayload: (...args) => parseSseDataPayload(...args),
   globalEventHub: globalMessageStreamHub,
-  onPayload: (payload) => {
+  onPayload: (payload, directory) => {
     maybeCacheSessionInfoFromEvent(payload);
-    void maybeSendPushForTrigger(payload);
+    void maybeSendPushForTrigger(payload, directory);
     sessionRuntime.processOpenCodeSsePayload(payload);
   },
 });
@@ -890,6 +952,7 @@ const serverUtilsRuntime = createServerUtilsRuntime({
   buildOpenCodeUrl,
   ensureOpenCodeApiPrefix,
   getUiNotificationClients: () => uiNotificationClients,
+  trackAuthChannel,
   getOpenCodePort: () => openCodePort,
   setOpenCodePortState: (value) => {
     openCodePort = value;
@@ -911,6 +974,7 @@ const serverUtilsRuntime = createServerUtilsRuntime({
     }
     return snapshot.PATH;
   },
+  readAuthoritativeProjects: () => sidebarStateRuntime.readSnapshot().then((snapshot) => snapshot.projects),
 });
 
 const setOpenCodePort = (...args) => serverUtilsRuntime.setOpenCodePort(...args);
@@ -964,19 +1028,26 @@ const tunnelWiringRuntime = createTunnelWiringRuntime({
   tunnelAuthController,
   readSettingsFromDiskMigrated,
   readManagedRemoteTunnelConfigFromDisk,
+  readFrpcTunnelConfigFromDisk,
   normalizeTunnelProvider,
   normalizeTunnelMode,
   normalizeOptionalPath,
   normalizeManagedRemoteTunnelHostname,
+  normalizeFrpcCustomDomain,
+  normalizeFrpcPublicHostname,
+  normalizeFrpcPublicUrl,
   normalizeTunnelBootstrapTtlMs,
   normalizeTunnelSessionTtlMs,
   isSupportedTunnelMode,
   upsertManagedRemoteTunnelToken,
   resolveManagedRemoteTunnelToken,
+  upsertFrpcTunnelConfig,
+  resolveFrpcTunnelToken,
   TUNNEL_MODE_QUICK,
   TUNNEL_MODE_MANAGED_LOCAL,
   TUNNEL_MODE_MANAGED_REMOTE,
   TUNNEL_PROVIDER_CLOUDFLARE,
+  TUNNEL_PROVIDER_FRPC,
   TunnelServiceError,
   getActiveTunnelController: () => activeTunnelController,
   setActiveTunnelController: (value) => {
@@ -1164,6 +1235,7 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   },
   tunnelAuthController,
   scheduledTasksRuntime,
+  disposeAuthChannels: () => authChannelLifecycle.dispose(),
 });
 
 const gracefulShutdown = (...args) => gracefulShutdownRuntime.gracefulShutdown(...args);
@@ -1269,14 +1341,33 @@ async function main(options = {}) {
     || options.tunnelConfigPath === null
     || typeof options.tunnelConfigPath === 'string'
     || typeof options.tunnelToken === 'string'
-    || typeof options.tunnelHostname === 'string';
+    || typeof options.tunnelHostname === 'string'
+    || typeof options.tunnelPublicUrl === 'string'
+    || typeof options.tunnelCustomDomain === 'string'
+    || typeof options.tunnelServerAddress === 'string'
+    || typeof options.tunnelTrustedCaFile === 'string'
+    || Number.isInteger(options.tunnelServerPort)
+    || Number.isInteger(options.tunnelRemotePort);
+  const startupTunnelProvider = shouldUseCanonicalTunnelConfig
+    ? normalizeTunnelProvider(options.tunnelProvider, {
+        strict: options.tunnelProvider !== undefined,
+      })
+    : null;
   const startupTunnelRequest = shouldUseCanonicalTunnelConfig
     ? normalizeTunnelStartRequest({
-        provider: normalizeTunnelProvider(options.tunnelProvider),
+        provider: startupTunnelProvider,
         mode: options.tunnelMode,
         configPath: normalizeOptionalPath(options.tunnelConfigPath),
         token: typeof options.tunnelToken === 'string' ? options.tunnelToken.trim() : '',
-        hostname: normalizeManagedRemoteTunnelHostname(options.tunnelHostname),
+        hostname: startupTunnelProvider === TUNNEL_PROVIDER_FRPC
+          ? options.tunnelHostname
+          : normalizeManagedRemoteTunnelHostname(options.tunnelHostname),
+        publicUrl: options.tunnelPublicUrl,
+        customDomain: options.tunnelCustomDomain,
+        serverAddress: options.tunnelServerAddress,
+        trustedCaFile: options.tunnelTrustedCaFile,
+        serverPort: options.tunnelServerPort,
+        remotePort: options.tunnelRemotePort,
       })
     : (tryCfTunnel
       ? {
@@ -1285,8 +1376,29 @@ async function main(options = {}) {
           configPath: undefined,
           token: '',
           hostname: undefined,
+          publicUrl: undefined,
+          customDomain: undefined,
+          proxyType: undefined,
+          serverAddress: undefined,
+          serverPort: undefined,
+          remotePort: undefined,
         }
       : null);
+  if (startupTunnelRequest) {
+    const startupCapabilities = tunnelProviderRegistry.get(startupTunnelRequest.provider)?.capabilities;
+    if (!startupCapabilities) {
+      throw new TunnelServiceError(
+        'provider_unsupported',
+        `Unsupported tunnel provider: ${startupTunnelRequest.provider}`
+      );
+    }
+    if (!startupCapabilities.modes?.some((entry) => entry?.key === startupTunnelRequest.mode)) {
+      throw new TunnelServiceError(
+        'mode_unsupported',
+        `Provider '${startupTunnelRequest.provider}' does not support mode '${startupTunnelRequest.mode}'`
+      );
+    }
+  }
   const attachSignals = options.attachSignals !== false;
   const onTunnelReady = typeof options.onTunnelReady === 'function' ? options.onTunnelReady : null;
   if (typeof options.exitOnShutdown === 'boolean') {
@@ -1305,6 +1417,12 @@ async function main(options = {}) {
   console.log(`Starting OpenChamber on port ${port === 0 ? 'auto' : port}`);
 
   const sayTTSCapability = await detectSayTtsCapability(process);
+
+  try {
+    await sidebarStateRuntime.initialize();
+  } catch (error) {
+    console.error(`[sidebar-state] initialization failed (${error?.code || 'SIDEBAR_STATE_STORAGE_FAILED'})`);
+  }
 
   const app = express();
   const serverStartedAt = new Date().toISOString();
@@ -1536,6 +1654,7 @@ async function main(options = {}) {
     getOpenChamberEventClients: () => uiOpenChamberEventClients,
     writeSseEvent,
     permissionAutoAcceptRuntime,
+    sidebarStateRuntime,
   });
 
   const previewProxyRuntime = createPreviewProxyRuntime({
@@ -1559,6 +1678,7 @@ async function main(options = {}) {
     fs,
     path,
     uiAuthController,
+    trackAuthChannel,
     buildAugmentedPath,
     searchPathFor,
     isExecutable,

@@ -16,6 +16,12 @@ import { openExternalUrl } from '@/lib/url';
 import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { formatTimeForPreference } from '@/lib/timeFormat';
 import { useUIStore, type TimeFormatPreference } from '@/stores/useUIStore';
+import {
+  buildFrpcStartEndpointPayload,
+  normalizeFrpcHostname,
+  normalizeFrpcPublicUrl,
+  type FrpcStartEndpointPayload,
+} from './frpcTunnelSettings';
 
 type TunnelState =
   | 'checking'
@@ -29,6 +35,7 @@ type TunnelState =
 type TtlOption = { value: string; label: string; ms: number | null };
 type TunnelMode = 'quick' | 'managed-remote' | 'managed-local';
 type ApiTunnelMode = TunnelMode;
+type FrpcProxyType = 'tcp' | 'http';
 
 interface ManagedRemoteTunnelPreset {
   id: string;
@@ -102,6 +109,7 @@ interface TunnelSessionRecord {
 interface TunnelStatusResponse {
   active: boolean;
   url: string | null;
+  provider?: string;
   mode?: ApiTunnelMode;
   hasManagedRemoteTunnelToken?: boolean;
   managedRemoteTunnelHostname?: string | null;
@@ -109,10 +117,23 @@ interface TunnelStatusResponse {
   bootstrapExpiresAt?: number | null;
   managedRemoteTunnelTokenPresetIds?: string[];
   managedRemoteTunnelPresets?: ManagedRemoteTunnelPreset[];
+  hasFrpcTunnelToken?: boolean;
+  frpcProxyType?: FrpcProxyType;
+  frpcServerAddress?: string | null;
+  frpcServerPort?: number | null;
+  frpcTrustedCaFile?: string | null;
+  frpcRemotePort?: number | null;
+  frpcPublicUrl?: string | null;
+  frpcCustomDomain?: string | null;
+  frpcPublicHostname?: string | null;
+  frpcConfigStatus?: 'ready' | 'missing' | 'error';
   activeTunnelMode?: ApiTunnelMode | null;
   providerMetadata?: {
     configPath?: string | null;
     resolvedHostname?: string | null;
+    serverAddress?: string | null;
+    serverPort?: number | null;
+    remotePort?: number | null;
   };
   activeSessions?: TunnelSessionRecord[];
   localPort?: number;
@@ -131,12 +152,22 @@ interface TunnelStartResponse {
   bootstrapExpiresAt?: number | null;
   activeTunnelMode?: ApiTunnelMode | null;
   mode?: ApiTunnelMode;
+  provider?: string;
   activeSessions?: TunnelSessionRecord[];
   managedRemoteTunnelTokenPresetIds?: string[];
   localPort?: number;
   replacedTunnel?: boolean;
   revokedBootstrapCount?: number;
   invalidatedSessionCount?: number;
+  hasFrpcTunnelToken?: boolean;
+  frpcProxyType?: FrpcProxyType;
+  frpcServerAddress?: string | null;
+  frpcServerPort?: number | null;
+  frpcTrustedCaFile?: string | null;
+  frpcRemotePort?: number | null;
+  frpcPublicUrl?: string | null;
+  frpcCustomDomain?: string | null;
+  frpcPublicHostname?: string | null;
 }
 
 interface TunnelProviderModeDescriptor {
@@ -164,7 +195,11 @@ interface TunnelDependencyInstallInfo {
   installCommand: string;
 }
 
-const getProviderDependencyName = (provider: string): string => (provider === 'ngrok' ? 'ngrok' : 'cloudflared');
+const getProviderDependencyName = (provider: string): string => {
+  if (provider === 'ngrok') return 'ngrok';
+  if (provider === 'frpc') return 'frpc';
+  return 'cloudflared';
+};
 
 const getClientInstallPlatform = (): string => {
   if (typeof window !== 'undefined' && typeof window.__OPENCHAMBER_PLATFORM__ === 'string') {
@@ -187,6 +222,9 @@ const getClientInstallPlatform = (): string => {
 };
 
 const getFallbackInstallCommand = (provider: string, platform = getClientInstallPlatform()): string => {
+  if (provider === 'frpc') {
+    return '';
+  }
   if (provider === 'ngrok') {
     if (platform === 'win32') {
       return 'winget install ngrok -s msstore';
@@ -233,6 +271,9 @@ const getProviderLabel = (provider: string): string => {
   }
   if (provider === 'ngrok') {
     return 'Ngrok';
+  }
+  if (provider === 'frpc') {
+    return 'FRPC';
   }
   return provider;
 };
@@ -307,6 +348,15 @@ const normalizePresetHostname = (value: string): string => {
   }
 };
 
+const parseFrpcPort = (value: string): number | null => {
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+  const port = Number(normalized);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+};
+
 const sanitizePresets = (value: unknown): ManagedRemoteTunnelPreset[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -352,6 +402,7 @@ export const TunnelSettings: React.FC = () => {
   const [state, setState] = React.useState<TunnelState>('checking');
   const [tunnelInfo, setTunnelInfo] = React.useState<TunnelInfo | null>(null);
   const [activeTunnelMode, setActiveTunnelMode] = React.useState<TunnelMode | null>(null);
+  const [activeTunnelProvider, setActiveTunnelProvider] = React.useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [managedRemoteValidationError, setManagedRemoteValidationError] = React.useState<string | null>(null);
@@ -372,6 +423,16 @@ export const TunnelSettings: React.FC = () => {
   const [newPresetName, setNewPresetName] = React.useState('');
   const [newPresetHostname, setNewPresetHostname] = React.useState('');
   const [newPresetToken, setNewPresetToken] = React.useState('');
+  const [frpcProxyType, setFrpcProxyType] = React.useState<FrpcProxyType>('tcp');
+  const [frpcServerAddress, setFrpcServerAddress] = React.useState('');
+  const [frpcServerPort, setFrpcServerPort] = React.useState('7000');
+  const [frpcTrustedCaFile, setFrpcTrustedCaFile] = React.useState('');
+  const [frpcRemotePort, setFrpcRemotePort] = React.useState('18080');
+  const [frpcPublicUrl, setFrpcPublicUrl] = React.useState('');
+  const [frpcCustomDomain, setFrpcCustomDomain] = React.useState('');
+  const [frpcPublicHostname, setFrpcPublicHostname] = React.useState('');
+  const [frpcToken, setFrpcToken] = React.useState('');
+  const [hasFrpcTunnelToken, setHasFrpcTunnelToken] = React.useState(false);
   const [bootstrapTtlMs, setBootstrapTtlMs] = React.useState<number | null>(30 * 60 * 1000);
   const [sessionTtlMs, setSessionTtlMs] = React.useState<number>(8 * 60 * 60 * 1000);
   const [remainingText, setRemainingText] = React.useState<string>('');
@@ -390,6 +451,21 @@ export const TunnelSettings: React.FC = () => {
   const selectedPreset = React.useMemo(
     () => managedRemoteTunnelPresets.find((preset) => preset.id === selectedPresetId) || managedRemoteTunnelPresets[0] || null,
     [managedRemoteTunnelPresets, selectedPresetId]
+  );
+  const normalizedFrpcServerAddress = frpcServerAddress.trim();
+  const normalizedFrpcServerPort = parseFrpcPort(frpcServerPort);
+  const normalizedFrpcTrustedCaFile = frpcTrustedCaFile.trim();
+  const normalizedFrpcRemotePort = parseFrpcPort(frpcRemotePort);
+  const normalizedFrpcPublicUrl = normalizeFrpcPublicUrl(frpcPublicUrl);
+  const normalizedFrpcCustomDomain = normalizeFrpcHostname(frpcCustomDomain);
+  const normalizedFrpcPublicHostname = normalizeFrpcHostname(frpcPublicHostname);
+  const isFrpcEndpointValid = Boolean(
+    normalizedFrpcServerAddress
+    && normalizedFrpcServerPort
+    && normalizedFrpcTrustedCaFile
+    && (frpcProxyType === 'tcp'
+      ? normalizedFrpcRemotePort && normalizedFrpcPublicUrl
+      : normalizedFrpcCustomDomain && normalizedFrpcPublicHostname)
   );
   const renderedSessionRecords = React.useMemo(() => {
     return sessionRecords.map((record) => {
@@ -430,8 +506,8 @@ export const TunnelSettings: React.FC = () => {
     if (state !== 'active' && state !== 'stopping') {
       return false;
     }
-    return activeTunnelMode === tunnelMode;
-  }, [activeTunnelMode, state, tunnelInfo, tunnelMode]);
+    return activeTunnelMode === tunnelMode && activeTunnelProvider === tunnelProvider;
+  }, [activeTunnelMode, activeTunnelProvider, state, tunnelInfo, tunnelMode, tunnelProvider]);
   const willReplaceActiveTunnel = React.useMemo(() => {
     if (!tunnelInfo || state !== 'active') {
       return false;
@@ -439,8 +515,8 @@ export const TunnelSettings: React.FC = () => {
     if (!activeTunnelMode) {
       return false;
     }
-    return activeTunnelMode !== tunnelMode;
-  }, [activeTunnelMode, state, tunnelInfo, tunnelMode]);
+    return activeTunnelMode !== tunnelMode || activeTunnelProvider !== tunnelProvider;
+  }, [activeTunnelMode, activeTunnelProvider, state, tunnelInfo, tunnelMode, tunnelProvider]);
   const suggestedConnectorPort = React.useMemo(() => {
     if (typeof localPort === 'number' && Number.isFinite(localPort) && localPort > 0) {
       return localPort;
@@ -550,6 +626,13 @@ export const TunnelSettings: React.FC = () => {
       const loadedProvider = typeof settingsData?.tunnelProvider === 'string' && settingsData.tunnelProvider.trim().length > 0
         ? settingsData.tunnelProvider.trim().toLowerCase()
         : 'cloudflare';
+      const statusFrpcProxyType = statusData.frpcProxyType === 'tcp' || statusData.frpcProxyType === 'http'
+        ? statusData.frpcProxyType
+        : null;
+      const settingsFrpcProxyType = settingsData?.frpcProxyType === 'tcp' || settingsData?.frpcProxyType === 'http'
+        ? settingsData.frpcProxyType
+        : null;
+      const loadedFrpcProxyType = statusFrpcProxyType ?? settingsFrpcProxyType ?? 'tcp';
       const loadedManagedLocalConfigPath = typeof settingsData?.managedLocalTunnelConfigPath === 'string'
         ? settingsData.managedLocalTunnelConfigPath.trim() || null
         : null;
@@ -578,6 +661,55 @@ export const TunnelSettings: React.FC = () => {
       setTunnelMode(loadedMode);
       setManagedLocalConfigPath(loadedManagedLocalConfigPath);
       setManagedRemoteTunnelPresets(presets);
+      setFrpcProxyType(loadedFrpcProxyType);
+      setFrpcServerAddress(
+        statusFrpcProxyType && statusData.frpcServerAddress === null
+          ? ''
+          : typeof statusData.frpcServerAddress === 'string'
+            ? statusData.frpcServerAddress
+            : (typeof settingsData?.frpcServerAddress === 'string' ? settingsData.frpcServerAddress : '')
+      );
+      setFrpcServerPort(String(
+        statusFrpcProxyType && statusData.frpcServerPort === null
+          ? ''
+          : typeof statusData.frpcServerPort === 'number'
+            ? statusData.frpcServerPort
+            : (typeof settingsData?.frpcServerPort === 'number' ? settingsData.frpcServerPort : 7000)
+      ));
+      setFrpcTrustedCaFile(
+        typeof statusData.frpcTrustedCaFile === 'string'
+          ? statusData.frpcTrustedCaFile
+          : (typeof settingsData?.frpcTrustedCaFile === 'string' ? settingsData.frpcTrustedCaFile : '')
+      );
+      setFrpcRemotePort(
+        statusFrpcProxyType === 'tcp'
+          ? (typeof statusData.frpcRemotePort === 'number' ? String(statusData.frpcRemotePort) : '')
+          : statusFrpcProxyType === null && typeof statusData.frpcRemotePort === 'number'
+            ? String(statusData.frpcRemotePort)
+            : (typeof settingsData?.frpcRemotePort === 'number' ? String(settingsData.frpcRemotePort) : '18080')
+      );
+      setFrpcPublicUrl(
+        statusFrpcProxyType === 'tcp'
+          ? (typeof statusData.frpcPublicUrl === 'string' ? statusData.frpcPublicUrl : '')
+          : statusFrpcProxyType === null && typeof statusData.frpcPublicUrl === 'string'
+            ? statusData.frpcPublicUrl
+            : (typeof settingsData?.frpcPublicUrl === 'string' ? settingsData.frpcPublicUrl : '')
+      );
+      setFrpcCustomDomain(
+        statusFrpcProxyType === 'http'
+          ? (typeof statusData.frpcCustomDomain === 'string' ? statusData.frpcCustomDomain : '')
+          : statusFrpcProxyType === null && typeof statusData.frpcCustomDomain === 'string'
+            ? statusData.frpcCustomDomain
+            : (typeof settingsData?.frpcCustomDomain === 'string' ? settingsData.frpcCustomDomain : '')
+      );
+      setFrpcPublicHostname(
+        statusFrpcProxyType === 'http'
+          ? (typeof statusData.frpcPublicHostname === 'string' ? statusData.frpcPublicHostname : '')
+          : statusFrpcProxyType === null && typeof statusData.frpcPublicHostname === 'string'
+            ? statusData.frpcPublicHostname
+            : (typeof settingsData?.frpcPublicHostname === 'string' ? settingsData.frpcPublicHostname : '')
+      );
+      setHasFrpcTunnelToken(statusData.hasFrpcTunnelToken === true);
       setSelectedPresetId(selectedId);
       setSessionRecords(Array.isArray(statusData.activeSessions) ? statusData.activeSessions : []);
       setActiveTunnelMode(
@@ -585,6 +717,7 @@ export const TunnelSettings: React.FC = () => {
           ? toUiTunnelMode(statusData.activeTunnelMode)
           : (statusData.active && statusData.mode ? toUiTunnelMode(statusData.mode) : null)
       );
+      setActiveTunnelProvider(statusData.active && typeof statusData.provider === 'string' ? statusData.provider : null);
       setSavedTokenPresetIds(new Set(Array.isArray(statusData.managedRemoteTunnelTokenPresetIds) ? statusData.managedRemoteTunnelTokenPresetIds : []));
       setLocalPort(typeof statusData.localPort === 'number' ? statusData.localPort : null);
 
@@ -750,6 +883,7 @@ export const TunnelSettings: React.FC = () => {
         }
         setSessionRecords(Array.isArray(statusData.activeSessions) ? statusData.activeSessions : []);
         setSavedTokenPresetIds(new Set(Array.isArray(statusData.managedRemoteTunnelTokenPresetIds) ? statusData.managedRemoteTunnelTokenPresetIds : []));
+        setHasFrpcTunnelToken(statusData.hasFrpcTunnelToken === true);
         setLocalPort(typeof statusData.localPort === 'number' ? statusData.localPort : null);
       } catch {
         // ignore transient refresh failures
@@ -776,6 +910,14 @@ export const TunnelSettings: React.FC = () => {
     managedLocalTunnelConfigPath?: string | null;
     managedRemoteTunnelPresets?: ManagedRemoteTunnelPreset[];
     managedRemoteTunnelPresetTokens?: Record<string, string>;
+    frpcProxyType?: FrpcProxyType;
+    frpcServerAddress?: string | null;
+    frpcServerPort?: number | null;
+    frpcTrustedCaFile?: string | null;
+    frpcRemotePort?: number | null;
+    frpcPublicUrl?: string | null;
+    frpcCustomDomain?: string | null;
+    frpcPublicHostname?: string | null;
     tunnelBootstrapTtlMs?: number | null;
     tunnelSessionTtlMs?: number;
   }) => {
@@ -793,6 +935,30 @@ export const TunnelSettings: React.FC = () => {
       }
       if (Object.prototype.hasOwnProperty.call(payload, 'managedRemoteTunnelPresets') && payload.managedRemoteTunnelPresets) {
         setManagedRemoteTunnelPresets(payload.managedRemoteTunnelPresets);
+      }
+      if (payload.frpcProxyType === 'tcp' || payload.frpcProxyType === 'http') {
+        setFrpcProxyType(payload.frpcProxyType);
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'frpcServerAddress')) {
+        setFrpcServerAddress(payload.frpcServerAddress ?? '');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'frpcServerPort')) {
+        setFrpcServerPort(payload.frpcServerPort ? String(payload.frpcServerPort) : '');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'frpcTrustedCaFile')) {
+        setFrpcTrustedCaFile(payload.frpcTrustedCaFile ?? '');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'frpcRemotePort')) {
+        setFrpcRemotePort(payload.frpcRemotePort ? String(payload.frpcRemotePort) : '');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'frpcPublicUrl')) {
+        setFrpcPublicUrl(payload.frpcPublicUrl ?? '');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'frpcCustomDomain')) {
+        setFrpcCustomDomain(payload.frpcCustomDomain ?? '');
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'frpcPublicHostname')) {
+        setFrpcPublicHostname(payload.frpcPublicHostname ?? '');
       }
     } catch {
       toast.error(t('settings.openchamber.tunnel.toast.saveSettingsFailed'));
@@ -912,14 +1078,115 @@ export const TunnelSettings: React.FC = () => {
     event.target.value = '';
   }, [managedLocalConfigExtensionError, saveTunnelSettings]);
 
+  const persistFrpcEndpointSettings = React.useCallback(async () => {
+    const serverAddress = frpcServerAddress.trim();
+    const serverPort = parseFrpcPort(frpcServerPort);
+    const trustedCaFile = frpcTrustedCaFile.trim();
+    if (!serverAddress || !serverPort || !trustedCaFile) {
+      return;
+    }
+
+    if (frpcProxyType === 'tcp') {
+      const remotePort = parseFrpcPort(frpcRemotePort);
+      const publicUrl = normalizeFrpcPublicUrl(frpcPublicUrl);
+      if (!remotePort || !publicUrl) {
+        return;
+      }
+      await saveTunnelSettings({
+        tunnelProvider: 'frpc',
+        tunnelMode: 'managed-remote',
+        frpcProxyType: 'tcp',
+        frpcServerAddress: serverAddress,
+        frpcServerPort: serverPort,
+        frpcTrustedCaFile: trustedCaFile,
+        frpcRemotePort: remotePort,
+        frpcPublicUrl: publicUrl,
+      });
+      return;
+    }
+
+    const customDomain = normalizeFrpcHostname(frpcCustomDomain);
+    const publicHostname = normalizeFrpcHostname(frpcPublicHostname);
+    if (!customDomain || !publicHostname) {
+      return;
+    }
+    await saveTunnelSettings({
+      tunnelProvider: 'frpc',
+      tunnelMode: 'managed-remote',
+      frpcProxyType: 'http',
+      frpcServerAddress: serverAddress,
+      frpcServerPort: serverPort,
+      frpcTrustedCaFile: trustedCaFile,
+      frpcCustomDomain: customDomain,
+      frpcPublicHostname: publicHostname,
+    });
+  }, [frpcCustomDomain, frpcProxyType, frpcPublicHostname, frpcPublicUrl, frpcRemotePort, frpcServerAddress, frpcServerPort, frpcTrustedCaFile, saveTunnelSettings]);
+
+  const handleFrpcProxyTypeChange = React.useCallback(async (proxyType: FrpcProxyType) => {
+    setFrpcProxyType(proxyType);
+    setManagedRemoteValidationError(null);
+    setErrorMessage(null);
+    await saveTunnelSettings({
+      tunnelProvider: 'frpc',
+      tunnelMode: 'managed-remote',
+      frpcProxyType: proxyType,
+    });
+  }, [saveTunnelSettings]);
+
   const handleStart = React.useCallback(async () => {
     setErrorMessage(null);
     setManagedRemoteValidationError(null);
+    let frpcStartEndpointPayload: FrpcStartEndpointPayload | null = null;
 
     if (tunnelMode === 'managed-local' && managedLocalConfigPath && !hasAllowedManagedLocalConfigExtension(managedLocalConfigPath)) {
       setErrorMessage(managedLocalConfigExtensionError);
       toast.error(managedLocalConfigExtensionError);
       return;
+    }
+
+    if (tunnelProvider === 'frpc' && tunnelMode === 'managed-remote') {
+      if (!normalizedFrpcTrustedCaFile) {
+        const message = t('settings.openchamber.tunnel.toast.frpcTrustedCaRequired');
+        setManagedRemoteValidationError(message);
+        toast.error(message);
+        return;
+      }
+      if (frpcProxyType === 'tcp') {
+        if (!normalizedFrpcServerAddress || !normalizedFrpcServerPort || !normalizedFrpcRemotePort || !normalizedFrpcPublicUrl) {
+          const message = t('settings.openchamber.tunnel.toast.frpcEndpointRequired');
+          setManagedRemoteValidationError(message);
+          toast.error(message);
+          return;
+        }
+        frpcStartEndpointPayload = buildFrpcStartEndpointPayload({
+          proxyType: 'tcp',
+          serverAddress: normalizedFrpcServerAddress,
+          serverPort: normalizedFrpcServerPort,
+          trustedCaFile: normalizedFrpcTrustedCaFile,
+          remotePort: normalizedFrpcRemotePort,
+          publicUrl: normalizedFrpcPublicUrl,
+        });
+      } else if (!normalizedFrpcServerAddress || !normalizedFrpcServerPort || !normalizedFrpcCustomDomain || !normalizedFrpcPublicHostname) {
+        const message = t('settings.openchamber.tunnel.toast.frpcHttpEndpointRequired');
+        setManagedRemoteValidationError(message);
+        toast.error(message);
+        return;
+      } else {
+        frpcStartEndpointPayload = buildFrpcStartEndpointPayload({
+          proxyType: 'http',
+          serverAddress: normalizedFrpcServerAddress,
+          serverPort: normalizedFrpcServerPort,
+          trustedCaFile: normalizedFrpcTrustedCaFile,
+          customDomain: normalizedFrpcCustomDomain,
+          publicHostname: normalizedFrpcPublicHostname,
+        });
+      }
+      if (!frpcToken.trim() && !hasFrpcTunnelToken) {
+        const message = t('settings.openchamber.tunnel.toast.frpcTokenRequired');
+        setManagedRemoteValidationError(message);
+        toast.error(message);
+        return;
+      }
     }
 
     setState('starting');
@@ -928,7 +1195,7 @@ export const TunnelSettings: React.FC = () => {
       let managedRemoteTunnelHostname = '';
       let managedRemoteTunnelToken = '';
 
-      if (tunnelMode === 'managed-remote') {
+      if (tunnelMode === 'managed-remote' && tunnelProvider === 'cloudflare') {
         if (!selectedPreset) {
           setState('idle');
           setManagedRemoteValidationError(t('settings.openchamber.tunnel.toast.selectOrAddManagedRemoteFirst'));
@@ -945,18 +1212,42 @@ export const TunnelSettings: React.FC = () => {
         });
       }
 
+      if (tunnelMode === 'managed-remote' && tunnelProvider === 'frpc' && frpcStartEndpointPayload) {
+        await saveTunnelSettings({
+          tunnelProvider: 'frpc',
+          tunnelMode: 'managed-remote',
+          frpcProxyType: frpcStartEndpointPayload.proxyType,
+          frpcServerAddress: frpcStartEndpointPayload.serverAddress,
+          frpcServerPort: frpcStartEndpointPayload.serverPort,
+          frpcTrustedCaFile: frpcStartEndpointPayload.trustedCaFile,
+          ...(frpcStartEndpointPayload.proxyType === 'tcp'
+            ? {
+              frpcRemotePort: frpcStartEndpointPayload.remotePort,
+              frpcPublicUrl: frpcStartEndpointPayload.publicUrl,
+            }
+            : {
+              frpcCustomDomain: frpcStartEndpointPayload.customDomain,
+              frpcPublicHostname: frpcStartEndpointPayload.hostname,
+            }),
+        });
+      }
+
       const res = await runtimeFetch('/api/openchamber/tunnel/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: tunnelProvider,
           mode: tunnelMode,
-          ...(tunnelMode === 'managed-remote' && selectedPreset ? {
+          ...(tunnelMode === 'managed-remote' && tunnelProvider === 'cloudflare' && selectedPreset ? {
             managedRemoteTunnelPresetId: selectedPreset.id,
             managedRemoteTunnelPresetName: selectedPreset.name,
           } : {}),
           ...(tunnelMode === 'managed-remote' && managedRemoteTunnelHostname ? { managedRemoteTunnelHostname } : {}),
           ...(tunnelMode === 'managed-remote' && managedRemoteTunnelToken ? { managedRemoteTunnelToken } : {}),
+          ...(tunnelMode === 'managed-remote' && tunnelProvider === 'frpc' && frpcStartEndpointPayload ? {
+            ...frpcStartEndpointPayload,
+            ...(frpcToken.trim() ? { token: frpcToken.trim() } : {}),
+          } : {}),
           ...(tunnelMode === 'managed-local' && managedLocalConfigPath ? { configPath: managedLocalConfigPath } : {}),
         }),
       });
@@ -965,8 +1256,13 @@ export const TunnelSettings: React.FC = () => {
       if (!res.ok || !data.ok) {
         if (tunnelMode === 'managed-remote' && typeof data.error === 'string' && data.error.includes('Managed remote tunnel token is required')) {
           setState('idle');
-          setManagedRemoteValidationError(t('settings.openchamber.tunnel.toast.managedRemoteTokenRequiredBeforeStarting'));
-          toast.error(t('settings.openchamber.tunnel.toast.addManagedRemoteTokenBeforeStarting'));
+          const message = tunnelProvider === 'frpc'
+            ? t('settings.openchamber.tunnel.toast.frpcTokenRequired')
+            : t('settings.openchamber.tunnel.toast.managedRemoteTokenRequiredBeforeStarting');
+          setManagedRemoteValidationError(message);
+          toast.error(tunnelProvider === 'frpc'
+            ? message
+            : t('settings.openchamber.tunnel.toast.addManagedRemoteTokenBeforeStarting'));
           return;
         }
         setState('error');
@@ -993,9 +1289,41 @@ export const TunnelSettings: React.FC = () => {
           ? toUiTunnelMode(data.activeTunnelMode)
           : (data.mode ? toUiTunnelMode(data.mode) : tunnelMode)
       );
+      setActiveTunnelProvider(typeof data.provider === 'string' ? data.provider : tunnelProvider);
       setSessionRecords(Array.isArray(data.activeSessions) ? data.activeSessions : []);
       if (Array.isArray(data.managedRemoteTunnelTokenPresetIds)) {
         setSavedTokenPresetIds(new Set(data.managedRemoteTunnelTokenPresetIds));
+      }
+      if (tunnelProvider === 'frpc') {
+        const responseProxyType = data.frpcProxyType === 'tcp' || data.frpcProxyType === 'http'
+          ? data.frpcProxyType
+          : frpcProxyType;
+        setFrpcProxyType(responseProxyType);
+        if (data.frpcServerAddress === null || typeof data.frpcServerAddress === 'string') {
+          setFrpcServerAddress(data.frpcServerAddress ?? '');
+        }
+        if (data.frpcServerPort === null || typeof data.frpcServerPort === 'number') {
+          setFrpcServerPort(data.frpcServerPort === null ? '' : String(data.frpcServerPort));
+        }
+        if (data.frpcTrustedCaFile === null || typeof data.frpcTrustedCaFile === 'string') {
+          setFrpcTrustedCaFile(data.frpcTrustedCaFile ?? '');
+        }
+        if (responseProxyType === 'tcp' && (data.frpcRemotePort === null || typeof data.frpcRemotePort === 'number')) {
+          setFrpcRemotePort(data.frpcRemotePort === null ? '' : String(data.frpcRemotePort));
+        }
+        if (responseProxyType === 'tcp' && (data.frpcPublicUrl === null || typeof data.frpcPublicUrl === 'string')) {
+          setFrpcPublicUrl(data.frpcPublicUrl ?? '');
+        }
+        if (responseProxyType === 'http') {
+          if (data.frpcCustomDomain === null || typeof data.frpcCustomDomain === 'string') {
+            setFrpcCustomDomain(data.frpcCustomDomain ?? '');
+          }
+          if (data.frpcPublicHostname === null || typeof data.frpcPublicHostname === 'string') {
+            setFrpcPublicHostname(data.frpcPublicHostname ?? '');
+          }
+        }
+        setHasFrpcTunnelToken(data.hasFrpcTunnelToken !== false);
+        setFrpcToken('');
       }
       if (typeof data.localPort === 'number') {
         setLocalPort(data.localPort);
@@ -1027,6 +1355,16 @@ export const TunnelSettings: React.FC = () => {
   }, [
     managedLocalConfigExtensionError,
     managedRemoteTunnelPresets,
+    frpcProxyType,
+    frpcToken,
+    hasFrpcTunnelToken,
+    normalizedFrpcCustomDomain,
+    normalizedFrpcPublicHostname,
+    normalizedFrpcPublicUrl,
+    normalizedFrpcRemotePort,
+    normalizedFrpcServerAddress,
+    normalizedFrpcServerPort,
+    normalizedFrpcTrustedCaFile,
     saveTunnelSettings,
     selectedPreset,
     sessionTokensByPresetId,
@@ -1050,6 +1388,7 @@ export const TunnelSettings: React.FC = () => {
       }
       setTunnelInfo(null);
       setActiveTunnelMode(null);
+      setActiveTunnelProvider(null);
       setQrDataUrl(null);
       setState('idle');
       toast.success(t('settings.openchamber.tunnel.toast.stopped'));
@@ -1311,9 +1650,11 @@ export const TunnelSettings: React.FC = () => {
                 {t('settings.openchamber.tunnel.notAvailable.dependencyNotFound', { dependency: displayedDependencyInstallInfo.dependency })}
               </p>
               <p className="typography-meta text-muted-foreground/70">{t('settings.openchamber.tunnel.notAvailable.installHint')}</p>
-              <code className="typography-code block rounded bg-muted/50 px-2 py-1 text-xs text-foreground">
-                {displayedDependencyInstallInfo.installCommand}
-              </code>
+              {displayedDependencyInstallInfo.installCommand && (
+                <code className="typography-code block rounded bg-muted/50 px-2 py-1 text-xs text-foreground">
+                  {displayedDependencyInstallInfo.installCommand}
+                </code>
+              )}
             </div>
           </div>
         </section>
@@ -1324,33 +1665,35 @@ export const TunnelSettings: React.FC = () => {
           <div className="space-y-3">
             <div data-settings-item="tunnel.provider" className="space-y-1.5">
               <p className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.provider')}</p>
-              <Select
-                value={tunnelProvider}
-                onValueChange={(value) => {
-                  void handleProviderChange(value);
-                }}
-                disabled={isSavingMode || state === 'starting' || state === 'stopping'}
-              >
-                <SelectTrigger className="max-w-[16rem]">
-                  <SelectValue placeholder={t('settings.openchamber.tunnel.field.providerPlaceholder')}>
-                    {getProviderLabel(tunnelProvider)}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {providerCapabilities.length > 0
-                    ? providerCapabilities.map((capability) => (
-                      <SelectItem key={capability.provider} value={capability.provider}>
-                        <ProviderOptionLabel provider={capability.provider} />
-                      </SelectItem>
-                    ))
-                    : (
-                      <SelectItem value="cloudflare">
-                        <ProviderOptionLabel provider="cloudflare" />
-                      </SelectItem>
-                    )}
-                  <SelectItem value="__more-soon" disabled>{t('settings.openchamber.tunnel.option.moreProvidersSoon')}</SelectItem>
-                </SelectContent>
-              </Select>
+              <div data-settings-item={tunnelProvider === 'frpc' && tunnelMode === 'managed-remote' ? undefined : 'tunnel.frpc'}>
+                <Select
+                  value={tunnelProvider}
+                  onValueChange={(value) => {
+                    void handleProviderChange(value);
+                  }}
+                  disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                >
+                  <SelectTrigger className="max-w-[16rem]">
+                    <SelectValue placeholder={t('settings.openchamber.tunnel.field.providerPlaceholder')}>
+                      {getProviderLabel(tunnelProvider)}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providerCapabilities.length > 0
+                      ? providerCapabilities.map((capability) => (
+                        <SelectItem key={capability.provider} value={capability.provider}>
+                          <ProviderOptionLabel provider={capability.provider} />
+                        </SelectItem>
+                      ))
+                      : (
+                        <SelectItem value="cloudflare">
+                          <ProviderOptionLabel provider="cloudflare" />
+                        </SelectItem>
+                      )}
+                    <SelectItem value="__more-soon" disabled>{t('settings.openchamber.tunnel.option.moreProvidersSoon')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div data-settings-item="tunnel.type" className="space-y-1.5">
@@ -1445,7 +1788,7 @@ export const TunnelSettings: React.FC = () => {
             </div>
           )}
 
-          {tunnelMode === 'managed-remote' && (
+          {tunnelProvider === 'cloudflare' && tunnelMode === 'managed-remote' && (
             <div data-settings-item="tunnel.managed-remote" className="space-y-2 rounded-lg border border-[var(--interactive-border)] bg-[var(--surface-elevated)] p-3">
               {typeof suggestedConnectorPort === 'number' && (
                 <div className="rounded-md border border-[var(--status-info-border)] bg-[var(--status-info-background)]/35 px-2 py-1.5">
@@ -1656,6 +1999,186 @@ export const TunnelSettings: React.FC = () => {
             </div>
           )}
 
+          {tunnelProvider === 'frpc' && tunnelMode === 'managed-remote' && (
+            <div data-settings-item="tunnel.frpc" className="space-y-3 rounded-lg border border-[var(--interactive-border)] bg-[var(--surface-elevated)] p-3">
+              <div className="space-y-1.5">
+                <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcProxyType')}</span>
+                <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t('settings.openchamber.tunnel.field.frpcProxyType')}>
+                  <Button
+                    variant="chip"
+                    size="xs"
+                    aria-pressed={frpcProxyType === 'tcp'}
+                    className="!font-normal"
+                    onClick={() => { void handleFrpcProxyTypeChange('tcp'); }}
+                    disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                  >
+                    {t('settings.openchamber.tunnel.option.frpcProxyType.tcp')}
+                  </Button>
+                  <Button
+                    variant="chip"
+                    size="xs"
+                    aria-pressed={frpcProxyType === 'http'}
+                    className="!font-normal"
+                    onClick={() => { void handleFrpcProxyTypeChange('http'); }}
+                    disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                  >
+                    {t('settings.openchamber.tunnel.option.frpcProxyType.http')}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcServerAddress')}</span>
+                  <Input
+                    value={frpcServerAddress}
+                    onChange={(event) => {
+                      setFrpcServerAddress(event.target.value);
+                      setManagedRemoteValidationError(null);
+                    }}
+                    onBlur={() => { void persistFrpcEndpointSettings(); }}
+                    placeholder={t('settings.openchamber.tunnel.field.frpcServerAddressPlaceholder')}
+                    className="h-7"
+                    disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcServerPort')}</span>
+                  <Input
+                    value={frpcServerPort}
+                    onChange={(event) => {
+                      setFrpcServerPort(event.target.value);
+                      setManagedRemoteValidationError(null);
+                    }}
+                    onBlur={() => { void persistFrpcEndpointSettings(); }}
+                    inputMode="numeric"
+                    placeholder="7000"
+                    className="h-7"
+                    disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcToken')}</span>
+                  <Input
+                    type="password"
+                    value={frpcToken}
+                    onChange={(event) => {
+                      setFrpcToken(event.target.value);
+                      setManagedRemoteValidationError(null);
+                    }}
+                    placeholder={hasFrpcTunnelToken
+                      ? t('settings.openchamber.tunnel.field.savedFrpcTokenPlaceholder')
+                      : t('settings.openchamber.tunnel.field.newPresetTokenPlaceholder')}
+                    className="h-7"
+                    disabled={state === 'starting' || state === 'stopping'}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcTrustedCaFile')}</span>
+                  <Input
+                    value={frpcTrustedCaFile}
+                    onChange={(event) => {
+                      setFrpcTrustedCaFile(event.target.value);
+                      setManagedRemoteValidationError(null);
+                    }}
+                    onBlur={() => { void persistFrpcEndpointSettings(); }}
+                    placeholder="~/.config/frp/ca.crt"
+                    className="h-7"
+                    disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcLocalPort')}</span>
+                  <Input
+                    value={typeof suggestedConnectorPort === 'number' ? String(suggestedConnectorPort) : ''}
+                    readOnly
+                    aria-readonly="true"
+                    className="h-7"
+                  />
+                </label>
+              </div>
+
+              {frpcProxyType === 'tcp' ? (
+                <>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className="space-y-1.5">
+                      <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcRemotePort')}</span>
+                      <Input
+                        value={frpcRemotePort}
+                        onChange={(event) => {
+                          setFrpcRemotePort(event.target.value);
+                          setManagedRemoteValidationError(null);
+                        }}
+                        onBlur={() => { void persistFrpcEndpointSettings(); }}
+                        inputMode="numeric"
+                        placeholder="18080"
+                        className="h-7"
+                        disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                      />
+                    </label>
+                    <label className="space-y-1.5">
+                      <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcPublicUrl')}</span>
+                      <Input
+                        value={frpcPublicUrl}
+                        onChange={(event) => {
+                          setFrpcPublicUrl(event.target.value);
+                          setManagedRemoteValidationError(null);
+                        }}
+                        onBlur={() => { void persistFrpcEndpointSettings(); }}
+                        placeholder="https://openchamber.example.com:18080"
+                        inputMode="url"
+                        className="h-7"
+                        disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                      />
+                    </label>
+                  </div>
+                  <p className="typography-meta text-muted-foreground/70">
+                    {t('settings.openchamber.tunnel.note.frpcTcpMapping')}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className="space-y-1.5">
+                      <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcCustomDomain')}</span>
+                      <Input
+                        value={frpcCustomDomain}
+                        onChange={(event) => {
+                          setFrpcCustomDomain(event.target.value);
+                          setManagedRemoteValidationError(null);
+                        }}
+                        onBlur={() => { void persistFrpcEndpointSettings(); }}
+                        placeholder={t('settings.openchamber.tunnel.field.frpcCustomDomainPlaceholder')}
+                        className="h-7"
+                        disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                      />
+                    </label>
+                    <label className="space-y-1.5">
+                      <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcPublicHostname')}</span>
+                      <Input
+                        value={frpcPublicHostname}
+                        onChange={(event) => {
+                          setFrpcPublicHostname(event.target.value);
+                          setManagedRemoteValidationError(null);
+                        }}
+                        onBlur={() => { void persistFrpcEndpointSettings(); }}
+                        placeholder={t('settings.openchamber.tunnel.field.frpcPublicHostnamePlaceholder')}
+                        className="h-7"
+                        disabled={isSavingMode || state === 'starting' || state === 'stopping'}
+                      />
+                    </label>
+                  </div>
+                  <p className="typography-meta text-muted-foreground/70">
+                    {t('settings.openchamber.tunnel.note.frpcHttpVhost')}
+                  </p>
+                </>
+              )}
+              {managedRemoteValidationError && (
+                <p className="typography-meta text-[var(--status-error)]">{managedRemoteValidationError}</p>
+              )}
+            </div>
+          )}
+
           {tunnelMode === 'managed-local' && (
             <div data-settings-item="tunnel.managed-local-config" className="space-y-2 rounded-lg border border-[var(--interactive-border)] bg-[var(--surface-elevated)] p-3">
               <div className="space-y-1.5">
@@ -1727,7 +2250,7 @@ export const TunnelSettings: React.FC = () => {
                 <div className="flex items-start gap-2">
                   <Icon name="information" className="mt-0.5 size-4 shrink-0 text-[var(--status-info)]" />
                   <div className="space-y-1">
-                    {tunnelMode === 'managed-remote' && (
+                    {tunnelProvider === 'cloudflare' && tunnelMode === 'managed-remote' && (
                       <>
                         <p className="typography-meta text-[var(--status-info)]">
                           {t('settings.openchamber.tunnel.note.managedRemoteRequiresDomain')}
@@ -1770,7 +2293,7 @@ export const TunnelSettings: React.FC = () => {
                 </div>
               </div>
 
-              {tunnelMode === 'managed-remote' && (
+              {tunnelProvider === 'cloudflare' && tunnelMode === 'managed-remote' && (
                 <div className="space-y-1.5">
                   <p className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.managedRemoteTunnelToConnect')}</p>
                   <Select
@@ -1816,7 +2339,8 @@ export const TunnelSettings: React.FC = () => {
                 disabled={
                   state === 'starting'
                   || isSavingMode
-                  || (tunnelMode === 'managed-remote' && !selectedPreset)
+                  || (tunnelProvider === 'cloudflare' && tunnelMode === 'managed-remote' && !selectedPreset)
+                  || (tunnelProvider === 'frpc' && tunnelMode === 'managed-remote' && (!isFrpcEndpointValid || (!frpcToken.trim() && !hasFrpcTunnelToken)))
                   || (tunnelMode === 'managed-local' && isManagedLocalConfigPathInvalid)
                 }
                 className={cn(primaryCtaClass, state === 'starting' && 'opacity-70')}

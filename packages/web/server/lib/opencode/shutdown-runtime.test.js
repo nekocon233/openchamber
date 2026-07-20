@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createGracefulShutdownRuntime } from './shutdown-runtime.js';
 
-const createRuntime = (server) => createGracefulShutdownRuntime({
+const createRuntime = (server, overrides = {}) => createGracefulShutdownRuntime({
   process: { exit: vi.fn() },
   shutdownTimeoutMs: 1000,
   getExitOnShutdown: () => false,
@@ -30,6 +30,7 @@ const createRuntime = (server) => createGracefulShutdownRuntime({
   getActiveTunnelController: () => null,
   setActiveTunnelController: vi.fn(),
   tunnelAuthController: { clearActiveTunnel: vi.fn() },
+  ...overrides,
 });
 
 describe('graceful shutdown runtime', () => {
@@ -54,5 +55,50 @@ describe('graceful shutdown runtime', () => {
 
     expect(warnSpy).not.toHaveBeenCalledWith('Server close timeout reached, forcing shutdown');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not clear tunnel state before asynchronous process termination', async () => {
+    let resolveStop;
+    const stop = vi.fn(() => new Promise((resolve) => { resolveStop = resolve; }));
+    const setActiveTunnelController = vi.fn();
+    const clearActiveTunnel = vi.fn();
+    const runtime = createRuntime(null, {
+      getActiveTunnelController: () => ({ stop }),
+      setActiveTunnelController,
+      tunnelAuthController: { clearActiveTunnel },
+    });
+
+    const shuttingDown = runtime.gracefulShutdown({ exitProcess: false });
+    await Promise.resolve();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(setActiveTunnelController).not.toHaveBeenCalled();
+    expect(clearActiveTunnel).not.toHaveBeenCalled();
+
+    resolveStop(true);
+    await shuttingDown;
+    expect(setActiveTunnelController).toHaveBeenCalledWith(null);
+    expect(clearActiveTunnel).toHaveBeenCalledOnce();
+  });
+
+  it('preserves tunnel state on termination failure while still allowing process exit', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stop = vi.fn(async () => { throw new Error('still running'); });
+    const setActiveTunnelController = vi.fn();
+    const clearActiveTunnel = vi.fn();
+    const processRuntime = { exit: vi.fn() };
+    const runtime = createRuntime(null, {
+      process: processRuntime,
+      getActiveTunnelController: () => ({ stop }),
+      setActiveTunnelController,
+      tunnelAuthController: { clearActiveTunnel },
+    });
+
+    await runtime.gracefulShutdown({ exitProcess: true });
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(setActiveTunnelController).not.toHaveBeenCalled();
+    expect(clearActiveTunnel).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith('Failed to confirm active tunnel termination during shutdown');
+    expect(processRuntime.exit).toHaveBeenCalledWith(0);
   });
 });

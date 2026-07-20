@@ -2,6 +2,7 @@ import type { Event, Session } from "@opencode-ai/sdk/v2/client"
 import { useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
 import { stripSessionDiffSnapshots } from "./sanitize"
 import { recordSessionRemoval, shouldSkipStaleSessionEvent } from "./session-event-freshness"
+import { clearPersistedSessionNavigation } from "./session-navigation"
 
 const getSessionInfoFromPayload = (event: Event): Session | null => {
   if (event.type !== "session.created" && event.type !== "session.updated" && event.type !== "session.deleted") {
@@ -35,9 +36,12 @@ export const applySessionEventToGlobalSessions = (payload: Event): void => {
   if (payload.type === "session.created" || payload.type === "session.updated") {
     const session = getSessionInfoFromPayload(payload)
     if (session) {
-      if (session.time?.archived) recordSessionRemoval(session.id)
+      if (session.time?.archived) {
+        recordSessionRemoval(session.id)
+      }
       const currentSession = getGlobalSessionSnapshot(session.id)
       if (!shouldSkipStaleSessionEvent(currentSession, session)) {
+        if (session.time?.archived) clearPersistedSessionNavigation(session.id)
         useGlobalSessionsStore.getState().upsertSession(session)
       }
     }
@@ -48,6 +52,7 @@ export const applySessionEventToGlobalSessions = (payload: Event): void => {
     const sessionID = (payload as { properties?: { sessionID?: string } }).properties?.sessionID ?? getSessionInfoFromPayload(payload)?.id
     if (sessionID) {
       recordSessionRemoval(sessionID)
+      clearPersistedSessionNavigation(sessionID)
       useGlobalSessionsStore.getState().removeSessions([sessionID])
     }
   }

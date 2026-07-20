@@ -27,6 +27,7 @@ export const createServerStartupRuntime = (dependencies) => {
     bindHost,
     startupTunnelRequest,
     onTunnelReady,
+    onPortReady,
   }) => {
     let activePort = port;
 
@@ -41,6 +42,7 @@ export const createServerStartupRuntime = (dependencies) => {
         try {
           const addressInfo = server.address();
           activePort = typeof addressInfo === 'object' && addressInfo ? addressInfo.port : port;
+          onPortReady?.(activePort);
 
           if (typeof process.send === 'function') {
             if (!process.connected) {
@@ -82,8 +84,20 @@ export const createServerStartupRuntime = (dependencies) => {
                 mode: startupTunnelRequest.mode,
                 intent: startupTunnelRequest.intent,
                 hostname: startupTunnelRequest.hostname,
+                customDomain: startupTunnelRequest.customDomain,
+                proxyType: startupTunnelRequest.proxyType,
                 token: startupTunnelRequest.token,
                 configPath: startupTunnelRequest.configPath,
+                serverAddress: startupTunnelRequest.serverAddress,
+                serverPort: startupTunnelRequest.serverPort,
+                trustedCaFile: startupTunnelRequest.trustedCaFile,
+                remotePort: startupTunnelRequest.remotePort,
+                publicUrl: startupTunnelRequest.publicUrl,
+                frpcEndpointExplicit: startupTunnelRequest.remotePort !== undefined
+                  || (typeof startupTunnelRequest.publicUrl === 'string' && startupTunnelRequest.publicUrl.length > 0)
+                  || (typeof startupTunnelRequest.customDomain === 'string' && startupTunnelRequest.customDomain.length > 0)
+                  || (typeof startupTunnelRequest.hostname === 'string' && startupTunnelRequest.hostname.length > 0)
+                  || (typeof startupTunnelRequest.proxyType === 'string' && startupTunnelRequest.proxyType.length > 0),
                 selectedPresetId: '',
                 selectedPresetName: '',
               });

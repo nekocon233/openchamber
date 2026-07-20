@@ -5,7 +5,7 @@ import { resolveGlobalSessionDirectory, mergeLiveSessionWithGlobalSession, useGl
 
 type SessionExtra = Partial<Session> & {
   directory?: string | null;
-  project?: { worktree?: string | null } | null;
+  project?: ({ worktree?: string | null } & Record<string, unknown>) | null;
 };
 
 const buildSession = (shareUrl: string, extra: SessionExtra = {}): Session => ({
@@ -68,6 +68,19 @@ describe('useGlobalSessionsStore', () => {
     expect(resolveGlobalSessionDirectory(useGlobalSessionsStore.getState().activeSessions[0])).toBe('/repo/app-worktree');
     expect(useGlobalSessionsStore.getState().sessionsByDirectory.get('/repo/app')).toBe(undefined);
     expect(useGlobalSessionsStore.getState().sessionsByDirectory.get('/repo/app-worktree')?.[0]?.id).toBe('ses_1');
+  });
+
+  test('keeps only the routing fallback when canonical project metadata arrives', () => {
+    useGlobalSessionsStore.getState().upsertSession(buildSession('https://share.example/a', {
+      project: { worktree: '/repo/app', name: 'Fallback project', staleField: 'remove-me' },
+    }));
+    useGlobalSessionsStore.getState().upsertSession(buildSession('https://share.example/b', {
+      project: { name: 'Canonical project' },
+      time: { created: 1, updated: 3 },
+    }));
+
+    const project = (useGlobalSessionsStore.getState().activeSessions[0] as SessionExtra).project;
+    expect(project).toEqual({ name: 'Canonical project', worktree: '/repo/app' });
   });
 
   test('preserves directory metadata when moving a session to archived', () => {

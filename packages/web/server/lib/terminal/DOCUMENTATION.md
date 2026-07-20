@@ -34,6 +34,7 @@ HTTP remains the authenticated command plane for create, resize, appearance upda
 ## Security And Relay
 
 The WebSocket path must remain in both `isUrlAuthWebSocketPath` and relay `ALLOWED_WS_PATHS`. The client must use `getRuntimeUrlResolver().websocket()` and `openRuntimeWebSocket`; direct local URLs or raw browser WebSockets break relay and URL-token authentication.
+Managed/public and Private Relay upgrades require URL-token authentication and the real origin gate even with passwordless UI configuration. Revocation or expiry closes only sockets owned by that opaque remote identity; terminal processes remain available for another authorized attachment and follow the existing idle/close lifecycle. Direct local passwordless sockets remain intentional.
 
 ## Verification
 

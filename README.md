@@ -51,7 +51,7 @@
 
 ### Web / PWA
 
-- Provider-aware tunnel access model with Cloudflare `quick`, `managed-remote`, and `managed-local` modes
+- Provider-aware tunnel access with Cloudflare, managed FRPC TCP and HTTP-vhost endpoints, and Ngrok
 - One-scan onboarding with tunnel QR + password URL helpers
 - Mobile-first experience: optimized chat controls, keyboard-safe layouts, and attachment-friendly UI
 - Background notifications plus reliable cross-tab session activity tracking
@@ -78,7 +78,7 @@
 
 ### Custom Themes
 
-- **Use it from anywhere** - Cloudflare tunnel with QR code onboarding. Scan, connect, code from your couch.
+- **Use it from anywhere** - Provider-aware tunnels with QR code onboarding. Scan, connect, code from your couch.
 - **Branchable chat timeline** - Undo, redo, fork from any turn. Explore different approaches without losing your place.
 - **GitHub-native workflows** - Start sessions from issues and PRs with context already attached. Review checks, merge - all in-app.
 - **Project Actions** - Run dev servers, configure SSH port forwarding, open remote URLs locally. Your project commands, one click away.
@@ -131,8 +131,11 @@ openchamber startup status           # Show startup service status
 openchamber startup disable          # Remove startup service
 openchamber tunnel help              # Tunnel lifecycle commands
 openchamber tunnel providers         # Show provider capabilities
-openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token <token>
+openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token-file ~/.secrets/cf-token
 openchamber tunnel start --profile prod-main
+openchamber tunnel start --provider frpc --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 openchamber tunnel start --provider cloudflare --mode quick --qr
 openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.cloudflared/config.yml
 openchamber tunnel status --all      # Show tunnel state across instances
@@ -266,7 +269,7 @@ environment:
   UI_PASSWORD: your_secure_password
 ```
 
-**Cloudflare Tunnel (optional):**
+**Tunnel (optional):**
 ```yaml
 environment:
   OPENCHAMBER_TUNNEL_MODE: quick # quick | managed-remote | managed-local
@@ -292,6 +295,36 @@ environment:
 
 Managed-local path note: `OPENCHAMBER_TUNNEL_CONFIG` must point to a path inside the container user home (`/home/openchamber/...`). If your Cloudflare config references a credentials JSON file, that file path must also be accessible inside the container (mount with `volumes`).
 
+For a managed FRPC TCP mapping, provide:
+
+```yaml
+environment:
+  OPENCHAMBER_TUNNEL_PROVIDER: frpc
+  OPENCHAMBER_TUNNEL_MODE: managed-remote
+  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+  OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
+  OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
+  OPENCHAMBER_TUNNEL_REMOTE_PORT: 20000
+  OPENCHAMBER_TUNNEL_PUBLIC_URL: https://app.example.com:20000
+  OPENCHAMBER_TUNNEL_TOKEN: <token>
+```
+
+For a managed FRPC HTTP-vhost endpoint, replace `OPENCHAMBER_TUNNEL_REMOTE_PORT` with the FRPS routing host and external public hostname:
+
+```yaml
+environment:
+  OPENCHAMBER_TUNNEL_PROVIDER: frpc
+  OPENCHAMBER_TUNNEL_MODE: managed-remote
+  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+  OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
+  OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
+  OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: openchamber.internal
+  OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com
+  OPENCHAMBER_TUNNEL_TOKEN: <token>
+```
+
+OpenChamber supplies its local listening port automatically for both FRPC endpoint types. TCP forwards plain HTTP and therefore also requires `OPENCHAMBER_TUNNEL_PUBLIC_URL`, an origin-only `https://` URL served by an external TLS terminator. With `openchamber tunnel`, FRPC accepts tokens only through `--token-file`, `--token-stdin`, or the private interactive prompt; inline `--token` is rejected. Profiles created through one of those inputs can be reused. Direct startup reads the token from `OPENCHAMBER_TUNNEL_TOKEN`.
+
 ### Reverse proxy notes
 
 - For a complete reverse proxy setup guide, see [`docs/REVERSE_PROXY.md`](./docs/REVERSE_PROXY.md).
@@ -300,6 +333,10 @@ Managed-local path note: `OPENCHAMBER_TUNNEL_CONFIG` must point to a path inside
 ### Tunnel behavior notes
 
 - OpenChamber supports one active tunnel per running instance (port).
+- An FRPC TCP endpoint uses `--remote-port` for raw HTTP forwarding and requires an exact externally TLS-terminated origin through `--public-url`. Bind the FRPS proxy port to loopback; OpenChamber rejects insecure or malformed URLs instead of inferring browser TLS from the FRPS address.
+- An FRPC HTTP-vhost endpoint uses `--custom-domain <frps-routing-host>` with `--hostname <external-public-host>` and is exposed at `https://<hostname>`. FRPS receives the routing `Host` on its vhost HTTP port; Caddy terminates public HTTPS on `443`, forwards to that FRPS port, sets `Host` to the custom domain, and sets `X-Forwarded-Host` to the public hostname.
+- A shared FRPS token authenticates FRPC; it does not isolate HTTP vhosts from other clients using that token.
+- FRPC requires a trusted CA certificate. Configure FRPS with a certificate whose SAN matches `OPENCHAMBER_TUNNEL_SERVER_ADDRESS`; OpenChamber verifies that identity and never enables insecure certificate verification.
 - Starting a tunnel with a different mode/provider on the same instance replaces the current tunnel.
 - Replacing or stopping a tunnel revokes existing connect links and invalidates remote tunnel sessions for that instance.
 - Connect links are one-time tokens; generating a new link revokes the previous unused link.
@@ -359,7 +396,7 @@ chown -R 1000:1000 data/
 <details>
 <summary><strong>Web / PWA</strong></summary>
 
-- Cloudflare tunnel with quick, managed-remote, and managed-local modes, secure one-time connect links, and QR onboarding
+- Cloudflare, FRPC, and Ngrok tunnel providers with secure one-time connect links and QR onboarding
 - Mobile-first: optimized chat controls, keyboard-safe layouts, drag-to-reorder projects
 - Background notifications and cross-tab session tracking
 - Self-update + restart flow that keeps your server settings intact
