@@ -43,7 +43,7 @@ export interface QueuedMessage {
     content: string;
     attachments?: AttachedFile[];
     createdAt: number;
-    /** Send config captured at queue time — used as-is when auto-sending */
+    /** Send config captured when the draft is created and used when it is selected for sending. */
     sendConfig?: {
         providerID: string;
         modelID: string;

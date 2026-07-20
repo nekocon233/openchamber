@@ -99,6 +99,7 @@ import {
     findAttachmentCitationRanges,
 } from './attachmentCitations';
 import { getFileMentionAutocompleteQuery, type FileMentionAutocompleteInputSource } from './fileMentionAutocompleteState';
+import { selectFollowUpDraft, shouldStageFollowUpAsDraft } from './lib/followUpDrafts';
 import { SessionSuggestionChip } from '@/components/chat/SessionSuggestionChip';
 import { SessionGoalRow } from '@/components/chat/SessionGoalRow';
 import { SessionGoalButton, SessionGoalObjectiveCounter } from '@/components/chat/SessionGoalButton';
@@ -1487,7 +1488,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     } | null>(null);
 
     // Message queue
-    const followUpBehavior = useMessageQueueStore((state) => state.followUpBehavior);
     const queuedMessages = useMessageQueueStore(
         React.useCallback(
             (state) => {
@@ -1498,8 +1498,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         )
     );
     const addToQueue = useMessageQueueStore((state) => state.addToQueue);
-    const clearQueue = useMessageQueueStore((state) => state.clearQueue);
     const removeFromQueue = useMessageQueueStore((state) => state.removeFromQueue);
+    const queuedMessageSendInFlightRef = React.useRef<string | null>(null);
+    const [sendingQueuedMessageId, setSendingQueuedMessageId] = React.useState<string | null>(null);
 
     // Inline comment drafts
     const draftCount = useInlineCommentDraftStore(
@@ -1754,8 +1755,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     }, [pendingInputText, consumePendingInputText]);
 
     const hasContent = message.trim().length > 0 || sendableAttachedFiles.length > 0 || hasDrafts;
-    const hasQueuedMessages = queuedMessages.length > 0;
-    const canSend = hasContent || hasQueuedMessages;
+    const canSend = hasContent;
 
     const canAbort = sessionPhase !== 'idle';
 
@@ -1779,9 +1779,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     };
     const handleSubmitRef = React.useRef<(options?: SubmitOptions) => Promise<void>>(async () => {});
 
-    // Add message to queue instead of sending
-    const handleQueueMessage = React.useCallback(() => {
-        const inputSnapshot = getCurrentInputSnapshot();
+    // Save an active-session follow-up as a draft instead of sending it.
+    const handleQueueMessage = React.useCallback((presetText?: string) => {
+        const inputSnapshot = presetText == null
+            ? getCurrentInputSnapshot()
+            : {
+                message: presetText,
+                hasContent: presetText.trim().length > 0 || sendableAttachedFiles.length > 0 || hasDrafts,
+            };
         if (!inputSnapshot.hasContent || !currentSessionId) return;
 
         const drafts = consumeDrafts(currentSessionId);
@@ -1804,9 +1809,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         });
 
         // Clear input and attachments
-        // Note: confirmedMentionsRef is NOT cleared here because queued messages
-        // are processed later in handleSubmit which reads the ref via extractInlineFileMentions.
-        // The ref is cleared in handleSubmit after all queued messages are sent.
+        // Keep confirmed mentions available when this draft is selected later.
         setMessage('');
         if (attachmentsToQueue.length > 0) {
             clearAttachedFiles();
@@ -1815,7 +1818,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         if (!isMobile) {
             textareaRef.current?.focus();
         }
-    }, [getCurrentInputSnapshot, currentSessionId, sendableAttachedFiles, sanitizeAttachmentsForSend, addToQueue, clearAttachedFiles, isMobile, consumeDrafts, currentProviderId, currentModelId, currentAgentName, currentVariant]);
+    }, [getCurrentInputSnapshot, currentSessionId, sendableAttachedFiles, hasDrafts, sanitizeAttachmentsForSend, addToQueue, clearAttachedFiles, isMobile, consumeDrafts, currentProviderId, currentModelId, currentAgentName, currentVariant]);
 
     const handleQueuedMessageEdit = React.useCallback((content: string) => {
         setMessage(content);
@@ -1825,8 +1828,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     }, []);
 
     const handleQueuedMessageSend = React.useCallback((messageId: string) => {
-        // Force-sending from the queue during a busy session counts as steer
-        void handleSubmitRef.current({ queuedOnly: true, queuedMessageId: messageId, delivery: 'steer' });
+        if (queuedMessageSendInFlightRef.current) return;
+
+        queuedMessageSendInFlightRef.current = messageId;
+        setSendingQueuedMessageId(messageId);
+        void handleSubmitRef.current({ queuedOnly: true, queuedMessageId: messageId, delivery: 'steer' })
+            .finally(() => {
+                if (queuedMessageSendInFlightRef.current !== messageId) return;
+                queuedMessageSendInFlightRef.current = null;
+                setSendingQueuedMessageId(null);
+            });
     }, []);
 
     const handleOpenAgentPanel = React.useCallback(() => {
@@ -1855,21 +1866,28 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 hasContent: options.presetText.trim().length > 0 || sendableAttachedFiles.length > 0 || hasDrafts,
             }
             : getCurrentInputSnapshot();
-        const queuedMessagesToSend = queuedMessageId
-            ? queuedMessages.filter((message) => message.id === queuedMessageId)
-            : queuedMessages;
+        const selectedDraft = queuedOnly
+            ? selectFollowUpDraft(queuedMessages, queuedMessageId)
+            : null;
 
-        if (queuedOnly && autoReviewRunning) {
+        if (!queuedOnly && shouldStageFollowUpAsDraft({
+            inputMode,
+            hasContent: inputSnapshot.hasContent,
+            sessionId: currentSessionId,
+            sessionPhase,
+            autoReviewRunning,
+        })) {
+            handleQueueMessage(options?.presetText);
             return;
         }
 
         if (queuedOnly) {
-            if (queuedMessagesToSend.length === 0 || !currentSessionId) return;
-        } else if ((!inputSnapshot.hasContent && !hasQueuedMessages) || (!currentSessionId && !newSessionDraftOpen)) {
+            if (!selectedDraft || !currentSessionId) return;
+        } else if (!inputSnapshot.hasContent || (!currentSessionId && !newSessionDraftOpen)) {
             return;
         }
 
-        const capturedSendConfig = queuedOnly ? queuedMessagesToSend[0]?.sendConfig : undefined;
+        const capturedSendConfig = selectedDraft?.sendConfig;
         const providerIdToSend = capturedSendConfig?.providerID ?? currentProviderId;
         const modelIdToSend = capturedSendConfig?.modelID ?? currentModelId;
         const agentNameToSend = capturedSendConfig?.agent ?? currentAgentName;
@@ -1880,15 +1898,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             return;
         }
 
-        // Sending is authoritative: if a question prompt is open, dismiss it
-        // so the prompt cannot linger or strand the session. The dismiss clears
-        // the card instantly (optimistic) and formally rejects the question.
-        // Rejecting unblocks the agent's tool but does NOT end its turn, so a
-        // direct send would race with the still-active run and be silently
-        // discarded by the OpenCode runner. Instead we queue the message; the
-        // queued-message auto-send hook delivers it as the next turn once the
-        // rejected turn winds down and the session returns to idle. This avoids
-        // aborting the turn (which would surface an "aborted" notice).
+        // A normal submission that dismisses a blocking question becomes a
+        // draft. The user can explicitly send it after the active turn settles.
         if (currentSessionId && !queuedOnly && autoReviewRunning) {
             handleQueueMessage();
             return;
@@ -1918,38 +1929,25 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         };
 
         // Consume any pending synthetic parts (from conflict resolution, etc.)
-        const syntheticParts = consumePendingSyntheticParts();
+        const syntheticParts = queuedOnly ? [] : consumePendingSyntheticParts();
 
-        // Process queued messages first
-        for (let i = 0; i < queuedMessagesToSend.length; i++) {
-            const queuedMsg = queuedMessagesToSend[i];
-            const { sanitizedText, mention } = parseAgentMentions(queuedMsg.content, agents);
+        if (selectedDraft) {
+            const { sanitizedText, mention } = parseAgentMentions(selectedDraft.content, agents);
             const { sanitizedText: queuedText, attachments: mentionAttachments } = extractInlineFileMentions(sanitizedText);
             addMentionedSkills(queuedText);
 
-            // Use agent mention from first message that has one
-            if (!agentMentionName && mention?.name) {
+            if (mention?.name) {
                 agentMentionName = mention.name;
             }
 
-            if (i === 0) {
-                // First queued message becomes primary
-                primaryText = queuedText;
-                primaryAttachments = [
-                    ...sanitizeAttachmentsForSend(queuedMsg.attachments),
-                    ...mentionAttachments,
-                ];
-            } else {
-                // Subsequent queued messages become additional parts
-                const queuedAttachments = sanitizeAttachmentsForSend(queuedMsg.attachments);
-                additionalParts.push({
-                    text: queuedText,
-                    attachments: [...queuedAttachments, ...mentionAttachments],
-                });
-            }
+            primaryText = queuedText;
+            primaryAttachments = [
+                ...sanitizeAttachmentsForSend(selectedDraft.attachments),
+                ...mentionAttachments,
+            ];
         }
 
-        // Add current input (skip for queued-only auto-send)
+        // Add current input unless an explicitly selected draft is being sent.
         if (!queuedOnly && inputSnapshot.hasContent) {
             const messageToSend = inputSnapshot.message.replace(/^\n+|\n+$/g, '');
             const { sanitizedText, mention } = parseAgentMentions(messageToSend, agents);
@@ -1961,17 +1959,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 agentMentionName = mention.name;
             }
 
-            if (queuedMessagesToSend.length === 0) {
-                // No queue - current input is primary
-                primaryText = messageText;
-                primaryAttachments = [...attachmentsToSend, ...mentionAttachments];
-            } else {
-                // Has queue - current input is additional part
-                additionalParts.push({
-                    text: messageText,
-                    attachments: [...attachmentsToSend, ...mentionAttachments],
-                });
-            }
+            primaryText = messageText;
+            primaryAttachments = [...attachmentsToSend, ...mentionAttachments];
         }
 
         const sessionKey = currentSessionId ?? (newSessionDraftOpen ? 'draft' : null);
@@ -1981,14 +1970,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         }
 
         if (drafts.length > 0) {
-            if (queuedMessagesToSend.length === 0) {
-                primaryText = appendInlineComments(primaryText, drafts);
-            } else if (additionalParts.length > 0) {
-                const lastPart = additionalParts[additionalParts.length - 1];
-                lastPart.text = appendInlineComments(lastPart.text, drafts);
-            } else {
-                primaryText = appendInlineComments(primaryText, drafts);
-            }
+            primaryText = appendInlineComments(primaryText, drafts);
         }
 
         // Add synthetic parts (from conflict resolution, etc.)
@@ -2003,14 +1985,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
         // Add linked issue as synthetic part (only the parts with synthetic: true)
         // The text part (synthetic: false) is completely dropped per requirements
-        if (linkedIssue) {
+        if (!queuedOnly && linkedIssue) {
             additionalParts.push({
                 text: linkedIssue.contextText,
                 synthetic: true,
             });
         }
 
-        if (linkedPr) {
+        if (!queuedOnly && linkedPr) {
             additionalParts.push({
                 text: linkedPr.instructionsText,
                 synthetic: true,
@@ -2031,12 +2013,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
         if (!primaryText && primaryAttachments.length === 0 && additionalParts.length === 0) return;
 
-        // Clear queue and input
-        if (currentSessionId && queuedMessageId) {
-            removeFromQueue(currentSessionId, queuedMessageId);
-        } else if (currentSessionId && hasQueuedMessages) {
-            clearQueue(currentSessionId);
-        }
+        // Keep a selected draft until the send is confirmed. Failed sends remain
+        // available for retry instead of silently losing the draft.
         if (!queuedOnly) {
             setMessage('');
             confirmedMentionsRef.current.clear();
@@ -2059,7 +2037,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
         // Handle local slash commands only in normal mode
         const normalizedCommand = primaryText.trimStart();
-        if (inputMode === 'normal' && normalizedCommand.startsWith('/')) {
+        if (!queuedOnly && inputMode === 'normal' && normalizedCommand.startsWith('/')) {
             const commandName = normalizedCommand
                 .slice(1)
                 .trim()
@@ -2293,7 +2271,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         const currentSessionDirectory = currentSessionId
             ? useSessionUIStore.getState().getDirectoryForSession(currentSessionId) || currentDirectory
             : currentDirectory;
-        const shouldAddResponseStyle = newSessionDraftOpen || (currentSessionId ? !hasUserMessages(currentSessionId, currentSessionDirectory) : false);
+        const shouldAddResponseStyle = !queuedOnly && (
+            newSessionDraftOpen
+            || (currentSessionId ? !hasUserMessages(currentSessionId, currentSessionDirectory) : false)
+        );
         if (shouldAddResponseStyle) {
             const responseStyleInstruction = await fetchResponseStyleInstruction().catch(() => null);
             if (responseStyleInstruction) {
@@ -2329,7 +2310,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             agentMentionName,
             additionalParts.length > 0 ? additionalParts : undefined,
             variantToSend,
-            inputMode,
+            queuedOnly ? 'normal' : inputMode,
             sendMessageOptions,
         );
         const restoreConsumedDrafts = () => {
@@ -2346,12 +2327,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             });
         }
 
-        void sendPromise.then(() => {
+        const handledSendPromise = sendPromise.then(() => {
+            if (queuedOnly && currentSessionId && queuedMessageId) {
+                removeFromQueue(currentSessionId, queuedMessageId);
+            }
             // Clear linked issue after successful message send
-            if (linkedIssue) {
+            if (!queuedOnly && linkedIssue) {
                 setLinkedIssue(null);
             }
-            if (linkedPr) {
+            if (!queuedOnly && linkedPr) {
                 setLinkedPr(null);
             }
         }).catch((error: unknown) => {
@@ -2385,46 +2369,44 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
             if (normalized.includes('payload too large') || normalized.includes('413') || normalized.includes('entity too large')) {
                 toast.error(t('chat.chatInput.toast.attachmentsTooLarge'));
-                if (allAttachments.length > 0) {
+                if (!queuedOnly && allAttachments.length > 0) {
                     useInputStore.getState().setAttachedFiles(allAttachments);
                 }
                 return;
             }
 
             if (isSoftNetworkError) {
-                if (allAttachments.length > 0) {
+                if (queuedOnly) {
+                    toast.error(t('chat.queuedMessage.sendFailed'));
+                } else if (allAttachments.length > 0) {
                     useInputStore.getState().setAttachedFiles(allAttachments);
                     toast.error(t('chat.chatInput.toast.sendAttachmentsFailed'));
                 }
                 return;
             }
 
-            if (allAttachments.length > 0) {
+            if (!queuedOnly && allAttachments.length > 0) {
                 useInputStore.getState().setAttachedFiles(allAttachments);
             }
-            toast.error(rawMessage || t('chat.chatInput.toast.messageSendFailed'));
+            toast.error(rawMessage || (queuedOnly
+                ? t('chat.queuedMessage.sendFailed')
+                : t('chat.chatInput.toast.messageSendFailed')));
         });
 
         if (!isMobile) {
             textareaRef.current?.focus();
         }
+
+        await handledSendPromise;
     };
 
     // Update ref with latest handleSubmit on every render
     handleSubmitRef.current = handleSubmit;
 
-    // Primary action for send/queue button — respects selected follow-up behavior
+    // handleSubmit owns the active-session draft decision for every input path.
     const handlePrimaryAction = React.useCallback(() => {
-        const inputSnapshot = getCurrentInputSnapshot();
-        const canQueue = inputMode === 'normal' && inputSnapshot.hasContent && currentSessionId && (sessionPhase !== 'idle' || autoReviewRunning);
-        if (followUpBehavior === 'queue' && canQueue) {
-            handleQueueMessage();
-        } else if (followUpBehavior === 'steer' && canQueue) {
-            void handleSubmitRef.current({ delivery: 'steer' });
-        } else {
-            void handleSubmitRef.current();
-        }
-    }, [inputMode, getCurrentInputSnapshot, currentSessionId, sessionPhase, autoReviewRunning, followUpBehavior, handleQueueMessage]);
+        void handleSubmitRef.current();
+    }, []);
 
     // Draft welcome presets: submit immediately.
     const submitPresetPrompt = React.useCallback((text: string) => {
@@ -2686,30 +2668,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             return;
         }
 
-        // Handle Enter/Ctrl+Enter based on selected follow-up behavior.
+        // handleSubmit stages active-session follow-ups before any transport call.
         if (e.key === 'Enter' && !e.shiftKey && (!isMobile || e.ctrlKey || e.metaKey)) {
             e.preventDefault();
-
-            const isCtrlEnter = e.ctrlKey || e.metaKey;
-
-            // Queueing / steering only works when there's an existing busy
-            // session (or an active auto-review run).
-            const canQueue = inputMode === 'normal' && hasContent && currentSessionId && (sessionPhase !== 'idle' || autoReviewRunning);
-
-            if (followUpBehavior === 'queue') {
-                if (isCtrlEnter || !canQueue) {
-                    handleSubmit();
-                } else {
-                    handleQueueMessage();
-                }
-            } else {
-                // steer: Enter steers into the running turn, Ctrl+Enter sends now.
-                if (isCtrlEnter || !canQueue) {
-                    handleSubmit();
-                } else {
-                    handleSubmit({ delivery: 'steer' });
-                }
-            }
+            handleSubmit();
         }
     };
 
@@ -4657,6 +4619,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 <QueuedMessageChips
                     onEditMessage={handleQueuedMessageEdit}
                     onSendMessage={handleQueuedMessageSend}
+                    sendingMessageId={sendingQueuedMessageId}
                 />
                 <AutoReviewBanner />
                 {hasDrafts && (

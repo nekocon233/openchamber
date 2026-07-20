@@ -19,6 +19,7 @@ This module contains tunnel provider orchestration for OpenChamber, including pr
 - `packages/web/server/lib/tunnels/providers/ngrok.js`: Ngrok quick tunnel provider implementation.
 
 ## Managed FRPC provider
+- Tunnel management is a host-local control surface. The HTTP routes for dependency checks, diagnostics, credential/config writes, start, and stop require a direct loopback request classified as local; public tunnels, Private Relay, LAN peers, and other external requests receive no management capability. Remote status responses are intentionally reduced to public active-state metadata and never include private endpoint paths or tunnel session credentials. Internal startup orchestration remains allowed so a persisted FRPC tunnel can recover with the host service.
 - The FRPC provider is registered alongside Cloudflare and Ngrok and is reachable from routes, Settings, and CLI surfaces.
 - `createFrpcBinaryManager()` returns `inspect()`, `prepare()`, and `getPaths()` for the pinned managed binary lifecycle.
 - `startFrpcClient(options)` resolves only after authoritative proxy readiness and returns a controller with asynchronous `stop()`, `isRunning()`, `getPublicUrl()`, and safe server/endpoint metadata accessors. Stop waits for process exit, escalates from `SIGTERM` to `SIGKILL` after a bounded grace period, and leaves the controller active if termination cannot be confirmed.

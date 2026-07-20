@@ -1655,6 +1655,7 @@ async function main(options = {}) {
     writeSseEvent,
     permissionAutoAcceptRuntime,
     sidebarStateRuntime,
+    isTunnelManagementAllowed: (req) => tunnelAuthController.isLocalManagementRequest(req),
   });
 
   const previewProxyRuntime = createPreviewProxyRuntime({

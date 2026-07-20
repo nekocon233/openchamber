@@ -14,7 +14,7 @@ import { DesktopNetworkSettings } from './DesktopNetworkSettings';
 import { KeyboardShortcutsSettings } from './KeyboardShortcutsSettings';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { useDeviceInfo } from '@/lib/device';
-import { isDesktopLocalOriginActive, isDesktopShell, isVSCodeRuntime, isWebRuntime, usesFramelessElectronChrome } from '@/lib/desktop';
+import { isDesktopLocalOriginActive, isDesktopShell, isHostLocalOriginActive, isVSCodeRuntime, isWebRuntime, usesFramelessElectronChrome } from '@/lib/desktop';
 import { subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import type { OpenChamberSection } from './types';
 
@@ -145,7 +145,7 @@ const VisualSectionContent: React.FC = () => {
     ]} />;
 };
 
-// Chat section: User message rendering, Diff layout, Mobile status bar, Show reasoning traces, Follow-up behavior, Persist draft
+// Chat section: User message rendering, Diff layout, Mobile status bar, Show reasoning traces, Persist draft
 const ChatSectionContent: React.FC = () => {
     const isVSCode = isVSCodeRuntime();
     return (
@@ -172,7 +172,6 @@ const ChatSectionContent: React.FC = () => {
                 'diffLayout',
                 'dotfiles',
                 'fileViewerPreview',
-                'followUpBehavior',
                 'persistDraft',
                 'inputSpellcheck',
             ]}
@@ -240,7 +239,7 @@ const VoiceSectionContent: React.FC = () => {
 };
 
 const TunnelSectionContent: React.FC = () => {
-    if (isVSCodeRuntime()) {
+    if (isVSCodeRuntime() || !isHostLocalOriginActive()) {
         return null;
     }
     return <TunnelSettings />;

@@ -3,13 +3,14 @@ import { describe, expect, test } from 'bun:test';
 import { buildSettingsSearchResults } from './search';
 
 describe('settings search FRPC integration', () => {
-  const buildTunnelResults = (query: string) => buildSettingsSearchResults({
+  const buildTunnelResults = (query: string, isHostLocalOrigin = true) => buildSettingsSearchResults({
     query,
     runtimeCtx: {
       isVSCode: false,
       isWeb: true,
       isDesktop: false,
       isMobile: false,
+      isHostLocalOrigin,
       isDesktopLocalOrigin: false,
       isMac: false,
       isWindows: false,
@@ -29,5 +30,9 @@ describe('settings search FRPC integration', () => {
     const results = buildTunnelResults('caddy public hostname');
 
     expect(results.some((result) => result.id === 'tunnel.frpc')).toBe(true);
+  });
+
+  test('hides tunnel management results away from the host origin', () => {
+    expect(buildTunnelResults('frpc', false)).toEqual([]);
   });
 });

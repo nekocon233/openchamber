@@ -3,6 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import { createTunnelAuth } from './tunnel-auth.js';
 import { registerAuthAndAccessRoutes, registerCommonRequestMiddleware, registerServerStatusRoutes } from './core-routes.js';
+import { registerOpenCodeRoutes } from './routes.js';
 import {
   createClientNotificationAuth,
   subscribeNotificationAuthInvalidation,
@@ -1064,5 +1065,64 @@ describe('client auth routes', () => {
       headers: { host: 'public.example.com' },
       socket: { remoteAddress: '203.0.113.10' },
     })).toBe('unknown-public');
+  });
+
+  it('allows tunnel management only from a direct loopback-local request', () => {
+    const tunnelAuthController = createTunnelAuth();
+    tunnelAuthController.setActiveTunnel({ tunnelId: 'tunnel-1', publicUrl: 'https://tunnel.example.com' });
+
+    expect(tunnelAuthController.isLocalManagementRequest({
+      headers: { host: '127.0.0.1:3000' },
+      socket: { remoteAddress: '127.0.0.1' },
+    })).toBe(true);
+    expect(tunnelAuthController.isLocalManagementRequest({
+      headers: { host: '192.168.1.5:3000' },
+      socket: { remoteAddress: '192.168.1.20' },
+    })).toBe(false);
+    expect(tunnelAuthController.isLocalManagementRequest({
+      headers: { host: 'tunnel.example.com' },
+      socket: { remoteAddress: '127.0.0.1' },
+    })).toBe(false);
+    expect(tunnelAuthController.isLocalManagementRequest({
+      headers: { host: '127.0.0.1:3000', 'x-openchamber-relay-connection': 'relay-1' },
+      socket: { remoteAddress: '127.0.0.1' },
+    })).toBe(false);
+    expect(tunnelAuthController.isLocalManagementRequest({
+      headers: { host: '127.0.0.1:3000' },
+      socket: { remoteAddress: '127.0.0.1' },
+      openchamberExternalAuthenticated: true,
+    })).toBe(false);
+  });
+
+  it('rejects remote tunnel settings writes without blocking unrelated settings', async () => {
+    const app = express();
+    app.use(express.json());
+    const persistSettings = vi.fn(async (changes) => changes);
+    const assertSettingsWriteAllowed = vi.fn();
+    registerOpenCodeRoutes(app, {
+      persistSettings,
+      sidebarStateRuntime: { assertSettingsWriteAllowed },
+      isTunnelManagementAllowed: (req) => req.headers['x-host-local'] === '1',
+    });
+
+    await request(app)
+      .put('/api/config/settings')
+      .send({ frpcServerAddress: 'frps.example.com' })
+      .expect(403, {
+        error: 'Tunnel management is only available from the host machine',
+        code: 'host_only',
+      });
+    await request(app)
+      .put('/api/config/settings')
+      .set('x-host-local', '1')
+      .send({ frpcServerAddress: 'frps.example.com' })
+      .expect(200, { frpcServerAddress: 'frps.example.com' });
+    await request(app)
+      .put('/api/config/settings')
+      .send({ themeId: 'system' })
+      .expect(200, { themeId: 'system' });
+
+    expect(persistSettings).toHaveBeenCalledTimes(2);
+    expect(assertSettingsWriteAllowed).toHaveBeenCalledTimes(2);
   });
 });

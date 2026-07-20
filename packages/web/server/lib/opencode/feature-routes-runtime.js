@@ -102,6 +102,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       writeSseEvent,
       permissionAutoAcceptRuntime,
       sidebarStateRuntime,
+      isTunnelManagementAllowed,
     } = routeDependencies;
 
     registerSidebarStateRoutes(app, sidebarStateRuntime);
@@ -131,6 +132,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       refreshOpenCodeAfterConfigChange,
       buildOpenCodeUrl,
       getOpenCodeAuthHeaders,
+      isTunnelManagementAllowed,
     });
 
     registerProjectIconRoutes(app, {

@@ -25,14 +25,19 @@ import { cn } from '@/lib/utils';
 interface QueuedMessageChipProps {
     message: QueuedMessage;
     sessionId: string;
+    sendingMessageId: string | null;
     onEdit: (message: QueuedMessage) => void;
     onSend: (message: QueuedMessage) => void;
 }
 
-const QueuedMessageChip = memo(({ message, sessionId, onEdit, onSend }: QueuedMessageChipProps) => {
+const QueuedMessageChip = memo(({ message, sessionId, sendingMessageId, onEdit, onSend }: QueuedMessageChipProps) => {
     const { t } = useI18n();
     const removeFromQueue = useMessageQueueStore((state) => state.removeFromQueue);
-    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: message.id });
+    const isSending = sendingMessageId === message.id;
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+        id: message.id,
+        disabled: isSending,
+    });
 
     // Get first line of message, truncated
     const firstLine = React.useMemo(() => {
@@ -53,12 +58,14 @@ const QueuedMessageChip = memo(({ message, sessionId, onEdit, onSend }: QueuedMe
             // Translate only (no scaleX/scaleY) so the lifted row keeps its size.
             style={{ transform: CSS.Translate.toString(transform), transition }}
             className={cn('flex min-w-0 items-center gap-2 py-1', isDragging && 'z-10 opacity-60')}
+            aria-busy={isSending}
         >
             <button
                 type="button"
+                disabled={isSending}
                 {...attributes}
                 {...listeners}
-                className="flex flex-shrink-0 cursor-grab touch-none select-none items-center justify-center text-muted-foreground hover:text-foreground active:cursor-grabbing"
+                className="flex flex-shrink-0 cursor-grab touch-none select-none items-center justify-center text-muted-foreground hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-40"
                 aria-label={t('chat.queuedMessage.reorderAria')}
             >
                 <Icon name="draggable" className="h-4 w-4" aria-hidden="true" />
@@ -73,6 +80,7 @@ const QueuedMessageChip = memo(({ message, sessionId, onEdit, onSend }: QueuedMe
                 type="button"
                 variant="secondary"
                 size="xs"
+                disabled={isSending}
                 onClick={() => onEdit(message)}
             >
                 <Icon name="edit" className="h-3 w-3" aria-hidden="true" />
@@ -82,15 +90,17 @@ const QueuedMessageChip = memo(({ message, sessionId, onEdit, onSend }: QueuedMe
                 type="button"
                 variant="secondary"
                 size="xs"
+                disabled={sendingMessageId !== null}
                 onClick={() => onSend(message)}
             >
-                <Icon name="send-plane" className="h-3 w-3" aria-hidden="true" />
+                <Icon name={isSending ? 'loader-4' : 'send-plane'} className={cn('h-3 w-3', isSending && 'animate-spin')} aria-hidden="true" />
                 {t('chat.queuedMessage.send')}
             </Button>
             <button
                 type="button"
+                disabled={isSending}
                 onClick={() => removeFromQueue(sessionId, message.id)}
-                className="flex items-center justify-center h-6 w-6 flex-shrink-0 hover:bg-[var(--interactive-hover)] rounded-full transition-colors"
+                className="flex items-center justify-center h-6 w-6 flex-shrink-0 hover:bg-[var(--interactive-hover)] rounded-full transition-colors disabled:opacity-40"
                 aria-label={t('chat.queuedMessage.removeAria')}
             >
                 <Icon name="close" className="h-4 w-4 text-muted-foreground" />
@@ -104,11 +114,12 @@ QueuedMessageChip.displayName = 'QueuedMessageChip';
 interface QueuedMessageChipsProps {
     onEditMessage: (content: string, attachments?: QueuedMessage['attachments']) => void;
     onSendMessage: (messageId: string) => void;
+    sendingMessageId: string | null;
 }
 
 const EMPTY_QUEUE: QueuedMessage[] = [];
 
-export const QueuedMessageChips = memo(({ onEditMessage, onSendMessage }: QueuedMessageChipsProps) => {
+export const QueuedMessageChips = memo(({ onEditMessage, onSendMessage, sendingMessageId }: QueuedMessageChipsProps) => {
     const { t } = useI18n();
     const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
     const queuedMessages = useMessageQueueStore(
@@ -162,9 +173,9 @@ export const QueuedMessageChips = memo(({ onEditMessage, onSendMessage }: Queued
             <div className="rounded-xl border border-border/60 bg-[var(--surface-elevated)] text-[var(--surface-elevated-foreground)] shadow-sm overflow-hidden">
                 <div className="flex w-full items-center gap-2 px-3 py-2 text-left">
                     <span className="typography-ui-label font-medium text-foreground flex-shrink-0">
-                        {t('chat.queuedMessage.title')} {queuedMessages.length}
+                        {t('chat.queuedMessage.title', { count: queuedMessages.length })}
                     </span>
-                    <Icon name="time" className="ml-auto h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <Icon name="file-edit" className="ml-auto h-4 w-4 text-muted-foreground" aria-hidden="true" />
                 </div>
                 <DndContext
                     sensors={sensors}
@@ -181,6 +192,7 @@ export const QueuedMessageChips = memo(({ onEditMessage, onSendMessage }: Queued
                                     key={message.id}
                                     message={message}
                                     sessionId={currentSessionId}
+                                    sendingMessageId={sendingMessageId}
                                     onEdit={handleEdit}
                                     onSend={handleSend}
                                 />

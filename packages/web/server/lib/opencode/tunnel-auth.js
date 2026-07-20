@@ -173,6 +173,23 @@ const isPrivateOrLoopbackIp = (candidate) => {
   return isPrivateOrLoopbackIpv4(normalized);
 };
 
+const isLoopbackIp = (candidate) => {
+  const normalized = normalizeIpCandidate(candidate);
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === '::1') {
+    return true;
+  }
+  if (normalized.includes(':')) {
+    return false;
+  }
+  const octets = normalized.split('.').map((part) => Number(part));
+  return octets.length === 4
+    && octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    && octets[0] === 127;
+};
+
 const isLocalHost = (host, req) => {
   if (!host) {
     return false;
@@ -268,6 +285,17 @@ export const createTunnelAuth = () => {
     // managed tunnel is currently active. Active tunnel state only identifies
     // the expected public host; it is not the boundary between local and remote.
     return 'unknown-public';
+  };
+
+  const isLocalManagementRequest = (req) => {
+    const relayMarker = req?.headers?.['x-openchamber-relay-connection'];
+    const hasRelayMarker = Array.isArray(relayMarker)
+      ? relayMarker.some((entry) => typeof entry === 'string' && entry.length > 0)
+      : typeof relayMarker === 'string' && relayMarker.length > 0;
+    if (hasRelayMarker || req?.openchamberExternalAuthenticated === true) {
+      return false;
+    }
+    return isLoopbackIp(getSocketRemoteIp(req)) && classifyRequestScope(req) === 'local';
   };
 
   const revokeBootstrapToken = () => {
@@ -594,6 +622,7 @@ export const createTunnelAuth = () => {
 
   return {
     classifyRequestScope,
+    isLocalManagementRequest,
     setActiveTunnel,
     clearActiveTunnel,
     revokeTunnelArtifacts,

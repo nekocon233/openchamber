@@ -54,6 +54,16 @@ These stores coordinate persistent project/session metadata across multiple view
 
 Do not reintroduce direct settings writes or whole-file folder writes for shared sidebar structure. Mutation failures must roll optimistic projections back to the last authoritative snapshot, and successful empty snapshots must remain distinct from fetch failures.
 
+### Follow-up drafts
+
+`messageQueueStore.ts` owns persisted, per-session follow-up drafts. The persisted field remains named `queuedMessages` so existing saved items survive the behavior change, but these entries are not an automatic send queue:
+
+- a normal follow-up created while a session is active is saved here instead of entering the message timeline;
+- status transitions never dispatch drafts;
+- ordinary composer sends never batch or clear drafts;
+- only an explicit send action for one draft submits it, and the draft is removed after that send succeeds;
+- editing or deleting a draft affects only the selected entry.
+
 ## Git / PR Stores
 
 The Git and PR stores are the most important stores to understand before editing this directory.

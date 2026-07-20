@@ -60,6 +60,7 @@ const createRuntime = ({
   frpcConfigReadError = null,
   readManagedRemoteTunnelConfigFromDisk = async () => ({ tunnels: [] }),
   getActiveTunnelController = () => null,
+  isLocalManagementRequest = () => true,
 }) => {
   const provider = {
     capabilities: {
@@ -79,7 +80,10 @@ const createRuntime = ({
       get: (id) => id === TUNNEL_PROVIDER_FRPC ? provider : null,
       listCapabilities: () => [provider.capabilities],
     },
-    tunnelAuthController,
+    tunnelAuthController: {
+      ...tunnelAuthController,
+      isLocalManagementRequest,
+    },
     readSettingsFromDiskMigrated: async () => settings,
     readManagedRemoteTunnelConfigFromDisk,
     readFrpcTunnelConfigFromDisk: async () => {
@@ -116,6 +120,66 @@ const createRuntime = ({
 };
 
 describe('FRPC tunnel routes', () => {
+  it('exposes only public status and rejects tunnel management away from the host', async () => {
+    let stopCalls = 0;
+    let checkCalls = 0;
+    const tunnelService = {
+      stop: async () => { stopCalls += 1; },
+      resolveActiveMode: () => TUNNEL_MODE_MANAGED_REMOTE,
+      resolveActiveProvider: () => TUNNEL_PROVIDER_FRPC,
+      getPublicUrl: () => 'https://app.example.com',
+      getProviderMetadata: () => ({ trustedCaFile: '/private/ca.crt' }),
+      checkAvailability: async () => { checkCalls += 1; return { available: true }; },
+    };
+    const tunnelAuthController = {
+      getActiveTunnelId: () => 'tunnel-1',
+      getActiveTunnelMode: () => TUNNEL_MODE_MANAGED_REMOTE,
+      getActiveTunnelHost: () => 'app.example.com',
+      setActiveTunnel: () => undefined,
+      getBootstrapStatus: () => ({ hasBootstrapToken: true, bootstrapExpiresAt: 123 }),
+      listTunnelSessions: () => [{ sessionId: 'sensitive-session-token' }],
+      revokeTunnelArtifacts: () => ({ revokedBootstrapCount: 0, invalidatedSessionCount: 0 }),
+      clearActiveTunnel: () => undefined,
+    };
+    const runtime = createRuntime({
+      tunnelService,
+      tunnelAuthController,
+      upsertFrpcTunnelConfig: async () => undefined,
+      isLocalManagementRequest: () => false,
+    });
+    const app = createApp();
+    runtime.registerRoutes(app);
+
+    const check = await invoke(app.handlers.get.get('/api/openchamber/tunnel/check'));
+    const providers = await invoke(app.handlers.get.get('/api/openchamber/tunnel/providers'));
+    const status = await invoke(app.handlers.get.get('/api/openchamber/tunnel/status'));
+    const doctor = await invoke(app.handlers.get.get('/api/openchamber/tunnel/doctor'));
+    const tokenWrite = await invoke(app.handlers.put.get('/api/openchamber/tunnel/managed-remote-token'));
+    const start = await invoke(app.handlers.post.get('/api/openchamber/tunnel/start'));
+    const stop = await invoke(app.handlers.post.get('/api/openchamber/tunnel/stop'));
+
+    expect(check.body).toMatchObject({ available: false, managementAllowed: false });
+    expect(providers.body).toEqual({ providers: [], managementAllowed: false });
+    expect(status.body).toEqual({
+      active: true,
+      url: 'https://app.example.com',
+      mode: TUNNEL_MODE_MANAGED_REMOTE,
+      provider: TUNNEL_PROVIDER_FRPC,
+      managementAllowed: false,
+      policy: 'host-only-management',
+      activeTunnelMode: TUNNEL_MODE_MANAGED_REMOTE,
+      activeSessions: [],
+    });
+    expect(JSON.stringify(status.body)).not.toContain('sensitive-session-token');
+    expect(JSON.stringify(status.body)).not.toContain('/private/ca.crt');
+    for (const response of [doctor, tokenWrite, start, stop]) {
+      expect(response.status).toBe(403);
+      expect(response.body).toMatchObject({ ok: false, code: 'host_only' });
+    }
+    expect(checkCalls).toBe(0);
+    expect(stopCalls).toBe(0);
+  });
+
   it('reports the last successful private endpoint ahead of stale draft settings', async () => {
     const tunnelService = {
       stop: () => false,
