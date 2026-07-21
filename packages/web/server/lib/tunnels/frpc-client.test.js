@@ -4,9 +4,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { PassThrough } from 'stream';
+import tls from 'tls';
 
 import {
   buildFrpcConfig,
+  loadFrpcDefaultTrustedCa,
   normalizeFrpcCustomDomain,
   normalizeFrpcPublicHostname,
   normalizeFrpcPublicUrl,
@@ -41,12 +43,11 @@ class FakeChild extends EventEmitter {
 }
 
 let tempRoot;
-let trustedCaFile;
+let runtimeTrustedCaFile;
 
 beforeEach(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-frpc-client-test-'));
-  trustedCaFile = path.join(tempRoot, 'ca.crt');
-  fs.writeFileSync(trustedCaFile, 'test-ca-certificate', { mode: 0o600 });
+  runtimeTrustedCaFile = path.join(tempRoot, 'trusted-ca.pem');
 });
 
 afterEach(() => {
@@ -62,7 +63,7 @@ describe('FRPC configuration', () => {
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       tokenFilePath: path.join(tempRoot, 'token'),
-      trustedCaFile,
+      trustedCaFile: runtimeTrustedCaFile,
     });
 
     expect(config).toContain('serverAddr = "203.0.113.10"');
@@ -74,7 +75,7 @@ describe('FRPC configuration', () => {
     expect(config).not.toContain('auth.token =');
     expect(config).toContain('transport.protocol = "tcp"');
     expect(config).toContain('transport.tls.enable = true');
-    expect(config).toContain(`transport.tls.trustedCaFile = ${JSON.stringify(trustedCaFile)}`);
+    expect(config).toContain(`transport.tls.trustedCaFile = ${JSON.stringify(runtimeTrustedCaFile)}`);
     expect(config).toContain('transport.tls.serverName = "203.0.113.10"');
     expect(config).toContain('name = "openchamber-18080"');
     expect(config).toContain('type = "tcp"');
@@ -101,7 +102,7 @@ describe('FRPC configuration', () => {
       customDomain: 'route.example.com',
       hostname: 'public.example.com',
       tokenFilePath: path.join(tempRoot, 'token'),
-      trustedCaFile,
+      trustedCaFile: runtimeTrustedCaFile,
     };
     const first = buildFrpcConfig(options);
     const second = buildFrpcConfig(options);
@@ -148,6 +149,65 @@ describe('FRPC configuration', () => {
   });
 });
 
+describe('host FRPS trust roots', () => {
+  it('combines runtime roots with an injected CA bundle and parses comments', () => {
+    const runtimeRoot = tls.rootCertificates[0];
+    const injectedRoot = tls.rootCertificates[1] || tls.rootCertificates[0];
+    const extraBundle = `# injected enterprise root\n${injectedRoot}\n`;
+    const missingFile = () => {
+      const error = new Error('not found');
+      error.code = 'ENOENT';
+      throw error;
+    };
+    const trustedCa = loadFrpcDefaultTrustedCa({
+      tlsImpl: {
+        getCACertificates: () => [],
+        rootCertificates: [runtimeRoot],
+      },
+      fsImpl: {
+        statSync: (filePath) => (filePath === '/extra/ca.pem' ? { isFile: () => true } : missingFile()),
+        readFileSync: (filePath) => {
+          if (filePath !== '/extra/ca.pem') {
+            missingFile();
+          }
+          return extraBundle;
+        },
+      },
+      env: { SSL_CERT_FILE: '/extra/ca.pem' },
+    });
+
+    const pem = trustedCa.contents.toString('utf8');
+    expect(pem).toContain(runtimeRoot.trim());
+    expect(pem).toContain(injectedRoot.trim());
+    expect(pem).not.toContain('injected enterprise root');
+    expect(trustedCa.certificateCount).toBe(2);
+  });
+  it('loads a legacy host FRP CA without exposing a tunnel setting', () => {
+    const legacyCaPath = path.join(os.homedir(), '.config', 'frp', 'ca.crt');
+    const missingFile = () => {
+      const error = new Error('not found');
+      error.code = 'ENOENT';
+      throw error;
+    };
+    const trustedCa = loadFrpcDefaultTrustedCa({
+      tlsImpl: { rootCertificates: [] },
+      fsImpl: {
+        statSync: (filePath) => (filePath === legacyCaPath ? { isFile: () => true } : missingFile()),
+        readFileSync: (filePath) => {
+          if (filePath !== legacyCaPath) {
+            missingFile();
+          }
+          return tls.rootCertificates[0];
+        },
+      },
+      env: {},
+    });
+
+    expect(trustedCa.contents.toString('utf8')).toContain(tls.rootCertificates[0].trim());
+    expect(trustedCa.certificateCount).toBe(1);
+  });
+});
+
 describe('startFrpcClient', () => {
   it('spawns directly and keeps token and config in private temporary files until stop', async () => {
     const token = 'top-secret-frp-token';
@@ -171,7 +231,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile,
       tempRoot,
       env: {
         SAFE_VALUE: 'kept',
@@ -200,7 +259,9 @@ describe('startFrpcClient', () => {
     const config = fs.readFileSync(configPath, 'utf8');
     expect(config).not.toContain(token);
     expect(fs.readFileSync(tokenPath, 'utf8')).toBe(token);
-    expect(fs.readFileSync(copiedTrustedCaPath, 'utf8')).toBe('test-ca-certificate');
+    const generatedTrustedCa = fs.readFileSync(copiedTrustedCaPath, 'utf8');
+    expect(generatedTrustedCa).toContain('-----BEGIN CERTIFICATE-----');
+    expect(config).toContain(`transport.tls.trustedCaFile = ${JSON.stringify(copiedTrustedCaPath)}`);
     expect(fs.statSync(configDirectory).mode & 0o777).toBe(0o700);
     expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
     expect(fs.statSync(copiedTrustedCaPath).mode & 0o777).toBe(0o600);
@@ -232,7 +293,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile,
       startupTimeoutMs: 15,
       tempRoot,
       spawnImpl,
@@ -242,9 +302,19 @@ describe('startFrpcClient', () => {
     expect(fs.existsSync(configDirectory)).toBe(false);
   });
 
-  it('rejects non-file and oversized trust anchors before launching FRPC', async () => {
+  it('fails closed before launching FRPC when host trust roots are unavailable', async () => {
     const spawnImpl = () => {
       throw new Error('FRPC must not launch');
+    };
+    const emptyFs = {
+      statSync: () => {
+        const error = new Error('not found');
+        error.code = 'ENOENT';
+        throw error;
+      },
+      readFileSync: () => {
+        throw new Error('not found');
+      },
     };
 
     await expect(startFrpcClient({
@@ -255,25 +325,12 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile: tempRoot,
       tempRoot,
+      env: {},
+      tlsImpl: { rootCertificates: [] },
+      fsImpl: emptyFs,
       spawnImpl,
-    })).rejects.toThrow(/regular file/);
-
-    const oversizedCaFile = path.join(tempRoot, 'oversized-ca.crt');
-    fs.writeFileSync(oversizedCaFile, Buffer.alloc((1024 * 1024) + 1));
-    await expect(startFrpcClient({
-      binaryPath: path.join(tempRoot, 'frpc'),
-      serverAddress: '203.0.113.10',
-      serverPort: 7000,
-      token: 'secret',
-      localPort: 3000,
-      remotePort: 18080,
-      publicUrl: 'https://app.example.com:18080',
-      trustedCaFile: oversizedCaFile,
-      tempRoot,
-      spawnImpl,
-    })).rejects.toThrow(/between 1 and 1048576 bytes/);
+    })).rejects.toThrow(/Could not resolve host CA certificates/);
   });
 
   it('uses the exact HTTP proxy name for readiness and the external hostname for its public URL', async () => {
@@ -297,7 +354,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       customDomain: 'route.example.com',
       hostname: 'public.example.com',
-      trustedCaFile,
       tempRoot,
       spawnImpl,
     });
@@ -328,7 +384,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       customDomain: 'route.example.com',
       hostname: 'public.example.com',
-      trustedCaFile,
       startupTimeoutMs: 15,
       tempRoot,
       spawnImpl,
@@ -350,7 +405,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile,
       tempRoot,
       spawnImpl,
     });
@@ -381,8 +435,7 @@ describe('startFrpcClient', () => {
         localPort: 3000,
         remotePort: 18080,
         publicUrl: 'https://app.example.com:18080',
-        trustedCaFile,
-        tempRoot,
+          tempRoot,
         spawnImpl,
       });
     } catch (error) {
@@ -395,6 +448,26 @@ describe('startFrpcClient', () => {
     expect(failure.message).not.toContain(token);
     expect(child.killedWith).toBe('SIGTERM');
     expect(fs.existsSync(configDirectory)).toBe(false);
+  });
+
+  it('explains an FRPS session shutdown as a certificate or endpoint trust failure', async () => {
+    const child = new FakeChild();
+    const spawnImpl = () => {
+      queueMicrotask(() => child.stderr.write('connect to server error: session shutdown\n'));
+      return child;
+    };
+
+    await expect(startFrpcClient({
+      binaryPath: path.join(tempRoot, 'frpc'),
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      token: 'secret',
+      localPort: 3000,
+      remotePort: 18080,
+      publicUrl: 'https://app.example.com:18080',
+      tempRoot,
+      spawnImpl,
+    })).rejects.toThrow(/certificate SAN.*~\/\.config\/frp\/ca\.crt/);
   });
 
   it('cleans temporary credentials when a ready process later exits', async () => {
@@ -414,7 +487,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile,
       tempRoot,
       spawnImpl,
       onExit: () => { exitCalls += 1; },
@@ -450,7 +522,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile,
       stopGraceTimeoutMs: 5,
       stopForceTimeoutMs: 20,
       tempRoot,
@@ -483,7 +554,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile,
       stopGraceTimeoutMs: 5,
       stopForceTimeoutMs: 5,
       tempRoot,
@@ -515,7 +585,6 @@ describe('startFrpcClient', () => {
       localPort: 3000,
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
-      trustedCaFile,
       tempRoot,
       spawnImpl,
       onLog: (stream, line) => logs.push({ stream, line }),

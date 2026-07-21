@@ -3,7 +3,6 @@ type FrpcStartEndpointInput =
     proxyType: 'tcp';
     serverAddress: string;
     serverPort: number;
-    trustedCaFile: string;
     remotePort: number;
     publicUrl: string;
   }
@@ -11,7 +10,6 @@ type FrpcStartEndpointInput =
     proxyType: 'http';
     serverAddress: string;
     serverPort: number;
-    trustedCaFile: string;
     customDomain: string;
     publicHostname: string;
   };
@@ -59,7 +57,6 @@ export type FrpcStartEndpointPayload =
     proxyType: 'tcp';
     serverAddress: string;
     serverPort: number;
-    trustedCaFile: string;
     remotePort: number;
     publicUrl: string;
   }
@@ -67,7 +64,6 @@ export type FrpcStartEndpointPayload =
     proxyType: 'http';
     serverAddress: string;
     serverPort: number;
-    trustedCaFile: string;
     customDomain: string;
     hostname: string;
   };
@@ -78,7 +74,6 @@ export const buildFrpcStartEndpointPayload = (input: FrpcStartEndpointInput): Fr
       proxyType: 'tcp',
       serverAddress: input.serverAddress,
       serverPort: input.serverPort,
-      trustedCaFile: input.trustedCaFile,
       remotePort: input.remotePort,
       publicUrl: input.publicUrl,
     };
@@ -88,7 +83,6 @@ export const buildFrpcStartEndpointPayload = (input: FrpcStartEndpointInput): Fr
     proxyType: 'http',
     serverAddress: input.serverAddress,
     serverPort: input.serverPort,
-    trustedCaFile: input.trustedCaFile,
     customDomain: input.customDomain,
     hostname: input.publicHostname,
   };

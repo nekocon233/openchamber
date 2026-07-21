@@ -777,7 +777,7 @@ class OpencodeService {
     }>;
     messageId?: string;
     agentMentions?: Array<{ name: string; source?: { value: string; start: number; end: number } }>;
-    delivery?: 'steer';
+    delivery?: 'steer' | 'queue';
     format?: {
       type: 'json_schema';
       schema: Record<string, unknown>;

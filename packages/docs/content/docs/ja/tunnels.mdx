@@ -86,14 +86,14 @@ openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.
 
 FRPC は現在の OpenChamber ローカルポートを、自分で運用する FRPS サーバーへ接続します。どちらのエンドポイントでも、OpenChamber がローカル待受ポートを自動的に設定します。
 
-CA 証明書ファイルも必要です。FRPS は SAN が `--frps-address` と一致する証明書を提示する必要があり、OpenChamber はその ID を検証して証明書検証を無効にしません。
+CA の設定は不要です。OpenChamber は実行環境のトラストルートを集めてプライベートな一時 PEM を生成し、FRPC に注入します。FRPC は引き続き `transport.tls` を有効にし、`--frps-address` と同じ `serverName` で FRPS の証明書を検証します。OpenChamber が未認証の FRPS から CA を学習したり、証明書検証を無効にしたりすることはありません。FRPS がプライベート CA やエンタープライズ CA を使う場合は、OpenChamber を実行するマシンの OS トラストストアにその CA をインストールするか、`SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS` で公開してください。トンネルごとの CA 設定はありません。互換性のため、レガシーなホストパス `~/.config/frp/ca.crt` と `~/.frp/ca.crt` にある CA バンドルも（存在する場合）これらのトラストルートにマージされます。Docker では「ホスト」のトラストルートはコンテナのトラストストアなので、コンテナ内に CA をインストールまたはマウントしてください。
 
 #### TCP マッピング
 
 `--remote-port` で TCP マッピングを作成し、`--public-url` で正確な外部 HTTPS オリジンを指定します。
 
 ```bash
-openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address frps.example.com --frps-port 7000 --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
 ```
 
 FRPC は TCP マッピングを通じて平文 HTTP を転送するため、OpenChamber は FRPS アドレスからブラウザー URL を推測しません。`--public-url` には、Caddy などの TLS 終端が待ち受けて FRPS のループバックポートへ転送する `https://` オリジンを指定します。HTTP、認証情報、パス、クエリを含む URL や不正な URL は、接続トークンの発行前に拒否されます。
@@ -103,7 +103,7 @@ FRPC は TCP マッピングを通じて平文 HTTP を転送するため、Open
 `--custom-domain <frps-routing-host>` と `--hostname <external-public-host>` を一緒に使います。
 
 ```bash
-openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 ```
 
 FRPC は `type = "http"` のプロキシを生成します。Caddy は公開ポート `443` で HTTPS を終端し、FRPS の HTTP 仮想ホストポートへ転送します。FRPS がプロキシを選べるよう `Host` を custom domain に設定し、`X-Forwarded-Host` を外部 hostname に設定してください。たとえば FRPS の HTTP 仮想ホストポートが `8080` の場合:
@@ -132,13 +132,13 @@ openchamber tunnel profile add --provider cloudflare --mode managed-remote --nam
 FRPC TCP では、サーバーとリモートポートの設定も保存します。
 
 ```bash
-openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-tcp --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-tcp --frps-address frps.example.com --frps-port 7000 --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
 ```
 
 FRPC HTTP 仮想ホストでは次のように保存します。
 
 ```bash
-openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 ```
 
 保存したいずれかのプロファイルで起動します。
@@ -151,16 +151,15 @@ openchamber tunnel start --profile frpc-http
 
 ## 直接起動用の環境変数
 
-直接起動では、共通の FRPC サーバー設定とトークンを使います。エンドポイントは 1 つだけ選びます。TCP では `OPENCHAMBER_TUNNEL_REMOTE_PORT` と `OPENCHAMBER_TUNNEL_PUBLIC_URL`、HTTP 仮想ホストでは `OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN` と `OPENCHAMBER_TUNNEL_HOSTNAME` の両方を使います。
+直接起動では、共通の FRPC サーバー設定とトークンを使います。エンドポイントは 1 つだけ選びます。TCP では `OPENCHAMBER_TUNNEL_REMOTE_PORT` と `OPENCHAMBER_TUNNEL_PUBLIC_URL`、HTTP 仮想ホストでは `OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN` と `OPENCHAMBER_TUNNEL_HOSTNAME` の両方を使います。FRPS の検証に環境変数は不要です。OpenChamber はホスト実行環境のトラストルート（Docker ではコンテナのトラストストア）と、（存在する場合）`~/.config/frp/ca.crt` と `~/.frp/ca.crt` のレガシー CA バンドルからトラストアンカーを構築します。
 
 **TCP:**
 
 ```yaml
 OPENCHAMBER_TUNNEL_PROVIDER: frpc
 OPENCHAMBER_TUNNEL_MODE: managed-remote
-OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
 OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
 OPENCHAMBER_TUNNEL_REMOTE_PORT: 20000
 OPENCHAMBER_TUNNEL_PUBLIC_URL: https://app.example.com:20000
 OPENCHAMBER_TUNNEL_TOKEN: <token>
@@ -171,9 +170,8 @@ OPENCHAMBER_TUNNEL_TOKEN: <token>
 ```yaml
 OPENCHAMBER_TUNNEL_PROVIDER: frpc
 OPENCHAMBER_TUNNEL_MODE: managed-remote
-OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
 OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
 OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: openchamber.internal
 OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com
 OPENCHAMBER_TUNNEL_TOKEN: <token>

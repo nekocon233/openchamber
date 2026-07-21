@@ -26,7 +26,6 @@ export interface StartWebUiServerOptions {
   tunnelPublicUrl?: string;
   tunnelCustomDomain?: string;
   tunnelServerAddress?: string;
-  tunnelTrustedCaFile?: string;
   tunnelServerPort?: number;
   tunnelRemotePort?: number;
 }
@@ -51,7 +50,6 @@ export declare function parseArgs(argv?: string[]): {
   tunnelPublicUrl?: string;
   tunnelCustomDomain?: string;
   tunnelServerAddress?: string;
-  tunnelTrustedCaFile?: string;
   tunnelServerPort?: number;
   tunnelRemotePort?: number;
 };

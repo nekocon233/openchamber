@@ -975,12 +975,6 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
   } else if (typeof candidate.frpcServerPort === 'number' && Number.isInteger(candidate.frpcServerPort) && candidate.frpcServerPort >= 1 && candidate.frpcServerPort <= 65535) {
     result.frpcServerPort = candidate.frpcServerPort;
   }
-  if (candidate.frpcTrustedCaFile === null) {
-    result.frpcTrustedCaFile = null;
-  } else if (typeof candidate.frpcTrustedCaFile === 'string') {
-    const value = candidate.frpcTrustedCaFile.trim();
-    result.frpcTrustedCaFile = value || null;
-  }
   if (candidate.frpcRemotePort === null) {
     result.frpcRemotePort = null;
   } else if (typeof candidate.frpcRemotePort === 'number' && Number.isInteger(candidate.frpcRemotePort) && candidate.frpcRemotePort >= 1 && candidate.frpcRemotePort <= 65535) {

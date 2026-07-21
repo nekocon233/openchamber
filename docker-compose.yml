@@ -26,7 +26,12 @@ services:
     # OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com  # required for managed-remote
     # OPENCHAMBER_TUNNEL_TOKEN: your_cloudflare_token  # required for managed-remote
     # OPENCHAMBER_TUNNEL_CONFIG: /home/openchamber/.cloudflared/config.yml  # optional for managed-local
-    # FRPC managed-remote: set provider=frpc plus SERVER_ADDRESS, SERVER_PORT, REMOTE_PORT, and TOKEN
+    # FRPC managed-remote: set provider=frpc plus SERVER_ADDRESS, SERVER_PORT, TOKEN, and either
+    # REMOTE_PORT+PUBLIC_URL for TCP or CUSTOM_DOMAIN+HOSTNAME for HTTP vhost.
+    # No CA file is needed: FRPS verification uses the container's trust store (the "host trust
+    # roots" inside Docker), honoring SSL_CERT_FILE/NODE_EXTRA_CA_CERTS; legacy CA bundles at
+    # ~/.config/frp/ca.crt and ~/.frp/ca.crt inside the container are merged in when present.
+    # Install private or enterprise CAs into the container trust store, not per tunnel.
     # OH_MY_OPENCODE: true # enable oh-my-opencode
     # OPENCODE_HOST: http://172.17.0.1:4096 # Connect to external OpenCode server
     # OPENCODE_SKIP_START: true # skip start opencode

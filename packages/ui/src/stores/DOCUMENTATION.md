@@ -54,15 +54,17 @@ These stores coordinate persistent project/session metadata across multiple view
 
 Do not reintroduce direct settings writes or whole-file folder writes for shared sidebar structure. Mutation failures must roll optimistic projections back to the last authoritative snapshot, and successful empty snapshots must remain distinct from fetch failures.
 
-### Follow-up drafts
+### Follow-up staging queue
 
-`messageQueueStore.ts` owns persisted, per-session follow-up drafts. The persisted field remains named `queuedMessages` so existing saved items survive the behavior change, but these entries are not an automatic send queue:
+`messageQueueStore.ts` owns persisted, per-session staged follow-ups. The persisted field remains named `queuedMessages` so existing saved items survive the behavior change:
 
-- a normal follow-up created while a session is active is saved here instead of entering the message timeline;
-- status transitions never dispatch drafts;
-- ordinary composer sends never batch or clear drafts;
-- only an explicit send action for one draft submits it, and the draft is removed after that send succeeds;
-- editing or deleting a draft affects only the selected entry.
+- a normal follow-up created while a session is active is staged here instead of entering the message timeline;
+- `staged` items wait for an explicit Queue or Send action;
+- Queue marks the item `queued`, and the oldest queued item auto-dispatches when the session becomes idle;
+- Cancel queue returns an item to `staged` without changing its content, attachments, order, or captured send configuration;
+- Send explicitly dispatches one item now; on a busy session it uses steer delivery;
+- successfully dispatched items are removed, while failed automatic dispatches return to `staged` instead of retry-looping;
+- editing or deleting affects only the selected entry.
 
 ## Git / PR Stores
 

@@ -36,7 +36,6 @@ export const runCliEntryIfMain = (dependencies) => {
     tunnelPublicUrl: cliOptions.tunnelPublicUrl,
     tunnelCustomDomain: cliOptions.tunnelCustomDomain,
     tunnelServerAddress: cliOptions.tunnelServerAddress,
-    tunnelTrustedCaFile: cliOptions.tunnelTrustedCaFile,
     tunnelServerPort: cliOptions.tunnelServerPort,
     tunnelRemotePort: cliOptions.tunnelRemotePort,
     attachSignals: true,

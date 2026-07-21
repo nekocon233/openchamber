@@ -12,7 +12,6 @@ export const createSettingsHelpers = (dependencies) => {
     normalizeManagedRemoteTunnelPresetTokens,
     normalizeFrpcServerAddress,
     normalizeFrpcServerPort,
-    normalizeFrpcTrustedCaFile,
     normalizeFrpcRemotePort,
     normalizeFrpcPublicUrl,
     sanitizeTypographySizesPartial,
@@ -422,20 +421,6 @@ export const createSettingsHelpers = (dependencies) => {
         result.frpcServerPort = normalizeFrpcServerPort(candidate.frpcServerPort);
       } catch {
         // Invalid values are rejected by omission, matching other settings sanitizers.
-      }
-    }
-    if (candidate.frpcTrustedCaFile === null) {
-      result.frpcTrustedCaFile = null;
-    } else if (typeof candidate.frpcTrustedCaFile === 'string') {
-      const value = candidate.frpcTrustedCaFile.trim();
-      if (!value) {
-        result.frpcTrustedCaFile = null;
-      } else {
-        try {
-          result.frpcTrustedCaFile = normalizeFrpcTrustedCaFile(value);
-        } catch {
-          // Invalid values are rejected by omission, matching other settings sanitizers.
-        }
       }
     }
     if (candidate.frpcRemotePort === null) {
@@ -946,6 +931,8 @@ export const createSettingsHelpers = (dependencies) => {
       ),
       typographySizes: nextTypographySizes
     };
+
+    delete next.frpcTrustedCaFile;
 
     return next;
   };

@@ -33,9 +33,9 @@ openchamber tunnel help              # Tunnel lifecycle commands
 openchamber tunnel providers         # Show provider capabilities
 openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token-file ~/.secrets/cf-token
 openchamber tunnel start --profile prod-main
-openchamber tunnel start --provider frpc --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
-openchamber tunnel start --provider frpc --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
-openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --frps-address frps.example.com --frps-port 7000 --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 openchamber tunnel start --provider cloudflare --mode quick --qr
 openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.cloudflared/config.yml
 openchamber tunnel status --all      # Show tunnel state across instances
@@ -62,7 +62,7 @@ openchamber update                   # Update to latest version
 - FRPC TCP uses `--remote-port` for raw HTTP forwarding and requires the exact externally TLS-terminated origin through `--public-url`. Bind the FRPS proxy port to loopback; OpenChamber rejects non-HTTPS, credential-bearing, path-bearing, or malformed public URLs instead of inferring TLS from the FRPS address.
 - FRPC HTTP vhost uses `--custom-domain <frps-routing-host>` with `--hostname <external-public-host>` and publishes `https://<hostname>`. Caddy terminates HTTPS on `443`, forwards to the FRPS vhost HTTP port, sets `Host` to the custom domain, and sets `X-Forwarded-Host` to the public hostname.
 - A shared FRPS token authenticates FRPC clients; it does not isolate HTTP vhosts. With `openchamber tunnel`, provide FRPC tokens only by file, stdin, or the private interactive prompt; inline `--token` is rejected. Profiles created through one of those inputs can be reused.
-- FRPC requires `--frps-ca-file`. Configure FRPS with a certificate whose SAN matches `--frps-address`; OpenChamber verifies that identity and never enables insecure certificate verification.
+- FRPC needs no per-tunnel CA configuration. OpenChamber collects the host runtime's trust roots (in Docker, the container's trust store; `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` are honored) into a private temporary PEM and injects it into FRPC, which still verifies the FRPS certificate over `transport.tls` with `--frps-address` as `serverName`. OpenChamber never learns a CA from an unauthenticated FRPS and never enables insecure certificate verification. Install private or enterprise CAs into the OS/container trust store of the machine running OpenChamber instead of configuring them per tunnel. For compatibility, CA bundles at the legacy host paths `~/.config/frp/ca.crt` and `~/.frp/ca.crt` (if present) are also merged into the collected trust roots; there is still no per-tunnel CA option in the UI, CLI, or environment.
 - The Docker FRPS example in the tunnel guide writes and starts the same `/etc/frp/frps.toml` path; do not mount a generated config at a different container location.
 
 ### Connect other OpenChamber apps
@@ -165,9 +165,8 @@ For a managed FRPC TCP mapping, set:
 environment:
   OPENCHAMBER_TUNNEL_PROVIDER: frpc
   OPENCHAMBER_TUNNEL_MODE: managed-remote
-  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
   OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-  OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
   OPENCHAMBER_TUNNEL_REMOTE_PORT: 20000
   OPENCHAMBER_TUNNEL_PUBLIC_URL: https://app.example.com:20000
   OPENCHAMBER_TUNNEL_TOKEN: <token>
@@ -179,9 +178,8 @@ For a managed FRPC HTTP-vhost endpoint, set:
 environment:
   OPENCHAMBER_TUNNEL_PROVIDER: frpc
   OPENCHAMBER_TUNNEL_MODE: managed-remote
-  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+  OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
   OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-  OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
   OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: openchamber.internal
   OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com
   OPENCHAMBER_TUNNEL_TOKEN: <token>

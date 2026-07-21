@@ -8,7 +8,6 @@ describe('managed FRPC start endpoint payload', () => {
       proxyType: 'tcp' as const,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://public.example.com:18080',
       customDomain: 'stale-vhost.example.com',
@@ -19,7 +18,6 @@ describe('managed FRPC start endpoint payload', () => {
       proxyType: 'tcp',
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://public.example.com:18080',
     });
@@ -30,7 +28,6 @@ describe('managed FRPC start endpoint payload', () => {
       proxyType: 'http' as const,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       customDomain: 'vhost.example.com',
       publicHostname: normalizeFrpcHostname(' HTTPS://Public.Example.com/path '),
       remotePort: 18080,
@@ -40,7 +37,6 @@ describe('managed FRPC start endpoint payload', () => {
       proxyType: 'http',
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       customDomain: 'vhost.example.com',
       hostname: 'public.example.com',
     });

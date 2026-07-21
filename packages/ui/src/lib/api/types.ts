@@ -710,7 +710,6 @@ export interface SettingsPayload {
   frpcProxyType?: 'tcp' | 'http';
   frpcServerAddress?: string | null;
   frpcServerPort?: number | null;
-  frpcTrustedCaFile?: string | null;
   frpcRemotePort?: number | null;
   frpcPublicUrl?: string | null;
   frpcCustomDomain?: string | null;

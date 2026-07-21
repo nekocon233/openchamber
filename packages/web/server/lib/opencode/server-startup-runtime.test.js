@@ -14,7 +14,7 @@ class FakeServer extends EventEmitter {
 }
 
 describe('server startup tunnel forwarding', () => {
-  it('forwards the FRPC trust anchor and explicit endpoint marker', async () => {
+  it('forwards the FRPC endpoint marker without a CA option', async () => {
     let receivedRequest;
     const runtime = createServerStartupRuntime({
       process: { env: {} },
@@ -44,7 +44,6 @@ describe('server startup tunnel forwarding', () => {
         mode: 'managed-remote',
         serverAddress: '203.0.113.10',
         serverPort: 7000,
-        trustedCaFile: '/home/openchamber/frp/ca.crt',
         remotePort: 18080,
         publicUrl: 'https://app.example.com:18080',
         token: 'private-token',
@@ -52,7 +51,6 @@ describe('server startup tunnel forwarding', () => {
     });
 
     expect(receivedRequest).toMatchObject({
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       frpcEndpointExplicit: true,

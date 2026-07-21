@@ -7,7 +7,6 @@ export const createManagedTunnelConfigRuntime = (deps) => {
     normalizeManagedRemoteTunnelPresets,
     normalizeFrpcServerAddress,
     normalizeFrpcServerPort,
-    normalizeFrpcTrustedCaFile,
     normalizeFrpcRemotePort,
     normalizeFrpcCustomDomain,
     normalizeFrpcPublicHostname,
@@ -210,10 +209,10 @@ export const createManagedTunnelConfigRuntime = (deps) => {
     }
 
     if (value.version === 1) {
-      throw new Error('FRPC version-1 tunnel config does not define a trusted CA file');
+      throw new Error('FRPC version-1 tunnel config does not satisfy the current secure endpoint contract');
     }
 
-    if (value.version !== FRPC_MANAGED_TUNNEL_VERSION) {
+    if (value.version !== 2 && value.version !== FRPC_MANAGED_TUNNEL_VERSION) {
       throw new Error('FRPC tunnel config has an unsupported format');
     }
 
@@ -221,7 +220,6 @@ export const createManagedTunnelConfigRuntime = (deps) => {
       version: FRPC_MANAGED_TUNNEL_VERSION,
       serverAddress: normalizeFrpcServerAddress(value.serverAddress),
       serverPort: normalizeFrpcServerPort(value.serverPort),
-      trustedCaFile: normalizeFrpcTrustedCaFile(value.trustedCaFile),
       token: normalizeFrpcToken(value.token),
       updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now(),
     };
@@ -290,7 +288,6 @@ export const createManagedTunnelConfigRuntime = (deps) => {
   const upsertFrpcTunnelConfig = async ({
     serverAddress,
     serverPort,
-    trustedCaFile,
     proxyType,
     remotePort,
     publicUrl,
@@ -302,7 +299,6 @@ export const createManagedTunnelConfigRuntime = (deps) => {
       version: FRPC_MANAGED_TUNNEL_VERSION,
       serverAddress,
       serverPort,
-      trustedCaFile,
       proxyType,
       remotePort,
       publicUrl,

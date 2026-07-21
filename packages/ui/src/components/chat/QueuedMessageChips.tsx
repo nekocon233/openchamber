@@ -27,13 +27,16 @@ interface QueuedMessageChipProps {
     sessionId: string;
     sendingMessageId: string | null;
     onEdit: (message: QueuedMessage) => void;
+    onQueue: (message: QueuedMessage) => void;
     onSend: (message: QueuedMessage) => void;
 }
 
-const QueuedMessageChip = memo(({ message, sessionId, sendingMessageId, onEdit, onSend }: QueuedMessageChipProps) => {
+const QueuedMessageChip = memo(({ message, sessionId, sendingMessageId, onEdit, onQueue, onSend }: QueuedMessageChipProps) => {
     const { t } = useI18n();
     const removeFromQueue = useMessageQueueStore((state) => state.removeFromQueue);
+    const setQueuedStatus = useMessageQueueStore((state) => state.setQueuedStatus);
     const isSending = sendingMessageId === message.id;
+    const isQueued = message.status === 'queued';
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
         id: message.id,
         disabled: isSending,
@@ -76,6 +79,11 @@ const QueuedMessageChip = memo(({ message, sessionId, sendingMessageId, onEdit, 
                     <span className="ml-1 text-muted-foreground">{t('chat.queuedMessage.attachments', { count: attachmentCount })}</span>
                 )}
             </span>
+            {isQueued && (
+                <span className="flex-shrink-0 rounded-full bg-[var(--interactive-hover)] px-2 py-0.5 typography-ui-label text-muted-foreground">
+                    {t('chat.queuedMessage.queued')}
+                </span>
+            )}
             <Button
                 type="button"
                 variant="secondary"
@@ -86,16 +94,40 @@ const QueuedMessageChip = memo(({ message, sessionId, sendingMessageId, onEdit, 
                 <Icon name="edit" className="h-3 w-3" aria-hidden="true" />
                 {t('chat.queuedMessage.edit')}
             </Button>
-            <Button
-                type="button"
-                variant="secondary"
-                size="xs"
-                disabled={sendingMessageId !== null}
-                onClick={() => onSend(message)}
-            >
-                <Icon name={isSending ? 'loader-4' : 'send-plane'} className={cn('h-3 w-3', isSending && 'animate-spin')} aria-hidden="true" />
-                {t('chat.queuedMessage.send')}
-            </Button>
+            {isQueued ? (
+                <>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="xs"
+                        disabled={sendingMessageId !== null}
+                        onClick={() => setQueuedStatus(sessionId, message.id, 'staged')}
+                    >
+                        {t('chat.queuedMessage.unqueue')}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="xs"
+                        disabled={sendingMessageId !== null}
+                        onClick={() => onSend(message)}
+                    >
+                        <Icon name={isSending ? 'loader-4' : 'send-plane'} className={cn('h-3 w-3', isSending && 'animate-spin')} aria-hidden="true" />
+                        {t('chat.queuedMessage.send')}
+                    </Button>
+                </>
+            ) : (
+                <Button
+                    type="button"
+                    variant="secondary"
+                    size="xs"
+                    disabled={sendingMessageId !== null}
+                    onClick={() => onQueue(message)}
+                >
+                    <Icon name="time" className="h-3 w-3" aria-hidden="true" />
+                    {t('chat.queuedMessage.queue')}
+                </Button>
+            )}
             <button
                 type="button"
                 disabled={isSending}
@@ -113,13 +145,14 @@ QueuedMessageChip.displayName = 'QueuedMessageChip';
 
 interface QueuedMessageChipsProps {
     onEditMessage: (content: string, attachments?: QueuedMessage['attachments']) => void;
+    onQueueMessage: (messageId: string) => void;
     onSendMessage: (messageId: string) => void;
     sendingMessageId: string | null;
 }
 
 const EMPTY_QUEUE: QueuedMessage[] = [];
 
-export const QueuedMessageChips = memo(({ onEditMessage, onSendMessage, sendingMessageId }: QueuedMessageChipsProps) => {
+export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendMessage, sendingMessageId }: QueuedMessageChipsProps) => {
     const { t } = useI18n();
     const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
     const queuedMessages = useMessageQueueStore(
@@ -160,6 +193,10 @@ export const QueuedMessageChips = memo(({ onEditMessage, onSendMessage, sendingM
         }
     }, [currentSessionId, popToInput, onEditMessage]);
 
+    const handleQueue = React.useCallback((message: QueuedMessage) => {
+        onQueueMessage(message.id);
+    }, [onQueueMessage]);
+
     const handleSend = React.useCallback((message: QueuedMessage) => {
         onSendMessage(message.id);
     }, [onSendMessage]);
@@ -194,6 +231,7 @@ export const QueuedMessageChips = memo(({ onEditMessage, onSendMessage, sendingM
                                     sessionId={currentSessionId}
                                     sendingMessageId={sendingMessageId}
                                     onEdit={handleEdit}
+                                    onQueue={handleQueue}
                                     onSend={handleSend}
                                 />
                             ))}

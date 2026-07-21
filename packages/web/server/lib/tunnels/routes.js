@@ -225,7 +225,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
     selectedPresetName,
     serverAddress,
     serverPort,
-    trustedCaFile,
     proxyType,
     remotePort,
     publicUrl,
@@ -249,7 +248,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
 
     let effectiveServerAddress = serverAddress;
     let effectiveServerPort = serverPort;
-    let effectiveTrustedCaFile = trustedCaFile;
     let effectiveProxyType = proxyType;
     let effectiveRemotePort = remotePort;
     let effectivePublicUrl = publicUrl;
@@ -266,8 +264,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           && typeof effectiveServerAddress === 'string'
           && effectiveServerAddress.trim().length > 0
           && effectiveServerPort !== undefined
-          && typeof effectiveTrustedCaFile === 'string'
-          && effectiveTrustedCaFile.trim().length > 0
           && typeof effectiveToken === 'string'
           && effectiveToken.trim().length > 0;
         if (!canReplaceInvalidConfig) {
@@ -278,9 +274,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
         ? effectiveServerAddress
         : (storedConfig?.serverAddress ?? settings?.frpcServerAddress);
       effectiveServerPort = effectiveServerPort ?? storedConfig?.serverPort ?? settings?.frpcServerPort;
-      effectiveTrustedCaFile = (typeof effectiveTrustedCaFile === 'string' && effectiveTrustedCaFile.trim())
-        ? effectiveTrustedCaFile
-        : (storedConfig?.trustedCaFile ?? settings?.frpcTrustedCaFile);
       const endpoint = resolveFrpcEndpoint({
         proxyType: effectiveProxyType,
         remotePort: effectiveRemotePort,
@@ -313,7 +306,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
       proxyType: effectiveProxyType,
       serverAddress: effectiveServerAddress,
       serverPort: effectiveServerPort,
-      trustedCaFile: effectiveTrustedCaFile,
       remotePort: effectiveRemotePort,
       publicUrl: effectivePublicUrl,
     }, { signal });
@@ -352,7 +344,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
         await upsertFrpcTunnelConfig({
           serverAddress: metadata.serverAddress ?? result.request.serverAddress,
           serverPort: metadata.serverPort ?? result.request.serverPort,
-          trustedCaFile: metadata.trustedCaFile ?? result.request.trustedCaFile,
           proxyType: persistedProxyType,
           remotePort: persistedProxyType === 'tcp'
             ? (metadata.remotePort ?? result.request.remotePort)
@@ -564,6 +555,12 @@ export const createTunnelRoutesRuntime = (dependencies) => {
       try {
         const params = req.query || {};
         const body = req.body || {};
+        if (
+          hasOwn(body, 'trustedCaFile') || hasOwn(body, 'frpcTrustedCaFile')
+          || hasOwn(params, 'trustedCaFile') || hasOwn(params, 'frpcTrustedCaFile')
+        ) {
+          throw new TunnelServiceError('validation_error', 'FRPC trusted CA options are no longer supported; host runtime trust roots are used automatically');
+        }
 
         const providerId = hasOwn(params, 'provider')
           ? normalizeRequestedProvider(params.provider)
@@ -630,9 +627,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           ? (params.serverAddress ?? params.frpcServerAddress ?? storedFrpcConfig?.serverAddress ?? settings?.frpcServerAddress).trim()
           : '';
         const serverPort = parsePort(rawServerPort);
-        const trustedCaFile = typeof (params.trustedCaFile ?? params.frpcTrustedCaFile ?? storedFrpcConfig?.trustedCaFile ?? settings?.frpcTrustedCaFile) === 'string'
-          ? (params.trustedCaFile ?? params.frpcTrustedCaFile ?? storedFrpcConfig?.trustedCaFile ?? settings?.frpcTrustedCaFile).trim()
-          : '';
         const endpointInput = {
           proxyType: body.proxyType ?? body.frpcProxyType ?? params.proxyType ?? params.frpcProxyType,
           remotePort: parsePort(body.remotePort ?? body.frpcRemotePort ?? params.remotePort ?? params.frpcRemotePort),
@@ -678,7 +672,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           hasSavedManagedRemoteProfile,
           serverAddress,
           serverPort,
-          trustedCaFile,
           remotePort: frpcEndpoint?.remotePort,
           publicUrl: frpcEndpoint?.publicUrl,
         };
@@ -760,7 +753,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
             configuredFrpcEndpoint = {
               serverAddress: settings?.frpcServerAddress,
               serverPort: settings?.frpcServerPort,
-              trustedCaFile: settings?.frpcTrustedCaFile,
               ...resolveSettingsFrpcEndpoint(settings),
             };
           } catch {
@@ -774,7 +766,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           : configuredFrpcEndpoint;
         const frpcServerAddress = reportedFrpcEndpoint?.serverAddress ?? null;
         const frpcServerPort = reportedFrpcEndpoint?.serverPort ?? null;
-        const frpcTrustedCaFile = reportedFrpcEndpoint?.trustedCaFile ?? null;
         const frpcProxyType = reportedFrpcEndpoint?.proxyType ?? null;
         const frpcRemotePort = frpcProxyType === 'tcp'
           ? (reportedFrpcEndpoint?.remotePort ?? null)
@@ -805,7 +796,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
             hasFrpcTunnelToken,
             frpcServerAddress,
             frpcServerPort,
-            frpcTrustedCaFile,
             frpcRemotePort,
             frpcPublicUrl,
             frpcProxyType,
@@ -861,7 +851,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           hasFrpcTunnelToken,
           frpcServerAddress,
           frpcServerPort,
-          frpcTrustedCaFile,
           frpcRemotePort,
           frpcPublicUrl,
           frpcProxyType,
@@ -927,6 +916,9 @@ export const createTunnelRoutesRuntime = (dependencies) => {
       _req?.once?.('aborted', abortStart);
       res?.once?.('close', abortOnResponseClose);
       try {
+        if (hasOwn(_req?.body, 'trustedCaFile') || hasOwn(_req?.body, 'frpcTrustedCaFile')) {
+          throw new TunnelServiceError('validation_error', 'FRPC trusted CA options are no longer supported; host runtime trust roots are used automatically');
+        }
         const settings = await readSettingsFromDiskMigrated();
         const providerExplicit = hasOwn(_req?.body, 'provider') && _req.body.provider !== undefined;
         const provider = providerExplicit
@@ -980,9 +972,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           ? (_req.body.serverAddress ?? _req.body.frpcServerAddress).trim()
           : undefined;
         const serverPort = parsePort(_req?.body?.serverPort ?? _req?.body?.frpcServerPort);
-        const trustedCaFile = typeof (_req?.body?.trustedCaFile ?? _req?.body?.frpcTrustedCaFile) === 'string'
-          ? (_req.body.trustedCaFile ?? _req.body.frpcTrustedCaFile).trim()
-          : undefined;
         const proxyType = _req?.body?.proxyType ?? _req?.body?.frpcProxyType;
         const remotePort = parsePort(_req?.body?.remotePort ?? _req?.body?.frpcRemotePort);
         const frpcPublicUrl = typeof (_req?.body?.publicUrl ?? _req?.body?.frpcPublicUrl) === 'string'
@@ -1043,7 +1032,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           selectedPresetName,
           serverAddress,
           serverPort,
-          trustedCaFile,
           proxyType,
           remotePort,
           publicUrl: frpcPublicUrl,
@@ -1100,7 +1088,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           hasFrpcTunnelToken: activeProvider === TUNNEL_PROVIDER_FRPC,
           frpcServerAddress: activeProvider === TUNNEL_PROVIDER_FRPC ? providerMetadata?.serverAddress ?? null : null,
           frpcServerPort: activeProvider === TUNNEL_PROVIDER_FRPC ? providerMetadata?.serverPort ?? null : null,
-          frpcTrustedCaFile: activeProvider === TUNNEL_PROVIDER_FRPC ? providerMetadata?.trustedCaFile ?? null : null,
           frpcRemotePort: activeFrpcProxyType === 'tcp'
             ? providerMetadata?.remotePort ?? null
             : null,

@@ -25,7 +25,6 @@ import {
   normalizeFrpcRemotePort,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
   normalizeFrpcToken,
 } from './lib/tunnels/frpc-client.js';
 import { createRequestSecurityRuntime } from './lib/security/request-security.js';
@@ -312,7 +311,7 @@ const CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH = path.join(OPENCHAMBER_DATA_D
 const CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'cloudflare-named-tunnels.json');
 const CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION = 1;
 const FRPC_MANAGED_TUNNEL_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'frpc-managed-tunnel.json');
-const FRPC_MANAGED_TUNNEL_VERSION = 2;
+const FRPC_MANAGED_TUNNEL_VERSION = 3;
 
 const managedTunnelConfigRuntime = createManagedTunnelConfigRuntime({
   fsPromises,
@@ -322,7 +321,6 @@ const managedTunnelConfigRuntime = createManagedTunnelConfigRuntime({
   normalizeManagedRemoteTunnelPresets,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
   normalizeFrpcRemotePort,
   normalizeFrpcCustomDomain,
   normalizeFrpcPublicHostname,
@@ -361,7 +359,6 @@ const settingsHelpers = createSettingsHelpers({
   normalizeManagedRemoteTunnelPresetTokens,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
   normalizeFrpcRemotePort,
   sanitizeTypographySizesPartial,
   normalizeStringArray,
@@ -1335,6 +1332,9 @@ async function main(options = {}) {
     throw new Error(getUnauthenticatedLanErrorMessage(effectiveBindHost));
   }
   const tryCfTunnel = options.tryCfTunnel === true;
+  if (options.tunnelTrustedCaFile !== undefined) {
+    throw new Error('tunnelTrustedCaFile is no longer supported. Install the CA into the host runtime trust store instead.');
+  }
   const apiOnly = options.apiOnly === true || isEnvFlagEnabled(process.env.OPENCHAMBER_API_ONLY);
   const shouldUseCanonicalTunnelConfig = typeof options.tunnelMode === 'string'
     || typeof options.tunnelProvider === 'string'
@@ -1345,7 +1345,6 @@ async function main(options = {}) {
     || typeof options.tunnelPublicUrl === 'string'
     || typeof options.tunnelCustomDomain === 'string'
     || typeof options.tunnelServerAddress === 'string'
-    || typeof options.tunnelTrustedCaFile === 'string'
     || Number.isInteger(options.tunnelServerPort)
     || Number.isInteger(options.tunnelRemotePort);
   const startupTunnelProvider = shouldUseCanonicalTunnelConfig
@@ -1365,7 +1364,6 @@ async function main(options = {}) {
         publicUrl: options.tunnelPublicUrl,
         customDomain: options.tunnelCustomDomain,
         serverAddress: options.tunnelServerAddress,
-        trustedCaFile: options.tunnelTrustedCaFile,
         serverPort: options.tunnelServerPort,
         remotePort: options.tunnelRemotePort,
       })

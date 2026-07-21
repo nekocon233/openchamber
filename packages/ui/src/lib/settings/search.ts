@@ -809,7 +809,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'tunnel',
     titleKey: 'settings.openchamber.tunnel.field.frpcProxyType',
     descriptionKey: 'settings.openchamber.tunnel.note.frpcProxyTypes',
-    keywords: ['frpc', 'frps', 'server ip', 'control port', 'remote port', 'tcp mapping', 'http vhost', 'custom domain', 'public hostname', 'trusted ca', 'tls certificate', 'server identity', 'caddy', 'reverse proxy', 'token'],
+    keywords: ['frpc', 'frps', 'server ip', 'control port', 'remote port', 'tcp mapping', 'http vhost', 'custom domain', 'public hostname', 'host trust', 'system trust store', 'tls certificate', 'server identity', 'caddy', 'reverse proxy', 'token'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {

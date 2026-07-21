@@ -95,7 +95,7 @@ export function routeMessage(params: {
   inputMode?: "normal" | "shell"
   files?: Array<{ type: "file"; mime: string; url: string; filename: string }>
   additionalParts?: Array<{ text: string; synthetic?: boolean; files?: Array<{ type: "file"; mime: string; url: string; filename: string }> }>
-  delivery?: 'steer'
+  delivery?: 'steer' | 'queue'
 }): Promise<void> {
   const requestDirectory = params.directory ?? undefined
   if (params.inputMode === "shell") {
@@ -179,7 +179,7 @@ export function routeMessage(params: {
 
 type SendMessageOptions = {
   sessionId?: string
-  delivery?: 'steer'
+  delivery?: 'steer' | 'queue'
 }
 
 type AssistantMessageSessionExecution = {

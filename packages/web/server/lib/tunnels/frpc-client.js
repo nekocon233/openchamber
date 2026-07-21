@@ -1,9 +1,10 @@
 import { spawn } from 'child_process';
-import { createHash } from 'crypto';
+import { createHash, X509Certificate } from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import os from 'os';
 import path from 'path';
+import tls from 'tls';
 import { domainToASCII } from 'url';
 
 export const FRPC_DEFAULT_STARTUP_TIMEOUT_MS = 20000;
@@ -13,6 +14,16 @@ const FRPC_TOKEN_MAX_LENGTH = 8192;
 const FRPC_TRUSTED_CA_MAX_BYTES = 1024 * 1024;
 
 const FRPC_PROXY_NAME_PREFIX = 'openchamber';
+const FRPC_DEFAULT_CA_BUNDLE_PATHS = [
+  path.join(os.homedir(), '.config', 'frp', 'ca.crt'),
+  path.join(os.homedir(), '.frp', 'ca.crt'),
+  '/etc/ssl/certs/ca-certificates.crt',
+  '/etc/pki/tls/certs/ca-bundle.crt',
+  '/etc/ssl/ca-bundle.pem',
+  '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+  '/usr/local/share/certs/ca-root-nss.crt',
+  '/etc/ssl/cert.pem',
+];
 const MAX_DIAGNOSTIC_LINES = 16;
 const MAX_DIAGNOSTIC_LINE_LENGTH = 600;
 const diagnosticBufferLimit = (secret) => MAX_DIAGNOSTIC_LINE_LENGTH + String(secret || '').length;
@@ -53,7 +64,7 @@ export function normalizeFrpcServerAddress(value) {
   return address;
 }
 
-export function normalizeFrpcTrustedCaFile(value, home = os.homedir()) {
+function normalizeFrpcTrustedCaFile(value, home = os.homedir()) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('FRPS trusted CA file is required');
   }
@@ -70,34 +81,104 @@ export function normalizeFrpcTrustedCaFile(value, home = os.homedir()) {
   return path.resolve(raw);
 }
 
-export function loadFrpcTrustedCaFile(value, {
-  home = os.homedir(),
-  fsImpl = fs,
-} = {}) {
-  const trustedCaFile = normalizeFrpcTrustedCaFile(value, home);
-  let stats;
-  try {
-    stats = fsImpl.statSync(trustedCaFile);
-  } catch (error) {
-    throw new Error(`Could not read FRPS trusted CA file: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (!stats.isFile()) {
-    throw new Error('FRPS trusted CA file must be a regular file');
-  }
-  if (stats.size === 0 || stats.size > FRPC_TRUSTED_CA_MAX_BYTES) {
-    throw new Error(`FRPS trusted CA file must contain between 1 and ${FRPC_TRUSTED_CA_MAX_BYTES} bytes`);
+const normalizeFrpcTrustedCaPem = (contents, label) => {
+  const text = Buffer.isBuffer(contents) ? contents.toString('utf8') : String(contents || '');
+  const certificates = text.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) || [];
+  if (certificates.length === 0) {
+    throw new Error(`${label} must contain PEM-encoded X.509 certificates`);
   }
 
-  let contents;
-  try {
-    contents = fsImpl.readFileSync(trustedCaFile);
-  } catch (error) {
-    throw new Error(`Could not read FRPS trusted CA file: ${error instanceof Error ? error.message : String(error)}`);
+  const normalizedCertificates = [];
+  const seen = new Set();
+  for (const certificate of certificates) {
+    const normalized = certificate.trim();
+    try {
+      new X509Certificate(normalized);
+    } catch {
+      throw new Error(`${label} must contain valid PEM-encoded X.509 certificates`);
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    normalizedCertificates.push(normalized);
   }
-  if (contents.length === 0 || contents.length > FRPC_TRUSTED_CA_MAX_BYTES) {
-    throw new Error(`FRPS trusted CA file must contain between 1 and ${FRPC_TRUSTED_CA_MAX_BYTES} bytes`);
+
+  const normalizedContents = Buffer.from(`${normalizedCertificates.join('\n')}\n`, 'utf8');
+  if (normalizedContents.length === 0 || normalizedContents.length > FRPC_TRUSTED_CA_MAX_BYTES) {
+    throw new Error(`${label} must contain between 1 and ${FRPC_TRUSTED_CA_MAX_BYTES} bytes`);
   }
-  return { path: trustedCaFile, contents };
+  return normalizedContents;
+};
+
+const appendFrpcTrustedCaPem = (certificates, contents, label) => {
+  const normalized = normalizeFrpcTrustedCaPem(contents, label).toString('utf8');
+  for (const certificate of normalized.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) || []) {
+    const value = certificate.trim();
+    if (!certificates.includes(value)) {
+      certificates.push(value);
+    }
+  }
+};
+
+export function loadFrpcDefaultTrustedCa({
+  tlsImpl = tls,
+  fsImpl = fs,
+  env = process.env,
+} = {}) {
+  const certificates = [];
+  if (typeof tlsImpl.getCACertificates === 'function') {
+    for (const type of ['system', 'default']) {
+      let typeCertificates;
+      try {
+        typeCertificates = tlsImpl.getCACertificates(type);
+      } catch {
+        continue;
+      }
+      for (const certificate of typeCertificates || []) {
+        if (typeof certificate === 'string' && certificate.trim() && !certificates.includes(certificate.trim())) {
+          certificates.push(certificate.trim());
+        }
+      }
+    }
+  }
+  for (const certificate of Array.isArray(tlsImpl.rootCertificates) ? tlsImpl.rootCertificates : []) {
+    if (typeof certificate === 'string' && certificate.trim() && !certificates.includes(certificate.trim())) {
+      certificates.push(certificate.trim());
+    }
+  }
+
+  const bundlePaths = [
+    typeof env.SSL_CERT_FILE === 'string' ? env.SSL_CERT_FILE : '',
+    typeof env.NODE_EXTRA_CA_CERTS === 'string' ? env.NODE_EXTRA_CA_CERTS : '',
+    ...FRPC_DEFAULT_CA_BUNDLE_PATHS,
+  ].filter(Boolean);
+  for (const bundlePath of bundlePaths) {
+    let stats;
+    try {
+      stats = fsImpl.statSync(bundlePath);
+    } catch (error) {
+      if (error && typeof error === 'object' && error.code === 'ENOENT') {
+        continue;
+      }
+      throw new Error(`Could not read host CA certificate bundle '${bundlePath}'`);
+    }
+    if (!stats.isFile()) {
+      continue;
+    }
+    appendFrpcTrustedCaPem(certificates, fsImpl.readFileSync(bundlePath), `Host CA certificate bundle '${bundlePath}'`);
+  }
+
+  if (certificates.length === 0) {
+    throw new Error('Could not resolve host CA certificates for FRPS verification');
+  }
+  const contents = normalizeFrpcTrustedCaPem(certificates.join('\n'), 'Host CA certificates');
+  return {
+    source: 'host',
+    sourcePath: null,
+    contents,
+    certificateCount: certificates.length,
+  };
 }
 
 const normalizeFrpcDnsHostname = (value, label) => {
@@ -308,9 +389,12 @@ const redactDiagnostic = (value, secrets) => {
 
 const createStartupError = (message, diagnostics) => {
   const usefulDiagnostics = diagnostics.filter(Boolean).slice(-MAX_DIAGNOSTIC_LINES);
+  const detail = usefulDiagnostics.some((line) => /session shutdown/i.test(line))
+    ? `${message} FRPS closed the control session before readiness. Verify the FRPS address, control port, certificate SAN, and that any private CA is installed in the host trust store or ~/.config/frp/ca.crt.`
+    : message;
   return new Error(usefulDiagnostics.length > 0
-    ? `${message} Last FRPC output: ${usefulDiagnostics.join(' | ')}`
-    : `${message} FRPC produced no diagnostic output.`);
+    ? `${detail} Last FRPC output: ${usefulDiagnostics.join(' | ')}`
+    : `${detail} FRPC produced no diagnostic output.`);
 };
 
 const FATAL_PATTERNS = [
@@ -470,12 +554,13 @@ export async function startFrpcClient({
   hostname,
   publicUrl,
   proxyType,
-  trustedCaFile,
   startupTimeoutMs = FRPC_DEFAULT_STARTUP_TIMEOUT_MS,
   stopGraceTimeoutMs = FRPC_DEFAULT_STOP_GRACE_TIMEOUT_MS,
   stopForceTimeoutMs = FRPC_DEFAULT_STOP_FORCE_TIMEOUT_MS,
   tempRoot = os.tmpdir(),
   env = process.env,
+  tlsImpl = tls,
+  fsImpl = fs,
   spawnImpl = spawn,
   onExit,
   onLog = (streamName, line) => console.log(`[frpc:${streamName}] ${line}`),
@@ -496,15 +581,13 @@ export async function startFrpcClient({
   const normalizedServerPort = normalizeFrpcServerPort(serverPort);
   const normalizedToken = normalizeFrpcToken(token);
   const normalizedLocalPort = normalizeFrpcLocalPort(localPort);
-  const trustedCa = loadFrpcTrustedCaFile(trustedCaFile);
-  const normalizedTrustedCaFile = trustedCa.path;
+  const trustedCa = loadFrpcDefaultTrustedCa({ tlsImpl, fsImpl, env });
   const endpoint = normalizeFrpcEndpoint({ remotePort, customDomain, hostname, publicUrl, proxyType });
   const proxyName = createFrpcProxyName(endpoint);
   const browserPublicUrl = endpoint.proxyType === 'http'
     ? `https://${endpoint.hostname}`
     : endpoint.publicUrl;
   const trustedCaContents = trustedCa.contents;
-
   let tempDirectory = null;
   let child = null;
   let running = false;
@@ -665,7 +748,6 @@ export async function startFrpcClient({
       process: child,
       serverAddress: normalizedServerAddress,
       serverPort: normalizedServerPort,
-      trustedCaFile: normalizedTrustedCaFile,
       proxyType: endpoint.proxyType,
       remotePort: endpoint.remotePort,
       customDomain: endpoint.customDomain,
@@ -691,7 +773,6 @@ export async function startFrpcClient({
       getPublicUrl: () => (running ? browserPublicUrl : null),
       getServerAddress: () => normalizedServerAddress,
       getServerPort: () => normalizedServerPort,
-      getTrustedCaFile: () => normalizedTrustedCaFile,
       getProxyType: () => endpoint.proxyType,
       getRemotePort: () => endpoint.remotePort,
       getCustomDomain: () => endpoint.customDomain,

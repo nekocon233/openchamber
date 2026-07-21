@@ -17,7 +17,6 @@ const TUNNEL_SETTINGS_KEYS = new Set([
   'frpcProxyType',
   'frpcServerAddress',
   'frpcServerPort',
-  'frpcTrustedCaFile',
   'frpcRemotePort',
   'frpcPublicUrl',
   'frpcCustomDomain',

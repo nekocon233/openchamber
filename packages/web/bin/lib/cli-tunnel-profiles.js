@@ -12,7 +12,6 @@ import {
   normalizeFrpcRemotePort,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
 } from '../../server/lib/tunnels/frpc-client.js';
 
 const TUNNEL_PROFILES_VERSION = 2;
@@ -87,14 +86,6 @@ function normalizeProfileServerPort(value) {
     return normalizeFrpcServerPort(parsed);
   } catch {
     return undefined;
-  }
-}
-
-function normalizeProfileTrustedCaFile(value) {
-  try {
-    return normalizeFrpcTrustedCaFile(value);
-  } catch {
-    return '';
   }
 }
 
@@ -258,13 +249,12 @@ function sanitizeTunnelProfilesData(data) {
     const publicUrl = normalizeProfilePublicUrl(entry.publicUrl);
     const serverAddress = normalizeProfileServerAddress(entry.serverAddress);
     const serverPort = normalizeProfileServerPort(entry.serverPort);
-    const trustedCaFile = normalizeProfileTrustedCaFile(entry.trustedCaFile);
     const remotePort = normalizeProfileRemotePort(entry.remotePort);
     const token = normalizeProfileToken(entry.token);
     const hasFrpcTcpEndpoint = Boolean(remotePort && !customDomain && !hostname);
     const hasFrpcHttpEndpoint = Boolean(!remotePort && customDomain && hostname);
     const hasRequiredEndpoint = provider === 'frpc'
-      ? Boolean(serverAddress && serverPort && trustedCaFile && (hasFrpcTcpEndpoint || hasFrpcHttpEndpoint))
+      ? Boolean(serverAddress && serverPort && (hasFrpcTcpEndpoint || hasFrpcHttpEndpoint))
       : Boolean(hostname);
     if (!provider || !mode || !name || !hasRequiredEndpoint || !token) continue;
     const key = `${provider}::${name.toLowerCase()}`;
@@ -279,7 +269,6 @@ function sanitizeTunnelProfilesData(data) {
         ? {
           serverAddress,
           serverPort,
-          trustedCaFile,
           ...(hasFrpcTcpEndpoint ? { remotePort, ...(publicUrl ? { publicUrl } : {}) } : { customDomain, hostname }),
         }
         : { hostname }),
@@ -650,7 +639,6 @@ export {
   normalizeProfilePublicUrl,
   normalizeProfileServerAddress,
   normalizeProfileServerPort,
-  normalizeProfileTrustedCaFile,
   normalizeProfileRemotePort,
   normalizeProfileToken,
   suggestProfileNameFromHostname,

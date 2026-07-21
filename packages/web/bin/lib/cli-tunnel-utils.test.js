@@ -13,7 +13,6 @@ describe('FRPC tunnel replay commands', () => {
       mode: 'managed-remote',
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       includeTokenPlaceholder: true,
@@ -21,7 +20,7 @@ describe('FRPC tunnel replay commands', () => {
 
     expect(command).toContain('--frps-address 203.0.113.10');
     expect(command).toContain('--frps-port 7000');
-    expect(command).toContain('--frps-ca-file /home/openchamber/frp/ca.crt');
+    expect(command).not.toContain('--frps-ca-file');
     expect(command).toContain('--remote-port 18080');
     expect(command).toContain('--public-url https://app.example.com:18080');
     expect(command).not.toContain('--token ');
@@ -33,13 +32,12 @@ describe('FRPC tunnel replay commands', () => {
       provider: 'frpc',
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
     });
 
     expect(command).toContain('--token-file <path>');
-    expect(command).toContain('--frps-ca-file /home/openchamber/frp/ca.crt');
+    expect(command).not.toContain('--frps-ca-file');
     expect(command).toContain('--public-url https://app.example.com:18080');
     expect(command).not.toContain('--token <token>');
   });
@@ -51,7 +49,6 @@ describe('FRPC tunnel replay commands', () => {
       mode: 'managed-remote',
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       customDomain: 'openchamber.internal',
       hostname: 'app.example.com',
       includeTokenPlaceholder: true,
@@ -68,7 +65,6 @@ describe('FRPC tunnel replay commands', () => {
       provider: 'frpc',
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       customDomain: 'openchamber.internal',
       hostname: 'app.example.com',
     });

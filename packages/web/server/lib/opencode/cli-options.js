@@ -22,7 +22,9 @@ export const parseServeCliOptions = ({
   const envTunnelPublicUrl = env.OPENCHAMBER_TUNNEL_PUBLIC_URL || undefined;
   const envTunnelCustomDomain = env.OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN || undefined;
   const envTunnelServerAddress = env.OPENCHAMBER_TUNNEL_SERVER_ADDRESS || undefined;
-  const envTunnelTrustedCaFile = env.OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE || undefined;
+  if (typeof env.OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE === 'string' && env.OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE.trim()) {
+    throw new Error('OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE is no longer supported. Install the CA into the host runtime trust store instead.');
+  }
   const envTunnelServerPort = Number.parseInt(env.OPENCHAMBER_TUNNEL_SERVER_PORT || '', 10);
   const envTunnelRemotePort = Number.parseInt(env.OPENCHAMBER_TUNNEL_REMOTE_PORT || '', 10);
   const envApiOnly = env.OPENCHAMBER_API_ONLY === '1' || env.OPENCHAMBER_API_ONLY === 'true';
@@ -40,7 +42,6 @@ export const parseServeCliOptions = ({
     tunnelPublicUrl: envTunnelPublicUrl,
     tunnelCustomDomain: envTunnelCustomDomain,
     tunnelServerAddress: envTunnelServerAddress,
-    tunnelTrustedCaFile: envTunnelTrustedCaFile,
     tunnelServerPort: Number.isInteger(envTunnelServerPort) ? envTunnelServerPort : undefined,
     tunnelRemotePort: Number.isInteger(envTunnelRemotePort) ? envTunnelRemotePort : undefined,
     apiOnly: envApiOnly,
@@ -156,10 +157,7 @@ export const parseServeCliOptions = ({
     }
 
     if (optionName === 'tunnel-trusted-ca-file') {
-      const { value, nextIndex } = consumeValue(i, inlineValue);
-      i = nextIndex;
-      options.tunnelTrustedCaFile = typeof value === 'string' ? value : options.tunnelTrustedCaFile;
-      continue;
+      throw new Error('--tunnel-trusted-ca-file is no longer supported. Install the CA into the host runtime trust store instead.');
     }
 
     if (optionName === 'tunnel-server-port' || optionName === 'tunnel-remote-port') {

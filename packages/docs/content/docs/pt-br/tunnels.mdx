@@ -86,14 +86,14 @@ openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.
 
 O FRPC conecta a porta local ativa do OpenChamber ao seu próprio servidor FRPS. O OpenChamber fornece automaticamente sua porta de escuta local para os dois tipos de endpoint.
 
-Também é necessário um arquivo de certificado de CA. O FRPS deve apresentar um certificado cujo SAN corresponda a `--frps-address`; o OpenChamber verifica essa identidade e nunca desativa a verificação do certificado.
+Nenhuma configuração de CA é necessária. O OpenChamber reúne as raízes de confiança do ambiente de execução em que roda em um PEM temporário privado e o injeta no FRPC, que ainda ativa `transport.tls` e verifica o certificado do FRPS com um `serverName` igual a `--frps-address`. O OpenChamber nunca aprende uma CA a partir de um FRPS não autenticado e nunca desativa a verificação do certificado. Se o seu FRPS usa uma CA privada ou corporativa, instale essa CA no repositório de confiança do sistema operacional da máquina que executa o OpenChamber (ou exponha-a por `SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS`); não há mais um campo de CA por túnel. Por compatibilidade, os pacotes de CA nos caminhos legados do host `~/.config/frp/ca.crt` e `~/.frp/ca.crt` (se presentes) também são mesclados a essas raízes de confiança. No Docker, as raízes de confiança do “host” são o repositório de confiança do contêiner, então instale ou monte a CA dentro do contêiner.
 
 #### Mapeamento TCP
 
 Use `--remote-port` para criar um mapeamento TCP e declare a origem HTTPS externa exata com `--public-url`:
 
 ```bash
-openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address frps.example.com --frps-port 7000 --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
 ```
 
 O FRPC encaminha HTTP sem criptografia pelo mapeamento TCP, portanto o OpenChamber nunca deduz uma URL de navegador a partir do endereço FRPS. `--public-url` deve ser uma origem `https://` em que o Caddy ou outro terminador TLS escuta e encaminha para a porta de loopback do FRPS. URLs HTTP, com credenciais, caminho, consulta ou malformadas são rejeitadas antes da emissão de um token de conexão.
@@ -103,7 +103,7 @@ O FRPC encaminha HTTP sem criptografia pelo mapeamento TCP, portanto o OpenChamb
 Use `--custom-domain <frps-routing-host>` junto com `--hostname <external-public-host>`:
 
 ```bash
-openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 ```
 
 O FRPC gera um proxy `type = "http"`. O Caddy encerra o HTTPS público na porta `443` e encaminha para a porta HTTP de hosts virtuais do FRPS. Ele deve enviar o custom domain como `Host`, para o FRPS escolher o proxy, e o hostname externo como `X-Forwarded-Host`. Por exemplo, se a porta HTTP de hosts virtuais do FRPS for `8080`:
@@ -132,13 +132,13 @@ openchamber tunnel profile add --provider cloudflare --mode managed-remote --nam
 Para FRPC TCP, salve também as configurações do servidor e da porta remota:
 
 ```bash
-openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-tcp --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-tcp --frps-address frps.example.com --frps-port 7000 --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
 ```
 
 Para o host virtual HTTP do FRPC:
 
 ```bash
-openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 ```
 
 Inicie usando um dos perfis salvos:
@@ -151,16 +151,15 @@ openchamber tunnel start --profile frpc-http
 
 ## Ambiente de inicialização direta
 
-A inicialização direta usa as configurações comuns do servidor FRPC e o token. Escolha exatamente um endpoint: `OPENCHAMBER_TUNNEL_REMOTE_PORT` com `OPENCHAMBER_TUNNEL_PUBLIC_URL` para TCP, ou `OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN` e `OPENCHAMBER_TUNNEL_HOSTNAME` juntos para o host virtual HTTP.
+A inicialização direta usa as configurações comuns do servidor FRPC e o token. Escolha exatamente um endpoint: `OPENCHAMBER_TUNNEL_REMOTE_PORT` com `OPENCHAMBER_TUNNEL_PUBLIC_URL` para TCP, ou `OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN` e `OPENCHAMBER_TUNNEL_HOSTNAME` juntos para o host virtual HTTP. A verificação do FRPS não precisa de nenhuma variável de ambiente: o OpenChamber constrói a âncora de confiança a partir das raízes de confiança do ambiente de execução hospedeiro (no Docker, o repositório de confiança do contêiner), além dos pacotes de CA legados em `~/.config/frp/ca.crt` e `~/.frp/ca.crt`, quando presentes.
 
 **TCP:**
 
 ```yaml
 OPENCHAMBER_TUNNEL_PROVIDER: frpc
 OPENCHAMBER_TUNNEL_MODE: managed-remote
-OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
 OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
 OPENCHAMBER_TUNNEL_REMOTE_PORT: 20000
 OPENCHAMBER_TUNNEL_PUBLIC_URL: https://app.example.com:20000
 OPENCHAMBER_TUNNEL_TOKEN: <token>
@@ -171,9 +170,8 @@ OPENCHAMBER_TUNNEL_TOKEN: <token>
 ```yaml
 OPENCHAMBER_TUNNEL_PROVIDER: frpc
 OPENCHAMBER_TUNNEL_MODE: managed-remote
-OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
 OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
 OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: openchamber.internal
 OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com
 OPENCHAMBER_TUNNEL_TOKEN: <token>

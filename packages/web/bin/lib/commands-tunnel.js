@@ -22,7 +22,6 @@ import {
   normalizeProfilePublicUrl,
   normalizeProfileServerAddress,
   normalizeProfileServerPort,
-  normalizeProfileTrustedCaFile,
   normalizeProfileRemotePort,
   normalizeProfileToken,
   suggestProfileNameFromHostname,
@@ -149,17 +148,6 @@ function normalizeExplicitFrpcServerAddress(options) {
   if (options.serverAddress !== undefined && !normalized) {
     throw new TunnelCliError(
       'Invalid --frps-address. Provide an IP address or bare hostname without a scheme, port, or path.',
-      EXIT_CODE.USAGE_ERROR,
-    );
-  }
-  return normalized;
-}
-
-function normalizeExplicitFrpcTrustedCaFile(options) {
-  const normalized = normalizeProfileTrustedCaFile(options.trustedCaFile);
-  if (options.trustedCaFile !== undefined && (!normalized || !isReadableRegularFile(normalized))) {
-    throw new TunnelCliError(
-      'Invalid --frps-ca-file. Provide a readable CA certificate file.',
       EXIT_CODE.USAGE_ERROR,
     );
   }
@@ -701,7 +689,6 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
     let customDomain = typeof options.customDomain === 'string' ? options.customDomain : undefined;
     let serverAddress = normalizeExplicitFrpcServerAddress(options);
     let serverPort = normalizeProfileServerPort(options.serverPort);
-    let trustedCaFile = normalizeExplicitFrpcTrustedCaFile(options);
     let remotePort = normalizeProfileRemotePort(options.remotePort);
     let frpcEndpoint = null;
     const resolvedTokenValue = resolveToken(options);
@@ -794,22 +781,6 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
         serverPort = normalizeProfileServerPort(enteredPort);
       }
 
-      if (provider === FRPC_PROVIDER && !trustedCaFile) {
-        const enteredTrustedCaFile = await clackText({
-          message: 'FRPS trusted CA certificate file',
-          placeholder: existingProfile?.trustedCaFile || '~/.config/frp/ca.crt',
-          validate(value) {
-            const filePath = normalizeProfileTrustedCaFile(value);
-            return filePath && isReadableRegularFile(filePath) ? undefined : 'A readable CA certificate file is required.';
-          },
-        });
-        if (clackIsCancel(enteredTrustedCaFile)) {
-          clackCancel('Profile add cancelled.');
-          return;
-        }
-        trustedCaFile = normalizeProfileTrustedCaFile(enteredTrustedCaFile);
-      }
-
       if (provider === FRPC_PROVIDER) {
         frpcEndpoint = await promptForFrpcEndpoint({
           options,
@@ -869,11 +840,11 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
       hostname = frpcEndpoint.hostname;
     }
     const endpointReady = provider === FRPC_PROVIDER
-      ? Boolean(serverAddress && serverPort && trustedCaFile && frpcEndpoint)
+      ? Boolean(serverAddress && serverPort && frpcEndpoint)
       : Boolean(hostname);
     if (!provider || !mode || !name || !endpointReady) {
       throw new Error(provider === FRPC_PROVIDER
-        ? '`tunnel profile add` requires --provider frpc, --name, --frps-address, --frps-port, --frps-ca-file, and one FRPC endpoint.'
+        ? '`tunnel profile add` requires --provider frpc, --name, --frps-address, --frps-port, and one FRPC endpoint.'
         : '`tunnel profile add` requires --provider, --mode managed-remote, --name, and --hostname.');
     }
 
@@ -897,7 +868,7 @@ async function handleTunnelProfileSubcommand(options, action, { boldText, ensure
     }
     assertCliProviderMode(provider, mode);
     const profileEndpointFields = provider === FRPC_PROVIDER
-      ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+      ? { serverAddress, serverPort, ...getFrpcEndpointFields(frpcEndpoint) }
       : { hostname };
 
     const existingIndex = store.profiles.findIndex(
@@ -1206,7 +1177,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
         let doctorCustomDomain = typeof options.customDomain === 'string' ? options.customDomain.trim() : '';
         let doctorServerAddress = normalizeExplicitFrpcServerAddress(options);
         let doctorServerPort = normalizeProfileServerPort(options.serverPort);
-        let doctorTrustedCaFile = normalizeExplicitFrpcTrustedCaFile(options);
         let doctorRemotePort = normalizeProfileRemotePort(options.remotePort);
         let doctorPublicUrl = typeof options.publicUrl === 'string' ? options.publicUrl.trim() : '';
         const explicitHostnameProvided = doctorHostnameOverride.length > 0;
@@ -1258,7 +1228,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
           }
           doctorServerAddress = doctorServerAddress || doctorProfile.serverAddress;
           doctorServerPort = doctorServerPort || doctorProfile.serverPort;
-          doctorTrustedCaFile = doctorTrustedCaFile || doctorProfile.trustedCaFile;
           if (providerOption === FRPC_PROVIDER) {
             const endpointInput = resolveFrpcEndpointInput(options, doctorProfile);
             doctorRemotePort = endpointInput.remotePort;
@@ -1318,7 +1287,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
           if (doctorCustomDomain) query.set('customDomain', doctorCustomDomain);
           if (doctorServerAddress) query.set('serverAddress', doctorServerAddress);
           if (doctorServerPort) query.set('serverPort', String(doctorServerPort));
-          if (doctorTrustedCaFile) query.set('trustedCaFile', doctorTrustedCaFile);
           if (doctorRemotePort) query.set('remotePort', String(doctorRemotePort));
           if (doctorPublicUrl) query.set('publicUrl', doctorPublicUrl);
           if (hasSavedManagedRemoteProfile) {
@@ -1610,7 +1578,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
         let customDomain = typeof options.customDomain === 'string' ? options.customDomain : undefined;
         let serverAddress = normalizeExplicitFrpcServerAddress(options);
         let serverPort = normalizeProfileServerPort(options.serverPort);
-        let trustedCaFile = normalizeExplicitFrpcTrustedCaFile(options);
         let remotePort = normalizeProfileRemotePort(options.remotePort);
         let frpcEndpoint = null;
         let selectedProfile = null;
@@ -1631,7 +1598,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
           token = (typeof token === 'string' && token.trim().length > 0) ? token : selectedProfile.token;
           serverAddress = serverAddress || selectedProfile.serverAddress;
           serverPort = serverPort || selectedProfile.serverPort;
-          trustedCaFile = trustedCaFile || selectedProfile.trustedCaFile;
         }
 
         // Interactive profile selection when no profile/mode specified in TTY
@@ -1661,8 +1627,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
                 token = (typeof token === 'string' && token.trim().length > 0) ? token : selectedProfile.token;
                 serverAddress = serverAddress || selectedProfile.serverAddress;
                 serverPort = serverPort || selectedProfile.serverPort;
-                trustedCaFile = trustedCaFile || selectedProfile.trustedCaFile;
-              }
+                    }
             }
           }
         }
@@ -1746,31 +1711,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
               serverPort = normalizeProfileServerPort(enteredPort);
             } else {
               throw new Error('FRPC requires --frps-port <port>.');
-            }
-          }
-
-          if (provider === FRPC_PROVIDER) {
-            if (trustedCaFile && !isReadableRegularFile(trustedCaFile)) {
-              throw new TunnelCliError('FRPS trusted CA certificate file is not readable.', EXIT_CODE.USAGE_ERROR);
-            }
-            if (!trustedCaFile) {
-              if (canPrompt(options)) {
-                const enteredTrustedCaFile = await clackText({
-                  message: 'FRPS trusted CA certificate file',
-                  placeholder: '~/.config/frp/ca.crt',
-                  validate(value) {
-                    const filePath = normalizeProfileTrustedCaFile(value);
-                    return filePath && isReadableRegularFile(filePath) ? undefined : 'A readable CA certificate file is required.';
-                  },
-                });
-                if (clackIsCancel(enteredTrustedCaFile)) {
-                  clackCancel('Tunnel start cancelled.');
-                  return;
-                }
-                trustedCaFile = normalizeProfileTrustedCaFile(enteredTrustedCaFile);
-              } else {
-                throw new Error('FRPC requires --frps-ca-file <path>.');
-              }
             }
           }
 
@@ -1888,7 +1828,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
                   provider,
                   mode: 'managed-remote',
                   ...(provider === FRPC_PROVIDER
-                    ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+                    ? { serverAddress, serverPort, ...getFrpcEndpointFields(frpcEndpoint) }
                     : { hostname }),
                   token,
                   createdAt: current.createdAt,
@@ -1901,7 +1841,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
                   provider,
                   mode: 'managed-remote',
                   ...(provider === FRPC_PROVIDER
-                    ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+                    ? { serverAddress, serverPort, ...getFrpcEndpointFields(frpcEndpoint) }
                     : { hostname }),
                   token,
                   createdAt: now,
@@ -2009,7 +1949,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
           customDomain,
           serverAddress,
           serverPort,
-          trustedCaFile,
           remotePort,
           publicUrl,
           connectTtlMs,
@@ -2033,7 +1972,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
             customDomain: customDomain || null,
             serverAddress: serverAddress || null,
             serverPort: serverPort || null,
-            trustedCaFile: trustedCaFile || null,
             remotePort: remotePort || null,
             publicUrl: publicUrl || null,
             hasToken: typeof token === 'string' && token.trim().length > 0,
@@ -2183,7 +2121,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
           ...(typeof options.configPath === 'string' ? { configPath: options.configPath } : {}),
           ...(typeof token === 'string' ? { token } : {}),
           ...(provider === FRPC_PROVIDER
-            ? { serverAddress, serverPort, trustedCaFile, ...getFrpcEndpointFields(frpcEndpoint) }
+            ? { serverAddress, serverPort, ...getFrpcEndpointFields(frpcEndpoint) }
             : (typeof hostname === 'string' ? { hostname } : {})),
           ...(selectedProfile ? {
             managedRemoteTunnelPresetId: provider === 'cloudflare'
@@ -2276,7 +2214,6 @@ async function tunnelCommand(options, subcommand, action, deps) {
               customDomain,
               serverAddress,
               serverPort,
-              trustedCaFile,
               remotePort,
               publicUrl,
             });

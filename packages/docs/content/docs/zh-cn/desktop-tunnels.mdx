@@ -35,7 +35,7 @@ Ngrok 目前支持快速隧道。Cloudflare 支持快速隧道和 Cloudflare 托
 
 ## 配置 FRPC
 
-FRPC 设置提供 **TCP** 和 **HTTP 虚拟主机** 两种代理类型。在私密令牌字段中输入 FRPS 地址、控制端口、受信任的 CA 证书文件和共享令牌。两种类型的本地端口都由 OpenChamber 自动提供。FRPS 必须提供 SAN 与 FRPS 地址匹配的证书；OpenChamber 会验证该身份，绝不会禁用证书验证。
+FRPC 设置提供 **TCP** 和 **HTTP 虚拟主机** 两种代理类型。在私密令牌字段中输入 FRPS 地址、控制端口和共享令牌；没有 CA 字段。两种类型的本地端口都由 OpenChamber 自动提供。OpenChamber 会从宿主运行时信任根生成私有临时 PEM 并注入 FRPC；FRPC 仍启用 `transport.tls`，并以等于 FRPS 地址的 `serverName` 验证 FRPS 证书。OpenChamber 绝不会从未经验证的 FRPS 学习 CA，也绝不会禁用证书验证。如果 FRPS 使用私有或企业 CA，请将该 CA 安装到运行 OpenChamber 的机器的 OS 信任库（或通过 `SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS` 提供），而不是按隧道配置。为保持兼容，宿主遗留路径 `~/.config/frp/ca.crt` 和 `~/.frp/ca.crt` 中的 CA 包（如果存在）也会合并进宿主信任根。
 
 - **TCP：**输入远程映射端口和确切的外部公网 HTTPS 源地址。FRPC 会通过映射端口转发明文 HTTP；请仅在回环地址开放该 FRPS 端口，并在声明的 URL 上配置 Caddy 或其他 TLS 终止器。OpenChamber 会拒绝 HTTP、格式错误或并非纯源地址的 URL，绝不会根据 FRPS 控制地址推断浏览器 TLS。
 - **HTTP 虚拟主机：**输入 FRPS 路由主机（custom domain）和外部公开 hostname。公开 URL 为 `https://<hostname>`。Caddy 在 `443` 端口终止 HTTPS，转发到 FRPS 的 HTTP 虚拟主机端口，把 `Host` 设为 custom domain，并把 `X-Forwarded-Host` 设为公开 hostname。

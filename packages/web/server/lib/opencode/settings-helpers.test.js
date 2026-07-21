@@ -7,7 +7,6 @@ import {
   normalizeFrpcPublicUrl,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
 } from '../tunnels/frpc-client.js';
 
 const createTestHelpers = (overrides = {}) => createSettingsHelpers({
@@ -23,7 +22,6 @@ const createTestHelpers = (overrides = {}) => createSettingsHelpers({
   normalizeManagedRemoteTunnelPresetTokens: () => undefined,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
   normalizeFrpcRemotePort,
   normalizeFrpcPublicUrl,
   sanitizeTypographySizesPartial: () => undefined,
@@ -64,7 +62,6 @@ const createTestHelpersWithRealSanitizers = () => {
     normalizeManagedRemoteTunnelPresetTokens: () => undefined,
     normalizeFrpcServerAddress,
     normalizeFrpcServerPort,
-    normalizeFrpcTrustedCaFile,
     normalizeFrpcRemotePort,
     normalizeFrpcPublicUrl,
     sanitizeTypographySizesPartial: () => undefined,
@@ -83,7 +80,6 @@ describe('settings helpers', () => {
       frpcProxyType: 'http',
       frpcServerAddress: ' 203.0.113.10 ',
       frpcServerPort: 7000,
-      frpcTrustedCaFile: '/home/testuser/frp/ca.crt',
       frpcRemotePort: 18080,
       frpcPublicUrl: ' HTTPS://Public.Example.com:18080/ ',
       frpcCustomDomain: ' https://VHOST.Example.com/path ',
@@ -93,7 +89,6 @@ describe('settings helpers', () => {
       frpcProxyType: 'http',
       frpcServerAddress: '203.0.113.10',
       frpcServerPort: 7000,
-      frpcTrustedCaFile: '/home/testuser/frp/ca.crt',
       frpcRemotePort: 18080,
       frpcPublicUrl: 'https://public.example.com:18080',
       frpcCustomDomain: 'vhost.example.com',
@@ -137,6 +132,22 @@ describe('settings helpers', () => {
     expect(response).not.toHaveProperty('managedRemoteTunnelToken');
     expect(response).not.toHaveProperty('managedRemoteTunnelPresetTokens');
     expect(response).not.toHaveProperty('frpcToken');
+  });
+
+  it('drops legacy FRPC CA settings during response formatting and the next persisted merge', () => {
+    const helpers = createTestHelpers();
+    const legacySettings = {
+      frpcServerAddress: 'frps.example.com',
+      frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
+    };
+
+    expect(helpers.formatSettingsResponse(legacySettings)).not.toHaveProperty('frpcTrustedCaFile');
+    expect(helpers.mergePersistedSettings(legacySettings, { frpcServerPort: 7000 })).toEqual({
+      frpcServerAddress: 'frps.example.com',
+      frpcServerPort: 7000,
+      securityScopedBookmarks: [],
+      typographySizes: undefined,
+    });
   });
 
   it('accepts messageStreamTransport as a persisted shared setting', () => {

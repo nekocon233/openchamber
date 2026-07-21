@@ -51,7 +51,6 @@ const createRuntime = ({
     tunnelMode: TUNNEL_MODE_MANAGED_REMOTE,
     frpcServerAddress: '203.0.113.10',
     frpcServerPort: 7000,
-    frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
     frpcProxyType: 'tcp',
     frpcRemotePort: 18080,
     frpcPublicUrl: 'https://app.example.com:18080',
@@ -68,7 +67,7 @@ const createRuntime = ({
       defaults: { mode: TUNNEL_MODE_MANAGED_REMOTE },
       modes: [{
         key: TUNNEL_MODE_MANAGED_REMOTE,
-        requires: ['serverAddress', 'serverPort', 'trustedCaFile', 'token'],
+        requires: ['serverAddress', 'serverPort', 'token'],
       }],
     },
   };
@@ -128,7 +127,7 @@ describe('FRPC tunnel routes', () => {
       resolveActiveMode: () => TUNNEL_MODE_MANAGED_REMOTE,
       resolveActiveProvider: () => TUNNEL_PROVIDER_FRPC,
       getPublicUrl: () => 'https://app.example.com',
-      getProviderMetadata: () => ({ trustedCaFile: '/private/ca.crt' }),
+      getProviderMetadata: () => ({ serverAddress: 'frps.example.com' }),
       checkAvailability: async () => { checkCalls += 1; return { available: true }; },
     };
     const tunnelAuthController = {
@@ -180,6 +179,52 @@ describe('FRPC tunnel routes', () => {
     expect(stopCalls).toBe(0);
   });
 
+  it('rejects removed FRPC CA options instead of silently changing trust', async () => {
+    let startCalls = 0;
+    const tunnelService = {
+      start: async () => {
+        startCalls += 1;
+        return {};
+      },
+      stop: async () => false,
+      resolveActiveMode: () => null,
+      resolveActiveProvider: () => null,
+      getPublicUrl: () => null,
+      getProviderMetadata: () => null,
+      checkAvailability: async () => ({ available: true }),
+    };
+    const tunnelAuthController = {
+      getActiveTunnelId: () => null,
+      getActiveTunnelMode: () => null,
+      getActiveTunnelHost: () => null,
+      setActiveTunnel: () => undefined,
+      getBootstrapStatus: () => ({ hasBootstrapToken: false, bootstrapExpiresAt: null }),
+      listTunnelSessions: () => [],
+      revokeTunnelArtifacts: () => ({ revokedBootstrapCount: 0, invalidatedSessionCount: 0 }),
+      clearActiveTunnel: () => undefined,
+    };
+    const runtime = createRuntime({
+      tunnelService,
+      tunnelAuthController,
+      upsertFrpcTunnelConfig: async () => undefined,
+    });
+    const app = createApp();
+    runtime.registerRoutes(app);
+
+    const start = await invoke(app.handlers.post.get('/api/openchamber/tunnel/start'), {
+      body: { provider: TUNNEL_PROVIDER_FRPC, trustedCaFile: '/home/openchamber/frp/ca.crt' },
+    });
+    const doctor = await invoke(app.handlers.get.get('/api/openchamber/tunnel/doctor'), {
+      query: { provider: TUNNEL_PROVIDER_FRPC, trustedCaFile: '/home/openchamber/frp/ca.crt' },
+    });
+
+    expect(start.status).toBe(422);
+    expect(start.body).toMatchObject({ ok: false, code: 'validation_error' });
+    expect(doctor.status).toBe(400);
+    expect(doctor.body).toMatchObject({ ok: false, code: 'validation_error' });
+    expect(startCalls).toBe(0);
+  });
+
   it('reports the last successful private endpoint ahead of stale draft settings', async () => {
     const tunnelService = {
       stop: () => false,
@@ -207,7 +252,6 @@ describe('FRPC tunnel routes', () => {
         version: 2,
         serverAddress: '203.0.113.10',
         serverPort: 7000,
-        trustedCaFile: '/home/openchamber/frp/ca.crt',
         proxyType: 'tcp',
         remotePort: 20000,
         publicUrl: 'https://private.example.com:20000',
@@ -224,8 +268,7 @@ describe('FRPC tunnel routes', () => {
       active: false,
       frpcServerAddress: '203.0.113.10',
       frpcServerPort: 7000,
-      frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
-      frpcRemotePort: 20000,
+        frpcRemotePort: 20000,
       frpcPublicUrl: 'https://private.example.com:20000',
       frpcProxyType: 'tcp',
       frpcCustomDomain: null,
@@ -263,7 +306,6 @@ describe('FRPC tunnel routes', () => {
         version: 2,
         serverAddress: 'frps.example.com',
         serverPort: 7000,
-        trustedCaFile: '/home/openchamber/frp/ca.crt',
         proxyType: 'http',
         customDomain: 'route.example.com',
         hostname: 'public.example.com',
@@ -280,8 +322,7 @@ describe('FRPC tunnel routes', () => {
       hasFrpcTunnelToken: true,
       frpcServerAddress: 'frps.example.com',
       frpcServerPort: 7000,
-      frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
-      frpcProxyType: 'http',
+        frpcProxyType: 'http',
       frpcRemotePort: null,
       frpcCustomDomain: 'route.example.com',
       frpcPublicHostname: 'public.example.com',
@@ -304,7 +345,6 @@ describe('FRPC tunnel routes', () => {
           providerMetadata: {
             serverAddress: request.serverAddress,
             serverPort: request.serverPort,
-            trustedCaFile: request.trustedCaFile,
             proxyType: request.proxyType,
             remotePort: request.remotePort,
             publicUrl: request.publicUrl,
@@ -352,7 +392,6 @@ describe('FRPC tunnel routes', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'tcp',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
@@ -363,7 +402,6 @@ describe('FRPC tunnel routes', () => {
     expect(persisted).toEqual({
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'tcp',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
@@ -453,7 +491,6 @@ describe('FRPC tunnel routes', () => {
           providerMetadata: {
             serverAddress: request.serverAddress,
             serverPort: request.serverPort,
-            trustedCaFile: request.trustedCaFile,
             proxyType: 'http',
             remotePort: null,
             customDomain: 'route.example.com',
@@ -488,8 +525,7 @@ describe('FRPC tunnel routes', () => {
         tunnelMode: TUNNEL_MODE_MANAGED_REMOTE,
         frpcServerAddress: 'frps.example.com',
         frpcServerPort: 7000,
-        frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
-        frpcProxyType: 'tcp',
+            frpcProxyType: 'tcp',
         frpcRemotePort: 18080,
       },
     });
@@ -515,7 +551,6 @@ describe('FRPC tunnel routes', () => {
     expect(persisted).toEqual({
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'http',
       remotePort: undefined,
       publicUrl: undefined,
@@ -527,8 +562,7 @@ describe('FRPC tunnel routes', () => {
       ok: true,
       url: 'https://public.example.com',
       frpcProxyType: 'http',
-      frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
-      frpcRemotePort: null,
+        frpcRemotePort: null,
       frpcPublicUrl: null,
       frpcCustomDomain: 'route.example.com',
       frpcPublicHostname: 'public.example.com',
@@ -549,7 +583,6 @@ describe('FRPC tunnel routes', () => {
           providerMetadata: {
             serverAddress: request.serverAddress,
             serverPort: request.serverPort,
-            trustedCaFile: request.trustedCaFile,
             proxyType: 'tcp',
             remotePort: request.remotePort,
             publicUrl: request.publicUrl,
@@ -585,8 +618,7 @@ describe('FRPC tunnel routes', () => {
         tunnelMode: TUNNEL_MODE_MANAGED_REMOTE,
         frpcServerAddress: 'frps.example.com',
         frpcServerPort: 7000,
-        frpcTrustedCaFile: '/home/openchamber/frp/ca.crt',
-        frpcProxyType: 'http',
+            frpcProxyType: 'http',
         frpcCustomDomain: 'stale-route.example.com',
         frpcPublicHostname: 'stale-public.example.com',
       },
@@ -624,7 +656,6 @@ describe('FRPC tunnel routes', () => {
         providerMetadata: {
           serverAddress: request.serverAddress,
           serverPort: request.serverPort,
-          trustedCaFile: request.trustedCaFile,
           proxyType: 'tcp',
           remotePort: request.remotePort,
           customDomain: null,
@@ -765,7 +796,6 @@ describe('FRPC tunnel routes', () => {
         url: scenario.url,
         hasFrpcTunnelToken: false,
         frpcServerAddress: null,
-        frpcTrustedCaFile: null,
         frpcConfigStatus: 'error',
         frpcConfigError: 'FRPC tunnel configuration is invalid or unreadable',
       });
@@ -919,7 +949,6 @@ describe('FRPC tunnel routes', () => {
         providerMetadata: {
           serverAddress: request.serverAddress,
           serverPort: request.serverPort,
-          trustedCaFile: request.trustedCaFile,
           proxyType: 'tcp',
           remotePort: request.remotePort,
         },
@@ -1060,7 +1089,6 @@ describe('FRPC tunnel routes', () => {
         providerMetadata: {
           serverAddress: request.serverAddress,
           serverPort: request.serverPort,
-          trustedCaFile: request.trustedCaFile,
           proxyType: 'tcp',
           remotePort: request.remotePort,
         },
@@ -1127,7 +1155,6 @@ describe('FRPC tunnel routes', () => {
         providerMetadata: {
           serverAddress: request.serverAddress,
           serverPort: request.serverPort,
-          trustedCaFile: request.trustedCaFile,
           proxyType: 'tcp',
           remotePort: request.remotePort,
         },
@@ -1210,7 +1237,6 @@ describe('FRPC tunnel routes', () => {
         providerMetadata: {
           serverAddress: request.serverAddress,
           serverPort: request.serverPort,
-          trustedCaFile: request.trustedCaFile,
           proxyType: 'tcp',
           remotePort: request.remotePort,
         },
@@ -1246,7 +1272,6 @@ describe('FRPC tunnel routes', () => {
       token: 'secret',
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://203.0.113.10:18080',
       frpcEndpointExplicit: true,

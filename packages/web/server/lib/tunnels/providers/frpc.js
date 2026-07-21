@@ -1,11 +1,10 @@
 import { createFrpcBinaryManager } from '../frpc-binary-manager.js';
 import {
+  loadFrpcDefaultTrustedCa,
   normalizeFrpcEndpoint,
-  loadFrpcTrustedCaFile,
   normalizeFrpcLocalPort,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
   normalizeFrpcToken,
   startFrpcClient,
 } from '../frpc-client.js';
@@ -29,7 +28,7 @@ export const frpcTunnelProviderCapabilities = {
       key: TUNNEL_MODE_MANAGED_REMOTE,
       label: 'Managed FRP Tunnel',
       intent: TUNNEL_INTENT_PERSISTENT_PUBLIC,
-      requires: ['serverAddress', 'serverPort', 'trustedCaFile', 'token'],
+      requires: ['serverAddress', 'serverPort', 'token'],
       supports: ['customDomain', 'publicUrl', 'sessionTTL'],
       proxyTypes: ['tcp', 'http'],
       stability: 'beta',
@@ -40,6 +39,7 @@ export const frpcTunnelProviderCapabilities = {
 export function createFrpcTunnelProvider({
   binaryManager = createFrpcBinaryManager(),
   startClient = startFrpcClient,
+  loadTrustedCa = loadFrpcDefaultTrustedCa,
 } = {}) {
   let activeController = null;
   let startQueue = Promise.resolve();
@@ -111,12 +111,22 @@ export function createFrpcTunnelProvider({
       () => normalizeFrpcServerPort(request.serverPort),
       'FRPS server port is configured.'
     );
-    addValidationCheck(
-      'requirement_trustedCaFile',
-      'FRPS trusted CA file',
-      () => loadFrpcTrustedCaFile(request.trustedCaFile),
-      'FRPS trusted CA file is readable and within the production size limit.'
-    );
+    try {
+      loadTrustedCa();
+      checks.push({
+        id: 'requirement_certificateTrust',
+        label: 'FRPS certificate trust',
+        status: 'pass',
+        detail: 'Host CA certificates are available for FRPS verification.',
+      });
+    } catch (error) {
+      checks.push({
+        id: 'requirement_certificateTrust',
+        label: 'FRPS certificate trust',
+        status: 'fail',
+        detail: error instanceof Error ? error.message : 'Invalid FRPS certificate trust',
+      });
+    }
     addValidationCheck(
       'requirement_token',
       'FRPC token',
@@ -168,14 +178,13 @@ export function createFrpcTunnelProvider({
     }
     let serverAddress;
     let serverPort;
-    let trustedCaFile;
     let endpoint;
     let token;
     let localPort;
     try {
       serverAddress = normalizeFrpcServerAddress(request.serverAddress);
       serverPort = normalizeFrpcServerPort(request.serverPort);
-      trustedCaFile = normalizeFrpcTrustedCaFile(request.trustedCaFile);
+      loadTrustedCa();
       endpoint = normalizeFrpcEndpoint(request);
       token = normalizeFrpcToken(request.token);
       localPort = normalizeFrpcLocalPort(context.activePort);
@@ -197,7 +206,6 @@ export function createFrpcTunnelProvider({
       binaryPath: prepared.path,
       serverAddress,
       serverPort,
-      trustedCaFile,
       token,
       localPort,
       proxyType: endpoint.proxyType,
@@ -262,7 +270,6 @@ export function createFrpcTunnelProvider({
     getMetadata: (controller = activeController) => controller ? {
       serverAddress: controller.getServerAddress?.() ?? null,
       serverPort: controller.getServerPort?.() ?? null,
-      trustedCaFile: controller.getTrustedCaFile?.() ?? null,
       proxyType: controller.getProxyType?.() ?? null,
       remotePort: controller.getRemotePort?.() ?? null,
       customDomain: controller.getCustomDomain?.() ?? null,

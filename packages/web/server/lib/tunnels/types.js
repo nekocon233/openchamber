@@ -198,9 +198,6 @@ export function normalizeTunnelStartRequest(input = {}, defaults = {}) {
   };
   const serverPort = normalizeRequestPort(input.serverPort ?? defaults.serverPort);
   const remotePort = normalizeRequestPort(input.remotePort ?? defaults.remotePort);
-  const trustedCaFile = typeof (input.trustedCaFile ?? defaults.trustedCaFile) === 'string'
-    ? (input.trustedCaFile ?? defaults.trustedCaFile).trim()
-    : '';
 
   return {
     provider,
@@ -215,7 +212,6 @@ export function normalizeTunnelStartRequest(input = {}, defaults = {}) {
     serverAddress,
     serverPort,
     remotePort,
-    trustedCaFile,
   };
 }
 
@@ -268,7 +264,6 @@ export function validateTunnelStartRequest(request, capabilities) {
     remotePort: 'FRPS remote port',
     customDomain: 'FRPS custom domain',
     publicUrl: 'FRPC TCP public HTTPS URL',
-    trustedCaFile: 'FRPS trusted CA file',
   };
   for (const field of requiredFields) {
     const value = request[field];

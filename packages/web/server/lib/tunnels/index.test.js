@@ -108,7 +108,7 @@ describe('createTunnelService', () => {
         modes: [{
           key: 'managed-remote',
           intent: 'persistent-public',
-          requires: ['serverAddress', 'serverPort', 'trustedCaFile', 'token'],
+          requires: ['serverAddress', 'serverPort', 'token'],
         }],
       },
       checkAvailability: async () => ({ available: true }),
@@ -135,7 +135,6 @@ describe('createTunnelService', () => {
       mode: 'managed-remote',
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://203.0.113.10',
       token: 'secret',
@@ -403,8 +402,13 @@ describe('createTunnelService', () => {
     const stopping = service.stop();
     resolveStart({ getPublicUrl: () => 'https://late.example.com' });
 
-    await expect(starting).rejects.toThrow('cleanup failed');
-    await expect(stopping).rejects.toMatchObject({ code: 'stop_failed' });
+    const [startError, stopError] = await Promise.all([
+      starting.catch((error) => error),
+      stopping.catch((error) => error),
+    ]);
+    expect(startError).toBeInstanceOf(Error);
+    expect(startError.message).toContain('cleanup failed');
+    expect(stopError).toMatchObject({ code: 'stop_failed' });
     expect(controller).toBeNull();
   });
 

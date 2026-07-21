@@ -124,7 +124,6 @@ function buildTunnelStartReplayCommand({
   customDomain,
   serverAddress,
   serverPort,
-  trustedCaFile,
   remotePort,
   publicUrl,
   connectTtlMs,
@@ -165,9 +164,6 @@ function buildTunnelStartReplayCommand({
   if (Number.isInteger(serverPort)) {
     parts.push('--frps-port', String(serverPort));
   }
-  if (typeof trustedCaFile === 'string' && trustedCaFile.trim().length > 0) {
-    parts.push('--frps-ca-file', shellQuote(trustedCaFile));
-  }
   if (Number.isInteger(remotePort)) {
     parts.push('--remote-port', String(remotePort));
   }
@@ -201,7 +197,7 @@ function buildTunnelStartReplayCommand({
   return parts.join(' ');
 }
 
-function buildTunnelProfileAddCommand({ provider, hostname, customDomain, serverAddress, serverPort, trustedCaFile, remotePort, publicUrl }) {
+function buildTunnelProfileAddCommand({ provider, hostname, customDomain, serverAddress, serverPort, remotePort, publicUrl }) {
   const isFrpc = provider === 'frpc';
   const parts = [
     'openchamber',
@@ -219,7 +215,6 @@ function buildTunnelProfileAddCommand({ provider, hostname, customDomain, server
     parts.push(
       '--frps-address', shellQuote(serverAddress || '<address>'),
       '--frps-port', String(serverPort || 7000),
-      '--frps-ca-file', shellQuote(trustedCaFile || '<ca-file>'),
     );
     if (customDomain) {
       parts.push(

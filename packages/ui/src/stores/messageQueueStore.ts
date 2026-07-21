@@ -38,11 +38,15 @@ export const normalizeFollowUpBehavior = (
     return DEFAULT_FOLLOW_UP_BEHAVIOR;
 };
 
+export type QueuedMessageStatus = 'staged' | 'queued';
+
 export interface QueuedMessage {
     id: string;
     content: string;
     attachments?: AttachedFile[];
     createdAt: number;
+    /** 'staged' waits for explicit queue/send; 'queued' auto-dispatches when the session goes idle. */
+    status: QueuedMessageStatus;
     /** Send config captured when the draft is created and used when it is selected for sending. */
     sendConfig?: {
         providerID: string;
@@ -58,8 +62,9 @@ interface MessageQueueState {
 }
 
 interface MessageQueueActions {
-    addToQueue: (sessionId: string, message: Omit<QueuedMessage, 'id' | 'createdAt'>) => void;
+    addToQueue: (sessionId: string, message: Omit<QueuedMessage, 'id' | 'createdAt' | 'status'> & { status?: QueuedMessageStatus }) => void;
     removeFromQueue: (sessionId: string, messageId: string) => void;
+    setQueuedStatus: (sessionId: string, messageId: string, status: QueuedMessageStatus) => void;
     reorderQueue: (sessionId: string, fromId: string, toId: string) => void;
     popToInput: (sessionId: string, messageId: string) => QueuedMessage | null;
     clearQueue: (sessionId: string) => void;
@@ -90,6 +95,7 @@ export const useMessageQueueStore = create<MessageQueueStore>()(
                         content: message.content,
                         attachments: message.attachments,
                         createdAt: Date.now(),
+                        status: message.status ?? 'staged',
                         sendConfig: message.sendConfig,
                     };
 
@@ -119,6 +125,23 @@ export const useMessageQueueStore = create<MessageQueueStore>()(
                             queuedMessages: {
                                 ...state.queuedMessages,
                                 [sessionId]: newQueue,
+                            },
+                        };
+                    });
+                },
+
+                setQueuedStatus: (sessionId, messageId, status) => {
+                    set((state) => {
+                        const currentQueue = state.queuedMessages[sessionId];
+                        if (!currentQueue) return state;
+                        const index = currentQueue.findIndex((m) => m.id === messageId);
+                        if (index === -1 || currentQueue[index].status === status) return state;
+                        const nextQueue = currentQueue.slice();
+                        nextQueue[index] = { ...nextQueue[index], status };
+                        return {
+                            queuedMessages: {
+                                ...state.queuedMessages,
+                                [sessionId]: nextQueue,
                             },
                         };
                     });
@@ -200,7 +223,7 @@ export const useMessageQueueStore = create<MessageQueueStore>()(
             }),
             {
                 name: 'message-queue-store',
-                version: 1,
+                version: 2,
                 storage: createDeferredSafeJSONStorage(),
                 partialize: (state) => ({
                     queuedMessages: state.queuedMessages,
@@ -208,8 +231,15 @@ export const useMessageQueueStore = create<MessageQueueStore>()(
                 }),
                 migrate: (persistedState) => {
                     const state = (persistedState ?? {}) as PersistedMessageQueueState;
+                    const queuedMessages: Record<string, QueuedMessage[]> = {};
+                    for (const [sessionId, messages] of Object.entries(state.queuedMessages ?? {})) {
+                        queuedMessages[sessionId] = (messages ?? []).map((message) => ({
+                            ...message,
+                            status: message.status === 'queued' ? 'queued' : 'staged',
+                        }));
+                    }
                     return {
-                        queuedMessages: state.queuedMessages ?? {},
+                        queuedMessages,
                         followUpBehavior: normalizeFollowUpBehavior(state.followUpBehavior, state.queueModeEnabled ?? null),
                     };
                 },

@@ -90,7 +90,6 @@ export const createServerStartupRuntime = (dependencies) => {
                 configPath: startupTunnelRequest.configPath,
                 serverAddress: startupTunnelRequest.serverAddress,
                 serverPort: startupTunnelRequest.serverPort,
-                trustedCaFile: startupTunnelRequest.trustedCaFile,
                 remotePort: startupTunnelRequest.remotePort,
                 publicUrl: startupTunnelRequest.publicUrl,
                 frpcEndpointExplicit: startupTunnelRequest.remotePort !== undefined

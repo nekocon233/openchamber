@@ -18,12 +18,10 @@ describe('FRPC direct startup options', () => {
       env: {
         OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: 'route.example.com',
         OPENCHAMBER_TUNNEL_HOSTNAME: 'public.example.com',
-        OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: '/home/openchamber/frp/ca.crt',
       },
     })).toMatchObject({
       tunnelCustomDomain: 'route.example.com',
       tunnelHostname: 'public.example.com',
-      tunnelTrustedCaFile: '/home/openchamber/frp/ca.crt',
     });
   });
 
@@ -32,13 +30,20 @@ describe('FRPC direct startup options', () => {
       argv: [
         '--tunnel-custom-domain', 'route.example.com',
         '--tunnel-hostname=public.example.com',
-        '--tunnel-trusted-ca-file', '/home/openchamber/frp/ca.crt',
       ],
     })).toMatchObject({
       tunnelCustomDomain: 'route.example.com',
       tunnelHostname: 'public.example.com',
-      tunnelTrustedCaFile: '/home/openchamber/frp/ca.crt',
     });
+  });
+
+  it('rejects removed direct-start CA options instead of ignoring them', () => {
+    expect(() => parse({
+      env: { OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: '/home/openchamber/frp/ca.crt' },
+    })).toThrow(/OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE is no longer supported/);
+    expect(() => parse({
+      argv: ['--tunnel-trusted-ca-file', '/home/openchamber/frp/ca.crt'],
+    })).toThrow(/--tunnel-trusted-ca-file is no longer supported/);
   });
 
   it('reads the explicit public HTTPS URL for direct TCP startup', () => {
@@ -69,5 +74,11 @@ describe('FRPC direct startup options', () => {
       tunnelMode: 'quick',
       attachSignals: false,
     })).rejects.toMatchObject({ code: 'mode_unsupported' });
+
+    await expect(startWebUiServer({
+      port: 0,
+      tunnelTrustedCaFile: '/home/openchamber/frp/ca.crt',
+      attachSignals: false,
+    })).rejects.toThrow(/tunnelTrustedCaFile is no longer supported/);
   });
 });

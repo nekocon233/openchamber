@@ -43,7 +43,7 @@ describe('FRPC tunnel request normalization', () => {
     modes: [{
       key: TUNNEL_MODE_MANAGED_REMOTE,
       intent: 'persistent-public',
-      requires: ['serverAddress', 'serverPort', 'trustedCaFile', 'token'],
+      requires: ['serverAddress', 'serverPort', 'token'],
     }],
   };
 
@@ -52,7 +52,6 @@ describe('FRPC tunnel request normalization', () => {
       provider: TUNNEL_PROVIDER_FRPC,
       serverAddress: ' 203.0.113.10 ',
       serverPort: '7000',
-      trustedCaFile: ' /home/openchamber/frp/ca.crt ',
       remotePort: 18080,
       publicUrl: ' https://app.example.com:18080/ ',
       token: ' secret ',
@@ -63,7 +62,6 @@ describe('FRPC tunnel request normalization', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080/',
       token: 'secret',
@@ -76,7 +74,6 @@ describe('FRPC tunnel request normalization', () => {
       provider: TUNNEL_PROVIDER_FRPC,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       token: 'secret',
     });
@@ -110,7 +107,6 @@ describe('FRPC tunnel request normalization', () => {
       provider: TUNNEL_PROVIDER_FRPC,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       customDomain: ' Route.Example.com ',
       hostname: ' Public.Example.com ',
       token: 'secret',
@@ -129,7 +125,6 @@ describe('FRPC tunnel request normalization', () => {
       provider: TUNNEL_PROVIDER_FRPC,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       token: 'secret',
     });
 
@@ -141,7 +136,6 @@ describe('FRPC tunnel request normalization', () => {
       provider: TUNNEL_PROVIDER_FRPC,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       customDomain: 'route.example.com',
@@ -152,7 +146,6 @@ describe('FRPC tunnel request normalization', () => {
       provider: TUNNEL_PROVIDER_FRPC,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       customDomain: 'route.example.com',
       token: 'secret',
     });

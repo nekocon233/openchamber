@@ -1,7 +1,4 @@
 import { describe, expect, it } from 'bun:test';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 
 import {
   FRPC_TUNNEL_PROVIDER,
@@ -27,7 +24,6 @@ const createController = (url, endpoint = {}) => {
     getPublicUrl: () => (running ? url : null),
     getServerAddress: () => endpoint.serverAddress ?? null,
     getServerPort: () => endpoint.serverPort ?? null,
-    getTrustedCaFile: () => endpoint.trustedCaFile ?? null,
     getProxyType: () => endpoint.proxyType ?? null,
     getRemotePort: () => endpoint.remotePort ?? null,
     getCustomDomain: () => endpoint.customDomain ?? null,
@@ -49,7 +45,7 @@ describe('FRPC tunnel provider', () => {
         key: TUNNEL_MODE_MANAGED_REMOTE,
         label: 'Managed FRP Tunnel',
         intent: TUNNEL_INTENT_PERSISTENT_PUBLIC,
-        requires: ['serverAddress', 'serverPort', 'trustedCaFile', 'token'],
+        requires: ['serverAddress', 'serverPort', 'token'],
         supports: ['customDomain', 'publicUrl', 'sessionTTL'],
         proxyTypes: ['tcp', 'http'],
         stability: 'beta',
@@ -125,7 +121,6 @@ describe('FRPC tunnel provider', () => {
     const diagnosed = await provider.diagnose({
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       customDomain: 'route.example.com',
       token,
     });
@@ -135,10 +130,7 @@ describe('FRPC tunnel provider', () => {
     expect(JSON.stringify(diagnosed)).not.toContain(token);
   });
 
-  it('validates doctor trust anchors with the same readable-file rules as startup', async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-frpc-doctor-test-'));
-    const trustedCaFile = path.join(tempRoot, 'custom-ca.crt');
-    fs.writeFileSync(trustedCaFile, 'custom-ca', { mode: 0o600 });
+  it('diagnoses host certificate trust and fails closed when it is unavailable', async () => {
     const binaryManager = {
       inspect: async () => ({
         supported: true,
@@ -149,37 +141,34 @@ describe('FRPC tunnel provider', () => {
       }),
       prepare: async () => ({ path: '/managed/frpc', version: '0.70.0' }),
     };
-    const provider = createFrpcTunnelProvider({ binaryManager });
+    const request = {
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      remotePort: 18080,
+      publicUrl: 'https://app.example.com:18080',
+      token: 'secret',
+    };
+    const readyProvider = createFrpcTunnelProvider({
+      binaryManager,
+      loadTrustedCa: () => ({ contents: Buffer.from('ca'), certificateCount: 1 }),
+    });
+    const failingProvider = createFrpcTunnelProvider({
+      binaryManager,
+      loadTrustedCa: () => {
+        throw new Error('Could not resolve host CA certificates for FRPS verification');
+      },
+    });
 
-    try {
-      const ready = await provider.diagnose({
-        serverAddress: 'frps.example.com',
-        serverPort: 7000,
-        trustedCaFile,
-        remotePort: 18080,
-        publicUrl: 'https://app.example.com:18080',
-        token: 'secret',
-      });
-      expect(ready.modes[0].checks.find((entry) => entry.id === 'requirement_trustedCaFile')).toMatchObject({
-        status: 'pass',
-      });
+    const ready = await readyProvider.diagnose(request);
+    expect(ready.modes[0].checks.find((entry) => entry.id === 'requirement_certificateTrust')).toMatchObject({
+      status: 'pass',
+    });
 
-      fs.rmSync(trustedCaFile);
-      const missing = await provider.diagnose({
-        serverAddress: 'frps.example.com',
-        serverPort: 7000,
-        trustedCaFile,
-        remotePort: 18080,
-        publicUrl: 'https://app.example.com:18080',
-        token: 'secret',
-      });
-      expect(missing.modes[0].checks.find((entry) => entry.id === 'requirement_trustedCaFile')).toMatchObject({
-        status: 'fail',
-        detail: expect.stringMatching(/Could not read FRPS trusted CA file/),
-      });
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    const missing = await failingProvider.diagnose(request);
+    expect(missing.modes[0].checks.find((entry) => entry.id === 'requirement_certificateTrust')).toMatchObject({
+      status: 'fail',
+      detail: expect.stringMatching(/Could not resolve host CA certificates/),
+    });
   });
 
   it('prepares before start, forwards only the required launch contract, and replaces the active client', async () => {
@@ -202,7 +191,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://first.example.com:18080',
       token: 'first-secret',
@@ -211,7 +199,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: '203.0.113.11',
       serverPort: 7001,
-      trustedCaFile: '/etc/frp/secondary-ca.crt',
       remotePort: 18081,
       publicUrl: 'https://second.example.com:18081',
       token: 'second-secret',
@@ -222,8 +209,7 @@ describe('FRPC tunnel provider', () => {
         binaryPath: '/managed/frpc',
         serverAddress: '203.0.113.10',
         serverPort: 7000,
-        trustedCaFile: '/etc/frp/ca.crt',
-        token: 'first-secret',
+          token: 'first-secret',
         localPort: 3000,
         proxyType: 'tcp',
         remotePort: 18080,
@@ -233,8 +219,7 @@ describe('FRPC tunnel provider', () => {
         binaryPath: '/managed/frpc',
         serverAddress: '203.0.113.11',
         serverPort: 7001,
-        trustedCaFile: '/etc/frp/secondary-ca.crt',
-        token: 'second-secret',
+          token: 'second-secret',
         localPort: 4000,
         proxyType: 'tcp',
         remotePort: 18081,
@@ -259,7 +244,6 @@ describe('FRPC tunnel provider', () => {
     const controller = createController('https://public.example.com', {
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       proxyType: 'http',
       customDomain: 'route.example.com',
       hostname: 'public.example.com',
@@ -277,7 +261,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       customDomain: 'route.example.com',
       hostname: 'public.example.com',
       token: 'secret',
@@ -289,7 +272,6 @@ describe('FRPC tunnel provider', () => {
       binaryPath: '/managed/frpc',
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       token: 'secret',
       localPort: 3000,
       proxyType: 'http',
@@ -299,7 +281,6 @@ describe('FRPC tunnel provider', () => {
     expect(provider.getMetadata()).toEqual({
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       proxyType: 'http',
       remotePort: null,
       customDomain: 'route.example.com',
@@ -334,17 +315,8 @@ describe('FRPC tunnel provider', () => {
     });
     await expect(provider.start({
       mode: TUNNEL_MODE_MANAGED_REMOTE,
-      serverAddress: 'frps.example.com',
-      serverPort: 7000,
-      remotePort: 18080,
-      publicUrl: 'https://app.example.com:18080',
-      token: 'secret',
-    }, { activePort: 3000 })).rejects.toMatchObject({ code: 'validation_error' });
-    await expect(provider.start({
-      mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: 'https://203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       token: 'secret',
@@ -353,7 +325,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       token: 'secret',
     }, { activePort: 3000 })).rejects.toMatchObject({ code: 'validation_error' });
@@ -361,7 +332,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       customDomain: 'route.example.com',
@@ -372,13 +342,53 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'http://app.example.com:18080',
       token: 'secret',
     }, { activePort: 3000 })).rejects.toMatchObject({ code: 'validation_error' });
     expect(launches).toBe(0);
     expect(prepares).toBe(0);
+  });
+
+  it('fails trust-root resolution before preparing or replacing the active client', async () => {
+    let prepareCalls = 0;
+    let trustCalls = 0;
+    const firstController = createController('https://active.example.com');
+    const binaryManager = {
+      inspect: async () => ({ supported: true, prepared: true }),
+      prepare: async () => {
+        prepareCalls += 1;
+        return { path: '/managed/frpc', version: '0.70.0' };
+      },
+    };
+    const provider = createFrpcTunnelProvider({
+      binaryManager,
+      startClient: async () => firstController,
+      loadTrustedCa: () => {
+        trustCalls += 1;
+        if (trustCalls > 1) {
+          throw new Error('Could not resolve host CA certificates for FRPS verification');
+        }
+        return { contents: Buffer.from('ca'), certificateCount: 1 };
+      },
+    });
+    const request = {
+      mode: TUNNEL_MODE_MANAGED_REMOTE,
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      remotePort: 18080,
+      publicUrl: 'https://app.example.com:18080',
+      token: 'secret',
+    };
+
+    await provider.start(request, { activePort: 3000 });
+    await expect(provider.start(request, { activePort: 3000 })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: expect.stringMatching(/Could not resolve host CA certificates/),
+    });
+    expect(prepareCalls).toBe(1);
+    expect(firstController.getStopCalls()).toBe(0);
+    expect(provider.resolvePublicUrl()).toBe('https://active.example.com');
   });
 
   it('does not launch after stop supersedes an in-progress prepare', async () => {
@@ -405,7 +415,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       token: 'secret',
@@ -438,7 +447,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       token: 'secret',
@@ -477,7 +485,6 @@ describe('FRPC tunnel provider', () => {
       mode: TUNNEL_MODE_MANAGED_REMOTE,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/etc/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
       token: 'secret',

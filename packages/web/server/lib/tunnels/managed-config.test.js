@@ -11,7 +11,6 @@ import {
   normalizeFrpcRemotePort,
   normalizeFrpcServerAddress,
   normalizeFrpcServerPort,
-  normalizeFrpcTrustedCaFile,
   normalizeFrpcToken,
 } from './frpc-client.js';
 import { createManagedTunnelConfigRuntime } from './managed-config.js';
@@ -31,7 +30,6 @@ beforeEach(async () => {
     normalizeManagedRemoteTunnelPresets: () => [],
     normalizeFrpcServerAddress,
     normalizeFrpcServerPort,
-    normalizeFrpcTrustedCaFile,
     normalizeFrpcRemotePort,
     normalizeFrpcCustomDomain,
     normalizeFrpcPublicHostname,
@@ -42,7 +40,7 @@ beforeEach(async () => {
       CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare-legacy.json'),
       CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION: 1,
       FRPC_MANAGED_TUNNEL_FILE_PATH: configPath,
-      FRPC_MANAGED_TUNNEL_VERSION: 2,
+      FRPC_MANAGED_TUNNEL_VERSION: 3,
     },
   });
 });
@@ -56,7 +54,6 @@ describe('FRPC managed tunnel config', () => {
     await runtime.upsertFrpcTunnelConfig({
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'tcp',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
@@ -64,10 +61,9 @@ describe('FRPC managed tunnel config', () => {
     });
 
     expect(await runtime.readFrpcTunnelConfigFromDisk()).toMatchObject({
-      version: 2,
+      version: 3,
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'tcp',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
@@ -77,7 +73,6 @@ describe('FRPC managed tunnel config', () => {
     await expect(runtime.resolveFrpcTunnelToken({
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
     })).resolves.toBe('private-frpc-token');
     await expect(runtime.resolveFrpcTunnelToken({
       serverAddress: '203.0.113.11',
@@ -85,11 +80,35 @@ describe('FRPC managed tunnel config', () => {
     })).resolves.toBe('');
   });
 
+  it('migrates a version-2 record and drops its legacy CA path', async () => {
+    await fsPromises.writeFile(configPath, JSON.stringify({
+      version: 2,
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      trustedCaFile: '/home/openchamber/frp/ca.crt',
+      proxyType: 'http',
+      customDomain: 'route.example.com',
+      hostname: 'public.example.com',
+      token: 'private-frpc-token',
+      updatedAt: 123,
+    }), { encoding: 'utf8', mode: 0o600 });
+
+    expect(await runtime.readFrpcTunnelConfigFromDisk()).toMatchObject({
+      version: 3,
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      proxyType: 'http',
+      customDomain: 'route.example.com',
+      hostname: 'public.example.com',
+      token: 'private-frpc-token',
+    });
+    expect(await runtime.readFrpcTunnelConfigFromDisk()).not.toHaveProperty('trustedCaFile');
+  });
+
   it('round-trips an HTTP-vhost endpoint without persisting a remote port', async () => {
     await runtime.upsertFrpcTunnelConfig({
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'http',
       customDomain: 'Route.Example.com',
       hostname: 'Public.Example.com',
@@ -97,10 +116,9 @@ describe('FRPC managed tunnel config', () => {
     });
 
     expect(await runtime.readFrpcTunnelConfigFromDisk()).toMatchObject({
-      version: 2,
+      version: 3,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'http',
       customDomain: 'route.example.com',
       hostname: 'public.example.com',
@@ -132,7 +150,6 @@ describe('FRPC managed tunnel config', () => {
         version: 2,
         serverAddress: '203.0.113.10',
         serverPort: 7000,
-        trustedCaFile: '/home/openchamber/frp/ca.crt',
         proxyType: 'tcp',
         remotePort: 18080,
         ...(publicUrl ? { publicUrl } : {}),
@@ -149,7 +166,6 @@ describe('FRPC managed tunnel config', () => {
       version: 2,
       serverAddress: 'frps.example.com',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       proxyType: 'http',
       remotePort: 18080,
       customDomain: 'route.example.com',
@@ -174,11 +190,10 @@ describe('FRPC managed tunnel config', () => {
     await expect(runtime.readFrpcTunnelConfigFromDisk()).rejects.toThrow(/Failed to read FRPC tunnel config/);
   });
 
-  it('preserves the previous endpoint, token, and trust anchor when atomic publish fails', async () => {
+  it('preserves the previous endpoint and token when atomic publish fails', async () => {
     await runtime.upsertFrpcTunnelConfig({
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/old-ca.crt',
       proxyType: 'tcp',
       remotePort: 18080,
       publicUrl: 'https://old.example.com:18080',
@@ -197,7 +212,6 @@ describe('FRPC managed tunnel config', () => {
       normalizeManagedRemoteTunnelPresets: () => [],
       normalizeFrpcServerAddress,
       normalizeFrpcServerPort,
-      normalizeFrpcTrustedCaFile,
       normalizeFrpcRemotePort,
       normalizeFrpcCustomDomain,
       normalizeFrpcPublicHostname,
@@ -208,14 +222,13 @@ describe('FRPC managed tunnel config', () => {
         CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare-legacy.json'),
         CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION: 1,
         FRPC_MANAGED_TUNNEL_FILE_PATH: configPath,
-        FRPC_MANAGED_TUNNEL_VERSION: 2,
+        FRPC_MANAGED_TUNNEL_VERSION: 3,
       },
     });
 
     await expect(failingRuntime.upsertFrpcTunnelConfig({
       serverAddress: '203.0.113.11',
       serverPort: 7001,
-      trustedCaFile: '/home/openchamber/frp/new-ca.crt',
       proxyType: 'tcp',
       remotePort: 18081,
       publicUrl: 'https://new.example.com:18081',
@@ -225,7 +238,6 @@ describe('FRPC managed tunnel config', () => {
     expect(await runtime.readFrpcTunnelConfigFromDisk()).toMatchObject({
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/old-ca.crt',
       remotePort: 18080,
       publicUrl: 'https://old.example.com:18080',
       token: 'old-private-token',

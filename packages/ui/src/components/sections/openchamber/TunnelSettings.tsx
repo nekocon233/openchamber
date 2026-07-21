@@ -121,7 +121,6 @@ interface TunnelStatusResponse {
   frpcProxyType?: FrpcProxyType;
   frpcServerAddress?: string | null;
   frpcServerPort?: number | null;
-  frpcTrustedCaFile?: string | null;
   frpcRemotePort?: number | null;
   frpcPublicUrl?: string | null;
   frpcCustomDomain?: string | null;
@@ -163,7 +162,6 @@ interface TunnelStartResponse {
   frpcProxyType?: FrpcProxyType;
   frpcServerAddress?: string | null;
   frpcServerPort?: number | null;
-  frpcTrustedCaFile?: string | null;
   frpcRemotePort?: number | null;
   frpcPublicUrl?: string | null;
   frpcCustomDomain?: string | null;
@@ -426,7 +424,6 @@ export const TunnelSettings: React.FC = () => {
   const [frpcProxyType, setFrpcProxyType] = React.useState<FrpcProxyType>('tcp');
   const [frpcServerAddress, setFrpcServerAddress] = React.useState('');
   const [frpcServerPort, setFrpcServerPort] = React.useState('7000');
-  const [frpcTrustedCaFile, setFrpcTrustedCaFile] = React.useState('');
   const [frpcRemotePort, setFrpcRemotePort] = React.useState('18080');
   const [frpcPublicUrl, setFrpcPublicUrl] = React.useState('');
   const [frpcCustomDomain, setFrpcCustomDomain] = React.useState('');
@@ -454,7 +451,6 @@ export const TunnelSettings: React.FC = () => {
   );
   const normalizedFrpcServerAddress = frpcServerAddress.trim();
   const normalizedFrpcServerPort = parseFrpcPort(frpcServerPort);
-  const normalizedFrpcTrustedCaFile = frpcTrustedCaFile.trim();
   const normalizedFrpcRemotePort = parseFrpcPort(frpcRemotePort);
   const normalizedFrpcPublicUrl = normalizeFrpcPublicUrl(frpcPublicUrl);
   const normalizedFrpcCustomDomain = normalizeFrpcHostname(frpcCustomDomain);
@@ -462,7 +458,6 @@ export const TunnelSettings: React.FC = () => {
   const isFrpcEndpointValid = Boolean(
     normalizedFrpcServerAddress
     && normalizedFrpcServerPort
-    && normalizedFrpcTrustedCaFile
     && (frpcProxyType === 'tcp'
       ? normalizedFrpcRemotePort && normalizedFrpcPublicUrl
       : normalizedFrpcCustomDomain && normalizedFrpcPublicHostname)
@@ -676,11 +671,6 @@ export const TunnelSettings: React.FC = () => {
             ? statusData.frpcServerPort
             : (typeof settingsData?.frpcServerPort === 'number' ? settingsData.frpcServerPort : 7000)
       ));
-      setFrpcTrustedCaFile(
-        typeof statusData.frpcTrustedCaFile === 'string'
-          ? statusData.frpcTrustedCaFile
-          : (typeof settingsData?.frpcTrustedCaFile === 'string' ? settingsData.frpcTrustedCaFile : '')
-      );
       setFrpcRemotePort(
         statusFrpcProxyType === 'tcp'
           ? (typeof statusData.frpcRemotePort === 'number' ? String(statusData.frpcRemotePort) : '')
@@ -913,7 +903,6 @@ export const TunnelSettings: React.FC = () => {
     frpcProxyType?: FrpcProxyType;
     frpcServerAddress?: string | null;
     frpcServerPort?: number | null;
-    frpcTrustedCaFile?: string | null;
     frpcRemotePort?: number | null;
     frpcPublicUrl?: string | null;
     frpcCustomDomain?: string | null;
@@ -944,9 +933,6 @@ export const TunnelSettings: React.FC = () => {
       }
       if (Object.prototype.hasOwnProperty.call(payload, 'frpcServerPort')) {
         setFrpcServerPort(payload.frpcServerPort ? String(payload.frpcServerPort) : '');
-      }
-      if (Object.prototype.hasOwnProperty.call(payload, 'frpcTrustedCaFile')) {
-        setFrpcTrustedCaFile(payload.frpcTrustedCaFile ?? '');
       }
       if (Object.prototype.hasOwnProperty.call(payload, 'frpcRemotePort')) {
         setFrpcRemotePort(payload.frpcRemotePort ? String(payload.frpcRemotePort) : '');
@@ -1081,8 +1067,7 @@ export const TunnelSettings: React.FC = () => {
   const persistFrpcEndpointSettings = React.useCallback(async () => {
     const serverAddress = frpcServerAddress.trim();
     const serverPort = parseFrpcPort(frpcServerPort);
-    const trustedCaFile = frpcTrustedCaFile.trim();
-    if (!serverAddress || !serverPort || !trustedCaFile) {
+    if (!serverAddress || !serverPort) {
       return;
     }
 
@@ -1098,7 +1083,6 @@ export const TunnelSettings: React.FC = () => {
         frpcProxyType: 'tcp',
         frpcServerAddress: serverAddress,
         frpcServerPort: serverPort,
-        frpcTrustedCaFile: trustedCaFile,
         frpcRemotePort: remotePort,
         frpcPublicUrl: publicUrl,
       });
@@ -1116,11 +1100,10 @@ export const TunnelSettings: React.FC = () => {
       frpcProxyType: 'http',
       frpcServerAddress: serverAddress,
       frpcServerPort: serverPort,
-      frpcTrustedCaFile: trustedCaFile,
       frpcCustomDomain: customDomain,
       frpcPublicHostname: publicHostname,
     });
-  }, [frpcCustomDomain, frpcProxyType, frpcPublicHostname, frpcPublicUrl, frpcRemotePort, frpcServerAddress, frpcServerPort, frpcTrustedCaFile, saveTunnelSettings]);
+  }, [frpcCustomDomain, frpcProxyType, frpcPublicHostname, frpcPublicUrl, frpcRemotePort, frpcServerAddress, frpcServerPort, saveTunnelSettings]);
 
   const handleFrpcProxyTypeChange = React.useCallback(async (proxyType: FrpcProxyType) => {
     setFrpcProxyType(proxyType);
@@ -1145,12 +1128,6 @@ export const TunnelSettings: React.FC = () => {
     }
 
     if (tunnelProvider === 'frpc' && tunnelMode === 'managed-remote') {
-      if (!normalizedFrpcTrustedCaFile) {
-        const message = t('settings.openchamber.tunnel.toast.frpcTrustedCaRequired');
-        setManagedRemoteValidationError(message);
-        toast.error(message);
-        return;
-      }
       if (frpcProxyType === 'tcp') {
         if (!normalizedFrpcServerAddress || !normalizedFrpcServerPort || !normalizedFrpcRemotePort || !normalizedFrpcPublicUrl) {
           const message = t('settings.openchamber.tunnel.toast.frpcEndpointRequired');
@@ -1162,7 +1139,6 @@ export const TunnelSettings: React.FC = () => {
           proxyType: 'tcp',
           serverAddress: normalizedFrpcServerAddress,
           serverPort: normalizedFrpcServerPort,
-          trustedCaFile: normalizedFrpcTrustedCaFile,
           remotePort: normalizedFrpcRemotePort,
           publicUrl: normalizedFrpcPublicUrl,
         });
@@ -1176,7 +1152,6 @@ export const TunnelSettings: React.FC = () => {
           proxyType: 'http',
           serverAddress: normalizedFrpcServerAddress,
           serverPort: normalizedFrpcServerPort,
-          trustedCaFile: normalizedFrpcTrustedCaFile,
           customDomain: normalizedFrpcCustomDomain,
           publicHostname: normalizedFrpcPublicHostname,
         });
@@ -1219,7 +1194,6 @@ export const TunnelSettings: React.FC = () => {
           frpcProxyType: frpcStartEndpointPayload.proxyType,
           frpcServerAddress: frpcStartEndpointPayload.serverAddress,
           frpcServerPort: frpcStartEndpointPayload.serverPort,
-          frpcTrustedCaFile: frpcStartEndpointPayload.trustedCaFile,
           ...(frpcStartEndpointPayload.proxyType === 'tcp'
             ? {
               frpcRemotePort: frpcStartEndpointPayload.remotePort,
@@ -1305,9 +1279,6 @@ export const TunnelSettings: React.FC = () => {
         if (data.frpcServerPort === null || typeof data.frpcServerPort === 'number') {
           setFrpcServerPort(data.frpcServerPort === null ? '' : String(data.frpcServerPort));
         }
-        if (data.frpcTrustedCaFile === null || typeof data.frpcTrustedCaFile === 'string') {
-          setFrpcTrustedCaFile(data.frpcTrustedCaFile ?? '');
-        }
         if (responseProxyType === 'tcp' && (data.frpcRemotePort === null || typeof data.frpcRemotePort === 'number')) {
           setFrpcRemotePort(data.frpcRemotePort === null ? '' : String(data.frpcRemotePort));
         }
@@ -1364,7 +1335,6 @@ export const TunnelSettings: React.FC = () => {
     normalizedFrpcRemotePort,
     normalizedFrpcServerAddress,
     normalizedFrpcServerPort,
-    normalizedFrpcTrustedCaFile,
     saveTunnelSettings,
     selectedPreset,
     sessionTokensByPresetId,
@@ -2071,20 +2041,6 @@ export const TunnelSettings: React.FC = () => {
                       : t('settings.openchamber.tunnel.field.newPresetTokenPlaceholder')}
                     className="h-7"
                     disabled={state === 'starting' || state === 'stopping'}
-                  />
-                </label>
-                <label className="space-y-1.5">
-                  <span className="typography-ui-label text-foreground">{t('settings.openchamber.tunnel.field.frpcTrustedCaFile')}</span>
-                  <Input
-                    value={frpcTrustedCaFile}
-                    onChange={(event) => {
-                      setFrpcTrustedCaFile(event.target.value);
-                      setManagedRemoteValidationError(null);
-                    }}
-                    onBlur={() => { void persistFrpcEndpointSettings(); }}
-                    placeholder="~/.config/frp/ca.crt"
-                    className="h-7"
-                    disabled={isSavingMode || state === 'starting' || state === 'stopping'}
                   />
                 </label>
                 <label className="space-y-1.5">

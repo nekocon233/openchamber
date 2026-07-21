@@ -86,14 +86,14 @@ openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.
 
 FRPC 会将当前 OpenChamber 本地端口连接到你自建的 FRPS 服务器。两种端点都无需填写本地监听端口，OpenChamber 会自动提供。
 
-还需要 CA 证书文件。FRPS 必须提供 SAN 与 `--frps-address` 匹配的证书；OpenChamber 会验证该身份，绝不会禁用证书验证。
+无需配置 CA。OpenChamber 会收集其运行环境的信任根，生成私有临时 PEM 并注入 FRPC；FRPC 仍启用 `transport.tls`，并以等于 `--frps-address` 的 `serverName` 验证 FRPS 证书。OpenChamber 绝不会从未经验证的 FRPS 学习 CA，也绝不会禁用证书验证。如果 FRPS 使用私有或企业 CA，请将该 CA 安装到运行 OpenChamber 的机器的 OS 信任库（或通过 `SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS` 提供）；不再有按隧道设置的 CA 字段。为保持兼容，宿主遗留路径 `~/.config/frp/ca.crt` 和 `~/.frp/ca.crt` 中的 CA 包（如果存在）也会合并进这些信任根。在 Docker 中，“宿主”信任根实际是容器的信任库，请将 CA 安装或挂载到容器内。
 
 #### TCP 映射
 
 使用 `--remote-port` 创建 TCP 映射，并通过 `--public-url` 声明确切的外部 HTTPS 源地址：
 
 ```bash
-openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address frps.example.com --frps-port 7000 --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
 ```
 
 FRPC 会通过 TCP 映射转发明文 HTTP，因此 OpenChamber 绝不会根据 FRPS 地址推断浏览器 URL。`--public-url` 必须是 Caddy 或其他 TLS 终止器监听并转发到 FRPS 回环端口的 `https://` 源地址。系统会在签发连接令牌前拒绝 HTTP、包含凭据、路径或查询参数以及格式错误的 URL。
@@ -103,7 +103,7 @@ FRPC 会通过 TCP 映射转发明文 HTTP，因此 OpenChamber 绝不会根据 
 同时使用 `--custom-domain <frps-routing-host>` 和 `--hostname <external-public-host>`：
 
 ```bash
-openchamber tunnel start --provider frpc --mode managed-remote --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel start --provider frpc --mode managed-remote --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 ```
 
 FRPC 会生成 `type = "http"` 代理。Caddy 在公网 `443` 端口终止 HTTPS，并转发到 FRPS 的 HTTP 虚拟主机端口。它必须把 `Host` 设为 custom domain，供 FRPS 选择代理，同时把 `X-Forwarded-Host` 设为外部 hostname。例如，FRPS 的 HTTP 虚拟主机端口为 `8080` 时：
@@ -132,13 +132,13 @@ openchamber tunnel profile add --provider cloudflare --mode managed-remote --nam
 对于 FRPC TCP，还应保存服务器和远程端口设置：
 
 ```bash
-openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-tcp --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-tcp --frps-address frps.example.com --frps-port 7000 --remote-port 20000 --public-url https://app.example.com:20000 --token-file ~/.secrets/frp-token
 ```
 
 对于 FRPC HTTP 虚拟主机：
 
 ```bash
-openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address 203.0.113.10 --frps-port 7000 --frps-ca-file ~/.config/frp/ca.crt --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
+openchamber tunnel profile add --provider frpc --mode managed-remote --name frpc-http --frps-address frps.example.com --frps-port 7000 --custom-domain openchamber.internal --hostname app.example.com --token-file ~/.secrets/frp-token
 ```
 
 使用任一已保存的配置文件启动：
@@ -151,16 +151,15 @@ openchamber tunnel start --profile frpc-http
 
 ## 直接启动环境变量
 
-直接启动使用通用 FRPC 服务器设置和令牌。只能选择一种端点：TCP 同时使用 `OPENCHAMBER_TUNNEL_REMOTE_PORT` 和 `OPENCHAMBER_TUNNEL_PUBLIC_URL`；HTTP 虚拟主机同时使用 `OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN` 和 `OPENCHAMBER_TUNNEL_HOSTNAME`。
+直接启动使用通用 FRPC 服务器设置和令牌。只能选择一种端点：TCP 同时使用 `OPENCHAMBER_TUNNEL_REMOTE_PORT` 和 `OPENCHAMBER_TUNNEL_PUBLIC_URL`；HTTP 虚拟主机同时使用 `OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN` 和 `OPENCHAMBER_TUNNEL_HOSTNAME`。FRPS 验证无需环境变量：OpenChamber 会从宿主运行时信任根（在 Docker 中即容器信任库）以及遗留路径 `~/.config/frp/ca.crt` 和 `~/.frp/ca.crt` 中的 CA 包（如果存在）构建信任锚。
 
 **TCP：**
 
 ```yaml
 OPENCHAMBER_TUNNEL_PROVIDER: frpc
 OPENCHAMBER_TUNNEL_MODE: managed-remote
-OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
 OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
 OPENCHAMBER_TUNNEL_REMOTE_PORT: 20000
 OPENCHAMBER_TUNNEL_PUBLIC_URL: https://app.example.com:20000
 OPENCHAMBER_TUNNEL_TOKEN: <token>
@@ -171,9 +170,8 @@ OPENCHAMBER_TUNNEL_TOKEN: <token>
 ```yaml
 OPENCHAMBER_TUNNEL_PROVIDER: frpc
 OPENCHAMBER_TUNNEL_MODE: managed-remote
-OPENCHAMBER_TUNNEL_SERVER_ADDRESS: 203.0.113.10
+OPENCHAMBER_TUNNEL_SERVER_ADDRESS: frps.example.com
 OPENCHAMBER_TUNNEL_SERVER_PORT: 7000
-OPENCHAMBER_TUNNEL_TRUSTED_CA_FILE: /home/openchamber/.config/frp/ca.crt
 OPENCHAMBER_TUNNEL_CUSTOM_DOMAIN: openchamber.internal
 OPENCHAMBER_TUNNEL_HOSTNAME: app.example.com
 OPENCHAMBER_TUNNEL_TOKEN: <token>

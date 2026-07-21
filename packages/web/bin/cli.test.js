@@ -301,7 +301,6 @@ describe('cli args', () => {
       '--provider', 'frpc',
       '--frps-address', '203.0.113.10',
       '--frps-port', '7000',
-      '--frps-ca-file', '/home/openchamber/frp/ca.crt',
       '--remote-port', '18080',
       '--public-url', 'https://app.example.com:18080',
     ]);
@@ -310,10 +309,17 @@ describe('cli args', () => {
       provider: 'frpc',
       serverAddress: '203.0.113.10',
       serverPort: 7000,
-      trustedCaFile: '/home/openchamber/frp/ca.crt',
       remotePort: 18080,
       publicUrl: 'https://app.example.com:18080',
     });
+  });
+
+  it('rejects the removed FRPC CA option with a deterministic usage error', () => {
+    expect(() => parseArgs([
+      'tunnel', 'start',
+      '--provider', 'frpc',
+      '--frps-ca-file', '/home/openchamber/frp/ca.crt',
+    ])).toThrow(/--frps-ca-file is no longer supported/);
   });
 
   it('parses FRPC HTTP-vhost endpoint options', () => {
@@ -328,9 +334,9 @@ describe('cli args', () => {
 
     expect(parsed.options).toMatchObject({
       provider: 'frpc',
-      serverAddress: 'frps.example.com',
-      serverPort: 7000,
-      customDomain: 'openchamber.internal',
+          serverAddress: 'frps.example.com',
+          serverPort: 7000,
+          customDomain: 'openchamber.internal',
       hostname: 'app.example.com',
     });
     expect(parsed.options.remotePort).toBeUndefined();
@@ -880,9 +886,7 @@ describe('FRPC endpoint CLI', () => {
   it('rejects mixed and incomplete endpoints in normal, quiet, JSON, and dry-run modes', async () => {
     await withTempOpenChamberDataDir(async (dir) => {
       const tokenFile = path.join(dir, 'frpc-token');
-      const trustedCaFile = path.join(dir, 'frps-ca.crt');
       fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
-      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
       const outputModes = [
         {},
         { quiet: true },
@@ -898,7 +902,6 @@ describe('FRPC endpoint CLI', () => {
           mode: 'managed-remote',
           serverAddress: 'frps.example.com',
           serverPort: 7000,
-          trustedCaFile,
           tokenFile,
           explicitPort: true,
           port: 3000,
@@ -921,7 +924,6 @@ describe('FRPC endpoint CLI', () => {
           name: 'http-main',
           serverAddress: 'frps.example.com',
           serverPort: 7000,
-          trustedCaFile,
           tokenFile,
           ...outputMode,
         };
@@ -942,15 +944,12 @@ describe('FRPC endpoint CLI', () => {
   it('requires and canonicalizes an externally terminated HTTPS origin for TCP', async () => {
     await withTempOpenChamberDataDir(async (dir) => {
       const tokenFile = path.join(dir, 'frpc-token');
-      const trustedCaFile = path.join(dir, 'frps-ca.crt');
       fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
-      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
       const base = {
         provider: 'frpc',
         mode: 'managed-remote',
         serverAddress: 'frps.example.com',
         serverPort: 7000,
-        trustedCaFile,
         remotePort: 18080,
         tokenFile,
         explicitPort: true,
@@ -980,8 +979,6 @@ describe('FRPC endpoint CLI', () => {
 
   it('fails a legacy TCP profile without guessing a browser URL', async () => {
     await withTempOpenChamberDataDir(async (dir) => {
-      const trustedCaFile = path.join(dir, 'frps-ca.crt');
-      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
       const profilesPath = getTunnelProfilesFilePath();
       fs.mkdirSync(path.dirname(profilesPath), { recursive: true });
       fs.writeFileSync(profilesPath, JSON.stringify({
@@ -993,7 +990,6 @@ describe('FRPC endpoint CLI', () => {
           mode: 'managed-remote',
           serverAddress: 'frps.example.com',
           serverPort: 7000,
-          trustedCaFile,
           remotePort: 18080,
           token: 'not-a-secret',
           createdAt: 1,
@@ -1018,16 +1014,13 @@ describe('FRPC endpoint CLI', () => {
   it('emits canonical HTTP-vhost dry-run JSON without exposing the token', async () => {
     await withTempOpenChamberDataDir(async (dir) => {
       const tokenFile = path.join(dir, 'frpc-token');
-      const trustedCaFile = path.join(dir, 'frps-ca.crt');
       fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
-      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
 
       const output = await captureStdout(() => commands.tunnel({
         provider: 'frpc',
         mode: 'managed-remote',
         serverAddress: 'frps.example.com',
         serverPort: 7000,
-        trustedCaFile,
         customDomain: 'openchamber.internal',
         hostname: 'app.example.com',
         tokenFile,
@@ -1069,19 +1062,16 @@ describe('FRPC endpoint CLI', () => {
   it('rejects an explicit invalid FRPS address before a saved profile can replace it in every output mode', async () => {
     await withTempOpenChamberDataDir(async (dir) => {
       const tokenFile = path.join(dir, 'frpc-token');
-      const trustedCaFile = path.join(dir, 'frps-ca.crt');
       fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
-      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
       await captureStdout(() => commands.tunnel({
         provider: 'frpc',
         mode: 'managed-remote',
         name: 'saved-frpc',
         serverAddress: 'frps.example.com',
         serverPort: 7000,
-          trustedCaFile,
-          remotePort: 18080,
-          publicUrl: 'https://saved.example.com:18080',
-          tokenFile,
+        remotePort: 18080,
+        publicUrl: 'https://saved.example.com:18080',
+        tokenFile,
         json: true,
       }, 'profile', 'add'));
 
@@ -1108,33 +1098,46 @@ describe('FRPC endpoint CLI', () => {
     });
   });
 
-  it('requires a readable trusted CA file for FRPS identity verification', async () => {
-    await expect(commands.tunnel({
-      provider: 'frpc',
-      mode: 'managed-remote',
-      serverAddress: 'frps.example.com',
-      serverPort: 7000,
-      remotePort: 18080,
-      explicitPort: true,
-      port: 3000,
-      dryRun: true,
-      json: true,
-    }, 'start')).rejects.toThrow(/frps-ca-file/);
+  it('starts an FRPC dry run without any CA option', async () => {
+    await withTempOpenChamberDataDir(async (dir) => {
+      const tokenFile = path.join(dir, 'frpc-token');
+      fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
+      const output = await captureStdout(() => commands.tunnel({
+        provider: 'frpc',
+        mode: 'managed-remote',
+        serverAddress: 'frps.example.com',
+        serverPort: 7000,
+        remotePort: 18080,
+        publicUrl: 'https://app.example.com:18080',
+        tokenFile,
+        explicitPort: true,
+        port: 3000,
+        dryRun: true,
+        json: true,
+      }, 'start'));
+
+      expect(JSON.parse(output)).toMatchObject({
+        ok: true,
+        dryRun: true,
+        provider: 'frpc',
+        serverAddress: 'frps.example.com',
+        serverPort: 7000,
+        remotePort: 18080,
+        publicUrl: 'https://app.example.com:18080',
+      });
+    });
   });
 
   it('round-trips HTTP-vhost profile add, list, show, and selected-profile start', async () => {
     await withTempOpenChamberDataDir(async (dir) => {
       const tokenFile = path.join(dir, 'frpc-token');
-      const trustedCaFile = path.join(dir, 'frps-ca.crt');
       fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
-      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
       const addOptions = {
         provider: 'frpc',
         mode: 'managed-remote',
         name: 'http-main',
         serverAddress: 'frps.example.com',
         serverPort: 7000,
-        trustedCaFile,
         customDomain: 'openchamber.internal',
         hostname: 'app.example.com',
         tokenFile,
@@ -1235,9 +1238,7 @@ describe('FRPC endpoint CLI', () => {
         },
       });
       const tokenFile = path.join(dir, 'frpc-token');
-      const trustedCaFile = path.join(dir, 'frps-ca.crt');
       fs.writeFileSync(tokenFile, 'not-a-secret', { mode: 0o600 });
-      fs.writeFileSync(trustedCaFile, 'test-ca', { mode: 0o600 });
       fs.writeFileSync(await getPidFilePath(server.port), String(process.pid));
       fs.writeFileSync(await getInstanceFilePath(server.port), JSON.stringify({
         port: server.port,
@@ -1252,7 +1253,6 @@ describe('FRPC endpoint CLI', () => {
           mode: 'managed-remote',
           serverAddress: 'frps.example.com',
           serverPort: 7000,
-          trustedCaFile,
           customDomain: 'openchamber.internal',
           hostname: 'app.example.com',
           tokenFile,
@@ -1267,7 +1267,6 @@ describe('FRPC endpoint CLI', () => {
           token: 'not-a-secret',
           serverAddress: 'frps.example.com',
           serverPort: 7000,
-          trustedCaFile,
           customDomain: 'openchamber.internal',
           hostname: 'app.example.com',
         });
@@ -1279,6 +1278,7 @@ describe('FRPC endpoint CLI', () => {
         expect(result).not.toHaveProperty('remotePort');
         expect(result.replayCommand).toContain('--custom-domain openchamber.internal');
         expect(result.replayCommand).toContain('--hostname app.example.com');
+        expect(result.replayCommand).not.toContain('--frps-ca-file');
         expect(result.replayCommand).not.toContain('--remote-port');
         expect(output).not.toContain('not-a-secret');
       } finally {

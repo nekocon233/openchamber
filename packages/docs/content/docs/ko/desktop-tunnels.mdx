@@ -35,7 +35,7 @@ Ngrok은 현재 빠른 터널을 지원합니다. Cloudflare는 빠른 터널과
 
 ## FRPC 구성
 
-FRPC 설정에서는 프록시 유형으로 **TCP**와 **HTTP 가상 호스트**를 선택할 수 있습니다. FRPS 주소, 제어 포트, 신뢰할 CA 인증서 파일, 공유 토큰을 비공개 토큰 필드에 입력하세요. 두 유형 모두 OpenChamber가 로컬 포트를 자동으로 제공합니다. FRPS는 SAN이 FRPS 주소와 일치하는 인증서를 제공해야 하며, OpenChamber는 이 신원을 검증하고 인증서 검증을 비활성화하지 않습니다.
+FRPC 설정에서는 프록시 유형으로 **TCP**와 **HTTP 가상 호스트**를 선택할 수 있습니다. FRPS 주소, 제어 포트, 공유 토큰을 비공개 토큰 필드에 입력하세요. CA 필드는 없습니다. 두 유형 모두 OpenChamber가 로컬 포트를 자동으로 제공합니다. OpenChamber는 호스트 런타임 신뢰 루트에서 비공개 임시 PEM을 생성해 FRPC에 주입하며, FRPC는 여전히 `transport.tls`를 활성화하고 FRPS 주소와 동일한 `serverName`으로 FRPS 인증서를 검증합니다. OpenChamber는 인증되지 않은 FRPS로부터 CA를 학습하지 않으며 인증서 검증을 비활성화하지도 않습니다. FRPS가 사설 또는 엔터프라이즈 CA를 사용하는 경우, 터널별로 구성하는 대신 해당 CA를 OpenChamber가 실행되는 머신의 OS 신뢰 저장소에 설치하거나 `SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS`로 노출하세요. 호환성을 위해 레거시 호스트 경로 `~/.config/frp/ca.crt` 및 `~/.frp/ca.crt`의 CA 번들도(존재하는 경우) 호스트 신뢰 루트에 병합됩니다.
 
 - **TCP:** 원격 매핑 포트와 정확한 외부 공개 HTTPS 오리진을 입력합니다. FRPC는 매핑된 포트에서 암호화되지 않은 HTTP를 전달하므로 해당 FRPS 포트는 루프백에서만 수신하고 선언한 URL에 Caddy 또는 다른 TLS 종단점을 배치하세요. OpenChamber는 HTTP, 잘못된 URL 또는 오리진 외 요소가 포함된 URL을 거부하며 FRPS 제어 주소에서 브라우저 TLS를 추정하지 않습니다.
 - **HTTP 가상 호스트:** FRPS 라우팅 호스트(custom domain)와 외부 공개 hostname을 입력합니다. 공개 URL은 `https://<hostname>`입니다. Caddy는 포트 `443`에서 HTTPS를 종료하고 FRPS HTTP 가상 호스트 포트로 전달하며, `Host`는 custom domain으로, `X-Forwarded-Host`는 공개 hostname으로 설정합니다.

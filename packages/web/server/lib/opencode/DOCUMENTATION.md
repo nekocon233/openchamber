@@ -254,7 +254,7 @@ This module provides OpenCode server integration utilities for the web server ru
 ## Public exports (cli-options.js)
 - `parseServeCliOptions(options)`: parses serve CLI flags and environment-derived defaults:
   - Port/host/ui-password
-  - Tunnel provider/mode/config/token/hostname and FRPC server/control/trusted-CA/remote-port/public-HTTPS-URL mapping
+  - Tunnel provider/mode/config/token/hostname and FRPC server/control/remote-port/public-HTTPS-URL mapping (FRPS verification uses host runtime trust roots automatically; no trusted-CA option is mapped)
   - Legacy `--tunnel` shorthand normalization
 
 ## Public exports (cli-entry-runtime.js)

@@ -35,7 +35,7 @@ FRPC は手動でインストールする必要がありません。OpenChamber 
 
 ## FRPC を設定する
 
-FRPC の設定では、プロキシタイプとして **TCP** または **HTTP 仮想ホスト** を選べます。FRPS アドレス、制御ポート、信頼する CA 証明書ファイル、共有トークンを非公開のトークン欄に入力します。どちらのタイプでも、OpenChamber がローカルポートを自動設定します。FRPS は SAN が FRPS アドレスと一致する証明書を提示する必要があり、OpenChamber はその ID を検証して証明書検証を無効にしません。
+FRPC の設定では、プロキシタイプとして **TCP** または **HTTP 仮想ホスト** を選べます。FRPS アドレス、制御ポート、共有トークンを非公開のトークン欄に入力します。CA の入力欄はありません。どちらのタイプでも、OpenChamber がローカルポートを自動設定します。OpenChamber はホスト実行環境のトラストルートからプライベートな一時 PEM を生成して FRPC に注入し、FRPC は引き続き `transport.tls` を有効にして、FRPS アドレスと同じ `serverName` で FRPS の証明書を検証します。OpenChamber が未認証の FRPS から CA を学習したり、証明書検証を無効にしたりすることはありません。FRPS がプライベート CA やエンタープライズ CA を使う場合は、トンネルごとに設定するのではなく、OpenChamber を実行するマシンの OS トラストストアにその CA をインストールするか、`SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS` で公開してください。互換性のため、レガシーなホストパス `~/.config/frp/ca.crt` と `~/.frp/ca.crt` にある CA バンドルも（存在する場合）ホストのトラストルートにマージされます。
 
 - **TCP:** リモートマッピングポートと正確な外部公開 HTTPS オリジンを入力します。FRPC はマッピングされたポートで平文 HTTP を転送するため、その FRPS ポートはループバックだけで待ち受け、指定した URL に Caddy などの TLS 終端を配置してください。OpenChamber は HTTP、不正、またはオリジン以外を含む URL を拒否し、FRPS 制御アドレスからブラウザー TLS を推測しません。
 - **HTTP 仮想ホスト:** FRPS ルーティングホスト（custom domain）と外部公開 hostname を入力します。公開 URL は `https://<hostname>` です。Caddy はポート `443` で HTTPS を終端し、FRPS の HTTP 仮想ホストポートへ転送して、`Host` を custom domain、`X-Forwarded-Host` を公開 hostname に設定します。

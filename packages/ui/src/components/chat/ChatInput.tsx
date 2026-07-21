@@ -1499,7 +1499,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     );
     const addToQueue = useMessageQueueStore((state) => state.addToQueue);
     const removeFromQueue = useMessageQueueStore((state) => state.removeFromQueue);
+    const setQueuedStatus = useMessageQueueStore((state) => state.setQueuedStatus);
     const queuedMessageSendInFlightRef = React.useRef<string | null>(null);
+    const queuedDrainInFlightRef = React.useRef<string | null>(null);
     const [sendingQueuedMessageId, setSendingQueuedMessageId] = React.useState<string | null>(null);
 
     // Inline comment drafts
@@ -1771,7 +1773,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     type SubmitOptions = {
         queuedOnly?: boolean;
         queuedMessageId?: string;
-        delivery?: 'steer';
+        delivery?: 'steer' | 'queue';
         /** Submit this text instead of the composer input. Used by preset
             starter chips: on mobile the collapsed pill has no mounted textarea,
             so the DOM-first input snapshot would read empty content. */
@@ -1827,6 +1829,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         }, 0);
     }, []);
 
+    // Explicit send of a queued/staged item: dispatch now (steer while busy).
     const handleQueuedMessageSend = React.useCallback((messageId: string) => {
         if (queuedMessageSendInFlightRef.current) return;
 
@@ -1839,6 +1842,35 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 setSendingQueuedMessageId(null);
             });
     }, []);
+
+    // Mark a staged item as queued: it auto-dispatches once the session goes idle.
+    const handleQueueStagedMessage = React.useCallback((messageId: string) => {
+        if (!currentSessionId) return;
+        setQueuedStatus(currentSessionId, messageId, 'queued');
+    }, [currentSessionId, setQueuedStatus]);
+
+    // Auto-drain queued items one at a time when the session is idle. On failure
+    // the item is demoted back to 'staged' so a broken send does not retry-loop.
+    React.useEffect(() => {
+        if (!currentSessionId) return;
+        if (sessionPhase !== 'idle' || autoReviewRunning) return;
+        if (queuedMessageSendInFlightRef.current || queuedDrainInFlightRef.current) return;
+        const next = queuedMessages.find((entry) => entry.status === 'queued');
+        if (!next) return;
+
+        queuedDrainInFlightRef.current = next.id;
+        setSendingQueuedMessageId(next.id);
+        void handleSubmitRef.current({ queuedOnly: true, queuedMessageId: next.id })
+            .finally(() => {
+                if (queuedDrainInFlightRef.current !== next.id) return;
+                queuedDrainInFlightRef.current = null;
+                setSendingQueuedMessageId(null);
+                const remaining = useMessageQueueStore.getState().queuedMessages[currentSessionId] ?? [];
+                if (remaining.some((entry) => entry.id === next.id)) {
+                    setQueuedStatus(currentSessionId, next.id, 'staged');
+                }
+            });
+    }, [autoReviewRunning, currentSessionId, queuedMessages, sessionPhase, setQueuedStatus]);
 
     const handleOpenAgentPanel = React.useCallback(() => {
         setMobileControlsPanel('agent');
@@ -1859,7 +1891,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     const handleSubmit = async (options?: SubmitOptions) => {
         const queuedOnly = options?.queuedOnly ?? false;
         const queuedMessageId = options?.queuedMessageId;
-        const delivery = options?.delivery === 'steer' && sessionPhase !== 'idle' ? 'steer' : undefined;
+        const delivery = options?.delivery && sessionPhase !== 'idle' ? options.delivery : undefined;
         const inputSnapshot = options?.presetText != null
             ? {
                 message: options.presetText,
@@ -4618,6 +4650,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 <AttachedFilesList onShowPopup={handleShowAttachmentPreview} />
                 <QueuedMessageChips
                     onEditMessage={handleQueuedMessageEdit}
+                    onQueueMessage={handleQueueStagedMessage}
                     onSendMessage={handleQueuedMessageSend}
                     sendingMessageId={sendingQueuedMessageId}
                 />
