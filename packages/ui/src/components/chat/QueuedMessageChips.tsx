@@ -60,83 +60,91 @@ const QueuedMessageChip = memo(({ message, sessionId, sendingMessageId, onEdit, 
             ref={setNodeRef}
             // Translate only (no scaleX/scaleY) so the lifted row keeps its size.
             style={{ transform: CSS.Translate.toString(transform), transition }}
-            className={cn('flex min-w-0 items-center gap-2 py-1', isDragging && 'z-10 opacity-60')}
+            className={cn('flex min-w-0 flex-col gap-1.5 py-1.5 md:flex-row md:items-center md:gap-2 md:py-1', isDragging && 'z-10 opacity-60')}
             aria-busy={isSending}
         >
-            <button
-                type="button"
-                disabled={isSending}
-                {...attributes}
-                {...listeners}
-                className="flex flex-shrink-0 cursor-grab touch-none select-none items-center justify-center text-muted-foreground hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-40"
-                aria-label={t('chat.queuedMessage.reorderAria')}
-            >
-                <Icon name="draggable" className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <span className="min-w-0 flex-1 truncate typography-ui-label text-foreground">
-                {firstLine || t('chat.queuedMessage.empty')}
-                {attachmentCount > 0 && (
-                    <span className="ml-1 text-muted-foreground">{t('chat.queuedMessage.attachments', { count: attachmentCount })}</span>
-                )}
-            </span>
-            {isQueued && (
-                <span className="flex-shrink-0 rounded-full bg-[var(--interactive-hover)] px-2 py-0.5 typography-ui-label text-muted-foreground">
-                    {t('chat.queuedMessage.queued')}
+            <div className="flex min-w-0 items-center gap-2 md:contents">
+                <button
+                    type="button"
+                    disabled={isSending}
+                    {...attributes}
+                    {...listeners}
+                    className="flex size-11 flex-shrink-0 cursor-grab touch-none select-none items-center justify-center text-muted-foreground hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-40 md:size-auto"
+                    aria-label={t('chat.queuedMessage.reorderAria')}
+                >
+                    <Icon name="draggable" className="h-4 w-4" aria-hidden="true" />
+                </button>
+                <span className="min-w-0 flex-1 truncate typography-ui-label text-foreground">
+                    {firstLine || t('chat.queuedMessage.empty')}
+                    {attachmentCount > 0 && (
+                        <span className="ml-1 text-muted-foreground">{t('chat.queuedMessage.attachments', { count: attachmentCount })}</span>
+                    )}
                 </span>
-            )}
-            <Button
-                type="button"
-                variant="secondary"
-                size="xs"
-                disabled={isSending}
-                onClick={() => onEdit(message)}
-            >
-                <Icon name="edit" className="h-3 w-3" aria-hidden="true" />
-                {t('chat.queuedMessage.edit')}
-            </Button>
-            {isQueued ? (
-                <>
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        size="xs"
-                        disabled={sendingMessageId !== null}
-                        onClick={() => setQueuedStatus(sessionId, message.id, 'staged')}
-                    >
-                        {t('chat.queuedMessage.unqueue')}
-                    </Button>
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        size="xs"
-                        disabled={sendingMessageId !== null}
-                        onClick={() => onSend(message)}
-                    >
-                        <Icon name={isSending ? 'loader-4' : 'send-plane'} className={cn('h-3 w-3', isSending && 'animate-spin')} aria-hidden="true" />
-                        {t('chat.queuedMessage.send')}
-                    </Button>
-                </>
-            ) : (
+                {isQueued && (
+                    <span className="flex-shrink-0 rounded-full bg-[var(--interactive-hover)] px-2 py-0.5 typography-ui-label text-muted-foreground">
+                        {t('chat.queuedMessage.queued')}
+                    </span>
+                )}
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 md:ml-auto md:flex-nowrap">
                 <Button
                     type="button"
                     variant="secondary"
                     size="xs"
-                    disabled={sendingMessageId !== null}
-                    onClick={() => onQueue(message)}
+                    className="h-11 px-3 md:h-6 md:px-2"
+                    disabled={isSending}
+                    onClick={() => onEdit(message)}
                 >
-                    <Icon name="time" className="h-3 w-3" aria-hidden="true" />
-                    {t('chat.queuedMessage.queue')}
+                    <Icon name="edit" className="h-3 w-3" aria-hidden="true" />
+                    {t('chat.queuedMessage.edit')}
                 </Button>
-            )}
-            <button
-                type="button"
-                disabled={isSending}
-                onClick={() => removeFromQueue(sessionId, message.id)}
-                className="flex items-center justify-center h-6 w-6 flex-shrink-0 hover:bg-[var(--interactive-hover)] rounded-full transition-colors disabled:opacity-40"
-                aria-label={t('chat.queuedMessage.removeAria')}
-            >
-                <Icon name="close" className="h-4 w-4 text-muted-foreground" />
-            </button>
+                {isQueued ? (
+                    <>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="xs"
+                            className="h-11 px-3 md:h-6 md:px-2"
+                            disabled={sendingMessageId !== null}
+                            onClick={() => setQueuedStatus(sessionId, message.id, 'staged')}
+                        >
+                            {t('chat.queuedMessage.unqueue')}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="xs"
+                            className="h-11 px-3 md:h-6 md:px-2"
+                            disabled={sendingMessageId !== null}
+                            onClick={() => onSend(message)}
+                        >
+                            <Icon name={isSending ? 'loader-4' : 'send-plane'} className={cn('h-3 w-3', isSending && 'animate-spin')} aria-hidden="true" />
+                            {t('chat.queuedMessage.send')}
+                        </Button>
+                    </>
+                ) : (
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="xs"
+                        className="h-11 px-3 md:h-6 md:px-2"
+                        disabled={sendingMessageId !== null}
+                        onClick={() => onQueue(message)}
+                    >
+                        <Icon name="time" className="h-3 w-3" aria-hidden="true" />
+                        {t('chat.queuedMessage.queue')}
+                    </Button>
+                )}
+                <button
+                    type="button"
+                    disabled={isSending}
+                    onClick={() => removeFromQueue(sessionId, message.id)}
+                    className="flex size-11 flex-shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--interactive-hover)] disabled:opacity-40 md:size-6"
+                    aria-label={t('chat.queuedMessage.removeAria')}
+                >
+                    <Icon name="close" className="h-4 w-4 text-muted-foreground" />
+                </button>
+            </div>
         </div>
     );
 });
@@ -223,7 +231,7 @@ export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendM
                         items={queuedMessages.map((m) => m.id)}
                         strategy={verticalListSortingStrategy}
                     >
-                        <div className="px-3 pb-3 flex flex-col gap-1.5 max-h-[10.5rem] overflow-y-auto">
+                        <div className="flex max-h-[40dvh] flex-col gap-1.5 overflow-y-auto px-3 pb-3 md:max-h-[10.5rem]">
                             {queuedMessages.map((message) => (
                                 <QueuedMessageChip
                                     key={message.id}
