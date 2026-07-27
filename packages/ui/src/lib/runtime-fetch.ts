@@ -1,11 +1,19 @@
 import { getActiveRelayTunnel } from './relay/runtime-tunnel';
 import { TUNNEL_PARSE_BASE } from './relay/tunnel-payloads';
 import { buildRuntimeAuthHeaders } from './runtime-auth';
+import { getRuntimeEndpointGeneration, getRuntimeKey } from './runtime-switch';
 import { getRuntimeUrlResolver, type RuntimeUrlQuery } from './runtime-url';
 
 export interface RuntimeFetchOptions extends RequestInit {
   query?: RuntimeUrlQuery;
+  expectedRuntimeKey?: string;
 }
+
+const assertExpectedRuntime = (expectedRuntimeKey?: string): void => {
+  if (expectedRuntimeKey && getRuntimeKey() !== expectedRuntimeKey) {
+    throw new DOMException('Runtime changed before request dispatch', 'AbortError');
+  }
+};
 
 const shouldResolveApiPath = (input: string): boolean => {
   return input.startsWith('/api/') || input === '/api' || input.startsWith('/auth/') || input === '/auth' || input === '/health';
@@ -232,18 +240,37 @@ const resolveRuntimeFetchInput = (input: string | URL | Request, query?: Runtime
 // requests — it never serves a stale/cached response.
 // ---------------------------------------------------------------------------
 const COALESCE_READ_PATH = /\/api\/(config|path|app\/agents|agent|project|command)(\b|\/|\?|$)/;
+const READ_COALESCE_TIMEOUT_MS = 30_000;
 const READ_COALESCE = new Map<string, Promise<Response>>();
 
-const coalesceReadKey = (method: string, url: string, hasSignal: boolean): string | null => {
-  if (hasSignal) return null;
+const coalesceReadKey = (
+  method: string,
+  url: string,
+  hasRequestContext: boolean,
+  runtimeKey: string,
+  runtimeGeneration: number,
+): string | null => {
+  if (hasRequestContext) return null;
   if (method !== 'GET') return null;
   if (url.includes('/event')) return null;
   if (!COALESCE_READ_PATH.test(url)) return null;
-  return `GET ${url}`;
+  return `${runtimeGeneration}\u0000${runtimeKey}\u0000GET ${url}`;
 };
 
 export const runtimeFetch = async (input: string | URL | Request, init: RuntimeFetchOptions = {}): Promise<Response> => {
-  const { query, ...requestInit } = init;
+  const { query, expectedRuntimeKey, ...requestInit } = init;
+  assertExpectedRuntime(expectedRuntimeKey);
+  const runtimeKey = getRuntimeKey();
+  const runtimeGeneration = getRuntimeEndpointGeneration();
+  const assertDispatchContext = () => {
+    assertExpectedRuntime(expectedRuntimeKey);
+    if (
+      getRuntimeKey() !== runtimeKey
+      || getRuntimeEndpointGeneration() !== runtimeGeneration
+    ) {
+      throw new DOMException('Runtime changed before request dispatch', 'AbortError');
+    }
+  };
 
   // Resolve the transport once — relay tunnel or network — then apply the SAME
   // read-coalescing to both. On a relay the tunnel is bandwidth/latency-bound, so
@@ -251,24 +278,26 @@ export const runtimeFetch = async (input: string | URL | Request, init: RuntimeF
   const relay = getActiveRelayTunnel();
   const relayPath = relay ? extractRelayPath(input, query) : null;
 
-  let doFetch: () => Promise<Response>;
+  let doFetch: (signal?: AbortSignal) => Promise<Response>;
   let url: string;
   let method: string;
   if (relay && relayPath !== null) {
     const inputHeaders = input instanceof Request ? input.headers : undefined;
     const headers = await mergeHeaders(inputHeaders, requestInit.headers, true);
+    assertDispatchContext();
     doFetch = input instanceof Request
-      ? () => relay.fetch(input, { ...requestInit, headers })
-      : () => relay.fetch(relayPath, { ...requestInit, headers });
+      ? (signal) => relay.fetch(input, { ...requestInit, ...(signal ? { signal } : {}), headers })
+      : (signal) => relay.fetch(relayPath, { ...requestInit, ...(signal ? { signal } : {}), headers });
     url = relayPath;
     method = String(requestInit.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
   } else {
     const resolvedInput = resolveRuntimeFetchInput(input, query);
     const inputHeaders = resolvedInput instanceof Request ? resolvedInput.headers : undefined;
     const headers = await mergeHeaders(inputHeaders, requestInit.headers, shouldAttachRuntimeAuth(resolvedInput));
+    assertDispatchContext();
     doFetch = resolvedInput instanceof Request
-      ? () => fetch(new Request(resolvedInput, { ...requestInit, headers }))
-      : () => fetch(resolvedInput, { ...requestInit, headers });
+      ? (signal) => fetch(new Request(resolvedInput, { ...requestInit, ...(signal ? { signal } : {}), headers }))
+      : (signal) => fetch(resolvedInput, { ...requestInit, ...(signal ? { signal } : {}), headers });
     url =
       resolvedInput instanceof Request ? resolvedInput.url
       : resolvedInput instanceof URL ? resolvedInput.toString()
@@ -278,22 +307,48 @@ export const runtimeFetch = async (input: string | URL | Request, init: RuntimeF
     ).toUpperCase();
   }
 
-  // A Request always carries a (possibly default) signal; treat any Request, or
-  // an explicit init.signal, as "has signal" and skip coalescing for safety.
-  const hasSignal = requestInit.signal != null || input instanceof Request;
+  // Coalesce only context-free reads. Custom headers and fetch policy can vary
+  // authority, directory, credentials, or cache semantics even for one URL.
+  const hasRequestContext = input instanceof Request
+    || requestInit.signal != null
+    || requestInit.headers != null
+    || requestInit.cache != null
+    || requestInit.credentials != null
+    || requestInit.integrity != null
+    || requestInit.mode != null
+    || requestInit.redirect != null
+    || requestInit.referrer != null
+    || requestInit.referrerPolicy != null;
 
-  const key = coalesceReadKey(method, url, hasSignal);
+  const key = coalesceReadKey(method, url, hasRequestContext, runtimeKey, runtimeGeneration);
+  assertDispatchContext();
   if (!key) return doFetch();
 
   const existing = READ_COALESCE.get(key);
   if (existing) return existing.then((res) => res.clone());
 
-  const pending = doFetch();
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new DOMException('Runtime read timed out', 'TimeoutError'));
+    }, READ_COALESCE_TIMEOUT_MS);
+  });
+  let request: Promise<Response>;
+  try {
+    request = doFetch(controller.signal);
+  } catch (error) {
+    if (timer) clearTimeout(timer);
+    throw error;
+  }
+  const pending = Promise.race([request, timeout]);
   READ_COALESCE.set(key, pending);
-  pending.then(
-    () => READ_COALESCE.delete(key),
-    () => READ_COALESCE.delete(key),
-  );
+  const settle = () => {
+    if (timer) clearTimeout(timer);
+    if (READ_COALESCE.get(key) === pending) READ_COALESCE.delete(key);
+  };
+  pending.then(settle, settle);
   return pending.then((res) => res.clone());
 };
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { gzipSync } from 'node:zlib';
 import express from 'express';
 import path from 'path';
 
@@ -87,6 +88,42 @@ describe('OpenCode proxy SSE forwarding', () => {
     expect(response.headers.get('x-upstream-test')).toBe('ok');
     expect(await response.text()).toBe('data: {"ok":true}\n\n');
     expect(seenAuthorization).toBe('Bearer test-token');
+  });
+
+  it('reports only proxy-confirmed session deletions', async () => {
+    const upstream = express();
+    upstream.delete('/session/:id', (req, res) => {
+      if (req.params.id === 'missing') return res.status(404).json({ error: 'missing' });
+      return res.status(204).end();
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const deletedSessions = [];
+
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+      onSessionDeleted: (sessionId) => deletedSessions.push(sessionId),
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    await fetch(`http://127.0.0.1:${proxyPort}/api/session/session%20deleted`, { method: 'DELETE' });
+    await fetch(`http://127.0.0.1:${proxyPort}/api/session/missing`, { method: 'DELETE' });
+
+    expect(deletedSessions).toEqual(['session deleted']);
   });
 
   it('terminates an established global event stream when its auth identity is revoked', async () => {
@@ -274,6 +311,87 @@ describe('OpenCode proxy SSE forwarding', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, source: 'external-host' });
+  });
+
+  it('preserves content encoding while streaming generic proxy responses', async () => {
+    const upstream = express();
+    upstream.get('/compressed', (_req, res) => {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Encoding', 'gzip');
+      res.end(gzipSync('compressed upstream body'));
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/compressed`);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('compressed upstream body');
+  });
+
+  it('never forwards OpenChamber client credentials through the generic API proxy', async () => {
+    let upstreamHeaders;
+    const upstream = express();
+    upstream.get('/credential-check', (req, res) => {
+      upstreamHeaders = req.headers;
+      res.status(404).json({ error: 'not found' });
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    await fetch(`http://127.0.0.1:${proxyPort}/api/credential-check`, {
+      headers: {
+        Authorization: 'Bearer openchamber-client-secret',
+        Cookie: 'openchamber_session=private',
+        'Proxy-Authorization': 'Basic private',
+        'X-OpenChamber-Relay-Connection': 'private-connection-id',
+        'X-Forwarded-Test': 'preserved',
+      },
+    });
+
+    expect(upstreamHeaders.authorization).toBeUndefined();
+    expect(upstreamHeaders.cookie).toBeUndefined();
+    expect(upstreamHeaders['proxy-authorization']).toBeUndefined();
+    expect(upstreamHeaders['x-openchamber-relay-connection']).toBeUndefined();
+    expect(upstreamHeaders['x-forwarded-test']).toBe('preserved');
   });
 
   it('replays parsed urlencoded bodies to generic API proxy requests', async () => {

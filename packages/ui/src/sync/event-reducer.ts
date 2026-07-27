@@ -269,12 +269,16 @@ export function applyDirectoryEvent(
     }
 
     case "session.deleted": {
-      const info = (event.properties as { info: Session }).info
+      const properties = event.properties as { sessionID?: string; info?: Session }
+      const info = properties.info
+      const sessionID = properties.sessionID ?? info?.id
+      if (!sessionID) return false
       const sessions = draft.session
-      const result = Binary.search(sessions, info.id, (s) => s.id)
+      const result = Binary.search(sessions, sessionID, (s) => s.id)
+      const removed = result.found ? sessions[result.index] : undefined
       if (result.found) sessions.splice(result.index, 1)
-      cleanupSessionCaches(draft, info.id, callbacks?.onSetSessionTodo)
-      if (!info.parentID) draft.sessionTotal = Math.max(0, draft.sessionTotal - 1)
+      cleanupSessionCaches(draft, sessionID, callbacks?.onSetSessionTodo)
+      if (!(info?.parentID ?? removed?.parentID)) draft.sessionTotal = Math.max(0, draft.sessionTotal - 1)
       return true
     }
 

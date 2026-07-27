@@ -11,6 +11,7 @@ import type { ChildStoreManager } from "./child-store"
 import { computeSubtreeIds } from "./scoped-blocking-requests"
 import { opencodeClient } from "@/lib/opencode/client"
 import { mergeSessionDirectoryMetadata, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
+import { useMessageQueueStore } from "@/stores/messageQueueStore"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { registerSessionDirectory } from "./sync-refs"
 import { isSyntheticPart } from "@/lib/messages/synthetic"
@@ -30,7 +31,16 @@ import {
 import { withContextObligatoryMessage, type ContextObligatoryMessage } from "@/lib/contextObligatoryMessages"
 import { setGlobalSessionStatus } from "./global-session-status"
 import { clearPersistedSessionNavigation } from "./session-navigation"
-import { getRuntimeKey } from "@/lib/runtime-switch"
+import {
+  getRuntimeEndpointGeneration,
+  getRuntimeKey,
+  RuntimeContextChangedError,
+} from "@/lib/runtime-switch"
+import { createOpenCodeIdentifier } from "@/lib/opencode/identifier"
+import {
+  getSessionRemovalRevision,
+  wasSessionRemovedSince,
+} from "./session-event-freshness"
 
 const MESSAGE_REFETCH_LIMIT = 100
 const SEND_CONFIRMATION_REFETCH_LIMIT = 30
@@ -220,7 +230,7 @@ function getErrorStatus(error: unknown): number | null {
   return typeof response?.status === "number" ? response.status : null
 }
 
-function isAmbiguousSendFailure(error: unknown): boolean {
+export function isAmbiguousSendFailure(error: unknown): boolean {
   const status = getErrorStatus(error)
   if (status === 503 || status === 504 || status === 408) return true
   if (error instanceof TypeError) return true
@@ -240,6 +250,9 @@ function isAmbiguousSendFailure(error: unknown): boolean {
     || message.includes("gateway timeout")
     || message.includes("econnreset")
     || message.includes("socket hang up")
+    || message.includes("may still be processing")
+    || message.includes("being processed")
+    || message === "failed to send message"
 }
 
 // Wait briefly for the pipeline to re-establish connection before failing a
@@ -275,6 +288,8 @@ type DirectoryStoreApi = ReturnType<ChildStoreManager["ensureChild"]>
 type SessionActionRuntimeContext = {
   runtimeKey: string
   generation: number
+  actionGeneration: number
+  runtimeGeneration: number
   childStores: ChildStoreManager | null
 }
 
@@ -288,14 +303,17 @@ class SessionActionRuntimeChangedError extends Error {
 function captureSessionActionRuntime(): SessionActionRuntimeContext {
   return {
     runtimeKey: getRuntimeKey(),
-    generation: _actionGeneration,
+    generation: useMessageQueueStore.getState().generation,
+    actionGeneration: _actionGeneration,
+    runtimeGeneration: getRuntimeEndpointGeneration(),
     childStores: _childStores,
   }
 }
 
 function isSessionActionRuntimeCurrent(context: SessionActionRuntimeContext): boolean {
   return getRuntimeKey() === context.runtimeKey
-    && _actionGeneration === context.generation
+    && _actionGeneration === context.actionGeneration
+    && getRuntimeEndpointGeneration() === context.runtimeGeneration
     && _childStores === context.childStores
 }
 
@@ -476,7 +494,9 @@ export async function createSession(
   parentID?: string | null,
   metadata?: Record<string, unknown>,
 ): Promise<Session | null> {
+  const runtimeContext = captureSessionActionRuntime()
   try {
+    assertSessionActionRuntimeCurrent(runtimeContext)
     // Capture the effective directory used for session creation so we can fall
     // back to it when the server response omits the `directory` field.
     // Without this, setCurrentSession would fall through to a stale
@@ -488,6 +508,7 @@ export async function createSession(
       parentID: parentID ?? undefined,
       metadata,
     }, effectiveDirectory)
+    assertSessionActionRuntimeCurrent(runtimeContext)
 
     const sessionDirectory = (session as { directory?: string | null }).directory ?? effectiveDirectory ?? null
     // Pre-populate routing index so SSE events arriving before session.created
@@ -628,12 +649,15 @@ function cleanupSessionNavigation(
   if (!isSessionActionRuntimeCurrent(runtimeContext)) return
   const ui = useSessionUIStore.getState()
   if (ui.currentSessionId === sessionId) ui.setCurrentSession(null)
-  if (clearWorktreeMetadata) cleanupSessionWorktreeMetadata(sessionId)
+  if (clearWorktreeMetadata) {
+    cleanupSessionWorktreeMetadata(sessionId)
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function deleteSession(sessionId: string, _options?: Record<string, unknown>): Promise<boolean> {
   const runtimeContext = captureSessionActionRuntime()
+  const removalRevision = getSessionRemovalRevision()
   const sessionDirectory = getSessionDirectory(sessionId)
   const snapshots = optimisticRemoveSession(runtimeContext.childStores, sessionId, sessionDirectory)
   const globalSnapshot = getGlobalSessionSnapshot(sessionId)
@@ -646,13 +670,17 @@ export async function deleteSession(sessionId: string, _options?: Record<string,
     remoteMutationStarted = true
     const deleted = await opencodeClient.deleteSession(sessionId, sessionDirectory)
     if (!isSessionActionRuntimeCurrent(runtimeContext)) {
-      if (deleted === true) cleanupSessionNavigation(sessionId, runtimeContext, true)
+      if (deleted === true) {
+        useMessageQueueStore.getState().dropSession(sessionId, runtimeContext)
+        cleanupSessionNavigation(sessionId, runtimeContext, true)
+      }
       return deleted === true
     }
     if (deleted !== true) {
       throw new Error("session.delete failed: server did not confirm deletion")
     }
     useGlobalSessionsStore.getState().removeSessions([sessionId])
+    useMessageQueueStore.getState().dropSession(sessionId, runtimeContext)
     cleanupSessionNavigation(sessionId, runtimeContext, true)
     return true
   } catch (error) {
@@ -661,10 +689,14 @@ export async function deleteSession(sessionId: string, _options?: Record<string,
     // Subsequent delete attempts for those children return 404; treat as
     // success since the session was already deleted by the cascade.
     if (remoteMutationStarted && (error as { status?: number })?.status === 404) {
+      useMessageQueueStore.getState().dropSession(sessionId, runtimeContext)
       cleanupSessionNavigation(sessionId, runtimeContext, true)
       return true
     }
-    if (isSessionActionRuntimeCurrent(runtimeContext)) {
+    if (
+      isSessionActionRuntimeCurrent(runtimeContext)
+      && !wasSessionRemovedSince(sessionId, removalRevision)
+    ) {
       restoreRemovedSessions(snapshots)
       restoreGlobalSessionSnapshot(globalSnapshot)
     }
@@ -675,6 +707,7 @@ export async function deleteSession(sessionId: string, _options?: Record<string,
 /** Delete a session specifying which directory it lives in. Used by agent groups for cross-directory deletes. */
 export async function deleteSessionInDirectory(sessionId: string, directory: string): Promise<boolean> {
   const runtimeContext = captureSessionActionRuntime()
+  const removalRevision = getSessionRemovalRevision()
   if (!runtimeContext.childStores) return false
   const snapshots = optimisticRemoveSession(runtimeContext.childStores, sessionId, directory)
   const globalSnapshot = getGlobalSessionSnapshot(sessionId)
@@ -686,22 +719,30 @@ export async function deleteSessionInDirectory(sessionId: string, directory: str
     remoteMutationStarted = true
     const deleted = await opencodeClient.deleteSession(sessionId, directory)
     if (!isSessionActionRuntimeCurrent(runtimeContext)) {
-      if (deleted === true) cleanupSessionNavigation(sessionId, runtimeContext, true)
+      if (deleted === true) {
+        useMessageQueueStore.getState().dropSession(sessionId, runtimeContext)
+        cleanupSessionNavigation(sessionId, runtimeContext, true)
+      }
       return deleted === true
     }
     if (deleted !== true) {
       throw new Error("session.delete failed: server did not confirm deletion")
     }
     useGlobalSessionsStore.getState().removeSessions([sessionId])
+    useMessageQueueStore.getState().dropSession(sessionId, runtimeContext)
     cleanupSessionNavigation(sessionId, runtimeContext, true)
     return true
   } catch (error) {
     console.error("[session-actions] deleteSessionInDirectory failed", error)
     if (remoteMutationStarted && (error as { status?: number })?.status === 404) {
+      useMessageQueueStore.getState().dropSession(sessionId, runtimeContext)
       cleanupSessionNavigation(sessionId, runtimeContext, true)
       return true
     }
-    if (isSessionActionRuntimeCurrent(runtimeContext)) {
+    if (
+      isSessionActionRuntimeCurrent(runtimeContext)
+      && !wasSessionRemovedSince(sessionId, removalRevision)
+    ) {
       restoreRemovedSessions(snapshots)
       restoreGlobalSessionSnapshot(globalSnapshot)
     }
@@ -711,6 +752,7 @@ export async function deleteSessionInDirectory(sessionId: string, directory: str
 
 export async function archiveSession(sessionId: string): Promise<boolean> {
   const runtimeContext = captureSessionActionRuntime()
+  const removalRevision = getSessionRemovalRevision()
   const sessionDirectory = getSessionDirectory(sessionId)
   const snapshots = optimisticRemoveSession(runtimeContext.childStores, sessionId, sessionDirectory)
   const globalSnapshot = getGlobalSessionSnapshot(sessionId)
@@ -732,7 +774,10 @@ export async function archiveSession(sessionId: string): Promise<boolean> {
     return true
   } catch (error) {
     console.error("[session-actions] archiveSession failed", error)
-    if (isSessionActionRuntimeCurrent(runtimeContext)) {
+    if (
+      isSessionActionRuntimeCurrent(runtimeContext)
+      && !wasSessionRemovedSince(sessionId, removalRevision)
+    ) {
       restoreRemovedSessions(snapshots)
       restoreGlobalSessionSnapshot(globalSnapshot)
     }
@@ -741,15 +786,21 @@ export async function archiveSession(sessionId: string): Promise<boolean> {
 }
 
 export async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
+  const runtimeContext = captureSessionActionRuntime()
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const sessionDirectory = getSessionDirectory(sessionId)
   const session = await opencodeClient.updateSession(sessionId, { title }, sessionDirectory)
+  assertSessionActionRuntimeCurrent(runtimeContext)
   useGlobalSessionsStore.getState().upsertSession(session)
   mirrorSessionIntoLiveStores(session, sessionDirectory)
 }
 
 export async function shareSession(sessionId: string): Promise<Session | null> {
+  const runtimeContext = captureSessionActionRuntime()
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const sessionDirectory = getSessionDirectory(sessionId)
   const result = await sdk().session.share({ sessionID: sessionId, directory: sessionDirectory })
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const session = stripSessionDiffSnapshots(assertSdkData(result, "session.share"))
   useGlobalSessionsStore.getState().upsertSession(session)
   updateLiveSession(session, sessionDirectory)
@@ -757,8 +808,11 @@ export async function shareSession(sessionId: string): Promise<Session | null> {
 }
 
 export async function unshareSession(sessionId: string): Promise<Session | null> {
+  const runtimeContext = captureSessionActionRuntime()
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const sessionDirectory = getSessionDirectory(sessionId)
   const result = await sdk().session.unshare({ sessionID: sessionId, directory: sessionDirectory })
+  assertSessionActionRuntimeCurrent(runtimeContext)
   const session = stripSessionDiffSnapshots(assertSdkData(result, "session.unshare"))
   useGlobalSessionsStore.getState().upsertSession(session)
   updateLiveSession(session, sessionDirectory)
@@ -768,40 +822,6 @@ export async function unshareSession(sessionId: string): Promise<Session | null>
 // ---------------------------------------------------------------------------
 // Optimistic message send — insert user message before API call, rollback on error
 // ---------------------------------------------------------------------------
-
-// ID generator matching OpenCode's Identifier.ascending format.
-// Uses BigInt(timestamp) * 0x1000 + counter, encoded as 6 hex bytes + random base62.
-// This ensures client-generated IDs sort correctly with server-generated ones.
-let lastIdTimestamp = 0
-let idCounter = 0
-
-function ascendingId(prefix: string): string {
-  const now = Date.now()
-  if (now !== lastIdTimestamp) {
-    lastIdTimestamp = now
-    idCounter = 0
-  }
-  idCounter += 1
-
-  const value = BigInt(now) * BigInt(0x1000) + BigInt(idCounter)
-  const bytes = new Uint8Array(6)
-  for (let i = 0; i < 6; i++) {
-    bytes[i] = Number((value >> BigInt(40 - 8 * i)) & BigInt(0xff))
-  }
-
-  let hex = ""
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i].toString(16).padStart(2, "0")
-  }
-
-  const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-  let rand = ""
-  for (let i = 0; i < 14; i++) {
-    rand += chars[Math.floor(Math.random() * 62)]
-  }
-
-  return `${prefix}_${hex}${rand}`
-}
 
 /**
  * Wraps an async send operation with optimistic user-message insertion.
@@ -817,9 +837,11 @@ export async function optimisticSend(input: {
   agent?: string
   directory?: string | null
   files?: Array<{ type: "file"; mime: string; url: string; filename: string }>
+  messageId?: string
   onOptimisticInsert?: () => void
   onMessageID?: (messageID: string) => void
-  beforeOptimisticInsert?: () => void
+  beforeOptimisticInsert?: () => void | Promise<void>
+  expectedRuntime?: { runtimeKey: string; generation: number }
   /** The actual API call — receives the optimistic messageID so the server can use the same ID */
   send: (messageID: string) => Promise<void>
 }): Promise<void> {
@@ -827,21 +849,33 @@ export async function optimisticSend(input: {
     throw new Error("Optimistic refs not set — is useSync() mounted?")
   }
 
+  const assertExpectedRuntime = () => {
+    if (
+      input.expectedRuntime
+      && (
+        getRuntimeKey() !== input.expectedRuntime.runtimeKey
+        || getRuntimeEndpointGeneration() !== input.expectedRuntime.generation
+      )
+    ) throw new RuntimeContextChangedError()
+  }
+  assertExpectedRuntime()
   await waitForConnectionOrThrow()
-  input.beforeOptimisticInsert?.()
+  assertExpectedRuntime()
+  await input.beforeOptimisticInsert?.()
+  assertExpectedRuntime()
 
   const targetDirectory = input.directory ?? dir()
   const store = targetDirectory ? dirStoreForDirectory(targetDirectory) : dirStore()
-  const messageID = ascendingId("msg")
+  const messageID = input.messageId ?? createOpenCodeIdentifier("msg")
   input.onMessageID?.(messageID)
-  const textPartId = ascendingId("prt")
+  const textPartId = createOpenCodeIdentifier("prt")
 
   const optimisticParts: Part[] = [
     { id: textPartId, type: "text", text: input.content } as Part,
   ]
   if (input.files) {
     for (const f of input.files) {
-      optimisticParts.push({ id: ascendingId("prt"), type: "file", mime: f.mime, url: f.url, filename: f.filename } as Part)
+      optimisticParts.push({ id: createOpenCodeIdentifier("prt"), type: "file", mime: f.mime, url: f.url, filename: f.filename } as Part)
     }
   }
 
@@ -879,11 +913,19 @@ export async function optimisticSend(input: {
   setGlobalSessionStatus(input.sessionId, targetDirectory, "busy", { optimistic: true })
 
   try {
+    assertExpectedRuntime()
     await input.send(messageID)
   } catch (error) {
+    assertExpectedRuntime()
     const acceptedRecords = isAmbiguousSendFailure(error)
-      ? await fetchRecentSendConfirmationRecords(input.sessionId, messageID, targetDirectory)
+      ? await fetchRecentSendConfirmationRecords(
+        input.sessionId,
+        messageID,
+        targetDirectory,
+        assertExpectedRuntime,
+      )
       : null
+    assertExpectedRuntime()
 
     if (acceptedRecords) {
       materializeConfirmedSendRecords(store, input.sessionId, messageID, acceptedRecords)
@@ -917,9 +959,11 @@ async function fetchRecentSendConfirmationRecords(
   sessionId: string,
   messageID: string,
   directory?: string | null,
+  assertExpectedRuntime?: () => void,
 ): Promise<Array<{ info: Message; parts?: Part[] }> | null> {
   for (let attempt = 0; attempt < SEND_CONFIRMATION_REFETCH_ATTEMPTS; attempt += 1) {
     if (attempt > 0) await wait(SEND_CONFIRMATION_REFETCH_RETRY_MS)
+    assertExpectedRuntime?.()
     try {
       const result = await sdk().session.messages({
         sessionID: sessionId,
@@ -929,11 +973,13 @@ async function fetchRecentSendConfirmationRecords(
       const records = (assertSdkSuccess(result, "session.messages") ?? [])
         .filter((record: { info?: { id?: string } }) => !!record?.info?.id) as Array<{ info: Message; parts?: Part[] }>
       if (records.some((record) => record.info.id === messageID)) {
+        assertExpectedRuntime?.()
         return records
       }
     } catch {
       // Confirmation is best-effort; if it fails, keep the original send error path.
     }
+    assertExpectedRuntime?.()
   }
   return null
 }

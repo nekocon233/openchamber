@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { buildRuntimeFetchUrl, isLatin1Safe, runtimeFetch, sanitizeHeadersForBrowser } from './runtime-fetch';
 import { clearRuntimeAuthCredentialProvider, setRuntimeBearerToken } from './runtime-auth';
+import { getRuntimeApiBaseUrl, getRuntimeKey, switchRuntimeEndpoint } from './runtime-switch';
 import { adoptRelayTunnel, deactivateRelayTunnel } from './relay/runtime-tunnel';
 import type { RelayTunnelClient } from './relay/tunnel-client';
 import { configureRuntimeUrlResolver, getRuntimeUrlResolver, setRuntimeUrlResolver } from './runtime-url';
@@ -51,6 +52,30 @@ describe('buildRuntimeFetchUrl', () => {
 });
 
 describe('runtimeFetch transport contract', () => {
+  test('rejects before dispatch when the expected runtime is no longer active', async () => {
+    const previousApiBaseUrl = getRuntimeApiBaseUrl();
+    const previousRuntimeKey = getRuntimeKey();
+    let dispatched = false;
+    try {
+      switchRuntimeEndpoint({ apiBaseUrl: 'https://runtime-b.example', runtimeKey: 'runtime-b' });
+      globalThis.fetch = (async () => {
+        dispatched = true;
+        return new Response(null, { status: 200 });
+      }) as typeof fetch;
+
+      await expect(runtimeFetch('/auth/follow-up-queue/mutations', {
+        method: 'POST',
+        body: 'private queue item',
+        expectedRuntimeKey: 'runtime-a',
+      })).rejects.toThrow('Runtime changed before request dispatch');
+      expect(dispatched).toBe(false);
+    } finally {
+      switchRuntimeEndpoint({ apiBaseUrl: previousApiBaseUrl, runtimeKey: previousRuntimeKey });
+      globalThis.fetch = originalFetch;
+      clearRuntimeAuthCredentialProvider();
+    }
+  });
+
   test('preserves bodies from actual SDK mutation requests on same-origin runtimes', async () => {
     const previous = getRuntimeUrlResolver();
     const originalWindow = globalThis.window;
@@ -401,8 +426,50 @@ describe('runtimeFetch read coalescing', () => {
         runtimeFetch('/api/config/providers', { signal: AbortSignal.timeout(1000) }),
       ]);
       expect(calls).toBe(2);
+
+      calls = 0;
+      // Directory/auth-affecting custom headers must retain request identity.
+      await Promise.all([
+        runtimeFetch('/api/config/providers', { headers: { 'x-opencode-directory': '/a' } }),
+        runtimeFetch('/api/config/providers', { headers: { 'x-opencode-directory': '/b' } }),
+      ]);
+      expect(calls).toBe(2);
     } finally {
       setRuntimeUrlResolver(previous);
+      globalThis.fetch = originalFetch;
+      clearRuntimeAuthCredentialProvider();
+    }
+  });
+
+  test('does not reuse an in-flight read across runtime generations', async () => {
+    const previousApiBaseUrl = getRuntimeApiBaseUrl();
+    const previousRuntimeKey = getRuntimeKey();
+    const responses: Array<(response: Response) => void> = [];
+    let calls = 0;
+    try {
+      switchRuntimeEndpoint({ apiBaseUrl: 'https://coalesce.example', runtimeKey: 'coalesce-runtime' });
+      globalThis.fetch = ((input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.includes('/auth/url-token')) {
+          return Promise.resolve(new Response(null, { status: 404 }));
+        }
+        calls += 1;
+        return new Promise<Response>((resolve) => responses.push(resolve));
+      }) as typeof fetch;
+
+      const first = runtimeFetch('/api/config/providers');
+      while (calls < 1) await Promise.resolve();
+      switchRuntimeEndpoint({ apiBaseUrl: 'https://coalesce.example', runtimeKey: 'coalesce-runtime' });
+      const second = runtimeFetch('/api/config/providers');
+      while (calls < 2) await Promise.resolve();
+
+      responses[0](new Response('{"runtime":"first"}', { headers: { 'content-type': 'application/json' } }));
+      responses[1](new Response('{"runtime":"second"}', { headers: { 'content-type': 'application/json' } }));
+      expect(await (await first).json()).toEqual({ runtime: 'first' });
+      expect(await (await second).json()).toEqual({ runtime: 'second' });
+      expect(calls).toBe(2);
+    } finally {
+      switchRuntimeEndpoint({ apiBaseUrl: previousApiBaseUrl, runtimeKey: previousRuntimeKey });
       globalThis.fetch = originalFetch;
       clearRuntimeAuthCredentialProvider();
     }

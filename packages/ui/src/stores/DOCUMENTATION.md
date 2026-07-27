@@ -54,17 +54,22 @@ These stores coordinate persistent project/session metadata across multiple view
 
 Do not reintroduce direct settings writes or whole-file folder writes for shared sidebar structure. Mutation failures must roll optimistic projections back to the last authoritative snapshot, and successful empty snapshots must remain distinct from fetch failures.
 
+Composer text deliberately does not live in a Zustand store. `components/chat/lib/chatDraftPersistence.ts` is a runtime-scoped, localStorage-only coordinator. `ChatInput` keeps keystroke-frequency text local and snapshots it after the persistence debounce; a local edit generation prevents successful submission cleanup from deleting a newer edit, and ambiguous send failure leaves the submitted value recoverable. Composer drafts never call a RuntimeAPI, consume global hints, or synchronize across devices. The existing user setting still enables or disables this device-local persistence.
+
 ### Follow-up staging queue
 
-`messageQueueStore.ts` owns persisted, per-session staged follow-ups. The persisted field remains named `queuedMessages` so existing saved items survive the behavior change:
+`messageQueueStore.ts` exposes the existing `queuedMessages[sessionId]` projection while owning a runtime-aware, per-session follow-up queue client:
 
-- a normal follow-up created while a session is active is staged here instead of entering the message timeline;
-- `staged` items wait for an explicit Queue or Send action;
-- Queue marks the item `queued`, and the oldest queued item auto-dispatches when the session becomes idle;
-- Cancel queue returns an item to `staged` without changing its content, attachments, order, or captured send configuration;
-- Send explicitly dispatches one item now; on a busy session it uses steer delivery;
-- successfully dispatched items are removed, while failed automatic dispatches return to `staged` instead of retry-looping;
-- editing or deleting affects only the selected entry.
+- Web, Electron, hosted mobile, and Capacitor load the active host's authoritative revisioned snapshot; VS Code and old hosts use a runtime-scoped device-local fallback.
+- Each session persists its last snapshot under runtime plus session identity. Every semantic mutation has an independent durable outbox record, so concurrent browser tabs cannot overwrite one another's pending work. Mutation IDs and enqueue order survive restart, only one mutation per client lane is in flight, and a revision conflict installs `latestSnapshot` before replaying the same intent.
+- A failed load never becomes empty success. Existing authoritative and optimistic items remain visible, while reconnect/transport-ready retries and opaque revision hints request a targeted reload.
+- Existing unscoped `message-queue-store` data is owned by the runtime active at startup. The current session migrates with stable item and message IDs, and its source entry is retained until the host confirms every item.
+- A new follow-up is accepted only after its runtime-scoped outbox is durably written and the full optimistic queue passes host-equivalent bounds. Permanent host rejection restores the composer payload instead of silently dropping it.
+- Items preserve order, status, fully resolved provider/model/agent send configuration, and attachment transport fields. New items are not staged until those selections are available. Browser `File` is stripped before persistence/host upload and rebuilt as an empty placeholder on load.
+- `staged` waits for explicit Queue or Send; `queued` auto-dispatches only while idle. Every dispatch first obtains a 120-second host claim, and another client's unexpired claim blocks automatic sending.
+- Confirmed sends enqueue `complete`; failures enqueue `release`, returning automatic sends to `staged` and manual sends to their original status. Claim handles carry runtime generation so a late send completion cannot mutate a newly selected host.
+- Terminal reset hints are sticky across already-scheduled refreshes, and the first authoritative load of a runtime generation may replace a persisted higher revision. Confirmed session deletion rejects pending work and writes a runtime/session deletion tombstone before removing the lane from memory and local storage; delayed completion from an older transport generation still applies to the same authority identity.
+- Device-local fallback mutations use the browser Web Locks API when available and re-read the persisted lane inside the lock. Storage events refresh other tabs; automatic claims are disabled when the runtime cannot provide a cross-context lock.
 
 ## Git / PR Stores
 

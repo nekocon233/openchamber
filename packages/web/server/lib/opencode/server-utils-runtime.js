@@ -217,6 +217,7 @@ export const createServerUtilsRuntime = (dependencies) => {
       getUiNotificationClients,
       trackAuthChannel,
       readAuthoritativeProjects,
+      onSessionDeleted: dependencies.onSessionDeleted,
     });
   };
 

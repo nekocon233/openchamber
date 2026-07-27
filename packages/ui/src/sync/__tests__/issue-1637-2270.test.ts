@@ -12,6 +12,7 @@ const markSessionAsOpenChamberCreatedCalls: string[] = []
 
 // Configurable opencodeClient.createSession — set per test
 let nextCreateSessionResponse: Session = { id: "ses_default", time: { created: 1 } } as Session
+let nextCreateSessionPromise: Promise<Session> | null = null
 let nextCreateSessionCalls: Array<{ params: unknown; directory: string | null | undefined }> = []
 
 // Configurable current directory (used as fallback when no directoryOverride is set)
@@ -23,7 +24,7 @@ mock.module("@/lib/opencode/client", () => ({
     setDirectory: mock(() => undefined),
     createSession: mock(async (params: unknown, directory?: string | null) => {
       nextCreateSessionCalls.push({ params, directory })
-      return nextCreateSessionResponse
+      return nextCreateSessionPromise ?? nextCreateSessionResponse
     }),
   },
 }))
@@ -87,6 +88,7 @@ beforeEach(() => {
   markSessionAsOpenChamberCreatedCalls.length = 0
   nextCreateSessionCalls = []
   nextCreateSessionResponse = { id: "ses_default", time: { created: 1 } } as Session
+  nextCreateSessionPromise = null
   currentDirectory = null
 
   // Initialize action refs. The first two args (sdk, childStores) are not
@@ -96,6 +98,27 @@ beforeEach(() => {
     { children: new Map(), ensureChild: () => ({}), getChild: () => undefined } as never,
     () => currentDirectory ?? "",
   )
+})
+
+describe("createSession runtime generation", () => {
+  test("does not install a late response after an endpoint changes under the same runtime key", async () => {
+    let resolveCreate!: (session: Session) => void
+    nextCreateSessionPromise = new Promise<Session>((resolve) => {
+      resolveCreate = resolve
+    })
+    const { switchRuntimeEndpoint } = await import("../../lib/runtime-switch")
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-create-a.test", runtimeKey: "runtime-create" })
+
+    const creation = createSession("late session", "/projects/alpha", null)
+    while (nextCreateSessionCalls.length === 0) await Promise.resolve()
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-create-b.test", runtimeKey: "runtime-create" })
+    resolveCreate({ id: "ses_late", time: { created: 1 }, directory: "/projects/alpha" } as Session)
+
+    expect(await creation).toBeNull()
+    expect(setCurrentSessionCalls).toEqual([])
+    expect(registerSessionDirectoryCalls).toEqual([])
+    expect(upsertSessionCalls).toEqual([])
+  })
 })
 
 describe("issue #1637 — server omits directory, falls back to directoryOverride", () => {

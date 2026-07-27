@@ -21,6 +21,14 @@ const RUNTIME_ENDPOINT_WILL_CHANGE_EVENT = 'openchamber:runtime-endpoint-will-ch
 
 let activeApiBaseUrl = '';
 let activeRuntimeKey = '';
+let runtimeEndpointGeneration = 0;
+
+export class RuntimeContextChangedError extends Error {
+  constructor() {
+    super('Runtime changed before operation dispatch');
+    this.name = 'RuntimeContextChangedError';
+  }
+}
 
 const setWindowRuntimeValue = <K extends '__OPENCHAMBER_API_BASE_URL__' | '__OPENCHAMBER_CLIENT_TOKEN__' | '__OPENCHAMBER_RUNTIME_HEADERS__'>(
   runtimeWindow: typeof window & {
@@ -76,6 +84,7 @@ const sameOrigin = (left: string, right: string): boolean => {
 };
 
 export const getRuntimeApiBaseUrl = (): string => activeApiBaseUrl || readInjectedApiBaseUrl();
+export const getRuntimeEndpointGeneration = (): number => runtimeEndpointGeneration;
 export const getRuntimeKey = (): string => {
   if (activeRuntimeKey) return activeRuntimeKey;
   const apiBaseUrl = getRuntimeApiBaseUrl();
@@ -109,6 +118,7 @@ export const switchRuntimeEndpoint = (options: { apiBaseUrl: string; clientToken
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent<RuntimeEndpointChangedDetail>(RUNTIME_ENDPOINT_WILL_CHANGE_EVENT, { detail }));
   }
+  runtimeEndpointGeneration += 1;
   activeApiBaseUrl = apiBaseUrl;
   activeRuntimeKey = runtimeKey;
   if (typeof window !== 'undefined') {

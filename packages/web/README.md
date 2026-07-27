@@ -267,6 +267,8 @@ systemctl --user enable --now opencode openchamber
 - **Background notifications** - know when your agent finishes, even from another tab
 - **Self-update** - update and restart from the UI, server settings stay intact
 - **Cross-tab tracking** - session activity stays in sync across browser tabs
+- **Cross-device follow-up queue** - staged follow-ups, order, status, attachments, and send configuration follow the active OpenChamber host
+- **Device-local composer drafts** - unfinished composer text is restored only on the same device and runtime
 
 - Provider-aware tunnel access with Cloudflare, managed FRPC TCP and HTTP-vhost endpoints, and Ngrok
 - One-scan onboarding with tunnel QR + password URL helpers

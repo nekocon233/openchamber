@@ -7,6 +7,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { MiniChatLayout } from '@/components/mini-chat/MiniChatLayout';
 import { usePushVisibilityBeacon } from '@/hooks/usePushVisibilityBeacon';
 import { useWindowTitle } from '@/hooks/useWindowTitle';
+import { useWebNotificationStream } from '@/hooks/useWebNotificationStream';
 import { opencodeClient } from '@/lib/opencode/client';
 import type { RuntimeAPIs } from '@/lib/api/types';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
@@ -308,6 +309,7 @@ export function ElectronMiniChatApp({ apis }: ElectronMiniChatAppProps) {
   useAppFontEffects();
   useMiniChatKeyboardShortcuts();
   usePushVisibilityBeacon({ enabled: true });
+  useWebNotificationStream({ deliverNotifications: false });
   useWindowTitle();
 
   return (

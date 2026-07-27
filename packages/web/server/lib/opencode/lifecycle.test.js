@@ -43,7 +43,7 @@ const createMockChild = () => {
   return child;
 };
 
-const createRuntime = (overrides = {}) => {
+const createRuntimeContext = (overrides = {}) => {
   const state = {
     openCodeWorkingDirectory: '/tmp/project',
     openCodeProcess: null,
@@ -67,7 +67,7 @@ const createRuntime = (overrides = {}) => {
     resolvedWslDistro: null,
   };
 
-  return createOpenCodeLifecycleRuntime({
+  const runtime = createOpenCodeLifecycleRuntime({
     state,
     env: {
       ENV_CONFIGURED_OPENCODE_PORT: 45678,
@@ -102,7 +102,11 @@ const createRuntime = (overrides = {}) => {
     })),
     ...overrides,
   });
+
+  return { runtime, state };
 };
+
+const createRuntime = (overrides = {}) => createRuntimeContext(overrides).runtime;
 
 describe('OpenCode lifecycle', () => {
   it('launches managed OpenCode with the managed PATH', async () => {
@@ -234,5 +238,69 @@ describe('OpenCode lifecycle', () => {
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
     await server.close();
+  });
+
+  it.each([
+    { code: 137, signal: null },
+    { code: null, signal: 'SIGKILL' },
+  ])('logs managed process exit diagnostics for code=$code signal=$signal', async ({ code, signal }) => {
+    delete process.env.OPENCODE_BINARY;
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'opencode server listening on http://127.0.0.1:45678\n');
+      });
+      return child;
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const runtime = createRuntime();
+      const server = await runtime.startOpenCode();
+      expect(server.exitCode).toBeNull();
+      expect(server.signalCode).toBeNull();
+
+      child.exitCode = code;
+      child.signalCode = signal;
+      child.emit('exit', code, signal);
+
+      expect(server.exitCode).toBe(code);
+      expect(server.signalCode).toBe(signal);
+      expect(errorSpy).toHaveBeenCalledWith(
+        `[OpenCode] Managed server process exited: pid=12345 code=${code ?? 'null'} signal=${signal ?? 'null'} expected=false`
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('keeps a live managed process after one failed health probe', async () => {
+    delete process.env.OPENCODE_BINARY;
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'opencode server listening on http://127.0.0.1:45678\n');
+      });
+      return child;
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const { runtime, state } = createRuntimeContext();
+      state.openCodeProcess = await runtime.startOpenCode();
+      state.openCodePort = 45678;
+
+      await runtime.triggerHealthCheck();
+
+      expect(killSpy).toHaveBeenCalledWith(12345, 0);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('immediate health check failed (1/'));
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+      killSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });

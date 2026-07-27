@@ -12,10 +12,12 @@ describe('OpenCode proxy header handling', () => {
       accept: 'application/json',
       'accept-encoding': 'gzip, deflate, br',
       connection: 'keep-alive',
+      'x-openchamber-relay-connection': 'private-connection-id',
     });
 
     expect(headers.accept).toBe('application/json');
     expect(headers['accept-encoding']).toBeUndefined();
+    expect(headers['x-openchamber-relay-connection']).toBeUndefined();
   });
 
   it('replaces client authorization with managed OpenCode auth', () => {
@@ -47,6 +49,11 @@ describe('OpenCode proxy header handling', () => {
   it('drops transfer-encoding from forwarded response headers', () => {
     expect(shouldForwardProxyResponseHeader('transfer-encoding')).toBe(false);
     expect(shouldForwardProxyResponseHeader('Transfer-Encoding')).toBe(false);
+  });
+
+  it('drops upstream cookies from the OpenChamber origin', () => {
+    expect(shouldForwardProxyResponseHeader('set-cookie')).toBe(false);
+    expect(shouldForwardProxyResponseHeader('Set-Cookie2')).toBe(false);
   });
 
   it('still keeps ordinary response headers', () => {

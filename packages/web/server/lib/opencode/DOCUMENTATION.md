@@ -24,7 +24,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/opencode/shutdown-runtime.js`: graceful shutdown orchestration runtime for watcher/session/terminal/process/server teardown.
 - `packages/web/server/lib/opencode/server-startup-runtime.js`: server listen/startup tunnel flow and process/signal handler orchestration runtime.
 - `packages/web/server/lib/opencode/static-routes-runtime.js`: static asset/SPA fallback route registration and manifest route wiring.
-- `packages/web/server/lib/opencode/feature-routes-runtime.js`: feature route composition runtime for dynamic import-backed config/skill/provider route registration.
+- `packages/web/server/lib/opencode/feature-routes-runtime.js`: feature route composition runtime for explicit OpenChamber routes, including the host-authoritative follow-up queue, before generic OpenCode proxy registration.
 - `packages/web/server/lib/opencode/opencode-resolution-runtime.js`: OpenCode binary resolution snapshot runtime for settings routes and diagnostics.
 - `packages/web/server/lib/opencode/tunnel-wiring-runtime.js`: tunnel service/routes composition runtime and active-port wiring for main server startup.
 - `packages/web/server/lib/opencode/startup-pipeline-runtime.js`: server startup tail orchestration runtime for terminal/proxy/static/start-listen flow.
@@ -109,6 +109,7 @@ This module provides OpenCode server integration utilities for the web server ru
   - `startHealthMonitoring(healthCheckIntervalMs)`
   - `waitForPortRelease(port, timeoutMs, hostname?)`
   - `killProcessOnPort(port)`
+- Managed process handles mirror the child process exit code and signal so health checks do not misclassify a live process after a transient probe failure. Child exits are logged with PID, exit code, signal, and whether shutdown was requested so unexpected process loss can be distinguished from a restart or normal teardown.
 
 ## Public exports (env-runtime.js)
 - `createOpenCodeEnvRuntime(dependencies)`: creates runtime that owns OpenCode CLI environment and binary discovery state.
@@ -247,7 +248,7 @@ This module provides OpenCode server integration utilities for the web server ru
   - `GET /api/config/themes`
   - `POST /api/config/reload`
 - `registerCommonRequestMiddleware(app, dependencies)`: registers shared request middleware stack:
-  - conditional JSON body parser behavior for `/api/*` vs non-API requests
+  - conditional JSON body parser behavior for general `/api/*` vs non-API requests; the security-sensitive follow-up queue parser remains route-local after authentication
   - URL-encoded parser setup
   - request logging middleware
 
@@ -293,6 +294,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - `createFeatureRoutesRuntime(dependencies)`: creates runtime for main feature route registration orchestration.
 - Returned API:
   - `registerRoutes(app, routeDependencies)`
+- Registers the mixed-version-safe `/auth/follow-up-queue/*` capability, load, and mutation paths plus authenticated `/api/follow-up-queue/*` aliases before the generic `/api/*` OpenCode proxy. Both namespaces use the normal authentication gate, and the 64 MiB follow-up queue JSON parser runs route-locally after authentication. The server no longer owns `/auth/chat-drafts/*` or explicit `/api/chat-drafts/*` routes.
 
 ## Public exports (opencode-resolution-runtime.js)
 - `createOpenCodeResolutionRuntime(dependencies)`: creates runtime for OpenCode binary/source snapshot resolution.
@@ -339,6 +341,7 @@ This module provides OpenCode server integration utilities for the web server ru
   - SSE forwarders: `GET /api/global/event`, `GET /api/event`
   - Session message forwarder: `POST /api/session/:sessionId/message`
   - Generic `/api/*` forwarding with hop-by-hop header filtering
+  - Successful `DELETE /api/session/:id` notification to the follow-up queue terminalization runtime
   - Windows `/session` merge fallback path behavior
   - OpenCode readiness gate for proxied `/api` requests
   - Auth-lifecycle ownership for established event SSE responses; revocation/expiry aborts the upstream reader and ends the downstream response.

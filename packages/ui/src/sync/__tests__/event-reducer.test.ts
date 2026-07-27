@@ -65,6 +65,29 @@ function buildSession(title: string, time: Session["time"]): Session {
 }
 
 describe("applyDirectoryEvent", () => {
+  test("cleans deleted sessions for both supported event shapes", () => {
+    for (const properties of [
+      { sessionID: "ses_1" },
+      { info: buildSession("Deleted", { created: 1, updated: 1 }) },
+    ]) {
+      const draft = state({
+        session: [buildSession("Deleted", { created: 1, updated: 1 })],
+        sessionTotal: 1,
+        todo: { ses_1: [] },
+        message: { ses_1: [] },
+      })
+
+      expect(applyDirectoryEvent(draft, {
+        type: "session.deleted",
+        properties,
+      } as unknown as Event)).toBe(true)
+      expect(draft.session).toEqual([])
+      expect(draft.sessionTotal).toBe(0)
+      expect(draft.todo.ses_1).toBe(undefined)
+      expect(draft.message.ses_1).toBe(undefined)
+    }
+  })
+
   test("returns typed materialization when delta arrives before parts", () => {
     const result = applyDirectoryEvent(state(), deltaEvent())
 

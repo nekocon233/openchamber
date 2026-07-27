@@ -112,6 +112,8 @@ import { attachRealtimeProxy } from './lib/realtime-proxy.js';
 import { createRelayService } from './lib/relay/service.js';
 import { createRelayHostLock } from './lib/relay/host-lock.js';
 import { createSidebarStateServerRuntime } from './lib/sidebar-state/index.js';
+import { createFollowUpQueueServerRuntime } from './lib/follow-up-queue/index.js';
+import { shouldSkipResponseCompression } from './lib/compression-runtime.js';
 import { createProxyMiddleware, responseInterceptor } from 'http-proxy-middleware';
 import webPush from 'web-push';
 
@@ -141,58 +143,6 @@ const TUNNEL_BOOTSTRAP_TTL_MAX_MS = 24 * 60 * 60 * 1000;
 const TUNNEL_SESSION_TTL_DEFAULT_MS = 8 * 60 * 60 * 1000;
 const TUNNEL_SESSION_TTL_MIN_MS = 5 * 60 * 1000;
 const TUNNEL_SESSION_TTL_MAX_MS = 30 * 24 * 60 * 60 * 1000;
-
-function headerIncludesEventStream(value) {
-  if (typeof value === 'string') {
-    return value.toLowerCase().includes('text/event-stream');
-  }
-
-  if (Array.isArray(value)) {
-    return value.some((entry) => typeof entry === 'string' && entry.toLowerCase().includes('text/event-stream'));
-  }
-
-  return false;
-}
-
-/**
- * SSE endpoint paths that must never be compressed by the compression middleware.
- *
- * The compression middleware filter runs before route handlers, so
- * `res.getHeader('Content-Type')` is still undefined at that point.
- * This means the Accept-header check alone is not sufficient for
- * non-standard clients (e.g. curl, fetch) that omit Accept.
- * Path-based exclusion acts as a deterministic fallback.
- */
-const SSE_PATH_PREFIXES = [
-  '/api/event',
-  '/api/global/event',
-  '/api/notifications/stream',
-  '/api/openchamber/events',
-  '/api/openchamber/realtime-proxy/sse',
-];
-
-function shouldSkipCompression(req, res) {
-  if (process.env.OPENCHAMBER_RUNTIME === 'desktop') {
-    return true;
-  }
-
-  if (headerIncludesEventStream(req.headers.accept)) {
-    return true;
-  }
-
-  const pathname = req.path || req.url || '';
-  if ((pathname === '/api' || pathname.startsWith('/api/')) && shouldSkipApiCompression()) {
-    return true;
-  }
-
-  for (const prefix of SSE_PATH_PREFIXES) {
-    if (pathname === prefix) {
-      return true;
-    }
-  }
-
-  return headerIncludesEventStream(res.getHeader('Content-Type'));
-}
 
 const OPENCHAMBER_VERSION = (() => {
   try {
@@ -497,6 +447,12 @@ const broadcastGlobalUiEvent = createGlobalUiEventBroadcaster({
   sseClients: uiNotificationClients,
   wsClients: uiNotificationWsClients,
   writeSseEvent,
+});
+const followUpQueueRuntime = createFollowUpQueueServerRuntime({
+  fsPromises,
+  path,
+  rootDirectory: path.join(OPENCHAMBER_DATA_DIR, 'follow-up-queue'),
+  broadcastGlobalUiEvent,
 });
 const broadcastUiNotification = (...args) => notificationEmitterRuntime.broadcastUiNotification(...args);
 
@@ -856,6 +812,12 @@ const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
   parseSseDataPayload: (...args) => parseSseDataPayload(...args),
   globalEventHub: globalMessageStreamHub,
   onPayload: (payload, directory) => {
+    const terminalization = followUpQueueRuntime.terminalizeSessionFromEvent(payload);
+    if (terminalization) {
+      void terminalization.catch(() => {
+        console.warn('[follow-up-queue] failed to terminalize deleted session');
+      });
+    }
     maybeCacheSessionInfoFromEvent(payload);
     void maybeSendPushForTrigger(payload, directory);
     sessionRuntime.processOpenCodeSsePayload(payload);
@@ -972,6 +934,17 @@ const serverUtilsRuntime = createServerUtilsRuntime({
     return snapshot.PATH;
   },
   readAuthoritativeProjects: () => sidebarStateRuntime.readSnapshot().then((snapshot) => snapshot.projects),
+  onSessionDeleted: (sessionId) => {
+    const terminalization = followUpQueueRuntime.terminalizeSessionFromEvent({
+      type: 'session.deleted',
+      properties: { sessionID: sessionId },
+    });
+    if (terminalization) {
+      void terminalization.catch(() => {
+        console.warn('[follow-up-queue] failed to terminalize proxy-confirmed deleted session');
+      });
+    }
+  },
 });
 
 const setOpenCodePort = (...args) => serverUtilsRuntime.setOpenCodePort(...args);
@@ -1169,18 +1142,119 @@ const ensureGlobalWatcherStarted = async () => {
 
   return globalWatcherStartPromise;
 };
+const checkFollowUpQueueSessionExists = async (sessionId) => {
+  const response = await fetch(buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, ''), {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...getOpenCodeAuthHeaders(),
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error(`OpenCode session lookup failed (${response.status})`);
+  const session = await response.json().catch(() => null);
+  if (!session || typeof session !== 'object' || session.id !== sessionId) {
+    throw new Error('OpenCode returned an invalid session lookup response');
+  }
+  return true;
+};
+const waitForGlobalWatcherConnection = async (timeoutMs = 10_000) => {
+  if (globalMessageStreamHub.isConnected()) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    const finish = (connected) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(connected);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    timer.unref?.();
+    unsubscribe = globalMessageStreamHub.subscribeStatus((status) => {
+      if (status?.type === 'connect') finish(true);
+    });
+    if (globalMessageStreamHub.isConnected()) finish(true);
+  });
+};
+let followUpQueueReconciliationPromise = null;
+let unsubscribeFollowUpQueueConnectRetry = null;
+const reconcileFollowUpQueuesWhenReady = () => {
+  if (!openCodeLifecycleState.isOpenCodeReady || !globalMessageStreamHub.isConnected()) {
+    return Promise.resolve(false);
+  }
+  if (followUpQueueReconciliationPromise) return followUpQueueReconciliationPromise;
+  const reconciliation = (async () => {
+    try {
+      const result = await followUpQueueRuntime.reconcileStoredSessions(checkFollowUpQueueSessionExists);
+      if (result.terminalized > 0 || result.failed > 0) {
+        console.log(
+          `[follow-up-queue] startup reconciliation checked ${result.checked}, terminalized ${result.terminalized}, failed ${result.failed}`,
+        );
+      }
+      return true;
+    } catch (error) {
+      console.warn(`[follow-up-queue] startup reconciliation failed: ${error?.message || error}`);
+      return false;
+    }
+  })();
+  followUpQueueReconciliationPromise = reconciliation;
+  void reconciliation.finally(() => {
+    if (followUpQueueReconciliationPromise === reconciliation) {
+      followUpQueueReconciliationPromise = null;
+    }
+  });
+  return reconciliation;
+};
+const scheduleFollowUpQueueReconciliationOnConnect = () => {
+  if (unsubscribeFollowUpQueueConnectRetry) return;
+  unsubscribeFollowUpQueueConnectRetry = globalMessageStreamHub.subscribeStatus((status) => {
+    if (status?.type !== 'connect') return;
+    unsubscribeFollowUpQueueConnectRetry?.();
+    unsubscribeFollowUpQueueConnectRetry = null;
+    void reconcileFollowUpQueuesWhenReady().then((reconciled) => {
+      if (!reconciled) scheduleFollowUpQueueReconciliationOnConnect();
+    });
+  });
+};
 const bootstrapOpenCodeAtStartup = async (...args) => {
   await openCodeLifecycleRuntime.bootstrapOpenCodeAtStartup(...args);
   scheduleOpenCodeApiDetection();
   if (openCodeLifecycleState.openCodeProcess && !openCodeLifecycleState.isExternalOpenCode) {
     startHealthMonitoring();
   }
+  try {
+    const recovery = await followUpQueueRuntime.recoverTerminalFences();
+    if (recovery.recovered > 0 || recovery.failed > 0) {
+      console.log(
+        `[follow-up-queue] terminal fence recovery recovered ${recovery.recovered}, failed ${recovery.failed}`,
+      );
+    }
+  } catch (error) {
+    console.warn(`[follow-up-queue] terminal fence recovery failed: ${error?.message || error}`);
+  }
   // The global watcher used to start only for desktop notifications; the
   // session-assist runtime also rides its event hub, so it now starts
   // unconditionally once OpenCode is up.
-  void ensureGlobalWatcherStarted().catch((error) => {
+  let watcherConnected = false;
+  try {
+    await ensureGlobalWatcherStarted();
+    watcherConnected = await waitForGlobalWatcherConnection();
+  } catch (error) {
     console.warn(`Global event watcher startup failed: ${error?.message || error}`);
-  });
+  }
+  if (openCodeLifecycleState.isOpenCodeReady && watcherConnected) {
+    if (!await reconcileFollowUpQueuesWhenReady()) {
+      scheduleFollowUpQueueReconciliationOnConnect();
+    }
+  } else {
+    if (openCodeLifecycleState.isOpenCodeReady) {
+      console.warn('[follow-up-queue] startup reconciliation skipped until the global watcher connects');
+    }
+    scheduleFollowUpQueueReconciliationOnConnect();
+  }
 };
 const killProcessOnPort = (...args) => openCodeLifecycleRuntime.killProcessOnPort(...args);
 const waitForPortRelease = (...args) => openCodeLifecycleRuntime.waitForPortRelease(...args);
@@ -1461,7 +1535,10 @@ async function main(options = {}) {
   });
   app.use(compression({
     filter: (req, res) => {
-      if (shouldSkipCompression(req, res)) return false;
+      if (shouldSkipResponseCompression(req, res, {
+        runtime: process.env.OPENCHAMBER_RUNTIME,
+        shouldSkipApiCompression,
+      })) return false;
       return compression.filter(req, res);
     },
     threshold: 1024,
@@ -1653,6 +1730,7 @@ async function main(options = {}) {
     writeSseEvent,
     permissionAutoAcceptRuntime,
     sidebarStateRuntime,
+    followUpQueueRuntime,
     isTunnelManagementAllowed: (req) => tunnelAuthController.isLocalManagementRequest(req),
   });
 

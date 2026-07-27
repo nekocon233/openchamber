@@ -572,4 +572,20 @@ describe('routeMessage skill invocation', () => {
     expect(sendMessageCalls).toHaveLength(1);
     expect(sendCommandCalls).toHaveLength(0);
   });
+
+  test('forwards a staged stable message ID through optimisticSend to the SDK', async () => {
+    const messageId = 'msg_000000000001ABCDEFGHIJKLMN';
+
+    await routeMessage({
+      sessionId: 'session-staged',
+      directory: '/skills/project',
+      content: 'staged follow up',
+      providerID: 'provider-a',
+      modelID: 'model-a',
+      messageId,
+    });
+
+    expect(sendMessageCalls).toHaveLength(1);
+    expect(sendMessageCalls[0].messageId).toBe(messageId);
+  });
 });

@@ -461,6 +461,66 @@ describe("session removal navigation runtime scope", () => {
     expect(store.getState().session[2]).toBe(existing)
   })
 
+  test("does not restore a session after an authoritative deletion event", async () => {
+    const target = { id: "session-a", title: "Target", time: { created: 1 } } as Session
+    const store = createStore({}, { session: [target] })
+    const deletionResult = deferred<boolean>()
+    sessionDeleteResult = deletionResult.promise
+    const { switchRuntimeEndpoint } = await import("../lib/runtime-switch")
+    const { recordSessionRemoval, resetSessionRemovalHistory } = await import("./session-event-freshness")
+    const { deleteSession, setActionRefs } = await import("./session-actions")
+
+    resetSessionRemovalHistory()
+    try {
+      switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-authoritative-delete.test", runtimeKey: "runtime-authoritative-delete" })
+      setActionRefs(
+        mockSdk as unknown as OpencodeClient,
+        createChildStores([["/test/project", store]]),
+        () => "/test/project",
+      )
+      const deletion = deleteSession("session-a")
+      while (sessionDeleteCalls.length === 0) await Promise.resolve()
+
+      recordSessionRemoval("session-a")
+      deletionResult.reject(new Error("response lost after delete"))
+
+      expect(await deletion).toBe(false)
+      expect(store.getState().session).toEqual([])
+    } finally {
+      resetSessionRemovalHistory()
+    }
+  })
+
+  test("drops follow-up state after a cross-directory delete succeeds", async () => {
+    const target = { id: "session-cross-directory", title: "Target", time: { created: 1 } } as Session
+    const store = createStore({}, { session: [target] })
+    const { switchRuntimeEndpoint } = await import("../lib/runtime-switch")
+    const { useMessageQueueStore } = await import("@/stores/messageQueueStore")
+    const { deleteSessionInDirectory, setActionRefs } = await import("./session-actions")
+    const runtimeKey = "runtime-cross-directory-delete"
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-cross-directory-delete.test", runtimeKey })
+    useMessageQueueStore.getState().switchRuntime(runtimeKey)
+    useMessageQueueStore.setState({
+      queuedMessages: {
+        "session-cross-directory": [{
+          id: "queued-cross-directory",
+          messageId: "msg_cross_directory",
+          content: "delete me",
+          createdAt: 1,
+          status: "staged",
+        }],
+      },
+    })
+    setActionRefs(
+      mockSdk as unknown as OpencodeClient,
+      createChildStores([["/other/project", store]]),
+      () => "/current/project",
+    )
+
+    expect(await deleteSessionInDirectory("session-cross-directory", "/other/project")).toBe(true)
+    expect(useMessageQueueStore.getState().queuedMessages["session-cross-directory"]).toBe(undefined)
+  })
+
   test("does not write an archived response into stores rebound to another runtime", async () => {
     const archiveResult = deferred<Session>()
     sessionUpdatePromise = archiveResult.promise
@@ -607,6 +667,129 @@ describe("optimisticSend target directory", () => {
     expect(currentStore.getState().session_status["session-new"]).toBe(undefined)
   })
 
+  test("does not insert or dispatch when the runtime changes during pre-insert work", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+    const beforeStarted = deferred<void>()
+    const releaseBeforeInsert = deferred<void>()
+    let optimisticAdd: OptimisticAddCall | null = null
+    let optimisticRemove: OptimisticRemoveCall | null = null
+    let finalSendCalled = false
+    const {
+      getRuntimeEndpointGeneration,
+      getRuntimeKey,
+      RuntimeContextChangedError,
+      switchRuntimeEndpoint,
+    } = await import("../lib/runtime-switch")
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-a.test", runtimeKey: "runtime-a" })
+    const expectedRuntime = {
+      runtimeKey: getRuntimeKey(),
+      generation: getRuntimeEndpointGeneration(),
+    }
+
+    const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
+    setActionRefs(mockSdk as unknown as OpencodeClient, childStores, () => "/target/project")
+    setOptimisticRefs(
+      (input) => {
+        optimisticAdd = input
+      },
+      (input) => {
+        optimisticRemove = input
+      },
+    )
+
+    const sendPromise = optimisticSend({
+      sessionId: "session-race",
+      directory: "/target/project",
+      content: "hello",
+      providerID: "provider",
+      modelID: "model",
+      expectedRuntime,
+      beforeOptimisticInsert: async () => {
+        beforeStarted.resolve()
+        await releaseBeforeInsert.promise
+      },
+      send: async () => {
+        finalSendCalled = true
+      },
+    })
+    await beforeStarted.promise
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-b.test", runtimeKey: "runtime-a" })
+    releaseBeforeInsert.resolve()
+
+    let caught: unknown = null
+    try {
+      await sendPromise
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(RuntimeContextChangedError)
+    expect(optimisticAdd).toBeNull()
+    expect(optimisticRemove).toBeNull()
+    expect(finalSendCalled).toBe(false)
+    expect(targetStore.getState().session_status["session-race"]).toBe(undefined)
+  })
+
+  test("does not confirm or roll back an old runtime after a late send failure", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+    const sendStarted = deferred<void>()
+    const sendResult = deferred<void>()
+    let optimisticRemove: OptimisticRemoveCall | null = null
+    let optimisticConfirm: OptimisticRemoveCall | null = null
+    const {
+      getRuntimeEndpointGeneration,
+      getRuntimeKey,
+      RuntimeContextChangedError,
+      switchRuntimeEndpoint,
+    } = await import("../lib/runtime-switch")
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-late-a.test", runtimeKey: "runtime-late" })
+    const expectedRuntime = {
+      runtimeKey: getRuntimeKey(),
+      generation: getRuntimeEndpointGeneration(),
+    }
+
+    const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
+    setActionRefs(mockSdk as unknown as OpencodeClient, childStores, () => "/target/project")
+    setOptimisticRefs(
+      () => {},
+      (input) => {
+        optimisticRemove = input
+      },
+      (input) => {
+        optimisticConfirm = input
+      },
+    )
+
+    const sendPromise = optimisticSend({
+      sessionId: "session-late-failure",
+      directory: "/target/project",
+      content: "hello",
+      providerID: "provider",
+      modelID: "model",
+      expectedRuntime,
+      send: async () => {
+        sendStarted.resolve()
+        return sendResult.promise
+      },
+    })
+    await sendStarted.promise
+    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-late-b.test", runtimeKey: "runtime-late" })
+    sendResult.reject(new TypeError("Load failed"))
+
+    let caught: unknown = null
+    try {
+      await sendPromise
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(RuntimeContextChangedError)
+    expect(optimisticRemove).toBeNull()
+    expect(optimisticConfirm).toBeNull()
+    expect(targetStore.getState().session_status["session-late-failure"]?.type).toBe("busy")
+    expect(replyCalls.some((call) => call.method === "session.messages")).toBe(false)
+  })
+
   test("allows callers to block final send when runtime changes after optimistic insert", async () => {
     const targetStore = createStore({})
     const childStores = createChildStores([["/target/project", targetStore]])
@@ -745,6 +928,19 @@ describe("optimisticSend target directory", () => {
     expect(optimisticConfirm).toBe(null)
     expect(replyCalls.filter((call) => call.method === "session.messages").every((call) => call.params.limit === 30)).toBe(true)
     expect(targetStore.getState().session_status["session-missing"]?.type).toBe("idle")
+  })
+})
+
+describe("ambiguous send failure classification", () => {
+  test("covers transport errors and retryable gateway statuses", async () => {
+    const { isAmbiguousSendFailure } = await import("./session-actions")
+    const unavailable = new Error("Service Unavailable") as Error & { status?: number }
+    unavailable.status = 503
+
+    expect(isAmbiguousSendFailure(unavailable)).toBe(true)
+    expect(isAmbiguousSendFailure(new TypeError("Load failed"))).toBe(true)
+    expect(isAmbiguousSendFailure(new DOMException("aborted", "AbortError"))).toBe(true)
+    expect(isAmbiguousSendFailure(new Error("validation failed"))).toBe(false)
   })
 })
 

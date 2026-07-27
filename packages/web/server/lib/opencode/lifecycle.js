@@ -351,10 +351,27 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
       runtime: process.env.OPENCHAMBER_RUNTIME || 'web',
     });
 
+    let closeRequested = false;
+    child.once('exit', (code, signal) => {
+      const message = `[OpenCode] Managed server process exited: pid=${child.pid ?? 'unknown'} code=${code ?? 'null'} signal=${signal ?? 'null'} expected=${closeRequested}`;
+      if (closeRequested) {
+        console.log(message);
+      } else {
+        console.error(message);
+      }
+    });
+
     return {
       url,
       pid: child.pid || null,
+      get exitCode() {
+        return child.exitCode;
+      },
+      get signalCode() {
+        return child.signalCode;
+      },
       async close() {
+        closeRequested = true;
         await closeManagedOpenCodeChild(child);
       },
     };

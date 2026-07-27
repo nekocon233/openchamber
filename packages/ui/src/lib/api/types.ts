@@ -682,6 +682,79 @@ export interface SidebarStateAPI {
   mutate(request: SidebarStateMutationRequest, options?: { signal?: AbortSignal }): Promise<SidebarStateMutationResult | null>;
 }
 
+export type FollowUpQueueStatus = 'staged' | 'queued';
+
+export interface FollowUpQueueAttachment {
+  id: string;
+  dataUrl: string;
+  mimeType: string;
+  filename: string;
+  size: number;
+  source: 'local' | 'server' | 'vscode';
+  serverPath?: string;
+  vscodePath?: string;
+  vscodeSource?: 'file' | 'selection';
+}
+
+export interface FollowUpQueueSendConfig {
+  providerID: string;
+  modelID: string;
+  agent?: string;
+  variant?: string;
+}
+
+export interface FollowUpQueueClaim {
+  id: string;
+  expiresAt: number;
+}
+
+export interface FollowUpQueueItem {
+  id: string;
+  messageId: string;
+  content: string;
+  attachments?: FollowUpQueueAttachment[];
+  createdAt: number;
+  status: FollowUpQueueStatus;
+  sendConfig?: FollowUpQueueSendConfig;
+  claim?: FollowUpQueueClaim;
+}
+
+export interface FollowUpQueueSnapshot {
+  scopeToken: string;
+  revision: number;
+  items: FollowUpQueueItem[];
+}
+
+export type FollowUpQueueOperation =
+  | { type: 'add'; item: Omit<FollowUpQueueItem, 'claim'> }
+  | { type: 'remove'; itemId: string }
+  | { type: 'set-status'; itemId: string; status: FollowUpQueueStatus }
+  | { type: 'move'; itemId: string; beforeId: string | null }
+  | { type: 'claim'; itemId: string; claimId: string; mode: 'manual' | 'auto' }
+  | { type: 'complete'; itemId: string; claimId: string }
+  | { type: 'release'; itemId: string; claimId: string; status: FollowUpQueueStatus };
+
+export interface FollowUpQueueMutationRequest {
+  sessionId: string;
+  baseRevision: number;
+  clientMutationId: string;
+  operation: FollowUpQueueOperation;
+}
+
+export interface FollowUpQueueMutationResult {
+  snapshot: FollowUpQueueSnapshot;
+  applied: boolean;
+  deduplicated: boolean;
+  mutationRevision: number | null;
+}
+
+export interface FollowUpQueueAPI {
+  /** False for runtimes, currently VS Code, without an OpenChamber host authority. */
+  supported: boolean;
+  load(sessionId: string, options?: { signal?: AbortSignal; expectedRuntimeKey?: string }): Promise<FollowUpQueueSnapshot | null>;
+  mutate(request: FollowUpQueueMutationRequest, options?: { signal?: AbortSignal; expectedRuntimeKey?: string }): Promise<FollowUpQueueMutationResult | null>;
+}
+
 export interface SettingsPayload {
   themeId?: string;
   useSystemTheme?: boolean;
@@ -1272,6 +1345,7 @@ export interface RuntimeAPIs {
   files: FilesAPI;
   settings: SettingsAPI;
   sidebarState: SidebarStateAPI;
+  followUpQueue: FollowUpQueueAPI;
   permissions: PermissionsAPI;
   notifications: NotificationsAPI;
   github?: GitHubAPI;

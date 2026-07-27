@@ -32,8 +32,8 @@ describe('shouldStageFollowUpAsDraft', () => {
 
 describe('selectFollowUpDraft', () => {
     const drafts: QueuedMessage[] = [
-        { id: 'draft-1', content: 'first', createdAt: 1, status: 'staged' },
-        { id: 'draft-2', content: 'second', createdAt: 2, status: 'staged' },
+        { id: 'draft-1', messageId: 'msg_first', content: 'first', createdAt: 1, status: 'staged' },
+        { id: 'draft-2', messageId: 'msg_second', content: 'second', createdAt: 2, status: 'staged' },
     ];
 
     test('returns only the explicitly selected draft', () => {

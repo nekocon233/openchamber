@@ -449,7 +449,7 @@ chown -R 1000:1000 data/
 - Favorite model cycling via keyboard shortcuts
 - Session folders and subfolders with drag-to-reorder
 - Persistent project notes and todos per project
-- Draft persistence per session with expanded focus mode for longer prompts
+- Cross-device draft persistence per session through the active OpenChamber host, with offline recovery and expanded focus mode for longer prompts
 
 </details>
 

@@ -722,7 +722,14 @@ export const registerOpenCodeProxy = (app, deps) => {
     router: () => resolveProxyTarget(),
     on: {
       proxyReq: (proxyReq, req) => {
-        // Inject OpenCode auth headers
+        // OpenChamber client/session credentials authenticate this server and
+        // must never cross the generic proxy boundary into OpenCode.
+        proxyReq.removeHeader?.('authorization');
+        proxyReq.removeHeader?.('cookie');
+        proxyReq.removeHeader?.('proxy-authorization');
+        proxyReq.removeHeader?.('x-openchamber-relay-connection');
+
+        // Inject only OpenCode's own upstream credential.
         const authHeaders = getOpenCodeAuthHeaders();
         if (authHeaders.Authorization) {
           proxyReq.setHeader('Authorization', authHeaders.Authorization);
@@ -746,10 +753,27 @@ export const registerOpenCodeProxy = (app, deps) => {
 
         replayParsedBody(proxyReq, req);
       },
-      proxyRes: (proxyRes) => {
+      proxyRes: (proxyRes, req) => {
         for (const key of Object.keys(proxyRes.headers || {})) {
+          // http-proxy streams the raw entity body, so its encoding header must
+          // stay intact. Fetch-based proxy paths use the stricter shared filter
+          // because fetch may already have decoded their response bodies.
+          if (key.toLowerCase() === 'content-encoding') continue;
           if (!shouldForwardProxyResponseHeader(key)) {
             delete proxyRes.headers[key];
+          }
+        }
+        const statusCode = Number(proxyRes.statusCode ?? 0);
+        const deletedSession = req.method === 'DELETE'
+          && statusCode >= 200
+          && statusCode < 300
+          ? /^\/api\/session\/([^/?]+)(?:\?.*)?$/.exec(String(req.originalUrl ?? ''))
+          : null;
+        if (deletedSession && typeof deps.onSessionDeleted === 'function') {
+          try {
+            deps.onSessionDeleted(decodeURIComponent(deletedSession[1]));
+          } catch {
+            // The upstream delete remains authoritative; realtime/startup reconciliation retries cleanup.
           }
         }
       },

@@ -9,6 +9,7 @@ import { createVSCodeActionsAPI } from './vscode';
 import { createVSCodeGitHubAPI } from './github';
 import { createVSCodeNotificationsAPI } from './notifications';
 import { createVSCodeSidebarStateAPI } from './sidebarState';
+import { createVSCodeFollowUpQueueAPI } from './followUpQueue';
 
 const terminalUnsupported = async (): Promise<never> => {
   throw new Error('Terminal is not supported in the VS Code runtime');
@@ -33,6 +34,7 @@ export const createVSCodeAPIs = (): RuntimeAPIs => ({
   files: createVSCodeFilesAPI(),
   settings: createVSCodeSettingsAPI(),
   sidebarState: createVSCodeSidebarStateAPI(),
+  followUpQueue: createVSCodeFollowUpQueueAPI(),
   permissions: createVSCodePermissionsAPI(),
   notifications: createVSCodeNotificationsAPI(),
   github: createVSCodeGitHubAPI(),

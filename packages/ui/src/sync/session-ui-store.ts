@@ -74,7 +74,11 @@ import {
   readPersistedSessionNavigation,
   setSessionOpener,
 } from "./session-navigation"
-import { getRuntimeKey } from "@/lib/runtime-switch"
+import {
+  getRuntimeEndpointGeneration,
+  getRuntimeKey,
+  RuntimeContextChangedError,
+} from "@/lib/runtime-switch"
 import { rememberRuntimeLiveStatus } from "./runtime-live-memory"
 
 export type { AttachedFile }
@@ -82,6 +86,18 @@ export type { AttachedFile }
 // ---------------------------------------------------------------------------
 // Send routing — shell mode, slash commands, or normal prompt
 // ---------------------------------------------------------------------------
+
+type ExpectedRuntimeContext = { runtimeKey: string; generation: number }
+
+const assertExpectedRuntimeContext = (expected?: ExpectedRuntimeContext): void => {
+  if (
+    expected
+    && (
+      getRuntimeKey() !== expected.runtimeKey
+      || getRuntimeEndpointGeneration() !== expected.generation
+    )
+  ) throw new RuntimeContextChangedError()
+}
 
 export function routeMessage(params: {
   sessionId: string
@@ -96,7 +112,10 @@ export function routeMessage(params: {
   files?: Array<{ type: "file"; mime: string; url: string; filename: string }>
   additionalParts?: Array<{ text: string; synthetic?: boolean; files?: Array<{ type: "file"; mime: string; url: string; filename: string }> }>
   delivery?: 'steer' | 'queue'
+  messageId?: string
+  expectedRuntime?: ExpectedRuntimeContext
 }): Promise<void> {
+  assertExpectedRuntimeContext(params.expectedRuntime)
   const requestDirectory = params.directory ?? undefined
   if (params.inputMode === "shell") {
     return opencodeClient.shellSession({
@@ -135,6 +154,8 @@ export function routeMessage(params: {
         agent: params.agent,
         directory: requestDirectory,
         files: params.files,
+        messageId: params.messageId,
+        expectedRuntime: params.expectedRuntime,
         send: (messageID) => opencodeClient.sendCommand({
           id: params.sessionId,
           providerID: params.providerID,
@@ -160,6 +181,8 @@ export function routeMessage(params: {
     agent: params.agent,
     directory: requestDirectory,
     files: params.files,
+    messageId: params.messageId,
+    expectedRuntime: params.expectedRuntime,
     send: (messageID) => opencodeClient.sendMessage({
       id: params.sessionId,
       providerID: params.providerID,
@@ -180,6 +203,9 @@ export function routeMessage(params: {
 type SendMessageOptions = {
   sessionId?: string
   delivery?: 'steer' | 'queue'
+  messageId?: string
+  onSessionMaterialized?: (sessionId: string) => void
+  expectedRuntime?: ExpectedRuntimeContext
 }
 
 type AssistantMessageSessionExecution = {
@@ -455,7 +481,9 @@ export async function materializeOpenDraftSession(selection: {
   modelID: string
   agent?: string
   variant?: string
+  expectedRuntime?: ExpectedRuntimeContext
 }): Promise<MaterializedDraftSession | null> {
+  assertExpectedRuntimeContext(selection.expectedRuntime)
   const store = useSessionUIStore.getState()
   const draft = store.newSessionDraft
   if (!draft?.open) return null
@@ -469,12 +497,15 @@ export async function materializeOpenDraftSession(selection: {
 
   if (draft.pendingWorktreeRequestId) {
     draftDirectoryOverride = await waitForPendingDraftWorktreeRequest(draft.pendingWorktreeRequestId)
+    assertExpectedRuntimeContext(selection.expectedRuntime)
     store.resolvePendingDraftWorktreeTarget(draft.pendingWorktreeRequestId, draftDirectoryOverride)
   }
 
   await waitForWorktreeBootstrapIfConfigured(draftDirectoryOverride, draftProjectId)
+  assertExpectedRuntimeContext(selection.expectedRuntime)
 
   const created = await store.createSession(draft.title, draftDirectoryOverride, draft.parentID ?? null)
+  assertExpectedRuntimeContext(selection.expectedRuntime)
   if (!created?.id) throw new Error("Failed to create session")
 
   persistDraftTarget({
@@ -1083,6 +1114,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     inputMode?: "normal" | "shell",
     options?: SendMessageOptions,
   ) => {
+    assertExpectedRuntimeContext(options?.expectedRuntime)
     // Clear non-Git changed-files bar on new user message for current session
     const sid = options?.sessionId ?? get().currentSessionId;
     if (sid) {
@@ -1131,8 +1163,10 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         modelID,
         agent: trimmedAgent,
         variant,
+        expectedRuntime: options?.expectedRuntime,
       })
       if (!createdDraftSession) throw new Error("Failed to create session")
+      options?.onSessionMaterialized?.(createdDraftSession.sessionId)
 
       const mergedAdditionalParts = createdDraftSession.syntheticParts?.length
         ? [...(additionalParts || []), ...createdDraftSession.syntheticParts]
@@ -1161,6 +1195,8 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         inputMode,
         files,
         delivery: options?.delivery,
+        messageId: options?.messageId,
+        expectedRuntime: options?.expectedRuntime,
         additionalParts: mergedAdditionalParts?.map((p) => ({
           text: p.text,
           synthetic: p.synthetic,
@@ -1241,6 +1277,8 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       inputMode,
       files,
       delivery: options?.delivery,
+      messageId: options?.messageId,
+      expectedRuntime: options?.expectedRuntime,
       additionalParts: additionalParts?.map((p) => ({
         text: p.text,
         synthetic: p.synthetic,

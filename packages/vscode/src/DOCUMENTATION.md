@@ -56,6 +56,8 @@ Keep `bridge.ts` as a thin orchestration layer that delegates message handling t
   - Owns the persisted VS Code permission auto-accept policy and its GET/PUT bridge contract.
   - Broadcasts policy snapshots to every active OpenChamber webview. Permission replies remain foreground UI-owned because VS Code does not run the OpenChamber server runtime.
 
+Composer drafts are runtime-scoped device-local storage in every runtime and have no RuntimeAPI. The VS Code webview explicitly exposes `followUpQueue.supported = false` because it does not run an OpenChamber host server; staged follow-ups therefore use the runtime-scoped device-local fallback and never fall through to the generic OpenCode proxy. Web, Electron, hosted mobile, and Capacitor clients connected to an OpenChamber host use the host-authoritative follow-up queue.
+
 ## Extension guideline
 
 When adding new bridge route families:

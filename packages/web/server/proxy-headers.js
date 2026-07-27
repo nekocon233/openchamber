@@ -3,6 +3,8 @@ const filteredRequestHeaders = new Set([
   // never reach the managed OpenCode upstream — it only accepts its own auth,
   // so a forwarded client bearer turns every upstream response into a 401.
   'authorization',
+  'cookie',
+  'proxy-authorization',
   'host',
   'connection',
   'content-length',
@@ -12,6 +14,7 @@ const filteredRequestHeaders = new Set([
   'trailer',
   'upgrade',
   'accept-encoding',
+  'x-openchamber-relay-connection',
 ]);
 
 const filteredResponseHeaders = new Set([
@@ -24,6 +27,8 @@ const filteredResponseHeaders = new Set([
   'upgrade',
   'www-authenticate',
   'content-encoding',
+  'set-cookie',
+  'set-cookie2',
 ]);
 
 export const collectForwardProxyHeaders = (requestHeaders, authHeaders = {}) => {

@@ -1,18 +1,19 @@
 import React from 'react';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { isDesktopShell, isWebRuntime } from '@/lib/desktop';
-import { runtimeFetch } from '@/lib/runtime-fetch';
-import { subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
+import { runtimeFetch, type RuntimeFetchOptions } from '@/lib/runtime-fetch';
+import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { useUIStore } from '@/stores/useUIStore';
 import type { NotificationPayload } from '@/lib/api/types';
 import { handleSidebarStateGlobalEvent } from '@/stores/useSidebarStateStore';
+import { handleFollowUpQueueGlobalEvent, useMessageQueueStore } from '@/stores/messageQueueStore';
 
 const NOTIFICATION_STREAM_PATH = '/api/notifications/stream';
 const NOTIFICATION_STREAM_HEARTBEAT_TIMEOUT_MS = 45_000;
 const NORMAL_RECONNECT_CAP_MS = 30_000;
 const CONSTRAINED_RECONNECT_CAP_MS = 300_000;
 
-type NotificationStreamFetcher = (input: string, init: RequestInit) => Promise<Response>;
+type NotificationStreamFetcher = (input: string, init: RuntimeFetchOptions) => Promise<Response>;
 
 type WebNotificationStreamOptions = {
   onEvent(value: unknown): void;
@@ -163,6 +164,7 @@ export const startWebNotificationStream = (options: WebNotificationStreamOptions
 
   const connect = (expectedGeneration: number) => {
     if (disposed || generation !== expectedGeneration) return;
+    const runtimeKey = getRuntimeKey();
     const controller = new AbortController();
     activeAbort = controller;
     let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -183,6 +185,7 @@ export const startWebNotificationStream = (options: WebNotificationStreamOptions
           headers: { Accept: 'text/event-stream' },
           cache: 'no-store',
           signal: controller.signal,
+          expectedRuntimeKey: runtimeKey,
         });
         responseStatus = response.status;
         if (!response.ok) throw new NotificationStreamResponseError(response.status);
@@ -190,6 +193,7 @@ export const startWebNotificationStream = (options: WebNotificationStreamOptions
         resetHeartbeat();
 
         await consumeSseStream(response.body, resetHeartbeat, (raw) => {
+          if (disposed || generation !== expectedGeneration) return;
           let value: unknown;
           try {
             value = JSON.parse(raw) as unknown;
@@ -208,6 +212,10 @@ export const startWebNotificationStream = (options: WebNotificationStreamOptions
 
           try {
             handleSidebarStateGlobalEvent(value);
+            handleFollowUpQueueGlobalEvent(value, {
+              runtimeKey,
+              generation: useMessageQueueStore.getState().generation,
+            });
             options.onEvent(value);
           } catch {
             // A consumer failure must not tear down the shared runtime stream.
@@ -266,14 +274,27 @@ export const toNotificationPayload = (value: unknown): NotificationPayload | nul
   };
 };
 
-export const useWebNotificationStream = (options?: { enabled?: boolean }) => {
+export const useWebNotificationStream = (options?: { enabled?: boolean; deliverNotifications?: boolean }) => {
   const enabled = options?.enabled ?? true;
+  const deliverNotifications = options?.deliverNotifications ?? true;
 
   React.useEffect(() => {
-    if (!enabled || isDesktopShell() || !isWebRuntime() || typeof window === 'undefined') return;
+    const desktopShell = isDesktopShell();
+    if (!enabled || (!desktopShell && !isWebRuntime()) || typeof window === 'undefined') return;
 
     return startWebNotificationStream({
       onEvent: (data) => {
+        if (!deliverNotifications) return;
+        const properties = data && typeof data === 'object'
+          ? (data as { properties?: unknown }).properties
+          : null;
+        const deliveredByLocalDesktop = properties && typeof properties === 'object' && (
+          (properties as Record<string, unknown>).desktopNotificationDelivered === true
+          || (properties as Record<string, unknown>).desktopStdoutActive === true
+        );
+        // A remote Electron host cannot notify this desktop. Suppress only the
+        // local in-process server's already-delivered native notification.
+        if (desktopShell && getRuntimeKey() === 'local' && deliveredByLocalDesktop) return;
         const payload = toNotificationPayload(data);
         if (!payload) return;
 
@@ -285,5 +306,5 @@ export const useWebNotificationStream = (options?: { enabled?: boolean }) => {
         void apis?.notifications?.notifyAgentCompletion(payload);
       },
     });
-  }, [enabled]);
+  }, [deliverNotifications, enabled]);
 };
