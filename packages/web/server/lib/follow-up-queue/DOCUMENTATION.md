@@ -29,7 +29,7 @@ const followUpQueue = createFollowUpQueueServerRuntime({
 });
 ```
 
-`rootDirectory` must be absolute. One process should instantiate one core per root so callers share its in-memory per-scope FIFO. Per-scope lock directories additionally serialize mutations across OpenChamber processes that share the authority directory. A contender prepares a complete owner directory and atomically renames it into the canonical lock path. Dead owners are atomically moved to a deterministic, non-empty quarantine path derived from their owner token; the quarantine remains as an ABA fence so a delayed reaper cannot move a successor lock.
+`rootDirectory` must be absolute. One process should instantiate one core per root so callers share its in-memory per-scope FIFO. Per-scope lock directories additionally serialize mutations across OpenChamber processes that share the authority directory. A contender prepares a complete owner directory and atomically renames it into the canonical lock path. Dead owners are atomically moved to a deterministic, non-empty quarantine path derived from their owner token; the quarantine remains as an ABA fence so a delayed reaper cannot move a successor lock. Windows may report an existing-directory rename as `EPERM` or `EACCES`; those codes count as contention only after the destination is confirmed to be a directory, while other permission failures still fail closed.
 
 ## Scope And Snapshot
 

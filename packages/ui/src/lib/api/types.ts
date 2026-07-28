@@ -357,6 +357,7 @@ export interface GitWorktreeValidationResult {
 
 export interface GitWorktreeBootstrapStatus {
   status: 'pending' | 'ready' | 'failed';
+  phase?: 'directory-created' | 'git-ready' | 'setup-ready';
   error: string | null;
   updatedAt: number;
 }
@@ -824,6 +825,7 @@ export interface SettingsPayload {
   pwaAppName?: string;
   mobileKeyboardMode?: 'native' | 'resize-content';
   draftStarters?: DraftStarterRef[];
+  draftStartersVisible?: boolean;
   draftStartersCraftGoalAdded?: boolean;
 
   [key: string]: unknown;
@@ -901,7 +903,7 @@ export interface VSCodeAPI {
   executeCommand(command: string, ...args: unknown[]): Promise<unknown>;
   openAgentManager(): Promise<void>;
   openExternalUrl(url: string): Promise<void>;
-  pickFiles?(): Promise<unknown>;
+  pickFiles?(options?: { extensions?: string[] }): Promise<unknown>;
   saveImage?(payload: unknown): Promise<unknown>;
   saveMarkdown?(payload: unknown): Promise<unknown>;
 }
@@ -925,6 +927,11 @@ export interface ApnsTokenPayload {
   token: string;
   /** 'ios' (APNs) or 'android' (FCM) — lets the relay route the token to the right service. */
   platform?: string;
+  /**
+   * APNs environment the token belongs to: 'sandbox' for Xcode/dev-signed installs,
+   * 'production' for TestFlight/App Store. Omitted when unknown (server defaults to production).
+   */
+  environment?: 'sandbox' | 'production';
 }
 
 export interface PushAPI {
@@ -951,17 +958,24 @@ type GitHubRepoRef = {
   url: string;
 };
 
-type GitHubChecksSummary = {
+export type GitHubChecksSummary = {
   state: 'success' | 'failure' | 'pending' | 'unknown';
   total: number;
   success: number;
   failure: number;
+  /** queued + in_progress + unconcluded runs. */
   pending: number;
+  inProgress?: number;
+  queued?: number;
+  /** Earliest started_at among in-progress runs (ISO), for elapsed display. */
+  startedAt?: string;
 };
 
 export type GitHubCheckRun = {
   id?: number;
   name: string;
+  startedAt?: string;
+  completedAt?: string;
   app?: {
     name?: string;
     slug?: string;
@@ -979,6 +993,7 @@ export type GitHubCheckRun = {
     jobId?: number;
     url?: string;
     name?: string;
+    workflowName?: string;
     conclusion?: string | null;
     steps?: Array<{
       name: string;
@@ -1063,6 +1078,8 @@ export type GitHubPullRequestsListResult = {
 
 export type GitHubPullRequestContextResult = {
   connected: boolean;
+  /** Server-side stamp of when the data was fetched from GitHub (ms epoch); survives server cache serves. */
+  fetchedAt?: number;
   repo?: GitHubRepoRef | null;
   pr?: GitHubPullRequestSummary | null;
   issueComments?: GitHubIssueComment[];
@@ -1075,6 +1092,8 @@ export type GitHubPullRequestContextResult = {
 
 export type GitHubPullRequestStatus = {
   connected: boolean;
+  /** Server-side stamp of when the data was fetched from GitHub (ms epoch); survives server cache serves. */
+  fetchedAt?: number;
   repo?: GitHubRepoRef | null;
   branch?: string;
   pr?: GitHubPullRequest | null;

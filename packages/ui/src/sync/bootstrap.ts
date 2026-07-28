@@ -128,32 +128,32 @@ export async function bootstrapDirectory(input: {
   sdk: OpencodeClient
   getState: () => State
   set: (patch: Partial<State>) => void
+  isStale?: () => boolean
   global: {
     config: Record<string, unknown>
     projects: Project[]
   }
   loadSessions: (directory: string) => Promise<void> | void
-  isCurrent?: () => boolean
-}) {
-  const { directory, sdk, getState, set: commit, global: g } = input
-  const isCurrent = () => input.isCurrent?.() !== false
-  const set = (patch: Partial<State>): boolean => {
-    if (!isCurrent()) return false
-    commit(patch)
+}): Promise<"complete" | "failed" | "stale"> {
+  const { directory, sdk, getState, set, global: g } = input
+  const commit = (patch: Partial<State>): boolean => {
+    if (input.isStale?.()) return false
+    set(patch)
     return true
   }
-  if (!isCurrent()) return
+  if (input.isStale?.()) return "stale"
   const state = getState()
   const loading = state.status !== "complete"
 
   // Seed from global state while we fetch directory-specific data
   const seededProject = projectID(directory, g.projects)
-  if (seededProject) set({ project: seededProject })
+  if (seededProject) commit({ project: seededProject })
   if (Object.keys(state.config ?? {}).length === 0 && Object.keys(g.config ?? {}).length > 0) {
     const seededConfig = g.config as State["config"]
-    if (set({ config: seededConfig })) emitSyncConfigChanged(directory, seededConfig)
+    if (commit({ config: seededConfig })) emitSyncConfigChanged(directory, seededConfig)
   }
-  if (loading) set({ status: "partial" })
+  if (loading) commit({ status: "partial" })
+  if (input.isStale?.()) return "stale"
 
   // ---------------------------------------------------------------------------
   // Phase 1: Critical path — block until these resolve so the UI can render.
@@ -164,17 +164,17 @@ export async function bootstrapDirectory(input: {
   const phase1Results = await Promise.allSettled([
     seededProject
       ? Promise.resolve()
-      : retry(() => sdk.project.current().then((x) => set({ project: unwrap(x, "project.current").id }))),
+      : retry(() => sdk.project.current().then((x) => commit({ project: unwrap(x, "project.current").id }))),
     retry(() => sdk.config.get().then((x) => {
       const config = unwrap(x, "config.get")
-      if (set({ config })) emitSyncConfigChanged(directory, config)
+      if (commit({ config })) emitSyncConfigChanged(directory, config)
     })),
     retry(() =>
       sdk.path.get().then((x) => {
         const data = unwrap(x, "path.get")
-        set({ path: data })
+        commit({ path: data })
         const next = projectID(data?.directory ?? directory, g.projects)
-        if (next) set({ project: next })
+        if (next) commit({ project: next })
       }),
     ),
     retry(async () => {
@@ -185,20 +185,25 @@ export async function bootstrapDirectory(input: {
         if (result.error) unwrap(result, "session.status")
         const status = parseSessionStatusSnapshot(result.data)
         if (!status) throw new Error("session.status returned malformed data")
-        if (!isCurrent()) return
+        if (input.isStale?.()) return
         const currentStatus = getState().session_status
-        set({
+        if (!commit({
           session_status: currentStatus === statusBaseline
             ? status
             : { ...status, ...currentStatus },
-        })
-        applyGlobalSessionStatusSnapshot(directory, status, undefined, statusBaselineRevision)
+        })) return
+        applyGlobalSessionStatusSnapshot(
+          directory,
+          status,
+          getState().session.map((session) => session.id),
+          statusBaselineRevision,
+        )
       } finally {
         clearTimeout(timeout)
       }
     }),
   ])
-  if (!isCurrent()) return
+  if (input.isStale?.()) return "stale"
 
   const phase1Errors = phase1Results
     .filter((r): r is PromiseRejectedResult => r.status === "rejected")
@@ -218,27 +223,27 @@ export async function bootstrapDirectory(input: {
 
   if (phase1Errors.length === phase1Results.length || pathFailedWithoutProject) {
     console.error(`[bootstrap] directory bootstrap failed for ${directory}`, phase1Errors[0])
-    return
+    return "failed"
   }
 
   // Mark ready after critical data arrives so the UI can paint.
-  if (loading) set({ status: "complete" })
+  if (loading) commit({ status: "complete" })
 
   // ---------------------------------------------------------------------------
   // Phase 2: Deferrable — fetch after first paint without blocking.
   // These enrich the UI but aren't required for basic functionality.
   // ---------------------------------------------------------------------------
-  void Promise.allSettled([
-    retry(() => sdk.command.list().then((x) => set({ command: unwrap(x, "command.list") }))),
-    retry(() => sdk.mcp.status().then((x) => set({ mcp: unwrap(x, "mcp.status") }))),
-    retry(() => sdk.lsp.status().then((x) => set({ lsp: unwrap(x, "lsp.status") }))),
+  const runDeferredPhase = () => Promise.allSettled([
+    retry(() => sdk.command.list().then((x) => commit({ command: unwrap(x, "command.list") }))),
+    retry(() => sdk.mcp.status().then((x) => commit({ mcp: unwrap(x, "mcp.status") }))),
+    retry(() => sdk.lsp.status().then((x) => commit({ lsp: unwrap(x, "lsp.status") }))),
     retry(() =>
       sdk.vcs.get().then((x) => {
         const current = getState()
         if (x.error) {
           throw new Error(`vcs.get failed: ${String(x.error)}`)
         }
-        set({ vcs: x.data ?? current.vcs })
+        commit({ vcs: x.data ?? current.vcs })
       }),
     ),
     retry(async () => {
@@ -270,7 +275,7 @@ export async function bootstrapDirectory(input: {
         if (currentSignature !== beforeSignature) continue
         delete merged[sessionID]
       }
-      set({ question: merged })
+      commit({ question: merged })
     }),
     retry(async () => {
       const before = getState()
@@ -301,10 +306,10 @@ export async function bootstrapDirectory(input: {
         if (currentSignature !== beforeSignature) continue
         delete merged[sessionID]
       }
-      set({ permission: merged })
+      commit({ permission: merged })
     }),
   ]).then((results) => {
-    if (!isCurrent()) return
+    if (input.isStale?.()) return
     const errors = results
       .filter((r): r is PromiseRejectedResult => r.status === "rejected")
       .map((r) => r.reason)
@@ -314,10 +319,19 @@ export async function bootstrapDirectory(input: {
   })
 
   // ---------------------------------------------------------------------------
-  // Phase 3: Lazy — session list can be large; don't block on it.
+  // Phase 3: Authoritative session list. Keep this scheduler-owned so bounded
+  // bootstrap concurrency also bounds list pagination, but do not hold the slot
+  // for the deferrable enrichment phase above.
   // ---------------------------------------------------------------------------
-  if (!isCurrent()) return
-  void Promise.resolve(input.loadSessions(directory)).catch((err) => {
-    if (isCurrent()) console.error(`[bootstrap] session load failed for ${directory}`, err)
-  })
+  const sessionsResult = await Promise.allSettled([Promise.resolve(input.loadSessions(directory))])
+  if (input.isStale?.()) return "stale"
+  const sessionLoad = sessionsResult[0]
+  setTimeout(() => {
+    if (!input.isStale?.()) void runDeferredPhase()
+  }, 0)
+  if (sessionLoad?.status === "rejected") {
+    console.error(`[bootstrap] session load failed for ${directory}`, sessionLoad.reason)
+    return "failed"
+  }
+  return "complete"
 }

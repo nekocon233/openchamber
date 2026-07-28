@@ -79,6 +79,7 @@ import {
   getRuntimeKey,
   RuntimeContextChangedError,
 } from "@/lib/runtime-switch"
+import { persistWorktreeTopology, readPersistedWorktreeTopology } from "./worktree-topology-cache"
 import { rememberRuntimeLiveStatus } from "./runtime-live-memory"
 
 export type { AttachedFile }
@@ -202,6 +203,7 @@ export function routeMessage(params: {
 
 type SendMessageOptions = {
   sessionId?: string
+  directory?: string
   delivery?: 'steer' | 'queue'
   messageId?: string
   onSessionMaterialized?: (sessionId: string) => void
@@ -431,6 +433,8 @@ type RuntimeSessionMemory = {
   sessionId: string | null
   directory: string | null
   draft: NewSessionDraftState
+  worktreeMetadata: Map<string, WorktreeMetadata>
+  availableWorktreesByProject: Map<string, WorktreeMetadata[]>
 }
 const runtimeSessionMemory = new Map<string, RuntimeSessionMemory>()
 
@@ -447,6 +451,8 @@ const writeRuntimeSessionMemory = (key: string, patch: Partial<RuntimeSessionMem
     sessionId: current?.sessionId ?? null,
     directory: current?.directory ?? null,
     draft: current?.draft ? cloneDraft(current.draft) : { ...DEFAULT_DRAFT },
+    worktreeMetadata: current?.worktreeMetadata ?? new Map(),
+    availableWorktreesByProject: current?.availableWorktreesByProject ?? new Map(),
     ...patch,
   })
 }
@@ -563,37 +569,13 @@ export async function materializeOpenDraftSession(selection: {
 // the FIRST launch — yielding a single project-scoped config load instead of a
 // worktree+project double-load. Discovery refreshes it in the background.
 // ---------------------------------------------------------------------------
-const WORKTREE_MAP_STORAGE_KEY = 'oc.worktreeMap'
-
-const loadPersistedWorktreeMap = (): Map<string, WorktreeMetadata[]> => {
-  try {
-    const raw = getDeferredSafeStorage().getItem(WORKTREE_MAP_STORAGE_KEY)
-    if (!raw) return new Map()
-    const entries = JSON.parse(raw) as Array<[string, WorktreeMetadata[]]>
-    if (!Array.isArray(entries)) return new Map()
-    return new Map(
-      entries.filter((entry) => Array.isArray(entry) && typeof entry[0] === 'string' && Array.isArray(entry[1])),
-    )
-  } catch {
-    return new Map()
-  }
-}
-
-const persistWorktreeMap = (serialized: string): void => {
-  try {
-    getDeferredSafeStorage().setItem(WORKTREE_MAP_STORAGE_KEY, serialized)
-  } catch {
-    // quota / serialization error — ignore; discovery still refreshes at runtime
-  }
-}
-
 const flattenWorktreeMap = (map: Map<string, WorktreeMetadata[]>): WorktreeMetadata[] => {
   const out: WorktreeMetadata[] = []
   for (const list of map.values()) out.push(...list)
   return out
 }
 
-const PERSISTED_WORKTREE_MAP = loadPersistedWorktreeMap()
+const PERSISTED_WORKTREE_MAP = readPersistedWorktreeTopology(runtimeMemoryKey())
 
 export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   currentSessionId: null,
@@ -713,6 +695,8 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       sessionId: currentSessionId,
       directory,
       draft: cloneDraft(get().newSessionDraft),
+      worktreeMetadata: new Map(get().worktreeMetadata),
+      availableWorktreesByProject: new Map(get().availableWorktreesByProject),
     })
   },
 
@@ -728,6 +712,8 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         : persisted?.sessionId ?? null
     const restoredDraft = memory?.draft ? cloneDraft(memory.draft) : { ...DEFAULT_DRAFT }
     const restoredDirectory = memory?.directory ?? persisted?.directory ?? null
+    const availableWorktreesByProject = memory?.availableWorktreesByProject
+      ?? readPersistedWorktreeTopology(key)
     if (restoredDirectory) {
       useDirectoryStore.getState().setDirectory(restoredDirectory, { showOverlay: false })
       opencodeClient.setDirectory(restoredDirectory)
@@ -747,6 +733,9 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       abortPromptSessionId: null,
       abortPromptExpiresAt: null,
       error: null,
+      worktreeMetadata: memory?.worktreeMetadata ?? new Map(),
+      availableWorktrees: flattenWorktreeMap(availableWorktreesByProject),
+      availableWorktreesByProject,
       sessionAbortFlags: new Map(),
       pendingChangesBarDismissed: new Map(),
     })
@@ -891,6 +880,23 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // closeNewSessionDraft
   // ---------------------------------------------------------------------------
   closeNewSessionDraft: () => {
+    const currentDraft = get().newSessionDraft
+    if (
+      !currentDraft.open
+      && currentDraft.selectedProjectId == null
+      && currentDraft.directoryOverride == null
+      && currentDraft.pendingWorktreeRequestId == null
+      && currentDraft.bootstrapPendingDirectory == null
+      && !currentDraft.preserveDirectoryOverride
+      && currentDraft.parentID == null
+      && currentDraft.title === undefined
+      && currentDraft.initialPrompt === undefined
+      && currentDraft.syntheticParts === undefined
+      && currentDraft.targetFolderId === undefined
+      && currentDraft.permissionAutoAcceptEnabled === undefined
+    ) {
+      return
+    }
     const nextDraft: NewSessionDraftState = {
         open: false,
         selectedProjectId: null,
@@ -1248,7 +1254,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     }
 
     const currentSessionDirectory = targetSessionId
-      ? normalizePath(get().getDirectoryForSession(targetSessionId))
+      ? normalizePath(options?.directory ?? get().getDirectoryForSession(targetSessionId))
       : null
     if (targetSessionId) {
       notifyMessageSent(targetSessionId)
@@ -1718,13 +1724,14 @@ setSessionOpener((sessionID, directory) => {
 // comparison avoids redundant localStorage writes when the Map reference
 // changed but the content is identical (e.g., re-discovery that found the
 // same worktrees).
-let lastPersistedWorktreeSerialized = ''
+const lastPersistedWorktreeSerializedByRuntime = new Map<string, string>()
 useSessionUIStore.subscribe((state, prev) => {
   if (state.availableWorktreesByProject !== prev.availableWorktreesByProject) {
+    const runtimeKey = runtimeMemoryKey()
     const serialized = JSON.stringify([...state.availableWorktreesByProject.entries()])
-    if (serialized !== lastPersistedWorktreeSerialized) {
-      lastPersistedWorktreeSerialized = serialized
-      persistWorktreeMap(serialized)
+    if (serialized !== lastPersistedWorktreeSerializedByRuntime.get(runtimeKey)) {
+      lastPersistedWorktreeSerializedByRuntime.set(runtimeKey, serialized)
+      persistWorktreeTopology(runtimeKey, state.availableWorktreesByProject)
     }
   }
 })

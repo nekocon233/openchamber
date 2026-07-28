@@ -156,10 +156,8 @@ export const ProjectActionsButton = ({
   const desktopSshInstances = useDesktopSshStore((state) => state.instances);
   const loadDesktopSsh = useDesktopSshStore((state) => state.load);
 
-  const setBottomTerminalOpen = useUIStore((state) => state.setBottomTerminalOpen);
   const terminalShell = useUIStore((state) => state.terminalShell);
   const terminalLoginShell = useUIStore((state) => state.terminalLoginShells.includes(state.terminalShell));
-  const setActiveMainTab = useUIStore((state) => state.setActiveMainTab);
   const setSettingsPage = useUIStore((state) => state.setSettingsPage);
   const setSettingsDialogOpen = useUIStore((state) => state.setSettingsDialogOpen);
   const setSettingsProjectsSelectedId = useUIStore((state) => state.setSettingsProjectsSelectedId);
@@ -260,7 +258,7 @@ export const ProjectActionsButton = ({
     id: AUTO_DISCOVER_ACTION_ID,
     name: t('projectActions.actions.autoDiscover'),
     command: '',
-    icon: 'search',
+    icon: 'scan-2',
     autoOpenUrl: true,
   }), [t]);
 
@@ -395,8 +393,7 @@ export const ProjectActionsButton = ({
     setTabIconKey(normalizedDirectory, tabId, action.icon || 'play');
     setActiveTab(normalizedDirectory, tabId);
     if (options.revealTerminal !== false) {
-      setBottomTerminalOpen(true);
-      setActiveMainTab('terminal');
+      useUIStore.getState().openContextPanelTab(normalizedDirectory, { mode: 'terminal' });
     }
 
     const stateAfterTab = useTerminalStore.getState().getDirectoryState(normalizedDirectory);
@@ -409,9 +406,7 @@ export const ProjectActionsButton = ({
   }, [
     ensureDirectory,
     normalizedDirectory,
-    setActiveMainTab,
     setActiveTab,
-    setBottomTerminalOpen,
     setTabIconKey,
     setTabLabel,
     t,
@@ -450,7 +445,7 @@ export const ProjectActionsButton = ({
             id: AUTO_DISCOVER_ACTION_ID,
             name: t('projectActions.actions.autoDiscover'),
             command: devServer.command,
-            icon: 'search',
+            icon: 'scan-2',
             autoOpenUrl: true,
             openUrl: devServer.previewUrlHint || '',
           };
@@ -543,7 +538,7 @@ export const ProjectActionsButton = ({
           store.updateProjectActionRunStatus(key, 'running');
           if (run) {
             store.setActiveTab(run.directory, run.tabId);
-            useUIStore.getState().setBottomTerminalOpen(true);
+            useUIStore.getState().openContextPanelTab(run.directory, { mode: 'terminal' });
           }
           delete previewWaitTimeoutByRunKeyRef.current[key];
         }, AUTO_DISCOVER_PREVIEW_WAIT_TIMEOUT_MS);
@@ -727,7 +722,7 @@ export const ProjectActionsButton = ({
 
   const selectedIconKey = (resolvedSelected.icon || 'play') as keyof typeof PROJECT_ACTION_ICON_MAP;
   const selectedIconName = resolvedSelected.id === AUTO_DISCOVER_ACTION_ID
-    ? 'search'
+    ? 'scan-2'
     : PROJECT_ACTION_ICON_MAP[selectedIconKey] || 'play';
   const selectedRunKey = toProjectActionRunKey(normalizedDirectory, resolvedSelected.id);
   const selectedRunning = projectActionRuns[selectedRunKey];
@@ -740,31 +735,39 @@ export const ProjectActionsButton = ({
     }
     openContextPreview(selectedRunning.directory, selectedRunPreviewUrl);
   };
+  const isAutoDiscoverSelected = resolvedSelected.id === AUTO_DISCOVER_ACTION_ID;
 
   if (compact) {
     return (
       <div className="inline-flex items-center">
-        <button
-          type="button"
-          disabled={isLoading || isStoppingSelected}
-          className={cn(
-            'app-region-no-drag inline-flex h-9 w-9 items-center justify-center rounded-[10px] [corner-shape:squircle] supports-[corner-shape:squircle]:rounded-[50px] p-2',
-            'typography-ui-label font-medium text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-            'disabled:cursor-not-allowed',
-            className
-          )}
-          onClick={handlePrimaryClick}
-          aria-label={selectedRunning
-            ? t('projectActions.actions.stopNamedAria', { name: resolvedSelected.name })
-            : t('projectActions.actions.runNamedAria', { name: resolvedSelected.name })}
-        >
-          {isStoppingSelected || isWaitingForSelectedPreview
-            ? <Icon name="loader-4" className="h-5 w-5 animate-spin text-[var(--status-warning)]" />
-            : selectedRunning
-              ? <Icon name="stop" className="h-5 w-5 text-[var(--status-warning)]" />
-              : <Icon name={selectedIconName} className="h-5 w-5" />}
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              disabled={isLoading || isStoppingSelected}
+              className={cn(
+                'app-region-no-drag inline-flex h-9 w-9 items-center justify-center rounded-[10px] [corner-shape:squircle] supports-[corner-shape:squircle]:rounded-[50px] p-2',
+                'typography-ui-label font-medium text-muted-foreground hover:bg-interactive-hover hover:text-foreground transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                'disabled:cursor-not-allowed',
+                className
+              )}
+              onClick={handlePrimaryClick}
+              aria-label={selectedRunning
+                ? t('projectActions.actions.stopNamedAria', { name: resolvedSelected.name })
+                : t('projectActions.actions.runNamedAria', { name: resolvedSelected.name })}
+            >
+              {isStoppingSelected || isWaitingForSelectedPreview
+                ? <Icon name="loader-4" className="h-5 w-5 animate-spin text-[var(--status-warning)]" />
+                : selectedRunning
+                  ? <Icon name="stop" className="h-5 w-5 text-[var(--status-warning)]" />
+                  : <Icon name={selectedIconName} className="h-5 w-5" />}
+            </button>
+          </TooltipTrigger>
+          {isAutoDiscoverSelected ? (
+            <TooltipContent sideOffset={6}>{t('projectActions.actions.autoDiscoverTooltip')}</TooltipContent>
+          ) : null}
+        </Tooltip>
         {showSelectedPreviewButton ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -799,7 +802,7 @@ export const ProjectActionsButton = ({
             {displayActions.map((entry) => {
               const iconKey = (entry.icon || 'play') as keyof typeof PROJECT_ACTION_ICON_MAP;
               const iconName = entry.id === AUTO_DISCOVER_ACTION_ID
-                ? 'search'
+                ? 'scan-2'
                 : PROJECT_ACTION_ICON_MAP[iconKey] || 'play';
               const runKey = toProjectActionRunKey(normalizedDirectory, entry.id);
               const runState = projectActionRuns[runKey];
@@ -840,27 +843,34 @@ export const ProjectActionsButton = ({
         className
       )}
     >
-      <button
-        type="button"
-        onClick={handlePrimaryClick}
-        disabled={isLoading || isStoppingSelected}
-        className={cn(
-          'inline-flex h-full items-center justify-center typography-ui-label font-medium text-foreground hover:bg-interactive-hover',
-          compact ? 'w-9 px-0' : 'px-2.5',
-          'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed'
-        )}
-        aria-label={selectedRunning
-          ? t('projectActions.actions.stopNamedAria', { name: resolvedSelected.name })
-          : t('projectActions.actions.runNamedAria', { name: resolvedSelected.name })}
-      >
-        <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
-          {isStoppingSelected || isWaitingForSelectedPreview
-            ? <Icon name="loader-4" className="h-4 w-4 animate-spin text-[var(--status-warning)]" />
-            : selectedRunning
-              ? <Icon name="stop" className="h-4 w-4 text-[var(--status-warning)]" />
-              : <Icon name={selectedIconName} className="h-4 w-4" />}
-        </span>
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={handlePrimaryClick}
+            disabled={isLoading || isStoppingSelected}
+            className={cn(
+              'inline-flex h-full items-center justify-center typography-ui-label font-medium text-foreground hover:bg-interactive-hover',
+              compact ? 'w-9 px-0' : 'px-2.5',
+              'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed'
+            )}
+            aria-label={selectedRunning
+              ? t('projectActions.actions.stopNamedAria', { name: resolvedSelected.name })
+              : t('projectActions.actions.runNamedAria', { name: resolvedSelected.name })}
+          >
+            <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+              {isStoppingSelected || isWaitingForSelectedPreview
+                ? <Icon name="loader-4" className="h-4 w-4 animate-spin text-[var(--status-warning)]" />
+                : selectedRunning
+                  ? <Icon name="stop" className="h-4 w-4 text-[var(--status-warning)]" />
+                  : <Icon name={selectedIconName} className="h-4 w-4" />}
+            </span>
+          </button>
+        </TooltipTrigger>
+        {isAutoDiscoverSelected ? (
+          <TooltipContent sideOffset={6}>{t('projectActions.actions.autoDiscoverTooltip')}</TooltipContent>
+        ) : null}
+      </Tooltip>
 
       {showSelectedPreviewButton ? (
         <Tooltip>
@@ -905,7 +915,7 @@ export const ProjectActionsButton = ({
           {displayActions.map((entry) => {
             const iconKey = (entry.icon || 'play') as keyof typeof PROJECT_ACTION_ICON_MAP;
             const iconName = entry.id === AUTO_DISCOVER_ACTION_ID
-              ? 'search'
+              ? 'scan-2'
               : PROJECT_ACTION_ICON_MAP[iconKey] || 'play';
             const runKey = toProjectActionRunKey(normalizedDirectory, entry.id);
             const runState = projectActionRuns[runKey];

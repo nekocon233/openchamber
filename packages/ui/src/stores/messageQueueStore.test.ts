@@ -14,7 +14,14 @@ import {
     applyFollowUpQueueOperation,
 } from '@/lib/followUpQueue';
 import { createOpenCodeIdentifier } from '@/lib/opencode/identifier';
-import { createMessageQueueStore } from './messageQueueStore';
+import {
+    createMessageQueueStore,
+    createMessageQueueTarget,
+    getMessageQueueKey,
+    migrateMessageQueueState,
+    parseMessageQueueKey,
+    type MessageQueueIdentity,
+} from './messageQueueStore';
 
 const createMemoryStorage = (): Storage => {
     const values = new Map<string, string>();
@@ -193,7 +200,7 @@ const createClient = (options: {
 
 const watchAndInitialize = async (
     store: ReturnType<typeof createMessageQueueStore>,
-    sessionId: string,
+    sessionId: MessageQueueIdentity,
 ): Promise<() => void> => {
     const unwatch = store.getState().watchSession(sessionId);
     await store.getState().initialize();
@@ -932,5 +939,56 @@ describe('host-authoritative follow-up queue client', () => {
 describe('OpenCode queue message identifier', () => {
     test('uses the Identifier.ascending message shape', () => {
         expect(/^msg_[\da-f]{12}[0-9A-Za-z]{14}$/.test(createOpenCodeIdentifier('msg'))).toBe(true);
+    });
+});
+
+describe('message queue target ownership', () => {
+    const unsupported: FollowUpQueueAPI = {
+        supported: false,
+        load: async () => null,
+        mutate: async () => null,
+    };
+
+    test('isolates colliding session IDs by directory within one runtime', async () => {
+        const storage = createMemoryStorage();
+        const { store } = createClient({
+            api: unsupported,
+            storage,
+            hasCrossContextLocalLock: () => true,
+        });
+        const first = createMessageQueueTarget('session-1', '/repo-a', 'runtime-a')!;
+        const second = createMessageQueueTarget('session-1', '/repo-b', 'runtime-a')!;
+
+        await store.getState().addToQueue(first, { content: 'from A' });
+        await store.getState().addToQueue(second, { content: 'from B' });
+
+        expect(store.getState().getQueueForTarget(first)[0]?.content).toBe('from A');
+        expect(store.getState().getQueueForTarget(second)[0]?.content).toBe('from B');
+
+        const restarted = createClient({
+            api: unsupported,
+            storage,
+            hasCrossContextLocalLock: () => true,
+        }).store;
+        await watchAndInitialize(restarted, second);
+        await watchAndInitialize(restarted, first);
+        expect(restarted.getState().getQueueForTarget(first)[0]?.content).toBe('from A');
+        expect(restarted.getState().getQueueForTarget(second)[0]?.content).toBe('from B');
+    });
+
+    test('round trips a composite queue key', () => {
+        const target = createMessageQueueTarget('session-1', '/repo', 'runtime-a')!;
+        expect(parseMessageQueueKey(getMessageQueueKey(target))).toEqual(target);
+    });
+
+    test('quarantines legacy session-only queues instead of assigning them to a target', () => {
+        const migrated = migrateMessageQueueState({
+            queuedMessages: {
+                'session-1': [{ id: 'queued-1', content: 'legacy', createdAt: 1 }],
+            },
+        }, 1);
+
+        expect(migrated.queuedMessages).toEqual({});
+        expect(migrated.quarantinedLegacyMessages['session-1']?.[0]?.content).toBe('legacy');
     });
 });

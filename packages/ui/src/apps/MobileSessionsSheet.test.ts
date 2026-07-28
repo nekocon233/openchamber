@@ -9,14 +9,16 @@ const mobileAppSource = readFileSync(join(__dirname, 'MobileApp.tsx'), 'utf8');
 const mobileTreeStoreSource = readFileSync(join(__dirname, '../stores/useMobileSessionTreeStore.ts'), 'utf8');
 
 describe('MobileSessionsSheet activity sections', () => {
-  test('sorts recent and pinned sessions from the same live message activity map', () => {
-    expect(source).toContain('open && (showPinnedSection || showRecentSection)');
-    expect(source).toContain('deriveRecentSessions(sessions, recentNow, messageActivityBySessionId)');
-    expect(source).toContain('sortSessionsByActivity(');
+  test('uses authoritative live activity for recent membership and shared lifecycle ordering', () => {
+    expect(source).toContain('const activeSessionIds = React.useMemo(() => {');
+    expect(source).toContain("status.type === 'busy' || status.type === 'retry'");
+    expect(source).toContain('deriveRecentSessions(sessions, activeSessionIds, recentNow)');
+    expect(source).toContain('orderSessionsByLifecycleScopes(');
     expect(source).toContain('sessions.filter((session) => pinnedSessionIds.has(session.id))');
     expect(source).toContain('if (!open || !showPinnedSection || normalizedQuery || editingOrder) return [];');
     expect(source).toContain('if (!open || !showRecentSection || normalizedQuery || editingOrder) return [];');
-    expect(source).not.toContain('compareSessionsByPinnedAndTime');
+    expect(source).not.toContain('messageActivityBySessionId');
+    expect(source).not.toContain('sortSessionsByActivity');
   });
 
   test('renders pinned then recent before the project tree with persisted expansion and shared pagination', () => {

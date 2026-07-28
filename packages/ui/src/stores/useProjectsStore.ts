@@ -23,6 +23,7 @@ import {
   useSidebarStateStore,
   type SidebarStateRuntimeContext,
 } from './useSidebarStateStore';
+import { getVSCodeBootstrapConfig, isVSCodeRuntime } from './utils/vscodeRuntime';
 
 /** Pick a color key that's least used among existing projects */
 const pickAutoColor = (projects: ProjectEntry[]): string => {
@@ -442,21 +443,11 @@ const createVSCodeWorkspaceProject = (
 };
 
 const getVSCodeWorkspaceFolders = (): VSCodeWorkspaceFolderConfig[] | null => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
   const runtimeApis = getRegisteredRuntimeAPIs();
-  if (!runtimeApis?.runtime?.isVSCode) {
+  const config = getVSCodeBootstrapConfig();
+  if (!isVSCodeRuntime(runtimeApis, config)) {
     return null;
   }
-
-  const config = (window as unknown as {
-    __VSCODE_CONFIG__?: {
-      workspaceFolder?: unknown;
-      workspaceFolders?: unknown;
-    };
-  }).__VSCODE_CONFIG__;
   const folders = Array.isArray(config?.workspaceFolders)
     ? config.workspaceFolders
         .map((entry) => {
@@ -568,8 +559,7 @@ const getVSCodeWorkspaceProject = (): { projects: ProjectEntry[]; activeProjectI
 // Always prefer the VS Code workspace projects over any persisted multi-project registry.
 const vscodeWorkspace = getVSCodeWorkspaceProject();
 const isVSCodeProjectsRuntime = (() => {
-  if (typeof window === 'undefined') return false;
-  return Boolean(getRegisteredRuntimeAPIs()?.runtime?.isVSCode);
+  return isVSCodeRuntime(getRegisteredRuntimeAPIs(), getVSCodeBootstrapConfig());
 })();
 const effectiveInitialProjects = vscodeWorkspace?.projects ?? (isVSCodeProjectsRuntime ? [] : initialProjects);
 const persistedInitialActiveProjectId = vscodeWorkspace?.activeProjectId ?? (isVSCodeProjectsRuntime ? null : readPersistedActiveProjectId());
@@ -976,9 +966,36 @@ export const useProjectsStore = create<ProjectsStore>()(
       if (isVSCodeProjectsRuntime) {
         return;
       }
-      // Projects and active navigation no longer come from server settings.
-      // The sidebar-state projection and runtime-scoped local cache own them.
-      void settings;
+      if (getRegisteredRuntimeAPIs()?.sidebarState?.supported === true) {
+        return;
+      }
+      const incomingProjects = sanitizeProjects(settings.projects ?? []);
+      const incomingActive = typeof settings.activeProjectId === 'string' && settings.activeProjectId.trim()
+        ? settings.activeProjectId.trim()
+        : null;
+
+      const current = get();
+
+      const projectsChanged = JSON.stringify(current.projects) !== JSON.stringify(incomingProjects);
+      const activeChanged = current.activeProjectId !== incomingActive;
+
+      if (!projectsChanged && !activeChanged) {
+        return;
+      }
+
+      const incomingIds = new Set(incomingProjects.map((p) => p.id));
+      const cleanedOrder = get().manualProjectOrder.filter((id) => incomingIds.has(id));
+      set({ projects: incomingProjects, activeProjectId: incomingActive, manualProjectOrder: cleanedOrder });
+      cacheProjects(incomingProjects, incomingActive);
+      persistManualProjectOrder(cleanedOrder);
+
+      if (incomingActive) {
+        const activeProject = incomingProjects.find((project) => project.id === incomingActive);
+        if (activeProject) {
+          opencodeClient.setDirectory(activeProject.path);
+          useDirectoryStore.getState().setDirectory(activeProject.path, { showOverlay: false });
+        }
+      }
     },
 
     syncVSCodeWorkspaceFolders: (folders, activePath) => {

@@ -22,6 +22,7 @@ import {
     parseFollowUpQueueSnapshot,
 } from '@/lib/followUpQueue';
 import { createOpenCodeIdentifier } from '@/lib/opencode/identifier';
+import { normalizePath } from '@/lib/pathNormalization';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import type { AttachedFile } from './types/sessionTypes';
@@ -52,6 +53,40 @@ export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments'> {
     attachments?: AttachedFile[];
 }
 
+export type MessageQueueTarget = {
+    runtimeKey: string;
+    directory: string;
+    sessionId: string;
+};
+
+export type MessageQueueIdentity = string | MessageQueueTarget;
+
+export const createMessageQueueTarget = (
+    sessionId: string,
+    directory: string | null | undefined,
+    runtimeKey: string = getRuntimeKey(),
+): MessageQueueTarget | null => {
+    const normalizedDirectory = normalizePath(directory);
+    if (!runtimeKey || !normalizedDirectory || !sessionId) return null;
+    return { runtimeKey, directory: normalizedDirectory, sessionId };
+};
+
+export const getMessageQueueKey = (target: MessageQueueTarget): string =>
+    `${target.runtimeKey}\n${target.directory}\n${target.sessionId}`;
+
+export const parseMessageQueueKey = (key: string): MessageQueueTarget | null => {
+    const [runtimeKey, directory, ...sessionParts] = key.split('\n');
+    return createMessageQueueTarget(sessionParts.join('\n'), directory, runtimeKey);
+};
+
+const getQueueKey = (identity: MessageQueueIdentity): string => (
+    typeof identity === 'string' ? identity : getMessageQueueKey(identity)
+);
+
+const getQueueSessionId = (identity: MessageQueueIdentity): string => (
+    typeof identity === 'string' ? identity : identity.sessionId
+);
+
 export type QueueClaimHandle = {
     claimId: string;
     item: QueuedMessage;
@@ -65,6 +100,7 @@ export type MessageQueueRuntimeContext = {
 
 interface MessageQueueState {
     queuedMessages: Record<string, QueuedMessage[]>;
+    quarantinedLegacyMessages: Record<string, QueuedMessage[]>;
     followUpBehavior: FollowUpBehavior;
     runtimeKey: string;
     generation: number;
@@ -73,24 +109,25 @@ interface MessageQueueState {
 
 interface MessageQueueActions {
     initialize: () => Promise<void>;
-    watchSession: (sessionId: string) => () => void;
-    refreshSession: (sessionId: string) => Promise<void>;
+    watchSession: (identity: MessageQueueIdentity) => () => void;
+    refreshSession: (identity: MessageQueueIdentity) => Promise<void>;
     addToQueue: (
-        sessionId: string,
+        identity: MessageQueueIdentity,
         message: Omit<QueuedMessage, 'id' | 'messageId' | 'createdAt' | 'status' | 'claim'> & { status?: QueuedMessageStatus },
     ) => Promise<QueuedMessage>;
-    removeFromQueue: (sessionId: string, messageId: string) => void;
-    setQueuedStatus: (sessionId: string, messageId: string, status: QueuedMessageStatus) => void;
-    reorderQueue: (sessionId: string, fromId: string, toId: string) => void;
-    popToInput: (sessionId: string, messageId: string) => QueuedMessage | null;
-    clearQueue: (sessionId: string) => void;
+    removeFromQueue: (identity: MessageQueueIdentity, messageId: string) => void;
+    setQueuedStatus: (identity: MessageQueueIdentity, messageId: string, status: QueuedMessageStatus) => void;
+    reorderQueue: (identity: MessageQueueIdentity, fromId: string, toId: string) => void;
+    popToInput: (identity: MessageQueueIdentity, messageId: string) => QueuedMessage | null;
+    clearQueue: (identity: MessageQueueIdentity) => void;
     clearAllQueues: () => void;
     setFollowUpBehavior: (behavior: FollowUpBehavior) => void;
     getQueueForSession: (sessionId: string) => QueuedMessage[];
-    claim: (sessionId: string, itemId: string, mode: 'manual' | 'auto') => Promise<QueueClaimHandle | null>;
-    complete: (sessionId: string, itemId: string, claimId: string, context?: MessageQueueRuntimeContext) => Promise<boolean>;
+    getQueueForTarget: (target: MessageQueueTarget) => QueuedMessage[];
+    claim: (identity: MessageQueueIdentity, itemId: string, mode: 'manual' | 'auto') => Promise<QueueClaimHandle | null>;
+    complete: (identity: MessageQueueIdentity, itemId: string, claimId: string, context?: MessageQueueRuntimeContext) => Promise<boolean>;
     release: (
-        sessionId: string,
+        identity: MessageQueueIdentity,
         itemId: string,
         claimId: string,
         status: QueuedMessageStatus,
@@ -121,6 +158,9 @@ type PendingOperation = {
 };
 
 type QueueLane = {
+    key: string;
+    identity: MessageQueueIdentity;
+    storageId: string;
     runtimeKey: string;
     generation: number;
     sessionId: string;
@@ -179,11 +219,38 @@ const OUTBOX_STORAGE_PREFIX = 'oc.followUpQueue.outbox.v1';
 const SETTINGS_STORAGE_KEY = 'oc.followUpQueue.settings.v1';
 const LEGACY_STORAGE_KEY = 'message-queue-store';
 const LEGACY_OWNER_KEY = 'oc.followUpQueue.legacyOwner.v1';
+const TARGET_OWNER_PREFIX = 'oc.followUpQueue.targetOwner.v1';
 const LOCAL_SCOPE_TOKEN = '0'.repeat(64);
 const INITIAL_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 30_000;
 
+type PersistedMessageQueueState = {
+    queuedMessages?: Record<string, QueuedMessage[]>;
+    quarantinedLegacyMessages?: Record<string, QueuedMessage[]>;
+    followUpBehavior?: FollowUpBehavior;
+    queueModeEnabled?: boolean;
+};
+
+export const migrateMessageQueueState = (
+    persistedState: unknown,
+    version: number,
+): Pick<MessageQueueState, 'queuedMessages' | 'quarantinedLegacyMessages' | 'followUpBehavior'> => {
+    const state = (persistedState ?? {}) as PersistedMessageQueueState;
+    const legacyQueues = version < 2 ? (state.queuedMessages ?? {}) : {};
+    return {
+        queuedMessages: version < 2 ? {} : (state.queuedMessages ?? {}),
+        quarantinedLegacyMessages: {
+            ...(state.quarantinedLegacyMessages ?? {}),
+            ...legacyQueues,
+        },
+        followUpBehavior: normalizeFollowUpBehavior(state.followUpBehavior, state.queueModeEnabled ?? null),
+    };
+};
+
 const normalizeRuntimeKey = (value: string): string => value.trim() || 'default';
+const targetOwnerKey = (runtimeKey: string, sessionId: string): string => (
+    `${TARGET_OWNER_PREFIX}:${encodeURIComponent(normalizeRuntimeKey(runtimeKey))}:${encodeURIComponent(sessionId)}`
+);
 const laneStorageKey = (runtimeKey: string, sessionId: string): string => (
     `${LANE_STORAGE_PREFIX}:${encodeURIComponent(normalizeRuntimeKey(runtimeKey))}:${encodeURIComponent(sessionId)}`
 );
@@ -463,6 +530,8 @@ export const createMessageQueueStore = (
     const startupRuntimeKey = normalizeRuntimeKey(dependencies.getRuntimeKey());
     const lanes = new Map<string, QueueLane>();
     const watchCounts = new Map<string, number>();
+    const watchIdentities = new Map<string, MessageQueueIdentity>();
+    const canonicalTargetOwners = new Map<string, string>();
     let activeController = new AbortController();
     let runtimeSupported: boolean | null = dependencies.getAPI()?.supported === false ? false : null;
     let outboxSequence = 0;
@@ -477,7 +546,7 @@ export const createMessageQueueStore = (
         );
 
         const laneIsCurrent = (lane: QueueLane): boolean => (
-            lanes.get(lane.sessionId) === lane
+            lanes.get(lane.key) === lane
             && contextIsCurrent({ runtimeKey: lane.runtimeKey, generation: lane.generation })
         );
 
@@ -491,8 +560,8 @@ export const createMessageQueueStore = (
                 pending: lane.embeddedPending,
             };
             try {
-                const key = laneStorageKey(lane.runtimeKey, lane.sessionId);
-                if (dependencies.storage.getItem(laneDeletionKey(lane.runtimeKey, lane.sessionId)) === '1') {
+                const key = laneStorageKey(lane.runtimeKey, lane.storageId);
+                if (dependencies.storage.getItem(laneDeletionKey(lane.runtimeKey, lane.storageId)) === '1') {
                     return false;
                 }
                 const serialized = JSON.stringify(stored);
@@ -505,7 +574,7 @@ export const createMessageQueueStore = (
         };
 
         const persistOutboxEntry = (lane: QueueLane, entry: PendingOperation): boolean => {
-            const key = outboxStorageKey(lane.runtimeKey, lane.sessionId, entry.clientMutationId);
+            const key = outboxStorageKey(lane.runtimeKey, lane.storageId, entry.clientMutationId);
             const serialized = JSON.stringify({
                 version: 1,
                 clientMutationId: entry.clientMutationId,
@@ -515,7 +584,7 @@ export const createMessageQueueStore = (
                 ...(entry.claimExpiresAt !== undefined ? { claimExpiresAt: entry.claimExpiresAt } : {}),
             });
             try {
-                if (dependencies.storage.getItem(laneDeletionKey(lane.runtimeKey, lane.sessionId)) === '1') {
+                if (dependencies.storage.getItem(laneDeletionKey(lane.runtimeKey, lane.storageId)) === '1') {
                     return false;
                 }
                 dependencies.storage.setItem(key, serialized);
@@ -536,7 +605,7 @@ export const createMessageQueueStore = (
             try {
                 dependencies.storage.removeItem(outboxStorageKey(
                     lane.runtimeKey,
-                    lane.sessionId,
+                    lane.storageId,
                     clientMutationId,
                 ));
             } catch {
@@ -695,7 +764,7 @@ export const createMessageQueueStore = (
             set((state) => ({
                 queuedMessages: {
                     ...state.queuedMessages,
-                    [lane.sessionId]: lane.visibleMessages,
+                    [lane.key]: lane.visibleMessages,
                 },
             }));
         };
@@ -715,17 +784,45 @@ export const createMessageQueueStore = (
             persistLane(lane);
         };
 
-        const createLane = (sessionId: string): QueueLane => {
+        const createLane = (identity: MessageQueueIdentity): QueueLane => {
             const runtimeKey = get().runtimeKey;
-            const deleted = dependencies.storage.getItem(laneDeletionKey(runtimeKey, sessionId)) === '1';
+            if (typeof identity !== 'string' && normalizeRuntimeKey(identity.runtimeKey) !== runtimeKey) {
+                throw runtimeChangedError();
+            }
+            const key = getQueueKey(identity);
+            const sessionId = getQueueSessionId(identity);
+            let storageId = sessionId;
+            if (typeof identity !== 'string') {
+                const ownerKey = `${runtimeKey}\n${sessionId}`;
+                let owner = canonicalTargetOwners.get(ownerKey);
+                if (owner === undefined) {
+                    try {
+                        const persistedOwner = dependencies.storage.getItem(targetOwnerKey(runtimeKey, sessionId));
+                        if (persistedOwner) {
+                            owner = persistedOwner;
+                        } else {
+                            dependencies.storage.setItem(targetOwnerKey(runtimeKey, sessionId), key);
+                            owner = dependencies.storage.getItem(targetOwnerKey(runtimeKey, sessionId)) ?? key;
+                        }
+                    } catch {
+                        owner = key;
+                    }
+                    canonicalTargetOwners.set(ownerKey, owner);
+                }
+                if (owner !== key) storageId = `target:${key}`;
+            }
+            const deleted = dependencies.storage.getItem(laneDeletionKey(runtimeKey, storageId)) === '1';
             const stored = deleted
                 ? null
-                : parseStoredLane(dependencies.storage.getItem(laneStorageKey(runtimeKey, sessionId)));
-            const durablePending = deleted ? [] : readOutboxEntries(runtimeKey, sessionId);
+                : parseStoredLane(dependencies.storage.getItem(laneStorageKey(runtimeKey, storageId)));
+            const durablePending = deleted ? [] : readOutboxEntries(runtimeKey, storageId);
             const knownMutationIds = new Set(durablePending.map((entry) => entry.clientMutationId));
             const embeddedPending: StoredQueueLane['pending'] = [];
             const migratedPending: PendingOperation[] = [];
             const lane: QueueLane = {
+                key,
+                identity,
+                storageId,
                 runtimeKey,
                 generation: get().generation,
                 sessionId,
@@ -747,7 +844,7 @@ export const createMessageQueueStore = (
                 visibleItems: [],
                 visibleMessages: [],
             };
-            lanes.set(sessionId, lane);
+            lanes.set(key, lane);
             if (!deleted) {
                 for (const entry of stored?.pending ?? []) {
                     if (knownMutationIds.has(entry.clientMutationId)) continue;
@@ -770,7 +867,10 @@ export const createMessageQueueStore = (
             return lane;
         };
 
-        const getLane = (sessionId: string): QueueLane => lanes.get(sessionId) ?? createLane(sessionId);
+        const getLane = (identity: MessageQueueIdentity): QueueLane => {
+            const key = getQueueKey(identity);
+            return lanes.get(key) ?? createLane(identity);
+        };
 
         const cancelRetry = (lane: QueueLane): void => {
             lane.cancelRetry?.();
@@ -778,26 +878,37 @@ export const createMessageQueueStore = (
         };
 
         const clearCurrentSessionLane = (sessionId: string): void => {
-            const lane = lanes.get(sessionId);
-            if (lane) {
+            const removedKeys: string[] = [];
+            for (const lane of lanes.values()) {
+                if (lane.sessionId !== sessionId) continue;
                 cancelRetry(lane);
                 for (const pending of lane.pending) {
                     pending.reject?.(new Error('Follow-up queue operation cancelled because the session was deleted'));
                 }
-                lanes.delete(sessionId);
+                lanes.delete(lane.key);
+                removedKeys.push(lane.key);
             }
-            watchCounts.delete(sessionId);
+            for (const key of removedKeys) {
+                watchCounts.delete(key);
+                watchIdentities.delete(key);
+            }
             set((state) => {
-                if (!(sessionId in state.queuedMessages)) return state;
                 const queuedMessages = { ...state.queuedMessages };
-                delete queuedMessages[sessionId];
+                let changed = false;
+                for (const [key] of Object.entries(queuedMessages)) {
+                    const target = parseMessageQueueKey(key);
+                    if (key !== sessionId && target?.sessionId !== sessionId) continue;
+                    delete queuedMessages[key];
+                    changed = true;
+                }
+                if (!changed) return state;
                 return { queuedMessages };
             });
         };
 
         const scheduleRetry = (lane: QueueLane): void => {
             if (!laneIsCurrent(lane) || lane.cancelRetry || runtimeSupported === false) return;
-            if ((watchCounts.get(lane.sessionId) ?? 0) === 0 && lane.pending.length === 0) return;
+            if ((watchCounts.get(lane.key) ?? 0) === 0 && lane.pending.length === 0) return;
             const delayMs = lane.retryDelayMs;
             lane.retryDelayMs = Math.min(lane.retryDelayMs * 2, MAX_RETRY_MS);
             lane.cancelRetry = dependencies.scheduleRetry(() => {
@@ -834,11 +945,11 @@ export const createMessageQueueStore = (
             lane: QueueLane,
             entry: PendingOperation,
         ): Promise<FollowUpQueueMutationResult> => dependencies.runWithLocalLock(
-            laneStorageKey(lane.runtimeKey, lane.sessionId),
+            laneStorageKey(lane.runtimeKey, lane.storageId),
             async () => {
                 if (!laneIsCurrent(lane) || runtimeSupported !== false) throw runtimeChangedError();
                 const stored = parseStoredLane(dependencies.storage.getItem(
-                    laneStorageKey(lane.runtimeKey, lane.sessionId),
+                    laneStorageKey(lane.runtimeKey, lane.storageId),
                 ));
                 if (stored && stored.pending.length === 0 && stored.localRevision >= lane.localRevision) {
                     lane.localItems = stored.localItems;
@@ -865,13 +976,13 @@ export const createMessageQueueStore = (
                 for (const lane of lanes.values()) {
                     if (!laneIsCurrent(lane)) continue;
                     await dependencies.runWithLocalLock(
-                        laneStorageKey(lane.runtimeKey, lane.sessionId),
+                        laneStorageKey(lane.runtimeKey, lane.storageId),
                         async () => {
                             if (!laneIsCurrent(lane)) return;
                             cancelRetry(lane);
                             const ownPending = [...lane.pending];
                             const stored = parseStoredLane(dependencies.storage.getItem(
-                                laneStorageKey(lane.runtimeKey, lane.sessionId),
+                                laneStorageKey(lane.runtimeKey, lane.storageId),
                             ));
                             if (
                                 stored?.baseSnapshot
@@ -881,7 +992,7 @@ export const createMessageQueueStore = (
                                 lane.localItems = stored.localItems;
                                 lane.localRevision = stored.localRevision;
                             }
-                            const durablePending = readOutboxEntries(lane.runtimeKey, lane.sessionId);
+                            const durablePending = readOutboxEntries(lane.runtimeKey, lane.storageId);
                             const embeddedPending = (stored?.pending ?? []).map((entry) => ({
                                 ...entry,
                                 outboxOrder: ++outboxSequence,
@@ -1220,10 +1331,10 @@ export const createMessageQueueStore = (
         };
 
         const enqueueOperation = (
-            sessionId: string,
+            identity: MessageQueueIdentity,
             operation: FollowUpQueueOperation,
         ): Promise<FollowUpQueueMutationResult> => {
-            const lane = getLane(sessionId);
+            const lane = getLane(identity);
             const projectionNow = dependencies.now();
             const entry: PendingOperation = {
                 clientMutationId: dependencies.createMutationId(),
@@ -1262,8 +1373,8 @@ export const createMessageQueueStore = (
             return completion;
         };
 
-        const fireAndPersist = (sessionId: string, operation: FollowUpQueueOperation): void => {
-            void enqueueOperation(sessionId, operation).catch(() => {});
+        const fireAndPersist = (identity: MessageQueueIdentity, operation: FollowUpQueueOperation): void => {
+            void enqueueOperation(identity, operation).catch(() => {});
         };
 
         const switchRuntime = (runtimeKey: string): void => {
@@ -1275,6 +1386,7 @@ export const createMessageQueueStore = (
                 for (const pending of lane.pending) pending.reject?.(runtimeChangedError());
             }
             lanes.clear();
+            canonicalTargetOwners.clear();
             runtimeSupported = dependencies.getAPI()?.supported === false ? false : null;
             set((state) => ({
                 runtimeKey: normalized,
@@ -1282,9 +1394,11 @@ export const createMessageQueueStore = (
                 supported: runtimeSupported,
                 queuedMessages: {},
             }));
-            for (const [sessionId, count] of watchCounts) {
+            for (const [key, count] of watchCounts) {
                 if (count <= 0) continue;
-                const lane = getLane(sessionId);
+                const identity = watchIdentities.get(key);
+                if (!identity || (typeof identity !== 'string' && identity.runtimeKey !== normalized)) continue;
+                const lane = getLane(identity);
                 publishLane(lane);
                 void initializeLane(lane);
             }
@@ -1292,6 +1406,7 @@ export const createMessageQueueStore = (
 
         return {
             queuedMessages: {},
+            quarantinedLegacyMessages: {},
             followUpBehavior: readInitialFollowUpBehavior(dependencies.storage),
             runtimeKey: startupRuntimeKey,
             generation: 0,
@@ -1304,37 +1419,44 @@ export const createMessageQueueStore = (
                     return;
                 }
                 const work: Promise<void>[] = [];
-                for (const [sessionId, count] of watchCounts) {
-                    if (count > 0) work.push(initializeLane(getLane(sessionId)));
+                for (const [key, count] of watchCounts) {
+                    const identity = watchIdentities.get(key);
+                    if (count > 0 && identity) work.push(initializeLane(getLane(identity)));
                 }
                 await Promise.all(work);
             },
 
-            watchSession: (sessionId) => {
-                if (!sessionId) return () => {};
-                watchCounts.set(sessionId, (watchCounts.get(sessionId) ?? 0) + 1);
-                const lane = getLane(sessionId);
+            watchSession: (identity) => {
+                if (!getQueueSessionId(identity)) return () => {};
+                const key = getQueueKey(identity);
+                watchIdentities.set(key, identity);
+                watchCounts.set(key, (watchCounts.get(key) ?? 0) + 1);
+                const lane = getLane(identity);
                 publishLane(lane);
                 void initializeLane(lane);
                 let active = true;
                 return () => {
                     if (!active) return;
                     active = false;
-                    const next = Math.max(0, (watchCounts.get(sessionId) ?? 1) - 1);
-                    if (next === 0) watchCounts.delete(sessionId);
-                    else watchCounts.set(sessionId, next);
-                    const currentLane = lanes.get(sessionId);
+                    const next = Math.max(0, (watchCounts.get(key) ?? 1) - 1);
+                    if (next === 0) {
+                        watchCounts.delete(key);
+                        watchIdentities.delete(key);
+                    } else {
+                        watchCounts.set(key, next);
+                    }
+                    const currentLane = lanes.get(key);
                     if (next === 0 && currentLane?.pending.length === 0) cancelRetry(currentLane);
                 };
             },
 
-            refreshSession: async (sessionId) => {
-                const lane = getLane(sessionId);
+            refreshSession: async (identity) => {
+                const lane = getLane(identity);
                 await refreshLane(lane);
                 if (runtimeSupported === true) await drainLane(lane);
             },
 
-            addToQueue: (sessionId, message) => {
+            addToQueue: (identity, message) => {
                 const item = parseFollowUpQueueItem({
                     id: dependencies.createItemId(),
                     messageId: dependencies.createMessageId(),
@@ -1346,7 +1468,7 @@ export const createMessageQueueStore = (
                     status: message.status ?? 'staged',
                     ...(message.sendConfig ? { sendConfig: { ...message.sendConfig } } : {}),
                 }, { allowClaim: false });
-                return enqueueOperation(sessionId, { type: 'add', item }).then((result) => {
+                return enqueueOperation(identity, { type: 'add', item }).then((result) => {
                     const persisted = result.snapshot.items.find((candidate) => (
                         candidate.id === item.id && candidate.messageId === item.messageId
                     ));
@@ -1355,17 +1477,17 @@ export const createMessageQueueStore = (
                 });
             },
 
-            removeFromQueue: (sessionId, messageId) => {
-                fireAndPersist(sessionId, { type: 'remove', itemId: messageId });
+            removeFromQueue: (identity, messageId) => {
+                fireAndPersist(identity, { type: 'remove', itemId: messageId });
             },
 
-            setQueuedStatus: (sessionId, messageId, status) => {
-                fireAndPersist(sessionId, { type: 'set-status', itemId: messageId, status });
+            setQueuedStatus: (identity, messageId, status) => {
+                fireAndPersist(identity, { type: 'set-status', itemId: messageId, status });
             },
 
-            reorderQueue: (sessionId, fromId, toId) => {
+            reorderQueue: (identity, fromId, toId) => {
                 if (fromId === toId) return;
-                const items = get().queuedMessages[sessionId] ?? [];
+                const items = get().queuedMessages[getQueueKey(identity)] ?? [];
                 const fromIndex = items.findIndex((item) => item.id === fromId);
                 const toIndex = items.findIndex((item) => item.id === toId);
                 if (fromIndex < 0 || toIndex < 0) return;
@@ -1373,28 +1495,30 @@ export const createMessageQueueStore = (
                 const [moved] = reordered.splice(fromIndex, 1);
                 reordered.splice(toIndex, 0, moved);
                 const movedIndex = reordered.findIndex((item) => item.id === fromId);
-                fireAndPersist(sessionId, {
+                fireAndPersist(identity, {
                     type: 'move',
                     itemId: fromId,
                     beforeId: reordered[movedIndex + 1]?.id ?? null,
                 });
             },
 
-            popToInput: (sessionId, messageId) => {
-                const message = (get().queuedMessages[sessionId] ?? []).find((item) => item.id === messageId) ?? null;
-                if (message) fireAndPersist(sessionId, { type: 'remove', itemId: messageId });
+            popToInput: (identity, messageId) => {
+                const message = (get().queuedMessages[getQueueKey(identity)] ?? []).find((item) => item.id === messageId) ?? null;
+                if (message) fireAndPersist(identity, { type: 'remove', itemId: messageId });
                 return message;
             },
 
-            clearQueue: (sessionId) => {
-                for (const item of get().queuedMessages[sessionId] ?? []) {
-                    fireAndPersist(sessionId, { type: 'remove', itemId: item.id });
+            clearQueue: (identity) => {
+                for (const item of get().queuedMessages[getQueueKey(identity)] ?? []) {
+                    fireAndPersist(identity, { type: 'remove', itemId: item.id });
                 }
             },
 
             clearAllQueues: () => {
-                for (const [sessionId, items] of Object.entries(get().queuedMessages)) {
-                    for (const item of items) fireAndPersist(sessionId, { type: 'remove', itemId: item.id });
+                for (const lane of lanes.values()) {
+                    for (const item of get().queuedMessages[lane.key] ?? []) {
+                        fireAndPersist(lane.identity, { type: 'remove', itemId: item.id });
+                    }
                 }
             },
 
@@ -1409,8 +1533,9 @@ export const createMessageQueueStore = (
             },
 
             getQueueForSession: (sessionId) => get().queuedMessages[sessionId] ?? [],
+            getQueueForTarget: (target) => get().queuedMessages[getMessageQueueKey(target)] ?? [],
 
-            claim: async (sessionId, itemId, mode) => {
+            claim: async (identity, itemId, mode) => {
                 const context = { runtimeKey: get().runtimeKey, generation: get().generation };
                 if (
                     mode === 'auto'
@@ -1418,23 +1543,23 @@ export const createMessageQueueStore = (
                     && !dependencies.hasCrossContextLocalLock()
                 ) return null;
                 const claimId = dependencies.createClaimId();
-                const result = await enqueueOperation(sessionId, { type: 'claim', itemId, claimId, mode });
+                const result = await enqueueOperation(identity, { type: 'claim', itemId, claimId, mode });
                 if (!contextIsCurrent(context)) return null;
                 const item = result.snapshot.items.find((candidate) => candidate.id === itemId);
                 if (item?.claim?.id !== claimId) return null;
                 return { claimId, item: toQueuedMessage(item), context };
             },
 
-            complete: async (sessionId, itemId, claimId, context) => {
+            complete: async (identity, itemId, claimId, context) => {
                 if (context && !contextIsCurrent(context)) return false;
-                const result = await enqueueOperation(sessionId, { type: 'complete', itemId, claimId });
+                const result = await enqueueOperation(identity, { type: 'complete', itemId, claimId });
                 if (context && !contextIsCurrent(context)) return false;
                 return !result.snapshot.items.some((item) => item.id === itemId);
             },
 
-            release: async (sessionId, itemId, claimId, status, context) => {
+            release: async (identity, itemId, claimId, status, context) => {
                 if (context && !contextIsCurrent(context)) return false;
-                const result = await enqueueOperation(sessionId, { type: 'release', itemId, claimId, status });
+                const result = await enqueueOperation(identity, { type: 'release', itemId, claimId, status });
                 if (context && !contextIsCurrent(context)) return false;
                 const item = result.snapshot.items.find((candidate) => candidate.id === itemId);
                 return Boolean(item && !item.claim && item.status === status);
@@ -1444,7 +1569,7 @@ export const createMessageQueueStore = (
                 if (context && !contextIsCurrent(context)) return;
                 if (!/^[\da-f]{64}$/.test(scopeToken) || !Number.isSafeInteger(revision) || revision < 0) return;
                 for (const lane of lanes.values()) {
-                    if (!laneIsCurrent(lane) || (watchCounts.get(lane.sessionId) ?? 0) === 0) continue;
+                    if (!laneIsCurrent(lane) || (watchCounts.get(lane.key) ?? 0) === 0) continue;
                     const unknownScope = lane.baseSnapshot === null;
                     if (!unknownScope && lane.baseSnapshot?.scopeToken !== scopeToken) continue;
                     if (!reset && !unknownScope && (lane.baseSnapshot?.revision ?? -1) >= revision) continue;
@@ -1489,7 +1614,7 @@ export const createMessageQueueStore = (
                     cancelRetry(lane);
                     lane.retryDelayMs = INITIAL_RETRY_MS;
                     lane.loadedForGeneration = false;
-                    if ((watchCounts.get(lane.sessionId) ?? 0) > 0 || lane.pending.length > 0 || lane.localItems.length > 0) {
+                    if ((watchCounts.get(lane.key) ?? 0) > 0 || lane.pending.length > 0 || lane.localItems.length > 0) {
                         void initializeLane(lane);
                     }
                 }
@@ -1497,19 +1622,27 @@ export const createMessageQueueStore = (
 
             dropSession: (sessionId, context) => {
                 const runtimeKey = context?.runtimeKey ?? get().runtimeKey;
+                const storageIds = new Set([sessionId]);
+                for (const lane of lanes.values()) {
+                    if (lane.runtimeKey === runtimeKey && lane.sessionId === sessionId) {
+                        storageIds.add(lane.storageId);
+                    }
+                }
                 let tombstoneWritten = false;
-                try {
-                    dependencies.storage.setItem(laneDeletionKey(runtimeKey, sessionId), '1');
-                    tombstoneWritten = true;
-                } catch {
-                    // Removing the larger lane can free enough quota for a retry below.
+                for (const storageId of storageIds) {
+                    try {
+                        dependencies.storage.setItem(laneDeletionKey(runtimeKey, storageId), '1');
+                        if (storageId === sessionId) tombstoneWritten = true;
+                    } catch {
+                        // Removing the larger lane can free enough quota for a retry below.
+                    }
+                    try {
+                        dependencies.storage.removeItem(laneStorageKey(runtimeKey, storageId));
+                    } catch {
+                        // In-memory cleanup still prevents deleted content from remaining visible.
+                    }
+                    removeSessionOutbox(runtimeKey, storageId);
                 }
-                try {
-                    dependencies.storage.removeItem(laneStorageKey(runtimeKey, sessionId));
-                } catch {
-                    // In-memory cleanup still prevents deleted content from remaining visible.
-                }
-                removeSessionOutbox(runtimeKey, sessionId);
                 if (!tombstoneWritten) {
                     try {
                         dependencies.storage.setItem(laneDeletionKey(runtimeKey, sessionId), '1');
@@ -1518,6 +1651,11 @@ export const createMessageQueueStore = (
                     }
                 }
                 if (runtimeKey === startupRuntimeKey) removeLegacySession(sessionId);
+                try {
+                    dependencies.storage.removeItem(targetOwnerKey(runtimeKey, sessionId));
+                } catch {
+                    // Session content was already removed independently.
+                }
                 if (runtimeKey !== get().runtimeKey) return;
                 clearCurrentSessionLane(sessionId);
             },
@@ -1529,7 +1667,7 @@ export const createMessageQueueStore = (
             if (runtimeSupported !== false) return;
             const deletedLane = [...lanes.values()].find((candidate) => (
                 laneIsCurrent(candidate)
-                && laneDeletionKey(candidate.runtimeKey, candidate.sessionId) === key
+                && laneDeletionKey(candidate.runtimeKey, candidate.storageId) === key
             ));
             if (deletedLane && newValue === '1') {
                 removeLegacySession(deletedLane.sessionId);
@@ -1539,7 +1677,7 @@ export const createMessageQueueStore = (
             if (newValue === null) return;
             const lane = [...lanes.values()].find((candidate) => (
                 laneIsCurrent(candidate)
-                && laneStorageKey(candidate.runtimeKey, candidate.sessionId) === key
+                && laneStorageKey(candidate.runtimeKey, candidate.storageId) === key
             ));
             if (!lane) return;
             const stored = parseStoredLane(newValue);

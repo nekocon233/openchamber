@@ -1,31 +1,32 @@
 import { create } from 'zustand';
-import type { Event } from '@opencode-ai/sdk/v2/client';
+import type { Event, SessionStatus } from '@opencode-ai/sdk/v2/client';
 import { normalizeProjectPath } from '@/lib/projectResolution';
+import {
+  observeSessionActivityEvent,
+  reconcileSessionActivitySnapshot,
+  removeSessionOrdering,
+} from './session-ordering';
 
-// Live busy/retry status for sessions across all directories. The global event
-// stream (`/api/global/event/ws`) carries status events for every directory;
-// this store preserves those events independently of child-store lifecycle so
-// cross-project consumers can reconcile status consistently.
-//
-// `statusById` keeps only non-idle entries. `resolvedStatusById` also retains a
-// bounded history of explicit idle tombstones so recent idle events override a
-// stale child store without accumulating every session ever observed. Active
-// entries carry their directory so a polled snapshot can reconcile a slice.
+// Shared live status index for every directory. Events update it incrementally
+// and directory snapshots reconcile it without requiring each row to scan all
+// child stores. Recent idle resolutions are retained as bounded tombstones so
+// delayed child-store publications cannot revive stale activity.
 
 type ActiveStatusType = 'busy' | 'retry';
+type ResolvedStatusType = ActiveStatusType | 'idle';
 
 const OPTIMISTIC_STATUS_GRACE_MS = 10_000;
 const MAX_STATUS_HISTORY_ENTRIES = 2_000;
 
 type GlobalSessionStatusEntry = {
-  status: ActiveStatusType;
+  status: SessionStatus;
   directory: string;
   optimisticUntil?: number;
 };
 
 type GlobalSessionStatusState = {
   statusById: Map<string, GlobalSessionStatusEntry>;
-  resolvedStatusById: Map<string, ActiveStatusType | 'idle'>;
+  resolvedStatusById: Map<string, ResolvedStatusType>;
   revision: number;
   revisionById: Map<string, number>;
   revisionFloor: number;
@@ -65,27 +66,32 @@ export const hasGlobalSessionStatusChangedSince = (sessionId: string, baselineRe
   return (state.revisionById.get(sessionId) ?? state.revisionFloor) > baselineRevision;
 };
 
-const normalizeStatusType = (type: unknown): ActiveStatusType | 'idle' =>
-  type === 'busy' ? 'busy' : type === 'retry' ? 'retry' : 'idle';
+const normalizeStatusType = (type: unknown): ResolvedStatusType => {
+  if (type === 'busy') return 'busy';
+  if (type === 'retry') return 'retry';
+  return 'idle';
+};
+
+const statusesEqual = (left: SessionStatus, right: SessionStatus): boolean => (
+  left.type === right.type && JSON.stringify(left) === JSON.stringify(right)
+);
 
 export const resolveSessionStatusType = (
-  globalStatus: ActiveStatusType | 'idle' | undefined,
-  childStatus: ActiveStatusType | 'idle' | undefined,
-): ActiveStatusType | 'idle' => globalStatus ?? childStatus ?? 'idle';
+  globalStatus: ResolvedStatusType | undefined,
+  childStatus: ResolvedStatusType | undefined,
+): ResolvedStatusType => globalStatus ?? childStatus ?? 'idle';
 
-// Both write paths normalize the directory key, so a polled snapshot can
-// authoritatively replace entries written by events (and vice versa) even when
-// the two sources format the same path differently (trailing slash, …).
-const normalizeDirectory = (directory: string): string =>
-  normalizeProjectPath(directory) ?? directory;
+const normalizeDirectory = (directory: string): string => (
+  normalizeProjectPath(directory) ?? directory
+);
 
 const trimStatusHistory = (
   revisionById: Map<string, number>,
   activeStatusById: Map<string, GlobalSessionStatusEntry>,
-  initialResolvedStatusById: Map<string, ActiveStatusType | 'idle'>,
+  initialResolvedStatusById: Map<string, ResolvedStatusType>,
   initialRevisionFloor: number,
 ): {
-  resolvedStatusById: Map<string, ActiveStatusType | 'idle'>;
+  resolvedStatusById: Map<string, ResolvedStatusType>;
   revisionFloor: number;
 } => {
   let revisionFloor = initialRevisionFloor;
@@ -94,6 +100,7 @@ const trimStatusHistory = (
   if (terminalEntryCount <= MAX_STATUS_HISTORY_ENTRIES) {
     return { resolvedStatusById, revisionFloor };
   }
+
   for (const [sessionId, revision] of revisionById) {
     if (terminalEntryCount <= MAX_STATUS_HISTORY_ENTRIES) break;
     if (activeStatusById.has(sessionId)) continue;
@@ -107,43 +114,49 @@ const trimStatusHistory = (
       resolvedStatusById.delete(sessionId);
     }
   }
+
   return { resolvedStatusById, revisionFloor };
 };
 
 const setStatus = (
   sessionId: string,
   directory: string,
-  status: ActiveStatusType | 'idle',
+  status: SessionStatus | { type: 'idle' },
   options?: { optimistic?: boolean },
 ): void => {
   useGlobalSessionStatusStore.setState((state) => {
+    const type = normalizeStatusType(status.type);
     const revision = state.revision + 1;
     const revisionById = new Map(state.revisionById);
     revisionById.delete(sessionId);
     revisionById.set(sessionId, revision);
+
     let resolvedStatusById = state.resolvedStatusById;
-    if (resolvedStatusById.get(sessionId) !== status) {
+    if (resolvedStatusById.get(sessionId) !== type) {
       resolvedStatusById = new Map(resolvedStatusById);
-      resolvedStatusById.set(sessionId, status);
+      resolvedStatusById.set(sessionId, type);
     }
 
     let statusById = state.statusById;
     const current = state.statusById.get(sessionId);
-    if (status === 'idle') {
+    if (type === 'idle') {
       if (current) {
-        statusById = new Map(state.statusById);
+        statusById = new Map(statusById);
         statusById.delete(sessionId);
       }
     } else {
-      const optimisticUntil = options?.optimistic ? Date.now() + OPTIMISTIC_STATUS_GRACE_MS : undefined;
+      const normalizedStatus = { ...status, type } as SessionStatus;
+      const optimisticUntil = options?.optimistic
+        ? Date.now() + OPTIMISTIC_STATUS_GRACE_MS
+        : undefined;
       if (
         !current
-        || current.status !== status
         || current.directory !== directory
+        || !statusesEqual(current.status, normalizedStatus)
         || current.optimisticUntil !== optimisticUntil
       ) {
-        statusById = new Map(state.statusById);
-        statusById.set(sessionId, { status, directory, optimisticUntil });
+        statusById = new Map(statusById);
+        statusById.set(sessionId, { status: normalizedStatus, directory, optimisticUntil });
       }
     }
 
@@ -168,52 +181,80 @@ const removeStatus = (sessionId: string): void => {
     resolvedStatusById.delete(sessionId);
     revisionById.delete(sessionId);
     revisionById.set(sessionId, revision);
-    const trimmed = trimStatusHistory(revisionById, statusById, resolvedStatusById, state.revisionFloor);
+    const trimmed = trimStatusHistory(
+      revisionById,
+      statusById,
+      resolvedStatusById,
+      state.revisionFloor,
+    );
     resolvedStatusById = trimmed.resolvedStatusById;
-    const revisionFloor = trimmed.revisionFloor;
-    return { statusById, resolvedStatusById, revision, revisionById, revisionFloor };
+    return {
+      statusById,
+      resolvedStatusById,
+      revision,
+      revisionById,
+      revisionFloor: trimmed.revisionFloor,
+    };
   });
 };
 
 export const setGlobalSessionStatus = (
   sessionId: string,
   directory: string | null | undefined,
-  status: ActiveStatusType | 'idle',
+  status: ResolvedStatusType,
   options?: { optimistic?: boolean },
 ): void => {
   if (!sessionId) return;
-  setStatus(sessionId, normalizeDirectory(directory ?? ''), status, options);
+  setStatus(
+    sessionId,
+    normalizeDirectory(directory ?? ''),
+    status === 'idle' ? { type: 'idle' } : { type: status } as SessionStatus,
+    options,
+  );
 };
 
-// Event-driven path: called by the sync dispatcher for all status-bearing
-// events. Mirrors the child reducer's semantics (`session.idle` /
-// `session.error` both resolve to idle).
 export const applyGlobalSessionStatusEvent = (directory: string, payload: Event): void => {
   switch (payload.type) {
     case 'session.status': {
       const props = payload.properties as { sessionID?: string; status?: { type?: string } } | undefined;
       if (typeof props?.sessionID !== 'string' || !props.sessionID) return;
-      setGlobalSessionStatus(props.sessionID, directory, normalizeStatusType(props.status?.type));
+      const type = normalizeStatusType(props.status?.type);
+      setStatus(
+        props.sessionID,
+        normalizeDirectory(directory),
+        type === 'idle' ? { type: 'idle' } : { ...(props.status ?? {}), type } as SessionStatus,
+      );
+      observeSessionActivityEvent(props.sessionID, type === 'idle' ? 'settled' : 'active');
       return;
     }
     case 'session.idle':
     case 'session.error': {
       const props = payload.properties as { sessionID?: string } | undefined;
       if (typeof props?.sessionID === 'string' && props.sessionID) {
-        setGlobalSessionStatus(props.sessionID, directory, 'idle');
+        setStatus(props.sessionID, normalizeDirectory(directory), { type: 'idle' });
+        observeSessionActivityEvent(props.sessionID, 'settled');
       }
       return;
     }
     case 'session.updated': {
-      const props = payload.properties as { sessionID?: string; info?: { id?: string; time?: { archived?: number | null } } };
-      const sessionId = props.sessionID ?? props.info?.id;
-      if (sessionId && props.info?.time?.archived) removeStatus(sessionId);
+      const props = payload.properties as {
+        sessionID?: string;
+        info?: { id?: string; time?: { archived?: number | null } };
+      } | undefined;
+      const sessionId = props?.sessionID ?? props?.info?.id;
+      if (sessionId && props?.info?.time?.archived) {
+        removeStatus(sessionId);
+        removeSessionOrdering(sessionId);
+      }
       return;
     }
     case 'session.deleted': {
-      const props = payload.properties as { sessionID?: string; info?: { id?: string } };
-      const sessionId = props.sessionID ?? props.info?.id;
-      if (sessionId) removeStatus(sessionId);
+      const props = payload.properties as { sessionID?: string; info?: { id?: string } } | undefined;
+      const sessionId = props?.sessionID ?? props?.info?.id;
+      if (sessionId) {
+        removeStatus(sessionId);
+        removeSessionOrdering(sessionId);
+      }
       return;
     }
     default:
@@ -221,10 +262,6 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
   }
 };
 
-// Polled path for `/session/status?directory=X`. Authoritative snapshots clear
-// missing entries by directory/session ID; monotonic snapshots only promote
-// active entries. Revision baselines keep either mode from replacing newer
-// event or optimistic state.
 export const applyGlobalSessionStatusSnapshot = (
   rawDirectory: string,
   raw: Record<string, { type?: string }>,
@@ -234,6 +271,9 @@ export const applyGlobalSessionStatusSnapshot = (
 ): void => {
   const directory = normalizeDirectory(rawDirectory);
   const known = new Set(knownSessionIds ?? []);
+  const orderingActive = new Set<string>();
+  const orderingKnown = new Set<string>();
+
   useGlobalSessionStatusStore.setState((state) => {
     let statusChanged = false;
     const next = new Map(state.statusById);
@@ -241,20 +281,23 @@ export const applyGlobalSessionStatusSnapshot = (
     let resolvedStatusById = state.resolvedStatusById;
     const now = Date.now();
 
-    const setResolvedStatus = (sessionId: string, status: ActiveStatusType | 'idle') => {
+    const setResolvedStatus = (sessionId: string, status: ResolvedStatusType) => {
       if (resolvedStatusById.get(sessionId) === status) return;
       if (resolvedStatusById === state.resolvedStatusById) {
         resolvedStatusById = new Map(resolvedStatusById);
       }
       resolvedStatusById.set(sessionId, status);
     };
-
     const canApply = (sessionId: string): boolean => (
       (state.revisionById.get(sessionId) ?? state.revisionFloor) <= baselineRevision
     );
     const isOptimisticallyProtected = (sessionId: string): boolean => (
       (next.get(sessionId)?.optimisticUntil ?? 0) > now
     );
+    const markOrdering = (sessionId: string, type: ResolvedStatusType) => {
+      orderingKnown.add(sessionId);
+      if (type !== 'idle') orderingActive.add(sessionId);
+    };
 
     if (mode === 'authoritative') {
       for (const [sessionId, entry] of state.statusById) {
@@ -268,6 +311,7 @@ export const applyGlobalSessionStatusSnapshot = (
           statusChanged = true;
           touchedIds.add(sessionId);
           setResolvedStatus(sessionId, 'idle');
+          markOrdering(sessionId, 'idle');
         }
       }
     }
@@ -279,6 +323,7 @@ export const applyGlobalSessionStatusSnapshot = (
       if (type === 'idle' && isOptimisticallyProtected(sessionId)) continue;
       touchedIds.add(sessionId);
       setResolvedStatus(sessionId, type);
+      markOrdering(sessionId, type);
       const current = next.get(sessionId);
       if (type === 'idle') {
         if (current && (current.directory === directory || known.has(sessionId))) {
@@ -287,23 +332,26 @@ export const applyGlobalSessionStatusSnapshot = (
         }
         continue;
       }
+
+      const normalizedStatus = { ...status, type } as SessionStatus;
       if (
         !current
-        || current.status !== type
         || current.directory !== directory
+        || !statusesEqual(current.status, normalizedStatus)
         || current.optimisticUntil !== undefined
       ) {
-        next.set(sessionId, { status: type, directory });
+        next.set(sessionId, { status: normalizedStatus, directory });
         statusChanged = true;
       }
     }
 
     if (mode === 'authoritative') {
       for (const sessionId of known) {
-        if (canApply(sessionId) && !isOptimisticallyProtected(sessionId)) {
-          touchedIds.add(sessionId);
-          if (!(sessionId in raw)) setResolvedStatus(sessionId, 'idle');
-        }
+        if (!canApply(sessionId) || isOptimisticallyProtected(sessionId)) continue;
+        touchedIds.add(sessionId);
+        const type = normalizeStatusType(raw[sessionId]?.type);
+        if (!(sessionId in raw)) setResolvedStatus(sessionId, 'idle');
+        markOrdering(sessionId, type);
       }
     }
     if (touchedIds.size === 0) return state;
@@ -329,4 +377,7 @@ export const applyGlobalSessionStatusSnapshot = (
       revisionFloor,
     };
   });
+
+  const orderingScope = mode === 'authoritative' ? orderingKnown : orderingActive;
+  reconcileSessionActivitySnapshot(orderingActive, orderingScope);
 };

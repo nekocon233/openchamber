@@ -189,10 +189,16 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.desktopMinimizeToTrayEnabled === 'boolean') {
       result.desktopMinimizeToTrayEnabled = candidate.desktopMinimizeToTrayEnabled;
     }
+    if (typeof candidate.desktopMacMenuBarEnabled === 'boolean') {
+      result.desktopMacMenuBarEnabled = candidate.desktopMacMenuBarEnabled;
+    }
     if (typeof candidate.desktopWindowControlsPosition === 'string') {
       const mode = candidate.desktopWindowControlsPosition.trim();
-      if (mode === 'auto' || mode === 'left' || mode === 'right') {
-        result.desktopWindowControlsPosition = mode;
+      // Legacy "auto" never read OS chrome config; persist as the right default.
+      if (mode === 'auto' || mode === 'right') {
+        result.desktopWindowControlsPosition = 'right';
+      } else if (mode === 'left') {
+        result.desktopWindowControlsPosition = 'left';
       }
     }
     if (candidate.permissionAutoAccept && typeof candidate.permissionAutoAccept === 'object' && !Array.isArray(candidate.permissionAutoAccept)) {
@@ -205,6 +211,10 @@ export const createSettingsHelpers = (dependencies) => {
       }
       result.permissionAutoAccept = {
         sessions,
+        revision: Number.isSafeInteger(candidate.permissionAutoAccept.revision)
+          && candidate.permissionAutoAccept.revision >= 0
+          ? candidate.permissionAutoAccept.revision
+          : 0,
       };
     }
     if (typeof candidate.desktopUiPassword === 'string') {
@@ -244,6 +254,15 @@ export const createSettingsHelpers = (dependencies) => {
         starters.push({ type, name });
       }
       result.draftStarters = starters;
+    }
+    if (typeof candidate.draftStartersVisible === 'boolean') {
+      result.draftStartersVisible = candidate.draftStartersVisible;
+    }
+    if (typeof candidate.draftStartersCraftGoalAdded === 'boolean') {
+      result.draftStartersCraftGoalAdded = candidate.draftStartersCraftGoalAdded;
+    }
+    if (typeof candidate.draftStartersScheduleTaskAdded === 'boolean') {
+      result.draftStartersScheduleTaskAdded = candidate.draftStartersScheduleTaskAdded;
     }
 
 
@@ -559,6 +578,9 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.showOpenCodeUpdateNotifications === 'boolean') {
       result.showOpenCodeUpdateNotifications = candidate.showOpenCodeUpdateNotifications;
     }
+    if (typeof candidate.agentControlToolEnabled === 'boolean') {
+      result.agentControlToolEnabled = candidate.agentControlToolEnabled;
+    }
     if (typeof candidate.openCodeUpdateToastDismissedVersion === 'string') {
       const version = candidate.openCodeUpdateToastDismissedVersion.trim();
       result.openCodeUpdateToastDismissedVersion = version.slice(0, VERSION_STRING_MAX_LENGTH);
@@ -625,6 +647,9 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (typeof candidate.expandedEditorToolbar === 'boolean') {
       result.expandedEditorToolbar = candidate.expandedEditorToolbar;
+    }
+    if (typeof candidate.wideChatLayoutEnabled === 'boolean') {
+      result.wideChatLayoutEnabled = candidate.wideChatLayoutEnabled;
     }
     if (typeof candidate.showSplitAssistantMessageActions === 'boolean') {
       result.showSplitAssistantMessageActions = candidate.showSplitAssistantMessageActions;

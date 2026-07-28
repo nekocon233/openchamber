@@ -711,6 +711,17 @@ export const createFollowUpQueueCore = (dependencies) => {
     error && typeof error === 'object' && error.code === code
   );
 
+  const isDirectoryCollision = async (error, targetDirectory) => {
+    if (isErrorCode(error, 'EEXIST') || isErrorCode(error, 'ENOTEMPTY')) return true;
+    if (!isErrorCode(error, 'EACCES') && !isErrorCode(error, 'EPERM')) return false;
+    try {
+      const stats = await fsPromises.stat(targetDirectory);
+      return typeof stats.isDirectory !== 'function' || stats.isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
   const isPidAlive = (pid) => {
     if (!Number.isSafeInteger(pid) || pid < 1) return false;
     try {
@@ -785,11 +796,7 @@ export const createFollowUpQueueCore = (dependencies) => {
     try {
       await fsPromises.rename(lockDirectory, staleDirectory);
     } catch (error) {
-      if (
-        isErrorCode(error, 'ENOENT')
-        || isErrorCode(error, 'EEXIST')
-        || isErrorCode(error, 'ENOTEMPTY')
-      ) return true;
+      if (isErrorCode(error, 'ENOENT') || await isDirectoryCollision(error, staleDirectory)) return true;
       throw new FollowUpQueueWriteError();
     }
     return true;
@@ -823,7 +830,7 @@ export const createFollowUpQueueCore = (dependencies) => {
           await fsPromises.rename(candidateDirectory, lockDirectory);
         } catch (error) {
           await removeOwnedLockDirectory(candidateDirectory, candidateOwnerFile);
-          if (isErrorCode(error, 'EEXIST') || isErrorCode(error, 'ENOTEMPTY')) {
+          if (await isDirectoryCollision(error, lockDirectory)) {
             const cleared = await tryClearStaleLock(lockDirectory, ownerFile);
             if (!cleared) {
               await waitForLock(retryMs);

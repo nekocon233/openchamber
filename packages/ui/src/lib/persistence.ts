@@ -2,7 +2,13 @@ import type { DesktopSettings } from '@/lib/desktop';
 import { createProjectIdFromPath } from '@/lib/projectId';
 import { useUIStore } from '@/stores/useUIStore';
 import { isMonoFontOption, isUiFontOption } from '@/lib/fontOptions';
-import { isFollowUpBehavior, normalizeFollowUpBehavior, useMessageQueueStore, type FollowUpBehavior } from '@/stores/messageQueueStore';
+import {
+  DEFAULT_FOLLOW_UP_BEHAVIOR,
+  isFollowUpBehavior,
+  normalizeFollowUpBehavior,
+  useMessageQueueStore,
+  type FollowUpBehavior,
+} from '@/stores/messageQueueStore';
 import { setDirectoryShowHidden } from '@/lib/directoryShowHidden';
 import { setFilesViewShowGitignored } from '@/lib/filesViewShowGitignored';
 import { loadAppearancePreferences, applyAppearancePreferences } from '@/lib/appearancePersistence';
@@ -12,6 +18,8 @@ import { normalizeMobileKeyboardMode, setStoredMobileKeyboardMode } from '@/lib/
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { isTerminalShell } from '@/lib/terminalShell';
 import { getRuntimeKey, subscribeRuntimeEndpointChanged, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
+import { DEFAULT_DARK_THEME_ID, DEFAULT_LIGHT_THEME_ID } from '@/lib/theme/themes';
+import { DEFAULT_OPEN_IN_APP_ID } from '@/lib/openInApps';
 
 export const applyPersistedHomeDirectoryToWindow = (homeDirectory: string): void => {
   if (typeof window === 'undefined') {
@@ -28,32 +36,80 @@ export const applyPersistedHomeDirectoryToWindow = (homeDirectory: string): void
   }
 };
 
+const SETTINGS_MIRROR_INDEX_KEY = 'openchamber.settingsMirror.v2.index';
+const SETTINGS_MIRROR_KEY_PREFIX = 'openchamber.settingsMirror.v2:';
+const MAX_SETTINGS_MIRROR_RUNTIMES = 5;
+
+export const getRuntimeSettingsMirrorStorageKey = (runtimeKey: string): string =>
+  `${SETTINGS_MIRROR_KEY_PREFIX}${encodeURIComponent(runtimeKey)}`;
+
+const setOrRemoveLocalStorage = (key: string, value: string | null): void => {
+  if (value === null) {
+    localStorage.removeItem(key);
+  } else {
+    localStorage.setItem(key, value);
+  }
+};
+
+const persistRuntimeSettingsMirror = (settings: DesktopSettings, runtimeKey: string): void => {
+  const mirror = {
+    themeId: settings.themeId,
+    themeVariant: settings.themeVariant,
+    lightThemeId: settings.lightThemeId,
+    darkThemeId: settings.darkThemeId,
+    useSystemTheme: settings.useSystemTheme,
+    lastDirectory: settings.lastDirectory,
+    homeDirectory: settings.homeDirectory,
+    projects: settings.projects,
+    activeProjectId: settings.activeProjectId,
+    pinnedDirectories: settings.pinnedDirectories,
+    gitmojiEnabled: settings.gitmojiEnabled,
+    directoryShowHidden: settings.directoryShowHidden,
+    filesViewShowGitignored: settings.filesViewShowGitignored,
+    openInAppId: settings.openInAppId,
+    pwaAppName: settings.pwaAppName,
+    mobileKeyboardMode: settings.mobileKeyboardMode,
+    openCodeUpdateToastDismissedVersion: settings.openCodeUpdateToastDismissedVersion,
+    dictationEnabled: settings.dictationEnabled,
+    sttProvider: settings.sttProvider,
+    sttServerUrl: settings.sttServerUrl,
+    sttModel: settings.sttModel,
+    sttLocalModel: settings.sttLocalModel,
+    sttLanguage: settings.sttLanguage,
+  };
+  localStorage.setItem(getRuntimeSettingsMirrorStorageKey(runtimeKey), JSON.stringify(mirror));
+
+  let previous: string[] = [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SETTINGS_MIRROR_INDEX_KEY) ?? '[]') as unknown;
+    if (Array.isArray(parsed)) previous = parsed.filter((entry): entry is string => typeof entry === 'string');
+  } catch {
+    previous = [];
+  }
+  const runtimes = [runtimeKey, ...previous.filter((entry) => entry !== runtimeKey)].slice(0, MAX_SETTINGS_MIRROR_RUNTIMES);
+  for (const staleRuntime of previous) {
+    if (!runtimes.includes(staleRuntime)) localStorage.removeItem(getRuntimeSettingsMirrorStorageKey(staleRuntime));
+  }
+  localStorage.setItem(SETTINGS_MIRROR_INDEX_KEY, JSON.stringify(runtimes));
+};
+
 const persistToLocalStorage = (settings: DesktopSettings) => {
   if (typeof window === 'undefined') {
     return;
   }
 
-  if (settings.themeId) {
-    localStorage.setItem('selectedThemeId', settings.themeId);
-  }
-  if (settings.themeVariant) {
-    localStorage.setItem('selectedThemeVariant', settings.themeVariant);
-  }
-  if (settings.lightThemeId) {
-    localStorage.setItem('lightThemeId', settings.lightThemeId);
-  }
-  if (settings.darkThemeId) {
-    localStorage.setItem('darkThemeId', settings.darkThemeId);
-  }
-  if (typeof settings.useSystemTheme === 'boolean') {
-    localStorage.setItem('useSystemTheme', String(settings.useSystemTheme));
-  }
-  if (settings.lastDirectory) {
-    localStorage.setItem('lastDirectory', settings.lastDirectory);
-  }
+  persistRuntimeSettingsMirror(settings, getRuntimeKey());
+  setOrRemoveLocalStorage('selectedThemeId', settings.themeId || null);
+  setOrRemoveLocalStorage('selectedThemeVariant', settings.themeVariant || null);
+  setOrRemoveLocalStorage('lightThemeId', settings.lightThemeId || null);
+  setOrRemoveLocalStorage('darkThemeId', settings.darkThemeId || null);
+  setOrRemoveLocalStorage('useSystemTheme', typeof settings.useSystemTheme === 'boolean' ? String(settings.useSystemTheme) : null);
+  setOrRemoveLocalStorage('lastDirectory', settings.lastDirectory || null);
   if (settings.homeDirectory) {
     localStorage.setItem('homeDirectory', settings.homeDirectory);
     applyPersistedHomeDirectoryToWindow(settings.homeDirectory);
+  } else {
+    localStorage.removeItem('homeDirectory');
   }
   if (Array.isArray(settings.pinnedDirectories) && settings.pinnedDirectories.length > 0) {
     localStorage.setItem('pinnedDirectories', JSON.stringify(settings.pinnedDirectories));
@@ -68,13 +124,15 @@ const persistToLocalStorage = (settings: DesktopSettings) => {
   }
   if (typeof settings.directoryShowHidden === 'boolean') {
     localStorage.setItem('directoryTreeShowHidden', settings.directoryShowHidden ? 'true' : 'false');
+  } else {
+    localStorage.removeItem('directoryTreeShowHidden');
   }
   if (typeof settings.filesViewShowGitignored === 'boolean') {
     localStorage.setItem('filesViewShowGitignored', settings.filesViewShowGitignored ? 'true' : 'false');
+  } else {
+    localStorage.removeItem('filesViewShowGitignored');
   }
-  if (typeof settings.openInAppId === 'string' && settings.openInAppId.length > 0) {
-    localStorage.setItem('openInAppId', settings.openInAppId);
-  }
+  setOrRemoveLocalStorage('openInAppId', typeof settings.openInAppId === 'string' && settings.openInAppId.length > 0 ? settings.openInAppId : null);
   if (typeof settings.pwaAppName === 'string') {
     const normalized = settings.pwaAppName.trim().replace(/\s+/g, ' ').slice(0, 64);
     if (normalized.length > 0) {
@@ -82,10 +140,10 @@ const persistToLocalStorage = (settings: DesktopSettings) => {
     } else {
       localStorage.removeItem('openchamber.pwaName');
     }
+  } else {
+    localStorage.removeItem('openchamber.pwaName');
   }
-  if (typeof settings.mobileKeyboardMode === 'string') {
-    setStoredMobileKeyboardMode(settings.mobileKeyboardMode);
-  }
+  setStoredMobileKeyboardMode(settings.mobileKeyboardMode);
   if (typeof settings.openCodeUpdateToastDismissedVersion === 'string') {
     const version = settings.openCodeUpdateToastDismissedVersion.trim();
     if (version) {
@@ -93,25 +151,23 @@ const persistToLocalStorage = (settings: DesktopSettings) => {
     } else {
       localStorage.removeItem('opencode-update-toast-dismissed-version');
     }
+  } else {
+    localStorage.removeItem('opencode-update-toast-dismissed-version');
   }
   if (typeof settings.dictationEnabled === 'boolean') {
     localStorage.setItem('dictationEnabled', String(settings.dictationEnabled));
+  } else {
+    localStorage.removeItem('dictationEnabled');
   }
   if (settings.sttProvider === 'local' || settings.sttProvider === 'openai-compatible') {
     localStorage.setItem('sttProvider', settings.sttProvider);
+  } else {
+    localStorage.removeItem('sttProvider');
   }
-  if (typeof settings.sttServerUrl === 'string') {
-    localStorage.setItem('sttServerUrl', settings.sttServerUrl);
-  }
-  if (typeof settings.sttModel === 'string') {
-    localStorage.setItem('sttModel', settings.sttModel);
-  }
-  if (typeof settings.sttLocalModel === 'string') {
-    localStorage.setItem('sttLocalModel', settings.sttLocalModel);
-  }
-  if (typeof settings.sttLanguage === 'string') {
-    localStorage.setItem('sttLanguage', settings.sttLanguage);
-  }
+  setOrRemoveLocalStorage('sttServerUrl', typeof settings.sttServerUrl === 'string' ? settings.sttServerUrl : null);
+  setOrRemoveLocalStorage('sttModel', typeof settings.sttModel === 'string' ? settings.sttModel : null);
+  setOrRemoveLocalStorage('sttLocalModel', typeof settings.sttLocalModel === 'string' ? settings.sttLocalModel : null);
+  setOrRemoveLocalStorage('sttLanguage', typeof settings.sttLanguage === 'string' ? settings.sttLanguage : null);
 };
 
 const dispatchSettingsSynced = (settings: DesktopSettings): void => {
@@ -119,6 +175,51 @@ const dispatchSettingsSynced = (settings: DesktopSettings): void => {
     return;
   }
   window.dispatchEvent(new CustomEvent<DesktopSettings>('openchamber:settings-synced', { detail: settings }));
+};
+
+type SettingsSaveState = 'idle' | 'saving' | 'error';
+
+let _settingsSaveState: SettingsSaveState = 'idle';
+let _settingsSaveStateResetTimer: ReturnType<typeof setTimeout> | null = null;
+const _settingsSaveStateListeners = new Set<() => void>();
+
+export const getSettingsSaveState = (): SettingsSaveState => _settingsSaveState;
+
+export const subscribeToSettingsSaveState = (listener: () => void): (() => void) => {
+  _settingsSaveStateListeners.add(listener);
+  return () => _settingsSaveStateListeners.delete(listener);
+};
+
+/**
+ * Drive the shared settings save indicator from pages that persist through
+ * their own APIs instead of updateDesktopSettings. 'error' resets to idle.
+ */
+export const reportSettingsSaveState = (state: 'saving' | 'saved' | 'error'): void => {
+  dispatchSettingsSaveState(state);
+};
+
+const dispatchSettingsSaveState = (state: 'saving' | 'saved' | 'error'): void => {
+  if (_settingsSaveStateResetTimer) {
+    clearTimeout(_settingsSaveStateResetTimer);
+    _settingsSaveStateResetTimer = null;
+  }
+
+  // Quiet indicator: success is the normal case and renders nothing ('saved' → idle);
+  // only in-flight saves and failures surface in the UI.
+  const nextState: SettingsSaveState = state === 'saved' ? 'idle' : state;
+  if (nextState !== _settingsSaveState) {
+    _settingsSaveState = nextState;
+    _settingsSaveStateListeners.forEach((listener) => listener());
+  }
+
+  if (nextState === 'error') {
+    _settingsSaveStateResetTimer = setTimeout(() => dispatchSettingsSaveState('saved'), 6000);
+  }
+
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent<'saving' | 'saved' | 'error'>('openchamber:settings-save-state', { detail: state }));
 };
 
 type PersistApi = {
@@ -431,42 +532,95 @@ const getPersistApi = (): PersistApi | undefined => {
 
 const getRuntimeSettingsAPI = () => getRegisteredRuntimeAPIs()?.settings ?? null;
 
-const DEFAULT_RUNTIME_NOTIFICATION_SETTINGS = {
-  nativeNotificationsEnabled: false,
-  notificationMode: 'hidden-only' as const,
-  notifyOnSubtasks: true,
-  notifyOnCompletion: true,
-  notifyOnError: true,
-  notifyOnQuestion: true,
-  notificationTemplates: {
-    completion: { title: '', message: '' },
-    error: { title: '', message: '' },
-    question: { title: '', message: '' },
-    subtask: { title: '', message: '' },
-  },
-  summarizeLastMessage: false,
-  summaryThreshold: 200,
-  summaryLength: 100,
-  maxLastMessageLength: 250,
-} satisfies DesktopSettings;
+const materializeAuthoritativeUiSettings = (settings: DesktopSettings): DesktopSettings => {
+  const defaults = useUIStore.getInitialState();
 
-const applyDesktopUiPreferences = (
-  settings: DesktopSettings,
-  options: { authoritativeNotifications?: boolean } = {},
-) => {
+  return {
+    useSystemTheme: true,
+    lightThemeId: DEFAULT_LIGHT_THEME_ID,
+    darkThemeId: DEFAULT_DARK_THEME_ID,
+    openInAppId: DEFAULT_OPEN_IN_APP_ID,
+    showReasoningTraces: defaults.showReasoningTraces,
+    sessionRecapEnabled: defaults.sessionRecapEnabled,
+    sessionSuggestionEnabled: defaults.sessionSuggestionEnabled,
+    sessionGoalEnabled: defaults.sessionGoalEnabled,
+    sessionGoalDefaultBudgetEnabled: defaults.sessionGoalDefaultBudgetEnabled,
+    sessionGoalDefaultBudget: defaults.sessionGoalDefaultBudget,
+    collapsibleThinkingBlocks: defaults.collapsibleThinkingBlocks,
+    autoDeleteEnabled: defaults.autoDeleteEnabled,
+    autoDeleteAfterDays: defaults.autoDeleteAfterDays,
+    sessionRetentionAction: defaults.sessionRetentionAction,
+    followUpBehavior: DEFAULT_FOLLOW_UP_BEHAVIOR,
+    showDeletionDialog: defaults.showDeletionDialog,
+    nativeNotificationsEnabled: defaults.nativeNotificationsEnabled,
+    notificationMode: defaults.notificationMode,
+    notifyOnSubtasks: defaults.notifyOnSubtasks,
+    notifyOnCompletion: defaults.notifyOnCompletion,
+    notifyOnError: defaults.notifyOnError,
+    notifyOnQuestion: defaults.notifyOnQuestion,
+    notificationTemplates: defaults.notificationTemplates,
+    summarizeLastMessage: defaults.summarizeLastMessage,
+    summaryThreshold: defaults.summaryThreshold,
+    summaryLength: defaults.summaryLength,
+    maxLastMessageLength: defaults.maxLastMessageLength,
+    inputSpellcheckEnabled: defaults.inputSpellcheckEnabled,
+    showOpenCodeUpdateNotifications: defaults.showOpenCodeUpdateNotifications,
+    agentControlToolEnabled: defaults.agentControlToolEnabled,
+    showToolFileIcons: defaults.showToolFileIcons,
+    codeBlockLineWrap: defaults.codeBlockLineWrap,
+    showTurnChangedFiles: defaults.showTurnChangedFiles,
+    showExpandedBashTools: defaults.showExpandedBashTools,
+    showExpandedEditTools: defaults.showExpandedEditTools,
+    timeFormatPreference: defaults.timeFormatPreference,
+    weekStartPreference: defaults.weekStartPreference,
+    desktopWindowControlsPosition: defaults.desktopWindowControlsPosition,
+    chatRenderMode: defaults.chatRenderMode,
+    activityRenderMode: defaults.activityRenderMode,
+    mermaidRenderingMode: defaults.mermaidRenderingMode,
+    userMessageRenderingMode: defaults.userMessageRenderingMode,
+    collapsibleUserMessages: defaults.collapsibleUserMessages,
+    messageStreamTransport: 'auto',
+    stickyUserHeader: defaults.stickyUserHeader,
+    promptNavigatorEnabled: defaults.promptNavigatorEnabled,
+    expandedEditorToolbar: defaults.expandedEditorToolbar,
+    wideChatLayoutEnabled: defaults.wideChatLayoutEnabled,
+    showSplitAssistantMessageActions: defaults.showSplitAssistantMessageActions,
+    draftStartersVisible: defaults.draftStartersVisible,
+    reportUsage: defaults.reportUsage,
+    fontSize: defaults.fontSize,
+    terminalFontSize: defaults.terminalFontSize,
+    terminalShell: defaults.terminalShell,
+    terminalLoginShells: defaults.terminalLoginShells,
+    editorFontSize: defaults.editorFontSize,
+    uiFont: defaults.uiFont,
+    monoFont: defaults.monoFont,
+    padding: defaults.padding,
+    cornerRadius: defaults.cornerRadius,
+    inputBarOffset: defaults.inputBarOffset,
+    shortcutOverrides: defaults.shortcutOverrides,
+    mobileKeyboardMode: 'resize-content',
+    favoriteModels: defaults.favoriteModels,
+    hiddenModels: defaults.hiddenModels,
+    collapsedModelProviders: defaults.collapsedModelProviders,
+    recentModels: defaults.recentModels,
+    recentAgents: defaults.recentAgents,
+    recentEfforts: defaults.recentEfforts,
+    diffLayoutPreference: defaults.diffLayoutPreference,
+    gitChangesViewMode: defaults.gitChangesViewMode,
+    directoryShowHidden: true,
+    filesViewShowGitignored: false,
+    dictationEnabled: true,
+    sttProvider: 'local',
+    sttServerUrl: 'http://localhost:8001/v1',
+    sttModel: 'deepdml/faster-whisper-large-v3-turbo-ct2',
+    sttLocalModel: 'parakeet-tdt-0.6b-v2-int8',
+    sttLanguage: '',
+    ...settings,
+  };
+};
+
+const applyDesktopUiPreferences = (settings: DesktopSettings) => {
   const store = useUIStore.getState();
-  const notificationSettings: DesktopSettings = options.authoritativeNotifications
-    ? {
-        ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS,
-        ...settings,
-        notificationTemplates: settings.notificationTemplates ?? {
-          completion: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.completion },
-          error: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.error },
-          question: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.question },
-          subtask: { ...DEFAULT_RUNTIME_NOTIFICATION_SETTINGS.notificationTemplates.subtask },
-        },
-      }
-    : settings;
   const configStore = typeof window !== 'undefined'
     ? window.__zustand_config_store__?.getState?.() ?? null
     : null;
@@ -524,40 +678,40 @@ const applyDesktopUiPreferences = (
   if (typeof settings.showDeletionDialog === 'boolean' && settings.showDeletionDialog !== store.showDeletionDialog) {
     store.setShowDeletionDialog(settings.showDeletionDialog);
   }
-  if (typeof notificationSettings.nativeNotificationsEnabled === 'boolean' && notificationSettings.nativeNotificationsEnabled !== store.nativeNotificationsEnabled) {
-    store.setNativeNotificationsEnabled(notificationSettings.nativeNotificationsEnabled);
+  if (typeof settings.nativeNotificationsEnabled === 'boolean' && settings.nativeNotificationsEnabled !== store.nativeNotificationsEnabled) {
+    store.setNativeNotificationsEnabled(settings.nativeNotificationsEnabled);
   }
-  if (typeof notificationSettings.notificationMode === 'string' && (notificationSettings.notificationMode === 'always' || notificationSettings.notificationMode === 'hidden-only')) {
-    if (notificationSettings.notificationMode !== store.notificationMode) {
-      store.setNotificationMode(notificationSettings.notificationMode);
+  if (typeof settings.notificationMode === 'string' && (settings.notificationMode === 'always' || settings.notificationMode === 'hidden-only')) {
+    if (settings.notificationMode !== store.notificationMode) {
+      store.setNotificationMode(settings.notificationMode);
     }
   }
-  if (typeof notificationSettings.notifyOnSubtasks === 'boolean' && notificationSettings.notifyOnSubtasks !== store.notifyOnSubtasks) {
-    store.setNotifyOnSubtasks(notificationSettings.notifyOnSubtasks);
+  if (typeof settings.notifyOnSubtasks === 'boolean' && settings.notifyOnSubtasks !== store.notifyOnSubtasks) {
+    store.setNotifyOnSubtasks(settings.notifyOnSubtasks);
   }
-  if (typeof notificationSettings.notifyOnCompletion === 'boolean' && notificationSettings.notifyOnCompletion !== store.notifyOnCompletion) {
-    store.setNotifyOnCompletion(notificationSettings.notifyOnCompletion);
+  if (typeof settings.notifyOnCompletion === 'boolean' && settings.notifyOnCompletion !== store.notifyOnCompletion) {
+    store.setNotifyOnCompletion(settings.notifyOnCompletion);
   }
-  if (typeof notificationSettings.notifyOnError === 'boolean' && notificationSettings.notifyOnError !== store.notifyOnError) {
-    store.setNotifyOnError(notificationSettings.notifyOnError);
+  if (typeof settings.notifyOnError === 'boolean' && settings.notifyOnError !== store.notifyOnError) {
+    store.setNotifyOnError(settings.notifyOnError);
   }
-  if (typeof notificationSettings.notifyOnQuestion === 'boolean' && notificationSettings.notifyOnQuestion !== store.notifyOnQuestion) {
-    store.setNotifyOnQuestion(notificationSettings.notifyOnQuestion);
+  if (typeof settings.notifyOnQuestion === 'boolean' && settings.notifyOnQuestion !== store.notifyOnQuestion) {
+    store.setNotifyOnQuestion(settings.notifyOnQuestion);
   }
-  if (notificationSettings.notificationTemplates && typeof notificationSettings.notificationTemplates === 'object') {
-    store.setNotificationTemplates(notificationSettings.notificationTemplates);
+  if (settings.notificationTemplates && typeof settings.notificationTemplates === 'object') {
+    store.setNotificationTemplates(settings.notificationTemplates);
   }
-  if (typeof notificationSettings.summarizeLastMessage === 'boolean' && notificationSettings.summarizeLastMessage !== store.summarizeLastMessage) {
-    store.setSummarizeLastMessage(notificationSettings.summarizeLastMessage);
+  if (typeof settings.summarizeLastMessage === 'boolean' && settings.summarizeLastMessage !== store.summarizeLastMessage) {
+    store.setSummarizeLastMessage(settings.summarizeLastMessage);
   }
-  if (typeof notificationSettings.summaryThreshold === 'number' && Number.isFinite(notificationSettings.summaryThreshold)) {
-    store.setSummaryThreshold(notificationSettings.summaryThreshold);
+  if (typeof settings.summaryThreshold === 'number' && Number.isFinite(settings.summaryThreshold)) {
+    store.setSummaryThreshold(settings.summaryThreshold);
   }
-  if (typeof notificationSettings.summaryLength === 'number' && Number.isFinite(notificationSettings.summaryLength)) {
-    store.setSummaryLength(notificationSettings.summaryLength);
+  if (typeof settings.summaryLength === 'number' && Number.isFinite(settings.summaryLength)) {
+    store.setSummaryLength(settings.summaryLength);
   }
-  if (typeof notificationSettings.maxLastMessageLength === 'number' && Number.isFinite(notificationSettings.maxLastMessageLength)) {
-    store.setMaxLastMessageLength(notificationSettings.maxLastMessageLength);
+  if (typeof settings.maxLastMessageLength === 'number' && Number.isFinite(settings.maxLastMessageLength)) {
+    store.setMaxLastMessageLength(settings.maxLastMessageLength);
   }
   if (typeof settings.inputSpellcheckEnabled === 'boolean' && settings.inputSpellcheckEnabled !== store.inputSpellcheckEnabled) {
     store.setInputSpellcheckEnabled(settings.inputSpellcheckEnabled);
@@ -567,6 +721,12 @@ const applyDesktopUiPreferences = (
     && settings.showOpenCodeUpdateNotifications !== store.showOpenCodeUpdateNotifications
   ) {
     store.setShowOpenCodeUpdateNotifications(settings.showOpenCodeUpdateNotifications);
+  }
+  if (
+    typeof settings.agentControlToolEnabled === 'boolean'
+    && settings.agentControlToolEnabled !== store.agentControlToolEnabled
+  ) {
+    store.setAgentControlToolEnabled(settings.agentControlToolEnabled);
   }
   if (typeof settings.showToolFileIcons === 'boolean' && settings.showToolFileIcons !== store.showToolFileIcons) {
     store.setShowToolFileIcons(settings.showToolFileIcons);
@@ -595,10 +755,14 @@ const applyDesktopUiPreferences = (
       store.setWeekStartPreference(settings.weekStartPreference);
     }
   }
-  if (typeof settings.desktopWindowControlsPosition === 'string'
-    && (settings.desktopWindowControlsPosition === 'auto' || settings.desktopWindowControlsPosition === 'left' || settings.desktopWindowControlsPosition === 'right')) {
-    if (settings.desktopWindowControlsPosition !== store.desktopWindowControlsPosition) {
-      store.setDesktopWindowControlsPosition(settings.desktopWindowControlsPosition);
+  if (typeof settings.desktopWindowControlsPosition === 'string') {
+    const nextPosition = settings.desktopWindowControlsPosition === 'left'
+      ? 'left'
+      : (settings.desktopWindowControlsPosition === 'right' || settings.desktopWindowControlsPosition === 'auto')
+        ? 'right'
+        : null;
+    if (nextPosition && nextPosition !== store.desktopWindowControlsPosition) {
+      store.setDesktopWindowControlsPosition(nextPosition);
     }
   }
   if (typeof settings.chatRenderMode === 'string'
@@ -669,17 +833,36 @@ const applyDesktopUiPreferences = (
         ...nextStarters.slice(insertAt),
       ];
     }
+    if (settings.draftStartersScheduleTaskAdded !== true && !nextStarters.some((starter) => starter.type === 'command' && starter.name === 'schedule-task')) {
+      const goalIndex = nextStarters.findIndex((starter) => starter.type === 'command' && starter.name === 'craft-goal');
+      const insertAt = goalIndex >= 0 ? goalIndex + 1 : nextStarters.length;
+      nextStarters = [
+        ...nextStarters.slice(0, insertAt),
+        { type: 'command', name: 'schedule-task' },
+        ...nextStarters.slice(insertAt),
+      ];
+    }
     if (JSON.stringify(store.globalDraftStarters) !== JSON.stringify(nextStarters)) {
       store.setGlobalDraftStarters(nextStarters);
     }
-    if (settings.draftStartersCraftGoalAdded !== true) {
+    if (settings.draftStartersCraftGoalAdded !== true || settings.draftStartersScheduleTaskAdded !== true) {
       settings.draftStarters = nextStarters;
       settings.draftStartersCraftGoalAdded = true;
+      settings.draftStartersScheduleTaskAdded = true;
     }
-  } else if (settings.draftStartersCraftGoalAdded !== true) {
-    // The built-in default already contains Craft a Goal; only persist the marker
-    // so removing it later remains a durable user choice.
-    settings.draftStartersCraftGoalAdded = true;
+  } else {
+    // The built-in default already contains Craft a Goal and Schedule a Task;
+    // only persist the markers so removing them later remains a durable user
+    // choice.
+    if (settings.draftStartersCraftGoalAdded !== true) {
+      settings.draftStartersCraftGoalAdded = true;
+    }
+    if (settings.draftStartersScheduleTaskAdded !== true) {
+      settings.draftStartersScheduleTaskAdded = true;
+    }
+  }
+  if (typeof settings.draftStartersVisible === 'boolean' && settings.draftStartersVisible !== store.draftStartersVisible) {
+    store.setDraftStartersVisible(settings.draftStartersVisible);
   }
   if (typeof settings.terminalFontSize === 'number' && Number.isFinite(settings.terminalFontSize) && settings.terminalFontSize !== store.terminalFontSize) {
     store.setTerminalFontSize(settings.terminalFontSize);
@@ -858,6 +1041,9 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
   if (typeof candidate.desktopMinimizeToTrayEnabled === 'boolean') {
     result.desktopMinimizeToTrayEnabled = candidate.desktopMinimizeToTrayEnabled;
   }
+  if (typeof candidate.desktopMacMenuBarEnabled === 'boolean') {
+    result.desktopMacMenuBarEnabled = candidate.desktopMacMenuBarEnabled;
+  }
 
   const projects = sanitizeProjects(candidate.projects);
   if (projects) {
@@ -882,8 +1068,14 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
   if (Array.isArray(candidate.draftStarters)) {
     result.draftStarters = sanitizeStarterRefs(candidate.draftStarters);
   }
+  if (typeof candidate.draftStartersVisible === 'boolean') {
+    result.draftStartersVisible = candidate.draftStartersVisible;
+  }
   if (typeof candidate.draftStartersCraftGoalAdded === 'boolean') {
     result.draftStartersCraftGoalAdded = candidate.draftStartersCraftGoalAdded;
+  }
+  if (typeof candidate.draftStartersScheduleTaskAdded === 'boolean') {
+    result.draftStartersScheduleTaskAdded = candidate.draftStartersScheduleTaskAdded;
   }
   if (typeof candidate.showReasoningTraces === 'boolean') {
     result.showReasoningTraces = candidate.showReasoningTraces;
@@ -1222,6 +1414,9 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
   if (typeof candidate.showOpenCodeUpdateNotifications === 'boolean') {
     result.showOpenCodeUpdateNotifications = candidate.showOpenCodeUpdateNotifications;
   }
+  if (typeof candidate.agentControlToolEnabled === 'boolean') {
+    result.agentControlToolEnabled = candidate.agentControlToolEnabled;
+  }
   if (typeof candidate.openCodeUpdateToastDismissedVersion === 'string') {
     result.openCodeUpdateToastDismissedVersion = candidate.openCodeUpdateToastDismissedVersion.trim().slice(0, 128);
   }
@@ -1248,9 +1443,16 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
     && (candidate.weekStartPreference === 'auto' || candidate.weekStartPreference === 'sunday' || candidate.weekStartPreference === 'monday')) {
     result.weekStartPreference = candidate.weekStartPreference;
   }
-  if (typeof candidate.desktopWindowControlsPosition === 'string'
-    && (candidate.desktopWindowControlsPosition === 'auto' || candidate.desktopWindowControlsPosition === 'left' || candidate.desktopWindowControlsPosition === 'right')) {
-    result.desktopWindowControlsPosition = candidate.desktopWindowControlsPosition;
+  if (typeof candidate.desktopWindowControlsPosition === 'string') {
+    if (candidate.desktopWindowControlsPosition === 'left') {
+      result.desktopWindowControlsPosition = 'left';
+    } else if (
+      candidate.desktopWindowControlsPosition === 'right'
+      || candidate.desktopWindowControlsPosition === 'auto'
+    ) {
+      // Legacy "auto" never read OS chrome config; treat as right.
+      result.desktopWindowControlsPosition = 'right';
+    }
   }
   if (typeof candidate.chatRenderMode === 'string'
     && (candidate.chatRenderMode === 'sorted' || candidate.chatRenderMode === 'live')) {
@@ -1280,6 +1482,9 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
   }
   if (typeof candidate.promptNavigatorEnabled === 'boolean') {
     result.promptNavigatorEnabled = candidate.promptNavigatorEnabled;
+  }
+  if (typeof candidate.expandedEditorToolbar === 'boolean') {
+    result.expandedEditorToolbar = candidate.expandedEditorToolbar;
   }
   if (typeof candidate.wideChatLayoutEnabled === 'boolean') {
     result.wideChatLayoutEnabled = candidate.wideChatLayoutEnabled;
@@ -1589,7 +1794,9 @@ export const syncDesktopSettings = async (): Promise<void> => {
   // prevent server settings from reaching the Zustand store.
   const applySettings = async (settings: DesktopSettings) => {
     if (!isSettingsRuntimeContextCurrent(context)) return;
-    const shouldPersistCraftGoalMigration = settings.draftStartersCraftGoalAdded !== true;
+    const shouldPersistCraftGoalMigration = settings.draftStartersCraftGoalAdded !== true
+      || settings.draftStartersScheduleTaskAdded !== true;
+    const authoritativeSettings = materializeAuthoritativeUiSettings(settings);
     try {
       persistToLocalStorage(settings);
     } catch (error) {
@@ -1597,20 +1804,24 @@ export const syncDesktopSettings = async (): Promise<void> => {
     }
     await waitForHydration();
     if (!isSettingsRuntimeContextCurrent(context)) return;
+    if (settings.draftStarters === undefined) {
+      useUIStore.setState({ globalDraftStarters: null });
+    }
     try {
-      applyDesktopUiPreferences(settings, { authoritativeNotifications: true });
+      applyDesktopUiPreferences(authoritativeSettings);
     } catch (error) {
       console.warn('applyDesktopUiPreferences failed:', error);
     }
     if (shouldPersistCraftGoalMigration) {
       await updateDesktopSettings({
-        ...(settings.draftStarters ? { draftStarters: settings.draftStarters } : {}),
+        ...(authoritativeSettings.draftStarters ? { draftStarters: authoritativeSettings.draftStarters } : {}),
         draftStartersCraftGoalAdded: true,
+        draftStartersScheduleTaskAdded: true,
       });
       if (!isSettingsRuntimeContextCurrent(context)) return;
     }
 
-    dispatchSettingsSynced(settings);
+    dispatchSettingsSynced(authoritativeSettings);
   };
 
   try {
@@ -1633,7 +1844,11 @@ async function _flushSettingsUpdate(): Promise<void> {
   _settingsFlushTimer = null;
   _settingsFlushWaiters = [];
   try {
-    if (!changes || !context || Object.keys(changes).length === 0 || !isSettingsRuntimeContextCurrent(context)) return;
+    if (!changes || !context || Object.keys(changes).length === 0 || !isSettingsRuntimeContextCurrent(context)) {
+      // Nothing will be written — clear any pending "Saving…" indicator.
+      dispatchSettingsSaveState('saved');
+      return;
+    }
 
     const runtimeSettings = getRuntimeSettingsAPI();
     if (runtimeSettings) {
@@ -1641,11 +1856,11 @@ async function _flushSettingsUpdate(): Promise<void> {
         const updated = await runtimeSettings.save(changes);
         if (!isSettingsRuntimeContextCurrent(context)) return;
         if (updated) {
-          persistToLocalStorage(updated);
           applyDesktopUiPreferences(updated);
           dispatchSettingsSynced(updated);
           _settingsCache = null;
         }
+        dispatchSettingsSaveState(updated ? 'saved' : 'error');
         return;
       } catch (error) {
         if (!isSettingsRuntimeContextCurrent(context)) return;
@@ -1667,20 +1882,26 @@ async function _flushSettingsUpdate(): Promise<void> {
       if (!isSettingsRuntimeContextCurrent(context)) return;
       if (!response.ok) {
         console.warn('Failed to update shared settings via API:', response.status, response.statusText);
+        dispatchSettingsSaveState('error');
         return;
       }
 
       const updated = (await response.json().catch(() => null)) as DesktopSettings | null;
       if (!isSettingsRuntimeContextCurrent(context)) return;
       if (updated) {
-        persistToLocalStorage(updated);
         applyDesktopUiPreferences(updated);
         dispatchSettingsSynced(updated);
+        dispatchSettingsSaveState('saved');
         // Invalidate GET cache so next read sees the fresh data
         _settingsCache = null;
+      } else {
+        dispatchSettingsSaveState('error');
       }
     } catch (error) {
-      if (isSettingsRuntimeContextCurrent(context)) console.warn('Failed to update shared settings via API:', error);
+      if (isSettingsRuntimeContextCurrent(context)) {
+        console.warn('Failed to update shared settings via API:', error);
+        dispatchSettingsSaveState('error');
+      }
     }
   } finally {
     waiters.forEach((resolve) => resolve());
@@ -1707,6 +1928,7 @@ export const updateDesktopSettings = async (changes: Partial<DesktopSettings>): 
 
   _pendingSettingsChanges = { ...(_pendingSettingsChanges ?? {}), ...writableChanges };
   _pendingSettingsContext = context;
+  dispatchSettingsSaveState('saving');
 
   if (_settingsFlushTimer) {
     clearTimeout(_settingsFlushTimer);

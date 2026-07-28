@@ -14,6 +14,7 @@ describe('settings search FRPC integration', () => {
       isDesktopLocalOrigin: false,
       isMac: false,
       isWindows: false,
+      isLinux: false,
     },
     visiblePageSlugs: ['tunnel'],
     t: (key) => key,

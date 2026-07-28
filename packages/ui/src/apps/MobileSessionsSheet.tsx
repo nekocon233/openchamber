@@ -37,8 +37,6 @@ import { NewWorktreeDialog } from '@/components/session/NewWorktreeDialog';
 import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import {
   deriveRecentSessions,
-  getSessionActivityTimestamp,
-  sortSessionsByActivity,
 } from '@/components/session/sidebar/activitySections';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -60,11 +58,15 @@ import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { orderWorktrees, useWorktreeOrderStore } from '@/stores/useWorktreeOrderStore';
+import {
+  EMPTY_SESSION_ORDER_RANKS,
+  orderSessionsByLifecycleScopes,
+  useSessionOrderingStore,
+} from '@/sync/session-ordering';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import {
   useAllAuthoritativeLiveSessionIds,
   useAllLiveSessions,
-  useAllSessionMessageActivity,
   useAllSessionStatuses,
 } from '@/sync/sync-context';
 import {
@@ -84,6 +86,8 @@ type MobileSessionsSheetProps = {
       'sidebar' renders the same content inline for the iPad persistent sidebar. */
   variant?: 'sheet' | 'sidebar';
 };
+
+const EMPTY_PINNED_SESSION_IDS = new Set<string>();
 
 type ProjectMeta = {
   id: string;
@@ -684,16 +688,21 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
   const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
   const setShowPinnedSection = useSessionDisplayStore((state) => state.setShowPinnedSection);
   const setShowRecentSection = useSessionDisplayStore((state) => state.setShowRecentSection);
-  const messageActivityBySessionId = useAllSessionMessageActivity(
-    open && (showPinnedSection || showRecentSection),
-  );
   const sessionStatuses = useAllSessionStatuses();
   const globalResolvedStatusById = useGlobalSessionStatusStore((state) => state.resolvedStatusById);
+  const globalActiveStatusById = useGlobalSessionStatusStore((state) => state.statusById);
   const globalActiveSessions = useGlobalSessionsStore((state) => state.activeSessions);
   const globalArchivedSessions = useGlobalSessionsStore((state) => state.archivedSessions);
-  const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.hasAuthoritativeSnapshot);
-  const pinnedSessionIds = useSessionPinnedStore((state) => state.ids);
+  const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.status === 'ready');
   const togglePinnedSession = useSessionPinnedStore((state) => state.toggle);
+  const pinnedSessionIds = useSessionPinnedStore(React.useCallback(
+    (state) => open || variant === 'sidebar' ? state.ids : EMPTY_PINNED_SESSION_IDS,
+    [open, variant],
+  ));
+  const sessionOrderRanks = useSessionOrderingStore(React.useCallback(
+    (state) => open || variant === 'sidebar' ? state.rankById : EMPTY_SESSION_ORDER_RANKS,
+    [open, variant],
+  ));
   const projects = useProjectsStore((state) => state.projects);
   const activeProjectId = useProjectsStore((state) => state.activeProjectId);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
@@ -941,31 +950,39 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
     return 'idle';
   }, [globalResolvedStatusById, sessionStatuses]);
 
-  const getActivityTimestamp = React.useCallback(
-    (session: Session) => getSessionActivityTimestamp(session, messageActivityBySessionId),
-    [messageActivityBySessionId],
-  );
+  const activeSessionIds = React.useMemo(() => {
+    const ids = new Set(globalActiveStatusById.keys());
+    for (const [sessionId, status] of Object.entries(sessionStatuses)) {
+      if (status.type === 'busy' || status.type === 'retry') ids.add(sessionId);
+    }
+    return ids;
+  }, [globalActiveStatusById, sessionStatuses]);
 
   const pinnedSessions = React.useMemo(() => {
     if (!open || !showPinnedSection || normalizedQuery || editingOrder) return [];
-    return sortSessionsByActivity(
+    return orderSessionsByLifecycleScopes(
       sessions.filter((session) => pinnedSessionIds.has(session.id)),
-      messageActivityBySessionId,
+      pinnedSessionIds,
+      sessionOrderRanks,
     );
   }, [
     editingOrder,
-    messageActivityBySessionId,
     normalizedQuery,
     open,
     pinnedSessionIds,
+    sessionOrderRanks,
     sessions,
     showPinnedSection,
   ]);
 
   const recentSessions = React.useMemo(() => {
     if (!open || !showRecentSection || normalizedQuery || editingOrder) return [];
-    return deriveRecentSessions(sessions, recentNow, messageActivityBySessionId);
-  }, [editingOrder, messageActivityBySessionId, normalizedQuery, open, recentNow, sessions, showRecentSection]);
+    return orderSessionsByLifecycleScopes(
+      deriveRecentSessions(sessions, activeSessionIds, recentNow),
+      pinnedSessionIds,
+      sessionOrderRanks,
+    );
+  }, [activeSessionIds, editingOrder, normalizedQuery, open, pinnedSessionIds, recentNow, sessionOrderRanks, sessions, showRecentSection]);
 
   const projectNodes = React.useMemo<ProjectNode[]>(() => {
     const nodes: ProjectNode[] = projectsMeta.map((project) => ({
@@ -1012,7 +1029,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
 
     for (const node of nodes) {
       for (const bucket of node.buckets) {
-        bucket.sessions.sort((a, b) => getSessionTimestamp(b) - getSessionTimestamp(a));
+        bucket.sessions = orderSessionsByLifecycleScopes(bucket.sessions, pinnedSessionIds, sessionOrderRanks);
         for (const session of bucket.sessions) {
           if (!getParentId(session)) node.totalSessions += 1;
         }
@@ -1020,7 +1037,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
     }
 
     return nodes;
-  }, [activeProjectId, projectsMeta, sessions]);
+  }, [activeProjectId, pinnedSessionIds, projectsMeta, sessionOrderRanks, sessions]);
 
   const normalizedDirectory = normalizePath(currentDirectory);
 
@@ -1109,7 +1126,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
             session={session}
             active={currentSessionId === session.id}
             indent={rowIndent}
-            activityTimestamp={getActivityTimestamp(session)}
+            activityTimestamp={getSessionTimestamp(session)}
             statusType={getSessionStatusType(session.id)}
             pinned={pinnedSessionIds.has(session.id)}
             hasChildren={hasChildren}
@@ -1236,7 +1253,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
       session={session}
       active={currentSessionId === session.id}
       indent={ACTIVITY_SESSION_INDENT}
-      activityTimestamp={getActivityTimestamp(session)}
+      activityTimestamp={getSessionTimestamp(session)}
       statusType={getSessionStatusType(session.id)}
       pinned={pinnedSessionIds.has(session.id)}
       contextLabel={buildSessionContextLabel(session)}
@@ -1265,14 +1282,16 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
   // Flat lists used only by the dedicated search-results view.
   const searchSessionMatches = React.useMemo(() => {
     if (!normalizedQuery) return [] as Session[];
-    return sessions
-      .filter((session) => {
+    return orderSessionsByLifecycleScopes(
+      sessions.filter((session) => {
         const directory = getSessionDirectory(session);
         const project = findExactProjectMatch(projectsMeta, directory);
         return sessionMatchesQuery(session, project?.label ?? '', normalizedQuery);
-      })
-      .sort((a, b) => getSessionTimestamp(b) - getSessionTimestamp(a));
-  }, [normalizedQuery, projectsMeta, sessions]);
+      }),
+      pinnedSessionIds,
+      sessionOrderRanks,
+    );
+  }, [normalizedQuery, pinnedSessionIds, projectsMeta, sessionOrderRanks, sessions]);
 
   const searchProjectMatches = React.useMemo(() => {
     if (!normalizedQuery) return [] as Array<ProjectMeta & { sessionCount: number }>;
@@ -1409,7 +1428,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({
                           session={session}
                           active={currentSessionId === session.id}
                           indent={12}
-                          activityTimestamp={getActivityTimestamp(session)}
+                          activityTimestamp={getSessionTimestamp(session)}
                           statusType={getSessionStatusType(session.id)}
                           pinned={pinnedSessionIds.has(session.id)}
                           contextLabel={buildSessionContextLabel(session)}

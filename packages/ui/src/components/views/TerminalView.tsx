@@ -36,8 +36,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
     const terminalFontSize = useUIStore(state => state.terminalFontSize);
     const terminalShell = useUIStore(state => state.terminalShell);
     const terminalLoginShell = useUIStore(state => state.terminalLoginShells.includes(state.terminalShell));
-    const bottomTerminalHeight = useUIStore((state) => state.bottomTerminalHeight);
-    const isBottomTerminalExpanded = useUIStore((state) => state.isBottomTerminalExpanded);
     const { isMobile, isTablet, hasTouchOnlyPointer } = useDeviceInfo();
     const isTouchTerminal = isMobile || isTablet;
     const useTouchTerminalInput = (isTouchTerminal || hasTouchOnlyPointer) && runtime.platform === 'web';
@@ -146,11 +144,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
     }, [useTouchTerminalInput]);
 
     const activeMainTab = useUIStore((state) => state.activeMainTab);
-    const isBottomTerminalOpen = useUIStore((state) => state.isBottomTerminalOpen);
-    const setBottomTerminalOpen = useUIStore((state) => state.setBottomTerminalOpen);
-    const setBottomTerminalExpanded = useUIStore((state) => state.setBottomTerminalExpanded);
     const isTerminalActive = activeMainTab === 'terminal';
-    const isTerminalVisible = visible ?? (isTerminalActive || isBottomTerminalOpen);
+    const isTerminalVisible = visible ?? isTerminalActive;
     const [hasOpenedTerminalViewport, setHasOpenedTerminalViewport] = React.useState(isTerminalVisible);
 
     React.useEffect(() => {
@@ -615,9 +610,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
     const handleAttachSelection = React.useCallback(() => {
         const selection = terminalControllerRef.current?.getSelection();
         const sessionKey = currentSessionId ?? (newSessionDraft?.open ? 'draft' : null);
-        if (!selection || !sessionKey || !activeTab) return;
-        addContextDraft({
-            sessionKey,
+        if (!selection || !sessionKey || !activeTab || !effectiveDirectory) return;
+        addContextDraft({ directory: effectiveDirectory, sessionKey }, {
             source: 'terminal',
             fileLabel: activeTab.label,
             startLine: selection.startLine,
@@ -626,7 +620,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
             language: activeTab.terminalSessionId ?? activeTab.id,
             text: '',
         });
-    }, [activeTab, addContextDraft, currentSessionId, newSessionDraft?.open]);
+    }, [activeTab, addContextDraft, currentSessionId, effectiveDirectory, newSessionDraft?.open]);
 
     const handleSelectTab = React.useCallback(
         (tabId: string) => {
@@ -848,34 +842,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
         };
     }, [isTerminalVisible, terminalViewportKey, useTouchTerminalInput]);
 
-    React.useEffect(() => {
-        if (useTouchTerminalInput || !isTerminalVisible || !isBottomTerminalOpen) {
-            return;
-        }
-
-        const controller = terminalControllerRef.current;
-        if (!controller) {
-            return;
-        }
-
-        const fitOnce = () => {
-            controller.fit();
-        };
-
-        if (typeof window !== 'undefined') {
-            const rafId = window.requestAnimationFrame(() => {
-                fitOnce();
-            });
-            const timeoutIds = [320].map((delay) => window.setTimeout(fitOnce, delay));
-            return () => {
-                window.cancelAnimationFrame(rafId);
-                timeoutIds.forEach((id) => window.clearTimeout(id));
-            };
-        }
-
-        fitOnce();
-    }, [bottomTerminalHeight, isBottomTerminalExpanded, isBottomTerminalOpen, isTerminalVisible, useTouchTerminalInput]);
-
     if (!hasActiveContext) {
         return (
             <div className="flex h-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
@@ -900,7 +866,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
 
     const quickKeysDisabled = !terminalSessionId || isConnecting || isRestarting || isReconnectPending;
     const shouldRenderViewport = hasOpenedTerminalViewport;
-    const showBottomDockControls = !isTouchTerminal && isBottomTerminalOpen && !isTerminalActive;
     const quickKeySize: 'lg' | 'xs' = isTouchTerminal ? 'lg' : 'xs';
     const quickKeyIconClass = isTouchTerminal ? 'w-10 p-0' : 'w-9 p-0';
     const preserveTerminalFocus = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -1078,32 +1043,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
                                     <span className="whitespace-nowrap">{t('terminalView.preview.open')}</span>
                                 </Button>
                             ) : null}
-                            {showBottomDockControls ? (
-                                <>
-                                    <Button
-                                        type="button"
-                                        size="xs"
-                                        variant="ghost"
-                                        onClick={() => setBottomTerminalExpanded(!isBottomTerminalExpanded)}
-                                        className={cn('shrink-0 p-0', isMobile ? 'h-8 w-8' : 'h-7 w-7')}
-                                        title={isBottomTerminalExpanded ? t('terminalView.bottomDock.restoreTitle') : t('terminalView.bottomDock.expandTitle')}
-                                        aria-label={isBottomTerminalExpanded ? t('terminalView.bottomDock.restoreAria') : t('terminalView.bottomDock.expandAria')}
-                                    >
-                                        {isBottomTerminalExpanded ? <Icon name="fullscreen-exit" className="h-4 w-4" /> : <Icon name="fullscreen" className="h-4 w-4" />}
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        size="xs"
-                                        variant="ghost"
-                                        onClick={() => setBottomTerminalOpen(false)}
-                                        className={cn('shrink-0 p-0', isMobile ? 'h-8 w-8' : 'h-7 w-7')}
-                                        title={t('terminalView.bottomDock.closeTitle')}
-                                        aria-label={t('terminalView.bottomDock.closeAria')}
-                                    >
-                                        <Icon name="close" className="h-4 w-4" />
-                                    </Button>
-                                </>
-                            ) : null}
                         </div>
                     </div>
                 ) : null}
@@ -1140,7 +1079,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible }) => {
                             fontFamily={resolvedFontStack}
                             fontSize={terminalFontSize}
                             enableTouchScroll={useTouchTerminalInput}
-                            autoFocus={!useTouchTerminalInput && isTerminalVisible}
+                            autoFocus={isTerminalVisible}
                             isVisible={isTerminalVisible}
                         />
                     ) : null}

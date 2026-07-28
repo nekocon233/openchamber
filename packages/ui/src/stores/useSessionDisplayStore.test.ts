@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { migrateSessionDisplayStore } from './useSessionDisplayStore';
+import { migrateSessionDisplayState, useSessionDisplayStore } from './useSessionDisplayStore';
 
 const sessionSidebarSource = readFileSync(join(
   dirname(fileURLToPath(import.meta.url)),
@@ -22,7 +22,7 @@ describe('session display store', () => {
   });
 
   test('enables the pinned section when migrating version 2 preferences', () => {
-    const migrated = migrateSessionDisplayStore({ showRecentSection: false }, 2);
+    const migrated = migrateSessionDisplayState({ showRecentSection: false }, 2);
     expect(migrated.showPinnedSection).toBe(true);
     expect(migrated.showRecentSection).toBe(false);
   });
@@ -33,6 +33,26 @@ describe('session display store', () => {
     expect(pinnedIndex).toBeGreaterThan(-1);
     expect(recentIndex).toBeGreaterThan(pinnedIndex);
     expect(activitySectionsSource).toContain("section.key === 'pinned' ? 'pinned' : 'recent'");
-    expect(sessionSidebarSource).toContain('`pinned:active:${parentID}`');
+    expect(sessionSidebarSource).toContain("renderContext === 'pinned'");
   });
+
+  test('defaults to manual ordering', () => {
+    expect(useSessionDisplayStore.getState().projectSortOrder).toBe('manual');
+  });
+
+  for (const version of [2, 3]) {
+    test(`migrates the v${version} recent default to manual`, () => {
+      const migrated = migrateSessionDisplayState({ projectSortOrder: 'recent' }, version);
+
+      expect(migrated.projectSortOrder).toBe('manual');
+    });
+  }
+
+  for (const projectSortOrder of ['manual', 'a-z', 'z-a', 'date-added'] as const) {
+    test(`preserves the v2 ${projectSortOrder} sort order`, () => {
+      const migrated = migrateSessionDisplayState({ projectSortOrder }, 2);
+
+      expect(migrated.projectSortOrder).toBe(projectSortOrder);
+    });
+  }
 });

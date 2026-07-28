@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { desktopActivateWindowRuntime, desktopHostProbe, desktopHostsGet, desktopHostsSet, redactSensitiveUrl, resolveDesktopHostUrl } from './desktopHosts';
+import {
+  desktopActivateWindowRuntime,
+  desktopHostProbe,
+  desktopHostsGet,
+  desktopHostsSet,
+  importDesktopHostPairing,
+  redactSensitiveUrl,
+  resolveDesktopHostUrl,
+} from './desktopHosts';
 
 const withDesktopBridge = async <T>(handler: (cmd: string, args: Record<string, unknown>) => unknown | Promise<unknown>, run: () => Promise<T>): Promise<T> => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -51,6 +59,12 @@ describe('resolveDesktopHostUrl', () => {
     expect(redactSensitiveUrl('https://example.trycloudflare.com/connect?t=secret-token')).toBe(
       'https://example.trycloudflare.com/connect?t=%5BREDACTED%5D',
     );
+  });
+});
+
+describe('importDesktopHostPairing', () => {
+  test('rejects malformed pairing links before changing hosts', async () => {
+    await expect(importDesktopHostPairing('not-a-connect-link', [])).rejects.toThrow('invalid-connect-link');
   });
 });
 

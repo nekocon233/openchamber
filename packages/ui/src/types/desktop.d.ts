@@ -10,6 +10,7 @@ declare global {
       windowRole?: 'main' | 'additional' | 'mini-chat';
       macVibrancy?: boolean;
       macVibrancySupported?: boolean;
+      trayEnabled?: boolean;
     };
     __OPENCHAMBER_PLATFORM__?: string;
     __OPENCHAMBER_DESKTOP_BOOT_OUTCOME__?: DesktopBootOutcome;

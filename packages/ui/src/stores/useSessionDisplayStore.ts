@@ -21,20 +21,20 @@ type SessionDisplayStore = {
   setProjectSortOrder: (order: ProjectSortOrder) => void;
 };
 
-export const migrateSessionDisplayStore = (
+export const migrateSessionDisplayState = (
   persisted: unknown,
   version: number,
 ): Partial<SessionDisplayStore> => {
   const state = (persisted ?? {}) as Partial<SessionDisplayStore>;
-  let next = state;
+  const next = { ...state };
   if (version < 1) {
-    next = { ...next, displayMode: 'minimal', projectSortOrder: 'recent' };
-  }
-  if (version < 2) {
-    next = { ...next, projectSortOrder: 'recent' };
+    next.displayMode = 'minimal';
   }
   if (version < 3) {
-    next = { ...next, showPinnedSection: true };
+    next.showPinnedSection = true;
+  }
+  if (version < 2 || (version < 4 && next.projectSortOrder === 'recent')) {
+    next.projectSortOrder = 'manual';
   }
   return next;
 };
@@ -50,7 +50,7 @@ export const useSessionDisplayStore = create<SessionDisplayStore>()(
       // disappear once the persisted preference rehydrates. Users who opted into
       // showing archived have `true` persisted, which is preserved on rehydrate.
       showArchivedSessions: false,
-      projectSortOrder: 'recent',
+      projectSortOrder: 'manual',
       setDisplayMode: (mode) => set({ displayMode: mode }),
       setShowPinnedSection: (show) => set({ showPinnedSection: show }),
       setShowRecentSection: (show) => set({ showRecentSection: show }),
@@ -62,13 +62,14 @@ export const useSessionDisplayStore = create<SessionDisplayStore>()(
     }),
     {
       name: 'session-display-mode',
-      version: 3,
+      version: 4,
       // v0 shipped 'default' as the only/initial mode, so most existing users
       // have it persisted by accident rather than choice. Nudge everyone onto
       // minimal once so the mode can be evaluated before removing it entirely.
-      // v1→v2 adds projectSortOrder defaulting to 'recent'.
+      // v1→v2 adds projectSortOrder using the canonical manual ordering.
       // v2→v3 adds the independently visible pinned section.
-      migrate: migrateSessionDisplayStore,
+      // v3→v4 replaces the previously shipped recent default with manual.
+      migrate: migrateSessionDisplayState,
     },
   ),
 );

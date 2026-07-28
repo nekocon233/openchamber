@@ -1,7 +1,6 @@
 import type { Session } from '@opencode-ai/sdk/v2';
 
 export const RECENT_SESSION_MAX_AGE_MS = 48 * 60 * 60 * 1000;
-const EMPTY_MESSAGE_ACTIVITY = new Map<string, number>();
 
 const isSubtaskSession = (session: Session): boolean => {
   return Boolean((session as Session & { parentID?: string | null }).parentID);
@@ -23,40 +22,19 @@ const getSessionUpdatedAt = (session: Session): number => {
   return 0;
 };
 
-export const getSessionActivityTimestamp = (
-  session: Session,
-  messageActivityBySessionId: ReadonlyMap<string, number> = EMPTY_MESSAGE_ACTIVITY,
-): number => {
-  const messageActivity = messageActivityBySessionId.get(session.id);
-  return typeof messageActivity === 'number' && Number.isFinite(messageActivity) && messageActivity > 0
-    ? messageActivity
-    : getSessionUpdatedAt(session);
-};
-
-export const sortSessionsByActivity = (
-  sessions: Session[],
-  messageActivityBySessionId: ReadonlyMap<string, number> = EMPTY_MESSAGE_ACTIVITY,
-): Session[] => {
-  return [...sessions].sort((a, b) => (
-    getSessionActivityTimestamp(b, messageActivityBySessionId)
-    - getSessionActivityTimestamp(a, messageActivityBySessionId)
-  ));
-};
-
-// Recent sessions are every non-archived, top-level session with effective
-// message/session activity inside the window. Missing message activity falls
-// back to session timestamps; live busy state does not affect membership.
+// Recent contains non-archived root sessions that are active now or were
+// updated within the retention window. The caller applies shared lifecycle
+// ordering after this membership filter.
 export const deriveRecentSessions = (
   sessions: Session[],
+  activeSessionIds: ReadonlySet<string>,
   now = Date.now(),
-  messageActivityBySessionId: ReadonlyMap<string, number> = EMPTY_MESSAGE_ACTIVITY,
 ): Session[] => {
   const minUpdatedAt = now - RECENT_SESSION_MAX_AGE_MS;
-  const recent = sessions.filter((session) => {
+  return sessions.filter((session) => {
     if (isArchivedSession(session) || isSubtaskSession(session)) {
       return false;
     }
-    return getSessionActivityTimestamp(session, messageActivityBySessionId) >= minUpdatedAt;
+    return activeSessionIds.has(session.id) || getSessionUpdatedAt(session) >= minUpdatedAt;
   });
-  return sortSessionsByActivity(recent, messageActivityBySessionId);
 };

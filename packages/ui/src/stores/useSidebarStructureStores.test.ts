@@ -158,9 +158,9 @@ describe('authoritative sidebar structure projections', () => {
   test('rejects a late project icon snapshot after the runtime changes', async () => {
     const originalFetch = globalThis.fetch;
     const iconResponse = deferred<Response>();
-    let requestedUrl = '';
+    const requestedUrls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {
-      requestedUrl = input instanceof Request ? input.url : input.toString();
+      requestedUrls.push(input instanceof Request ? input.url : input.toString());
       return iconResponse.promise;
     }) as typeof fetch;
 
@@ -170,7 +170,7 @@ describe('authoritative sidebar structure projections', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       const staleSnapshot = { ...authoritative, revision: 5 };
       const removal = useProjectsStore.getState().removeProjectIcon('project-one');
-      while (!requestedUrl) await Promise.resolve();
+      while (requestedUrls.length === 0) await Promise.resolve();
 
       authoritative = {
         ...initialSnapshot(),
@@ -186,9 +186,9 @@ describe('authoritative sidebar structure projections', () => {
       }));
 
       const result = await removal;
-      expect(requestedUrl.startsWith('http://icon-runtime-a.test/')).toBe(true);
+      expect(requestedUrls.some((url) => url.startsWith('http://icon-runtime-a.test/'))).toBe(true);
       expect(result.ok).toBe(false);
-      expect(result.error).toContain('runtime changed');
+      expect((result.error ?? '').toLowerCase()).toContain('runtime changed');
       expect(useSidebarStateStore.getState().runtimeKey).toBe('icon-runtime-b');
       expect(useSidebarStateStore.getState().baseSnapshot).toEqual(authoritative);
       expect(useProjectsStore.getState().projects.map((project) => project.id)).toEqual(['project-new']);

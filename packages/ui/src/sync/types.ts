@@ -52,6 +52,10 @@ export type State = {
   session: Session[]
   sessionsLoaded: boolean
   sessionTotal: number
+  sessionListSource?: "empty" | "persisted" | "live" | "authoritative"
+  sessionRevision?: number
+  sessionEventRevision?: Record<string, number>
+  sessionDeletedRevision?: Record<string, number>
   session_status: Record<string, SessionStatus>
   session_diff: Record<string, FileDiff[]>
   todo: Record<string, Todo[]>
@@ -123,6 +127,10 @@ export const INITIAL_STATE: State = {
   session: [],
   sessionsLoaded: false,
   sessionTotal: 0,
+  sessionListSource: "empty",
+  sessionRevision: 0,
+  sessionEventRevision: {},
+  sessionDeletedRevision: {},
   session_status: {},
   session_diff: {},
   todo: {},

@@ -4,8 +4,9 @@ import { devtools } from 'zustand/middleware';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { SidebarStateOperation } from '@/lib/api/types';
 import { normalizeSidebarFolderScope } from '@/lib/sidebarState';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { useSidebarStateStore } from './useSidebarStateStore';
-import { getDeferredSafeStorage } from './utils/safeStorage';
+import { getDeferredSafeStorage, getSafeStorage } from './utils/safeStorage';
 
 export interface SessionFolder {
   id: string;
@@ -31,24 +32,83 @@ interface SessionFoldersActions {
   addSessionToFolder: (scopeKey: string, folderId: string, sessionId: string) => void;
   addSessionsToFolder: (scopeKey: string, folderId: string, sessionIds: string[]) => void;
   removeSessionFromFolder: (scopeKey: string, sessionId: string) => void;
+  removeSessionEverywhere: (runtimeKey: string, sessionId: string) => void;
   removeSessionsFromFolders: (scopeKey: string, sessionIds: string[]) => void;
   toggleFolderCollapse: (folderId: string) => void;
-  cleanupSessions: (scopeKey: string, existingSessionIds: Set<string>) => void;
   getSessionFolderId: (scopeKey: string, sessionId: string) => string | null;
+  resetForRuntimeSwitch: (runtimeKey: string) => void;
 }
 
 type SessionFoldersStore = SessionFoldersState & SessionFoldersActions;
 
 const FOLDERS_STORAGE_KEY = 'oc.sessions.folders';
 const COLLAPSED_STORAGE_KEY = 'oc.sessions.folderCollapse';
-const ARCHIVED_SCOPE_PREFIX = '__archived__:';
+const STORAGE_INDEX_KEY = 'oc.sessions.folders.v2.index';
 const LOCAL_PERSIST_DEBOUNCE_MS = 300;
 
 const safeStorage = getDeferredSafeStorage();
+const immediateSafeStorage = getSafeStorage();
+let activeFolderRuntimeKey = getRuntimeKey();
 let persistFoldersTimer: ReturnType<typeof setTimeout> | undefined;
 let persistCollapsedTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingFoldersMap: SessionFoldersMap | null = null;
 let pendingCollapsedIds: Set<string> | null = null;
+let pendingBrowserRuntimeKey: string | null = null;
+
+type FolderStorageIndex = {
+  version: 2;
+  legacyClaimed: boolean;
+  runtimes: Array<{ runtimeKey: string; updatedAt: number }>;
+};
+
+const runtimeStorageKey = (base: string, runtimeKey: string): string => (
+  `${base}.v2:${encodeURIComponent(runtimeKey)}`
+);
+
+const readStorageIndex = (): FolderStorageIndex => {
+  try {
+    const parsed = JSON.parse(safeStorage.getItem(STORAGE_INDEX_KEY) ?? '') as Partial<FolderStorageIndex>;
+    return parsed.version === 2 && Array.isArray(parsed.runtimes)
+      ? { version: 2, legacyClaimed: Boolean(parsed.legacyClaimed), runtimes: parsed.runtimes }
+      : { version: 2, legacyClaimed: false, runtimes: [] };
+  } catch {
+    return { version: 2, legacyClaimed: false, runtimes: [] };
+  }
+};
+
+const touchRuntimeStorage = (
+  runtimeKey: string,
+  updatedAt = Date.now(),
+  targetStorage: Storage = safeStorage,
+): void => {
+  const index = readStorageIndex();
+  const runtimes = [
+    { runtimeKey, updatedAt },
+    ...index.runtimes.filter((entry) => entry.runtimeKey !== runtimeKey),
+  ];
+  targetStorage.setItem(STORAGE_INDEX_KEY, JSON.stringify({
+    version: 2,
+    legacyClaimed: index.legacyClaimed,
+    runtimes,
+  }));
+};
+
+const claimLegacyStorage = (runtimeKey: string): void => {
+  const index = readStorageIndex();
+  if (index.legacyClaimed) return;
+  const legacyFolders = safeStorage.getItem(FOLDERS_STORAGE_KEY);
+  const legacyCollapsed = safeStorage.getItem(COLLAPSED_STORAGE_KEY);
+  if (legacyFolders) safeStorage.setItem(runtimeStorageKey(FOLDERS_STORAGE_KEY, runtimeKey), legacyFolders);
+  if (legacyCollapsed) safeStorage.setItem(runtimeStorageKey(COLLAPSED_STORAGE_KEY, runtimeKey), legacyCollapsed);
+  const next = { ...index, legacyClaimed: true };
+  const serialized = JSON.stringify(next);
+  safeStorage.setItem(STORAGE_INDEX_KEY, serialized);
+  if (safeStorage.getItem(STORAGE_INDEX_KEY) === serialized) {
+    safeStorage.removeItem(FOLDERS_STORAGE_KEY);
+    safeStorage.removeItem(COLLAPSED_STORAGE_KEY);
+  }
+  touchRuntimeStorage(runtimeKey, 0);
+};
 
 const usesAuthoritativeSidebarState = (): boolean => (
   getRegisteredRuntimeAPIs()?.sidebarState?.supported === true
@@ -62,9 +122,10 @@ const normalizeScopeKey = (scopeKey: string): string | null => {
   }
 };
 
-const readPersistedFolders = (): SessionFoldersMap => {
+const readPersistedFolders = (runtimeKey = activeFolderRuntimeKey): SessionFoldersMap => {
   try {
-    const raw = safeStorage.getItem(FOLDERS_STORAGE_KEY);
+    claimLegacyStorage(runtimeKey);
+    const raw = safeStorage.getItem(runtimeStorageKey(FOLDERS_STORAGE_KEY, runtimeKey));
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
@@ -98,9 +159,10 @@ const readPersistedFolders = (): SessionFoldersMap => {
   }
 };
 
-const readPersistedCollapsed = (): Set<string> => {
+const readPersistedCollapsed = (runtimeKey = activeFolderRuntimeKey): Set<string> => {
   try {
-    const raw = safeStorage.getItem(COLLAPSED_STORAGE_KEY);
+    claimLegacyStorage(runtimeKey);
+    const raw = safeStorage.getItem(runtimeStorageKey(COLLAPSED_STORAGE_KEY, runtimeKey));
     if (!raw) return new Set();
     const parsed = JSON.parse(raw) as unknown;
     return Array.isArray(parsed)
@@ -113,27 +175,41 @@ const readPersistedCollapsed = (): Set<string> => {
 
 const persistFolders = (foldersMap: SessionFoldersMap): void => {
   pendingFoldersMap = foldersMap;
+  pendingBrowserRuntimeKey = activeFolderRuntimeKey;
   clearTimeout(persistFoldersTimer);
   persistFoldersTimer = setTimeout(() => {
+    const runtimeKey = pendingBrowserRuntimeKey ?? activeFolderRuntimeKey;
     try {
-      safeStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(pendingFoldersMap));
+      safeStorage.setItem(
+        runtimeStorageKey(FOLDERS_STORAGE_KEY, runtimeKey),
+        JSON.stringify(pendingFoldersMap ?? {}),
+      );
+      touchRuntimeStorage(runtimeKey);
     } catch {
       // ignored
     }
     pendingFoldersMap = null;
+    if (pendingCollapsedIds === null) pendingBrowserRuntimeKey = null;
   }, LOCAL_PERSIST_DEBOUNCE_MS);
 };
 
 const persistCollapsed = (collapsedFolderIds: Set<string>): void => {
   pendingCollapsedIds = collapsedFolderIds;
+  pendingBrowserRuntimeKey = activeFolderRuntimeKey;
   clearTimeout(persistCollapsedTimer);
   persistCollapsedTimer = setTimeout(() => {
+    const runtimeKey = pendingBrowserRuntimeKey ?? activeFolderRuntimeKey;
     try {
-      safeStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(Array.from(pendingCollapsedIds ?? [])));
+      safeStorage.setItem(
+        runtimeStorageKey(COLLAPSED_STORAGE_KEY, runtimeKey),
+        JSON.stringify(Array.from(pendingCollapsedIds ?? [])),
+      );
+      touchRuntimeStorage(runtimeKey);
     } catch {
       // ignored
     }
     pendingCollapsedIds = null;
+    if (pendingFoldersMap === null) pendingBrowserRuntimeKey = null;
   }, LOCAL_PERSIST_DEBOUNCE_MS);
 };
 
@@ -142,27 +218,54 @@ const persistLocalState = (foldersMap: SessionFoldersMap, collapsedFolderIds: Se
   persistCollapsed(collapsedFolderIds);
 };
 
+const flushPendingBrowserPersistence = (): void => {
+  if (persistFoldersTimer) clearTimeout(persistFoldersTimer);
+  if (persistCollapsedTimer) clearTimeout(persistCollapsedTimer);
+  persistFoldersTimer = undefined;
+  persistCollapsedTimer = undefined;
+
+  const runtimeKey = pendingBrowserRuntimeKey ?? activeFolderRuntimeKey;
+  let wrote = false;
+  if (pendingFoldersMap !== null) {
+    const key = runtimeStorageKey(FOLDERS_STORAGE_KEY, runtimeKey);
+    const value = JSON.stringify(pendingFoldersMap);
+    safeStorage.setItem(key, value);
+    immediateSafeStorage.setItem(key, value);
+    pendingFoldersMap = null;
+    wrote = true;
+  }
+  if (pendingCollapsedIds !== null) {
+    const key = runtimeStorageKey(COLLAPSED_STORAGE_KEY, runtimeKey);
+    const value = JSON.stringify(Array.from(pendingCollapsedIds));
+    safeStorage.setItem(key, value);
+    immediateSafeStorage.setItem(key, value);
+    pendingCollapsedIds = null;
+    wrote = true;
+  }
+  if (wrote) {
+    const updatedAt = Date.now();
+    touchRuntimeStorage(runtimeKey, updatedAt);
+    touchRuntimeStorage(runtimeKey, updatedAt, immediateSafeStorage);
+  }
+  pendingBrowserRuntimeKey = null;
+};
+
 if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', () => {
-    if (pendingFoldersMap) {
-      clearTimeout(persistFoldersTimer);
-      try {
-        safeStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(pendingFoldersMap));
-      } catch {
-        // ignored
-      }
-      pendingFoldersMap = null;
+  const flushPending = () => {
+    try {
+      flushPendingBrowserPersistence();
+    } catch {
+      // Deferred storage retains failed writes.
     }
-    if (pendingCollapsedIds) {
-      clearTimeout(persistCollapsedTimer);
-      try {
-        safeStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(Array.from(pendingCollapsedIds)));
-      } catch {
-        // ignored
-      }
-      pendingCollapsedIds = null;
-    }
-  });
+  };
+  window.addEventListener('pagehide', flushPending, { capture: true });
+  window.addEventListener('beforeunload', flushPending, { capture: true });
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushPending();
+    });
+    document.addEventListener('freeze', flushPending);
+  }
 }
 
 const createFolderId = (): string => {
@@ -170,18 +273,6 @@ const createFolderId = (): string => {
     return crypto.randomUUID();
   }
   return `folder_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-};
-
-const cleanFolderHierarchy = (folders: SessionFolder[]): SessionFolder[] => {
-  let result = folders;
-  let changed = true;
-  while (changed) {
-    const folderIds = new Set(result.map((folder) => folder.id));
-    const next = result.filter((folder) => !folder.parentId || folderIds.has(folder.parentId));
-    changed = next.length !== result.length;
-    result = next;
-  }
-  return result;
 };
 
 const removeCollapsedFolderIds = (
@@ -204,6 +295,19 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
     foldersMap: readPersistedFolders(),
     collapsedFolderIds: readPersistedCollapsed(),
 
+    resetForRuntimeSwitch: (runtimeKey) => {
+      try {
+        flushPendingBrowserPersistence();
+      } catch {
+        // Deferred storage retains failed writes.
+      }
+      activeFolderRuntimeKey = runtimeKey;
+      set({
+        foldersMap: usesAuthoritativeSidebarState() ? {} : readPersistedFolders(runtimeKey),
+        collapsedFolderIds: readPersistedCollapsed(runtimeKey),
+      });
+    },
+
     getFoldersForScope: (rawScopeKey) => {
       const scopeKey = normalizeScopeKey(rawScopeKey);
       return scopeKey ? get().foldersMap[scopeKey] ?? [] : [];
@@ -219,10 +323,7 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
         parentId: parentId ?? null,
       };
       const current = get().foldersMap;
-      const nextMap = {
-        ...current,
-        [scopeKey]: [...(current[scopeKey] ?? []), folder],
-      };
+      const nextMap = { ...current, [scopeKey]: [...(current[scopeKey] ?? []), folder] };
       set({ foldersMap: nextMap });
       persistLocalState(nextMap, get().collapsedFolderIds);
       submitSidebarOperation({
@@ -346,52 +447,40 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
       submitSidebarOperation({ type: 'folder.unassign', scopeKey, sessionIds: ids });
     },
 
+    removeSessionEverywhere: (runtimeKey, sessionId) => {
+      if (!runtimeKey || runtimeKey !== activeFolderRuntimeKey || runtimeKey !== getRuntimeKey() || !sessionId) return;
+      const current = get().foldersMap;
+      let nextMap: SessionFoldersMap | null = null;
+      const changedScopes: string[] = [];
+
+      for (const [scopeKey, folders] of Object.entries(current)) {
+        let scopeChanged = false;
+        const nextFolders = folders.map((folder) => {
+          const sessionIds = folder.sessionIds.filter((id) => id !== sessionId);
+          if (sessionIds.length === folder.sessionIds.length) return folder;
+          scopeChanged = true;
+          return { ...folder, sessionIds };
+        });
+        if (!scopeChanged) continue;
+        nextMap ??= { ...current };
+        nextMap[scopeKey] = nextFolders;
+        changedScopes.push(scopeKey);
+      }
+
+      if (!nextMap) return;
+      set({ foldersMap: nextMap });
+      if (!usesAuthoritativeSidebarState()) persistFolders(nextMap);
+      for (const scopeKey of changedScopes) {
+        submitSidebarOperation({ type: 'folder.unassign', scopeKey, sessionIds: [sessionId] });
+      }
+    },
+
     toggleFolderCollapse: (folderId) => {
       const next = new Set(get().collapsedFolderIds);
       if (next.has(folderId)) next.delete(folderId);
       else next.add(folderId);
       set({ collapsedFolderIds: next });
       persistCollapsed(next);
-    },
-
-    cleanupSessions: (rawScopeKey, existingSessionIds) => {
-      const scopeKey = normalizeScopeKey(rawScopeKey);
-      if (!scopeKey) return;
-      const current = get().foldersMap;
-      const folders = current[scopeKey];
-      if (!folders?.length) return;
-
-      const pruneEmpty = scopeKey.startsWith(ARCHIVED_SCOPE_PREFIX);
-      let changed = false;
-      let nextFolders = folders.map((folder) => {
-        const sessionIds = folder.sessionIds.filter((sessionId) => existingSessionIds.has(sessionId));
-        if (sessionIds.length === folder.sessionIds.length) return folder;
-        changed = true;
-        return { ...folder, sessionIds };
-      });
-      if (pruneEmpty) {
-        const nonEmpty = nextFolders.filter((folder) => folder.sessionIds.length > 0);
-        if (nonEmpty.length !== nextFolders.length) changed = true;
-        nextFolders = cleanFolderHierarchy(nonEmpty);
-      }
-      if (!changed) return;
-
-      const remainingIds = new Set(nextFolders.map((folder) => folder.id));
-      const removedFolderIds = new Set(folders.filter((folder) => !remainingIds.has(folder.id)).map((folder) => folder.id));
-      const nextMap = { ...current };
-      if (nextFolders.length > 0) nextMap[scopeKey] = nextFolders;
-      else delete nextMap[scopeKey];
-      const nextCollapsed = removeCollapsedFolderIds(get().collapsedFolderIds, removedFolderIds);
-      set(nextCollapsed
-        ? { foldersMap: nextMap, collapsedFolderIds: nextCollapsed }
-        : { foldersMap: nextMap });
-      persistLocalState(nextMap, nextCollapsed ?? get().collapsedFolderIds);
-      submitSidebarOperation({
-        type: 'folder.cleanup',
-        scopeKey,
-        existingSessionIds: [...existingSessionIds],
-        pruneEmpty,
-      });
     },
 
     getSessionFolderId: (rawScopeKey, sessionId) => {
@@ -444,7 +533,16 @@ useSidebarStateStore.subscribe((state, previousState) => {
     synchronizeFoldersFromSidebarState();
     return;
   }
-  if (state.runtimeKey !== previousState.runtimeKey && previousState.snapshot) {
-    useSessionFoldersStore.setState({ foldersMap: {} });
+  if (state.runtimeKey !== previousState.runtimeKey) {
+    try {
+      flushPendingBrowserPersistence();
+    } catch {
+      // Deferred storage retains failed writes.
+    }
+    activeFolderRuntimeKey = state.runtimeKey;
+    useSessionFoldersStore.setState({
+      foldersMap: usesAuthoritativeSidebarState() ? {} : readPersistedFolders(state.runtimeKey),
+      collapsedFolderIds: readPersistedCollapsed(state.runtimeKey),
+    });
   }
 });
