@@ -9,7 +9,7 @@ export { normalizePath };
 export const selectExpandedParentKeysForContext = (
   previous: Set<string>,
   expanded: ReadonlySet<string>,
-  context: 'project' | 'recent',
+  context: 'project' | 'recent' | 'pinned',
 ): Set<string> => {
   const prefix = `${context}:`;
   const next = new Set([...expanded].filter((key) => key.startsWith(prefix)));
@@ -22,10 +22,16 @@ export const selectExpandedParentKeysForContext = (
 export const toggleExpandedParentKey = (
   expanded: Set<string>,
   key: string,
+  descendantKeys: Iterable<string> = [],
 ): Set<string> => {
   const next = new Set(expanded);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
+  if (next.delete(key)) {
+    for (const descendantKey of descendantKeys) {
+      next.delete(descendantKey);
+    }
+  } else {
+    next.add(key);
+  }
   return next;
 };
 

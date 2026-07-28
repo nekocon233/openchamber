@@ -168,16 +168,6 @@ const SIDEBAR_PR_NO_PR_RETRY_MS = 5 * 60_000;
 const EMPTY_SUBTREE_SET: Set<string> = new Set();
 const EMPTY_STRING_ARRAY: string[] = [];
 
-const selectPinnedExpandedParentKeys = (
-  previous: Set<string>,
-  expanded: ReadonlySet<string>,
-): Set<string> => {
-  const next = new Set([...expanded].filter((key) => key.startsWith('pinned:')));
-  return previous.size === next.size && [...next].every((key) => previous.has(key))
-    ? previous
-    : next;
-};
-
 const useStableRenderCallback = <Args extends unknown[], Return>(handler: (...args: Args) => Return): ((...args: Args) => Return) => {
   const handlerRef = React.useRef(handler);
   handlerRef.current = handler;
@@ -852,9 +842,24 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     sessionEvents.requestDirectoryDialog();
   }, []);
 
-  const toggleParent = React.useCallback((expansionKey: string) => {
+  const toggleParent = React.useCallback((expansionKey: string, node: SessionNode) => {
     setExpandedParents((previous) => {
-      const next = toggleExpandedParentKey(previous, expansionKey);
+      const expandedDescendantKeys: string[] = [];
+      if (previous.has(expansionKey)) {
+        const expansionKeyPrefix = expansionKey.slice(0, expansionKey.length - node.session.id.length);
+        const collectExpandedDescendantKeys = (children: SessionNode[]): void => {
+          for (const child of children) {
+            const childExpansionKey = `${expansionKeyPrefix}${child.session.id}`;
+            if (previous.has(childExpansionKey)) {
+              expandedDescendantKeys.push(childExpansionKey);
+            }
+            collectExpandedDescendantKeys(child.children);
+          }
+        };
+        collectExpandedDescendantKeys(node.children);
+      }
+
+      const next = toggleExpandedParentKey(previous, expansionKey, expandedDescendantKeys);
       try {
         safeStorage.setItem(SESSION_EXPANDED_STORAGE_KEY, JSON.stringify(Array.from(next)));
       } catch { /* ignored */ }
@@ -1092,9 +1097,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     expandedParents,
     'recent',
   );
-  const pinnedExpandedParents = selectPinnedExpandedParentKeys(
+  const pinnedExpandedParents = selectExpandedParentKeysForContext(
     pinnedExpandedParentsRef.current,
     expandedParents,
+    'pinned',
   );
   projectExpandedParentsRef.current = projectExpandedParents;
   recentExpandedParentsRef.current = recentExpandedParents;

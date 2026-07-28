@@ -72,7 +72,7 @@ type Props = {
   setEditTitle: (value: string) => void;
   handleSaveEdit: (titleOverride?: string) => void;
   handleCancelEdit: () => void;
-  toggleParent: (expansionKey: string) => void;
+  toggleParent: (expansionKey: string, node: SessionNode) => void;
   handleSessionSelect: (sessionId: string, sessionDirectory: string | null) => void;
   handleSessionDoubleClick: (sessionId: string, sessionTitle: string) => void;
   togglePinnedSession: (target: SessionPinnedTarget) => void;
@@ -383,7 +383,7 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   const [exportDialogOpen, setExportDialogOpen] = React.useState(false);
   const [exportIncludeSubtasks, setExportIncludeSubtasks] = React.useState(true);
 
-  const menuInstanceKey = `${renderContext}:${archivedBucket ? 'archived' : 'active'}:${session.id}`;
+  const renderInstanceKey = `${renderContext}:${archivedBucket ? 'archived' : 'active'}:${session.id}`;
   const isZombie = useViewportStore(
     React.useCallback((state) => Boolean(state.sessionMemoryState.get(viewportSessionKey(session.id))?.isZombie), [session.id]),
   );
@@ -403,18 +403,15 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   const sessionTitle = resolvedSession.title || t('sessions.sidebar.session.untitled');
   const hasChildren = node.children.length > 0;
   const isPinnedSession = isSessionPinned(pinnedSessionIds, sessionDirectory, session.id);
-  // Per-render-context expansion key: the same session can appear in both
-  // the project's root and the "Recent" list, and expanding one should not
-  // expand the other. Matches the format of menuInstanceKey.
-  const expansionKey = menuInstanceKey;
-  const isExpanded = hasSessionSearchQuery ? true : expandedParents.has(expansionKey);
+  // Menus and expansion are scoped to this rendered copy of the session.
+  const isExpanded = hasSessionSearchQuery ? true : expandedParents.has(renderInstanceKey);
   const isSubtaskSession = Boolean((resolvedSession as Session & { parentID?: string | null }).parentID);
   const unseenCount = useSessionUnseenCount(session.id);
   const needsAttention = unseenCount > 0 && (!isSubtaskSession || notifyOnSubtasks);
   const sessionTimestamp = resolvedSession.time?.updated || resolvedSession.time?.created || Date.now();
   const sessionUpdatedLabel = formatSessionDateLabel(sessionTimestamp);
   const sessionCompactUpdatedLabel = formatSessionCompactDateLabel(sessionTimestamp);
-  const isMenuOpen = openSidebarMenuKey === menuInstanceKey;
+  const isMenuOpen = openSidebarMenuKey === renderInstanceKey;
   const [isContextMenuOpen, setIsContextMenuOpen] = React.useState(false);
   const isSessionMenuOpen = isMenuOpen || isContextMenuOpen;
   const isMultiRunLikeSession = React.useMemo(() => parseMultiRunSessionTitle(resolvedSession.title) !== null, [resolvedSession.title]);
@@ -658,13 +655,13 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
       tabIndex={0}
       onClick={(event) => {
         event.stopPropagation();
-        toggleParent(expansionKey);
+        toggleParent(renderInstanceKey, node);
       }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           event.stopPropagation();
-          toggleParent(expansionKey);
+          toggleParent(renderInstanceKey, node);
         }
       }}
       style={{ minWidth: 14, minHeight: 14 }}
@@ -695,7 +692,7 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
     if (open) {
       setIsContextMenuOpen(false);
     }
-    setOpenSidebarMenuKey(open ? menuInstanceKey : null);
+    setOpenSidebarMenuKey(open ? renderInstanceKey : null);
   };
 
   const handleMenuOpenChangeComplete = (open: boolean) => {
@@ -714,7 +711,7 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   const handleMenuTriggerClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    setOpenSidebarMenuKey(isMenuOpen ? null : menuInstanceKey);
+    setOpenSidebarMenuKey(isMenuOpen ? null : renderInstanceKey);
   };
 
   const handleMenuTriggerPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
