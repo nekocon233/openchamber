@@ -5,7 +5,6 @@ import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { startModelPrefsAutoSave } from '@/lib/modelPrefsAutoSave';
 import { startAppearanceAutoSave } from '@/lib/appearanceAutoSave';
 import { useUIStore } from '@/stores/useUIStore';
-import { useMessageQueueStore } from '@/stores/messageQueueStore';
 import {
   applyPersistedHomeDirectoryToWindow,
   getRuntimeSettingsMirrorStorageKey,
@@ -408,7 +407,7 @@ describe('updateDesktopSettings', () => {
     expect(useUIStore.getState().favoriteModels).toHaveLength(1);
     expect(useUIStore.getState().globalDraftStarters).toEqual([{ type: 'command', name: 'runtime-a' }]);
     expect(useUIStore.getState().draftStartersVisible).toBe(false);
-    expect(useMessageQueueStore.getState().followUpBehavior).toBe('steer');
+    expect(useUIStore.getState().followUpBehavior).toBe('steer');
 
     switchRuntimeEndpoint({ apiBaseUrl: 'https://preferences-b.example', runtimeKey: 'preferences-b' });
     registerSettingsApi(async () => ({}), async () => ({
@@ -422,7 +421,31 @@ describe('updateDesktopSettings', () => {
     expect(useUIStore.getState().favoriteModels).toEqual([]);
     expect(useUIStore.getState().globalDraftStarters).toBeNull();
     expect(useUIStore.getState().draftStartersVisible).toBe(true);
-    expect(useMessageQueueStore.getState().followUpBehavior).toBe('queue');
+    expect(useUIStore.getState().followUpBehavior).toBe('queue');
+  });
+
+  test('migrates legacy queue mode without writing settings back during hydration', async () => {
+    getWindow();
+    invalidateSettingsCache();
+    switchRuntimeEndpoint({ apiBaseUrl: 'https://legacy-follow-up.example', runtimeKey: 'legacy-follow-up' });
+    useUIStore.getState().setFollowUpBehavior('queue');
+    const saveCalls: Array<Partial<SettingsPayload>> = [];
+    registerSettingsApi(async (changes) => {
+      saveCalls.push(changes);
+      return changes as SettingsPayload;
+    }, async () => ({
+      settings: {
+        queueModeEnabled: false,
+        draftStartersCraftGoalAdded: true,
+        draftStartersScheduleTaskAdded: true,
+      },
+      source: 'web',
+    }));
+
+    await syncDesktopSettings();
+
+    expect(useUIStore.getState().followUpBehavior).toBe('steer');
+    expect(saveCalls).toEqual([]);
   });
 
   test('treats settings save responses as partial patches', async () => {

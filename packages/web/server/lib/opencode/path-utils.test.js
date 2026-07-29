@@ -1,11 +1,10 @@
 import path from 'node:path';
-import os from 'node:os';
 import { describe, expect, it } from 'vitest';
 
 import { pathLooksUserConfigured, mergePathValues } from './path-utils.js';
 
-const home = os.homedir();
-const delim = path.delimiter;
+const home = '/home/agent';
+const delim = path.posix.delimiter;
 
 describe('pathLooksUserConfigured', () => {
   it('returns false for empty or non-string values', () => {

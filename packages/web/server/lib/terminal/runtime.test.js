@@ -64,7 +64,7 @@ describe('terminal runtime', () => {
       spawn: (shell, args, options) => {
         const dataHandlers = new Set();
         const exitHandlers = new Set();
-        const process = {
+        const ptyProcess = {
           pid: 123 + processes.length,
           shell,
           args,
@@ -81,8 +81,8 @@ describe('terminal runtime', () => {
           emitData(data) { for (const handler of dataHandlers) handler(data); },
           emitExit(exitCode = 0, signal = 0) { for (const handler of exitHandlers) handler({ exitCode, signal }); },
         };
-        processes.push(process);
-        return process;
+        processes.push(ptyProcess);
+        return ptyProcess;
       },
     });
     const server = new EventEmitter();
@@ -189,7 +189,7 @@ describe('terminal runtime', () => {
       const listed = createResponse();
       await harness.routes.get.get('/api/terminal/shells')({}, listed);
       expect(listed.body).toEqual(expect.arrayContaining([
-        { id: 'auto', name: 'Auto', supportsLogin: true },
+        { id: 'auto', name: 'Auto', supportsLogin: process.platform !== 'win32' },
         { id: 'zsh', name: 'zsh', supportsLogin: true },
         { id: 'bash', name: 'bash', supportsLogin: true },
         { id: 'sh', name: 'sh', supportsLogin: false },
@@ -412,7 +412,7 @@ describe('terminal runtime', () => {
       spawn: () => {
         const data = new Set();
         const exits = new Set();
-        const process = {
+        const ptyProcess = {
           pid: 99123,
           killed: false,
           writes: [],
@@ -422,8 +422,8 @@ describe('terminal runtime', () => {
           emitData(value) { for (const handler of data) handler(value); },
           emitExit(exitCode) { for (const handler of exits) handler({ exitCode, signal: 0 }); },
         };
-        processes.push(process);
-        return process;
+        processes.push(ptyProcess);
+        return ptyProcess;
       },
     });
     const runtime = createRuntime(server, {

@@ -15,8 +15,6 @@ let refreshOpenCodeAfterConfigChange;
 let app;
 let cleanupPaths;
 
-const testUnlessRoot = typeof process.getuid === 'function' && process.getuid() === 0 ? test.skip : test;
-
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
@@ -46,7 +44,6 @@ function createApp(overrides = {}) {
 
 function createRegistryApp(getNpmInfo) {
   app = createApp({ getNpmInfo });
-  return app;
 }
 
 async function createEntry(spec = 'a') {
@@ -190,7 +187,10 @@ describe('opencode plugin routes', () => {
     expect(getNpmInfo).not.toHaveBeenCalled();
   });
 
-  testUnlessRoot('GET /registry reports unreadable path plugin', async () => {
+  test.skipIf(
+    process.platform === 'win32'
+      || (typeof process.getuid === 'function' && process.getuid() === 0),
+  )('GET /registry reports unreadable path plugin', async () => {
     createRegistryApp(mock(async () => ({ ok: true, latest: '1.0.0', versions: ['1.0.0'], distTags: { latest: '1.0.0' } })));
     const tmpFile = path.join(fs.mkdtempSync(path.join(rootDir, 'plugin-unreadable-')), 'plugin.js');
     fs.writeFileSync(tmpFile, '// plugin', 'utf8');

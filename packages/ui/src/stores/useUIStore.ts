@@ -23,6 +23,24 @@ export type TimeFormatPreference = 'auto' | '12h' | '24h';
 export type WeekStartPreference = 'auto' | 'sunday' | 'monday';
 export type DesktopWindowControlsPosition = 'left' | 'right';
 export type FileEditorKeymap = 'default' | 'vim';
+export type FollowUpBehavior = 'steer' | 'queue';
+
+export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = 'queue';
+
+export const isFollowUpBehavior = (value: unknown): value is FollowUpBehavior => (
+  value === 'steer' || value === 'queue'
+);
+
+export const normalizeFollowUpBehavior = (
+  value: unknown,
+  legacyQueueModeEnabled?: boolean | null,
+): FollowUpBehavior => {
+  if (value === 'immediate') return 'steer';
+  if (isFollowUpBehavior(value)) return value;
+  if (legacyQueueModeEnabled === false) return 'steer';
+  if (legacyQueueModeEnabled === true) return 'queue';
+  return DEFAULT_FOLLOW_UP_BEHAVIOR;
+};
 
 function normalizeFileEditorKeymap(value: unknown): FileEditorKeymap {
   return value === 'vim' ? 'vim' : 'default';
@@ -616,6 +634,7 @@ interface UIStore {
   collapsibleThinkingBlocks: boolean;
   chatRenderMode: ChatRenderMode;
   activityRenderMode: ActivityRenderMode;
+  followUpBehavior: FollowUpBehavior;
   showDeletionDialog: boolean;
   autoDeleteEnabled: boolean;
   autoDeleteAfterDays: number;
@@ -774,6 +793,7 @@ interface UIStore {
   setCollapsibleThinkingBlocks: (value: boolean) => void;
   setChatRenderMode: (value: ChatRenderMode) => void;
   setActivityRenderMode: (value: ActivityRenderMode) => void;
+  setFollowUpBehavior: (value: FollowUpBehavior) => void;
   setShowDeletionDialog: (value: boolean) => void;
   setAutoDeleteEnabled: (value: boolean) => void;
   setAutoDeleteAfterDays: (days: number) => void;
@@ -928,6 +948,7 @@ export const useUIStore = create<UIStore>()(
         collapsibleThinkingBlocks: true,
         chatRenderMode: 'live',
         activityRenderMode: 'summary',
+        followUpBehavior: DEFAULT_FOLLOW_UP_BEHAVIOR,
         showDeletionDialog: true,
         autoDeleteEnabled: false,
         autoDeleteAfterDays: 30,
@@ -1632,6 +1653,10 @@ export const useUIStore = create<UIStore>()(
 
         setActivityRenderMode: (value) => {
           set({ activityRenderMode: value });
+        },
+
+        setFollowUpBehavior: (value) => {
+          set({ followUpBehavior: value });
         },
 
         setShowDeletionDialog: (value) => {
@@ -2342,6 +2367,7 @@ export const useUIStore = create<UIStore>()(
           collapsibleThinkingBlocks: state.collapsibleThinkingBlocks,
           chatRenderMode: state.chatRenderMode,
           activityRenderMode: state.activityRenderMode,
+          followUpBehavior: state.followUpBehavior,
           showDeletionDialog: state.showDeletionDialog,
           autoDeleteEnabled: state.autoDeleteEnabled,
           autoDeleteAfterDays: state.autoDeleteAfterDays,

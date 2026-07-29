@@ -53,6 +53,12 @@ const canRunGit = () => {
   }
 };
 
+const normalizeGitPath = (value) => value.replace(/\\/g, '/');
+
+const buildNodeSetupCommand = (scriptPath) => process.platform === 'win32'
+  ? `node ${scriptPath}`
+  : `${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`;
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -69,6 +75,7 @@ async function createTempRepo() {
   await git.init();
   await git.addConfig('user.name', 'Test User', false, 'local');
   await git.addConfig('user.email', 'test@example.com', false, 'local');
+  await git.addConfig('core.autocrlf', 'false', false, 'local');
   await git.raw(['symbolic-ref', 'HEAD', 'refs/heads/main']);
   return { tmpDir, git };
 }
@@ -297,7 +304,7 @@ describe('worktree root resolution', () => {
     runGit(repo, ['init', '-b', 'main']);
     fs.mkdirSync(subdirectory, { recursive: true });
 
-    await expect(resolveWorktreeTopLevel(subdirectory)).resolves.toEqual({ root: fs.realpathSync(repo) });
+    await expect(resolveWorktreeTopLevel(subdirectory)).resolves.toEqual({ root: normalizeGitPath(fs.realpathSync(repo)) });
   });
 
   it('resolves the primary worktree root from a linked worktree', async () => {
@@ -314,7 +321,7 @@ describe('worktree root resolution', () => {
     fs.rmSync(worktree, { recursive: true, force: true });
     runGit(repo, ['worktree', 'add', '-b', 'feature/test', worktree, 'HEAD']);
 
-    await expect(resolvePrimaryWorktreeRoot(worktree)).resolves.toEqual({ root: fs.realpathSync(repo) });
+    await expect(resolvePrimaryWorktreeRoot(worktree)).resolves.toEqual({ root: normalizeGitPath(fs.realpathSync(repo)) });
   });
 });
 
@@ -361,7 +368,7 @@ describe('createWorktree', () => {
         branchName: 'feature/bootstrap-phases',
         worktreeName: 'bootstrap-phases',
         returnAfterDirectoryCreated: true,
-        startCommand: `${JSON.stringify(process.execPath)} ${JSON.stringify(setupScript)}`,
+        startCommand: buildNodeSetupCommand(setupScript),
       });
 
       expect(created.bootstrapStatus).toMatchObject({
@@ -424,7 +431,7 @@ describe('createWorktree', () => {
         branchName: 'feature/remove-bootstrap-race',
         worktreeName: 'remove-bootstrap-race',
         returnAfterDirectoryCreated: true,
-        startCommand: `${JSON.stringify(process.execPath)} ${JSON.stringify(setupScript)}`,
+        startCommand: buildNodeSetupCommand(setupScript),
       });
 
       await expect.poll(() => fs.existsSync(setupStarted), { timeout: 5_000 }).toBe(true);
@@ -460,6 +467,7 @@ describe('createWorktree', () => {
     runGit(repo, ['init', '-b', 'main']);
     runGit(repo, ['config', 'user.email', 'test@example.com']);
     runGit(repo, ['config', 'user.name', 'Test User']);
+    runGit(repo, ['config', 'core.autocrlf', 'false']);
     fs.writeFileSync(path.join(repo, 'README.md'), '# Test\n');
     runGit(repo, ['add', 'README.md']);
     runGit(repo, ['commit', '-m', 'Initial commit']);
@@ -494,7 +502,7 @@ describe('createWorktree', () => {
 
       fs.rmSync(worktree, { recursive: true, force: true });
       runGit(repo, ['worktree', 'add', '-b', 'feature/in-use', worktree, 'HEAD']);
-      const canonicalWorktree = fs.realpathSync(worktree);
+      const canonicalWorktree = normalizeGitPath(fs.realpathSync(worktree));
 
       await expect(createWorktree(repo, {
         mode: 'existing',

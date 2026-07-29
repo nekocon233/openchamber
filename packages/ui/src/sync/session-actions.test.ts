@@ -669,36 +669,6 @@ describe("session removal navigation runtime scope", () => {
     expect(store.getState().session).toEqual([])
   })
 
-  test("drops follow-up state after a cross-directory delete succeeds", async () => {
-    const target = { id: "session-cross-directory", title: "Target", time: { created: 1 } } as Session
-    const store = createStore({}, { session: [target] })
-    const { switchRuntimeEndpoint } = await import("../lib/runtime-switch")
-    const { useMessageQueueStore } = await import("@/stores/messageQueueStore")
-    const { deleteSessionInDirectory, setActionRefs } = await import("./session-actions")
-    const runtimeKey = "runtime-cross-directory-delete"
-    switchRuntimeEndpoint({ apiBaseUrl: "http://runtime-cross-directory-delete.test", runtimeKey })
-    useMessageQueueStore.getState().switchRuntime(runtimeKey)
-    useMessageQueueStore.setState({
-      queuedMessages: {
-        "session-cross-directory": [{
-          id: "queued-cross-directory",
-          messageId: "msg_cross_directory",
-          content: "delete me",
-          createdAt: 1,
-          status: "staged",
-        }],
-      },
-    })
-    setActionRefs(
-      mockSdk as unknown as OpencodeClient,
-      createChildStores([["/other/project", store]]),
-      () => "/current/project",
-    )
-
-    expect(await deleteSessionInDirectory("session-cross-directory", "/other/project")).toBe(true)
-    expect(useMessageQueueStore.getState().queuedMessages["session-cross-directory"]).toBe(undefined)
-  })
-
   test("does not write an archived response into stores rebound to another runtime", async () => {
     const archiveResult = deferred<Session>()
     sessionUpdatePromise = archiveResult.promise
@@ -1193,9 +1163,16 @@ describe("ambiguous send failure classification", () => {
     const { isAmbiguousSendFailure } = await import("./session-actions")
     const unavailable = new Error("Service Unavailable") as Error & { status?: number }
     unavailable.status = 503
+    const badGateway = new Error("Bad Gateway") as Error & { status?: number }
+    badGateway.status = 502
+    const malformedAdmission = new Error("Malformed admission") as Error & { sendMayHaveBeenAccepted?: boolean }
+    malformedAdmission.sendMayHaveBeenAccepted = true
 
     expect(isAmbiguousSendFailure(unavailable)).toBe(true)
+    expect(isAmbiguousSendFailure(badGateway)).toBe(true)
+    expect(isAmbiguousSendFailure(malformedAdmission)).toBe(true)
     expect(isAmbiguousSendFailure(new TypeError("Load failed"))).toBe(true)
+    expect(isAmbiguousSendFailure(new Error("fetch failed"))).toBe(true)
     expect(isAmbiguousSendFailure(new DOMException("aborted", "AbortError"))).toBe(true)
     expect(isAmbiguousSendFailure(new Error("validation failed"))).toBe(false)
   })

@@ -16,7 +16,7 @@ import {
   startFrpcClient,
 } from './frpc-client.js';
 
-class FakeChild extends EventEmitter {
+class FakeChildProcess extends EventEmitter {
   constructor() {
     super();
     this.stdout = new PassThrough();
@@ -212,7 +212,7 @@ describe('startFrpcClient', () => {
   it('spawns directly and keeps token and config in private temporary files until stop', async () => {
     const token = 'top-secret-frp-token';
     const binaryPath = path.join(tempRoot, 'frpc');
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     let launch;
     const spawnImpl = (command, args, options) => {
       launch = { command, args, options };
@@ -262,10 +262,12 @@ describe('startFrpcClient', () => {
     const generatedTrustedCa = fs.readFileSync(copiedTrustedCaPath, 'utf8');
     expect(generatedTrustedCa).toContain('-----BEGIN CERTIFICATE-----');
     expect(config).toContain(`transport.tls.trustedCaFile = ${JSON.stringify(copiedTrustedCaPath)}`);
-    expect(fs.statSync(configDirectory).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(copiedTrustedCaPath).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(configDirectory).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(copiedTrustedCaPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+    }
     expect(controller.getPublicUrl()).toBe('https://app.example.com:18080');
     expect(controller.getConfiguredPublicUrl()).toBe('https://app.example.com:18080');
     expect(controller.getRemotePort()).toBe(18080);
@@ -277,7 +279,7 @@ describe('startFrpcClient', () => {
   });
 
   it('does not treat login success or process liveness as proxy readiness', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     let configDirectory;
     const spawnImpl = (_command, args) => {
       configDirectory = path.dirname(args[1]);
@@ -334,7 +336,7 @@ describe('startFrpcClient', () => {
   });
 
   it('uses the exact HTTP proxy name for readiness and the external hostname for its public URL', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     let proxyName;
     const spawnImpl = (_command, args) => {
       const config = fs.readFileSync(args[1], 'utf8');
@@ -368,7 +370,7 @@ describe('startFrpcClient', () => {
   });
 
   it('does not accept readiness for a different HTTP proxy name', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     const spawnImpl = (_command, args) => {
       const config = fs.readFileSync(args[1], 'utf8');
       const proxyName = config.match(/name = "([^"]+)"/)?.[1];
@@ -391,7 +393,7 @@ describe('startFrpcClient', () => {
   });
 
   it('still recognizes readiness when the secret equals a public log marker', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     const spawnImpl = () => {
       queueMicrotask(() => child.stdout.write('[openchamber-18080] start proxy success\n'));
       return child;
@@ -415,7 +417,7 @@ describe('startFrpcClient', () => {
 
   it('returns actionable fatal diagnostics without exposing the token', async () => {
     const token = 'diagnostic-secret';
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     let configDirectory;
     const spawnImpl = (_command, args) => {
       configDirectory = path.dirname(args[1]);
@@ -435,7 +437,7 @@ describe('startFrpcClient', () => {
         localPort: 3000,
         remotePort: 18080,
         publicUrl: 'https://app.example.com:18080',
-          tempRoot,
+        tempRoot,
         spawnImpl,
       });
     } catch (error) {
@@ -451,7 +453,7 @@ describe('startFrpcClient', () => {
   });
 
   it('explains an FRPS session shutdown as a certificate or endpoint trust failure', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     const spawnImpl = () => {
       queueMicrotask(() => child.stderr.write('connect to server error: session shutdown\n'));
       return child;
@@ -471,7 +473,7 @@ describe('startFrpcClient', () => {
   });
 
   it('cleans temporary credentials when a ready process later exits', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     let configDirectory;
     let exitCalls = 0;
     const spawnImpl = (_command, args) => {
@@ -501,7 +503,7 @@ describe('startFrpcClient', () => {
   });
 
   it('waits for confirmed termination and escalates to SIGKILL after the grace period', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     const signals = [];
     child.kill = (signal) => {
       signals.push(signal);
@@ -536,7 +538,7 @@ describe('startFrpcClient', () => {
   });
 
   it('keeps the controller active when termination cannot be confirmed', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     const signals = [];
     child.kill = (signal) => {
       signals.push(signal);
@@ -570,7 +572,7 @@ describe('startFrpcClient', () => {
   });
 
   it('streams bounded redacted runtime diagnostics instead of retaining process output', async () => {
-    const child = new FakeChild();
+    const child = new FakeChildProcess();
     const logs = [];
     const token = `runtime-${'s'.repeat(1000)}-secret`;
     const spawnImpl = () => {

@@ -11,7 +11,6 @@ import type { ChildStoreManager } from "./child-store"
 import { computeSubtreeIds } from "./scoped-blocking-requests"
 import { opencodeClient } from "@/lib/opencode/client"
 import { mergeSessionDirectoryMetadata, resolveGlobalSessionDirectory, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
-import { useMessageQueueStore } from "@/stores/messageQueueStore"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { registerSessionDirectory } from "./sync-refs"
 import { isSyntheticPart } from "@/lib/messages/synthetic"
@@ -44,6 +43,20 @@ const SEND_CONFIRMATION_REFETCH_RETRY_MS = 150
 const MESSAGE_REFETCH_SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 const UNREVERT_REFETCH_ATTEMPTS = 3
 const UNREVERT_REFETCH_RETRY_MS = 150
+const AMBIGUOUS_SEND_STATUS_CODES = new Set([502, 503, 504, 408])
+const AMBIGUOUS_SEND_MESSAGE_FRAGMENTS = [
+  "timeout",
+  "timed out",
+  "failed to fetch",
+  "fetch failed",
+  "networkerror",
+  "network error",
+  "gateway timeout",
+  "econnreset",
+  "socket hang up",
+  "may still be processing",
+  "being processed",
+]
 
 // Reference set by SyncProvider — allows actions to access SDK and stores
 let _sdk: OpencodeClient | null = null
@@ -370,28 +383,25 @@ function getErrorStatus(error: unknown): number | null {
 }
 
 export function isAmbiguousSendFailure(error: unknown): boolean {
+  if (
+    error
+    && typeof error === "object"
+    && (error as { sendMayHaveBeenAccepted?: unknown }).sendMayHaveBeenAccepted === true
+  ) return true
   const status = getErrorStatus(error)
-  if (status === 503 || status === 504 || status === 408) return true
+  if (status !== null && AMBIGUOUS_SEND_STATUS_CODES.has(status)) return true
   if (error instanceof TypeError) return true
   if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) return true
 
-  const message = error instanceof Error
-    ? error.message.toLowerCase()
-    : typeof error === "string"
-      ? error.toLowerCase()
-      : ""
+  let message = ""
+  if (error instanceof Error) {
+    message = error.message.toLowerCase()
+  } else if (typeof error === "string") {
+    message = error.toLowerCase()
+  }
 
-  return message.includes("timeout")
-    || message.includes("timed out")
-    || message.includes("failed to fetch")
-    || message.includes("networkerror")
-    || message.includes("network error")
-    || message.includes("gateway timeout")
-    || message.includes("econnreset")
-    || message.includes("socket hang up")
-    || message.includes("may still be processing")
-    || message.includes("being processed")
-    || message === "failed to send message"
+  return message === "failed to send message"
+    || AMBIGUOUS_SEND_MESSAGE_FRAGMENTS.some((fragment) => message.includes(fragment))
 }
 
 // Wait briefly for the pipeline to re-establish connection before failing a
@@ -423,7 +433,6 @@ type DirectoryStoreApi = ReturnType<ChildStoreManager["ensureChild"]>
 
 type SessionActionRuntimeContext = {
   runtimeKey: string
-  generation: number
   actionGeneration: number
   runtimeGeneration: number
   childStores: ChildStoreManager | null
@@ -439,7 +448,6 @@ class SessionActionRuntimeChangedError extends Error {
 function captureSessionActionRuntime(): SessionActionRuntimeContext {
   return {
     runtimeKey: getRuntimeKey(),
-    generation: useMessageQueueStore.getState().generation,
     actionGeneration: _actionGeneration,
     runtimeGeneration: getRuntimeEndpointGeneration(),
     childStores: _childStores,
@@ -779,7 +787,6 @@ function finalizeConfirmedSessionDeletion(
   sessionDirectory: string | undefined,
   runtimeContext: SessionActionRuntimeContext,
 ): void {
-  useMessageQueueStore.getState().dropSession(sessionId, runtimeContext)
   if (!isSessionActionRuntimeCurrent(runtimeContext)) {
     cleanupSessionNavigation(sessionId, runtimeContext, true)
     return

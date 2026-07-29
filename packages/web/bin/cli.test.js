@@ -51,6 +51,8 @@ import {
   resolveServeHost,
 } from './cli.js';
 
+const canInspectProcessIdentity = process.platform === 'linux' || process.platform === 'darwin';
+
 async function withTempOpenChamberDataDir(fn) {
   const previous = process.env.OPENCHAMBER_DATA_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-cli-test-'));
@@ -345,9 +347,9 @@ describe('cli args', () => {
 
     expect(parsed.options).toMatchObject({
       provider: 'frpc',
-          serverAddress: 'frps.example.com',
-          serverPort: 7000,
-          customDomain: 'openchamber.internal',
+      serverAddress: 'frps.example.com',
+      serverPort: 7000,
+      customDomain: 'openchamber.internal',
       hostname: 'app.example.com',
     });
     expect(parsed.options.remotePort).toBeUndefined();
@@ -969,9 +971,16 @@ describe('compatibility exports', () => {
   it('includes ngrok in fallback tunnel providers when no server is reachable', async () => {
     await withTempOpenChamberDataDir(async () => {
       const port = await allocateLoopbackPort();
-      const output = await captureStdout(async () => {
-        await commands.tunnel({ json: true, explicitPort: true, port }, 'providers');
-      });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => createMockJsonResponse(null, false);
+      let output;
+      try {
+        output = await captureStdout(async () => {
+          await commands.tunnel({ json: true, explicitPort: true, port }, 'providers');
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
 
       const body = JSON.parse(output);
       expect(body.source).toBe('fallback');
@@ -1899,7 +1908,7 @@ describe('isOpenchamberProcessRunning', () => {
   // Identity verification is available on Linux (/proc) and macOS (ps); on those
   // platforms a live but unrelated process (a recycled stale PID) must read as
   // not-running so it can't trip the "already running" guard (issue #1721).
-  it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')(
+  it.skipIf(!canInspectProcessIdentity)(
     'returns false for a live non-OpenChamber PID',
     async () => {
       const child = spawn('sleep', ['30'], { stdio: 'ignore' });
@@ -2160,28 +2169,30 @@ describe('lifecycle instance discovery', () => {
     });
   });
 
-  it('cleans a matched pid-file entry without stopping it when the recorded port is free', async () => {
-    await withTempOpenChamberDataDir(async () => {
-      const port = await allocateLoopbackPort();
-      const child = spawnOpenChamberLikeIdleProcess();
-      const pidFile = await getPidFilePath(port);
-      const instanceFile = await getInstanceFilePath(port);
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        fs.writeFileSync(pidFile, String(child.pid));
-        fs.writeFileSync(instanceFile, JSON.stringify({ port, host: '127.0.0.1', launchMode: 'daemon' }, null, 2));
+  it.skipIf(!canInspectProcessIdentity)(
+    'cleans a matched pid-file entry without stopping it when the recorded port is free', async () => {
+      await withTempOpenChamberDataDir(async () => {
+        const port = await allocateLoopbackPort();
+        const child = spawnOpenChamberLikeIdleProcess();
+        const pidFile = await getPidFilePath(port);
+        const instanceFile = await getInstanceFilePath(port);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          fs.writeFileSync(pidFile, String(child.pid));
+          fs.writeFileSync(instanceFile, JSON.stringify({ port, host: '127.0.0.1', launchMode: 'daemon' }, null, 2));
 
-        const instance = await discoverUnconfirmedRegistryInstanceOnPort(port, { host: '127.0.0.1' });
+          const instance = await discoverUnconfirmedRegistryInstanceOnPort(port, { host: '127.0.0.1' });
 
-        expect(instance).toBeNull();
-        expect(fs.existsSync(pidFile)).toBe(false);
-        expect(fs.existsSync(instanceFile)).toBe(false);
-        expect(child.exitCode).toBeNull();
-      } finally {
-        child.kill('SIGKILL');
-      }
-    });
-  });
+          expect(instance).toBeNull();
+          expect(fs.existsSync(pidFile)).toBe(false);
+          expect(fs.existsSync(instanceFile)).toBe(false);
+          expect(child.exitCode).toBeNull();
+        } finally {
+          child.kill('SIGKILL');
+        }
+      });
+    },
+  );
 });
 
 describe('lifecycle commands with unmanaged explicit ports', () => {
@@ -2227,32 +2238,34 @@ describe('lifecycle commands with unmanaged explicit ports', () => {
     });
   });
 
-  it('stop --port can recover a matched pid-file instance whose HTTP endpoint is unresponsive', async () => {
-    await withTempOpenChamberDataDir(async () => {
-      const port = await allocateLoopbackPort();
-      const child = spawnOpenChamberLikeHungServer(port);
-      const pidFile = await getPidFilePath(port);
-      const instanceFile = await getInstanceFilePath(port);
-      try {
-        expect(await waitForTcpPort(port)).toBe(true);
-        fs.writeFileSync(pidFile, String(child.pid));
-        fs.writeFileSync(instanceFile, JSON.stringify({ port, host: '127.0.0.1', launchMode: 'daemon' }, null, 2));
+  it.skipIf(!canInspectProcessIdentity)(
+    'stop --port can recover a matched pid-file instance whose HTTP endpoint is unresponsive', async () => {
+      await withTempOpenChamberDataDir(async () => {
+        const port = await allocateLoopbackPort();
+        const child = spawnOpenChamberLikeHungServer(port);
+        const pidFile = await getPidFilePath(port);
+        const instanceFile = await getInstanceFilePath(port);
+        try {
+          expect(await waitForTcpPort(port)).toBe(true);
+          fs.writeFileSync(pidFile, String(child.pid));
+          fs.writeFileSync(instanceFile, JSON.stringify({ port, host: '127.0.0.1', launchMode: 'daemon' }, null, 2));
 
-        await commands.stop({ explicitPort: true, port, host: '127.0.0.1', quiet: true, suppressQuietOutput: true });
+          await commands.stop({ explicitPort: true, port, host: '127.0.0.1', quiet: true, suppressQuietOutput: true });
 
-        expect(fs.existsSync(pidFile)).toBe(false);
-        expect(fs.existsSync(instanceFile)).toBe(false);
-        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-      } finally {
-        child.kill('SIGKILL');
-      }
-    });
-  });
+          expect(fs.existsSync(pidFile)).toBe(false);
+          expect(fs.existsSync(instanceFile)).toBe(false);
+          expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+        } finally {
+          child.kill('SIGKILL');
+        }
+      });
+    },
+  );
 
   it('plain stop ignores a stale CLI registry entry that resolves to desktop runtime', async () => {
     await withTempOpenChamberDataDir(async () => {
       const server = await startMockOpenChamberServer({ runtime: 'desktop' });
-      const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+      const child = spawnOpenChamberLikeIdleProcess();
       const pidFile = await getPidFilePath(server.port);
       const instanceFile = await getInstanceFilePath(server.port);
       try {

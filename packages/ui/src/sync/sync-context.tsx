@@ -12,12 +12,6 @@ import {
   useSidebarStateStore,
   type SidebarStateRuntimeContext,
 } from "@/stores/useSidebarStateStore"
-import {
-  handleFollowUpQueueGlobalEvent,
-  notifyFollowUpQueueTransportReady,
-  useMessageQueueStore,
-  type MessageQueueRuntimeContext,
-} from "@/stores/messageQueueStore"
 import { isVSCodeRuntime } from "@/lib/desktop"
 import { isMobileSurfaceRuntime } from "@/lib/runtimeSurface"
 import { reduceGlobalEvent, applyGlobalProject, applyDirectoryEvent, type SessionMaterializationReason } from "./event-reducer"
@@ -1757,10 +1751,6 @@ function handleEvent(
   // type will mutate. This preserves reference identity for untouched slices
   // so Zustand selectors skip re-renders for unrelated subscribers.
   const current = getDirectoryEventState(store, batch)
-  if (payload.type === "session.deleted" && expectedRuntimeKey === getRuntimeKey()) {
-    const deletedSessionID = getSessionIdFromPayload(payload)
-    if (deletedSessionID) useMessageQueueStore.getState().dropSession(deletedSessionID)
-  }
   const draft: State = { ...current }
   const clonedFields = batch?.clonedFields.get(store) ?? new Set<keyof State>()
   const newlyClonedFields: Array<keyof State> = []
@@ -1990,7 +1980,6 @@ export function SyncProvider(props: {
   const pipelineHasConnectedRef = useRef(false)
   const pipelineDisconnectedBeforeFirstConnectRef = useRef(false)
   const sidebarStateGeneration = useSidebarStateStore((state) => state.generation)
-  const followUpQueueGeneration = useMessageQueueStore((state) => state.generation)
 
   useEffect(() => {
     resyncingDirectoriesRef.current.clear()
@@ -2184,10 +2173,6 @@ export function SyncProvider(props: {
       runtimeKey,
       generation: sidebarStateGeneration,
     }
-    const followUpQueueRuntimeContext: MessageQueueRuntimeContext = {
-      runtimeKey,
-      generation: followUpQueueGeneration,
-    }
     const pipeline = createEventPipeline({
       sdk: props.sdk,
       transport: messageStreamTransport,
@@ -2206,7 +2191,6 @@ export function SyncProvider(props: {
         try {
           for (const payload of payloads) {
             handleSidebarStateGlobalEvent(payload, sidebarRuntimeContext)
-            handleFollowUpQueueGlobalEvent(payload, followUpQueueRuntimeContext)
             dispatchVSCodeRuntimeNotificationEvent(directory, payload)
             if (payload.type === "installation.update-available") {
               const version = typeof (payload.properties as { version?: unknown })?.version === "string"
@@ -2224,7 +2208,6 @@ export function SyncProvider(props: {
       },
       onReconnect: () => {
         notifySidebarStateTransportReady(sidebarRuntimeContext)
-        notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         useConfigStore.setState({
           isConnected: true,
           hasEverConnected: true,
@@ -2255,7 +2238,6 @@ export function SyncProvider(props: {
       },
       onTransportSwitch: () => {
         notifySidebarStateTransportReady(sidebarRuntimeContext)
-        notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         // Transport changes are gap-prone in real networks. Treat them like a
         // reconnect and refresh active session snapshots from HTTP.
         useConfigStore.setState({
@@ -2275,7 +2257,7 @@ export function SyncProvider(props: {
       }
       pipeline.cleanup()
     }
-  }, [props.sdk, childStores, routingIndex, messageStreamTransport, runtimeKey, sidebarStateGeneration, followUpQueueGeneration, triggerDirectoryResync])
+  }, [props.sdk, childStores, routingIndex, messageStreamTransport, runtimeKey, sidebarStateGeneration, triggerDirectoryResync])
 
   useEffect(() => {
     let stopped = false

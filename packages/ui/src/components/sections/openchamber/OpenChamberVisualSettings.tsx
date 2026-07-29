@@ -3,8 +3,7 @@ import { runtimeFetch } from '@/lib/runtime-fetch';
 
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import type { ThemeMode } from '@/types/theme';
-import { useUIStore } from '@/stores/useUIStore';
-import { useMessageQueueStore, type FollowUpBehavior } from '@/stores/messageQueueStore';
+import { useUIStore, type FollowUpBehavior } from '@/stores/useUIStore';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { NumberInput } from '@/components/ui/number-input';
@@ -358,8 +357,8 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
     const setShowTerminalQuickKeysOnDesktop = useUIStore(state => state.setShowTerminalQuickKeysOnDesktop);
     const fileEditorKeymap = useUIStore(state => state.fileEditorKeymap);
     const setFileEditorKeymap = useUIStore(state => state.setFileEditorKeymap);
-    const followUpBehavior = useMessageQueueStore(state => state.followUpBehavior);
-    const setFollowUpBehavior = useMessageQueueStore(state => state.setFollowUpBehavior);
+    const followUpBehavior = useUIStore(state => state.followUpBehavior);
+    const setFollowUpBehavior = useUIStore(state => state.setFollowUpBehavior);
     const persistChatDraft = useUIStore(state => state.persistChatDraft);
     const setPersistChatDraft = useUIStore(state => state.setPersistChatDraft);
     const inputSpellcheckEnabled = useUIStore(state => state.inputSpellcheckEnabled);
@@ -545,6 +544,11 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
         setActivityRenderMode(mode);
         void updateDesktopSettings({ activityRenderMode: mode });
     }, [setActivityRenderMode]);
+
+    const handleFollowUpBehaviorChange = React.useCallback((behavior: FollowUpBehavior) => {
+        setFollowUpBehavior(behavior);
+        void updateDesktopSettings({ followUpBehavior: behavior });
+    }, [setFollowUpBehavior]);
 
     const handleMermaidRenderingModeChange = React.useCallback((mode: 'svg' | 'ascii') => {
         setMermaidRenderingMode(mode);
@@ -1738,7 +1742,7 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
                                                     <SettingsRadioOption
                                                         key={option.id}
                                                         selected={followUpBehavior === option.id}
-                                                        onSelect={() => setFollowUpBehavior(option.id)}
+                                                        onSelect={() => handleFollowUpBehaviorChange(option.id)}
                                                         label={tUnsafe(option.labelKey)}
                                                         ariaLabel={t('settings.openchamber.visual.field.followUpBehaviorAria', { option: tUnsafe(option.labelKey) })}
                                                     />

@@ -3,8 +3,10 @@ import { EventEmitter } from 'node:events';
 import { gzipSync } from 'node:zlib';
 import express from 'express';
 import path from 'path';
+import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 
 import { createSseBoundaryTracker, registerOpenCodeProxy, writeSseChunkWithBackpressure } from './lib/opencode/proxy.js';
+import { registerCommonRequestMiddleware } from './lib/opencode/core-routes.js';
 import { createAuthChannelLifecycle } from './lib/ui-auth/channel-auth.js';
 import {
   createClientNotificationAuth,
@@ -90,17 +92,37 @@ describe('OpenCode proxy SSE forwarding', () => {
     expect(seenAuthorization).toBe('Bearer test-token');
   });
 
-  it('reports only proxy-confirmed session deletions', async () => {
+  it('preserves official SDK prompt request fidelity through the generic proxy', async () => {
+    let seenRequest;
+    let resolveUpstreamRequest;
+    const upstreamRequest = new Promise((resolve) => {
+      resolveUpstreamRequest = resolve;
+    });
     const upstream = express();
-    upstream.delete('/session/:id', (req, res) => {
-      if (req.params.id === 'missing') return res.status(404).json({ error: 'missing' });
-      return res.status(204).end();
+    upstream.post('/api/session/:id/prompt', express.raw({ type: '*/*' }), (req, res) => {
+      seenRequest = {
+        path: req.path,
+        query: req.query,
+        body: req.body.toString('utf8'),
+        headers: req.headers,
+      };
+      resolveUpstreamRequest();
+      res.json({
+        data: {
+          admittedSeq: 1,
+          id: 'msg_sdk_prompt',
+          sessionID: req.params.id,
+          prompt: { text: 'Preserve this prompt exactly.' },
+          delivery: 'queue',
+          timeCreated: 1,
+        },
+      });
     });
     upstreamServer = await listen(upstream);
     const upstreamPort = upstreamServer.address().port;
-    const deletedSessions = [];
 
     const app = express();
+    registerCommonRequestMiddleware(app, { express });
     registerOpenCodeProxy(app, {
       fs: {},
       os: {},
@@ -112,18 +134,47 @@ describe('OpenCode proxy SSE forwarding', () => {
         openCodeNotReadySince: 0,
         isRestartingOpenCode: false,
       }),
-      getOpenCodeAuthHeaders: () => ({}),
+      getOpenCodeAuthHeaders: () => ({ Authorization: 'Bearer upstream-token' }),
       buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
       ensureOpenCodeApiPrefix: () => {},
-      onSessionDeleted: (sessionId) => deletedSessions.push(sessionId),
     });
     proxyServer = await listen(app);
     const proxyPort = proxyServer.address().port;
 
-    await fetch(`http://127.0.0.1:${proxyPort}/api/session/session%20deleted`, { method: 'DELETE' });
-    await fetch(`http://127.0.0.1:${proxyPort}/api/session/missing`, { method: 'DELETE' });
+    const payload = {
+      id: 'msg_sdk_prompt',
+      prompt: { text: 'Preserve this prompt exactly.' },
+      delivery: 'queue',
+    };
+    const client = createOpencodeClient({
+      baseUrl: `http://127.0.0.1:${proxyPort}/api`,
+      directory: '/workspace/repo',
+    });
+    const promptResponse = client.v2.session.prompt({
+      sessionID: 'session-one',
+      ...payload,
+    });
 
-    expect(deletedSessions).toEqual(['session deleted']);
+    await upstreamRequest;
+    expect(seenRequest).toMatchObject({
+      path: '/api/session/session-one/prompt',
+      query: {},
+      headers: {
+        authorization: 'Bearer upstream-token',
+        'content-type': 'application/json',
+        'x-opencode-directory': '%2Fworkspace%2Frepo',
+      },
+    });
+    expect(JSON.parse(seenRequest.body)).toEqual(payload);
+    await expect(promptResponse).resolves.toMatchObject({
+      data: {
+        data: {
+          id: 'msg_sdk_prompt',
+          sessionID: 'session-one',
+          delivery: 'queue',
+        },
+      },
+    });
   });
 
   it('terminates an established global event stream when its auth identity is revoked', async () => {

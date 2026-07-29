@@ -585,19 +585,21 @@ describe('routeMessage skill invocation', () => {
       content: '/not-a-real-skill',
       providerID: 'provider-a',
       modelID: 'model-a',
+      delivery: 'queue',
     });
 
     expect(sendMessageCalls).toHaveLength(1);
+    expect(sendMessageCalls[0].delivery).toBe('queue');
     expect(sendCommandCalls).toHaveLength(0);
   });
 
-  test('forwards a staged stable message ID through optimisticSend to the SDK', async () => {
+  test('forwards a caller-provided stable message ID through optimisticSend to the SDK', async () => {
     const messageId = 'msg_000000000001ABCDEFGHIJKLMN';
 
     await routeMessage({
-      sessionId: 'session-staged',
+      sessionId: 'session-stable-id',
       directory: '/skills/project',
-      content: 'staged follow up',
+      content: 'follow up',
       providerID: 'provider-a',
       modelID: 'model-a',
       messageId,

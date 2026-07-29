@@ -63,9 +63,9 @@ describe('runtimeFetch transport contract', () => {
         return new Response(null, { status: 200 });
       }) as typeof fetch;
 
-      await expect(runtimeFetch('/auth/follow-up-queue/mutations', {
+      await expect(runtimeFetch('/api/config/settings', {
         method: 'POST',
-        body: 'private queue item',
+        body: JSON.stringify({ themeId: 'openchamber' }),
         expectedRuntimeKey: 'runtime-a',
       })).rejects.toThrow('Runtime changed before request dispatch');
       expect(dispatched).toBe(false);

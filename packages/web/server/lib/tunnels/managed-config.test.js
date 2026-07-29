@@ -18,31 +18,34 @@ import { createManagedTunnelConfigRuntime } from './managed-config.js';
 let tempRoot;
 let configPath;
 let runtime;
+const supportsPosixPermissions = process.platform !== 'win32';
+
+const createConfigRuntime = (runtimeFsPromises = fsPromises) => createManagedTunnelConfigRuntime({
+  fsPromises: runtimeFsPromises,
+  path,
+  crypto,
+  normalizeManagedRemoteTunnelHostname: (value) => value,
+  normalizeManagedRemoteTunnelPresets: () => [],
+  normalizeFrpcServerAddress,
+  normalizeFrpcServerPort,
+  normalizeFrpcRemotePort,
+  normalizeFrpcCustomDomain,
+  normalizeFrpcPublicHostname,
+  normalizeFrpcPublicUrl,
+  normalizeFrpcToken,
+  constants: {
+    CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare.json'),
+    CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare-legacy.json'),
+    CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION: 1,
+    FRPC_MANAGED_TUNNEL_FILE_PATH: configPath,
+    FRPC_MANAGED_TUNNEL_VERSION: 3,
+  },
+});
 
 beforeEach(async () => {
   tempRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'openchamber-frpc-config-test-'));
   configPath = path.join(tempRoot, 'frpc-managed-tunnel.json');
-  runtime = createManagedTunnelConfigRuntime({
-    fsPromises,
-    path,
-    crypto,
-    normalizeManagedRemoteTunnelHostname: (value) => value,
-    normalizeManagedRemoteTunnelPresets: () => [],
-    normalizeFrpcServerAddress,
-    normalizeFrpcServerPort,
-    normalizeFrpcRemotePort,
-    normalizeFrpcCustomDomain,
-    normalizeFrpcPublicHostname,
-    normalizeFrpcPublicUrl,
-    normalizeFrpcToken,
-    constants: {
-      CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare.json'),
-      CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare-legacy.json'),
-      CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION: 1,
-      FRPC_MANAGED_TUNNEL_FILE_PATH: configPath,
-      FRPC_MANAGED_TUNNEL_VERSION: 3,
-    },
-  });
+  runtime = createConfigRuntime();
 });
 
 afterEach(async () => {
@@ -69,7 +72,9 @@ describe('FRPC managed tunnel config', () => {
       publicUrl: 'https://app.example.com:18080',
       token: 'private-frpc-token',
     });
-    expect((await fsPromises.stat(configPath)).mode & 0o777).toBe(0o600);
+    if (supportsPosixPermissions) {
+      expect((await fsPromises.stat(configPath)).mode & 0o777).toBe(0o600);
+    }
     await expect(runtime.resolveFrpcTunnelToken({
       serverAddress: '203.0.113.10',
       serverPort: 7000,
@@ -126,7 +131,9 @@ describe('FRPC managed tunnel config', () => {
     });
     const persisted = JSON.parse(await fsPromises.readFile(configPath, 'utf8'));
     expect(persisted.remotePort).toBeUndefined();
-    expect((await fsPromises.stat(configPath)).mode & 0o777).toBe(0o600);
+    if (supportsPosixPermissions) {
+      expect((await fsPromises.stat(configPath)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('rejects a version-1 record that cannot verify the FRPS identity', async () => {
@@ -141,7 +148,9 @@ describe('FRPC managed tunnel config', () => {
 
     await expect(runtime.readFrpcTunnelConfigFromDisk()).rejects.toThrow(/Failed to read FRPC tunnel config/);
     expect(JSON.parse(await fsPromises.readFile(configPath, 'utf8')).version).toBe(1);
-    expect((await fsPromises.stat(configPath)).mode & 0o777).toBe(0o600);
+    if (supportsPosixPermissions) {
+      expect((await fsPromises.stat(configPath)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('rejects legacy or insecure TCP records without a valid public HTTPS URL', async () => {
@@ -199,30 +208,10 @@ describe('FRPC managed tunnel config', () => {
       publicUrl: 'https://old.example.com:18080',
       token: 'old-private-token',
     });
-    const failingRuntime = createManagedTunnelConfigRuntime({
-      fsPromises: {
-        ...fsPromises,
-        rename: async () => {
-          throw new Error('publish failed');
-        },
-      },
-      path,
-      crypto,
-      normalizeManagedRemoteTunnelHostname: (value) => value,
-      normalizeManagedRemoteTunnelPresets: () => [],
-      normalizeFrpcServerAddress,
-      normalizeFrpcServerPort,
-      normalizeFrpcRemotePort,
-      normalizeFrpcCustomDomain,
-      normalizeFrpcPublicHostname,
-      normalizeFrpcPublicUrl,
-      normalizeFrpcToken,
-      constants: {
-        CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare.json'),
-        CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH: path.join(tempRoot, 'cloudflare-legacy.json'),
-        CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION: 1,
-        FRPC_MANAGED_TUNNEL_FILE_PATH: configPath,
-        FRPC_MANAGED_TUNNEL_VERSION: 3,
+    const failingRuntime = createConfigRuntime({
+      ...fsPromises,
+      rename: async () => {
+        throw new Error('publish failed');
       },
     });
 

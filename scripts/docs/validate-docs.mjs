@@ -35,7 +35,8 @@ function routeFromFile(filePath) {
 }
 
 function hasFrontmatterKey(content, key) {
-  const hit = /^---\n([\s\S]*?)\n---\n/m.exec(content)
+  const normalized = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n")
+  const hit = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalized)
   if (!hit) return false
   return new RegExp(`^${key}:\\s*.+$`, "m").test(hit[1])
 }

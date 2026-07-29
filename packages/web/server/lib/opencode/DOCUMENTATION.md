@@ -24,7 +24,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/opencode/shutdown-runtime.js`: graceful shutdown orchestration runtime for watcher/session/terminal/process/server teardown.
 - `packages/web/server/lib/opencode/server-startup-runtime.js`: server listen/startup tunnel flow and process/signal handler orchestration runtime.
 - `packages/web/server/lib/opencode/static-routes-runtime.js`: static asset/SPA fallback route registration and manifest route wiring.
-- `packages/web/server/lib/opencode/feature-routes-runtime.js`: feature route composition runtime for explicit OpenChamber routes, including the host-authoritative follow-up queue, before generic OpenCode proxy registration.
+- `packages/web/server/lib/opencode/feature-routes-runtime.js`: feature route composition runtime for explicit OpenChamber routes before generic OpenCode proxy registration.
 - `packages/web/server/lib/opencode/opencode-resolution-runtime.js`: OpenCode binary resolution snapshot runtime for settings routes and diagnostics.
 - `packages/web/server/lib/opencode/tunnel-wiring-runtime.js`: tunnel service/routes composition runtime and active-port wiring for main server startup.
 - `packages/web/server/lib/opencode/startup-pipeline-runtime.js`: server startup tail orchestration runtime for terminal/proxy/static/start-listen flow.
@@ -258,7 +258,7 @@ OpenChamber tool injection.
   - `GET /api/config/themes`
   - `POST /api/config/reload`
 - `registerCommonRequestMiddleware(app, dependencies)`: registers shared request middleware stack:
-  - conditional JSON body parser behavior for general `/api/*` vs non-API requests; the security-sensitive follow-up queue parser remains route-local after authentication
+  - conditional JSON body parser behavior for explicit OpenChamber routes versus generic `/api/*` proxy requests
   - URL-encoded parser setup
   - request logging middleware
 
@@ -304,7 +304,7 @@ OpenChamber tool injection.
 - `createFeatureRoutesRuntime(dependencies)`: creates runtime for main feature route registration orchestration.
 - Returned API:
   - `registerRoutes(app, routeDependencies)`
-- Registers the mixed-version-safe `/auth/follow-up-queue/*` capability, load, and mutation paths plus authenticated `/api/follow-up-queue/*` aliases before the generic `/api/*` OpenCode proxy. Both namespaces use the normal authentication gate, and the 64 MiB follow-up queue JSON parser runs route-locally after authentication. The server no longer owns `/auth/chat-drafts/*` or explicit `/api/chat-drafts/*` routes.
+- Registers explicit OpenChamber feature routes before the generic `/api/*` OpenCode proxy. The server owns no follow-up queue capability, load, or mutation routes; unknown `/api/*` paths continue through the generic proxy without compatibility tombstones.
 
 ## Public exports (opencode-resolution-runtime.js)
 - `createOpenCodeResolutionRuntime(dependencies)`: creates runtime for OpenCode binary/source snapshot resolution.
@@ -354,8 +354,9 @@ an authoritative loopback callback URL even when OpenChamber binds port `0`.
 - Owns:
   - SSE forwarders: `GET /api/global/event`, `GET /api/event`
   - Session message forwarder: `POST /api/session/:sessionId/message`
-  - Generic `/api/*` forwarding with hop-by-hop header filtering
-  - Successful `DELETE /api/session/:id` notification to the follow-up queue terminalization runtime
+  - Generic `/api/*` forwarding with hop-by-hop header filtering. Express strips
+    the mounted outer `/api` prefix exactly once, preserving the official v2
+    SDK's nested `/api/api/*` routes as upstream `/api/*` routes.
   - Windows `/session` merge fallback path behavior
   - OpenCode readiness gate for proxied `/api` requests
   - Auth-lifecycle ownership for established event SSE responses; revocation/expiry aborts the upstream reader and ends the downstream response.
@@ -377,6 +378,7 @@ an authoritative loopback callback URL even when OpenChamber binds port `0`.
 - User config: `~/.config/opencode/opencode.json`.
 - Project config: `<workingDirectory>/.opencode/opencode.json` or `opencode.json`.
 - Custom config: `OPENCODE_CONFIG` env var path.
+- Retired files under `OPENCHAMBER_DATA_DIR/follow-up-queue` are not read, reconciled, migrated, or deleted.
 - Rate limit config: `OPENCHAMBER_RATE_LIMIT_MAX_ATTEMPTS`, `OPENCHAMBER_RATE_LIMIT_NO_IP_MAX_ATTEMPTS` env vars.
 
 ## Notes for contributors

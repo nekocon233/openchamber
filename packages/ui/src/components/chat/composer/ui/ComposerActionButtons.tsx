@@ -1,8 +1,8 @@
 /**
- * The composer's send / queue / stop control.
+ * The composer's send / stop control.
  *
  * Which one is shown depends on whether a turn is running: idle sends, a busy
- * session with content offers both queue (above) and stop, a busy session
+ * session with content offers both follow-up send (above) and stop, a busy session
  * without content offers only stop.
  */
 
@@ -24,7 +24,6 @@ type ComposerActionButtonsProps = {
     currentSessionId: string | null;
     newSessionDraftOpen: boolean;
     onPrimaryAction: () => void;
-    onQueueMessage: () => void;
     onAbort: () => void;
 };
 
@@ -40,15 +39,16 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
         currentSessionId,
         newSessionDraftOpen,
         onPrimaryAction,
-        onQueueMessage,
         onAbort,
     } = props;
     const { t } = useI18n();
+    const canSendToCurrentTarget = canSend && Boolean(currentSessionId || newSessionDraftOpen);
+    const canSendFollowUp = canSend && Boolean(currentSessionId);
 
     const sendButton = (
         <button
             type={isMobile ? 'button' : 'submit'}
-            disabled={!canSend || (!currentSessionId && !newSessionDraftOpen)}
+            disabled={!canSendToCurrentTarget}
             onClick={(event) => {
                 if (!isMobile) {
                     return;
@@ -59,7 +59,7 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
             }}
             className={cn(
                 footerIconButtonClass,
-                canSend && (currentSessionId || newSessionDraftOpen)
+                canSendToCurrentTarget
                     ? 'text-primary hover:text-primary'
                     : 'opacity-30'
             )}
@@ -78,21 +78,21 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
             {hasContent ? (
                 <button
                     type="button"
-                    disabled={!currentSessionId}
+                    disabled={!canSendFollowUp}
                     onClick={(event) => {
                         if (isMobile) {
                             event.preventDefault();
                         }
-                        onQueueMessage();
+                        onPrimaryAction();
                     }}
                     className={cn(
                         footerIconButtonClass,
                         'absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-1',
-                        currentSessionId ? 'text-primary hover:text-primary' : 'opacity-30'
+                        canSendFollowUp ? 'text-primary hover:text-primary' : 'opacity-30'
                     )}
-                    aria-label={t('chat.chatInput.actions.queueMessageAria')}
+                    aria-label={t('chat.chatInput.actions.sendMessageAria')}
                 >
-                    <Icon name="send-plane-2" className={cn(sendIconSizeClass, '-rotate-90')} />
+                    <Icon name="send-plane-2" className={cn(sendIconSizeClass)} />
                 </button>
             ) : null}
             <button
@@ -119,6 +119,5 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
     && prev.currentSessionId === next.currentSessionId
     && prev.newSessionDraftOpen === next.newSessionDraftOpen
     && prev.onPrimaryAction === next.onPrimaryAction
-    && prev.onQueueMessage === next.onQueueMessage
     && prev.onAbort === next.onAbort
 ));

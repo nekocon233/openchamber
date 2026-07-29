@@ -7,7 +7,6 @@ import { registerGitRoutes } from '../git/routes.js';
 import { registerMagicPromptRoutes } from '../magic-prompts/routes.js';
 import { registerSessionFoldersRoutes } from '../session-folders/routes.js';
 import { registerSidebarStateRoutes } from '../sidebar-state/routes.js';
-import { registerFollowUpQueueRoutes } from '../follow-up-queue/routes.js';
 import { registerPermissionAutoAcceptRoutes } from '../permission-auto-accept/runtime.js';
 import { registerConfigEntityRoutes } from './config-entity-routes.js';
 import { registerSettingsUtilityRoutes } from './core-routes.js';
@@ -110,12 +109,10 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       emitSessionCreatedEvent,
       permissionAutoAcceptRuntime,
       sidebarStateRuntime,
-      followUpQueueRuntime,
       isTunnelManagementAllowed,
     } = routeDependencies;
 
     registerSidebarStateRoutes(app, sidebarStateRuntime);
-    registerFollowUpQueueRoutes(app, followUpQueueRuntime);
 
     registerSettingsUtilityRoutes(app, {
       readCustomThemesFromDisk,

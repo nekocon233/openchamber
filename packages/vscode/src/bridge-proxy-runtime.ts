@@ -46,6 +46,16 @@ const collectProxyResponseHeaders = (headers: Headers, deps: Pick<ProxyRuntimeDe
   return result;
 };
 
+const mergeProxyRequestHeaders = (
+  forwarded: Record<string, string> | undefined,
+  upstreamAuth: Record<string, string> | undefined,
+  deps: Pick<ProxyRuntimeDeps, 'sanitizeForwardHeaders'>,
+): Record<string, string> => {
+  const headers = new Headers(deps.sanitizeForwardHeaders(forwarded));
+  new Headers(upstreamAuth).forEach((value, key) => headers.set(key, value));
+  return Object.fromEntries(headers.entries());
+};
+
 const isSseProxyPath = (requestPath: string): boolean => {
   try {
     const parsed = new URL(requestPath, 'https://openchamber.invalid');
@@ -64,6 +74,7 @@ type ProxyRuntimeDeps = {
 };
 
 const proxyAbortControllers = new Map<string, AbortController>();
+const API_PROXY_TIMEOUT_MS = 45_000;
 
 // ---------------------------------------------------------------------------
 // In-flight read coalescing (parity with the web runtimeFetch coalescer)
@@ -158,61 +169,76 @@ export async function handleProxyBridgeMessage(
         return { id, type, success: true, data: localFsResponse };
       }
 
-      const apiUrl = await waitForApiUrl(ctx?.manager);
-      if (!apiUrl) {
-        const data = deps.buildUnavailableApiResponse();
-        return { id, type, success: true, data };
-      }
-
-      const base = `${apiUrl.replace(/\/+$/, '')}/`;
-      const targetUrl = new URL(normalizedPath.replace(/^\/+/, ''), base).toString();
-      const requestHeaders: Record<string, string> = {
-        ...deps.sanitizeForwardHeaders(headers),
-        ...ctx?.manager?.getOpenCodeAuthHeaders(),
-      };
-
-      const requestBody =
-        typeof bodyBase64 === 'string' && bodyBase64.length > 0 && normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD'
-          ? Buffer.from(bodyBase64, 'base64')
-          : undefined;
-
-      // Coalesce concurrent identical GET reads to idempotent endpoints so the
-      // single OpenCode process serves them once. The shared fetch carries no
-      // AbortController (api:proxy:abort can't cancel these reads), so one
-      // caller aborting can't strand the others.
-      const coalesceKey =
-        normalizedMethod === 'GET' && COALESCE_READ_PATH.test(normalizedPath) ? `GET ${targetUrl}` : null;
-      if (coalesceKey) {
-        const existing = READ_COALESCE.get(coalesceKey);
-        if (existing) {
-          const shared = await existing;
-          return { id, type, success: true, data: { ...shared, headers: { ...shared.headers } } };
-        }
-        const pending = performApiProxyFetch(targetUrl, 'GET', requestHeaders, undefined, undefined, deps);
-        READ_COALESCE.set(coalesceKey, pending);
-        pending.then(
-          () => READ_COALESCE.delete(coalesceKey),
-          () => READ_COALESCE.delete(coalesceKey),
-        );
-        const data = await pending;
-        return { id, type, success: true, data };
-      }
-
-      const abortController = new AbortController();
-      proxyAbortControllers.set(id, abortController);
-
+      const isCoalescedRead = normalizedMethod === 'GET' && COALESCE_READ_PATH.test(normalizedPath);
+      const abortController = isCoalescedRead ? null : new AbortController();
+      if (abortController) proxyAbortControllers.set(id, abortController);
       try {
-        const data = await performApiProxyFetch(
-          targetUrl,
-          normalizedMethod,
-          requestHeaders,
-          requestBody,
-          abortController.signal,
+        const apiUrl = await waitForApiUrl(ctx?.manager);
+        if (!apiUrl) {
+          const data = deps.buildUnavailableApiResponse();
+          return { id, type, success: true, data };
+        }
+
+        if (abortController?.signal.aborted) {
+          const data: ApiProxyResponsePayload = {
+            status: 502,
+            headers: { 'content-type': 'application/json' },
+            bodyText: JSON.stringify({ error: 'OpenCode API request aborted' }),
+          };
+          return { id, type, success: true, data };
+        }
+
+        const base = `${apiUrl.replace(/\/+$/, '')}/`;
+        const targetUrl = new URL(normalizedPath.replace(/^\/+/, ''), base).toString();
+        const requestHeaders = mergeProxyRequestHeaders(
+          headers,
+          ctx?.manager?.getOpenCodeAuthHeaders(),
           deps,
         );
-        return { id, type, success: true, data };
+        const requestBody =
+          typeof bodyBase64 === 'string' && bodyBase64.length > 0 && normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD'
+            ? Buffer.from(bodyBase64, 'base64')
+            : undefined;
+
+        // Coalesce concurrent identical GET reads to idempotent endpoints so the
+        // single OpenCode process serves them once. The shared fetch carries no
+        // AbortController (api:proxy:abort can't cancel these reads), so one
+        // caller aborting can't strand the others.
+        if (isCoalescedRead) {
+          const coalesceKey = `GET ${targetUrl}`;
+          const existing = READ_COALESCE.get(coalesceKey);
+          if (existing) {
+            const shared = await existing;
+            return { id, type, success: true, data: { ...shared, headers: { ...shared.headers } } };
+          }
+          const pending = performApiProxyFetch(targetUrl, 'GET', requestHeaders, undefined, undefined, deps);
+          READ_COALESCE.set(coalesceKey, pending);
+          pending.then(
+            () => READ_COALESCE.delete(coalesceKey),
+            () => READ_COALESCE.delete(coalesceKey),
+          );
+          const data = await pending;
+          return { id, type, success: true, data };
+        }
+
+        const timeoutSignal = AbortSignal.timeout(API_PROXY_TIMEOUT_MS);
+        const abortOnTimeout = () => abortController?.abort();
+        timeoutSignal.addEventListener('abort', abortOnTimeout, { once: true });
+        try {
+          const data = await performApiProxyFetch(
+            targetUrl,
+            normalizedMethod,
+            requestHeaders,
+            requestBody,
+            abortController?.signal,
+            deps,
+          );
+          return { id, type, success: true, data };
+        } finally {
+          timeoutSignal.removeEventListener('abort', abortOnTimeout);
+        }
       } finally {
-        proxyAbortControllers.delete(id);
+        if (abortController) proxyAbortControllers.delete(id);
       }
     }
 
@@ -243,11 +269,12 @@ export async function handleProxyBridgeMessage(
 
       const base = `${apiUrl.replace(/\/+$/, '')}/`;
       const targetUrl = new URL(normalizedPath.replace(/^\/+/, ''), base).toString();
-      const requestHeaders: Record<string, string> = {
-        ...deps.sanitizeForwardHeaders(headers),
-        ...ctx?.manager?.getOpenCodeAuthHeaders(),
-      };
-      const timeoutSignal = AbortSignal.timeout(45000);
+      const requestHeaders = mergeProxyRequestHeaders(
+        headers,
+        ctx?.manager?.getOpenCodeAuthHeaders(),
+        deps,
+      );
+      const timeoutSignal = AbortSignal.timeout(API_PROXY_TIMEOUT_MS);
       const abortController = new AbortController();
       proxyAbortControllers.set(id, abortController);
       const onTimeout = () => abortController.abort();

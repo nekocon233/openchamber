@@ -46,6 +46,9 @@ The webview CSP permits `blob:` only for `worker-src` so shared UI parsers can r
 
 - `bridge-proxy-runtime.ts`
   - Proxy route handlers (`api:proxy`, `api:session:message`) with injected helper dependencies.
+  - Generic non-coalesced requests register abort ownership before readiness
+    waiting, receive a bounded host timeout, and let host OpenCode auth replace
+    any case-variant browser authorization header.
 
 - `bridge-config-runtime.ts`
   - Config and skills message handlers (`api:config/*`).
@@ -63,7 +66,7 @@ The webview CSP permits `blob:` only for `worker-src` so shared UI parsers can r
   - Owns the persisted VS Code permission auto-accept policy and its GET/PUT bridge contract.
   - Serializes reads and read-modify-write updates, persists a monotonic policy revision, and broadcasts the exact committed snapshot to every active OpenChamber webview. Permission replies remain foreground UI-owned because VS Code does not run the OpenChamber server runtime.
 
-Composer drafts are runtime-scoped device-local storage in every runtime and have no RuntimeAPI. The VS Code webview explicitly exposes `followUpQueue.supported = false` because it does not run an OpenChamber host server; staged follow-ups therefore use the runtime-scoped device-local fallback and never fall through to the generic OpenCode proxy. Web, Electron, hosted mobile, and Capacitor clients connected to an OpenChamber host use the host-authoritative follow-up queue.
+Composer drafts use runtime-scoped device-local storage and have no RuntimeAPI. Follow-up messages use official OpenCode `queue` or `steer` delivery through the generic SDK proxy; the VS Code webview exposes no OpenChamber queue stub or extension-host bridge.
 
 ## Extension guideline
 

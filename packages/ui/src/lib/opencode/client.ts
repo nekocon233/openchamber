@@ -11,6 +11,7 @@ import type {
   Agent,
   TextPartInput,
   FilePartInput,
+  PromptInput,
 } from "@opencode-ai/sdk/v2";
 import type { PermissionRequest } from "@/types/permission";
 import type { QuestionRequest } from "@/types/question";
@@ -27,7 +28,11 @@ export type FetchPermissionResult =
   | { state: "unknown" };
 import { getRuntimeUrlResolver } from "@/lib/runtime-url";
 import { runtimeFetch } from "@/lib/runtime-fetch";
-import { getRuntimeKey } from "@/lib/runtime-switch";
+import {
+  getRuntimeEndpointGeneration,
+  getRuntimeKey,
+  RuntimeContextChangedError,
+} from "@/lib/runtime-switch";
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry";
 import { markStartupTrace } from "@/lib/startupTrace";
 import { createOpenCodeIdentifier } from "@/lib/opencode/identifier";
@@ -84,12 +89,23 @@ type SdkResult<T> = {
   response?: { status?: number };
 };
 
+function throwSdkError(result: SdkResult<unknown>, operation: string): never {
+  const status = result.response?.status;
+  if (status === undefined && result.error instanceof Error) {
+    throw result.error;
+  }
+  const error = new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`) as Error & {
+    cause?: unknown;
+    status?: number;
+  };
+  error.cause = result.error;
+  if (status !== undefined) error.status = status;
+  throw error;
+}
+
 function unwrapSdkData<T>(result: SdkResult<T>, operation: string): T {
-  if (result.error) {
-    const status = result.response?.status;
-    const error = new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`) as Error & { status?: number };
-    if (status !== undefined) error.status = status;
-    throw error;
+  if (result.error !== undefined && result.error !== null) {
+    throwSdkError(result, operation);
   }
   if (result.data === undefined || result.data === null) {
     throw new Error(`${operation} failed: empty response`);
@@ -98,13 +114,45 @@ function unwrapSdkData<T>(result: SdkResult<T>, operation: string): T {
 }
 
 function unwrapSdkOptional<T>(result: SdkResult<T>, operation: string): T | undefined {
-  if (result.error) {
-    const status = result.response?.status;
-    const error = new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`) as Error & { status?: number };
-    if (status !== undefined) error.status = status;
-    throw error;
+  if (result.error !== undefined && result.error !== null) {
+    throwSdkError(result, operation);
   }
   return result.data;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function throwAmbiguousAdmissionError(): never {
+  const error = new Error('v2.session.prompt returned a malformed admission response') as Error & {
+    sendMayHaveBeenAccepted?: boolean;
+  };
+  error.sendMayHaveBeenAccepted = true;
+  throw error;
+}
+
+function assertSessionInputAdmission(
+  result: SdkResult<unknown>,
+  expected: { id: string; sessionID: string; delivery: 'steer' | 'queue' },
+): void {
+  const envelope = unwrapSdkData(result, 'v2.session.prompt');
+  if (!isRecord(envelope) || !isRecord(envelope.data)) {
+    throwAmbiguousAdmissionError();
+  }
+  const admission = envelope.data;
+  if (
+    admission.id !== expected.id
+    || admission.sessionID !== expected.sessionID
+    || admission.delivery !== expected.delivery
+    || typeof admission.admittedSeq !== 'number'
+    || !Number.isFinite(admission.admittedSeq)
+    || typeof admission.timeCreated !== 'number'
+    || !Number.isFinite(admission.timeCreated)
+    || !isRecord(admission.prompt)
+  ) {
+    throwAmbiguousAdmissionError();
+  }
 }
 
 const ABSOLUTE_URL_PATTERN = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//;
@@ -238,6 +286,7 @@ class OpencodeService {
   private configCache: Map<string, { config: Config; expiresAt: number }> = new Map();
   private configCacheGeneration = 0;
   private listDirectoryCache: Map<string, { entries: FilesystemEntry[]; expiresAt: number }> = new Map();
+  private sessionDeliveryOperations: Map<string, Promise<void>> = new Map();
 
   constructor(baseUrl: string = DEFAULT_BASE_URL) {
     const runtimeBase = resolveRuntimeBaseUrl();
@@ -290,6 +339,21 @@ class OpencodeService {
     const scoped = createRuntimeOpencodeClient({ baseUrl: this.baseUrl, directory: normalized });
     this.scopedClients.set(key, scoped);
     return scoped;
+  }
+
+  private runSessionDeliveryOperation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.sessionDeliveryOperations.get(key) ?? Promise.resolve();
+    const run = previous.then(operation, operation);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.sessionDeliveryOperations.set(key, tail);
+    return run.finally(() => {
+      if (this.sessionDeliveryOperations.get(key) === tail) {
+        this.sessionDeliveryOperations.delete(key);
+      }
+    });
   }
 
   private normalizeCandidatePath(path?: string | null): string | null {
@@ -730,7 +794,7 @@ class OpencodeService {
     agent?: string;
     variant?: string;
     files?: Array<FileInputLite>;
-    /** Additional text/file parts to include (for batch sending queued messages) */
+    /** Additional text/file parts to include with the primary composer message. */
     additionalParts?: Array<{
       text: string;
       synthetic?: boolean;
@@ -749,6 +813,129 @@ class OpencodeService {
     // Use the optimistic/client-generated ID as the real user message ID so SSE
     // can reconcile the echoed server message in-place.
     const messageId = params.messageId ?? createOpenCodeIdentifier("msg");
+    const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
+
+    if (params.delivery) {
+      const delivery = params.delivery;
+      const deliveryRuntime = {
+        key: getRuntimeKey(),
+        generation: getRuntimeEndpointGeneration(),
+      };
+      const assertDeliveryRuntimeCurrent = () => {
+        if (
+          getRuntimeKey() !== deliveryRuntime.key
+          || getRuntimeEndpointGeneration() !== deliveryRuntime.generation
+        ) {
+          throw new RuntimeContextChangedError();
+        }
+      };
+      if (params.format) {
+        throw new Error('Official follow-up delivery does not support structured message format');
+      }
+
+      const syntheticPreface = Boolean(params.prefaceText?.trim()) && params.prefaceTextSynthetic !== false;
+      const syntheticAdditionalPart = params.additionalParts?.some((part) => part.synthetic === true) ?? false;
+      if (syntheticPreface || syntheticAdditionalPart) {
+        throw new Error('Official follow-up delivery does not support synthetic parts');
+      }
+
+      const textSegments: string[] = [];
+      if (params.prefaceText?.trim()) textSegments.push(params.prefaceText);
+      if (params.text?.trim()) textSegments.push(params.text);
+
+      const files: NonNullable<PromptInput['files']> = [];
+      const appendFiles = async (inputFiles: Array<FileInputLite> | undefined) => {
+        for (const file of inputFiles ?? []) {
+          const normalized = await this.normalizeFilePart(file);
+          files.push({
+            uri: normalized.url,
+            ...(normalized.filename ? { name: normalized.filename } : {}),
+          });
+        }
+      };
+      await appendFiles(params.files);
+
+      for (const part of params.additionalParts ?? []) {
+        if (part.text?.trim()) textSegments.push(part.text);
+        await appendFiles(part.files);
+      }
+
+      const agents: NonNullable<PromptInput['agents']> = (params.agentMentions ?? [])
+        .filter((mention) => Boolean(mention?.name))
+        .map((mention) => ({
+          name: mention.name,
+          ...(mention.source ? {
+            source: {
+              text: mention.source.value,
+              start: mention.source.start,
+              end: mention.source.end,
+            },
+          } : {}),
+        }));
+      if (textSegments.length === 0 && files.length === 0 && agents.length === 0) {
+        throw new Error('Message must have at least one part (text or file)');
+      }
+
+      const prompt: PromptInput = {
+        text: textSegments.join('\n\n'),
+        ...(files.length > 0 ? { files } : {}),
+        ...(agents.length > 0 ? { agents } : {}),
+      };
+      const operationKey = [
+        deliveryRuntime.generation,
+        deliveryRuntime.key,
+        requestDirectory ?? '',
+        params.id,
+      ].join('\u0000');
+
+      return this.runSessionDeliveryOperation(operationKey, async () => {
+        assertDeliveryRuntimeCurrent();
+        const durableClient = requestDirectory ? this.getScopedApiClient(requestDirectory) : this.client;
+        assertProviderCircuitClosed(params.providerID);
+        try {
+          if (params.agent !== undefined) {
+            unwrapSdkOptional(
+              await durableClient.v2.session.switchAgent({
+                sessionID: params.id,
+                agent: params.agent,
+              }),
+              'v2.session.switchAgent',
+            );
+            assertDeliveryRuntimeCurrent();
+          }
+          unwrapSdkOptional(
+            await durableClient.v2.session.switchModel({
+              sessionID: params.id,
+              model: {
+                id: params.modelID,
+                providerID: params.providerID,
+                ...(params.variant ? { variant: params.variant } : {}),
+              },
+            }),
+            'v2.session.switchModel',
+          );
+          assertDeliveryRuntimeCurrent();
+          assertSessionInputAdmission(
+            await durableClient.v2.session.prompt({
+              sessionID: params.id,
+              id: messageId,
+              prompt,
+              delivery,
+            }),
+            { id: messageId, sessionID: params.id, delivery },
+          );
+        } catch (error) {
+          const status = error && typeof error === 'object' && typeof (error as { status?: unknown }).status === 'number'
+            ? (error as { status: number }).status
+            : undefined;
+          recordProviderError(params.providerID, status);
+          throw error;
+        }
+
+        recordProviderSuccess(params.providerID);
+        return messageId;
+      });
+    }
 
     // Build parts array using SDK types (TextPartInput | FilePartInput) plus lightweight agent parts
     const parts: Array<TextPartInput | FilePartInput | AgentPartInputLite> = [];
@@ -778,7 +965,7 @@ class OpencodeService {
       }
     }
 
-    // Add additional parts (for batch/queued messages)
+    // Add additional parts supplied by the composer.
     if (params.additionalParts && params.additionalParts.length > 0) {
       for (const additional of params.additionalParts) {
         if (additional.text && additional.text.trim()) {
@@ -813,8 +1000,6 @@ class OpencodeService {
       throw new Error('Message must have at least one part (text or file)');
     }
 
-    const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
-
     if (params.format) {
       console.info('[git-generation][browser] send structured message', {
         sessionId: params.id,
@@ -843,7 +1028,6 @@ class OpencodeService {
         agent: params.agent,
         variant: params.variant,
         messageID: messageId,
-        ...(params.delivery ? { delivery: params.delivery } : {}),
         ...(params.format ? { format: params.format } : {}),
         parts,
       });

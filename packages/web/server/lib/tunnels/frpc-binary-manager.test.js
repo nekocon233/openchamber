@@ -34,7 +34,7 @@ afterEach(() => {
   }
 });
 
-const createAsset = ({ archive, archiveType, member, platform, arch, binaryName }) => {
+const createAssetFixture = ({ archive, archiveType, member, platform, arch, binaryName }) => {
   const name = `fixture.${archiveType === 'zip' ? 'zip' : 'tar.gz'}`;
   return {
     platform,
@@ -92,7 +92,7 @@ const createTarGzFixture = (entries) => {
   return gzipSync(Buffer.concat(chunks));
 };
 
-const createRequestImpl = (responses, calls = []) => (url, _options, callback) => {
+const createRequestMock = (responses, calls = []) => (url, _options, callback) => {
   calls.push(String(url));
   const request = new EventEmitter();
   request.destroy = (error) => {
@@ -250,7 +250,7 @@ describe('createFrpcBinaryManager', () => {
     const binary = Buffer.from('windows-frpc-fixture');
     const member = 'fixture/frpc.exe';
     const archive = createZipFixture(member, binary);
-    const asset = createAsset({
+    const asset = createAssetFixture({
       archive,
       archiveType: 'zip',
       member,
@@ -262,7 +262,7 @@ describe('createFrpcBinaryManager', () => {
     const manager = createFrpcBinaryManager({
       asset,
       dataDir,
-      requestImpl: createRequestImpl([{
+      requestImpl: createRequestMock([{
         body: archive,
         headers: { 'content-length': String(archive.length) },
       }], calls),
@@ -277,9 +277,11 @@ describe('createFrpcBinaryManager', () => {
     expect(first.path).toBe(paths.binaryPath);
     expect(calls).toHaveLength(1);
     expect(fs.readFileSync(paths.binaryPath)).toEqual(binary);
-    expect(fs.statSync(paths.targetDirectory).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(paths.archivePath).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(paths.binaryPath).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(paths.targetDirectory).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(paths.archivePath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(paths.binaryPath).mode & 0o777).toBe(0o700);
+    }
 
     fs.writeFileSync(paths.binaryPath, 'corrupt');
     const offlineManager = createFrpcBinaryManager({
@@ -302,7 +304,7 @@ describe('createFrpcBinaryManager', () => {
     const binary = Buffer.from('frpc');
     const member = 'fixture/frpc.exe';
     const archive = createZipFixture(member, binary);
-    const asset = createAsset({
+    const asset = createAssetFixture({
       archive,
       archiveType: 'zip',
       member,
@@ -313,7 +315,7 @@ describe('createFrpcBinaryManager', () => {
     const manager = createFrpcBinaryManager({
       asset,
       dataDir,
-      requestImpl: createRequestImpl([{ body: Buffer.concat([archive, Buffer.from('extra')]) }]),
+      requestImpl: createRequestMock([{ body: Buffer.concat([archive, Buffer.from('extra')]) }]),
       verifyBinary: createBinaryVerifier(binary),
     });
 
@@ -331,7 +333,7 @@ describe('createFrpcBinaryManager', () => {
     const binary = Buffer.from('frpc');
     const member = 'fixture/frpc.exe';
     const archive = createZipFixture(member, binary);
-    const asset = createAsset({
+    const asset = createAssetFixture({
       archive,
       archiveType: 'zip',
       member,
@@ -342,7 +344,7 @@ describe('createFrpcBinaryManager', () => {
     const manager = createFrpcBinaryManager({
       asset,
       dataDir,
-      requestImpl: createRequestImpl([{
+      requestImpl: createRequestMock([{
         statusCode: 302,
         headers: { location: 'https://downloads.evil.example/frpc.zip' },
       }]),
@@ -358,7 +360,7 @@ describe('createFrpcBinaryManager', () => {
     const binary = Buffer.from('cached-frpc');
     const member = 'fixture/frpc.exe';
     const archive = createZipFixture(member, binary);
-    const asset = createAsset({
+    const asset = createAssetFixture({
       archive,
       archiveType: 'zip',
       member,
@@ -395,7 +397,7 @@ describe('createFrpcBinaryManager', () => {
     const binary = Buffer.from('locked-frpc');
     const member = 'fixture/frpc.exe';
     const archive = createZipFixture(member, binary);
-    const asset = createAsset({
+    const asset = createAssetFixture({
       archive,
       archiveType: 'zip',
       member,
@@ -404,7 +406,7 @@ describe('createFrpcBinaryManager', () => {
       binaryName: 'frpc.exe',
     });
     const calls = [];
-    const requestImpl = createRequestImpl([{
+    const requestImpl = createRequestMock([{
       body: archive,
       headers: { 'content-length': String(archive.length) },
     }], calls);

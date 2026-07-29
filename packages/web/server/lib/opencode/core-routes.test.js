@@ -268,26 +268,18 @@ describe('core-routes', () => {
     };
     registerAuthAndAccessRoutes(app, dependencies);
     app.get('/api/private-test', (_req, res) => res.json({ ok: true }));
-    app.post('/auth/follow-up-queue/mutations', (_req, res) => res.json({ ok: true }));
 
     await request(app).get('/api/private-test').expect(401, { error: 'Client authentication required' });
     await request(app)
       .get('/api/private-test')
       .set('Authorization', 'Bearer valid-client')
       .expect(200, { ok: true });
-    await request(app).post('/auth/follow-up-queue/mutations').expect(401, { error: 'Client authentication required' });
-    await request(app)
-      .post('/auth/follow-up-queue/mutations')
-      .set('Authorization', 'Bearer valid-client')
-      .expect(200, { ok: true });
-    await request(app).post('/AUTH/FOLLOW-UP-QUEUE/MUTATIONS').expect(401, { error: 'Client authentication required' });
 
     requestScope = 'local';
     await request(app).get('/api/private-test').expect(200, { ok: true });
-    await request(app).post('/auth/follow-up-queue/mutations').expect(200, { ok: true });
 
-    expect(requireClientAuth).toHaveBeenCalledTimes(5);
-    expect(requireAuth).toHaveBeenCalledTimes(2);
+    expect(requireClientAuth).toHaveBeenCalledTimes(2);
+    expect(requireAuth).toHaveBeenCalledTimes(1);
   });
 
   it('requires a valid client bearer for relay-marked requests but keeps direct loopback passwordless', async () => {
@@ -424,21 +416,6 @@ describe('core-routes', () => {
       .expect(200);
 
     expect(response.body).toEqual({ body: { content: 'Snippet body' } });
-  });
-
-  it('skips generic body parsing for case-insensitive follow-up queue routes', async () => {
-    const app = express();
-    registerCommonRequestMiddleware(app, { express });
-    app.post('/api/follow-up-queue/mutations', (req, res) => {
-      res.json({ parsed: req.body !== undefined });
-    });
-
-    const response = await request(app)
-      .post('/API/FOLLOW-UP-QUEUE/MUTATIONS')
-      .set('Content-Type', 'application/json')
-      .send({ value: 'synthetic' })
-      .expect(200, { parsed: false });
-    expect(response.headers['cache-control']).toBe('no-store');
   });
 
   it('should require API auth before probing loopback preview URLs', async () => {

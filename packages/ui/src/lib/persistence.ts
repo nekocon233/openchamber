@@ -1,14 +1,13 @@
 import type { DesktopSettings } from '@/lib/desktop';
 import { createProjectIdFromPath } from '@/lib/projectId';
-import { useUIStore } from '@/stores/useUIStore';
-import { isMonoFontOption, isUiFontOption } from '@/lib/fontOptions';
 import {
   DEFAULT_FOLLOW_UP_BEHAVIOR,
   isFollowUpBehavior,
   normalizeFollowUpBehavior,
-  useMessageQueueStore,
+  useUIStore,
   type FollowUpBehavior,
-} from '@/stores/messageQueueStore';
+} from '@/stores/useUIStore';
+import { isMonoFontOption, isUiFontOption } from '@/lib/fontOptions';
 import { setDirectoryShowHidden } from '@/lib/directoryShowHidden';
 import { setFilesViewShowGitignored } from '@/lib/filesViewShowGitignored';
 import { loadAppearancePreferences, applyAppearancePreferences } from '@/lib/appearancePersistence';
@@ -627,7 +626,6 @@ const applyDesktopUiPreferences = (settings: DesktopSettings) => {
   const configStoreApi = typeof window !== 'undefined'
     ? window.__zustand_config_store__ ?? null
     : null;
-  const queueStore = useMessageQueueStore.getState();
 
   if (typeof settings.showReasoningTraces === 'boolean' && settings.showReasoningTraces !== store.showReasoningTraces) {
     store.setShowReasoningTraces(settings.showReasoningTraces);
@@ -671,8 +669,8 @@ const applyDesktopUiPreferences = (settings: DesktopSettings) => {
   } else if (typeof settings.queueModeEnabled === 'boolean') {
     nextFollowUpBehavior = normalizeFollowUpBehavior(undefined, settings.queueModeEnabled);
   }
-  if (nextFollowUpBehavior && nextFollowUpBehavior !== queueStore.followUpBehavior) {
-    queueStore.setFollowUpBehavior(nextFollowUpBehavior);
+  if (nextFollowUpBehavior && nextFollowUpBehavior !== store.followUpBehavior) {
+    store.setFollowUpBehavior(nextFollowUpBehavior);
   }
 
   if (typeof settings.showDeletionDialog === 'boolean' && settings.showDeletionDialog !== store.showDeletionDialog) {

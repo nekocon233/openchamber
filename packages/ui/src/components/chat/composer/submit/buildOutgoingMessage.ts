@@ -1,10 +1,10 @@
 /**
  * Assembling what the composer actually sends.
  *
- * A single send can carry more than what the user just typed: messages queued
- * while the previous turn ran, inline review comments, `@file` references
- * resolved to attachments, a linked GitHub issue or PR, synthetic parts from
- * conflict resolution, and an instruction naming the skills mentioned inline.
+ * A single send can carry more than what the user just typed: inline review
+ * comments, `@file` references resolved to attachments, a linked GitHub issue
+ * or PR, synthetic parts from conflict resolution, and an instruction naming
+ * the skills mentioned inline.
  *
  * OpenCode takes one primary message plus additional parts, so all of that has
  * to be flattened into that shape — and the flattening has rules that are easy
@@ -32,15 +32,8 @@ export interface OutgoingMessage {
     isEmpty: boolean;
 }
 
-export interface QueuedInput {
-    content: string;
-    attachments?: AttachedFile[];
-}
-
 export interface OutgoingMessageInput {
-    /** Messages queued while a turn was running, oldest first. */
-    queued: readonly QueuedInput[];
-    /** The composer's own text, or null when this send skips it. */
+    /** The composer's own text, or null when this send has no visible body. */
     composerText: string | null;
     composerAttachments: readonly AttachedFile[];
     /** Inline review comments, appended to the user's last authored text. */
@@ -100,51 +93,21 @@ export function buildOutgoingMessage(
         return mentions;
     };
 
-    // Queued messages come first, in the order they were queued: the oldest
-    // becomes the primary message so the turn reads chronologically.
-    input.queued.forEach((queued, index) => {
-        const resolved = resolve(queued.content);
-        const attachments = [
-            ...deps.sanitizeAttachments(queued.attachments),
-            ...resolved.attachments,
-        ];
-
-        if (index === 0) {
-            primaryText = resolved.text;
-            primaryAttachments = attachments;
-            return;
-        }
-        additionalParts.push({ text: resolved.text, attachments });
-    });
-
-    // The composer's own text follows, becoming primary only when nothing was
-    // queued ahead of it.
+    // The composer owns the one visible user body. Official OpenCode delivery
+    // handles busy-session ordering rather than a client-side staged queue.
     if (input.composerText !== null) {
         const resolved = resolve(input.composerText.replace(/^\n+|\n+$/g, ''));
-        const attachments = [
+        primaryText = resolved.text;
+        primaryAttachments = [
             ...deps.sanitizeAttachments(input.composerAttachments),
             ...resolved.attachments,
         ];
-
-        if (input.queued.length === 0) {
-            primaryText = resolved.text;
-            primaryAttachments = attachments;
-        } else {
-            additionalParts.push({ text: resolved.text, attachments });
-        }
     }
 
-    // Inline comments attach to the last thing the user authored, so they read
-    // as a continuation of it rather than as a separate turn.
+    // Inline comments are a continuation of the visible composer body rather
+    // than a separate part.
     if (input.inlineComments.length > 0) {
-        const lastAuthored = input.queued.length > 0 && additionalParts.length > 0
-            ? additionalParts[additionalParts.length - 1]
-            : null;
-        if (lastAuthored) {
-            lastAuthored.text = deps.appendComments(lastAuthored.text, input.inlineComments);
-        } else {
-            primaryText = deps.appendComments(primaryText, input.inlineComments);
-        }
+        primaryText = deps.appendComments(primaryText, input.inlineComments);
     }
 
     // Everything below is context for the model, never user-visible content.

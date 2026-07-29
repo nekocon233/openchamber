@@ -83,20 +83,44 @@ and the send path reading the same grammar.
 
 ## Ordering rules worth knowing
 
-- `submit/buildOutgoingMessage.ts` flattens queued messages, the composer text,
-  inline comments and context into OpenCode's one-primary-plus-parts shape. The
-  oldest queued message becomes primary; **inline comments attach to the last
-  body the user authored** rather than becoming their own part; PR instructions
-  precede the PR diff.
+- `submit/buildOutgoingMessage.ts` assembles the composer text, inline comments
+  and context into OpenCode's one-primary-plus-parts shape. **Inline comments
+  attach to the composer body** rather than becoming their own part; PR
+  instructions precede the PR diff.
 - `state/useComposerDraft.ts` — a draft belongs to a (runtime, directory,
   session) identity. Writes are debounced while typing but forced at every edge
   where the page may stop running, because a pending timer is not a saved
   draft. Two orderings are load-bearing: the debounced write is skipped once
   while a draft is being restored, and a deleted draft's empty signature is
-  recorded before a queued write could resurrect it.
+  recorded before a pending write could resurrect it.
 - `state/useDraftTarget.ts` — the draft can target a directory that does not
   exist yet (a worktree being created). It must survive not appearing in the
   branch list, or the selector snaps back to the project root mid-creation.
+
+## Follow-up delivery
+
+Follow-up delivery applies only to normal prompts in an existing session.
+While the authoritative phase snapshot is `busy` or `retry`, the composer sends
+directly through OpenCode's durable prompt API with the `steer` or `queue`
+delivery selected by `useUIStore.followUpBehavior`. Idle prompts omit delivery
+and keep using `promptAsync`. If sending dismisses a blocking question, the
+selected delivery is forced even when the captured phase still says `idle`,
+because rejecting the question can leave the active turn running.
+
+The durable client uses a directory-scoped SDK client, switches the selected
+agent and model (including variant), then admits the prompt once with its stable
+message ID. The three-step sequence is serialized per runtime, directory, and
+session so concurrent follow-ups cannot exchange model or agent selections; a
+runtime change stops the sequence before its next request. It never retries an
+ambiguous POST failure. Slash commands and shell input retain their existing
+transports and never opt into follow-up delivery.
+
+Durable `PromptInput` cannot represent structured output format or synthetic
+parts. Those combinations fail explicitly instead of dropping content;
+the composer restores submitted text, attachments, inline drafts, and pending
+synthetic parts. While auto-review owns the session, submit does not consume or
+send anything. Preset and dictation submissions are inserted into the composer
+so text supplied outside a mounted editor is not lost.
 
 ## Mobile
 

@@ -715,7 +715,6 @@ export const registerOpenCodeProxy = (app, deps) => {
   const apiProxy = createProxyMiddleware({
     target: resolveProxyTarget(),
     changeOrigin: true,
-    pathRewrite: { '^/api': '' },
     timeout: PROXY_REQUEST_TIMEOUT_MS,
     proxyTimeout: PROXY_REQUEST_TIMEOUT_MS,
     // Dynamic target — port can change after restart
@@ -753,7 +752,7 @@ export const registerOpenCodeProxy = (app, deps) => {
 
         replayParsedBody(proxyReq, req);
       },
-      proxyRes: (proxyRes, req) => {
+      proxyRes: (proxyRes) => {
         for (const key of Object.keys(proxyRes.headers || {})) {
           // http-proxy streams the raw entity body, so its encoding header must
           // stay intact. Fetch-based proxy paths use the stricter shared filter
@@ -761,19 +760,6 @@ export const registerOpenCodeProxy = (app, deps) => {
           if (key.toLowerCase() === 'content-encoding') continue;
           if (!shouldForwardProxyResponseHeader(key)) {
             delete proxyRes.headers[key];
-          }
-        }
-        const statusCode = Number(proxyRes.statusCode ?? 0);
-        const deletedSession = req.method === 'DELETE'
-          && statusCode >= 200
-          && statusCode < 300
-          ? /^\/api\/session\/([^/?]+)(?:\?.*)?$/.exec(String(req.originalUrl ?? ''))
-          : null;
-        if (deletedSession && typeof deps.onSessionDeleted === 'function') {
-          try {
-            deps.onSessionDeleted(decodeURIComponent(deletedSession[1]));
-          } catch {
-            // The upstream delete remains authoritative; realtime/startup reconciliation retries cleanup.
           }
         }
       },

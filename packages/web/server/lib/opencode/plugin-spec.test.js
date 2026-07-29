@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import path from 'node:path';
 import * as spec from './plugin-spec.js';
 
 describe('parseNpmSpec', () => {
@@ -118,25 +119,25 @@ describe('parsePathSpec', () => {
 
   test('tilde home shorthand with subpath', () => {
     expect(spec.parsePathSpec('~/x.js', { homedir: '/home/u', cwd: '/p' })).toEqual({
-      absolutePath: '/home/u/x.js',
+      absolutePath: path.resolve('/home/u', 'x.js'),
     });
   });
 
   test('bare tilde = homedir', () => {
     expect(spec.parsePathSpec('~', { homedir: '/home/u', cwd: '/p' })).toEqual({
-      absolutePath: '/home/u',
+      absolutePath: path.resolve('/home/u'),
     });
   });
 
   test('relative ./', () => {
     expect(spec.parsePathSpec('./x.js', { homedir: '/home/u', cwd: '/p' })).toEqual({
-      absolutePath: '/p/x.js',
+      absolutePath: path.resolve('/p', 'x.js'),
     });
   });
 
   test('relative ../', () => {
     expect(spec.parsePathSpec('../x.js', { homedir: '/home/u', cwd: '/p/a' })).toEqual({
-      absolutePath: '/p/x.js',
+      absolutePath: path.resolve('/p/a', '../x.js'),
     });
   });
 

@@ -61,6 +61,114 @@ describe('VS Code API proxy aborts', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test('does not start an upstream request when aborted during readiness wait', async () => {
+    const originalFetch = globalThis.fetch;
+    let status = 'connecting';
+    let notifyStatus: ((status: string) => void) | null = null;
+    let fetchCount = 0;
+    const delayedContext = {
+      manager: {
+        getStatus: () => status,
+        getApiUrl: () => 'http://127.0.0.1:3902',
+        getOpenCodeAuthHeaders: () => ({}),
+        onStatusChange: (cb: (nextStatus: string) => void) => {
+          notifyStatus = cb;
+          cb(status);
+          return { dispose: () => {} };
+        },
+      },
+    } as unknown as BridgeContext;
+
+    try {
+      globalThis.fetch = (async () => {
+        fetchCount += 1;
+        return new Response('{}', { status: 200 });
+      }) as typeof fetch;
+
+      const pending = handleProxyBridgeMessage(
+        { id: 'req_waiting', type: 'api:proxy', payload: { method: 'POST', path: '/api/session/abc/prompt' } },
+        delayedContext,
+        deps,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      await handleProxyBridgeMessage(
+        { id: 'abort_req_waiting', type: 'api:proxy:abort', payload: { requestID: 'req_waiting' } },
+        delayedContext,
+        deps,
+      );
+      status = 'connected';
+      const statusListener = notifyStatus as ((nextStatus: string) => void) | null;
+      statusListener?.(status);
+
+      const response = await pending;
+      assert.equal(fetchCount, 0);
+      assert.equal((response?.data as { status?: number }).status, 502);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('VS Code official durable prompt proxy', () => {
+  test('preserves the v2 path, body and directory while host auth replaces browser auth', async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const authenticatedContext = {
+      manager: {
+        getStatus: () => 'connected',
+        getApiUrl: () => 'http://127.0.0.1:3902',
+        getOpenCodeAuthHeaders: () => ({ Authorization: 'Basic host-credential' }),
+        onStatusChange: (cb: (status: string) => void) => {
+          cb('connected');
+          return { dispose: () => {} };
+        },
+      },
+    } as unknown as BridgeContext;
+    const body = JSON.stringify({
+      id: 'msg_durable',
+      prompt: { text: 'follow up' },
+      delivery: 'queue',
+    });
+
+    try {
+      globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        capturedUrl = String(input);
+        capturedInit = init;
+        return new Response(JSON.stringify({ data: { id: 'msg_durable' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as typeof fetch;
+
+      const response = await handleProxyBridgeMessage({
+        id: 'req_durable',
+        type: 'api:proxy',
+        payload: {
+          method: 'POST',
+          path: '/api/session/session-one/prompt',
+          headers: {
+            authorization: 'Bearer browser-credential',
+            'content-type': 'application/json',
+            'x-opencode-directory': '%2Fworkspace%2Frepo',
+          },
+          bodyBase64: Buffer.from(body, 'utf8').toString('base64'),
+        },
+      }, authenticatedContext, deps);
+
+      const requestHeaders = new Headers(capturedInit?.headers);
+      assert.equal(capturedUrl, 'http://127.0.0.1:3902/api/session/session-one/prompt');
+      assert.equal(capturedInit?.method, 'POST');
+      assert.equal(Buffer.from(capturedInit?.body as Buffer).toString('utf8'), body);
+      assert.equal(requestHeaders.get('authorization'), 'Basic host-credential');
+      assert.equal(requestHeaders.get('x-opencode-directory'), '%2Fworkspace%2Frepo');
+      assert.equal((response?.data as { status?: number }).status, 200);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe('VS Code API proxy read coalescing', () => {
