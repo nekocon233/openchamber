@@ -90,6 +90,7 @@ import {
   setImperativeSessionMessageLoader,
   type SessionMessageLoadState,
 } from "./session-message-loader"
+import { retainEffectResourceThroughReplay } from "./effect-resource-lifecycle"
 
 // ---------------------------------------------------------------------------
 // Context
@@ -1965,6 +1966,7 @@ export function SyncProvider(props: {
   }
   const messageLoader = messageLoaderRef.current
   messageLoader.configure({ sdk: props.sdk, runtimeKey })
+  const retainedMessageLoadersRef = useRef(new Set<SessionMessageLoader>())
   const routingIndexRef = useRef<EventRoutingIndex | null>(null)
   if (!routingIndexRef.current) routingIndexRef.current = createEventRoutingIndex()
   const routingIndex = routingIndexRef.current
@@ -2439,8 +2441,8 @@ export function SyncProvider(props: {
 
   // Set refs so non-React code (session-actions, session-ui-store) can access sync state
   useEffect(() => {
-    // React Strict Mode replays effect cleanup/setup without recreating refs.
-    // Reactivate the loader that the simulated cleanup disposed.
+    // Effect setup may replay with the same ref-backed loader. Activation is
+    // monotonic and never rolls back the loader's authority epoch.
     messageLoader.activate()
     setImperativeSessionMessageLoader(messageLoader)
     setSyncRefs(props.sdk, childStores, props.directory, (sessionID, dir) => {
@@ -2451,6 +2453,12 @@ export function SyncProvider(props: {
       childStores,
       () => opencodeClient.getDirectory() || props.directory,
     )
+    if (_activeDirectory && _activeSession) {
+      void messageLoader.ensure(
+        { directory: _activeDirectory, sessionID: _activeSession },
+        { reason: "reactive" },
+      )
+    }
     return () => {
       if (getImperativeSessionMessageLoader() === messageLoader) {
         setImperativeSessionMessageLoader(null)
@@ -2458,10 +2466,14 @@ export function SyncProvider(props: {
     }
   }, [props.sdk, props.directory, childStores, messageLoader, routingIndex])
 
-  useEffect(() => () => {
-    messageLoader.dispose()
-    childStores.disposeAll()
-  }, [childStores, messageLoader])
+  useEffect(() => retainEffectResourceThroughReplay(
+    retainedMessageLoadersRef.current,
+    messageLoader,
+    () => {
+      messageLoader.dispose()
+      childStores.disposeAll()
+    },
+  ), [childStores, messageLoader])
 
   // Subscribe to child store for streaming state derivation
   useEffect(() => {

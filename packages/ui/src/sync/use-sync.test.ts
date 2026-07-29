@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Part } from '@opencode-ai/sdk/v2/client'
 
-import { shouldFetchSessionForRenderableSync, hasUserMessage } from './use-sync'
+import { shouldFetchSessionForRenderableSync, shouldReuseSyncSessionInflight, hasUserMessage } from './use-sync'
 import { mergeOptimisticPage } from './optimistic'
 import { materializeSessionSnapshots } from './materialization'
 
@@ -28,6 +28,17 @@ describe('shouldFetchSessionForRenderableSync', () => {
       shouldLoadMessages: false,
       force: false,
     })).toBe(true)
+  })
+})
+
+describe('shouldReuseSyncSessionInflight', () => {
+  test('reuses a request only for the same loader authority', () => {
+    const owner = {}
+    const existing = { owner, authorityEpoch: 3 }
+
+    expect(shouldReuseSyncSessionInflight(existing, owner, 3)).toBe(true)
+    expect(shouldReuseSyncSessionInflight(existing, {}, 3)).toBe(false)
+    expect(shouldReuseSyncSessionInflight(existing, owner, 4)).toBe(false)
   })
 })
 

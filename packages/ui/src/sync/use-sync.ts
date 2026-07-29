@@ -19,6 +19,7 @@ import { isMobileSurfaceRuntime } from "@/lib/runtimeSurface"
 import { clearSessionPrefetch } from "./session-prefetch-cache"
 import { getSessionMaterializationStatus } from "./materialization"
 import { getRuntimeKey } from "@/lib/runtime-switch"
+import type { SessionMessageLoader } from "./session-message-loader"
 
 const INITIAL_MESSAGE_PAGE_SIZE = 50
 const VSCODE_INITIAL_MESSAGE_PAGE_SIZE = 30
@@ -38,13 +39,26 @@ const seenByDirectory = new Map<string, SeenDirectoryEntry>()
 
 // Shared across useSync() hook instances. Chat, model controls, and sidebar can
 // all request the same session during startup; coalesce them into one HTTP load.
-const syncSessionInflightByKey = new Map<string, Promise<void>>()
+type SyncSessionInflight = {
+  owner: SessionMessageLoader
+  authorityEpoch: number
+  promise: Promise<void>
+}
+const syncSessionInflightByKey = new Map<string, SyncSessionInflight>()
 
 // Per-session generation counter. When a newer syncSession request starts for
 // the same session, older in-flight requests become stale and must not write
 // to the store. This prevents rapid session switches (e.g. 1→2→3 in the
 // sidebar) from having each completed fetch fight for focus.
 const syncSessionGenerationByKey = new Map<string, number>()
+
+export function shouldReuseSyncSessionInflight(
+  existing: { owner: object; authorityEpoch: number } | undefined,
+  owner: object,
+  authorityEpoch: number,
+): boolean {
+  return Boolean(existing && existing.owner === owner && existing.authorityEpoch === authorityEpoch)
+}
 
 type SdkResult<T> = {
   data?: T
@@ -236,17 +250,23 @@ export function useSync() {
       const targetDirectory = directoryOverride || directory
       touch(sessionID, targetDirectory)
       const key = keyFor(sessionID, targetDirectory)
+      const authorityEpoch = messageLoader.getAuthorityEpoch()
 
       // Dedup inflight requests
       const existing = syncSessionInflightByKey.get(key)
-      if (existing) return existing
+      if (existing && shouldReuseSyncSessionInflight(existing, messageLoader, authorityEpoch)) {
+        return existing.promise
+      }
 
       // This is a new request. Bump generation so any older request that
       // might still be finishing (e.g. from a previous component lifecycle)
       // knows it is stale and should not write to the store.
       const generation = (syncSessionGenerationByKey.get(key) ?? 0) + 1
       syncSessionGenerationByKey.set(key, generation)
-      const isStale = () => syncSessionGenerationByKey.get(key) !== generation
+      const isStale = () => (
+        messageLoader.getAuthorityEpoch() !== authorityEpoch
+        || syncSessionGenerationByKey.get(key) !== generation
+      )
 
       const targetStore = targetDirectory === directory
         ? store
@@ -299,13 +319,13 @@ export function useSync() {
         ])
       })()
 
-      syncSessionInflightByKey.set(key, promise)
+      const inflight: SyncSessionInflight = { owner: messageLoader, authorityEpoch, promise }
+      syncSessionInflightByKey.set(key, inflight)
       const clearInflightRequest = () => {
-        if (syncSessionInflightByKey.get(key) === promise) {
-          syncSessionInflightByKey.delete(key)
-          if (syncSessionGenerationByKey.get(key) === generation) {
-            syncSessionGenerationByKey.delete(key)
-          }
+        if (syncSessionInflightByKey.get(key) !== inflight) return
+        syncSessionInflightByKey.delete(key)
+        if (syncSessionGenerationByKey.get(key) === generation) {
+          syncSessionGenerationByKey.delete(key)
         }
       }
       void promise.then(clearInflightRequest, clearInflightRequest)

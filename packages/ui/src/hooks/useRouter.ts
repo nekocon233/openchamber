@@ -155,7 +155,9 @@ export function useRouter(): void {
 
     // Only process if URL has route params
     if (!hasRouteParams()) {
-      // No route params - just set up sync (URL will update when user navigates)
+      // A primary surface may have restored its last conversation before
+      // React mounted. Normalize the root URL to that restored target.
+      syncURLFromState({ replace: true });
       return;
     }
 
@@ -188,7 +190,7 @@ export function useRouter(): void {
     };
 
     void initializeRoute();
-  }, [applyRoute, isVSCode, isEmbeddedChat]);
+  }, [applyRoute, isVSCode, isEmbeddedChat, syncURLFromState]);
 
   // Subscribe to session changes
   React.useEffect(() => {

@@ -117,7 +117,7 @@ if (hostedSurface === 'mobile') {
   void getDesktopRelayRestoreReady().then(() => import('@openchamber/ui/main'));
 }
 
-if (import.meta.env.PROD) {
+if (import.meta.env.MODE === 'production') {
   registerPwaServiceWorker();
 } else {
   unregisterDevelopmentServiceWorkers();

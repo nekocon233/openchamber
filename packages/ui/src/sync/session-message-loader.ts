@@ -122,7 +122,7 @@ export const EMPTY_SESSION_MESSAGE_LOAD_STATE = createDefaultState()
 export class SessionMessageLoader {
   private sdk: OpencodeClient
   private runtimeKey: string
-  private sdkEpoch = 0
+  private authorityEpoch = 0
   private disposed = false
   private readonly entries = new Map<string, LoaderEntry>()
 
@@ -140,7 +140,7 @@ export class SessionMessageLoader {
     const previousRuntimeKey = this.runtimeKey
     this.sdk = configuration.sdk
     this.runtimeKey = configuration.runtimeKey
-    this.sdkEpoch += 1
+    this.authorityEpoch += 1
     for (const entry of this.entries.values()) {
       entry.snapshot = {
         ...entry.snapshot,
@@ -160,6 +160,10 @@ export class SessionMessageLoader {
 
   activate(): void {
     this.disposed = false
+  }
+
+  getAuthorityEpoch(): number {
+    return this.authorityEpoch
   }
 
   ensure(
@@ -183,11 +187,11 @@ export class SessionMessageLoader {
         const inflight = entry.inflight
         const entryKey = this.keyFor(normalized)
         const generation = entry.snapshot.generation
-        const sdkEpoch = this.sdkEpoch
+        const authorityEpoch = this.authorityEpoch
         return inflight.then(() => {
           if (
             this.disposed
-            || this.sdkEpoch !== sdkEpoch
+            || this.authorityEpoch !== authorityEpoch
             || entry.snapshot.generation !== generation
             || this.entries.get(entryKey) !== entry
           ) {
@@ -253,7 +257,7 @@ export class SessionMessageLoader {
       const inflight = entry.inflight
       const entryKey = this.keyFor(normalized)
       const generation = entry.snapshot.generation
-      const sdkEpoch = this.sdkEpoch
+      const authorityEpoch = this.authorityEpoch
       const clearQueuedRefresh = () => {
         if (entry.queuedRefresh !== queuedRefresh) return
         entry.queuedRefresh = null
@@ -262,7 +266,7 @@ export class SessionMessageLoader {
       const queuedRefresh = inflight.then(() => {
         if (
           this.disposed
-          || this.sdkEpoch !== sdkEpoch
+          || this.authorityEpoch !== authorityEpoch
           || entry.snapshot.generation !== generation
           || this.entries.get(entryKey) !== entry
         ) {
@@ -379,7 +383,7 @@ export class SessionMessageLoader {
 
   dispose(): void {
     this.disposed = true
-    this.sdkEpoch += 1
+    this.authorityEpoch += 1
     for (const entry of this.entries.values()) {
       this.bumpGeneration(entry)
       entry.inflight = null
@@ -450,7 +454,7 @@ export class SessionMessageLoader {
     run: (isCurrent: () => boolean) => Promise<void>,
   ): Promise<void> {
     const generation = entry.snapshot.generation
-    const sdkEpoch = this.sdkEpoch
+    const authorityEpoch = this.authorityEpoch
     const finishPerformanceEvent = startSessionLoadPerformanceEvent({
       operation: kind === "prefetch" ? "session-prefetch" : `session-messages.${kind}`,
       runtimeKey: this.runtimeKey,
@@ -460,7 +464,7 @@ export class SessionMessageLoader {
     })
     const isCurrent = () => (
       !this.disposed
-      && this.sdkEpoch === sdkEpoch
+      && this.authorityEpoch === authorityEpoch
       && entry.snapshot.generation === generation
       && this.childStores.getChild(target.directory) === store
     )

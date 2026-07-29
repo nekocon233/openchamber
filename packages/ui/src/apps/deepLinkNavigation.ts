@@ -11,6 +11,7 @@ import {
 } from '@/stores/useGlobalSessionsStore';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { getPWADisplayMode } from '@/lib/pwa';
+import { persistSessionNavigation } from '@/sync/session-navigation';
 
 import {
   buildDeepLink,
@@ -286,10 +287,17 @@ export const useDeepLinkSource = (options: { ready: boolean }): void => {
       }
       const currentUrl = typeof window !== 'undefined' ? window.location.href : 'http://localhost/';
       const intent = parseServiceWorkerNotificationClick(event.data, currentUrl);
-      if (intent) applyDeepLinkIntent(intent);
+      const accepted = intent?.type === 'session';
+      if (intent?.type === 'session') {
+        // The installed-PWA launcher may reload this page immediately after the
+        // acknowledgement, so persist the target before handing control back.
+        persistSessionNavigation(intent.sessionId, intent.directory);
+        applyDeepLinkIntent(intent);
+      }
       const responsePort = event.ports?.[0];
       responsePort?.postMessage({
         type: 'openchamber:notification-click-ack',
+        accepted,
         installed: getPWADisplayMode() !== 'browser',
       });
       responsePort?.close();

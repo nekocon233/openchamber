@@ -7,13 +7,23 @@ import { parseRoute } from '@/lib/router';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
 const navigationSource = readFileSync(new URL('./deepLinkNavigation.ts', import.meta.url), 'utf8');
+const sessionNavigationSource = readFileSync(new URL('../sync/session-navigation.ts', import.meta.url), 'utf8');
 
 describe('service worker notification deep links', () => {
-  test('reports installed display mode in the click acknowledgement', () => {
+  test('reports intent acceptance and installed display mode in the click acknowledgement', () => {
+    expect(navigationSource).toContain("const accepted = intent?.type === 'session'");
     expect(navigationSource).toContain("installed: getPWADisplayMode() !== 'browser'");
-    expect(navigationSource.indexOf('if (intent) applyDeepLinkIntent(intent);')).toBeLessThan(
-      navigationSource.indexOf("type: 'openchamber:notification-click-ack'"),
-    );
+    const persistIndex = navigationSource.indexOf('persistSessionNavigation(intent.sessionId, intent.directory);');
+    const applyIndex = navigationSource.indexOf('applyDeepLinkIntent(intent);', persistIndex);
+    const acknowledgementIndex = navigationSource.indexOf("type: 'openchamber:notification-click-ack'");
+    expect(persistIndex).toBeGreaterThan(-1);
+    expect(persistIndex).toBeLessThan(applyIndex);
+    expect(applyIndex).toBeLessThan(acknowledgementIndex);
+  });
+
+  test('writes launcher navigation synchronously so an immediate reload can restore it', () => {
+    expect(sessionNavigationSource).toContain('getSafeStorage().setItem(storageKey(runtimeKey), JSON.stringify(value))');
+    expect(sessionNavigationSource).not.toContain('getDeferredSafeStorage');
   });
 
   test('prefers the explicit session ID', () => {

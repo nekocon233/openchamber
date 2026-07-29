@@ -8,6 +8,7 @@ import { setActionRefs, setOptimisticRefs } from './session-actions';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useCommandsStore } from '@/stores/useCommandsStore';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import {
   clearPersistedSessionNavigation,
@@ -220,6 +221,7 @@ describe('persisted current session navigation', () => {
       restoredSessionRuntimeKey: null,
       newSessionDraft: { open: false, directoryOverride: null, parentID: null },
     });
+    useGlobalSessionsStore.setState({ activeSessions: [], archivedSessions: [] });
   });
 
   afterEach(() => {
@@ -318,6 +320,107 @@ describe('persisted current session navigation', () => {
       restoredSessionRuntimeKey: null,
     });
     expect(readPersistedSessionNavigation(runtimeKey)?.directory).toBe('/repo/authoritative');
+  });
+
+  test('restores a persisted subagent through its parent chain to the root conversation', () => {
+    const runtimeKey = getRuntimeKey();
+    const root = {
+      id: 'session-root',
+      directory: '/repo/root',
+      time: { created: 1 },
+    };
+    const child = {
+      id: 'session-child',
+      parentID: root.id,
+      directory: '/repo/root',
+      time: { created: 2 },
+    };
+    const grandchild = {
+      id: 'session-grandchild',
+      parentID: child.id,
+      directory: '/repo/root',
+      time: { created: 3 },
+    };
+    persistSessionNavigation(grandchild.id, grandchild.directory, runtimeKey);
+    useGlobalSessionsStore.setState({ activeSessions: [root, child, grandchild], archivedSessions: [] });
+    useSessionUIStore.setState({
+      currentSessionId: grandchild.id,
+      currentSessionDirectory: grandchild.directory,
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeKey,
+    });
+
+    useSessionUIStore.getState().reconcileRestoredSession(grandchild);
+
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: root.id,
+      currentSessionDirectory: root.directory,
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+    });
+    expect(readPersistedSessionNavigation(runtimeKey)?.sessionId).toBe(root.id);
+  });
+
+  test('clears a restored subagent when its parent is missing', () => {
+    const runtimeKey = getRuntimeKey();
+    const child = {
+      id: 'session-orphan',
+      parentID: 'session-missing-parent',
+      directory: '/repo/orphan',
+      time: { created: 1 },
+    };
+    persistSessionNavigation(child.id, child.directory, runtimeKey);
+    useGlobalSessionsStore.setState({ activeSessions: [child], archivedSessions: [] });
+    useSessionUIStore.setState({
+      currentSessionId: child.id,
+      currentSessionDirectory: child.directory,
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeKey,
+    });
+
+    useSessionUIStore.getState().reconcileRestoredSession(child);
+
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: null,
+      currentSessionDirectory: null,
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+    });
+    expect(readPersistedSessionNavigation(runtimeKey)).toBeNull();
+  });
+
+  test('clears a restored subagent when its parent chain contains a cycle', () => {
+    const runtimeKey = getRuntimeKey();
+    const first = {
+      id: 'session-cycle-a',
+      parentID: 'session-cycle-b',
+      directory: '/repo/cycle',
+      time: { created: 1 },
+    };
+    const second = {
+      id: 'session-cycle-b',
+      parentID: first.id,
+      directory: '/repo/cycle',
+      time: { created: 2 },
+    };
+    persistSessionNavigation(first.id, first.directory, runtimeKey);
+    useGlobalSessionsStore.setState({ activeSessions: [first, second], archivedSessions: [] });
+    useSessionUIStore.setState({
+      currentSessionId: first.id,
+      currentSessionDirectory: first.directory,
+      restoredSessionPendingValidation: true,
+      restoredSessionRuntimeKey: runtimeKey,
+    });
+
+    useSessionUIStore.getState().reconcileRestoredSession(first);
+
+    expect(useSessionUIStore.getState()).toMatchObject({
+      currentSessionId: null,
+      currentSessionDirectory: null,
+      restoredSessionPendingValidation: false,
+      restoredSessionRuntimeKey: null,
+    });
+    expect(readPersistedSessionNavigation(runtimeKey)).toBeNull();
   });
 
   test('keeps the last conversation when an unsent new-session draft is opened', () => {

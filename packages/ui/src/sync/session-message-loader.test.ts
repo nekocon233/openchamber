@@ -61,18 +61,22 @@ describe("SessionMessageLoader", () => {
     childStores.disposeAll()
   })
 
-  test("reactivates after a Strict Mode lifecycle replay", async () => {
+  test("reactivates after disposal with a new authority epoch", async () => {
     let calls = 0
     const { childStores, loader } = createLoader(async ({ sessionID }) => {
       calls += 1
       return response([createRecord(sessionID)])
     })
     const target = { directory: "/repo", sessionID: "session-a" }
+    const initialAuthorityEpoch = loader.getAuthorityEpoch()
 
     loader.dispose()
+    const disposedAuthorityEpoch = loader.getAuthorityEpoch()
+    expect(disposedAuthorityEpoch).toBeGreaterThan(initialAuthorityEpoch)
     childStores.disposeAll()
     const unconfigure = childStores.configure({})
     loader.activate()
+    expect(loader.getAuthorityEpoch()).toBe(disposedAuthorityEpoch)
     await loader.ensure(target, { reason: "navigation" })
 
     expect(calls).toBe(1)

@@ -42,6 +42,7 @@ type NotificationClickMessage = {
 
 type NotificationClickAck = {
   type: 'openchamber:notification-click-ack';
+  accepted?: boolean;
   installed?: boolean;
 };
 
@@ -72,7 +73,9 @@ const getNotificationTargetUrl = (data: NotificationData | null, tag: string): s
 
   try {
     const target = new URL(rawUrl, self.location.origin);
-    if (target.origin !== self.location.origin) return null;
+    if (target.origin !== self.location.origin) {
+      return fallbackUrl ? new URL(fallbackUrl, self.location.origin).href : null;
+    }
     if (sessionId) {
       const urlSessionId = target.searchParams.get('session')?.trim() ?? '';
       target.searchParams.set('session', sessionId);
@@ -84,7 +87,7 @@ const getNotificationTargetUrl = (data: NotificationData | null, tag: string): s
     }
     return target.href;
   } catch {
-    return null;
+    return fallbackUrl ? new URL(fallbackUrl, self.location.origin).href : null;
   }
 };
 
@@ -179,8 +182,18 @@ self.addEventListener('notificationclick', (event) => {
     ];
 
     const fallbackUrl = targetUrl ?? new URL('/', self.location.origin).href;
+    let openWindowAttempted = false;
+    const openTargetWindow = async (): Promise<boolean> => {
+      if (openWindowAttempted) return false;
+      openWindowAttempted = true;
+      try {
+        return Boolean(await self.clients.openWindow(fallbackUrl));
+      } catch {
+        return false;
+      }
+    };
     if (orderedClients.length === 0) {
-      await self.clients.openWindow(fallbackUrl).catch(() => null);
+      await openTargetWindow();
       return;
     }
 
@@ -191,7 +204,7 @@ self.addEventListener('notificationclick', (event) => {
       for (const candidate of orderedClients) {
         if (await focusWindowClient(candidate)) return;
       }
-      await self.clients.openWindow(fallbackUrl).catch(() => null);
+      await openTargetWindow();
       return;
     }
 
@@ -206,22 +219,15 @@ self.addEventListener('notificationclick', (event) => {
       if (typeof candidate.postMessage === 'function') {
         const acknowledgement = await postNotificationClickIntent(candidate, message);
 
-        // Chromium grants one window-interaction allowance per notification click.
-        // Installed PWAs use openWindow so Windows can route through the app launcher;
-        // browser tabs use focus. Never chain both operations for one candidate.
-        // Older app bundles acknowledged without an `installed` field. Prefer the
-        // launcher-safe path for that upgrade window; only an explicit false is a
-        // browser tab that should consume the allowance with focus().
-        if (acknowledgement && acknowledgement.installed !== false) {
-          await self.clients.openWindow(fallbackUrl).catch(() => null);
-          return;
+        // The page persists an accepted target before acknowledging. Installed
+        // PWAs can therefore use the launcher to become visible without losing
+        // the target across its navigate-existing reload. Browser tabs focus in
+        // place; older acknowledgements remain launcher-safe during upgrades.
+        if (acknowledgement && acknowledgement.accepted !== false) {
+          if (acknowledgement.installed !== false && await openTargetWindow()) return;
+          if (await focusWindowClient(candidate)) return;
+          continue;
         }
-        if (acknowledgement && await focusWindowClient(candidate)) return;
-        if (!acknowledgement) {
-          await self.clients.openWindow(fallbackUrl).catch(() => null);
-          return;
-        }
-        continue;
       }
 
       if (targetUrl) {
@@ -232,13 +238,12 @@ self.addEventListener('notificationclick', (event) => {
           // Uncontrolled legacy clients may reject navigation.
         }
         if (navigatedClient && await focusWindowClient(navigatedClient)) return;
-        await self.clients.openWindow(fallbackUrl).catch(() => null);
-        return;
+        continue;
       }
 
       if (await focusWindowClient(candidate)) return;
     }
 
-    await self.clients.openWindow(fallbackUrl).catch(() => null);
+    await openTargetWindow();
   })());
 });

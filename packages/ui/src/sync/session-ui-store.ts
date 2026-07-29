@@ -755,7 +755,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       || state.restoredSessionRuntimeKey !== key
     ) return
 
-    if (!session || session.id !== state.currentSessionId) {
+    const clearRestoredSession = () => {
       clearPersistedSessionNavigation(state.currentSessionId, key)
       activeSessionByRuntime.set(key, null)
       writeRuntimeSessionMemory(key, { sessionId: null, directory: null })
@@ -766,12 +766,37 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         restoredSessionRuntimeKey: null,
       })
       setActiveSession("", "")
+    }
+
+    if (!session || session.id !== state.currentSessionId) {
+      clearRestoredSession()
       return
     }
 
-    const authoritativeDirectory = resolveGlobalSessionDirectory(session)
+    const globalState = useGlobalSessionsStore.getState()
+    const sessionsById = new Map(
+      [...globalState.activeSessions, ...globalState.archivedSessions]
+        .map((candidate) => [candidate.id, candidate] as const),
+    )
+    let primarySession = session
+    const visited = new Set<string>()
+    while (primarySession.parentID) {
+      if (visited.has(primarySession.id)) {
+        clearRestoredSession()
+        return
+      }
+      visited.add(primarySession.id)
+      const parentSession = sessionsById.get(primarySession.parentID)
+      if (!parentSession) {
+        clearRestoredSession()
+        return
+      }
+      primarySession = parentSession
+    }
+
+    const authoritativeDirectory = resolveGlobalSessionDirectory(primarySession)
     set({ restoredSessionPendingValidation: false, restoredSessionRuntimeKey: null })
-    get().setCurrentSession(session.id, authoritativeDirectory ?? state.currentSessionDirectory)
+    get().setCurrentSession(primarySession.id, authoritativeDirectory ?? state.currentSessionDirectory)
   },
 
   // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 type NotificationClickHandler = (event: {
   notification: {
@@ -25,17 +26,24 @@ type ClientMock = {
 
 const originalSelf = Object.getOwnPropertyDescriptor(globalThis, 'self');
 
-const createAcknowledgingPostMessage = (installed: boolean | undefined) => vi.fn((_message: unknown, transfer?: Transferable[]) => {
+const createAcknowledgingPostMessage = (
+  installed: boolean | undefined,
+  accepted: boolean | undefined = true,
+) => vi.fn((_message: unknown, transfer?: Transferable[]) => {
   const port = transfer?.[0] as MessagePort | undefined;
   port?.postMessage({
     type: 'openchamber:notification-click-ack',
+    ...(accepted === undefined ? {} : { accepted }),
     ...(installed === undefined ? {} : { installed }),
   });
 });
 
-const installServiceWorker = async (clients: ClientMock[] = []) => {
+const installServiceWorker = async (
+  clients: ClientMock[] = [],
+  options: { openWindowResult?: ClientMock | null } = {},
+) => {
   const listeners = new Map<string, unknown>();
-  const openWindow = vi.fn(async () => null);
+  const openWindow = vi.fn(async () => options.openWindowResult ?? null);
   const matchAll = vi.fn(async () => clients);
   const showNotification = vi.fn(async () => undefined);
 
@@ -155,7 +163,7 @@ describe('service worker notification clicks', () => {
         const port = transfer?.[0] as MessagePort | undefined;
         setTimeout(() => {
           calls.push('ack');
-          port?.postMessage({ type: 'openchamber:notification-click-ack', installed: false });
+          port?.postMessage({ type: 'openchamber:notification-click-ack', accepted: true, installed: false });
         }, 0);
       }),
     };
@@ -230,7 +238,7 @@ describe('service worker notification clicks', () => {
     );
   });
 
-  it('uses one openWindow operation for an installed PWA client', async () => {
+  it('uses the app launcher after an installed PWA durably accepts the intent', async () => {
     const client = {
       focused: false,
       visibilityState: 'hidden' as const,
@@ -238,7 +246,7 @@ describe('service worker notification clicks', () => {
       focus: vi.fn(async () => client),
       postMessage: createAcknowledgingPostMessage(true),
     };
-    const { clickHandler, openWindow } = await installServiceWorker([client]);
+    const { clickHandler, openWindow } = await installServiceWorker([client], { openWindowResult: client });
 
     await clickNotification(clickHandler, {
       data: { sessionId: 'ses_windows_pwa', directory: '/workspace' },
@@ -253,15 +261,35 @@ describe('service worker notification clicks', () => {
     expect(client.navigate).not.toHaveBeenCalled();
   });
 
-  it('uses the launcher-safe path for an old client acknowledgement without display mode', async () => {
+  it('focuses an installed PWA client when the launcher returns no window', async () => {
     const client = {
       focused: false,
       visibilityState: 'hidden' as const,
       navigate: vi.fn(),
       focus: vi.fn(async () => client),
-      postMessage: createAcknowledgingPostMessage(undefined),
+      postMessage: createAcknowledgingPostMessage(true),
     };
     const { clickHandler, openWindow } = await installServiceWorker([client]);
+
+    await clickNotification(clickHandler, {
+      data: { sessionId: 'ses_launcher_null', directory: '/workspace' },
+      tag: 'ready-ses_launcher_null',
+    });
+
+    expect(openWindow).toHaveBeenCalledTimes(1);
+    expect(client.focus).toHaveBeenCalledTimes(1);
+    expect(client.navigate).not.toHaveBeenCalled();
+  });
+
+  it('uses the launcher-safe path for an old client acknowledgement without acceptance or display mode', async () => {
+    const client = {
+      focused: false,
+      visibilityState: 'hidden' as const,
+      navigate: vi.fn(),
+      focus: vi.fn(async () => client),
+      postMessage: createAcknowledgingPostMessage(undefined, undefined),
+    };
+    const { clickHandler, openWindow } = await installServiceWorker([client], { openWindowResult: client });
 
     await clickNotification(clickHandler, { data: { sessionId: 'ses_legacy_ack' }, tag: 'ready-ses_legacy_ack' });
 
@@ -270,7 +298,7 @@ describe('service worker notification clicks', () => {
     expect(client.navigate).not.toHaveBeenCalled();
   });
 
-  it('opens the target once when an app client does not acknowledge', async () => {
+  it('navigates and focuses an existing app client when it does not acknowledge', async () => {
     const client = {
       focused: false,
       visibilityState: 'hidden' as const,
@@ -278,14 +306,32 @@ describe('service worker notification clicks', () => {
       focus: vi.fn(async () => client),
       postMessage: vi.fn(),
     };
+    client.navigate.mockResolvedValue(client);
     const { clickHandler, openWindow } = await installServiceWorker([client]);
 
     await clickNotification(clickHandler, { data: { sessionId: 'ses_no_ack' }, tag: 'ready-ses_no_ack' });
 
-    expect(openWindow).toHaveBeenCalledTimes(1);
-    expect(openWindow).toHaveBeenCalledWith('https://openchamber.example/?session=ses_no_ack');
-    expect(client.focus).not.toHaveBeenCalled();
-    expect(client.navigate).not.toHaveBeenCalled();
+    expect(client.navigate).toHaveBeenCalledWith('https://openchamber.example/?session=ses_no_ack');
+    expect(client.focus).toHaveBeenCalledTimes(1);
+    expect(openWindow).not.toHaveBeenCalled();
+  });
+
+  it('navigates an existing client when it rejects the delivered intent', async () => {
+    const client = {
+      focused: false,
+      visibilityState: 'hidden' as const,
+      navigate: vi.fn(),
+      focus: vi.fn(async () => client),
+      postMessage: createAcknowledgingPostMessage(false, false),
+    };
+    client.navigate.mockResolvedValue(client);
+    const { clickHandler, openWindow } = await installServiceWorker([client]);
+
+    await clickNotification(clickHandler, { data: { sessionId: 'ses_rejected' }, tag: 'ready-ses_rejected' });
+
+    expect(client.navigate).toHaveBeenCalledWith('https://openchamber.example/?session=ses_rejected');
+    expect(client.focus).toHaveBeenCalledTimes(1);
+    expect(openWindow).not.toHaveBeenCalled();
   });
 
   it('focuses an installed PWA in place for a targetless notification', async () => {
@@ -363,6 +409,23 @@ describe('service worker notification clicks', () => {
     );
   });
 
+  it('uses a safe session target when the payload URL is cross-origin', async () => {
+    const { clickHandler, openWindow } = await installServiceWorker();
+
+    await clickNotification(clickHandler, {
+      data: {
+        url: 'https://attacker.example/?session=ses_stale',
+        sessionId: 'ses_safe',
+        directory: '/workspace',
+      },
+      tag: 'ready-ses_safe',
+    });
+
+    expect(openWindow).toHaveBeenCalledWith(
+      'https://openchamber.example/?session=ses_safe&directory=%2Fworkspace',
+    );
+  });
+
   it('opens the durable target once when intent delivery fails', async () => {
     const client = {
       focused: false,
@@ -387,7 +450,7 @@ describe('service worker notification clicks', () => {
       [expect.anything()],
     );
     expect(client.focus).not.toHaveBeenCalled();
-    expect(client.navigate).not.toHaveBeenCalled();
+    expect(client.navigate).toHaveBeenCalledWith('https://openchamber.example/?session=ses_ios');
     expect(openWindow).toHaveBeenCalledWith('https://openchamber.example/?session=ses_ios');
   });
 
@@ -443,6 +506,15 @@ describe('service worker notification clicks', () => {
     await clickNotification(clickHandler, { tag: 'openchamber-test' });
 
     expect(openWindow).toHaveBeenCalledWith('https://openchamber.example/');
+  });
+});
+
+describe('service worker registration', () => {
+  it('uses the Vite build mode instead of an inherited NODE_ENV', () => {
+    const source = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain("import.meta.env.MODE === 'production'");
+    expect(source).not.toContain('import.meta.env.PROD');
   });
 });
 
