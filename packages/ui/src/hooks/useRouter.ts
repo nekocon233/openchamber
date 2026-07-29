@@ -19,6 +19,20 @@ function isVSCodeContext(): boolean {
   return win.__VSCODE_CONFIG__ !== undefined;
 }
 
+export function getCurrentAppRouteState(): AppRouteState {
+  const sessionState = useSessionUIStore.getState();
+  const uiState = useUIStore.getState();
+
+  return {
+    sessionId: sessionState.currentSessionId,
+    sessionDirectory: sessionState.currentSessionDirectory,
+    tab: uiState.activeMainTab,
+    isSettingsOpen: uiState.isSettingsDialogOpen,
+    settingsPath: uiState.settingsPage,
+    diffFile: uiState.pendingDiffFile,
+  };
+}
+
 /**
  * Hook that provides bidirectional URL routing for OpenChamber.
  *
@@ -118,22 +132,6 @@ export function useRouter(): void {
   );
 
   /**
-   * Get current app state for URL serialization.
-   */
-  const getCurrentAppState = React.useCallback((): AppRouteState => {
-    const sessionState = useSessionUIStore.getState();
-    const uiState = useUIStore.getState();
-
-    return {
-      sessionId: sessionState.currentSessionId,
-      tab: uiState.activeMainTab,
-      isSettingsOpen: uiState.isSettingsDialogOpen,
-      settingsPath: uiState.settingsPage,
-      diffFile: uiState.pendingDiffFile,
-    };
-  }, []);
-
-  /**
    * Sync current app state to URL.
    */
   const syncURLFromState = React.useCallback(
@@ -142,10 +140,10 @@ export function useRouter(): void {
         return;
       }
 
-      const state = getCurrentAppState();
+      const state = getCurrentAppRouteState();
       updateBrowserURL(state, options);
     },
-    [isVSCode, isEmbeddedChat, getCurrentAppState]
+    [isVSCode, isEmbeddedChat]
   );
 
   // Initialize: parse URL and apply route on mount
@@ -172,10 +170,16 @@ export function useRouter(): void {
       // deep links do not briefly normalize `?session=...` back to `/` while
       // the session's directory/message bootstrap is still catching up.
       if (!isVSCode && !isEmbeddedChat) {
+        const currentSessionState = useSessionUIStore.getState();
+        const sessionId = route.sessionId ?? currentSessionState.currentSessionId;
+        const sessionDirectory = route.sessionDirectory
+          ?? (currentSessionState.currentSessionId === sessionId
+            ? currentSessionState.currentSessionDirectory
+            : null);
         updateBrowserURL({
-          ...getCurrentAppState(),
-          sessionId: route.sessionId ?? useSessionUIStore.getState().currentSessionId,
-          sessionDirectory: route.sessionDirectory,
+          ...getCurrentAppRouteState(),
+          sessionId,
+          sessionDirectory,
           tab: route.tab ?? useUIStore.getState().activeMainTab,
           settingsPath: route.settingsPath ?? useUIStore.getState().settingsPage,
           diffFile: route.diffFile ?? useUIStore.getState().pendingDiffFile,
@@ -184,7 +188,7 @@ export function useRouter(): void {
     };
 
     void initializeRoute();
-  }, [applyRoute, getCurrentAppState, isVSCode, isEmbeddedChat]);
+  }, [applyRoute, isVSCode, isEmbeddedChat]);
 
   // Subscribe to session changes
   React.useEffect(() => {
@@ -192,18 +196,16 @@ export function useRouter(): void {
       return;
     }
 
-    let prevSessionId: string | null = useSessionUIStore.getState().currentSessionId;
-
-    const unsubscribe = useSessionUIStore.subscribe((state) => {
-      const sessionId = state.currentSessionId;
+    const unsubscribe = useSessionUIStore.subscribe((state, previousState) => {
+      const sessionChanged = state.currentSessionId !== previousState.currentSessionId;
+      const directoryChanged = state.currentSessionDirectory !== previousState.currentSessionDirectory;
 
       // Skip if no change or if we're currently applying a route
-      if (sessionId === prevSessionId || isApplyingRouteRef.current) {
+      if ((!sessionChanged && !directoryChanged) || isApplyingRouteRef.current) {
         return;
       }
 
-      prevSessionId = sessionId;
-      syncURLFromState();
+      syncURLFromState({ replace: !sessionChanged });
     });
 
     return unsubscribe;

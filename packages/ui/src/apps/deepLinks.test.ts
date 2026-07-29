@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
 import { parseServiceWorkerNotificationClick } from './deepLinks';
+import { applyDeepLinkIntent } from './deepLinkNavigation';
 import { parseRoute } from '@/lib/router';
+import { useSessionUIStore } from '@/sync/session-ui-store';
 
 const navigationSource = readFileSync(new URL('./deepLinkNavigation.ts', import.meta.url), 'utf8');
 
@@ -67,4 +69,26 @@ test('web route preserves a cold-start session directory hint', () => {
     settingsPath: null,
     diffFile: null,
   });
+});
+
+test('applies a session with an explicit directory before global readiness', () => {
+  const originalSetCurrentSession = useSessionUIStore.getState().setCurrentSession;
+  const selected: Array<{ sessionId: string | null; directory: string | null | undefined }> = [];
+  useSessionUIStore.setState({
+    setCurrentSession: (sessionId, directory) => {
+      selected.push({ sessionId, directory });
+    },
+  });
+
+  try {
+    applyDeepLinkIntent({
+      type: 'session',
+      sessionId: 'ses_cold',
+      directory: '/workspace',
+    }, { prepareSession: false });
+
+    expect(selected).toEqual([{ sessionId: 'ses_cold', directory: '/workspace' }]);
+  } finally {
+    useSessionUIStore.setState({ setCurrentSession: originalSetCurrentSession });
+  }
 });

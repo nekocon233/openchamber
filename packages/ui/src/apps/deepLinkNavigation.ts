@@ -28,10 +28,10 @@ import {
  * handlers via {@link useDeepLinkHandlers}. Session/new-session navigation goes straight to
  * the session store (always available), so those resolve even before the shell has mounted.
  *
- * Intents that arrive before the app is ready (cold launch from a tap/widget) or before their
- * handler is registered are stashed in a module-level holder that survives the connect flow
- * and SyncProvider remount, then applied as soon as the app becomes ready / the handler
- * appears. Only the most recent intent is kept (newest wins) — a burst of taps shouldn't queue.
+ * Intents that need connection state or shell handlers are stashed in a module-level holder
+ * that survives the connect flow and SyncProvider remount. A session intent with an explicit
+ * directory can select the store immediately; it must not be blocked by unrelated startup
+ * readiness. Only the most recent intent is kept (newest wins) — a burst of taps shouldn't queue.
  */
 
 export interface DeepLinkHandlers {
@@ -203,7 +203,11 @@ const execute = ({ intent, prepareSession }: PendingDeepLink): boolean => {
 };
 
 const flush = (): void => {
-  if (!ready || !pending) return;
+  if (!pending) return;
+  const canApplyWhileConnecting = pending.intent.type === 'session'
+    && typeof pending.intent.directory === 'string'
+    && pending.intent.directory.trim().length > 0;
+  if (!ready && !canApplyWhileConnecting) return;
   const navigation = pending;
   // Drop the stash before executing; if the handler isn't registered yet, execute() returns
   // false and we re-stash so a later registerDeepLinkHandlers() flush can retry it.
@@ -259,7 +263,8 @@ export const useDeepLinkHandlers = (next: DeepLinkHandlers): void => {
  * (`App.appUrlOpen` — widgets, Live Activities, external links) and notification taps
  * (`pushNotificationActionPerformed`), normalising each into a {@link DeepLinkIntent}.
  * Both listeners are registered UNCONDITIONALLY so a cold-launch tap/open isn't lost while
- * the app is still connecting; intents stash until `ready` (connected + initialized).
+ * the app is still connecting. Intents that cannot be applied directly stash until `ready`
+ * (connected + initialized).
  */
 export const useDeepLinkSource = (options: { ready: boolean }): void => {
   const { ready: isReady } = options;

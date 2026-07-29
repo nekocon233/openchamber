@@ -3,8 +3,13 @@ import type { Message, OpencodeClient, Part } from "@opencode-ai/sdk/v2/client"
 import { ChildStoreManager } from "./child-store"
 import { SessionMessageLoader } from "./session-message-loader"
 
-const createRecord = (sessionID: string, id = "msg_1") => ({
-  info: { id, sessionID, role: "user", time: { created: 1 } } as Message,
+const createRecord = (
+  sessionID: string,
+  id = "msg_1",
+  role: "user" | "assistant" = "user",
+  parentID?: string,
+) => ({
+  info: { id, sessionID, role, ...(parentID ? { parentID } : {}), time: { created: 1 } } as Message,
   parts: [{ id: `part_${id}`, messageID: id, sessionID, type: "text", text: "hello" }] as Part[],
 })
 
@@ -56,6 +61,27 @@ describe("SessionMessageLoader", () => {
     childStores.disposeAll()
   })
 
+  test("reactivates after a Strict Mode lifecycle replay", async () => {
+    let calls = 0
+    const { childStores, loader } = createLoader(async ({ sessionID }) => {
+      calls += 1
+      return response([createRecord(sessionID)])
+    })
+    const target = { directory: "/repo", sessionID: "session-a" }
+
+    loader.dispose()
+    childStores.disposeAll()
+    const unconfigure = childStores.configure({})
+    loader.activate()
+    await loader.ensure(target, { reason: "navigation" })
+
+    expect(calls).toBe(1)
+    expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.length).toBe(1)
+    unconfigure()
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
   test("runs a requested tail refresh after an older in-flight load", async () => {
     const initial = deferred<ReturnType<typeof response>>()
     const refresh = deferred<ReturnType<typeof response>>()
@@ -85,6 +111,65 @@ describe("SessionMessageLoader", () => {
 
     expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((message) => message.id))
       .toEqual(["msg_1", "msg_2"])
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("queues initial history behind an unresolved reconnect tail refresh", async () => {
+    const tail = deferred<ReturnType<typeof response>>()
+    const initial = deferred<ReturnType<typeof response>>()
+    const requests: Array<{ limit?: number; before?: string }> = []
+    const target = { directory: "/repo", sessionID: "session-a" }
+    const user = createRecord(target.sessionID, "msg_1")
+    const assistant = createRecord(target.sessionID, "msg_2", "assistant", user.info.id)
+    const { childStores, loader } = createLoader(async (input) => {
+      requests.push({ limit: input.limit, before: input.before })
+      return requests.length === 1 ? tail.promise : initial.promise
+    })
+
+    const refreshing = loader.refreshTail(target, 30)
+    const ensuring = loader.ensure(target, { reason: "navigation" })
+    expect(requests).toEqual([{ limit: 30, before: undefined }])
+
+    tail.resolve(response([assistant], "older-cursor"))
+    await refreshing
+    await Promise.resolve()
+    expect(loader.getSnapshot(target).resolved).toBe(false)
+    expect(requests).toEqual([
+      { limit: 30, before: undefined },
+      { limit: 50, before: undefined },
+    ])
+
+    initial.resolve(response([user, assistant]))
+    await ensuring
+
+    expect(loader.getSnapshot(target).resolved).toBe(true)
+    expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((message) => message.id))
+      .toEqual(["msg_1", "msg_2"])
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("does not treat realtime-only materialization as resolved history", async () => {
+    let calls = 0
+    const target = { directory: "/repo", sessionID: "session-a" }
+    const historical = createRecord(target.sessionID, "msg_1")
+    const realtime = createRecord(target.sessionID, "msg_2")
+    const { childStores, loader } = createLoader(async () => {
+      calls += 1
+      return response([historical])
+    })
+    const store = childStores.ensureChild(target.directory, { bootstrap: false })
+    store.setState({
+      message: { [target.sessionID]: [realtime.info] },
+      part: { [realtime.info.id]: realtime.parts },
+    })
+
+    await loader.ensure(target, { reason: "navigation" })
+
+    expect(calls).toBe(1)
+    expect(loader.getSnapshot(target).resolved).toBe(true)
+    expect(store.getState().message[target.sessionID]?.map((message) => message.id)).toEqual(["msg_1", "msg_2"])
     loader.dispose()
     childStores.disposeAll()
   })

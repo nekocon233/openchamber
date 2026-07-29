@@ -181,6 +181,8 @@ Rules:
 4. Async commits are generation-checked. Runtime switches, forced refreshes, eviction, and disposal must reject stale completion.
 5. Prefetch coverage and persisted directory data are runtime-scoped. Legacy persisted directory entries may seed startup continuity, but they are not live truth.
 6. Message and part materialization preserves references for unchanged records and maintains direct message-to-parts lookup. Consumers subscribe to the selected session's records rather than broad message/part containers.
+7. Reconnect and recovery tail refreshes may materialize recent records, but a partial tail with an older-page cursor does not resolve initial history. A visible session still runs the boundary-seeking initial load, even when those recent records are already renderable; pagination always targets the session's owning directory.
+8. `SyncProvider` lifecycle setup must reactivate its message loader. React Strict Mode may replay effect cleanup/setup while preserving refs, so a simulated cleanup must not leave the currently registered loader permanently disposed.
 
 Initial loads use smaller pages on constrained VS Code/mobile surfaces. Older pages are fetched through the same loader and merged with optimistic records before publication.
 

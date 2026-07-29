@@ -253,7 +253,10 @@ export function useSync() {
         : childStores.ensureChild(targetDirectory, { bootstrap: false })
       const current = targetStore.getState()
       const materialization = getSessionMaterializationStatus(current, sessionID)
-      const cachedReady = materialization.hasMessages && materialization.renderable
+      // Reconnect recovery can materialize a renderable recent tail without
+      // establishing the user-message boundary needed for visible history.
+      const historyResolved = messageLoader.getSnapshot({ directory: targetDirectory, sessionID }).resolved
+      const cachedReady = materialization.hasMessages && materialization.renderable && historyResolved
       const hasSession = Binary.search(current.session, sessionID, (s) => s.id).found
       if (cachedReady && hasSession && !force) return
       const shouldLoadMessages = Boolean(!cachedReady || force)

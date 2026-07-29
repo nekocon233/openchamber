@@ -2457,6 +2457,9 @@ export function SyncProvider(props: {
 
   // Set refs so non-React code (session-actions, session-ui-store) can access sync state
   useEffect(() => {
+    // React Strict Mode replays effect cleanup/setup without recreating refs.
+    // Reactivate the loader that the simulated cleanup disposed.
+    messageLoader.activate()
     setImperativeSessionMessageLoader(messageLoader)
     setSyncRefs(props.sdk, childStores, props.directory, (sessionID, dir) => {
       setIndexedSessionDirectory(routingIndex, sessionID, dir)

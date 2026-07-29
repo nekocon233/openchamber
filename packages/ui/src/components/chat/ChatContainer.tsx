@@ -540,14 +540,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
     const sync = useSync();
     const syncDirectory = useSyncDirectory();
     const effectiveSessionDirectory = currentSessionDirectory ?? syncDirectory;
-    const ensureSessionRenderable = React.useCallback(
-        (sessionId: string) => sync.ensureSessionRenderable(sessionId, false, effectiveSessionDirectory),
-        [effectiveSessionDirectory, sync],
-    );
     const loadMoreMessages = React.useCallback(
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        (sessionId: string, _direction: 'up' | 'down') => sync.loadMore(sessionId),
-        [sync],
+        (sessionId: string) => sync.loadMore(sessionId, effectiveSessionDirectory),
+        [effectiveSessionDirectory, sync],
     );
 
     // UI store
@@ -971,9 +966,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
 
     React.useEffect(() => {
         if (!active || !currentSessionId) return;
-        if (hasRenderableSessionSnapshot) return;
-        void ensureSessionRenderable(currentSessionId);
-    }, [active, currentSessionId, ensureSessionRenderable, hasRenderableSessionSnapshot]);
+        if (hasRenderableSessionSnapshot && sessionMessageLoadState.resolved) return;
+        void sync.ensureSessionRenderable(currentSessionId, false, effectiveSessionDirectory);
+    }, [active, currentSessionId, effectiveSessionDirectory, hasRenderableSessionSnapshot, sessionMessageLoadState.resolved, sync]);
 
 	if (!currentSessionId && !draftOpen) {
 		// With auto-open, the draft welcome opens on the next tick (effect below),

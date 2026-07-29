@@ -158,6 +158,10 @@ export class SessionMessageLoader {
     }
   }
 
+  activate(): void {
+    this.disposed = false
+  }
+
   ensure(
     target: SessionMessageTarget,
     options?: { force?: boolean; reason?: "navigation" | "reactive" | "prefetch" },
@@ -167,20 +171,30 @@ export class SessionMessageLoader {
     const entry = this.getEntry(normalized)
     const store = this.childStores.ensureChild(normalized.directory, { bootstrap: false })
     const materialization = getSessionMaterializationStatus(store.getState(), normalized.sessionID)
-    if (!options?.force && materialization.renderable) {
-      if (!entry.snapshot.resolved) {
-        this.patchEntry(entry, {
-          status: "ready",
-          error: null,
-          resolved: true,
-          limit: Math.max(entry.snapshot.limit, store.getState().message[normalized.sessionID]?.length ?? 0),
-        })
-      }
+    if (!options?.force && materialization.renderable && entry.snapshot.resolved) {
       return entry.inflight ?? Promise.resolve()
     }
     if (entry.inflight) {
+      const loadingKind = entry.snapshot.loadingKind
       if (options?.reason !== "prefetch" && entry.snapshot.loadingKind === "prefetch") {
         this.patchEntry(entry, { loadingKind: "initial" })
+      }
+      if (!entry.snapshot.resolved && (loadingKind === "older" || loadingKind === "refresh")) {
+        const inflight = entry.inflight
+        const entryKey = this.keyFor(normalized)
+        const generation = entry.snapshot.generation
+        const sdkEpoch = this.sdkEpoch
+        return inflight.then(() => {
+          if (
+            this.disposed
+            || this.sdkEpoch !== sdkEpoch
+            || entry.snapshot.generation !== generation
+            || this.entries.get(entryKey) !== entry
+          ) {
+            return
+          }
+          return this.ensure(normalized, options)
+        })
       }
       return entry.inflight
     }
@@ -219,7 +233,7 @@ export class SessionMessageLoader {
         status: "ready",
         loadingKind: null,
         error: null,
-        resolved: true,
+        resolved: entry.snapshot.resolved || page.complete,
         limit: Math.max(entry.snapshot.limit, committed.messages.length),
         cursor: page.cursor,
         complete: page.complete,
@@ -273,7 +287,7 @@ export class SessionMessageLoader {
         status: "ready",
         loadingKind: null,
         error: null,
-        resolved: true,
+        resolved: entry.snapshot.resolved || page.complete,
         limit: Math.max(entry.snapshot.limit, committed.messages.length),
         cursor: page.cursor,
         complete: page.complete,
@@ -592,6 +606,7 @@ export class SessionMessageLoader {
   }
 
   private persistCoverage(target: SessionMessageTarget, state: SessionMessageLoadState): void {
+    if (!state.resolved) return
     setSessionPrefetch({
       directory: target.directory,
       sessionID: target.sessionID,
