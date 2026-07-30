@@ -17,6 +17,7 @@ import { resolveManagedOpenCodeCwd } from './opencode-cwd.mjs';
 import { sanitizeRuntimeRequestHeaders } from './runtime-request-headers.mjs';
 import { assertUpdaterCapability } from './updater-capability.mjs';
 import { checkForDesktopUpdate } from './updater-check.mjs';
+import { resolveUpdaterChannel } from './updater-channel.mjs';
 import { resolveUpdaterFeed } from './updater-feed.mjs';
 import { createMainWindowSessionNavigation } from './main-window-session-navigation.mjs';
 import { createWindowRuntimeIdentityController } from './window-runtime-identity.mjs';
@@ -880,6 +881,16 @@ const buildVersionUrl = (url) => {
   }
 };
 
+const buildSessionStatusUrl = (url) => {
+  try {
+    const parsed = new URL(url);
+    parsed.pathname = `${parsed.pathname.replace(/\/$/, '') || ''}/auth/session`;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
 const classifyVersionPayload = (payload) => {
   const compatibility = payload?.compatibility;
   if (!payload || payload.status !== 'ok' || !compatibility || typeof compatibility !== 'object') {
@@ -914,7 +925,8 @@ const fetchVersionPayload = async (versionUrl, { headers, timeoutMs }) => {
 
 const probeHostWithTimeout = async (url, timeoutMs, clientToken = '', requestHeaders = {}, expectedServerId = '') => {
   const versionUrl = buildVersionUrl(url);
-  if (!versionUrl) {
+  const sessionStatusUrl = buildSessionStatusUrl(url);
+  if (!versionUrl || !sessionStatusUrl) {
     throw new Error('Invalid URL');
   }
 
@@ -958,8 +970,19 @@ const probeHostWithTimeout = async (url, timeoutMs, clientToken = '', requestHea
       return { status: 'unreachable', latencyMs: Date.now() - started };
     }
     const payload = await response.json().catch(() => null);
+    const versionStatus = classifyVersionPayload(payload);
+    if (versionStatus !== 'ok') {
+      return { status: versionStatus, latencyMs: Date.now() - started };
+    }
+    const sessionResponse = await fetchVersionPayload(sessionStatusUrl, { headers, timeoutMs });
+    if (sessionResponse.status === 401 || sessionResponse.status === 403) {
+      return { status: 'auth', latencyMs: Date.now() - started };
+    }
+    if (!sessionResponse.ok) {
+      return { status: 'unreachable', latencyMs: Date.now() - started };
+    }
     return {
-      status: classifyVersionPayload(payload),
+      status: versionStatus,
       latencyMs: Date.now() - started,
     };
   } catch {
@@ -1687,15 +1710,13 @@ const buildInitScript = (localOrigin, bootOutcome, apiBaseUrl = '', clientToken 
   ].join('');
 };
 
-// Keep per-window init scripts aligned with state. Chooser/onboarding reloads after
-// desktop_hosts_set; if only state.initScript is updated, dom-ready reinjects a stale
-// not-configured outcome and the UI flickers on "Waiting for OpenCode".
-const syncInitScriptToWindows = (initScript = state.initScript) => {
+// Keep the main window aligned with global host configuration without overwriting
+// the runtime-specific bootstrap retained by additional and Mini Chat windows.
+const syncMainWindowInitScript = (initScript = state.initScript) => {
   if (!initScript) return;
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.__ocInitScript = initScript;
-    }
+  const mainWindow = state.mainWindow;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.__ocInitScript = initScript;
   }
 };
 
@@ -2645,6 +2666,13 @@ const createBrowserWindow = ({ label, windowRole = 'additional', restoreGeometry
       if (url.protocol === 'devtools:') return true;
       if (url.protocol === `${UI_PROTOCOL}:`) return true;
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+      // In development the renderer is served by Vite while state.localOrigin
+      // remains the separate local API server. Permit same-origin reloads from
+      // the renderer itself so Vite full-reload fallbacks stay in Electron.
+      try {
+        if (new URL(browserWindow.webContents.getURL()).origin === url.origin) return true;
+      } catch {
+      }
       if (state.localOrigin) {
         try {
           if (new URL(state.localOrigin).origin === url.origin) return true;
@@ -2691,11 +2719,8 @@ const createBrowserWindow = ({ label, windowRole = 'additional', restoreGeometry
   });
 
   browserWindow.webContents.on('dom-ready', () => {
-    // Prefer authoritative state script so hosts_set updates survive reloads even if a
-    // window still holds a pre-activation / not-configured __ocInitScript.
-    const initScript = state.initScript || browserWindow.__ocInitScript;
+    const initScript = browserWindow.__ocInitScript;
     if (initScript) {
-      browserWindow.__ocInitScript = initScript;
       void browserWindow.webContents.executeJavaScript(initScript).catch(() => {});
     }
   });
@@ -2753,7 +2778,7 @@ const activateMainWindow = async (url, localOrigin, bootOutcome, runtimeConfig =
     rendererRuntimeConfig.requestHeaders,
     runtimeKeyFromWindowConfig(rendererRuntimeConfig) || '',
   );
-  syncInitScriptToWindows(state.initScript);
+  syncMainWindowInitScript(state.initScript);
 
   const mainWindow = state.mainWindow;
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2994,9 +3019,8 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
     void shell.openExternal(url).catch(() => {});
   });
   browserWindow.webContents.on('dom-ready', () => {
-    const initScript = state.initScript || browserWindow.__ocInitScript;
+    const initScript = browserWindow.__ocInitScript;
     if (initScript) {
-      browserWindow.__ocInitScript = initScript;
       void browserWindow.webContents.executeJavaScript(initScript).catch(() => {});
     }
   });
@@ -3155,10 +3179,17 @@ const setupAutoUpdater = () => {
   const testBuild = typeof __OPENCHAMBER_UPDATER_E2E_BUILD__ !== 'undefined'
     && __OPENCHAMBER_UPDATER_E2E_BUILD__ === true;
   const feed = resolveUpdaterFeed({ testBuild });
+  const updaterChannel = feed.provider === 'github'
+    ? resolveUpdaterChannel({ platform: process.platform, architecture: process.arch })
+    : null;
+  if (updaterChannel) {
+    autoUpdater.channel = updaterChannel;
+  }
   autoUpdater.setFeedURL(feed);
   log.info('[electron] updater feed configured', {
     provider: feed.provider,
     target: feed.provider === 'github' ? `${feed.owner}/${feed.repo}` : feed.url,
+    channel: updaterChannel || 'latest',
   });
 
   autoUpdater.on('download-progress', (progress) => {
@@ -4265,7 +4296,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         state.requestHeaders || {},
         windowRuntimeIdentity.get(state.mainWindow) || '',
       );
-      syncInitScriptToWindows(state.initScript);
+      syncMainWindowInitScript(state.initScript);
       log.info('[electron] hosts config updated, recomputed bootOutcome', state.bootOutcome);
       return null;
     }
@@ -4950,6 +4981,9 @@ const isLocalSender = (webContents) => {
     if (!raw) return false;
     const url = new URL(raw);
     if (url.protocol === `${UI_PROTOCOL}:` && url.hostname === 'app') return true;
+    // Electron dev renders from Vite while the local API is served on a
+    // separate port. This exact loopback HMR origin is trusted only in dev.
+    if (isDev && url.origin === `http://127.0.0.1:${process.env.OPENCHAMBER_HMR_UI_PORT || '5173'}`) return true;
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
     if (state.localUiOrigin && state.localUiOrigin === url.origin) return true;
     if (state.localOrigin) {
@@ -5073,10 +5107,10 @@ ipcMain.handle('openchamber:file:grant-existing', async (event, filePath) => {
 });
 
 // --- Native tray / menu bar ---------------------------------------------------
-// Tray lives on macOS and Windows; the renderer streams a compact state snapshot via
-// the `desktop_tray_update` IPC command (see the command switch). Tray clicks
-// flow back through dispatchTrayAction → renderer (focus/respond) or native
-// handlers (show window / quit).
+// Tray lives on macOS, Windows, and Linux. The renderer streams a compact state
+// snapshot via the `desktop_tray_update` IPC command (see the command switch).
+// Tray clicks flow back through dispatchTrayAction → renderer (focus/respond) or
+// native handlers (show / hide / toggle / quit).
 
 // Icon assets: a calm outline (idle), a statically filled cube (a finished
 // session left unread), and an eased sequence the busy state breathes through.
@@ -5207,6 +5241,30 @@ const dispatchTrayAction = async (action) => {
 
   if (action.type === 'quit') {
     app.quit();
+    return;
+  }
+
+  if (action.type === 'hide-main-window') {
+    const target = (state.mainWindow && !state.mainWindow.isDestroyed())
+      ? state.mainWindow
+      : BrowserWindow.getFocusedWindow();
+    if (target && !target.isDestroyed() && target.isVisible()) {
+      debounceWindowStatePersist(target, true);
+      target.hide();
+    }
+    return;
+  }
+
+  if (action.type === 'toggle-main-window') {
+    const target = (state.mainWindow && !state.mainWindow.isDestroyed())
+      ? state.mainWindow
+      : null;
+    if (target && target.isVisible() && !target.isMinimized()) {
+      debounceWindowStatePersist(target, true);
+      target.hide();
+      return;
+    }
+    await revealMainWindow();
     return;
   }
 

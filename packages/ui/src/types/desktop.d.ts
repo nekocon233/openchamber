@@ -8,6 +8,7 @@ declare global {
     __OPENCHAMBER_ELECTRON__?: {
       runtime?: string;
       windowRole?: 'main' | 'additional' | 'mini-chat';
+      arch?: string;
       macVibrancy?: boolean;
       macVibrancySupported?: boolean;
       trayEnabled?: boolean;

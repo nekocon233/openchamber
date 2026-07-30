@@ -702,6 +702,7 @@ export interface SettingsPayload {
   nativeNotificationsEnabled?: boolean;
   notificationMode?: 'always' | 'hidden-only';
   autoDeleteEnabled?: boolean;
+  autoSaveEnabled?: boolean;
   autoDeleteAfterDays?: number;
   sessionRetentionAction?: 'archive' | 'delete';
   tunnelProvider?: string;

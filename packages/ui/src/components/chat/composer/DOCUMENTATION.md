@@ -83,10 +83,16 @@ and the send path reading the same grammar.
 
 ## Ordering rules worth knowing
 
+- `editor/ComposerEditor.tsx` forwards a click on the composer's padding by
+  focusing the view *before* setting the selection: CodeMirror reveals its
+  drawn caret through a class it only writes while applying an update, so the
+  selection has to be the update that follows the focus. Native text selection
+  and read-only or otherwise non-editable views are left alone.
 - `submit/buildOutgoingMessage.ts` assembles the composer text, inline comments
   and context into OpenCode's one-primary-plus-parts shape. **Inline comments
   attach to the composer body** rather than becoming their own part; PR
-  instructions precede the PR diff.
+  instructions precede the PR diff. Busy-session ordering belongs to official
+  OpenCode delivery rather than a client-side staged queue.
 - `state/useComposerDraft.ts` — a draft belongs to a (runtime, directory,
   session) identity. Writes are debounced while typing but forced at every edge
   where the page may stop running, because a pending timer is not a saved
@@ -103,9 +109,9 @@ Follow-up delivery applies only to normal prompts in an existing session.
 While the authoritative phase snapshot is `busy` or `retry`, the composer sends
 directly through OpenCode's durable prompt API with the `steer` or `queue`
 delivery selected by `useUIStore.followUpBehavior`. Idle prompts omit delivery
-and keep using `promptAsync`. If sending dismisses a blocking question, the
-selected delivery is forced even when the captured phase still says `idle`,
-because rejecting the question can leave the active turn running.
+and keep using `promptAsync`. If sending dismisses a blocking permission or
+question, the selected delivery is forced even when the captured phase still
+says `idle`, because rejecting the prompt can leave the active turn running.
 
 The durable client uses a directory-scoped SDK client, switches the selected
 agent and model (including variant), then admits the prompt once with its stable

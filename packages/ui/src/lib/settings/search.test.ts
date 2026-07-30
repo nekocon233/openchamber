@@ -15,6 +15,7 @@ describe('settings search FRPC integration', () => {
       isMac: false,
       isWindows: false,
       isLinux: false,
+      isWindowsArm64: false,
     },
     visiblePageSlugs: ['tunnel'],
     t: (key) => key,

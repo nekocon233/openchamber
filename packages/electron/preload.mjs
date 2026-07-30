@@ -108,6 +108,7 @@ if (Number.isFinite(macosMajor) && macosMajor > 0) {
 contextBridge.exposeInMainWorld('__OPENCHAMBER_ELECTRON__', {
   runtime: 'electron',
   windowRole,
+  arch: process.arch,
   macVibrancy: hasMacVibrancy,
   macVibrancySupported,
   trayEnabled,

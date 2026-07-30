@@ -8,6 +8,11 @@ import {
   switchRuntimeEndpoint,
 } from './runtime-switch';
 import { clearRuntimeUrlAuthToken, setRuntimeExtraHeaders } from './runtime-auth';
+import {
+  activateRelayTunnel,
+  deactivateRelayTunnel,
+  getActiveRelayDescriptor,
+} from './relay/runtime-tunnel';
 
 describe('runtime endpoint switching', () => {
   test('initializes a main-owned runtime key before a relay API is available', () => {
@@ -15,6 +20,29 @@ describe('runtime endpoint switching', () => {
 
     expect(getRuntimeKey()).toBe('host:relay');
     expect(getRuntimeApiBaseUrl()).toBe('');
+  });
+
+  test('exposes a credential-free copy of the active relay descriptor', () => {
+    const descriptor = {
+      relayUrl: 'wss://relay.example.com',
+      serverId: 'server-1',
+      hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'public-x', y: 'public-y' },
+      grant: 'one-time-secret',
+    };
+
+    try {
+      activateRelayTunnel(descriptor);
+      const exposed = getActiveRelayDescriptor();
+      expect(exposed).toEqual({
+        relayUrl: descriptor.relayUrl,
+        serverId: descriptor.serverId,
+        hostEncPubJwk: descriptor.hostEncPubJwk,
+      });
+      expect(exposed).not.toBe(descriptor);
+      expect(exposed?.hostEncPubJwk).not.toBe(descriptor.hostEncPubJwk);
+    } finally {
+      deactivateRelayTunnel();
+    }
   });
 
   test('notifies listeners before and after mutating the active endpoint', () => {
