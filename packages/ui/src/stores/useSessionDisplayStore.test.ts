@@ -36,6 +36,19 @@ describe('session display store', () => {
     expect(sessionSidebarSource).toContain("renderContext === 'pinned'");
   });
 
+  test('rebuilds activity top content when pinned or recent expansion changes', () => {
+    const topContentIndex = sessionSidebarSource.indexOf('const topContent = React.useMemo(');
+    expect(topContentIndex).toBeGreaterThan(-1);
+    const topContentEndIndex = sessionSidebarSource.indexOf('\n  );', topContentIndex);
+    expect(topContentEndIndex).toBeGreaterThan(topContentIndex);
+
+    const topContentSource = sessionSidebarSource.slice(topContentIndex, topContentEndIndex);
+    expect(topContentSource).toContain('expandedParentsByContext={{ recent: recentExpandedParents, pinned: pinnedExpandedParents }}');
+    expect(topContentSource).toContain('recentExpandedParents');
+    expect(topContentSource).toContain('pinnedExpandedParents');
+    expect(activitySectionsSource).toContain('expandedParentsByContext[renderContext]');
+  });
+
   test('defaults to manual ordering', () => {
     expect(useSessionDisplayStore.getState().projectSortOrder).toBe('manual');
   });

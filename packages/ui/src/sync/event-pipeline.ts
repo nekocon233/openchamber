@@ -20,6 +20,7 @@ import { type RelayTunnelWebSocket } from "@/lib/relay/tunnel-client"
 import { openRuntimeWebSocket } from "@/lib/relay/runtime-socket"
 import { syncDebug } from "./debug"
 import { countSyncPerformance } from "./performance-diagnostics"
+import { createSessionNextTranslator } from "./session-next-translator"
 
 const FLUSH_FRAME_MS = 33
 const BACKPRESSURE_FLUSH_FRAME_MS = 200
@@ -198,6 +199,18 @@ function resolveEventPayload(payload: unknown): Event | null {
     return payload as Event
   }
 
+  if (record.type === "sync") {
+    const syncEvent = (payload as { syncEvent?: unknown }).syncEvent
+    if (syncEvent && typeof syncEvent === "object" && typeof (syncEvent as { type?: unknown }).type === "string") {
+      const candidate = syncEvent as { id?: unknown; type: string; data?: unknown }
+      return {
+        id: typeof candidate.id === "string" ? candidate.id : undefined,
+        type: candidate.type,
+        properties: candidate.data,
+      } as Event
+    }
+  }
+
   if (record.payload && typeof record.payload === "object" && typeof (record.payload as { type?: unknown }).type === "string") {
     return record.payload as Event
   }
@@ -266,6 +279,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
   let wsFallbackUntil = 0
 
   const directories = new Map<string, DirectoryQueue>()
+  const sessionNextTranslator = createSessionNextTranslator()
 
   const getOrCreateDir = (directory: string): DirectoryQueue => {
     let d = directories.get(directory)
@@ -463,9 +477,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     onReconnect?.()
   }
 
-  const enqueueEvent = (directory: string, payload: Event) => {
-    countSyncPerformance("pipelineRawEvents")
-    const normalizedPayload = normalizeEventType(payload)
+  const enqueueNormalizedEvent = (directory: string, normalizedPayload: Event) => {
     const routedDirectory = routeDirectory?.(directory, normalizedPayload) || directory
     const d = getOrCreateDir(routedDirectory)
 
@@ -537,6 +549,37 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
 
     d.queue.push(normalizedPayload)
     scheduleDir(routedDirectory)
+  }
+
+  const enqueueEvent = (directory: string, payload: Event) => {
+    countSyncPerformance("pipelineRawEvents")
+    const normalizedPayload = normalizeEventType(payload)
+
+    if (normalizedPayload.type === "session.deleted") {
+      const properties = normalizedPayload.properties as { sessionID?: unknown; info?: { id?: unknown } }
+      const sessionID = typeof properties.sessionID === "string"
+        ? properties.sessionID
+        : typeof properties.info?.id === "string"
+          ? properties.info.id
+          : null
+      if (sessionID) sessionNextTranslator.clearSession(directory, sessionID)
+    }
+
+    const translated = sessionNextTranslator.translate(directory, normalizedPayload)
+    if (translated) {
+      if (
+        normalizedPayload.type === "session.next.prompt.admitted"
+        || normalizedPayload.type === "session.next.prompted"
+      ) {
+        enqueueNormalizedEvent(directory, normalizedPayload)
+      }
+      for (const translatedEvent of translated) {
+        enqueueNormalizedEvent(directory, translatedEvent)
+      }
+      return
+    }
+
+    enqueueNormalizedEvent(directory, normalizedPayload)
   }
 
   const resetHeartbeat = () => {
@@ -951,6 +994,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
       globalThis.window.removeEventListener("offline", onOffline)
     }
     abort.abort()
+    sessionNextTranslator.clear()
     flushAll()
   }
 

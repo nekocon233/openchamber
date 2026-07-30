@@ -1596,6 +1596,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
       renderContext: 'project' | 'recent' | 'pinned' = 'project',
       renderExtras?: SessionNodeRenderExtras,
+      expandedParentsOverride?: Set<string>,
     ): React.ReactNode => (
       <SessionNodeItem
         node={node}
@@ -1605,11 +1606,12 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         archivedBucket={archivedBucket}
         pinnedSessionIds={pinnedSessionIds}
         expandedParents={
-          renderContext === 'recent'
+          expandedParentsOverride
+          ?? (renderContext === 'recent'
             ? recentExpandedParents
             : renderContext === 'pinned'
               ? pinnedExpandedParents
-              : projectExpandedParents
+              : projectExpandedParents)
         }
         hasSessionSearchQuery={hasSessionSearchQuery}
         normalizedSessionSearchQuery={normalizedSessionSearchQuery}
@@ -1790,6 +1792,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       return (!isVSCode && (showPinnedSection || showRecentSection) && !hasSessionSearchQuery) ? (
         <SidebarActivitySections
           sections={activitySections}
+          expandedParentsByContext={{ recent: recentExpandedParents, pinned: pinnedExpandedParents }}
           renderSessionNode={renderSessionNode}
           editingId={editingId}
           openSidebarMenuKey={openSidebarMenuKey}

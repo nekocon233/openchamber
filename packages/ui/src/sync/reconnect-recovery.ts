@@ -30,19 +30,19 @@ const getParentId = (session: Session): string | null | undefined => (
 )
 
 const includeAncestorSessions = (
-  parentIds: string[],
+  pendingParentIds: string[],
   includedIds: Set<string>,
   sessionsById: Map<string, Session>,
   excludedIds?: ReadonlySet<string>,
 ): void => {
-  while (parentIds.length > 0) {
-    const parentId = parentIds.pop()
+  while (pendingParentIds.length > 0) {
+    const parentId = pendingParentIds.pop()
     if (!parentId || includedIds.has(parentId) || excludedIds?.has(parentId)) continue
     const parent = sessionsById.get(parentId)
     if (!parent) continue
     includedIds.add(parentId)
     const ancestorId = getParentId(parent)
-    if (ancestorId) parentIds.push(ancestorId)
+    if (ancestorId) pendingParentIds.push(ancestorId)
   }
 }
 
@@ -61,14 +61,14 @@ export function mergeBootstrapSessions(
   for (const session of rootSessions) sessionsById.set(session.id, session)
 
   const includedIds = new Set(rootIds)
-  const pendingParentIds: string[] = []
+  const completeParentIds: string[] = []
   for (const session of completeSessions) {
     const parentId = getParentId(session)
     if (!parentId) continue
     includedIds.add(session.id)
-    pendingParentIds.push(parentId)
+    completeParentIds.push(parentId)
   }
-  includeAncestorSessions(pendingParentIds, includedIds, sessionsById)
+  includeAncestorSessions(completeParentIds, includedIds, sessionsById)
 
   if (revisions) {
     const deletedIds = new Set(
@@ -76,15 +76,33 @@ export function mergeBootstrapSessions(
         .filter(([, revision]) => revision > revisions.baselineRevision)
         .map(([sessionId]) => sessionId),
     )
+    const liveParentIds: string[] = []
     for (const session of existingSessions) {
       if ((revisions.eventRevision?.[session.id] ?? 0) <= revisions.baselineRevision) continue
       sessionsById.set(session.id, session)
       includedIds.add(session.id)
       const parentId = getParentId(session)
-      if (parentId) pendingParentIds.push(parentId)
+      if (parentId) liveParentIds.push(parentId)
     }
-    for (const sessionId of deletedIds) includedIds.delete(sessionId)
-    includeAncestorSessions(pendingParentIds, includedIds, sessionsById, deletedIds)
+    for (const sessionId of [...includedIds]) {
+      if (deletedIds.has(sessionId)) {
+        includedIds.delete(sessionId)
+        continue
+      }
+      const seen = new Set<string>()
+      const session = sessionsById.get(sessionId)
+      let parentId = session ? getParentId(session) : null
+      while (parentId && !seen.has(parentId)) {
+        if (deletedIds.has(parentId)) {
+          includedIds.delete(sessionId)
+          break
+        }
+        seen.add(parentId)
+        const parent = sessionsById.get(parentId)
+        parentId = parent ? getParentId(parent) : null
+      }
+    }
+    includeAncestorSessions(liveParentIds, includedIds, sessionsById, deletedIds)
   }
 
   const sessions = [...includedIds]

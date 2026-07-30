@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -16,9 +17,15 @@ test('production updater feed is immutable GitHub configuration', () => {
   assert.equal(Object.isFrozen(PRODUCTION_UPDATER_FEED), true);
   assert.deepEqual(PRODUCTION_UPDATER_FEED, {
     provider: 'github',
-    owner: 'openchamber',
+    owner: 'nekocon233',
     repo: 'openchamber',
   });
+});
+
+test('packaged publish metadata cannot fall back to the official repository', () => {
+  const packageMetadata = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+  assert.deepEqual(packageMetadata.build.publish, PRODUCTION_UPDATER_FEED);
+  assert.notEqual(`${packageMetadata.build.publish.owner}/${packageMetadata.build.publish.repo}`, 'openchamber/openchamber');
 });
 
 test('requires the complete E2E environment and embedded build-marker conjunction', () => {

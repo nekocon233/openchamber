@@ -105,28 +105,32 @@ and the send path reading the same grammar.
 
 ## Follow-up delivery
 
-Follow-up delivery applies only to normal prompts in an existing session.
-While the authoritative phase snapshot is `busy` or `retry`, the composer sends
-directly through OpenCode's durable prompt API with the `steer` or `queue`
-delivery selected by `useUIStore.followUpBehavior`. Idle prompts omit delivery
-and keep using `promptAsync`. If sending dismisses a blocking permission or
-question, the selected delivery is forced even when the captured phase still
-says `idle`, because rejecting the prompt can leave the active turn running.
+Follow-up queueing applies only to normal prompts in an existing session. While
+the authoritative phase snapshot is `busy` or `retry`, choosing the queue
+follow-up behavior stores the prompt in OpenChamber's host-authoritative
+follow-up queue instead of sending it to OpenCode. The same follow-up behavior
+is forced when sending dismisses a blocking permission or question, even if the
+captured phase still says `idle`, because rejecting the prompt can leave the
+active turn running. The queue entry captures the visible text, attachments,
+provider, model, agent, and variant at enqueue time; mutable composer selections
+are never re-read when the entry later sends. `steer` remains the immediate
+OpenCode delivery path for users who explicitly choose it. Idle prompts without
+a dismissed blocker, and queued drains, use the normal `promptAsync` path.
 
-The durable client uses a directory-scoped SDK client, switches the selected
-agent and model (including variant), then admits the prompt once with its stable
-message ID. The three-step sequence is serialized per runtime, directory, and
-session so concurrent follow-ups cannot exchange model or agent selections; a
-runtime change stops the sequence before its next request. It never retries an
-ambiguous POST failure. Slash commands and shell input retain their existing
-transports and never opt into follow-up delivery.
+Queued entries are user-visible staged work, not read-only projections. They can
+be removed, edited back into the composer, marked queued/unqueued, reordered,
+or sent manually. Web and desktop use the host queue API with revisioned
+snapshots, outbox replay, and revision hints; VS Code exposes an explicit
+unsupported API, so the store uses its runtime-scoped local fallback. Claim and
+release/complete operations prevent two clients from draining the same queued
+entry. When the session reaches idle, the composer claims only the first
+unclaimed `queued` entry and sends it with its captured configuration; failure
+releases the entry instead of dropping it.
 
-Durable `PromptInput` cannot represent structured output format or synthetic
-parts. Those combinations fail explicitly instead of dropping content;
-the composer restores submitted text, attachments, inline drafts, and pending
-synthetic parts. While auto-review owns the session, submit does not consume or
-send anything. Preset and dictation submissions are inserted into the composer
-so text supplied outside a mounted editor is not lost.
+Slash commands and shell input retain their existing transports and never opt
+into follow-up queueing. While auto-review owns the session, submit does not
+consume or send anything. Preset and dictation submissions are inserted into
+the composer so text supplied outside a mounted editor is not lost.
 
 ## Mobile
 

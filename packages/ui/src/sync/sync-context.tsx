@@ -90,6 +90,12 @@ import {
   setImperativeSessionMessageLoader,
   type SessionMessageLoadState,
 } from "./session-message-loader"
+import {
+  handleFollowUpQueueGlobalEvent,
+  notifyFollowUpQueueTransportReady,
+  useMessageQueueStore,
+  type MessageQueueRuntimeContext,
+} from "@/stores/messageQueueStore"
 import { retainEffectResourceThroughReplay } from "./effect-resource-lifecycle"
 
 // ---------------------------------------------------------------------------
@@ -798,6 +804,11 @@ const getSessionIdFromPayload = (event: Event): string | null => {
 
   const props = properties as Record<string, unknown>
 
+  if (event.type.startsWith("session.next.")) {
+    const sessionID = props.sessionID
+    return typeof sessionID === "string" && sessionID.length > 0 ? sessionID : null
+  }
+
   if (event.type === "message.updated") {
     const info = props.info
     if (!info || typeof info !== "object") {
@@ -867,6 +878,11 @@ const getMessageIdFromPayload = (event: Event): string | null => {
   }
 
   const props = properties as Record<string, unknown>
+
+  if (event.type.startsWith("session.next.")) {
+    const messageID = props.messageID
+    return typeof messageID === "string" && messageID.length > 0 ? messageID : null
+  }
 
   if (event.type === "message.updated") {
     const info = props.info
@@ -1552,6 +1568,7 @@ function handleEvent(
     const sessionID = getSessionIdFromPayload(payload)
     if (sessionID && directory && directory !== "global") {
       cleanupPersistedSessionState({ runtimeKey: expectedRuntimeKey, directory, sessionId: sessionID })
+      useMessageQueueStore.getState().dropSession(sessionID)
     }
   }
 
@@ -1964,6 +1981,7 @@ export function SyncProvider(props: {
   const pipelineHasConnectedRef = useRef(false)
   const pipelineDisconnectedBeforeFirstConnectRef = useRef(false)
   const sidebarStateGeneration = useSidebarStateStore((state) => state.generation)
+  const followUpQueueGeneration = useMessageQueueStore((state) => state.generation)
 
   useEffect(() => {
     resyncingDirectoriesRef.current.clear()
@@ -2157,6 +2175,10 @@ export function SyncProvider(props: {
       runtimeKey,
       generation: sidebarStateGeneration,
     }
+    const followUpQueueRuntimeContext: MessageQueueRuntimeContext = {
+      runtimeKey,
+      generation: followUpQueueGeneration,
+    }
     const pipeline = createEventPipeline({
       sdk: props.sdk,
       transport: messageStreamTransport,
@@ -2175,6 +2197,7 @@ export function SyncProvider(props: {
         try {
           for (const payload of payloads) {
             handleSidebarStateGlobalEvent(payload, sidebarRuntimeContext)
+            handleFollowUpQueueGlobalEvent(payload, followUpQueueRuntimeContext)
             dispatchVSCodeRuntimeNotificationEvent(directory, payload)
             if (payload.type === "installation.update-available") {
               const version = typeof (payload.properties as { version?: unknown })?.version === "string"
@@ -2192,6 +2215,7 @@ export function SyncProvider(props: {
       },
       onReconnect: () => {
         notifySidebarStateTransportReady(sidebarRuntimeContext)
+        notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         useConfigStore.setState({
           isConnected: true,
           hasEverConnected: true,
@@ -2222,6 +2246,7 @@ export function SyncProvider(props: {
       },
       onTransportSwitch: () => {
         notifySidebarStateTransportReady(sidebarRuntimeContext)
+        notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         // Transport changes are gap-prone in real networks. Treat them like a
         // reconnect and refresh active session snapshots from HTTP.
         useConfigStore.setState({
@@ -2241,7 +2266,7 @@ export function SyncProvider(props: {
       }
       pipeline.cleanup()
     }
-  }, [props.sdk, childStores, routingIndex, messageStreamTransport, runtimeKey, sidebarStateGeneration, triggerDirectoryResync])
+  }, [props.sdk, childStores, routingIndex, messageStreamTransport, runtimeKey, sidebarStateGeneration, followUpQueueGeneration, triggerDirectoryResync])
 
   useEffect(() => {
     let stopped = false

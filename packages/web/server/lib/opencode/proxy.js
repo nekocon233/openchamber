@@ -782,7 +782,7 @@ export const registerOpenCodeProxy = (app, deps) => {
 
         replayParsedBody(proxyReq, req);
       },
-      proxyRes: (proxyRes) => {
+      proxyRes: (proxyRes, req) => {
         for (const key of Object.keys(proxyRes.headers || {})) {
           // http-proxy streams the raw entity body, so its encoding header must
           // stay intact. Fetch-based proxy paths use the stricter shared filter
@@ -790,6 +790,19 @@ export const registerOpenCodeProxy = (app, deps) => {
           if (key.toLowerCase() === 'content-encoding') continue;
           if (!shouldForwardProxyResponseHeader(key)) {
             delete proxyRes.headers[key];
+          }
+        }
+        const statusCode = Number(proxyRes.statusCode ?? 0);
+        const deletedSession = req.method === 'DELETE'
+          && statusCode >= 200
+          && statusCode < 300
+          ? /^\/api\/session\/([^/?]+)(?:\?.*)?$/.exec(String(req.originalUrl ?? ''))
+          : null;
+        if (deletedSession && typeof deps.onSessionDeleted === 'function') {
+          try {
+            deps.onSessionDeleted(decodeURIComponent(deletedSession[1]));
+          } catch {
+            // The upstream delete remains authoritative; realtime/startup reconciliation retries cleanup.
           }
         }
       },

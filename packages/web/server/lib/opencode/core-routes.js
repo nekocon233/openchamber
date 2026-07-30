@@ -77,7 +77,8 @@ const requiresExternalAuth = (req) => {
   if (req.method === 'POST' && pathname === '/api/client-auth/pairing/redeem') return false;
   if (pathname === '/api/version') return false;
   if (pathname === '/api' || pathname.startsWith('/api/')) return true;
-  return pathname === '/auth/url-token'
+  return pathname.startsWith('/auth/follow-up-queue/')
+    || pathname === '/auth/url-token'
     || (req.method === 'GET' && pathname === '/auth/session');
 };
 
@@ -381,6 +382,13 @@ export const registerServerStatusRoutes = (app, dependencies) => {
 
   app.use(async (req, res, next) => {
     try {
+      const pathname = getRequestPathname(req).toLowerCase();
+      if (
+        pathname.startsWith('/auth/follow-up-queue/')
+        || pathname.startsWith('/api/follow-up-queue/')
+      ) {
+        res.setHeader('Cache-Control', 'no-store');
+      }
       await enforceExternalRequestAuth({ req, res, next, tunnelAuthController, uiAuthController });
     } catch (error) {
       next(error);
@@ -1208,6 +1216,13 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       next(err);
     }
   });
+  app.use('/auth/follow-up-queue', async (req, res, next) => {
+    try {
+      await requireApiAuth(req, res, next);
+    } catch (err) {
+      next(err);
+    }
+  });
 };
 
 export const registerSettingsUtilityRoutes = (app, dependencies) => {
@@ -1253,7 +1268,14 @@ export const registerCommonRequestMiddleware = (app, dependencies) => {
   const { express, verboseRequestLogs = false } = dependencies;
 
   app.use((req, res, next) => {
-    if (req.path.startsWith('/api/behavior')) {
+    const normalizedPath = req.path.toLowerCase();
+    if (
+      normalizedPath.startsWith('/api/follow-up-queue/')
+      || normalizedPath.startsWith('/auth/follow-up-queue/')
+    ) {
+      res.setHeader('Cache-Control', 'no-store');
+      next();
+    } else if (req.path.startsWith('/api/behavior')) {
       const contentLength = parseInt(req.headers['content-length'] || '0', 10);
       if (contentLength > 1024 * 1024) {
         return res.status(413).json({ error: 'Content exceeds maximum size of 1048576 bytes' });
@@ -1306,7 +1328,14 @@ export const registerCommonRequestMiddleware = (app, dependencies) => {
   });
 
   const urlencoded = express.urlencoded({ extended: true, limit: '50mb' });
-  app.use(urlencoded);
+  app.use((req, res, next) => {
+    const normalizedPath = req.path.toLowerCase();
+    if (
+      normalizedPath.startsWith('/api/follow-up-queue/')
+      || normalizedPath.startsWith('/auth/follow-up-queue/')
+    ) return next();
+    return urlencoded(req, res, next);
+  });
 
   app.use((req, _res, next) => {
     if (verboseRequestLogs) {

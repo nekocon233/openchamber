@@ -38,6 +38,19 @@ const mergeParts = (parts: Part[] | undefined, want: Part[]) => {
   return next
 }
 
+const reconcileConfirmedMessage = (server: Message, optimistic: Message): Message => {
+  if (server.role !== 'user' || optimistic.role !== 'user') return server
+  const model = server.model?.providerID && server.model?.modelID
+    ? server.model
+    : optimistic.model
+  if (server.agent && model === server.model) return server
+  return {
+    ...server,
+    agent: server.agent || optimistic.agent,
+    model,
+  }
+}
+
 export function mergeOptimisticPage(page: MessagePage, items: OptimisticItem[]) {
   if (items.length === 0) return { ...page, confirmed: [] as string[] }
 
@@ -53,6 +66,7 @@ export function mergeOptimisticPage(page: MessagePage, items: OptimisticItem[]) 
     const current = part.get(item.message.id)
     if (found && hasParts(current, item.parts)) {
       confirmed.push(item.message.id)
+      session[result.index] = reconcileConfirmedMessage(session[result.index], item.message)
       continue
     }
 

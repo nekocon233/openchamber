@@ -1,10 +1,10 @@
 import React from 'react';
 import type { Session } from '@opencode-ai/sdk/v2';
-import { opencodeClient } from '@/lib/opencode/client';
 import { ensureGlobalSessionsLoaded, useGlobalSessionsStore, resolveGlobalSessionDirectory } from '@/stores/useGlobalSessionsStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { getAllSyncSessions } from '@/sync/sync-refs';
 import { useUIStore } from '@/stores/useUIStore';
+import { archiveSession, deleteSessionInDirectory } from '@/sync/session-actions';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AUTO_DELETE_KEEP_RECENT = 5;
@@ -103,15 +103,13 @@ export const useSessionAutoCleanup = (enabledOrOptions?: boolean | CleanupOption
   }, [autoDeleteAfterDays, currentSessionId, globalSessions]);
 
   const runCleanup = React.useCallback(
-      async ({ force = false }: { force?: boolean } = {}): Promise<CleanupResult> => {
+    async ({ force = false }: { force?: boolean } = {}): Promise<CleanupResult> => {
       if (runningRef.current) {
         return { completedIds: [], failedIds: [], action: sessionRetentionAction, skippedReason: 'running' };
       }
 
-      if (!autoDeleteEnabled || autoDeleteAfterDays <= 0) {
-        if (!force) {
-          return { completedIds: [], failedIds: [], action: sessionRetentionAction, skippedReason: 'disabled' };
-        }
+      if (!force && (!autoDeleteEnabled || autoDeleteAfterDays <= 0)) {
+        return { completedIds: [], failedIds: [], action: sessionRetentionAction, skippedReason: 'disabled' };
       }
 
       if (isLoading) {
@@ -157,22 +155,16 @@ export const useSessionAutoCleanup = (enabledOrOptions?: boolean | CleanupOption
           }
 
           try {
-            if (sessionRetentionAction === 'archive') {
-              await opencodeClient.updateSession(id, { time: { archived: Date.now() } }, directory);
-            } else {
-              await opencodeClient.deleteSession(id, directory);
-            }
-            completedIds.push(id);
+            const completed = sessionRetentionAction === 'archive'
+              ? await archiveSession(id, directory)
+              : await deleteSessionInDirectory(id, directory);
+            if (completed) completedIds.push(id);
+            else failedIds.push(id);
           } catch {
             failedIds.push(id);
           }
         }
 
-        if (sessionRetentionAction === 'archive') {
-          useGlobalSessionsStore.getState().archiveSessions(completedIds);
-        } else {
-          useGlobalSessionsStore.getState().removeSessions(completedIds);
-        }
         return { completedIds, failedIds, action: sessionRetentionAction };
       } finally {
         runningRef.current = false;

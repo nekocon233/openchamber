@@ -11,6 +11,7 @@ import {
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(currentDirectory, 'main.tsx'), 'utf8');
 const mobileAppSource = readFileSync(join(currentDirectory, 'apps/MobileApp.tsx'), 'utf8');
+const mobileRendererSource = readFileSync(join(currentDirectory, 'apps/renderMobileApp.tsx'), 'utf8');
 
 describe('primary surface session restoration', () => {
   test('guards browser access and restores eligible surfaces before React mounts', () => {
@@ -21,6 +22,16 @@ describe('primary surface session restoration', () => {
     expect(guardIndex).toBeGreaterThan(-1);
     expect(restoreIndex).toBeGreaterThan(guardIndex);
     expect(restoreIndex).toBeLessThan(source.indexOf('createRoot(rootElement).render'));
+  });
+
+  test('uses the same pre-mount navigation guard on the mobile renderer', () => {
+    const guardIndex = mobileRendererSource.indexOf(
+      "if (typeof window !== 'undefined' && shouldPrimePrimarySessionNavigation())",
+    );
+    const restoreIndex = mobileRendererSource.indexOf('restoreForRuntimeSwitch()');
+    expect(guardIndex).toBeGreaterThan(-1);
+    expect(restoreIndex).toBeGreaterThan(guardIndex);
+    expect(restoreIndex).toBeLessThan(mobileRendererSource.indexOf('createRoot(rootElement).render'));
   });
 
   test('restores a normal browser root but preserves explicit URL targets', () => {
@@ -47,6 +58,10 @@ describe('primary surface session restoration', () => {
     expect(shouldPrimePrimarySessionNavigation({
       search: '?directory=%2Frepo',
       pathname: '/',
+    }, 'ses_notification')).toBe(false);
+    expect(shouldPrimePrimarySessionNavigation({
+      search: '?session=ses_other&directory=%2Frepo',
+      pathname: '/mobile.html',
     }, 'ses_notification')).toBe(false);
   });
 

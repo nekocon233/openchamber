@@ -35,6 +35,8 @@ import {
 import { createOpenCodeIdentifier } from "@/lib/opencode/identifier"
 import { getImperativeSessionMessageLoader } from "./session-message-loader"
 import { cleanupPersistedSessionState } from "./session-deletion-cleanup"
+import { useMessageQueueStore } from "@/stores/messageQueueStore"
+import { normalizePath } from "@/lib/pathNormalization"
 
 const MESSAGE_REFETCH_LIMIT = 100
 const SEND_CONFIRMATION_REFETCH_LIMIT = 30
@@ -71,15 +73,17 @@ let _optimisticAdd: ((input: OptimisticAddInput) => void) | null = null
 let _optimisticRemove: ((input: OptimisticRemoveInput) => void) | null = null
 let _optimisticConfirm: ((input: OptimisticConfirmInput) => void) | null = null
 
+type SessionMembershipMutation = "present" | "removed"
+
 function sessionMutationPatch(
   state: ReturnType<DirectoryStoreApi["getState"]>,
   sessionId: string,
-  deleted: boolean,
+  membership: SessionMembershipMutation,
 ) {
   const revision = (state.sessionRevision ?? 0) + 1
   const sessionEventRevision = { ...(state.sessionEventRevision ?? {}) }
   const sessionDeletedRevision = { ...(state.sessionDeletedRevision ?? {}) }
-  if (deleted) {
+  if (membership === "removed") {
     sessionDeletedRevision[sessionId] = revision
     delete sessionEventRevision[sessionId]
   } else {
@@ -318,7 +322,7 @@ function reconcileSessionMove(
     question: questions.source,
     message: messages.source,
     part: parts.source,
-    ...sessionMutationPatch(sourceState, session.id, true),
+    ...sessionMutationPatch(sourceState, session.id, "removed"),
   })
   destinationStore.setState({
     session: destinationSessions,
@@ -332,7 +336,7 @@ function reconcileSessionMove(
     question: questions.destination,
     message: messages.destination,
     part: parts.destination,
-    ...sessionMutationPatch(destinationState, session.id, false),
+    ...sessionMutationPatch(destinationState, session.id, "present"),
   })
 
   return movedSession
@@ -785,12 +789,13 @@ function removeSessionFromLiveStores(sessionId: string, preferredDirectory?: str
   const snapshots: RemovedSessionSnapshot[] = []
   const visited = new Set<string>()
   const candidates: Array<[string, DirectoryStoreApi]> = []
+  const normalizedPreferredDirectory = preferredDirectory ? normalizePath(preferredDirectory) : null
 
-  if (preferredDirectory) {
-    const preferredStore = _childStores.children.get(preferredDirectory)
+  if (normalizedPreferredDirectory) {
+    const preferredStore = _childStores.getChild(normalizedPreferredDirectory)
     if (preferredStore) {
-      candidates.push([preferredDirectory, preferredStore])
-      visited.add(preferredDirectory)
+      candidates.push([normalizedPreferredDirectory, preferredStore])
+      visited.add(normalizedPreferredDirectory)
     }
   }
 
@@ -801,13 +806,12 @@ function removeSessionFromLiveStores(sessionId: string, preferredDirectory?: str
 
   for (const [directory, store] of candidates) {
     const current = store.getState()
-    if (!current.session.some((session) => session.id === sessionId)) {
-      continue
-    }
+    const containsSession = current.session.some((session) => session.id === sessionId)
+    if (!containsSession && directory !== normalizedPreferredDirectory) continue
     snapshots.push({ directory })
     store.setState({
-      session: current.session.filter((session) => session.id !== sessionId),
-      ...sessionMutationPatch(current, sessionId, true),
+      ...(containsSession ? { session: current.session.filter((session) => session.id !== sessionId) } : {}),
+      ...sessionMutationPatch(current, sessionId, "removed"),
     })
   }
 
@@ -846,6 +850,7 @@ function finalizeConfirmedSessionDeletion(
   useGlobalSessionsStore.getState().removeSessions([sessionId])
   cleanupSessionNavigation(sessionId, runtimeContext, true)
   if (sessionDirectory) {
+    useMessageQueueStore.getState().dropSession(sessionId)
     cleanupPersistedSessionState({
       runtimeKey: runtimeContext.runtimeKey,
       directory: sessionDirectory,
@@ -919,9 +924,9 @@ export async function deleteSessionInDirectory(sessionId: string, directory: str
   }
 }
 
-export async function archiveSession(sessionId: string): Promise<boolean> {
+export async function archiveSession(sessionId: string, directoryOverride?: string): Promise<boolean> {
   const runtimeContext = captureSessionActionRuntime()
-  const sessionDirectory = getSessionDirectory(sessionId)
+  const sessionDirectory = directoryOverride ?? getSessionDirectory(sessionId)
   const archivedAt = Date.now()
   try {
     await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory, runtimeContext)

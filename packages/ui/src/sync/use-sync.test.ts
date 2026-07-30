@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message, Part } from '@opencode-ai/sdk/v2/client'
 
-import { shouldFetchSessionForRenderableSync, shouldReuseSyncSessionInflight, hasUserMessage } from './use-sync'
+import {
+  canCommitSessionDetailLoad,
+  hasUserMessage,
+  queueForcedSyncSessionFollowUp,
+  shouldFetchSessionForRenderableSync,
+  shouldReuseSyncSessionInflight,
+} from './use-sync'
 import { mergeOptimisticPage } from './optimistic'
 import { materializeSessionSnapshots } from './materialization'
 
@@ -31,6 +37,26 @@ describe('shouldFetchSessionForRenderableSync', () => {
   })
 })
 
+describe('canCommitSessionDetailLoad', () => {
+  test('rejects same-session updates and removals newer than the request baseline', () => {
+    expect(canCommitSessionDetailLoad({
+      sessionEventRevision: { target: 4 },
+      sessionDeletedRevision: {},
+    }, 'target', 3)).toBe(false)
+    expect(canCommitSessionDetailLoad({
+      sessionEventRevision: {},
+      sessionDeletedRevision: { target: 4 },
+    }, 'target', 3)).toBe(false)
+  })
+
+  test('allows unrelated mutations and revisions already included in the baseline', () => {
+    expect(canCommitSessionDetailLoad({
+      sessionEventRevision: { target: 3, other: 5 },
+      sessionDeletedRevision: {},
+    }, 'target', 3)).toBe(true)
+  })
+})
+
 describe('shouldReuseSyncSessionInflight', () => {
   test('reuses a request only for the same loader authority', () => {
     const owner = {}
@@ -39,6 +65,71 @@ describe('shouldReuseSyncSessionInflight', () => {
     expect(shouldReuseSyncSessionInflight(existing, owner, 3)).toBe(true)
     expect(shouldReuseSyncSessionInflight(existing, {}, 3)).toBe(false)
     expect(shouldReuseSyncSessionInflight(existing, owner, 4)).toBe(false)
+  })
+
+  test('coalesces forced follow-ups and waits for the trailing run', async () => {
+    let resolveInflight!: () => void
+    let resolveFollowUp!: () => void
+    const existing = {
+      promise: new Promise<void>((resolve) => { resolveInflight = resolve }),
+      force: false,
+      forcedFollowUp: null as Promise<void> | null,
+    }
+    let runs = 0
+    const run = () => {
+      runs += 1
+      return new Promise<void>((resolve) => { resolveFollowUp = resolve })
+    }
+
+    const first = queueForcedSyncSessionFollowUp(existing, () => true, run)
+    const duplicate = queueForcedSyncSessionFollowUp(existing, () => true, run)
+    expect(duplicate).toBe(first)
+    expect(runs).toBe(0)
+
+    resolveInflight()
+    await Promise.resolve()
+    expect(runs).toBe(1)
+
+    let settled = false
+    void first.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    resolveFollowUp()
+    await Promise.all([first, duplicate])
+    expect(settled).toBe(true)
+  })
+
+  test('drops a forced follow-up after its authority becomes stale', async () => {
+    let resolveInflight!: () => void
+    const existing = {
+      promise: new Promise<void>((resolve) => { resolveInflight = resolve }),
+      force: false,
+      forcedFollowUp: null as Promise<void> | null,
+    }
+    let current = true
+    let runs = 0
+    const followUp = queueForcedSyncSessionFollowUp(existing, () => current, async () => { runs += 1 })
+
+    current = false
+    resolveInflight()
+    await followUp
+    expect(runs).toBe(0)
+  })
+
+  test('shares an in-flight request that already satisfies forced freshness', async () => {
+    let resolveInflight!: () => void
+    const existing = {
+      promise: new Promise<void>((resolve) => { resolveInflight = resolve }),
+      force: true,
+      forcedFollowUp: null as Promise<void> | null,
+    }
+    let runs = 0
+
+    const followUp = queueForcedSyncSessionFollowUp(existing, () => true, async () => { runs += 1 })
+    expect(followUp).toBe(existing.promise)
+    resolveInflight()
+    await followUp
+    expect(runs).toBe(0)
   })
 })
 

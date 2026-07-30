@@ -27,6 +27,7 @@ type GlobalSessionStatusEntry = {
 type GlobalSessionStatusState = {
   statusById: Map<string, GlobalSessionStatusEntry>;
   resolvedStatusById: Map<string, ResolvedStatusType>;
+  statusSnapshotAtByDirectory: Map<string, number>;
   revision: number;
   revisionById: Map<string, number>;
   revisionFloor: number;
@@ -35,6 +36,7 @@ type GlobalSessionStatusState = {
 export const useGlobalSessionStatusStore = create<GlobalSessionStatusState>(() => ({
   statusById: new Map(),
   resolvedStatusById: new Map(),
+  statusSnapshotAtByDirectory: new Map(),
   revision: 0,
   revisionById: new Map(),
   revisionFloor: 0,
@@ -46,6 +48,7 @@ export const resetGlobalSessionStatuses = (): void => {
     return {
       statusById: new Map(),
       resolvedStatusById: new Map(),
+      statusSnapshotAtByDirectory: new Map(),
       revision,
       revisionById: new Map(),
       revisionFloor: revision,
@@ -280,6 +283,9 @@ export const applyGlobalSessionStatusSnapshot = (
     const touchedIds = new Set<string>();
     let resolvedStatusById = state.resolvedStatusById;
     const now = Date.now();
+    const statusSnapshotAtByDirectory = mode === 'authoritative'
+      ? new Map(state.statusSnapshotAtByDirectory).set(directory, now)
+      : state.statusSnapshotAtByDirectory;
 
     const setResolvedStatus = (sessionId: string, status: ResolvedStatusType) => {
       if (resolvedStatusById.get(sessionId) === status) return;
@@ -354,7 +360,11 @@ export const applyGlobalSessionStatusSnapshot = (
         markOrdering(sessionId, type);
       }
     }
-    if (touchedIds.size === 0) return state;
+    if (touchedIds.size === 0) {
+      return statusSnapshotAtByDirectory === state.statusSnapshotAtByDirectory
+        ? state
+        : { statusSnapshotAtByDirectory };
+    }
 
     const revision = state.revision + 1;
     const revisionById = new Map(state.revisionById);
@@ -372,6 +382,7 @@ export const applyGlobalSessionStatusSnapshot = (
     return {
       statusById,
       resolvedStatusById,
+      statusSnapshotAtByDirectory,
       revision,
       revisionById,
       revisionFloor,

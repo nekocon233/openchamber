@@ -103,6 +103,17 @@ function areSessionStatusesEqual(left: SessionStatus | undefined, right: Session
   return true
 }
 
+function preserveUserSelection(existing: Message, next: Message): Message {
+  if (existing.role !== 'user' || next.role !== 'user') return next
+  const model = next.model?.providerID && next.model?.modelID ? next.model : existing.model
+  if (next.agent && model === next.model) return next
+  return {
+    ...next,
+    agent: next.agent || existing.agent,
+    model,
+  }
+}
+
 function areJsonEquivalent(left: unknown, right: unknown): boolean {
   if (left === right) return true
   if (left === undefined || right === undefined) return left === right
@@ -355,14 +366,15 @@ export function applyDirectoryEvent(
       if (result.found) {
         // Skip message replacement if unchanged — preserves reference, avoids re-render
         const existing = messages[result.index]
-        const unchanged = areMessageUpdateFieldsEqual(existing, info)
+        const nextInfo = preserveUserSelection(existing, info)
+        const unchanged = areMessageUpdateFieldsEqual(existing, nextInfo)
         if (unchanged) {
           syncDebug.reducer.messageUpdatedUnchanged(info.sessionID, info.id, info.role, (info as { finish?: unknown }).finish, (info.time as { completed?: number })?.completed)
           return false
         }
         const next = [...messages]
-        next[result.index] = info
-        draft.message[info.sessionID] = next
+        next[result.index] = nextInfo
+        draft.message[nextInfo.sessionID] = next
       } else {
         const next = [...messages]
         next.splice(result.index, 0, info)

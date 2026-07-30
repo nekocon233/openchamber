@@ -6,6 +6,7 @@ import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-sw
 import { useUIStore } from '@/stores/useUIStore';
 import type { NotificationPayload } from '@/lib/api/types';
 import { handleSidebarStateGlobalEvent } from '@/stores/useSidebarStateStore';
+import { handleFollowUpQueueGlobalEvent } from '@/stores/messageQueueStore';
 
 const NOTIFICATION_STREAM_PATH = '/api/notifications/stream';
 const NOTIFICATION_STREAM_HEARTBEAT_TIMEOUT_MS = 45_000;
@@ -211,6 +212,7 @@ export const startWebNotificationStream = (options: WebNotificationStreamOptions
 
           try {
             handleSidebarStateGlobalEvent(value);
+            handleFollowUpQueueGlobalEvent(value);
             options.onEvent(value);
           } catch {
             // A consumer failure must not tear down the shared runtime stream.

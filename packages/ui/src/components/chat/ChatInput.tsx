@@ -5,6 +5,12 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import {
+    createMessageQueueTarget,
+    getMessageQueueKey,
+    useMessageQueueStore,
+    type QueuedMessage,
+} from '@/stores/messageQueueStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useInputStore } from '@/sync/input-store';
 import {
@@ -15,7 +21,7 @@ import {
 } from '@/sync/attachment-files';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import * as sessionActions from '@/sync/session-actions';
-import { useUserMessageHistory } from "@/sync/sync-context";
+import { useSessionPermissions, useSessionQuestions, useUserMessageHistory } from "@/sync/sync-context";
 import { getInlineCommentDraftKey, useInlineCommentDraftStore, type InlineCommentDraft, type InlineCommentDraftTarget } from '@/stores/useInlineCommentDraftStore';
 import { useSnippetsStore } from '@/stores/useSnippetsStore';
 import { appendInlineComments } from '@/lib/messages/inlineComments';
@@ -140,6 +146,7 @@ import { MobilePillComposer } from './composer/ui/MobilePillComposer';
 import { ComposerContextChips } from './composer/ui/ComposerContextChips';
 import { LinkedReferenceRow } from './composer/ui/LinkedReferenceRow';
 import { RevertedMessageDock } from './composer/ui/RevertedMessageDock';
+import { QueuedMessageChips } from './QueuedMessageChips';
 import { SessionSuggestionChip } from '@/components/chat/SessionSuggestionChip';
 import { SessionGoalRow } from '@/components/chat/SessionGoalRow';
 
@@ -211,6 +218,7 @@ const MemoComposerDictation = React.memo(ComposerDictation);
 const MemoMobileAgentButton = React.memo(MobileAgentButton);
 const MemoMobileModelButton = React.memo(MobileModelButton);
 const MemoStatusRow = React.memo(StatusRow);
+const EMPTY_QUEUE: QueuedMessage[] = [];
 
 interface ChatInputProps {
     onOpenSettings?: () => void;
@@ -362,6 +370,36 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     const inputBarOffset = useUIStore((state) => state.inputBarOffset);
     const persistChatDraft = useUIStore((state) => state.persistChatDraft);
     const followUpBehavior = useUIStore((state) => state.followUpBehavior);
+    const queueRuntimeKey = useMessageQueueStore((state) => state.runtimeKey);
+    const queueGeneration = useMessageQueueStore((state) => state.generation);
+    const messageQueueTarget = React.useMemo(
+        () => currentSessionId
+            ? createMessageQueueTarget(
+                currentSessionId,
+                currentSessionDirectoryForSync ?? currentDirectory,
+                queueRuntimeKey,
+            )
+            : null,
+        [currentDirectory, currentSessionDirectoryForSync, currentSessionId, queueRuntimeKey],
+    );
+    const messageQueueKey = messageQueueTarget ? getMessageQueueKey(messageQueueTarget) : null;
+    const queuedMessages = useMessageQueueStore(
+        React.useCallback(
+            (state) => messageQueueKey
+                ? state.queuedMessages[messageQueueKey] ?? EMPTY_QUEUE
+                : EMPTY_QUEUE,
+            [messageQueueKey],
+        ),
+    );
+    const addToQueue = useMessageQueueStore((state) => state.addToQueue);
+    const setQueuedStatus = useMessageQueueStore((state) => state.setQueuedStatus);
+    const watchQueueSession = useMessageQueueStore((state) => state.watchSession);
+    const claimQueuedMessage = useMessageQueueStore((state) => state.claim);
+    const completeQueuedMessage = useMessageQueueStore((state) => state.complete);
+    const releaseQueuedMessage = useMessageQueueStore((state) => state.release);
+    const queuedMessageSendInFlightRef = React.useRef<{ itemId: string } | null>(null);
+    const queuedDrainInFlightRef = React.useRef<{ itemId: string } | null>(null);
+    const [sendingQueuedMessageId, setSendingQueuedMessageId] = React.useState<string | null>(null);
     const inputSpellcheckEnabled = useUIStore((state) => state.inputSpellcheckEnabled);
     const isExpandedInput = useUIStore((state) => state.isExpandedInput);
     const setExpandedInput = useUIStore((state) => state.setExpandedInput);
@@ -780,11 +818,124 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
     // Session activity for follow-up delivery and controls
     const { phase: sessionPhase } = useCurrentSessionActivity();
+    const pendingBlockingPermissions = useSessionPermissions(
+        currentSessionId ?? '',
+        currentSessionDirectoryForSync ?? currentDirectory,
+    );
+    const pendingBlockingQuestions = useSessionQuestions(
+        currentSessionId ?? '',
+        currentSessionDirectoryForSync ?? currentDirectory,
+    );
+    const hasPendingBlockingRequests = pendingBlockingPermissions.length > 0 || pendingBlockingQuestions.length > 0;
     const autoReviewRunning = useAutoReviewStore(React.useCallback((state) => {
         if (!currentSessionId) return false;
         const run = state.runsByOriginalSessionID[currentSessionId];
         return run?.status === 'running' && run.runtimeKey === getRuntimeKey();
     }, [currentSessionId]));
+
+    React.useEffect(() => {
+        queuedMessageSendInFlightRef.current = null;
+        queuedDrainInFlightRef.current = null;
+        setSendingQueuedMessageId(null);
+    }, [messageQueueKey, queueGeneration]);
+
+    React.useEffect(() => {
+        if (!messageQueueTarget) return;
+        return watchQueueSession(messageQueueTarget);
+    }, [messageQueueKey, messageQueueTarget, queueGeneration, watchQueueSession]);
+
+    const sendQueuedMessage = React.useCallback(async (messageId: string, mode: 'manual' | 'auto'): Promise<boolean> => {
+        if (!messageQueueTarget || queuedMessageSendInFlightRef.current) return false;
+        const item = useMessageQueueStore.getState().getQueueForTarget(messageQueueTarget)
+            .find((candidate) => candidate.id === messageId);
+        if (!item) return false;
+        queuedMessageSendInFlightRef.current = { itemId: messageId };
+        setSendingQueuedMessageId(messageId);
+        const claim = await claimQueuedMessage(messageQueueTarget, messageId, mode).catch(() => null);
+        if (!claim) {
+            queuedMessageSendInFlightRef.current = null;
+            setSendingQueuedMessageId(null);
+            return false;
+        }
+        try {
+            const sendConfig = item.sendConfig ?? {
+                providerID: currentProviderId ?? '',
+                modelID: currentModelId ?? '',
+                ...(currentAgentName ? { agent: currentAgentName } : {}),
+                ...(currentVariant ? { variant: currentVariant } : {}),
+            };
+            if (!sendConfig.providerID || !sendConfig.modelID) {
+                throw new Error('Queued message is missing its captured model selection');
+            }
+            await sendMessage(
+                item.content,
+                sendConfig.providerID,
+                sendConfig.modelID,
+                sendConfig.agent,
+                item.attachments,
+                undefined,
+                undefined,
+                sendConfig.variant,
+                'normal',
+                {
+                    sessionId: messageQueueTarget.sessionId,
+                    directory: messageQueueTarget.directory,
+                    messageId: item.messageId,
+                },
+            );
+            await completeQueuedMessage(messageQueueTarget, messageId, claim.claimId, claim.context);
+            return true;
+        } catch {
+            await releaseQueuedMessage(messageQueueTarget, messageId, claim.claimId, 'staged', claim.context).catch(() => false);
+            toast.error(t('chat.queuedMessage.sendFailed'));
+            return false;
+        } finally {
+            if (queuedMessageSendInFlightRef.current?.itemId === messageId) {
+                queuedMessageSendInFlightRef.current = null;
+            }
+            setSendingQueuedMessageId(null);
+        }
+    }, [
+        claimQueuedMessage,
+        completeQueuedMessage,
+        currentAgentName,
+        currentModelId,
+        currentProviderId,
+        currentVariant,
+        messageQueueTarget,
+        releaseQueuedMessage,
+        sendMessage,
+        t,
+    ]);
+
+    const handleQueuedMessageSend = React.useCallback((messageId: string) => {
+        void sendQueuedMessage(messageId, 'manual');
+    }, [sendQueuedMessage]);
+
+    const handleQueuedMessageQueue = React.useCallback((messageId: string) => {
+        if (!messageQueueTarget) return;
+        setQueuedStatus(messageQueueTarget, messageId, 'queued');
+    }, [messageQueueTarget, setQueuedStatus]);
+
+    const handleQueuedMessageEdit = React.useCallback((content: string) => {
+        messageRef.current = content;
+        setMessage(content);
+        writeChatDraft(chatDraftIdentity, content, confirmedMentionsRef.current);
+        window.setTimeout(() => composerRef.current?.focus(), 0);
+    }, [chatDraftIdentity]);
+
+    React.useEffect(() => {
+        if (!messageQueueTarget || sessionPhase !== 'idle' || autoReviewRunning || hasPendingBlockingRequests) return;
+        if (queuedMessageSendInFlightRef.current || queuedDrainInFlightRef.current) return;
+        const next = queuedMessages.find((entry) => entry.status === 'queued' && !entry.claim);
+        if (!next) return;
+        queuedDrainInFlightRef.current = { itemId: next.id };
+        void sendQueuedMessage(next.id, 'auto').finally(() => {
+            if (queuedDrainInFlightRef.current?.itemId === next.id) {
+                queuedDrainInFlightRef.current = null;
+            }
+        });
+    }, [autoReviewRunning, hasPendingBlockingRequests, messageQueueTarget, queuedMessages, sendQueuedMessage, sessionPhase]);
 
     const handleOpenMobilePanel = React.useCallback((panel: MobileControlsPanel) => {
         if (!isMobile) {
@@ -841,6 +992,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             starter chips: on mobile the collapsed pill has no mounted textarea,
             so the DOM-first input snapshot would read empty content. */
         presetText?: string;
+        /** Stage this submission in the follow-up queue instead of sending now. */
+        forceQueue?: boolean;
     };
     const handleSubmitRef = React.useRef<(options?: SubmitOptions) => Promise<void>>(async () => {});
 
@@ -1144,25 +1297,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
         // Unknown slash invocations intentionally fall through to this normal
         // prompt path, so they remain eligible for ordinary follow-up delivery.
-        const shouldUseFollowUpDelivery = Boolean(currentSessionId)
+        const shouldUseFollowUpDelivery = options?.forceQueue === true || (
+            Boolean(currentSessionId)
             && inputMode === 'normal'
-            && (sessionPhase !== 'idle' || dismissedBlockingPrompt);
-        const delivery = shouldUseFollowUpDelivery
-            ? followUpBehavior
-            : undefined;
-
-        const sendPromise = sendCapturedMessage(
-            primaryText,
-            providerIdToSend,
-            modelIdToSend,
-            agentNameToSend,
-            primaryAttachments,
-            agentMentionName,
-            additionalParts.length > 0 ? additionalParts : undefined,
-            variantToSend,
-            inputMode,
-            delivery ? { ...sendMessageOptions, delivery } : sendMessageOptions,
+            && (sessionPhase !== 'idle' || dismissedBlockingPrompt)
         );
+        const delivery = options?.forceQueue === true
+            ? 'queue'
+            : shouldUseFollowUpDelivery
+                ? followUpBehavior
+                : undefined;
+
         const restoreConsumedDrafts = () => {
             if (isSubmissionContextCurrent() && consumedDraftTarget && drafts.length > 0) {
                 useInlineCommentDraftStore.getState().restoreDrafts(consumedDraftTarget, drafts);
@@ -1182,6 +1327,59 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 ...attachedFiles.filter((attachment) => !currentIds.has(attachment.id)),
             ]);
         };
+
+        if (delivery === 'queue') {
+            if (!currentSessionId || !messageQueueTarget) {
+                restoreConsumedDrafts();
+                restoreConsumedSyntheticParts();
+                restoreComposerAttachments();
+                restoreSubmittedInputAfterError(new Error('Unable to resolve the queue target for this session'));
+                toast.error(t('chat.queuedMessage.sendFailed'));
+                return;
+            }
+            try {
+                await addToQueue(messageQueueTarget, {
+                    content: primaryText,
+                    attachments: primaryAttachments,
+                    status: 'staged',
+                    sendConfig: {
+                        providerID: providerIdToSend,
+                        modelID: modelIdToSend,
+                        ...(agentNameToSend ? { agent: agentNameToSend } : {}),
+                        ...(variantToSend ? { variant: variantToSend } : {}),
+                    },
+                });
+                if (linkedIssue) setLinkedIssue(null);
+                if (linkedPr) setLinkedPr(null);
+                if (typeof window === 'undefined') {
+                    scrollToBottom?.();
+                } else {
+                    window.requestAnimationFrame(() => scrollToBottom?.());
+                }
+                if (!isMobile) composerRef.current?.focus();
+                return;
+            } catch (error) {
+                restoreConsumedDrafts();
+                restoreConsumedSyntheticParts();
+                restoreComposerAttachments();
+                if (restoreSubmittedInputAfterError(error)) return;
+                toast.error(error instanceof Error ? error.message : t('chat.chatInput.toast.messageSendFailed'));
+                return;
+            }
+        }
+
+        const sendPromise = sendCapturedMessage(
+            primaryText,
+            providerIdToSend,
+            modelIdToSend,
+            agentNameToSend,
+            primaryAttachments,
+            agentMentionName,
+            additionalParts.length > 0 ? additionalParts : undefined,
+            variantToSend,
+            inputMode,
+            delivery ? { ...sendMessageOptions, delivery } : sendMessageOptions,
+        );
 
         if (typeof window === 'undefined') {
             scrollToBottom?.();
@@ -1243,6 +1441,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     // Every send surface routes through the same command-aware submit path.
     const handlePrimaryAction = React.useCallback(() => {
         void handleSubmitRef.current();
+    }, []);
+
+    const handleQueueMessage = React.useCallback(() => {
+        void handleSubmitRef.current({ forceQueue: true });
     }, []);
 
     // Draft welcome presets: submit immediately.
@@ -2383,6 +2585,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                         onRemove={() => setLinkedPr(null)}
                     />
                 ) : null}
+                <QueuedMessageChips
+                    onEditMessage={handleQueuedMessageEdit}
+                    onQueueMessage={handleQueuedMessageQueue}
+                    onSendMessage={handleQueuedMessageSend}
+                    sendingMessageId={sendingQueuedMessageId}
+                />
                 <RevertedMessageDock
                     sessionId={currentSessionId}
                     directory={currentSessionDirectoryForSync ?? currentDirectory}
@@ -2625,6 +2833,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                         onToggleExpandedInput={handleToggleExpandedInput}
                         onTogglePermissionAutoAccept={handlePermissionAutoAcceptToggle}
                         onPrimaryAction={handlePrimaryAction}
+                        onQueueMessage={handleQueueMessage}
                         onAbort={handleAbort}
                         onStartDictation={toggleDictation}
                         onDictationInsert={handleDictationInsert}

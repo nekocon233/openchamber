@@ -61,6 +61,58 @@ describe("SessionMessageLoader", () => {
     childStores.disposeAll()
   })
 
+  test("runs at most one forced load after an in-flight initial load", async () => {
+    const initial = deferred<ReturnType<typeof response>>()
+    const forced = deferred<ReturnType<typeof response>>()
+    let calls = 0
+    const { childStores, loader } = createLoader(async () => {
+      calls += 1
+      return calls === 1 ? initial.promise : forced.promise
+    })
+    const target = { directory: "/repo", sessionID: "session-forced" }
+
+    const loading = loader.ensure(target, { reason: "reactive" })
+    const firstForce = loader.ensure(target, { force: true, reason: "reactive" })
+    const duplicateForce = loader.ensure(target, { force: true, reason: "reactive" })
+    expect(firstForce).toBe(duplicateForce)
+    expect(calls).toBe(1)
+
+    initial.resolve(response([createRecord(target.sessionID, "msg_1")]))
+    await loading
+    await Promise.resolve()
+    expect(calls).toBe(2)
+
+    forced.resolve(response([createRecord(target.sessionID, "msg_2")]))
+    await Promise.all([firstForce, duplicateForce])
+    expect(calls).toBe(2)
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("runs a queued forced load after the in-flight load fails", async () => {
+    const forced = deferred<ReturnType<typeof response>>()
+    let calls = 0
+    const { childStores, loader } = createLoader(async ({ sessionID }) => {
+      calls += 1
+      return calls === 1
+        ? { error: { message: "rejected" }, response: { status: 400 } }
+        : forced.promise.then(() => response([createRecord(sessionID)]))
+    })
+    const target = { directory: "/repo", sessionID: "session-retry" }
+
+    const loading = loader.ensure(target, { reason: "reactive" })
+    const forcing = loader.ensure(target, { force: true, reason: "reactive" })
+    await loading
+    await Promise.resolve()
+    expect(calls).toBe(2)
+
+    forced.resolve(response([]))
+    await forcing
+    expect(loader.getSnapshot(target).status).toBe("ready")
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
   test("reactivates after disposal with a new authority epoch", async () => {
     let calls = 0
     const { childStores, loader } = createLoader(async ({ sessionID }) => {

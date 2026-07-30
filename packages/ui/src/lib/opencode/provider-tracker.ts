@@ -29,8 +29,18 @@ type ProviderState = {
   circuitCooldownMs: number
 }
 
+export type ProviderTrackerLane = Readonly<{
+  runtimeKey: string
+}>
+
 const providers = new Map<string, ProviderState>()
-const providerKey = (providerID: string): string => JSON.stringify([getRuntimeKey(), providerID])
+const providerKey = (lane: ProviderTrackerLane, providerID: string): string => (
+  JSON.stringify([lane.runtimeKey, providerID])
+)
+
+export function captureProviderTrackerLane(runtimeKey = getRuntimeKey()): ProviderTrackerLane {
+  return { runtimeKey }
+}
 
 function evictStaleProviders(): void {
   const now = Date.now()
@@ -47,8 +57,8 @@ if (typeof setInterval !== 'undefined') {
   ;(interval as unknown as { unref?: () => void }).unref?.()
 }
 
-function getOrCreateProvider(providerID: string): ProviderState {
-  const key = providerKey(providerID)
+function getOrCreateProvider(lane: ProviderTrackerLane, providerID: string): ProviderState {
+  const key = providerKey(lane, providerID)
   let state = providers.get(key)
   if (!state) {
     state = {
@@ -68,14 +78,14 @@ function getOrCreateProvider(providerID: string): ProviderState {
   return state
 }
 
-export function recordProviderSuccess(providerID: string): void {
+export function recordProviderSuccess(lane: ProviderTrackerLane, providerID: string): void {
   if (!providerID) return
-  providers.delete(providerKey(providerID))
+  providers.delete(providerKey(lane, providerID))
 }
 
-export function recordProviderError(providerID: string, status?: number): void {
+export function recordProviderError(lane: ProviderTrackerLane, providerID: string, status?: number): void {
   if (!providerID) return
-  const state = getOrCreateProvider(providerID)
+  const state = getOrCreateProvider(lane, providerID)
   state.consecutiveErrors += 1
   state.lastErrorAt = Date.now()
 
@@ -95,8 +105,8 @@ function isCircuitBreakerStatus(status?: number): boolean {
   return status !== undefined && RETRYABLE_STATUS_CODES.has(status)
 }
 
-function isCircuitOpen(providerID: string): boolean {
-  const state = providers.get(providerKey(providerID))
+function isCircuitOpen(lane: ProviderTrackerLane, providerID: string): boolean {
+  const state = providers.get(providerKey(lane, providerID))
   if (!state?.circuitOpen) return false
 
   const elapsed = Date.now() - state.circuitOpenAt
@@ -113,15 +123,20 @@ function isCircuitOpen(providerID: string): boolean {
   return true
 }
 
-export function shouldRetry(providerID: string, status: number, attempt: number): boolean {
+export function shouldRetry(
+  lane: ProviderTrackerLane,
+  providerID: string,
+  status: number,
+  attempt: number,
+): boolean {
   if (!RETRYABLE_STATUS_CODES.has(status)) return false
   if (attempt >= DEFAULT_RETRY_MAX_ATTEMPTS - 1) return false
-  if (isCircuitOpen(providerID)) return false
+  if (isCircuitOpen(lane, providerID)) return false
   return true
 }
 
-export function assertProviderCircuitClosed(providerID: string): void {
-  if (!providerID || !isCircuitOpen(providerID)) return
+export function assertProviderCircuitClosed(lane: ProviderTrackerLane, providerID: string): void {
+  if (!providerID || !isCircuitOpen(lane, providerID)) return
   throw new Error(`Provider ${providerID} is temporarily unavailable after repeated errors. Please retry shortly.`)
 }
 

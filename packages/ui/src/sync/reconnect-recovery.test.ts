@@ -156,4 +156,17 @@ describe("mergeBootstrapSessions", () => {
       rootCount: 0,
     })
   })
+
+  test("removes stale descendants of a root deleted after the request starts", () => {
+    const deletedRoot = createSession("deleted")
+    const staleChild = createSession("child", { parentID: "deleted" })
+
+    expect(mergeBootstrapSessions([deletedRoot], [staleChild], [], {
+      baselineRevision: 2,
+      deletedRevision: { deleted: 3 },
+    })).toEqual({
+      sessions: [],
+      rootCount: 0,
+    })
+  })
 })

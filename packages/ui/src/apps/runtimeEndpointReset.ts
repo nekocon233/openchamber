@@ -18,6 +18,7 @@ import { resetStreamingState } from '@/sync/streaming';
 import { resetGlobalSessionStatuses } from '@/sync/global-session-status';
 import { resetSessionRemovalHistory } from '@/sync/session-event-freshness';
 import { resetSessionOrdering } from '@/sync/session-ordering';
+import { useMessageQueueStore } from '@/stores/messageQueueStore';
 import { syncDesktopSettings } from '@/lib/persistence';
 import { useSidebarStateStore } from '@/stores/useSidebarStateStore';
 import { getRuntimeKey } from '@/lib/runtime-switch';
@@ -35,6 +36,7 @@ export const reconnectAppForTransportSwitch = (): void => {
   opencodeClient.reconnectToRuntimeBaseUrl();
   resetStreamingState();
   useSidebarStateStore.getState().switchRuntime(getRuntimeKey());
+  useMessageQueueStore.getState().switchRuntime(getRuntimeKey());
 };
 
 export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedDetail): void => {
@@ -56,6 +58,7 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   });
   useProjectsStore.getState().resetForRuntimeSwitch();
   useSidebarStateStore.getState().switchRuntime(detail.runtimeKey);
+  useMessageQueueStore.getState().switchRuntime(detail.runtimeKey);
   // Cross-project session list (mobile sessions sheet & co) belongs to the
   // previous instance — drop it so stale sessions can't linger after a switch.
   useGlobalSessionsStore.getState().resetForRuntimeSwitch();

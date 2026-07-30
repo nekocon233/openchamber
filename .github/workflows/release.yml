@@ -25,6 +25,7 @@ permissions:
 
 jobs:
   create-release:
+    if: ${{ github.repository == 'openchamber/openchamber' }}
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create_release.outputs.id }}

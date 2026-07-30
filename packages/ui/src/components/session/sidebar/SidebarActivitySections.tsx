@@ -29,6 +29,7 @@ type ActivitySection = {
 
 type Props = {
   sections: ActivitySection[];
+  expandedParentsByContext: Record<'recent' | 'pinned', Set<string>>;
   renderSessionNode: (
     node: SessionNode,
     depth?: number,
@@ -38,6 +39,7 @@ type Props = {
     secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
     renderContext?: 'project' | 'recent' | 'pinned',
     renderExtras?: SessionNodeRenderExtras,
+    expandedParents?: Set<string>,
   ) => React.ReactNode;
   editingId: string | null;
   openSidebarMenuKey: string | null;
@@ -54,6 +56,7 @@ const MAX_VISIBLE_RECENT_SESSIONS = 7;
 export function SidebarActivitySections(props: Props): React.ReactNode {
   const {
     sections,
+    expandedParentsByContext,
     renderSessionNode,
     editingId,
     openSidebarMenuKey,
@@ -160,6 +163,7 @@ export function SidebarActivitySections(props: Props): React.ReactNode {
           item.secondaryMeta,
           renderContext,
           getRenderExtras(item.node),
+          expandedParentsByContext[renderContext],
         );
 
         if (flatVariant) {

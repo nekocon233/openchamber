@@ -152,6 +152,33 @@ describe('applyDirectoryEvent', () => {
     expect(state.part[messageID]?.[0]?.text).toBe('haha')
   })
 
+  it('preserves captured user agent and model when a sparse V2 echo confirms the same message', () => {
+    const state = structuredClone(INITIAL_STATE)
+    const info = {
+      id: 'msg-user',
+      sessionID: 'ses-1',
+      role: 'user',
+      agent: 'build',
+      model: { providerID: 'provider-a', modelID: 'model-a', variant: 'high' },
+      time: { created: 1 },
+    }
+    state.message['ses-1'] = [info]
+
+    applyDirectoryEvent(state, {
+      type: 'message.updated',
+      properties: {
+        info: {
+          ...info,
+          agent: '',
+          model: { providerID: '', modelID: '' },
+        },
+      },
+    })
+
+    expect(state.message['ses-1'][0].agent).toBe('build')
+    expect(state.message['ses-1'][0].model).toEqual({ providerID: 'provider-a', modelID: 'model-a', variant: 'high' })
+  })
+
   it('does not let a stale running tool update overwrite a completed tool part', () => {
     const state = structuredClone(INITIAL_STATE)
     const messageID = 'msg-5'

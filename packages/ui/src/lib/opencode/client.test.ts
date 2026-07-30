@@ -17,6 +17,10 @@ const switchModelCalls: unknown[][] = [];
 const switchModelResults: unknown[] = [];
 const durablePromptCalls: unknown[][] = [];
 const durablePromptResults: unknown[] = [];
+const historyCalls: unknown[][] = [];
+const historyResults: unknown[] = [];
+const nextMessagesCalls: unknown[][] = [];
+const nextMessagesResults: unknown[] = [];
 const sessionStatusCalls: unknown[][] = [];
 let sessionStatusResult: unknown = { data: {} };
 
@@ -75,6 +79,27 @@ const durablePromptMock = mock(async (...args: unknown[]) => {
   });
 });
 
+const historyMock = mock(async (...args: unknown[]) => {
+  callOrder.push('history');
+  historyCalls.push(args);
+  return nextResult(historyResults, {
+    data: {
+      data: [],
+      hasMore: false,
+    },
+  });
+});
+
+const nextMessagesMock = mock(async (...args: unknown[]) => {
+  callOrder.push('nextMessages');
+  nextMessagesCalls.push(args);
+  return nextResult(nextMessagesResults, {
+    data: {
+      data: [],
+    },
+  });
+});
+
 const createOpencodeClientMock = mock((config: ClientConfig) => {
   createdClientConfigs.push(config);
   return {
@@ -98,6 +123,8 @@ const createOpencodeClientMock = mock((config: ClientConfig) => {
         switchAgent: switchAgentMock,
         switchModel: switchModelMock,
         prompt: durablePromptMock,
+        history: historyMock,
+        messages: nextMessagesMock,
       },
     },
   };
@@ -160,6 +187,10 @@ beforeEach(() => {
   switchModelResults.length = 0;
   durablePromptCalls.length = 0;
   durablePromptResults.length = 0;
+  historyCalls.length = 0;
+  historyResults.length = 0;
+  nextMessagesCalls.length = 0;
+  nextMessagesResults.length = 0;
   sessionStatusCalls.length = 0;
   sessionStatusResult = { data: {} };
   opencodeClient.clearConfigCache();
@@ -214,8 +245,140 @@ describe('opencodeClient getConfig cache', () => {
   });
 });
 
+describe('opencodeClient session input history', () => {
+  const durableEvent = (input: {
+    type: 'session.next.prompt.admitted' | 'session.next.prompted';
+    seq: number;
+    messageID: string;
+    text: string;
+  }) => ({
+    type: input.type,
+    durable: { aggregateID: 'ses_history', seq: input.seq, version: 1 },
+    data: {
+      timestamp: input.seq * 1000,
+      sessionID: 'ses_history',
+      messageID: input.messageID,
+      prompt: { text: input.text },
+      delivery: 'queue',
+    },
+  });
+
+  test('pages admission history and marks promoted inputs without treating gaps as empty success', async () => {
+    historyResults.push(
+      {
+        data: {
+          data: [
+            durableEvent({ type: 'session.next.prompt.admitted', seq: 10, messageID: 'msg-a', text: 'first' }),
+            durableEvent({ type: 'session.next.prompted', seq: 20, messageID: 'msg-a', text: 'first' }),
+            durableEvent({ type: 'session.next.prompt.admitted', seq: 30, messageID: 'msg-b', text: 'second' }),
+          ],
+          hasMore: true,
+        },
+      },
+      {
+        data: {
+          data: [
+            durableEvent({ type: 'session.next.prompted', seq: 40, messageID: 'msg-b', text: 'second' }),
+            durableEvent({ type: 'session.next.prompt.admitted', seq: 50, messageID: 'msg-c', text: 'third' }),
+          ],
+          hasMore: false,
+        },
+      },
+    );
+
+    const result = await opencodeClient.loadSessionInputAdmissionHistory({
+      sessionID: 'ses_history',
+      directory: '/workspace/history',
+      limit: 100,
+    });
+
+    expect(result.complete).toBe(true);
+    expect(result.admissions).toEqual([
+      {
+        admittedSeq: 10,
+        id: 'msg-a',
+        sessionID: 'ses_history',
+        prompt: { text: 'first' },
+        delivery: 'queue',
+        timeCreated: 10_000,
+        promotedSeq: 20,
+      },
+      {
+        admittedSeq: 30,
+        id: 'msg-b',
+        sessionID: 'ses_history',
+        prompt: { text: 'second' },
+        delivery: 'queue',
+        timeCreated: 30_000,
+        promotedSeq: 40,
+      },
+      {
+        admittedSeq: 50,
+        id: 'msg-c',
+        sessionID: 'ses_history',
+        prompt: { text: 'third' },
+        delivery: 'queue',
+        timeCreated: 50_000,
+      },
+    ]);
+    expect(historyCalls).toEqual([
+      [{ sessionID: 'ses_history', limit: 100 }],
+      [{ sessionID: 'ses_history', limit: 100, after: 30 }],
+    ]);
+    expect(createdClientConfigs[0]?.directory).toBe('/workspace/history');
+  });
+
+  test('loads the projected V2 tail newest-first request and returns it chronologically', async () => {
+    nextMessagesResults.push({
+      data: {
+        data: [
+          {
+            id: 'msg-new',
+            type: 'user',
+            text: 'newest',
+            time: { created: 2000 },
+          },
+          {
+            id: 'msg-old',
+            type: 'user',
+            text: 'oldest',
+            time: { created: 1000 },
+          },
+        ],
+      },
+    });
+
+    const messages = await opencodeClient.loadSessionNextMessages({
+      sessionID: 'ses_history',
+      directory: '/workspace/history',
+      limit: 50,
+    });
+
+    expect(nextMessagesCalls).toEqual([[{ sessionID: 'ses_history', limit: 50, order: 'desc' }]]);
+    expect(messages.map((message: { id: string }) => message.id)).toEqual(['msg-old', 'msg-new']);
+  });
+
+  test('returns an incomplete projection instead of pretending a bounded scan is authoritative empty', async () => {
+    historyResults.push({
+      data: {
+        data: [durableEvent({ type: 'session.next.prompt.admitted', seq: 10, messageID: 'msg-a', text: 'first' })],
+        hasMore: true,
+      },
+    });
+
+    const result = await opencodeClient.loadSessionInputAdmissionHistory({
+      sessionID: 'ses_history',
+      maxPages: 1,
+    });
+
+    expect(result.complete).toBe(false);
+    expect(result.admissions.map((admission: { id: string }) => admission.id)).toEqual(['msg-a']);
+  });
+});
+
 describe('opencodeClient official follow-up delivery', () => {
   test('serializes queued delivery after switching the selected agent and model', async () => {
+    const admissions: unknown[] = [];
     const messageId = await opencodeClient.sendMessage({
       id: 'ses_queue',
       providerID: 'anthropic',
@@ -231,6 +394,7 @@ describe('opencodeClient official follow-up delivery', () => {
       agentMentions: [{ name: 'explore', source: { value: '@explore', start: 0, end: 8 } }],
       messageId: 'msg_queue',
       delivery: 'queue',
+      onAdmitted: (admission: unknown) => admissions.push(admission),
     });
 
     expect(messageId).toBe('msg_queue');
@@ -260,6 +424,24 @@ describe('opencodeClient official follow-up delivery', () => {
         delivery: 'queue',
       },
     ]]);
+    expect(admissions).toEqual([{
+      admittedSeq: 1,
+      id: 'msg_queue',
+      sessionID: 'ses_queue',
+      prompt: {
+        text: 'primary\n\nfollow-up body',
+        files: [
+          { uri: 'data:image/png;base64,AA==', name: 'one.png' },
+          { uri: 'file:///workspace/two.txt', name: 'two.txt' },
+        ],
+        agents: [{
+          name: 'explore',
+          source: { text: '@explore', start: 0, end: 8 },
+        }],
+      },
+      delivery: 'queue',
+      timeCreated: 1,
+    }]);
     expect(promptAsyncCalls).toHaveLength(0);
   });
 
@@ -519,5 +701,25 @@ describe('opencodeClient non-delivery promptAsync', () => {
     expect(message).toContain('transport failure');
     expect(message).toContain('relay tunnel reset');
     expect((error as Error & { status?: number }).status).toBe(undefined);
+  });
+
+  test('records late failures against the runtime that dispatched the request', async () => {
+    const providerID = 'anthropic-runtime-lane';
+    const deferred = Array.from({ length: 3 }, () => createDeferred<unknown>());
+    promptAsyncResults.push(...deferred.map((entry) => entry.promise));
+
+    const sends = deferred.map(() => sendPrompt(providerID));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(promptAsyncCalls).toHaveLength(3);
+
+    runtimeKey = 'runtime-b';
+    runtimeGeneration += 1;
+    for (const entry of deferred) {
+      entry.resolve({ response: new Response('unavailable', { status: 503 }) });
+    }
+    await Promise.allSettled(sends);
+
+    await sendPrompt(providerID);
+    expect(promptAsyncCalls).toHaveLength(4);
   });
 });

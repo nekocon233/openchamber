@@ -93,8 +93,8 @@ export function buildOutgoingMessage(
         return mentions;
     };
 
-    // The composer owns the one visible user body. Official OpenCode delivery
-    // handles busy-session ordering rather than a client-side staged queue.
+    // The composer owns the one visible user body. Busy-session ordering is
+    // handled by OpenChamber's follow-up queue before this send is dispatched.
     if (input.composerText !== null) {
         const resolved = resolve(input.composerText.replace(/^\n+|\n+$/g, ''));
         primaryText = resolved.text;

@@ -14,7 +14,12 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useAutoReviewStore, type AutoReviewRun } from '@/stores/useAutoReviewStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useUIStore } from '@/stores/useUIStore';
-import { optimisticSend, patchSessionMetadata, waitForConnectionOrThrow } from '@/sync/session-actions';
+import {
+  deleteSessionInDirectory,
+  optimisticSend,
+  patchSessionMetadata,
+  waitForConnectionOrThrow,
+} from '@/sync/session-actions';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { getSyncMessages, getSyncParts, getSyncSessionStatus, registerSessionDirectory } from '@/sync/sync-refs';
@@ -466,9 +471,10 @@ const createOrReuseReviewSession = async (originalSessionID: string, directory: 
     await patchSessionMetadata(originalSessionID, directory, (metadata) => withReviewSessionLink(metadata, review.id));
   } catch (error) {
     assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-    await opencodeClient.deleteSession(review.id, directory).catch((deleteError) => {
-      console.warn('[review-flow] failed to delete unlinked review session after link failure', deleteError);
-    });
+    const deleted = await deleteSessionInDirectory(review.id, directory);
+    if (!deleted) {
+      console.warn('[review-flow] failed to delete unlinked review session after link failure');
+    }
     throw error;
   }
   useGlobalSessionsStore.getState().upsertSession(review);
@@ -478,7 +484,6 @@ const createOrReuseReviewSession = async (originalSessionID: string, directory: 
 export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void> => {
   await waitForConnectionOrThrow();
   const expectedAutoReviewRuntimeKey = input.autoReview ? getRuntimeKey() : undefined;
-  let reviewPrompt: string;
 
   if (input.generateHandoff ?? true) {
     const visibleText = await renderMagicPrompt('session.reviewHandoff.visible');
@@ -529,10 +534,9 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
 
     await continueFromHandoff();
     return;
-  } else {
-    reviewPrompt = await renderMagicPrompt('session.reviewSessionWithoutHandoff.visible');
   }
 
+  const reviewPrompt = await renderMagicPrompt('session.reviewSessionWithoutHandoff.visible');
   const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, expectedAutoReviewRuntimeKey);
   const runtimeKey = expectedAutoReviewRuntimeKey ?? getRuntimeKey();
   const waitAfterCreatedAt = Date.now();

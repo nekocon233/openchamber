@@ -24,6 +24,7 @@ type ComposerActionButtonsProps = {
     currentSessionId: string | null;
     newSessionDraftOpen: boolean;
     onPrimaryAction: () => void;
+    onQueueMessage: () => void;
     onAbort: () => void;
 };
 
@@ -39,6 +40,7 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
         currentSessionId,
         newSessionDraftOpen,
         onPrimaryAction,
+        onQueueMessage,
         onAbort,
     } = props;
     const { t } = useI18n();
@@ -83,16 +85,16 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
                         if (isMobile) {
                             event.preventDefault();
                         }
-                        onPrimaryAction();
+                        onQueueMessage();
                     }}
                     className={cn(
                         footerIconButtonClass,
                         'absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-1',
                         canSendFollowUp ? 'text-primary hover:text-primary' : 'opacity-30'
                     )}
-                    aria-label={t('chat.chatInput.actions.sendMessageAria')}
+                    aria-label={t('chat.chatInput.actions.queueMessageAria')}
                 >
-                    <Icon name="send-plane-2" className={cn(sendIconSizeClass)} />
+                    <Icon name="send-plane-2" className={cn(sendIconSizeClass, '-rotate-90')} />
                 </button>
             ) : null}
             <button
@@ -119,5 +121,6 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
     && prev.currentSessionId === next.currentSessionId
     && prev.newSessionDraftOpen === next.newSessionDraftOpen
     && prev.onPrimaryAction === next.onPrimaryAction
+    && prev.onQueueMessage === next.onQueueMessage
     && prev.onAbort === next.onAbort
 ));

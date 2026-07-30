@@ -426,6 +426,27 @@ describe("confirmed session removal", () => {
     }).toEqual({ directory: "/test/project", sessionId: "session-a" })
   })
 
+  test("records a deletion tombstone when the session row is already absent", async () => {
+    const source = createStore({})
+    const { deleteSession, setActionRefs } = await import("./session-actions")
+    const { mergeBootstrapSessions } = await import("./reconnect-recovery")
+    setActionRefs(mockSdk as unknown as OpencodeClient, createChildStores([["/test/project", source]]), () => "/test/project")
+
+    expect(await deleteSession("session-a")).toBe(true)
+    const current = source.getState()
+    expect(current.sessionDeletedRevision?.["session-a"]).toBeGreaterThan(0)
+    expect(mergeBootstrapSessions(
+      [{ id: "session-a", time: { created: 1 } } as Session],
+      [],
+      current.session,
+      {
+        baselineRevision: 0,
+        eventRevision: current.sessionEventRevision,
+        deletedRevision: current.sessionDeletedRevision,
+      },
+    ).sessions).toEqual([])
+  })
+
   test("does not archive locally until the server returns the archived session", async () => {
     const source = createStore({}, {
       session: [{ id: "session-a", directory: "/test/project", time: { created: 1 } } as Session],
@@ -451,6 +472,18 @@ describe("confirmed session removal", () => {
     expect(await archiveSession("session-a")).toBe(true)
     expect(source.getState().session).toEqual([])
     expect((globalUpsertedSessions[0] as Session)?.time?.archived).toBe(2)
+  })
+
+  test("records an archive tombstone when the session row is already absent", async () => {
+    sessionUpdateResult = {
+      data: { id: "session-a", directory: "/test/project", time: { created: 1, archived: 2 } } as Session,
+    }
+    const source = createStore({})
+    const { archiveSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(mockSdk as unknown as OpencodeClient, createChildStores([["/test/project", source]]), () => "/test/project")
+
+    expect(await archiveSession("session-a", "/test/project")).toBe(true)
+    expect(source.getState().sessionDeletedRevision?.["session-a"]).toBeGreaterThan(0)
   })
 })
 

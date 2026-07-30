@@ -128,7 +128,7 @@ const assertExpectedRuntimeContext = (expected?: ExpectedRuntimeContext): void =
   ) throw new RuntimeContextChangedError()
 }
 
-export function routeMessage(params: {
+export async function routeMessage(params: {
   sessionId: string
   directory?: string | null
   content: string

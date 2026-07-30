@@ -259,4 +259,67 @@ describe("createEventPipeline", () => {
       pipeline.cleanup()
     }
   })
+
+  test("translates durable prompt promotion and coalesces translated text deltas", async () => {
+    let resolveStreamFinished!: () => void
+    const streamFinished = new Promise<void>((resolve) => {
+      resolveStreamFinished = resolve
+    })
+    let resolveDelivered!: (events: readonly Event[]) => void
+    const deliveredBatch = new Promise<readonly Event[]>((resolve) => {
+      resolveDelivered = resolve
+    })
+    const prompt = {
+      timestamp: 1,
+      sessionID: "ses_1",
+      messageID: "msg_1",
+      prompt: { text: "queued" },
+      delivery: "queue",
+    }
+    const pipeline = createEventPipeline({
+      sdk: createSdk([
+        { id: "admitted-1", type: "session.next.prompt.admitted", properties: prompt } as Event,
+        { id: "prompted-1", type: "session.next.prompted", properties: prompt } as Event,
+        { id: "text-started-1", type: "session.next.text.started", properties: {
+          timestamp: 2,
+          sessionID: "ses_1",
+          assistantMessageID: "assistant_1",
+          textID: "text_1",
+        } } as Event,
+        { id: "text-delta-1", type: "session.next.text.delta", properties: {
+          timestamp: 3,
+          sessionID: "ses_1",
+          assistantMessageID: "assistant_1",
+          textID: "text_1",
+          delta: "a",
+        } } as Event,
+        { id: "text-delta-2", type: "session.next.text.delta", properties: {
+          timestamp: 4,
+          sessionID: "ses_1",
+          assistantMessageID: "assistant_1",
+          textID: "text_1",
+          delta: "b",
+        } } as Event,
+      ], resolveStreamFinished),
+      onEvents: (_directory, events) => resolveDelivered([...events]),
+      transport: "sse",
+      heartbeatTimeoutMs: 1_000,
+    })
+
+    try {
+      await streamFinished
+      const delivered = await Promise.race([deliveredBatch, failAfter(500)])
+      expect(delivered.map((event) => event.type)).toEqual([
+        "session.next.prompt.admitted",
+        "session.next.prompted",
+        "message.updated",
+        "message.part.updated",
+        "message.part.updated",
+        "message.part.delta",
+      ])
+      expect((delivered[5]?.properties as { delta?: string }).delta).toBe("ab")
+    } finally {
+      pipeline.cleanup()
+    }
+  })
 })

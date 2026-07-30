@@ -19,6 +19,7 @@ import { startTypographyWatcher } from '@/lib/typographyWatcher';
 import { preloadMarkdownRenderer } from '@/components/chat/markdownRendererLoader';
 import { SessionAuthGate } from '@/components/auth/SessionAuthGate';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { shouldPrimePrimarySessionNavigation } from '@/sync/session-navigation';
 import { MobileApp } from './MobileApp';
 
 const initializeSharedPreferences = () => {
@@ -47,9 +48,11 @@ const initializeSharedPreferences = () => {
 export function renderMobileApp(apis: RuntimeAPIs) {
   preloadMarkdownRenderer();
   initializeSharedPreferences();
-  // Restore the last conversation before React mounts so ChatContainer does
-  // not replace it with the automatic new-session draft on the first effect.
-  useSessionUIStore.getState().restoreForRuntimeSwitch();
+  if (typeof window !== 'undefined' && shouldPrimePrimarySessionNavigation()) {
+    // Explicit URL targets win over persisted navigation. Eligible cold starts
+    // still restore before the automatic new-session draft effect can run.
+    useSessionUIStore.getState().restoreForRuntimeSwitch();
+  }
 
   // Expose the widget snapshot builder so the native shell can read the session overview
   // (attention count + recent sessions) and feed the home/lock-screen/Control Center widgets.

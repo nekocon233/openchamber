@@ -160,7 +160,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "openchamber",
+      "owner": "nekocon233",
       "repo": "openchamber"
     }
   }

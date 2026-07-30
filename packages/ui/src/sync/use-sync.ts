@@ -43,6 +43,8 @@ type SyncSessionInflight = {
   owner: SessionMessageLoader
   authorityEpoch: number
   promise: Promise<void>
+  force: boolean
+  forcedFollowUp: Promise<void> | null
 }
 const syncSessionInflightByKey = new Map<string, SyncSessionInflight>()
 
@@ -58,6 +60,21 @@ export function shouldReuseSyncSessionInflight(
   authorityEpoch: number,
 ): boolean {
   return Boolean(existing && existing.owner === owner && existing.authorityEpoch === authorityEpoch)
+}
+
+export function queueForcedSyncSessionFollowUp(
+  existing: Pick<SyncSessionInflight, "promise" | "force" | "forcedFollowUp">,
+  isCurrent: () => boolean,
+  run: () => Promise<void>,
+): Promise<void> {
+  if (existing.force) return existing.promise
+  if (existing.forcedFollowUp) return existing.forcedFollowUp
+  const followUp = existing.promise.then(() => {
+    if (!isCurrent()) return
+    return run()
+  })
+  existing.forcedFollowUp = followUp
+  return followUp
 }
 
 type SdkResult<T> = {
@@ -124,9 +141,17 @@ export function shouldFetchSessionForRenderableSync(input: {
   return Boolean(input.force) || !input.hasSession || input.shouldLoadMessages
 }
 
+export function canCommitSessionDetailLoad(
+  state: Pick<State, "sessionEventRevision" | "sessionDeletedRevision">,
+  sessionID: string,
+  baselineRevision: number,
+): boolean {
+  return (state.sessionEventRevision?.[sessionID] ?? 0) <= baselineRevision
+    && (state.sessionDeletedRevision?.[sessionID] ?? 0) <= baselineRevision
+}
+
 // ---------------------------------------------------------------------------
 // useSync — message loading, pagination, optimistic updates
-// Message loading, pagination, optimistic updates
 // ---------------------------------------------------------------------------
 
 export function useSync() {
@@ -175,9 +200,8 @@ export function useSync() {
     [childStores, messageLoader, runtimeKey],
   )
 
-  // Get or create the seen-set for a directory. LRU reorder on access.
-  // When seen directories exceed MAX_SEEN_DIRS, evict the oldest directory's caches.
-  // LRU reorder on access. Evicts oldest directory when exceeding MAX_SEEN_DIRS.
+  // Get or create the seen-set for a directory. LRU reorder on access;
+  // evict the oldest directory when the shared cache exceeds MAX_SEEN_DIRS.
   const seenFor = useCallback((targetDirectory: string) => {
     const cacheKey = `${runtimeKey}\n${targetDirectory}`
     const existing = seenByDirectory.get(cacheKey)
@@ -229,7 +253,7 @@ export function useSync() {
         // One very large inactive session can create memory/GC pressure that
         // makes later small-session switches feel slow. Keep it while active,
         // but do not retain it as a warm cache in constrained shells.
-          const afterPrefetchEviction = prefetched.length > 0 ? targetStore.getState() : state
+        const afterPrefetchEviction = prefetched.length > 0 ? targetStore.getState() : state
         const heavyInactive = Object.keys(afterPrefetchEviction.message).filter((id) => {
           if (id === sessionID || protectedIds.has(id)) return false
           return isHeavyConstrainedSessionCache(afterPrefetchEviction, id)
@@ -245,7 +269,11 @@ export function useSync() {
 
   // Sync a session (load if not cached)
   const syncSession = useCallback(
-    async (sessionID: string, force?: boolean, directoryOverride?: string) => {
+    async function syncSession(
+      sessionID: string,
+      force?: boolean,
+      directoryOverride?: string,
+    ): Promise<void> {
       if (getRuntimeKey() !== runtimeKey) return
       const targetDirectory = directoryOverride || directory
       touch(sessionID, targetDirectory)
@@ -255,7 +283,12 @@ export function useSync() {
       // Dedup inflight requests
       const existing = syncSessionInflightByKey.get(key)
       if (existing && shouldReuseSyncSessionInflight(existing, messageLoader, authorityEpoch)) {
-        return existing.promise
+        if (!force) return existing.promise
+        return queueForcedSyncSessionFollowUp(
+          existing,
+          () => getRuntimeKey() === runtimeKey && messageLoader.getAuthorityEpoch() === authorityEpoch,
+          () => syncSession(sessionID, true, targetDirectory),
+        )
       }
 
       // This is a new request. Bump generation so any older request that
@@ -272,6 +305,7 @@ export function useSync() {
         ? store
         : childStores.ensureChild(targetDirectory, { bootstrap: false })
       const current = targetStore.getState()
+      const baselineSessionRevision = current.sessionRevision ?? 0
       const materialization = getSessionMaterializationStatus(current, sessionID)
       // Reconnect recovery can materialize a renderable recent tail without
       // establishing the user-message boundary needed for visible history.
@@ -294,6 +328,12 @@ export function useSync() {
                   if (result.data && !isStale()) {
                     const nextSession = stripSessionDiffSnapshots(result.data)
                     const s = targetStore.getState()
+                    if (
+                      nextSession.time?.archived
+                      || !canCommitSessionDetailLoad(s, sessionID, baselineSessionRevision)
+                    ) {
+                      return
+                    }
                     const sessions = [...s.session]
                     const idx = Binary.search(sessions, sessionID, (s) => s.id)
                     if (idx.found) {
@@ -301,7 +341,10 @@ export function useSync() {
                     } else {
                       sessions.splice(idx.index, 0, nextSession)
                     }
-                    if (!isStale()) {
+                    if (
+                      !isStale()
+                      && canCommitSessionDetailLoad(targetStore.getState(), sessionID, baselineSessionRevision)
+                    ) {
                       targetStore.setState({ session: sessions })
                     }
                   }
@@ -319,7 +362,13 @@ export function useSync() {
         ])
       })()
 
-      const inflight: SyncSessionInflight = { owner: messageLoader, authorityEpoch, promise }
+      const inflight: SyncSessionInflight = {
+        owner: messageLoader,
+        authorityEpoch,
+        promise,
+        force: Boolean(force),
+        forcedFollowUp: null,
+      }
       syncSessionInflightByKey.set(key, inflight)
       const clearInflightRequest = () => {
         if (syncSessionInflightByKey.get(key) !== inflight) return

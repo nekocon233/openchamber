@@ -16,6 +16,8 @@ import { isVSCodeRuntime } from "@/lib/desktop"
 import { isMobileSurfaceRuntime } from "@/lib/runtimeSurface"
 import { normalizePath } from "@/lib/pathNormalization"
 import { startSessionLoadPerformanceEvent } from "./session-load-performance"
+import { convertSessionNextMessages } from "./v2-session-records"
+import { opencodeClient } from "@/lib/opencode/client"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 const INITIAL_MESSAGE_PAGE_SIZE = 50
@@ -32,6 +34,10 @@ export type SessionMessageTarget = {
 
 export type SessionMessageLoadKind = "initial" | "older" | "refresh" | "prefetch"
 export type SessionMessageLoadStatus = "idle" | "loading" | "ready" | "error"
+type SessionMessageEnsureOptions = {
+  force?: boolean
+  reason?: "navigation" | "reactive" | "prefetch"
+}
 
 export type SessionMessageLoadState = {
   status: SessionMessageLoadStatus
@@ -49,6 +55,8 @@ type LoaderEntry = {
   snapshot: SessionMessageLoadState
   listeners: Set<() => void>
   inflight: Promise<void> | null
+  queuedForce: Promise<void> | null
+  queuedForceReason: SessionMessageEnsureOptions["reason"]
   queuedRefresh: Promise<void> | null
   queuedRefreshLimit: number
   optimistic: Map<string, OptimisticItem>
@@ -179,7 +187,7 @@ export class SessionMessageLoader {
 
   ensure(
     target: SessionMessageTarget,
-    options?: { force?: boolean; reason?: "navigation" | "reactive" | "prefetch" },
+    options?: SessionMessageEnsureOptions,
   ): Promise<void> {
     const normalized = this.normalizeTarget(target)
     if (!normalized || this.disposed) return Promise.resolve()
@@ -194,18 +202,39 @@ export class SessionMessageLoader {
       if (options?.reason !== "prefetch" && entry.snapshot.loadingKind === "prefetch") {
         this.patchEntry(entry, { loadingKind: "initial" })
       }
+      if (options?.force) {
+        if (options.reason !== "prefetch" || !entry.queuedForceReason) {
+          entry.queuedForceReason = options.reason
+        }
+        if (entry.queuedForce) return entry.queuedForce
+        const inflight = entry.inflight
+        const entryKey = this.keyFor(normalized)
+        const generation = entry.snapshot.generation
+        const authorityEpoch = this.authorityEpoch
+        const clearQueuedForce = () => {
+          if (entry.queuedForce !== queuedForce) return
+          entry.queuedForce = null
+          entry.queuedForceReason = undefined
+        }
+        const queuedForce = inflight.then(() => {
+          if (!this.isEntryCurrent(entryKey, entry, generation, authorityEpoch)) {
+            clearQueuedForce()
+            return
+          }
+          const reason = entry.queuedForceReason
+          clearQueuedForce()
+          return this.ensure(normalized, { force: true, reason })
+        })
+        entry.queuedForce = queuedForce
+        return queuedForce
+      }
       if (!entry.snapshot.resolved && (loadingKind === "older" || loadingKind === "refresh")) {
         const inflight = entry.inflight
         const entryKey = this.keyFor(normalized)
         const generation = entry.snapshot.generation
         const authorityEpoch = this.authorityEpoch
         return inflight.then(() => {
-          if (
-            this.disposed
-            || this.authorityEpoch !== authorityEpoch
-            || entry.snapshot.generation !== generation
-            || this.entries.get(entryKey) !== entry
-          ) {
+          if (!this.isEntryCurrent(entryKey, entry, generation, authorityEpoch)) {
             return
           }
           return this.ensure(normalized, options)
@@ -275,12 +304,7 @@ export class SessionMessageLoader {
         entry.queuedRefreshLimit = 0
       }
       const queuedRefresh = inflight.then(() => {
-        if (
-          this.disposed
-          || this.authorityEpoch !== authorityEpoch
-          || entry.snapshot.generation !== generation
-          || this.entries.get(entryKey) !== entry
-        ) {
+        if (!this.isEntryCurrent(entryKey, entry, generation, authorityEpoch)) {
           clearQueuedRefresh()
           return
         }
@@ -422,6 +446,18 @@ export class SessionMessageLoader {
     return `${this.runtimeKey}\n${target.directory}\n${target.sessionID}`
   }
 
+  private isEntryCurrent(
+    entryKey: string,
+    entry: LoaderEntry,
+    generation: number,
+    authorityEpoch: number,
+  ): boolean {
+    return !this.disposed
+      && this.authorityEpoch === authorityEpoch
+      && entry.snapshot.generation === generation
+      && this.entries.get(entryKey) === entry
+  }
+
   private getEntry(target: SessionMessageTarget): LoaderEntry {
     const key = this.keyFor(target)
     const existing = this.entries.get(key)
@@ -441,6 +477,8 @@ export class SessionMessageLoader {
         : createDefaultState(),
       listeners: new Set(),
       inflight: null,
+      queuedForce: null,
+      queuedForceReason: undefined,
       queuedRefresh: null,
       queuedRefreshLimit: 0,
       optimistic: new Map(),
@@ -561,6 +599,23 @@ export class SessionMessageLoader {
     this.persistCoverage(target, entry.snapshot)
   }
 
+  private async fetchNextTailRecords(target: SessionMessageTarget, limit: number) {
+    try {
+      const messages = await opencodeClient.loadSessionNextMessages({
+        sessionID: target.sessionID,
+        directory: target.directory,
+        limit,
+      })
+      return convertSessionNextMessages({
+        messages,
+        sessionID: target.sessionID,
+        directory: target.directory,
+      })
+    } catch {
+      return null
+    }
+  }
+
   private async fetchPage(target: SessionMessageTarget, limit: number, before?: string): Promise<FetchedPage> {
     const result = await retry(async () => {
       const response = await this.sdk.session.messages({
@@ -584,6 +639,16 @@ export class SessionMessageLoader {
     const partsByMessageID = new Map<string, Part[]>()
     for (const record of records as Array<{ info: { id: string }; parts?: Part[] }>) {
       partsByMessageID.set(record.info.id, sortParts(record.parts ?? []))
+    }
+    if (!before) {
+      const nextRecords = await this.fetchNextTailRecords(target, limit)
+      const knownMessageIDs = new Set(session.map((message) => message.id))
+      for (const record of nextRecords ?? []) {
+        if (knownMessageIDs.has(record.info.id)) continue
+        session.push(record.info)
+        partsByMessageID.set(record.info.id, sortParts(record.parts))
+      }
+      session.sort((left, right) => cmp(left.id, right.id))
     }
     const cursor = result.response?.headers?.get?.("x-next-cursor") ?? undefined
     return { session, partsByMessageID, cursor, complete: !cursor }

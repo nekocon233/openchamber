@@ -12,6 +12,9 @@ import type {
   TextPartInput,
   FilePartInput,
   PromptInput,
+  SessionDurableEvent,
+  SessionInputAdmitted,
+  SessionMessage,
 } from "@opencode-ai/sdk/v2";
 import type { PermissionRequest } from "@/types/permission";
 import type { QuestionRequest } from "@/types/question";
@@ -38,6 +41,7 @@ import { markStartupTrace } from "@/lib/startupTrace";
 import { createOpenCodeIdentifier } from "@/lib/opencode/identifier";
 import {
   assertProviderCircuitClosed,
+  captureProviderTrackerLane,
   recordProviderSuccess,
   recordProviderError,
 } from "./provider-tracker";
@@ -132,10 +136,10 @@ function throwAmbiguousAdmissionError(): never {
   throw error;
 }
 
-function assertSessionInputAdmission(
+function parseSessionInputAdmission(
   result: SdkResult<unknown>,
   expected: { id: string; sessionID: string; delivery: 'steer' | 'queue' },
-): void {
+): SessionInputAdmitted {
   const envelope = unwrapSdkData(result, 'v2.session.prompt');
   if (!isRecord(envelope) || !isRecord(envelope.data)) {
     throwAmbiguousAdmissionError();
@@ -153,6 +157,7 @@ function assertSessionInputAdmission(
   ) {
     throwAmbiguousAdmissionError();
   }
+  return admission as unknown as SessionInputAdmitted;
 }
 
 const ABSOLUTE_URL_PATTERN = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//;
@@ -339,6 +344,94 @@ class OpencodeService {
     const scoped = createRuntimeOpencodeClient({ baseUrl: this.baseUrl, directory: normalized });
     this.scopedClients.set(key, scoped);
     return scoped;
+  }
+
+  async loadSessionInputAdmissionHistory(params: {
+    sessionID: string;
+    directory?: string | null;
+    limit?: number;
+    maxPages?: number;
+  }): Promise<{ admissions: SessionInputAdmitted[]; complete: boolean }> {
+    const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
+    const durableClient = requestDirectory ? this.getScopedApiClient(requestDirectory) : this.client;
+    const limit = Math.max(1, Math.min(params.limit ?? 100, 500));
+    const maxPages = Math.max(1, params.maxPages ?? 50);
+    const admissionsById = new Map<string, SessionInputAdmitted>();
+    let after: number | undefined;
+
+    const eventAdmission = (event: SessionDurableEvent): SessionInputAdmitted | null => {
+      if (event.type !== 'session.next.prompt.admitted' && event.type !== 'session.next.prompted') return null;
+      const seq = event.durable?.seq;
+      if (typeof seq !== 'number' || !Number.isFinite(seq)) return null;
+      const promotedSeq = event.type === 'session.next.prompted' ? seq : undefined;
+      return {
+        admittedSeq: seq,
+        id: event.data.messageID,
+        sessionID: event.data.sessionID,
+        prompt: event.data.prompt,
+        delivery: event.data.delivery,
+        timeCreated: event.data.timestamp,
+        ...(promotedSeq !== undefined ? { promotedSeq } : {}),
+      };
+    };
+
+    for (let page = 0; page < maxPages; page += 1) {
+      const result = await durableClient.v2.session.history({
+        sessionID: params.sessionID,
+        limit,
+        ...(after === undefined ? {} : { after }),
+      });
+      const history = unwrapSdkData(result, 'v2.session.history');
+      if (!Array.isArray(history.data)) {
+        throw new Error('v2.session.history returned no data');
+      }
+
+      for (const event of history.data) {
+        const admission = eventAdmission(event);
+        if (!admission) continue;
+        const existing = admissionsById.get(admission.id);
+        if (event.type === 'session.next.prompt.admitted') {
+          admissionsById.set(admission.id, admission);
+          continue;
+        }
+        admissionsById.set(admission.id, {
+          ...(existing ?? admission),
+          promotedSeq: admission.promotedSeq,
+        });
+      }
+
+      if (!history.hasMore) {
+        return { admissions: [...admissionsById.values()], complete: true };
+      }
+
+      const last = history.data[history.data.length - 1];
+      const nextAfter = last?.durable?.seq;
+      if (typeof nextAfter !== 'number' || !Number.isFinite(nextAfter) || nextAfter === after) {
+        throw new Error('v2.session.history returned an invalid pagination cursor');
+      }
+      after = nextAfter;
+    }
+
+    return { admissions: [...admissionsById.values()], complete: false };
+  }
+
+  async loadSessionNextMessages(params: {
+    sessionID: string;
+    directory?: string | null;
+    limit?: number;
+  }): Promise<SessionMessage[]> {
+    const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
+    const durableClient = requestDirectory ? this.getScopedApiClient(requestDirectory) : this.client;
+    const result = await durableClient.v2.session.messages({
+      sessionID: params.sessionID,
+      limit: params.limit ?? 50,
+      order: 'desc',
+    });
+    const payload = unwrapSdkData(result, 'v2.session.messages');
+    if (!Array.isArray(payload.data)) {
+      throw new Error('v2.session.messages returned no data');
+    }
+    return [...payload.data].reverse();
   }
 
   private runSessionDeliveryOperation<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -803,6 +896,7 @@ class OpencodeService {
     messageId?: string;
     agentMentions?: Array<{ name: string; source?: { value: string; start: number; end: number } }>;
     delivery?: 'steer' | 'queue';
+    onAdmitted?: (admission: SessionInputAdmitted) => void;
     format?: {
       type: 'json_schema';
       schema: Record<string, unknown>;
@@ -821,6 +915,7 @@ class OpencodeService {
         key: getRuntimeKey(),
         generation: getRuntimeEndpointGeneration(),
       };
+      const providerTrackerLane = captureProviderTrackerLane(deliveryRuntime.key);
       const assertDeliveryRuntimeCurrent = () => {
         if (
           getRuntimeKey() !== deliveryRuntime.key
@@ -891,7 +986,7 @@ class OpencodeService {
       return this.runSessionDeliveryOperation(operationKey, async () => {
         assertDeliveryRuntimeCurrent();
         const durableClient = requestDirectory ? this.getScopedApiClient(requestDirectory) : this.client;
-        assertProviderCircuitClosed(params.providerID);
+        assertProviderCircuitClosed(providerTrackerLane, params.providerID);
         try {
           if (params.agent !== undefined) {
             unwrapSdkOptional(
@@ -915,7 +1010,7 @@ class OpencodeService {
             'v2.session.switchModel',
           );
           assertDeliveryRuntimeCurrent();
-          assertSessionInputAdmission(
+          const admission = parseSessionInputAdmission(
             await durableClient.v2.session.prompt({
               sessionID: params.id,
               id: messageId,
@@ -924,15 +1019,18 @@ class OpencodeService {
             }),
             { id: messageId, sessionID: params.id, delivery },
           );
+          params.onAdmitted?.(admission);
         } catch (error) {
           const status = error && typeof error === 'object' && typeof (error as { status?: unknown }).status === 'number'
             ? (error as { status: number }).status
             : undefined;
-          recordProviderError(params.providerID, status);
+          if (!(error instanceof RuntimeContextChangedError)) {
+            recordProviderError(providerTrackerLane, params.providerID, status);
+          }
           throw error;
         }
 
-        recordProviderSuccess(params.providerID);
+        recordProviderSuccess(providerTrackerLane, params.providerID);
         return messageId;
       });
     }
@@ -1013,7 +1111,8 @@ class OpencodeService {
       });
     }
 
-    assertProviderCircuitClosed(params.providerID);
+    const providerTrackerLane = captureProviderTrackerLane();
+    assertProviderCircuitClosed(providerTrackerLane, params.providerID);
 
     let response: Response;
 
@@ -1050,12 +1149,12 @@ class OpencodeService {
       // Do not retry prompt_async after a transport failure: through a remote
       // tunnel the POST may already be running server-side even though the
       // client lost the response.
-      recordProviderError(params.providerID);
+      recordProviderError(providerTrackerLane, params.providerID);
       throw error;
     }
 
     if (response.ok) {
-      recordProviderSuccess(params.providerID);
+      recordProviderSuccess(providerTrackerLane, params.providerID);
       return messageId;
     }
 
@@ -1068,7 +1167,7 @@ class OpencodeService {
     const suffix = detail && detail.trim().length > 0 ? `: ${detail.trim()}` : '';
     const error = new Error(`Failed to send message (${response.status})${suffix}`) as Error & { status?: number };
     error.status = response.status;
-    recordProviderError(params.providerID, response.status);
+    recordProviderError(providerTrackerLane, params.providerID, response.status);
     throw error;
   }
 

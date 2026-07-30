@@ -49,6 +49,15 @@ describe("global session status index", () => {
     expect(useGlobalSessionStatusStore.getState().resolvedStatusById.get("ses-1")).toBe("idle")
   })
 
+  test("marks authoritative status snapshots without treating monotonic polls as idle proof", () => {
+    applyGlobalSessionStatusSnapshot("/project", {}, ["ses-1"])
+    expect(useGlobalSessionStatusStore.getState().statusSnapshotAtByDirectory.has("/project")).toBe(true)
+
+    const timestamp = useGlobalSessionStatusStore.getState().statusSnapshotAtByDirectory.get("/project")
+    applyGlobalSessionStatusSnapshot("/project", {}, ["ses-1"], Number.POSITIVE_INFINITY, "monotonic")
+    expect(useGlobalSessionStatusStore.getState().statusSnapshotAtByDirectory.get("/project")).toBe(timestamp)
+  })
+
   test("resolves global status before child status and falls back deterministically", () => {
     expect(resolveSessionStatusType("busy", undefined)).toBe("busy")
     expect(resolveSessionStatusType("retry", "idle")).toBe("retry")
@@ -126,6 +135,7 @@ describe("global session status index", () => {
     const resetState = useGlobalSessionStatusStore.getState()
     expect(resetState.statusById.size).toBe(0)
     expect(resetState.resolvedStatusById.size).toBe(0)
+    expect(resetState.statusSnapshotAtByDirectory.size).toBe(0)
     expect(resetState.revisionById.size).toBe(0)
 
     applyGlobalSessionStatusSnapshot(
