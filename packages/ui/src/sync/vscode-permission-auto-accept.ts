@@ -7,7 +7,7 @@ import * as sessionActions from "./session-actions"
 const RETRY_DELAYS_MS = [0, 250, 1000]
 
 type Dependencies = {
-  getPolicy: () => Record<string, boolean>
+  getPolicy: () => { sessions: Record<string, boolean>; defaultEnabled: boolean } | null
   getSessions: () => ReadonlyMap<string, Session>
   getSession: (sessionId: string, directory?: string) => Promise<Session>
   listPendingPermissions: (directory?: string) => Promise<PermissionRequest[]>
@@ -22,30 +22,32 @@ export function createVSCodePermissionAutoAcceptRuntime(dependencies: Dependenci
   const recentOutcomes = new Map<string, boolean>()
 
   const isEnabled = async (sessionId: string, directory?: string) => {
+    if (!sessionId) return false
     const policy = dependencies.getPolicy()
+    if (!policy) return false
     const syncedSessions = dependencies.getSessions()
-    const fetchedSessions = new Map<string, Session>()
     const seen = new Set<string>()
     let current: string | undefined = sessionId
     let currentDirectory = directory
 
-    while (current && !seen.has(current)) {
-      if (Object.prototype.hasOwnProperty.call(policy, current)) return policy[current] === true
+    while (current) {
+      if (seen.has(current)) return false
+      if (Object.prototype.hasOwnProperty.call(policy.sessions, current)) return policy.sessions[current] === true
       seen.add(current)
 
-      let session: Session | undefined = syncedSessions.get(current) ?? fetchedSessions.get(current)
+      let session: Session | undefined = syncedSessions.get(current)
       if (!session) {
         try {
           session = await dependencies.getSession(current, currentDirectory)
-          fetchedSessions.set(session.id, session)
         } catch {
           return false
         }
       }
+      if (!session || session.id !== current) return false
       current = session.parentID
       currentDirectory = session.directory || currentDirectory
     }
-    return false
+    return policy.defaultEnabled
   }
 
   const processPermission = (permission: PermissionRequest, directory?: string) => {
@@ -101,7 +103,12 @@ export function createVSCodePermissionAutoAcceptRuntime(dependencies: Dependenci
 }
 
 const runtime = createVSCodePermissionAutoAcceptRuntime({
-  getPolicy: () => usePermissionStore.getState().autoAccept,
+  getPolicy: () => {
+    const state = usePermissionStore.getState()
+    return state.loaded
+      ? { sessions: state.autoAccept, defaultEnabled: state.defaultEnabled }
+      : null
+  },
   getSessions: getAllSyncSessionMap,
   getSession: (sessionId, directory) => opencodeClient.getSession(sessionId, directory),
   listPendingPermissions: (directory) => opencodeClient.listPendingPermissions({ directories: [directory] }),

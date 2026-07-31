@@ -16,7 +16,6 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { createMessageQueueTarget, getMessageQueueKey, useMessageQueueStore, type MessageQueueTarget, type QueuedMessage } from '@/stores/messageQueueStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useInputStore } from '@/sync/input-store';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useI18n } from '@/lib/i18n';
@@ -179,7 +178,7 @@ const QueuedMessageChip = memo(({ message, target, sendingMessageId, onEdit, onQ
 QueuedMessageChip.displayName = 'QueuedMessageChip';
 
 interface QueuedMessageChipsProps {
-    onEditMessage: (content: string, attachments?: QueuedMessage['attachments']) => void;
+    onEditMessage: (message: QueuedMessage) => void;
     onQueueMessage: (messageId: string) => void;
     onSendMessage: (messageId: string) => void;
     sendingMessageId: string | null;
@@ -242,11 +241,7 @@ export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendM
 
         const popped = popToInput(target, message.id);
         if (popped) {
-            if (popped.attachments && popped.attachments.length > 0) {
-                const currentAttachments = useInputStore.getState().attachedFiles;
-                useInputStore.getState().setAttachedFiles([...currentAttachments, ...popped.attachments]);
-            }
-            onEditMessage(popped.content, popped.attachments);
+            onEditMessage(popped);
         }
     }, [target, popToInput, onEditMessage]);
 

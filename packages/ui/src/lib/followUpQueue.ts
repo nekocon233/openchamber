@@ -1,4 +1,5 @@
 import type {
+  FollowUpQueueAdditionalPart,
   FollowUpQueueAttachment,
   FollowUpQueueItem,
   FollowUpQueueMutationResult,
@@ -12,6 +13,8 @@ const SCOPE_TOKEN_PATTERN = /^[\da-f]{64}$/;
 const MAX_ITEMS = 256;
 const MAX_ATTACHMENTS_PER_ITEM = 32;
 const MAX_ATTACHMENTS_PER_QUEUE = 512;
+const MAX_ADDITIONAL_PARTS_PER_ITEM = 64;
+const MAX_ADDITIONAL_PARTS_PER_QUEUE = 1024;
 const MAX_CONTENT_BYTES = 1024 * 1024;
 const MAX_TOTAL_CONTENT_BYTES = 4 * 1024 * 1024;
 const MAX_ATTACHMENT_DATA_URL_BYTES = 56 * 1024 * 1024;
@@ -22,8 +25,14 @@ const MAX_MIME_TYPE_BYTES = 256;
 const MAX_FILENAME_BYTES = 4096;
 const MAX_ATTACHMENT_PATH_BYTES = 16 * 1024;
 const MAX_SEND_CONFIG_STRING_BYTES = 1024;
+const MAX_AGENT_MENTION_NAME_BYTES = 1024;
 
 export const FOLLOW_UP_QUEUE_CLAIM_TTL_MS = 120_000;
+
+export const isFollowUpQueueClaimAvailable = (
+  item: Pick<FollowUpQueueItem, 'claim'>,
+  now = Date.now(),
+): boolean => !item.claim || item.claim.expiresAt <= now;
 
 export class FollowUpQueueRequestError extends Error {
   readonly status: number;
@@ -153,6 +162,18 @@ const parseAttachment = (value: unknown, field: string): FollowUpQueueAttachment
   };
 };
 
+const parseAdditionalPart = (value: unknown, field: string): FollowUpQueueAdditionalPart => {
+  if (!isRecord(value)) throw new Error(`Invalid follow-up queue ${field}`);
+  assertKeys(value, ['text', 'synthetic'], field);
+  if (Object.prototype.hasOwnProperty.call(value, 'synthetic') && typeof value.synthetic !== 'boolean') {
+    throw new Error(`Invalid follow-up queue ${field}.synthetic`);
+  }
+  return {
+    text: parseString(value.text, `${field}.text`, MAX_CONTENT_BYTES),
+    ...(typeof value.synthetic === 'boolean' ? { synthetic: value.synthetic } : {}),
+  };
+};
+
 const parseSendConfig = (value: unknown, field: string): FollowUpQueueSendConfig => {
   if (!isRecord(value)) throw new Error(`Invalid follow-up queue ${field}`);
   assertKeys(value, ['providerID', 'modelID', 'agent', 'variant'], field);
@@ -174,7 +195,18 @@ export const parseFollowUpQueueItem = (
 ): FollowUpQueueItem => {
   const field = options.field ?? 'item';
   if (!isRecord(value)) throw new Error(`Invalid follow-up queue ${field}`);
-  assertKeys(value, ['id', 'messageId', 'content', 'attachments', 'createdAt', 'status', 'sendConfig', 'claim'], field);
+  assertKeys(value, [
+    'id',
+    'messageId',
+    'content',
+    'attachments',
+    'additionalParts',
+    'agentMentionName',
+    'createdAt',
+    'status',
+    'sendConfig',
+    'claim',
+  ], field);
   if (options.allowClaim === false && value.claim !== undefined) {
     throw new Error(`Invalid follow-up queue ${field}.claim`);
   }
@@ -190,6 +222,23 @@ export const parseFollowUpQueueItem = (
   if (attachments && new Set(attachments.map((attachment) => attachment.id)).size !== attachments.length) {
     throw new Error(`Invalid follow-up queue ${field}.attachments`);
   }
+  if (value.additionalParts !== undefined && !Array.isArray(value.additionalParts)) {
+    throw new Error(`Invalid follow-up queue ${field}.additionalParts`);
+  }
+  if (Array.isArray(value.additionalParts) && value.additionalParts.length > MAX_ADDITIONAL_PARTS_PER_ITEM) {
+    throw new Error(`Invalid follow-up queue ${field}.additionalParts`);
+  }
+  const additionalParts = value.additionalParts === undefined
+    ? undefined
+    : value.additionalParts.map((part, index) => parseAdditionalPart(part, `${field}.additionalParts[${index}]`));
+  const content = parseString(value.content, `${field}.content`, MAX_CONTENT_BYTES);
+  const additionalContentBytes = additionalParts?.reduce(
+    (total, part) => total + utf8Length(part.text),
+    0,
+  ) ?? 0;
+  if (utf8Length(content) + additionalContentBytes > MAX_CONTENT_BYTES) {
+    throw new Error(`Invalid follow-up queue ${field}.content`);
+  }
   let claim: FollowUpQueueItem['claim'];
   if (value.claim !== undefined) {
     if (!isRecord(value.claim)) throw new Error(`Invalid follow-up queue ${field}.claim`);
@@ -202,9 +251,18 @@ export const parseFollowUpQueueItem = (
 
   return {
     id: parseIdentifier(value.id, `${field}.id`),
-    messageId: parseIdentifier(value.messageId, `${field}.messageId`),
-    content: parseString(value.content, `${field}.content`, MAX_CONTENT_BYTES),
+    messageId: value.messageId === null ? null : parseIdentifier(value.messageId, `${field}.messageId`),
+    content,
     ...(attachments ? { attachments } : {}),
+    ...(additionalParts ? { additionalParts } : {}),
+    ...(value.agentMentionName !== undefined ? {
+      agentMentionName: parseString(
+        value.agentMentionName,
+        `${field}.agentMentionName`,
+        MAX_AGENT_MENTION_NAME_BYTES,
+        { nonEmpty: true, controlFree: true },
+      ),
+    } : {}),
     createdAt: parseInteger(value.createdAt, `${field}.createdAt`),
     status: parseStatus(value.status, `${field}.status`),
     ...(value.sendConfig !== undefined ? { sendConfig: parseSendConfig(value.sendConfig, `${field}.sendConfig`) } : {}),
@@ -220,11 +278,18 @@ const parseItems = (value: unknown): FollowUpQueueItem[] => {
   let contentBytes = 0;
   let attachmentCount = 0;
   let attachmentStringBytes = 0;
+  let additionalPartCount = 0;
   for (const item of items) {
-    if (itemIds.has(item.id) || messageIds.has(item.messageId)) throw new Error('Invalid follow-up queue item identity');
+    if (itemIds.has(item.id) || (item.messageId !== null && messageIds.has(item.messageId))) {
+      throw new Error('Invalid follow-up queue item identity');
+    }
     itemIds.add(item.id);
-    messageIds.add(item.messageId);
+    if (item.messageId !== null) messageIds.add(item.messageId);
     contentBytes += utf8Length(item.content);
+    for (const part of item.additionalParts ?? []) {
+      additionalPartCount += 1;
+      contentBytes += utf8Length(part.text);
+    }
     for (const attachment of item.attachments ?? []) {
       attachmentCount += 1;
       for (const entry of Object.values(attachment)) {
@@ -236,6 +301,7 @@ const parseItems = (value: unknown): FollowUpQueueItem[] => {
     contentBytes > MAX_TOTAL_CONTENT_BYTES
     || attachmentCount > MAX_ATTACHMENTS_PER_QUEUE
     || attachmentStringBytes > MAX_TOTAL_ATTACHMENT_STRING_BYTES
+    || additionalPartCount > MAX_ADDITIONAL_PARTS_PER_QUEUE
   ) {
     throw new Error('Invalid follow-up queue aggregate limits');
   }
@@ -348,10 +414,22 @@ const attachmentsEqual = (left: FollowUpQueueAttachment[] | undefined, right: Fo
   });
 };
 
+const additionalPartsEqual = (
+  left: FollowUpQueueAdditionalPart[] | undefined,
+  right: FollowUpQueueAdditionalPart[] | undefined,
+): boolean => {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((part, index) => (
+    part.text === right[index].text && part.synthetic === right[index].synthetic
+  ));
+};
+
 export const followUpQueueItemsEqual = (left: FollowUpQueueItem, right: FollowUpQueueItem): boolean => (
   left.id === right.id
   && left.messageId === right.messageId
   && left.content === right.content
+  && left.agentMentionName === right.agentMentionName
   && left.createdAt === right.createdAt
   && left.status === right.status
   && left.sendConfig?.providerID === right.sendConfig?.providerID
@@ -361,11 +439,13 @@ export const followUpQueueItemsEqual = (left: FollowUpQueueItem, right: FollowUp
   && left.claim?.id === right.claim?.id
   && left.claim?.expiresAt === right.claim?.expiresAt
   && attachmentsEqual(left.attachments, right.attachments)
+  && additionalPartsEqual(left.additionalParts, right.additionalParts)
 );
 
 type FollowUpQueueApplyOptions = {
   now?: number;
   claimExpiresAt?: number;
+  messageId?: string;
 };
 
 type FollowUpQueueApplyResult = {
@@ -378,13 +458,13 @@ export const applyFollowUpQueueOperation = (
   operation: FollowUpQueueOperation,
   options: FollowUpQueueApplyOptions = {},
 ): FollowUpQueueApplyResult => {
-  const itemIndex = operation.type === 'add'
-    ? -1
-    : snapshot.items.findIndex((item) => item.id === operation.itemId);
-
   if (operation.type === 'add') {
     const matches = snapshot.items.filter(
-      (item) => item.id === operation.item.id || item.messageId === operation.item.messageId,
+      (item) => item.id === operation.item.id || (
+        item.messageId !== null
+        && operation.item.messageId !== null
+        && item.messageId === operation.item.messageId
+      ),
     );
     if (matches.length > 0) {
       if (matches.length === 1 && followUpQueueItemsEqual(matches[0], operation.item)) {
@@ -400,6 +480,8 @@ export const applyFollowUpQueueOperation = (
       applied: true,
     };
   }
+
+  const itemIndex = snapshot.items.findIndex((item) => item.id === operation.itemId);
   if (itemIndex < 0) return { snapshot, applied: false };
 
   if (operation.type === 'remove') {
@@ -440,9 +522,16 @@ export const applyFollowUpQueueOperation = (
     if (item.claim?.id === operation.claimId && item.claim.expiresAt === expiresAt) {
       return { snapshot, applied: false };
     }
+    const messageId = item.messageId === null && options.messageId
+      ? options.messageId
+      : item.messageId;
     const items = snapshot.items.slice();
-    items[itemIndex] = { ...item, claim: { id: operation.claimId, expiresAt: Number(expiresAt) } };
-    return { snapshot: { ...snapshot, items }, applied: true };
+    items[itemIndex] = {
+      ...item,
+      messageId,
+      claim: { id: operation.claimId, expiresAt: Number(expiresAt) },
+    };
+    return { snapshot: parseFollowUpQueueSnapshot({ ...snapshot, items }), applied: true };
   }
   if (operation.type === 'complete') {
     if (snapshot.items[itemIndex].claim?.id !== operation.claimId) return { snapshot, applied: false };

@@ -22,7 +22,7 @@ test('production updater feed is immutable GitHub configuration', () => {
   });
 });
 
-test('packaged publish metadata cannot fall back to the official repository', () => {
+test('local packaged publish metadata matches the default fork feed', () => {
   const packageMetadata = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
   assert.deepEqual(packageMetadata.build.publish, PRODUCTION_UPDATER_FEED);
   assert.notEqual(`${packageMetadata.build.publish.owner}/${packageMetadata.build.publish.repo}`, 'openchamber/openchamber');

@@ -10,41 +10,29 @@ const buildSessionMap = (sessions: Session[]): Map<string, Session> => {
   return map;
 };
 
-const resolveLineage = (
-  sessionID: string,
-  sessions: Session[],
-  sessionById?: ReadonlyMap<string, Session>,
-): string[] => {
-  const map = sessionById ?? buildSessionMap(sessions);
-  const result: string[] = [];
-  const seen = new Set<string>();
-  let current: string | undefined = sessionID;
-
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    result.push(current);
-    current = map.get(current)?.parentID;
-  }
-
-  return result;
-};
-
 export const autoRespondsPermission = (input: {
   autoAccept: PermissionAutoAcceptMap;
+  defaultEnabled: boolean;
   sessions: Session[];
   sessionById?: ReadonlyMap<string, Session>;
   sessionID: string;
 }): boolean => {
-  const { autoAccept, sessions, sessionById, sessionID } = input;
-  if (Object.keys(autoAccept).length === 0) return false;
-  const lineage = resolveLineage(sessionID, sessions, sessionById);
+  const { autoAccept, defaultEnabled, sessions, sessionById, sessionID } = input;
+  if (!sessionID) return false;
+  const map = sessionById ?? buildSessionMap(sessions);
+  const seen = new Set<string>();
+  let current: string | undefined = sessionID;
 
-  for (const id of lineage) {
-    if (!Object.prototype.hasOwnProperty.call(autoAccept, id)) {
-      continue;
+  while (current) {
+    if (seen.has(current)) return false;
+    seen.add(current);
+    if (Object.prototype.hasOwnProperty.call(autoAccept, current)) {
+      return autoAccept[current] === true;
     }
-    return autoAccept[id] === true;
+    const session = map.get(current);
+    if (!session) return false;
+    current = session.parentID;
   }
 
-  return false;
+  return defaultEnabled;
 };

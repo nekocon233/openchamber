@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import {
   FollowUpQueueConflictError,
@@ -17,6 +17,8 @@ const MAX_FOLLOW_UP_QUEUE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_ITEMS = 256;
 const MAX_ATTACHMENTS_PER_ITEM = 32;
 const MAX_ATTACHMENTS_PER_QUEUE = 512;
+const MAX_ADDITIONAL_PARTS_PER_ITEM = 64;
+const MAX_ADDITIONAL_PARTS_PER_QUEUE = 1024;
 const MAX_CONTENT_BYTES = 1024 * 1024;
 const MAX_TOTAL_CONTENT_BYTES = 4 * 1024 * 1024;
 const MAX_ATTACHMENT_DATA_URL_BYTES = 56 * 1024 * 1024;
@@ -29,10 +31,33 @@ const MAX_MIME_TYPE_BYTES = 256;
 const MAX_FILENAME_BYTES = 4096;
 const MAX_ATTACHMENT_PATH_BYTES = 16 * 1024;
 const MAX_SEND_CONFIG_STRING_BYTES = 1024;
+const MAX_AGENT_MENTION_NAME_BYTES = 1024;
 const CLAIM_TTL_MS = 120_000;
 const LOCK_OWNER_GRACE_MS = 5_000;
 const MAX_LOCK_RETRY_MS = 100;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/;
+const MESSAGE_ID_RANDOM_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+const MESSAGE_ID_RANDOM_LENGTH = 14;
+
+let lastMessageIdTimestamp = 0;
+let messageIdCounter = 0;
+
+const createOpenCodeMessageId = (timestamp) => {
+  if (timestamp !== lastMessageIdTimestamp) {
+    lastMessageIdTimestamp = timestamp;
+    messageIdCounter = 0;
+  }
+  messageIdCounter += 1;
+
+  const sortable = BigInt(timestamp) * BigInt(0x1000) + BigInt(messageIdCounter);
+  const time = Array.from({ length: 6 }, (_, index) => (
+    Number((sortable >> BigInt(40 - 8 * index)) & BigInt(0xff)).toString(16).padStart(2, '0')
+  )).join('');
+  const random = Array.from(randomBytes(MESSAGE_ID_RANDOM_LENGTH), (byte) => (
+    MESSAGE_ID_RANDOM_CHARS[byte % MESSAGE_ID_RANDOM_CHARS.length]
+  )).join('');
+  return `msg_${time}${random}`;
+};
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
@@ -202,6 +227,31 @@ const normalizeAttachments = (value, field) => {
   return attachments;
 };
 
+const normalizeAdditionalPart = (value, field) => {
+  const part = requireRecord(value, field);
+  requireAllowedKeys(part, new Set(['text', 'synthetic']), field);
+  const normalized = {
+    text: requireUtf8String(part.text, `${field}.text`, MAX_CONTENT_BYTES),
+  };
+  if (hasOwn(part, 'synthetic')) {
+    if (typeof part.synthetic !== 'boolean') {
+      throw new FollowUpQueueValidationError(`${field}.synthetic must be a boolean`);
+    }
+    normalized.synthetic = part.synthetic;
+  }
+  return normalized;
+};
+
+const normalizeAdditionalParts = (value, field) => {
+  if (!Array.isArray(value)) {
+    throw new FollowUpQueueValidationError(`${field} must be an array`);
+  }
+  if (value.length > MAX_ADDITIONAL_PARTS_PER_ITEM) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its item limit`);
+  }
+  return value.map((part, index) => normalizeAdditionalPart(part, `${field}[${index}]`));
+};
+
 const normalizeSendConfig = (value, field) => {
   const sendConfig = requireRecord(value, field);
   requireAllowedKeys(sendConfig, new Set(['providerID', 'modelID', 'agent', 'variant']), field);
@@ -251,7 +301,18 @@ const normalizeItem = (value, field, options = {}) => {
   const item = requireRecord(value, field);
   requireAllowedKeys(
     item,
-    new Set(['id', 'messageId', 'content', 'attachments', 'createdAt', 'status', 'sendConfig', 'claim']),
+    new Set([
+      'id',
+      'messageId',
+      'content',
+      'attachments',
+      'additionalParts',
+      'agentMentionName',
+      'createdAt',
+      'status',
+      'sendConfig',
+      'claim',
+    ]),
     field,
   );
   if (options.allowClaim === false && hasOwn(item, 'claim')) {
@@ -260,11 +321,30 @@ const normalizeItem = (value, field, options = {}) => {
 
   const normalized = {
     id: normalizeIdentifier(item.id, `${field}.id`),
-    messageId: normalizeIdentifier(item.messageId, `${field}.messageId`),
+    messageId: item.messageId === null ? null : normalizeIdentifier(item.messageId, `${field}.messageId`),
     content: requireUtf8String(item.content, `${field}.content`, MAX_CONTENT_BYTES),
   };
   if (hasOwn(item, 'attachments')) {
     normalized.attachments = normalizeAttachments(item.attachments, `${field}.attachments`);
+  }
+  if (hasOwn(item, 'additionalParts')) {
+    normalized.additionalParts = normalizeAdditionalParts(item.additionalParts, `${field}.additionalParts`);
+  }
+  if (hasOwn(item, 'agentMentionName')) {
+    normalized.agentMentionName = requireUtf8String(
+      item.agentMentionName,
+      `${field}.agentMentionName`,
+      MAX_AGENT_MENTION_NAME_BYTES,
+      { nonEmpty: true, controlFree: true },
+    );
+  }
+  const itemContentBytes = Buffer.byteLength(normalized.content, 'utf8')
+    + (normalized.additionalParts ?? []).reduce(
+      (total, part) => total + Buffer.byteLength(part.text, 'utf8'),
+      0,
+    );
+  if (itemContentBytes > MAX_CONTENT_BYTES) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its total content limit`);
   }
   normalized.createdAt = normalizeNonNegativeInteger(item.createdAt, `${field}.createdAt`);
   normalized.status = normalizeStatus(item.status, `${field}.status`);
@@ -294,16 +374,21 @@ const assertItemsWithinLimits = (items, field = 'items') => {
   let totalContentBytes = 0;
   let totalAttachments = 0;
   let totalAttachmentStringBytes = 0;
+  let totalAdditionalParts = 0;
   for (const item of items) {
     if (seenIds.has(item.id)) {
       throw new FollowUpQueueValidationError(`${field} contains duplicate item ids`);
     }
-    if (seenMessageIds.has(item.messageId)) {
+    if (item.messageId !== null && seenMessageIds.has(item.messageId)) {
       throw new FollowUpQueueValidationError(`${field} contains duplicate message ids`);
     }
     seenIds.add(item.id);
-    seenMessageIds.add(item.messageId);
+    if (item.messageId !== null) seenMessageIds.add(item.messageId);
     totalContentBytes += Buffer.byteLength(JSON.stringify(item.content), 'utf8') - 2;
+    for (const part of item.additionalParts ?? []) {
+      totalAdditionalParts += 1;
+      totalContentBytes += Buffer.byteLength(JSON.stringify(part.text), 'utf8') - 2;
+    }
     for (const attachment of item.attachments ?? []) {
       totalAttachments += 1;
       totalAttachmentStringBytes += getAttachmentStringBytes(attachment);
@@ -317,6 +402,9 @@ const assertItemsWithinLimits = (items, field = 'items') => {
   }
   if (totalAttachmentStringBytes > MAX_TOTAL_ATTACHMENT_STRING_BYTES) {
     throw new FollowUpQueueValidationError(`${field} exceeds its total attachment string limit`);
+  }
+  if (totalAdditionalParts > MAX_ADDITIONAL_PARTS_PER_QUEUE) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its total additional part count limit`);
   }
 };
 
@@ -493,6 +581,10 @@ const cloneItem = (item) => {
   if (hasOwn(item, 'attachments')) {
     cloned.attachments = item.attachments.map(cloneAttachment);
   }
+  if (hasOwn(item, 'additionalParts')) {
+    cloned.additionalParts = item.additionalParts.map((part) => ({ ...part }));
+  }
+  if (hasOwn(item, 'agentMentionName')) cloned.agentMentionName = item.agentMentionName;
   cloned.createdAt = item.createdAt;
   cloned.status = item.status;
   if (hasOwn(item, 'sendConfig')) cloned.sendConfig = { ...item.sendConfig };
@@ -530,14 +622,14 @@ const requireDependency = (value, name) => {
 
 const itemsEqual = (first, second) => JSON.stringify(first) === JSON.stringify(second);
 
-const applyOperation = (items, operation, now) => {
-  const itemIndex = operation.type === 'add'
-    ? -1
-    : items.findIndex((item) => item.id === operation.itemId);
-
+const applyOperation = (items, operation, now, createMessageId) => {
   if (operation.type === 'add') {
     const identityMatches = items.filter(
-      (item) => item.id === operation.item.id || item.messageId === operation.item.messageId,
+      (item) => item.id === operation.item.id || (
+        item.messageId !== null
+        && operation.item.messageId !== null
+        && item.messageId === operation.item.messageId
+      ),
     );
     if (identityMatches.length > 0) {
       if (identityMatches.length === 1 && itemsEqual(identityMatches[0], operation.item)) {
@@ -550,6 +642,7 @@ const applyOperation = (items, operation, now) => {
     return { items: nextItems, changed: true };
   }
 
+  const itemIndex = items.findIndex((item) => item.id === operation.itemId);
   if (itemIndex === -1) return { items, changed: false };
 
   if (operation.type === 'remove') {
@@ -590,8 +683,16 @@ const applyOperation = (items, operation, now) => {
     if (item.claim?.id === claim.id && item.claim.expiresAt === claim.expiresAt) {
       return { items, changed: false };
     }
+    const messageId = item.messageId === null
+      ? normalizeIdentifier(createMessageId(timestamp), 'generated messageId')
+      : item.messageId;
     const nextItems = items.slice();
-    nextItems[itemIndex] = { ...item, claim };
+    nextItems[itemIndex] = {
+      ...item,
+      messageId,
+      claim,
+    };
+    assertItemsWithinLimits(nextItems);
     return { items: nextItems, changed: true };
   }
 
@@ -622,6 +723,7 @@ export const createFollowUpQueueCore = (dependencies) => {
   const createTempId = options.createTempId ?? randomUUID;
   const createLockId = options.createLockId ?? randomUUID;
   const now = options.now ?? Date.now;
+  const createMessageId = options.createMessageId ?? createOpenCodeMessageId;
   const waitForLock = options.waitForLock ?? ((delayMs) => new Promise((resolve) => {
     const timer = setTimeout(resolve, delayMs);
     timer.unref?.();
@@ -1076,7 +1178,7 @@ export const createFollowUpQueueCore = (dependencies) => {
       let applied = false;
       let mutationRevision = null;
       if (!envelope.terminal) {
-        const result = applyOperation(envelope.items, mutation.operation, now);
+        const result = applyOperation(envelope.items, mutation.operation, now, createMessageId);
         items = result.items;
         applied = result.changed;
         if (applied) {

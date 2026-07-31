@@ -240,8 +240,48 @@ describe('message stream websocket runtime', () => {
       eventId: 'evt-2',
       directory: '/tmp/project',
     });
+    expect(secondSocket.sent.findIndex((frame) => frame.type === 'event'))
+      .toBeLessThan(secondSocket.sent.findIndex((frame) => frame.type === 'ready'));
 
     secondSocket.close();
+    await runtime.close();
+  });
+
+  it('signals an unrecoverable replay gap before declaring the websocket ready', async () => {
+    const server = new EventEmitter();
+    const wsClients = new Set();
+    const globalEventHub = {
+      subscribeEvent: () => () => {},
+      subscribeStatus: () => () => {},
+      start() {},
+      stop() {},
+      isConnected: () => true,
+      resolveReplay: () => ({ events: [], gap: true }),
+      replayAfter: () => [],
+    };
+    const runtime = createMessageStreamWsRuntime({
+      server,
+      uiAuthController: null,
+      isRequestOriginAllowed: async () => true,
+      rejectWebSocketUpgrade() {
+        throw new Error('upgrade should not be used in this test');
+      },
+      buildOpenCodeUrl: (path) => `http://127.0.0.1:4096${path}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      processForwardedEventPayload() {},
+      wsClients,
+      globalEventHub,
+    });
+
+    const socket = new FakeSocket();
+    runtime.wsServer.emit('connection', socket, { url: '/api/global/event/ws?lastEventId=evt-evicted' });
+
+    expect(socket.sent).toEqual([
+      { type: 'replay-gap', scope: 'global' },
+      { type: 'ready', scope: 'global' },
+    ]);
+
+    socket.close();
     await runtime.close();
   });
 

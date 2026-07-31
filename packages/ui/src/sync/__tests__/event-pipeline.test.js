@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { createEventPipeline } from '../event-pipeline';
+import { clearRuntimeUrlAuthToken, setRuntimeUrlAuthToken } from '@/lib/runtime-auth';
 
 const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
 const originalWebSocket = globalThis.WebSocket;
 
 function installDomStubs() {
+  setRuntimeUrlAuthToken('test-url-token', Date.now() + 10 * 60 * 1000);
   globalThis.document = {
     visibilityState: 'visible',
     addEventListener() {},
@@ -50,11 +52,12 @@ class FakeWebSocket {
 
   emitClose() {
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.({ code: 1000, reason: '' });
   }
 }
 
 afterEach(() => {
+  clearRuntimeUrlAuthToken();
   globalThis.document = originalDocument;
   globalThis.window = originalWindow;
   globalThis.WebSocket = originalWebSocket;
@@ -591,6 +594,33 @@ describe('createEventPipeline', () => {
         },
       },
     ]);
+  });
+
+  it('commits replayed events before reconnect repair starts', async () => {
+    installDomStubs();
+    globalThis.WebSocket = FakeWebSocket;
+    const order = [];
+    const pipeline = createEventPipeline({
+      sdk: { global: { event: async () => { throw new Error('SSE should not be used in ws mode'); } } },
+      transport: 'ws',
+      onEvent: (_directory, payload) => order.push(`event:${payload.type}`),
+      onReconnect: () => order.push('reconnect'),
+    });
+
+    await Promise.resolve();
+    const socket = FakeWebSocket.instances[0];
+    socket.emitOpen();
+    socket.emitMessage({ type: 'replay-gap', scope: 'global' });
+    socket.emitMessage({
+      type: 'event',
+      eventId: 'evt-replayed',
+      directory: '/tmp/project',
+      payload: { type: 'session.status', properties: { sessionID: 'session-1', status: { type: 'busy' } } },
+    });
+    socket.emitMessage({ type: 'ready', scope: 'global' });
+
+    expect(order).toEqual(['event:session.status', 'reconnect']);
+    pipeline.cleanup();
   });
 
   it('falls back to SSE when websocket closes before ready in auto mode', async () => {

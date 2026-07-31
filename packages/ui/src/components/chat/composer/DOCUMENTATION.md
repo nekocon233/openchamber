@@ -91,8 +91,8 @@ and the send path reading the same grammar.
 - `submit/buildOutgoingMessage.ts` assembles the composer text, inline comments
   and context into OpenCode's one-primary-plus-parts shape. **Inline comments
   attach to the composer body** rather than becoming their own part; PR
-  instructions precede the PR diff. Busy-session ordering belongs to official
-  OpenCode delivery rather than a client-side staged queue.
+  instructions precede the PR diff. Busy normal prompts use OpenChamber's host
+  queue when configured for `queue`, or immediate legacy delivery for `steer`.
 - `state/useComposerDraft.ts` — a draft belongs to a (runtime, directory,
   session) identity. Writes are debounced while typing but forced at every edge
   where the page may stop running, because a pending timer is not a saved
@@ -112,20 +112,30 @@ follow-up queue instead of sending it to OpenCode. The same follow-up behavior
 is forced when sending dismisses a blocking permission or question, even if the
 captured phase still says `idle`, because rejecting the prompt can leave the
 active turn running. The queue entry captures the visible text, attachments,
-provider, model, agent, and variant at enqueue time; mutable composer selections
-are never re-read when the entry later sends. `steer` remains the immediate
-OpenCode delivery path for users who explicitly choose it. Idle prompts without
-a dismissed blocker, and queued drains, use the normal `promptAsync` path.
+ordered additional text/synthetic parts, routed agent mention, provider, model,
+agent, and variant at enqueue time; mutable composer selections are never
+re-read when the entry later sends. `steer` remains the immediate
+legacy `promptAsync` path for users who explicitly choose it. Direct V2 queue
+delivery is rejected so only the host queue admits queued work. Idle prompts
+without a dismissed blocker, and queued drains, use the normal `promptAsync`
+path.
 
 Queued entries are user-visible staged work, not read-only projections. They can
-be removed, edited back into the composer, marked queued/unqueued, reordered,
-or sent manually. Web and desktop use the host queue API with revisioned
+be removed, edited back into the composer with attachments, additional parts,
+and routed agent mention restored, marked queued/unqueued, reordered, or sent
+manually. Web and desktop use the host queue API with revisioned
 snapshots, outbox replay, and revision hints; VS Code exposes an explicit
 unsupported API, so the store uses its runtime-scoped local fallback. Claim and
 release/complete operations prevent two clients from draining the same queued
-entry. When the session reaches idle, the composer claims only the first
-unclaimed `queued` entry and sends it with its captured configuration; failure
-releases the entry instead of dropping it.
+entry. Manual send and idle auto-drain dispatch the payload returned by the
+claim, not a pre-claim projection. Immediately after claiming, the composer
+captures the current runtime key and endpoint generation and passes that guard
+through `sendMessage`; switching runtimes rejects the send instead of targeting
+the new endpoint. The transient generation is not a queue field. When the
+session reaches idle, the composer claims only the first unclaimed `queued`
+entry; failure releases the entry instead of dropping it. If an existing claim
+expires while the session is idle, its expiry boundary wakes auto-drain so the
+entry does not remain stranded.
 
 Slash commands and shell input retain their existing transports and never opt
 into follow-up queueing. While auto-review owns the session, submit does not

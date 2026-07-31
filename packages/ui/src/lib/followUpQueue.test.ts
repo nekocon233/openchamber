@@ -4,6 +4,7 @@ import type { FollowUpQueueSnapshot } from '@/lib/api/types';
 import {
   FOLLOW_UP_QUEUE_CLAIM_TTL_MS,
   applyFollowUpQueueOperation,
+  isFollowUpQueueClaimAvailable,
   parseFollowUpQueueMutationResult,
   parseFollowUpQueueSnapshot,
 } from './followUpQueue';
@@ -23,6 +24,11 @@ const snapshot = (): FollowUpQueueSnapshot => ({
       size: 4,
       source: 'local',
     }],
+    additionalParts: [
+      { text: 'hidden context', synthetic: true },
+      { text: 'plain additional text' },
+    ],
+    agentMentionName: 'build',
     createdAt: 10,
     status: 'queued',
   }],
@@ -38,6 +44,28 @@ describe('follow-up queue protocol parsing', () => {
       deduplicated: false,
       mutationRevision: 2,
     }).snapshot.items[0].attachments?.[0].filename).toBe('a.txt');
+    expect(parsed.items[0].additionalParts).toEqual([
+      { text: 'hidden context', synthetic: true },
+      { text: 'plain additional text' },
+    ]);
+    expect(parsed.items[0].agentMentionName).toBe('build');
+  });
+
+  test('accepts stored items that predate the optional extended payload fields', () => {
+    const legacy = snapshot();
+    delete legacy.items[0].additionalParts;
+    delete legacy.items[0].agentMentionName;
+
+    const parsed = parseFollowUpQueueSnapshot(legacy).items[0];
+    expect(parsed.additionalParts).toBe(undefined);
+    expect(parsed.agentMentionName).toBe(undefined);
+  });
+
+  test('accepts unclaimed items without an assigned OpenCode message ID', () => {
+    const pending = snapshot();
+    pending.items[0].messageId = null;
+
+    expect(parseFollowUpQueueSnapshot(pending).items[0].messageId).toBeNull();
   });
 
   test('rejects browser File fields, unknown fields, and duplicate identities', () => {
@@ -48,13 +76,58 @@ describe('follow-up queue protocol parsing', () => {
     const withUnknown = { ...snapshot(), unexpected: true };
     expect(() => parseFollowUpQueueSnapshot(withUnknown)).toThrow();
 
+    const withUnknownPartField = snapshot();
+    (withUnknownPartField.items[0].additionalParts?.[0] as unknown as Record<string, unknown>).unexpected = true;
+    expect(() => parseFollowUpQueueSnapshot(withUnknownPartField)).toThrow();
+
+    const withInvalidSynthetic = snapshot();
+    (withInvalidSynthetic.items[0].additionalParts?.[0] as unknown as Record<string, unknown>).synthetic = 'yes';
+    expect(() => parseFollowUpQueueSnapshot(withInvalidSynthetic)).toThrow();
+
     const duplicate = snapshot();
     duplicate.items.push({ ...duplicate.items[0] });
     expect(() => parseFollowUpQueueSnapshot(duplicate)).toThrow();
   });
+
+  test('bounds additional-part count and combined item and queue text', () => {
+    const tooManyParts = snapshot();
+    tooManyParts.items[0].additionalParts = Array.from(
+      { length: 65 },
+      (_, index) => ({ text: `part-${index}`, synthetic: true }),
+    );
+    expect(() => parseFollowUpQueueSnapshot(tooManyParts)).toThrow();
+
+    const oversizedItem = snapshot();
+    oversizedItem.items[0].content = 'x'.repeat(512 * 1024);
+    oversizedItem.items[0].additionalParts = [{ text: 'y'.repeat((512 * 1024) + 1), synthetic: true }];
+    expect(() => parseFollowUpQueueSnapshot(oversizedItem)).toThrow();
+
+    const oversizedQueue = snapshot();
+    oversizedQueue.items = Array.from({ length: 5 }, (_, index) => ({
+      ...oversizedQueue.items[0],
+      id: `item-${index}`,
+      messageId: `message-${index}`,
+      content: '',
+      additionalParts: [{ text: 'z'.repeat(1024 * 1024), synthetic: true }],
+    }));
+    expect(() => parseFollowUpQueueSnapshot(oversizedQueue)).toThrow();
+
+    const oversizedMention = snapshot();
+    oversizedMention.items[0].agentMentionName = 'a'.repeat(1025);
+    expect(() => parseFollowUpQueueSnapshot(oversizedMention)).toThrow();
+  });
 });
 
 describe('follow-up queue semantic replay', () => {
+  test('makes an expired claim available without treating a live claim as free', () => {
+    const item = snapshot().items[0];
+    item.claim = { id: 'claim-one', expiresAt: 200 };
+
+    expect(isFollowUpQueueClaimAvailable(item, 199)).toBe(false);
+    expect(isFollowUpQueueClaimAvailable(item, 200)).toBe(true);
+    expect(isFollowUpQueueClaimAvailable({ claim: undefined }, 0)).toBe(true);
+  });
+
   test('applies status, move, remove, and add intents without changing the authoritative revision', () => {
     let current = snapshot();
     current = applyFollowUpQueueOperation(current, {
@@ -110,5 +183,40 @@ describe('follow-up queue semantic replay', () => {
     });
     expect(replaced.applied).toBe(true);
     expect(replaced.snapshot.items[0].claim?.id).toBe('claim-two');
+  });
+
+  test('assigns a message ID on first claim and preserves it across release and retry', () => {
+    const pending = snapshot();
+    pending.items[0].messageId = null;
+    const claimed = applyFollowUpQueueOperation(pending, {
+      type: 'claim',
+      itemId: 'item-one',
+      claimId: 'claim-one',
+      mode: 'auto',
+    }, {
+      now: 100,
+      claimExpiresAt: 100 + FOLLOW_UP_QUEUE_CLAIM_TTL_MS,
+      messageId: 'msg_claimed',
+    }).snapshot;
+    expect(claimed.items[0].messageId).toBe('msg_claimed');
+
+    const released = applyFollowUpQueueOperation(claimed, {
+      type: 'release',
+      itemId: 'item-one',
+      claimId: 'claim-one',
+      status: 'staged',
+    }).snapshot;
+    const reclaimed = applyFollowUpQueueOperation(released, {
+      type: 'claim',
+      itemId: 'item-one',
+      claimId: 'claim-two',
+      mode: 'manual',
+    }, {
+      now: 200,
+      claimExpiresAt: 200 + FOLLOW_UP_QUEUE_CLAIM_TTL_MS,
+      messageId: 'msg_replacement',
+    }).snapshot;
+
+    expect(reclaimed.items[0].messageId).toBe('msg_claimed');
   });
 });

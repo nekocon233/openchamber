@@ -79,6 +79,7 @@ class FakeAuthority {
     readonly mutationCalls: FollowUpQueueMutationRequest[] = [];
     private readonly snapshots = new Map<string, FollowUpQueueSnapshot>();
     private readonly ledger = new Map<string, FollowUpQueueMutationResult>();
+    private messageCounter = 0;
 
     readonly api: FollowUpQueueAPI = {
         supported: true,
@@ -112,6 +113,7 @@ class FakeAuthority {
             const applied = applyFollowUpQueueOperation(current, request.operation, {
                 now: this.now,
                 claimExpiresAt: this.now + FOLLOW_UP_QUEUE_CLAIM_TTL_MS,
+                messageId: `msg_${String(++this.messageCounter).padStart(12, '0')}${'H'.repeat(14)}`,
             });
             const snapshot = {
                 ...applied.snapshot,
@@ -208,7 +210,7 @@ const watchAndInitialize = async (
 };
 
 describe('host-authoritative follow-up queue client', () => {
-    test('supports add, status, reorder, delete, stable message IDs, and attachment round trips', async () => {
+    test('supports add, status, reorder, delete, deferred message IDs, and attachment round trips', async () => {
         const { authority, store } = createClient({ useDefaultMessageId: true });
         await watchAndInitialize(store, 'session-one');
         const attachment = {
@@ -225,6 +227,11 @@ describe('host-authoritative follow-up queue client', () => {
         store.getState().addToQueue('session-one', {
             content: 'first',
             attachments: [attachment],
+            additionalParts: [
+                { text: 'synthetic context', synthetic: true },
+                { text: 'plain additional text' },
+            ],
+            agentMentionName: 'review',
             sendConfig: { providerID: 'provider', modelID: 'model', agent: 'agent', variant: 'high' },
         });
         store.getState().addToQueue('session-one', { content: 'second' });
@@ -233,7 +240,7 @@ describe('host-authoritative follow-up queue client', () => {
 
         const initial = store.getState().queuedMessages['session-one'];
         expect(initial).toHaveLength(3);
-        expect(/^msg_[\da-f]{12}[0-9A-Za-z]{14}$/.test(initial[0].messageId)).toBe(true);
+        expect(initial.every((entry) => entry.messageId === null)).toBe(true);
         expect(initial[0].attachments?.[0].dataUrl).toBe(attachment.dataUrl);
         expect(initial[0].attachments?.[0].filename).toBe(attachment.filename);
         expect(initial[0].attachments?.[0].serverPath).toBe(attachment.serverPath);
@@ -244,6 +251,13 @@ describe('host-authoritative follow-up queue client', () => {
             agent: 'agent',
             variant: 'high',
         });
+        expect(initial[0].additionalParts).toEqual([
+            { text: 'synthetic context', synthetic: true },
+            { text: 'plain additional text' },
+        ]);
+        expect(initial[0].agentMentionName).toBe('review');
+        expect(authority.getSnapshot('session-one').items[0].additionalParts).toEqual(initial[0].additionalParts);
+        expect(authority.getSnapshot('session-one').items[0].agentMentionName).toBe('review');
         expect('file' in (authority.getSnapshot('session-one').items[0].attachments?.[0] ?? {})).toBe(false);
 
         store.getState().setQueuedStatus('session-one', initial[1].id, 'queued');
@@ -261,6 +275,29 @@ describe('host-authoritative follow-up queue client', () => {
         store.getState().removeFromQueue('session-one', initial[2].id);
         await store.getState().initialize();
         expect(store.getState().queuedMessages['session-one'].map((entry) => entry.content)).toEqual(['second', 'first']);
+    });
+
+    test('assigns an OpenCode message ID at first claim and reuses it after release', async () => {
+        const { store } = createClient();
+        await watchAndInitialize(store, 'session-claim-id');
+        const queued = await store.getState().addToQueue('session-claim-id', {
+            content: 'send after idle',
+            status: 'queued',
+        });
+        expect(queued.messageId).toBeNull();
+
+        const first = await store.getState().claim('session-claim-id', queued.id, 'auto');
+        expect(/^msg_[\da-f]{12}[0-9A-Za-z]{14}$/.test(first?.item.messageId ?? '')).toBe(true);
+        const assignedMessageId = first?.item.messageId;
+        expect(await store.getState().release(
+            'session-claim-id',
+            queued.id,
+            first!.claimId,
+            'staged',
+        )).toBe(true);
+
+        const second = await store.getState().claim('session-claim-id', queued.id, 'manual');
+        expect(second?.item.messageId).toBe(assignedMessageId);
     });
 
     test('propagates a mobile add to a desktop client through a targeted revision hint', async () => {
@@ -842,7 +879,11 @@ describe('host-authoritative follow-up queue client', () => {
         const storage = createMemoryStorage();
         const { store } = createClient({ api: unsupported, storage, getRuntimeKey: () => runtimeKey });
         await watchAndInitialize(store, 'session-one');
-        store.getState().addToQueue('session-one', { content: 'runtime a local' });
+        store.getState().addToQueue('session-one', {
+            content: 'runtime a local',
+            additionalParts: [{ text: 'runtime a context', synthetic: true }],
+            agentMentionName: 'local-agent',
+        });
         await store.getState().initialize();
         expect(store.getState().supported).toBe(false);
         expect(store.getState().queuedMessages['session-one'][0].content).toBe('runtime a local');
@@ -854,6 +895,10 @@ describe('host-authoritative follow-up queue client', () => {
         runtimeKey = 'runtime-a';
         store.getState().switchRuntime(runtimeKey);
         expect(store.getState().queuedMessages['session-one'][0].content).toBe('runtime a local');
+        expect(store.getState().queuedMessages['session-one'][0].additionalParts).toEqual([
+            { text: 'runtime a context', synthetic: true },
+        ]);
+        expect(store.getState().queuedMessages['session-one'][0].agentMentionName).toBe('local-agent');
     });
 
     test('migrates the concrete unscoped queue only for the startup runtime and deletes it after host confirmation', async () => {
@@ -891,7 +936,8 @@ describe('host-authoritative follow-up queue client', () => {
         await watchAndInitialize(restarted, 'session-one');
         const migrated = authority.getSnapshot('session-one').items[0];
         expect(migrated.id).toBe('legacy-item');
-        expect(migrated.messageId.startsWith('msg_')).toBe(true);
+        expect(migrated.messageId).not.toBeNull();
+        expect(migrated.messageId?.startsWith('msg_')).toBe(true);
         expect('file' in (migrated.attachments?.[0] ?? {})).toBe(false);
         expect(JSON.parse(storage.getItem('message-queue-store') ?? '{}').state.queuedMessages['session-one']).toBe(undefined);
     });

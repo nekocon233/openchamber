@@ -4,6 +4,8 @@ import { togglePermissionAutoAccept } from "../../components/chat/permissionAuto
 const storage = new Map<string, string>()
 const createSessionCalls: Array<{ title?: string; directory: string | null; parentID: string | null; metadata?: unknown }> = []
 const permissionAutoAcceptCalls: Array<[string, boolean]> = []
+const optimisticSendCalls: unknown[] = []
+let permissionAutoAcceptShouldFail = false
 
 const getMockCalls = (fn: unknown): unknown[][] => ((fn as { mock?: { calls: unknown[][] } }).mock?.calls ?? [])
 
@@ -62,11 +64,16 @@ mock.module("@/lib/opencode/client", () => ({
   },
 }))
 
+mock.module("@/lib/runtime-fetch", () => ({
+  runtimeFetch: mock(async () => new Response(null, { status: 204 })),
+}))
+
 mock.module("@/stores/permissionStore", () => ({
   usePermissionStore: {
     getState: () => ({
       setSessionAutoAccept: mock(async (sessionId: string, enabled: boolean) => {
         permissionAutoAcceptCalls.push([sessionId, enabled])
+        if (permissionAutoAcceptShouldFail) throw new Error("policy unavailable")
       }),
     }),
   },
@@ -98,6 +105,24 @@ mock.module("@/stores/useDirectoryStore", () => ({
     getState: () => ({
       currentDirectory: null,
       setDirectory: mock(() => undefined),
+    }),
+  },
+}))
+
+mock.module("@/stores/useUIStore", () => ({
+  useUIStore: {
+    getState: () => ({
+      sessionGoalDefaultBudgetEnabled: false,
+      sessionGoalDefaultBudget: 0,
+    }),
+  },
+}))
+
+mock.module("@/stores/useSessionGoalArmStore", () => ({
+  useSessionGoalArmStore: {
+    getState: () => ({
+      consume: () => ({ armed: false, objectiveOverride: null }),
+      setArmed: () => undefined,
     }),
   },
 }))
@@ -161,8 +186,10 @@ mock.module("../selection-store", () => ({
 
 mock.module("@/lib/runtime-switch", () => ({
   getRuntimeApiBaseUrl: () => "",
+  getRuntimeEndpointGeneration: () => 0,
   getRuntimeKey: () => "test-runtime",
   initializeRuntimeEndpoint: () => undefined,
+  RuntimeContextChangedError: class RuntimeContextChangedError extends Error {},
   subscribeRuntimeEndpointChanged: () => () => undefined,
   switchRuntimeEndpoint: () => undefined,
 }))
@@ -180,6 +207,9 @@ mock.module("../notification-store", () => ({
 }))
 
 mock.module("../session-navigation", () => ({
+  clearPersistedSessionNavigation: () => undefined,
+  persistSessionNavigation: () => undefined,
+  readPersistedSessionNavigation: () => null,
   setSessionOpener: () => undefined,
 }))
 
@@ -227,6 +257,7 @@ mock.module("../sync-refs", () => ({
 }))
 
 mock.module("../session-actions", () => ({
+  abortCurrentOperation: mock(async () => undefined),
   createSession: mock(async (title: string | undefined, directory: string | null, parentID: string | null, metadata?: unknown) => {
     createSessionCalls.push({ title, directory, parentID, metadata })
     return { id: "ses_issue_2039", directory }
@@ -236,15 +267,23 @@ mock.module("../session-actions", () => ({
   updateSessionTitle: mock(async () => undefined),
   shareSession: mock(async () => undefined),
   unshareSession: mock(async () => undefined),
-  optimisticSend: mock(async () => undefined),
+  optimisticSend: mock(async (input: unknown) => {
+    optimisticSendCalls.push(input)
+  }),
   refetchSessionMessages: mock(async () => undefined),
   revertToMessage: mock(async () => undefined),
   unrevertSession: mock(async () => undefined),
   forkFromMessage: mock(async () => undefined),
   fetchMessagesForSession: mock(async () => undefined),
+  getSessionLastAssistantModel: () => null,
+  patchSessionMetadata: mock(async () => undefined),
 }))
 
-const { materializeOpenDraftSession, useSessionUIStore } = await import("../session-ui-store")
+const {
+  materializeOpenDraftSession,
+  supersedePendingDraftPermissionPolicy,
+  useSessionUIStore,
+} = await import("../session-ui-store")
 
 describe("issue 2039 draft auto-accept", () => {
   test("toggles draft state before a session exists", () => {
@@ -298,6 +337,8 @@ describe("issue 2039 draft auto-accept", () => {
     storage.clear()
     createSessionCalls.length = 0
     permissionAutoAcceptCalls.length = 0
+    optimisticSendCalls.length = 0
+    permissionAutoAcceptShouldFail = false
 
     useSessionUIStore.setState({
       currentSessionId: null,
@@ -310,12 +351,8 @@ describe("issue 2039 draft auto-accept", () => {
     })
   })
 
-  test("stores auto-accept in the draft and applies it when the session materializes", async () => {
+  test("defaults auto-accept on and applies it when the session materializes", async () => {
     useSessionUIStore.getState().openNewSessionDraft()
-
-    expect(useSessionUIStore.getState().newSessionDraft.permissionAutoAcceptEnabled).toBe(false)
-
-    useSessionUIStore.getState().setDraftPermissionAutoAcceptEnabled(true)
 
     expect(useSessionUIStore.getState().newSessionDraft.permissionAutoAcceptEnabled).toBe(true)
 
@@ -329,6 +366,90 @@ describe("issue 2039 draft auto-accept", () => {
     expect(createSessionCalls).toHaveLength(1)
     expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", true]])
     expect(useSessionUIStore.getState().currentSessionId).toBe("ses_issue_2039")
+  })
+
+  test("persists an explicit auto-accept disable when the session materializes", async () => {
+    useSessionUIStore.getState().openNewSessionDraft({ permissionAutoAcceptEnabled: false })
+
+    expect(useSessionUIStore.getState().newSessionDraft.permissionAutoAcceptEnabled).toBe(false)
+
+    const result = await materializeOpenDraftSession({
+      providerID: "provider",
+      modelID: "model",
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(result?.sessionId).toBe("ses_issue_2039")
+    expect(createSessionCalls).toHaveLength(1)
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", false]])
+  })
+
+  test("shares one session creation when the same open draft materializes concurrently", async () => {
+    useSessionUIStore.getState().openNewSessionDraft()
+
+    const first = materializeOpenDraftSession({ providerID: "provider", modelID: "model" })
+    useSessionUIStore.getState().setDraftPermissionAutoAcceptEnabled(false)
+    const second = materializeOpenDraftSession({ providerID: "provider", modelID: "model" })
+    const [firstResult, secondResult] = await Promise.all([first, second])
+
+    expect(firstResult?.sessionId).toBe("ses_issue_2039")
+    expect(secondResult?.sessionId).toBe("ses_issue_2039")
+    expect(createSessionCalls).toHaveLength(1)
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", true]])
+  })
+
+  test("retries a failed disabled policy before dispatching to the materialized session", async () => {
+    useSessionUIStore.getState().openNewSessionDraft({ permissionAutoAcceptEnabled: false })
+    permissionAutoAcceptShouldFail = true
+
+    await expect(materializeOpenDraftSession({
+      providerID: "provider",
+      modelID: "model",
+    })).rejects.toThrow("policy unavailable")
+
+    expect(createSessionCalls).toHaveLength(1)
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", false]])
+    expect(useSessionUIStore.getState().currentSessionId).toBe("ses_issue_2039")
+
+    await expect(useSessionUIStore.getState().sendMessage(
+      "retry",
+      "provider",
+      "model",
+    )).rejects.toThrow("policy unavailable")
+
+    expect(createSessionCalls).toHaveLength(1)
+    expect(permissionAutoAcceptCalls).toEqual([
+      ["ses_issue_2039", false],
+      ["ses_issue_2039", false],
+    ])
+    expect(optimisticSendCalls).toHaveLength(0)
+
+    permissionAutoAcceptShouldFail = false
+    await useSessionUIStore.getState().sendMessage("retry", "provider", "model")
+
+    expect(createSessionCalls).toHaveLength(1)
+    expect(permissionAutoAcceptCalls).toEqual([
+      ["ses_issue_2039", false],
+      ["ses_issue_2039", false],
+      ["ses_issue_2039", false],
+    ])
+    expect(optimisticSendCalls).toHaveLength(1)
+  })
+
+  test("does not replay a failed disabled policy after a later explicit override", async () => {
+    useSessionUIStore.getState().openNewSessionDraft({ permissionAutoAcceptEnabled: false })
+    permissionAutoAcceptShouldFail = true
+
+    await expect(materializeOpenDraftSession({
+      providerID: "provider",
+      modelID: "model",
+    })).rejects.toThrow("policy unavailable")
+
+    supersedePendingDraftPermissionPolicy("ses_issue_2039", "test-runtime")
+    await useSessionUIStore.getState().sendMessage("send after override", "provider", "model")
+
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", false]])
+    expect(optimisticSendCalls).toHaveLength(1)
   })
 
   test("does not apply draft auto-accept after the draft is closed", async () => {

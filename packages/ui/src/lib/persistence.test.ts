@@ -436,6 +436,7 @@ describe('updateDesktopSettings', () => {
     }, async () => ({
       settings: {
         queueModeEnabled: false,
+        autoSaveEnabled: true,
         draftStartersCraftGoalAdded: true,
         draftStartersScheduleTaskAdded: true,
       },

@@ -11,7 +11,6 @@ import type {
   Agent,
   TextPartInput,
   FilePartInput,
-  PromptInput,
   SessionDurableEvent,
   SessionInputAdmitted,
   SessionMessage,
@@ -32,9 +31,7 @@ export type FetchPermissionResult =
 import { getRuntimeUrlResolver } from "@/lib/runtime-url";
 import { runtimeFetch } from "@/lib/runtime-fetch";
 import {
-  getRuntimeEndpointGeneration,
   getRuntimeKey,
-  RuntimeContextChangedError,
 } from "@/lib/runtime-switch";
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry";
 import { markStartupTrace } from "@/lib/startupTrace";
@@ -51,6 +48,8 @@ import {
 const DEFAULT_BASE_URL = import.meta.env.VITE_OPENCODE_URL || "/api";
 const CONFIG_CACHE_TTL_MS = 10_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 4_000;
+const SESSION_STATUS_TIMEOUT_MS = 4_000;
+const SESSION_NEXT_MESSAGES_PAGE_LIMIT = 200;
 
 type SessionStatusSnapshot = Record<string, SessionStatus>;
 
@@ -128,36 +127,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function throwAmbiguousAdmissionError(): never {
-  const error = new Error('v2.session.prompt returned a malformed admission response') as Error & {
-    sendMayHaveBeenAccepted?: boolean;
-  };
-  error.sendMayHaveBeenAccepted = true;
-  throw error;
-}
-
-function parseSessionInputAdmission(
-  result: SdkResult<unknown>,
-  expected: { id: string; sessionID: string; delivery: 'steer' | 'queue' },
-): SessionInputAdmitted {
-  const envelope = unwrapSdkData(result, 'v2.session.prompt');
-  if (!isRecord(envelope) || !isRecord(envelope.data)) {
-    throwAmbiguousAdmissionError();
+function parseSessionActiveSnapshot(value: unknown): string[] | null {
+  if (!isRecord(value)) return null;
+  const activeSessionIDs: string[] = [];
+  for (const [sessionID, rawActivity] of Object.entries(value)) {
+    if (!sessionID || !isRecord(rawActivity) || rawActivity.type !== 'running') return null;
+    activeSessionIDs.push(sessionID);
   }
-  const admission = envelope.data;
-  if (
-    admission.id !== expected.id
-    || admission.sessionID !== expected.sessionID
-    || admission.delivery !== expected.delivery
-    || typeof admission.admittedSeq !== 'number'
-    || !Number.isFinite(admission.admittedSeq)
-    || typeof admission.timeCreated !== 'number'
-    || !Number.isFinite(admission.timeCreated)
-    || !isRecord(admission.prompt)
-  ) {
-    throwAmbiguousAdmissionError();
-  }
-  return admission as unknown as SessionInputAdmitted;
+  return activeSessionIDs;
 }
 
 const ABSOLUTE_URL_PATTERN = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//;
@@ -193,23 +170,22 @@ const resolveRuntimeBaseUrl = (): string | null => {
   }
 };
 
-type AbortSignalConstructorWithTimeout = typeof AbortSignal & {
-  timeout?: (milliseconds: number) => AbortSignal;
-};
-
-const createTimeoutSignal = (timeoutMs: number): { signal: AbortSignal; cleanup: () => void } => {
-  const abortSignal = typeof AbortSignal !== 'undefined'
-    ? AbortSignal as AbortSignalConstructorWithTimeout
-    : undefined;
-  if (typeof abortSignal?.timeout === 'function') {
-    return { signal: abortSignal.timeout(timeoutMs), cleanup: () => undefined };
-  }
-
+const createTimeoutSignal = (
+  timeoutMs: number,
+  parentSignal?: AbortSignal,
+): { signal: AbortSignal; abort: () => void; cleanup: () => void } => {
   const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   return {
     signal: controller.signal,
-    cleanup: () => clearTimeout(timeoutId),
+    abort: () => controller.abort(),
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      parentSignal?.removeEventListener('abort', abortFromParent);
+    },
   };
 };
 
@@ -291,7 +267,6 @@ class OpencodeService {
   private configCache: Map<string, { config: Config; expiresAt: number }> = new Map();
   private configCacheGeneration = 0;
   private listDirectoryCache: Map<string, { entries: FilesystemEntry[]; expiresAt: number }> = new Map();
-  private sessionDeliveryOperations: Map<string, Promise<void>> = new Map();
 
   constructor(baseUrl: string = DEFAULT_BASE_URL) {
     const runtimeBase = resolveRuntimeBaseUrl();
@@ -354,7 +329,7 @@ class OpencodeService {
   }): Promise<{ admissions: SessionInputAdmitted[]; complete: boolean }> {
     const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
     const durableClient = requestDirectory ? this.getScopedApiClient(requestDirectory) : this.client;
-    const limit = Math.max(1, Math.min(params.limit ?? 100, 500));
+    const limit = Math.max(1, Math.min(params.limit ?? 100, 100));
     const maxPages = Math.max(1, params.maxPages ?? 50);
     const admissionsById = new Map<string, SessionInputAdmitted>();
     let after: number | undefined;
@@ -419,34 +394,52 @@ class OpencodeService {
     sessionID: string;
     directory?: string | null;
     limit?: number;
-  }): Promise<SessionMessage[]> {
+    cursor?: string;
+  }): Promise<{ messages: SessionMessage[]; cursor?: string }> {
     const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
     const durableClient = requestDirectory ? this.getScopedApiClient(requestDirectory) : this.client;
-    const result = await durableClient.v2.session.messages({
-      sessionID: params.sessionID,
-      limit: params.limit ?? 50,
-      order: 'desc',
-    });
-    const payload = unwrapSdkData(result, 'v2.session.messages');
-    if (!Array.isArray(payload.data)) {
-      throw new Error('v2.session.messages returned no data');
-    }
-    return [...payload.data].reverse();
-  }
+    const requestedLimit = typeof params.limit === 'number' && Number.isFinite(params.limit)
+      ? Math.trunc(params.limit)
+      : 50;
+    const pageSize = Math.max(1, Math.min(requestedLimit, SESSION_NEXT_MESSAGES_PAGE_LIMIT));
+    const messagesByID = new Map<string, SessionMessage>();
 
-  private runSessionDeliveryOperation<T>(key: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.sessionDeliveryOperations.get(key) ?? Promise.resolve();
-    const run = previous.then(operation, operation);
-    const tail = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.sessionDeliveryOperations.set(key, tail);
-    return run.finally(() => {
-      if (this.sessionDeliveryOperations.get(key) === tail) {
-        this.sessionDeliveryOperations.delete(key);
+    const result = await durableClient.v2.session.messages(params.cursor === undefined
+      ? {
+        sessionID: params.sessionID,
+        limit: pageSize,
+        order: 'desc',
       }
-    });
+      : {
+        sessionID: params.sessionID,
+        limit: pageSize,
+        cursor: params.cursor,
+      });
+    const payload = unwrapSdkData(result, 'v2.session.messages');
+    if (!isRecord(payload) || !Array.isArray(payload.data) || !isRecord(payload.cursor)) {
+      throw new Error('v2.session.messages returned malformed data');
+    }
+
+    for (const rawMessage of payload.data) {
+      if (!isRecord(rawMessage) || typeof rawMessage.id !== 'string' || rawMessage.id.length === 0) {
+        throw new Error('v2.session.messages returned a malformed message');
+      }
+      if (!messagesByID.has(rawMessage.id)) {
+        messagesByID.set(rawMessage.id, rawMessage as unknown as SessionMessage);
+      }
+    }
+
+    const nextCursor = payload.data.length > 0 ? payload.cursor.next : undefined;
+    if (
+      nextCursor !== undefined
+      && (typeof nextCursor !== 'string' || nextCursor.length === 0 || nextCursor === params.cursor)
+    ) {
+      throw new Error('v2.session.messages returned an invalid pagination cursor');
+    }
+    return {
+      messages: [...messagesByID.values()].reverse(),
+      ...(typeof nextCursor === 'string' ? { cursor: nextCursor } : {}),
+    };
   }
 
   private normalizeCandidatePath(path?: string | null): string | null {
@@ -896,7 +889,6 @@ class OpencodeService {
     messageId?: string;
     agentMentions?: Array<{ name: string; source?: { value: string; start: number; end: number } }>;
     delivery?: 'steer' | 'queue';
-    onAdmitted?: (admission: SessionInputAdmitted) => void;
     format?: {
       type: 'json_schema';
       schema: Record<string, unknown>;
@@ -909,130 +901,8 @@ class OpencodeService {
     const messageId = params.messageId ?? createOpenCodeIdentifier("msg");
     const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
 
-    if (params.delivery) {
-      const delivery = params.delivery;
-      const deliveryRuntime = {
-        key: getRuntimeKey(),
-        generation: getRuntimeEndpointGeneration(),
-      };
-      const providerTrackerLane = captureProviderTrackerLane(deliveryRuntime.key);
-      const assertDeliveryRuntimeCurrent = () => {
-        if (
-          getRuntimeKey() !== deliveryRuntime.key
-          || getRuntimeEndpointGeneration() !== deliveryRuntime.generation
-        ) {
-          throw new RuntimeContextChangedError();
-        }
-      };
-      if (params.format) {
-        throw new Error('Official follow-up delivery does not support structured message format');
-      }
-
-      const syntheticPreface = Boolean(params.prefaceText?.trim()) && params.prefaceTextSynthetic !== false;
-      const syntheticAdditionalPart = params.additionalParts?.some((part) => part.synthetic === true) ?? false;
-      if (syntheticPreface || syntheticAdditionalPart) {
-        throw new Error('Official follow-up delivery does not support synthetic parts');
-      }
-
-      const textSegments: string[] = [];
-      if (params.prefaceText?.trim()) textSegments.push(params.prefaceText);
-      if (params.text?.trim()) textSegments.push(params.text);
-
-      const files: NonNullable<PromptInput['files']> = [];
-      const appendFiles = async (inputFiles: Array<FileInputLite> | undefined) => {
-        for (const file of inputFiles ?? []) {
-          const normalized = await this.normalizeFilePart(file);
-          files.push({
-            uri: normalized.url,
-            ...(normalized.filename ? { name: normalized.filename } : {}),
-          });
-        }
-      };
-      await appendFiles(params.files);
-
-      for (const part of params.additionalParts ?? []) {
-        if (part.text?.trim()) textSegments.push(part.text);
-        await appendFiles(part.files);
-      }
-
-      const agents: NonNullable<PromptInput['agents']> = (params.agentMentions ?? [])
-        .filter((mention) => Boolean(mention?.name))
-        .map((mention) => ({
-          name: mention.name,
-          ...(mention.source ? {
-            source: {
-              text: mention.source.value,
-              start: mention.source.start,
-              end: mention.source.end,
-            },
-          } : {}),
-        }));
-      if (textSegments.length === 0 && files.length === 0 && agents.length === 0) {
-        throw new Error('Message must have at least one part (text or file)');
-      }
-
-      const prompt: PromptInput = {
-        text: textSegments.join('\n\n'),
-        ...(files.length > 0 ? { files } : {}),
-        ...(agents.length > 0 ? { agents } : {}),
-      };
-      const operationKey = [
-        deliveryRuntime.generation,
-        deliveryRuntime.key,
-        requestDirectory ?? '',
-        params.id,
-      ].join('\u0000');
-
-      return this.runSessionDeliveryOperation(operationKey, async () => {
-        assertDeliveryRuntimeCurrent();
-        const durableClient = requestDirectory ? this.getScopedApiClient(requestDirectory) : this.client;
-        assertProviderCircuitClosed(providerTrackerLane, params.providerID);
-        try {
-          if (params.agent !== undefined) {
-            unwrapSdkOptional(
-              await durableClient.v2.session.switchAgent({
-                sessionID: params.id,
-                agent: params.agent,
-              }),
-              'v2.session.switchAgent',
-            );
-            assertDeliveryRuntimeCurrent();
-          }
-          unwrapSdkOptional(
-            await durableClient.v2.session.switchModel({
-              sessionID: params.id,
-              model: {
-                id: params.modelID,
-                providerID: params.providerID,
-                ...(params.variant ? { variant: params.variant } : {}),
-              },
-            }),
-            'v2.session.switchModel',
-          );
-          assertDeliveryRuntimeCurrent();
-          const admission = parseSessionInputAdmission(
-            await durableClient.v2.session.prompt({
-              sessionID: params.id,
-              id: messageId,
-              prompt,
-              delivery,
-            }),
-            { id: messageId, sessionID: params.id, delivery },
-          );
-          params.onAdmitted?.(admission);
-        } catch (error) {
-          const status = error && typeof error === 'object' && typeof (error as { status?: unknown }).status === 'number'
-            ? (error as { status: number }).status
-            : undefined;
-          if (!(error instanceof RuntimeContextChangedError)) {
-            recordProviderError(providerTrackerLane, params.providerID, status);
-          }
-          throw error;
-        }
-
-        recordProviderSuccess(providerTrackerLane, params.providerID);
-        return messageId;
-      });
+    if (params.delivery === 'queue') {
+      throw new Error('Queue delivery must be handled by the OpenChamber follow-up queue');
     }
 
     // Build parts array using SDK types (TextPartInput | FilePartInput) plus lightweight agent parts
@@ -1288,7 +1158,7 @@ class OpencodeService {
   }
 
   /**
-   * Returns the upstream `/session/status` map, or `null` if the fetch failed.
+   * Returns the merged legacy status and V2 active snapshot, or `null` if either fetch failed.
    *
    * `null` vs `{}` matters for reconnect resync: the server omits idle sessions
    * from the response, so an empty `{}` means "everything is idle" and a candidate
@@ -1297,18 +1167,38 @@ class OpencodeService {
    */
   async getSessionStatusForDirectory(
     directory: string | null | undefined,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<SessionStatusSnapshot | null> {
+    const timeout = createTimeoutSignal(options?.timeoutMs ?? SESSION_STATUS_TIMEOUT_MS, options?.signal);
     try {
       const trimmedDirectory = typeof directory === "string" ? directory.trim() : "";
-      const result = await this.client.session.status(
-        trimmedDirectory ? { directory: trimmedDirectory } : undefined,
-        options?.signal ? { signal: options.signal } : undefined,
+      const requestOptions = { signal: timeout.signal };
+      const activeClient = trimmedDirectory ? this.getScopedApiClient(trimmedDirectory) : this.client;
+      const [legacyResult, activeResult] = await Promise.all([
+        this.client.session.status(
+          trimmedDirectory ? { directory: trimmedDirectory } : undefined,
+          requestOptions,
+        ),
+        activeClient.v2.session.active(requestOptions),
+      ]);
+      if (legacyResult.error || activeResult.error) return null;
+      const legacySnapshot = parseSessionStatusSnapshot(legacyResult.data);
+      const activeSessionIDs = parseSessionActiveSnapshot(
+        isRecord(activeResult.data) ? activeResult.data.data : undefined,
       );
-      if (result.error) return null;
-      return parseSessionStatusSnapshot(result.data);
+      if (!legacySnapshot || !activeSessionIDs) return null;
+
+      const merged = { ...legacySnapshot };
+      for (const sessionID of activeSessionIDs) {
+        if (merged[sessionID]?.type === 'retry') continue;
+        merged[sessionID] = { type: 'busy' };
+      }
+      return merged;
     } catch {
+      timeout.abort();
       return null;
+    } finally {
+      timeout.cleanup();
     }
   }
 

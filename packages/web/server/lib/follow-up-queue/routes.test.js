@@ -53,7 +53,7 @@ describe('follow-up queue routes', () => {
     ]) {
       const response = await request(app).get(route).expect(200);
       expect(response.headers['cache-control']).toBe('no-store');
-      expect(response.body).toEqual({ authority: 'openchamber-host', version: 1 });
+      expect(response.body).toEqual({ authority: 'openchamber-host', version: 2 });
     }
 
     const loaded = await request(app)

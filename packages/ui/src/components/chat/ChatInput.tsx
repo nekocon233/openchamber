@@ -11,6 +11,7 @@ import {
     useMessageQueueStore,
     type QueuedMessage,
 } from '@/stores/messageQueueStore';
+import { isFollowUpQueueClaimAvailable } from '@/lib/followUpQueue';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useInputStore } from '@/sync/input-store';
 import {
@@ -123,6 +124,7 @@ import {
     toServerFileUrl,
 } from './composer/attachments/filePaths';
 import { buildOutgoingMessage } from './composer/submit/buildOutgoingMessage';
+import { shouldUseFollowUpDelivery } from './lib/followUpDrafts';
 import {
     buildCommandVariables,
     canRunCommand,
@@ -858,7 +860,18 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             return false;
         }
         try {
-            const sendConfig = item.sendConfig ?? {
+            const queuedItem = claim.item;
+            const expectedRuntime = {
+                runtimeKey: getRuntimeKey(),
+                generation: getRuntimeEndpointGeneration(),
+            };
+            const queueState = useMessageQueueStore.getState();
+            if (
+                expectedRuntime.runtimeKey !== messageQueueTarget.runtimeKey
+                || queueState.runtimeKey !== claim.context.runtimeKey
+                || queueState.generation !== claim.context.generation
+            ) throw new RuntimeContextChangedError();
+            const sendConfig = queuedItem.sendConfig ?? {
                 providerID: currentProviderId ?? '',
                 modelID: currentModelId ?? '',
                 ...(currentAgentName ? { agent: currentAgentName } : {}),
@@ -868,19 +881,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 throw new Error('Queued message is missing its captured model selection');
             }
             await sendMessage(
-                item.content,
+                queuedItem.content,
                 sendConfig.providerID,
                 sendConfig.modelID,
                 sendConfig.agent,
-                item.attachments,
-                undefined,
-                undefined,
+                queuedItem.attachments,
+                queuedItem.agentMentionName,
+                queuedItem.additionalParts,
                 sendConfig.variant,
                 'normal',
                 {
                     sessionId: messageQueueTarget.sessionId,
                     directory: messageQueueTarget.directory,
-                    messageId: item.messageId,
+                    messageId: queuedItem.messageId,
+                    expectedRuntime,
                 },
             );
             await completeQueuedMessage(messageQueueTarget, messageId, claim.claimId, claim.context);
@@ -917,17 +931,55 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         setQueuedStatus(messageQueueTarget, messageId, 'queued');
     }, [messageQueueTarget, setQueuedStatus]);
 
-    const handleQueuedMessageEdit = React.useCallback((content: string) => {
+    const handleQueuedMessageEdit = React.useCallback((queuedMessage: QueuedMessage) => {
+        let content = queuedMessage.content;
+        if (queuedMessage.agentMentionName) {
+            content = `@${queuedMessage.agentMentionName}`;
+            if (queuedMessage.content) content += ` ${queuedMessage.content}`;
+        }
+        const inputState = useInputStore.getState();
+        if (queuedMessage.attachments && queuedMessage.attachments.length > 0) {
+            const currentIds = new Set(inputState.attachedFiles.map((attachment) => attachment.id));
+            inputState.setAttachedFiles([
+                ...inputState.attachedFiles,
+                ...queuedMessage.attachments.filter((attachment) => !currentIds.has(attachment.id)),
+            ]);
+        }
+        if (queuedMessage.additionalParts && queuedMessage.additionalParts.length > 0) {
+            inputState.setPendingSyntheticParts([
+                ...queuedMessage.additionalParts.map((part) => ({ ...part })),
+                ...(inputState.pendingSyntheticParts ?? []),
+            ]);
+        }
         messageRef.current = content;
         setMessage(content);
         writeChatDraft(chatDraftIdentity, content, confirmedMentionsRef.current);
         window.setTimeout(() => composerRef.current?.focus(), 0);
     }, [chatDraftIdentity]);
 
+    const [queueLeaseEpoch, setQueueLeaseEpoch] = React.useState(0);
+    React.useEffect(() => {
+        const now = Date.now();
+        let nextExpiry = Number.POSITIVE_INFINITY;
+        for (const entry of queuedMessages) {
+            if (entry.status !== 'queued' || !entry.claim || entry.claim.expiresAt <= now) continue;
+            nextExpiry = Math.min(nextExpiry, entry.claim.expiresAt);
+        }
+        if (!Number.isFinite(nextExpiry)) return;
+        const timer = window.setTimeout(
+            () => setQueueLeaseEpoch((epoch) => epoch + 1),
+            Math.max(1, nextExpiry - now + 1),
+        );
+        return () => window.clearTimeout(timer);
+    }, [queuedMessages]);
+
     React.useEffect(() => {
         if (!messageQueueTarget || sessionPhase !== 'idle' || autoReviewRunning || hasPendingBlockingRequests) return;
         if (queuedMessageSendInFlightRef.current || queuedDrainInFlightRef.current) return;
-        const next = queuedMessages.find((entry) => entry.status === 'queued' && !entry.claim);
+        const now = Date.now();
+        const next = queuedMessages.find((entry) => (
+            entry.status === 'queued' && isFollowUpQueueClaimAvailable(entry, now)
+        ));
         if (!next) return;
         queuedDrainInFlightRef.current = { itemId: next.id };
         void sendQueuedMessage(next.id, 'auto').finally(() => {
@@ -935,7 +987,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 queuedDrainInFlightRef.current = null;
             }
         });
-    }, [autoReviewRunning, hasPendingBlockingRequests, messageQueueTarget, queuedMessages, sendQueuedMessage, sessionPhase]);
+    }, [autoReviewRunning, hasPendingBlockingRequests, messageQueueTarget, queueLeaseEpoch, queuedMessages, sendQueuedMessage, sessionPhase]);
 
     const handleOpenMobilePanel = React.useCallback((panel: MobileControlsPanel) => {
         if (!isMobile) {
@@ -1084,6 +1136,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 restoreExplicitInput();
                 return;
             }
+        }
+
+        let authoritativeSessionPhase: 'idle' | 'busy' | 'retry' | null | undefined;
+        if (
+            submissionSessionId
+            && inputMode === 'normal'
+            && sessionPhase === 'idle'
+            && !dismissedBlockingPrompt
+            && options?.forceQueue !== true
+        ) {
+            const statusDirectory = useSessionUIStore.getState().getDirectoryForSession(submissionSessionId)
+                || currentDirectory
+                || null;
+            const statusSnapshot = await opencodeClient.getSessionStatusForDirectory(statusDirectory);
+            if (!isSubmissionContextCurrent()) return;
+            authoritativeSessionPhase = statusSnapshot === null
+                ? null
+                : statusSnapshot[submissionSessionId]?.type ?? 'idle';
         }
 
         const sendMessageOptions = {
@@ -1297,16 +1367,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
         // Unknown slash invocations intentionally fall through to this normal
         // prompt path, so they remain eligible for ordinary follow-up delivery.
-        const shouldUseFollowUpDelivery = options?.forceQueue === true || (
-            Boolean(currentSessionId)
-            && inputMode === 'normal'
-            && (sessionPhase !== 'idle' || dismissedBlockingPrompt)
-        );
-        const delivery = options?.forceQueue === true
-            ? 'queue'
-            : shouldUseFollowUpDelivery
-                ? followUpBehavior
-                : undefined;
+        const useFollowUpDelivery = shouldUseFollowUpDelivery({
+            sessionId: currentSessionId,
+            inputMode,
+            sessionPhase,
+            dismissedBlockingPrompt,
+            authoritativeSessionPhase,
+        });
+        let delivery: 'steer' | 'queue' | undefined;
+        if (options?.forceQueue === true) {
+            delivery = 'queue';
+        } else if (useFollowUpDelivery) {
+            delivery = followUpBehavior;
+        }
 
         const restoreConsumedDrafts = () => {
             if (isSubmissionContextCurrent() && consumedDraftTarget && drafts.length > 0) {
@@ -1341,6 +1414,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 await addToQueue(messageQueueTarget, {
                     content: primaryText,
                     attachments: primaryAttachments,
+                    ...(additionalParts.length > 0 ? {
+                        additionalParts: additionalParts.map((part) => ({
+                            text: part.text,
+                            ...(part.synthetic !== undefined ? { synthetic: part.synthetic } : {}),
+                        })),
+                    } : {}),
+                    ...(agentMentionName ? { agentMentionName } : {}),
                     status: 'staged',
                     sendConfig: {
                         providerID: providerIdToSend,

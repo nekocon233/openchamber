@@ -2,6 +2,25 @@ import type { QueuedMessage } from '@/stores/messageQueueStore';
 
 type SessionPhase = 'idle' | 'busy' | 'retry';
 
+export const shouldUseFollowUpDelivery = ({
+    inputMode,
+    sessionId,
+    sessionPhase,
+    dismissedBlockingPrompt,
+    authoritativeSessionPhase,
+}: {
+    inputMode: 'normal' | 'shell';
+    sessionId: string | null;
+    sessionPhase: SessionPhase;
+    dismissedBlockingPrompt: boolean;
+    authoritativeSessionPhase?: SessionPhase | null;
+}): boolean => {
+    if (inputMode !== 'normal' || !sessionId) return false;
+    if (sessionPhase !== 'idle' || dismissedBlockingPrompt) return true;
+    if (authoritativeSessionPhase === undefined) return false;
+    return authoritativeSessionPhase !== 'idle';
+};
+
 export const shouldStageFollowUpAsDraft = ({
     inputMode,
     hasContent,

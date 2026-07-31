@@ -7,9 +7,19 @@ function makeSession(id: string, parentID?: string): Session {
 }
 
 describe("autoRespondsPermission", () => {
-  test("returns false when autoAccept is empty", () => {
+  test("uses the enabled default when autoAccept is empty", () => {
     expect(autoRespondsPermission({
       autoAccept: {},
+      defaultEnabled: true,
+      sessions: [makeSession("s1")],
+      sessionID: "s1",
+    })).toBe(true)
+  })
+
+  test("uses a disabled default when supplied by an older runtime", () => {
+    expect(autoRespondsPermission({
+      autoAccept: {},
+      defaultEnabled: false,
       sessions: [makeSession("s1")],
       sessionID: "s1",
     })).toBe(false)
@@ -19,6 +29,7 @@ describe("autoRespondsPermission", () => {
     const autoAccept: PermissionAutoAcceptMap = { s1: true }
     expect(autoRespondsPermission({
       autoAccept,
+      defaultEnabled: true,
       sessions: [makeSession("s1")],
       sessionID: "s1",
     })).toBe(true)
@@ -28,6 +39,7 @@ describe("autoRespondsPermission", () => {
     const autoAccept: PermissionAutoAcceptMap = { s1: false }
     expect(autoRespondsPermission({
       autoAccept,
+      defaultEnabled: true,
       sessions: [makeSession("s1")],
       sessionID: "s1",
     })).toBe(false)
@@ -41,6 +53,7 @@ describe("autoRespondsPermission", () => {
     ]
     expect(autoRespondsPermission({
       autoAccept,
+      defaultEnabled: true,
       sessions,
       sessionID: "child",
     })).toBe(true)
@@ -55,6 +68,7 @@ describe("autoRespondsPermission", () => {
     ]
     expect(autoRespondsPermission({
       autoAccept,
+      defaultEnabled: true,
       sessions,
       sessionID: "child",
     })).toBe(true)
@@ -65,13 +79,14 @@ describe("autoRespondsPermission", () => {
     const child = makeSession("child", "parent")
     expect(autoRespondsPermission({
       autoAccept: { parent: true },
+      defaultEnabled: true,
       sessions: [],
       sessionById: new Map([[parent.id, parent], [child.id, child]]),
       sessionID: "child",
     })).toBe(true)
   })
 
-  test("returns false when only sibling has autoAccept enabled", () => {
+  test("uses the default when only an unrelated session has a policy", () => {
     const autoAccept: PermissionAutoAcceptMap = { sibling: true }
     const sessions = [
       makeSession("parent"),
@@ -80,9 +95,10 @@ describe("autoRespondsPermission", () => {
     ]
     expect(autoRespondsPermission({
       autoAccept,
+      defaultEnabled: true,
       sessions,
       sessionID: "child",
-    })).toBe(false)
+    })).toBe(true)
   })
 
   test("child autoAccept overrides parent", () => {
@@ -93,6 +109,7 @@ describe("autoRespondsPermission", () => {
     ]
     expect(autoRespondsPermission({
       autoAccept,
+      defaultEnabled: true,
       sessions,
       sessionID: "child",
     })).toBe(false)
@@ -102,8 +119,27 @@ describe("autoRespondsPermission", () => {
     const autoAccept: PermissionAutoAcceptMap = { s1: true }
     expect(autoRespondsPermission({
       autoAccept,
+      defaultEnabled: true,
       sessions: [],
       sessionID: "unknown",
+    })).toBe(false)
+  })
+
+  test("fails closed when an ancestor is missing", () => {
+    expect(autoRespondsPermission({
+      autoAccept: {},
+      defaultEnabled: true,
+      sessions: [makeSession("child", "missing")],
+      sessionID: "child",
+    })).toBe(false)
+  })
+
+  test("fails closed when the session lineage contains a cycle", () => {
+    expect(autoRespondsPermission({
+      autoAccept: {},
+      defaultEnabled: true,
+      sessions: [makeSession("first", "second"), makeSession("second", "first")],
+      sessionID: "first",
     })).toBe(false)
   })
 })

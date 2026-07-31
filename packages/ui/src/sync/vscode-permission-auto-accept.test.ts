@@ -15,7 +15,7 @@ describe("VS Code permission auto-accept runtime", () => {
       return session(id, id === "child" ? "root" : undefined)
     })
     const runtime = createVSCodePermissionAutoAcceptRuntime({
-      getPolicy: () => ({ root: true }),
+      getPolicy: () => ({ sessions: { root: true }, defaultEnabled: true }),
       getSessions: () => new Map(),
       getSession,
       listPendingPermissions: async () => [],
@@ -33,7 +33,7 @@ describe("VS Code permission auto-accept runtime", () => {
     let replyCalls = 0
     const reply = mock(async () => { replyCalls += 1 })
     const runtime = createVSCodePermissionAutoAcceptRuntime({
-      getPolicy: () => ({ root: true, child: false }),
+      getPolicy: () => ({ sessions: { root: true, child: false }, defaultEnabled: true }),
       getSessions: () => new Map([["child", session("child", "root")]]),
       getSession: async () => session("root"),
       listPendingPermissions: async () => [],
@@ -50,7 +50,7 @@ describe("VS Code permission auto-accept runtime", () => {
     let replyCalls = 0
     const reply = mock(async () => { replyCalls += 1 })
     const runtime = createVSCodePermissionAutoAcceptRuntime({
-      getPolicy: () => ({ root: true }),
+      getPolicy: () => ({ sessions: { root: true }, defaultEnabled: true }),
       getSessions: () => new Map(),
       getSession: async () => { throw new Error("offline") },
       listPendingPermissions: async () => [],
@@ -70,7 +70,7 @@ describe("VS Code permission auto-accept runtime", () => {
       if (attempts < 2) throw new Error("transient")
     })
     const runtime = createVSCodePermissionAutoAcceptRuntime({
-      getPolicy: () => ({ child: true }),
+      getPolicy: () => ({ sessions: { child: true }, defaultEnabled: true }),
       getSessions: () => new Map(),
       getSession: async () => session("child"),
       listPendingPermissions: async () => [],
@@ -89,7 +89,7 @@ describe("VS Code permission auto-accept runtime", () => {
   test("reconciles existing pending permissions immediately after enablement", async () => {
     const replied: string[] = []
     const runtime = createVSCodePermissionAutoAcceptRuntime({
-      getPolicy: () => ({ root: true, disabled: false }),
+      getPolicy: () => ({ sessions: { root: true, disabled: false }, defaultEnabled: true }),
       getSessions: () => new Map([
         ["child", session("child", "root")],
         ["disabled", session("disabled", "root")],
@@ -112,7 +112,7 @@ describe("VS Code permission auto-accept runtime", () => {
   test("treats an already resolved permission as handled without replying", async () => {
     let replyCalls = 0
     const runtime = createVSCodePermissionAutoAcceptRuntime({
-      getPolicy: () => ({ child: true }),
+      getPolicy: () => ({ sessions: { child: true }, defaultEnabled: true }),
       getSessions: () => new Map(),
       getSession: async () => session("child"),
       listPendingPermissions: async () => [],
@@ -122,6 +122,57 @@ describe("VS Code permission auto-accept runtime", () => {
     })
 
     expect(await runtime.processPermission({ ...permission, id: "resolved" })).toBe(true)
+    expect(replyCalls).toBe(0)
+  })
+
+  test("uses the enabled default for a known session without an explicit policy", async () => {
+    let replyCalls = 0
+    const runtime = createVSCodePermissionAutoAcceptRuntime({
+      getPolicy: () => ({ sessions: {}, defaultEnabled: true }),
+      getSessions: () => new Map([["child", session("child")]]),
+      getSession: async (id) => session(id),
+      listPendingPermissions: async () => [],
+      getPermissionState: async () => "ok",
+      reply: async () => { replyCalls += 1 },
+      wait: async () => undefined,
+    })
+
+    expect(await runtime.processPermission({ ...permission, id: "default-enabled" })).toBe(true)
+    expect(replyCalls).toBe(1)
+  })
+
+  test("fails closed before the authoritative policy is loaded", async () => {
+    let replyCalls = 0
+    const runtime = createVSCodePermissionAutoAcceptRuntime({
+      getPolicy: () => null,
+      getSessions: () => new Map([["child", session("child")]]),
+      getSession: async (id) => session(id),
+      listPendingPermissions: async () => [],
+      getPermissionState: async () => "ok",
+      reply: async () => { replyCalls += 1 },
+      wait: async () => undefined,
+    })
+
+    expect(await runtime.processPermission({ ...permission, id: "policy-unloaded" })).toBe(false)
+    expect(replyCalls).toBe(0)
+  })
+
+  test("fails closed when the session lineage contains a cycle", async () => {
+    let replyCalls = 0
+    const runtime = createVSCodePermissionAutoAcceptRuntime({
+      getPolicy: () => ({ sessions: {}, defaultEnabled: true }),
+      getSessions: () => new Map([
+        ["child", session("child", "parent")],
+        ["parent", session("parent", "child")],
+      ]),
+      getSession: async (id) => session(id),
+      listPendingPermissions: async () => [],
+      getPermissionState: async () => "ok",
+      reply: async () => { replyCalls += 1 },
+      wait: async () => undefined,
+    })
+
+    expect(await runtime.processPermission({ ...permission, id: "cyclic-lineage" })).toBe(false)
     expect(replyCalls).toBe(0)
   })
 })

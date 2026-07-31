@@ -1,12 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import { createMainWindowSessionNavigation } from './main-window-session-navigation.mjs';
+import {
+  createMainWindowSessionNavigation,
+  handleWindowDidStartNavigation,
+} from './main-window-session-navigation.mjs';
 
-const createWindow = () => ({
-  destroyed: false,
-  isDestroyed() {
-    return this.destroyed;
-  },
-});
+const createWindow = () => {
+  const browserWindow = {
+    destroyed: false,
+    isDestroyed() {
+      return this.destroyed;
+    },
+  };
+  browserWindow.webContents = {};
+  return browserWindow;
+};
 
 describe('main-window session navigation', () => {
   test('waits for the current main renderer before delivering navigation', () => {
@@ -49,6 +56,82 @@ describe('main-window session navigation', () => {
     expect(navigation.flush(mainWindow)).toBe(false);
     expect(navigation.markReady(mainWindow)).toBe(true);
     expect(emitted).toEqual([{ sessionId: 'session-b', directory: '/repo/b' }]);
+  });
+
+  test('keeps renderer readiness when a subframe starts loading', () => {
+    const mainWindow = createWindow();
+    const emitted = [];
+    const runtimeResets = [];
+    const navigation = createMainWindowSessionNavigation({
+      getMainWindow: () => mainWindow,
+      getWindowRuntimeKey: () => 'runtime-a',
+      emitToWindow: (_browserWindow, _event, detail) => emitted.push(detail),
+    });
+
+    navigation.markReady(mainWindow);
+    expect(handleWindowDidStartNavigation({
+      browserWindow: mainWindow,
+      mainWindowSessionNavigation: navigation,
+      windowRuntimeIdentity: { reset: (browserWindow) => runtimeResets.push(browserWindow) },
+      isInPlace: false,
+      isMainFrame: false,
+    })).toBe(false);
+
+    navigation.queue('session-a', '/repo/a');
+    expect(navigation.flush(mainWindow)).toBe(true);
+    expect(emitted).toEqual([{ sessionId: 'session-a', directory: '/repo/a' }]);
+    expect(runtimeResets).toEqual([]);
+  });
+
+  test('resets renderer readiness and runtime identity when the main frame starts loading', () => {
+    const mainWindow = createWindow();
+    const emitted = [];
+    const runtimeResets = [];
+    const navigation = createMainWindowSessionNavigation({
+      getMainWindow: () => mainWindow,
+      getWindowRuntimeKey: () => 'runtime-a',
+      emitToWindow: (_browserWindow, _event, detail) => emitted.push(detail),
+    });
+
+    navigation.markReady(mainWindow);
+    expect(handleWindowDidStartNavigation({
+      browserWindow: mainWindow,
+      mainWindowSessionNavigation: navigation,
+      windowRuntimeIdentity: { reset: (browserWindow) => runtimeResets.push(browserWindow) },
+      isInPlace: false,
+      isMainFrame: true,
+    })).toBe(true);
+
+    navigation.queue('session-a', '/repo/a');
+    expect(navigation.flush(mainWindow)).toBe(false);
+    expect(runtimeResets).toEqual([mainWindow]);
+    expect(navigation.markReady(mainWindow)).toBe(true);
+    expect(emitted).toEqual([{ sessionId: 'session-a', directory: '/repo/a' }]);
+  });
+
+  test('keeps renderer readiness for an in-page main-frame navigation', () => {
+    const mainWindow = createWindow();
+    const emitted = [];
+    const runtimeResets = [];
+    const navigation = createMainWindowSessionNavigation({
+      getMainWindow: () => mainWindow,
+      getWindowRuntimeKey: () => 'runtime-a',
+      emitToWindow: (_browserWindow, _event, detail) => emitted.push(detail),
+    });
+
+    navigation.markReady(mainWindow);
+    expect(handleWindowDidStartNavigation({
+      browserWindow: mainWindow,
+      mainWindowSessionNavigation: navigation,
+      windowRuntimeIdentity: { reset: (browserWindow) => runtimeResets.push(browserWindow) },
+      isInPlace: true,
+      isMainFrame: true,
+    })).toBe(false);
+
+    navigation.queue('session-a', '/repo/a');
+    expect(navigation.flush(mainWindow)).toBe(true);
+    expect(emitted).toEqual([{ sessionId: 'session-a', directory: '/repo/a' }]);
+    expect(runtimeResets).toEqual([]);
   });
 
   test('does not deliver to a destroyed main window', () => {

@@ -541,15 +541,18 @@ export const createScheduledTasksRuntime = (deps) => {
     } catch {
     }
 
-    if (task.execution.permissionAutoAccept && typeof setSessionAutoAccept === 'function') {
-      // Enroll before the prompt goes out so the very first permission request
-      // is already auto-approved. Enrollment failure must not kill the run —
-      // the task still executes, permissions just wait for the user.
+    const permissionAutoAccept = task.execution.permissionAutoAccept === true;
+    if (typeof setSessionAutoAccept === 'function') {
+      // Persist the task's explicit choice before the prompt so the runtime
+      // default cannot override either an enabled or disabled task policy.
       try {
-        await setSessionAutoAccept(sessionID, true, projectPath);
+        await setSessionAutoAccept(sessionID, permissionAutoAccept, projectPath);
       } catch (error) {
-        logger.warn?.('[scheduled-tasks] failed to enable permission auto-accept for session', sessionID, error?.message ?? error);
+        logger.warn?.('[scheduled-tasks] failed to configure permission auto-accept for session', sessionID, error?.message ?? error);
+        if (!permissionAutoAccept) throw error;
       }
+    } else if (!permissionAutoAccept) {
+      throw new Error('permission auto-accept policy runtime is unavailable');
     }
 
     const scheduledCommand = await resolveScheduledCommand({ client, projectPath, task });

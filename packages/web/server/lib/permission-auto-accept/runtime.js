@@ -1,4 +1,5 @@
 const SETTINGS_KEY = 'permissionAutoAccept';
+const DEFAULT_ENABLED = true;
 const RETRY_DELAYS_MS = [0, 250, 1000];
 const REQUEST_TIMEOUT_MS = 5000;
 const SESSION_CACHE_LIMIT = 10000;
@@ -39,6 +40,7 @@ export function createPermissionAutoAcceptRuntime({
 
   const snapshot = () => ({
     sessions: { ...policy.sessions },
+    defaultEnabled: DEFAULT_ENABLED,
     revision: policy.revision,
   });
 
@@ -125,11 +127,13 @@ export function createPermissionAutoAcceptRuntime({
   };
 
   const isSessionAutoAccepting = async (sessionId, directory) => {
+    if (typeof sessionId !== 'string' || !sessionId) return false;
     await load();
     const seen = new Set();
     let current = sessionId;
     let currentDirectory = directory;
-    while (current && !seen.has(current)) {
+    while (current) {
+      if (seen.has(current)) return false;
       if (Object.hasOwn(policy.sessions, current)) return policy.sessions[current] === true;
       seen.add(current);
       let info;
@@ -138,10 +142,11 @@ export function createPermissionAutoAcceptRuntime({
       } catch {
         return false;
       }
+      if (!info) return false;
       current = info?.parentID ?? null;
       currentDirectory = info?.directory ?? currentDirectory;
     }
-    return false;
+    return DEFAULT_ENABLED;
   };
 
   const replyOnce = async (permission, directory) => {

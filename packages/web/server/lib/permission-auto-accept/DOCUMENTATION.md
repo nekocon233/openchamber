@@ -6,7 +6,7 @@ This module owns the authoritative permission auto-accept policy for web, deskto
 
 ## Policy
 
-`permissionAutoAccept.sessions` contains explicit per-session boolean policies.
+`permissionAutoAccept.sessions` contains explicit per-session boolean policies. Runtime snapshots expose `defaultEnabled: true`, so a known session with a complete lineage auto-accepts when no explicit policy exists. Clients connected to an older owner that omits `defaultEnabled` continue to fail closed.
 
 Policy inheritance uses the nearest explicit session value. A child `false` therefore overrides a parent `true`; descendants without an explicit value inherit from their nearest configured ancestor.
 
@@ -14,7 +14,7 @@ Policy inheritance uses the nearest explicit session value. A child `false` ther
 
 `createPermissionAutoAcceptRuntime` loads and serializes policy writes, subscribes to the global OpenCode event hub, caches session lineage, retries transient replies, and reconciles pending permissions after startup, reconnect, and policy enablement. Enabling Auto-Accept for a session immediately accepts matching pending requests and keeps handling future requests without requiring a connected UI.
 
-Unknown lineage and failed policy loads fail closed. A failed pending-permission fetch is distinct from an empty successful response and never clears policy state.
+Unknown or cyclic lineage and failed policy loads fail closed. A failed pending-permission fetch is distinct from an empty successful response and never clears policy state.
 
 ## Routes
 

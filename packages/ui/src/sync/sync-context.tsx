@@ -570,6 +570,13 @@ function isRecentBoot() {
   return bootingRoot || Date.now() - bootedAt < BOOT_DEBOUNCE_MS
 }
 
+export function shouldResyncAfterStreamConnect(
+  hasConnected: boolean,
+  disconnectedBeforeFirstConnect: boolean,
+): boolean {
+  return hasConnected || disconnectedBeforeFirstConnect
+}
+
 function getViewedSessionMaterializationTarget(directory: string) {
   if (!_activeDirectory || !_activeSession) return null
   if (directory !== _activeDirectory) return null
@@ -1551,10 +1558,11 @@ function handleEvent(
   if ((payload as { type?: unknown }).type === "openchamber:permission-auto-accept.updated") {
     const properties = (payload as unknown as { properties?: unknown }).properties
     if (properties && typeof properties === "object") {
-      const snapshot = properties as { sessions?: unknown; revision?: unknown }
+      const snapshot = properties as { sessions?: unknown; defaultEnabled?: unknown; revision?: unknown }
       if (snapshot.sessions && typeof snapshot.sessions === "object") {
         usePermissionStore.getState().applySnapshot({
           sessions: snapshot.sessions as Record<string, boolean>,
+          defaultEnabled: snapshot.defaultEnabled === true,
           revision: typeof snapshot.revision === "number" ? snapshot.revision : undefined,
         }, expectedRuntimeKey)
       }
@@ -2221,14 +2229,12 @@ export function SyncProvider(props: {
           hasEverConnected: true,
           connectionPhase: "connected",
         })
-        const isFirstConnect = !pipelineHasConnectedRef.current
+        const shouldResync = shouldResyncAfterStreamConnect(
+          pipelineHasConnectedRef.current,
+          pipelineDisconnectedBeforeFirstConnectRef.current,
+        )
         pipelineHasConnectedRef.current = true
-        if (isFirstConnect && !pipelineDisconnectedBeforeFirstConnectRef.current) {
-          return
-        }
-        if (isRecentBoot()) {
-          return
-        }
+        if (!shouldResync) return
         for (const dir of childStores.children.keys()) {
           triggerDirectoryResync(dir, "stream-reconnect")
         }

@@ -3,7 +3,6 @@ import type { Event, Message, ModelRef, Part, Prompt } from '@opencode-ai/sdk/v2
 type SessionNextPromptState = {
   messageID: string;
   prompt: Prompt;
-  delivery: 'steer' | 'queue';
   timeCreated: number;
 };
 
@@ -18,7 +17,6 @@ type SessionNextAssistantState = {
 
 type SessionNextStreamState = {
   kind: 'text' | 'reasoning';
-  started: boolean;
   ended: boolean;
 };
 
@@ -33,7 +31,6 @@ type SessionNextToolState = {
 type SessionNextContext = {
   seenEventIDs: Set<string>;
   seenEventOrder: string[];
-  prompts: Map<string, SessionNextPromptState>;
   lastUserMessageID: string | null;
   assistants: Map<string, SessionNextAssistantState>;
   streams: Map<string, SessionNextStreamState>;
@@ -61,7 +58,6 @@ const emptyTokens = () => ({
 const createContext = (): SessionNextContext => ({
   seenEventIDs: new Set(),
   seenEventOrder: [],
-  prompts: new Map(),
   lastUserMessageID: null,
   assistants: new Map(),
   streams: new Map(),
@@ -179,7 +175,6 @@ const promptParts = (prompt: SessionNextPromptState, sessionID: string): Part[] 
 
 const assistantMessage = (
   directory: string,
-  context: SessionNextContext,
   state: SessionNextAssistantState,
   patch?: Partial<Message>,
 ): Message => ({
@@ -229,6 +224,7 @@ export function createSessionNextTranslator(): SessionNextTranslator {
     if (existing) return existing;
     const created = createContext();
     contexts.set(key, created);
+    boundMap(contexts);
     return created;
   };
 
@@ -270,18 +266,6 @@ export function createSessionNextTranslator(): SessionNextTranslator {
       }
 
       case 'session.next.prompt.admitted': {
-        const messageID = typeof props.messageID === 'string' ? props.messageID : null;
-        const prompt = props.prompt && typeof props.prompt === 'object' ? props.prompt as Prompt : null;
-        if (!messageID || !prompt) return events;
-        const state: SessionNextPromptState = {
-          messageID,
-          prompt,
-          delivery: props.delivery === 'steer' ? 'steer' : 'queue',
-          timeCreated: typeof props.timestamp === 'number' ? props.timestamp : Date.now(),
-        };
-        context.prompts.set(messageID, state);
-        boundMap(context.prompts);
-        context.lastUserMessageID = messageID;
         return events;
       }
 
@@ -292,11 +276,8 @@ export function createSessionNextTranslator(): SessionNextTranslator {
         const state: SessionNextPromptState = {
           messageID,
           prompt,
-          delivery: props.delivery === 'steer' ? 'steer' : 'queue',
           timeCreated: typeof props.timestamp === 'number' ? props.timestamp : Date.now(),
         };
-        context.prompts.set(messageID, state);
-        boundMap(context.prompts);
         context.lastUserMessageID = messageID;
         pushUserPrompt(state);
         return events;
@@ -317,7 +298,7 @@ export function createSessionNextTranslator(): SessionNextTranslator {
         context.assistants.set(assistantMessageID, state);
         boundMap(context.assistants);
         const info = {
-          ...assistantMessage(directory, context, state),
+          ...assistantMessage(directory, state),
           sessionID,
         } as Message;
         events.push(messageEvent(payload, 'assistant', info));
@@ -350,12 +331,15 @@ export function createSessionNextTranslator(): SessionNextTranslator {
                   : 'Provider turn failed',
               },
             },
-          };
+        };
         const info = {
-          ...assistantMessage(directory, context, existing, patch as Partial<Message>),
+          ...assistantMessage(directory, existing, patch as Partial<Message>),
           sessionID,
         } as Message;
         events.push(messageEvent(payload, 'assistant-final', info));
+        if (payload.type === 'session.next.step.failed' || props.finish !== 'tool-calls') {
+          events.push(statusEvent(payload, sessionID, 'idle'));
+        }
         return events;
       }
 
@@ -369,7 +353,7 @@ export function createSessionNextTranslator(): SessionNextTranslator {
             : null;
         if (!assistantMessageID || !streamID) return events;
         const kind = payload.type === 'session.next.text.started' ? 'text' : 'reasoning';
-        context.streams.set(streamID, { kind, started: true, ended: false });
+        context.streams.set(streamID, { kind, ended: false });
         boundMap(context.streams);
         const timestamp = typeof props.timestamp === 'number' ? props.timestamp : Date.now();
         const part = kind === 'text'
@@ -430,7 +414,7 @@ export function createSessionNextTranslator(): SessionNextTranslator {
         const existing = context.streams.get(streamID);
         if (existing?.ended) return events;
         const kind = existing?.kind ?? (payload.type === 'session.next.text.ended' ? 'text' : 'reasoning');
-        context.streams.set(streamID, { kind, started: true, ended: true });
+        context.streams.set(streamID, { kind, ended: true });
         const timestamp = typeof props.timestamp === 'number' ? props.timestamp : Date.now();
         const part = kind === 'text'
           ? {
@@ -582,6 +566,9 @@ export function createSessionNextTranslator(): SessionNextTranslator {
         const error = props.error && typeof props.error === 'object' && typeof (props.error as { message?: unknown }).message === 'string'
           ? (props.error as { message: string }).message
           : 'Tool execution failed';
+        const attachments = success
+          ? contentAttachments(sessionID, assistantMessageID, callID, content)
+          : [];
         const part = {
           id: callID,
           sessionID,
@@ -601,8 +588,8 @@ export function createSessionNextTranslator(): SessionNextTranslator {
                 provider: props.provider,
               },
               time: { start: tool.startedAt, end: timestamp },
-              ...(contentAttachments(sessionID, assistantMessageID, callID, content).length > 0
-                ? { attachments: contentAttachments(sessionID, assistantMessageID, callID, content) }
+              ...(attachments.length > 0
+                ? { attachments }
                 : {}),
             }
             : {

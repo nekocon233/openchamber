@@ -55,7 +55,7 @@ const sendStorageError = (res, error, message) => res.status(500).json({
 export const registerFollowUpQueueRoutes = (app, followUpQueueRuntime) => {
   const sendCapabilities = (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({ authority: 'openchamber-host', version: 1 });
+    return res.json({ authority: 'openchamber-host', version: 2 });
   };
   app.get('/auth/follow-up-queue/capabilities', sendCapabilities);
   app.get('/api/follow-up-queue/capabilities', sendCapabilities);

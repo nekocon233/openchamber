@@ -89,7 +89,7 @@ const getQueueSessionId = (identity: MessageQueueIdentity): string => (
 
 type QueueClaimHandle = {
     claimId: string;
-    item: QueuedMessage;
+    item: QueuedMessage & { messageId: string };
     context: MessageQueueRuntimeContext;
 };
 
@@ -364,7 +364,7 @@ const createPlaceholderFile = (attachment: FollowUpQueueAttachment): File => {
 };
 
 const toQueuedMessage = (item: FollowUpQueueItem): QueuedMessage => {
-    const { attachments, ...rest } = item;
+    const { attachments, additionalParts, ...rest } = item;
     return {
         ...rest,
         ...(attachments ? {
@@ -372,6 +372,9 @@ const toQueuedMessage = (item: FollowUpQueueItem): QueuedMessage => {
                 ...cloneAttachmentDTO(attachment),
                 file: createPlaceholderFile(attachment),
             })),
+        } : {}),
+        ...(additionalParts ? {
+            additionalParts: additionalParts.map((part) => ({ ...part })),
         } : {}),
         ...(item.sendConfig ? { sendConfig: { ...item.sendConfig } } : {}),
         ...(item.claim ? { claim: { ...item.claim } } : {}),
@@ -381,6 +384,10 @@ const toQueuedMessage = (item: FollowUpQueueItem): QueuedMessage => {
 const itemListsEqual = (left: FollowUpQueueItem[], right: FollowUpQueueItem[]): boolean => (
     left === right
     || (left.length === right.length && left.every((item, index) => followUpQueueItemsEqual(item, right[index])))
+);
+
+const assignedMessageIdsMatch = (left: string | null, right: string | null): boolean => (
+    left !== null && right !== null && left === right
 );
 
 const parseStoredLane = (raw: string | null): StoredQueueLane | null => {
@@ -689,6 +696,8 @@ export const createMessageQueueStore = (
                     messageId,
                     content: raw.content,
                     ...(attachments && attachments.length > 0 ? { attachments } : {}),
+                    ...(Array.isArray(raw.additionalParts) ? { additionalParts: raw.additionalParts } : {}),
+                    ...(raw.agentMentionName !== undefined ? { agentMentionName: raw.agentMentionName } : {}),
                     createdAt: Number.isSafeInteger(raw.createdAt) && Number(raw.createdAt) >= 0
                         ? Number(raw.createdAt)
                         : dependencies.now(),
@@ -698,7 +707,7 @@ export const createMessageQueueStore = (
                 try {
                     const item = parseFollowUpQueueItem(candidate, { allowClaim: false });
                     seenIds.add(item.id);
-                    seenMessageIds.add(item.messageId);
+                    if (item.messageId !== null) seenMessageIds.add(item.messageId);
                     items.push(item);
                 } catch {
                     // Invalid legacy data remains in its original key and is never deleted.
@@ -927,9 +936,14 @@ export const createMessageQueueStore = (
                 revision: lane.localRevision,
                 items: lane.localItems,
             };
-            const applied = applyFollowUpQueueOperation(before, entry.operation, {
+            const operation = entry.operation;
+            const claimedItem = operation.type === 'claim'
+                ? before.items.find((item) => item.id === operation.itemId)
+                : undefined;
+            const applied = applyFollowUpQueueOperation(before, operation, {
                 now: entry.projectionNow,
                 claimExpiresAt: entry.claimExpiresAt,
+                ...(claimedItem?.messageId === null ? { messageId: dependencies.createMessageId() } : {}),
             });
             if (applied.applied) lane.localRevision += 1;
             lane.localItems = applied.snapshot.items;
@@ -1075,7 +1089,7 @@ export const createMessageQueueStore = (
             lane.localItems = lane.localItems.filter((local) => {
                 if (legacyIds.has(local.id) && !allLegacyConfirmed) return true;
                 const remote = snapshot.items.find(
-                    (item) => item.id === local.id || item.messageId === local.messageId,
+                    (item) => item.id === local.id || assignedMessageIdsMatch(item.messageId, local.messageId),
                 );
                 return !remote || !followUpQueueItemsEqual(local, remote);
             });
@@ -1086,12 +1100,15 @@ export const createMessageQueueStore = (
             const additions: PendingOperation[] = [];
             for (const item of lane.localItems) {
                 const remote = lane.baseSnapshot.items.find(
-                    (candidate) => candidate.id === item.id || candidate.messageId === item.messageId,
+                    (candidate) => candidate.id === item.id || assignedMessageIdsMatch(candidate.messageId, item.messageId),
                 );
                 if (remote && followUpQueueItemsEqual(remote, item)) continue;
                 const alreadyPending = lane.pending.some(
                     (entry) => entry.operation.type === 'add'
-                        && (entry.operation.item.id === item.id || entry.operation.item.messageId === item.messageId),
+                        && (
+                            entry.operation.item.id === item.id
+                            || assignedMessageIdsMatch(entry.operation.item.messageId, item.messageId)
+                        ),
                 );
                 if (alreadyPending) continue;
                 additions.push({
@@ -1116,19 +1133,14 @@ export const createMessageQueueStore = (
             options: { allowRevisionReset?: boolean } = {},
         ): boolean => {
             if (!laneIsCurrent(lane)) return false;
-            const revisionReset = Boolean(
-                options.allowRevisionReset
-                && lane.baseSnapshot
+            const isOlderRevision = Boolean(
+                lane.baseSnapshot
                 && snapshot.revision < lane.baseSnapshot.revision
             );
-            if (
-                !options.allowRevisionReset
-                && lane.baseSnapshot
-                && snapshot.revision < lane.baseSnapshot.revision
-            ) return false;
+            if (isOlderRevision && !options.allowRevisionReset) return false;
             lane.baseSnapshot = snapshot;
             lane.loadedForGeneration = true;
-            lane.hintedRevision = revisionReset
+            lane.hintedRevision = isOlderRevision
                 ? snapshot.revision
                 : Math.max(lane.hintedRevision, snapshot.revision);
             lane.retryDelayMs = INITIAL_RETRY_MS;
@@ -1262,13 +1274,13 @@ export const createMessageQueueStore = (
                         const missingAppliedAdd = addOperation !== null
                             && !effectiveResult.snapshot.items.some((item) => (
                                 item.id === addOperation.item.id
-                                || item.messageId === addOperation.item.messageId
+                                || assignedMessageIdsMatch(item.messageId, addOperation.item.messageId)
                             ));
                         removePending(lane, entry);
                         if (missingAppliedAdd && addOperation) {
                             lane.localItems = lane.localItems.filter((item) => (
                                 item.id !== addOperation.item.id
-                                && item.messageId !== addOperation.item.messageId
+                                && !assignedMessageIdsMatch(item.messageId, addOperation.item.messageId)
                             ));
                             lane.legacyItemIds = lane.legacyItemIds.filter((id) => id !== addOperation.item.id);
                             persistLane(lane);
@@ -1459,19 +1471,23 @@ export const createMessageQueueStore = (
             addToQueue: (identity, message) => {
                 const item = parseFollowUpQueueItem({
                     id: dependencies.createItemId(),
-                    messageId: dependencies.createMessageId(),
+                    messageId: null,
                     content: message.content,
                     ...(message.attachments && message.attachments.length > 0 ? {
                         attachments: message.attachments.map(toAttachmentDTO),
+                    } : {}),
+                    ...(message.additionalParts && message.additionalParts.length > 0 ? {
+                        additionalParts: message.additionalParts.map((part) => ({ ...part })),
+                    } : {}),
+                    ...(message.agentMentionName !== undefined ? {
+                        agentMentionName: message.agentMentionName,
                     } : {}),
                     createdAt: dependencies.now(),
                     status: message.status ?? 'staged',
                     ...(message.sendConfig ? { sendConfig: { ...message.sendConfig } } : {}),
                 }, { allowClaim: false });
                 return enqueueOperation(identity, { type: 'add', item }).then((result) => {
-                    const persisted = result.snapshot.items.find((candidate) => (
-                        candidate.id === item.id && candidate.messageId === item.messageId
-                    ));
+                    const persisted = result.snapshot.items.find((candidate) => candidate.id === item.id);
                     if (!persisted) throw new Error('The host rejected the follow-up');
                     return toQueuedMessage(persisted);
                 });
@@ -1546,8 +1562,12 @@ export const createMessageQueueStore = (
                 const result = await enqueueOperation(identity, { type: 'claim', itemId, claimId, mode });
                 if (!contextIsCurrent(context)) return null;
                 const item = result.snapshot.items.find((candidate) => candidate.id === itemId);
-                if (item?.claim?.id !== claimId) return null;
-                return { claimId, item: toQueuedMessage(item), context };
+                if (item?.claim?.id !== claimId || item.messageId === null) return null;
+                return {
+                    claimId,
+                    item: toQueuedMessage(item) as QueuedMessage & { messageId: string },
+                    context,
+                };
             },
 
             complete: async (identity, itemId, claimId, context) => {

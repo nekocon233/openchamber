@@ -70,9 +70,9 @@ The webview CSP permits `blob:` only for `worker-src` so shared UI parsers can r
 
 - `bridge-permission-auto-accept-runtime.ts`
   - Owns the persisted VS Code permission auto-accept policy and its GET/PUT bridge contract.
-  - Serializes reads and read-modify-write updates, persists a monotonic policy revision, and broadcasts the exact committed snapshot to every active OpenChamber webview. Permission replies remain foreground UI-owned because VS Code does not run the OpenChamber server runtime.
+  - Serializes reads and read-modify-write updates, persists a monotonic policy revision, and broadcasts the exact committed snapshot with `defaultEnabled: true` to every active OpenChamber webview. Explicit session values override that default. Permission replies remain foreground UI-owned because VS Code does not run the OpenChamber server runtime.
 
-Composer drafts use runtime-scoped device-local storage and have no RuntimeAPI. Follow-up messages use official OpenCode `queue` or `steer` delivery through the generic SDK proxy; the VS Code webview exposes no OpenChamber queue stub or extension-host bridge.
+Composer drafts use runtime-scoped device-local storage and have no RuntimeAPI. The VS Code webview reports the OpenChamber host queue API as unsupported, so shared UI keeps queued follow-ups in its runtime-scoped local fallback; `steer` remains immediate official OpenCode delivery through the generic SDK proxy.
 
 ## Extension guideline
 

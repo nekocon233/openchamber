@@ -16,14 +16,13 @@ export function parseSseEventEnvelope(block) {
     return null;
   }
 
-  const eventId = block
-    .split('\n')
+  const lines = block.split('\n');
+  const sseEventId = lines
     .find((line) => line.startsWith('id:'))
     ?.slice(3)
     .trim() || null;
 
-  const dataLines = block
-    .split('\n')
+  const dataLines = lines
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.slice(5).replace(/^\s/, ''));
 
@@ -38,6 +37,14 @@ export function parseSseEventEnvelope(block) {
 
   try {
     const parsed = JSON.parse(payloadText);
+    const parsedEventId =
+      typeof parsed?.payload?.id === 'string' && parsed.payload.id.length > 0
+        ? parsed.payload.id
+        : typeof parsed?.id === 'string' && parsed.id.length > 0
+          ? parsed.id
+          : null;
+    const eventId = sseEventId ?? parsedEventId;
+
     if (
       parsed &&
       typeof parsed === 'object' &&

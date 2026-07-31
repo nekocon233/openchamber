@@ -31,6 +31,6 @@ production GitHub updater provider. It supports native x64 and arm64 hosts.
 
 The harness binds only `127.0.0.1`. Runtime override activation additionally requires
 `OPENCHAMBER_E2E=1`, the loopback URL set by the harness, and the build-time marker.
-Normal packages omit the build-time marker and always use `openchamber/openchamber`.
+Normal local packages omit the E2E marker and default to `nekocon233/openchamber`. Production release jobs embed their checked-out GitHub owner and repository while bundling the main process, so official and fork packages cannot cross update feeds.
 The renderer, IPC bridge, command-line arguments, and persistent configuration do not
 have access to the feed URL.

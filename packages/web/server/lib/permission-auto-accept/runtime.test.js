@@ -38,6 +38,7 @@ describe('permission auto-accept runtime', () => {
     const second = createRuntime({ stored: first.getSettings() });
     await expect(second.runtime.load()).resolves.toEqual({
       sessions: { root: true },
+      defaultEnabled: true,
       revision: 1,
     });
   });
@@ -48,6 +49,31 @@ describe('permission auto-accept runtime', () => {
     await expect(runtime.setSessionPolicy('root', true)).resolves.toMatchObject({ revision: 1 });
     await expect(runtime.setSessionPolicy('child', false)).resolves.toMatchObject({ revision: 2 });
     expect(getSettings().permissionAutoAccept.revision).toBe(2);
+  });
+
+  it('defaults known sessions to auto-accept when no explicit policy exists', async () => {
+    const { runtime, emit } = createRuntime();
+    emit({ type: 'session.created', properties: { info: { id: 'root' } } });
+
+    await expect(runtime.isSessionAutoAccepting('root', '/project')).resolves.toBe(true);
+  });
+
+  it('fails closed when an unconfigured session cannot be resolved', async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      if (new URL(url).pathname === '/permission') return new Response('[]');
+      return new Response('', { status: 503 });
+    });
+    const { runtime } = createRuntime({ fetchImpl });
+
+    await expect(runtime.isSessionAutoAccepting('unknown', '/project')).resolves.toBe(false);
+  });
+
+  it('fails closed when the session lineage contains a cycle', async () => {
+    const { runtime, emit } = createRuntime();
+    emit({ type: 'session.created', properties: { info: { id: 'first', parentID: 'second' } } });
+    emit({ type: 'session.created', properties: { info: { id: 'second', parentID: 'first' } } });
+
+    await expect(runtime.isSessionAutoAccepting('first', '/project')).resolves.toBe(false);
   });
 
   it('uses nearest explicit ancestor policy for subagents', async () => {
@@ -132,7 +158,10 @@ describe('permission auto-accept runtime', () => {
       if (path === '/session/other') return Response.json({ id: 'other' });
       return new Response('', { status: 404 });
     });
-    const { runtime } = createRuntime({ fetchImpl });
+    const { runtime } = createRuntime({
+      stored: { permissionAutoAccept: { sessions: { other: false } } },
+      fetchImpl,
+    });
 
     await runtime.setSessionPolicy('root', true, '/project');
 
@@ -141,6 +170,10 @@ describe('permission auto-accept runtime', () => {
       .map(([url]) => new URL(url).pathname);
     expect(replyPaths).toEqual(['/permission/root-pending/reply']);
     expect(fetchImpl.mock.calls.some(([url]) => new URL(url).searchParams.get('directory') === '/project')).toBe(true);
-    expect(await runtime.load()).toEqual({ sessions: { root: true }, revision: 1 });
+    expect(await runtime.load()).toEqual({
+      sessions: { other: false, root: true },
+      defaultEnabled: true,
+      revision: 1,
+    });
   });
 });

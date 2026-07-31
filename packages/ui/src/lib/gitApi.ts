@@ -3,10 +3,19 @@ import * as gitHttp from './gitApiHttp';
 import { opencodeClient } from './opencode/client';
 import { renderMagicPrompt } from './magicPrompts';
 import { runtimeFetch } from './runtime-fetch';
-import { materializeOpenDraftSession, useSessionUIStore } from '@/sync/session-ui-store';
+import {
+  ensurePendingDraftPermissionPolicy,
+  materializeOpenDraftSession,
+  useSessionUIStore,
+} from '@/sync/session-ui-store';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import {
+  getRuntimeEndpointGeneration,
+  getRuntimeKey,
+  RuntimeContextChangedError,
+} from './runtime-switch';
 
 export type {
   GitStatus,
@@ -264,8 +273,9 @@ async function generateCommitMessageViaSession(
   directory: string,
   visiblePrompt: string,
   hiddenPrompt: string,
+  expectedRuntime: SessionGenerationContext['expectedRuntime'],
 ): Promise<{ message: import('./api/types').GeneratedCommitMessage }> {
-  const generationSession = await resolveGenerationSessionContext();
+  const generationSession = await resolveGenerationSessionContext(expectedRuntime);
   const structured = await runStructuredGenerationInActiveSession({
     directory,
     visiblePrompt,
@@ -282,6 +292,7 @@ export async function generateCommitMessage(
   options?: { zenModel?: string; providerId?: string; modelId?: string }
 ): Promise<{ message: import('./api/types').GeneratedCommitMessage }> {
   const startedAt = Date.now();
+  const expectedRuntime = captureGenerationRuntime();
   void options;
 
   console.info('[git-generation][browser] request', {
@@ -297,7 +308,9 @@ export async function generateCommitMessage(
   });
 
   try {
+    assertGenerationRuntime(expectedRuntime);
     const diffs = await collectSelectedFileDiffs(directory, files);
+    assertGenerationRuntime(expectedRuntime);
     const { currentProviderId, currentModelId } = useConfigStore.getState();
     const response = await runtimeFetch('/api/small-model/generate', {
       method: 'POST',
@@ -315,7 +328,8 @@ export async function generateCommitMessage(
       // No authenticated provider has a small model — fall back to the
       // session transport so free-model-only setups keep a working button.
       console.info('[git-generation][browser] small model unavailable, falling back to session transport');
-      const result = await generateCommitMessageViaSession(directory, visiblePrompt, hiddenPrompt);
+      assertGenerationRuntime(expectedRuntime);
+      const result = await generateCommitMessageViaSession(directory, visiblePrompt, hiddenPrompt, expectedRuntime);
       console.info('[git-generation][browser] success', {
         transport: 'session-fallback',
         kind: 'commit',
@@ -327,6 +341,7 @@ export async function generateCommitMessage(
     }
 
     const payload = await response.json().catch(() => null) as { text?: unknown; error?: unknown } | null;
+    assertGenerationRuntime(expectedRuntime);
     if (!response.ok || typeof payload?.text !== 'string') {
       const message = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
       throw new Error(message);
@@ -358,6 +373,7 @@ export async function generatePullRequestDescription(
   payload: { base: string; head: string; context?: string; zenModel?: string; providerId?: string; modelId?: string }
 ): Promise<import('./api/types').GeneratedPullRequestDescription> {
   const startedAt = Date.now();
+  const expectedRuntime = captureGenerationRuntime();
 
   const commitLog = await getGitLog(directory, {
     from: payload.base,
@@ -426,6 +442,7 @@ export async function generatePullRequestDescription(
   });
 
   try {
+    assertGenerationRuntime(expectedRuntime);
     const { currentProviderId, currentModelId } = useConfigStore.getState();
     const response = await runtimeFetch('/api/small-model/generate', {
       method: 'POST',
@@ -443,7 +460,8 @@ export async function generatePullRequestDescription(
       // No authenticated provider has a small model — fall back to the
       // session transport so free-model-only setups keep working.
       console.info('[git-generation][browser] small model unavailable, falling back to session transport');
-      const generationSession = await resolveGenerationSessionContext();
+      assertGenerationRuntime(expectedRuntime);
+      const generationSession = await resolveGenerationSessionContext(expectedRuntime);
       const structured = await runStructuredGenerationInActiveSession({
         directory,
         visiblePrompt,
@@ -463,6 +481,7 @@ export async function generatePullRequestDescription(
     }
 
     const payload = await response.json().catch(() => null) as { text?: unknown; error?: unknown } | null;
+    assertGenerationRuntime(expectedRuntime);
     if (!response.ok || typeof payload?.text !== 'string') {
       const message = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
       throw new Error(message);
@@ -495,14 +514,32 @@ type SessionGenerationContext = {
   modelID: string;
   agent?: string;
   variant?: string;
+  expectedRuntime: { runtimeKey: string; generation: number };
 };
 
 const GENERATION_CONFIG_ERROR = 'No default provider or model configured. Please select a provider and model in settings first.';
 
-async function resolveGenerationSessionContext(): Promise<SessionGenerationContext> {
+const captureGenerationRuntime = () => ({
+  runtimeKey: getRuntimeKey(),
+  generation: getRuntimeEndpointGeneration(),
+});
+
+const assertGenerationRuntime = (expected: SessionGenerationContext['expectedRuntime']): void => {
+  if (
+    getRuntimeKey() !== expected.runtimeKey
+    || getRuntimeEndpointGeneration() !== expected.generation
+  ) throw new RuntimeContextChangedError();
+};
+
+async function resolveGenerationSessionContext(
+  expectedRuntime: SessionGenerationContext['expectedRuntime'],
+): Promise<SessionGenerationContext> {
+  assertGenerationRuntime(expectedRuntime);
   const activeSession = resolveSessionGenerationContext();
   if (activeSession) {
-    return activeSession;
+    await ensurePendingDraftPermissionPolicy(activeSession.sessionId, expectedRuntime);
+    assertGenerationRuntime(expectedRuntime);
+    return { ...activeSession, expectedRuntime };
   }
 
   const draft = useSessionUIStore.getState().newSessionDraft;
@@ -520,12 +557,14 @@ async function resolveGenerationSessionContext(): Promise<SessionGenerationConte
     modelID: config.currentModelId,
     agent: config.currentAgentName || undefined,
     variant: config.currentVariant || undefined,
+    expectedRuntime,
   });
+  assertGenerationRuntime(expectedRuntime);
 
   if (!createdDraftSession) {
     const retry = resolveSessionGenerationContext();
     if (retry) {
-      return retry;
+      return { ...retry, expectedRuntime };
     }
     throw new Error('Failed to create session for generation');
   }
@@ -536,10 +575,11 @@ async function resolveGenerationSessionContext(): Promise<SessionGenerationConte
     modelID: config.currentModelId,
     agent: createdDraftSession.agent,
     variant: config.currentVariant || undefined,
+    expectedRuntime,
   };
 }
 
-const resolveSessionGenerationContext = (): SessionGenerationContext | null => {
+const resolveSessionGenerationContext = (): Omit<SessionGenerationContext, 'expectedRuntime'> | null => {
   const sessionId = useSessionUIStore.getState().currentSessionId;
   if (!sessionId) {
     return null;
@@ -628,7 +668,9 @@ const runStructuredGenerationInActiveSession = async ({
 
   requestChatForceScrollBottom(generationSession.sessionId);
 
+  assertGenerationRuntime(generationSession.expectedRuntime);
   const response = await opencodeClient.withDirectory(directory, async () => {
+    assertGenerationRuntime(generationSession.expectedRuntime);
     return opencodeClient.getApiClient().session.prompt({
       sessionID: generationSession.sessionId,
       ...(trimmedDirectory.length > 0 ? { directory: trimmedDirectory } : {}),
@@ -641,6 +683,7 @@ const runStructuredGenerationInActiveSession = async ({
       parts: promptParts,
     });
   });
+  assertGenerationRuntime(generationSession.expectedRuntime);
 
   const responseError = response?.error as { message?: string } | undefined;
   if (!response?.data) {

@@ -50,7 +50,7 @@ mock.module("@/components/ui", () => ({
 
 import { INITIAL_STATE, type State } from "../types"
 import type { DirectoryStore } from "../child-store"
-import { resyncBlockingRequestsForDirectory } from "../sync-context"
+import { resyncBlockingRequestsForDirectory, shouldResyncAfterStreamConnect } from "../sync-context"
 
 function buildQuestion(overrides: Partial<QuestionRequest> = {}): QuestionRequest {
   return {
@@ -204,5 +204,14 @@ describe("resyncBlockingRequestsForDirectory", () => {
     expect(store.getState().question["ses_a"]).toHaveLength(1)
     expect(store.getState().question["ses_a"]?.[0]?.id).toBe("que_1")
     expect(listPendingPermissionsCalls).toHaveLength(1)
+  })
+})
+
+describe("shouldResyncAfterStreamConnect", () => {
+  test("skips only a clean first connection and recovers every actual reconnect", () => {
+    expect(shouldResyncAfterStreamConnect(false, false)).toBe(false)
+    expect(shouldResyncAfterStreamConnect(false, true)).toBe(true)
+    expect(shouldResyncAfterStreamConnect(true, false)).toBe(true)
+    expect(shouldResyncAfterStreamConnect(true, true)).toBe(true)
   })
 })

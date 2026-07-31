@@ -697,6 +697,11 @@ export interface FollowUpQueueAttachment {
   vscodeSource?: 'file' | 'selection';
 }
 
+export interface FollowUpQueueAdditionalPart {
+  text: string;
+  synthetic?: boolean;
+}
+
 export interface FollowUpQueueSendConfig {
   providerID: string;
   modelID: string;
@@ -711,9 +716,11 @@ export interface FollowUpQueueClaim {
 
 export interface FollowUpQueueItem {
   id: string;
-  messageId: string;
+  messageId: string | null;
   content: string;
   attachments?: FollowUpQueueAttachment[];
+  additionalParts?: FollowUpQueueAdditionalPart[];
+  agentMentionName?: string;
   createdAt: number;
   status: FollowUpQueueStatus;
   sendConfig?: FollowUpQueueSendConfig;

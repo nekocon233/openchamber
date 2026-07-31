@@ -10,7 +10,7 @@ import { createWebFollowUpQueueAPI } from './followUpQueue';
 const scopeToken = 'a'.repeat(64);
 const capabilitiesResponse = () => new Response(JSON.stringify({
   authority: 'openchamber-host',
-  version: 1,
+  version: 2,
 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 const item = {
   id: 'queue-one',
@@ -121,15 +121,15 @@ describe('web follow-up queue API', () => {
     expect(JSON.stringify(runtimeFetch.mock.calls[0])).not.toContain('private follow up');
   });
 
-  it('does not send queue content to a different capability version', async () => {
+  it('does not send queue content to an older capability version', async () => {
     runtimeFetch.mockResolvedValueOnce(new Response(JSON.stringify({
       authority: 'openchamber-host',
-      version: 2,
+      version: 1,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     const request = {
       sessionId: 'session-one',
       baseRevision: 0,
-      clientMutationId: 'mutation-version-two',
+      clientMutationId: 'mutation-version-one',
       operation: { type: 'add' as const, item: { ...item, content: 'version-private' } },
     };
 

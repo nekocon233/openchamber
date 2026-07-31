@@ -24,7 +24,7 @@ describe('shared running session indicator', () => {
 
   test('uses per-session global-first status and preserves a reduced-motion glyph', () => {
     expect(syncSource).toContain('state.resolvedStatusById.get(sessionId)');
-    expect(syncSource).toContain('resolveSessionStatusType(globalStatus, childStatus?.type)');
+    expect(syncSource).toContain('resolveSessionStatusType(globalStatus, activeStatus?.type)');
     expect(cssSource).toContain('.session-running-spinner');
     expect(cssSource).toContain('animation: none !important');
   });

@@ -48,6 +48,7 @@ const createHarness = async (options = {}) => {
     dedupeLimit: options.dedupeLimit,
     createTempId: options.createTempId ?? (() => `test-${tempId += 1}`),
     createLockId: options.createLockId,
+    createMessageId: options.createMessageId,
     now: options.now ?? (() => 1_000),
     waitForLock: options.waitForLock,
   });
@@ -321,6 +322,11 @@ describe('follow-up queue core', () => {
     };
     const validItem = createItem('valid', {
       attachments: [attachment],
+      additionalParts: [
+        { text: 'private synthetic context', synthetic: true },
+        { text: 'plain additional text' },
+      ],
+      agentMentionName: 'review-agent',
       sendConfig: {
         providerID: 'provider-a',
         modelID: 'model-a',
@@ -345,9 +351,32 @@ describe('follow-up queue core', () => {
       type: 'add',
       item: { ...createItem('extra'), unsupported: true },
     })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    await expect(mutate(core, sessionId, 1, 'schema-additional-extra', {
+      type: 'add',
+      item: createItem('additional-extra', {
+        additionalParts: [{ text: 'context', synthetic: true, unsupported: true }],
+      }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    await expect(mutate(core, sessionId, 1, 'schema-additional-synthetic', {
+      type: 'add',
+      item: createItem('additional-synthetic', {
+        additionalParts: [{ text: 'context', synthetic: 'yes' }],
+      }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    await expect(mutate(core, sessionId, 1, 'schema-agent-mention-limit', {
+      type: 'add',
+      item: createItem('agent-mention-limit', { agentMentionName: 'a'.repeat(1025) }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
     await expect(mutate(core, sessionId, 1, 'schema-content-limit', {
       type: 'add',
       item: createItem('large', { content: 'x'.repeat((1024 * 1024) + 1) }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    await expect(mutate(core, sessionId, 1, 'schema-combined-content-limit', {
+      type: 'add',
+      item: createItem('combined-large', {
+        content: 'x'.repeat(512 * 1024),
+        additionalParts: [{ text: 'y'.repeat((512 * 1024) + 1), synthetic: true }],
+      }),
     })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
     await expect(mutate(core, sessionId, 1, 'schema-attachment-count', {
       type: 'add',
@@ -356,6 +385,53 @@ describe('follow-up queue core', () => {
           ...attachment,
           id: `attachment-${index}`,
         })),
+      }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    await expect(mutate(core, sessionId, 1, 'schema-additional-count', {
+      type: 'add',
+      item: createItem('additional-parts', {
+        additionalParts: Array.from({ length: 65 }, (_, index) => ({
+          text: `part-${index}`,
+          synthetic: true,
+        })),
+      }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+  });
+
+  it('keeps stored v1 items without extended payload fields readable', async () => {
+    const { core } = await createHarness();
+    const legacyItem = createItem('legacy-payload');
+    await mutate(core, 'session-legacy-payload', 0, 'legacy-payload-add', {
+      type: 'add', item: legacyItem,
+    });
+
+    await expect(core.load('session-legacy-payload')).resolves.toMatchObject({
+      revision: 1,
+      items: [legacyItem],
+    });
+  });
+
+  it('counts additional-part text toward the aggregate queue content limit', async () => {
+    const { core } = await createHarness();
+    const sessionId = 'session-additional-content-limit';
+    const additionalText = 'x'.repeat(1024 * 1024);
+    let revision = 0;
+    for (let index = 0; index < 4; index += 1) {
+      const result = await mutate(core, sessionId, revision, `aggregate-add-${index}`, {
+        type: 'add',
+        item: createItem(`aggregate-${index}`, {
+          content: '',
+          additionalParts: [{ text: additionalText, synthetic: true }],
+        }),
+      });
+      revision = result.snapshot.revision;
+    }
+
+    await expect(mutate(core, sessionId, revision, 'aggregate-add-overflow', {
+      type: 'add',
+      item: createItem('aggregate-overflow', {
+        content: '',
+        additionalParts: [{ text: 'overflow', synthetic: true }],
       }),
     })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
   });
@@ -607,6 +683,39 @@ describe('follow-up queue core', () => {
     });
     expect(completed).toMatchObject({ applied: true, mutationRevision: 6 });
     expect(completed.snapshot.items).toEqual([]);
+  });
+
+  it('assigns a durable message ID on first claim and keeps it across response loss and release', async () => {
+    let generated = 0;
+    const { core } = await createHarness({
+      createMessageId: () => `msg_${String(++generated).padStart(12, '0')}${'H'.repeat(14)}`,
+    });
+    const sessionId = 'session-deferred-message-id';
+    const first = createItem('deferred-one', { messageId: null, status: 'queued' });
+    const second = createItem('deferred-two', { messageId: null, status: 'queued' });
+    await mutate(core, sessionId, 0, 'deferred-add-one', { type: 'add', item: first });
+    await mutate(core, sessionId, 1, 'deferred-add-two', { type: 'add', item: second });
+
+    const request = {
+      type: 'claim', itemId: first.id, claimId: 'claim-deferred-one', mode: 'auto',
+    };
+    const claimed = await mutate(core, sessionId, 2, 'deferred-claim', request);
+    expect(claimed.snapshot.items[0].messageId).toBe(`msg_${'1'.padStart(12, '0')}${'H'.repeat(14)}`);
+
+    const replayed = await mutate(core, sessionId, 2, 'deferred-claim', request);
+    expect(replayed.deduplicated).toBe(true);
+    expect(replayed.snapshot.items[0].messageId).toBe(claimed.snapshot.items[0].messageId);
+    expect(generated).toBe(1);
+
+    const released = await mutate(core, sessionId, 3, 'deferred-release', {
+      type: 'release', itemId: first.id, claimId: 'claim-deferred-one', status: 'staged',
+    });
+    const reclaimed = await mutate(core, sessionId, 4, 'deferred-reclaim', {
+      type: 'claim', itemId: first.id, claimId: 'claim-deferred-two', mode: 'manual',
+    });
+    expect(released.snapshot.items[0].messageId).toBe(claimed.snapshot.items[0].messageId);
+    expect(reclaimed.snapshot.items[0].messageId).toBe(claimed.snapshot.items[0].messageId);
+    expect(generated).toBe(1);
   });
 
   it('writes a terminal tombstone and records later public mutations without revival', async () => {

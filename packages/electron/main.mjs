@@ -18,8 +18,11 @@ import { sanitizeRuntimeRequestHeaders } from './runtime-request-headers.mjs';
 import { assertUpdaterCapability } from './updater-capability.mjs';
 import { checkForDesktopUpdate } from './updater-check.mjs';
 import { resolveUpdaterChannel } from './updater-channel.mjs';
-import { resolveUpdaterFeed } from './updater-feed.mjs';
-import { createMainWindowSessionNavigation } from './main-window-session-navigation.mjs';
+import { PRODUCTION_UPDATER_FEED, resolveUpdaterFeed } from './updater-feed.mjs';
+import {
+  createMainWindowSessionNavigation,
+  handleWindowDidStartNavigation,
+} from './main-window-session-navigation.mjs';
 import { createWindowRuntimeIdentityController } from './window-runtime-identity.mjs';
 import {
   WINDOWS_NOTIFICATION_TARGET_LIMIT,
@@ -209,7 +212,7 @@ const LOCAL_DESKTOP_CLIENT_DEDUPE_KEY = 'desktop-local';
 // connecting to someone else's server).
 const REMOTE_DESKTOP_CLIENT_KIND = 'desktop';
 const ENV_OVERRIDE_HOST_ID = '__env';
-const CHANGELOG_URL = 'https://raw.githubusercontent.com/openchamber/openchamber/main/CHANGELOG.md';
+const CHANGELOG_URL = `https://raw.githubusercontent.com/${PRODUCTION_UPDATER_FEED.owner}/${PRODUCTION_UPDATER_FEED.repo}/main/CHANGELOG.md`;
 const GITHUB_BUG_REPORT_URL = 'https://github.com/openchamber/openchamber/issues/new?template=bug_report.yml';
 const GITHUB_FEATURE_REQUEST_URL = 'https://github.com/openchamber/openchamber/issues/new?template=feature_request.yml';
 const DISCORD_INVITE_URL = 'https://discord.gg/ZYRSdnwwKA';
@@ -2725,9 +2728,14 @@ const createBrowserWindow = ({ label, windowRole = 'additional', restoreGeometry
     }
   });
 
-  browserWindow.webContents.on('did-start-loading', () => {
-    mainWindowSessionNavigation.markLoading(browserWindow);
-    windowRuntimeIdentity.reset(browserWindow);
+  browserWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    handleWindowDidStartNavigation({
+      browserWindow,
+      mainWindowSessionNavigation,
+      windowRuntimeIdentity,
+      isInPlace,
+      isMainFrame,
+    });
   });
 
   browserWindow.webContents.on('did-finish-load', () => {

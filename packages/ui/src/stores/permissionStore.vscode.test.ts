@@ -6,12 +6,15 @@ let reconcileShouldFail = false
 mock.module("@/lib/runtime-fetch", () => ({
   runtimeFetch: async (_path: string, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as { enabled?: boolean }
-    return new Response(JSON.stringify({ sessions: { root: body.enabled === true } }), { status: 200 })
+    return new Response(JSON.stringify({ sessions: { root: body.enabled === true }, defaultEnabled: true }), { status: 200 })
   },
 }))
 mock.module("@/lib/desktop", () => ({ isVSCodeRuntime: () => true }))
 mock.module("@/sync/sync-refs", () => ({ getAllSyncSessionMap: () => new Map() }))
 mock.module("@/sync/session-ui-store", () => ({
+  clearPendingDraftPermissionPolicy: () => undefined,
+  setPendingDraftPermissionPolicy: () => undefined,
+  supersedePendingDraftPermissionPolicy: () => null,
   useSessionUIStore: { getState: () => ({ getDirectoryForSession: () => "/repo" }) },
 }))
 mock.module("@/lib/opencode/client", () => ({

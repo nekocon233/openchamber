@@ -15,6 +15,7 @@ Server-owned scheduled task runtime and routes for OpenChamber-only automation.
   - Timer scheduling and queueing
   - Concurrency controls
   - Session create + prompt_async execution
+  - Persists each task's explicit permission auto-accept choice before prompting, so the runtime default cannot override disabled tasks
   - Emits OpenChamber task-run events
 
 - `packages/web/server/lib/scheduled-tasks/routes.js`

@@ -23,12 +23,18 @@ const nextMessagesCalls: unknown[][] = [];
 const nextMessagesResults: unknown[] = [];
 const sessionStatusCalls: unknown[][] = [];
 let sessionStatusResult: unknown = { data: {} };
+const sessionActiveCalls: unknown[][] = [];
+let sessionActiveResult: unknown = { data: { data: {} } };
 
 const nextResult = (results: unknown[], fallback: unknown): unknown => {
   const next = results.shift();
   if (next instanceof Error) throw next;
   return next ?? fallback;
 };
+
+const configuredResult = (result: unknown, args: unknown[]): unknown => (
+  typeof result === 'function' ? (result as (...input: unknown[]) => unknown)(...args) : result
+);
 
 const createDeferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -96,8 +102,14 @@ const nextMessagesMock = mock(async (...args: unknown[]) => {
   return nextResult(nextMessagesResults, {
     data: {
       data: [],
+      cursor: {},
     },
   });
+});
+
+const sessionActiveMock = mock(async (...args: unknown[]) => {
+  sessionActiveCalls.push(args);
+  return configuredResult(sessionActiveResult, args);
 });
 
 const createOpencodeClientMock = mock((config: ClientConfig) => {
@@ -115,7 +127,7 @@ const createOpencodeClientMock = mock((config: ClientConfig) => {
       promptAsync: promptAsyncMock,
       status: mock(async (...args: unknown[]) => {
         sessionStatusCalls.push(args);
-        return sessionStatusResult;
+        return configuredResult(sessionStatusResult, args);
       }),
     },
     v2: {
@@ -125,6 +137,7 @@ const createOpencodeClientMock = mock((config: ClientConfig) => {
         prompt: durablePromptMock,
         history: historyMock,
         messages: nextMessagesMock,
+        active: sessionActiveMock,
       },
     },
   };
@@ -193,18 +206,76 @@ beforeEach(() => {
   nextMessagesResults.length = 0;
   sessionStatusCalls.length = 0;
   sessionStatusResult = { data: {} };
+  sessionActiveCalls.length = 0;
+  sessionActiveResult = { data: { data: {} } };
   opencodeClient.clearConfigCache();
 });
 
 describe('opencodeClient session status', () => {
-  test('forwards directory and abort signal through the SDK', async () => {
+  test('forwards the directory and one bounded signal to both status endpoints', async () => {
     const controller = new AbortController();
 
     await opencodeClient.getSessionStatusForDirectory('/workspace/project', { signal: controller.signal });
 
-    expect(sessionStatusCalls).toEqual([
-      [{ directory: '/workspace/project' }, { signal: controller.signal }],
-    ]);
+    const legacySignal = (sessionStatusCalls[0]?.[1] as { signal?: AbortSignal })?.signal;
+    const activeSignal = (sessionActiveCalls[0]?.[0] as { signal?: AbortSignal })?.signal;
+    expect(sessionStatusCalls[0]?.[0]).toEqual({ directory: '/workspace/project' });
+    expect(legacySignal).toBeInstanceOf(AbortSignal);
+    expect(activeSignal).toBe(legacySignal);
+    expect(legacySignal).not.toBe(controller.signal);
+  });
+
+  test('returns unknown after the bounded status request aborts a half-open endpoint', async () => {
+    let observedSignal: AbortSignal | undefined;
+    sessionStatusResult = (...args: unknown[]) => new Promise((resolve) => {
+      observedSignal = (args[1] as { signal?: AbortSignal })?.signal;
+      const finish = () => resolve({ error: new Error('aborted') });
+      if (observedSignal?.aborted) finish();
+      else observedSignal?.addEventListener('abort', finish, { once: true });
+    });
+
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project', { timeoutMs: 5 })).toBeNull();
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  test('aborts the sibling status request when one endpoint rejects immediately', async () => {
+    let siblingSignal: AbortSignal | undefined;
+    sessionStatusResult = () => {
+      throw new Error('legacy rejected');
+    };
+    sessionActiveResult = (...args: unknown[]) => new Promise((resolve) => {
+      siblingSignal = (args[0] as { signal?: AbortSignal })?.signal;
+      const finish = () => resolve({ error: new Error('aborted') });
+      if (siblingSignal?.aborted) finish();
+      else siblingSignal?.addEventListener('abort', finish, { once: true });
+    });
+
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+    expect(siblingSignal?.aborted).toBe(true);
+  });
+
+  test('merges live V2 running sessions with legacy status while preserving retry details', async () => {
+    sessionStatusResult = {
+      data: {
+        ses_idle: { type: 'idle' },
+        ses_retry: { type: 'retry', attempt: 2, message: 'waiting', next: 123 },
+      },
+    };
+    sessionActiveResult = {
+      data: {
+        data: {
+          ses_idle: { type: 'running' },
+          ses_retry: { type: 'running' },
+          ses_v2: { type: 'running' },
+        },
+      },
+    };
+
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toEqual({
+      ses_idle: { type: 'busy' },
+      ses_retry: { type: 'retry', attempt: 2, message: 'waiting', next: 123 },
+      ses_v2: { type: 'busy' },
+    });
   });
 
   test('rejects malformed payloads instead of treating them as authoritative empty state', async () => {
@@ -215,6 +286,19 @@ describe('opencodeClient session status', () => {
     expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
 
     sessionStatusResult = { data: { ses_retry: { type: 'retry', attempt: '1' } } };
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+
+    sessionStatusResult = { data: {} };
+    sessionActiveResult = { data: { data: { ses_bad: { type: 'stale' } } } };
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+  });
+
+  test('preserves prior authority when either live status endpoint fails', async () => {
+    sessionActiveResult = { error: { message: 'unavailable' }, response: { status: 503 } };
+    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+
+    sessionActiveResult = { data: { data: {} } };
+    sessionStatusResult = { error: { message: 'unavailable' }, response: { status: 503 } };
     expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
   });
 });
@@ -345,17 +429,90 @@ describe('opencodeClient session input history', () => {
             time: { created: 1000 },
           },
         ],
+        cursor: {},
       },
     });
 
-    const messages = await opencodeClient.loadSessionNextMessages({
+    const page = await opencodeClient.loadSessionNextMessages({
       sessionID: 'ses_history',
       directory: '/workspace/history',
       limit: 50,
     });
 
     expect(nextMessagesCalls).toEqual([[{ sessionID: 'ses_history', limit: 50, order: 'desc' }]]);
-    expect(messages.map((message: { id: string }) => message.id)).toEqual(['msg-old', 'msg-new']);
+    expect(page.messages.map((message: { id: string }) => message.id)).toEqual(['msg-old', 'msg-new']);
+    expect(page.cursor).toBe(undefined);
+  });
+
+  test('returns cursor.next so the shared loader can page without repeating order', async () => {
+    const shared = { id: 'msg-shared', type: 'user', text: 'shared', time: { created: 2000 } };
+    nextMessagesResults.push(
+      {
+        data: {
+          data: [
+            { id: 'msg-new', type: 'user', text: 'new', time: { created: 3000 } },
+            shared,
+          ],
+          cursor: { next: 'cursor-older' },
+        },
+      },
+      {
+        data: {
+          data: [
+            shared,
+            { id: 'msg-old', type: 'user', text: 'old', time: { created: 1000 } },
+          ],
+          cursor: {},
+        },
+      },
+    );
+
+    const first = await opencodeClient.loadSessionNextMessages({
+      sessionID: 'ses_history',
+      directory: '/workspace/history',
+      limit: 4,
+    });
+    const second = await opencodeClient.loadSessionNextMessages({
+      sessionID: 'ses_history',
+      directory: '/workspace/history',
+      limit: 4,
+      cursor: first.cursor,
+    });
+
+    expect(nextMessagesCalls).toEqual([
+      [{ sessionID: 'ses_history', limit: 4, order: 'desc' }],
+      [{ sessionID: 'ses_history', limit: 4, cursor: 'cursor-older' }],
+    ]);
+    expect(first.messages.map((message: { id: string }) => message.id)).toEqual(['msg-shared', 'msg-new']);
+    expect(first.cursor).toBe('cursor-older');
+    expect(second.messages.map((message: { id: string }) => message.id)).toEqual(['msg-old', 'msg-shared']);
+    expect(second.cursor).toBe(undefined);
+  });
+
+  test('clamps each V2 messages page to the official 200-record limit', async () => {
+    nextMessagesResults.push({ data: { data: [], cursor: {} } });
+
+    await opencodeClient.loadSessionNextMessages({
+      sessionID: 'ses_history',
+      limit: 500,
+    });
+
+    expect(nextMessagesCalls).toEqual([[{ sessionID: 'ses_history', limit: 200, order: 'desc' }]]);
+  });
+
+  test('rejects a cursor that points back to the same V2 page', async () => {
+    nextMessagesResults.push({
+      data: {
+        data: [{ id: 'msg-old', type: 'user', text: 'old', time: { created: 1000 } }],
+        cursor: { next: 'cursor-repeat' },
+      },
+    });
+
+    await expect(opencodeClient.loadSessionNextMessages({
+      sessionID: 'ses_history',
+      cursor: 'cursor-repeat',
+    })).rejects.toThrow('invalid pagination cursor');
+    expect(nextMessagesCalls).toHaveLength(1);
   });
 
   test('returns an incomplete projection instead of pretending a bounded scan is authoritative empty', async () => {
@@ -376,265 +533,125 @@ describe('opencodeClient session input history', () => {
   });
 });
 
-describe('opencodeClient official follow-up delivery', () => {
-  test('serializes queued delivery after switching the selected agent and model', async () => {
-    const admissions: unknown[] = [];
-    const messageId = await opencodeClient.sendMessage({
+describe('opencodeClient follow-up delivery', () => {
+  test('rejects queue delivery before touching either OpenCode execution engine', async () => {
+    await expect(opencodeClient.sendMessage({
       id: 'ses_queue',
       providerID: 'anthropic',
       modelID: 'claude-sonnet',
-      variant: 'high',
-      agent: 'build',
-      text: 'primary',
-      files: [{ type: 'file', mime: 'image/png', url: 'data:image/png;base64,AA==', filename: 'one.png' }],
-      additionalParts: [{
-        text: 'follow-up body',
-        files: [{ type: 'file', mime: 'text/plain', url: 'file:///workspace/two.txt', filename: 'two.txt' }],
-      }],
-      agentMentions: [{ name: 'explore', source: { value: '@explore', start: 0, end: 8 } }],
-      messageId: 'msg_queue',
+      text: 'queue this',
       delivery: 'queue',
-      onAdmitted: (admission: unknown) => admissions.push(admission),
-    });
+    })).rejects.toThrow('Queue delivery must be handled by the OpenChamber follow-up queue');
 
-    expect(messageId).toBe('msg_queue');
-    expect(callOrder).toEqual(['switchAgent', 'switchModel', 'prompt']);
-    expect(switchAgentCalls).toEqual([[{ sessionID: 'ses_queue', agent: 'build' }]]);
-    expect(switchModelCalls).toEqual([[
-      {
-        sessionID: 'ses_queue',
-        model: { id: 'claude-sonnet', providerID: 'anthropic', variant: 'high' },
-      },
-    ]]);
-    expect(durablePromptCalls).toEqual([[
-      {
-        sessionID: 'ses_queue',
-        id: 'msg_queue',
-        prompt: {
-          text: 'primary\n\nfollow-up body',
-          files: [
-            { uri: 'data:image/png;base64,AA==', name: 'one.png' },
-            { uri: 'file:///workspace/two.txt', name: 'two.txt' },
-          ],
-          agents: [{
-            name: 'explore',
-            source: { text: '@explore', start: 0, end: 8 },
-          }],
-        },
-        delivery: 'queue',
-      },
-    ]]);
-    expect(admissions).toEqual([{
-      admittedSeq: 1,
-      id: 'msg_queue',
-      sessionID: 'ses_queue',
-      prompt: {
-        text: 'primary\n\nfollow-up body',
-        files: [
-          { uri: 'data:image/png;base64,AA==', name: 'one.png' },
-          { uri: 'file:///workspace/two.txt', name: 'two.txt' },
-        ],
-        agents: [{
-          name: 'explore',
-          source: { text: '@explore', start: 0, end: 8 },
-        }],
-      },
-      delivery: 'queue',
-      timeCreated: 1,
-    }]);
+    expect(callOrder).toEqual([]);
     expect(promptAsyncCalls).toHaveLength(0);
+    expect(switchAgentCalls).toHaveLength(0);
+    expect(switchModelCalls).toHaveLength(0);
+    expect(durablePromptCalls).toHaveLength(0);
   });
 
-  test('serializes steer delivery through a directory-scoped SDK client', async () => {
+  test('routes steer through ordinary promptAsync with the normalized directory and body', async () => {
     await opencodeClient.sendMessage({
       id: 'ses_steer',
       providerID: 'openai',
       modelID: 'gpt-5',
+      agent: 'build',
+      variant: 'high',
       text: 'redirect now',
       messageId: 'msg_steer',
       delivery: 'steer',
       directory: 'd:\\workspace\\project\\',
     });
 
-    expect(createdClientConfigs).toHaveLength(1);
-    expect(createdClientConfigs[0]?.directory).toBe('D:/workspace/project');
-    expect(callOrder).toEqual(['switchModel', 'prompt']);
-    expect(durablePromptCalls[0]?.[0]).toEqual({
-      sessionID: 'ses_steer',
-      id: 'msg_steer',
-      prompt: { text: 'redirect now' },
-      delivery: 'steer',
-    });
+    expect(callOrder).toEqual(['promptAsync']);
+    expect(promptAsyncCalls).toEqual([[
+      {
+        sessionID: 'ses_steer',
+        directory: 'D:/workspace/project',
+        model: { providerID: 'openai', modelID: 'gpt-5' },
+        agent: 'build',
+        variant: 'high',
+        messageID: 'msg_steer',
+        parts: [{ type: 'text', text: 'redirect now' }],
+      },
+    ]]);
+    expect(switchAgentCalls).toHaveLength(0);
+    expect(switchModelCalls).toHaveLength(0);
+    expect(durablePromptCalls).toHaveLength(0);
   });
 
-  test('rejects structured format and synthetic text before switching session configuration', async () => {
-    await expect(opencodeClient.sendMessage({
-      id: 'ses_format',
-      providerID: 'anthropic-format',
-      modelID: 'claude-sonnet',
-      text: 'hello',
-      delivery: 'queue',
+  test('keeps steer structured and synthetic payload semantics identical to ordinary sends', async () => {
+    await opencodeClient.sendMessage({
+      id: 'ses_steer_body',
+      providerID: 'openai-steer-body',
+      modelID: 'gpt-5',
+      text: 'visible',
+      prefaceText: 'synthetic context',
+      messageId: 'msg_steer_body',
+      delivery: 'steer',
       format: { type: 'json_schema', schema: { type: 'object' } },
-    })).rejects.toThrow('does not support structured message format');
+    });
 
-    await expect(opencodeClient.sendMessage({
-      id: 'ses_synthetic',
-      providerID: 'anthropic-synthetic',
-      modelID: 'claude-sonnet',
-      text: 'hello',
-      delivery: 'steer',
-      additionalParts: [{ text: 'hidden context', synthetic: true }],
-    })).rejects.toThrow('does not support synthetic parts');
-
-    await expect(opencodeClient.sendMessage({
-      id: 'ses_synthetic_file',
-      providerID: 'anthropic-synthetic-file',
-      modelID: 'claude-sonnet',
-      text: 'hello',
-      delivery: 'queue',
-      additionalParts: [{
-        text: '',
-        synthetic: true,
-        files: [{ type: 'file', mime: 'text/plain', url: 'file:///workspace/context.txt' }],
-      }],
-    })).rejects.toThrow('does not support synthetic parts');
-
-    expect(callOrder).toEqual([]);
+    expect(promptAsyncCalls[0]?.[0]).toEqual({
+      sessionID: 'ses_steer_body',
+      model: { providerID: 'openai-steer-body', modelID: 'gpt-5' },
+      agent: undefined,
+      variant: undefined,
+      messageID: 'msg_steer_body',
+      format: { type: 'json_schema', schema: { type: 'object' } },
+      parts: [
+        { type: 'text', text: 'synthetic context', synthetic: true },
+        { type: 'text', text: 'visible' },
+      ],
+    });
+    expect(durablePromptCalls).toHaveLength(0);
   });
 
-  test('preserves SDK transport error identity for ambiguous-send reconciliation', async () => {
-    const transportError = new TypeError('Load failed');
-    durablePromptResults.push({ error: transportError, response: undefined });
-
-    let caught: unknown = null;
-    try {
-      await opencodeClient.sendMessage({
-        id: 'ses_transport_failure',
-        providerID: 'anthropic-durable-transport',
-        modelID: 'claude-sonnet',
-        text: 'hello',
-        delivery: 'queue',
-      });
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBe(transportError);
-    expect(durablePromptCalls).toHaveLength(1);
-  });
-
-  test('marks a malformed successful admission as potentially accepted', async () => {
-    durablePromptResults.push({ data: { data: { admitted: true } } });
-
-    let caught: unknown = null;
-    try {
-      await opencodeClient.sendMessage({
-        id: 'ses_malformed_admission',
-        providerID: 'anthropic-malformed-admission',
-        modelID: 'claude-sonnet',
-        text: 'hello',
-        delivery: 'queue',
-      });
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(Error);
-    expect((caught as { sendMayHaveBeenAccepted?: boolean }).sendMayHaveBeenAccepted).toBe(true);
-  });
-
-  test('serializes session configuration and admission for concurrent follow-ups', async () => {
-    const firstSwitch = createDeferred<unknown>();
-    switchModelResults.push(firstSwitch.promise);
+  test('dispatches concurrent steer sends without the V2 delivery serialization queue', async () => {
+    const firstResponse = createDeferred<unknown>();
+    const secondResponse = createDeferred<unknown>();
+    promptAsyncResults.push(firstResponse.promise, secondResponse.promise);
 
     const first = opencodeClient.sendMessage({
-      id: 'ses_serial',
-      providerID: 'provider-first',
-      modelID: 'model-first',
+      id: 'ses_concurrent_steer',
+      providerID: 'openai-steer-first',
+      modelID: 'gpt-5',
       text: 'first',
-      delivery: 'queue',
+      delivery: 'steer',
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(switchModelCalls).toHaveLength(1);
-
     const second = opencodeClient.sendMessage({
-      id: 'ses_serial',
-      providerID: 'provider-second',
-      modelID: 'model-second',
+      id: 'ses_concurrent_steer',
+      providerID: 'openai-steer-second',
+      modelID: 'gpt-5',
       text: 'second',
-      delivery: 'queue',
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(switchModelCalls).toHaveLength(1);
-    expect(durablePromptCalls).toHaveLength(0);
-
-    firstSwitch.resolve({ response: new Response(null, { status: 204 }) });
-    await Promise.all([first, second]);
-
-    expect(callOrder).toEqual(['switchModel', 'prompt', 'switchModel', 'prompt']);
-    expect(switchModelCalls.map((args) => args[0])).toEqual([
-      { sessionID: 'ses_serial', model: { id: 'model-first', providerID: 'provider-first' } },
-      { sessionID: 'ses_serial', model: { id: 'model-second', providerID: 'provider-second' } },
-    ]);
-  });
-
-  test('stops a durable sequence before prompt admission when the runtime changes', async () => {
-    const modelSwitch = createDeferred<unknown>();
-    switchModelResults.push(modelSwitch.promise);
-
-    const send = opencodeClient.sendMessage({
-      id: 'ses_runtime_change',
-      providerID: 'provider-runtime-change',
-      modelID: 'model-runtime-change',
-      text: 'hello',
       delivery: 'steer',
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(switchModelCalls).toHaveLength(1);
 
-    runtimeGeneration += 1;
-    modelSwitch.resolve({ response: new Response(null, { status: 204 }) });
-
-    await expect(send).rejects.toThrow('Runtime changed before operation dispatch');
+    expect(promptAsyncCalls).toHaveLength(2);
+    expect(switchModelCalls).toHaveLength(0);
     expect(durablePromptCalls).toHaveLength(0);
+
+    firstResponse.resolve({ response: new Response(null, { status: 200 }) });
+    secondResponse.resolve({ response: new Response(null, { status: 200 }) });
+    await Promise.all([first, second]);
   });
 
-  test('does not retry an ambiguous durable prompt failure', async () => {
-    durablePromptResults.push({
-      error: { _tag: 'ServiceUnavailableError', message: 'starting' },
-      response: { status: 503 },
-    });
+  test('keeps steer promptAsync error semantics identical to ordinary sends', async () => {
+    promptAsyncResults.push({ response: new Response('unavailable', { status: 503 }) });
 
     await expect(opencodeClient.sendMessage({
-      id: 'ses_failure',
-      providerID: 'anthropic-durable-503',
-      modelID: 'claude-sonnet',
-      agent: 'build',
-      text: 'hello',
-      delivery: 'queue',
-    })).rejects.toThrow('v2.session.prompt failed (503)');
-
-    expect(switchAgentCalls).toHaveLength(1);
-    expect(switchModelCalls).toHaveLength(1);
-    expect(durablePromptCalls).toHaveLength(1);
-    expect(callOrder).toEqual(['switchAgent', 'switchModel', 'prompt']);
-  });
-
-  test('stops after a switch failure and does not attempt or retry the prompt', async () => {
-    switchModelResults.push(new TypeError('Failed to fetch'));
-
-    await expect(opencodeClient.sendMessage({
-      id: 'ses_switch_failure',
-      providerID: 'openai-switch-failure',
+      id: 'ses_steer_failure',
+      providerID: 'openai-steer-failure',
       modelID: 'gpt-5',
       text: 'hello',
       delivery: 'steer',
-    })).rejects.toThrow('Failed to fetch');
+    })).rejects.toThrow('Failed to send message (503): unavailable');
 
-    expect(switchModelCalls).toHaveLength(1);
+    expect(promptAsyncCalls).toHaveLength(1);
     expect(durablePromptCalls).toHaveLength(0);
-    expect(callOrder).toEqual(['switchModel']);
   });
+
 });
 
 describe('opencodeClient non-delivery promptAsync', () => {

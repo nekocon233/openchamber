@@ -72,6 +72,17 @@ Build output goes to `packages/electron/dist`.
 
 macOS builds produce `dmg` and `zip` artifacts. Windows builds produce an NSIS installer. Linux builds produce an AppImage for the native x64 or arm64 host.
 
+## Production Releases
+
+`.github/workflows/release.yml` creates production releases only in `openchamber/openchamber` and `nekocon233/openchamber`. Both repositories build Electron for macOS, Windows, and Linux, upload the installable artifacts, publish the architecture-specific updater manifests, and publish the GitHub Release only after every required Desktop job succeeds. A manual dry run leaves the draft unpublished.
+
+The repository-specific release conditions are:
+
+- `openchamber/openchamber` retains the canonical release path: signed and notarized macOS packages, npm publication, the official mobile release, and the optional Discord and website integrations. That path requires the corresponding official release secrets.
+- `nekocon233/openchamber` publishes only the Desktop GitHub Release. npm, mobile, Discord, and website release jobs are skipped, and the finalizer explicitly accepts the skipped npm/mobile dependencies. The fork uses `GITHUB_TOKEN` for its release and must configure its own `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` secrets so the published macOS updater channel is signed, notarized, and installable.
+
+Other forks do not create a release through this production workflow. `release-desktop-smoke.yml` can build temporary artifacts for a selected repository and ref, but it does not publish a production updater release. Likewise, `build-macos-arm64-dmg.yml` uploads only one temporary arm64 DMG artifact; it does not create a GitHub Release or publish the complete updater manifest set.
+
 ## Platform Notes
 
 macOS packaging needs Xcode/build tools for notarized builds and icon asset compilation.
@@ -86,7 +97,7 @@ Running a packaged Linux AppImage requires FUSE (`libfuse.so.2`, typically `libf
 
 Linux updates are supported only when the packaged app is running from a writable AppImage. Update checks, downloads, and installation report an actionable error when `APPIMAGE` is missing, invalid, or read-only; a missing release feed (`latest-linux.yml` 404 before the first Linux publish) is treated as “no update available”. macOS and Windows updater behavior is unchanged. Release builds keep `latest-linux.yml` (x64) and `latest-linux-arm64.yml` separate and validate each manifest against its AppImage before upload. Linux AppImages download full updates (no `.blockmap` differential channel yet).
 
-This fork resolves its production Desktop update feed and packaged publish metadata only against `nekocon233/openchamber`; it never checks or installs releases from `openchamber/openchamber`. The loopback E2E updater fixture remains available for controlled replacement testing.
+Production release jobs embed the checked-out GitHub owner/repository into both the Desktop main bundle and Electron Builder publish metadata. Packages built by `nekocon233/openchamber` therefore update only from that fork, while canonical packages update only from `openchamber/openchamber`. Local builds default to the fork feed. The loopback E2E updater fixture remains available for controlled replacement testing.
 
 ### Updater End-to-End Fixture
 

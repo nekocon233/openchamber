@@ -308,7 +308,7 @@ Transport-triggered health checks share the periodic monitor's failure accountin
 - `createFeatureRoutesRuntime(dependencies)`: creates runtime for main feature route registration orchestration.
 - Returned API:
   - `registerRoutes(app, routeDependencies)`
-- Registers explicit OpenChamber feature routes before the generic `/api/*` OpenCode proxy. The server owns no follow-up queue capability, load, or mutation routes; unknown `/api/*` paths continue through the generic proxy without compatibility tombstones.
+- Registers explicit OpenChamber feature routes, including the host follow-up queue API, before the generic `/api/*` OpenCode proxy. Unknown `/api/*` paths continue through the generic proxy without compatibility tombstones.
 
 ## Public exports (opencode-resolution-runtime.js)
 - `createOpenCodeResolutionRuntime(dependencies)`: creates runtime for OpenCode binary/source snapshot resolution.
@@ -383,7 +383,7 @@ an authoritative loopback callback URL even when OpenChamber binds port `0`.
 - User config: `~/.config/opencode/opencode.json`.
 - Project config: `<workingDirectory>/.opencode/opencode.json` or `opencode.json`.
 - Custom config: `OPENCODE_CONFIG` env var path.
-- Retired files under `OPENCHAMBER_DATA_DIR/follow-up-queue` are not read, reconciled, migrated, or deleted.
+- Host-authoritative follow-up queue snapshots are stored under `OPENCHAMBER_DATA_DIR/follow-up-queue` and loaded or mutated only through the follow-up queue runtime.
 - Rate limit config: `OPENCHAMBER_RATE_LIMIT_MAX_ATTEMPTS`, `OPENCHAMBER_RATE_LIMIT_NO_IP_MAX_ATTEMPTS` env vars.
 
 ## Notes for contributors

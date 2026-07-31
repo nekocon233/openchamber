@@ -56,9 +56,11 @@ Items are ordered FIFO records:
 ```js
 {
   id,
-  messageId,
+  messageId: null | string,
   content,
   attachments?,
+  additionalParts?: [{ text, synthetic? }],
+  agentMentionName?,
   createdAt,
   status: 'staged' | 'queued',
   sendConfig?: { providerID, modelID, agent?, variant? },
@@ -66,20 +68,23 @@ Items are ordered FIFO records:
 }
 ```
 
-`messageId` is client-created once and remains unchanged across claims and retries, preventing a lease retry from creating a second OpenCode message. Public `add` operations cannot supply `claim`.
+New items use `messageId: null`. The host assigns a time-sortable OpenCode message ID in the same authoritative mutation that acquires the first claim. That ID remains unchanged across release, claim expiry, restart, response-loss replay, and later claims, preventing both chronology inversion against the assistant that made the queue drainable and duplicate OpenCode messages after an ambiguous send. Stored version-1 items with an existing string ID retain it. Public `add` operations cannot supply `claim`.
 
 Attachment records allow exactly `id`, `dataUrl`, `mimeType`, `filename`, `size`, `source`, and optional `serverPath`, `vscodePath`, `vscodeSource`. `source` is `local`, `server`, or `vscode`; `vscodeSource` is `file` or `selection`. The browser-only `file` object is forbidden by strict extra-field validation.
+
+Additional-part records allow exactly `text` and optional boolean `synthetic`. `agentMentionName` is an optional non-empty, control-free string. These optional fields and nullable pre-claim message IDs extend storage version 1 in place, so previously persisted items remain valid. Runtime endpoint generations are client-only send guards and are never accepted or persisted by the host.
 
 Explicit bounds are:
 
 - 256 queue items; 32 attachments per item and 512 per queue.
-- 1 MiB UTF-8 content per item and 4 MiB total queue content.
+- 64 additional parts per item and 1,024 per queue.
+- 1 MiB combined UTF-8 primary/additional-part text per item and 4 MiB total queue text.
 - 56 MiB per `dataUrl` and 56 MiB total attachment string data per queue.
 - 2 GiB maximum declared attachment `size`.
-- 256-byte identifiers, 256-byte MIME types, 4 KiB filenames, and 16 KiB optional attachment paths.
+- 256-byte identifiers, 256-byte MIME types, 1 KiB agent mention names, 4 KiB filenames, and 16 KiB optional attachment paths.
 - 64 MiB maximum persisted authority file and 64 MiB route-local JSON body limit.
 
-All objects reject unknown fields. Stored and incoming item arrays reject duplicate item IDs, message IDs, and per-item attachment IDs.
+All objects reject unknown fields. Stored and incoming item arrays reject duplicate item IDs, assigned message IDs, and per-item attachment IDs; multiple unclaimed items may have `messageId: null`.
 
 ## Mutations
 
@@ -101,7 +106,7 @@ Supported operations are:
 
 The retained idempotency record is checked before revision comparison so a response-lost retry with its original base can recover. A first-seen request otherwise requires an exact `baseRevision`; mismatch throws `FollowUpQueueConflictError` with `latestSnapshot` and performs no write.
 
-Only a semantic snapshot change advances revision by one. Missing remove/status/move/claim targets, a missing move anchor, same status/order, ineligible auto claim, and claim mismatch are no-ops. They return `applied: false`, do not advance revision, and still atomically persist their mutation ID. Adding an existing item ID or message ID is a no-op only when the complete normalized item is identical; otherwise it is an item conflict.
+Only a semantic snapshot change advances revision by one. Missing remove/status/move/claim targets, a missing move anchor, same status/order, ineligible auto claim, and claim mismatch are no-ops. They return `applied: false`, do not advance revision, and still atomically persist their mutation ID. Adding an existing item ID or the same non-null message ID is a no-op only when the complete normalized item is identical; otherwise it is an item conflict.
 
 The result is:
 
@@ -113,7 +118,7 @@ The result is:
 
 ## Claims And Completion
 
-The host sets every acquired claim's `expiresAt` to its current clock plus exactly 120 seconds. `auto` can claim only `queued` items; `manual` can claim either status. Another unexpired claim blocks acquisition, while an expired claim can be replaced. A fresh claim mutation using the same claim ID may renew that claim; replaying the same mutation ID never renews it.
+The host sets every acquired claim's `expiresAt` to its current clock plus exactly 120 seconds. The first successful claim also assigns an unclaimed item's OpenCode message ID atomically. `auto` can claim only `queued` items; `manual` can claim either status. Another unexpired claim blocks acquisition, while an expired claim can be replaced. A fresh claim mutation using the same claim ID may renew that claim; replaying the same mutation ID never renews it or reallocates the message ID.
 
 `complete` and `release` require the currently stored claim ID, including after that claim's expiry. `complete` removes the item. `release` clears the claim and sets the requested `staged` or `queued` status. A replacement claimant prevents an older claimant from completing or releasing the item.
 
@@ -151,7 +156,7 @@ Routes are registered before the generic OpenCode proxy:
 - `POST /auth/follow-up-queue/mutations`
 - Authenticated aliases under `/api/follow-up-queue/*`
 
-Capabilities return `{ authority: 'openchamber-host', version: 1 }`. Every success and error response is `Cache-Control: no-store`. Both namespaces pass normal OpenChamber authentication before the route-local JSON parser buffers a body. Validation is `400`; revision, item, and idempotency conflicts are `409`; storage failures are generic `500` responses.
+Capabilities return `{ authority: 'openchamber-host', version: 2 }`. Version 2 is required for nullable pre-claim message IDs; mismatched clients fall back without sending queue content to the incompatible host. Every success and error response is `Cache-Control: no-store`. Both namespaces pass normal OpenChamber authentication before the route-local JSON parser buffers a body. Validation is `400`; revision, item, and idempotency conflicts are `409`; storage failures are generic `500` responses.
 
 The server has no explicit chat-draft authority or chat-draft routes. Existing chat-draft files are not read, migrated, or deleted.
 

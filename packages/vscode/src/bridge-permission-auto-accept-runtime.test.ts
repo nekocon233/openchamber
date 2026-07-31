@@ -24,14 +24,14 @@ describe('VS Code permission auto-accept policy bridge', () => {
     }, context, dependencies);
 
     assert.equal(response?.success, true);
-    assert.deepEqual(response?.data, { sessions: { root: true }, revision: 1 });
-    assert.deepEqual(broadcasts, [{ sessions: { root: true }, revision: 1 }]);
+    assert.deepEqual(response?.data, { sessions: { root: true }, defaultEnabled: true, revision: 1 });
+    assert.deepEqual(broadcasts, [{ sessions: { root: true }, defaultEnabled: true, revision: 1 }]);
 
     const reloaded = await handlePermissionAutoAcceptBridgeMessage({
       id: '2',
       type: 'api:permission-auto-accept:get',
     }, context, dependencies);
-    assert.deepEqual(reloaded?.data, { sessions: { root: true }, revision: 1 });
+    assert.deepEqual(reloaded?.data, { sessions: { root: true }, defaultEnabled: true, revision: 1 });
   });
 
   test('serializes concurrent writes without losing policy entries', async () => {
@@ -53,7 +53,7 @@ describe('VS Code permission auto-accept policy bridge', () => {
       id: '3',
       type: 'api:permission-auto-accept:get',
     }, context, dependencies);
-    assert.deepEqual(reloaded?.data, { sessions: { root: true, child: false }, revision: 2 });
+    assert.deepEqual(reloaded?.data, { sessions: { root: true, child: false }, defaultEnabled: true, revision: 2 });
   });
 
   test('rejects malformed policy writes', async () => {

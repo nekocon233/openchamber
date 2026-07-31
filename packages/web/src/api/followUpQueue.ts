@@ -118,7 +118,7 @@ export const createWebFollowUpQueueAPI = (): FollowUpQueueAPI => {
           && typeof payload === 'object'
           && !Array.isArray(payload)
           && (payload as Record<string, unknown>).authority === 'openchamber-host'
-          && (payload as Record<string, unknown>).version === 1
+          && (payload as Record<string, unknown>).version === 2
         );
       })();
       capabilityProbes.set(probeKey, request);

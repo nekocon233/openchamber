@@ -2,6 +2,19 @@ const normalizeValue = (value) => (
   typeof value === 'string' && value.trim() ? value.trim() : null
 );
 
+export const handleWindowDidStartNavigation = ({
+  browserWindow,
+  mainWindowSessionNavigation,
+  windowRuntimeIdentity,
+  isInPlace,
+  isMainFrame,
+}) => {
+  if (isMainFrame !== true || isInPlace === true) return false;
+  mainWindowSessionNavigation.markLoading(browserWindow);
+  windowRuntimeIdentity.reset(browserWindow);
+  return true;
+};
+
 export const createMainWindowSessionNavigation = ({ getMainWindow, getWindowRuntimeKey, emitToWindow }) => {
   if (
     typeof getMainWindow !== 'function'

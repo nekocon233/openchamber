@@ -69,7 +69,7 @@ export type EventPipeline = {
 }
 
 type MessageStreamWsFrame = {
-  type: "ready" | "event" | "error" | "backpressure"
+  type: "ready" | "event" | "error" | "backpressure" | "replay-gap"
   payload?: unknown
   eventId?: string
   directory?: string
@@ -197,18 +197,6 @@ function resolveEventPayload(payload: unknown): Event | null {
   const record = payload as { type?: unknown; payload?: unknown }
   if (typeof record.type === "string") {
     return payload as Event
-  }
-
-  if (record.type === "sync") {
-    const syncEvent = (payload as { syncEvent?: unknown }).syncEvent
-    if (syncEvent && typeof syncEvent === "object" && typeof (syncEvent as { type?: unknown }).type === "string") {
-      const candidate = syncEvent as { id?: unknown; type: string; data?: unknown }
-      return {
-        id: typeof candidate.id === "string" ? candidate.id : undefined,
-        type: candidate.type,
-        properties: candidate.data,
-      } as Event
-    }
   }
 
   if (record.payload && typeof record.payload === "object" && typeof (record.payload as { type?: unknown }).type === "string") {
@@ -744,6 +732,9 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
         }
 
         if (frame.type === "ready") {
+          // Replay frames precede ready. Commit them before reconnect repair
+          // captures its authoritative mutation baseline.
+          flushAll()
           opened = true
           readyAt = Date.now()
           if (readyTimer) {
@@ -752,6 +743,13 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
           }
           streamErrorLogged = false
           markConnected()
+          return
+        }
+
+        if (frame.type === "replay-gap") {
+          // Ready still triggers authoritative repair. Drop the stale cursor so
+          // later attempts do not request the same unrecoverable boundary.
+          lastEventId = undefined
           return
         }
 

@@ -15,6 +15,7 @@ export function createGlobalMessageStreamHub({
   const eventSubscribers = new Set();
   const statusSubscribers = new Set();
   const replay = [];
+  let replayPredecessorEventId = null;
 
   let controller = null;
   let reader = null;
@@ -89,7 +90,8 @@ export function createGlobalMessageStreamHub({
         if (normalized.eventId) {
           replay.push(normalized);
           if (replay.length > replayLimit) {
-            replay.splice(0, replay.length - replayLimit);
+            const removed = replay.splice(0, replay.length - replayLimit);
+            replayPredecessorEventId = removed.at(-1)?.eventId ?? replayPredecessorEventId;
           }
         }
 
@@ -125,6 +127,14 @@ export function createGlobalMessageStreamHub({
     buildUrlFailed = false;
   };
 
+  const resolveReplay = (eventId) => {
+    if (!eventId) return { events: [], gap: false };
+    const index = replay.findIndex((entry) => entry.eventId === eventId);
+    if (index !== -1) return { events: replay.slice(index + 1), gap: false };
+    if (eventId === replayPredecessorEventId) return { events: [...replay], gap: false };
+    return { events: [], gap: true };
+  };
+
   return {
     start,
     stop,
@@ -146,13 +156,9 @@ export function createGlobalMessageStreamHub({
         statusSubscribers.delete(subscriber);
       };
     },
+    resolveReplay,
     replayAfter(eventId) {
-      if (!eventId) {
-        return [];
-      }
-
-      const index = replay.findIndex((entry) => entry.eventId === eventId);
-      return index === -1 ? [] : replay.slice(index + 1);
+      return resolveReplay(eventId).events;
     },
   };
 }

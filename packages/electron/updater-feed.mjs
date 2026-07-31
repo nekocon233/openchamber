@@ -1,9 +1,16 @@
-import fs from 'node:fs';
+const DEFAULT_UPDATE_OWNER = 'nekocon233';
+const DEFAULT_UPDATE_REPO = 'openchamber';
+const EMBEDDED_UPDATE_OWNER = typeof __OPENCHAMBER_UPDATE_OWNER__ === 'string'
+  ? __OPENCHAMBER_UPDATE_OWNER__
+  : DEFAULT_UPDATE_OWNER;
+const EMBEDDED_UPDATE_REPO = typeof __OPENCHAMBER_UPDATE_REPO__ === 'string'
+  ? __OPENCHAMBER_UPDATE_REPO__
+  : DEFAULT_UPDATE_REPO;
 
 export const PRODUCTION_UPDATER_FEED = Object.freeze({
   provider: 'github',
-  owner: 'nekocon233',
-  repo: 'openchamber',
+  owner: EMBEDDED_UPDATE_OWNER,
+  repo: EMBEDDED_UPDATE_REPO,
 });
 
 const isLoopbackHostname = (hostname) => {

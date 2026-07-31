@@ -40,6 +40,29 @@ describe('session-next translator', () => {
     expect(parts[0].id).toBe('msg-1:text');
   });
 
+  test('does not parent an active turn to a queued prompt before promotion', () => {
+    const translator = createSessionNextTranslator();
+    translator.translate('/repo', event('session.next.prompted', promptProperties, 'prompted-1'));
+    translator.translate('/repo', event('session.next.prompt.admitted', {
+      ...promptProperties,
+      messageID: 'msg-queued',
+      prompt: { text: 'later' },
+    }, 'admitted-later'));
+
+    const started = translator.translate('/repo', event('session.next.step.started', {
+      timestamp: 1100,
+      sessionID: 'session-1',
+      assistantMessageID: 'assistant-current',
+      agent: 'build',
+      model: { id: 'model-a', providerID: 'provider-a' },
+    }, 'step-current')) ?? [];
+
+    const assistant = (started[0].properties as { info: Message }).info;
+    expect(assistant.role).toBe('assistant');
+    if (assistant.role !== 'assistant') throw new Error('expected assistant message');
+    expect(assistant.parentID).toBe('msg-1');
+  });
+
   test('maps assistant lifecycle, streamed text, and final status into legacy events', () => {
     const translator = createSessionNextTranslator();
     translator.translate('/repo', event('session.next.prompted', promptProperties, 'prompted-1'));
@@ -108,7 +131,77 @@ describe('session-next translator', () => {
       cost: 0.01,
       tokens: { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
     }, 'step-ended-1')) ?? [];
-    expect(stepEnded.map((candidate) => candidate.type)).toEqual(['message.updated']);
+    expect(stepEnded.map((candidate) => candidate.type)).toEqual(['message.updated', 'session.status']);
+    expect(stepEnded[1].properties).toEqual({ sessionID: 'session-1', status: { type: 'idle' } });
+  });
+
+  test('keeps the session busy when a completed provider step continues through tool calls', () => {
+    const translator = createSessionNextTranslator();
+    translator.translate('/repo', event('session.next.step.started', {
+      timestamp: 1000,
+      sessionID: 'session-1',
+      assistantMessageID: 'assistant-tool-step',
+      agent: 'build',
+      model: { id: 'model-a', providerID: 'provider-a' },
+    }, 'tool-step-started'));
+
+    const ended = translator.translate('/repo', event('session.next.step.ended', {
+      timestamp: 1100,
+      sessionID: 'session-1',
+      assistantMessageID: 'assistant-tool-step',
+      finish: 'tool-calls',
+      cost: 0,
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    }, 'tool-step-ended')) ?? [];
+
+    expect(ended.map((candidate) => candidate.type)).toEqual(['message.updated']);
+  });
+
+  test('projects failed and cancelled outcomes from the real step events to terminal idle status', () => {
+    const failedTranslator = createSessionNextTranslator();
+    failedTranslator.translate('/repo', event('session.next.step.started', {
+      timestamp: 1000,
+      sessionID: 'session-failed',
+      assistantMessageID: 'assistant-failed',
+      agent: 'build',
+      model: { id: 'model-a', providerID: 'provider-a' },
+    }, 'failed-step-started'));
+    const failed = failedTranslator.translate('/repo', event('session.next.step.failed', {
+      timestamp: 1100,
+      sessionID: 'session-failed',
+      assistantMessageID: 'assistant-failed',
+      error: { type: 'unknown', message: 'provider failed' },
+    }, 'failed-step-ended')) ?? [];
+
+    expect(failed.map((candidate) => candidate.type)).toEqual(['message.updated', 'session.status']);
+    const failedMessage = (failed[0].properties as { info: Message }).info;
+    expect((failedMessage as Message & { error?: unknown }).error).toEqual({
+      name: 'UnknownError',
+      data: { message: 'provider failed' },
+    });
+    expect(failed[1].properties).toEqual({ sessionID: 'session-failed', status: { type: 'idle' } });
+
+    const cancelledTranslator = createSessionNextTranslator();
+    cancelledTranslator.translate('/repo', event('session.next.step.started', {
+      timestamp: 2000,
+      sessionID: 'session-cancelled',
+      assistantMessageID: 'assistant-cancelled',
+      agent: 'build',
+      model: { id: 'model-a', providerID: 'provider-a' },
+    }, 'cancelled-step-started'));
+    const cancelled = cancelledTranslator.translate('/repo', event('session.next.step.ended', {
+      timestamp: 2100,
+      sessionID: 'session-cancelled',
+      assistantMessageID: 'assistant-cancelled',
+      finish: 'cancelled',
+      cost: 0,
+      tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    }, 'cancelled-step-ended')) ?? [];
+
+    expect(cancelled.map((candidate) => candidate.type)).toEqual(['message.updated', 'session.status']);
+    const cancelledMessage = (cancelled[0].properties as { info: Message }).info;
+    expect((cancelledMessage as Message & { finish?: string }).finish).toBe('cancelled');
+    expect(cancelled[1].properties).toEqual({ sessionID: 'session-cancelled', status: { type: 'idle' } });
   });
 
   test('maps tool input, execution, progress, and success into one stable tool part', () => {

@@ -9,6 +9,7 @@ type PolicyContext = {
 
 export type PermissionAutoAcceptSnapshot = {
   sessions: Record<string, boolean>;
+  defaultEnabled: boolean;
   revision: number;
 };
 
@@ -27,7 +28,7 @@ const normalizeSnapshot = (value: unknown): PermissionAutoAcceptSnapshot => {
     && Number((source as { revision?: unknown }).revision) >= 0
     ? Number((source as { revision?: unknown }).revision)
     : 0;
-  return { sessions, revision };
+  return { sessions, defaultEnabled: true, revision };
 };
 
 const readPermissionAutoAcceptPolicy = (context: PolicyContext) =>
@@ -61,6 +62,7 @@ async function setPermissionAutoAcceptPolicy(
     const current = readPermissionAutoAcceptPolicy(context);
     const snapshot = {
       sessions: { ...current.sessions, [sessionId]: enabled },
+      defaultEnabled: current.defaultEnabled,
       revision: current.revision + 1,
     };
     await context.globalState.update(STORAGE_KEY, snapshot);

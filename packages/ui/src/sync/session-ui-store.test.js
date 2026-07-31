@@ -5,7 +5,6 @@ import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionWorktreeStore } from './session-worktree-store';
 import { expandSlashCommandGoalObjective, routeMessage, useSessionUIStore } from './session-ui-store';
 import { setActionRefs, setOptimisticRefs } from './session-actions';
-import { useSessionInputQueueStore } from './session-input-queue';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useCommandsStore } from '@/stores/useCommandsStore';
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -629,7 +628,6 @@ describe('routeMessage skill invocation', () => {
   const sendMessageCalls = [];
   let originalSendCommand;
   let originalSendMessage;
-  let originalLoadSessionInputAdmissionHistory;
 
   beforeEach(() => {
     sendCommandCalls.length = 0;
@@ -656,8 +654,6 @@ describe('routeMessage skill invocation', () => {
 
     originalSendCommand = opencodeClient.sendCommand;
     originalSendMessage = opencodeClient.sendMessage;
-    originalLoadSessionInputAdmissionHistory = opencodeClient.loadSessionInputAdmissionHistory;
-    useSessionInputQueueStore.setState({ entriesByKey: {}, promotedByKey: {} });
     opencodeClient.sendCommand = async (params) => {
       sendCommandCalls.push(params);
       return 'msg';
@@ -671,9 +667,7 @@ describe('routeMessage skill invocation', () => {
   afterEach(() => {
     opencodeClient.sendCommand = originalSendCommand;
     opencodeClient.sendMessage = originalSendMessage;
-    opencodeClient.loadSessionInputAdmissionHistory = originalLoadSessionInputAdmissionHistory;
     useSkillsStore.setState({ skills: [] });
-    useSessionInputQueueStore.setState({ entriesByKey: {}, promotedByKey: {} });
   });
 
   test('invokes a user-installed skill as a command', async () => {
@@ -719,132 +713,14 @@ describe('routeMessage skill invocation', () => {
       content: '/not-a-real-skill',
       providerID: 'provider-a',
       modelID: 'model-a',
-      delivery: 'queue',
     });
 
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].delivery).toBe('queue');
+    expect(sendMessageCalls[0].delivery).toBeUndefined();
     expect(sendCommandCalls).toHaveLength(0);
   });
 
-  test('queue delivery records official admission without a transcript optimistic insert', async () => {
-    const optimisticAdds = [];
-    setOptimisticRefs((input) => optimisticAdds.push(input), () => {});
-    opencodeClient.sendMessage = async (params) => {
-      sendMessageCalls.push(params);
-      params.onAdmitted?.({
-        admittedSeq: 42,
-        id: params.messageId,
-        sessionID: params.id,
-        prompt: { text: params.text, files: [{ uri: 'data:text/plain;base64,AA==', name: 'note.txt' }] },
-        delivery: 'queue',
-        timeCreated: 4200,
-      });
-      return params.messageId;
-    };
-
-    await routeMessage({
-      sessionId: 'session-queue',
-      directory: '/skills/project',
-      content: 'queue this',
-      providerID: 'provider-a',
-      modelID: 'model-a',
-      files: [{ type: 'file', mime: 'text/plain', url: 'data:text/plain;base64,AA==', filename: 'note.txt' }],
-      delivery: 'queue',
-      messageId: 'msg-queue',
-    });
-
-    expect(optimisticAdds).toHaveLength(0);
-    expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].delivery).toBe('queue');
-    const queued = useSessionInputQueueStore.getState().entriesByKey;
-    expect(Object.values(queued).flatMap((entries) => Object.values(entries))).toEqual([
-      expect.objectContaining({
-        messageID: 'msg-queue',
-        sessionID: 'session-queue',
-        directory: '/skills/project',
-        state: 'queued',
-        admittedSeq: 42,
-        fileCount: 1,
-      }),
-    ]);
-  });
-
-  test('ambiguous queue failure confirms admission through durable history', async () => {
-    opencodeClient.sendMessage = async () => {
-      throw new TypeError('Failed to fetch');
-    };
-    opencodeClient.loadSessionInputAdmissionHistory = async (params) => {
-      expect(params).toEqual({ sessionID: 'session-queue', directory: '/skills/project', limit: 500, maxPages: 100 });
-      return {
-        complete: true,
-        admissions: [{
-          admittedSeq: 43,
-          id: 'msg-ambiguous-queue',
-          sessionID: 'session-queue',
-          prompt: { text: 'queue this' },
-          delivery: 'queue',
-          timeCreated: 4300,
-        }],
-      };
-    };
-
-    await routeMessage({
-      sessionId: 'session-queue',
-      directory: '/skills/project',
-      content: 'queue this',
-      providerID: 'provider-a',
-      modelID: 'model-a',
-      delivery: 'queue',
-      messageId: 'msg-ambiguous-queue',
-    });
-
-    const queued = Object.values(useSessionInputQueueStore.getState().entriesByKey)
-      .flatMap((entries) => Object.values(entries));
-    expect(queued).toEqual([
-      expect.objectContaining({
-        messageID: 'msg-ambiguous-queue',
-        state: 'queued',
-        admittedSeq: 43,
-      }),
-    ]);
-  });
-
-  test('keeps an ambiguous queue submission pending when durable history is incomplete', async () => {
-    opencodeClient.sendMessage = async () => {
-      throw new TypeError('Failed to fetch');
-    };
-    opencodeClient.loadSessionInputAdmissionHistory = async () => ({
-      complete: false,
-      admissions: [],
-    });
-
-    await routeMessage({
-      sessionId: 'session-queue',
-      directory: '/skills/project',
-      content: 'queue this',
-      providerID: 'provider-a',
-      modelID: 'model-a',
-      delivery: 'queue',
-      messageId: 'msg-unknown-queue',
-    });
-
-    const queued = Object.values(useSessionInputQueueStore.getState().entriesByKey)
-      .flatMap((entries) => Object.values(entries));
-    expect(queued).toEqual([
-      expect.objectContaining({
-        messageID: 'msg-unknown-queue',
-        state: 'submitting',
-      }),
-    ]);
-  });
-
-  test('removes the submitting chip and rethrows when queue admission is rejected', async () => {
-    const failure = Object.assign(new Error('conflict'), { status: 409 });
-    opencodeClient.sendMessage = async () => {
-      throw failure;
-    };
-
+  test('rejects direct queue delivery before optimistic insertion or OpenCode dispatch', async () => {
     await expect(routeMessage({
       sessionId: 'session-queue',
       directory: '/skills/project',
@@ -852,10 +728,9 @@ describe('routeMessage skill invocation', () => {
       providerID: 'provider-a',
       modelID: 'model-a',
       delivery: 'queue',
-      messageId: 'msg-rejected-queue',
-    })).rejects.toBe(failure);
+    })).rejects.toThrow('Queue delivery must be handled by the OpenChamber follow-up queue');
 
-    expect(useSessionInputQueueStore.getState().entriesByKey).toEqual({});
+    expect(sendMessageCalls).toHaveLength(0);
   });
 
   test('forwards a caller-provided stable message ID through optimisticSend to the SDK', async () => {

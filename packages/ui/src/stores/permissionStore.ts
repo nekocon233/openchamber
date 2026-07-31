@@ -6,12 +6,18 @@ import { getAllSyncSessionMap } from "@/sync/sync-refs";
 import { runtimeFetch } from "@/lib/runtime-fetch";
 import { isVSCodeRuntime } from "@/lib/desktop";
 import { createDeferredSafeJSONStorage } from "./utils/safeStorage";
-import { useSessionUIStore } from "@/sync/session-ui-store";
+import {
+    clearPendingDraftPermissionPolicy,
+    setPendingDraftPermissionPolicy,
+    supersedePendingDraftPermissionPolicy,
+    useSessionUIStore,
+} from "@/sync/session-ui-store";
 import { opencodeClient } from "@/lib/opencode/client";
 import { getRuntimeKey } from "@/lib/runtime-switch";
 
 type PermissionPolicySnapshot = {
     sessions: PermissionAutoAcceptMap;
+    defaultEnabled: boolean;
     revision?: number;
 };
 
@@ -21,6 +27,7 @@ const normalizeRevision = (value: unknown): number | undefined => (
 
 interface PermissionStore {
     autoAccept: PermissionAutoAcceptMap;
+    defaultEnabled: boolean;
     loaded: boolean;
     saving: boolean;
     lastAppliedRevision: number;
@@ -30,7 +37,11 @@ interface PermissionStore {
     applySnapshot: (snapshot: PermissionPolicySnapshot, expectedRuntimeKey?: string) => void;
     reset: () => void;
     isSessionAutoAccepting: (sessionId: string) => boolean;
-    setSessionAutoAccept: (sessionId: string, enabled: boolean) => Promise<void>;
+    setSessionAutoAccept: (
+        sessionId: string,
+        enabled: boolean,
+        options?: { preservePendingDraftIntent?: boolean },
+    ) => Promise<void>;
 }
 
 const readSnapshot = async (response: Response): Promise<PermissionPolicySnapshot> => {
@@ -43,22 +54,43 @@ const readSnapshot = async (response: Response): Promise<PermissionPolicySnapsho
     for (const [sessionId, enabled] of Object.entries(payload.sessions)) {
         if (sessionId && typeof enabled === "boolean") sessions[sessionId] = enabled;
     }
-    return { sessions, revision: normalizeRevision(payload.revision) };
+    return {
+        sessions,
+        defaultEnabled: payload.defaultEnabled === true,
+        revision: normalizeRevision(payload.revision),
+    };
 };
 
 const requestSnapshot = async (path: string, init?: RequestInit) => readSnapshot(await runtimeFetch(path, init));
 
 const isAutoAccepting = (
     autoAccept: PermissionAutoAcceptMap,
+    defaultEnabled: boolean,
     sessionById: ReadonlyMap<string, Session>,
     sessionId: string,
-) => autoRespondsPermission({ autoAccept, sessions: [], sessionById, sessionID: sessionId });
+) => autoRespondsPermission({ autoAccept, defaultEnabled, sessions: [], sessionById, sessionID: sessionId });
 
 type PermissionOperation = { generation: number; runtimeKey: string; sequence: number };
 let generation = 0;
 let operationSequence = 0;
 let latestStartedSequence = 0;
 const pendingSavingOperations = new Set<number>();
+const sessionPolicyMutationQueues = new Map<string, Promise<void>>();
+const latestExplicitPolicyOperation = new Map<string, number>();
+
+const sessionPolicyOperationKey = (operation: PermissionOperation, sessionId: string): string => (
+    `${operation.generation}\n${operation.runtimeKey}\n${sessionId}`
+);
+
+const enqueueSessionPolicyMutation = <T>(key: string, run: () => Promise<T>): Promise<T> => {
+    const previous = sessionPolicyMutationQueues.get(key);
+    const result = previous ? previous.catch(() => undefined).then(run) : run();
+    const tail = result.then(() => undefined, () => undefined);
+    sessionPolicyMutationQueues.set(key, tail);
+    return result.finally(() => {
+        if (sessionPolicyMutationQueues.get(key) === tail) sessionPolicyMutationQueues.delete(key);
+    });
+};
 
 const beginOperation = (): PermissionOperation => {
     const operation = { generation, runtimeKey: getRuntimeKey(), sequence: ++operationSequence };
@@ -81,6 +113,7 @@ const normalizeSessions = (value: unknown): PermissionAutoAcceptMap => {
 
 export const usePermissionStore = create<PermissionStore>()(persist((set, get) => ({
     autoAccept: {},
+    defaultEnabled: false,
     loaded: false,
     saving: false,
     lastAppliedRevision: -1,
@@ -126,7 +159,7 @@ export const usePermissionStore = create<PermissionStore>()(persist((set, get) =
         generation += 1;
         latestStartedSequence = 0;
         pendingSavingOperations.clear();
-        set({ autoAccept: {}, loaded: false, saving: false, lastAppliedRevision: -1 });
+        set({ autoAccept: {}, defaultEnabled: false, loaded: false, saving: false, lastAppliedRevision: -1 });
     },
 
     applySnapshot: (snapshot, expectedRuntimeKey) => {
@@ -138,6 +171,7 @@ export const usePermissionStore = create<PermissionStore>()(persist((set, get) =
             if (revision !== undefined && revision < state.lastAppliedRevision) return state;
             return {
                 autoAccept: sessions,
+                defaultEnabled: snapshot.defaultEnabled === true,
                 loaded: true,
                 ...(revision !== undefined ? { lastAppliedRevision: revision } : {}),
             };
@@ -146,43 +180,75 @@ export const usePermissionStore = create<PermissionStore>()(persist((set, get) =
 
     isSessionAutoAccepting: (sessionId) => {
         if (!sessionId) return false;
-        const autoAccept = get().autoAccept;
-        if (Object.keys(autoAccept).length === 0) return false;
-        return isAutoAccepting(autoAccept, getAllSyncSessionMap(), sessionId);
+        const { autoAccept, defaultEnabled, loaded } = get();
+        if (!loaded) return false;
+        return isAutoAccepting(autoAccept, defaultEnabled, getAllSyncSessionMap(), sessionId);
     },
 
-    setSessionAutoAccept: async (sessionId, enabled) => {
-        if (!sessionId) return;
+    setSessionAutoAccept: (sessionId, enabled, options) => {
+        if (!sessionId) return Promise.resolve();
         const operation = beginOperation();
+        const operationKey = sessionPolicyOperationKey(operation, sessionId);
+        const preservePendingDraftIntent = options?.preservePendingDraftIntent === true;
+        const superseded = preservePendingDraftIntent
+            ? null
+            : supersedePendingDraftPermissionPolicy(sessionId, operation.runtimeKey);
+        const pendingToken = !preservePendingDraftIntent && !enabled
+            ? setPendingDraftPermissionPolicy(sessionId, false, operation.runtimeKey)
+            : null;
+        if (!preservePendingDraftIntent) {
+            latestExplicitPolicyOperation.set(operationKey, operation.sequence);
+        }
         pendingSavingOperations.add(operation.sequence);
         set({ saving: true });
-        try {
-            const directory = useSessionUIStore.getState().getDirectoryForSession(sessionId)
-                ?? opencodeClient.getDirectory()
-                ?? undefined;
-            const snapshot = await requestSnapshot(
-                `/api/permission-auto-accept/sessions/${encodeURIComponent(sessionId)}`,
-                {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ enabled, directory }),
-                },
-            );
-            if (!isCurrentOperation(operation)) return;
-            if (snapshot.revision === undefined && operation.sequence !== latestStartedSequence) return;
-            get().applySnapshot(snapshot, operation.runtimeKey);
-            if (isCurrentOperation(operation) && isVSCodeRuntime() && enabled) {
-                const { reconcileVSCodePendingPermissions } = await import("@/sync/vscode-permission-auto-accept");
+        return enqueueSessionPolicyMutation(operationKey, async () => {
+            try {
+                if (superseded) await superseded.catch(() => undefined);
+                if (!isCurrentOperation(operation)) return;
+                const directory = useSessionUIStore.getState().getDirectoryForSession(sessionId)
+                    ?? opencodeClient.getDirectory()
+                    ?? undefined;
+                const snapshot = await requestSnapshot(
+                    `/api/permission-auto-accept/sessions/${encodeURIComponent(sessionId)}`,
+                    {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ enabled, directory }),
+                    },
+                );
+                if (!isCurrentOperation(operation)) return;
+                if (snapshot.revision === undefined && operation.sequence !== latestStartedSequence) return;
+                if (
+                    !preservePendingDraftIntent
+                    && latestExplicitPolicyOperation.get(operationKey) !== operation.sequence
+                ) return;
+                get().applySnapshot(snapshot, operation.runtimeKey);
+                if (!preservePendingDraftIntent) {
+                    clearPendingDraftPermissionPolicy(
+                        sessionId,
+                        operation.runtimeKey,
+                        pendingToken ?? undefined,
+                    );
+                }
+                if (isCurrentOperation(operation) && isVSCodeRuntime() && enabled) {
+                    const { reconcileVSCodePendingPermissions } = await import("@/sync/vscode-permission-auto-accept");
+                    if (isCurrentOperation(operation)) {
+                        void reconcileVSCodePendingPermissions(directory).catch(() => undefined);
+                    }
+                }
+            } finally {
+                if (
+                    !preservePendingDraftIntent
+                    && latestExplicitPolicyOperation.get(operationKey) === operation.sequence
+                ) {
+                    latestExplicitPolicyOperation.delete(operationKey);
+                }
                 if (isCurrentOperation(operation)) {
-                    void reconcileVSCodePendingPermissions(directory).catch(() => undefined);
+                    pendingSavingOperations.delete(operation.sequence);
+                    set({ saving: pendingSavingOperations.size > 0 });
                 }
             }
-        } finally {
-            if (isCurrentOperation(operation)) {
-                pendingSavingOperations.delete(operation.sequence);
-                set({ saving: pendingSavingOperations.size > 0 });
-            }
-        }
+        });
     },
 
 }), {

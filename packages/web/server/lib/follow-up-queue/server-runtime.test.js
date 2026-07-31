@@ -33,6 +33,8 @@ const createItem = (suffix = 'a') => ({
     source: 'server',
     serverPath: '/synthetic/private/path',
   }],
+  additionalParts: [{ text: `private-context-${suffix}`, synthetic: true }],
+  agentMentionName: `private-agent-${suffix}`,
   createdAt: 1_000,
   status: 'queued',
 });
@@ -96,6 +98,8 @@ describe('follow-up queue server runtime', () => {
       item.content,
       item.attachments[0].dataUrl,
       item.attachments[0].serverPath,
+      item.additionalParts[0].text,
+      item.agentMentionName,
       'claim-event',
     ]) {
       expect(serializedEvents).not.toContain(forbidden);

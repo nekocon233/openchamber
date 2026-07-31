@@ -84,14 +84,19 @@ output['latest-arm64.yml'] = serialize(winArm64);
 
 const macX64 = await read('latest-yml-x86_64-apple-darwin', 'latest-mac.yml');
 const macArm64 = await read('latest-yml-aarch64-apple-darwin', 'latest-mac.yml');
-if (macX64 || macArm64) {
-  const base = macArm64 || macX64;
-  output['latest-mac.yml'] = serialize({
-    version: base.version,
-    files: [...(macArm64?.files || []), ...(macX64?.files || [])],
-    releaseDate: base.releaseDate,
-  });
+if (!macX64 || !macArm64) {
+  throw new Error('Both x64 and arm64 macOS update manifests are required');
 }
+for (const [name, manifest] of Object.entries({ winX64, winArm64, macX64, macArm64 })) {
+  if (manifest.version !== version) {
+    throw new Error(`${name} update manifest version ${manifest.version || '<missing>'} does not match ${version}`);
+  }
+}
+output['latest-mac.yml'] = serialize({
+  version: macArm64.version,
+  files: [...macArm64.files, ...macX64.files],
+  releaseDate: macArm64.releaseDate,
+});
 
 const tag = `v${version}`;
 const tmp = process.env.RUNNER_TEMP || '/tmp';

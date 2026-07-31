@@ -32,22 +32,35 @@ export function createGlobalMessageStreamWsBridge({
   };
 
   const replayEvents = (socket, requestedLastEventId) => {
-    for (const entry of globalHub.replayAfter(requestedLastEventId)) {
+    const replay = typeof globalHub.resolveReplay === 'function'
+      ? globalHub.resolveReplay(requestedLastEventId)
+      : { events: globalHub.replayAfter(requestedLastEventId), gap: false };
+    if (replay.gap) {
+      const sent = sendMessageStreamWsFrame(socket, { type: 'replay-gap', scope: 'global' });
+      if (!sent) {
+        removeClient(socket);
+        return false;
+      }
+    }
+    for (const entry of replay.events) {
       const sent = sendMessageStreamWsEvent(socket, entry.payload, {
         directory: entry.directory,
         eventId: entry.eventId,
       });
       if (!sent) {
         removeClient(socket);
-        return;
+        return false;
       }
     }
+    return true;
   };
 
   const markReady = (socket, requestedLastEventId) => {
     if (socket.readyState !== 1) {
       return;
     }
+
+    if (!replayEvents(socket, requestedLastEventId)) return;
 
     const sent = sendMessageStreamWsFrame(socket, {
       type: 'ready',
@@ -60,7 +73,6 @@ export function createGlobalMessageStreamWsBridge({
 
     readyClients.add(socket);
     wsClients.add(socket);
-    replayEvents(socket, requestedLastEventId);
   };
 
   const stopHubIfUnused = () => {
@@ -88,30 +100,23 @@ export function createGlobalMessageStreamWsBridge({
     }
   };
 
-  const unsubscribeEvent = globalHub.subscribeEvent(({ payload, directory, eventId }) => {
+  const broadcastEvent = (payload, options) => {
     for (const socket of Array.from(clients)) {
       if (!readyClients.has(socket)) {
         continue;
       }
-      const sent = sendMessageStreamWsEvent(socket, payload, {
-        directory,
-        eventId,
-      });
+      const sent = sendMessageStreamWsEvent(socket, payload, options);
       if (!sent) {
         removeClient(socket);
       }
     }
+  };
+
+  const unsubscribeEvent = globalHub.subscribeEvent(({ payload, directory, eventId }) => {
+    broadcastEvent(payload, { directory, eventId });
 
     processForwardedEventPayload(payload, (syntheticPayload) => {
-      for (const socket of Array.from(clients)) {
-        if (!readyClients.has(socket)) {
-          continue;
-        }
-        const sent = sendMessageStreamWsEvent(socket, syntheticPayload, { directory: 'global' });
-        if (!sent) {
-          removeClient(socket);
-        }
-      }
+      broadcastEvent(syntheticPayload, { directory: 'global' });
     });
   });
 
@@ -147,9 +152,12 @@ export function createGlobalMessageStreamWsBridge({
         return;
       }
 
+      const message = status.buildUrlFailed
+        ? 'OpenCode service unavailable'
+        : 'Failed to connect to OpenCode event stream';
       closeClientsWithInitialError({
-        message: status.buildUrlFailed ? 'OpenCode service unavailable' : 'Failed to connect to OpenCode event stream',
-        closeReason: status.buildUrlFailed ? 'OpenCode service unavailable' : 'Failed to connect to OpenCode event stream',
+        message,
+        closeReason: message,
         triggerHealthCheckFor: !status.buildUrlFailed,
       });
       return;

@@ -118,6 +118,49 @@ export function expandSlashCommandGoalObjective(content: string, commands: GoalC
 
 type ExpectedRuntimeContext = { runtimeKey: string; generation: number }
 
+type PendingDraftPermissionPolicy = {
+  enabled: boolean
+  inflight: Promise<void> | null
+  token: symbol
+}
+
+const pendingDraftPermissionPolicies = new Map<string, PendingDraftPermissionPolicy>()
+
+const pendingDraftPermissionPolicyKey = (sessionId: string, runtimeKey = getRuntimeKey()): string => `${runtimeKey}\n${sessionId}`
+
+export const clearPendingDraftPermissionPolicy = (
+  sessionId: string,
+  runtimeKey = getRuntimeKey(),
+  expectedToken?: symbol,
+): void => {
+  const key = pendingDraftPermissionPolicyKey(sessionId, runtimeKey)
+  if (expectedToken && pendingDraftPermissionPolicies.get(key)?.token !== expectedToken) return
+  pendingDraftPermissionPolicies.delete(key)
+}
+
+export const supersedePendingDraftPermissionPolicy = (
+  sessionId: string,
+  runtimeKey = getRuntimeKey(),
+): Promise<void> | null => {
+  const key = pendingDraftPermissionPolicyKey(sessionId, runtimeKey)
+  const pending = pendingDraftPermissionPolicies.get(key)
+  pendingDraftPermissionPolicies.delete(key)
+  return pending?.inflight ?? null
+}
+
+export const setPendingDraftPermissionPolicy = (
+  sessionId: string,
+  enabled: boolean,
+  runtimeKey = getRuntimeKey(),
+): symbol => {
+  const token = Symbol("pending-draft-permission-policy")
+  pendingDraftPermissionPolicies.set(
+    pendingDraftPermissionPolicyKey(sessionId, runtimeKey),
+    { enabled, inflight: null, token },
+  )
+  return token
+}
+
 const assertExpectedRuntimeContext = (expected?: ExpectedRuntimeContext): void => {
   if (
     expected
@@ -126,6 +169,43 @@ const assertExpectedRuntimeContext = (expected?: ExpectedRuntimeContext): void =
       || getRuntimeEndpointGeneration() !== expected.generation
     )
   ) throw new RuntimeContextChangedError()
+}
+
+export async function ensurePendingDraftPermissionPolicy(
+  sessionId: string,
+  expectedRuntime?: ExpectedRuntimeContext,
+): Promise<void> {
+  const operationRuntime = expectedRuntime ?? {
+    runtimeKey: getRuntimeKey(),
+    generation: getRuntimeEndpointGeneration(),
+  }
+  assertExpectedRuntimeContext(operationRuntime)
+  const key = pendingDraftPermissionPolicyKey(sessionId, operationRuntime.runtimeKey)
+  const pending = pendingDraftPermissionPolicies.get(key)
+  if (!pending) return
+
+  if (!pending.inflight) {
+    const operation = (async () => {
+      const { usePermissionStore } = await import("@/stores/permissionStore")
+      await usePermissionStore.getState().setSessionAutoAccept(
+        sessionId,
+        pending.enabled,
+        { preservePendingDraftIntent: true },
+      )
+      assertExpectedRuntimeContext(operationRuntime)
+    })().finally(() => {
+      if (pendingDraftPermissionPolicies.get(key) === pending && pending.inflight === operation) {
+        pending.inflight = null
+      }
+    })
+    pending.inflight = operation
+  }
+
+  await pending.inflight
+  assertExpectedRuntimeContext(operationRuntime)
+  if (pendingDraftPermissionPolicies.get(key) === pending) {
+    pendingDraftPermissionPolicies.delete(key)
+  }
 }
 
 export async function routeMessage(params: {
@@ -145,6 +225,9 @@ export async function routeMessage(params: {
   expectedRuntime?: ExpectedRuntimeContext
 }): Promise<void> {
   assertExpectedRuntimeContext(params.expectedRuntime)
+  if (params.delivery === 'queue') {
+    throw new Error('Queue delivery must be handled by the OpenChamber follow-up queue')
+  }
   const requestDirectory = params.directory ?? undefined
   if (params.inputMode === "shell") {
     return opencodeClient.shellSession({
@@ -492,6 +575,16 @@ type MaterializedDraftSession = {
   syntheticParts?: SyntheticContextPart[]
 }
 
+type DraftMaterialization = {
+  promise: Promise<MaterializedDraftSession | null>
+}
+
+const draftMaterializations = new Map<string, DraftMaterialization>()
+
+const draftMaterializationKey = (runtime: ExpectedRuntimeContext): string => (
+  `${runtime.runtimeKey}\n${runtime.generation}`
+)
+
 const resolveProjectRefForWorktreeDirectory = (directory: string | null, projectId?: string | null): { id: string; path: string } | null => {
   const projectsState = useProjectsStore.getState()
   if (projectId) {
@@ -510,78 +603,106 @@ const waitForWorktreeBootstrapIfConfigured = async (directory: string | null, pr
   }
 }
 
-export async function materializeOpenDraftSession(selection: {
+export function materializeOpenDraftSession(selection: {
   providerID: string
   modelID: string
   agent?: string
   variant?: string
   expectedRuntime?: ExpectedRuntimeContext
 }): Promise<MaterializedDraftSession | null> {
-  assertExpectedRuntimeContext(selection.expectedRuntime)
+  const operationRuntime = selection.expectedRuntime ?? {
+    runtimeKey: getRuntimeKey(),
+    generation: getRuntimeEndpointGeneration(),
+  }
+  assertExpectedRuntimeContext(operationRuntime)
   const store = useSessionUIStore.getState()
   const draft = store.newSessionDraft
-  if (!draft?.open) return null
-  const draftPermissionAutoAcceptEnabled = draft.permissionAutoAcceptEnabled === true
+  const materializationKey = draftMaterializationKey(operationRuntime)
+  const existing = draftMaterializations.get(materializationKey)
+  if (existing) return existing.promise
+  if (!draft?.open) return Promise.resolve(null)
 
-  const trimmedAgent = typeof selection.agent === "string" && selection.agent.trim().length > 0
-    ? selection.agent.trim()
-    : undefined
-  let draftDirectoryOverride = draft.bootstrapPendingDirectory ?? draft.directoryOverride ?? null
-  const draftProjectId = draft.selectedProjectId ?? null
+  const materialization = (async () => {
+    const draftPermissionAutoAcceptEnabled = draft.permissionAutoAcceptEnabled === true
 
-  if (draft.pendingWorktreeRequestId) {
-    draftDirectoryOverride = await waitForPendingDraftWorktreeRequest(draft.pendingWorktreeRequestId)
-    assertExpectedRuntimeContext(selection.expectedRuntime)
-    store.resolvePendingDraftWorktreeTarget(draft.pendingWorktreeRequestId, draftDirectoryOverride)
-  }
+    const trimmedAgent = typeof selection.agent === "string" && selection.agent.trim().length > 0
+      ? selection.agent.trim()
+      : undefined
+    let draftDirectoryOverride = draft.bootstrapPendingDirectory ?? draft.directoryOverride ?? null
+    const draftProjectId = draft.selectedProjectId ?? null
 
-  await waitForWorktreeBootstrapIfConfigured(draftDirectoryOverride, draftProjectId)
-  assertExpectedRuntimeContext(selection.expectedRuntime)
+    if (draft.pendingWorktreeRequestId) {
+      draftDirectoryOverride = await waitForPendingDraftWorktreeRequest(draft.pendingWorktreeRequestId)
+      assertExpectedRuntimeContext(operationRuntime)
+      store.resolvePendingDraftWorktreeTarget(draft.pendingWorktreeRequestId, draftDirectoryOverride)
+    }
 
-  const created = await store.createSession(draft.title, draftDirectoryOverride, draft.parentID ?? null)
-  assertExpectedRuntimeContext(selection.expectedRuntime)
-  if (!created?.id) throw new Error("Failed to create session")
+    await waitForWorktreeBootstrapIfConfigured(draftDirectoryOverride, draftProjectId)
+    assertExpectedRuntimeContext(operationRuntime)
 
-  persistDraftTarget({
-    projectId: draftProjectId,
-    directory: normalizePath(draftDirectoryOverride ?? created.directory ?? null),
+    const created = await store.createSession(draft.title, draftDirectoryOverride, draft.parentID ?? null)
+    assertExpectedRuntimeContext(operationRuntime)
+    if (!created?.id) throw new Error("Failed to create session")
+
+    persistDraftTarget({
+      projectId: draftProjectId,
+      directory: normalizePath(draftDirectoryOverride ?? created.directory ?? null),
+    })
+
+    const draftSyntheticParts = draft.syntheticParts
+    const createdDirectory = normalizePath(draftDirectoryOverride ?? created.directory ?? null)
+    const configState = useConfigStore.getState()
+    void activateConfigForDirectory(createdDirectory).catch((error) => {
+      console.warn("Failed to activate directory after creating session:", error)
+    })
+
+    const effectiveDraftAgent = trimmedAgent ?? configState.currentAgentName
+
+    useSelectionStore.getState().saveSessionModelSelection(created.id, selection.providerID, selection.modelID)
+
+    if (effectiveDraftAgent) {
+      useSelectionStore.getState().saveSessionAgentSelection(created.id, effectiveDraftAgent)
+      useSelectionStore.getState().saveAgentModelForSession(created.id, effectiveDraftAgent, selection.providerID, selection.modelID)
+      useSelectionStore.getState().saveAgentModelVariantForSession(created.id, effectiveDraftAgent, selection.providerID, selection.modelID, selection.variant)
+    }
+
+    store.initializeNewOpenChamberSession(created.id, configState.agents ?? [])
+
+    store.setCurrentSession(created.id, createdDirectory)
+
+    const pendingPolicyToken = !draftPermissionAutoAcceptEnabled
+      ? setPendingDraftPermissionPolicy(created.id, false, operationRuntime.runtimeKey)
+      : null
+    try {
+      const { usePermissionStore } = await import("@/stores/permissionStore")
+      assertExpectedRuntimeContext(operationRuntime)
+      await usePermissionStore.getState().setSessionAutoAccept(
+        created.id,
+        draftPermissionAutoAcceptEnabled,
+        { preservePendingDraftIntent: true },
+      )
+      if (pendingPolicyToken) {
+        clearPendingDraftPermissionPolicy(created.id, operationRuntime.runtimeKey, pendingPolicyToken)
+      }
+    } catch (error) {
+      if (!draftPermissionAutoAcceptEnabled) throw error
+      console.warn("Failed to apply draft permission auto-accept to new session:", error)
+    }
+    assertExpectedRuntimeContext(operationRuntime)
+
+    return {
+      sessionId: created.id,
+      directory: createdDirectory,
+      agent: effectiveDraftAgent,
+      syntheticParts: draftSyntheticParts,
+    }
+  })().finally(() => {
+    if (draftMaterializations.get(materializationKey)?.promise === materialization) {
+      draftMaterializations.delete(materializationKey)
+    }
   })
-
-  const draftSyntheticParts = draft.syntheticParts
-  const createdDirectory = normalizePath(draftDirectoryOverride ?? created.directory ?? null)
-  const configState = useConfigStore.getState()
-  void activateConfigForDirectory(createdDirectory).catch((error) => {
-    console.warn("Failed to activate directory after creating session:", error)
-  })
-
-  const effectiveDraftAgent = trimmedAgent ?? configState.currentAgentName
-
-  useSelectionStore.getState().saveSessionModelSelection(created.id, selection.providerID, selection.modelID)
-
-  if (effectiveDraftAgent) {
-    useSelectionStore.getState().saveSessionAgentSelection(created.id, effectiveDraftAgent)
-    useSelectionStore.getState().saveAgentModelForSession(created.id, effectiveDraftAgent, selection.providerID, selection.modelID)
-    useSelectionStore.getState().saveAgentModelVariantForSession(created.id, effectiveDraftAgent, selection.providerID, selection.modelID, selection.variant)
-  }
-
-  store.initializeNewOpenChamberSession(created.id, configState.agents ?? [])
-
-  store.setCurrentSession(created.id, createdDirectory)
-
-  if (draftPermissionAutoAcceptEnabled) {
-    void import("@/stores/permissionStore")
-      .then(({ usePermissionStore }) => usePermissionStore.getState().setSessionAutoAccept(created.id, true))
-      .catch((error) => {
-        console.warn("Failed to apply draft permission auto-accept to new session:", error)
-      })
-  }
-
-  return {
-    sessionId: created.id,
-    directory: createdDirectory,
-    agent: effectiveDraftAgent,
-    syntheticParts: draftSyntheticParts,
-  }
+  draftMaterializations.set(materializationKey, { promise: materialization })
+  return materialization
 }
 
 // ---------------------------------------------------------------------------
@@ -879,7 +1000,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       open: true,
       selectedProjectId: selectedProject?.id ?? null,
       directoryOverride: directory,
-      permissionAutoAcceptEnabled: options?.permissionAutoAcceptEnabled === true,
+      permissionAutoAcceptEnabled: options?.permissionAutoAcceptEnabled ?? true,
       pendingWorktreeRequestId: options?.pendingWorktreeRequestId ?? null,
       bootstrapPendingDirectory: normalizePath(options?.bootstrapPendingDirectory ?? null),
       preserveDirectoryOverride: options?.preserveDirectoryOverride === true,
@@ -1177,6 +1298,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     // Clear non-Git changed-files bar on new user message for current session
     const sid = options?.sessionId ?? get().currentSessionId;
     if (sid) {
+      await ensurePendingDraftPermissionPolicy(sid, options?.expectedRuntime)
       const map = new Map(get().pendingChangesBarDismissed);
       map.delete(sid);
       set({ pendingChangesBarDismissed: map });
@@ -1690,18 +1812,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     if (sessionId === get().currentSessionId && get().currentSessionDirectory) {
       return get().currentSessionDirectory
     }
-    const resolved = resolveSessionDirectory(sessionId, (sid) => get().worktreeMetadata.get(sid))
-    if (resolved) return resolved
-    const attachmentDirectory = getAttachedSessionDirectory(getAttachmentForSession(sessionId))
-    if (attachmentDirectory) return attachmentDirectory
-    const sessions = getAllSyncSessions()
-    const session = sessions.find((s) => s.id === sessionId)
-    if (session) return resolveDirectoryKey(session)
-    const globalStore = useGlobalSessionsStore.getState()
-    const globalSession = [...globalStore.activeSessions, ...globalStore.archivedSessions]
-      .find((s) => s.id === sessionId)
-    if (globalSession) return resolveGlobalSessionDirectory(globalSession)
-    return null
+    return resolveSessionDirectory(sessionId, (sid) => get().worktreeMetadata.get(sid))
   },
 
   getLastUserChoice: (sessionId) => {

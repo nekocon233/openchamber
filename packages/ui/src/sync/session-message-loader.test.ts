@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, OpencodeClient, Part } from "@opencode-ai/sdk/v2/client"
+import type { Message, OpencodeClient, Part, SessionMessage } from "@opencode-ai/sdk/v2/client"
 import { ChildStoreManager } from "./child-store"
 import { SessionMessageLoader } from "./session-message-loader"
 
@@ -12,6 +12,22 @@ const createRecord = (
   info: { id, sessionID, role, ...(parentID ? { parentID } : {}), time: { created: 1 } } as Message,
   parts: [{ id: `part_${id}`, messageID: id, sessionID, type: "text", text: "hello" }] as Part[],
 })
+
+const createNextRecord = (id: string, created: number): SessionMessage => ({
+  id,
+  type: "user",
+  text: id,
+  time: { created },
+} as SessionMessage)
+
+const createNextAssistantRecord = (id: string, created: number): SessionMessage => ({
+  id,
+  type: "assistant",
+  agent: "build",
+  model: { id: "model-a", providerID: "provider-a" },
+  content: [{ type: "text", id: `part_${id}`, text: id }],
+  time: { created, completed: created + 1 },
+} as SessionMessage)
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void
@@ -31,10 +47,19 @@ const createLoader = (messages: (input: {
   directory?: string
   limit?: number
   before?: string
-}) => Promise<unknown>) => {
+}) => Promise<unknown>, loadSessionNextMessages: (params: {
+  sessionID: string
+  directory?: string | null
+  limit?: number
+  cursor?: string
+}) => Promise<{ messages: SessionMessage[]; cursor?: string }> = async () => ({ messages: [] })) => {
   const childStores = new ChildStoreManager()
   const sdk = { session: { messages } } as unknown as OpencodeClient
-  const loader = new SessionMessageLoader(childStores, { sdk, runtimeKey: "runtime-a" })
+  const loader = new SessionMessageLoader(
+    childStores,
+    { sdk, runtimeKey: "runtime-a" },
+    loadSessionNextMessages,
+  )
   return { childStores, loader }
 }
 
@@ -291,6 +316,125 @@ describe("SessionMessageLoader", () => {
     childStores.disposeAll()
   })
 
+  test("commits successful legacy records while exposing a retryable V2 supplement failure", async () => {
+    const supplementError = new Error("V2 messages unavailable")
+    const { childStores, loader } = createLoader(
+      async ({ sessionID }) => response([createRecord(sessionID, "fresh-legacy")]),
+      async () => {
+        throw supplementError
+      },
+    )
+    const target = { directory: "/repo", sessionID: "session-v2-failure" }
+    const store = childStores.ensureChild(target.directory, { bootstrap: false })
+    store.setState({
+      message: {
+        [target.sessionID]: [{
+          id: "cached",
+          sessionID: target.sessionID,
+          role: "user",
+          time: { created: 0 },
+        } as Message],
+      },
+    })
+
+    await loader.ensure(target, { force: true })
+
+    expect(loader.getSnapshot(target).status).toBe("error")
+    expect(loader.getSnapshot(target).error).toBe(supplementError)
+    expect(store.getState().message[target.sessionID]?.map((message) => message.id)).toEqual(["cached", "fresh-legacy"])
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("keeps an initial boundary expansion retryable when one source fails", async () => {
+    const supplementError = new Error("V2 expansion unavailable")
+    const target = { directory: "/repo", sessionID: "session-v2-expansion-failure" }
+    const assistant = createRecord(target.sessionID, "msg_2", "assistant")
+    let nextCalls = 0
+    const { childStores, loader } = createLoader(
+      async () => response([assistant], "legacy-older"),
+      async () => {
+        nextCalls += 1
+        if (nextCalls === 1) return { messages: [] }
+        throw supplementError
+      },
+    )
+
+    await loader.ensure(target, { force: true })
+
+    const snapshot = loader.getSnapshot(target)
+    expect(snapshot.status).toBe("error")
+    expect(snapshot.resolved).toBe(false)
+    expect(snapshot.complete).toBe(false)
+    expect(snapshot.cursor).toBe(undefined)
+    expect(snapshot.error).toBe(supplementError)
+    expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((message) => message.id))
+      .toEqual(["msg_2"])
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("advances legacy and V2 cursors independently until both histories are complete", async () => {
+    const legacyRequests: Array<string | undefined> = []
+    const nextRequests: Array<string | undefined> = []
+    const target = { directory: "/repo", sessionID: "session-dual-history" }
+    const { childStores, loader } = createLoader(
+      async ({ before }) => {
+        legacyRequests.push(before)
+        return before
+          ? response([createRecord(target.sessionID, "msg_1")])
+          : response([createRecord(target.sessionID, "msg_3")], "legacy-older")
+      },
+      async ({ cursor }) => {
+        nextRequests.push(cursor)
+        return cursor
+          ? { messages: [createNextRecord("msg_2", 2)] }
+          : { messages: [createNextRecord("msg_4", 4)], cursor: "v2-older" }
+      },
+    )
+
+    await loader.ensure(target, { reason: "navigation" })
+    for (let attempt = 0; attempt < 20 && !loader.getSnapshot(target).complete; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    expect(legacyRequests).toEqual([undefined, "legacy-older"])
+    expect(nextRequests).toEqual([undefined, "v2-older"])
+    expect(loader.getSnapshot(target).complete).toBe(true)
+    expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((message) => message.id))
+      .toEqual(["msg_1", "msg_2", "msg_3", "msg_4"])
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("links an assistant at a V2 page boundary after its older user message loads", async () => {
+    const target = { directory: "/repo", sessionID: "session-v2-boundary" }
+    const nextRequests: Array<string | undefined> = []
+    const { childStores, loader } = createLoader(
+      async () => response([]),
+      async ({ cursor }) => {
+        nextRequests.push(cursor)
+        return cursor
+          ? { messages: [createNextRecord("msg_1", 1)] }
+          : { messages: [createNextAssistantRecord("msg_2", 2)], cursor: "v2-older" }
+      },
+    )
+
+    await loader.ensure(target, { reason: "navigation" })
+    for (let attempt = 0; attempt < 20 && !loader.getSnapshot(target).complete; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    const messages = childStores.getChild(target.directory)?.getState().message[target.sessionID]
+    const assistant = messages?.find((message) => message.id === "msg_2")
+    expect(nextRequests).toEqual([undefined, undefined, undefined, "v2-older"])
+    expect(assistant?.role).toBe("assistant")
+    if (assistant?.role !== "assistant") throw new Error("expected assistant")
+    expect(assistant.parentID).toBe("msg_1")
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
   test("propagates a zero response status on SDK errors", async () => {
     const { childStores, loader } = createLoader(async () => ({
       error: { message: "network rejected" },
@@ -316,6 +460,48 @@ describe("SessionMessageLoader", () => {
     await loading
 
     expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]).toBe(undefined)
+    expect(loader.getSnapshot(target).status).toBe("idle")
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("does not retarget delayed retries after the loader runtime changes", async () => {
+    const childStores = new ChildStoreManager()
+    let oldLegacyCalls = 0
+    let newLegacyCalls = 0
+    let nextCalls = 0
+    const newSdk = {
+      session: {
+        messages: async () => {
+          newLegacyCalls += 1
+          return response([])
+        },
+      },
+    } as unknown as OpencodeClient
+    const oldSdk = {
+      session: {
+        messages: async () => {
+          oldLegacyCalls += 1
+          loader.configure({ sdk: newSdk, runtimeKey: "runtime-b" })
+          return { error: { message: "unavailable" }, response: { status: 503 } }
+        },
+      },
+    } as unknown as OpencodeClient
+    const loader = new SessionMessageLoader(
+      childStores,
+      { sdk: oldSdk, runtimeKey: "runtime-a" },
+      async () => {
+        nextCalls += 1
+        return { messages: [] }
+      },
+    )
+    const target = { directory: "/repo", sessionID: "session-runtime-switch" }
+
+    await loader.ensure(target, { force: true })
+
+    expect(oldLegacyCalls).toBe(1)
+    expect(newLegacyCalls).toBe(0)
+    expect(nextCalls).toBe(0)
     expect(loader.getSnapshot(target).status).toBe("idle")
     loader.dispose()
     childStores.disposeAll()

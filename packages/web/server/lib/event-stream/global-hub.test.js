@@ -41,6 +41,45 @@ async function waitForAssertion(assertion) {
 }
 
 describe('createGlobalMessageStreamHub', () => {
+  it('keeps payload-id events in bounded replay and replays only events after the reconnect id', async () => {
+    const received = [];
+    const replayAfterFirstEvent = [];
+    const hub = createGlobalMessageStreamHub({
+      buildOpenCodeUrl: (pathname) => `http://127.0.0.1:4096${pathname}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      upstreamReconnectDelayMs: 100,
+      replayLimit: 2,
+      fetchImpl: async () => createSseResponse({
+        blocks: [
+          'data: {"directory":"/tmp/project","payload":{"id":"evt-1","type":"server.connected","properties":{}}}\n\n' +
+          'data: {"directory":"/tmp/project","payload":{"id":"evt-2","type":"session.updated","properties":{}}}\n\n' +
+          'data: {"directory":"/tmp/project","payload":{"id":"evt-3","type":"session.idle","properties":{}}}\n\n',
+        ],
+      }),
+    });
+
+    hub.subscribeEvent((event) => {
+      received.push(event.eventId);
+      if (event.eventId === 'evt-2') {
+        replayAfterFirstEvent.push(...hub.replayAfter('evt-1').map((entry) => entry.eventId));
+      }
+    });
+
+    try {
+      hub.start();
+      await waitForAssertion(() => {
+        expect(received).toEqual(['evt-1', 'evt-2', 'evt-3']);
+      });
+
+      expect(replayAfterFirstEvent).toEqual(['evt-2']);
+      expect(hub.replayAfter('evt-1').map((entry) => entry.eventId)).toEqual(['evt-2', 'evt-3']);
+      expect(hub.replayAfter('evt-2').map((entry) => entry.eventId)).toEqual(['evt-3']);
+      expect(hub.resolveReplay('evt-unknown')).toEqual({ events: [], gap: true });
+    } finally {
+      hub.stop();
+    }
+  });
+
   it('continues fanout when an event subscriber throws', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const received = [];

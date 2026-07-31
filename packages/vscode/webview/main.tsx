@@ -1837,11 +1837,12 @@ onCommand('settingsSynced', () => {
 
 onCommand('permissionAutoAcceptSynced', (payload) => {
   if (!payload || typeof payload !== 'object') return;
-  const snapshot = payload as { sessions?: unknown; revision?: unknown };
+  const snapshot = payload as { sessions?: unknown; defaultEnabled?: unknown; revision?: unknown };
   const sessions = snapshot.sessions;
   if (!sessions || typeof sessions !== 'object') return;
   usePermissionStore.getState().applySnapshot({
     sessions: sessions as Record<string, boolean>,
+    defaultEnabled: snapshot.defaultEnabled === true,
     revision: typeof snapshot.revision === 'number' ? snapshot.revision : undefined,
   });
 });

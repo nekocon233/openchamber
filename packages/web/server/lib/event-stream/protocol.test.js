@@ -30,6 +30,51 @@ describe('event stream protocol helpers', () => {
     });
   });
 
+  it('uses a wrapped global payload id when the SSE id line is missing', () => {
+    const envelope = parseSseEventEnvelope(
+      'data: {"directory":"/tmp/project","payload":{"id":"evt-global-1","type":"session.updated","properties":{}}}\n'
+    );
+
+    expect(envelope).toEqual({
+      eventId: 'evt-global-1',
+      directory: '/tmp/project',
+      payload: {
+        id: 'evt-global-1',
+        type: 'session.updated',
+        properties: {},
+      },
+    });
+  });
+
+  it('uses a top-level directory event id when the SSE id line is missing', () => {
+    const envelope = parseSseEventEnvelope(
+      'data: {"id":"evt-directory-1","type":"session.updated","properties":{"directory":"/tmp/project"}}\n'
+    );
+
+    expect(envelope).toEqual({
+      eventId: 'evt-directory-1',
+      directory: '/tmp/project',
+      payload: {
+        id: 'evt-directory-1',
+        type: 'session.updated',
+        properties: { directory: '/tmp/project' },
+      },
+    });
+  });
+
+  it('prefers a valid SSE id and does not guess an event id', () => {
+    const envelope = parseSseEventEnvelope(
+      'id: evt-sse\n' +
+      'data: {"id":"evt-top-level","payload":{"id":"evt-payload","type":"session.updated"}}\n'
+    );
+    const envelopeWithoutEventId = parseSseEventEnvelope(
+      'data: {"type":"session.updated","properties":{"id":"entity-id","sessionID":"ses_1"}}\n'
+    );
+
+    expect(envelope?.eventId).toBe('evt-sse');
+    expect(envelopeWithoutEventId?.eventId).toBeNull();
+  });
+
   it('derives directory from payload properties when not wrapped', () => {
     const envelope = parseSseEventEnvelope(
       'data: {"type":"openchamber:notification","properties":{"directory":"/tmp/project"}}\n'

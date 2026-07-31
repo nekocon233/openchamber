@@ -12,6 +12,7 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 - `packages/web/server/lib/event-stream/upstream-reader.js`: reusable upstream SSE reader with event-id tracking, stall recovery, and reconnect handling.
 - `packages/web/server/lib/event-stream/runtime.js`: thin WebSocket server runtime for upgrade handling and path dispatch to the global/directory bridges.
 - `packages/web/server/lib/event-stream/protocol.test.js`: unit tests for protocol helpers.
+- `packages/web/server/lib/event-stream/global-hub.test.js`: unit tests for shared global fan-out and bounded replay behavior.
 - `packages/web/server/lib/event-stream/upstream-reader.test.js`: unit tests for upstream SSE reader behavior.
 - `packages/web/server/lib/event-stream/runtime.test.js`: unit tests for runtime-side broadcaster behavior.
 
@@ -21,7 +22,7 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 - `MESSAGE_STREAM_GLOBAL_WS_PATH`: `/api/global/event/ws`
 - `MESSAGE_STREAM_DIRECTORY_WS_PATH`: `/api/event/ws`
 - `MESSAGE_STREAM_WS_HEARTBEAT_INTERVAL_MS`: heartbeat interval for browser-facing WS connections.
-- `parseSseEventEnvelope(block)`: parses an SSE block into `{ eventId, directory, payload }`.
+- `parseSseEventEnvelope(block)`: parses an SSE block into `{ eventId, directory, payload }`. A non-empty SSE `id:` wins; otherwise the parser uses a non-empty parsed `payload.id` for wrapped global events or top-level `id` for unwrapped directory events. It never synthesizes an ID.
 - `sendMessageStreamWsFrame(socket, payload)`: serializes and sends a JSON WS frame.
 - `sendMessageStreamWsEvent(socket, payload, options)`: sends an event frame with optional `eventId` and `directory`.
 
@@ -40,7 +41,7 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 - Managed/public and Private Relay upgrades always require an allowlisted URL token plus the normal origin check, independent of UI-password enablement. Direct local passwordless upgrades remain intentional.
 - OpenChamber still fetches OpenCode upstream event streams over SSE.
 - The web server creates one shared global message-stream hub. OpenCode watcher side effects and global WS clients subscribe to that hub, so there is one upstream `/global/event` SSE reader for both server-side processing and browser fan-out.
-- The global hub keeps a bounded replay buffer keyed by SSE `eventId` so reconnecting browser clients can receive buffered events after their requested `Last-Event-ID`.
+- The global hub keeps a bounded replay buffer keyed by the parsed `eventId` so reconnecting browser clients can receive buffered events after their requested `Last-Event-ID`. This includes OpenCode global events whose IDs exist only at `payload.id`; events without an explicit SSE or JSON event ID are forwarded live but are not added to replay. An evicted or unknown cursor produces an explicit `replay-gap`. Recoverable replay events precede the browser-facing `ready` frame, and the browser commits them before starting authoritative reconnect repair.
 - Directory WS clients still attach one upstream `/event?directory=...` SSE reader per connection because directory streams are scoped.
 - If an upstream SSE stream stalls after the browser WS is already ready, the reader aborts that upstream fetch and reconnects upstream with `Last-Event-ID`, keeping the browser WS alive when recovery is fast.
 - When the shared global upstream reconnects after it was previously ready, the global WS bridge sends a fresh `ready` frame to already-ready browser clients. The browser treats this as a reconnect edge and can run scoped state repair without requiring the browser WS to close.
@@ -59,6 +60,7 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 
 ## Testing
 - Run `bun test packages/web/server/lib/event-stream/protocol.test.js`
+- Run `bun test packages/web/server/lib/event-stream/global-hub.test.js`
 - Run `bun test packages/web/server/lib/event-stream/upstream-reader.test.js`
 - Run `bun test packages/web/server/lib/event-stream/runtime.test.js`
 - Run repo validation before finalizing: `bun run type-check`, `bun run lint`, `bun run build`
