@@ -125,13 +125,35 @@ const getInitialExpansionLimits = () => isConstrainedRuntime()
   ? CONSTRAINED_INITIAL_PAGE_EXPANSION_LIMITS
   : INITIAL_PAGE_EXPANSION_LIMITS
 
-const isUserMessage = (message: Message): boolean => {
+const resolveMessageRole = (message: Message): unknown => {
   const candidate = message as Message & { clientRole?: unknown; role?: unknown }
-  const role = typeof candidate.clientRole === "string" ? candidate.clientRole : candidate.role
-  return role === "user"
+  return typeof candidate.clientRole === "string" ? candidate.clientRole : candidate.role
 }
 
-const hasUserMessage = (messages: Message[]): boolean => messages.some(isUserMessage)
+const hasInitialTurnBoundary = (messages: Message[]): boolean => {
+  const userMessageIDs = new Set(
+    messages.filter((message) => resolveMessageRole(message) === "user").map((message) => message.id),
+  )
+  if (userMessageIDs.size === 0) return false
+
+  let precedingUserMessageID = ""
+  for (const message of messages) {
+    const role = resolveMessageRole(message)
+    if (role === "user") {
+      precedingUserMessageID = message.id
+      continue
+    }
+    if (role !== "assistant") continue
+
+    const parentID = (message as Message & { parentID?: unknown }).parentID
+    if (typeof parentID === "string" && parentID.length > 0) {
+      if (!userMessageIDs.has(parentID)) return false
+      continue
+    }
+    if (precedingUserMessageID.length === 0) return false
+  }
+  return true
+}
 
 const linkMissingAssistantParents = (messages: Message[]): Message[] => {
   let lastUserMessageID = ""
@@ -637,13 +659,13 @@ export class SessionMessageLoader {
       if (firstPage.session.length > 0) this.commitPage(target, entry, store, firstPage, "merge", isCurrent)
       throw firstPage.error
     }
-    const deferFirstCommit = !firstPage.complete && !hasUserMessage(firstPage.session)
-    let committed = deferFirstCommit
-      ? { messages: firstPage.session }
-      : this.commitPage(target, entry, store, firstPage, "merge", isCurrent)
+    const needsBoundaryExpansion = !firstPage.complete && !hasInitialTurnBoundary(firstPage.session)
+    let acceptedMessages = needsBoundaryExpansion
+      ? firstPage.session
+      : this.commitPage(target, entry, store, firstPage, "merge", isCurrent)?.messages
     let acceptedPage = firstPage
 
-    if (deferFirstCommit) {
+    if (needsBoundaryExpansion) {
       for (const limit of getInitialExpansionLimits()) {
         if (limit <= firstLimit || !isCurrent()) continue
         const expandedPage = await this.fetchPage(target, limit)
@@ -653,24 +675,24 @@ export class SessionMessageLoader {
           throw expandedPage.error
         }
         acceptedPage = expandedPage
-        const boundaryFound = hasUserMessage(expandedPage.session)
+        const boundaryFound = hasInitialTurnBoundary(expandedPage.session)
         const isLast = limit === getInitialExpansionLimits()[getInitialExpansionLimits().length - 1]
         if (expandedPage.complete || boundaryFound || isLast) {
-          committed = this.commitPage(target, entry, store, expandedPage, "merge", isCurrent)
+          acceptedMessages = this.commitPage(target, entry, store, expandedPage, "merge", isCurrent)?.messages
         } else {
-          committed = { messages: expandedPage.session }
+          acceptedMessages = expandedPage.session
         }
         if (expandedPage.complete || boundaryFound) break
       }
     }
 
-    if (!committed || !isCurrent()) return
+    if (!acceptedMessages || !isCurrent()) return
     this.patchEntry(entry, {
       status: "ready",
       loadingKind: null,
       error: null,
       resolved: true,
-      limit: committed.messages.length,
+      limit: acceptedMessages.length,
       cursor: acceptedPage.cursor,
       complete: acceptedPage.complete,
       updatedAt: Date.now(),

@@ -435,6 +435,60 @@ describe("SessionMessageLoader", () => {
     childStores.disposeAll()
   })
 
+  test("expands a mobile initial page when a leading assistant belongs to an older user", async () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { __OPENCHAMBER_SURFACE__: "mobile" } as Window & typeof globalThis,
+    })
+
+    const target = { directory: "/repo", sessionID: "session-mobile-boundary" }
+    const nextRequests: Array<{ limit?: number; cursor?: string }> = []
+    const { childStores, loader } = createLoader(
+      async () => response([]),
+      async ({ limit, cursor }) => {
+        nextRequests.push({ limit, cursor })
+        return limit === 30
+          ? {
+              messages: [
+                createNextAssistantRecord("msg_2", 2),
+                createNextRecord("msg_3", 3),
+                createNextAssistantRecord("msg_4", 4),
+              ],
+              cursor: "v2-older",
+            }
+          : {
+              messages: [
+                createNextRecord("msg_1", 1),
+                createNextAssistantRecord("msg_2", 2),
+                createNextRecord("msg_3", 3),
+                createNextAssistantRecord("msg_4", 4),
+              ],
+            }
+      },
+    )
+
+    try {
+      await loader.ensure(target, { reason: "navigation" })
+
+      const messages = childStores.getChild(target.directory)?.getState().message[target.sessionID]
+      const leadingAssistant = messages?.find((message) => message.id === "msg_2")
+      expect(nextRequests).toEqual([
+        { limit: 30, cursor: undefined },
+        { limit: 50, cursor: undefined },
+      ])
+      expect(leadingAssistant?.role).toBe("assistant")
+      if (leadingAssistant?.role !== "assistant") throw new Error("expected assistant")
+      expect(leadingAssistant.parentID).toBe("msg_1")
+      expect(loader.getSnapshot(target).complete).toBe(true)
+    } finally {
+      loader.dispose()
+      childStores.disposeAll()
+      if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow)
+      else Reflect.deleteProperty(globalThis, "window")
+    }
+  })
+
   test("propagates a zero response status on SDK errors", async () => {
     const { childStores, loader } = createLoader(async () => ({
       error: { message: "network rejected" },
