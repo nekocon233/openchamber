@@ -433,4 +433,38 @@ describe('ui auth client credential seam', () => {
     expect(expiresAt).toBeGreaterThanOrEqual(before + 122_000);
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 124_000);
   });
+
+  it('issues trusted-device sessions and client tokens for 180 days', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const trustedDeviceTtlMs = 180 * 24 * 60 * 60 * 1000;
+    let createClientInput = null;
+    const auth = createUiAuth({
+      password: 'secret',
+      clientAuthController: {
+        createClient: async (input) => {
+          createClientInput = input;
+          return { token: 'client-token' };
+        },
+      },
+    });
+
+    const before = Date.now();
+    const req = {
+      method: 'POST',
+      headers: {},
+      body: {
+        password: 'secret',
+        trustDevice: true,
+        issueClientToken: true,
+      },
+    };
+    const res = createResponse();
+
+    await auth.handleSessionCreate(req, res);
+
+    expect(String(res.getHeader('set-cookie'))).toContain(`Max-Age=${trustedDeviceTtlMs / 1000}`);
+    const expiresAt = Date.parse(createClientInput.expiresAt);
+    expect(expiresAt).toBeGreaterThanOrEqual(before + trustedDeviceTtlMs - 1_000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + trustedDeviceTtlMs + 1_000);
+  });
 });

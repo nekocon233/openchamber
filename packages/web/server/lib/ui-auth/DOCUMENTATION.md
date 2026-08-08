@@ -16,6 +16,7 @@ Pairing v2 is implemented by `packages/web/server/lib/client-auth/pairing.js`. I
 
 ## Public exports (ui-auth.js)
 - `createUiAuth({ password, cookieName, sessionTtlMs, readSettingsFromDiskMigrated })`: creates UI auth controller with methods:
+  - Standard sessions expire 12 hours after issuance. Sessions requested with `trustDevice: true`, and client tokens issued from those sessions, expire 180 days after issuance. These are fixed, non-sliding expirations.
   - `enabled`
   - `requireAuth(req, res, next)`
   - `requireClientAuth(req, res, next)` — bearer-only validation with no UI-cookie issuance or mutation; Private Relay requests use this gate because their loopback hop is not local trust.
