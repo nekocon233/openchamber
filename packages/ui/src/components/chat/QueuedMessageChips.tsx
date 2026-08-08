@@ -192,7 +192,7 @@ export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendM
     const currentSessionDirectory = useSessionUIStore(
         React.useCallback(
             (state) => currentSessionId
-                ? state.getDirectoryForSession(currentSessionId) ?? state.currentSessionDirectory
+                ? state.getDirectoryForSession(currentSessionId)
                 : null,
             [currentSessionId],
         ),

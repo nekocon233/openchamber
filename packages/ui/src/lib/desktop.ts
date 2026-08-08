@@ -1,4 +1,4 @@
-import type { ProjectEntry, TerminalShell } from '@/lib/api/types';
+import type { ProjectEntry, RuntimeAPIs, TerminalShell } from '@/lib/api/types';
 import { getInjectedBootOutcome } from '@/lib/desktopBoot';
 import type { DraftStarterRef } from '@/lib/draftStarters';
 import type { MobileKeyboardMode } from '@/lib/mobileKeyboardMode';
@@ -138,6 +138,10 @@ export type DesktopSettings = {
   sessionGoalDefaultBudgetEnabled?: boolean;
   sessionGoalDefaultBudget?: number;
   smallModelOverride?: string; // format: "provider/model"
+  // The walkthrough needs structured output and a roomy context, which the
+  // small model is often deliberately not chosen for. Unset means "use the
+  // small model"; a value replaces it for this feature only.
+  walkthroughModelOverride?: string; // format: "provider/model"
   defaultGitIdentityId?: string; // ''/undefined = unset, 'global' or profile id
   openInAppId?: string;
   autoCreateWorktree?: boolean;
@@ -544,6 +548,10 @@ export const isHostLocalOriginActive = (): boolean => {
   return Boolean(targetUrl && isLoopbackHost(targetUrl.hostname));
 };
 
+export const canRequestNativeDirectoryAccess = (): boolean => (
+  isDesktopShell() && hasDesktopInvoke() && isDesktopLocalOriginActive()
+);
+
 export const startDesktopWindowDrag = async (): Promise<boolean> => {
   if (!isDesktopShell()) {
     return false;
@@ -575,6 +583,15 @@ export const isWebRuntime = (): boolean => {
   return !isVSCodeRuntime();
 };
 
+/**
+ * Electron reuses the web RuntimeAPIs implementation, so distinguish a browser
+ * client from an Electron renderer with both the runtime descriptor and shell.
+ */
+export const isBrowserClientRuntime = (
+  platform: RuntimeAPIs['runtime']['platform'],
+  desktopShell = isDesktopShell(),
+): boolean => platform === 'web' && !desktopShell;
+
 export const getDesktopHomeDirectory = async (): Promise<string | null> => {
   if (typeof window !== 'undefined') {
     const embedded = window.__OPENCHAMBER_HOME__;
@@ -590,12 +607,13 @@ export const requestDirectoryAccess = async (
   directoryPath: string
 ): Promise<{ success: boolean; path?: string; projectId?: string; error?: string }> => {
   // Desktop shell on local instance: use native folder picker.
-  if (hasDesktopInvoke() && isDesktopLocalOriginActive()) {
+  if (canRequestNativeDirectoryAccess()) {
     try {
       const selected = await getDesktopBridge()?.openDialog?.({
         directory: true,
         multiple: false,
         title: 'Select Working Directory',
+        ...(directoryPath ? { defaultPath: directoryPath } : {}),
       });
       if (!selected || typeof selected !== 'string') {
         return { success: false, error: 'Directory selection cancelled' };
@@ -607,7 +625,7 @@ export const requestDirectoryAccess = async (
     }
   }
 
-  return { success: true, path: directoryPath };
+  return { success: false, error: 'Native directory picker not available' };
 };
 
 const isDesktopFileGrantResult = (

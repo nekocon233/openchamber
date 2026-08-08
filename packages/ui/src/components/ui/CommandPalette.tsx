@@ -41,7 +41,7 @@ import { canUseElectronDesktopIPC, invokeDesktop, isDesktopShell, isHostLocalOri
 import { SETTINGS_PAGE_METADATA, type SettingsRuntimeContext } from '@/lib/settings/metadata';
 
 const EMPTY_PINNED_SESSION_IDS = new Set<string>();
-import { getSettingsNavIcon } from '@/components/views/SettingsView';
+import { getSettingsNavIcon } from '@/lib/settings/metadata';
 import { Icon } from "@/components/icon/Icon";
 import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { McpIcon } from '@/components/icons/McpIcon';

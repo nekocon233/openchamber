@@ -739,4 +739,34 @@ describe('opencodeClient non-delivery promptAsync', () => {
     await sendPrompt(providerID);
     expect(promptAsyncCalls).toHaveLength(4);
   });
+
+  test('does not dispatch after the runtime changes while preparing attachments', async () => {
+    runtimeKey = 'runtime-a';
+    const pending = opencodeClient.sendMessage({
+      id: 'ses_runtime_race',
+      providerID: 'runtime-race-provider',
+      modelID: 'model-a',
+      text: 'hello',
+      runtimeKey: 'runtime-a',
+      files: [{
+        type: 'file',
+        mime: 'text/markdown',
+        filename: 'notes.md',
+        url: 'data:text/markdown,hello',
+      }],
+    });
+
+    runtimeKey = 'runtime-b';
+
+    let error: unknown = null;
+    try {
+      await pending;
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error instanceof Error ? error.message : String(error)).toContain('runtime changed');
+    expect(promptAsyncCalls).toHaveLength(0);
+  });
 });

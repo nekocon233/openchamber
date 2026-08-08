@@ -50,11 +50,15 @@ describe('MobileSessionsSheet activity sections', () => {
     expect(source).toContain("t('sessions.sidebar.header.displayMode.showRecent')");
   });
 
-  test('uses authoritative running status and exposes pin actions on mobile rows', () => {
+  test('uses authoritative activity, exposes pin actions, and keeps mobile sheets mounted', () => {
     expect(source).toContain('useAllSessionStatuses()');
     expect(source).toContain("statusType === 'busy' || statusType === 'retry'");
-    expect(source).toContain('<SessionRunningIndicator');
-    expect(source).toContain("t('mobile.sessions.status.running')");
+    expect(source).toContain('useHasSessionActivityDuration(session.id, isStreaming)');
+    expect(source).toContain('<SessionActivityDuration');
+    expect(source).toContain('running={isStreaming}');
+    expect(source).toContain("isStreaming ? 'bg-primary' : 'bg-[var(--status-info)]'");
+    expect(source).not.toContain('<SessionRunningIndicator');
+    expect(source).not.toContain("t('mobile.sessions.status.running')");
     expect(source).toContain('onTogglePinned={() => togglePinnedSession(session.id)}');
     expect(source).toContain("<Icon name={pinned ? 'unpin' : 'pushpin'}");
     expect(source).toContain('opencodeClient.getSessionStatusForDirectory(directory, { signal: controller.signal })');
@@ -73,11 +77,13 @@ describe('MobileSessionsSheet activity sections', () => {
     expect(source).toContain('useAllAuthoritativeLiveSessionIds()');
     expect(source).toContain('!archivedIds.has(session.id)');
     expect(source).toContain('!hasAuthoritativeGlobalSessions || authoritativeLiveSessionIds.has(session.id)');
-    expect(mobileAppSource).toContain(`{ipadSidebarOpen ? (
-                <ErrorBoundary>
-                  <MobileSessionsSheet`);
-    expect(mobileAppSource).toContain(`{sessionsSheetOpen ? (
+    expect(mobileAppSource).toContain(`<MobileSessionsSheet
+                  open
+                  variant="sidebar"`);
+    expect(mobileAppSource).toContain(`{!isTabletLayout ? (
           <MobileSessionsSheet`);
-    expect(mobileAppSource).not.toContain('active={ipadSidebarOpen}');
+    expect(mobileAppSource).toContain('open={sessionsSheetOpen}');
+    expect(mobileAppSource).not.toContain(`{sessionsSheetOpen ? (
+          <MobileSessionsSheet`);
   });
 });

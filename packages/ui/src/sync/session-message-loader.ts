@@ -76,6 +76,11 @@ type SessionMessageSourceCursor = {
   next: string | null | undefined
 }
 
+type LoadPerformanceDetails = {
+  retryCount: number
+  recordCount: number
+}
+
 type LoaderConfiguration = {
   sdk: OpencodeClient
   runtimeKey: string
@@ -95,6 +100,9 @@ const encodeSourceCursor = (cursor: SessionMessageSourceCursor): string | undefi
   const legacy = cursor.legacy ?? null
   const next = cursor.next ?? null
   if (legacy === null && next === null) return undefined
+  // Preserve the pre-V2 cursor shape once the V2 source is exhausted. The
+  // decoder already treats a raw cursor as legacy-only coverage.
+  if (legacy !== null && next === null) return legacy
   return `${COMBINED_CURSOR_PREFIX}${encodeURIComponent(JSON.stringify({ legacy, next }))}`
 }
 
@@ -329,15 +337,8 @@ export class SessionMessageLoader {
     }
     if (options?.force) this.bumpGeneration(entry)
     const kind: SessionMessageLoadKind = options?.reason === "prefetch" ? "prefetch" : "initial"
-    return this.startLoad(normalized, entry, store, kind, async (isCurrent) => {
-      await this.loadInitial(normalized, entry, store, isCurrent)
-      if (!isMobileSurfaceRuntime() && isCurrent()) {
-        queueMicrotask(() => {
-          if (isCurrent() && entry.snapshot.cursor && !entry.snapshot.complete) {
-            void this.loadOlder(normalized)
-          }
-        })
-      }
+    return this.startLoad(normalized, entry, store, kind, async (isCurrent, performance) => {
+      await this.loadInitial(normalized, entry, store, isCurrent, performance)
     })
   }
 
@@ -353,8 +354,8 @@ export class SessionMessageLoader {
     if (entry.snapshot.complete || !entry.snapshot.cursor) return Promise.resolve()
     const store = this.childStores.ensureChild(normalized.directory, { bootstrap: false })
     const cursor = entry.snapshot.cursor
-    return this.startLoad(normalized, entry, store, "older", async (isCurrent) => {
-      const page = await this.fetchPage(normalized, HISTORY_MESSAGE_PAGE_SIZE, cursor)
+    return this.startLoad(normalized, entry, store, "older", async (isCurrent, performance) => {
+      const page = await this.fetchPage(normalized, HISTORY_MESSAGE_PAGE_SIZE, cursor, "older", performance)
       if (!isCurrent()) return
       if (page.error) {
         if (page.session.length > 0) this.commitPage(normalized, entry, store, page, "prepend", isCurrent)
@@ -374,6 +375,27 @@ export class SessionMessageLoader {
       })
       this.persistCoverage(normalized, entry.snapshot)
     })
+  }
+
+  async loadComplete(target: SessionMessageTarget): Promise<void> {
+    const normalized = this.normalizeTarget(target)
+    if (!normalized || this.disposed) throw new Error("Session message loader is unavailable")
+    const initial = this.getSnapshot(normalized)
+    await this.ensure(normalized, { force: !initial.resolved })
+
+    const visitedCursors = new Set<string>()
+    while (true) {
+      const snapshot = this.getSnapshot(normalized)
+      if (snapshot.status === "error") throw snapshot.error ?? new Error("Session history could not be loaded")
+      if (snapshot.complete) return
+      if (!snapshot.cursor) throw new Error("Session history coverage is unresolved")
+      if (visitedCursors.has(snapshot.cursor)) {
+        throw new Error("Session history pagination made no progress")
+      }
+      visitedCursors.add(snapshot.cursor)
+
+      await this.loadOlder(normalized)
+    }
   }
 
   refreshTail(target: SessionMessageTarget, limit: number): Promise<void> {
@@ -406,11 +428,11 @@ export class SessionMessageLoader {
     }
     const store = this.childStores.ensureChild(normalized.directory, { bootstrap: false })
     this.bumpGeneration(entry)
-    return this.startLoad(normalized, entry, store, "refresh", async (isCurrent) => {
+    return this.startLoad(normalized, entry, store, "refresh", async (isCurrent, performance) => {
       const previousCoverage = entry.snapshot.resolved
         ? { cursor: entry.snapshot.cursor, complete: entry.snapshot.complete }
         : null
-      const page = await this.fetchPage(normalized, Math.max(1, limit))
+      const page = await this.fetchPage(normalized, Math.max(1, limit), undefined, "refresh", performance)
       if (!isCurrent()) return
       if (page.error) {
         if (page.session.length > 0) this.commitPage(normalized, entry, store, page, "merge", isCurrent)
@@ -600,15 +622,12 @@ export class SessionMessageLoader {
     entry: LoaderEntry,
     store: { getState: () => DirectoryStore; setState: DirectoryStoreSetter },
     kind: SessionMessageLoadKind,
-    run: (isCurrent: () => boolean) => Promise<void>,
+    run: (isCurrent: () => boolean, performance: LoadPerformanceDetails) => Promise<void>,
   ): Promise<void> {
     const generation = entry.snapshot.generation
     const authorityEpoch = this.authorityEpoch
     const finishPerformanceEvent = startSessionLoadPerformanceEvent({
       operation: kind === "prefetch" ? "session-prefetch" : `session-messages.${kind}`,
-      runtimeKey: this.runtimeKey,
-      directory: target.directory,
-      sessionID: target.sessionID,
       caller: kind,
     })
     const isCurrent = () => (
@@ -617,21 +636,22 @@ export class SessionMessageLoader {
       && entry.snapshot.generation === generation
       && this.childStores.getChild(target.directory) === store
     )
+    const performance = { retryCount: 0, recordCount: 0 }
     this.patchEntry(entry, { status: "loading", loadingKind: kind, error: null })
     let loadPromise: Promise<void>
     try {
-      loadPromise = run(isCurrent)
+      loadPromise = run(isCurrent, performance)
     } catch (error) {
       loadPromise = Promise.reject(error)
     }
     const promise = loadPromise
-      .then(() => finishPerformanceEvent(isCurrent() ? "complete" : "stale"))
+      .then(() => finishPerformanceEvent(isCurrent() ? "complete" : "stale", performance))
       .catch((error: unknown) => {
         if (!isCurrent()) {
-          finishPerformanceEvent("stale")
+          finishPerformanceEvent("stale", performance)
           return
         }
-        finishPerformanceEvent("error")
+        finishPerformanceEvent("error", performance)
         this.patchEntry(entry, {
           status: "error",
           loadingKind: null,
@@ -650,10 +670,11 @@ export class SessionMessageLoader {
     entry: LoaderEntry,
     store: { getState: () => DirectoryStore; setState: DirectoryStoreSetter },
     isCurrent: () => boolean,
+    performance?: LoadPerformanceDetails,
   ): Promise<void> {
     const storeMessageCount = store.getState().message[target.sessionID]?.length ?? 0
     const firstLimit = Math.max(entry.snapshot.limit, storeMessageCount, getInitialPageSize())
-    const firstPage = await this.fetchPage(target, firstLimit)
+    const firstPage = await this.fetchPage(target, firstLimit, undefined, "initial-page", performance)
     if (!isCurrent()) return
     if (firstPage.error) {
       if (firstPage.session.length > 0) this.commitPage(target, entry, store, firstPage, "merge", isCurrent)
@@ -668,7 +689,7 @@ export class SessionMessageLoader {
     if (needsBoundaryExpansion) {
       for (const limit of getInitialExpansionLimits()) {
         if (limit <= firstLimit || !isCurrent()) continue
-        const expandedPage = await this.fetchPage(target, limit)
+        const expandedPage = await this.fetchPage(target, limit, undefined, "initial-page", performance)
         if (!isCurrent()) return
         if (expandedPage.error) {
           if (expandedPage.session.length > 0) this.commitPage(target, entry, store, expandedPage, "merge", isCurrent)
@@ -724,7 +745,21 @@ export class SessionMessageLoader {
     }
   }
 
-  private async fetchPage(target: SessionMessageTarget, limit: number, before?: string): Promise<FetchedPage> {
+  private async fetchPage(
+    target: SessionMessageTarget,
+    limit: number,
+    before?: string,
+    caller: "initial-page" | "older" | "refresh" = "initial-page",
+    performance?: LoadPerformanceDetails,
+  ): Promise<FetchedPage> {
+    const finishPagePerformance = startSessionLoadPerformanceEvent({
+      operation: "session-messages.page",
+      caller,
+      requestLimit: limit,
+      cursorPresent: before !== undefined,
+    })
+    let retryCount = 0
+    let recordCount = 0
     const requestSdk = this.sdk
     const requestRuntimeKey = this.runtimeKey
     const assertRequestOwner = () => {
@@ -732,72 +767,96 @@ export class SessionMessageLoader {
         throw new Error("Session message loader runtime changed")
       }
     }
-    const sourceCursor = decodeSourceCursor(before)
-    const legacyCursor = sourceCursor.legacy
-    const nextCursor = sourceCursor.next
-    const [legacySettled, nextSettled] = await Promise.allSettled([
-      legacyCursor === null
-        ? Promise.resolve(null)
-        : retry(async () => {
-            assertRequestOwner()
-            const response = await requestSdk.session.messages({
-              sessionID: target.sessionID,
-              directory: target.directory,
-              limit,
-              before: legacyCursor,
-            })
-            assertSdkSuccess(response, "session.messages")
-            if (!Array.isArray(response.data)) {
-              const error = new Error("session.messages returned no data") as Error & { status?: number }
-              error.status = 503
-              throw error
-            }
-            return { data: response.data, response: response.response }
-          }),
-      nextCursor === null
-        ? Promise.resolve({ records: [], cursor: undefined })
-        : retry(() => {
-            assertRequestOwner()
-            return this.fetchNextRecords(target, limit, requestRuntimeKey, nextCursor)
-          }),
-    ])
-    const legacyPage = legacySettled.status === "fulfilled" ? legacySettled.value : null
-    const nextPage = nextSettled.status === "fulfilled"
-      ? nextSettled.value
-      : { records: [], cursor: undefined }
-    let error: Error | undefined
-    if (legacySettled.status === "rejected") {
-      error = legacySettled.reason instanceof Error
-        ? legacySettled.reason
-        : new Error(formatSdkError(legacySettled.reason))
-    } else if (nextSettled.status === "rejected") {
-      error = nextSettled.reason instanceof Error
-        ? nextSettled.reason
-        : new Error(formatSdkError(nextSettled.reason))
+    try {
+      const sourceCursor = decodeSourceCursor(before)
+      const legacyCursor = sourceCursor.legacy
+      const nextCursor = sourceCursor.next
+      let legacyAttempts = 0
+      let nextAttempts = 0
+      const [legacySettled, nextSettled] = await Promise.allSettled([
+        legacyCursor === null
+          ? Promise.resolve(null)
+          : retry(async () => {
+              legacyAttempts += 1
+              assertRequestOwner()
+              const response = await requestSdk.session.messages({
+                sessionID: target.sessionID,
+                directory: target.directory,
+                limit,
+                before: legacyCursor,
+              })
+              assertSdkSuccess(response, "session.messages")
+              if (!Array.isArray(response.data)) {
+                const error = new Error("session.messages returned no data") as Error & { status?: number }
+                error.status = 503
+                throw error
+              }
+              return { data: response.data, response: response.response }
+            }),
+        nextCursor === null
+          ? Promise.resolve({ records: [], cursor: undefined })
+          : retry(() => {
+              nextAttempts += 1
+              assertRequestOwner()
+              return this.fetchNextRecords(target, limit, requestRuntimeKey, nextCursor)
+            }),
+      ])
+      retryCount = Math.max(0, legacyAttempts - 1) + Math.max(0, nextAttempts - 1)
+      const legacyPage = legacySettled.status === "fulfilled" ? legacySettled.value : null
+      const nextPage = nextSettled.status === "fulfilled"
+        ? nextSettled.value
+        : { records: [], cursor: undefined }
+      let pageError: Error | undefined
+      if (legacySettled.status === "rejected") {
+        pageError = legacySettled.reason instanceof Error
+          ? legacySettled.reason
+          : new Error(formatSdkError(legacySettled.reason))
+      } else if (nextSettled.status === "rejected") {
+        pageError = nextSettled.reason instanceof Error
+          ? nextSettled.reason
+          : new Error(formatSdkError(nextSettled.reason))
+      }
+      const records = (legacyPage?.data ?? [])
+        .filter((record: { info?: { id?: string } }) => Boolean(record?.info?.id))
+      const session = records
+        .map((record: { info: Message }) => stripMessageDiffSnapshots(record.info))
+        .sort((left: Message, right: Message) => cmp(left.id, right.id))
+      const partsByMessageID = new Map<string, Part[]>()
+      for (const record of records as Array<{ info: { id: string }; parts?: Part[] }>) {
+        partsByMessageID.set(record.info.id, sortParts(record.parts ?? []))
+      }
+      const knownMessageIDs = new Set(session.map((message) => message.id))
+      for (const record of nextPage.records) {
+        if (knownMessageIDs.has(record.info.id)) continue
+        knownMessageIDs.add(record.info.id)
+        session.push(record.info)
+        partsByMessageID.set(record.info.id, sortParts(record.parts))
+      }
+      session.sort((left, right) => cmp(left.id, right.id))
+      recordCount = session.length
+      const cursor = pageError
+        ? before
+        : encodeSourceCursor({
+            legacy: legacyPage?.response?.headers?.get?.("x-next-cursor") ?? null,
+            next: nextPage.cursor ?? null,
+          })
+      finishPagePerformance(pageError ? "error" : "complete", { retryCount, recordCount })
+      return {
+        session,
+        partsByMessageID,
+        cursor,
+        complete: !pageError && !cursor,
+        ...(pageError ? { error: pageError } : {}),
+      }
+    } catch (error) {
+      finishPagePerformance("error", { retryCount, recordCount })
+      throw error
+    } finally {
+      if (performance) {
+        performance.retryCount += retryCount
+        performance.recordCount += recordCount
+      }
     }
-    const records = (legacyPage?.data ?? []).filter((record: { info?: { id?: string } }) => Boolean(record?.info?.id))
-    const session = records
-      .map((record: { info: Message }) => stripMessageDiffSnapshots(record.info))
-      .sort((left: Message, right: Message) => cmp(left.id, right.id))
-    const partsByMessageID = new Map<string, Part[]>()
-    for (const record of records as Array<{ info: { id: string }; parts?: Part[] }>) {
-      partsByMessageID.set(record.info.id, sortParts(record.parts ?? []))
-    }
-    const knownMessageIDs = new Set(session.map((message) => message.id))
-    for (const record of nextPage.records) {
-      if (knownMessageIDs.has(record.info.id)) continue
-      knownMessageIDs.add(record.info.id)
-      session.push(record.info)
-      partsByMessageID.set(record.info.id, sortParts(record.parts))
-    }
-    session.sort((left, right) => cmp(left.id, right.id))
-    const cursor = error
-      ? before
-      : encodeSourceCursor({
-          legacy: legacyPage?.response?.headers?.get?.("x-next-cursor") ?? null,
-          next: nextPage.cursor ?? null,
-        })
-    return { session, partsByMessageID, cursor, complete: !error && !cursor, ...(error ? { error } : {}) }
   }
 
   private commitPage(

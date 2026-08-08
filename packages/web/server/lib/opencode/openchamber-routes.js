@@ -1,5 +1,23 @@
 import { DISTRIBUTION_POLICY } from '../distribution-policy.js';
 
+const SYSTEMD_SERVICE_UNIT_PATTERN = /^[A-Za-z0-9:_.@-]+\.service$/;
+
+function resolveSystemdServiceUnit(environment) {
+  if (!environment.INVOCATION_ID) {
+    return null;
+  }
+
+  const configuredUnit = typeof environment.OPENCHAMBER_SYSTEMD_UNIT === 'string'
+    ? environment.OPENCHAMBER_SYSTEMD_UNIT.trim()
+    : '';
+  const unit = configuredUnit || 'openchamber.service';
+  return SYSTEMD_SERVICE_UNIT_PATTERN.test(unit) ? unit : null;
+}
+
+function quotePosixShell(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
 export const registerOpenChamberRoutes = (app, dependencies) => {
   const {
     fs,
@@ -13,6 +31,7 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
     readSettingsFromDiskMigrated,
     fetchFreeZenModels,
     getCachedZenModels,
+    distributionPolicy = DISTRIBUTION_POLICY,
   } = dependencies;
 
   app.get('/api/openchamber/update-check', async (req, res) => {
@@ -34,14 +53,14 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
       const userAgent = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : '';
       const appType = parseString(req.query.appType) || 'web';
 
-      if (appType === 'web' && DISTRIBUTION_POLICY.webUpdateMode === 'external') {
+      if (appType === 'web' && distributionPolicy.webUpdateMode === 'external') {
         const { getCurrentVersion } = await import('../package-manager.js');
         return res.json({
           available: false,
           currentVersion: parseString(req.query.currentVersion) || getCurrentVersion(),
           updatePolicy: 'external',
-          distribution: DISTRIBUTION_POLICY.id,
-          repositoryUrl: DISTRIBUTION_POLICY.repositoryUrl,
+          distribution: distributionPolicy.id,
+          repositoryUrl: distributionPolicy.repositoryUrl,
           nextSuggestedCheckInSec: 7 * 24 * 60 * 60,
         });
       }
@@ -69,17 +88,17 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
   });
 
   app.post('/api/openchamber/update-install', async (_req, res) => {
-    if (DISTRIBUTION_POLICY.webUpdateMode === 'external') {
+    if (distributionPolicy.webUpdateMode === 'external') {
       return res.status(403).json({
         error: 'Self-update is disabled for this distribution',
         updatePolicy: 'external',
-        distribution: DISTRIBUTION_POLICY.id,
-        repositoryUrl: DISTRIBUTION_POLICY.repositoryUrl,
+        distribution: distributionPolicy.id,
+        repositoryUrl: distributionPolicy.repositoryUrl,
       });
     }
 
     try {
-      const { spawn: spawnChild } = await import('child_process');
+      const { spawn: spawnChild, spawnSync } = await import('child_process');
       const {
         checkForUpdates,
         getUpdateCommand,
@@ -134,10 +153,57 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
       } catch {
       }
       const launchMode = storedOptions.launchMode === 'foreground' ? 'foreground' : 'daemon';
-      const isForegroundService = launchMode === 'foreground';
+
+      if (launchMode === 'foreground') {
+        const systemdServiceUnit = resolveSystemdServiceUnit(process.env);
+        if (!systemdServiceUnit) {
+          return res.status(409).json({
+            error: 'Foreground servers must be updated by their service manager. Set OPENCHAMBER_SYSTEMD_UNIT when running under systemd, or run openchamber update and restart the service.',
+          });
+        }
+
+        const updateJobName = `openchamber-update-${Date.now()}`;
+        const updateLogPath = `journalctl --user-unit ${updateJobName}.service`;
+        const updateScript = [
+          'set -eu',
+          updateCmd,
+          `systemctl --user restart ${quotePosixShell(systemdServiceUnit)}`,
+        ].join('\n');
+        const systemdRun = spawnSync('systemd-run', [
+          '--user',
+          `--unit=${updateJobName}`,
+          '--collect',
+          '--service-type=exec',
+          `--setenv=PATH=${process.env.PATH || ''}`,
+          '/bin/sh',
+          '-c',
+          updateScript,
+        ], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 5000,
+        });
+
+        if (systemdRun.status !== 0) {
+          const detail = (systemdRun.stderr || systemdRun.stdout || '').trim();
+          return res.status(409).json({
+            error: detail || `Could not queue update job for ${systemdServiceUnit}`,
+          });
+        }
+
+        return res.json({
+          success: true,
+          message: 'Update queued; OpenChamber will restart after installation completes',
+          version: updateInfo.version,
+          packageManager: pm,
+          autoRestart: true,
+          restartManager: 'systemd',
+          jobId: updateJobName,
+          logPath: updateLogPath,
+        });
+      }
 
       const isWindows = process.platform === 'win32';
-      const quotePosix = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
       const quoteCmd = (value) => {
         const stringValue = String(value);
         return `"${stringValue.replace(/"/g, '""')}"`;
@@ -145,8 +211,8 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
 
       const cliPath = path.resolve(__dirname, '..', 'bin', 'cli.js');
       const restartParts = [
-        isWindows ? quoteCmd(process.execPath) : quotePosix(process.execPath),
-        isWindows ? quoteCmd(cliPath) : quotePosix(cliPath),
+        isWindows ? quoteCmd(process.execPath) : quotePosixShell(process.execPath),
+        isWindows ? quoteCmd(cliPath) : quotePosixShell(cliPath),
         'serve',
         '--port',
         String(storedOptions.port),
@@ -179,7 +245,7 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         restartCmdPrimary += ' --api-only';
         restartCmdFallback += ' --api-only';
       }
-      const restartCmd = isForegroundService ? '' : `(${restartCmdPrimary}) || (${restartCmdFallback})`;
+      const restartCmd = `(${restartCmdPrimary}) || (${restartCmdFallback})`;
       const updateLogPath = path.join(openchamberDataDir, 'update-install.log');
       const logPreamble = [
         '',
@@ -191,10 +257,10 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         `packageManagerCommand=${pmDetails.packageManagerCommand || 'unknown'}`,
         `packagePath=${pmDetails.packagePath || 'unknown'}`,
         `globalNodeModulesRoot=${pmDetails.globalNodeModulesRoot || 'unknown'}`,
-        `mode=${isContainer ? 'container' : 'restart'}`,
+        'mode=restart',
         `launchMode=${launchMode}`,
         `updateCommand=${updateCmd}`,
-        `restartCommand=${restartCmd || 'service-manager'}`,
+        `restartCommand=${restartCmd}`,
         `logPath=${updateLogPath}`,
       ].join('\n');
 
@@ -204,36 +270,36 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         version: updateInfo.version,
         packageManager: pm,
         autoRestart: true,
-        restartManager: isForegroundService ? 'service' : 'cli',
+        restartManager: 'cli',
       });
 
-        setTimeout(() => {
-          console.log(`\nInstalling update using ${pm}...`);
-          console.log(`Running: ${updateCmd}`);
-          console.log(logPreamble);
+      setTimeout(() => {
+        console.log(`\nInstalling update using ${pm}...`);
+        console.log(`Running: ${updateCmd}`);
+        console.log(logPreamble);
 
-          const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'sh';
-          const shellFlag = isWindows ? '/c' : '-c';
-          const script = isWindows
-            ? `
+        const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'sh';
+        const shellFlag = isWindows ? '/c' : '-c';
+        const script = isWindows
+          ? `
             echo ${quoteCmd(logPreamble)}
             timeout /t 2 /nobreak >nul
             ${updateCmd}
             if %ERRORLEVEL% EQU 0 (
               echo Update successful, restarting OpenChamber...
-              ${restartCmd || 'echo Service manager will restart OpenChamber.'}
+              ${restartCmd}
             ) else (
               echo Update failed
               exit /b 1
             )
             `
           : `
-            printf '%s\n' ${quotePosix(logPreamble)}
+            printf '%s\n' ${quotePosixShell(logPreamble)}
             sleep 2
             ${updateCmd}
             if [ $? -eq 0 ]; then
               echo "Update successful, restarting OpenChamber..."
-              ${restartCmd || 'echo "Service manager will restart OpenChamber."'}
+              ${restartCmd}
             else
               echo "Update failed"
               exit 1

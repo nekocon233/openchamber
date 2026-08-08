@@ -19,9 +19,11 @@ The preload bridge exposes desktop-only APIs to the web UI through `window.__OPE
 | File | Purpose |
 |------|---------|
 | `main.mjs` | Electron main process, app lifecycle, windows, menus, deep links, native IPC handlers, updates, local server startup |
+| `startup-url-selection.mjs` | Pure bundled/HMR startup probe and loopback connection-limit policy |
 | `preload.mjs` | Safe bridge from the rendered UI to Electron IPC |
 | `ssh-manager.mjs` | SSH host import, connection lifecycle, tunnel/port forwarding helpers |
 | `scripts/electron-dev.mjs` | Desktop dev launcher with Vite HMR support |
+| `scripts/ensure-electron.mjs` | Verifies the installed Electron binary is complete and repairs it via the postinstall under Bun |
 | `scripts/build-web-assets.mjs` | Builds `packages/web` and stages UI assets into `resources/web-dist` |
 | `scripts/prepare-opencode-cli.mjs` | Downloads and stages the pinned OpenCode CLI into `resources/opencode-cli` |
 | `scripts/bundle-main.mjs` | Bundles Electron main code into `dist-bundle/main.mjs` for packaging |
@@ -42,10 +44,18 @@ bun run electron:dev
 
 The Electron workspace package trusts Electron's install script so `bun install` downloads the platform runtime in fresh checkouts and worktrees.
 
+Electron's postinstall (`node install.js`) is run by `bun install` with the system Node. Under Node 24, the bundled `extract-zip@2.0.1` silently unpacks only the first entry of the Electron zip, leaving `dist/` without the binary and `path.txt` missing. To keep this from blocking desktop work:
+
+- The root `postinstall` runs `ensure-electron.mjs --best-effort`, which detects an incomplete Electron install (missing binary, stale `dist/version`/`path.txt`, or a binary of the wrong architecture) and repairs it by re-running the postinstall under Bun (which extracts correctly), falling back to Node.
+- `electron-dev.mjs` runs the same check (fail-fast, not best-effort) before launching, so `bun run electron:dev` self-heals even when an install was interrupted.
+- The check can be run on demand with `bun run --cwd packages/electron ensure:electron`; set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` to skip repair (e.g. CI without a network).
+- Unit tests in `scripts/ensure-electron.test.mjs` (run via `bun run --cwd packages/electron test:architecture`) cover healthy/missing/stale installs, wrong-architecture binaries, repair fallback, and `--best-effort`.
+
 Useful variants:
 
 ```bash
 bun run electron:dev:bundled
+bun run --cwd packages/electron ensure:electron
 bun run type-check:electron
 bun run lint:electron
 ```
@@ -66,7 +76,7 @@ That runs, in order:
 2. `prepare:opencode-cli` to download/cache the pinned OpenCode CLI and copy it into `packages/electron/resources/opencode-cli`.
 3. `bundle:main` to create `packages/electron/dist-bundle/main.mjs`.
 4. `rebuild:native` to rebuild native modules for Electron.
-5. `package.mjs` to run `electron-builder`; its `afterPack` hook stages the rebuilt `better-sqlite3` binary that Electron Builder's Bun dependency collector otherwise omits.
+5. `package.mjs` to run `electron-builder`; its `afterPack` hook stages the compiled macOS icon asset catalog.
 
 Build output goes to `packages/electron/dist`.
 
@@ -94,6 +104,8 @@ Linux AppImages must be built natively. Set `OPENCHAMBER_TARGET_ARCH=x64` or `OP
 After packaging, run `bun run --cwd packages/electron verify:linux-appimage`. The verifier extracts the final AppImage and checks its ELF architecture, desktop identity, Electron executable, pinned OpenCode CLI version and architecture, and all packaged native `.node` modules.
 
 Running a packaged Linux AppImage requires FUSE (`libfuse.so.2`, typically `libfuse2` / `libfuse2t64` on Debian/Ubuntu). Without FUSE, start with `APPIMAGE_EXTRACT_AND_RUN=1`. Keep the AppImage on a writable path so in-app updates can replace it.
+
+Desktop clears AppImage `ARGV0` from `process.env` before probing the login shell and starting the in-process server. Leaving it set makes zsh rewrite argv[0] for integrated-terminal and managed-OpenCode child commands to the AppImage path.
 
 Linux updates are supported only when the packaged app is running from a writable AppImage. Update checks, downloads, and installation report an actionable error when `APPIMAGE` is missing, invalid, or read-only; a missing release feed (`latest-linux.yml` 404 before the first Linux publish) is treated as “no update available”. macOS and Windows updater behavior is unchanged. Release builds keep `latest-linux.yml` (x64) and `latest-linux-arm64.yml` separate and validate each manifest against its AppImage before upload. Linux AppImages download full updates (no `.blockmap` differential channel yet).
 
@@ -136,6 +148,7 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 | `OPENCHAMBER_TARGET_ARCH` | Explicit desktop package architecture (`x64` or `arm64`); Linux requires it to match the native host |
 | `OPENCHAMBER_DESKTOP_NOTIFY=true` | Enables desktop notification flow in the web server |
 | `OPENCHAMBER_SKIP_API_COMPRESSION=true` | Defaulted by Desktop to reduce local CPU overhead |
+| `OPENCHAMBER_STARTUP_PERF=1` | Enables privacy-safe startup phase timings in Desktop/server logs; disabled by default |
 | `OPENCODE_HOST` / `OPENCODE_PORT` / `OPENCODE_SKIP_START` | Connect Desktop to an external OpenCode server instead of starting one locally |
 
 ## Native Features Owned Here
@@ -143,6 +156,7 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 - Floating Mini Chat windows.
 - Multiple native windows.
 - Native notifications. Windows toast bodies activate an opaque `openchamber://notification/<id>` deep link, so Action Center clicks can restart the app, recreate the main window, and defer exact session navigation until the renderer listener is ready. Actionable targets carry their source runtime identity and are rejected if the main renderer has switched to another runtime before the click. Readiness carries no renderer-supplied identity: main derives remote identity from the committed document URL, verifies configured-host identity against that origin, and tracks local-shell host switches only after validating the configured host in main. Main also injects the validated configured-host key at boot so direct and relay hosts keep the same identity across restart.
+- User-confirmed local folder selection. The shared UI supplies the requested directory as the picker `defaultPath`; confirmation is required before filesystem access is retried.
 - One-click open/reveal/open-in-app actions.
 - Desktop host switcher and deep-link imports.
 - Local and remote instance handling.

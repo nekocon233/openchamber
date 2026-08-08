@@ -32,6 +32,7 @@ import { markPendingUserSendAnimation } from "@/lib/userSendAnimation"
 import { normalizePath } from "@/lib/pathNormalization"
 import { flattenAssistantTextParts } from "@/lib/messages/messageText"
 import { composeForkSessionMessage } from "@/lib/messages/executionMeta"
+import { findLatestUserModelChoice } from "@/lib/messages/userModelChoice"
 import { waitForPendingDraftWorktreeRequest } from "@/lib/worktrees/pendingDraftWorktree"
 import { waitForWorktreeBootstrap } from "@/lib/worktrees/worktreeBootstrap"
 import { getWorktreeSetupWaitEnabled } from "@/lib/openchamberConfig"
@@ -42,13 +43,23 @@ import {
   getSyncMessages,
   getSyncParts,
   getDirectoryState,
+  getSyncSessionDirectory,
 } from "./sync-refs"
+import {
+  resolveSessionDirectoryFromSources,
+  type SessionDirectoryResolution,
+  type SessionDirectorySources,
+} from "./session-directory-resolution"
 import { markSessionViewed } from "./notification-store"
 import { setActiveSession } from "./sync-context"
 import {
   createSession as createSessionAction,
   deleteSession as deleteSessionAction,
+  deleteSessions as deleteSessionsAction,
   archiveSession as archiveSessionAction,
+  archiveSessions as archiveSessionsAction,
+  unarchiveSession as unarchiveSessionAction,
+  unarchiveSessions as unarchiveSessionsAction,
   updateSessionTitle as updateSessionTitleAction,
   shareSession as shareSessionAction,
   unshareSession as unshareSessionAction,
@@ -58,6 +69,10 @@ import {
   unrevertSession as unrevertSessionAction,
   forkFromMessage as forkFromMessageAction,
   fetchMessagesForSession,
+  type ArchiveSessionsOptions,
+  type DeleteSessionOptions,
+  type DeleteSessionsOptions,
+  type UnarchiveSessionsOptions,
 } from "./session-actions"
 import { useInputStore, type SyntheticContextPart } from "./input-store"
 import { useSessionGoalArmStore } from "@/stores/useSessionGoalArmStore"
@@ -79,6 +94,7 @@ import {
   getRuntimeKey,
   RuntimeContextChangedError,
 } from "@/lib/runtime-switch"
+import { persistLastActiveSession, readLastActiveSession } from "./last-session-cache"
 import { persistWorktreeTopology, readPersistedWorktreeTopology } from "./worktree-topology-cache"
 import { rememberRuntimeLiveStatus } from "./runtime-live-memory"
 
@@ -209,6 +225,7 @@ export async function ensurePendingDraftPermissionPolicy(
 }
 
 export async function routeMessage(params: {
+  runtimeKey?: string
   sessionId: string
   directory?: string | null
   content: string
@@ -231,6 +248,7 @@ export async function routeMessage(params: {
   const requestDirectory = params.directory ?? undefined
   if (params.inputMode === "shell") {
     return opencodeClient.shellSession({
+      runtimeKey: params.runtimeKey,
       sessionId: params.sessionId,
       directory: requestDirectory,
       agent: params.agent ?? "",
@@ -259,6 +277,7 @@ export async function routeMessage(params: {
 
     if (isCommand) {
       return optimisticSend({
+        runtimeKey: params.runtimeKey,
         sessionId: params.sessionId,
         content: params.content,
         providerID: params.providerID,
@@ -269,6 +288,7 @@ export async function routeMessage(params: {
         messageId: params.messageId,
         expectedRuntime: params.expectedRuntime,
         send: (messageID) => opencodeClient.sendCommand({
+          runtimeKey: params.runtimeKey,
           id: params.sessionId,
           providerID: params.providerID,
           modelID: params.modelID,
@@ -286,6 +306,7 @@ export async function routeMessage(params: {
 
   // Normal prompt — optimistic insert so message appears instantly
   return optimisticSend({
+    runtimeKey: params.runtimeKey,
     sessionId: params.sessionId,
     content: params.content,
     providerID: params.providerID,
@@ -296,6 +317,7 @@ export async function routeMessage(params: {
     messageId: params.messageId,
     expectedRuntime: params.expectedRuntime,
     send: (messageID) => opencodeClient.sendMessage({
+      runtimeKey: params.runtimeKey,
       id: params.sessionId,
       providerID: params.providerID,
       modelID: params.modelID,
@@ -312,7 +334,14 @@ export async function routeMessage(params: {
   })
 }
 
+type CapturedSendTarget = {
+  runtimeKey: string
+  sessionId: string
+  directory: string
+}
+
 type SendMessageOptions = {
+  target?: CapturedSendTarget
   sessionId?: string
   directory?: string
   delivery?: 'steer' | 'queue'
@@ -403,7 +432,7 @@ export type SessionUIState = {
   prepareForRuntimeSwitch: (apiBaseUrl?: string | null) => void
   restoreForRuntimeSwitch: (apiBaseUrl?: string | null) => void
   reconcileRestoredSession: (session: Session | null) => void
-  openNewSessionDraft: (options?: Partial<NewSessionDraftState>) => void
+  openNewSessionDraft: (options?: Partial<NewSessionDraftState> & { automatic?: boolean }) => void
   closeNewSessionDraft: () => void
   setNewSessionDraftTarget: (target: { projectId?: string | null; selectedProjectId?: string | null; directoryOverride?: string | null }, options?: { force?: boolean }) => void
   setDraftPreserveDirectoryOverride: (value: boolean) => void
@@ -438,10 +467,12 @@ export type SessionUIState = {
   ) => Promise<void>
 
   createSession: (title?: string, directoryOverride?: string | null, parentID?: string | null, metadata?: Record<string, unknown>) => Promise<Session | null>
-  deleteSession: (id: string, options?: Record<string, unknown>) => Promise<boolean>
-  deleteSessions: (ids: string[], options?: Record<string, unknown>) => Promise<{ deletedIds: string[]; failedIds: string[] }>
+  deleteSession: (id: string, options?: DeleteSessionOptions) => Promise<boolean>
+  deleteSessions: (ids: string[], options?: DeleteSessionsOptions) => Promise<{ deletedIds: string[]; failedIds: string[] }>
   archiveSession: (id: string) => Promise<boolean>
-  archiveSessions: (ids: string[], options?: Record<string, unknown>) => Promise<{ archivedIds: string[]; failedIds: string[] }>
+  archiveSessions: (ids: string[], options?: ArchiveSessionsOptions) => Promise<{ archivedIds: string[]; failedIds: string[] }>
+  unarchiveSession: (id: string) => Promise<boolean>
+  unarchiveSessions: (ids: string[], options?: UnarchiveSessionsOptions) => Promise<{ restoredIds: string[]; failedIds: string[] }>
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>
   shareSession: (sessionId: string) => Promise<Session | null>
   unshareSession: (sessionId: string) => Promise<Session | null>
@@ -459,6 +490,12 @@ export type SessionUIState = {
   debugSessionMessages: (sessionId: string) => Promise<void>
   pollForTokenUpdates: () => void
   setSessionDirectory: (sessionId: string, directory: string | null) => void
+  /**
+   * Replace a guessed selection directory with the authoritative one once sync
+   * has indexed the session. Safe to call at any time: it only ever promotes a
+   * guess, never overrides a confirmed selection.
+   */
+  adoptAuthoritativeSessionDirectory: (sessionId?: string) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -507,26 +544,123 @@ const getAttachmentForSession = (sessionId: string | null | undefined): SessionW
   return useSessionWorktreeStore.getState().getAttachment(sessionId)
 }
 
+/**
+ * The directory that owns a session, from the two server-backed signals.
+ *
+ * `null` means "not indexed yet", never "no directory" — callers must fall back
+ * rather than treat it as empty.
+ *
+ * The session's own record wins. Holding a session in a child store proves
+ * containment, not ownership: a project's session list legitimately includes
+ * the sessions of its worktrees so the sidebar can group them, so the parent
+ * repository holds worktree sessions too. Reading ownership from store
+ * membership therefore reports the parent for a session that lives in a
+ * worktree, and every fetch is then addressed to a directory that does not own
+ * it. Store membership remains the fallback for a session whose record carries
+ * no directory.
+ */
+const getAuthoritativeSessionDirectory = (sessionId: string): string | null => {
+  const target = getAllSyncSessions().find((s) => s.id === sessionId)
+  const recordDirectory = target ? resolveDirectoryKey(target) : null
+  if (recordDirectory) return normalizePath(recordDirectory)
+  const owningDirectory = getSyncSessionDirectory(sessionId)
+  return owningDirectory ? normalizePath(owningDirectory) : null
+}
+
+/**
+ * Directory remembered for a session in this runtime, plus the one persisted
+ * across restarts. Exported for diagnostics: a stale persisted directory is the
+ * hardest source to observe and the one that survives reloads, so a report that
+ * cannot show it cannot rule it out.
+ */
+export const getRememberedSessionDirectory = (sessionId: string): {
+  runtime: string | null
+  persisted: string | null
+} => {
+  const key = runtimeMemoryKey()
+  const runtimeMemory = runtimeSessionMemory.get(key)
+  const persistedNavigation = readPersistedSessionNavigation(key)
+  const persistedLastSession = readLastActiveSession(key)
+  const persisted = persistedNavigation?.sessionId === sessionId
+    ? persistedNavigation
+    : persistedLastSession
+  return {
+    runtime: runtimeMemory?.sessionId === sessionId ? normalizePath(runtimeMemory.directory) : null,
+    persisted: persisted?.sessionId === sessionId ? normalizePath(persisted.directory) : null,
+  }
+}
+
+/**
+ * Session whose `currentSessionDirectory` is only the active directory, used
+ * because the session's own directory was not known at selection time. Such a
+ * value must never outrank a worktree assignment or reach persistence — it is
+ * a guess, not a selection.
+ */
+let guessedSelectionSessionId: string | null = null
+
+const collectSessionDirectorySources = (
+  sessionId: string,
+  getWtMeta: (id: string) => WorktreeMetadata | undefined,
+  selected: string | null,
+): SessionDirectorySources => ({
+  authoritative: getAuthoritativeSessionDirectory(sessionId),
+  selected: sessionId === guessedSelectionSessionId ? null : normalizePath(selected),
+  attachment: getAttachedSessionDirectory(getAttachmentForSession(sessionId)),
+  worktreeMetadata: normalizePath(getWtMeta(sessionId)?.path ?? null),
+  remembered: getRememberedSessionDirectory(sessionId).runtime,
+})
+
+/**
+ * Conflicts already warned about, so a stale directory logs once instead of on
+ * every keystroke. Keyed by runtime *and* the exact pair of directories: the
+ * same session ID means a different thing in another runtime, and a conflict
+ * that reappears after being resolved is news worth logging again. Bounded so
+ * a long-lived session cannot grow it without limit.
+ */
+const reportedDirectoryConflicts = new Set<string>()
+const MAX_REPORTED_DIRECTORY_CONFLICTS = 200
+
+const reportSessionDirectoryConflict = (
+  sessionId: string,
+  resolution: SessionDirectoryResolution,
+): void => {
+  if (!resolution.conflict) return
+  const conflictKey = JSON.stringify([
+    runtimeMemoryKey(),
+    sessionId,
+    resolution.directory,
+    resolution.conflict.source,
+    resolution.conflict.directory,
+  ])
+  if (reportedDirectoryConflicts.has(conflictKey)) return
+  if (reportedDirectoryConflicts.size >= MAX_REPORTED_DIRECTORY_CONFLICTS) {
+    reportedDirectoryConflicts.clear()
+  }
+  reportedDirectoryConflicts.add(conflictKey)
+  console.warn(
+    "[session-directory] session directory sources disagree; using the higher-authority one. "
+    + "Run __opencodeDebug.diagnoseSessionDirectory() for the full picture.",
+    {
+      sessionId,
+      using: resolution.source,
+      directory: resolution.directory,
+      conflictingSource: resolution.conflict.source,
+      conflictingDirectory: resolution.conflict.directory,
+    },
+  )
+}
+
 const resolveSessionDirectory = (
   sessionId: string | null | undefined,
   getWtMeta: (id: string) => WorktreeMetadata | undefined,
+  selected: string | null = null,
 ): string | null => {
   if (!sessionId) return null
-  const attachmentDirectory = getAttachedSessionDirectory(getAttachmentForSession(sessionId))
-  if (attachmentDirectory) return attachmentDirectory
-  const metaPath = getWtMeta(sessionId)?.path
-  if (typeof metaPath === "string" && metaPath.trim().length > 0) return normalizePath(metaPath)
-  const runtimeMemory = runtimeSessionMemory.get(runtimeMemoryKey())
-  if (runtimeMemory?.sessionId === sessionId && runtimeMemory.directory) {
-    return normalizePath(runtimeMemory.directory)
-  }
-  const sessions = getAllSyncSessions()
-  const target = sessions.find((s) => s.id === sessionId)
-  if (target) return resolveDirectoryKey(target)
-  const global = useGlobalSessionsStore.getState()
-  const globalSession = [...global.activeSessions, ...global.archivedSessions]
-    .find((session) => session.id === sessionId)
-  return globalSession ? resolveGlobalSessionDirectory(globalSession) : null
+  const resolution = resolveSessionDirectoryFromSources(
+    collectSessionDirectorySources(sessionId, getWtMeta, selected),
+  )
+  reportSessionDirectoryConflict(sessionId, resolution)
+  return resolution.directory
 }
 
 const activateConfigForDirectory = async (directory: string | null | undefined): Promise<void> => {
@@ -650,7 +784,9 @@ export function materializeOpenDraftSession(selection: {
     })
 
     const draftSyntheticParts = draft.syntheticParts
-    const createdDirectory = normalizePath(draftDirectoryOverride ?? created.directory ?? null)
+    // The create response is authoritative and may canonicalize the requested
+    // worktree path through symlinks or platform-specific casing.
+    const createdDirectory = normalizePath(created.directory ?? draftDirectoryOverride ?? null)
     const configState = useConfigStore.getState()
     void activateConfigForDirectory(createdDirectory).catch((error) => {
       console.warn("Failed to activate directory after creating session:", error)
@@ -765,7 +901,13 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       (sid) => get().worktreeMetadata.get(sid),
     )
     const fallbackDir = opencodeClient.getDirectory() ?? directoryState.currentDirectory ?? null
-    const resolvedDir = (directoryHint ? normalizePath(directoryHint) : null) ?? sessionDir ?? fallbackDir
+    const knownDir = (directoryHint ? normalizePath(directoryHint) : null) ?? sessionDir
+    const resolvedDir = knownDir ?? fallbackDir
+    // `fallbackDir` is the active directory, not this session's directory. It
+    // keeps routing usable while the owning directory store bootstraps, but it
+    // must never be remembered: a persisted guess outlives the race that
+    // produced it and survives reloads and restarts.
+    const isGuessedDir = knownDir === null
     const projectsState = useProjectsStore.getState()
     const sessionProject = resolvedDir
       ? resolveProjectForSessionDirectory(
@@ -783,9 +925,16 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       restoredSessionPendingValidation: false,
       restoredSessionRuntimeKey: null,
     })
-    writeRuntimeSessionMemory(key, { sessionId: id, directory: resolvedDir ?? null })
-    if (id) persistSessionNavigation(id, resolvedDir, key)
-    else if (previousSessionId) clearPersistedSessionNavigation(previousSessionId, key)
+    guessedSelectionSessionId = isGuessedDir && id ? id : null
+    const rememberedDir = isGuessedDir ? null : resolvedDir ?? null
+    writeRuntimeSessionMemory(key, { sessionId: id, directory: rememberedDir })
+    if (id) {
+      persistSessionNavigation(id, rememberedDir, key)
+      // Mobile cold launches still consume the bounded legacy cache directly.
+      persistLastActiveSession(key, { sessionId: id, directory: rememberedDir })
+    } else if (previousSessionId) {
+      clearPersistedSessionNavigation(previousSessionId, key)
+    }
 
     // Kick off the message fetch on the same tick, before React commits the
     // state change and fires ChatContainer.useEffect. The fetch is
@@ -1295,8 +1444,13 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     options?: SendMessageOptions,
   ) => {
     assertExpectedRuntimeContext(options?.expectedRuntime)
+    const capturedTarget = options?.target
+    if (capturedTarget && capturedTarget.runtimeKey !== getRuntimeKey()) {
+      throw new Error("Message was not sent because the runtime changed.")
+    }
+
     // Clear non-Git changed-files bar on new user message for current session
-    const sid = options?.sessionId ?? get().currentSessionId;
+    const sid = capturedTarget?.sessionId ?? options?.sessionId ?? get().currentSessionId;
     if (sid) {
       await ensurePendingDraftPermissionPolicy(sid, options?.expectedRuntime)
       const map = new Map(get().pendingChangesBarDismissed);
@@ -1356,7 +1510,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     }
 
     // ---- New session from draft ----
-    if (!options?.sessionId && draft?.open) {
+    if (!capturedTarget && !options?.sessionId && draft?.open) {
       const createdDraftSession = await materializeOpenDraftSession({
         providerID,
         modelID,
@@ -1412,7 +1566,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     }
 
     // ---- Existing session ----
-    const targetSessionId = options?.sessionId ?? get().currentSessionId
+    const targetSessionId = capturedTarget?.sessionId ?? options?.sessionId ?? get().currentSessionId
     const sessionAgentSelection = targetSessionId
       ? useSelectionStore.getState().getSessionAgentSelection(targetSessionId)
       : null
@@ -1447,7 +1601,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     }
 
     const currentSessionDirectory = targetSessionId
-      ? normalizePath(options?.directory ?? get().getDirectoryForSession(targetSessionId))
+      ? normalizePath(capturedTarget?.directory ?? options?.directory ?? get().getDirectoryForSession(targetSessionId))
       : null
     if (targetSessionId) {
       notifyMessageSent(targetSessionId)
@@ -1468,6 +1622,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       await applyArmedGoal(targetSessionId, currentSessionDirectory)
     }
     await routeMessage({
+      runtimeKey: capturedTarget?.runtimeKey,
       sessionId: targetSessionId || "",
       directory: currentSessionDirectory,
       content,
@@ -1525,31 +1680,17 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // ---------------------------------------------------------------------------
   // deleteSession — calls SDK, SSE event updates child store
   // ---------------------------------------------------------------------------
-  deleteSession: (id) => deleteSessionAction(id),
+  deleteSession: (id, options) => deleteSessionAction(id, options),
 
-  deleteSessions: async (ids) => {
-    const deletedIds: string[] = []
-    const failedIds: string[] = []
-    for (const id of ids) {
-      const ok = await deleteSessionAction(id)
-      if (ok) deletedIds.push(id)
-      else failedIds.push(id)
-    }
-    return { deletedIds, failedIds }
-  },
+  deleteSessions: (ids, options) => deleteSessionsAction(ids, options),
 
   archiveSession: (id) => archiveSessionAction(id),
 
-  archiveSessions: async (ids) => {
-    const archivedIds: string[] = []
-    const failedIds: string[] = []
-    for (const id of ids) {
-      const ok = await archiveSessionAction(id)
-      if (ok) archivedIds.push(id)
-      else failedIds.push(id)
-    }
-    return { archivedIds, failedIds }
-  },
+  archiveSessions: (ids, options) => archiveSessionsAction(ids, options),
+
+  unarchiveSession: (id) => unarchiveSessionAction(id),
+
+  unarchiveSessions: (ids, options) => unarchiveSessionsAction(ids, options),
 
   // ---------------------------------------------------------------------------
   // updateSessionTitle — calls SDK, SSE event updates child store
@@ -1809,42 +1950,42 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   },
 
   getDirectoryForSession: (sessionId) => {
-    if (sessionId === get().currentSessionId && get().currentSessionDirectory) {
-      return get().currentSessionDirectory
-    }
-    return resolveSessionDirectory(sessionId, (sid) => get().worktreeMetadata.get(sid))
+    // The selection-time directory participates in resolution, it does not
+    // short-circuit it. For a worktree session selected before its directory
+    // store finished bootstrapping, that value is a startup fallback pointing
+    // at the parent repository; letting it win would route every send, queue
+    // key, and send-confirmation lookup to a directory that does not own the
+    // session.
+    const selected = sessionId === get().currentSessionId ? get().currentSessionDirectory : null
+    const resolved = resolveSessionDirectory(
+      sessionId,
+      (sid) => get().worktreeMetadata.get(sid),
+      selected,
+    )
+    if (resolved) return resolved
+    const globalStore = useGlobalSessionsStore.getState()
+    const globalSession = [...globalStore.activeSessions, ...globalStore.archivedSessions]
+      .find((s) => s.id === sessionId)
+    if (globalSession) return resolveGlobalSessionDirectory(globalSession)
+    return null
   },
 
   getLastUserChoice: (sessionId) => {
     const directory = get().getDirectoryForSession(sessionId) ?? undefined
     const messages = getSyncMessages(sessionId, directory)
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages[i] as Message & {
-        model?: { providerID?: string; modelID?: string; variant?: string }
-        variant?: string
-        mode?: string
-      }
-      if (message.role !== "user") {
-        continue
-      }
-
-      const providerID = typeof message.model?.providerID === "string" && message.model.providerID.trim().length > 0
-        ? message.model.providerID
-        : undefined
-      const modelID = typeof message.model?.modelID === "string" && message.model.modelID.trim().length > 0
-        ? message.model.modelID
-        : undefined
-      const agent = typeof message.agent === "string" && message.agent.trim().length > 0
-        ? message.agent
-        : (typeof message.mode === "string" && message.mode.trim().length > 0 ? message.mode : undefined)
-      const variantCandidate = message.model?.variant ?? message.variant
-      const variant = typeof variantCandidate === "string" && variantCandidate.trim().length > 0
-        ? variantCandidate
-        : undefined
-
-      return { agent, providerID, modelID, variant }
+    const choice = findLatestUserModelChoice(
+      messages,
+      (messageId) => getSyncParts(messageId, directory),
+    )
+    if (!choice) {
+      return null
     }
-    return null
+    return {
+      agent: choice.agent,
+      providerID: choice.providerID,
+      modelID: choice.modelID,
+      variant: choice.variant,
+    }
   },
 
   getCurrentAgent: (sessionId) => {
@@ -1870,11 +2011,42 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     // Handled by sync system's SSE stream
   },
 
+  adoptAuthoritativeSessionDirectory: (sessionId) => {
+    const target = sessionId ?? get().currentSessionId
+    // Only a guess is promoted. A confirmed selection outranks anything sync
+    // learns later, and a selection that has since moved on must not be
+    // rewritten by a directory that finished bootstrapping in the background.
+    if (!target || target !== guessedSelectionSessionId) return
+    if (target !== get().currentSessionId) return
+
+    const authoritative = getAuthoritativeSessionDirectory(target)
+    if (!authoritative) return
+
+    // The selection stops being a guess even when the directory is unchanged:
+    // the value has now been confirmed by the store that owns the session.
+    guessedSelectionSessionId = null
+    if (authoritative !== get().currentSessionDirectory) {
+      set({ currentSessionDirectory: authoritative })
+    }
+    const key = runtimeMemoryKey()
+    writeRuntimeSessionMemory(key, { sessionId: target, directory: authoritative })
+    persistSessionNavigation(target, authoritative, key)
+    persistLastActiveSession(key, { sessionId: target, directory: authoritative })
+  },
+
   setSessionDirectory: (sessionId, directory) => {
     const normalized = normalizePath(directory)
+    // Callers set this from a confirmed destination (a completed move, a
+    // created worktree), so the selection is no longer a guess.
+    if (sessionId === guessedSelectionSessionId) {
+      guessedSelectionSessionId = null
+    }
     if (sessionId === get().currentSessionId) {
       set({ currentSessionDirectory: normalized })
-      writeRuntimeSessionMemory(runtimeMemoryKey(), { sessionId, directory: normalized })
+      const key = runtimeMemoryKey()
+      writeRuntimeSessionMemory(key, { sessionId, directory: normalized })
+      persistSessionNavigation(sessionId, normalized, key)
+      persistLastActiveSession(key, { sessionId, directory: normalized })
     }
   },
 

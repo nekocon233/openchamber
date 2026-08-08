@@ -1,6 +1,6 @@
 import express from 'express';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
-import { createWorktree } from '../git/index.js';
+import { createWorktree, getWorktreeBootstrapStatus } from '../git/index.js';
 import { expandSnippets } from '../opencode/snippets.js';
 import { expandCommandGoalObjective, parseScheduledCommandPrompt } from '../scheduled-tasks/runtime.js';
 import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
@@ -272,6 +272,66 @@ const resolveRequestedDirectory = async ({ payload, readSettingsFromDiskMigrated
     : { ok: false, status: 400, error: validated.error || 'Invalid directory' };
 };
 
+const PROMPT_LANDED_TIMEOUT_MS = 5_000;
+const PROMPT_LANDED_POLL_MS = 150;
+
+// createWorktree returns while the worktree is still being populated in the
+// background (git reset --hard after a --no-checkout add). Dispatching a
+// prompt into a half-populated directory makes opencode's run die with
+// UnknownError (agent and config files are not there yet), so wait until the
+// bootstrap reaches git-ready (population done) or fails before creating the
+// session and dispatching.
+const WORKTREE_BOOTSTRAP_TIMEOUT_MS = 60_000;
+const WORKTREE_BOOTSTRAP_POLL_MS = 150;
+
+const waitForWorktreeBootstrapReady = async ({ directory }) => {
+  const deadline = Date.now() + WORKTREE_BOOTSTRAP_TIMEOUT_MS;
+  for (;;) {
+    const status = await getWorktreeBootstrapStatus(directory);
+    if (status?.status === 'failed') {
+      throw new OpenChamberControlError(`Worktree bootstrap failed: ${status.error || 'unknown error'}`, 500);
+    }
+    const phase = status?.phase;
+    if (status?.status === 'ready' || phase === 'git-ready' || phase === 'setup-ready') return;
+    if (Date.now() >= deadline) {
+      throw new OpenChamberControlError('Timed out waiting for the worktree bootstrap', 500);
+    }
+    await new Promise((resolve) => setTimeout(resolve, WORKTREE_BOOTSTRAP_POLL_MS));
+  }
+};
+
+const latestUserMessageID = async ({ client, sessionID, directory }) => {
+  let response;
+  try {
+    response = await client.session.messages({ sessionID, directory, limit: 100 });
+  } catch {
+    return { ok: false, messageID: null };
+  }
+  const messages = Array.isArray(response?.data) ? response.data : [];
+  let latest = null;
+  for (const message of messages) {
+    const info = message?.info;
+    if (info?.role !== 'user') continue;
+    if (!latest || (info.time?.created || 0) >= (latest.time?.created || 0)) latest = info;
+  }
+  return { ok: true, messageID: asNonEmptyString(latest?.id) };
+};
+
+// `prompt_async` answers 204 as soon as OpenCode forks the run, and every later
+// failure is reported only on the session event stream. Confirm the prompt was
+// actually recorded so `promptDispatched` never claims a dispatch that vanished.
+const waitForPromptLanded = async ({ client, sessionID, directory, baselineUserMessageID }) => {
+  const deadline = Date.now() + PROMPT_LANDED_TIMEOUT_MS;
+  for (;;) {
+    const latest = await latestUserMessageID({ client, sessionID, directory });
+    // A failed lookup is not authoritative evidence that the prompt was lost.
+    if (!latest.ok) return true;
+    if (latest.messageID && latest.messageID !== baselineUserMessageID) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, PROMPT_LANDED_POLL_MS));
+  }
+};
+
 const resolveWorktreeInput = (payload) => {
   if (!payload?.worktree || typeof payload.worktree !== 'object') return null;
   const name = asNonEmptyString(payload.worktree.name);
@@ -320,6 +380,48 @@ export const createOpenChamberSessionService = (dependencies) => {
     } catch {
     }
     return null;
+  };
+
+  // Explicit model/agent/variant are never checked by `prompt_async`: an unknown
+  // agent makes the forked run fail silently, leaving a session with no message.
+  // Reject them before any session, worktree, or goal side effect happens.
+  const validateRequestedSelection = async ({ directory, requestedModel, requestedAgent, requestedVariant }) => {
+    if (!requestedModel && !requestedAgent && !requestedVariant) return;
+    const authHeaders = getOpenCodeAuthHeaders();
+    const { providers, agents } = await fetchSelectionInputs({
+      buildOpenCodeUrl,
+      authHeaders,
+      directory,
+      readSettingsFromDiskMigrated,
+    });
+
+    // An empty list means the lookup failed or returned nothing authoritative;
+    // it must not turn a valid selection into a rejection.
+    if (requestedAgent && agents.length > 0) {
+      const agent = agents.find((entry) => entry?.name === requestedAgent) || null;
+      if (!agent) {
+        throw new OpenChamberControlError(`Unknown agent '${requestedAgent}' for ${directory}`, 400);
+      }
+      if (!isPrimaryAgentMode(agent.mode)) {
+        throw new OpenChamberControlError(`Agent '${requestedAgent}' is a subagent and cannot receive a prompt directly`, 400);
+      }
+    }
+
+    if (requestedModel && providers.length > 0) {
+      if (!hasProviderModel(providers, requestedModel.providerID, requestedModel.modelID)) {
+        throw new OpenChamberControlError(
+          `Unknown model '${requestedModel.providerID}/${requestedModel.modelID}' for ${directory}`,
+          400,
+        );
+      }
+      if (requestedVariant
+        && !resolveVariant(providers, requestedModel.providerID, requestedModel.modelID, requestedVariant)) {
+        throw new OpenChamberControlError(
+          `Unknown variant '${requestedVariant}' for model '${requestedModel.providerID}/${requestedModel.modelID}'`,
+          400,
+        );
+      }
+    }
   };
 
   const dispatchPrompt = async ({
@@ -417,6 +519,7 @@ export const createOpenChamberSessionService = (dependencies) => {
         throw markGoalPartial(error);
       }
     } else {
+      const baseline = await latestUserMessageID({ client, sessionID, directory });
       try {
         await runPromptAsync({
           baseUrl,
@@ -437,6 +540,22 @@ export const createOpenChamberSessionService = (dependencies) => {
         });
       } catch (error) {
         throw markGoalPartial(error);
+      }
+      const landed = await waitForPromptLanded({
+        client,
+        sessionID,
+        directory,
+        baselineUserMessageID: baseline.messageID,
+      });
+      if (!landed) {
+        return {
+          model,
+          agent,
+          variant,
+          promptDispatched: false,
+          dispatchedAsCommand: false,
+          promptError: 'OpenCode accepted the prompt but it never appeared in the session',
+        };
       }
     }
 
@@ -470,12 +589,23 @@ export const createOpenChamberSessionService = (dependencies) => {
     if (payload?.worktree && !worktreeInput) {
       throw new OpenChamberControlError('worktree.name is required when worktree is provided', 400);
     }
+
+    if (typeof waitForOpenCodeReady === 'function') await waitForOpenCodeReady(10_000, 250);
+
+    if (prompt) {
+      await validateRequestedSelection({
+        directory: resolvedDirectory.directory,
+        requestedModel: model,
+        requestedAgent: agent,
+        requestedVariant: variant,
+      });
+    }
+
     if (worktreeInput) {
       worktree = await createWorktree(resolvedDirectory.directory, worktreeInput);
       sessionDirectory = worktree.path;
+      await waitForWorktreeBootstrapReady({ directory: sessionDirectory });
     }
-
-    if (typeof waitForOpenCodeReady === 'function') await waitForOpenCodeReady(10_000, 250);
 
     const baseUrl = buildOpenCodeUrl('/', '').replace(/\/$/, '');
     const authHeaders = getOpenCodeAuthHeaders();
@@ -514,6 +644,7 @@ export const createOpenChamberSessionService = (dependencies) => {
       ...(prompt && dispatch.agent ? { agent: dispatch.agent } : {}),
       ...(prompt && dispatch.variant ? { variant: dispatch.variant } : {}),
       promptDispatched: dispatch.promptDispatched,
+      ...(dispatch.promptError ? { promptError: dispatch.promptError } : {}),
       dispatchedAsCommand: dispatch.dispatchedAsCommand,
       ...(goalInput.enabled ? { goalEnabled: true } : {}),
       ...(goalInput.tokenBudget ? { goalTokenBudget: goalInput.tokenBudget } : {}),
@@ -566,6 +697,13 @@ export const createOpenChamberSessionService = (dependencies) => {
       directory = resolvedDirectory.directory;
       if (typeof waitForOpenCodeReady === 'function') await waitForOpenCodeReady(10_000, 250);
 
+      await validateRequestedSelection({
+        directory,
+        requestedModel,
+        requestedAgent: asNonEmptyString(payload.agent),
+        requestedVariant: asNonEmptyString(payload.variant),
+      });
+
       const baseUrl = buildOpenCodeUrl('/', '').replace(/\/$/, '');
       const authHeaders = getOpenCodeAuthHeaders();
       const client = createOpencodeClient({ baseUrl, headers: authHeaders });
@@ -608,7 +746,8 @@ export const createOpenChamberSessionService = (dependencies) => {
         model: dispatch.model,
         ...(dispatch.agent ? { agent: dispatch.agent } : {}),
         ...(dispatch.variant ? { variant: dispatch.variant } : {}),
-        promptDispatched: true,
+        promptDispatched: dispatch.promptDispatched,
+        ...(dispatch.promptError ? { promptError: dispatch.promptError } : {}),
         dispatchedAsCommand: dispatch.dispatchedAsCommand,
         ...(goalInput.enabled ? { goalEnabled: true } : {}),
         ...(goalInput.tokenBudget ? { goalTokenBudget: goalInput.tokenBudget } : {}),
@@ -624,7 +763,7 @@ export const createOpenChamberSessionService = (dependencies) => {
             model: dispatch.model,
             ...(dispatch.agent ? { agent: dispatch.agent } : {}),
             ...(dispatch.variant ? { variant: dispatch.variant } : {}),
-            promptDispatched: true,
+            promptDispatched: dispatch.promptDispatched,
             dispatchedAsCommand: dispatch.dispatchedAsCommand,
             ...(goalInput.enabled ? { goalEnabled: true } : {}),
             ...(goalInput.tokenBudget ? { goalTokenBudget: goalInput.tokenBudget } : {}),

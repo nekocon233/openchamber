@@ -149,13 +149,13 @@ export const NotificationSettings: React.FC = () => {
     field: 'title' | 'message',
     value: string,
   ) => {
-    setNotificationTemplates({
-      ...notificationTemplates,
+    setNotificationTemplates((current) => ({
+      ...current,
       [event]: {
-        ...notificationTemplates[event],
+        ...current[event],
         [field]: value,
       },
-    });
+    }));
   };
 
   const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {

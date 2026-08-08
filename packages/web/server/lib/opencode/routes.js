@@ -2,6 +2,9 @@ import { createProjectIdFromPath } from '../projects/project-id.js';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import {
+  buildDeferredRestartResponse,
+} from './config-mutation-response.js';
 
 const TUNNEL_SETTINGS_KEYS = new Set([
   'tunnelBootstrapTtlMs',
@@ -28,7 +31,6 @@ const includesTunnelSettings = (changes) => Object.keys(changes || {}).some((key
 export const registerOpenCodeRoutes = (app, dependencies) => {
   const {
     crypto,
-    clientReloadDelayMs,
     getOpenCodeResolutionSnapshot,
     getOpenCodeUpgradeCapability,
     formatSettingsResponse,
@@ -40,6 +42,7 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     resolveProjectDirectory,
     getProviderSources,
     removeProviderConfig,
+    upsertProviderConfig,
     refreshOpenCodeAfterConfigChange,
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
@@ -477,6 +480,63 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     }
   });
 
+  app.put('/api/provider', async (req, res) => {
+    try {
+      const providerID = typeof req.body?.providerID === 'string'
+        ? req.body.providerID.trim()
+        : (typeof req.body?.providerId === 'string' ? req.body.providerId.trim() : '');
+      const config = req.body?.config;
+      const scope = typeof req.body?.scope === 'string' ? req.body.scope : 'user';
+
+      if (!providerID) {
+        return res.status(400).json({ error: 'Provider ID is required' });
+      }
+      if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        return res.status(400).json({ error: 'Provider config is required' });
+      }
+      if (scope !== 'user' && scope !== 'project' && scope !== 'custom') {
+        return res.status(400).json({ error: 'Invalid scope' });
+      }
+
+      const headerDirectory = typeof req.get === 'function' ? req.get('x-opencode-directory') : null;
+      const queryDirectory = Array.isArray(req.query?.directory)
+        ? req.query.directory[0]
+        : req.query?.directory;
+      const requestedDirectory = headerDirectory || queryDirectory || null;
+
+      let directory = null;
+      if (scope === 'project' || requestedDirectory) {
+        const resolved = await resolveProjectDirectory(req);
+        if (!resolved.directory) {
+          return res.status(400).json({ error: resolved.error || 'Working directory is required' });
+        }
+        directory = resolved.directory;
+      } else {
+        const resolved = await resolveProjectDirectory(req);
+        if (resolved.directory) {
+          directory = resolved.directory;
+        }
+      }
+
+      const { getProviderAuth } = await getAuthLibrary();
+      const hasStoredAuth = Boolean(getProviderAuth(providerID));
+      const upsertResult = upsertProviderConfig(providerID, config, directory, scope, { hasStoredAuth });
+
+      return res.json({
+        ...buildDeferredRestartResponse(
+          `Provider ${providerID} saved. Restart OpenCode to apply.`,
+        ),
+        providerId: upsertResult.providerId,
+        path: upsertResult.path,
+        config: upsertResult.config,
+      });
+    } catch (error) {
+      const status = typeof error?.statusCode === 'number' ? error.statusCode : 500;
+      console.error('Failed to upsert provider config:', error);
+      return res.status(status).json({ error: error.message || 'Failed to save provider config' });
+    }
+  });
+
   app.delete('/api/provider/:providerId/auth', async (req, res) => {
     try {
       const { providerId } = req.params;
@@ -523,15 +583,18 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
       }
 
       if (removed) {
-        await refreshOpenCodeAfterConfigChange(`provider ${providerId} disconnected (${scope})`);
+        return res.json({
+          success: true,
+          removed,
+          ...buildDeferredRestartResponse('Provider disconnected successfully. Restart OpenCode to apply.'),
+        });
       }
 
       return res.json({
         success: true,
         removed,
-        requiresReload: removed,
-        message: removed ? 'Provider disconnected successfully' : 'Provider was not connected',
-        reloadDelayMs: removed ? clientReloadDelayMs : undefined,
+        requiresReload: false,
+        message: 'Provider was not connected',
       });
     } catch (error) {
       console.error('Failed to disconnect provider:', error);
@@ -619,14 +682,9 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
 
       await fs.promises.writeFile(AGENTS_MD_PATH, content, 'utf8');
 
-      // Refresh OpenCode so it picks up the new AGENTS.md without a full restart
-      try {
-        await refreshOpenCodeAfterConfigChange('global behavior (AGENTS.md) updated');
-      } catch {
-        // Non-fatal: file was written successfully
-      }
-
-      return res.json({ success: true });
+      return res.json(buildDeferredRestartResponse(
+        'AGENTS.md saved. Restart OpenCode to apply.',
+      ));
     } catch (error) {
       console.error('Failed to write AGENTS.md:', error);
       return res.status(500).json({ error: error.message || 'Failed to write AGENTS.md' });

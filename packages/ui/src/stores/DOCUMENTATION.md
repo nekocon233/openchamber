@@ -47,6 +47,7 @@ Examples:
 - `useProjectsStore.ts`
 - `useGlobalSessionsStore.ts`
 - `useSessionFoldersStore.ts`
+- `messageQueueStore.ts`
 
 These stores coordinate persistent project/session metadata across multiple views.
 
@@ -60,7 +61,8 @@ User-visible session ordering is also not owned by the global cache array order.
 
 Global refresh rules:
 
-- Per-directory refresh is bounded to two requests across callers and prioritizes the current directory.
+- The OpenCode `archived` list flag means "also include archived sessions": the server only drops its `time_archived IS NULL` condition. The global cache therefore loads with one inclusive request (`archived: true`) and splits active/archived client-side via `splitGlobalSessionsByArchived` — an `archived: false` request cannot be truthful because the server filter excludes restored sessions (`time.archived` falsy-but-present, see "Restore (unarchive) contract" in `sync/DOCUMENTATION.md`). For callers that still want only archived records, `listGlobalSessionPages` narrows inclusive responses at the data boundary (default `narrowToArchived`), so the archived cache never holds active sessions and no consumer has to re-derive that. Pagination progress stays measured on the raw response, so a page that is full upstream but filtered out here is not mistaken for the last page.
+- Per-directory refresh issues one inclusive request per directory (previously two), bounded to two requests across callers and prioritizing the current directory.
 - Each directory is an independent completeness scope. A failed directory preserves its previous sessions while successful directories reconcile normally.
 - Fetch failure must remain distinguishable from a successful empty list; failed scopes cannot destructively clear cached sessions.
 - Runtime switch increments the load generation and clears the previous runtime's snapshot so stale in-flight work cannot commit.
@@ -257,7 +259,10 @@ Expected model:
 
 - `GitView` / `DiffView` ensure current-directory Git state when visible
 - explicit Git actions refresh status/branches/log as needed
-- successful file-mutating tools can issue a one-shot Git refresh hint
+- a mounted file-mutating tool issues a one-shot Git refresh hint when it transitions from active to successfully finalized; remounting historical completed tools does not replay the hint
+- a successful dirty save from the in-app file editor issues a path-scoped Git refresh hint; clean autosave checks remain no-ops
+- refresh hints with authoritative file paths invalidate only those cached and currently rendered diffs before status refresh; pathless tools request status reconciliation without broadly remounting DiffView
+- targeted diff remounts preserve the user's current file-section anchor and intra-file offset before paint instead of resetting the stacked view to the top
 - no root-level background Git polling
 
 ### PR

@@ -55,6 +55,8 @@ import { isFullySyntheticMessage } from '@/lib/messages/synthetic';
 import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { findShellCommandForMessage, isUserShellMarkerMessage } from './lib/shellBridge';
 import { resolveChatPromptReadOnly } from './chatPromptReadOnly';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { createFirstVisibleSessionPerformanceTracker } from '@/sync/session-load-performance';
 
 const EMPTY_MESSAGES: Array<{ info: Message; parts: Part[] }> = [];
 const IDLE_SESSION_STATUS = { type: 'idle' as const };
@@ -140,6 +142,7 @@ type HydratingToolSkeletonRow = {
 
 type ChatViewportProps = {
     currentSessionId: string;
+    currentSessionKey: string;
     isDesktopExpandedInput: boolean;
     isMobile: boolean;
     stickyUserHeader: boolean;
@@ -178,6 +181,7 @@ type ChatViewportProps = {
 
 const ChatViewport = React.memo(({
     currentSessionId,
+    currentSessionKey,
     isDesktopExpandedInput,
     isMobile,
     stickyUserHeader,
@@ -345,7 +349,7 @@ const ChatViewport = React.memo(({
                             </div>
                         )}
                         <MessageList
-                            key={currentSessionId}
+                            key={currentSessionKey}
                             ref={messageListRef}
                             sessionKey={currentSessionId}
                             disableStaging={pendingRevealWork}
@@ -398,6 +402,7 @@ const ChatViewport = React.memo(({
     );
 }, (prev, next) => {
     return prev.currentSessionId === next.currentSessionId
+        && prev.currentSessionKey === next.currentSessionKey
         && prev.isDesktopExpandedInput === next.isDesktopExpandedInput
         && prev.isMobile === next.isMobile
         && prev.stickyUserHeader === next.stickyUserHeader
@@ -542,8 +547,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
     const sync = useSync();
     const syncDirectory = useSyncDirectory();
     const effectiveSessionDirectory = currentSessionDirectory ?? syncDirectory;
+    const currentSessionKey = currentSessionId
+        ? JSON.stringify([getRuntimeKey(), effectiveSessionDirectory, currentSessionId])
+        : null;
     const loadMoreMessages = React.useCallback(
-        (sessionId: string) => sync.loadMore(sessionId, effectiveSessionDirectory),
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        (sessionId: string, _direction: 'up' | 'down') => sync.loadMore(sessionId, effectiveSessionDirectory),
         [effectiveSessionDirectory, sync],
     );
 
@@ -584,6 +593,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
         currentSessionId ?? '',
         effectiveSessionDirectory,
     );
+    const [firstVisiblePerformance] = React.useState(createFirstVisibleSessionPerformanceTracker);
+
+    React.useEffect(() => {
+        if (!active || !currentSessionKey || !hasRenderableSessionSnapshot || sessionMessages.length === 0) return;
+        return firstVisiblePerformance.schedule(currentSessionKey, sessionMessages.length);
+    }, [active, currentSessionKey, firstVisiblePerformance, hasRenderableSessionSnapshot, sessionMessages.length]);
 
     // Plan detection - watches messages for plan creation and signals store
     usePlanDetection(currentSessionId ?? '', sessionMessages);
@@ -752,7 +767,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
 
     React.useEffect(() => {
         if (autoOpenDraft && !currentSessionId && !draftOpen) {
-            openNewSessionDraft();
+            // Programmatic fallback, not user navigation — must not clear the
+            // persisted last-session pointer the cold-launch restore reads.
+            openNewSessionDraft({ automatic: true });
         }
     }, [autoOpenDraft, currentSessionId, draftOpen, openNewSessionDraft]);
 
@@ -774,6 +791,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
         showScrollButton,
     } = useChatAutoFollow({
         currentSessionId,
+        currentSessionKey,
         sessionMessageCount,
         sessionIsWorking,
         isMobile,
@@ -784,6 +802,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
 
     const timelineController = useChatTimelineController({
         sessionId: currentSessionId,
+        sessionKey: currentSessionKey,
         messages: viewportMessages,
         historyMeta,
         scrollRef,
@@ -935,7 +954,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
         };
     }, [currentSessionId, isDesktopExpandedInput, scrollRef]);
 
-    const lastScrolledSessionRef = React.useRef<string | null>(null);
+    const lastScrolledSessionKeyRef = React.useRef<string | null>(null);
 
     const isSessionHydrating =
         Boolean(currentSessionId)
@@ -947,10 +966,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
 
     React.useEffect(() => {
         if (!active || !currentSessionId) return;
-        if (lastScrolledSessionRef.current === currentSessionId) return;
+        if (lastScrolledSessionKeyRef.current === currentSessionKey) return;
 
         const hasHashTarget = typeof window !== 'undefined' && window.location.hash.length > 0;
-        lastScrolledSessionRef.current = currentSessionId;
+        lastScrolledSessionKeyRef.current = currentSessionKey;
         if (hasHashTarget) {
             // Hash navigation handler will scroll to target; we just release auto-follow.
             releaseAutoFollow();
@@ -965,7 +984,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
         } else {
             window.requestAnimationFrame(run);
         }
-    }, [active, currentSessionId, releaseAutoFollow, restoreSnapshot]);
+    }, [active, currentSessionId, currentSessionKey, releaseAutoFollow, restoreSnapshot]);
 
     React.useEffect(() => {
         if (!active || !currentSessionId) return;
@@ -1133,6 +1152,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
 			{returnToParentButton}
 			<ChatViewport
 				currentSessionId={currentSessionId}
+                currentSessionKey={currentSessionKey ?? currentSessionId}
                 isDesktopExpandedInput={isDesktopExpandedInput}
                 isMobile={isMobile}
                 stickyUserHeader={stickyUserHeader}

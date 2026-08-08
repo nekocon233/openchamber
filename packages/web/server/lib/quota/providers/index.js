@@ -12,6 +12,7 @@ import * as codex from './codex.js';
 import * as copilot from './copilot.js';
 import * as crof from './crof.js';
 import * as cursor from './cursor.js';
+import * as deepseek from './deepseek.js';
 import * as google from './google/index.js';
 import * as kimi from './kimi.js';
 import * as nanogpt from './nanogpt.js';
@@ -25,6 +26,7 @@ import * as neuralwatt from './neuralwatt.js';
 import * as ollamaCloud from './ollama-cloud.js';
 import * as wafer from './wafer.js';
 import * as opencodeGo from './opencode-go.js';
+import * as xai from './xai.js';
 
 const registry = {
   claude: {
@@ -50,6 +52,12 @@ const registry = {
     providerName: cursor.providerName,
     isConfigured: cursor.isConfigured,
     fetchQuota: cursor.fetchQuota
+  },
+  deepseek: {
+    providerId: deepseek.providerId,
+    providerName: deepseek.providerName,
+    isConfigured: deepseek.isConfigured,
+    fetchQuota: deepseek.fetchQuota
   },
   google: {
     providerId: google.providerId,
@@ -134,6 +142,12 @@ const registry = {
     providerName: neuralwatt.providerName,
     isConfigured: neuralwatt.isConfigured,
     fetchQuota: neuralwatt.fetchQuota
+  },
+  xai: {
+    providerId: xai.providerId,
+    providerName: xai.providerName,
+    isConfigured: xai.isConfigured,
+    fetchQuota: xai.fetchQuota
   }
 };
 
@@ -184,6 +198,7 @@ export const fetchOpenaiQuota = openai.fetchQuota;
 export const fetchGoogleQuota = google.fetchGoogleQuota;
 export const fetchCodexQuota = codex.fetchQuota;
 export const fetchCursorQuota = cursor.fetchQuota;
+export const fetchDeepseekQuota = deepseek.fetchQuota;
 export const fetchCopilotQuota = copilot.fetchQuota;
 export const fetchCopilotAddonQuota = copilot.fetchQuotaAddon;
 export const fetchKimiQuota = kimi.fetchQuota;

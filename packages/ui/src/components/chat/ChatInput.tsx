@@ -1,6 +1,5 @@
 import React from 'react';
 import { ComposerDictation } from '@/components/dictation/ComposerDictation';
-// sessionStore removed — currentSessionId comes from useSessionUIStore
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
@@ -42,7 +41,7 @@ import {
 } from '@/lib/chatDraftPersistence';
 import { ReviewFlowDialog, type ReviewFlowExecution } from '@/components/session/ReviewFlowDialog';
 import { AttachedFilesList, AttachedVSCodeFileChips, ActiveEditorFileSuggestion } from './FileAttachment';
-import ToolOutputDialog from './message/ToolOutputDialog';
+import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { ToolPopupContent } from './message/types';
 import { AutoReviewBanner } from './AutoReviewBanner';
 import type { FileMentionHandle } from './FileMentionAutocomplete';
@@ -57,11 +56,11 @@ import { PendingChangesBar } from './PendingChangesBar';
 import { useChatSurfaceMode } from './useChatSurfaceMode';
 import { MobileAgentButton } from './MobileAgentButton';
 import { MobileModelButton } from './MobileModelButton';
-import { MobileSessionStatusBar } from './MobileSessionStatusBar';
 import { useCurrentSessionActivity } from '@/hooks/useSessionActivity';
 import { toast } from '@/components/ui';
-// useMessageStore removed — messages now come from sync system
 import { isVSCodeRuntime } from '@/lib/desktop';
+import { useTabletLayout } from '@/lib/device';
+import { useHardwareKeyboard } from '@/lib/hardwareKeyboard';
 import { isIMECompositionEvent } from '@/lib/ime';
 import { getCycledPrimaryAgentName, type MobileControlsPanel } from './mobileControlsUtils';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
@@ -151,6 +150,10 @@ import { RevertedMessageDock } from './composer/ui/RevertedMessageDock';
 import { QueuedMessageChips } from './QueuedMessageChips';
 import { SessionSuggestionChip } from '@/components/chat/SessionSuggestionChip';
 import { SessionGoalRow } from '@/components/chat/SessionGoalRow';
+
+// Lazy like in ChatMessage: a static import would pull the @pierre/diffs and
+// Shiki stacks into the eager startup graph for a dialog opened on demand.
+const ToolOutputDialog = lazyWithChunkRecovery(() => import('./message/ToolOutputDialog'));
 
 const MAX_VISIBLE_COMPOSER_LINES = 8;
 /**
@@ -368,6 +371,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     const getVisibleAgents = useConfigStore((state) => state.getVisibleAgents);
     const agents = getVisibleAgents();
     const isMobile = useUIStore((state) => state.isMobile);
+    const hasHardwareKeyboard = useHardwareKeyboard();
+    const { enabled: isTabletLayout } = useTabletLayout();
     const setImagePreviewOpen = useUIStore((state) => state.setImagePreviewOpen);
     const inputBarOffset = useUIStore((state) => state.inputBarOffset);
     const persistChatDraft = useUIStore((state) => state.persistChatDraft);
@@ -419,6 +424,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     );
     const ensureGitStatus = useGitStore((state) => state.ensureStatus);
     const fetchGitStatus = useGitStore((state) => state.fetchStatus);
+    const clearGitDiffCache = useGitStore((state) => state.clearDiffCache);
     const [showAbortStatus, setShowAbortStatus] = React.useState(false);
     const setSessionAutoAccept = usePermissionStore((state) => state.setSessionAutoAccept);
     const [isNarrowComposer, setIsNarrowComposer] = React.useState(false);
@@ -427,6 +433,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         title: '',
         content: '',
     });
+    // Mount the lazy preview dialog only after its first open; rendering it
+    // closed would fetch the ToolOutputDialog chunk (with the @pierre/diffs
+    // stack) on the draft screen before any preview is requested.
+    const [attachmentPreviewMounted, setAttachmentPreviewMounted] = React.useState(false);
+    React.useEffect(() => {
+        if (attachmentPreview.open) {
+            setAttachmentPreviewMounted(true);
+        }
+    }, [attachmentPreview.open]);
     const attachmentCompatibilityRef = React.useRef({
         modelKey: `${currentProviderId ?? ''}/${currentModelId ?? ''}`,
         modalitySignature: currentModelMetadata?.modalities?.input?.slice().sort().join(',') ?? null,
@@ -495,9 +510,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         if (!currentDirectory || !runtimeGit) return;
         return sessionEvents.onGitRefreshHint((hint) => {
             if (normalizePath(hint.directory) !== normalizePath(currentDirectory)) return;
-            void fetchGitStatus(currentDirectory, runtimeGit);
+            if (hint.paths?.length) {
+                clearGitDiffCache(currentDirectory, hint.paths);
+            }
+            void fetchGitStatus(currentDirectory, runtimeGit, { silent: true });
         });
-    }, [currentDirectory, runtimeGit, fetchGitStatus]);
+    }, [clearGitDiffCache, currentDirectory, runtimeGit, fetchGitStatus]);
 
     const handleStartReviewFlow = React.useCallback(async (execution: ReviewFlowExecution) => {
         if (!currentSessionId) return;
@@ -2473,6 +2491,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         editorRef: composerRef,
         formRef: composerFormRef,
         setExpandedInput,
+        // The pill exists to buy screen back from the soft keyboard. A tablet
+        // has the room regardless, and with a hardware keyboard there is no
+        // soft keyboard to buy it back from — keep the real composer up.
+        alwaysExpanded: hasHardwareKeyboard || isTabletLayout,
         holders: {
             controlsPanelOpen: Boolean(mobileControlsPanel),
             attachMenuOpen: mobileAttachMenuOpen,
@@ -2723,8 +2745,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                         newSessionDraftOpen={newSessionDraftOpen}
                         hasContent={Boolean(hasContent)}
                         isVSCode={isVSCode}
+                        canAbort={canAbort}
                         footerIconButtonClass={footerIconButtonClass}
                         iconSizeClass={iconSizeClass}
+                        stopIconSizeClass={stopIconSizeClass}
                         theme={currentTheme}
                         onExpand={mobileShell.expand}
                         onApplySuggestion={applyAssistSuggestion}
@@ -2734,6 +2758,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                         onOpenPrPicker={openPrPicker}
                         onOpenAttachSheet={openMobileAttachSheet}
                         onStartDictation={toggleDictation}
+                        onAbort={handleAbort}
                     />
                 ) : (
                 <>
@@ -2810,7 +2835,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                         onClose={closeAutocomplete}
                     />
                     {/* Positioning context for the dictation overlay: covers the
-                        text area + footer exactly, excluding MobileSessionStatusBar. */}
+                        text area + footer exactly. */}
                     <div className={cn('relative flex flex-col', isComposerExpanded && 'flex-1 min-h-0')}>
                     <div className={cn("overflow-hidden", isComposerExpanded && 'flex flex-1 min-h-0 flex-col')}>
                         {isMobile ? (
@@ -2945,10 +2970,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                     />
                 ) : null}
                 </div>
-                {/* Mobile session panel: slide-up overlay toggled by
-                    MobileSessionPanelTrigger. Mounted outside the pill
-                    conditional so the pill's trigger works too. */}
-                {isMobile && <MobileSessionStatusBar />}
                 {/* Hidden host for the model/agent/variant bottom sheets. Kept
                     outside the pill conditional so an open panel survives (and
                     stays visible over) the collapsed composer. */}
@@ -2993,11 +3014,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             submitting={reviewFlowSubmitting}
             onConfirm={handleStartReviewFlow}
         />
-        <ToolOutputDialog
-            popup={attachmentPreview}
-            onOpenChange={handleAttachmentPreviewOpenChange}
-            isMobile={isMobile}
-        />
+        {attachmentPreviewMounted ? (
+            <React.Suspense fallback={null}>
+                <ToolOutputDialog
+                    popup={attachmentPreview}
+                    onOpenChange={handleAttachmentPreviewOpenChange}
+                    isMobile={isMobile}
+                />
+            </React.Suspense>
+        ) : null}
 
         {/* Single always-mounted picker input. It must NOT live inside
             ComposerAttachmentControls: that component mounts once per composer

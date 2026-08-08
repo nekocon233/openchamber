@@ -6,6 +6,11 @@ import {
   reconcileSessionActivitySnapshot,
   removeSessionOrdering,
 } from './session-ordering';
+import {
+  observeSessionActivityTiming,
+  reconcileSessionActivityTiming,
+  removeSessionActivityTiming,
+} from './session-activity-timing';
 
 // Shared live status index for every directory. Events update it incrementally
 // and directory snapshots reconcile it without requiring each row to scan all
@@ -228,6 +233,8 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
         type === 'idle' ? { type: 'idle' } : { ...(props.status ?? {}), type } as SessionStatus,
       );
       observeSessionActivityEvent(props.sessionID, type === 'idle' ? 'settled' : 'active');
+      // `retry` is still a running turn, so the elapsed counter keeps going.
+      observeSessionActivityTiming(props.sessionID, type === 'idle' ? 'settled' : 'active');
       return;
     }
     case 'session.idle':
@@ -236,6 +243,7 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
       if (typeof props?.sessionID === 'string' && props.sessionID) {
         setStatus(props.sessionID, normalizeDirectory(directory), { type: 'idle' });
         observeSessionActivityEvent(props.sessionID, 'settled');
+        observeSessionActivityTiming(props.sessionID, 'settled');
       }
       return;
     }
@@ -248,6 +256,7 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
       if (sessionId && props?.info?.time?.archived) {
         removeStatus(sessionId);
         removeSessionOrdering(sessionId);
+        removeSessionActivityTiming(sessionId);
       }
       return;
     }
@@ -257,6 +266,7 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
       if (sessionId) {
         removeStatus(sessionId);
         removeSessionOrdering(sessionId);
+        removeSessionActivityTiming(sessionId);
       }
       return;
     }
@@ -391,4 +401,8 @@ export const applyGlobalSessionStatusSnapshot = (
 
   const orderingScope = mode === 'authoritative' ? orderingKnown : orderingActive;
   reconcileSessionActivitySnapshot(orderingActive, orderingScope);
+  reconcileSessionActivityTiming(
+    orderingActive,
+    (sessionId) => mode === 'authoritative' && orderingKnown.has(sessionId),
+  );
 };

@@ -181,9 +181,10 @@ const execute = ({ intent, prepareSession }: PendingDeepLink): boolean => {
       return true;
 
     case 'status':
-      // The session status panel is store-backed (useUIStore.mobileSessionPanelOpen),
-      // so it opens without a shell handler — like session/new-session.
-      useUIStore.getState().setMobileSessionPanelOpen(true);
+      // The old input-bar status panel is gone — recent sessions with statuses
+      // now live in the sessions drawer, so route status links there.
+      if (!handlers.openSessions) return false;
+      handlers.openSessions();
       return true;
 
     case 'view':
