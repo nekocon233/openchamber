@@ -118,7 +118,10 @@ re-read when the entry later sends. `steer` remains the immediate
 legacy `promptAsync` path for users who explicitly choose it. Direct V2 queue
 delivery is rejected so only the host queue admits queued work. Idle prompts
 without a dismissed blocker, and queued drains, use the normal `promptAsync`
-path.
+path. When the pre-send status probe cannot answer (network failure, timeout,
+or a malformed response), the submit stops before any input is consumed: the
+composer keeps its text and attachments and shows a retry hint, rather than
+staging the prompt or steering it into a turn whose state is unknown.
 
 Queued entries are user-visible staged work, not read-only projections. They can
 be removed, edited back into the composer with attachments, additional parts,

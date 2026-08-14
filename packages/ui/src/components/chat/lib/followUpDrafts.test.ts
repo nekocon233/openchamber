@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test';
 
 import type { QueuedMessage } from '@/stores/messageQueueStore';
 import {
+    resolveFollowUpDeliveryDecision,
     selectFollowUpDraft,
     shouldStageFollowUpAsDraft,
-    shouldUseFollowUpDelivery,
 } from './followUpDrafts';
 
 const activeFollowUp = {
@@ -34,7 +34,7 @@ describe('shouldStageFollowUpAsDraft', () => {
     });
 });
 
-describe('shouldUseFollowUpDelivery', () => {
+describe('resolveFollowUpDeliveryDecision', () => {
     const idleSubmission = {
         inputMode: 'normal' as const,
         sessionId: 'session-1',
@@ -42,18 +42,22 @@ describe('shouldUseFollowUpDelivery', () => {
         dismissedBlockingPrompt: false,
     };
 
-    test('uses follow-up handling when authoritative activity is busy, retrying, or unavailable', () => {
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, authoritativeSessionPhase: 'busy' })).toBe(true);
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, authoritativeSessionPhase: 'retry' })).toBe(true);
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, authoritativeSessionPhase: null })).toBe(true);
+    test('uses follow-up handling when authoritative activity is busy or retrying', () => {
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, authoritativeSessionPhase: 'busy' })).toBe('follow-up');
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, authoritativeSessionPhase: 'retry' })).toBe('follow-up');
+    });
+
+    test('blocks an idle-looking send when authoritative activity is unavailable', () => {
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, authoritativeSessionPhase: null })).toBe('unavailable');
     });
 
     test('sends directly only after authoritative idle and preserves existing local activity rules', () => {
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, authoritativeSessionPhase: 'idle' })).toBe(false);
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, sessionPhase: 'busy' })).toBe(true);
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, dismissedBlockingPrompt: true })).toBe(true);
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, inputMode: 'shell' })).toBe(false);
-        expect(shouldUseFollowUpDelivery({ ...idleSubmission, sessionId: null })).toBe(false);
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, authoritativeSessionPhase: 'idle' })).toBe('direct');
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission })).toBe('direct');
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, sessionPhase: 'busy' })).toBe('follow-up');
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, dismissedBlockingPrompt: true })).toBe('follow-up');
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, inputMode: 'shell' })).toBe('direct');
+        expect(resolveFollowUpDeliveryDecision({ ...idleSubmission, sessionId: null })).toBe('direct');
     });
 });
 

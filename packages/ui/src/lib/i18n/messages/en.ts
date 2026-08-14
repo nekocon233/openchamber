@@ -2158,6 +2158,7 @@ export const dict = {
   'chat.chatInput.toast.attachmentsTooLarge': 'Attachments are too large to send. Please try reducing the number or size of images.',
   'chat.chatInput.toast.sendAttachmentsFailed': 'Failed to send attachments. Try fewer files or smaller images.',
   'chat.chatInput.toast.messageSendFailed': 'Message failed to send. Attachments restored.',
+  'chat.chatInput.toast.sessionStatusUnavailable': 'Could not confirm whether the session is idle. The message was not sent. Check your connection and try again.',
   'chat.chatInput.toast.clipboardAttachFailed': 'Failed to attach image from clipboard',
   'chat.chatInput.toast.addedFileMentions': 'Added {count} file mention(s)',
   'chat.chatInput.toast.attachFileFailed': 'Failed to attach file',

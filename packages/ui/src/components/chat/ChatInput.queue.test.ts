@@ -23,13 +23,30 @@ describe('ChatInput follow-up queue integration', () => {
 
   test('checks authoritative activity before treating an existing idle session as directly sendable', () => {
     const statusIndex = source.indexOf('await opencodeClient.getSessionStatusForDirectory(statusDirectory)');
-    const deliveryIndex = source.indexOf('const useFollowUpDelivery = shouldUseFollowUpDelivery({');
+    const decisionIndex = source.indexOf('const deliveryDecision = resolveFollowUpDeliveryDecision({');
     const sendIndex = source.indexOf('const sendPromise = sendCapturedMessage(');
 
     expect(statusIndex).toBeGreaterThan(-1);
-    expect(deliveryIndex).toBeGreaterThan(statusIndex);
-    expect(sendIndex).toBeGreaterThan(deliveryIndex);
-    expect(source.slice(statusIndex, deliveryIndex)).toContain("statusSnapshot === null");
+    expect(decisionIndex).toBeGreaterThan(statusIndex);
+    expect(sendIndex).toBeGreaterThan(decisionIndex);
+    expect(source.slice(statusIndex, decisionIndex)).toContain("statusSnapshot === null");
+  });
+
+  test('restores input instead of staging when authoritative activity is unavailable', () => {
+    const unavailableIndex = source.indexOf("deliveryDecision === 'unavailable'");
+    const queueIndex = source.indexOf("if (delivery === 'queue')");
+    const sendIndex = source.indexOf('const sendPromise = sendCapturedMessage(');
+
+    expect(unavailableIndex).toBeGreaterThan(-1);
+    expect(queueIndex).toBeGreaterThan(unavailableIndex);
+    expect(sendIndex).toBeGreaterThan(unavailableIndex);
+    const unavailableSource = source.slice(unavailableIndex, queueIndex);
+    expect(unavailableSource).toContain('restoreConsumedDrafts()');
+    expect(unavailableSource).toContain('restoreConsumedSyntheticParts()');
+    expect(unavailableSource).toContain('restoreComposerAttachments()');
+    expect(unavailableSource).toContain('restoreSubmittedInputAfterError(');
+    expect(unavailableSource).toContain("toast.error(t('chat.chatInput.toast.sessionStatusUnavailable'))");
+    expect(unavailableSource).not.toContain('addToQueue(');
   });
 
   test('restores the explicit queue action and drains only unclaimed queued entries at idle', () => {

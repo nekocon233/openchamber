@@ -2,7 +2,9 @@ import type { QueuedMessage } from '@/stores/messageQueueStore';
 
 type SessionPhase = 'idle' | 'busy' | 'retry';
 
-export const shouldUseFollowUpDelivery = ({
+type FollowUpDeliveryDecision = 'direct' | 'follow-up' | 'unavailable';
+
+export const resolveFollowUpDeliveryDecision = ({
     inputMode,
     sessionId,
     sessionPhase,
@@ -14,11 +16,12 @@ export const shouldUseFollowUpDelivery = ({
     sessionPhase: SessionPhase;
     dismissedBlockingPrompt: boolean;
     authoritativeSessionPhase?: SessionPhase | null;
-}): boolean => {
-    if (inputMode !== 'normal' || !sessionId) return false;
-    if (sessionPhase !== 'idle' || dismissedBlockingPrompt) return true;
-    if (authoritativeSessionPhase === undefined) return false;
-    return authoritativeSessionPhase !== 'idle';
+}): FollowUpDeliveryDecision => {
+    if (inputMode !== 'normal' || !sessionId) return 'direct';
+    if (sessionPhase !== 'idle' || dismissedBlockingPrompt) return 'follow-up';
+    if (authoritativeSessionPhase === null) return 'unavailable';
+    if (authoritativeSessionPhase === undefined || authoritativeSessionPhase === 'idle') return 'direct';
+    return 'follow-up';
 };
 
 export const shouldStageFollowUpAsDraft = ({

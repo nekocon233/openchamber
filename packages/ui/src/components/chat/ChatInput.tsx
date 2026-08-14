@@ -123,7 +123,7 @@ import {
     toServerFileUrl,
 } from './composer/attachments/filePaths';
 import { buildOutgoingMessage } from './composer/submit/buildOutgoingMessage';
-import { shouldUseFollowUpDelivery } from './lib/followUpDrafts';
+import { resolveFollowUpDeliveryDecision } from './lib/followUpDrafts';
 import {
     buildCommandVariables,
     canRunCommand,
@@ -1385,7 +1385,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
         // Unknown slash invocations intentionally fall through to this normal
         // prompt path, so they remain eligible for ordinary follow-up delivery.
-        const useFollowUpDelivery = shouldUseFollowUpDelivery({
+        const deliveryDecision = resolveFollowUpDeliveryDecision({
             sessionId: currentSessionId,
             inputMode,
             sessionPhase,
@@ -1395,7 +1395,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         let delivery: 'steer' | 'queue' | undefined;
         if (options?.forceQueue === true) {
             delivery = 'queue';
-        } else if (useFollowUpDelivery) {
+        } else if (deliveryDecision === 'follow-up') {
             delivery = followUpBehavior;
         }
 
@@ -1418,6 +1418,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 ...attachedFiles.filter((attachment) => !currentIds.has(attachment.id)),
             ]);
         };
+
+        // An unavailable status probe must not masquerade as a busy session:
+        // restore the submitted content instead of staging it for later.
+        if (deliveryDecision === 'unavailable') {
+            restoreConsumedDrafts();
+            restoreConsumedSyntheticParts();
+            restoreComposerAttachments();
+            restoreSubmittedInputAfterError(new Error('Session status unavailable'));
+            toast.error(t('chat.chatInput.toast.sessionStatusUnavailable'));
+            return;
+        }
 
         if (delivery === 'queue') {
             if (!currentSessionId || !messageQueueTarget) {

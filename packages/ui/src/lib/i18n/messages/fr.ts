@@ -1925,6 +1925,7 @@ export const dict = {
   'chat.chatInput.toast.attachmentsTooLarge': 'Les pièces jointes sont trop volumineuses pour être envoyées. Veuillez essayer de réduire le nombre ou la taille des images.',
   'chat.chatInput.toast.sendAttachmentsFailed': 'Échec de l\'envoi des pièces jointes. Essayez moins de fichiers ou des images plus petites.',
   'chat.chatInput.toast.messageSendFailed': 'Le message n\'a pas pu être envoyé. Pièces jointes restaurées.',
+  'chat.chatInput.toast.sessionStatusUnavailable': 'Impossible de confirmer si la session est inactive. Le message n\'a pas été envoyé. Vérifiez la connexion et réessayez.',
   'chat.chatInput.toast.clipboardAttachFailed': 'Échec de la pièce jointe de l\'image du presse-papiers',
   'chat.chatInput.toast.addedFileMentions': 'Ajout des mentions du fichier {count}',
   'chat.chatInput.toast.attachFileFailed': 'Impossible de joindre le fichier',
