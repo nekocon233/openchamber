@@ -36,6 +36,7 @@ import { DirectoryExplorerDialog } from '@/components/session/DirectoryExplorerD
 import { Icon } from '@/components/icon/Icon';
 import { NewWorktreeDialog } from '@/components/session/NewWorktreeDialog';
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
+import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { deriveRecentSessions } from '@/components/session/sidebar/activitySections';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -402,9 +403,10 @@ const MobileSwipeActionsRow: React.FC<{
 const SessionRenameForm: React.FC<{
   initialTitle: string;
   indent: number;
+  statusDescriptionId?: string;
   onSubmit: (title: string) => void;
   onCancel: () => void;
-}> = ({ initialTitle, indent, onSubmit, onCancel }) => {
+}> = ({ initialTitle, indent, statusDescriptionId, onSubmit, onCancel }) => {
   const { t } = useI18n();
   const [value, setValue] = React.useState(initialTitle);
 
@@ -439,6 +441,7 @@ const SessionRenameForm: React.FC<{
           if (event.key === 'Escape') onCancel();
         }}
         aria-label={t('sessions.sidebar.session.rename.save')}
+        aria-describedby={statusDescriptionId}
         placeholder={t('sessions.sidebar.session.menu.rename')}
         // 16px prevents the iOS focus zoom; the bare input keeps the row height.
         // The inline min-height overrides mobile.css's global 36px input
@@ -532,6 +535,18 @@ const SessionRow: React.FC<{
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
   const showActivityDuration = (isStreaming || showUnreadDot) && hasActivityDuration;
+  const statusLabel = isStreaming
+    ? t('sessions.sidebar.session.status.active')
+    : showUnreadDot
+      ? t('sessions.sidebar.session.status.unread')
+      : null;
+  const statusDescriptionId = React.useId();
+  const canToggleChildren = hasChildren && Boolean(onToggleChildren);
+  const statusMarker = isStreaming ? (
+    <SessionRunningIndicator label={t('sessions.sidebar.session.status.active')} />
+  ) : showUnreadDot ? (
+    <span className="size-1.5 rounded-full bg-[var(--status-info)]" />
+  ) : null;
 
   const contentRef = React.useRef<HTMLDivElement>(null);
   const startRef = React.useRef<{ x: number; y: number } | null>(null);
@@ -657,8 +672,9 @@ const SessionRow: React.FC<{
       >
         {/* Left gutter slot: live activity indicator takes priority over the
             subsession chevron — same position, so rows never shift. When the
-            row has children the slot still toggles them either way. */}
-        {isStreaming || showUnreadDot || (hasChildren && onToggleChildren) ? (
+            row has children the slot still toggles them either way; otherwise
+            the status marker remains non-interactive. */}
+        {canToggleChildren ? (
           <button
             type="button"
             className="absolute z-10 flex w-6 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -666,82 +682,89 @@ const SessionRow: React.FC<{
             aria-label={expanded
               ? t('sessions.sidebar.session.subsessions.collapse')
               : t('sessions.sidebar.session.subsessions.expand')}
-            disabled={!hasChildren || !onToggleChildren}
+            aria-describedby={statusLabel ? statusDescriptionId : undefined}
             onClick={(event) => {
               event.stopPropagation();
               onToggleChildren?.();
             }}
           >
-            {isStreaming || showUnreadDot ? (
-              <span
-                className={cn(
-                  'size-1.5 rounded-full',
-                  isStreaming ? 'bg-primary' : 'bg-[var(--status-info)]',
-                )}
-                aria-hidden
-              />
+            {statusMarker ? (
+              <span className="inline-flex" aria-hidden>
+                {statusMarker}
+              </span>
             ) : (
               <RiArrowDownSLine className={cn('size-[18px] transition-transform duration-150', expanded ? 'rotate-0' : '-rotate-90')} />
             )}
           </button>
+        ) : statusMarker ? (
+          <span
+            className="pointer-events-none absolute z-10 flex w-6 items-center justify-center"
+            style={{ left: Math.max(indent - 32, 2), top: 0, bottom: 0 }}
+            aria-hidden
+          >
+            {statusMarker}
+          </span>
         ) : null}
+        {statusLabel ? <span id={statusDescriptionId} className="sr-only">{statusLabel}</span> : null}
         {renaming && onSubmitRename && onCancelRename ? (
           <SessionRenameForm
             initialTitle={title}
             indent={indent}
+            statusDescriptionId={statusLabel ? statusDescriptionId : undefined}
             onSubmit={onSubmitRename}
             onCancel={onCancelRename}
           />
         ) : (
-        <button
-          type="button"
-          // Single-line rows: fixed h-9 (36px) to match SessionRenameForm
-          // exactly — min-h-* utilities lose the specificity fight against
-          // mobile.css's global 36px button floor anyway, so make the real
-          // height explicit. Two-line rows (search results with a context
-          // subtitle) keep flexible height.
-          className={cn(
-            'flex min-w-0 flex-1 items-center gap-2.5 pr-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset',
-            contextLabel ? 'min-h-10 py-1' : 'h-9',
-          )}
-          style={{ paddingLeft: indent, touchAction: 'manipulation' }}
-          aria-current={active ? 'page' : undefined}
-          onClick={() => {
-            // A tap while the actions are out just closes them.
-            if (revealedRef.current) {
-              onRevealedChange?.(false);
-              return;
-            }
-            onSelect();
-          }}
-        >
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="flex items-center gap-2.5">
-              <span
-                className={cn(
-                  'block min-w-0 flex-1 truncate typography-ui-label',
-                  active ? 'text-primary' : 'text-foreground',
-                )}
-              >
-                {title}
+          <button
+            type="button"
+            // Single-line rows: fixed h-9 (36px) to match SessionRenameForm
+            // exactly — min-h-* utilities lose the specificity fight against
+            // mobile.css's global 36px button floor anyway, so make the real
+            // height explicit. Two-line rows (search results with a context
+            // subtitle) keep flexible height.
+            className={cn(
+              'flex min-w-0 flex-1 items-center gap-2.5 pr-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset',
+              contextLabel ? 'min-h-10 py-1' : 'h-9',
+            )}
+            style={{ paddingLeft: indent, touchAction: 'manipulation' }}
+            aria-current={active ? 'page' : undefined}
+            aria-describedby={statusLabel ? statusDescriptionId : undefined}
+            onClick={() => {
+              // A tap while the actions are out just closes them.
+              if (revealedRef.current) {
+                onRevealedChange?.(false);
+                return;
+              }
+              onSelect();
+            }}
+          >
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="flex items-center gap-2.5">
+                <span
+                  className={cn(
+                    'block min-w-0 flex-1 truncate typography-ui-label',
+                    active ? 'text-primary' : 'text-foreground',
+                  )}
+                >
+                  {title}
+                </span>
+                {/* The elapsed turn takes the time slot while it matters, then
+                    hands it back to the relative timestamp. */}
+                {showActivityDuration ? (
+                  <SessionActivityDuration
+                    sessionId={session.id}
+                    running={isStreaming}
+                    className="typography-micro"
+                  />
+                ) : time ? (
+                  <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{time}</span>
+                ) : null}
               </span>
-              {/* The elapsed turn takes the time slot while it matters, then
-                  hands it back to the relative timestamp. */}
-              {showActivityDuration ? (
-                <SessionActivityDuration
-                  sessionId={session.id}
-                  running={isStreaming}
-                  className="typography-micro"
-                />
-              ) : time ? (
-                <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{time}</span>
+              {contextLabel ? (
+                <span className="block truncate typography-micro text-muted-foreground">{contextLabel}</span>
               ) : null}
             </span>
-            {contextLabel ? (
-              <span className="block truncate typography-micro text-muted-foreground">{contextLabel}</span>
-            ) : null}
-          </span>
-        </button>
+          </button>
         )}
         {onTogglePinned && !renaming ? (
           <Button

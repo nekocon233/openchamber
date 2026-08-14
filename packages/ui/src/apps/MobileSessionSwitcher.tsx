@@ -2,6 +2,7 @@ import React from 'react';
 import type { Session } from '@opencode-ai/sdk/v2';
 
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
+import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { formatSessionCompactDateLabel } from '@/components/session/sidebar/utils';
 import { useSwitcherItems } from '@/components/session/sidebar/hooks/useSwitcherItems';
 import { useTabletLayout } from '@/lib/device';
@@ -36,6 +37,7 @@ const SwitcherRow: React.FC<{
   const statusType = status?.type ?? 'idle';
   const isStreaming = statusType === 'busy' || statusType === 'retry';
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
+  const unreadStatusLabel = t('sessions.sidebar.session.status.unread');
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
   const showActivityDuration = (isStreaming || showUnreadDot) && hasActivityDuration;
   const timeLabel = formatSessionCompactDateLabel(session.time?.updated ?? session.time?.created ?? 0);
@@ -60,13 +62,18 @@ const SwitcherRow: React.FC<{
       </span>
       {/* Activity sits on the right, before the time — no reserved left gutter. */}
       {isStreaming || showUnreadDot ? (
-        <span
-          className={cn(
-            'size-1.5 shrink-0 rounded-full',
-            isStreaming ? 'bg-primary' : 'bg-[var(--status-info)]',
+        <span className="flex size-3.5 shrink-0 items-center justify-center">
+          {isStreaming ? (
+            <SessionRunningIndicator label={t('sessions.sidebar.session.status.active')} />
+          ) : (
+            <span
+              role="img"
+              className="size-1.5 rounded-full bg-[var(--status-info)]"
+              aria-label={unreadStatusLabel}
+              title={unreadStatusLabel}
+            />
           )}
-          aria-hidden
-        />
+        </span>
       ) : null}
       {/* The elapsed turn takes the time slot while it matters, then hands it
           back to the relative timestamp. */}

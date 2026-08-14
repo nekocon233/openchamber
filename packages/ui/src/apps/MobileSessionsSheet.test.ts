@@ -56,8 +56,11 @@ describe('MobileSessionsSheet activity sections', () => {
     expect(source).toContain('useHasSessionActivityDuration(session.id, isStreaming)');
     expect(source).toContain('<SessionActivityDuration');
     expect(source).toContain('running={isStreaming}');
-    expect(source).toContain("isStreaming ? 'bg-primary' : 'bg-[var(--status-info)]'");
-    expect(source).not.toContain('<SessionRunningIndicator');
+    expect(source).toContain('<SessionRunningIndicator');
+    expect(source).toContain('className="size-1.5 rounded-full bg-[var(--status-info)]"');
+    expect(source.match(/aria-describedby=\{statusLabel \? statusDescriptionId : undefined\}/g)).toHaveLength(2);
+    expect(source).toContain('aria-describedby={statusDescriptionId}');
+    expect(source).not.toContain('disabled={!hasChildren || !onToggleChildren}');
     expect(source).not.toContain("t('mobile.sessions.status.running')");
     expect(source).toContain('onTogglePinned={() => togglePinnedSession(session.id)}');
     expect(source).toContain("<Icon name={pinned ? 'unpin' : 'pushpin'}");
