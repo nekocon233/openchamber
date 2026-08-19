@@ -12,6 +12,9 @@ const DYNAMIC_IMPORT_ERROR_PATTERNS = [
   /error loading dynamically imported module/i,
   /Loading chunk \S+ failed/i,
   /ChunkLoadError/i,
+  /Unexpected end of (JSON )?input/i,
+  /Unexpected token/i,
+  /Unexpected EOF/i,
 ];
 
 function readErrorText(error: unknown): string {
@@ -30,7 +33,11 @@ function readErrorText(error: unknown): string {
   }
 }
 
-function isDynamicImportError(error: unknown): boolean {
+export function isDynamicImportError(error: unknown): boolean {
+  if (error instanceof SyntaxError) {
+    return true;
+  }
+
   const text = readErrorText(error);
   return DYNAMIC_IMPORT_ERROR_PATTERNS.some((pattern) => pattern.test(text));
 }

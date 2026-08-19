@@ -6,6 +6,14 @@
  * refused prompt indistinguishable from "nothing happened" — the user has
  * nothing to report beyond "it disappeared".
  *
+ * Confirmation is three-state for ambiguous (transport-level) failures:
+ * - confirmed: the message was found server-side and stays in the transcript;
+ * - not found: a successful refetch proved absence, so the message is rolled
+ *   back and the failure is recorded here;
+ * - unknown: the server could not be reached, so the message is kept and
+ *   resolved later on a timer. Only the delayed rollback of an unknown send
+ *   records a second entry, marked `confirmationChecked: true`.
+ *
  * This buffer gives the failure somewhere to live until someone asks for it,
  * via the About dialog's diagnostics report or `__opencodeDebug`. It is
  * in-memory only: never persisted, never sent anywhere, and dropped on reload.

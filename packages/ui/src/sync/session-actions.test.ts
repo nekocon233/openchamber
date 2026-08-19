@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, mock } from "bun:test"
+import { describe, expect, test, beforeEach, afterEach, mock } from "bun:test"
 import type { PermissionRequest } from "@/types/permission"
 import type { QuestionRequest } from "@/types/question"
 
@@ -273,6 +273,7 @@ mock.module("./sync-refs", () => ({
   },
 }))
 
+import { getRuntimeKey } from "@/lib/runtime-switch"
 import { create, type StoreApi } from "zustand"
 import { INITIAL_STATE } from "./types"
 import type { DirectoryStore } from "./child-store"
@@ -1567,6 +1568,213 @@ describe("optimisticSend target directory", () => {
     expect(targetStore.getState().session_status["session-missing"]?.type).toBe("idle")
   })
 })
+
+describe("optimisticSend unconfirmed outcome", () => {
+  const UNREACHABLE_MESSAGES_RESULT = { error: new Error("fetch failed"), response: { status: 502 } }
+
+  // The send rejects quickly, but the confirmation refetches interleave
+  // real `wait()` calls. Start the send without awaiting and let the real
+  // timers settle it — the refetch loop is bounded (3 attempts, ~750ms).
+  const startUnconfirmedSend = async (targetStore: StoreApi<DirectoryStore>, childStores: ReturnType<typeof createChildStores>, options?: {
+    sessionId?: string
+  }) => {
+    const sessionId = options?.sessionId ?? "session-unreachable"
+    const removeCalls: OptimisticRemoveCall[] = []
+    const confirmCalls: OptimisticRemoveCall[] = []
+    let sentMessageID = ""
+    let caught: unknown = undefined
+
+    const { optimisticSend, UnconfirmedSendError, setActionRefs, setOptimisticRefs } = await import("./session-actions")
+    setActionRefs(mockSdk as unknown as OpencodeClient, childStores, () => "/target/project")
+    setOptimisticRefs(
+      () => {},
+      (input) => { removeCalls.push(input) },
+      (input) => { confirmCalls.push(input) },
+    )
+
+    sessionMessagesResult = UNREACHABLE_MESSAGES_RESULT
+
+    const sendPromise = optimisticSend({
+      sessionId,
+      directory: "/target/project",
+      content: "hello",
+      providerID: "provider",
+      modelID: "model",
+      send: async (messageID) => {
+        sentMessageID = messageID
+        const error = new Error("Failed to send message (504): gateway timeout") as Error & { status?: number }
+        error.status = 504
+        throw error
+      },
+    }).then(
+      () => { caught = null },
+      (error) => { caught = error },
+    )
+
+    return {
+      sendPromise,
+      removeCalls,
+      confirmCalls,
+      getSentMessageID: () => sentMessageID,
+      UnconfirmedSendError,
+      getCaught: () => caught,
+      buildEntry: (startedAt?: number) => ({
+        runtimeKey: getRuntimeKey(),
+        sessionId,
+        messageId: sentMessageID,
+        directory: "/target/project" as string | null,
+        content: "hello",
+        startedAt: startedAt ?? Date.now(),
+        attempts: 0,
+      }),
+    }
+  }
+
+  const realSleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  beforeEach(() => {
+    replyCalls.length = 0
+    scopedClientDirectories.length = 0
+    sessionMessagesResult = { data: [] }
+  })
+
+  afterEach(async () => {
+    const { resetUnconfirmedSendState } = await import("./session-actions")
+    resetUnconfirmedSendState()
+  })
+
+  test("keeps the optimistic message and throws UnconfirmedSendError when confirmation refetches all fail", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+
+    const { sendPromise, removeCalls, confirmCalls, getSentMessageID, UnconfirmedSendError, getCaught } =
+      await startUnconfirmedSend(targetStore, childStores)
+
+    await sendPromise
+
+    expect(getCaught()).toBeInstanceOf(UnconfirmedSendError)
+    // The optimistic message is owned by the sync layer's shadow (mocked
+    // here); keeping it means neither a rollback nor a confirm was issued.
+    expect(removeCalls.length).toBe(0)
+    expect(confirmCalls.length).toBe(0)
+    expect(targetStore.getState().session_status["session-unreachable"]?.type).toBe("busy")
+    expect(getSentMessageID().length).toBeGreaterThan(0)
+  })
+
+  test("rolls back and notifies listeners when a later check proves the message absent", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+
+    const { sendPromise, removeCalls, getSentMessageID, UnconfirmedSendError, getCaught, buildEntry } =
+      await startUnconfirmedSend(targetStore, childStores)
+
+    const rollbacks: Array<{ sessionId: string; messageId: string; content: string; directory: string | null }> = []
+    const { onUnconfirmedSendRollback } = await import("./session-actions")
+    const off = onUnconfirmedSendRollback((rollback) => {
+      rollbacks.push({
+        sessionId: rollback.sessionId,
+        messageId: rollback.messageId,
+        content: rollback.content,
+        directory: rollback.directory,
+      })
+    })
+
+    await sendPromise
+    expect(getCaught()).toBeInstanceOf(UnconfirmedSendError)
+
+    // Drive the delayed check directly (equivalent to the timer firing
+    // after the first backoff step) with a reachable server that has no
+    // record of the message.
+    sessionMessagesResult = { data: [] }
+    const { resolveUnconfirmedSendNow } = await import("./session-actions")
+    resolveUnconfirmedSendNow(buildEntry())
+    await realSleep(1200)
+
+    expect(rollbacks.length).toBe(1)
+    expect(rollbacks[0]).toEqual({
+      sessionId: "session-unreachable",
+      messageId: getSentMessageID(),
+      content: "hello",
+      directory: "/target/project",
+    })
+    expect(removeCalls.length).toBe(1)
+    expect(removeCalls[0]).toEqual({
+      sessionID: "session-unreachable",
+      directory: "/target/project",
+      messageID: getSentMessageID(),
+    })
+    expect(targetStore.getState().session_status["session-unreachable"]?.type).toBe("idle")
+    off()
+  })
+
+  test("keeps waiting when the later check still cannot reach the server, then confirms once it can", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+
+    const { sendPromise, confirmCalls, getSentMessageID, UnconfirmedSendError, getCaught, buildEntry } =
+      await startUnconfirmedSend(targetStore, childStores)
+
+    const rollbacks: unknown[] = []
+    const { onUnconfirmedSendRollback, resolveUnconfirmedSendNow } = await import("./session-actions")
+    const off = onUnconfirmedSendRollback((rollback) => { rollbacks.push(rollback) })
+
+    await sendPromise
+    expect(getCaught()).toBeInstanceOf(UnconfirmedSendError)
+
+    // Server still unreachable: no rollback may fire, no confirm may issue.
+    resolveUnconfirmedSendNow(buildEntry())
+    await realSleep(1200)
+    expect(rollbacks.length).toBe(0)
+    expect(confirmCalls.length).toBe(0)
+
+    // Server is back and reports the message: confirm it in place.
+    sessionMessagesResult = {
+      data: [{
+        info: { id: getSentMessageID(), role: "user", sessionID: "session-unreachable", time: { created: 1 } } as Message,
+        parts: [{ id: "server-part", type: "text", text: "hello" } as Part],
+      }],
+    }
+    resolveUnconfirmedSendNow(buildEntry())
+    await realSleep(1200)
+
+    expect(rollbacks.length).toBe(0)
+    expect(targetStore.getState().message["session-unreachable"]?.[0]?.id).toBe(getSentMessageID())
+    expect(targetStore.getState().part[getSentMessageID()]?.[0]?.id).toBe("server-part")
+    expect(confirmCalls.length).toBe(1)
+    expect(confirmCalls[0]).toEqual({
+      sessionID: "session-unreachable",
+      directory: "/target/project",
+      messageID: getSentMessageID(),
+    })
+    off()
+  })
+
+  test("forces a rollback when the total wait cap has elapsed while the server stays unreachable", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+
+    const { sendPromise, removeCalls, getSentMessageID, UnconfirmedSendError, getCaught, buildEntry } =
+      await startUnconfirmedSend(targetStore, childStores)
+
+    const rollbacks: unknown[] = []
+    const { onUnconfirmedSendRollback, resolveUnconfirmedSendNow } = await import("./session-actions")
+    const off = onUnconfirmedSendRollback((rollback) => { rollbacks.push(rollback) })
+
+    await sendPromise
+    expect(getCaught()).toBeInstanceOf(UnconfirmedSendError)
+
+    // The entry is already past the total wait cap.
+    resolveUnconfirmedSendNow(buildEntry(Date.now() - 4 * 60_000))
+    await realSleep(1200)
+
+    expect(rollbacks.length).toBe(1)
+    expect(removeCalls.length).toBe(1)
+    expect(removeCalls[0]?.messageID).toBe(getSentMessageID())
+    expect(targetStore.getState().session_status["session-unreachable"]?.type).toBe("idle")
+    off()
+  })
+})
+
 
 describe("ambiguous send failure classification", () => {
   test("covers transport errors and retryable gateway statuses", async () => {

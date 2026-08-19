@@ -338,6 +338,44 @@ export const registerOpenCodeProxy = (app, deps) => {
     return true;
   };
 
+  // A stalled OpenCode can fail thousands of proxied requests in minutes;
+  // logging every one floods stderr (tens of MB observed) and burns CPU.
+  // Log the first few of each distinct message per minute, then a periodic
+  // summary line.
+  const PROXY_ERROR_LOG_BURST = 3;
+  const PROXY_ERROR_LOG_WINDOW_MS = 60_000;
+  const PROXY_ERROR_LOG_SUMMARY_EVERY = 100;
+  const proxyErrorLogState = new Map();
+
+  const logThrottledProxyError = (label, message) => {
+    const key = `${label}\u0000${String(message)}`;
+    const now = Date.now();
+    let entry = proxyErrorLogState.get(key);
+    if (!entry || now - entry.windowStartAt >= PROXY_ERROR_LOG_WINDOW_MS) {
+      entry = { windowStartAt: now, count: 0, suppressed: 0 };
+      proxyErrorLogState.set(key, entry);
+    }
+    entry.count += 1;
+    if (entry.count <= PROXY_ERROR_LOG_BURST) {
+      console.error(`[proxy] OpenCode ${label} proxy error:`, message);
+      return;
+    }
+    entry.suppressed += 1;
+    if (entry.suppressed % PROXY_ERROR_LOG_SUMMARY_EVERY === 1) {
+      console.error(
+        `[proxy] OpenCode ${label} proxy error (${entry.suppressed - 1} repeats suppressed):`,
+        message
+      );
+    }
+    if (proxyErrorLogState.size > 200) {
+      for (const [entryKey, candidate] of proxyErrorLogState) {
+        if (now - candidate.windowStartAt >= PROXY_ERROR_LOG_WINDOW_MS) {
+          proxyErrorLogState.delete(entryKey);
+        }
+      }
+    }
+  };
+
   const applyProxyResponseDeadline = (req, res, next) => {
     if (isInteractiveOAuthCallback(req)) {
       return next();
@@ -501,7 +539,7 @@ export const registerOpenCodeProxy = (app, deps) => {
         }
         return;
       }
-      console.error('[proxy] OpenCode SSE proxy error:', error?.message ?? error);
+      logThrottledProxyError('SSE', error?.message ?? error);
       if (!res.headersSent) {
         res.status(503).json({ error: 'OpenCode service unavailable' });
       } else {
@@ -574,7 +612,9 @@ export const registerOpenCodeProxy = (app, deps) => {
   const forwardSanitizedSessionListRequest = async (req, res, next, logLabel) => {
     try {
       const upstreamPath = await getRequestUpstreamPath(req);
-      const result = await fetchSessionListPayload(upstreamPath, { req });
+      // Bound the upstream fetch so a stalled OpenCode cannot leave the
+      // request (and the UI behind it) hanging without any deadline.
+      const result = await fetchSessionListPayload(upstreamPath, { req, timeoutMs: PROXY_REQUEST_TIMEOUT_MS });
 
       res.status(result.upstream.status);
       applyForwardProxyResponseHeaders(result.upstream.headers, res);
@@ -597,7 +637,7 @@ export const registerOpenCodeProxy = (app, deps) => {
       if (isAbortError(error)) {
         return;
       }
-      console.error(`[proxy] OpenCode ${logLabel} proxy error:`, error?.message ?? error);
+      logThrottledProxyError(logLabel, error?.message ?? error);
       if (!res.headersSent) {
         res.status(503).json({ error: 'OpenCode service unavailable' });
         return;
@@ -848,7 +888,7 @@ export const registerOpenCodeProxy = (app, deps) => {
         }
       },
       error: (err, req, res) => {
-        console.error('[proxy] OpenCode proxy error:', err.message);
+        logThrottledProxyError('request', err.message);
         if (req?.[PROXY_TIMEOUT_MARKER]) {
           return;
         }

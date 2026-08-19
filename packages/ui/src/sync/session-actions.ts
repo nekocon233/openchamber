@@ -56,6 +56,14 @@ const SEND_CONFIRMATION_REFETCH_ATTEMPTS = 3
 const SEND_CONFIRMATION_REFETCH_BASE_RETRY_MS = 250
 const SEND_CONFIRMATION_RECONNECT_TIMEOUT_MS = 3000
 const SEND_CONFIRMATION_RECONNECT_POLL_MS = 100
+// When a failed send's confirmation refetch cannot even reach the server
+// (e.g. the backend is stalled), rolling the optimistic message back would
+// let the user re-send a prompt the engine may already be answering. Keep the
+// message in place and re-check on a timer instead; only a definitive
+// "message absent" or the total wait cap rolls it back.
+const UNCONFIRMED_SEND_FIRST_CHECK_MS = 10_000
+const UNCONFIRMED_SEND_CHECK_BACKOFF_MS = 10_000
+const UNCONFIRMED_SEND_MAX_WAIT_MS = 3 * 60_000
 const MESSAGE_REFETCH_SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 const UNREVERT_REFETCH_ATTEMPTS = 3
 const UNREVERT_REFETCH_RETRY_MS = 150
@@ -91,6 +99,63 @@ let _optimisticAdd: ((input: OptimisticAddInput) => void) | null = null
 let _optimisticRemove: ((input: OptimisticRemoveInput) => void) | null = null
 let _optimisticConfirm: ((input: OptimisticConfirmInput) => void) | null = null
 
+export type UnconfirmedSendRollback = {
+  runtimeKey: string
+  sessionId: string
+  messageId: string
+  directory: string | null
+  content: string
+}
+
+export class UnconfirmedSendError extends Error {
+  readonly sessionId: string
+  readonly messageId: string
+  readonly directory: string | null
+
+  constructor(sessionId: string, messageId: string, directory: string | null) {
+    super("The message may still have been accepted; its send outcome could not be confirmed.")
+    this.name = "UnconfirmedSendError"
+    this.sessionId = sessionId
+    this.messageId = messageId
+    this.directory = directory
+  }
+}
+
+export function isUnconfirmedSendError(error: unknown): error is UnconfirmedSendError {
+  return error instanceof UnconfirmedSendError
+}
+
+export type UnconfirmedSendEntry = {
+  runtimeKey: string
+  sessionId: string
+  messageId: string
+  directory: string | null
+  content: string
+  startedAt: number
+  attempts: number
+}
+
+const unconfirmedSendTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const unconfirmedSendRollbackListeners = new Set<(rollback: UnconfirmedSendRollback) => void>()
+
+const unconfirmedSendKey = (sessionId: string, messageId: string) => `${sessionId}\u0000${messageId}`
+
+export function onUnconfirmedSendRollback(listener: (rollback: UnconfirmedSendRollback) => void): () => void {
+  unconfirmedSendRollbackListeners.add(listener)
+  return () => {
+    unconfirmedSendRollbackListeners.delete(listener)
+  }
+}
+
+// Drops every pending delayed confirmation and rollback listener. Runtime
+// switches dispose the stores these entries belong to, and tests need a
+// deterministic boundary between runs.
+export function resetUnconfirmedSendState(): void {
+  for (const timer of unconfirmedSendTimers.values()) clearTimeout(timer)
+  unconfirmedSendTimers.clear()
+  unconfirmedSendRollbackListeners.clear()
+}
+
 type SessionMembershipMutation = "present" | "removed"
 
 function sessionMutationPatch(
@@ -124,7 +189,10 @@ function invalidateSessionLoads(sessionId: string, directories: Iterable<string 
   }
 }
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+// Resolve through globalThis so test fake-timer implementations that replace
+// the global function can intercept it (a bare `setTimeout` reference can be
+// bound to the builtin by the runtime and bypass the replacement).
+const wait = (ms: number) => new Promise((resolve) => globalThis.setTimeout(resolve, ms))
 
 type SdkResult<T> = {
   data?: T
@@ -1409,7 +1477,7 @@ export async function optimisticSend(input: {
     const status = getErrorStatus(error)
     const capturedRuntimeCurrent = !input.runtimeKey || input.runtimeKey === getRuntimeKey()
     const ambiguousFailure = capturedRuntimeCurrent && isAmbiguousSendFailure(error)
-    const acceptedRecords = ambiguousFailure
+    const confirmation = ambiguousFailure
       ? await fetchRecentSendConfirmationRecords(
         input.sessionId,
         messageID,
@@ -1419,14 +1487,40 @@ export async function optimisticSend(input: {
       : null
     assertExpectedRuntime()
 
-    if (acceptedRecords) {
-      materializeConfirmedSendRecords(store, input.sessionId, messageID, acceptedRecords)
+    if (confirmation?.outcome === "confirmed") {
+      materializeConfirmedSendRecords(store, input.sessionId, messageID, confirmation.records)
       optimisticConfirm?.({
         sessionID: input.sessionId,
         directory: targetDirectory,
         messageID,
       })
       return
+    }
+
+    if (confirmation?.outcome === "unknown") {
+      // The server could not be reached to confirm the send. The message may
+      // already be accepted; rolling it back now lets the composer re-send a
+      // prompt the engine is already answering. Keep the optimistic message in
+      // place and resolve the outcome on a timer instead.
+      recordSendFailure({
+        sessionId: input.sessionId,
+        messageId: messageID,
+        directory: targetDirectory ?? null,
+        status,
+        ambiguous: true,
+        confirmationChecked: true,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+      scheduleUnconfirmedSendResolution({
+        runtimeKey: input.runtimeKey ?? getRuntimeKey(),
+        sessionId: input.sessionId,
+        messageId: messageID,
+        directory: targetDirectory ?? null,
+        content: input.content,
+        startedAt: Date.now(),
+        attempts: 0,
+      })
+      throw new UnconfirmedSendError(input.sessionId, messageID, targetDirectory ?? null)
     }
 
     // The rollback below makes the user's message disappear with no other
@@ -1487,12 +1581,17 @@ export async function optimisticSend(input: {
   }
 }
 
+type SendConfirmationOutcome =
+  | { outcome: "confirmed"; records: Array<{ info: Message; parts?: Part[] }> }
+  | { outcome: "not-found" }
+  | { outcome: "unknown" }
+
 async function fetchRecentSendConfirmationRecords(
   sessionId: string,
   messageID: string,
   directory?: string | null,
   assertExpectedRuntime?: () => void,
-): Promise<Array<{ info: Message; parts?: Part[] }> | null> {
+): Promise<SendConfirmationOutcome> {
   // Bounded: a connection that never returns must still let the send fail
   // rather than hang the composer.
   const reconnectDeadline = Date.now() + SEND_CONFIRMATION_RECONNECT_TIMEOUT_MS
@@ -1500,6 +1599,11 @@ async function fetchRecentSendConfirmationRecords(
     await wait(SEND_CONFIRMATION_RECONNECT_POLL_MS)
   }
 
+  // A refetch that fails is not evidence the message is absent — it is no
+  // evidence at all. Only a successful query may answer "not found"; queries
+  // that all fail must surface as "unknown" so the caller can keep the
+  // optimistic message instead of rolling back a possibly-accepted prompt.
+  let anyQuerySucceeded = false
   for (let attempt = 0; attempt < SEND_CONFIRMATION_REFETCH_ATTEMPTS; attempt += 1) {
     if (attempt > 0) await wait(SEND_CONFIRMATION_REFETCH_BASE_RETRY_MS * 2 ** (attempt - 1))
     assertExpectedRuntime?.()
@@ -1511,16 +1615,126 @@ async function fetchRecentSendConfirmationRecords(
       })
       const records = (assertSdkSuccess(result, "session.messages") ?? [])
         .filter((record: { info?: { id?: string } }) => !!record?.info?.id) as Array<{ info: Message; parts?: Part[] }>
+      anyQuerySucceeded = true
       if (records.some((record) => record.info.id === messageID)) {
         assertExpectedRuntime?.()
-        return records
+        return { outcome: "confirmed", records }
       }
     } catch {
-      // Confirmation is best-effort; if it fails, keep the original send error path.
+      // Confirmation is best-effort; a failed query keeps the outcome unknown.
     }
     assertExpectedRuntime?.()
   }
-  return null
+  return anyQuerySucceeded ? { outcome: "not-found" } : { outcome: "unknown" }
+}
+
+function scheduleUnconfirmedSendResolution(entry: UnconfirmedSendEntry): void {
+  const key = unconfirmedSendKey(entry.sessionId, entry.messageId)
+  if (unconfirmedSendTimers.has(key)) return
+  const backoffDelay = entry.attempts === 0
+    ? UNCONFIRMED_SEND_FIRST_CHECK_MS
+    : UNCONFIRMED_SEND_CHECK_BACKOFF_MS * 2 ** Math.min(entry.attempts - 1, 4)
+  // Never let a backoff step overshoot the total wait cap by much: the final
+  // resolution must run at (or very near) the cap so the user is not left
+  // waiting for the next full backoff interval.
+  const remainingBudget = Math.max(UNCONFIRMED_SEND_MAX_WAIT_MS - (Date.now() - entry.startedAt), 0)
+  const delay = Math.min(backoffDelay, remainingBudget)
+  const timer = setTimeout(() => {
+    unconfirmedSendTimers.delete(key)
+    void resolveUnconfirmedSend(entry)
+  }, delay)
+  unconfirmedSendTimers.set(key, timer)
+}
+
+async function resolveUnconfirmedSend(entry: UnconfirmedSendEntry): Promise<void> {
+  // A runtime switch disposes the old runtime's stores and optimistic state;
+  // never mutate state under a runtime that no longer owns this entry.
+  if (entry.runtimeKey !== getRuntimeKey()) return
+
+  let confirmation: SendConfirmationOutcome = { outcome: "unknown" }
+  try {
+    confirmation = await fetchRecentSendConfirmationRecords(entry.sessionId, entry.messageId, entry.directory)
+  } catch {
+    confirmation = { outcome: "unknown" }
+  }
+
+  if (entry.runtimeKey !== getRuntimeKey()) return
+
+  if (confirmation.outcome === "confirmed") {
+    const store = entry.directory ? dirStoreForDirectory(entry.directory) : dirStore()
+    materializeConfirmedSendRecords(store, entry.sessionId, entry.messageId, confirmation.records)
+    _optimisticConfirm?.({
+      sessionID: entry.sessionId,
+      directory: entry.directory,
+      messageID: entry.messageId,
+    })
+    return
+  }
+
+  if (confirmation.outcome === "not-found") {
+    rollbackUnconfirmedSend(entry)
+    return
+  }
+
+  // Still unreachable: keep the optimistic message and try again later until
+  // the total wait cap forces a rollback so the user is not blocked forever.
+  if (Date.now() - entry.startedAt >= UNCONFIRMED_SEND_MAX_WAIT_MS) {
+    rollbackUnconfirmedSend(entry)
+    return
+  }
+  scheduleUnconfirmedSendResolution({ ...entry, attempts: entry.attempts + 1 })
+}
+
+// Exported so reconnect paths can resolve a pending send immediately instead
+// of waiting for the next timer step, and so tests can drive the resolver
+// directly without depending on cross-module fake timers.
+export function resolveUnconfirmedSendNow(entry: UnconfirmedSendEntry): void {
+  void resolveUnconfirmedSend(entry)
+}
+
+function rollbackUnconfirmedSend(entry: UnconfirmedSendEntry): void {
+  const store = entry.directory ? dirStoreForDirectory(entry.directory) : dirStore()
+
+  // The loader's optimisticRemove clears the shadow AND the visible store
+  // message; it is safe when the message is already gone (e.g. the runtime
+  // disposed the store), so a late rollback can never clobber authoritative
+  // state.
+  _optimisticRemove?.({
+    sessionID: entry.sessionId,
+    directory: entry.directory,
+    messageID: entry.messageId,
+  })
+  store.setState({
+    session_status: {
+      ...store.getState().session_status,
+      [entry.sessionId]: { type: "idle" as const },
+    },
+  })
+  setGlobalSessionStatus(entry.sessionId, entry.directory, "idle")
+  recordSendFailure({
+    sessionId: entry.sessionId,
+    messageId: entry.messageId,
+    directory: entry.directory,
+    status: null,
+    ambiguous: true,
+    confirmationChecked: true,
+    reason: "unconfirmed send resolved as not sent",
+  })
+
+  const rollback: UnconfirmedSendRollback = {
+    runtimeKey: entry.runtimeKey,
+    sessionId: entry.sessionId,
+    messageId: entry.messageId,
+    directory: entry.directory,
+    content: entry.content,
+  }
+  for (const listener of unconfirmedSendRollbackListeners) {
+    try {
+      listener(rollback)
+    } catch (error) {
+      console.error("[session-actions] unconfirmed send rollback listener failed", error)
+    }
+  }
 }
 
 function materializeConfirmedSendRecords(

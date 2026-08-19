@@ -82,6 +82,7 @@ import { togglePermissionAutoAccept } from './permissionAutoAccept';
 import { extractGitChangedFiles } from './changedFiles';
 import { useI18n } from '@/lib/i18n';
 import { sessionEvents } from '@/lib/sessionEvents';
+import { createOpenCodeIdentifier } from '@/lib/opencode/identifier';
 import { fetchResponseStyleInstruction } from '@/lib/responseStyle';
 import { wrapSystemReminder } from '@/lib/systemReminder';
 import { getSyncMessages } from '@/sync/sync-refs';
@@ -306,6 +307,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
     // Ref to track current message value without triggering re-renders in effects
     const messageRef = React.useRef(message);
     const pendingPastedAttachmentFilenamesRef = React.useRef<Set<string>>(new Set());
+    // The message ID and text of the last failed submission. Re-submitting
+    // the same restored text reuses the ID so OpenCode merges the retry into
+    // the (possibly accepted) original message instead of creating a
+    // duplicate that spawns a second AI response.
+    const lastSubmitRef = React.useRef<{ messageId: string; text: string } | undefined>(undefined);
 
     // TODO: port sendMessage to session-actions (complex — creates sessions, handles attachments, etc.)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -516,6 +522,30 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             void fetchGitStatus(currentDirectory, runtimeGit, { silent: true });
         });
     }, [clearGitDiffCache, currentDirectory, runtimeGit, fetchGitStatus]);
+
+    React.useEffect(() => {
+        if (!chatDraftIdentity) return;
+        return sessionActions.onUnconfirmedSendRollback((rollback) => {
+            if (rollback.runtimeKey !== chatDraftIdentity.runtimeKey) return;
+            if (normalizePath(rollback.directory) !== chatDraftIdentity.directory) return;
+            // New-session drafts only have a session ID after materialization;
+            // an unresolved draft composer is the only one that can own a
+            // rollback for this directory without a session match.
+            if (chatDraftIdentity.sessionId !== null && rollback.sessionId !== chatDraftIdentity.sessionId) return;
+
+            const currentInput = composerRef.current?.getValue() ?? messageRef.current;
+            const restoredInput = currentInput && currentInput !== rollback.content
+                ? appendWithLineBreaks(rollback.content, currentInput)
+                : rollback.content;
+            messageRef.current = restoredInput;
+            setMessage(restoredInput);
+            writeChatDraft(chatDraftIdentity, restoredInput, confirmedMentionsRef.current);
+            // A retry of the restored text must reuse the rolled-back message
+            // ID so an accepted server-side message is merged, not duplicated.
+            lastSubmitRef.current = { messageId: rollback.messageId, text: rollback.content };
+            toast.error(t('chat.chatInput.toast.messageSendFailed'));
+        });
+    }, [chatDraftIdentity, t]);
 
     const handleStartReviewFlow = React.useCallback(async (execution: ReviewFlowExecution) => {
         if (!currentSessionId) return;
@@ -1477,6 +1507,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             }
         }
 
+        // Re-submitting the same restored text after a failed send reuses the
+        // previous message ID: OpenCode merges a repeated ID into the original
+        // message, so a retry can never spawn a duplicate user message and a
+        // second AI response. New or edited text starts a fresh message.
+        const submissionMessageId = lastSubmitRef.current && lastSubmitRef.current.text === primaryText
+            ? lastSubmitRef.current.messageId
+            : createOpenCodeIdentifier('msg');
+
         const sendPromise = sendCapturedMessage(
             primaryText,
             providerIdToSend,
@@ -1487,9 +1525,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             additionalParts.length > 0 ? additionalParts : undefined,
             variantToSend,
             inputMode,
-            delivery ? { ...sendMessageOptions, delivery } : sendMessageOptions,
+            delivery
+                ? { ...sendMessageOptions, delivery, messageId: submissionMessageId }
+                : { ...sendMessageOptions, messageId: submissionMessageId },
         );
-
         if (typeof window === 'undefined') {
             scrollToBottom?.();
         } else {
@@ -1499,6 +1538,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         }
 
         const handledSendPromise = sendPromise.then(() => {
+            lastSubmitRef.current = undefined;
             // Clear linked issue after successful message send
             if (linkedIssue) {
                 setLinkedIssue(null);
@@ -1507,6 +1547,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 setLinkedPr(null);
             }
         }).catch((error: unknown) => {
+            if (sessionActions.isUnconfirmedSendError(error)) {
+                // The send outcome could not be confirmed: the optimistic
+                // message stays in the transcript and the composer stays
+                // cleared so a retry cannot duplicate a prompt the engine may
+                // already be answering. A delayed rollback (definitively not
+                // sent) restores the input through the rollback listener.
+                lastSubmitRef.current = { messageId: submissionMessageId, text: primaryText };
+                restoreConsumedDrafts();
+                restoreConsumedSyntheticParts();
+                restoreComposerAttachments();
+                toast.warning(t('chat.chatInput.toast.sendUnconfirmed'));
+                return;
+            }
+
             const rawMessage =
                 error instanceof Error
                     ? error.message
@@ -1516,6 +1570,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             const normalized = rawMessage.toLowerCase();
             const isSoftNetworkError = sessionActions.isAmbiguousSendFailure(error);
 
+            // Keep the ID so a retry of the restored text merges into the
+            // original message instead of duplicating it.
+            lastSubmitRef.current = { messageId: submissionMessageId, text: primaryText };
             restoreConsumedDrafts();
             restoreConsumedSyntheticParts();
             restoreComposerAttachments();

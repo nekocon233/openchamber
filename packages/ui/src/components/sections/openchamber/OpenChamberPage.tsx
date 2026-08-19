@@ -1,24 +1,27 @@
 import React from 'react';
 import { OpenChamberVisualSettings } from './OpenChamberVisualSettings';
-import { AboutSettings } from './AboutSettings';
 import { SessionRetentionSettings } from './SessionRetentionSettings';
 import { PasskeySettings } from './PasskeySettings';
 import { DefaultsSettings } from './DefaultsSettings';
-import { GitSettings } from './GitSettings';
-import { NotificationSettings } from './NotificationSettings';
-import { GitHubSettings } from './GitHubSettings';
-import { VoiceSettings } from './VoiceSettings';
-import { TunnelSettings } from './TunnelSettings';
 import { OpenCodeCliSettings } from './OpenCodeCliSettings';
 import { DesktopNetworkSettings } from './DesktopNetworkSettings';
-import { KeyboardShortcutsSettings } from './KeyboardShortcutsSettings';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { useDeviceInfo } from '@/lib/device';
 import { isDesktopLocalOriginActive, isDesktopShell, isHostLocalOriginActive, isVSCodeRuntime, isWebRuntime } from '@/lib/desktop';
 import { isCapacitorApp } from '@/lib/platform';
 import { useI18n } from '@/lib/i18n';
 import { subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
+import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { OpenChamberSection } from './types';
+
+const AboutSettings = lazyWithChunkRecovery(() => import('./AboutSettings').then((m) => ({ default: m.AboutSettings })));
+const GitSettings = lazyWithChunkRecovery(() => import('./GitSettings').then((m) => ({ default: m.GitSettings })));
+const NotificationSettings = lazyWithChunkRecovery(() => import('./NotificationSettings').then((m) => ({ default: m.NotificationSettings })));
+const GitHubSettings = lazyWithChunkRecovery(() => import('./GitHubSettings').then((m) => ({ default: m.GitHubSettings })));
+const VoiceSettings = lazyWithChunkRecovery(() => import('./VoiceSettings').then((m) => ({ default: m.VoiceSettings })));
+const TunnelSettings = lazyWithChunkRecovery(() => import('./TunnelSettings').then((m) => ({ default: m.TunnelSettings })));
+const KeyboardShortcutsSettings = lazyWithChunkRecovery(() => import('./KeyboardShortcutsSettings').then((m) => ({ default: m.KeyboardShortcutsSettings })));
 
 const useRuntimeEndpointEpoch = (): number => {
     const [epoch, setEpoch] = React.useState(0);
@@ -54,7 +57,13 @@ export const OpenChamberPage: React.FC<OpenChamberPageProps> = ({ section }) => 
                 {!isVSCode && <OpenCodeCliSettings />}
                 <SessionRetentionSettings />
                 {isWebRuntime() && !isDesktopShell() && !isVSCode && !isCapacitorApp() && <PasskeySettings />}
-                {showAbout && <AboutSettings />}
+                {showAbout && (
+                    <ErrorBoundary>
+                        <React.Suspense fallback={null}>
+                            <AboutSettings />
+                        </React.Suspense>
+                    </ErrorBoundary>
+                )}
             </SettingsPageLayout>
         );
     }
@@ -125,8 +134,14 @@ export const OpenChamberPage: React.FC<OpenChamberPageProps> = ({ section }) => 
     );
 };
 
+const wrapLazySection = (node: React.ReactNode) => (
+    <ErrorBoundary>
+        <React.Suspense fallback={null}>{node}</React.Suspense>
+    </ErrorBoundary>
+);
+
 const ShortcutsSectionContent: React.FC = () => {
-    return <KeyboardShortcutsSettings />;
+    return wrapLazySection(<KeyboardShortcutsSettings />);
 };
 
 // General section: app-level settings — startup/tray/network, access password,
@@ -223,7 +238,7 @@ const SessionsSectionContent: React.FC = () => {
 
 // Git section: Commit message model, Worktree settings
 const GitSectionContent: React.FC = () => {
-    return <GitSettings />;
+    return wrapLazySection(<GitSettings />);
 };
 
 // GitHub section: Connect account for PR/issue workflows
@@ -231,12 +246,12 @@ const GitHubSectionContent: React.FC = () => {
     if (isVSCodeRuntime()) {
         return null;
     }
-    return <GitHubSettings />;
+    return wrapLazySection(<GitHubSettings />);
 };
 
 // Notifications section: Native browser notifications
 const NotificationSectionContent: React.FC = () => {
-    return <NotificationSettings />;
+    return wrapLazySection(<NotificationSettings />);
 };
 
 // Voice section: Language selection and continuous mode
@@ -244,12 +259,12 @@ const VoiceSectionContent: React.FC = () => {
     if (isVSCodeRuntime()) {
         return null;
     }
-    return <VoiceSettings />;
+    return wrapLazySection(<VoiceSettings />);
 };
 
 const TunnelSectionContent: React.FC = () => {
     if (isVSCodeRuntime() || !isHostLocalOriginActive()) {
         return null;
     }
-    return <TunnelSettings />;
+    return wrapLazySection(<TunnelSettings />);
 };

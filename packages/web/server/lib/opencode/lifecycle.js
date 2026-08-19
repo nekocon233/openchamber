@@ -17,6 +17,23 @@ const HEALTH_CHECK_MAX_CONSECUTIVE_FAILURES = parsePositiveInt(
 );
 const HEALTH_CHECK_INTERVAL_OVERRIDE_MS = parsePositiveInt(process.env.OPENCHAMBER_OPENCODE_HEALTH_INTERVAL_MS, 0);
 const HEALTH_CHECK_RESULT_CACHE_MS = parsePositiveInt(process.env.OPENCHAMBER_OPENCODE_HEALTH_CACHE_MS, 750);
+// TCP-level liveness gate that runs before the HTTP health probe. A stalled
+// process (blocked event loop, full accept backlog) fails connect or times
+// out in well under a second instead of occupying the HTTP probe for its
+// whole timeout.
+const HEALTH_CHECK_TCP_PROBE_TIMEOUT_MS = parsePositiveInt(
+  process.env.OPENCHAMBER_OPENCODE_HEALTH_TCP_TIMEOUT_MS,
+  400
+);
+// Sliding-window degradation detection. Intermittent stalls can succeed just
+// often enough to reset the consecutive-failure counter forever; a window
+// with a high failure rate restarts OpenCode even though no long run of
+// failures ever accumulates.
+const HEALTH_CHECK_WINDOW_SIZE = parsePositiveInt(process.env.OPENCHAMBER_OPENCODE_HEALTH_WINDOW_SIZE, 8);
+const HEALTH_CHECK_WINDOW_FAILURE_THRESHOLD = parsePositiveInt(
+  process.env.OPENCHAMBER_OPENCODE_HEALTH_WINDOW_FAILURE_THRESHOLD,
+  6
+);
 const OPENCODE_HEALTH_PATH = '/global/health';
 // Last-used directory plus the three most recently opened projects — deeper
 // tails are unlikely to be the user's first click and just add background work.
@@ -427,8 +444,49 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
     });
   };
 
+  const probeOpenCodeTcpPort = (port, timeoutMs) => new Promise((resolve) => {
+    if (!port || port <= 0) {
+      resolve(false);
+      return;
+    }
+    const socket = net.connect({ host: resolveOpenCodeProbeHost(), port });
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+
+  const resolveOpenCodeProbeHost = () => {
+    if (state.openCodeBaseUrl) {
+      try {
+        return new URL(state.openCodeBaseUrl).hostname;
+      } catch {
+      }
+    }
+    const configured = env.ENV_CONFIGURED_OPENCODE_HOSTNAME;
+    if (configured && configured !== '0.0.0.0' && configured !== '::' && configured !== '[::]') {
+      return configured;
+    }
+    return '127.0.0.1';
+  };
+
   const isOpenCodeProcessHealthy = async () => {
     if (!state.openCodeProcess || !state.openCodePort) {
+      return false;
+    }
+
+    // Fast TCP liveness gate: a stalled process cannot accept connections,
+    // so this fails in milliseconds instead of occupying the HTTP probe for
+    // its full timeout.
+    const tcpHealthy = await probeOpenCodeTcpPort(state.openCodePort, HEALTH_CHECK_TCP_PROBE_TIMEOUT_MS);
+    if (!tcpHealthy) {
       return false;
     }
 
@@ -1007,15 +1065,34 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
   let lastUnhealthyWithBusySessionsAt = 0;
   let consecutiveHealthFailures = 0;
   let lastCountedHealthFailureAt = 0;
+  let lastSampledHealthAt = 0;
   let healthProbePromise = null;
   let healthCheckCyclePromise = null;
   let lastHealthProbeResult = null;
   let healthFailureCountIntervalMs = 15_000;
+  // Sliding window of recent probe results (true = healthy). Intermittent
+  // stalls that succeed just often enough to reset the consecutive-failure
+  // counter are still caught when the window failure rate crosses the
+  // threshold.
+  let healthProbeHistory = [];
 
   const resetHealthFailureState = () => {
     consecutiveHealthFailures = 0;
     lastUnhealthyWithBusySessionsAt = 0;
     lastCountedHealthFailureAt = 0;
+  };
+
+  const pushHealthProbeResult = (healthy) => {
+    healthProbeHistory.push(healthy);
+    if (healthProbeHistory.length > HEALTH_CHECK_WINDOW_SIZE) {
+      healthProbeHistory = healthProbeHistory.slice(-HEALTH_CHECK_WINDOW_SIZE);
+    }
+  };
+
+  const isDegradedHealthWindow = () => {
+    if (healthProbeHistory.length < HEALTH_CHECK_WINDOW_SIZE) return false;
+    const failures = healthProbeHistory.filter((healthy) => !healthy).length;
+    return failures >= HEALTH_CHECK_WINDOW_FAILURE_THRESHOLD;
   };
 
   const probeOpenCodeHealth = async () => {
@@ -1075,6 +1152,7 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
           console.log(`[lifecycle] ${source} health check: OpenCode process exited, restarting...`);
           consecutiveHealthFailures = 0;
           lastHealthProbeResult = null;
+          healthProbeHistory = [];
           await restartOpenCode();
           return;
         }
@@ -1083,18 +1161,45 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
           return;
         }
         lastCountedHealthFailureAt = checkedAt;
+        // The sliding window samples at the same pace as the failure counter,
+        // so cached/rapid probes cannot flood the window with duplicates.
+        pushHealthProbeResult(false);
         consecutiveHealthFailures += 1;
         console.warn(
           `[lifecycle] ${source} health check failed (${consecutiveHealthFailures}/${HEALTH_CHECK_MAX_CONSECUTIVE_FAILURES})`
         );
-        if (consecutiveHealthFailures < HEALTH_CHECK_MAX_CONSECUTIVE_FAILURES) return;
+        const windowDegraded = isDegradedHealthWindow();
+        if (windowDegraded) {
+          const failures = healthProbeHistory.filter((result) => !result).length;
+          console.warn(
+            `[lifecycle] ${source} health check window degraded (${failures}/${HEALTH_CHECK_WINDOW_SIZE} failed)`
+          );
+        }
+        if (
+          consecutiveHealthFailures < HEALTH_CHECK_MAX_CONSECUTIVE_FAILURES
+          && !windowDegraded
+        ) {
+          return;
+        }
         if (shouldSkipRestartForBusySessions()) return;
         console.log(`[lifecycle] ${source} health check failure threshold reached, restarting OpenCode...`);
         consecutiveHealthFailures = 0;
         lastHealthProbeResult = null;
+        healthProbeHistory = [];
         await restartOpenCode();
       } else {
-        resetHealthFailureState();
+        // An occasional success must not reset a degraded run (that is how
+        // intermittent stalls dodge the consecutive-failure threshold), but a
+        // fully healthy window proves recovery and clears the counters.
+        const checkedAt = now();
+        if (lastSampledHealthAt && checkedAt - lastSampledHealthAt < healthFailureCountIntervalMs) {
+          return;
+        }
+        lastSampledHealthAt = checkedAt;
+        pushHealthProbeResult(true);
+        if (healthProbeHistory.every((result) => result)) {
+          resetHealthFailureState();
+        }
       }
     })().finally(() => {
       healthCheckCyclePromise = null;

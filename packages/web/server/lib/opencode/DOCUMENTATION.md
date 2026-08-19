@@ -146,6 +146,10 @@ macOS `say` voice enumeration starts concurrently with server composition. The s
 
 Transport-triggered health checks share the periodic monitor's failure accounting interval. Rapid WS reconnect callbacks therefore cannot exhaust the managed-process restart threshold using one cached unhealthy result; an exited managed process still restarts immediately.
 
+Health probes gate on a fast TCP-level connect check (default 400 ms) before the HTTP `/global/health` fetch (default 5 s timeout), so a stalled process — blocked event loop or full accept backlog — fails the probe in milliseconds instead of occupying the HTTP timeout. Restart triggers use two independent signals: the consecutive-failure counter (default 20) and a sliding window of sampled probe results (default: 6 failures in the last 8 samples). An intermittent stall that succeeds just often enough to reset the consecutive counter still restarts OpenCode once the window degrades, while an occasional success no longer resets a degraded run; only a fully healthy window clears the counters. Samples are taken at the failure-accounting interval, so cached/rapid probes cannot flood the window. Tune with `OPENCHAMBER_OPENCODE_HEALTH_TCP_TIMEOUT_MS`, `OPENCHAMBER_OPENCODE_HEALTH_WINDOW_SIZE`, and `OPENCHAMBER_OPENCODE_HEALTH_WINDOW_FAILURE_THRESHOLD`.
+
+Proxy upstream failures are logged with per-message throttling (3 lines per distinct message per minute, then a summary every 100 repeats) instead of one line per request, keeping stderr bounded when OpenCode stalls under load. The session-list fetch path carries the proxy request deadline so a stalled upstream cannot hang the request without any timeout.
+
 ## Public exports (env-runtime.js)
 - `createOpenCodeEnvRuntime(dependencies)`: creates runtime that owns OpenCode CLI environment and binary discovery state.
 - OpenCode CLI resolution order is persisted settings, environment overrides, bundled Desktop CLI when available, PATH, known install locations, then platform shell discovery.

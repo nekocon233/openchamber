@@ -11,32 +11,9 @@ import { useSkillsCatalogStore } from '@/stores/useSkillsCatalogStore';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { Tooltip, TooltipTrigger } from '@/components/ui/tooltip';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
-import { AgentsSidebar } from '@/components/sections/agents/AgentsSidebar';
-import { AgentsPage } from '@/components/sections/agents/AgentsPage';
-import { BehaviorPage } from '@/components/sections/behavior/BehaviorPage';
-import { CommandsSidebar } from '@/components/sections/commands/CommandsSidebar';
-import { CommandsPage } from '@/components/sections/commands/CommandsPage';
-import { McpSidebar } from '@/components/sections/mcp/McpSidebar';
-import { McpPage } from '@/components/sections/mcp/McpPage';
-import { PluginsSidebar, PluginsPage } from '@/components/sections/plugins';
 import { usePluginsStore } from '@/stores/usePluginsStore';
-import { SkillsSidebar } from '@/components/sections/skills/SkillsSidebar';
-import { SkillsPage } from '@/components/sections/skills/SkillsPage';
-import { ProjectsSidebar } from '@/components/sections/projects/ProjectsSidebar';
-import { ProjectsPage } from '@/components/sections/projects/ProjectsPage';
-import { RemoteInstancesPage } from '@/components/sections/remote-instances/RemoteInstancesPage';
-import { ProvidersSidebar } from '@/components/sections/providers/ProvidersSidebar';
-import { ProvidersPage } from '@/components/sections/providers/ProvidersPage';
-import { UsageSidebar } from '@/components/sections/usage/UsageSidebar';
-import { UsagePage } from '@/components/sections/usage/UsagePage';
-import { MagicPromptsSidebar } from '@/components/sections/magic-prompts/MagicPromptsSidebar';
-import { MagicPromptsPage } from '@/components/sections/magic-prompts/MagicPromptsPage';
-import { SnippetsSidebar } from '@/components/sections/snippets/SnippetsSidebar';
-import { SnippetsPage } from '@/components/sections/snippets/SnippetsPage';
-import { GitPage } from '@/components/sections/git-identities/GitPage';
 import type { OpenChamberSection } from '@/components/sections/openchamber/types';
 import { OpenChamberPage } from '@/components/sections/openchamber/OpenChamberPage';
-import { AboutSettings } from '@/components/sections/openchamber/AboutSettings';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
 import {
   SETTINGS_SECTION_TITLE_CLASS,
@@ -62,6 +39,32 @@ import {
   type SettingsPageMeta,
 } from '@/lib/settings/metadata';
 import { buildSettingsSearchResults, type SettingsSearchResult } from '@/lib/settings/search';
+import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
+
+const AgentsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/agents/AgentsSidebar').then((m) => ({ default: m.AgentsSidebar })));
+const AgentsPage = lazyWithChunkRecovery(() => import('@/components/sections/agents/AgentsPage').then((m) => ({ default: m.AgentsPage })));
+const BehaviorPage = lazyWithChunkRecovery(() => import('@/components/sections/behavior/BehaviorPage').then((m) => ({ default: m.BehaviorPage })));
+const CommandsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/commands/CommandsSidebar').then((m) => ({ default: m.CommandsSidebar })));
+const CommandsPage = lazyWithChunkRecovery(() => import('@/components/sections/commands/CommandsPage').then((m) => ({ default: m.CommandsPage })));
+const McpSidebar = lazyWithChunkRecovery(() => import('@/components/sections/mcp/McpSidebar').then((m) => ({ default: m.McpSidebar })));
+const McpPage = lazyWithChunkRecovery(() => import('@/components/sections/mcp/McpPage').then((m) => ({ default: m.McpPage })));
+const PluginsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/plugins').then((m) => ({ default: m.PluginsSidebar })));
+const PluginsPage = lazyWithChunkRecovery(() => import('@/components/sections/plugins').then((m) => ({ default: m.PluginsPage })));
+const SkillsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/skills/SkillsSidebar').then((m) => ({ default: m.SkillsSidebar })));
+const SkillsPage = lazyWithChunkRecovery(() => import('@/components/sections/skills/SkillsPage').then((m) => ({ default: m.SkillsPage })));
+const ProjectsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/projects/ProjectsSidebar').then((m) => ({ default: m.ProjectsSidebar })));
+const ProjectsPage = lazyWithChunkRecovery(() => import('@/components/sections/projects/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
+const RemoteInstancesPage = lazyWithChunkRecovery(() => import('@/components/sections/remote-instances/RemoteInstancesPage').then((m) => ({ default: m.RemoteInstancesPage })));
+const ProvidersSidebar = lazyWithChunkRecovery(() => import('@/components/sections/providers/ProvidersSidebar').then((m) => ({ default: m.ProvidersSidebar })));
+const ProvidersPage = lazyWithChunkRecovery(() => import('@/components/sections/providers/ProvidersPage').then((m) => ({ default: m.ProvidersPage })));
+const UsageSidebar = lazyWithChunkRecovery(() => import('@/components/sections/usage/UsageSidebar').then((m) => ({ default: m.UsageSidebar })));
+const UsagePage = lazyWithChunkRecovery(() => import('@/components/sections/usage/UsagePage').then((m) => ({ default: m.UsagePage })));
+const MagicPromptsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/magic-prompts/MagicPromptsSidebar').then((m) => ({ default: m.MagicPromptsSidebar })));
+const MagicPromptsPage = lazyWithChunkRecovery(() => import('@/components/sections/magic-prompts/MagicPromptsPage').then((m) => ({ default: m.MagicPromptsPage })));
+const SnippetsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/snippets/SnippetsSidebar').then((m) => ({ default: m.SnippetsSidebar })));
+const SnippetsPage = lazyWithChunkRecovery(() => import('@/components/sections/snippets/SnippetsPage').then((m) => ({ default: m.SnippetsPage })));
+const GitPage = lazyWithChunkRecovery(() => import('@/components/sections/git-identities/GitPage').then((m) => ({ default: m.GitPage })));
+const AboutSettings = lazyWithChunkRecovery(() => import('@/components/sections/openchamber/AboutSettings').then((m) => ({ default: m.AboutSettings })));
 
 // UI Kit: fixed settings navigation width
 const SETTINGS_NAV_WIDTH = 256;
@@ -578,32 +581,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     );
   }, [t]);
 
+  const wrapLazyPage = React.useCallback((node: React.ReactNode) => (
+    <React.Suspense fallback={null}>{node}</React.Suspense>
+  ), []);
+
   const renderPageSidebar = React.useCallback((slug: SettingsPageSlug, opts: { onItemSelect?: () => void }) => {
     switch (slug) {
       case 'projects':
-        return <ProjectsSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<ProjectsSidebar onItemSelect={opts.onItemSelect} />);
       case 'agents':
-        return <AgentsSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<AgentsSidebar onItemSelect={opts.onItemSelect} />);
       case 'commands':
-        return <CommandsSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<CommandsSidebar onItemSelect={opts.onItemSelect} />);
       case 'mcp':
-        return <McpSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<McpSidebar onItemSelect={opts.onItemSelect} />);
       case 'plugins':
-        return <PluginsSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<PluginsSidebar onItemSelect={opts.onItemSelect} />);
       case 'skills.installed':
-        return <SkillsSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<SkillsSidebar onItemSelect={opts.onItemSelect} />);
       case 'providers':
-        return <ProvidersSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<ProvidersSidebar onItemSelect={opts.onItemSelect} />);
       case 'usage':
-        return <UsageSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<UsageSidebar onItemSelect={opts.onItemSelect} />);
       case 'magic-prompts':
-        return <MagicPromptsSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<MagicPromptsSidebar onItemSelect={opts.onItemSelect} />);
       case 'snippets':
-        return <SnippetsSidebar onItemSelect={opts.onItemSelect} />;
+        return wrapLazyPage(<SnippetsSidebar onItemSelect={opts.onItemSelect} />);
       default:
         return null;
     }
-  }, []);
+  }, [wrapLazyPage]);
 
   const renderPageContent = React.useCallback((slug: SettingsPageSlug) => {
     const meta = getSettingsPageMeta(slug);
@@ -613,39 +620,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
 
     switch (slug) {
       case 'projects':
-        return <ProjectsPage />;
+        return wrapLazyPage(<ProjectsPage />);
       case 'remote-instances':
-        return <RemoteInstancesPage />;
+        return wrapLazyPage(<RemoteInstancesPage />);
       case 'agents':
-        return <AgentsPage />;
+        return wrapLazyPage(<AgentsPage />);
       case 'behavior':
-        return <BehaviorPage />;
+        return wrapLazyPage(<BehaviorPage />);
       case 'commands':
-        return <CommandsPage />;
+        return wrapLazyPage(<CommandsPage />);
       case 'mcp':
-        return <McpPage />;
+        return wrapLazyPage(<McpPage />);
       case 'plugins':
-        return <PluginsPage />;
+        return wrapLazyPage(<PluginsPage />);
       case 'skills.installed':
-        return <SkillsPage view="installed" />;
+        return wrapLazyPage(<SkillsPage view="installed" />);
       case 'skills.catalog':
-        return <SkillsPage view="catalog" />;
+        return wrapLazyPage(<SkillsPage view="catalog" />);
       case 'providers':
-        return <ProvidersPage />;
+        return wrapLazyPage(<ProvidersPage />);
       case 'usage':
-        return <UsagePage />;
+        return wrapLazyPage(<UsagePage />);
       case 'about':
-        return (
+        return wrapLazyPage(
           <SettingsPageLayout title={t('settings.page.about.title')} showSaveStatus={false}>
             <AboutSettings />
           </SettingsPageLayout>
         );
       case 'magic-prompts':
-        return <MagicPromptsPage />;
+        return wrapLazyPage(<MagicPromptsPage />);
       case 'snippets':
-        return <SnippetsPage />;
+        return wrapLazyPage(<SnippetsPage />);
       case 'git':
-        return <GitPage />;
+        return wrapLazyPage(<GitPage />);
       case 'general':
       case 'appearance':
       case 'chat':
@@ -661,7 +668,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       default:
         return null;
     }
-  }, [openChamberSectionBySlug, renderUnavailable, runtimeCtx, t]);
+  }, [openChamberSectionBySlug, renderUnavailable, runtimeCtx, t, wrapLazyPage]);
 
   // Mobile: if opened via deep-link / palette to a non-home page, jump into it once.
   React.useEffect(() => {

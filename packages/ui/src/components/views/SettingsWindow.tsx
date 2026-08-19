@@ -2,7 +2,10 @@ import React from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import { SettingsView } from './SettingsView';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
+
+const SettingsView = lazyWithChunkRecovery(() => import('./SettingsView').then((m) => ({ default: m.SettingsView })));
 
 interface SettingsWindowProps {
   open: boolean;
@@ -62,7 +65,11 @@ export const SettingsWindow: React.FC<SettingsWindowProps> = ({ open, onOpenChan
             <Dialog.Description id={descriptionId} className="sr-only">
               {t('settings.window.description')}
             </Dialog.Description>
-            <SettingsView onClose={() => onOpenChange(false)} isWindowed />
+            <ErrorBoundary>
+              <React.Suspense fallback={null}>
+                <SettingsView onClose={() => onOpenChange(false)} isWindowed />
+              </React.Suspense>
+            </ErrorBoundary>
           </Dialog.Popup>
         </div>
       </Dialog.Portal>

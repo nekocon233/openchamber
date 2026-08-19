@@ -478,12 +478,14 @@ export const MainLayout: React.FC = () => {
 
                     {/* Desktop settings: windowed dialog with blur */}
                     {settingsWindowMounted ? (
-                        <React.Suspense fallback={null}>
-                            <SettingsWindow
-                                open={isSettingsDialogOpen}
-                                onOpenChange={setSettingsDialogOpen}
-                            />
-                        </React.Suspense>
+                        <ErrorBoundary>
+                            <React.Suspense fallback={null}>
+                                <SettingsWindow
+                                    open={isSettingsDialogOpen}
+                                    onOpenChange={setSettingsDialogOpen}
+                                />
+                            </React.Suspense>
+                        </ErrorBoundary>
                     ) : null}
                 </>
             )}

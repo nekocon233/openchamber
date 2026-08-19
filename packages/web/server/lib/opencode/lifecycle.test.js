@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import net from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const spawnMock = vi.fn();
@@ -256,10 +257,99 @@ describe('OpenCode lifecycle', () => {
     });
 
     await runtime.triggerHealthCheck();
-
     expect(close).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('(1/20)'));
+    warn.mockRestore();
+  });
+
+  it('restarts an intermittently stalling OpenCode when the health window degrades', async () => {
+    const close = vi.fn(async () => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // A real TCP listener lets the probe's connect gate succeed; the fetch
+    // mock then decides the HTTP health outcome per sample.
+    const tcpServer = net.createServer((socket) => socket.destroy());
+    await new Promise((resolve) => tcpServer.listen(45678, '127.0.0.1', resolve));
+
+    let probeHealthy = false;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: probeHealthy,
+      json: async () => (probeHealthy ? { healthy: true } : null),
+    }));
+
+    let fakeNow = 1;
+    const runtime = createRuntime({ now: () => fakeNow }, {
+      openCodePort: 45678,
+      openCodeProcess: {
+        pid: null,
+        exitCode: null,
+        signalCode: null,
+        close,
+      },
+      isOpenCodeReady: true,
+    });
+
+    // Six failures scattered between two successes: the consecutive-failure
+    // counter never approaches 20, but the sliding window crosses the 6/8
+    // degradation threshold and forces a restart.
+    const replacement = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        replacement.stdout.emit('data', 'opencode server listening on http://127.0.0.1:45678\n');
+      });
+      return replacement;
+    });
+    const pattern = [false, true, false, false, false, true, false, false];
+    for (let index = 0; index < pattern.length; index += 1) {
+      // The final sample triggers the restart; release the port so the
+      // restart's port-release wait completes instead of timing out.
+      if (index === pattern.length - 1) {
+        tcpServer.close();
+      }
+      probeHealthy = pattern[index];
+      await runtime.triggerHealthCheck();
+      fakeNow += 15_000;
+    }
+
+    expect(close).toHaveBeenCalledTimes(1);
+    tcpServer.close();
+    warn.mockRestore();
+  });
+
+  it('does not restart while the health window stays below the failure threshold', async () => {
+    const close = vi.fn(async () => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tcpServer = net.createServer((socket) => socket.destroy());
+    await new Promise((resolve) => tcpServer.listen(45678, '127.0.0.1', resolve));
+
+    let probeHealthy = false;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: probeHealthy,
+      json: async () => (probeHealthy ? { healthy: true } : null),
+    }));
+
+    let fakeNow = 1;
+    const runtime = createRuntime({ now: () => fakeNow }, {
+      openCodePort: 45678,
+      openCodeProcess: {
+        pid: null,
+        exitCode: null,
+        signalCode: null,
+        close,
+      },
+      isOpenCodeReady: true,
+    });
+
+    // Four failures and four successes keep the window below the threshold.
+    const pattern = [false, true, false, true, false, true, false, true];
+    for (const healthy of pattern) {
+      probeHealthy = healthy;
+      await runtime.triggerHealthCheck();
+      fakeNow += 15_000;
+    }
+
+    expect(close).not.toHaveBeenCalled();
+    tcpServer.close();
     warn.mockRestore();
   });
 

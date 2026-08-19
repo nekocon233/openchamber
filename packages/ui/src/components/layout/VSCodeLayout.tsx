@@ -546,16 +546,18 @@ export const VSCodeLayout: React.FC = () => {
         </div>
       ) : currentView === 'settings' ? (
         // Settings view
-        <React.Suspense fallback={null}>
-          <SettingsView
-            onClose={() => {
-              const previousView = viewBeforeSettingsRef.current;
-              viewBeforeSettingsRef.current = null;
-              setCurrentView(previousView ?? (usesExpandedLayout ? 'chat' : 'sessions'));
-            }}
-            forceMobile={usesMobileLayout}
-          />
-        </React.Suspense>
+        <ErrorBoundary>
+          <React.Suspense fallback={null}>
+            <SettingsView
+              onClose={() => {
+                const previousView = viewBeforeSettingsRef.current;
+                viewBeforeSettingsRef.current = null;
+                setCurrentView(previousView ?? (usesExpandedLayout ? 'chat' : 'sessions'));
+              }}
+              forceMobile={usesMobileLayout}
+            />
+          </React.Suspense>
+        </ErrorBoundary>
       ) : usesExpandedLayout ? (
         // Expanded layout: sessions sidebar + chat side by side
         <div className="flex h-full">

@@ -3,6 +3,7 @@ import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { useI18n } from '@/lib/i18n';
 import { Icon } from "@/components/icon/Icon";
+import { isDynamicImportError } from '@/lib/chunkLoadRecovery';
 
 interface ChatErrorBoundaryState {
   hasError: boolean;
@@ -18,9 +19,11 @@ interface ChatErrorBoundaryProps {
 interface ChatErrorBoundaryTexts {
   title: string;
   description: string;
+  chunkLoadDescription: string;
   sessionLabel: string;
   detailsSummary: string;
   resetAction: string;
+  reloadAction: string;
   persistentHint: string;
 }
 
@@ -50,6 +53,13 @@ class ChatErrorBoundaryView extends React.Component<ChatErrorBoundaryViewProps, 
     this.setState({ hasError: false, error: undefined, errorInfo: undefined });
   };
 
+  handleReload = () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.location.reload();
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -63,7 +73,9 @@ class ChatErrorBoundaryView extends React.Component<ChatErrorBoundaryViewProps, 
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground text-center">
-                {this.props.texts.description}
+                {isDynamicImportError(this.state.error)
+                  ? this.props.texts.chunkLoadDescription
+                  : this.props.texts.description}
               </p>
 
               {this.props.sessionId && (
@@ -82,9 +94,15 @@ class ChatErrorBoundaryView extends React.Component<ChatErrorBoundaryViewProps, 
               )}
 
               <div className="flex gap-2">
-                <Button onClick={this.handleReset} variant="outline" className="flex-1">
+                <Button
+                  onClick={isDynamicImportError(this.state.error) ? this.handleReload : this.handleReset}
+                  variant="outline"
+                  className="flex-1"
+                >
                   <Icon name="restart" className="h-4 w-4 mr-2" />
-                  {this.props.texts.resetAction}
+                  {isDynamicImportError(this.state.error)
+                    ? this.props.texts.reloadAction
+                    : this.props.texts.resetAction}
                 </Button>
               </div>
 
@@ -109,9 +127,11 @@ export function ChatErrorBoundary(props: ChatErrorBoundaryProps) {
       texts={{
         title: t('chat.errorBoundary.title'),
         description: t('chat.errorBoundary.description'),
+        chunkLoadDescription: t('chat.errorBoundary.chunkLoadDescription'),
         sessionLabel: t('chat.errorBoundary.sessionLabel'),
         detailsSummary: t('chat.errorBoundary.detailsSummary'),
         resetAction: t('chat.errorBoundary.resetAction'),
+        reloadAction: t('chat.errorBoundary.reloadAction'),
         persistentHint: t('chat.errorBoundary.persistentHint'),
       }}
     />
