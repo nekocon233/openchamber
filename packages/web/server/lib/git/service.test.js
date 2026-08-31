@@ -8,6 +8,8 @@ import simpleGit from 'simple-git';
 import {
   checkoutCommit,
   cherryPick,
+  continueMerge,
+  continueRebase,
   createWorktree,
   getWorktreeBootstrapStatus,
   getBranches,
@@ -175,6 +177,55 @@ describe.runIf(canRunGit())('setLocalIdentity', () => {
     expect(runGit(tmpDir, ['config', '--local', '--get', 'core.sshCommand']).trim()).toBe(
       "ssh -i '/tmp/test key' -o IdentitiesOnly=yes"
     );
+  });
+});
+
+describe.runIf(canRunGit())('non-interactive conflict continuation', () => {
+  const createConflictingBranches = async () => {
+    const { tmpDir, git } = await createTempRepo();
+    fs.writeFileSync(path.join(tmpDir, 'shared.txt'), 'base\n');
+    await git.add('shared.txt');
+    await git.commit('base');
+
+    await git.checkoutLocalBranch('feature');
+    fs.writeFileSync(path.join(tmpDir, 'shared.txt'), 'feature\n');
+    await git.add('shared.txt');
+    await git.commit('feature change');
+
+    await git.checkout('main');
+    fs.writeFileSync(path.join(tmpDir, 'shared.txt'), 'main\n');
+    await git.add('shared.txt');
+    await git.commit('main change');
+    return { tmpDir, git };
+  };
+
+  it('continues a rebase with the fixed no-op editor', async () => {
+    const { tmpDir, git } = await createConflictingBranches();
+    await git.checkout('feature');
+    await expect(git.rebase(['main'])).rejects.toThrow();
+
+    fs.writeFileSync(path.join(tmpDir, 'shared.txt'), 'resolved\n');
+    await git.add('shared.txt');
+
+    await expect(continueRebase(tmpDir)).resolves.toEqual({
+      success: true,
+      conflict: false,
+    });
+    expect((await git.log({ maxCount: 1 })).latest?.message).toBe('feature change');
+  });
+
+  it('continues a merge with --no-edit and no editor environment override', async () => {
+    const { tmpDir, git } = await createConflictingBranches();
+    await expect(git.merge(['feature'])).rejects.toThrow();
+
+    fs.writeFileSync(path.join(tmpDir, 'shared.txt'), 'resolved\n');
+    await git.add('shared.txt');
+
+    await expect(continueMerge(tmpDir)).resolves.toEqual({
+      success: true,
+      conflict: false,
+    });
+    expect((await git.log({ maxCount: 1 })).latest?.message).toContain('Merge');
   });
 });
 

@@ -352,15 +352,19 @@ const buildGitEnv = async () => {
   return env;
 };
 
-const createGit = async (directory, { allowUnsafeSshCommand = false } = {}) => {
+const createGit = async (
+  directory,
+  { allowUnsafeSshCommand = false, allowUnsafeEditor = false } = {}
+) => {
   const env = await buildGitEnv();
   const spawnOptions = { windowsHide: true };
   const binary = getGitBinary();
   const hasCustomBinary = typeof binary === 'string' && binary.trim() && binary !== 'git' && binary !== 'git.exe';
-  const unsafe = hasCustomBinary || allowUnsafeSshCommand
+  const unsafe = hasCustomBinary || allowUnsafeSshCommand || allowUnsafeEditor
     ? {
       ...(hasCustomBinary && { allowUnsafeCustomBinary: true }),
       ...(allowUnsafeSshCommand && { allowUnsafeSshCommand: true }),
+      ...(allowUnsafeEditor && { allowUnsafeEditor: true }),
     }
     : undefined;
   // Always pin simple-git to an explicit working directory. Omitting baseDir
@@ -483,14 +487,16 @@ const resolveGitRepositoryRoot = async (directoryPath, git) => {
     : path.resolve(directoryPath, normalizedTopLevel);
 };
 
-const createRepositoryGitContext = async (directory) => {
+const createRepositoryGitContext = async (directory, gitOptions) => {
   const directoryPath = normalizeDirectoryPath(directory);
   if (typeof directoryPath !== 'string' || !directoryPath.trim()) {
     throw new Error('Git directory is required');
   }
-  const directoryGit = await createGit(directoryPath);
+  const directoryGit = await createGit(directoryPath, gitOptions);
   const repoRoot = await resolveGitRepositoryRoot(directoryPath, directoryGit);
-  const git = path.resolve(directoryPath) === repoRoot ? directoryGit : await createGit(repoRoot);
+  const git = path.resolve(directoryPath) === repoRoot
+    ? directoryGit
+    : await createGit(repoRoot, gitOptions);
   return { directoryPath, directoryGit, repoRoot, git };
 };
 
@@ -4846,7 +4852,7 @@ export async function abortMerge(directory) {
 }
 
 export async function continueRebase(directory) {
-  const { git } = await createRepositoryGitContext(directory);
+  const { git } = await createRepositoryGitContext(directory, { allowUnsafeEditor: true });
 
   try {
     // Set GIT_EDITOR to prevent editor prompts
@@ -4901,7 +4907,7 @@ export async function continueMerge(directory) {
 
     // For merge, we commit after resolving conflicts
     // Use --no-edit to use the default merge commit message
-    await git.env('GIT_EDITOR', 'true').commit([], { '--no-edit': null });
+    await git.commit([], { '--no-edit': null });
     return { success: true, conflict: false };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();

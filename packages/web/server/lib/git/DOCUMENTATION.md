@@ -68,10 +68,13 @@ The following functions are exported and used by the web server:
 ### Merge and Rebase Operations
 - `rebase(directory, options)`: Start a rebase onto a target branch.
 - `abortRebase(directory)`: Abort an in-progress rebase.
-- `continueRebase(directory)`: Continue a rebase after conflict resolution.
+- `continueRebase(directory)`: Continue a rebase after conflict resolution. Uses a narrowly scoped
+  `simple-git` unsafe-editor opt-in only for the fixed `GIT_EDITOR=true` no-op editor, preventing
+  interactive prompts without allowing arbitrary editors in other Git operations.
 - `merge(directory, options)`: Merge a branch into current branch.
 - `abortMerge(directory)`: Abort an in-progress merge.
-- `continueMerge(directory)`: Continue a merge after conflict resolution.
+- `continueMerge(directory)`: Continue a merge after conflict resolution using `git commit --no-edit`;
+  it does not set an editor environment variable.
 - `getConflictDetails(directory)`: Get detailed conflict information including operation type, unmerged files, and diff.
 
 ### Stash Operations
