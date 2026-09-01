@@ -32,6 +32,10 @@ const MAX_FILENAME_BYTES = 4096;
 const MAX_ATTACHMENT_PATH_BYTES = 16 * 1024;
 const MAX_SEND_CONFIG_STRING_BYTES = 1024;
 const MAX_AGENT_MENTION_NAME_BYTES = 1024;
+const MAX_METADATA_BYTES = 1024 * 1024;
+const MAX_TOTAL_METADATA_BYTES = 4 * 1024 * 1024;
+const MAX_METADATA_DEPTH = 8;
+const MAX_METADATA_CONTAINER_ENTRIES = 256;
 const CLAIM_TTL_MS = 120_000;
 const LOCK_OWNER_GRACE_MS = 5_000;
 const MAX_LOCK_RETRY_MS = 100;
@@ -227,17 +231,77 @@ const normalizeAttachments = (value, field) => {
   return attachments;
 };
 
+const normalizeMetadataValue = (value, field, depth = 0) => {
+  if (depth > MAX_METADATA_DEPTH) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its nesting limit`);
+  }
+  if (value === null) return value;
+  const primitive = Object(value) !== value;
+  const primitiveTag = Object.prototype.toString.call(value);
+  if (primitive && (primitiveTag === '[object Boolean]' || primitiveTag === '[object String]')) return value;
+  if (primitive && primitiveTag === '[object Number]') {
+    if (!Number.isFinite(value)) throw new FollowUpQueueValidationError(`${field} must be finite`);
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > MAX_METADATA_CONTAINER_ENTRIES) {
+      throw new FollowUpQueueValidationError(`${field} exceeds its entry limit`);
+    }
+    return value.map((entry, index) => normalizeMetadataValue(entry, `${field}[${index}]`, depth + 1));
+  }
+  const record = requireRecord(value, field);
+  const keys = Object.keys(record);
+  if (keys.length > MAX_METADATA_CONTAINER_ENTRIES) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its entry limit`);
+  }
+  const normalized = {};
+  for (const key of keys) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      throw new FollowUpQueueValidationError(`${field} contains an unsafe key`);
+    }
+    normalized[key] = normalizeMetadataValue(record[key], `${field}.${key}`, depth + 1);
+  }
+  return normalized;
+};
+
+const normalizeContextMetadata = (value, field) => {
+  const metadata = requireRecord(value, field);
+  requireAllowedKeys(metadata, new Set(['openchamberContext']), field);
+  if (!hasOwn(metadata, 'openchamberContext')) {
+    throw new FollowUpQueueValidationError(`${field}.openchamberContext is required`);
+  }
+  const context = normalizeMetadataValue(metadata.openchamberContext, `${field}.openchamberContext`);
+  if (!isRecord(context)) {
+    throw new FollowUpQueueValidationError(`${field}.openchamberContext is invalid`);
+  }
+  requireUtf8String(context.kind, `${field}.openchamberContext.kind`, MAX_IDENTIFIER_BYTES, {
+    nonEmpty: true,
+    controlFree: true,
+  });
+  const normalized = { openchamberContext: context };
+  if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > MAX_METADATA_BYTES) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its byte limit`);
+  }
+  return normalized;
+};
+
 const normalizeAdditionalPart = (value, field) => {
   const part = requireRecord(value, field);
-  requireAllowedKeys(part, new Set(['text', 'synthetic']), field);
+  requireAllowedKeys(part, new Set(['text', 'attachments', 'synthetic', 'metadata']), field);
   const normalized = {
     text: requireUtf8String(part.text, `${field}.text`, MAX_CONTENT_BYTES),
   };
+  if (hasOwn(part, 'attachments')) {
+    normalized.attachments = normalizeAttachments(part.attachments, `${field}.attachments`);
+  }
   if (hasOwn(part, 'synthetic')) {
-    if (typeof part.synthetic !== 'boolean') {
+    if (part.synthetic !== true && part.synthetic !== false) {
       throw new FollowUpQueueValidationError(`${field}.synthetic must be a boolean`);
     }
     normalized.synthetic = part.synthetic;
+  }
+  if (hasOwn(part, 'metadata')) {
+    normalized.metadata = normalizeContextMetadata(part.metadata, `${field}.metadata`);
   }
   return normalized;
 };
@@ -330,6 +394,23 @@ const normalizeItem = (value, field, options = {}) => {
   if (hasOwn(item, 'additionalParts')) {
     normalized.additionalParts = normalizeAdditionalParts(item.additionalParts, `${field}.additionalParts`);
   }
+  const itemAttachments = [
+    ...(normalized.attachments ?? []),
+    ...(normalized.additionalParts ?? []).flatMap((part) => part.attachments ?? []),
+  ];
+  if (
+    itemAttachments.length > MAX_ATTACHMENTS_PER_ITEM
+    || new Set(itemAttachments.map((attachment) => attachment.id)).size !== itemAttachments.length
+  ) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its total attachment count limit`);
+  }
+  const itemMetadataBytes = (normalized.additionalParts ?? []).reduce(
+    (total, part) => total + (part.metadata ? Buffer.byteLength(JSON.stringify(part.metadata), 'utf8') : 0),
+    0,
+  );
+  if (itemMetadataBytes > MAX_METADATA_BYTES) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its metadata byte limit`);
+  }
   if (hasOwn(item, 'agentMentionName')) {
     normalized.agentMentionName = requireUtf8String(
       item.agentMentionName,
@@ -375,6 +456,7 @@ const assertItemsWithinLimits = (items, field = 'items') => {
   let totalAttachments = 0;
   let totalAttachmentStringBytes = 0;
   let totalAdditionalParts = 0;
+  let totalMetadataBytes = 0;
   for (const item of items) {
     if (seenIds.has(item.id)) {
       throw new FollowUpQueueValidationError(`${field} contains duplicate item ids`);
@@ -388,6 +470,11 @@ const assertItemsWithinLimits = (items, field = 'items') => {
     for (const part of item.additionalParts ?? []) {
       totalAdditionalParts += 1;
       totalContentBytes += Buffer.byteLength(JSON.stringify(part.text), 'utf8') - 2;
+      if (part.metadata) totalMetadataBytes += Buffer.byteLength(JSON.stringify(part.metadata), 'utf8');
+      for (const attachment of part.attachments ?? []) {
+        totalAttachments += 1;
+        totalAttachmentStringBytes += getAttachmentStringBytes(attachment);
+      }
     }
     for (const attachment of item.attachments ?? []) {
       totalAttachments += 1;
@@ -405,6 +492,9 @@ const assertItemsWithinLimits = (items, field = 'items') => {
   }
   if (totalAdditionalParts > MAX_ADDITIONAL_PARTS_PER_QUEUE) {
     throw new FollowUpQueueValidationError(`${field} exceeds its total additional part count limit`);
+  }
+  if (totalMetadataBytes > MAX_TOTAL_METADATA_BYTES) {
+    throw new FollowUpQueueValidationError(`${field} exceeds its total metadata byte limit`);
   }
 };
 
@@ -571,6 +661,7 @@ const normalizeStorageEnvelope = (value, expectedScope) => {
 };
 
 const cloneAttachment = (attachment) => ({ ...attachment });
+const cloneMetadata = (metadata) => JSON.parse(JSON.stringify(metadata));
 
 const cloneItem = (item) => {
   const cloned = {
@@ -582,7 +673,13 @@ const cloneItem = (item) => {
     cloned.attachments = item.attachments.map(cloneAttachment);
   }
   if (hasOwn(item, 'additionalParts')) {
-    cloned.additionalParts = item.additionalParts.map((part) => ({ ...part }));
+    cloned.additionalParts = item.additionalParts.map((part) => {
+      const clonedPart = { text: part.text };
+      if (hasOwn(part, 'attachments')) clonedPart.attachments = part.attachments.map(cloneAttachment);
+      if (hasOwn(part, 'synthetic')) clonedPart.synthetic = part.synthetic;
+      if (hasOwn(part, 'metadata')) clonedPart.metadata = cloneMetadata(part.metadata);
+      return clonedPart;
+    });
   }
   if (hasOwn(item, 'agentMentionName')) cloned.agentMentionName = item.agentMentionName;
   cloned.createdAt = item.createdAt;

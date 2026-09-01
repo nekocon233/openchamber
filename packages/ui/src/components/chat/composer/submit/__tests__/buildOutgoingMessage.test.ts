@@ -1,13 +1,23 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { AttachedFile } from '@/stores/types/sessionTypes';
+import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
+import { CONTEXT_METADATA_KEY, contextPayloadFromDraft } from '@/lib/messages/contextParts';
 import {
     buildOutgoingMessage,
     type OutgoingMessageDeps,
     type OutgoingMessageInput,
 } from '../buildOutgoingMessage';
 
-const attachment = (id: string) => ({ id, filename: `${id}.txt` } as unknown as AttachedFile);
+const attachment = (id: string): AttachedFile => ({
+    id,
+    file: new File([id], `${id}.txt`, { type: 'text/plain' }),
+    filename: `${id}.txt`,
+    mimeType: 'text/plain',
+    size: id.length,
+    dataUrl: `data:text/plain,${id}`,
+    source: 'local',
+});
 
 /**
  * Resolvers with just enough behavior to observe ordering: `@agent:name`
@@ -26,7 +36,6 @@ const deps = (overrides: Partial<OutgoingMessageDeps> = {}): OutgoingMessageDeps
     },
     sanitizeAttachments: (files) => [...(files ?? [])],
     collectSkillNames: (text) => [...text.matchAll(/\/(\w+)/g)].map((match) => match[1]),
-    appendComments: (text, comments) => `${text}\n[${comments.length} comments]`,
     buildSkillInstruction: (names) => (names.length ? `use: ${names.join(',')}` : null),
     ...overrides,
 });
@@ -35,9 +44,10 @@ const input = (overrides: Partial<OutgoingMessageInput> = {}): OutgoingMessageIn
     composerText: null,
     composerAttachments: [],
     inlineComments: [],
-    syntheticTexts: [],
-    linkedIssueContext: null,
+    additionalParts: [],
+    linkedIssue: null,
     linkedPr: null,
+    linkedLinearIssue: null,
     ...overrides,
 });
 
@@ -80,31 +90,115 @@ describe('composer content', () => {
     });
 });
 
-describe('composer context', () => {
-    test('appends inline comments to the primary composer body', () => {
+const commentDraft = (overrides: Partial<InlineCommentDraft> = {}): InlineCommentDraft => ({
+    id: 'icd-1',
+    sessionKey: 's1',
+    source: 'diff',
+    fileLabel: 'src/app.ts',
+    startLine: 3,
+    endLine: 5,
+    side: 'modified',
+    code: 'const x = 1;',
+    language: 'ts',
+    text: 'fix this',
+    createdAt: 1,
+    ...overrides,
+});
+
+describe('context drafts', () => {
+    test('each becomes a synthetic part carrying structured metadata', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'body',
-            inlineComments: [{}, {}],
+            inlineComments: [commentDraft(), commentDraft({ id: 'icd-2', source: 'file', side: undefined })],
         }), deps());
 
-        expect(result.primaryText).toBe('body\n[2 comments]');
+        expect(result.primaryText).toBe('body');
+        expect(result.additionalParts).toHaveLength(2);
+        expect(result.additionalParts.every((part) => part.synthetic)).toBe(true);
+        expect(result.additionalParts[0].metadata?.[CONTEXT_METADATA_KEY])
+            .toEqual(contextPayloadFromDraft(commentDraft()));
+        expect(result.additionalParts[1].metadata?.[CONTEXT_METADATA_KEY])
+            .toEqual(contextPayloadFromDraft(commentDraft({ id: 'icd-2', source: 'file', side: undefined })));
+        expect(result.additionalParts[0].text).toContain('Comment on `src/app.ts` lines 3-5 (modified):');
+        expect(result.additionalParts[0].text).toContain('fix this');
     });
 
-    test('orders synthetic context, issue, PR instructions, PR diff, then skills', () => {
+    test('context parts precede other additional context', () => {
+        const result = buildOutgoingMessage(input({
+            composerText: 'body',
+            inlineComments: [commentDraft()],
+            additionalParts: [{ text: 'conflict note', synthetic: true }],
+        }), deps());
+
+        expect(result.additionalParts.map((part) => part.text.startsWith('Comment on') ? 'comment' : part.text))
+            .toEqual(['comment', 'conflict note']);
+    });
+});
+
+describe('additional context', () => {
+    test('preserves attachment, synthetic, and metadata fields', () => {
+        const metadata = { [CONTEXT_METADATA_KEY]: contextPayloadFromDraft(commentDraft()) };
+        const result = buildOutgoingMessage(input({
+            composerText: 'body',
+            additionalParts: [{
+                text: 'context',
+                attachments: [attachment('context-file')],
+                synthetic: true,
+                metadata,
+            }],
+        }), deps());
+
+        expect(result.additionalParts).toEqual([{
+            text: 'context',
+            attachments: [attachment('context-file')],
+            synthetic: true,
+            metadata,
+        }]);
+    });
+
+    test('a linked PR sends its instructions before its diff', () => {
+        const result = buildOutgoingMessage(input({
+            composerText: 'review this',
+            linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'how to read it', context: 'the diff' },
+        }), deps());
+
+        expect(result.additionalParts.map((part) => part.text)).toEqual(['how to read it', 'the diff']);
+        expect(result.additionalParts.every((part) => part.synthetic)).toBe(true);
+        expect(result.additionalParts[1].metadata?.[CONTEXT_METADATA_KEY])
+            .toEqual({ kind: 'github-pr', number: 7, title: 'PR', url: 'https://x/pr/7' });
+    });
+
+    test('linked issues retain structured context metadata', () => {
+        const result = buildOutgoingMessage(input({
+            composerText: 'fix it',
+            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' },
+            linkedLinearIssue: { identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear body' },
+        }), deps());
+
+        expect(result.additionalParts.map((part) => part.text)).toEqual(['issue body', 'linear body']);
+        expect(result.additionalParts[0].metadata?.[CONTEXT_METADATA_KEY])
+            .toEqual({ kind: 'github-issue', number: 3, title: 'Bug', url: 'https://x/issues/3' });
+        expect(result.additionalParts[1].metadata?.[CONTEXT_METADATA_KEY])
+            .toEqual({ kind: 'linear-issue', identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12' });
+    });
+
+    test('orders supplied context, linked references, PR instructions and skills', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'typed /deploy',
-            syntheticTexts: ['synthetic'],
-            linkedIssueContext: 'issue',
-            linkedPr: { instructions: 'pr-how', context: 'pr-diff' },
+            additionalParts: [{ text: 'synthetic', synthetic: true }],
+            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue' },
+            linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'pr-how', context: 'pr-diff' },
+            linkedLinearIssue: { identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear' },
         }), deps());
 
         expect(result.primaryText).toBe('typed /deploy');
-        expect(result.additionalParts).toEqual([
-            { text: 'synthetic', synthetic: true },
-            { text: 'issue', synthetic: true },
-            { text: 'pr-how', synthetic: true },
-            { text: 'pr-diff', synthetic: true },
-            { text: 'use: deploy', synthetic: true },
+        expect(result.additionalParts.map((part) => part.text)).toEqual([
+            'synthetic',
+            'issue',
+            'pr-how',
+            'pr-diff',
+            'linear',
+            'use: deploy',
         ]);
     });
 
@@ -117,8 +211,10 @@ describe('composer context', () => {
         expect(result.additionalParts.at(-1)?.text).toBe('use: deploy,audit');
     });
 
-    test('treats context without visible text as sendable', () => {
-        const result = buildOutgoingMessage(input({ linkedIssueContext: 'issue body' }), deps());
+    test('context without visible text is still sendable', () => {
+        const result = buildOutgoingMessage(input({
+            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' },
+        }), deps());
 
         expect(result.isEmpty).toBe(false);
     });

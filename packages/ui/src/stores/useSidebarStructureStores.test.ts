@@ -105,15 +105,17 @@ describe('authoritative sidebar structure projections', () => {
     useDirectoryStore.getState().setDirectory(originalProject.path, { showOverlay: false });
     mutationFailure = new Error('injected project add failure');
 
-    const added = useProjectsStore.getState().addProject('/workspace/optimistic', {
+    const addedPromise = useProjectsStore.getState().addProject('/workspace/optimistic', {
       id: 'project-optimistic',
       label: 'Optimistic',
     });
 
-    expect(added?.id).toBe('project-optimistic');
     expect(useProjectsStore.getState().activeProjectId).toBe('project-optimistic');
     expect(opencodeClient.getDirectory()).toBe('/workspace/optimistic');
     expect(useDirectoryStore.getState().currentDirectory).toBe('/workspace/optimistic');
+
+    const added = await addedPromise;
+    expect(added?.id).toBe('project-optimistic');
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 

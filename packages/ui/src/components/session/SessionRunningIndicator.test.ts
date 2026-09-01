@@ -5,18 +5,18 @@ import { fileURLToPath } from 'node:url';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const indicatorSource = readFileSync(join(currentDirectory, 'SessionRunningIndicator.tsx'), 'utf8');
-const nodeSource = readFileSync(join(currentDirectory, 'sidebar/SessionNodeItem.tsx'), 'utf8');
+const nodeSource = readFileSync(join(currentDirectory, 'sidebar/sessions/SessionNodeItem.tsx'), 'utf8');
 const switcherSource = readFileSync(join(currentDirectory, 'SessionSwitcherDropdown.tsx'), 'utf8');
 const mobileSessionsSource = readFileSync(join(currentDirectory, '../../apps/MobileSessionsSheet.tsx'), 'utf8');
 const mobileSwitcherSource = readFileSync(join(currentDirectory, '../../apps/MobileSessionSwitcher.tsx'), 'utf8');
 const commandPaletteSource = readFileSync(join(currentDirectory, '../ui/CommandPalette.tsx'), 'utf8');
-const collapsedIndicatorSource = readFileSync(join(currentDirectory, 'sidebar/collapsedActivityIndicator.tsx'), 'utf8');
-const sidebarSource = readFileSync(join(currentDirectory, 'SessionSidebar.tsx'), 'utf8');
+const collapsedIndicatorSource = readFileSync(join(currentDirectory, 'sidebar/sessions/collapsedActivityIndicator.tsx'), 'utf8');
+const projectCollectionSource = readFileSync(join(currentDirectory, 'sidebar/list/SessionProjectCollection.tsx'), 'utf8');
 const syncSource = readFileSync(join(currentDirectory, '../../sync/sync-context.tsx'), 'utf8');
 const cssSource = readFileSync(join(currentDirectory, '../../index.css'), 'utf8');
-const projectAggregateSource = sidebarSource.slice(
-  sidebarSource.indexOf('const ProjectAggregateStatusIndicator'),
-  sidebarSource.indexOf('const SessionSidebarComponent'),
+const projectAggregateSource = projectCollectionSource.slice(
+  projectCollectionSource.indexOf('const ProjectAggregateStatusIndicator'),
+  projectCollectionSource.indexOf('type Project ='),
 );
 
 describe('shared running session indicator', () => {
@@ -26,7 +26,7 @@ describe('shared running session indicator', () => {
     expect(nodeSource).toContain('<SessionRunningIndicator');
     expect(nodeSource).toContain('const statusMarkerContent = isStreaming ? (');
     expect(nodeSource).toContain('useResolvedSessionStatusType(session.id, !archivedBucket)');
-    expect(nodeSource).toContain('{ enabled: !archivedBucket }');
+    expect(nodeSource).toContain('enabled: !archivedBucket');
     expect(switcherSource).toContain('<SessionRunningIndicator');
     expect(mobileSessionsSource).toContain('<SessionRunningIndicator');
     expect(mobileSwitcherSource).toContain('<SessionRunningIndicator');

@@ -59,7 +59,7 @@ Items are ordered FIFO records:
   messageId: null | string,
   content,
   attachments?,
-  additionalParts?: [{ text, synthetic? }],
+  additionalParts?: [{ text, attachments?, synthetic?, metadata? }],
   agentMentionName?,
   createdAt,
   status: 'staged' | 'queued',
@@ -70,15 +70,16 @@ Items are ordered FIFO records:
 
 New items use `messageId: null`. The host assigns a time-sortable OpenCode message ID in the same authoritative mutation that acquires the first claim. That ID remains unchanged across release, claim expiry, restart, response-loss replay, and later claims, preventing both chronology inversion against the assistant that made the queue drainable and duplicate OpenCode messages after an ambiguous send. Stored version-1 items with an existing string ID retain it. Public `add` operations cannot supply `claim`.
 
-Attachment records allow exactly `id`, `dataUrl`, `mimeType`, `filename`, `size`, `source`, and optional `serverPath`, `vscodePath`, `vscodeSource`. `source` is `local`, `server`, or `vscode`; `vscodeSource` is `file` or `selection`. The browser-only `file` object is forbidden by strict extra-field validation.
+Attachment records allow exactly `id`, `dataUrl`, `mimeType`, `filename`, `size`, `source`, and optional `serverPath`, `vscodePath`, `vscodeSource`. `source` is `local`, `server`, or `vscode`; `vscodeSource` is `file` or `selection`. The browser-only `file` object is forbidden by strict extra-field validation. The same transport records may be attached to an additional part; primary and additional-part attachments share the per-item and per-queue count, byte, and identifier limits.
 
-Additional-part records allow exactly `text` and optional boolean `synthetic`. `agentMentionName` is an optional non-empty, control-free string. These optional fields and nullable pre-claim message IDs extend storage version 1 in place, so previously persisted items remain valid. Runtime endpoint generations are client-only send guards and are never accepted or persisted by the host.
+Additional-part records allow exactly `text`, optional attachment records, optional boolean `synthetic`, and optional `metadata`. Metadata is restricted to one bounded `openchamberContext` JSON payload; the UI validates its discriminated context shape before using it. This preserves structured code, terminal, browser, PR, and issue context while a prompt waits in the queue. `agentMentionName` is an optional non-empty, control-free string. These optional fields and nullable pre-claim message IDs extend storage version 1 in place, so previously persisted items remain valid. Runtime endpoint generations are client-only send guards and are never accepted or persisted by the host.
 
 Explicit bounds are:
 
-- 256 queue items; 32 attachments per item and 512 per queue.
+- 256 queue items; 32 primary/additional-part attachments per item and 512 per queue.
 - 64 additional parts per item and 1,024 per queue.
 - 1 MiB combined UTF-8 primary/additional-part text per item and 4 MiB total queue text.
+- 1 MiB context metadata per item and 4 MiB total queue metadata.
 - 56 MiB per `dataUrl` and 56 MiB total attachment string data per queue.
 - 2 GiB maximum declared attachment `size`.
 - 256-byte identifiers, 256-byte MIME types, 1 KiB agent mention names, 4 KiB filenames, and 16 KiB optional attachment paths.

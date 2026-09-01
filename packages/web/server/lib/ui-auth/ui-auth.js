@@ -1046,7 +1046,7 @@ export const createUiAuth = ({
     let clientTokenResult = null;
     if (req.body?.issueClientToken === true && typeof clientAuthController?.createClient === 'function') {
       clientTokenResult = await clientAuthController.createClient({
-        label: req.body?.clientLabel,
+        fallbackLabel: req.body?.clientLabel,
         expiresAt: new Date(Date.now() + ttlMs).toISOString(),
         clientKind: req.body?.clientKind,
         dedupeKey: req.body?.dedupeKey,
@@ -1114,7 +1114,7 @@ export const createUiAuth = ({
       let clientTokenResult = null;
       if (req.body?.issueClientToken === true && typeof clientAuthController?.createClient === 'function') {
         clientTokenResult = await clientAuthController.createClient({
-          label: req.body?.clientLabel,
+          fallbackLabel: req.body?.clientLabel,
           expiresAt: new Date(Date.now() + ttlMs).toISOString(),
           clientKind: req.body?.clientKind,
           dedupeKey: req.body?.dedupeKey,

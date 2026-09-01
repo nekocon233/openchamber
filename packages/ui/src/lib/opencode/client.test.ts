@@ -11,6 +11,7 @@ const createdClientConfigs: ClientConfig[] = [];
 const callOrder: string[] = [];
 const promptAsyncCalls: unknown[][] = [];
 const promptAsyncResults: unknown[] = [];
+const pathGetResults: unknown[] = [];
 const switchAgentCalls: unknown[][] = [];
 const switchAgentResults: unknown[] = [];
 const switchModelCalls: unknown[][] = [];
@@ -112,6 +113,12 @@ const sessionActiveMock = mock(async (...args: unknown[]) => {
   return configuredResult(sessionActiveResult, args);
 });
 
+const pathGetMock = mock(async () => {
+  const next = pathGetResults.shift();
+  if (next instanceof Error) throw next;
+  return next ?? { data: { directory: '/workspace/project' } };
+});
+
 const createOpencodeClientMock = mock((config: ClientConfig) => {
   createdClientConfigs.push(config);
   return {
@@ -139,6 +146,9 @@ const createOpencodeClientMock = mock((config: ClientConfig) => {
         messages: nextMessagesMock,
         active: sessionActiveMock,
       },
+    },
+    path: {
+      get: pathGetMock,
     },
   };
 });
@@ -194,6 +204,7 @@ beforeEach(() => {
   callOrder.length = 0;
   promptAsyncCalls.length = 0;
   promptAsyncResults.length = 0;
+  pathGetResults.length = 0;
   switchAgentCalls.length = 0;
   switchAgentResults.length = 0;
   switchModelCalls.length = 0;
@@ -300,6 +311,16 @@ describe('opencodeClient session status', () => {
     sessionActiveResult = { data: { data: {} } };
     sessionStatusResult = { error: { message: 'unavailable' }, response: { status: 503 } };
     expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
+  });
+});
+
+describe('opencodeClient directory availability', () => {
+  test('distinguishes a missing directory from an unavailable path probe', async () => {
+    pathGetResults.push({ error: { code: 'ENOENT', message: 'no such file or directory' } });
+    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('missing');
+
+    pathGetResults.push(new Error('offline'));
+    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('unknown');
   });
 });
 
@@ -681,6 +702,38 @@ describe('opencodeClient non-delivery promptAsync', () => {
     expect(switchAgentCalls).toHaveLength(0);
     expect(switchModelCalls).toHaveLength(0);
     expect(durablePromptCalls).toHaveLength(0);
+  });
+
+  test('preserves structured metadata on additional context parts', async () => {
+    const metadata = {
+      openchamberContext: {
+        kind: 'github-issue' as const,
+        number: 17,
+        title: 'Context',
+        url: 'https://example.test/issues/17',
+      },
+    };
+
+    await opencodeClient.sendMessage({
+      id: 'ses_context',
+      providerID: 'anthropic',
+      modelID: 'claude-sonnet',
+      text: 'use this context',
+      messageId: 'msg_context',
+      additionalParts: [{ text: 'issue body', synthetic: true, metadata }],
+    });
+
+    expect(promptAsyncCalls[0]?.[0]).toEqual({
+      sessionID: 'ses_context',
+      model: { providerID: 'anthropic', modelID: 'claude-sonnet' },
+      agent: undefined,
+      variant: undefined,
+      messageID: 'msg_context',
+      parts: [
+        { type: 'text', text: 'use this context' },
+        { type: 'text', text: 'issue body', synthetic: true, metadata },
+      ],
+    });
   });
 
   test('does not retry 504 prompt responses because the POST may already be accepted', async () => {

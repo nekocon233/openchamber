@@ -25,7 +25,26 @@ const snapshot = (): FollowUpQueueSnapshot => ({
       source: 'local',
     }],
     additionalParts: [
-      { text: 'hidden context', synthetic: true },
+      {
+        text: 'hidden context',
+        attachments: [{
+          id: 'attachment-two',
+          dataUrl: 'data:text/plain;base64,Y29udGV4dA==',
+          mimeType: 'text/plain',
+          filename: 'context.txt',
+          size: 7,
+          source: 'local',
+        }],
+        synthetic: true,
+        metadata: {
+          openchamberContext: {
+            kind: 'github-issue',
+            number: 42,
+            title: 'Queue context',
+            url: 'https://example.com/issues/42',
+          },
+        },
+      },
       { text: 'plain additional text' },
     ],
     agentMentionName: 'build',
@@ -45,7 +64,7 @@ describe('follow-up queue protocol parsing', () => {
       mutationRevision: 2,
     }).snapshot.items[0].attachments?.[0].filename).toBe('a.txt');
     expect(parsed.items[0].additionalParts).toEqual([
-      { text: 'hidden context', synthetic: true },
+      snapshot().items[0].additionalParts?.[0],
       { text: 'plain additional text' },
     ]);
     expect(parsed.items[0].agentMentionName).toBe('build');
@@ -83,6 +102,16 @@ describe('follow-up queue protocol parsing', () => {
     const withInvalidSynthetic = snapshot();
     (withInvalidSynthetic.items[0].additionalParts?.[0] as unknown as Record<string, unknown>).synthetic = 'yes';
     expect(() => parseFollowUpQueueSnapshot(withInvalidSynthetic)).toThrow();
+
+    const withInvalidMetadata = snapshot();
+    (withInvalidMetadata.items[0].additionalParts?.[0] as { metadata?: unknown }).metadata = {
+      openchamberContext: { kind: 'unsupported' },
+    };
+    expect(() => parseFollowUpQueueSnapshot(withInvalidMetadata)).toThrow();
+
+    const withNestedFile = snapshot();
+    (withNestedFile.items[0].additionalParts?.[0].attachments?.[0] as unknown as Record<string, unknown>).file = {};
+    expect(() => parseFollowUpQueueSnapshot(withNestedFile)).toThrow();
 
     const duplicate = snapshot();
     duplicate.items.push({ ...duplicate.items[0] });

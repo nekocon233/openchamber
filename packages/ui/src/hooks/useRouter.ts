@@ -1,12 +1,12 @@
 import React from 'react';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useUIStore } from '@/stores/useUIStore';
+import { useUIStore, type ContextPanelMode } from '@/stores/useUIStore';
 import { parseRoute, updateBrowserURL, hasRouteParams } from '@/lib/router';
+import { openSessionFromRoute } from '@/lib/router/openSessionFromRoute';
 import type { RouteState, AppRouteState } from '@/lib/router';
-import type { MainTab } from '@/stores/useUIStore';
 import { resolveSettingsSlug } from '@/lib/settings/metadata';
 import { isEmbeddedSessionChat } from '@/components/layout/contextPanelEmbeddedChat';
-import { applyDeepLinkIntent } from '@/apps/deepLinkNavigation';
+import { useDirectoryStore } from '@/stores/useDirectoryStore';
 
 /**
  * Check if running in VS Code webview context.
@@ -26,10 +26,8 @@ export function getCurrentAppRouteState(): AppRouteState {
   return {
     sessionId: sessionState.currentSessionId,
     sessionDirectory: sessionState.currentSessionDirectory,
-    tab: uiState.activeMainTab,
     isSettingsOpen: uiState.isSettingsDialogOpen,
     settingsPath: uiState.settingsPage,
-    diffFile: uiState.pendingDiffFile,
   };
 }
 
@@ -63,8 +61,6 @@ export function useRouter(): void {
   const isApplyingRouteRef = React.useRef(false);
 
   // Get store actions (stable references)
-  const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
-  const setActiveMainTab = useUIStore((state) => state.setActiveMainTab);
   const setSettingsDialogOpen = useUIStore((state) => state.setSettingsDialogOpen);
   const setSettingsPage = useUIStore((state) => state.setSettingsPage);
   const navigateToDiff = useUIStore((state) => state.navigateToDiff);
@@ -83,30 +79,14 @@ export function useRouter(): void {
       try {
         // 1. Apply session first (may trigger async operations)
         if (route.sessionId) {
-          const sessionState = useSessionUIStore.getState();
-          const isProvisionalCurrentSession = sessionState.restoredSessionPendingValidation
-            && sessionState.currentSessionId === route.sessionId;
-          const directoryHint = route.sessionDirectory
-            ?? (isProvisionalCurrentSession ? null : sessionState.getDirectoryForSession(route.sessionId));
-          if (isVSCode || isEmbeddedChat) {
-            setCurrentSession(route.sessionId, directoryHint);
-          } else {
-            const shouldPrepareSession = !route.settingsPath
-              && !route.diffFile
-              && (!route.tab || route.tab === 'chat');
-            applyDeepLinkIntent({
-              type: 'session',
-              sessionId: route.sessionId,
-              directory: directoryHint ?? undefined,
-            }, { prepareSession: shouldPrepareSession });
-          }
+          await openSessionFromRoute(route.sessionId, route.sessionDirectory);
         }
 
-        // 2. Handle settings (takes precedence over tabs - it's a full-screen overlay)
+        // 2. Handle settings first because it is a full-screen overlay.
         if (route.settingsPath) {
           setSettingsPage(resolveSettingsSlug(route.settingsPath));
           setSettingsDialogOpen(true);
-          // Don't process tab when settings is open
+          // Do not process a route view while settings is open.
           return;
         }
 
@@ -115,9 +95,16 @@ export function useRouter(): void {
           setSettingsDialogOpen(false);
         }
 
-        // 3. Apply tab
-        if (route.tab) {
-          setActiveMainTab(route.tab);
+        // 3. Apply the view selected by the legacy URL parameter. Desktop
+        // surfaces live in the context panel, so a non-chat tab deep link
+        // opens the matching panel surface; activeSurface itself stays 'chat'
+        // (nothing renders non-chat surfaces in the main area).
+        if (route.tab && route.tab !== 'chat') {
+          const directory = useDirectoryStore.getState().currentDirectory;
+          if (directory) {
+            const mode: ContextPanelMode = route.tab === 'files' ? 'file' : route.tab;
+            useUIStore.getState().openContextSurface(directory, mode);
+          }
         }
 
         // 4. Apply diff file (only if going to diff tab)
@@ -128,7 +115,7 @@ export function useRouter(): void {
         isApplyingRouteRef.current = false;
       }
     },
-    [isEmbeddedChat, isVSCode, setCurrentSession, setActiveMainTab, setSettingsDialogOpen, setSettingsPage, navigateToDiff]
+    [setSettingsDialogOpen, setSettingsPage, navigateToDiff]
   );
 
   /**
@@ -182,9 +169,7 @@ export function useRouter(): void {
           ...getCurrentAppRouteState(),
           sessionId,
           sessionDirectory,
-          tab: route.tab ?? useUIStore.getState().activeMainTab,
           settingsPath: route.settingsPath ?? useUIStore.getState().settingsPage,
-          diffFile: route.diffFile ?? useUIStore.getState().pendingDiffFile,
         }, { replace: true, force: true });
       }
     };
@@ -213,16 +198,14 @@ export function useRouter(): void {
     return unsubscribe;
   }, [isVSCode, isEmbeddedChat, syncURLFromState]);
 
-  // Subscribe to UI store changes (tab, settings)
+  // Subscribe to UI store changes (view, settings)
   React.useEffect(() => {
     if (isVSCode || isEmbeddedChat) {
       return;
     }
 
-    let prevTab: MainTab = useUIStore.getState().activeMainTab;
     let prevSettingsOpen: boolean = useUIStore.getState().isSettingsDialogOpen;
     let prevSettingsPath: string = useUIStore.getState().settingsPage;
-    let prevDiffFile: string | null = useUIStore.getState().pendingDiffFile;
 
     const unsubscribe = useUIStore.subscribe((state) => {
       // Skip if we're currently applying a route
@@ -230,19 +213,13 @@ export function useRouter(): void {
         return;
       }
 
-      const tabChanged = state.activeMainTab !== prevTab;
       const settingsOpenChanged = state.isSettingsDialogOpen !== prevSettingsOpen;
       const settingsPathChanged = state.settingsPage !== prevSettingsPath;
-      const diffFileChanged = state.pendingDiffFile !== prevDiffFile && state.activeMainTab === 'diff';
 
-      // Update tracking vars
-      prevTab = state.activeMainTab;
       prevSettingsOpen = state.isSettingsDialogOpen;
       prevSettingsPath = state.settingsPage;
-      prevDiffFile = state.pendingDiffFile;
 
-      // Only sync if something relevant changed
-      if (tabChanged || settingsOpenChanged || settingsPathChanged || diffFileChanged) {
+      if (settingsOpenChanged || settingsPathChanged) {
         syncURLFromState();
       }
     });
@@ -270,10 +247,6 @@ export function useRouter(): void {
         if (uiState.isSettingsDialogOpen) {
           setSettingsDialogOpen(false);
         }
-        // Reset to chat tab if not already there
-        if (uiState.activeMainTab !== 'chat') {
-          setActiveMainTab('chat');
-        }
       }
     };
 
@@ -282,5 +255,5 @@ export function useRouter(): void {
     return () => {
       window.removeEventListener('popstate', handlePopState);
     };
-  }, [applyRoute, isVSCode, isEmbeddedChat, setActiveMainTab, setSettingsDialogOpen]);
+  }, [applyRoute, isVSCode, isEmbeddedChat, setSettingsDialogOpen]);
 }

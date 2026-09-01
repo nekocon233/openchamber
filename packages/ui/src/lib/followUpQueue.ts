@@ -8,6 +8,7 @@ import type {
   FollowUpQueueSnapshot,
   FollowUpQueueStatus,
 } from '@/lib/api/types';
+import { CONTEXT_METADATA_KEY, readContextPart, type ContextPartMetadata } from '@/lib/messages/contextParts';
 
 const SCOPE_TOKEN_PATTERN = /^[\da-f]{64}$/;
 const MAX_ITEMS = 256;
@@ -26,6 +27,8 @@ const MAX_FILENAME_BYTES = 4096;
 const MAX_ATTACHMENT_PATH_BYTES = 16 * 1024;
 const MAX_SEND_CONFIG_STRING_BYTES = 1024;
 const MAX_AGENT_MENTION_NAME_BYTES = 1024;
+const MAX_METADATA_BYTES = 1024 * 1024;
+const MAX_TOTAL_METADATA_BYTES = 4 * 1024 * 1024;
 
 export const FOLLOW_UP_QUEUE_CLAIM_TTL_MS = 120_000;
 
@@ -164,13 +167,38 @@ const parseAttachment = (value: unknown, field: string): FollowUpQueueAttachment
 
 const parseAdditionalPart = (value: unknown, field: string): FollowUpQueueAdditionalPart => {
   if (!isRecord(value)) throw new Error(`Invalid follow-up queue ${field}`);
-  assertKeys(value, ['text', 'synthetic'], field);
+  assertKeys(value, ['text', 'attachments', 'synthetic', 'metadata'], field);
   if (Object.prototype.hasOwnProperty.call(value, 'synthetic') && typeof value.synthetic !== 'boolean') {
     throw new Error(`Invalid follow-up queue ${field}.synthetic`);
   }
+  if (value.attachments !== undefined && !Array.isArray(value.attachments)) {
+    throw new Error(`Invalid follow-up queue ${field}.attachments`);
+  }
+  const attachments = value.attachments === undefined
+    ? undefined
+    : value.attachments.map((attachment, index) => parseAttachment(attachment, `${field}.attachments[${index}]`));
+  if (attachments && (
+    attachments.length > MAX_ATTACHMENTS_PER_ITEM
+    || new Set(attachments.map((attachment) => attachment.id)).size !== attachments.length
+  )) {
+    throw new Error(`Invalid follow-up queue ${field}.attachments`);
+  }
+  let metadata: ContextPartMetadata | undefined;
+  if (value.metadata !== undefined) {
+    if (!isRecord(value.metadata)) throw new Error(`Invalid follow-up queue ${field}.metadata`);
+    assertKeys(value.metadata, [CONTEXT_METADATA_KEY], `${field}.metadata`);
+    const payload = readContextPart({ type: 'text', metadata: value.metadata });
+    if (!payload) throw new Error(`Invalid follow-up queue ${field}.metadata`);
+    metadata = { [CONTEXT_METADATA_KEY]: payload };
+    if (utf8Length(JSON.stringify(metadata)) > MAX_METADATA_BYTES) {
+      throw new Error(`Invalid follow-up queue ${field}.metadata`);
+    }
+  }
   return {
     text: parseString(value.text, `${field}.text`, MAX_CONTENT_BYTES),
+    ...(attachments ? { attachments } : {}),
     ...(typeof value.synthetic === 'boolean' ? { synthetic: value.synthetic } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 };
 
@@ -231,6 +259,23 @@ export const parseFollowUpQueueItem = (
   const additionalParts = value.additionalParts === undefined
     ? undefined
     : value.additionalParts.map((part, index) => parseAdditionalPart(part, `${field}.additionalParts[${index}]`));
+  const allAttachments = [
+    ...(attachments ?? []),
+    ...(additionalParts?.flatMap((part) => part.attachments ?? []) ?? []),
+  ];
+  if (
+    allAttachments.length > MAX_ATTACHMENTS_PER_ITEM
+    || new Set(allAttachments.map((attachment) => attachment.id)).size !== allAttachments.length
+  ) {
+    throw new Error(`Invalid follow-up queue ${field}.attachments`);
+  }
+  const itemMetadataBytes = additionalParts?.reduce(
+    (total, part) => total + (part.metadata ? utf8Length(JSON.stringify(part.metadata)) : 0),
+    0,
+  ) ?? 0;
+  if (itemMetadataBytes > MAX_METADATA_BYTES) {
+    throw new Error(`Invalid follow-up queue ${field}.metadata`);
+  }
   const content = parseString(value.content, `${field}.content`, MAX_CONTENT_BYTES);
   const additionalContentBytes = additionalParts?.reduce(
     (total, part) => total + utf8Length(part.text),
@@ -279,6 +324,7 @@ const parseItems = (value: unknown): FollowUpQueueItem[] => {
   let attachmentCount = 0;
   let attachmentStringBytes = 0;
   let additionalPartCount = 0;
+  let metadataBytes = 0;
   for (const item of items) {
     if (itemIds.has(item.id) || (item.messageId !== null && messageIds.has(item.messageId))) {
       throw new Error('Invalid follow-up queue item identity');
@@ -289,6 +335,13 @@ const parseItems = (value: unknown): FollowUpQueueItem[] => {
     for (const part of item.additionalParts ?? []) {
       additionalPartCount += 1;
       contentBytes += utf8Length(part.text);
+      if (part.metadata) metadataBytes += utf8Length(JSON.stringify(part.metadata));
+      for (const attachment of part.attachments ?? []) {
+        attachmentCount += 1;
+        for (const entry of Object.values(attachment)) {
+          if (typeof entry === 'string') attachmentStringBytes += utf8Length(entry);
+        }
+      }
     }
     for (const attachment of item.attachments ?? []) {
       attachmentCount += 1;
@@ -302,6 +355,7 @@ const parseItems = (value: unknown): FollowUpQueueItem[] => {
     || attachmentCount > MAX_ATTACHMENTS_PER_QUEUE
     || attachmentStringBytes > MAX_TOTAL_ATTACHMENT_STRING_BYTES
     || additionalPartCount > MAX_ADDITIONAL_PARTS_PER_QUEUE
+    || metadataBytes > MAX_TOTAL_METADATA_BYTES
   ) {
     throw new Error('Invalid follow-up queue aggregate limits');
   }
@@ -421,7 +475,10 @@ const additionalPartsEqual = (
   if (left === right) return true;
   if (!left || !right || left.length !== right.length) return false;
   return left.every((part, index) => (
-    part.text === right[index].text && part.synthetic === right[index].synthetic
+    part.text === right[index].text
+    && part.synthetic === right[index].synthetic
+    && attachmentsEqual(part.attachments, right[index].attachments)
+    && JSON.stringify(part.metadata) === JSON.stringify(right[index].metadata)
   ));
 };
 

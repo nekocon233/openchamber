@@ -10,7 +10,6 @@ const originalSessionState = {
 };
 
 const originalUIState = {
-  activeMainTab: useUIStore.getState().activeMainTab,
   isSettingsDialogOpen: useUIStore.getState().isSettingsDialogOpen,
   settingsPage: useUIStore.getState().settingsPage,
   pendingDiffFile: useUIStore.getState().pendingDiffFile,

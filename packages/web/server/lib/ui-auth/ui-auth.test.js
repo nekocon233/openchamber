@@ -402,7 +402,7 @@ describe('ui auth client credential seam', () => {
             token: 'client-token',
             client: {
               id: 'device-1',
-              label: input.label,
+              label: input.label ?? input.fallbackLabel,
               createdAt: new Date().toISOString(),
               lastUsedAt: null,
               revokedAt: null,
@@ -428,7 +428,7 @@ describe('ui auth client credential seam', () => {
     await auth.handleSessionCreate(req, res);
 
     expect(res.body.clientToken).toBe('client-token');
-    expect(createClientInput.label).toBe('OpenChamber Desktop');
+    expect(createClientInput.fallbackLabel).toBe('OpenChamber Desktop');
     const expiresAt = Date.parse(createClientInput.expiresAt);
     expect(expiresAt).toBeGreaterThanOrEqual(before + 122_000);
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 124_000);

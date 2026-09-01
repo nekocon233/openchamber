@@ -228,7 +228,19 @@ describe('host-authoritative follow-up queue client', () => {
             content: 'first',
             attachments: [attachment],
             additionalParts: [
-                { text: 'synthetic context', synthetic: true },
+                {
+                    text: 'synthetic context',
+                    attachments: [{ ...attachment, id: 'attachment-two' }],
+                    synthetic: true,
+                    metadata: {
+                        openchamberContext: {
+                            kind: 'github-issue',
+                            number: 42,
+                            title: 'Queue context',
+                            url: 'https://example.com/issues/42',
+                        },
+                    },
+                },
                 { text: 'plain additional text' },
             ],
             agentMentionName: 'review',
@@ -251,14 +263,26 @@ describe('host-authoritative follow-up queue client', () => {
             agent: 'agent',
             variant: 'high',
         });
-        expect(initial[0].additionalParts).toEqual([
-            { text: 'synthetic context', synthetic: true },
-            { text: 'plain additional text' },
-        ]);
+        const contextPart = initial[0].additionalParts?.[0];
+        expect(contextPart?.text).toBe('synthetic context');
+        expect(contextPart?.synthetic).toBe(true);
+        expect(contextPart?.attachments?.[0].id).toBe('attachment-two');
+        expect(contextPart?.attachments?.[0].filename).toBe('a.txt');
+        expect(contextPart?.attachments?.[0].file).toBeInstanceOf(File);
+        expect(contextPart?.metadata).toEqual({
+            openchamberContext: {
+                kind: 'github-issue',
+                number: 42,
+                title: 'Queue context',
+                url: 'https://example.com/issues/42',
+            },
+        });
+        expect(initial[0].additionalParts?.[1]).toEqual({ text: 'plain additional text' });
         expect(initial[0].agentMentionName).toBe('review');
-        expect(authority.getSnapshot('session-one').items[0].additionalParts).toEqual(initial[0].additionalParts);
+        expect(authority.getSnapshot('session-one').items[0].additionalParts?.[0].metadata).toEqual(contextPart?.metadata);
         expect(authority.getSnapshot('session-one').items[0].agentMentionName).toBe('review');
         expect('file' in (authority.getSnapshot('session-one').items[0].attachments?.[0] ?? {})).toBe(false);
+        expect('file' in (authority.getSnapshot('session-one').items[0].additionalParts?.[0].attachments?.[0] ?? {})).toBe(false);
 
         store.getState().setQueuedStatus('session-one', initial[1].id, 'queued');
         await store.getState().initialize();

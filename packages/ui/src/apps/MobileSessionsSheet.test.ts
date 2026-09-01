@@ -6,48 +6,23 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(__dirname, 'MobileSessionsSheet.tsx'), 'utf8');
 const mobileAppSource = readFileSync(join(__dirname, 'MobileApp.tsx'), 'utf8');
-const mobileTreeStoreSource = readFileSync(join(__dirname, '../stores/useMobileSessionTreeStore.ts'), 'utf8');
 
-describe('MobileSessionsSheet activity sections', () => {
-  test('uses authoritative live activity for recent membership and shared lifecycle ordering', () => {
-    expect(source).toContain('const activeSessionIds = React.useMemo(() => {');
-    expect(source).toContain("status.type === 'busy' || status.type === 'retry'");
-    expect(source).toContain('deriveRecentSessions(sessions, activeSessionIds, recentNow)');
-    expect(source).toContain('orderSessionsByLifecycleScopes(');
-    expect(source).toContain('sessions.filter((session) => pinnedSessionIds.has(session.id))');
-    expect(source).toContain('if (!open || !showPinnedSection || normalizedQuery || editingOrder) return [];');
-    expect(source).toContain('if (!open || !showRecentSection || normalizedQuery || editingOrder) return [];');
-    expect(source).not.toContain('messageActivityBySessionId');
-    expect(source).not.toContain('sortSessionsByActivity');
+describe('MobileSessionsSheet session structure', () => {
+  test('partitions managed chats from project sessions', () => {
+    expect(source).toContain('partitionSidebarSessions(sessions, false)');
+    expect(source).toContain('sessions: orderSessionsByLifecycleScopes(chatSessions');
+    expect(source).toContain('for (const session of projectSessions)');
+    expect(source).not.toContain('deriveRecentSessions(');
   });
 
-  test('renders pinned then recent before the project tree with persisted expansion and shared pagination', () => {
-    const pinnedSectionIndex = source.indexOf("title={t('mobile.sessions.section.pinned')}");
-    const recentSectionIndex = source.indexOf("title={t('sessions.sidebar.activity.recentTitle')}");
+  test('renders managed chats before the project tree with stable bucket identity', () => {
+    const chatsSectionIndex = source.indexOf("const chatsLabel = t('mobile.sessions.section.chats')");
     const projectTreeIndex = source.indexOf('{orderedNodes.map');
 
-    expect(pinnedSectionIndex).toBeGreaterThan(-1);
-    expect(recentSectionIndex).toBeGreaterThan(pinnedSectionIndex);
-    expect(projectTreeIndex).toBeGreaterThan(recentSectionIndex);
-    expect(source).toContain('const MobileSessionActivityGroup: React.FC');
-    expect(source).toContain('count + SESSIONS_PER_BUCKET');
-    expect(source).toContain('expanded={pinnedSectionExpanded}');
-    expect(source).toContain('onExpandedChange={setPinnedSectionExpanded}');
-    expect(source).toContain('expanded={recentSectionExpanded}');
-    expect(source).toContain('onExpandedChange={setRecentSectionExpanded}');
-    expect(source).not.toContain('const [expanded, setExpanded] = React.useState(true)');
-    expect(mobileTreeStoreSource).toContain('pinnedSectionExpanded: true');
-    expect(mobileTreeStoreSource).toContain('recentSectionExpanded: true');
-    expect(mobileTreeStoreSource).toContain("name: 'mobile-session-tree'");
-  });
-
-  test('uses persisted display preferences in the mobile editor and activity list', () => {
-    expect(source).toContain('state.showPinnedSection');
-    expect(source).toContain('state.showRecentSection');
-    expect(source).toContain('state.setShowPinnedSection');
-    expect(source).toContain('state.setShowRecentSection');
-    expect(source).toContain("t('sessions.sidebar.header.displayMode.showPinned')");
-    expect(source).toContain("t('sessions.sidebar.header.displayMode.showRecent')");
+    expect(chatsSectionIndex).toBeGreaterThan(-1);
+    expect(projectTreeIndex).toBeGreaterThan(chatsSectionIndex);
+    expect(source).toContain('renderBucketSessions(chatsBucketKey, chatsBucket, PROJECT_SESSION_INDENT)');
+    expect(source).toContain('renderBucketSessions(`${node.project.id}::${bucket.key}`, bucket, PROJECT_SESSION_INDENT)');
   });
 
   test('uses authoritative activity, exposes pin actions, and keeps mobile sheets mounted', () => {

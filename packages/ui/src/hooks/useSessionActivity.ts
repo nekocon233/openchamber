@@ -20,7 +20,7 @@ const IDLE_RESULT: SessionActivityResult = IDLE_SESSION_ACTIVITY;
  * permission / question indicator takes priority, and the send button must stay
  * available so the user can supersede the prompt with a new message).
  */
-function useSessionActivity(sessionId: string | null | undefined, directory?: string): SessionActivityResult {
+export function useSessionActivity(sessionId: string | null | undefined, directory?: string): SessionActivityResult {
   const status = useSessionStatus(sessionId ?? '', directory);
   const globalResolvedStatus = useGlobalSessionStatusStore(
     React.useCallback((state) => sessionId ? state.resolvedStatusById.get(sessionId) : undefined, [sessionId]),

@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type {
     FollowUpQueueAPI,
+    FollowUpQueueAdditionalPart,
     FollowUpQueueAttachment,
     FollowUpQueueItem,
     FollowUpQueueMutationResult,
@@ -49,8 +50,13 @@ const normalizeFollowUpBehavior = (
 
 type QueuedMessageStatus = FollowUpQueueStatus;
 
-export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments'> {
+type QueuedAdditionalPart = Omit<FollowUpQueueAdditionalPart, 'attachments'> & {
     attachments?: AttachedFile[];
+};
+
+export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | 'additionalParts'> {
+    attachments?: AttachedFile[];
+    additionalParts?: QueuedAdditionalPart[];
 }
 
 export type MessageQueueTarget = {
@@ -363,18 +369,34 @@ const createPlaceholderFile = (attachment: FollowUpQueueAttachment): File => {
     } as File;
 };
 
+const toAttachedFile = (attachment: FollowUpQueueAttachment): AttachedFile => ({
+    ...cloneAttachmentDTO(attachment),
+    file: createPlaceholderFile(attachment),
+});
+
+const toQueuedAdditionalPart = (part: FollowUpQueueAdditionalPart): QueuedAdditionalPart => {
+    const { attachments, ...rest } = part;
+    const queued: QueuedAdditionalPart = { ...rest };
+    if (attachments) queued.attachments = attachments.map(toAttachedFile);
+    return queued;
+};
+
+const toAdditionalPartDTO = (part: QueuedAdditionalPart): FollowUpQueueAdditionalPart => {
+    const { attachments, ...rest } = part;
+    const dto: FollowUpQueueAdditionalPart = { ...rest };
+    if (attachments) dto.attachments = attachments.map(toAttachmentDTO);
+    return dto;
+};
+
 const toQueuedMessage = (item: FollowUpQueueItem): QueuedMessage => {
     const { attachments, additionalParts, ...rest } = item;
     return {
         ...rest,
         ...(attachments ? {
-            attachments: attachments.map((attachment) => ({
-                ...cloneAttachmentDTO(attachment),
-                file: createPlaceholderFile(attachment),
-            })),
+            attachments: attachments.map(toAttachedFile),
         } : {}),
         ...(additionalParts ? {
-            additionalParts: additionalParts.map((part) => ({ ...part })),
+            additionalParts: additionalParts.map(toQueuedAdditionalPart),
         } : {}),
         ...(item.sendConfig ? { sendConfig: { ...item.sendConfig } } : {}),
         ...(item.claim ? { claim: { ...item.claim } } : {}),
@@ -1477,7 +1499,7 @@ export const createMessageQueueStore = (
                         attachments: message.attachments.map(toAttachmentDTO),
                     } : {}),
                     ...(message.additionalParts && message.additionalParts.length > 0 ? {
-                        additionalParts: message.additionalParts.map((part) => ({ ...part })),
+                        additionalParts: message.additionalParts.map(toAdditionalPartDTO),
                     } : {}),
                     ...(message.agentMentionName !== undefined ? {
                         agentMentionName: message.agentMentionName,

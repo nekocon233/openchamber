@@ -14,7 +14,6 @@ import { getPWADisplayMode } from '@/lib/pwa';
 import { persistSessionNavigation } from '@/sync/session-navigation';
 
 import {
-  buildDeepLink,
   parseDeepLink,
   parseServiceWorkerNotificationClick,
   type DeepLinkIntent,
@@ -114,7 +113,6 @@ const execute = ({ intent, prepareSession }: PendingDeepLink): boolean => {
           if (prepareSession) {
             handlers.prepareForSession?.();
             useUIStore.getState().setSettingsDialogOpen(false);
-            useUIStore.getState().setActiveMainTab('chat');
           }
           void store.setCurrentSession(intent.sessionId, knownDirectory);
           return true;
@@ -231,7 +229,7 @@ export const applyDeepLinkIntent = (
 };
 
 /** Convenience: parse a raw `openchamber://…` URL and apply it. No-op for unrecognised URLs. */
-export const applyDeepLinkUrl = (raw: string | null | undefined): void => {
+const applyDeepLinkUrl = (raw: string | null | undefined): void => {
   const intent = parseDeepLink(raw);
   if (intent) {
     applyDeepLinkIntent(intent);
@@ -358,7 +356,3 @@ export const useDeepLinkSource = (options: { ready: boolean }): void => {
     };
   }, []);
 };
-
-// Re-export so producers (notifications, future widgets) have one import for the whole vocabulary.
-export { buildDeepLink, parseDeepLink };
-export type { DeepLinkIntent, SessionsFilter, ViewTarget };

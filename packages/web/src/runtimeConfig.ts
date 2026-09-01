@@ -2,6 +2,7 @@ import { getRuntimeExtraHeadersSync, refreshLocalRuntimeUrlAuthToken, refreshRun
 import { installRuntimeFetchBridge } from '@openchamber/ui/lib/runtime-fetch';
 import { initializeRuntimeEndpoint, switchRuntimeEndpoint } from '@openchamber/ui/lib/runtime-switch';
 import { restoreDesktopRelayRuntime } from '@openchamber/ui/lib/desktopRelayRestore';
+import { getInjectedBootOutcome } from '@openchamber/ui/lib/desktopBoot';
 import { configureRuntimeUrlResolver } from '@openchamber/ui/lib/runtime-url';
 import type { EmbeddedSessionRuntimeBootstrap } from '@openchamber/ui/components/layout/contextPanelEmbeddedChat';
 import { opencodeClient } from '@openchamber/ui/lib/opencode/client';
@@ -48,6 +49,8 @@ export const createConfiguredWebAPIs = (bootstrap?: EmbeddedSessionRuntimeBootst
   const { apiBaseUrl, clientToken, localOrigin, runtimeHeaders, relayHostId, relay } = bootstrap ?? readRuntimeBootstrapConfig();
   const injectedRuntimeKey = bootstrap == null ? window.__OPENCHAMBER_RUNTIME_KEY__ : '';
   const runtimeKey = typeof injectedRuntimeKey === 'string' ? injectedRuntimeKey.trim() : '';
+  const bootOutcome = bootstrap ? null : getInjectedBootOutcome();
+  const desktopHostId = relayHostId || (bootOutcome?.target === 'remote' ? bootOutcome.hostId : '');
 
   const urls = configureRuntimeUrlResolver({
     apiBaseUrl: apiBaseUrl || undefined,
@@ -55,7 +58,7 @@ export const createConfiguredWebAPIs = (bootstrap?: EmbeddedSessionRuntimeBootst
   });
   initializeRuntimeEndpoint({
     apiBaseUrl,
-    runtimeKey: runtimeKey || (sameOrigin(apiBaseUrl, localOrigin) ? 'local' : null),
+    runtimeKey: runtimeKey || (sameOrigin(apiBaseUrl, localOrigin) ? 'local' : (desktopHostId ? `host:${desktopHostId}` : null)),
   });
   setRuntimeBearerToken(clientToken || null);
   setRuntimeExtraHeaders(runtimeHeaders || null);

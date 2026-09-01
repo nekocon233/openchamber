@@ -12,7 +12,11 @@ import { SessionRunningIndicator } from '@/components/session/SessionRunningIndi
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useResolvedSessionStatusType } from '@/sync/sync-context';
 import { useSessionUnseenCount } from '@/sync/notification-store';
-import { useSwitcherItems, type SwitcherItem } from '@/components/session/sidebar/hooks/useSwitcherItems';
+import {
+  findSwitcherItemAncestorIds,
+  useSwitcherItems,
+  type SwitcherItem,
+} from '@/components/session/sidebar/shell/useSwitcherItems';
 import { useUIStore } from '@/stores/useUIStore';
 import { resolveGlobalSessionDirectory } from '@/stores/useGlobalSessionsStore';
 import { formatSessionCompactDateLabel } from './sidebar/utils';
@@ -23,6 +27,7 @@ import { cn } from '@/lib/utils';
 type SecondaryMeta = SwitcherItem['secondaryMeta'];
 
 type SwitcherVariant = 'default' | 'compact';
+const NEW_SESSION_SWITCHER_TARGET = 'new-session';
 
 type SessionSwitcherDropdownProps = {
   children: React.ReactNode;
@@ -41,7 +46,7 @@ export function SessionSwitcherDropdown({
   const setOpen = useUIStore((state) => state.setSessionDropdownOpen);
 
   return (
-    <DropdownMenu open={isOpen} onOpenChange={setOpen} modal={false}>
+    <DropdownMenu open={isOpen} onOpenChange={setOpen} modal={false} disableGlobalShortcuts>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
       <DropdownMenuContent
         align={align}
@@ -70,18 +75,21 @@ type SwitcherContentProps = {
 };
 
 function SwitcherContent({ onSelect, variant, scopeProjectId }: SwitcherContentProps): React.ReactElement {
-  const items = useSwitcherItems(true, { scopeProjectId });
+  const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
+  const isNewSessionDraftOpen = useSessionUIStore((state) => state.newSessionDraft.open === true);
+  const items = useSwitcherItems(true, { scopeProjectId, currentSessionId });
   const openNewSessionDraft = useSessionUIStore((state) => state.openNewSessionDraft);
-  const setActiveMainTab = useUIStore((state) => state.setActiveMainTab);
   const { t } = useI18n();
 
   const handleNewSession = React.useCallback(() => {
-    setActiveMainTab('chat');
     onSelect();
     openNewSessionDraft();
-  }, [onSelect, openNewSessionDraft, setActiveMainTab]);
+  }, [onSelect, openNewSessionDraft]);
 
   const [expandedParents, setExpandedParents] = React.useState<Set<string>>(new Set());
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const initialFocusCompleteRef = React.useRef(false);
+  const initialTarget = isNewSessionDraftOpen ? NEW_SESSION_SWITCHER_TARGET : currentSessionId;
   const toggleParent = React.useCallback((sessionId: string) => {
     setExpandedParents((prev) => {
       const next = new Set(prev);
@@ -94,10 +102,36 @@ function SwitcherContent({ onSelect, variant, scopeProjectId }: SwitcherContentP
     });
   }, []);
 
+  React.useLayoutEffect(() => {
+    if (initialFocusCompleteRef.current || !initialTarget) return;
+
+    const ancestorIds = initialTarget === NEW_SESSION_SWITCHER_TARGET
+      ? []
+      : findSwitcherItemAncestorIds(items, initialTarget);
+    if (!ancestorIds) return;
+
+    if (ancestorIds.some((id) => !expandedParents.has(id))) {
+      setExpandedParents((previous) => new Set([...previous, ...ancestorIds]));
+      return;
+    }
+
+    const animationFrame = requestAnimationFrame(() => {
+      const item = Array.from(
+        contentRef.current?.querySelectorAll<HTMLElement>('[data-switcher-item-id]') ?? [],
+      ).find((element) => element.dataset.switcherItemId === initialTarget);
+      if (!item) return;
+      item.focus();
+      item.scrollIntoView({ block: 'nearest' });
+      initialFocusCompleteRef.current = true;
+    });
+    return () => cancelAnimationFrame(animationFrame);
+  }, [expandedParents, initialTarget, items]);
+
   return (
-    <div className="max-h-[60vh] overflow-y-auto">
+    <div ref={contentRef} className="max-h-[60vh] overflow-y-auto">
       <div className="space-y-0.5">
         <BaseMenu.Item
+          data-switcher-item-id={NEW_SESSION_SWITCHER_TARGET}
           onClick={handleNewSession}
           className={cn(
             'group relative flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 outline-hidden select-none',
@@ -229,6 +263,7 @@ function SwitcherRow({ session, depth, variant, secondaryMeta, hasChildren, isEx
         handleSelect();
       }}
       data-slot="session-switcher-item"
+      data-switcher-item-id={session.id}
       className={cn(
         'group relative flex w-full cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 outline-hidden select-none',
         'data-[highlighted]:bg-interactive-hover hover:bg-interactive-hover',

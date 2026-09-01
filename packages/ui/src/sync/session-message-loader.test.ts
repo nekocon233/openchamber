@@ -10,10 +10,16 @@ import {
 const createRecord = (
   sessionID: string,
   id = "msg_1",
-  role: "user" | "assistant" = "user",
+  roleOrCreated: "user" | "assistant" | number = "user",
   parentID?: string,
 ) => ({
-  info: { id, sessionID, role, ...(parentID ? { parentID } : {}), time: { created: 1 } } as Message,
+  info: {
+    id,
+    sessionID,
+    role: typeof roleOrCreated === "number" ? "user" : roleOrCreated,
+    ...(parentID ? { parentID } : {}),
+    time: { created: typeof roleOrCreated === "number" ? roleOrCreated : 1 },
+  } as Message,
   parts: [{ id: `part_${id}`, messageID: id, sessionID, type: "text", text: "hello" }] as Part[],
 })
 
@@ -123,8 +129,8 @@ describe("SessionMessageLoader", () => {
     const { childStores, loader } = createLoader(async ({ sessionID, limit, before }) => {
       calls.push({ limit, before })
       return before
-        ? response([createRecord(sessionID, "msg_older")])
-        : response([createRecord(sessionID, "msg_latest")], "older-cursor")
+        ? response([createRecord(sessionID, "msg_older", 1)])
+        : response([createRecord(sessionID, "msg_latest", 2)], "older-cursor")
     })
     const target = { directory: "/repo", sessionID: "session-a" }
 
@@ -141,7 +147,7 @@ describe("SessionMessageLoader", () => {
       { limit: 100, before: "older-cursor" },
     ])
     expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((message) => message.id))
-      .toEqual(["msg_latest", "msg_older"].sort())
+      .toEqual(["msg_older", "msg_latest"])
     loader.dispose()
     childStores.disposeAll()
   })
@@ -168,6 +174,30 @@ describe("SessionMessageLoader", () => {
     expect(loader.getSnapshot(target).status).toBe("ready")
     loader.dispose()
     childStores.disposeAll()
+  })
+
+  test("keeps a post-rollover tail after legacy messages for shared runtime identities", async () => {
+    const runtimes = ["web", "desktop", "vscode", "mobile"]
+    for (const runtimeKey of runtimes) {
+      const childStores = new ChildStoreManager()
+      const sdk = {
+        session: {
+          messages: async ({ sessionID }: { sessionID: string }) => response([
+            createRecord(sessionID, "msg_000000000000Current", 200),
+            createRecord(sessionID, "msg_ffffffffffffLegacy", 100),
+          ]),
+        },
+      } as unknown as OpencodeClient
+      const loader = new SessionMessageLoader(childStores, { sdk, runtimeKey })
+      const target = { directory: `/repo-${runtimeKey}`, sessionID: "session-a" }
+
+      await loader.ensure(target)
+
+      expect(childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((message) => message.id))
+        .toEqual(["msg_ffffffffffffLegacy", "msg_000000000000Current"])
+      loader.dispose()
+      childStores.disposeAll()
+    }
   })
 
   test("loads every history page for an explicit complete-history request", async () => {
@@ -527,8 +557,8 @@ describe("SessionMessageLoader", () => {
       async ({ before }) => {
         legacyRequests.push(before)
         return before
-          ? response([createRecord(target.sessionID, "msg_1")])
-          : response([createRecord(target.sessionID, "msg_3")], "legacy-older")
+          ? response([createRecord(target.sessionID, "msg_1", 1)])
+          : response([createRecord(target.sessionID, "msg_3", 3)], "legacy-older")
       },
       async ({ cursor }) => {
         nextRequests.push(cursor)

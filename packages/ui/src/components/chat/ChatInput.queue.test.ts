@@ -17,7 +17,13 @@ describe('ChatInput follow-up queue integration', () => {
     expect(source.slice(branchIndex, sendIndex)).toContain('await addToQueue(messageQueueTarget');
     expect(source.slice(branchIndex, sendIndex)).toContain("status: 'staged'");
     expect(source.slice(branchIndex, sendIndex)).toContain('additionalParts: additionalParts.map');
+    expect(source.slice(branchIndex, sendIndex)).toContain('part.attachments');
+    expect(source.slice(branchIndex, sendIndex)).toContain('part.metadata');
     expect(source.slice(branchIndex, sendIndex)).toContain('agentMentionName');
+    expect(source.slice(branchIndex, sendIndex)).toContain('providerID: providerIdToSend');
+    expect(source.slice(branchIndex, sendIndex)).toContain('modelID: modelIdToSend');
+    expect(source.slice(branchIndex, sendIndex)).toContain('agent: agentNameToSend');
+    expect(source.slice(branchIndex, sendIndex)).toContain('variant: variantToSend');
     expect(source.slice(branchIndex, sendIndex)).not.toContain('sendCapturedMessage(');
   });
 
@@ -33,19 +39,17 @@ describe('ChatInput follow-up queue integration', () => {
   });
 
   test('restores input instead of staging when authoritative activity is unavailable', () => {
-    const unavailableIndex = source.indexOf("deliveryDecision === 'unavailable'");
-    const queueIndex = source.indexOf("if (delivery === 'queue')");
-    const sendIndex = source.indexOf('const sendPromise = sendCapturedMessage(');
+    const unavailableIndex = source.indexOf('authoritativeSessionPhase === null');
+    const consumeIndex = source.indexOf('const syntheticParts = consumePendingSyntheticParts()');
 
     expect(unavailableIndex).toBeGreaterThan(-1);
-    expect(queueIndex).toBeGreaterThan(unavailableIndex);
-    expect(sendIndex).toBeGreaterThan(unavailableIndex);
-    const unavailableSource = source.slice(unavailableIndex, queueIndex);
-    expect(unavailableSource).toContain('restoreConsumedDrafts()');
-    expect(unavailableSource).toContain('restoreConsumedSyntheticParts()');
-    expect(unavailableSource).toContain('restoreComposerAttachments()');
-    expect(unavailableSource).toContain('restoreSubmittedInputAfterError(');
+    expect(consumeIndex).toBeGreaterThan(unavailableIndex);
+    const unavailableSource = source.slice(unavailableIndex, consumeIndex);
+    expect(unavailableSource).toContain('restoreExplicitInput()');
     expect(unavailableSource).toContain("toast.error(t('chat.chatInput.toast.sessionStatusUnavailable'))");
+    expect(unavailableSource).not.toContain('consumePendingSyntheticParts()');
+    expect(unavailableSource).not.toContain('consumeDrafts(');
+    expect(unavailableSource).not.toContain('clearAttachedFiles()');
     expect(unavailableSource).not.toContain('addToQueue(');
   });
 
@@ -87,5 +91,20 @@ describe('ChatInput follow-up queue integration', () => {
     expect(editSource).toContain('queuedMessage.additionalParts');
     expect(editSource).toContain('queuedMessage.attachments');
     expect(editSource).toContain('setPendingSyntheticParts');
+  });
+
+  test('keeps shell, known slash commands, and auto-review out of queue admission', () => {
+    const autoReviewIndex = source.indexOf('if (autoReviewRunning || isAutoReviewRunningNow())');
+    const consumeIndex = source.indexOf('const syntheticParts = consumePendingSyntheticParts()');
+    const slashIndex = source.indexOf("const parsedCommand = inputMode === 'normal'");
+    const queueIndex = source.indexOf("if (delivery === 'queue')");
+    const forceQueueIndex = source.indexOf("options?.forceQueue === true && inputMode === 'normal'");
+
+    expect(autoReviewIndex).toBeGreaterThan(-1);
+    expect(autoReviewIndex).toBeLessThan(consumeIndex);
+    expect(slashIndex).toBeGreaterThan(consumeIndex);
+    expect(slashIndex).toBeLessThan(queueIndex);
+    expect(forceQueueIndex).toBeGreaterThan(-1);
+    expect(forceQueueIndex).toBeLessThan(queueIndex);
   });
 });

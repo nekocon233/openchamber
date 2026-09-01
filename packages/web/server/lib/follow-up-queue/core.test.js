@@ -323,7 +323,19 @@ describe('follow-up queue core', () => {
     const validItem = createItem('valid', {
       attachments: [attachment],
       additionalParts: [
-        { text: 'private synthetic context', synthetic: true },
+        {
+          text: 'private synthetic context',
+          attachments: [{ ...attachment, id: 'attachment-context' }],
+          synthetic: true,
+          metadata: {
+            openchamberContext: {
+              kind: 'github-issue',
+              number: 42,
+              title: 'Queue context',
+              url: 'https://example.com/issues/42',
+            },
+          },
+        },
         { text: 'plain additional text' },
       ],
       agentMentionName: 'review-agent',
@@ -361,6 +373,21 @@ describe('follow-up queue core', () => {
       type: 'add',
       item: createItem('additional-synthetic', {
         additionalParts: [{ text: 'context', synthetic: 'yes' }],
+      }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    await expect(mutate(core, sessionId, 1, 'schema-additional-metadata', {
+      type: 'add',
+      item: createItem('additional-metadata', {
+        additionalParts: [{ text: 'context', metadata: { unsupported: true } }],
+      }),
+    })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    await expect(mutate(core, sessionId, 1, 'schema-additional-file-field', {
+      type: 'add',
+      item: createItem('additional-file-field', {
+        additionalParts: [{
+          text: 'context',
+          attachments: [{ ...attachment, id: 'attachment-nested-file', file: {} }],
+        }],
       }),
     })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
     await expect(mutate(core, sessionId, 1, 'schema-agent-mention-limit', {

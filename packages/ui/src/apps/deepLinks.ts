@@ -10,7 +10,7 @@
  * context — including, eventually, a tiny encoder shared with the native widget/extension.
  */
 
-export const DEEP_LINK_SCHEME = 'openchamber';
+const DEEP_LINK_SCHEME = 'openchamber';
 
 export type SessionsFilter = 'all' | 'attention' | 'recent';
 export type ViewTarget = 'files' | 'mcp' | 'instances' | 'update';

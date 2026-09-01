@@ -14,12 +14,16 @@
  */
 
 import type { AttachedFile } from '@/stores/types/sessionTypes';
+import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
+import { contextPayloadFromDraft, createContextPart, type ContextPartMetadata } from '@/lib/messages/contextParts';
 
 export interface OutgoingPart {
     text: string;
     attachments?: AttachedFile[];
     /** Synthetic parts are context for the model, not shown as user content. */
     synthetic?: boolean;
+    /** Structured context (see contextParts.ts), persisted with the part. */
+    metadata?: ContextPartMetadata;
 }
 
 export interface OutgoingMessage {
@@ -36,12 +40,13 @@ export interface OutgoingMessageInput {
     /** The composer's own text, or null when this send has no visible body. */
     composerText: string | null;
     composerAttachments: readonly AttachedFile[];
-    /** Inline review comments, appended to the user's last authored text. */
-    inlineComments: readonly unknown[];
-    /** Synthetic context produced elsewhere (conflict resolution, and such). */
-    syntheticTexts: readonly string[];
-    linkedIssueContext: string | null;
-    linkedPr: { instructions: string; context: string } | null;
+    /** Context drafts (code comments, terminal selections, annotations, PR context). */
+    inlineComments: readonly InlineCommentDraft[];
+    /** Additional context produced elsewhere (conflict resolution, and such). */
+    additionalParts: readonly OutgoingPart[];
+    linkedIssue: { number: number; title: string; url: string; contextText: string } | null;
+    linkedPr: { number: number; title: string; url: string; instructions: string; context: string } | null;
+    linkedLinearIssue: { identifier: string; title: string; url: string; contextText: string } | null;
 }
 
 /**
@@ -57,8 +62,6 @@ export interface OutgoingMessageDeps {
     sanitizeAttachments: (files: readonly AttachedFile[] | undefined) => AttachedFile[];
     /** Skills named inline with `/name`. */
     collectSkillNames: (text: string) => string[];
-    /** Append inline review comments to a message body. */
-    appendComments: (text: string, comments: readonly unknown[]) => string;
     /** Instruction telling the model which skills the user named. */
     buildSkillInstruction: (names: string[]) => string | null;
 }
@@ -104,26 +107,41 @@ export function buildOutgoingMessage(
         ];
     }
 
-    // Inline comments are a continuation of the visible composer body rather
-    // than a separate part.
-    if (input.inlineComments.length > 0) {
-        primaryText = deps.appendComments(primaryText, input.inlineComments);
+    // Everything below is context for the model, never plain user text. Each
+    // attached context item becomes its own synthetic part carrying structured
+    // metadata, so the timeline can render it as a context block after the
+    // server echoes the message back.
+    for (const draft of input.inlineComments) {
+        additionalParts.push(createContextPart(contextPayloadFromDraft(draft)));
     }
 
-    // Everything below is context for the model, never user-visible content.
-    for (const text of input.syntheticTexts) {
-        additionalParts.push({ text, synthetic: true });
+    for (const part of input.additionalParts) {
+        additionalParts.push({
+            text: part.text,
+            ...(part.attachments && part.attachments.length > 0
+                ? { attachments: deps.sanitizeAttachments(part.attachments) }
+                : {}),
+            ...(part.synthetic !== undefined ? { synthetic: part.synthetic } : {}),
+            ...(part.metadata ? { metadata: part.metadata } : {}),
+        });
     }
 
-    if (input.linkedIssueContext) {
-        additionalParts.push({ text: input.linkedIssueContext, synthetic: true });
+    if (input.linkedIssue) {
+        const { number, title, url, contextText } = input.linkedIssue;
+        additionalParts.push(createContextPart({ kind: 'github-issue', number, title, url }, contextText));
     }
 
     if (input.linkedPr) {
         // Instructions before context: the model is told how to read the diff
         // before it is given the diff.
-        additionalParts.push({ text: input.linkedPr.instructions, synthetic: true });
-        additionalParts.push({ text: input.linkedPr.context, synthetic: true });
+        const { number, title, url, instructions, context } = input.linkedPr;
+        additionalParts.push({ text: instructions, synthetic: true });
+        additionalParts.push(createContextPart({ kind: 'github-pr', number, title, url }, context));
+    }
+
+    if (input.linkedLinearIssue) {
+        const { identifier, title, url, contextText } = input.linkedLinearIssue;
+        additionalParts.push(createContextPart({ kind: 'linear-issue', identifier, title, url }, contextText));
     }
 
     const skillInstruction = deps.buildSkillInstruction(skillNames);
