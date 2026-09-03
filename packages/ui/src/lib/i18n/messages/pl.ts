@@ -249,6 +249,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.header.displayMode.minimal': 'Minimalny',
   'sessions.sidebar.header.displayMode.showRecent': 'Pokaż sekcję ostatnich',
   'sessions.sidebar.header.displayMode.showPinned': 'Pokaż sekcję przypiętych',
+  'sessions.sidebar.header.displayMode.showChats': 'Pokaż sekcję czatów',
   'sessions.sidebar.header.displayMode.showArchived': 'Pokaż zarchiwizowane sesje',
   'sessions.sidebar.header.displayMode.collapseAll': 'Zwiń wszystkie',
   'sessions.sidebar.header.displayMode.expandAll': 'Rozwiń wszystkie',

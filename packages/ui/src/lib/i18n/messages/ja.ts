@@ -438,6 +438,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.header.displayMode.minimal': 'ミニマル',
   'sessions.sidebar.header.displayMode.showRecent': '最近のセクションを表示',
   'sessions.sidebar.header.displayMode.showPinned': 'ピン留めセクションを表示',
+  'sessions.sidebar.header.displayMode.showChats': 'チャットセクションを表示',
   'sessions.sidebar.header.displayMode.showArchived': 'アーカイブ済みセッションを表示',
   'sessions.sidebar.header.displayMode.collapseAll': 'すべて折りたたむ',
   'sessions.sidebar.header.displayMode.expandAll': 'すべて展開',

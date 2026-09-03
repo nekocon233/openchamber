@@ -1,4 +1,5 @@
 import type { Session } from '@opencode-ai/sdk/v2';
+import { isSessionPinned } from '@/stores/useSessionPinnedStore';
 import type { SessionNode } from '../types';
 
 export type RecentSessionLocation = {
@@ -57,6 +58,14 @@ export const deriveRecentSessions = (
     return activeSessionIds.has(session.id) || getSessionUpdatedAt(session) >= minUpdatedAt;
   });
 };
+
+export const derivePinnedSessions = (
+  sessions: Session[],
+  pinnedSessionIds: Set<string>,
+): Session[] => sessions.filter((session) => (
+  !isArchivedSession(session)
+  && isSessionPinned(pinnedSessionIds, session.directory, session.id)
+));
 
 export const deriveRecentActivitySections = ({
   sessions,

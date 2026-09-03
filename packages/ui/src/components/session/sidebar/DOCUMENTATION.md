@@ -9,14 +9,14 @@ kept at this root in `types.ts` and `utils.tsx`.
 - `projects/` owns project zones, grouping, ordering, scroller behavior, project
   view state, repository state, and worktree presentation.
 - `sessions/` owns session rows, row actions, expansion, ownership, and activity indicators.
-- `recent/` owns Recent and managed Chats activity projections.
+- `recent/` owns Pinned, managed Chats, and Recent activity projections.
 - `folders/` owns folder DnD, bulk actions, archived folders, and folder UI.
 - `SessionSidebar.tsx` is orchestration only. It discovers worktrees, wires shell actions, and mounts the visible collection.
-- Web and desktop render managed Chats before optional Recent, then project zones. VS Code keeps its workspace-scoped grouped list and excludes managed Chats and worktrees.
+- Web and desktop render optional Pinned, managed Chats, optional Recent, then project zones. All three activity-zone visibility choices are device-local and independent. VS Code keeps its workspace-scoped grouped list and excludes those activity zones and worktrees.
 - `by-worktree` renders slim PR-aware worktree headers. `flat` renders one merged active group per project with per-row branch markers. Both modes derive from the same project section data.
 - Session rows use one single-line layout. `busy` and `retry` use `SessionRunningIndicator`; unread rows use a static info dot. `SessionActivityDuration` replaces the metadata slot while running and remains after settlement only while the row is unread.
 - Collapsed project, group, and folder activity is always a static aggregate dot. A spinner is reserved for one identifiable running session or the short worktree-move operation.
-- Parent expansion is manual. Each project, Recent, active, and archived render context has an independent persisted key. Collapsing a parent clears only expanded descendants in that same context.
+- Parent expansion is manual. Each project, Pinned, Recent, active, and archived render context has an independent persisted key. Collapsing a parent clears only expanded descendants in that same context.
 - Project collapse, group collapse/order, parent expansion, selection, and display preferences are device-local. Shared project/folder/pin/worktree structure follows the runtime sidebar-state authority; VS Code retains its local fallback.
 - Recent includes non-archived root sessions that are active now or inside the timestamp window. It excludes child and archived sessions.
 - Folder and project/worktree DnD use stable entity IDs, never array positions. Reordering commits only on drag end.
@@ -60,9 +60,9 @@ existing data; it is never treated as an authoritative empty list.
 
 ### Components
 
-- `shell/SidebarHeader.tsx`: Header toolbar for add-project, Scheduled/Multi-run/Archive full-page entry points, session search, selection mode, project sort, grouping, Recent visibility, sticky headers, and collapse/expand all.
+- `shell/SidebarHeader.tsx`: Header toolbar for add-project, Scheduled/Multi-run/Archive full-page entry points, session search, selection mode, project sort, grouping, Pinned/Chats/Recent visibility, sticky headers, and collapse/expand all.
 - `shell/SidebarNav.tsx`: New-session text row above the tree; hidden in VS Code.
-- `recent/SidebarActivitySections.tsx`: Managed Chats and Recent renderer. Chats use the managed root and Recent uses a separate render context from project rows.
+- `recent/SidebarActivitySections.tsx`: Pinned, managed Chats, and Recent renderer. Chats use the managed root; Pinned and Recent each use a separate render context from project rows and each other.
 - `shell/SidebarFooter.tsx`: Static footer with icon-only settings, shortcuts, about, and update actions.
 - `projects/SessionProjectScroller.tsx`: Main scrollable renderer for project zones and their flat/archived groups; owns project and group drag-to-reorder.
 - `projects/SessionGroupSection.tsx`: Renders one flat or archived group: sessions first, then flat folder entries with path labels, show-more batching, and explicit loading/error/retry state. Archived buckets virtualize past 50 rows.
@@ -77,7 +77,7 @@ existing data; it is never treated as an authoritative empty list.
 
 - `sessions/useSessionActions.ts`: Centralizes session row actions (select/open, rename, share/unshare, archive/delete, confirmations).
 - `shell/useSessionSearchEffects.ts`: Handles search open/close UX and input focus behavior.
-- `list/useSessionPrefetch.ts`: Publishes directory-aware nearby/active session prefetch demand to the shared message loader. Recent may prefetch across projects without substituting the current directory.
+- `list/useSessionPrefetch.ts`: Publishes directory-aware nearby/active session prefetch demand to the shared message loader. Pinned and Recent may prefetch across projects without substituting the current directory.
 - `projects/useSessionGrouping.ts`: Builds grouped session structures and search text/filter helpers.
 - `projects/useSessionSidebarSections.ts`: Composes final per-project sections and group search metadata for rendering.
 - `projects/useProjectSessionSelection.ts`: Resolves active/current project-session selection logic and session-directory context.
@@ -92,7 +92,7 @@ existing data; it is never treated as an authoritative empty list.
 ### Types and utilities
 
 - `types.ts`: Shared sidebar types (`SessionNode`, `SessionGroup`, summary/search metadata).
-- `recent/activitySections.ts`: Recent membership and projection helpers. Recent includes non-archived root sessions that are active now or fall within the timestamp window.
+- `recent/activitySections.ts`: Pinned/Recent membership and projection helpers. Pinned membership follows the runtime-directory-session pin identity without a time limit. Recent includes non-archived root sessions that are active now or fall within the timestamp window.
 - Active global session metadata wins over an older child-store cache entry. Once the global list is authoritative, live-only rows are admitted only from child stores that completed bootstrap; this preserves externally created sessions without resurrecting deleted cached sessions.
 - The mobile sheet combines live child-store status, global status events, and a bounded, abortable, revision-gated per-directory status reconciliation while open. Rendering a row never bootstraps a directory or fetches message history. The phone drawer and tablet sidebar stay mounted across close/collapse transitions so project and worktree state remains warm; the phone's status reconciliation is gated by its `open` state.
 - Desktop session rows, the header switcher, and command-palette session results resolve each session from the global event-backed status first and the initialized child-store status second. `busy` and `retry` use the shared rotating loader while explicit global `idle` overrides stale child activity. These surfaces subscribe per session and do not copy the mobile sheet's polling into permanently mounted desktop UI.
@@ -100,14 +100,14 @@ existing data; it is never treated as an authoritative empty list.
 - `utils.tsx`: Shared sidebar utilities (path normalization, dedupe, archived scope keys, project relation checks, text highlight, labels, and compact date formatting). Shared session ranking lives in `sync/session-ordering.ts`.
 - `list/sessionBootstrapDemands.ts`: Builds the deduplicated directory demand plan. Selected directories rank above active projects, expanded groups, visible collapsed groups, and background/collapsed projects.
 
-Web and desktop show managed Chats before optional Recent activity. Chats use
-their shared managed root for folders and never expose worktree actions. Project
-display can be all projects or one selected project. The mobile sessions sheet
-(`apps/MobileSessionsSheet.tsx`) partitions the same way through
-`partitionSidebarSessions` and lists Chats as a collapsible section above the
-project tree, with no Recent projection. VS Code excludes worktrees and managed
-Chats, while retaining its workspace-scoped grouped list and inline archived
-buckets.
+Web, desktop, and the mobile sessions sheet show optional Pinned, optional
+managed Chats, then optional Recent activity before the project tree. They use
+the same device-local visibility preferences. Chats use their shared managed
+root for folders and never expose worktree actions. Pinned and Recent duplicate
+their project rows intentionally and retain child-session trees. Project display
+can be all projects or one selected project. VS Code excludes worktrees and
+managed Chats, while retaining its workspace-scoped grouped list and inline
+archived buckets.
 
 Directory demand always includes known project roots and worktrees. Visibility
 only changes priority. Row mounts must not start bootstrap work. Selection and
@@ -125,7 +125,7 @@ make every row observe unrelated streaming updates.
 - Session selection does not invalidate the sidebar orchestration component. Each mounted row selects only whether its own session ID is active, while parent expansion, project selection memory, and neighbor prefetch run in small effect-only subscribers.
 - Parent expansion is exclusively manual. Selecting or navigating to a subsession never expands its parent automatically.
 - Expanding adds only the parent key. Collapsing walks descendants only in the interaction path, clears every expanded descendant key in the same render context and active/archived bucket, and persists the result once. Other roots remain unchanged, and no descendant list is retained in state.
-- Project/worktree and Recent trees use independent persisted context keys, with active and archived buckets separated. Expansion changes in one context neither invalidate nor change the others. The persisted storage key remains `v3`; older state mixed contexts and is not migrated into this contract.
+- Project/worktree, Pinned, and Recent trees use independent persisted context keys, with active and archived buckets separated. Expansion changes in one context neither invalidate nor change the others. The persisted storage key remains `v3`; older state mixed contexts and is not migrated into this contract.
 - Folder membership may contain both a parent session and its descendants. Rendering treats only the highest assigned ancestors as folder roots because their normal session trees already include assigned descendants; persisted membership remains unchanged for cleanup and move semantics.
 - Sidebar selection holds the clicked row's viewport position across navigation-driven sidebar updates. Wheel or touch input cancels the hold immediately, so programmatic compensation never fights intentional scrolling.
 - Global session subscriptions are structural: create/delete, title, share, archive, directory, parent, and slug changes invalidate the tree. Recency-only `time.updated` changes do not trigger a rebuild. The separate lifecycle rank invalidates ordering only on `settled ↔ active` transitions, with root sessions ranked among roots and child sessions only among siblings of the same parent.

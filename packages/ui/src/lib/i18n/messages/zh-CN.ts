@@ -438,6 +438,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.header.displayMode.minimal': '精简',
   'sessions.sidebar.header.displayMode.showRecent': '显示最近部分',
   'sessions.sidebar.header.displayMode.showPinned': '显示置顶部分',
+  'sessions.sidebar.header.displayMode.showChats': '显示聊天分组',
   'sessions.sidebar.header.displayMode.showArchived': '显示已归档会话',
   'sessions.sidebar.header.displayMode.collapseAll': '全部折叠',
   'sessions.sidebar.header.displayMode.expandAll': '全部展开',

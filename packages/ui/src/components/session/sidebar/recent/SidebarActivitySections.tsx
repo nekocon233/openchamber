@@ -23,7 +23,7 @@ export type ActivityItem = {
 };
 
 type ActivitySection = {
-  key: 'active-now' | 'chats';
+  key: 'pinned' | 'active-now' | 'chats';
   title: string;
   items: ActivityItem[];
 };
@@ -141,10 +141,13 @@ export function SidebarActivitySections(props: Props): React.ReactNode {
 
   const relativeTimeTick = useRelativeTimeTick();
 
-  const buildRenderExtras = React.useCallback((nodes: SessionNode[]) => {
+  const buildRenderExtras = React.useCallback((
+    nodes: SessionNode[],
+    renderContext: 'recent' | 'pinned',
+  ) => {
     const subtreeContainsEditing = new Set<string>();
     collectSubtreeContainingId(nodes, props.editingId, subtreeContainsEditing);
-    const menuOpenSessionId = resolveMenuOpenSessionId(nodes, props.openSidebarMenuKey, 'recent', false);
+    const menuOpenSessionId = resolveMenuOpenSessionId(nodes, props.openSidebarMenuKey, renderContext, false);
     const nodeStructureKeyByNode = new WeakMap<SessionNode, string>();
     const visit = (node: SessionNode): void => {
       nodeStructureKeyByNode.set(node, computeNodeStructureKey(node));
@@ -188,7 +191,8 @@ export function SidebarActivitySections(props: Props): React.ReactNode {
         const remainingCount = section.items.length - visibleItems.length;
         const usesCustomRenderer = section.key === 'chats' && Boolean(props.renderChatsSection);
         const canShowFewer = !usesCustomRenderer && !flatVariant && section.items.length > initialVisibleCount && remainingCount === 0;
-        const getRenderExtras = buildRenderExtras(visibleItems.map((item) => item.node));
+        const renderContext = section.key === 'pinned' ? 'pinned' : 'recent';
+        const getRenderExtras = buildRenderExtras(visibleItems.map((item) => item.node), renderContext);
         const renderItem = (item: ActivityItem) => (
           <SessionTreeItem
             key={item.node.session.id}
@@ -207,7 +211,7 @@ export function SidebarActivitySections(props: Props): React.ReactNode {
             groupDirectory={item.groupDirectory}
             projectId={item.projectId}
             secondaryMeta={item.secondaryMeta}
-            renderContext="recent"
+            renderContext={renderContext}
             renderExtras={getRenderExtras(item.node)}
             setEditingId={props.setEditingId}
             setEditTitle={props.setEditTitle}
@@ -258,7 +262,10 @@ export function SidebarActivitySections(props: Props): React.ReactNode {
                 aria-expanded={!isCollapsed}
               >
                 <span className="inline-flex h-3.5 w-3.5 items-center justify-center">
-                  <Icon name={section.key === 'chats' ? 'chat-4' : 'history'} className={cn('h-3.5 w-3.5 text-muted-foreground/80', 'group-hover:hidden')} />
+                  <Icon
+                    name={section.key === 'chats' ? 'chat-4' : section.key === 'pinned' ? 'pushpin' : 'history'}
+                    className={cn('h-3.5 w-3.5 text-muted-foreground/80', 'group-hover:hidden')}
+                  />
                   <span className="hidden h-3.5 w-3.5 items-center justify-center text-muted-foreground group-hover:inline-flex">
                     {isCollapsed ? <Icon name="arrow-right-s" className="h-3.5 w-3.5" /> : <Icon name="arrow-down-s" className="h-3.5 w-3.5" />}
                   </span>

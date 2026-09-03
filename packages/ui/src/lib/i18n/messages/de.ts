@@ -402,6 +402,7 @@ export const dict = {
   'sessions.sidebar.header.displayMode.minimal': 'Minimal',
   'sessions.sidebar.header.displayMode.showRecent': 'Letzten Abschnitt anzeigen',
   'sessions.sidebar.header.displayMode.showPinned': 'Abschnitt „Angeheftet“ anzeigen',
+  'sessions.sidebar.header.displayMode.showChats': 'Chat-Bereich anzeigen',
   'sessions.sidebar.header.displayMode.showArchived': 'Archivierte Sitzungen anzeigen',
   'sessions.sidebar.header.displayMode.collapseAll': 'Alle einklappen',
   'sessions.sidebar.header.displayMode.expandAll': 'Alle ausklappen',

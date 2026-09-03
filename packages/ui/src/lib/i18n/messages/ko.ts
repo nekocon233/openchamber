@@ -438,6 +438,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.header.displayMode.minimal': '최소',
   'sessions.sidebar.header.displayMode.showRecent': '최근 섹션 표시',
   'sessions.sidebar.header.displayMode.showPinned': '고정 섹션 표시',
+  'sessions.sidebar.header.displayMode.showChats': '채팅 섹션 표시',
   'sessions.sidebar.header.displayMode.showArchived': '보관된 세션 표시',
   'sessions.sidebar.header.displayMode.collapseAll': '모두 접기',
   'sessions.sidebar.header.displayMode.expandAll': '모두 펼치기',

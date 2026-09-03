@@ -8,21 +8,44 @@ const source = readFileSync(join(__dirname, 'MobileSessionsSheet.tsx'), 'utf8');
 const mobileAppSource = readFileSync(join(__dirname, 'MobileApp.tsx'), 'utf8');
 
 describe('MobileSessionsSheet session structure', () => {
-  test('partitions managed chats from project sessions', () => {
+  test('partitions managed chats and derives Pinned and Recent activity sessions', () => {
     expect(source).toContain('partitionSidebarSessions(sessions, false)');
     expect(source).toContain('sessions: orderSessionsByLifecycleScopes(chatSessions');
+    expect(source).toContain('derivePinnedSessions(sessions, pinnedSessionIds)');
+    expect(source).toContain('deriveRecentSessions(sessions, globalActiveSessionIds)');
+    expect(source).toContain('includeSessionDescendants(roots, sessions)');
+    expect(source).toContain("const activitySectionsEnabled = open || variant === 'sidebar'");
     expect(source).toContain('for (const session of projectSessions)');
-    expect(source).not.toContain('deriveRecentSessions(');
   });
 
-  test('renders managed chats before the project tree with stable bucket identity', () => {
-    const chatsSectionIndex = source.indexOf("const chatsLabel = t('mobile.sessions.section.chats')");
+  test('renders Pinned, Chats, Recent, then the project tree with stable bucket identity', () => {
+    const pinnedSectionIndex = source.indexOf('showPinnedSection ? renderActivitySection');
+    const chatsSectionIndex = source.indexOf('showChatsSection ? renderActivitySection');
+    const recentSectionIndex = source.indexOf('showRecentSection ? renderActivitySection');
     const projectTreeIndex = source.indexOf('{orderedNodes.map');
 
-    expect(chatsSectionIndex).toBeGreaterThan(-1);
-    expect(projectTreeIndex).toBeGreaterThan(chatsSectionIndex);
-    expect(source).toContain('renderBucketSessions(chatsBucketKey, chatsBucket, PROJECT_SESSION_INDENT)');
+    expect(pinnedSectionIndex).toBeGreaterThan(-1);
+    expect(chatsSectionIndex).toBeGreaterThan(pinnedSectionIndex);
+    expect(recentSectionIndex).toBeGreaterThan(chatsSectionIndex);
+    expect(projectTreeIndex).toBeGreaterThan(recentSectionIndex);
+    expect(source).toContain('bucketKey: `${PINNED_SECTION_KEY}::${PINNED_SECTION_KEY}`');
+    expect(source).toContain('bucketKey: chatsBucketKey');
+    expect(source).toContain('renderBucketSessions(bucketKey, bucket, PROJECT_SESSION_INDENT)');
+    expect(source).toContain('bucketKey: `${RECENT_SECTION_KEY}::${RECENT_SECTION_KEY}`');
     expect(source).toContain('renderBucketSessions(`${node.project.id}::${bucket.key}`, bucket, PROJECT_SESSION_INDENT)');
+  });
+
+  test('uses the persisted display preferences in a mobile header menu', () => {
+    expect(source).toContain('const showPinnedSection = useSessionDisplayStore');
+    expect(source).toContain('const showChatsSection = useSessionDisplayStore');
+    expect(source).toContain('const showRecentSection = useSessionDisplayStore');
+    expect(source).toContain('onClick={togglePinnedSection}');
+    expect(source).toContain('onClick={toggleChatsSection}');
+    expect(source).toContain('onClick={toggleRecentSection}');
+    expect(source).toContain("t('sessions.sidebar.header.displayMode.showPinned')");
+    expect(source).toContain("t('sessions.sidebar.header.displayMode.showChats')");
+    expect(source).toContain("t('sessions.sidebar.header.displayMode.showRecent')");
+    expect(source).toContain('visibleSessions.filter((session) =>');
   });
 
   test('uses authoritative activity, exposes pin actions, and keeps mobile sheets mounted', () => {
@@ -37,7 +60,9 @@ describe('MobileSessionsSheet session structure', () => {
     expect(source).toContain('aria-describedby={statusDescriptionId}');
     expect(source).not.toContain('disabled={!hasChildren || !onToggleChildren}');
     expect(source).not.toContain("t('mobile.sessions.status.running')");
-    expect(source).toContain('onTogglePinned={() => togglePinnedSession(session.id)}');
+    expect(source).toContain('togglePinnedSession({');
+    expect(source).toContain('directory: sessionDirectory');
+    expect(source).toContain('sessionId: session.id');
     expect(source).toContain("<Icon name={pinned ? 'unpin' : 'pushpin'}");
     expect(source).toContain('opencodeClient.getSessionStatusForDirectory(directory, { signal: controller.signal })');
     expect(source).toContain('applyGlobalSessionStatusSnapshot(directory, snapshot, sessionIds, baselineRevision)');

@@ -1,16 +1,39 @@
 import { describe, expect, test } from 'bun:test';
 import type { Session } from '@opencode-ai/sdk/v2';
-import { deriveRecentActivitySections, deriveRecentSessions } from './activitySections';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { getPinnedSessionKey } from '@/stores/useSessionPinnedStore';
+import { derivePinnedSessions, deriveRecentActivitySections, deriveRecentSessions } from './activitySections';
 
 const NOW = 200_000_000;
 const RECENT = NOW - (48 * 60 * 60 * 1000);
 const OLD = NOW - (72 * 60 * 60 * 1000);
 
-const session = (id: string, options: { parentID?: string; archived?: number; updated?: number } = {}): Session => ({
+// SAFETY: this fixture supplies every Session field read by the membership helpers under test.
+const session = (id: string, options: { parentID?: string; archived?: number; updated?: number; directory?: string } = {}): Session => ({
   id,
   parentID: options.parentID,
+  directory: options.directory,
   time: { created: OLD, updated: options.updated ?? OLD, archived: options.archived },
 } as Session);
+
+describe('derivePinnedSessions', () => {
+  test('keeps an old pinned session independently from Recent membership', () => {
+    const pinned = session('pinned', { directory: '/workspace/app' });
+    const unpinned = session('unpinned', { directory: '/workspace/app' });
+    const archived = session('archived', { directory: '/workspace/app', archived: NOW - 1 });
+    const pinnedKey = getPinnedSessionKey(getRuntimeKey(), '/workspace/app', pinned.id);
+    const archivedKey = getPinnedSessionKey(getRuntimeKey(), '/workspace/app', archived.id);
+
+    expect(pinnedKey).not.toBeNull();
+    expect(archivedKey).not.toBeNull();
+    if (!pinnedKey || !archivedKey) throw new Error('Expected composite pinned-session keys');
+    expect(derivePinnedSessions(
+      [pinned, unpinned, archived],
+      new Set([pinnedKey, archivedKey]),
+    )).toEqual([pinned]);
+    expect(deriveRecentSessions([pinned], new Set(), NOW)).toEqual([]);
+  });
+});
 
 describe('deriveRecentSessions', () => {
   test('includes an old root session while it is active', () => {

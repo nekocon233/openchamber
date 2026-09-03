@@ -115,7 +115,7 @@ export type SessionNodeItemProps = {
   mobileVariant: boolean;
   alwaysShowActions: boolean;
   secondaryMeta?: SecondaryMeta | null;
-  renderContext?: 'project' | 'recent';
+  renderContext?: 'project' | 'recent' | 'pinned';
   /**
    * Precomputed set of session IDs whose subtree contains the session
    * currently being edited. Precomputed once per group render.

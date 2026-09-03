@@ -176,7 +176,10 @@ export const MobileOverlayPanel: React.FC<MobileOverlayPanelProps> = ({
           {children}
         </ScrollableOverlay>
         {footer ? (
-          <div className="shrink-0 border-t border-border/40 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <div
+            className="shrink-0 border-t border-border/40 px-3 py-2"
+            style={{ paddingBottom: 'max(0.5rem, var(--oc-interactive-bottom-safe, 0px), env(safe-area-inset-bottom, 0px))' }}
+          >
             {footer}
           </div>
         ) : null}

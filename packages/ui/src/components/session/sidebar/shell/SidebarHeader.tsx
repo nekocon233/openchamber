@@ -65,7 +65,11 @@ export function SidebarHeader(props: Props): React.ReactNode {
   const selectionModeEnabled = useSessionMultiSelectStore((state) => state.enabled);
   const toggleSelectionMode = useSessionMultiSelectStore((state) => state.toggleMode);
 
+  const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
+  const showChatsSection = useSessionDisplayStore((state) => state.showChatsSection);
   const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
+  const togglePinnedSection = useSessionDisplayStore((state) => state.togglePinnedSection);
+  const toggleChatsSection = useSessionDisplayStore((state) => state.toggleChatsSection);
   const toggleRecentSection = useSessionDisplayStore((state) => state.toggleRecentSection);
   const projectSortOrder = useSessionDisplayStore((state) => state.projectSortOrder);
   const setProjectSortOrder = useSessionDisplayStore((state) => state.setProjectSortOrder);
@@ -262,6 +266,24 @@ export function SidebarHeader(props: Props): React.ReactNode {
                   </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
+                {showRecentControls ? (
+                  <DropdownMenuItem
+                    onClick={togglePinnedSection}
+                    className="flex items-center justify-between"
+                  >
+                    <span>{t('sessions.sidebar.header.displayMode.showPinned')}</span>
+                    {showPinnedSection ? <Icon name="check" className="h-4 w-4 text-primary" /> : null}
+                  </DropdownMenuItem>
+                ) : null}
+                {showRecentControls ? (
+                  <DropdownMenuItem
+                    onClick={toggleChatsSection}
+                    className="flex items-center justify-between"
+                  >
+                    <span>{t('sessions.sidebar.header.displayMode.showChats')}</span>
+                    {showChatsSection ? <Icon name="check" className="h-4 w-4 text-primary" /> : null}
+                  </DropdownMenuItem>
+                ) : null}
                 {showRecentControls && !isSingleProjectMode ? (
                   <DropdownMenuItem
                     onClick={() => {

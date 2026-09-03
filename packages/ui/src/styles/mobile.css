@@ -213,6 +213,12 @@
      .header-safe-area padding are already set by the unconditional iOS block
      above; only the standalone-specific rules live here. */
   @supports (-webkit-touch-callout: none) {
+    :root.device-mobile:not(.desktop-runtime),
+    :root.device-tablet:not(.desktop-runtime),
+    :root.mobile-pointer:not(.desktop-runtime) {
+      --oc-interactive-bottom-safe: max(16px, var(--oc-safe-area-bottom, env(safe-area-inset-bottom, 0px)));
+    }
+
     :root.device-mobile:not(.desktop-runtime) .main-content-safe-area,
     :root.device-tablet:not(.desktop-runtime) .main-content-safe-area,
     :root.mobile-pointer:not(.desktop-runtime) .main-content-safe-area {
@@ -226,7 +232,7 @@
     :root.device-mobile:not(.desktop-runtime) .bottom-safe-area,
     :root.device-tablet:not(.desktop-runtime) .bottom-safe-area,
     :root.mobile-pointer:not(.desktop-runtime) .bottom-safe-area {
-      padding-bottom: var(--oc-safe-area-bottom-visual) !important;
+      padding-bottom: var(--oc-interactive-bottom-safe) !important;
     }
 
     /* Fix iOS viewport issues */
@@ -297,6 +303,7 @@
       --oc-safe-area-bottom: env(safe-area-inset-bottom, 0);
       --oc-safe-area-bottom-visual: clamp(0px, calc(var(--oc-safe-area-bottom) * 0.35), 12px);
       --oc-safe-area-left: env(safe-area-inset-left, 0);
+      --oc-interactive-bottom-safe: max(16px, var(--oc-safe-area-bottom, env(safe-area-inset-bottom, 0px)));
     }
 
     :root.device-mobile:not(.desktop-runtime) .header-safe-area,
@@ -322,7 +329,7 @@
   }
 }
 
-/* Phase 6: Home indicator blur gradient fix */
+/* Installed-PWA dialogs and bottom sheets reserve the interactive home-indicator area structurally. */
 @media (display-mode: standalone) and (max-width: 768px) {
   .pwa-dialog-content {
     --pwa-dialog-padding: clamp(0.75rem, 3vw, 1.25rem);
@@ -333,13 +340,13 @@
     max-height: calc(
       100vh
       - var(--oc-safe-area-top, 0px)
-      - var(--oc-safe-area-bottom-visual, 0px)
+      - max(var(--oc-safe-area-bottom-visual, 0px), var(--oc-interactive-bottom-safe, 0px))
       - 20px
     );
     max-height: calc(
       100dvh
       - var(--oc-safe-area-top, 0px)
-      - var(--oc-safe-area-bottom-visual, 0px)
+      - max(var(--oc-safe-area-bottom-visual, 0px), var(--oc-interactive-bottom-safe, 0px))
       - 20px
     );
     padding: var(--pwa-dialog-padding);
@@ -381,62 +388,18 @@
 
   .pwa-overlay-panel {
     margin-bottom: 0;
+    max-height: calc(
+      100dvh
+      - max(0.75rem, var(--oc-safe-area-top, 0px))
+      - max(0.75rem, var(--oc-interactive-bottom-safe, 0px))
+    );
   }
 
   .pwa-overlay-panel .pwa-overlay-scroll {
-    padding-bottom: calc(var(--oc-safe-area-bottom-visual, 0px) + 12px);
-  }
-}
-
-@media (display-mode: standalone) {
-  /* Home indicator overlay */
-  :root.device-mobile:not(.desktop-runtime) body::after,
-  :root.device-tablet:not(.desktop-runtime) body::after,
-  :root.mobile-pointer:not(.desktop-runtime) body::after {
-    content: '';
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: var(--oc-safe-area-bottom-visual, var(--oc-safe-area-bottom, env(safe-area-inset-bottom, 0)));
-    background: linear-gradient(
-      to top,
-      var(--background) 0%,
-      var(--background) 30%,
-      rgba(from var(--background) r g b / 0.8) 60%,
-      rgba(from var(--background) r g b / 0.3) 85%,
-      transparent 100%
+    padding-bottom: calc(
+      max(var(--oc-safe-area-bottom-visual, 0px), var(--oc-interactive-bottom-safe, 0px))
+      + 12px
     );
-    z-index: 1000;
-    pointer-events: none;
-  }
-
-  /* Fallback for browsers without rgba(from ...) support */
-  @supports not (color: rgba(from white r g b / 0.5)) {
-    :root.device-mobile:not(.desktop-runtime) body::after,
-    :root.device-tablet:not(.desktop-runtime) body::after,
-    :root.mobile-pointer:not(.desktop-runtime) body::after {
-      background: linear-gradient(
-        to top,
-        var(--background) 0%,
-        var(--background) 30%,
-        rgba(21, 19, 19, 0.8) 60%,  /* Dark theme fallback */
-        rgba(21, 19, 19, 0.3) 85%,
-        transparent 100%
-      );
-    }
-
-    /* Light theme fallback */
-    :root body::after {
-      background: linear-gradient(
-        to top,
-        var(--background) 0%,
-        var(--background) 30%,
-        rgba(248, 247, 243, 0.8) 60%,  /* Light theme fallback */
-        rgba(248, 247, 243, 0.3) 85%,
-        transparent 100%
-      );
-    }
   }
 }
 
@@ -703,10 +666,8 @@
    needs real top/bottom safe-area room of its own. */
 @media (display-mode: standalone) {
   /* Bottom: reserve home-indicator room under the composer while the keyboard
-     is down. The generic .bottom-safe-area token is intentionally capped at
-     4px (visual tuck under the gradient overlay), which is not enough to keep
-     controls clear of the indicator / rounded corners. A fixed floor is
-     required: iOS 26 standalone reports env(safe-area-inset-bottom) as 0.
+     is down. A fixed floor is required because some standalone releases report
+     env(safe-area-inset-bottom) as 0.
      Cancel the room while the keyboard is up (the indicator area is behind the
      keyboard, and the pinned form anchors by its offsetHeight). The class flip
      is deliberately delayed (tap race, see ChatInput onBlur) — the transition
@@ -716,7 +677,14 @@
   }
 
   :root:not(.oc-capacitor-app):not(.oc-browser-keyboard-open) .oc-mobile-composer {
-    padding-bottom: calc(0.75rem + max(16px, var(--oc-safe-area-bottom, env(safe-area-inset-bottom, 0px)))) !important;
+    padding-bottom: calc(
+      0.75rem
+      + max(
+        16px,
+        var(--oc-interactive-bottom-safe, 0px),
+        var(--oc-safe-area-bottom, env(safe-area-inset-bottom, 0px))
+      )
+    ) !important;
   }
 
   /* Fullscreen composer: ChatInput pins the form to the visual viewport from
@@ -728,11 +696,17 @@
   }
 
   /* iOS standalone can leave 100dvh stuck at the keyboard-shrunk value after
-     the keyboard hides (WebKit doesn't reliably restore the dynamic viewport),
-     which shifted the whole shell up by that leftover. Standalone has no
-     collapsing browser chrome, so the dynamic and large viewports are the same
-     thing — pin the shell to 100lvh, which always reports full screen height.
-     Initial geometry is identical (lvh == dvh on load). */
+     the keyboard hides (WebKit doesn't reliably restore the dynamic viewport).
+     The root is an overflow-hidden clipping ancestor, so pin it and the shell
+     to the same stable height; otherwise the shorter root clips the composer's
+     bottom even when the shell has recovered. Standalone has no collapsing
+     browser chrome, so lvh and dvh are identical on initial load. */
+  :root.device-mobile:not(.desktop-runtime):not(.oc-capacitor-app),
+  :root.device-tablet:not(.desktop-runtime):not(.oc-capacitor-app),
+  :root.mobile-pointer:not(.desktop-runtime):not(.oc-capacitor-app) {
+    height: 100lvh;
+  }
+
   :root:not(.oc-capacitor-app) .oc-mobile-app-shell {
     height: 100lvh;
   }

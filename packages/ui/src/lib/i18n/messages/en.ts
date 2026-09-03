@@ -437,6 +437,7 @@ export const dict = {
   'sessions.sidebar.header.displayMode.minimal': 'Minimal',
   'sessions.sidebar.header.displayMode.showRecent': 'Show recent section',
   'sessions.sidebar.header.displayMode.showPinned': 'Show pinned section',
+  'sessions.sidebar.header.displayMode.showChats': 'Show chats section',
   'sessions.sidebar.header.displayMode.showArchived': 'Show archived sessions',
   'sessions.sidebar.header.displayMode.collapseAll': 'Collapse all',
   'sessions.sidebar.header.displayMode.expandAll': 'Expand all',

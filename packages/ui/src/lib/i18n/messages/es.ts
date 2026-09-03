@@ -438,6 +438,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.header.displayMode.minimal": "Mínimo",
   "sessions.sidebar.header.displayMode.showRecent": "Mostrar recientes",
   "sessions.sidebar.header.displayMode.showPinned": "Mostrar sección de fijadas",
+  "sessions.sidebar.header.displayMode.showChats": "Mostrar sección de chats",
   "sessions.sidebar.header.displayMode.showArchived": "Mostrar sesiones archivadas",
   "sessions.sidebar.header.displayMode.collapseAll": "Colapsar todo",
   "sessions.sidebar.header.displayMode.expandAll": "Expandir todo",

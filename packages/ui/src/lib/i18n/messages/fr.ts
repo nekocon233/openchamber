@@ -266,6 +266,7 @@ export const dict = {
   'sessions.sidebar.header.displayMode.minimal': 'Minimal',
   'sessions.sidebar.header.displayMode.showRecent': 'Afficher la section récente',
   'sessions.sidebar.header.displayMode.showPinned': 'Afficher la section épinglée',
+  'sessions.sidebar.header.displayMode.showChats': 'Afficher la section des chats',
   'sessions.sidebar.header.displayMode.collapseAll': 'Tout réduire',
   'sessions.sidebar.header.displayMode.expandAll': 'Tout développer',
   'sessions.sidebar.header.projectSort.manual': 'Manuel',

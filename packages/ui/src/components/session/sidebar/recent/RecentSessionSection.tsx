@@ -21,6 +21,7 @@ type Props = {
   sessions: Session[];
   childrenMap: ReadonlyMap<string, readonly Session[]>;
   pinnedSessionIds: Set<string>;
+  pinnedSessions: Session[];
   recentSessions: Session[];
   expandedParents: Set<string>;
   notifyOnSubtasks: boolean;
@@ -33,6 +34,8 @@ type Props = {
   chatSessions: Session[];
   renderChatsSection: (items: ActivityItem[]) => React.ReactNode;
   onNewChat: () => void;
+  showPinnedSection: boolean;
+  showChatsSection: boolean;
   showRecentSection: boolean;
 } & Pick<SessionTreeItemProps,
   | 'setEditingId'
@@ -64,8 +67,11 @@ export const RecentSessionSection: React.FC<Props> = (props) => {
     sessions,
     childrenMap,
     pinnedSessionIds,
+    pinnedSessions,
     recentSessions,
     chatSessions,
+    showPinnedSection,
+    showChatsSection,
     showRecentSection,
   } = props;
   const { t } = useI18n();
@@ -119,7 +125,17 @@ export const RecentSessionSection: React.FC<Props> = (props) => {
     query: hasSessionSearchQuery ? normalizedSessionSearchQuery : '',
   }), [getSessionLocation, getSessionNode, hasSessionSearchQuery, normalizedSessionSearchQuery, recentSessions]);
   const sections = React.useMemo(() => [
-    {
+    ...(showPinnedSection ? [{
+      key: 'pinned' as const,
+      title: t('sessions.sidebar.activity.pinnedTitle'),
+      items: deriveRecentActivitySections({
+        sessions: pinnedSessions,
+        getSessionLocation,
+        getSessionNode,
+        query: hasSessionSearchQuery ? normalizedSessionSearchQuery : '',
+      })[0]?.items ?? [],
+    }] : []),
+    ...(showChatsSection ? [{
       key: 'chats' as const,
       title: t('sessions.sidebar.activity.chatsTitle'),
       items: chatSessions.map((session) => ({
@@ -128,9 +144,21 @@ export const RecentSessionSection: React.FC<Props> = (props) => {
         groupDirectory: session.directory ?? null,
         secondaryMeta: null,
       })),
-    },
+    }] : []),
     ...(showRecentSection ? recentSections.map((section) => ({ ...section, title: t('sessions.sidebar.activity.recentTitle') })) : []),
-  ], [chatSessions, getSessionNode, recentSections, showRecentSection, t]);
+  ], [
+    chatSessions,
+    getSessionLocation,
+    getSessionNode,
+    hasSessionSearchQuery,
+    normalizedSessionSearchQuery,
+    pinnedSessions,
+    recentSections,
+    showChatsSection,
+    showPinnedSection,
+    showRecentSection,
+    t,
+  ]);
   return (
     <SidebarActivitySections
       sections={sections}

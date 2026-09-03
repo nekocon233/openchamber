@@ -19,6 +19,7 @@ type SessionDisplayStore = {
   stickyZoneHeaders: boolean;
   toggleStickyZoneHeaders: () => void;
   showPinnedSection: boolean;
+  showChatsSection: boolean;
   showRecentSection: boolean;
   // VS Code only: the compact webview keeps archived buckets inline because it
   // has no room for the full Archive page. Web/desktop ignore this flag and
@@ -26,9 +27,11 @@ type SessionDisplayStore = {
   showArchivedSessions: boolean;
   projectSortOrder: ProjectSortOrder;
   setShowPinnedSection: (show: boolean) => void;
+  setShowChatsSection: (show: boolean) => void;
   setShowRecentSection: (show: boolean) => void;
   setShowArchivedSessions: (show: boolean) => void;
   togglePinnedSection: () => void;
+  toggleChatsSection: () => void;
   toggleRecentSection: () => void;
   toggleArchivedSessions: () => void;
   setProjectSortOrder: (order: ProjectSortOrder) => void;
@@ -56,6 +59,9 @@ export const migrateSessionDisplayState = (
     // single row layout. Drop the stale key from persisted state.
     delete next.displayMode;
   }
+  if (version < 6) {
+    next.showChatsSection = true;
+  }
   return next;
 };
 
@@ -71,6 +77,7 @@ export const useSessionDisplayStore = create<SessionDisplayStore>()(
       stickyZoneHeaders: true,
       toggleStickyZoneHeaders: () => set((state) => ({ stickyZoneHeaders: !state.stickyZoneHeaders })),
       showPinnedSection: true,
+      showChatsSection: true,
       showRecentSection: true,
       // Default to HIDDEN so the pre-hydration state matches the quiet/safe
       // option: archived sessions must never flash visible on startup and then
@@ -78,21 +85,24 @@ export const useSessionDisplayStore = create<SessionDisplayStore>()(
       showArchivedSessions: false,
       projectSortOrder: 'manual',
       setShowPinnedSection: (show) => set({ showPinnedSection: show }),
+      setShowChatsSection: (show) => set({ showChatsSection: show }),
       setShowRecentSection: (show) => set({ showRecentSection: show }),
       setShowArchivedSessions: (show) => set({ showArchivedSessions: show }),
       togglePinnedSection: () => set((state) => ({ showPinnedSection: !state.showPinnedSection })),
+      toggleChatsSection: () => set((state) => ({ showChatsSection: !state.showChatsSection })),
       toggleRecentSection: () => set((state) => ({ showRecentSection: !state.showRecentSection })),
       toggleArchivedSessions: () => set((state) => ({ showArchivedSessions: !state.showArchivedSessions })),
       setProjectSortOrder: (order) => set({ projectSortOrder: order }),
     }),
     {
       name: 'session-display-mode',
-      version: 5,
+      version: 6,
       // v1→v2 adds projectSortOrder using the canonical manual ordering.
       // v2→v3 adds the independently visible pinned section.
       // v3→v4 replaces the previously shipped recent default with manual.
       // v3→v4 removes displayMode (single sidebar row layout).
       // v4→v5 adds the independent all-projects/single-project view mode.
+      // v5→v6 adds the independently visible managed Chats section.
       migrate: migrateSessionDisplayState,
     },
   ),

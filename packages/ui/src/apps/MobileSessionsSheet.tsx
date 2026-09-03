@@ -38,6 +38,12 @@ import { NewWorktreeDialog } from '@/components/session/NewWorktreeDialog';
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
 import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
 import { toast } from '@/components/ui';
@@ -45,6 +51,7 @@ import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { getProjectLabel, normalizePath } from './mobilePaths';
 import { CHAT_DRAFT_PROJECT_ID, isChatDirectoryPath } from '@/lib/chatDirectories';
 import { partitionSidebarSessions } from '@/components/session/sidebar/list/sessionCollection';
+import { derivePinnedSessions, deriveRecentSessions } from '@/components/session/sidebar/recent/activitySections';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n } from '@/lib/i18n';
 import { opencodeClient } from '@/lib/opencode/client';
@@ -60,7 +67,8 @@ import { mergeLiveSessionWithGlobalSession, refreshGlobalSessions, useGlobalSess
 import { useMobileSessionExpansionStore } from '@/stores/useMobileSessionExpansionStore';
 import { useMobileSessionTreeStore } from '@/stores/useMobileSessionTreeStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
+import { isSessionPinned, useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
+import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { orderWorktrees, useWorktreeOrderStore } from '@/stores/useWorktreeOrderStore';
 import {
   EMPTY_SESSION_ORDER_RANKS,
@@ -104,6 +112,9 @@ type MobileSessionsSheetProps = {
 };
 
 const EMPTY_PINNED_SESSION_IDS = new Set<string>();
+const EMPTY_ACTIVE_SESSION_IDS = new Set<string>();
+const PINNED_SECTION_KEY = 'openchamber:mobile:pinned';
+const RECENT_SECTION_KEY = 'openchamber:mobile:recent';
 
 type ProjectMeta = {
   id: string;
@@ -151,6 +162,30 @@ const CHILD_INDENT_STEP = 16;
 
 const getParentId = (session: Session): string | null =>
   (session as Session & { parentID?: string | null }).parentID ?? null;
+
+const includeSessionDescendants = (roots: Session[], sessions: Session[]): Session[] => {
+  if (roots.length === 0) return [];
+  const childrenByParent = new Map<string, Session[]>();
+  for (const session of sessions) {
+    const parentId = getParentId(session);
+    if (!parentId) continue;
+    const children = childrenByParent.get(parentId) ?? [];
+    children.push(session);
+    childrenByParent.set(parentId, children);
+  }
+  const included = new Set(roots.map((session) => session.id));
+  const pending = [...included];
+  while (pending.length > 0) {
+    const parentId = pending.pop();
+    if (!parentId) continue;
+    for (const child of childrenByParent.get(parentId) ?? []) {
+      if (included.has(child.id)) continue;
+      included.add(child.id);
+      pending.push(child.id);
+    }
+  }
+  return sessions.filter((session) => included.has(session.id));
+};
 
 const getSessionDirectory = (session: Session): string => {
   const sessionWithDirectory = session as Session & {
@@ -937,10 +972,15 @@ const SortableProjectRow: React.FC<{
 export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange, variant = 'drawer', footer }) => {
   const { t } = useI18n();
   const { git } = useRuntimeAPIs();
+  const activitySectionsEnabled = open || variant === 'sidebar';
   const liveSessions = useAllLiveSessions();
   const authoritativeLiveSessionIds = useAllAuthoritativeLiveSessionIds();
   const sessionStatuses = useAllSessionStatuses();
   const globalResolvedStatusById = useGlobalSessionStatusStore((state) => state.resolvedStatusById);
+  const globalActiveSessionIds = useGlobalSessionStatusStore(React.useCallback(
+    (state) => open || variant === 'sidebar' ? state.activeSessionIds : EMPTY_ACTIVE_SESSION_IDS,
+    [open, variant],
+  ));
   const globalActiveSessions = useGlobalSessionsStore((state) => state.activeSessions);
   const globalArchivedSessions = useGlobalSessionsStore((state) => state.archivedSessions);
   const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.status === 'ready');
@@ -949,6 +989,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     (state) => open || variant === 'sidebar' ? state.ids : EMPTY_PINNED_SESSION_IDS,
     [open, variant],
   ));
+  const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
+  const showChatsSection = useSessionDisplayStore((state) => state.showChatsSection);
+  const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
+  const togglePinnedSection = useSessionDisplayStore((state) => state.togglePinnedSection);
+  const toggleChatsSection = useSessionDisplayStore((state) => state.toggleChatsSection);
+  const toggleRecentSection = useSessionDisplayStore((state) => state.toggleRecentSection);
   const sessionOrderRanks = useSessionOrderingStore(React.useCallback(
     (state) => open || variant === 'sidebar' ? state.rankById : EMPTY_SESSION_ORDER_RANKS,
     [open, variant],
@@ -1144,10 +1190,47 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks),
   }), [chatSessions, pinnedSessionIds, sessionOrderRanks]);
   const chatsBucketKey = `${CHAT_DRAFT_PROJECT_ID}::${CHAT_DRAFT_PROJECT_ID}`;
-  const chatRootCount = React.useMemo(
-    () => chatSessions.filter((session) => !getParentId(session)).length,
-    [chatSessions],
-  );
+  const pinnedBucket = React.useMemo<WorktreeBucket>(() => {
+    const roots = activitySectionsEnabled && showPinnedSection
+      ? derivePinnedSessions(sessions, pinnedSessionIds)
+      : [];
+    return {
+      key: PINNED_SECTION_KEY,
+      label: '',
+      path: '',
+      worktree: null,
+      sessions: orderSessionsByLifecycleScopes(
+        includeSessionDescendants(roots, sessions),
+        pinnedSessionIds,
+        sessionOrderRanks,
+      ),
+    };
+  }, [activitySectionsEnabled, pinnedSessionIds, sessionOrderRanks, sessions, showPinnedSection]);
+  const recentBucket = React.useMemo<WorktreeBucket>(() => {
+    const roots = activitySectionsEnabled && showRecentSection
+      ? deriveRecentSessions(sessions, globalActiveSessionIds)
+      : [];
+    return {
+      key: RECENT_SECTION_KEY,
+      label: '',
+      path: '',
+      worktree: null,
+      sessions: orderSessionsByLifecycleScopes(
+        includeSessionDescendants(roots, sessions),
+        pinnedSessionIds,
+        sessionOrderRanks,
+      ),
+    };
+  }, [activitySectionsEnabled, globalActiveSessionIds, pinnedSessionIds, sessionOrderRanks, sessions, showRecentSection]);
+  const visibleSessions = React.useMemo(() => {
+    const visibleIds = new Set(projectSessions.map((session) => session.id));
+    if (showChatsSection) {
+      for (const session of chatSessions) visibleIds.add(session.id);
+    }
+    for (const session of pinnedBucket.sessions) visibleIds.add(session.id);
+    for (const session of recentBucket.sessions) visibleIds.add(session.id);
+    return sessions.filter((session) => visibleIds.has(session.id));
+  }, [chatSessions, pinnedBucket.sessions, projectSessions, recentBucket.sessions, sessions, showChatsSection]);
 
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -1155,7 +1238,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     if (!open) return new Map<string, string[]>();
     const queryMatchIds = new Set<string>();
     if (normalizedQuery) {
-      for (const session of sessions) {
+      for (const session of visibleSessions) {
         const directory = getSessionDirectory(session);
         const project = findExactProjectMatch(projectsMeta, directory);
         if (sessionMatchesQuery(session, project?.label ?? '', normalizedQuery)) {
@@ -1163,10 +1246,11 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
         }
       }
     }
-    const ordered = [...sessions].sort((a, b) => {
+    const ordered = [...visibleSessions].sort((a, b) => {
       const queryDifference = Number(queryMatchIds.has(b.id)) - Number(queryMatchIds.has(a.id));
       if (normalizedQuery && queryDifference !== 0) return queryDifference;
-      const pinnedDifference = Number(pinnedSessionIds.has(b.id)) - Number(pinnedSessionIds.has(a.id));
+      const pinnedDifference = Number(isSessionPinned(pinnedSessionIds, getSessionDirectory(b), b.id))
+        - Number(isSessionPinned(pinnedSessionIds, getSessionDirectory(a), a.id));
       if (pinnedDifference !== 0) return pinnedDifference;
       return getSessionTimestamp(b) - getSessionTimestamp(a);
     });
@@ -1179,7 +1263,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       targets.set(directory, sessionIds);
     }
     return targets;
-  }, [normalizedQuery, open, pinnedSessionIds, projectsMeta, sessions]);
+  }, [normalizedQuery, open, pinnedSessionIds, projectsMeta, visibleSessions]);
 
   React.useEffect(() => {
     statusPollTargetsRef.current = [...statusPollTargets.entries()];
@@ -1397,6 +1481,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       const children = childrenByParent.get(session.id) ?? [];
       const hasChildren = children.length > 0;
       const expanded = Boolean(expandedParents[session.id]);
+      const sessionDirectory = getSessionDirectory(session);
       return (
         <React.Fragment key={session.id}>
           <SessionRow
@@ -1405,12 +1490,15 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             indent={rowIndent}
             activityTimestamp={getSessionTimestamp(session)}
             statusType={getSessionStatusType(session.id)}
-            pinned={pinnedSessionIds.has(session.id)}
+            pinned={isSessionPinned(pinnedSessionIds, sessionDirectory, session.id)}
             hasChildren={hasChildren}
             expanded={expanded}
             onToggleChildren={hasChildren ? () => toggleParent(session.id) : undefined}
             onSelect={() => handleSelectSession(session)}
-            onTogglePinned={() => togglePinnedSession(session.id)}
+            onTogglePinned={sessionDirectory ? () => togglePinnedSession({
+              directory: sessionDirectory,
+              sessionId: session.id,
+            }) : undefined}
             revealed={revealedSessionId === session.id}
             onRevealedChange={(nextRevealed) => handleRowRevealedChange(session.id, nextRevealed)}
             confirmingDelete={confirmingDeleteSessionId === session.id}
@@ -1592,7 +1680,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   const searchSessionMatches = React.useMemo(() => {
     if (!normalizedQuery) return [] as Session[];
     return orderSessionsByLifecycleScopes(
-      sessions.filter((session) => {
+      visibleSessions.filter((session) => {
         // Subsessions are implementation noise in a flat search list — only
         // top-level sessions are searchable.
         if (getParentId(session)) return false;
@@ -1603,7 +1691,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       pinnedSessionIds,
       sessionOrderRanks,
     );
-  }, [normalizedQuery, pinnedSessionIds, projectsMeta, sessionOrderRanks, sessions]);
+  }, [normalizedQuery, pinnedSessionIds, projectsMeta, sessionOrderRanks, visibleSessions]);
 
   const searchProjectMatches = React.useMemo(() => {
     if (!normalizedQuery) return [] as Array<ProjectMeta & { sessionCount: number }>;
@@ -1620,6 +1708,13 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
   const hasNoMatches =
     normalizedQuery && searchSessionMatches.length === 0 && searchProjectMatches.length === 0;
+  const hasVisibleActivitySessions = (
+    showPinnedSection && pinnedBucket.sessions.length > 0
+  ) || (
+    showChatsSection && chatSessions.length > 0
+  ) || (
+    showRecentSection && recentBucket.sessions.length > 0
+  );
   const canEditOrder = !normalizedQuery && projectsMeta.length > 1;
 
   const editToggle = canEditOrder ? (
@@ -1665,14 +1760,109 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     </Button>
   ) : null;
 
+  const displayMenu = !editingOrder ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="chip"
+          size="sm"
+          className="w-9 px-0"
+          aria-label={t('sessions.sidebar.header.displayMode.label')}
+          title={t('sessions.sidebar.header.displayMode.label')}
+        >
+          <Icon name="equalizer-2" className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-48">
+        <DropdownMenuItem onClick={togglePinnedSection} className="flex items-center justify-between">
+          <span>{t('sessions.sidebar.header.displayMode.showPinned')}</span>
+          {showPinnedSection ? <Icon name="check" className="size-4 text-primary" /> : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={toggleChatsSection} className="flex items-center justify-between">
+          <span>{t('sessions.sidebar.header.displayMode.showChats')}</span>
+          {showChatsSection ? <Icon name="check" className="size-4 text-primary" /> : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={toggleRecentSection} className="flex items-center justify-between">
+          <span>{t('sessions.sidebar.header.displayMode.showRecent')}</span>
+          {showRecentSection ? <Icon name="check" className="size-4 text-primary" /> : null}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : null;
+
   const trailingActions =
-    newChatButton || addProjectButton || editToggle ? (
+    newChatButton || addProjectButton || displayMenu || editToggle ? (
       <>
         {newChatButton}
         {addProjectButton}
+        {displayMenu}
         {editToggle}
       </>
     ) : null;
+
+  const renderActivitySection = ({
+    sectionKey,
+    bucketKey,
+    label,
+    icon,
+    bucket,
+    showWhenEmpty = false,
+  }: {
+    sectionKey: string;
+    bucketKey: string;
+    label: string;
+    icon: 'pushpin' | 'chat-4' | 'history';
+    bucket: WorktreeBucket;
+    showWhenEmpty?: boolean;
+  }): React.ReactNode => {
+    const rootCount = bucket.sessions.filter((session) => !getParentId(session)).length;
+    if (!showWhenEmpty && rootCount === 0) return null;
+    const expanded = projectExpandedMap[sectionKey] ?? true;
+    return (
+      <section className="border-t border-border/70 first:border-t-0">
+        <div className="flex min-h-12 w-full items-center">
+          <button
+            type="button"
+            className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+            onClick={() => {
+              if (revealedRowId) {
+                handleRowKeyRevealedChange(revealedRowId, false);
+                return;
+              }
+              toggleProject(sectionKey, expanded);
+            }}
+            aria-expanded={expanded}
+            aria-label={expanded
+              ? t('sessions.sidebar.group.collapseAria', { label })
+              : t('sessions.sidebar.group.expandAria', { label })}
+            style={{ touchAction: 'manipulation' }}
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-muted)] text-muted-foreground">
+              <Icon name={icon} className="size-4" />
+            </span>
+            <span className="block min-w-0 flex-1 truncate typography-ui-label font-semibold text-foreground">
+              {label}
+            </span>
+            <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
+              {rootCount}
+            </span>
+          </button>
+        </div>
+        {expanded ? (
+          <div className="pb-2">
+            {bucket.sessions.length > 0 ? (
+              renderBucketSessions(bucketKey, bucket, PROJECT_SESSION_INDENT)
+            ) : (
+              <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingLeft: PROJECT_SESSION_INDENT }}>
+                {t('sessions.sidebar.activity.chatsEmpty')}
+              </p>
+            )}
+          </div>
+        ) : null}
+      </section>
+    );
+  };
 
   // flex-1 + min-h-0 rather than h-full: both hosts put a fixed-height header
   // above this, so a 100% height overflows by exactly that header — and the
@@ -1705,7 +1895,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
               ) : null}
             </div>
           </div>
-          {projectsMeta.length === 0 && chatSessions.length === 0 ? (
+          {projectsMeta.length === 0 && !hasVisibleActivitySessions ? (
             <MobileSessionsEmpty
               title={t('mobile.sessions.empty.noProjectsTitle')}
               description={t('mobile.sessions.empty.noProjectsDescription')}
@@ -1738,21 +1928,27 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                     </span>
                   </div>
                   <div className="overflow-hidden rounded-2xl border border-border/70 bg-[var(--surface-elevated)]">
-                    {searchSessionMatches.map((session, index) => (
-                      <div key={session.id} className={cn(index > 0 && 'border-t border-border/70')}>
-                        <SessionRow
-                          session={session}
-                          active={currentSessionId === session.id}
-                          indent={12}
-                          activityTimestamp={getSessionTimestamp(session)}
-                          statusType={getSessionStatusType(session.id)}
-                          pinned={pinnedSessionIds.has(session.id)}
-                          contextLabel={buildSessionContextLabel(session)}
-                          onSelect={() => handleSelectSession(session)}
-                          onTogglePinned={() => togglePinnedSession(session.id)}
-                        />
-                      </div>
-                    ))}
+                    {searchSessionMatches.map((session, index) => {
+                      const sessionDirectory = getSessionDirectory(session);
+                      return (
+                        <div key={session.id} className={cn(index > 0 && 'border-t border-border/70')}>
+                          <SessionRow
+                            session={session}
+                            active={currentSessionId === session.id}
+                            indent={12}
+                            activityTimestamp={getSessionTimestamp(session)}
+                            statusType={getSessionStatusType(session.id)}
+                            pinned={isSessionPinned(pinnedSessionIds, sessionDirectory, session.id)}
+                            contextLabel={buildSessionContextLabel(session)}
+                            onSelect={() => handleSelectSession(session)}
+                            onTogglePinned={sessionDirectory ? () => togglePinnedSession({
+                              directory: sessionDirectory,
+                              sessionId: session.id,
+                            }) : undefined}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
               ) : null}
@@ -1831,55 +2027,28 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             </div>
           ) : (
             <div className="flex flex-col">
-              {(() => {
-                const chatsExpanded = projectExpandedMap[CHAT_DRAFT_PROJECT_ID] ?? true;
-                const chatsLabel = t('mobile.sessions.section.chats');
-                return (
-                  <section>
-                    <div className="flex min-h-12 w-full items-center">
-                      <button
-                        type="button"
-                        className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
-                        onClick={() => {
-                          if (revealedRowId) {
-                            handleRowKeyRevealedChange(revealedRowId, false);
-                            return;
-                          }
-                          toggleProject(CHAT_DRAFT_PROJECT_ID, chatsExpanded);
-                        }}
-                        aria-expanded={chatsExpanded}
-                        aria-label={
-                          chatsExpanded
-                            ? t('sessions.sidebar.group.collapseAria', { label: chatsLabel })
-                            : t('sessions.sidebar.group.expandAria', { label: chatsLabel })
-                        }
-                        style={{ touchAction: 'manipulation' }}
-                      >
-                        <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-muted)] text-muted-foreground">
-                          <Icon name="chat-4" className="size-4" />
-                        </span>
-                        <span className="block min-w-0 flex-1 truncate typography-ui-label font-semibold text-foreground">
-                          {chatsLabel}
-                        </span>
-                        <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
-                          {chatRootCount}
-                        </span>
-                      </button>
-                    </div>
-                    {chatsExpanded ? (
-                      <div className="pb-2">
-                        {chatsBucket.sessions.length > 0 ? (
-                          renderBucketSessions(chatsBucketKey, chatsBucket, PROJECT_SESSION_INDENT)
-                        ) : (
-                          <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingLeft: PROJECT_SESSION_INDENT }}>
-                            {t('sessions.sidebar.activity.chatsEmpty')}
-                          </p>
-                        )}
-                      </div>
-                    ) : null}
-                  </section>
-                );
-              })()}
+              {showPinnedSection ? renderActivitySection({
+                sectionKey: PINNED_SECTION_KEY,
+                bucketKey: `${PINNED_SECTION_KEY}::${PINNED_SECTION_KEY}`,
+                label: t('mobile.sessions.section.pinned'),
+                icon: 'pushpin',
+                bucket: pinnedBucket,
+              }) : null}
+              {showChatsSection ? renderActivitySection({
+                sectionKey: CHAT_DRAFT_PROJECT_ID,
+                bucketKey: chatsBucketKey,
+                label: t('mobile.sessions.section.chats'),
+                icon: 'chat-4',
+                bucket: chatsBucket,
+                showWhenEmpty: true,
+              }) : null}
+              {showRecentSection ? renderActivitySection({
+                sectionKey: RECENT_SECTION_KEY,
+                bucketKey: `${RECENT_SECTION_KEY}::${RECENT_SECTION_KEY}`,
+                label: t('sessions.sidebar.activity.recentTitle'),
+                icon: 'history',
+                bucket: recentBucket,
+              }) : null}
               {orderedNodes.map((node) => {
                 const projectExpanded = isProjectExpanded(node);
                 const buckets = normalizedQuery

@@ -225,6 +225,10 @@ refusing programmatic focus outside a gesture, WebKit leaving the layout
 viewport panned after the keyboard hides, overlay chains handing off through a
 frame where nothing is open.
 
+Installed PWAs keep the document root clipping boundary and
+`.oc-mobile-app-shell` on the same stable viewport height. Changing only the
+shell lets a stale, keyboard-sized `100dvh` root clip the bottom of the composer.
+
 **Every timeout and `flushSync` in them has a reason recorded next to it, and
 none of them is verifiable outside a real device.** Change them only against
 hardware.

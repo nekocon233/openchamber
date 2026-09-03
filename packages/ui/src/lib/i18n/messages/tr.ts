@@ -3298,6 +3298,7 @@ export const dict = {
   'mobile.sessions.section.pinned': 'Sabitlenenler',
   'mobile.sessions.status.running': 'Çalışıyor',
   'sessions.sidebar.header.displayMode.showPinned': 'Sabitlenenler bölümünü göster',
+  'sessions.sidebar.header.displayMode.showChats': 'Sohbetler bölümünü göster',
   'sessions.sidebar.activity.pinnedTitle': 'sabitlenenler',
   'gitView.empty.discoveringRepositories': 'Git depoları aranıyor...',
   'gitView.empty.discoverFailed': 'Git depoları taranamadı',

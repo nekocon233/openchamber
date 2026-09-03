@@ -13,7 +13,7 @@ type Context = {
   projectId?: string | null;
   archivedBucket?: boolean;
   secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null;
-  renderContext?: 'project' | 'recent';
+  renderContext?: 'project' | 'recent' | 'pinned';
 };
 
 type SessionTreeItemRenderProps = Context & Pick<SessionNodeItemProps,
