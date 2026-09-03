@@ -687,6 +687,16 @@
     ) !important;
   }
 
+  /* While the keyboard is up the rule above lets go, but the generic
+     .bottom-safe-area on the same form does not: its --oc-interactive-bottom-safe
+     (the real home-indicator inset, up to ~34px) stays as dead padding parked
+     between the composer and the keyboard. Tighten back to the visual tuck,
+     mirroring the Capacitor oc-keyboard-open rule. Same specificity as
+     .bottom-safe-area and later in the sheet, so it wins the !important tie. */
+  :root.oc-browser-keyboard-open:not(.oc-capacitor-app) .oc-mobile-composer {
+    padding-bottom: var(--oc-safe-area-bottom-visual, 12px) !important;
+  }
+
   /* Fullscreen composer: ChatInput pins the form to the visual viewport from
      y = visualViewport.offsetTop, which is 0 in standalone (no URL bar), so the
      form's first row lands under the status bar / Dynamic Island. Pad the

@@ -229,6 +229,15 @@ Installed PWAs keep the document root clipping boundary and
 `.oc-mobile-app-shell` on the same stable viewport height. Changing only the
 shell lets a stale, keyboard-sized `100dvh` root clip the bottom of the composer.
 
+The standalone composer reserves home-indicator room below itself while the
+keyboard is down (`.oc-mobile-composer` padding in `mobile.css`), and that
+reservation cancels on `oc-browser-keyboard-open`. The cancellation must cover
+the generic `.bottom-safe-area` padding on the same form too: that rule is
+unconditional and `!important`, so without the matching
+`:root.oc-browser-keyboard-open .oc-mobile-composer` override its
+home-indicator inset survives as dead space parked between the composer and
+the raised keyboard.
+
 **Every timeout and `flushSync` in them has a reason recorded next to it, and
 none of them is verifiable outside a real device.** Change them only against
 hardware.

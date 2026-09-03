@@ -695,7 +695,11 @@ const SessionRow: React.FC<{
           <button
             type="button"
             className="absolute z-10 flex w-6 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            style={{ left: Math.max(indent - 32, 2), top: 0, bottom: 0, touchAction: 'manipulation' }}
+            // minWidth/minHeight escape the global 36px mobile touch-target
+            // floor (mobile.css): without it the button grows wider than the
+            // 24px gutter and its content centers 6px right of the plain
+            // status-marker span used by childless rows.
+            style={{ left: Math.max(indent - 32, 2), top: 0, bottom: 0, touchAction: 'manipulation', minWidth: 0, minHeight: 0 }}
             aria-label={expanded
               ? t('sessions.sidebar.session.subsessions.collapse')
               : t('sessions.sidebar.session.subsessions.expand')}
