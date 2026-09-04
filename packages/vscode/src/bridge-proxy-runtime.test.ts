@@ -1,7 +1,11 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { BridgeContext } from './bridge';
-import { handleProxyBridgeMessage } from './bridge-proxy-runtime';
+import {
+  handleProxyBridgeMessage,
+  resolveApiProxyTimeoutMs,
+  resolveProxyAbortStatus,
+} from './bridge-proxy-runtime';
 
 const deps = {
   tryHandleLocalFsProxy: async () => null,
@@ -28,6 +32,58 @@ const ctx = {
     },
   },
 } as unknown as BridgeContext;
+
+describe('VS Code API proxy timeout parity', () => {
+  test('keeps short read bounds but gives long POST requests the web deadline', () => {
+    assert.equal(resolveApiProxyTimeoutMs('GET', '/session/session-one'), 45_000);
+    assert.equal(resolveApiProxyTimeoutMs('POST', '/session/session-one/summarize'), 4 * 60 * 1000);
+    assert.equal(resolveApiProxyTimeoutMs('POST', '/session/session-one/prompt'), 4 * 60 * 1000);
+  });
+
+  test('gives provider OAuth callbacks the web interactive deadline', () => {
+    assert.equal(
+      resolveApiProxyTimeoutMs('POST', '/provider/claude-code/oauth/callback'),
+      15 * 60 * 1000,
+    );
+    assert.equal(
+      resolveApiProxyTimeoutMs('post', '/api/provider/github-copilot/oauth/callback/?method=0'),
+      15 * 60 * 1000,
+    );
+    assert.equal(
+      resolveApiProxyTimeoutMs('POST', '/mcp/github/auth/authenticate'),
+      15 * 60 * 1000,
+    );
+  });
+
+  test('keeps SSE on its dedicated bridge path', async () => {
+    const response = await handleProxyBridgeMessage(
+      { id: 'sse-generic', type: 'api:proxy', payload: { method: 'GET', path: '/global/event?directory=/repo' } },
+      ctx,
+      deps,
+    );
+
+    assert.deepEqual(response, {
+      id: 'sse-generic',
+      type: 'api:proxy',
+      success: true,
+      data: {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+        bodyText: JSON.stringify({ error: 'SSE requests must use api:sse:start' }),
+      },
+    });
+  });
+
+  test('distinguishes host timeouts from caller aborts', () => {
+    const timeout = new AbortController();
+    timeout.abort(new DOMException('Timed out', 'TimeoutError'));
+    const callerAbort = new AbortController();
+    callerAbort.abort();
+
+    assert.equal(resolveProxyAbortStatus(timeout.signal), 504);
+    assert.equal(resolveProxyAbortStatus(callerAbort.signal), 502);
+  });
+});
 
 describe('VS Code API proxy aborts', () => {
   test('aborts non-SSE api:proxy fetches by bridge request id', async () => {

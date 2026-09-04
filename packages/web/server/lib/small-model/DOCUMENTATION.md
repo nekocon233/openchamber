@@ -19,29 +19,42 @@ other runtime API.
   OpenCode process. A plugin registers its provider from the `config` hook and
   supplies the credential from its `auth` loader, so neither reaches
   `opencode.json` nor `auth.json`; `GET /provider` is the only place they
-  become visible. The module caches one snapshot (30s TTL, shared in-flight
-  request) and answers `null` — never an empty provider list — when OpenCode is
-  unreachable, so a momentary outage cannot retract providers. It is wired once
-  from `server/index.js` and reset on OpenCode restart, which reloads plugins
-  and can move their ports and keys.
+  become visible. Snapshots are cached per directory (30s TTL, one shared
+  in-flight request per directory), and `/provider` receives that directory.
+  A reset advances a generation before clearing the cache, so a request from
+  the old OpenCode process cannot write its keys or ports back afterward. Each
+  request clears only its own in-flight slot. Failed refreshes retain the last
+  snapshot for that directory; a stale pre-reset request returns `null`. The
+  module is wired once from `server/index.js` and reset on OpenCode restart.
 - `resolve.js` — model selection, mirroring OpenCode's `getSmallModel` chain:
-  0. OpenChamber's own settings override (Settings → Sessions → Small Model):
-     when `smallModelUseDefault` is `false`, `smallModelOverride`
-     (`provider/model`) outranks everything below. Sanitized in
-     `settings-helpers.js` (server), `persistence.ts` (client), and
-     `bridge-settings-runtime.ts` (VS Code).
-  1. `small_model` from the merged OpenCode config layers (`provider/model`).
-  2. Family-priority scan (`gemini-flash` → `gpt-nano` → `claude-haiku`)
-     **within the session's provider first** (`preferredProviderID`, like
-     OpenCode resolves within the current provider), then over the other
-     providers with a usable auth entry, newest `release_date` first.
-  3. GitHub Copilot hidden utility models (`gpt-*-nano/mini`) — these never
-     appear in the catalog, so they participate as the `gpt-nano` family entry
-     and as a final utility fallback.
-  4. Last resort: the session's own model (`preferredModelID`) when no small
-     model resolves anywhere — costlier, but always valid.
+   0. OpenChamber's own settings override (Settings → Sessions → Small Model):
+      when `smallModelUseDefault` is `false`, `smallModelOverride`
+      (`provider/model`) outranks everything below. This is an explicit user
+      choice, so it may name `claude-code`. Sanitized in
+      `settings-helpers.js` (server), `persistence.ts` (client), and
+      `bridge-settings-runtime.ts` (VS Code).
+   1. `small_model` from the merged OpenCode config layers (`provider/model`).
+      This is also explicit and may name `claude-code`.
+   2. Family-priority scan (`gemini-flash` → `gpt-nano` → `claude-haiku`)
+      **within the session's provider first** (`preferredProviderID`, like
+      OpenCode resolves within the current provider), then over the other
+      providers with a usable auth entry, newest `release_date` first.
+      `claude-code` is excluded from both automatic scans.
+   3. GitHub Copilot hidden utility models (`gpt-*-nano/mini`) — these never
+      appear in the catalog, so they participate as the `gpt-nano` family entry
+      and as a final utility fallback.
+   4. Last resort: the session's own model (`preferredModelID`) when no small
+      model resolves anywhere — costlier, but always valid except for
+      `claude-code`, which requires an explicit source.
+   A request-level `model` is the third explicit source. Only `settings`,
+   `config`, and `request` resolutions may use `claude-code`; a Claude Code
+   session or Haiku family match never opts in on the user's behalf.
+   When a caller supplies `preferredProviderID`, implicit resolution is
+   same-provider by default. `restrictToPreferredProvider: false` is the only
+   opt-out. Settings, config, and request models remain explicit overrides.
 - Input clamp: the prompt is measured against the resolved model's catalog
-  `limit.context` (minus an output reserve, ~4 chars/token estimate;
+  `limit.context` together with the system prompt (minus an output reserve,
+  ~4 chars/token estimate;
   conservative default when the model is not in the catalog). `onOverflow`
   decides what an oversized prompt means:
   - `truncate` (default) clips the tail and reports `inputTruncated: true`.
@@ -69,7 +82,8 @@ other runtime API.
   that want as much answer room as the resolved model allows — they cannot name
   a number before knowing which model they got. The resolved value comes back as
   `outputTokens`, which is what the caller should then request, so the reserve
-  and the request are the same number by construction.
+  and the request are the same number by construction. `describeSmallModel`
+  applies the same output-limit cap before calculating its input budget.
 - Reasoning models can spend the entire output budget thinking and return
   nothing. That case (empty content with `finish_reason: 'length'`, or content
   empty while `reasoning_content` is populated) throws with
@@ -82,7 +96,11 @@ other runtime API.
   is whether the resolved provider has a usable credential (`auth.json` or
   config `provider.<id>.options.apiKey`) — settings/config overrides can name a
   provider with none, and callers such as the walkthrough refuse before the
-  request. `structuredOutput` is tri-state: `true`/`false` from the catalog,
+  request. For `claude-code`, `hasLogin` is true only when the running OpenCode
+  reports the provider as connected with both `apiKey` and `baseURL`. Generation
+  enforces the same condition and returns a non-secret `transport` identity for
+  transport-scoped capability memory. `structuredOutput` is tri-state: `true`/`false`
+  from the catalog,
   `null` when the catalog omits the field — which it does for roughly half of
   all models, aggregators and proxies especially. Callers must treat `null` as
   "try it", not "unsupported".
@@ -119,8 +137,20 @@ other runtime API.
     the auth.json entry. `provider.<id>.options.headers` is sent with the
     request and overrides the bearer default, so gateways that authenticate on
     their own header work here exactly as they do in a chat turn. Configured API
-    keys and header values honor OpenCode's `{env:NAME}` and `{file:path}`
-    substitutions; file contents and resolved credentials remain server-side.
+    Base URLs, keys, and header values honor OpenCode's `{env:NAME}` and `{file:path}`
+    substitutions. A missing, empty, or malformed substitution throws
+    `provider-config-resolution-failed`; it never falls through to auth.json or
+    a vendor endpoint. File contents and resolved credentials remain server-side.
+  - **Claude Code** (`claude-code`): uses the OpenAI-compatible endpoint from
+    the connected runtime provider and adds
+    `x-opencode-claude-request-kind: utility`. No other provider receives that
+    header. Resolution copies one `apiKey`/`baseURL` pair from one directory
+    snapshot and uses it for the generation. This branch does not read the
+    provider config or auth.json, so those sources cannot replace the runtime
+    bearer, redirect the prompt, or override the reserved header. The local
+    plugin can then run a single-turn, no-tools utility call. Credentials stay
+    in the normal authorization header and are never returned to the client or
+    written to diagnostics.
   - The runtime credential is refused for providers listed in
     `OWN_CREDENTIAL_HANDLING`. Their branches need the stored entry rather than
     a bearer token: the clearest case is the ChatGPT-plan `openai` login, whose
@@ -140,7 +170,7 @@ other runtime API.
 
 ## Which providers the pickers may offer
 
-`listAuthenticatedProviders()` answers one question for the Small Model and
+`listAuthenticatedProviders(directory)` answers one question for the Small Model and
 Changes Walkthrough pickers alike: which providers can this module actually
 call. One rule decides it, applied the same way to every provider — **a
 credential we are allowed to use, and an endpoint to send it to.** The
@@ -175,12 +205,19 @@ left to the call. A provider whose protocol lives in a plugin's `fetch` stays
 selectable and fails when used — which is what it did before this resolution
 existed.
 
-Claude Code is refused unconditionally. A plugin can publish an
-OpenAI-compatible endpoint for it, but that endpoint is a façade over the
-Claude Agent SDK, which spawns the Claude Code CLI per request and spends the
-user's Claude subscription rate limit. Paying that for a session title or a
-summary is the wrong trade, so an available endpoint does not lift the
-refusal — the cost is the reason, not the transport.
+Claude Code appears in the pickers only when the runtime snapshot reports it as
+connected and includes both a credential and an endpoint. Its `auth.json` entry
+alone is not enough. Selecting it in Small Model or Changes Walkthrough,
+configuring it as OpenCode's `small_model`, or naming it in a request is an
+explicit opt-in. Every generation starts the Claude Code CLI through the local
+plugin and consumes the user's Claude subscription allowance.
+
+Picker visibility does not make Claude Code an automatic candidate. Session
+model and family resolution still exclude it, so a default Claude Code session
+gets the normal no-model `404` instead of silently starting the CLI. This single
+rule covers session recap and suggestion, TTS summaries, selection notes, both
+goal-objective distillation paths, goal audits, commit and pull-request text,
+and walkthrough generation.
 
 The result is served as `authenticatedProviders` on `GET /api/small-model`.
 The field name predates the runtime resolution; it now means "callable", which
@@ -210,3 +247,8 @@ module is imported on first request, not at server startup.
   of scope; they need more than a key/token (regions, resource names).
 - Responses from the codex backend are collected from the SSE stream; the
   endpoint itself is non-streaming by design (small utility calls).
+- VS Code intercepts `GET /api/small-model` and
+  `POST /api/small-model/generate` with JSON `501` and
+  `code: 'small-model-runtime-unsupported'`. Full generation parity needs an
+  extension-host owner for config, credentials, runtime `/provider` snapshots,
+  and direct provider transport; proxying these routes to OpenCode is not valid.

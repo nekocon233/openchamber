@@ -90,16 +90,24 @@ const fail = (message, statusCode, extra = {}) =>
 // and cancelling is an explicit request rather than a side effect of leaving.
 const jobs = new Map();
 
-// Providers that answered a schema request with a 4xx. Retrying the schema on
-// every generation means paying for a call we already know will fail, so the
-// refusal is remembered and the fallback goes first next time.
+// Providers that clearly rejected the schema request and then produced a valid
+// walkthrough without it. Retrying a known refusal costs an avoidable call.
 //
 // Process-lifetime only, on purpose: a provider that gains structured-output
 // support should not need a settings change to be tried again — a restart is
 // enough, and the cost of one wasted first attempt after that is small.
 const schemaRefusedBy = new Set();
 
-const modelKey = (model) => `${model.providerID}/${model.modelID}`;
+const modelKey = (model) => `${model.providerID}/${model.modelID}/${model.transport || 'unknown'}`;
+
+const SCHEMA_ERROR_PATTERN = /response[_ -]?format|json[_ -]?schema|structured output|tool[_ -]?choice|must contain[^.]*\bjson\b|\bjson\b[^.]*required/i;
+
+const refusesSchema = (error) => {
+  if (error?.code === 'structured-output-unsupported') return true;
+  const status = Number(error?.status ?? error?.statusCode);
+  return (status === 400 || status === 422)
+    && SCHEMA_ERROR_PATTERN.test(String(error?.message || ''));
+};
 
 const jobKey = (repoRoot, sourceKeyValue) => `${repoRoot}\0${sourceKeyValue}`;
 
@@ -108,8 +116,8 @@ const jobKey = (repoRoot, sourceKeyValue) => `${repoRoot}\0${sourceKeyValue}`;
  *
  * Only phases a person can actually wait on are named. Building the digest and
  * reading the cache take single-digit milliseconds; giving them their own rows
- * would imply progress where there is none. `retrying` appears only when a
- * provider rejects the schema and the prompt-side fallback runs.
+ * would imply progress where there is none. `retrying` appears only while the
+ * prompt-side fallback runs after a schema rejection or unusable schema reply.
  */
 const setStage = (repoRoot, sourceKeyValue, stage) => {
   const job = jobs.get(jobKey(repoRoot, sourceKeyValue));
@@ -171,7 +179,11 @@ const resolveModel = (directory, explicitModel) => describeSmallModel({
   overrideModel: explicitModel || readWalkthroughModelOverride(),
 });
 
-export const __testing = { generationTimeoutMs, walkthroughOutputTokens };
+export const __testing = {
+  generationTimeoutMs,
+  walkthroughOutputTokens,
+  clearSchemaRefusalMemory: () => schemaRefusedBy.clear(),
+};
 
 /**
  * Current diff for a source, parsed into files and hunks.
@@ -512,62 +524,76 @@ async function runGeneration({ directory, source, repoRoot, key, force, explicit
     return null;
   };
 
-  const refusesSchema = (error) => error?.code === 'structured-output-unsupported'
-    || (Number(error?.status) >= 400 && Number(error?.status) < 500);
-
-  let raw;
-  let usedSchema = false;
-
-  if (schemaRefusedBy.has(modelKey(model))) {
-    // Already known to refuse: skip straight to the fallback rather than pay
-    // for a call whose failure is a foregone conclusion.
+  const parseWalkthrough = (raw) => normalizeWalkthrough(parseModelJson(raw.text), idByAlias);
+  const structuredOutputFailure = (error) => fail(
+    `${modelLabel(model)} could not return the structured response a walkthrough needs`,
+    409,
+    { code: 'structured-output-unsupported', model, cause: error?.message },
+  );
+  const invalidWalkthroughFailure = (error) => fail(
+    `${modelLabel(model)} did not return a usable walkthrough — try a different small model`,
+    502,
+    { code: 'invalid-walkthrough', model, cause: error?.message },
+  );
+  const requestWithoutSchema = async () => {
     setStage(repoRoot, key, 'retrying');
     try {
-      raw = await withoutSchema();
+      return await withoutSchema();
     } catch (error) {
       throw asRequestFailure(error) ?? error;
     }
-  } else {
+  };
+
+  const refusalKey = modelKey(model);
+  let walkthrough;
+
+  if (schemaRefusedBy.has(refusalKey)) {
+    // Already known to refuse: skip straight to the fallback rather than pay
+    // for a call whose failure is a foregone conclusion.
+    const fallbackResponse = await requestWithoutSchema();
     try {
-      raw = await withSchema();
-      usedSchema = true;
+      walkthrough = parseWalkthrough(fallbackResponse);
+    } catch (error) {
+      throw structuredOutputFailure(error);
+    }
+  } else {
+    let schemaResponse;
+    try {
+      schemaResponse = await withSchema();
     } catch (error) {
       const failure = asRequestFailure(error);
       if (failure) throw failure;
       if (!refusesSchema(error)) throw error;
 
-      schemaRefusedBy.add(modelKey(model));
-      setStage(repoRoot, key, 'retrying');
+      const fallbackResponse = await requestWithoutSchema();
       try {
-        raw = await withoutSchema();
-      } catch (fallbackError) {
-        throw asRequestFailure(fallbackError) ?? fallbackError;
+        walkthrough = parseWalkthrough(fallbackResponse);
+      } catch (error) {
+        throw structuredOutputFailure(error);
+      }
+      // A transport error alone is not enough evidence to poison future
+      // schema attempts. Remember only after the fallback produced usable data.
+      schemaRefusedBy.add(refusalKey);
+    }
+
+    if (!walkthrough) {
+      try {
+        walkthrough = parseWalkthrough(schemaResponse);
+      } catch {
+        // A provider can accept the schema fields yet ignore them. Give the
+        // prompt-only shape one chance, but do not remember a stochastic parse
+        // failure as a transport capability verdict.
+        const fallbackResponse = await requestWithoutSchema();
+        try {
+          walkthrough = parseWalkthrough(fallbackResponse);
+        } catch (fallbackError) {
+          throw invalidWalkthroughFailure(fallbackError);
+        }
       }
     }
   }
 
   setStage(repoRoot, key, 'assembling');
-
-  let walkthrough;
-  try {
-    walkthrough = normalizeWalkthrough(parseModelJson(raw.text), idByAlias);
-  } catch (error) {
-    // Without schema support the model was asked for JSON in prose and did not
-    // deliver: that is a capability problem the user can fix by switching model,
-    // so it gets the picker rather than a parser error.
-    if (!usedSchema) {
-      throw fail(
-        `${modelLabel(model)} could not return the structured response a walkthrough needs`,
-        409,
-        { code: 'structured-output-unsupported', model },
-      );
-    }
-    throw fail(
-      `${modelLabel(model)} did not return a usable walkthrough — try a different small model`,
-      502,
-      { code: 'invalid-walkthrough', model, cause: error?.message },
-    );
-  }
 
   const generatedAt = new Date().toISOString();
   const entry = {

@@ -13,6 +13,7 @@ describe('walkthrough routes', () => {
   let base;
   let releaseJob;
   let job;
+  let generationRequests;
 
   let lastArgs;
 
@@ -22,6 +23,7 @@ describe('walkthrough routes', () => {
       return { walkthrough: null, hunks: [], hunkCount: 0, generating: Boolean(job) };
     },
     async generateWalkthrough(args) {
+      generationRequests += 1;
       lastArgs = args;
       if (job) return job;
       job = new Promise((resolve) => {
@@ -41,9 +43,19 @@ describe('walkthrough routes', () => {
     signal,
   });
 
+  const waitForJob = async (expectedRequests = 1) => {
+    const deadline = Date.now() + 1_000;
+    while ((!releaseJob || generationRequests < expectedRequests) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(releaseJob).toBeTypeOf('function');
+    expect(generationRequests).toBeGreaterThanOrEqual(expectedRequests);
+  };
+
   beforeEach(async () => {
     job = null;
     releaseJob = undefined;
+    generationRequests = 0;
     lastArgs = undefined;
     const app = express();
     app.use(express.json());
@@ -59,7 +71,7 @@ describe('walkthrough routes', () => {
 
   it('answers a generation request that nobody interrupted', async () => {
     const pending = generate();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForJob();
     releaseJob();
 
     const body = await (await pending).json();
@@ -70,7 +82,7 @@ describe('walkthrough routes', () => {
   it('delivers the result to a client that reconnected after a refresh', async () => {
     const controller = new AbortController();
     generate(controller.signal).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForJob();
     controller.abort();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -81,7 +93,7 @@ describe('walkthrough routes', () => {
     expect(read.generating).toBe(true);
 
     const reattached = generate();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForJob(2);
     releaseJob();
 
     const body = await (await reattached).json();

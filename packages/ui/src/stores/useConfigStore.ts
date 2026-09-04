@@ -22,6 +22,7 @@ import { markStartupTrace, measureStartupTrace } from "@/lib/startupTrace";
 import { normalizePath } from "@/lib/pathNormalization";
 import { getSyncConfig, subscribeToSyncConfigChanges } from "@/sync/sync-refs";
 import { getRuntimeKey } from "@/lib/runtime-switch";
+import { mergeModelMetadataWithLiveModel } from "@/lib/modelMetadata";
 
 const MODELS_DEV_API_URL = "https://models.dev/api.json";
 const MODELS_DEV_PROXY_URL = "/api/openchamber/models-metadata";
@@ -523,39 +524,6 @@ const buildModelMetadataKey = (providerId: string, modelId: string) => {
     }
     return `${normalizedProvider}/${modelId}`;
 };
-
-const mapModalities = (cap: { text: boolean; audio: boolean; image: boolean; video: boolean; pdf: boolean } | undefined): string[] => {
-    if (!cap) return [];
-    const result: string[] = [];
-    if (cap.text) result.push('text');
-    if (cap.audio) result.push('audio');
-    if (cap.image) result.push('image');
-    if (cap.video) result.push('video');
-    if (cap.pdf) result.push('pdf');
-    return result;
-};
-
-const deriveModelMetadata = (providerId: string, model: ProviderModel): ModelMetadata => ({
-    id: model.id,
-    providerId,
-    name: model.name,
-    tool_call: model.capabilities?.toolcall,
-    reasoning: model.capabilities?.reasoning,
-    temperature: model.capabilities?.temperature,
-    attachment: model.capabilities?.attachment,
-    modalities: model.capabilities ? {
-        input: mapModalities(model.capabilities.input),
-        output: mapModalities(model.capabilities.output),
-    } : undefined,
-    cost: model.cost ? {
-        input: model.cost.input,
-        output: model.cost.output,
-        cache_read: model.cost.cache?.read,
-        cache_write: model.cost.cache?.write,
-    } : undefined,
-    limit: model.limit,
-    release_date: model.release_date,
-});
 
 const transformModelsDevResponse = (payload: unknown): Map<string, ModelMetadata> => {
     const metadataMap = new Map<string, ModelMetadata>();
@@ -3395,22 +3363,12 @@ export const useConfigStore = create<ConfigStore>()(
                         return undefined;
                     }
                     const { modelsMetadata, providers } = get();
-                    const cached = modelsMetadata.get(key);
-                    if (cached) {
-                        return cached;
-                    }
-
-                    // Fallback: derive metadata from provider model data (covers custom providers not in models.dev)
                     const provider = providers.find((p) => p.id === providerId);
-                    if (!provider) {
-                        return undefined;
-                    }
-                    const model = provider.models.find((m) => m.id === modelId);
-                    if (!model) {
-                        return undefined;
-                    }
-
-                    return deriveModelMetadata(providerId, model);
+                    const model = provider?.models.find((entry) => entry.id === modelId);
+                    const cached = modelsMetadata.get(key);
+                    return model
+                        ? mergeModelMetadataWithLiveModel(providerId, model, cached)
+                        : cached;
                 },
                 getVisibleAgents: () => {
                     const { agents } = get();

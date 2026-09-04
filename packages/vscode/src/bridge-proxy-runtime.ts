@@ -75,6 +75,27 @@ type ProxyRuntimeDeps = {
 
 const proxyAbortControllers = new Map<string, AbortController>();
 const API_PROXY_TIMEOUT_MS = 45_000;
+const LONG_POST_TIMEOUT_MS = 4 * 60 * 1000;
+const INTERACTIVE_OAUTH_TIMEOUT_MS = 15 * 60 * 1000;
+const INTERACTIVE_OAUTH_PATH = /^\/(?:provider\/[^/]+\/oauth\/callback|mcp\/[^/]+\/auth\/authenticate)\/?$/;
+
+const proxyPathname = (requestPath: string): string => {
+  try {
+    return new URL(requestPath, 'https://openchamber.invalid').pathname.replace(/^\/api(?=\/|$)/, '') || '/';
+  } catch {
+    return requestPath.replace(/^\/api(?=\/|$)/, '');
+  }
+};
+
+export const resolveApiProxyTimeoutMs = (method: string, requestPath: string): number => {
+  if (method.toUpperCase() !== 'POST') return API_PROXY_TIMEOUT_MS;
+  return INTERACTIVE_OAUTH_PATH.test(proxyPathname(requestPath))
+    ? INTERACTIVE_OAUTH_TIMEOUT_MS
+    : LONG_POST_TIMEOUT_MS;
+};
+
+export const resolveProxyAbortStatus = (signal: AbortSignal): 502 | 504 =>
+  signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError' ? 504 : 502;
 
 // ---------------------------------------------------------------------------
 // In-flight read coalescing (parity with the web runtimeFetch coalescer)
@@ -118,11 +139,14 @@ const performApiProxyFetch = async (
       bodyBase64: Buffer.from(arrayBuffer).toString('base64'),
     };
   } catch (error) {
+    const status = signal?.aborted ? resolveProxyAbortStatus(signal) : 502;
     return {
-      status: 502,
+      status,
       headers: { 'content-type': 'application/json' },
       bodyText: JSON.stringify({
-        error: error instanceof Error ? error.message : 'Failed to reach OpenCode API',
+        error: status === 504
+          ? 'OpenCode API request timed out'
+          : error instanceof Error ? error.message : 'Failed to reach OpenCode API',
       }),
     };
   }
@@ -221,8 +245,8 @@ export async function handleProxyBridgeMessage(
           return { id, type, success: true, data };
         }
 
-        const timeoutSignal = AbortSignal.timeout(API_PROXY_TIMEOUT_MS);
-        const abortOnTimeout = () => abortController?.abort();
+        const timeoutSignal = AbortSignal.timeout(resolveApiProxyTimeoutMs(normalizedMethod, normalizedPath));
+        const abortOnTimeout = () => abortController?.abort(timeoutSignal.reason);
         timeoutSignal.addEventListener('abort', abortOnTimeout, { once: true });
         try {
           const data = await performApiProxyFetch(
@@ -274,10 +298,10 @@ export async function handleProxyBridgeMessage(
         ctx?.manager?.getOpenCodeAuthHeaders(),
         deps,
       );
-      const timeoutSignal = AbortSignal.timeout(API_PROXY_TIMEOUT_MS);
+      const timeoutSignal = AbortSignal.timeout(resolveApiProxyTimeoutMs('POST', normalizedPath));
       const abortController = new AbortController();
       proxyAbortControllers.set(id, abortController);
-      const onTimeout = () => abortController.abort();
+      const onTimeout = () => abortController.abort(timeoutSignal.reason);
       timeoutSignal.addEventListener('abort', onTimeout, { once: true });
 
       try {
@@ -309,15 +333,16 @@ export async function handleProxyBridgeMessage(
 
         return { id, type, success: true, data };
       } catch (error) {
-        const isTimeout =
-          error instanceof Error &&
-          ((error as Error & { name?: string }).name === 'TimeoutError' ||
-            (error as Error & { name?: string }).name === 'AbortError');
+        const abortStatus = abortController.signal.aborted
+          ? resolveProxyAbortStatus(abortController.signal)
+          : null;
         const body = JSON.stringify({
-          error: isTimeout ? 'OpenCode message forward timed out' : error instanceof Error ? error.message : 'OpenCode message forward failed',
+          error: abortStatus === 504
+            ? 'OpenCode message forward timed out'
+            : error instanceof Error ? error.message : 'OpenCode message forward failed',
         });
         const data: ApiProxyResponsePayload = {
-          status: isTimeout ? 504 : 503,
+          status: abortStatus ?? 503,
           headers: { 'content-type': 'application/json' },
           bodyText: body,
         };

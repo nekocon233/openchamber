@@ -22,8 +22,11 @@ const credentialError = (res, error) => res.status(400).json({
   error: error instanceof Error ? error.message : 'Credential validation failed',
 });
 
-export function registerQuotaRoutes(app, { getQuotaProviders }) {
+export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode = () => false }) {
   app.get('/api/quota/providers', async (_req, res) => {
+    if (isExternalOpenCode()) {
+      return res.json({ providers: [], availability: 'unsupported' });
+    }
     try {
       const { listConfiguredQuotaProviders } = await getQuotaProviders();
       res.json({ providers: listConfiguredQuotaProviders() });
@@ -86,6 +89,17 @@ export function registerQuotaRoutes(app, { getQuotaProviders }) {
     try {
       const { providerId } = req.params;
       if (!providerId) return res.status(400).json({ error: 'Provider ID is required' });
+      if (isExternalOpenCode()) {
+        return res.json({
+          providerId,
+          providerName: providerId,
+          ok: false,
+          configured: false,
+          usage: null,
+          fetchedAt: Date.now(),
+          availability: 'unsupported',
+        });
+      }
       const { fetchQuotaForProvider } = await getQuotaProviders();
       res.json(await fetchQuotaForProvider(providerId));
     } catch (error) {

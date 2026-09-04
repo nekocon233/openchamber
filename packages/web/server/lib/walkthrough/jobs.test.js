@@ -232,6 +232,7 @@ describe('generation stages', () => {
     });
     getDiff.mockImplementation(async (_dir, options) => (options?.staged ? '' : PATCH));
     generateSmallModelText.mockReset();
+    walkthroughTesting.clearSchemaRefusalMemory();
   });
 
   it('reports asking while the model runs and clears when the job ends', async () => {
@@ -249,13 +250,13 @@ describe('generation stages', () => {
     expect(getGenerationStage('/repo', 'working-tree:all')).toBeNull();
   });
 
-  it('reports retrying only when a provider rejects the schema', async () => {
+  it('reports retrying while a rejected schema request uses the fallback', async () => {
     let seen = [];
     let attempt = 0;
     generateSmallModelText.mockImplementation(async () => {
       attempt += 1;
       seen.push(getGenerationStage('/repo', 'working-tree:all'));
-      if (attempt === 1) throw Object.assign(new Error('bad request'), { status: 400 });
+      if (attempt === 1) throw Object.assign(new Error('response_format json_schema is unsupported'), { status: 400 });
       return { text: RESPONSE };
     });
 
@@ -265,15 +266,15 @@ describe('generation stages', () => {
   });
 });
 
-// Retrying the schema on every generation means paying for a call already known
-// to fail; the refusal has to be remembered.
-describe('schema refusal memory', () => {
+describe('schema fallback classification', () => {
   beforeEach(() => {
     fs.rmSync(path.join(TEMP_DATA_DIR, 'walkthroughs'), { recursive: true, force: true });
+    walkthroughTesting.clearSchemaRefusalMemory();
     describeSmallModel.mockResolvedValue({
-      providerID: 'opencode-go',
-      modelID: 'deepseek-v4-flash',
-      source: 'config',
+      providerID: 'test-provider',
+      modelID: 'test-model',
+      source: 'request',
+      transport: 'openai-compatible:test',
       inputCharBudget: 1_000_000,
       structuredOutput: null,
     });
@@ -281,23 +282,125 @@ describe('schema refusal memory', () => {
     generateSmallModelText.mockReset();
   });
 
-  it('stops sending a schema to a model that already rejected one', async () => {
+  it.each([401, 403, 408, 429])('does not fallback after HTTP %s', async (status) => {
+    generateSmallModelText.mockRejectedValue(Object.assign(
+      new Error('response_format json_schema is unsupported'),
+      { status },
+    ));
+
+    await expect(generateWalkthrough({ directory: '/repo', source: SOURCE })).rejects.toMatchObject({ status });
+    expect(generateSmallModelText).toHaveBeenCalledOnce();
+    expect(generateSmallModelText.mock.calls[0][0].responseSchema).toBeDefined();
+  });
+
+  it('does not fallback for an unclassified 400', async () => {
+    generateSmallModelText.mockRejectedValue(Object.assign(new Error('bad request'), { status: 400 }));
+
+    await expect(generateWalkthrough({ directory: '/repo', source: SOURCE })).rejects.toMatchObject({ status: 400 });
+    expect(generateSmallModelText).toHaveBeenCalledOnce();
+  });
+
+  it('retries once without schema when the schema response cannot be parsed', async () => {
     const sentSchema = [];
+    let attempt = 0;
     generateSmallModelText.mockImplementation(async ({ responseSchema }) => {
+      attempt += 1;
       sentSchema.push(Boolean(responseSchema));
-      if (responseSchema) throw Object.assign(new Error('bad request'), { status: 400 });
+      if (attempt === 1) return { text: 'not json' };
       return { text: RESPONSE };
     });
 
     await generateWalkthrough({ directory: '/repo', source: SOURCE });
-    expect(sentSchema).toEqual([true, false]);
-
-    // A different diff, so the cache cannot answer instead.
     getDiff.mockImplementation(async (_dir, options) => (
       options?.staged ? '' : PATCH.replace('const added = true;', 'const added = false;')
     ));
     await generateWalkthrough({ directory: '/repo', source: SOURCE });
 
-    expect(sentSchema).toEqual([true, false, false]);
+    expect(sentSchema).toEqual([true, false, true]);
+  });
+
+  it('does not remember a schema refusal when its fallback request fails', async () => {
+    const sentSchema = [];
+    let attempt = 0;
+    generateSmallModelText.mockImplementation(async ({ responseSchema }) => {
+      attempt += 1;
+      sentSchema.push(Boolean(responseSchema));
+      if (attempt === 1) {
+        throw Object.assign(new Error('json_schema is unsupported'), { status: 400 });
+      }
+      if (attempt === 2) {
+        throw Object.assign(new Error('provider unavailable'), { status: 503 });
+      }
+      return { text: RESPONSE };
+    });
+
+    await expect(generateWalkthrough({ directory: '/repo', source: SOURCE })).rejects.toMatchObject({ status: 503 });
+    await generateWalkthrough({ directory: '/repo', source: SOURCE });
+
+    expect(sentSchema).toEqual([true, false, true]);
+  });
+});
+
+// Retrying the schema on every generation means paying for a call already known
+// to fail; the refusal has to be remembered.
+describe('schema refusal memory', () => {
+  beforeEach(() => {
+    fs.rmSync(path.join(TEMP_DATA_DIR, 'walkthroughs'), { recursive: true, force: true });
+    describeSmallModel.mockResolvedValue({
+      providerID: 'claude-code',
+      modelID: 'haiku',
+      source: 'request',
+      transport: 'claude-code-runtime:a',
+      inputCharBudget: 1_000_000,
+      structuredOutput: null,
+    });
+    getDiff.mockImplementation(async (_dir, options) => (options?.staged ? '' : PATCH));
+    generateSmallModelText.mockReset();
+    walkthroughTesting.clearSchemaRefusalMemory();
+  });
+
+  it('keeps an explicit Claude Code model while remembering its schema fallback', async () => {
+    const sentSchema = [];
+    generateSmallModelText.mockImplementation(async ({ model, responseSchema }) => {
+      sentSchema.push({ model, schema: Boolean(responseSchema) });
+      if (responseSchema) throw Object.assign(new Error('structured-output unsupported'), { code: 'structured-output-unsupported' });
+      return { text: RESPONSE };
+    });
+
+    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'claude-code/haiku' });
+    expect(sentSchema).toEqual([
+      { model: 'claude-code/haiku', schema: true },
+      { model: 'claude-code/haiku', schema: false },
+    ]);
+
+    // A different diff, so the cache cannot answer instead.
+    getDiff.mockImplementation(async (_dir, options) => (
+      options?.staged ? '' : PATCH.replace('const added = true;', 'const added = false;')
+    ));
+    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'claude-code/haiku' });
+
+    expect(sentSchema).toEqual([
+      { model: 'claude-code/haiku', schema: true },
+      { model: 'claude-code/haiku', schema: false },
+      { model: 'claude-code/haiku', schema: false },
+    ]);
+
+    describeSmallModel.mockResolvedValue({
+      providerID: 'claude-code',
+      modelID: 'haiku',
+      source: 'request',
+      transport: 'claude-code-runtime:b',
+      inputCharBudget: 1_000_000,
+      structuredOutput: null,
+    });
+    getDiff.mockImplementation(async (_dir, options) => (
+      options?.staged ? '' : PATCH.replace('const added = true;', 'const added = null;')
+    ));
+    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'claude-code/haiku' });
+
+    expect(sentSchema.slice(-2)).toEqual([
+      { model: 'claude-code/haiku', schema: true },
+      { model: 'claude-code/haiku', schema: false },
+    ]);
   });
 });

@@ -45,16 +45,16 @@ export const getClaudeCliAuthStatus = ({
       if (resolved) result = readStatus(spawnSyncFn, resolved, childEnv);
     }
     const output = `${result.stdout || ''}`.trim();
-    if (!output) return { connected: false, reason: 'empty-status' };
+    if (!output) return { status: 'unavailable', connected: false, reason: 'empty-status' };
     const payload = JSON.parse(output);
-    return {
-      connected: payload?.loggedIn === true,
-      reason: payload?.loggedIn === true ? 'logged-in' : 'logged-out',
-    };
-  } catch (error) {
-    return {
-      connected: false,
-      reason: error instanceof Error ? error.message : String(error),
-    };
+    if (payload?.loggedIn === true) {
+      return { status: 'connected', connected: true, reason: 'logged-in' };
+    }
+    if (payload?.loggedIn === false) {
+      return { status: 'disconnected', connected: false, reason: 'logged-out' };
+    }
+    return { status: 'unavailable', connected: false, reason: 'invalid-status' };
+  } catch {
+    return { status: 'unavailable', connected: false, reason: 'invalid-status' };
   }
 };

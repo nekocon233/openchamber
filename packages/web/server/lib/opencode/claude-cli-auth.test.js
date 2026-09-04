@@ -16,7 +16,7 @@ describe('getClaudeCliAuthStatus', () => {
       },
     });
 
-    expect(status).toEqual({ connected: true, reason: 'logged-in' });
+    expect(status).toEqual({ status: 'connected', connected: true, reason: 'logged-in' });
     expect(invocation.command).toBe('claude');
     expect(invocation.args).toEqual(['auth', 'status', '--json']);
     expect(invocation.options.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
@@ -27,7 +27,7 @@ describe('getClaudeCliAuthStatus', () => {
       spawnSyncFn: () => ({ stdout: JSON.stringify({ loggedIn: false }) }),
     });
 
-    expect(status).toEqual({ connected: false, reason: 'logged-out' });
+    expect(status).toEqual({ status: 'disconnected', connected: false, reason: 'logged-out' });
   });
 
   test('finds Claude through a login shell when a desktop PATH cannot', () => {
@@ -43,12 +43,29 @@ describe('getClaudeCliAuthStatus', () => {
       },
     });
 
-    expect(status).toEqual({ connected: true, reason: 'logged-in' });
+    expect(status).toEqual({ status: 'connected', connected: true, reason: 'logged-in' });
     expect(invocations.map(({ command }) => command)).toEqual([
       'claude',
       '/bin/zsh',
       '/Users/test/.local/bin/claude',
     ]);
     expect(invocations[1].args).toEqual(['-lic', 'command -v claude']);
+  });
+
+  test('treats a timed out CLI probe as unavailable', () => {
+    const status = getClaudeCliAuthStatus({
+      platform: 'win32',
+      spawnSyncFn: () => ({ stdout: '', error: new Error('ETIMEDOUT') }),
+    });
+
+    expect(status).toEqual({ status: 'unavailable', connected: false, reason: 'empty-status' });
+  });
+
+  test('treats invalid JSON as unavailable instead of logged out', () => {
+    const status = getClaudeCliAuthStatus({
+      spawnSyncFn: () => ({ stdout: '{invalid' }),
+    });
+
+    expect(status).toEqual({ status: 'unavailable', connected: false, reason: 'invalid-status' });
   });
 });

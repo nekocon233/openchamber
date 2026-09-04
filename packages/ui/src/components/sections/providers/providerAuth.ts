@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export interface AuthMethod {
   type?: string;
   name?: string;
@@ -62,6 +64,7 @@ export const requiresOpenCodeRestartAfterOAuth = (providerId: string): boolean =
   providerId !== 'claude-code';
 
 export interface ProviderCredentialInput {
+  providerId?: string;
   /** Present when OpenCode reports an active credential (api/env/oauth). */
   key?: string | null;
   /** OpenChamber auth.json provenance for this provider. */
@@ -83,12 +86,57 @@ export interface ProviderCredentialInput {
   envDeclared?: boolean;
 }
 
+export type ProviderAuthSourceSnapshot = {
+  exists: boolean;
+  status?: 'connected' | 'disconnected' | 'unavailable';
+  canDisconnect?: boolean;
+  path?: string | null;
+};
+
+const providerSourceInfoSchema = z.object({
+  exists: z.boolean(),
+  path: z.string().nullable().optional(),
+});
+
+const providerSourcesSchema = z.object({
+  auth: providerSourceInfoSchema.extend({
+    status: z.enum(['connected', 'disconnected', 'unavailable']).optional(),
+    canDisconnect: z.boolean().optional(),
+  }),
+  user: providerSourceInfoSchema,
+  project: providerSourceInfoSchema,
+  custom: providerSourceInfoSchema.optional(),
+});
+
+export type ProviderSourcesSnapshot = z.infer<typeof providerSourcesSchema>;
+type ProviderSourcesInput = Parameters<typeof providerSourcesSchema.safeParse>[0];
+
+export const parseProviderSourcesSnapshot = (
+  value: ProviderSourcesInput,
+): ProviderSourcesSnapshot | null => {
+  const parsed = providerSourcesSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+};
+
+export type ProviderSourceLoadStatus = 'loading' | 'loaded' | 'failed';
+
+type ProviderAuthenticationState =
+  | { status: 'loading'; hasCredentials: false; canDisconnect: false }
+  | { status: 'connected'; hasCredentials: true; canDisconnect: boolean }
+  | { status: 'disconnected'; hasCredentials: false; canDisconnect: boolean }
+  | { status: 'unavailable'; hasCredentials: false; canDisconnect: false };
+
 /**
  * Prefer authoritative credential signals. Declared env vars are the weakest of
  * them — the array holds variable *names*, not values — but for providers whose
  * credentials span several env vars it is the only signal OpenCode exposes.
  */
 export const providerHasCredentials = (input: ProviderCredentialInput): boolean => {
+  // The Claude Code plugin uses a fixed proxy key, while the Claude CLI owns
+  // the real login. The provider source endpoint resolves that CLI state.
+  if (input.providerId === 'claude-code') {
+    return input.authSourceExists === true;
+  }
   if (typeof input.key === 'string' && input.key.trim().length > 0) {
     return true;
   }
@@ -100,6 +148,46 @@ export const providerHasCredentials = (input: ProviderCredentialInput): boolean 
   }
   return input.authSourceExists === true;
 };
+
+export const canDisconnectProvider = (providerId: string, runtimeOwnsMutation: boolean): boolean =>
+  providerId !== 'claude-code' && runtimeOwnsMutation;
+
+export const resolveProviderAuthenticationState = (input: {
+  providerId: string;
+  sourceLoadStatus: ProviderSourceLoadStatus;
+  authSource?: ProviderAuthSourceSnapshot;
+  credentials: ProviderCredentialInput;
+}): ProviderAuthenticationState => {
+  if (input.sourceLoadStatus === 'loading') {
+    return { status: 'loading', hasCredentials: false, canDisconnect: false };
+  }
+  if (
+    input.sourceLoadStatus === 'failed'
+    || !input.authSource
+    || input.authSource.status === 'unavailable'
+  ) {
+    return { status: 'unavailable', hasCredentials: false, canDisconnect: false };
+  }
+
+  const hasCredentials = providerHasCredentials({
+    ...input.credentials,
+    providerId: input.providerId,
+    authSourceExists: input.authSource?.status === 'connected' || input.authSource?.exists === true,
+  });
+  const canDisconnect = canDisconnectProvider(
+    input.providerId,
+    input.authSource?.canDisconnect === true,
+  );
+  if (hasCredentials) {
+    return { status: 'connected', hasCredentials: true, canDisconnect };
+  }
+  return { status: 'disconnected', hasCredentials: false, canDisconnect };
+};
+
+type ProviderDisconnectResult = { success?: boolean; removed?: boolean } | null | undefined;
+
+export const providerAuthWasRemoved = (payload: ProviderDisconnectResult): boolean =>
+  payload?.removed === true;
 
 export const shouldShowModelsSection = (input: {
   modelCount: number;

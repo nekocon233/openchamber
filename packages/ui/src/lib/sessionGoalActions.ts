@@ -85,11 +85,11 @@ export interface SetSessionGoalInput {
 // acceptance criteria (bottom), sacrificing the middle.
 const TRIM_MARKER = '\n\n[… objective trimmed for the auditor — the full text was delivered in the chat message …]\n\n';
 
-const fitObjective = async (raw: string): Promise<string> => {
+const fitObjective = async (raw: string, directory?: string): Promise<string> => {
   if (raw.length <= SESSION_GOAL_OBJECTIVE_CHAR_LIMIT) {
     return raw;
   }
-  const distilled = await distillGoalObjective(raw);
+  const distilled = await distillGoalObjective(raw, directory);
   if (distilled) {
     return distilled.slice(0, SESSION_GOAL_OBJECTIVE_CHAR_LIMIT);
   }
@@ -109,7 +109,7 @@ export async function setSessionGoal(
   if (!rawObjective) {
     throw new Error('Goal objective must not be empty');
   }
-  const objective = await fitObjective(rawObjective);
+  const objective = await fitObjective(rawObjective, directory);
   const tokenBudget = typeof input.tokenBudget === 'number' && Number.isFinite(input.tokenBudget) && input.tokenBudget > 0
     ? Math.floor(input.tokenBudget)
     : null;

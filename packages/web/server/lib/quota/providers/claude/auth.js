@@ -14,7 +14,7 @@
  * @module quota/providers/claude/auth
  */
 
-import { execFileSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 
@@ -56,23 +56,20 @@ const parseClaudeCodeBlob = (blob, source) => {
 };
 
 const readKeychainCredential = () => {
-  if (process.platform !== 'darwin') return null;
-  let raw;
+  if (process.platform !== 'darwin') return { status: 'missing' };
   try {
-    raw = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'], {
+    const result = spawnSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'], {
       encoding: 'utf8',
       timeout: 10_000,
       stdio: ['ignore', 'pipe', 'ignore']
     });
+    if (result.error) return { status: 'unavailable' };
+    if (result.status === 44) return { status: 'missing' };
+    if (result.status !== 0 || !result.stdout?.trim()) return { status: 'unavailable' };
+    const credential = parseClaudeCodeBlob(JSON.parse(result.stdout.trim()), 'keychain');
+    return credential ? { status: 'found', credential } : { status: 'unavailable' };
   } catch {
-    // No entry, or the user denied Keychain access. Both mean "try the next source".
-    return null;
-  }
-  try {
-    return parseClaudeCodeBlob(JSON.parse(raw.trim()), 'keychain');
-  } catch {
-    console.warn('Claude quota: Keychain credentials are not valid JSON');
-    return null;
+    return { status: 'unavailable' };
   }
 };
 
@@ -106,8 +103,11 @@ const readEnvCredential = () => {
  *
  * @returns {ClaudeCredential|null}
  */
-export const loadClaudeCredential = () =>
-  readKeychainCredential()
-  ?? readCredentialsFile()
-  ?? readOpenCodeCredential()
-  ?? readEnvCredential();
+export const loadClaudeCredential = () => {
+  const keychain = readKeychainCredential();
+  if (keychain.status === 'found') return keychain.credential;
+  const fileCredential = process.platform !== 'darwin' || keychain.status === 'missing'
+    ? readCredentialsFile()
+    : null;
+  return fileCredential ?? readOpenCodeCredential() ?? readEnvCredential();
+};

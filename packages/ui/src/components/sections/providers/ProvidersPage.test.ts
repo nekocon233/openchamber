@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { requiresProviderAuth, shouldLoadAvailableProviders } from './providerAvailability';
 import {
+  canDisconnectProvider,
   getOAuthAuthMethods,
   normalizeAuthType,
   parseAuthPayload,
-requiresOpenCodeRestartAfterOAuth,
+  parseProviderSourcesSnapshot,
+  providerAuthWasRemoved,
+  requiresOpenCodeRestartAfterOAuth,
+  resolveProviderAuthenticationState,
   providerHasCredentials,
   shouldAutoOpenAuthPanel,
   shouldShowApiKeyAuth,
@@ -76,6 +80,22 @@ describe('provider auth method helpers', () => {
   });
 });
 
+describe('provider source payload', () => {
+  test('rejects missing and invalid auth authority', () => {
+    expect(parseProviderSourcesSnapshot(null)).toBeNull();
+    expect(parseProviderSourcesSnapshot({
+      auth: { exists: false, status: 'maybe' },
+      user: { exists: false },
+      project: { exists: false },
+    })).toBeNull();
+    expect(parseProviderSourcesSnapshot({
+      auth: { exists: false, status: 'unavailable', canDisconnect: false },
+      user: { exists: false },
+      project: { exists: false },
+    })?.auth.status).toBe('unavailable');
+  });
+});
+
 describe('provider credential state helpers', () => {
   test('providerHasCredentials requires key, options.apiKey, declared env, or auth source', () => {
     // Built-in catalog entry with no credential signal at all.
@@ -104,6 +124,83 @@ describe('provider credential state helpers', () => {
     expect(providerHasCredentials({ key: undefined, authSourceExists: false, optionsApiKey: '' })).toBe(false);
     expect(providerHasCredentials({ key: undefined, authSourceExists: false, optionsApiKey: '   ' })).toBe(false);
     expect(providerHasCredentials({ key: undefined, authSourceExists: false, optionsApiKey: null })).toBe(false);
+  });
+
+  test('Claude Code trusts CLI-backed auth source state instead of its proxy key', () => {
+    const disconnected = providerHasCredentials({
+      providerId: 'claude-code',
+      key: 'claude-code-proxy',
+      optionsApiKey: 'claude-code-proxy',
+      envDeclared: true,
+      authSourceExists: false,
+    });
+
+    expect(disconnected).toBe(false);
+    expect(shouldAutoOpenAuthPanel({
+      sourcesLoaded: true,
+      hasCredentials: disconnected,
+      userDismissed: false,
+    })).toBe(true);
+    expect(providerHasCredentials({
+      providerId: 'claude-code',
+      optionsApiKey: 'claude-code-proxy',
+      authSourceExists: true,
+    })).toBe(true);
+  });
+
+  test('Claude Code has no local disconnect action and success requires a removed credential', () => {
+    expect(canDisconnectProvider('claude-code', true)).toBe(false);
+    expect(canDisconnectProvider('github-copilot', true)).toBe(true);
+    expect(canDisconnectProvider('github-copilot', false)).toBe(false);
+    expect(providerAuthWasRemoved({ success: true, removed: true })).toBe(true);
+    expect(providerAuthWasRemoved({ success: true, removed: false })).toBe(false);
+    expect(providerAuthWasRemoved(null)).toBe(false);
+  });
+
+  test('keeps loading and failed source requests distinct from logged out', () => {
+    const credentials = { optionsApiKey: 'claude-code-proxy' };
+    expect(resolveProviderAuthenticationState({
+      providerId: 'claude-code',
+      sourceLoadStatus: 'loading',
+      credentials,
+    })).toEqual({ status: 'loading', hasCredentials: false, canDisconnect: false });
+    expect(resolveProviderAuthenticationState({
+      providerId: 'claude-code',
+      sourceLoadStatus: 'failed',
+      credentials,
+    })).toEqual({ status: 'unavailable', hasCredentials: false, canDisconnect: false });
+    expect(resolveProviderAuthenticationState({
+      providerId: 'claude-code',
+      sourceLoadStatus: 'loaded',
+      credentials,
+    })).toEqual({ status: 'unavailable', hasCredentials: false, canDisconnect: false });
+    expect(resolveProviderAuthenticationState({
+      providerId: 'claude-code',
+      sourceLoadStatus: 'loaded',
+      authSource: { exists: false, status: 'unavailable', canDisconnect: false },
+      credentials,
+    })).toEqual({ status: 'unavailable', hasCredentials: false, canDisconnect: false });
+  });
+
+  test('uses the authoritative source capability for connected and disconnect state', () => {
+    expect(resolveProviderAuthenticationState({
+      providerId: 'claude-code',
+      sourceLoadStatus: 'loaded',
+      authSource: { exists: true, status: 'connected', canDisconnect: false },
+      credentials: { optionsApiKey: 'claude-code-proxy' },
+    })).toEqual({ status: 'connected', hasCredentials: true, canDisconnect: false });
+    expect(resolveProviderAuthenticationState({
+      providerId: 'github-copilot',
+      sourceLoadStatus: 'loaded',
+      authSource: { exists: true, status: 'connected', canDisconnect: true },
+      credentials: {},
+    })).toEqual({ status: 'connected', hasCredentials: true, canDisconnect: true });
+    expect(resolveProviderAuthenticationState({
+      providerId: 'bedrock',
+      sourceLoadStatus: 'loaded',
+      authSource: { exists: false, status: 'disconnected', canDisconnect: false },
+      credentials: { envDeclared: true },
+    })).toEqual({ status: 'connected', hasCredentials: true, canDisconnect: false });
   });
 
   test('env-less OAuth-only provider without credentials opens panel and hides models', () => {

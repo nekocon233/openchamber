@@ -2109,6 +2109,7 @@ async function main(options = {}) {
     permissionAutoAcceptRuntime,
     sidebarStateRuntime,
     followUpQueueRuntime,
+    isExternalOpenCode: () => ENV_SKIP_OPENCODE_START || openCodeLifecycleState.isExternalOpenCode === true,
     isTunnelManagementAllowed: (req) => tunnelAuthController.isLocalManagementRequest(req),
   });
 

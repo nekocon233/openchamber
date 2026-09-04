@@ -46,6 +46,8 @@ export interface ProviderResult {
   ok: boolean;
   configured: boolean;
   error?: string;
+  /** Whether the active runtime owns enough credential state to answer. */
+  availability?: 'available' | 'unsupported';
   /** Subscription tier reported by the provider, when it exposes one. */
   planLabel?: string | null;
   usage: ProviderUsage | null;

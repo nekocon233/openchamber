@@ -416,7 +416,7 @@ export const registerOpenCodeProxy = (app, deps) => {
   // it cannot share the ordinary request deadline. Bounded by the shortest
   // upstream expiry we know of — GitHub device codes last ~15 minutes.
   const INTERACTIVE_OAUTH_TIMEOUT_MS = 15 * 60 * 1000;
-  const INTERACTIVE_OAUTH_PATH = /^\/provider\/[^/]+\/oauth\/callback\/?$/;
+  const INTERACTIVE_OAUTH_PATH = /^\/(?:provider\/[^/]+\/oauth\/callback|mcp\/[^/]+\/auth\/authenticate)\/?$/;
 
   const isInteractiveOAuthCallback = (req) =>
     req.method === 'POST' && INTERACTIVE_OAUTH_PATH.test(req.path);

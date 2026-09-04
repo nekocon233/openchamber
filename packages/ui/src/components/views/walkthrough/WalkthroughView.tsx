@@ -394,13 +394,14 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
   const activeModelId = activeModelParts.join('/');
 
   useEffect(() => {
-    if (modelProviders !== undefined) return;
     let cancelled = false;
+    setModelProviders(undefined);
     (async () => {
       try {
         const response = await runtimeFetch('/api/small-model', {
           method: 'GET',
           headers: { Accept: 'application/json' },
+          query: { directory },
         });
         if (!response.ok) return;
         const payload = (await response.json().catch(() => null)) as { authenticatedProviders?: unknown } | null;
@@ -408,14 +409,13 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
           setModelProviders(payload.authenticatedProviders.filter((id): id is string => typeof id === 'string'));
         }
       } catch {
-        // Leave undefined: the picker then offers every provider, which is
-        // worse but not broken.
+        // Leave undefined so a failed directory-scoped lookup offers nothing.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [modelProviders]);
+  }, [directory]);
 
   const isStructuredOutputCapable = useCallback(
     (providerId: string, modelId: string) =>
@@ -816,6 +816,7 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
       <div className={cn('flex min-h-0 flex-1', showToc ? 'flex-row' : 'flex-col')}>
         {blockedReason ? (
           <WalkthroughBlocker
+            directory={directory}
             reason={blockedReason}
             model={blockedModel}
             requiredChars={blockedRequiredChars}

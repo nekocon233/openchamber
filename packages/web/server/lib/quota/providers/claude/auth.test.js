@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const execFileSync = vi.fn();
+const spawnSync = vi.fn();
 const files = new Map();
 const openCodeAuth = vi.fn(() => ({}));
 
-vi.mock('child_process', () => ({ execFileSync: (...args) => execFileSync(...args) }));
+vi.mock('child_process', () => ({ spawnSync: (...args) => spawnSync(...args) }));
 
 vi.mock('fs', () => {
   const fs = {
@@ -43,8 +43,8 @@ const withPlatform = (platform, run) => {
 
 beforeEach(() => {
   files.clear();
-  execFileSync.mockReset();
-  execFileSync.mockImplementation(() => { throw new Error('no keychain entry'); });
+  spawnSync.mockReset();
+  spawnSync.mockReturnValue({ status: 44, stdout: '' });
   openCodeAuth.mockReturnValue({});
   delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -57,7 +57,7 @@ afterEach(() => {
 
 describe('Claude credential discovery', () => {
   it('prefers the macOS Keychain over a stale credentials file', () => {
-    execFileSync.mockReturnValue(claudeCodeBlob('keychain-token'));
+    spawnSync.mockReturnValue({ status: 0, stdout: claudeCodeBlob('keychain-token') });
     files.set(`${process.env.HOME}/.claude/.credentials.json`, claudeCodeBlob('file-token'));
 
     const credential = withPlatform('darwin', loadClaudeCredential);
@@ -73,7 +73,7 @@ describe('Claude credential discovery', () => {
 
     const credential = withPlatform('linux', loadClaudeCredential);
 
-    expect(execFileSync).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
     expect(credential.accessToken).toBe('file-token');
     expect(credential.source).toBe('credentials-file');
   });
@@ -106,12 +106,23 @@ describe('Claude credential discovery', () => {
   });
 
   it('ignores a Keychain blob that only holds unrelated MCP tokens', () => {
-    execFileSync.mockReturnValue(JSON.stringify({ mcpOAuth: { 'linear|abc': { accessToken: 'unrelated' } } }));
+    spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify({ mcpOAuth: { 'linear|abc': { accessToken: 'unrelated' } } }) });
 
     expect(withPlatform('darwin', loadClaudeCredential)).toBeNull();
   });
 
   it('returns null when every source is empty', () => {
     expect(withPlatform('darwin', loadClaudeCredential)).toBeNull();
+  });
+
+  it('uses the legacy file only when the Keychain item is missing', () => {
+    files.set(`${process.env.HOME}/.claude/.credentials.json`, claudeCodeBlob('file-token'));
+
+    const missing = withPlatform('darwin', loadClaudeCredential);
+    spawnSync.mockReturnValue({ status: 36, stdout: '' });
+    const unavailable = withPlatform('darwin', loadClaudeCredential);
+
+    expect(missing.accessToken).toBe('file-token');
+    expect(unavailable).toBeNull();
   });
 });

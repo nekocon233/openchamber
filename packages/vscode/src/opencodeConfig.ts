@@ -2170,7 +2170,16 @@ export const updateCommand = (commandName: string, updates: Record<string, unkno
   }
 };
 
-export const getProviderSources = (providerId: string, workingDirectory?: string) => {
+type ProviderAuthSourceStatus = 'connected' | 'disconnected' | 'unavailable';
+
+type ProviderSources = {
+  auth: { exists: boolean; status: ProviderAuthSourceStatus; canDisconnect: boolean };
+  user: { exists: boolean; path: string };
+  project: { exists: boolean; path: string | null };
+  custom: { exists: boolean; path: string | null };
+};
+
+export const getProviderSources = (providerId: string, workingDirectory?: string): ProviderSources => {
   const layers = readConfigLayers(workingDirectory);
   const customProviders = isPlainObject((layers.customConfig as Record<string, unknown>)?.provider)
     ? (layers.customConfig as Record<string, unknown>).provider as Record<string, unknown>
@@ -2199,7 +2208,7 @@ export const getProviderSources = (providerId: string, workingDirectory?: string
     || Object.prototype.hasOwnProperty.call(userProvidersAlias, providerId);
 
   return {
-    auth: { exists: false },
+    auth: { exists: false, status: 'unavailable', canDisconnect: false },
     user: { exists: userExists, path: layers.paths.userPath },
     project: { exists: projectExists, path: layers.paths.projectPath ?? null },
     custom: { exists: customExists, path: layers.paths.customPath },

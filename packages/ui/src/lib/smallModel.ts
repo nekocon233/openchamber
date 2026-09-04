@@ -1,5 +1,6 @@
 import { requestSmallModel } from '@/lib/smallModelRequest';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { getSessionLastAssistantModel } from '@/sync/session-actions';
 
 // Selections shorter than this are already note-sized — summarizing them
@@ -32,6 +33,7 @@ export async function summarizeSelectionForNotes(text: string, sessionId?: strin
     // that conversation. The composer picker only serves as a fallback.
     const sessionModel = sessionId ? getSessionLastAssistantModel(sessionId) : null;
     const { currentProviderId, currentModelId } = useConfigStore.getState();
+    const directory = useDirectoryStore.getState().currentDirectory || undefined;
     const preferredProviderID = sessionModel?.providerID || currentProviderId || '';
     const preferredModelID = sessionModel?.modelID || currentModelId || '';
     const response = await requestSmallModel({
@@ -40,6 +42,7 @@ export async function summarizeSelectionForNotes(text: string, sessionId?: strin
       body: JSON.stringify({
         prompt: trimmed,
         system: NOTES_SYSTEM_PROMPT,
+        directory,
         restrictToPreferredProvider: true,
         ...(preferredProviderID ? { preferredProviderID } : {}),
         ...(preferredModelID ? { preferredModelID } : {}),
@@ -74,7 +77,7 @@ const GOAL_OBJECTIVE_SYSTEM_PROMPT = [
  * via the small model. Returns null on any failure — callers fall back to a
  * head+tail excerpt.
  */
-export async function distillGoalObjective(planContent: string): Promise<string | null> {
+export async function distillGoalObjective(planContent: string, directory?: string): Promise<string | null> {
   try {
     const { currentProviderId, currentModelId } = useConfigStore.getState();
     const response = await requestSmallModel({
@@ -83,6 +86,7 @@ export async function distillGoalObjective(planContent: string): Promise<string 
       body: JSON.stringify({
         prompt: planContent,
         system: GOAL_OBJECTIVE_SYSTEM_PROMPT,
+        directory,
         restrictToPreferredProvider: true,
         ...(currentProviderId ? { preferredProviderID: currentProviderId } : {}),
         ...(currentModelId ? { preferredModelID: currentModelId } : {}),

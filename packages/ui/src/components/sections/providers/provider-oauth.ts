@@ -29,6 +29,14 @@ export interface OAuthAuthorization {
   userCode?: string;
 }
 
+export type OAuthRuntimeContext = { runtimeKey: string; generation: number };
+
+export const isOAuthRuntimeContextCurrent = (
+  captured: OAuthRuntimeContext,
+  runtimeKey: string,
+  generation: number,
+): boolean => captured.runtimeKey === runtimeKey && captured.generation === generation;
+
 export const shouldOpenAuthorizationUrl = (providerId: string, url?: string): boolean =>
   Boolean(url) && providerId !== 'claude-code';
 
@@ -78,11 +86,13 @@ const parsePromptOptions = (value: unknown): AuthPromptOption[] => {
     if (optionValue === undefined) {
       continue;
     }
-    options.push({
+    const hint = asText(entry.hint);
+    const option: AuthPromptOption = {
       value: optionValue,
       label: asText(entry.label) ?? optionValue,
-      ...(asText(entry.hint) ? { hint: asText(entry.hint)! } : {}),
-    });
+    };
+    if (hint) option.hint = hint;
+    options.push(option);
   }
   return options;
 };
@@ -121,14 +131,16 @@ export const parseAuthPrompts = (value: unknown): AuthPrompt[] => {
       continue;
     }
     const when = parsePromptCondition(entry.when);
-    prompts.push({
+    const placeholder = asText(entry.placeholder);
+    const prompt: AuthPrompt = {
       type,
       key,
       message: asText(entry.message) ?? key,
       options,
-      ...(asText(entry.placeholder) ? { placeholder: asText(entry.placeholder)! } : {}),
-      ...(when ? { when } : {}),
-    });
+    };
+    if (placeholder) prompt.placeholder = placeholder;
+    if (when) prompt.when = when;
+    prompts.push(prompt);
   }
   return prompts;
 };

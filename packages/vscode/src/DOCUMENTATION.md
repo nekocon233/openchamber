@@ -56,8 +56,12 @@ The webview build emits each worker as one self-contained file. VS Code webviews
 - `bridge-proxy-runtime.ts`
   - Proxy route handlers (`api:proxy`, `api:session:message`) with injected helper dependencies.
   - Generic non-coalesced requests register abort ownership before readiness
-    waiting, receive a bounded host timeout, and let host OpenCode auth replace
-    any case-variant browser authorization header.
+    waiting and let host OpenCode auth replace any case-variant browser
+    authorization header. Reads use a 45-second host timeout, ordinary POSTs
+    match the web proxy's 4-minute deadline, and interactive provider/MCP OAuth
+    requests use its 15-minute deadline.
+  - Host timeout aborts return `504`; caller/runtime aborts remain distinct and
+    do not masquerade as timeout failures.
   - SSE routes are intentionally excluded from the generic proxy and use `sseProxy.ts`, whose upstream-only stall watchdog closes a quiet OpenCode stream so the webview can reconnect instead of trusting an open but silent response.
   - The webview allocates each SSE stream ID and installs its listener before requesting the upstream stream, so immediate OpenCode replay events cannot race the bridge start response.
 
@@ -74,7 +78,22 @@ The webview build emits each worker as one self-contained file. VS Code webviews
   - Includes session activity snapshot bridge handler used by webview parity routes (`/api/session-activity`).
   - Includes Zen utility model parity handler used by shared notification settings (`/api/zen/models`).
   - Owns managed OpenCode upgrade status and mutation handlers, including capability reporting, upgrade serialization, and process restart after a successful upgrade.
-  - Provider handlers cover source lookup, disconnect (`DELETE /api/provider/:id/auth`), and custom provider upsert (`PUT /api/provider`; create/update OpenAI-compatible config with explicit `scope` for user/project/custom layers; requires `env` or stored auth; secrets via OpenCode auth API).
+  - Provider handlers cover source lookup, disconnect (`DELETE /api/provider/:id/auth`), and custom provider upsert (`PUT /api/provider`; create/update OpenAI-compatible config with explicit `scope` for user/project/custom layers; requires `env` or stored auth; secrets via OpenCode auth API). Source responses expose `connected`, `disconnected`, or `unavailable` plus mutation ownership. External OpenCode runtimes never read or mutate extension-host provider credentials.
+
+- `claudeAuth.ts`
+  - Reads Claude authentication without mutating or refreshing credentials.
+  - Managed-runtime Provider status comes from an asynchronous, concurrent-call
+    coalesced `claude auth status --json` probe. It uses the same executable and
+    Windows shim rules as managed OpenCode launch. Missing, malformed, and
+    timed-out probes remain unavailable rather than becoming logged out.
+  - Quota credentials resolve in order from macOS Keychain,
+    `~/.claude/.credentials.json`, OpenCode auth, then
+    `CLAUDE_CODE_OAUTH_TOKEN`. A missing Keychain item permits the legacy file
+    fallback; an inaccessible or malformed Keychain entry does not.
+
+- `process-launch.ts`
+  - Owns shared executable lookup and Windows `.cmd`/`.bat` launch shaping for
+    managed OpenCode and Claude CLI probes.
 
 - `opencode-upgrade-runtime.ts`
   - Owns managed-versus-external capability decisions, latest-version checks, serialized OpenCode self-upgrades, and restart-after-upgrade behavior.
@@ -84,6 +103,13 @@ The webview build emits each worker as one self-contained file. VS Code webviews
   - Serializes reads and read-modify-write updates, persists a monotonic policy revision, and broadcasts the exact committed snapshot with `defaultEnabled: true` to every active OpenChamber webview. Explicit session values override that default. Permission replies remain foreground UI-owned because VS Code does not run the OpenChamber server runtime.
 
 Composer drafts use runtime-scoped device-local storage and have no RuntimeAPI. The VS Code webview reports the OpenChamber host queue API as unsupported, so shared UI keeps queued follow-ups in its runtime-scoped local fallback; `steer` remains immediate official OpenCode delivery through the generic SDK proxy.
+
+The webview also handles `/api/small-model` and `/api/small-model/generate`
+locally with a stable JSON `501`. The extension has no OpenChamber server-side
+provider transport owner, so forwarding these paths to OpenCode would return its
+HTML fallback rather than Small Model behavior. Full parity requires a dedicated
+extension-host implementation for config, credentials, directory-scoped runtime
+provider discovery, and direct provider calls.
 
 ## Shared webview message ordering
 

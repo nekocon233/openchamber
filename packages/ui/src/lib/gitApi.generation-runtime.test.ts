@@ -4,6 +4,7 @@ let runtimeKey = "runtime-a"
 let runtimeGeneration = 1
 let permissionChecks = 0
 let promptCalls = 0
+let smallModelRestrictsProvider: boolean | undefined
 
 class TestRuntimeContextChangedError extends Error {
   constructor() {
@@ -19,8 +20,11 @@ mock.module("./runtime-switch", () => ({
 }))
 
 mock.module("./runtime-fetch", () => ({
-  runtimeFetch: async () => {
-    runtimeGeneration += 1
+  runtimeFetch: async (path: string, init?: RequestInit) => {
+    if (path === "/api/small-model/generate") {
+      if (init?.body) smallModelRestrictsProvider = JSON.parse(String(init.body)).restrictToPreferredProvider
+      runtimeGeneration += 1
+    }
     return new Response(null, { status: 404 })
   },
 }))
@@ -91,6 +95,7 @@ describe("git generation runtime ownership", () => {
     runtimeGeneration = 1
     permissionChecks = 0
     promptCalls = 0
+    smallModelRestrictsProvider = undefined
   })
 
   test("does not fall back into a session after the small-model request changes runtime", async () => {
@@ -98,5 +103,6 @@ describe("git generation runtime ownership", () => {
 
     expect(permissionChecks).toBe(0)
     expect(promptCalls).toBe(0)
+    expect(smallModelRestrictsProvider).toBe(true)
   })
 })

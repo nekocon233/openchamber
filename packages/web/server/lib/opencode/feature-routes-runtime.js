@@ -136,6 +136,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       permissionAutoAcceptRuntime,
       sidebarStateRuntime,
       followUpQueueRuntime,
+      isExternalOpenCode,
       isTunnelManagementAllowed,
     } = routeDependencies;
 
@@ -169,6 +170,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       refreshOpenCodeAfterConfigChange,
       buildOpenCodeUrl,
       getOpenCodeAuthHeaders,
+      isExternalOpenCode,
       isTunnelManagementAllowed,
     });
 
@@ -307,7 +309,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       getProfile,
     });
 
-    registerQuotaRoutes(app, { getQuotaProviders });
+    registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode });
     registerSmallModelRoutes(app, { getSmallModelService });
     registerWalkthroughRoutes(app, { getWalkthroughService });
     registerSessionGoalRoutes(app);

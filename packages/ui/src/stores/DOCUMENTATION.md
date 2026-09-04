@@ -238,6 +238,11 @@ project in Settings cannot change what chat sees. Components select through
 `selectSkillsForDirectory` / `selectMcpServersForDirectory` /
 `selectProvidersForDirectory`, which return stored arrays.
 
+Model metadata uses the active provider model as authority for runtime
+capabilities, modalities, costs, and limits. The models.dev catalog fills only
+fields the live model omits. `getModelMetadata` owns this merge so Provider
+Settings, model pickers, and attachment compatibility checks cannot disagree.
+
 Settings resolves its directory through `useSettingsDirectory`, backed by
 `useUIStore.settingsProjectPath`. That selection is Settings-local and not
 persisted: it follows the active project until the user picks another one. The

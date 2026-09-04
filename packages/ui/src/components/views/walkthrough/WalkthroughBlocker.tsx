@@ -9,6 +9,7 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import type { WalkthroughBlockedState, WalkthroughModel } from '@/lib/walkthrough/types';
 
 interface WalkthroughBlockerProps {
+  directory: string;
   reason: WalkthroughBlockedState;
   model?: WalkthroughModel;
   requiredChars?: number;
@@ -25,6 +26,7 @@ const modelLabel = (model?: WalkthroughModel) =>
  * in place rather than sending the user to Settings to guess.
  */
 export const WalkthroughBlocker = ({
+  directory,
   reason,
   model,
   requiredChars,
@@ -44,13 +46,15 @@ export const WalkthroughBlocker = ({
     || reason === 'output-exhausted';
 
   useEffect(() => {
-    if (!canChooseModel || providers !== undefined) return;
+    if (!canChooseModel) return;
     let cancelled = false;
+    setProviders(undefined);
     (async () => {
       try {
         const response = await runtimeFetch('/api/small-model', {
           method: 'GET',
           headers: { Accept: 'application/json' },
+          query: { directory },
         });
         if (!response.ok) return;
         const payload = (await response.json().catch(() => null)) as
@@ -60,14 +64,13 @@ export const WalkthroughBlocker = ({
           setProviders(payload.authenticatedProviders.filter((id): id is string => typeof id === 'string'));
         }
       } catch {
-        // Leave undefined: the picker then offers every provider, which is a
-        // worse experience but not a broken one.
+        // Leave undefined so a failed directory-scoped lookup offers nothing.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [canChooseModel, providers]);
+  }, [canChooseModel, directory]);
 
   const handleModelChange = useCallback(
     async (providerId: string, modelId: string) => {

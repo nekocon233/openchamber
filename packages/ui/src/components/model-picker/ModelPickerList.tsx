@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Model } from '@opencode-ai/sdk/v2';
 import {
   DndContext,
   MouseSensor,
@@ -23,7 +24,7 @@ import { cn } from '@/lib/utils';
 import { useModelPickerSectionsStore } from '@/stores/useModelPickerSectionsStore';
 import type { ModelMetadata } from '@/types';
 
-type ProviderModel = Record<string, unknown> & { id?: string; name?: string };
+type ProviderModel = Model;
 
 export type ModelPickerProvider = {
   id: string;
@@ -62,8 +63,8 @@ const formatUsdCurrency = (value: number) => new Intl.NumberFormat(getCurrentInt
   minimumFractionDigits: 2,
 }).format(value);
 
-const getModelDisplayName = (model: Record<string, unknown>) => {
-  return getSharedModelDisplayName(model, undefined, { maxLength: 40 });
+const getModelDisplayName = (model: ProviderModel) => {
+  return getSharedModelDisplayName({ id: model.id, name: model.name }, undefined, { maxLength: 40 });
 };
 
 const formatModelContextTokens = (value?: number | null) => {
@@ -573,7 +574,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     if (!collapsedSections.has('recent')) filteredRecents.forEach((entry) => items.push(entry));
     filteredProviders.forEach((provider) => {
       if (collapsedSections.has(`provider:${provider.id}`)) return;
-      provider.models.forEach((model) => items.push({ model, providerID: provider.id, modelID: model.id as string }));
+      provider.models.forEach((model) => items.push({ model, providerID: provider.id, modelID: model.id }));
     });
     return items;
   }, [collapsedSections, filteredFavorites, filteredProviders, filteredRecents]);
@@ -831,7 +832,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
           {renderSectionSentinel(sectionKey)}
           {renderSectionHeader(sectionKey, <ProviderLogo providerId={provider.id} className="h-4 w-4 flex-shrink-0" />, provider.name || provider.id, headerDragProps)}
           {!isSectionCollapsed(sectionKey)
-            ? provider.models.map((model) => renderRow({ model, providerID: provider.id, modelID: model.id as string }, 'provider', false, currentFlatIndex++))
+            ? provider.models.map((model) => renderRow({ model, providerID: provider.id, modelID: model.id }, 'provider', false, currentFlatIndex++))
             : null}
         </div>
       </>

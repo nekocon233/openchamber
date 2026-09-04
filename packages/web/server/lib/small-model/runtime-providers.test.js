@@ -5,6 +5,7 @@ import {
   configureOpenCodeRuntimeProviders,
   getRuntimeProvider,
   getRuntimeProviderSnapshot,
+  getRuntimeProviderTransport,
   resetOpenCodeRuntimeProviders,
 } from './runtime-providers.js';
 
@@ -82,6 +83,47 @@ describe('OpenCode runtime provider snapshot', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('scopes snapshots by directory and sends the directory to OpenCode', async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const directory = new URL(input).searchParams.get('directory');
+      return new Response(JSON.stringify(providerPayload({
+        all: [{
+          id: 'llmapi',
+          options: { apiKey: `${directory}-key`, baseURL: `https://${directory === '/one' ? 'one' : 'two'}.example/v1` },
+          models: {},
+        }],
+        connected: ['llmapi'],
+      })), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    const [one, two] = await Promise.all([
+      getRuntimeProvider('llmapi', '/one'),
+      getRuntimeProvider('llmapi', '/two'),
+    ]);
+
+    expect(one).toMatchObject({ apiKey: '/one-key', baseURL: 'https://one.example/v1' });
+    expect(two).toMatchObject({ apiKey: '/two-key', baseURL: 'https://two.example/v1' });
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      'http://127.0.0.1:4096/provider?directory=%2Fone',
+      'http://127.0.0.1:4096/provider?directory=%2Ftwo',
+    ]);
+
+    await getRuntimeProvider('llmapi', '/one');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a transport only for a connected provider with a key and endpoint', async () => {
+    const transport = await getRuntimeProviderTransport('llmapi', '/workspace');
+
+    expect(transport).toEqual({
+      providerID: 'llmapi',
+      apiKey: 'plugin-key',
+      baseURL: 'https://api.llmapi.ai/v1',
+    });
+    expect(Object.isFrozen(transport)).toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:4096/provider?directory=%2Fworkspace');
+  });
+
   it('answers "unknown" rather than "no providers" when OpenCode is unreachable', async () => {
     resetOpenCodeRuntimeProviders();
     fetchMock.mockRejectedValue(new Error('connection refused'));
@@ -101,6 +143,37 @@ describe('OpenCode runtime provider snapshot', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(refreshed.providers.has('llmapi')).toBe(true);
+  });
+
+  it('does not let a request from before reset publish or clear its replacement', async () => {
+    let resolveOld;
+    let resolveNew;
+    fetchMock
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve; }));
+
+    const oldRequest = getRuntimeProviderSnapshot('/workspace');
+    resetOpenCodeRuntimeProviders();
+    const newRequest = getRuntimeProviderSnapshot('/workspace');
+
+    resolveOld(new Response(JSON.stringify(providerPayload({
+      all: [{ id: 'llmapi', options: { apiKey: 'old-key', baseURL: 'https://old.example/v1' }, models: {} }],
+      connected: ['llmapi'],
+    })), { status: 200, headers: { 'content-type': 'application/json' } }));
+    expect(await oldRequest).toBeNull();
+
+    const joinedReplacement = getRuntimeProviderSnapshot('/workspace');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    resolveNew(new Response(JSON.stringify(providerPayload({
+      all: [{ id: 'llmapi', options: { apiKey: 'new-key', baseURL: 'https://new.example/v1' }, models: {} }],
+      connected: ['llmapi'],
+    })), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const [replacement, joined] = await Promise.all([newRequest, joinedReplacement]);
+    expect(replacement.providers.get('llmapi')).toMatchObject({ apiKey: 'new-key', baseURL: 'https://new.example/v1' });
+    expect(joined).toBe(replacement);
+    expect((await getRuntimeProvider('llmapi', '/workspace')).apiKey).toBe('new-key');
   });
 
   it('stays on file-based resolution until it is configured', async () => {

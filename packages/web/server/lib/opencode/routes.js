@@ -49,6 +49,8 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
     sidebarStateRuntime,
+    isExternalOpenCode = () => false,
+    readClaudeCliAuthStatus = getClaudeCliAuthStatus,
     isTunnelManagementAllowed = () => false,
     fsPromises = fs.promises,
   } = dependencies;
@@ -649,11 +651,28 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
       }
 
       const sources = getProviderSources(providerId, directory);
-      const { getProviderAuth } = await getAuthLibrary();
-      const auth = getProviderAuth(providerId);
-      sources.sources.auth.exists = providerId === 'claude-code'
-        ? getClaudeCliAuthStatus().connected
-        : Boolean(auth);
+      const hasConfigSource = sources.sources.user.exists
+        || sources.sources.project.exists
+        || sources.sources.custom?.exists === true;
+      if (isExternalOpenCode()) {
+        sources.sources.auth = { exists: false, status: 'unavailable', canDisconnect: false };
+      } else if (providerId === 'claude-code') {
+        const cliStatus = readClaudeCliAuthStatus();
+        sources.sources.auth = {
+          exists: cliStatus.status === 'connected',
+          status: cliStatus.status,
+          canDisconnect: false,
+        };
+      } else {
+        const { getProviderAuth } = await getAuthLibrary();
+        const auth = getProviderAuth(providerId);
+        const connected = Boolean(auth);
+        sources.sources.auth = {
+          exists: connected,
+          status: connected ? 'connected' : 'disconnected',
+          canDisconnect: connected || hasConfigSource,
+        };
+      }
 
       return res.json({
         providerId,
@@ -727,6 +746,17 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
       const { providerId } = req.params;
       if (!providerId) {
         return res.status(400).json({ error: 'Provider ID is required' });
+      }
+      const external = isExternalOpenCode();
+      if (external || providerId === 'claude-code') {
+        return res.json({
+          success: false,
+          removed: false,
+          capability: external ? 'unavailable' : 'cli-owned',
+          code: external
+            ? 'PROVIDER_AUTH_RUNTIME_UNAVAILABLE'
+            : 'PROVIDER_AUTH_CLI_OWNED',
+        });
       }
 
       const scope = typeof req.query?.scope === 'string' ? req.query.scope : 'auth';

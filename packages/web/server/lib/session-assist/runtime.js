@@ -153,6 +153,7 @@ export const createSessionAssistRuntime = ({
 }) => {
   const timers = new Map();
   const inflight = new Set();
+  const pendingReruns = new Map();
   let stopped = false;
 
   const clearTimer = (sessionId) => {
@@ -161,6 +162,7 @@ export const createSessionAssistRuntime = ({
       clearTimeout(existing.timer);
       timers.delete(sessionId);
     }
+    pendingReruns.delete(sessionId);
   };
 
   const openCodeFetch = async (path, { directory, method = 'GET', body } = {}) => {
@@ -343,9 +345,14 @@ export const createSessionAssistRuntime = ({
 
   const armTimer = (sessionId, directory) => {
     clearTimer(sessionId);
+    const armedAt = Date.now();
     const timer = setTimeout(() => {
       timers.delete(sessionId);
-      if (stopped || inflight.has(sessionId)) return;
+      if (stopped) return;
+      if (inflight.has(sessionId)) {
+        pendingReruns.set(sessionId, { directory, armedAt });
+        return;
+      }
       inflight.add(sessionId);
       generateAssist(sessionId, directory)
         .catch((error) => {
@@ -353,10 +360,14 @@ export const createSessionAssistRuntime = ({
         })
         .finally(() => {
           inflight.delete(sessionId);
+          if (stopped || !pendingReruns.has(sessionId)) return;
+          const pending = pendingReruns.get(sessionId);
+          pendingReruns.delete(sessionId);
+          armTimer(sessionId, pending.directory);
         });
     }, quietMs);
     if (typeof timer?.unref === 'function') timer.unref();
-    timers.set(sessionId, { timer, armedAt: Date.now() });
+    timers.set(sessionId, { timer, armedAt });
   };
 
   const processPayload = (payload, directoryHint = '') => {
@@ -375,7 +386,7 @@ export const createSessionAssistRuntime = ({
       // OpenCode re-emits message.updated for OLD user messages after the
       // session settles (post-completion metadata patches). Only a message
       // created after the timer was armed means the user actually moved on.
-      const armed = timers.get(userMessage.sessionId);
+      const armed = timers.get(userMessage.sessionId) ?? pendingReruns.get(userMessage.sessionId);
       if (armed && userMessage.createdAt >= armed.armedAt) {
         clearTimer(userMessage.sessionId);
       }
@@ -388,6 +399,7 @@ export const createSessionAssistRuntime = ({
       clearTimeout(timer);
     }
     timers.clear();
+    pendingReruns.clear();
   };
 
   return { processPayload, stop };

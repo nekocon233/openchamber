@@ -15,11 +15,11 @@ vi.mock('../opencode/shared.js', () => ({
   isPlainObject: (value) => value instanceof Object && !Array.isArray(value),
 }));
 
-vi.mock('./runtime-providers.js', () => ({ getRuntimeProvider: vi.fn(async () => null) }));
+vi.mock('./runtime-providers.js', () => ({ getRuntimeProviderTransport: vi.fn(async () => null) }));
 
 const { callSmallModel } = await import('./call.js');
 const { readConfig, readConfigLayers } = await import('../opencode/shared.js');
-const { getRuntimeProvider } = await import('./runtime-providers.js');
+const { getRuntimeProviderTransport } = await import('./runtime-providers.js');
 
 // Minimal catalog fragment used by the catalog-based base URL resolution case.
 const CATALOG = {
@@ -62,14 +62,15 @@ describe('callSmallModel — custom provider config', () => {
     readConfig.mockReset();
     readConfigLayers.mockReset();
     // Default: OpenCode knows nothing, so resolution stays file-based.
-    getRuntimeProvider.mockReset();
-    getRuntimeProvider.mockResolvedValue(null);
+    getRuntimeProviderTransport.mockReset();
+    getRuntimeProviderTransport.mockResolvedValue(null);
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
     delete process.env.OPENCHAMBER_TEST_PROVIDER_KEY;
+    delete process.env.OPENCHAMBER_TEST_PROVIDER_URL;
     delete process.env.OPENCHAMBER_TEST_GATEWAY_KEY;
   });
 
@@ -126,6 +127,88 @@ describe('callSmallModel — custom provider config', () => {
       expect(lastCall(fetchMock).init.headers.Authorization).toBe('Bearer sk-env-key');
     });
 
+    it('fails closed when a configured apiKey environment variable cannot resolve', async () => {
+      readConfig.mockReturnValue({
+        provider: {
+          custom: {
+            options: { apiKey: '{env:OPENCHAMBER_TEST_PROVIDER_KEY}', baseURL: 'https://configured.example/v1' },
+          },
+        },
+      });
+
+      await expect(callSmallModel({
+        auth: { custom: { type: 'api', key: 'auth-fallback-key' } },
+        catalog: { custom: { id: 'custom', api: 'https://vendor.example/v1', models: {} } },
+        workingDirectory: '/proj',
+        providerID: 'custom',
+        modelID: 'model',
+        prompt: 'sensitive prompt',
+      })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'provider-config-resolution-failed',
+        providerID: 'custom',
+        configField: 'apiKey',
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when a configured apiKey file cannot resolve', async () => {
+      readConfig.mockReturnValue({
+        provider: {
+          custom: {
+            options: { apiKey: '{file:/missing/provider-key}', baseURL: 'https://configured.example/v1' },
+          },
+        },
+      });
+      vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+        throw new Error('missing');
+      });
+
+      await expect(callSmallModel({
+        auth: { custom: { type: 'api', key: 'auth-fallback-key' } },
+        catalog: { custom: { id: 'custom', api: 'https://vendor.example/v1', models: {} } },
+        workingDirectory: '/proj',
+        providerID: 'custom',
+        modelID: 'model',
+        prompt: 'sensitive prompt',
+      })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'provider-config-resolution-failed',
+        providerID: 'custom',
+        configField: 'apiKey',
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when a configured baseURL substitution cannot resolve', async () => {
+      delete process.env.OPENCHAMBER_TEST_PROVIDER_URL;
+      readConfig.mockReturnValue({
+        provider: {
+          openai: {
+            options: { baseURL: '{env:OPENCHAMBER_TEST_PROVIDER_URL}' },
+          },
+        },
+      });
+
+      await expect(callSmallModel({
+        auth: { openai: { type: 'api', key: 'sk-openai' } },
+        catalog: {},
+        workingDirectory: '/proj',
+        providerID: 'openai',
+        modelID: 'gpt-4o-mini',
+        prompt: 'sensitive prompt',
+      })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'provider-config-resolution-failed',
+        providerID: 'openai',
+        configField: 'baseURL',
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('sends configured provider headers alongside the bearer token', async () => {
       process.env.OPENCHAMBER_TEST_GATEWAY_KEY = 'sub-key';
       readConfig.mockReturnValue({
@@ -137,6 +220,7 @@ describe('callSmallModel — custom provider config', () => {
               headers: {
                 'Ocp-Apim-Subscription-Key': '{env:OPENCHAMBER_TEST_GATEWAY_KEY}',
                 'x-tenant': 'team',
+                'X-OpenCode-Claude-Request-Kind': 'utility',
               },
             },
           },
@@ -157,6 +241,37 @@ describe('callSmallModel — custom provider config', () => {
       expect(init.headers['Ocp-Apim-Subscription-Key']).toBe('sub-key');
       expect(init.headers['x-tenant']).toBe('team');
       expect(init.headers.Authorization).toBe('Bearer sk-config');
+      expect(init.headers['X-OpenCode-Claude-Request-Kind']).toBeUndefined();
+      expect(init.headers['x-opencode-claude-request-kind']).toBeUndefined();
+    });
+
+    it('fails closed when a configured header substitution cannot resolve', async () => {
+      readConfig.mockReturnValue({
+        provider: {
+          custom: {
+            options: {
+              baseURL: 'https://configured.example/v1',
+              headers: { Authorization: '{env:OPENCHAMBER_TEST_GATEWAY_KEY}' },
+            },
+          },
+        },
+      });
+
+      await expect(callSmallModel({
+        auth: { custom: { type: 'api', key: 'auth-fallback-key' } },
+        catalog: { custom: { id: 'custom', api: 'https://vendor.example/v1', models: {} } },
+        workingDirectory: '/proj',
+        providerID: 'custom',
+        modelID: 'model',
+        prompt: 'sensitive prompt',
+      })).rejects.toMatchObject({
+        statusCode: 422,
+        code: 'provider-config-resolution-failed',
+        providerID: 'custom',
+        configField: 'header "Authorization"',
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('resolves a relative header file from the config layer that defines it', async () => {
@@ -519,11 +634,10 @@ describe('callSmallModel — custom provider config', () => {
     // case that used to fail with "has no known API base URL" (#2666).
     it('uses the endpoint and credential OpenCode resolved for a plugin provider', async () => {
       readConfig.mockReturnValue({});
-      getRuntimeProvider.mockResolvedValue({
-        id: 'llmapi',
+      getRuntimeProviderTransport.mockResolvedValue({
+        providerID: 'llmapi',
         apiKey: 'plugin-key',
         baseURL: 'https://api.llmapi.ai/v1',
-        anonymousZen: false,
       });
       const fetchMock = vi.fn(async () => ok('done'));
       vi.stubGlobal('fetch', fetchMock);
@@ -540,6 +654,66 @@ describe('callSmallModel — custom provider config', () => {
       const { url, init } = lastCall(fetchMock);
       expect(url).toBe('https://api.llmapi.ai/v1/chat/completions');
       expect(init.headers.Authorization).toBe('Bearer plugin-key');
+      expect(init.headers['x-opencode-claude-request-kind']).toBeUndefined();
+      expect(getRuntimeProviderTransport).toHaveBeenCalledWith('llmapi', '/proj');
+    });
+
+    it('uses only the one connected Claude Code runtime transport', async () => {
+      const responseSchema = {
+        type: 'object',
+        properties: { recap: { type: 'string' } },
+        required: ['recap'],
+        additionalProperties: false,
+      };
+      readConfig.mockReturnValue({
+        provider: {
+          'claude-code': {
+            options: {
+              apiKey: 'malicious-config-key',
+              baseURL: 'https://malicious.example/v1',
+              headers: {
+                Authorization: 'Bearer malicious-header-key',
+                'X-OpenCode-Claude-Request-Kind': 'agent',
+              },
+            },
+          },
+        },
+      });
+      getRuntimeProviderTransport.mockResolvedValue({
+        providerID: 'claude-code',
+        apiKey: 'runtime-key',
+        baseURL: 'http://127.0.0.1:60668/v1',
+      });
+      const diagnostic = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const fetchMock = vi.fn(async () => ok('{"recap":"done"}'));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await callSmallModel({
+        auth: { 'claude-code': { type: 'api', key: 'malicious-auth-key' } },
+        catalog: {},
+        workingDirectory: '/proj',
+        providerID: 'claude-code',
+        modelID: 'haiku',
+        prompt: 'summarize',
+        responseSchema,
+      });
+
+      const { url, init } = lastCall(fetchMock);
+      expect(url).toBe('http://127.0.0.1:60668/v1/chat/completions');
+      expect(init.headers['x-opencode-claude-request-kind']).toBe('utility');
+      expect(init.headers['X-OpenCode-Claude-Request-Kind']).toBeUndefined();
+      expect(init.headers.Authorization).toBe('Bearer runtime-key');
+      const body = JSON.parse(init.body);
+      expect(body.response_format.json_schema.schema).toEqual(responseSchema);
+      expect(getRuntimeProviderTransport).toHaveBeenCalledOnce();
+      expect(getRuntimeProviderTransport).toHaveBeenCalledWith('claude-code', '/proj');
+      expect(readConfig).not.toHaveBeenCalled();
+      const outbound = JSON.stringify(fetchMock.mock.calls);
+      expect(outbound).not.toContain('malicious.example');
+      expect(outbound).not.toContain('malicious-config-key');
+      expect(outbound).not.toContain('malicious-header-key');
+      expect(outbound).not.toContain('malicious-auth-key');
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('runtime-key');
     });
 
     it('keeps the ChatGPT-plan login on its own transport instead of the runtime key', async () => {
@@ -547,11 +721,10 @@ describe('callSmallModel — custom provider config', () => {
       // OpenCode reports an OAuth access token as `options.apiKey` for openai;
       // api.openai.com answers it with 401, so it must not stand in for the
       // codex path.
-      getRuntimeProvider.mockResolvedValue({
-        id: 'openai',
+      getRuntimeProviderTransport.mockResolvedValue({
+        providerID: 'openai',
         apiKey: 'oauth-access-token',
-        baseURL: null,
-        anonymousZen: false,
+        baseURL: 'https://api.openai.com/v1',
       });
 
       await expect(callSmallModel({
@@ -566,11 +739,10 @@ describe('callSmallModel — custom provider config', () => {
 
     it('prefers an explicit config baseURL over the runtime endpoint', async () => {
       readConfig.mockReturnValue({ provider: { custom: { options: { baseURL: 'https://configured.example/v1' } } } });
-      getRuntimeProvider.mockResolvedValue({
-        id: 'custom',
+      getRuntimeProviderTransport.mockResolvedValue({
+        providerID: 'custom',
         apiKey: 'runtime-key',
         baseURL: 'https://runtime.example/v1',
-        anonymousZen: false,
       });
       const fetchMock = vi.fn(async () => ok('done'));
       vi.stubGlobal('fetch', fetchMock);

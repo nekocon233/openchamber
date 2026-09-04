@@ -12,6 +12,7 @@ import { getOpenCodeUpgradeStatus, upgradeManagedOpenCode } from './opencode-upg
 import { buildDeferredRestartResponse } from './config-mutation-response';
 import { normalizeWindowsDriveLetter } from './pathUtils';
 import { resolveWorkspaceFolders } from './workspaceResolver';
+import { getClaudeCliAuthStatus } from './claudeAuth';
 import type { BridgeContext, BridgeResponse } from './bridge';
 
 type BridgeMessageInput = {
@@ -29,6 +30,9 @@ type SystemRuntimeDeps = {
 
 const NOTIFICATION_CLAIM_TTL_MS = 10_000;
 const notificationClaims = new Map<string, number>();
+
+const isExternalOpenCodeRuntime = (ctx?: BridgeContext): boolean =>
+  ctx?.manager?.getDebugInfo().mode === 'external';
 
 const claimNotification = (key: string): boolean => {
   const now = Date.now();
@@ -422,6 +426,20 @@ export async function handleSystemBridgeMessage(
       if (!providerId) {
         return { id, type, success: false, error: 'Provider ID is required' };
       }
+      const external = isExternalOpenCodeRuntime(ctx);
+      if (external || providerId === 'claude-code') {
+        return {
+          id,
+          type,
+          success: true,
+          data: {
+            success: false,
+            removed: false,
+            capability: external ? 'unavailable' : 'cli-owned',
+            code: external ? 'PROVIDER_AUTH_RUNTIME_UNAVAILABLE' : 'PROVIDER_AUTH_CLI_OWNED',
+          },
+        };
+      }
       const normalizedScope = typeof scope === 'string' ? scope : 'auth';
       const workingDirectory = typeof directory === 'string' && directory.trim().length > 0
         ? directory.trim()
@@ -475,8 +493,27 @@ export async function handleSystemBridgeMessage(
           ? directory.trim()
           : ctx?.manager?.getWorkingDirectory();
         const sources = getProviderSources(providerId, workingDirectory);
-        const auth = getProviderAuth(providerId);
-        sources.auth.exists = Boolean(auth);
+        const hasConfigSource = sources.user.exists || sources.project.exists || sources.custom.exists;
+        if (isExternalOpenCodeRuntime(ctx)) {
+          sources.auth = { exists: false, status: 'unavailable', canDisconnect: false };
+        } else if (providerId === 'claude-code') {
+          const cliStatus = await getClaudeCliAuthStatus();
+          sources.auth = isExternalOpenCodeRuntime(ctx)
+            ? { exists: false, status: 'unavailable', canDisconnect: false }
+            : {
+                exists: cliStatus.status === 'connected',
+                status: cliStatus.status,
+                canDisconnect: false,
+              };
+        } else {
+          const auth = getProviderAuth(providerId);
+          const connected = Boolean(auth);
+          sources.auth = {
+            exists: connected,
+            status: connected ? 'connected' : 'disconnected',
+            canDisconnect: connected || hasConfigSource,
+          };
+        }
         return { id, type, success: true, data: { providerId, sources } };
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -543,6 +580,9 @@ export async function handleSystemBridgeMessage(
     }
 
     case 'api:quota:providers': {
+      if (isExternalOpenCodeRuntime(ctx)) {
+        return { id, type, success: true, data: { providers: [], availability: 'unsupported' } };
+      }
       try {
         const providers = listConfiguredQuotaProviders();
         return { id, type, success: true, data: { providers } };
@@ -586,6 +626,22 @@ export async function handleSystemBridgeMessage(
       const { providerId } = (payload || {}) as { providerId?: string };
       if (!providerId) {
         return { id, type, success: false, error: 'Provider ID is required' };
+      }
+      if (isExternalOpenCodeRuntime(ctx)) {
+        return {
+          id,
+          type,
+          success: true,
+          data: {
+            providerId,
+            providerName: providerId,
+            ok: false,
+            configured: false,
+            usage: null,
+            fetchedAt: Date.now(),
+            availability: 'unsupported',
+          },
+        };
       }
       try {
         const result = await fetchQuotaForProvider(providerId);

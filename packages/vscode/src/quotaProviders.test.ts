@@ -25,7 +25,12 @@ const AUTH = JSON.stringify({
 ((fs as unknown) as { existsSync: () => boolean }).existsSync = () => true;
 ((fs as unknown) as { readFileSync: () => string }).readFileSync = () => AUTH;
 
-import { fetchQuotaForProvider } from './quotaProviders';
+import {
+  fetchClaudeQuota,
+  fetchQuotaForProvider,
+  resetClaudeQuotaCache,
+} from './quotaProviders';
+import type { ClaudeCredential } from './claudeAuth';
 
 type MockResponseInit = { ok?: boolean; status?: number };
 
@@ -263,6 +268,18 @@ describe('GitHub Copilot quota provider (VS Code parity)', () => {
 });
 
 describe('Claude quota provider (VS Code parity)', () => {
+  const credential = {
+    accessToken: 'fixture-access-token',
+    refreshToken: 'fixture-refresh-token',
+    expiresAt: 1_786_735_755_912,
+    planLabel: 'max',
+    source: 'credentials-file',
+  } satisfies ClaudeCredential;
+
+  beforeEach(() => {
+    resetClaudeQuotaCache();
+  });
+
   test('parses current limits, model-scoped limits, and extra usage', async () => {
     stubFetchReturning(() => Promise.resolve(mockResponse({
       limits: [
@@ -278,9 +295,10 @@ describe('Claude quota provider (VS Code parity)', () => {
       },
     })));
 
-    const result = await fetchQuotaForProvider('claude');
+    const result = await fetchClaudeQuota(() => credential);
 
     assert.equal(result.ok, true);
+    assert.equal(result.planLabel, 'max');
     assert.equal(result.usage?.windows['5h']?.usedPercent, 12);
     assert.equal(result.usage?.windows['7d']?.usedPercent, 34);
     assert.equal(result.usage?.models?.Sonnet?.windows['7d']?.usedPercent, 56);
@@ -304,14 +322,43 @@ describe('Claude quota provider (VS Code parity)', () => {
       return response;
     }) as typeof fetch;
 
-    const initial = await fetchQuotaForProvider('claude');
-    const rateLimited = await fetchQuotaForProvider('claude');
-    const duringCooldown = await fetchQuotaForProvider('claude');
+    const initial = await fetchClaudeQuota(() => credential);
+    const rateLimited = await fetchClaudeQuota(() => credential);
+    const duringCooldown = await fetchClaudeQuota(() => credential);
 
     assert.equal(initial.ok, true);
     assert.equal(rateLimited.ok, true);
     assert.equal(duringCooldown.ok, true);
+    assert.equal(duringCooldown.planLabel, 'max');
     assert.equal(duringCooldown.usage?.windows['5h']?.usedPercent, 12);
+    assert.equal(requestCount, 2);
+  });
+
+  test('does not carry a rate-limit cooldown to a different Claude credential', async () => {
+    const responses = [
+      new Response('{}', { status: 429, headers: { 'retry-after': '120' } }),
+      mockResponse({ five_hour: { utilization: 7, resets_at: '2026-08-20T12:00:00Z' } }),
+    ];
+    let requestCount = 0;
+    globalThis.fetch = async () => {
+      const response = responses[requestCount];
+      requestCount += 1;
+      if (!response) throw new Error('Missing fixture response');
+      return response;
+    };
+
+    const first = await fetchClaudeQuota(() => credential);
+    const second = await fetchClaudeQuota(() => ({
+      ...credential,
+      accessToken: 'other-fixture-access-token',
+      refreshToken: 'other-fixture-refresh-token',
+      planLabel: 'pro',
+    }));
+
+    assert.equal(first.ok, false);
+    assert.equal(second.ok, true);
+    assert.equal(second.planLabel, 'pro');
+    assert.equal(second.usage?.windows['5h']?.usedPercent, 7);
     assert.equal(requestCount, 2);
   });
 });

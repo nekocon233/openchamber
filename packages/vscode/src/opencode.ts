@@ -11,6 +11,7 @@ import { normalizeWindowsDriveLetter } from './pathUtils';
 import { resolveWorkingDirectoryChange } from './workingDirectoryChange';
 import { registerManagedProcess, unregisterManagedProcess, reapOrphanedProcesses } from './opencodeProcessRegistry';
 import { applyProviderEnvAliases } from './provider-env-aliases';
+import { findExecutableInPath, isExecutable, resolveWindowsLaunchSpec } from './process-launch';
 
 const t = vscode.l10n.t;
 
@@ -26,11 +27,6 @@ function getManagerOutputChannel(): vscode.OutputChannel {
   }
   return managerOutputChannel;
 }
-const WINDOWS_EXECUTABLE_EXTENSIONS = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM')
-  .split(';')
-  .map((ext) => ext.trim().toLowerCase())
-  .filter(Boolean)
-  .map((ext) => (ext.startsWith('.') ? ext : `.${ext}`));
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 type OpenCodeDebugInfo = {
@@ -117,47 +113,6 @@ function resolvePortFromUrl(url: string): number | null {
   }
 }
 
-function isExecutable(filePath: string): boolean {
-  if (!filePath) return false;
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) return false;
-    // Windows executability is extension-based.
-    if (process.platform === 'win32') {
-      const ext = path.extname(filePath).toLowerCase();
-      if (!ext) return true;
-      return ['.exe', '.cmd', '.bat', '.com'].includes(ext);
-    }
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Windows launch spec: .cmd/.bat shims (and bare names, which resolve to .cmd
-// shims via PATHEXT) must run under cmd.exe. Spawn cmd.exe DIRECTLY with the
-// shim path as its own argv element (shell:false) — `shell: true` builds an
-// unquoted command line, so a space-containing path like
-// "C:\Program Files\nodejs\opencode.cmd" broke with
-// "'C:\Program' is not recognized as an internal or external command".
-function resolveWindowsLaunchSpec(binary: string, args: string[]): { binary: string; args: string[] } {
-  if (process.platform !== 'win32') {
-    return { binary, args };
-  }
-  const trimmed = (binary || '').trim();
-  const ext = path.extname(trimmed).toLowerCase();
-  const isBatchShim = ext === '.cmd' || ext === '.bat';
-  const isBareName = !ext && !trimmed.includes('\\') && !trimmed.includes('/');
-  if (!isBatchShim && !isBareName) {
-    return { binary: trimmed, args };
-  }
-  return {
-    binary: process.env.ComSpec || 'cmd.exe',
-    args: ['/d', '/s', '/c', 'call', trimmed, ...args],
-  };
-}
-
 // Strip a single wrapping quote pair (Windows "Copy as path" and quoted shell
 // snippets) — literal quotes are never part of a real path and break every
 // executable check.
@@ -191,35 +146,6 @@ function appendToPath(dir: string) {
   const parts = current.split(path.delimiter).filter(Boolean);
   if (parts.includes(trimmed)) return;
   process.env.PATH = [trimmed, ...parts].join(path.delimiter);
-}
-
-function findExecutableInPath(binaryName: string): string | null {
-  const trimmed = (binaryName || '').trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const current = process.env.PATH || '';
-  if (!current) {
-    return null;
-  }
-
-  const extensions = process.platform === 'win32' ? WINDOWS_EXECUTABLE_EXTENSIONS : [''];
-  for (const segment of current.split(path.delimiter)) {
-    const dir = segment.trim();
-    if (!dir) {
-      continue;
-    }
-
-    for (const ext of extensions) {
-      const candidate = path.join(dir, process.platform === 'win32' ? `${trimmed}${ext}` : trimmed);
-      if (isExecutable(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
 }
 
 let cachedDetectedOpencodeCliPath: string | undefined;

@@ -14,16 +14,23 @@ import { copyTextToClipboard } from '@/lib/clipboard';
 import { openExternalUrl } from '@/lib/url';
 import { opencodeClient } from '@/lib/opencode/client';
 import {
+  getRuntimeEndpointGeneration,
+  getRuntimeKey,
+  subscribeRuntimeEndpointWillChange,
+} from '@/lib/runtime-switch';
+import {
   collectPromptInputs,
   defaultPromptValues,
   describeOAuthError,
   firstUnansweredPrompt,
+  isOAuthRuntimeContextCurrent,
   parseAuthPrompts,
   parseAuthorization,
   shouldOpenAuthorizationUrl,
   visiblePrompts,
   type AuthPrompt,
   type OAuthAuthorization,
+  type OAuthRuntimeContext,
 } from './provider-oauth';
 
 export interface ProviderOAuthMethod {
@@ -54,6 +61,11 @@ type Flow =
 
 const IDLE: Flow = { phase: 'idle' };
 
+type OAuthAttempt = OAuthRuntimeContext & {
+  controller: AbortController;
+  client: ReturnType<typeof opencodeClient.getSdkClient>;
+};
+
 /**
  * OAuth sign-in for a provider's auth methods.
  *
@@ -61,9 +73,9 @@ const IDLE: Flow = { phase: 'idle' };
  * chains straight into `callback` and holds it open until the user finishes in
  * the browser, `code` collects a pasted code first. See `provider-oauth.ts`.
  *
- * Only one method can run at a time, and the in-flight callback is aborted when
- * this component unmounts. Mount it with `key={providerId}` so switching
- * providers starts from a clean flow.
+ * Only one method can run at a time. The authorize/callback attempt is aborted
+ * when this component unmounts or the runtime changes. Mount it with
+ * `key={providerId}` so switching providers starts from a clean flow.
  */
 export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
   providerId,
@@ -75,9 +87,20 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
   const [flow, setFlow] = React.useState<Flow>(IDLE);
   const [promptValues, setPromptValues] = React.useState<Record<string, string>>({});
   const [codeInput, setCodeInput] = React.useState('');
-  const callbackAbortRef = React.useRef<AbortController | null>(null);
+  const attemptRef = React.useRef<OAuthAttempt | null>(null);
 
-  React.useEffect(() => () => callbackAbortRef.current?.abort(), []);
+  React.useEffect(() => {
+    const unsubscribe = subscribeRuntimeEndpointWillChange(() => {
+      attemptRef.current?.controller.abort();
+      attemptRef.current = null;
+      setFlow(IDLE);
+    });
+    return () => {
+      unsubscribe();
+      attemptRef.current?.controller.abort();
+      attemptRef.current = null;
+    };
+  }, []);
 
   const activeIndex = flow.phase === 'idle' ? null : flow.methodIndex;
   const busy = flow.phase === 'authorizing'
@@ -99,34 +122,38 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
    * handed control to the user, so a failure here is a flow state, not an
    * exception to unwind.
    */
-  const runCallback = async (methodIndex: number, code?: string) => {
-    const controller = new AbortController();
-    callbackAbortRef.current?.abort();
-    callbackAbortRef.current = controller;
+  const isCurrentAttempt = (attempt: OAuthAttempt): boolean =>
+    attemptRef.current === attempt
+    && !attempt.controller.signal.aborted
+    && isOAuthRuntimeContextCurrent(
+      attempt,
+      getRuntimeKey(),
+      getRuntimeEndpointGeneration(),
+    );
+
+  const runCallback = async (attempt: OAuthAttempt, methodIndex: number, code?: string) => {
+    if (!isCurrentAttempt(attempt)) return;
 
     try {
-      const result = await opencodeClient.getSdkClient().provider.oauth.callback(
+      const result = await attempt.client.provider.oauth.callback(
         {
           providerID: providerId,
           method: methodIndex,
           ...(code ? { code } : {}),
         },
-        { signal: controller.signal },
+        { signal: attempt.controller.signal },
       );
-      if (controller.signal.aborted) {
-        return;
-      }
+      if (!isCurrentAttempt(attempt)) return;
       if (result.error) {
         throw result.error;
       }
 
+      await onConnected();
+      if (!isCurrentAttempt(attempt)) return;
       setFlow(IDLE);
       toast.success(t('settings.providers.page.toast.oauthCompleted'));
-      await onConnected();
     } catch (error) {
-      if (controller.signal.aborted) {
-        return;
-      }
+      if (!isCurrentAttempt(attempt)) return;
       console.error('Failed to complete OAuth flow:', error);
       setFlow({
         phase: 'failed',
@@ -134,28 +161,39 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
         message: describeOAuthError(error, t, 'settings.providers.page.toast.oauthCompleteFailed'),
       });
     } finally {
-      if (callbackAbortRef.current === controller) {
-        callbackAbortRef.current = null;
-      }
+      if (attemptRef.current === attempt) attemptRef.current = null;
     }
   };
 
   const runAuthorize = async (methodIndex: number, inputs: Record<string, string>) => {
+    attemptRef.current?.controller.abort();
+    const attempt: OAuthAttempt = {
+      controller: new AbortController(),
+      client: opencodeClient.getSdkClient(),
+      runtimeKey: getRuntimeKey(),
+      generation: getRuntimeEndpointGeneration(),
+    };
+    attemptRef.current = attempt;
     setFlow({ phase: 'authorizing', methodIndex });
 
     let authorization: OAuthAuthorization;
     try {
-      const result = await opencodeClient.getSdkClient().provider.oauth.authorize({
-        providerID: providerId,
-        method: methodIndex,
-        ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-      });
+      const result = await attempt.client.provider.oauth.authorize(
+        {
+          providerID: providerId,
+          method: methodIndex,
+          ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+        },
+        { signal: attempt.controller.signal },
+      );
+      if (!isCurrentAttempt(attempt)) return;
       if (result.error) {
         throw result.error;
       }
 
       const parsed = parseAuthorization(result.data);
       if (!parsed) {
+        attemptRef.current = null;
         setFlow({
           phase: 'failed',
           methodIndex,
@@ -165,7 +203,9 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
       }
       authorization = parsed;
     } catch (error) {
+      if (!isCurrentAttempt(attempt)) return;
       console.error('Failed to start OAuth flow:', error);
+      attemptRef.current = null;
       setFlow({
         phase: 'failed',
         methodIndex,
@@ -188,7 +228,7 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
     }
 
     setFlow({ phase: 'waiting', methodIndex, authorization });
-    await runCallback(methodIndex);
+    await runCallback(attempt, methodIndex);
   };
 
   const beginConnect = (method: ProviderOAuthMethod) => {
@@ -224,8 +264,13 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
     if (!code) {
       return;
     }
+    const attempt = attemptRef.current;
+    if (!attempt || !isCurrentAttempt(attempt)) {
+      setFlow(IDLE);
+      return;
+    }
     setFlow({ ...flow, submitting: true });
-    void runCallback(flow.methodIndex, code);
+    void runCallback(attempt, flow.methodIndex, code);
   };
 
   /**
@@ -233,8 +278,8 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
    * a new `authorize` replaces it, so reconnecting is always safe.
    */
   const cancel = () => {
-    callbackAbortRef.current?.abort();
-    callbackAbortRef.current = null;
+    attemptRef.current?.controller.abort();
+    attemptRef.current = null;
     setFlow(IDLE);
   };
 
@@ -377,10 +422,15 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
             )}
 
             {isActive && flow.phase === 'authorizing' && (
-              <p className="typography-meta text-muted-foreground flex items-center gap-2">
-                <Icon name="loader" className="h-3.5 w-3.5 animate-spin" />
-                {t('settings.providers.page.auth.oauth.starting')}
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="typography-meta text-muted-foreground flex items-center gap-2">
+                  <Icon name="loader" className="h-3.5 w-3.5 animate-spin" />
+                  {t('settings.providers.page.auth.oauth.starting')}
+                </p>
+                <Button variant="ghost" size="xs" className="!font-normal shrink-0" onClick={cancel}>
+                  {t('settings.providers.page.actions.cancel')}
+                </Button>
+              </div>
             )}
 
             {isActive && flow.phase === 'waiting' && (

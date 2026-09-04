@@ -92,8 +92,10 @@ This module provides OpenCode server integration utilities for the web server ru
   - `GET /api/opencode/upgrade-status` (returns version availability plus the authoritative `upgrade.supported`, `upgrade.manager`, and `upgrade.reason` capability)
   - `POST /api/opencode/directory` (validates and activates an existing project directory; `{ create: true }` explicitly creates the requested project directory before activation, including outside the previously active workspace)
   - `GET /api/provider/:providerId/source`
+    - Auth state is `connected`, `disconnected`, or `unavailable`; responses also state whether this runtime owns Disconnect. External OpenCode runtimes return unavailable without reading the host Claude CLI or auth file.
   - `PUT /api/provider` (create/update custom OpenAI-compatible provider config in OpenCode user/project/custom layers via `scope`; secrets stay in auth via the OpenCode auth API)
   - `DELETE /api/provider/:providerId/auth`
+    - External runtimes and CLI-owned Claude Code auth return a non-mutating capability result instead of deleting host files or claiming the CLI logged out.
 - Owns lazy auth library loading for provider auth checks/removal.
 - Keeps route behavior independent from composition root; `index.js` now supplies dependencies only.
 
@@ -405,8 +407,8 @@ an authoritative loopback callback URL even when OpenChamber binds port `0`.
   - SSE forwarders: `GET /api/global/event`, `GET /api/event`
     - Downstream heartbeats keep clients and intermediaries alive, while a separate upstream-only stall watchdog closes the downstream response when OpenCode stops producing bytes so clients reconnect instead of trusting synthetic heartbeats indefinitely. Each watchdog reset uses the current load-aware timeout, matching the shared event transport.
   - Session message forwarder: `POST /api/session/:sessionId/message`
-  - Interactive OAuth forwarder: `POST /api/provider/:providerID/oauth/callback`
-    - Upstream blocks inside this call for the whole browser sign-in (device-code polling or a loopback redirect), so it is exempt from the ordinary request deadline and uses a 15-minute proxy timeout instead of `LONG_REQUEST_TIMEOUT_MS`. All other `/api/provider/*` routes, including `oauth/authorize`, keep the ordinary deadline.
+  - Interactive OAuth forwarders: `POST /api/provider/:providerID/oauth/callback` and `POST /api/mcp/:name/auth/authenticate`
+    - Upstream blocks inside these calls for the whole browser sign-in (device-code polling or a loopback redirect), so both the outer response deadline and proxy use the 15-minute interactive timeout instead of `LONG_REQUEST_TIMEOUT_MS`. Other provider routes, including `oauth/authorize`, keep the ordinary deadline.
   - Generic `/api/*` forwarding with hop-by-hop header filtering. Express strips
     the mounted outer `/api` prefix exactly once, preserving the official v2
     SDK's nested `/api/api/*` routes as upstream `/api/*` routes.

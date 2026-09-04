@@ -13,17 +13,22 @@ and one suggested user follow-up with the small model
    anything, there is no backfill and no session scanning.
 2. `session.status: idle` arms a 60-second per-session timer; any `busy`/
    `retry` status or a user `message.updated` clears it (the "1 minute of
-   quiet" rule).
+   quiet" rule). If another quiet idle cycle expires while generation is still
+   in flight, the runtime records one pending rerun. The in-flight request's
+   `finally` starts a fresh quiet window for that cycle. A later busy status or
+   new user message clears both the timer and the pending rerun.
 3. On fire: fetch the session (skip sub-agent sessions with `parentID`),
    take the LAST exchange only — the final assistant reply plus the user
    message it answered (assistant `parentID` → user id) — and call
    `generateSmallModelText` with the
-   session's own provider/model taken from the last assistant message — so
-   the utility call spends the same subscription as the conversation.
+   session's own provider/model taken from the last assistant message. An
+   eligible automatic model stays on the conversation's provider.
    `restrictToPreferredProvider` forbids the resolver's global fallback:
    conversation content never goes to a provider the user didn't pick for
    the session, unless the small model was chosen explicitly (settings
-   override or opencode config). A resolver 404 is silently skipped.
+   override or opencode config). `claude-code` is never selected from the
+   session model or Haiku family, so default Claude Code sessions skip the
+   assist. An explicit override may use it. A resolver 404 is silently skipped.
 4. The requested JSON fields (`recap`, `suggestion`, or both) are clamped and
    PATCHed onto the session metadata together with `forMessageID` (the last
    assistant message id) and `generatedAt`. Before writing, the session tail is

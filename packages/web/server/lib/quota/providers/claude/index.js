@@ -135,12 +135,11 @@ const fetchQuotaUncoalesced = async () => {
 export const fetchQuota = () => {
   if (pendingFetch) return pendingFetch;
 
-  const request = fetchQuotaUncoalesced();
-  const pending = request.finally(() => {
+  const pending = fetchQuotaUncoalesced().finally(() => {
     if (pendingFetch === pending) pendingFetch = null;
   });
   pendingFetch = pending;
-  return pendingFetch;
+  return pending;
 };
 
 /** Test seam: clears the rate-limit cache between cases. */

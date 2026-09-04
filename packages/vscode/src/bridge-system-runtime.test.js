@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 const executeCommand = mock(async () => undefined);
+const getProviderSources = mock();
+const getProviderAuth = mock();
+const getClaudeCliAuthStatus = mock();
+const removeProviderAuth = mock();
+const removeProviderConfig = mock();
+const fetchQuotaForProvider = mock();
+const listConfiguredQuotaProviders = mock();
 const updateWorkspaceFolders = mock(async (start, deleteCount, ...foldersToAdd) => {
   for (const folder of foldersToAdd) {
     currentWorkspaceFolders = [...currentWorkspaceFolders, { name: folder.uri.fsPath.split('/').pop(), uri: folder.uri }];
@@ -39,17 +46,18 @@ mock.module('vscode', () => ({
 }));
 
 mock.module('./opencodeConfig', () => ({
-  removeProviderConfig: mock(),
-  getProviderSources: mock(),
+  removeProviderConfig,
+  getProviderSources,
   upsertProviderConfig: mock(),
 }));
 mock.module('./opencodeAuth', () => ({
-  getProviderAuth: mock(),
-  removeProviderAuth: mock(),
+  getProviderAuth,
+  removeProviderAuth,
 }));
+mock.module('./claudeAuth', () => ({ getClaudeCliAuthStatus }));
 mock.module('./quotaProviders', () => ({
-  fetchQuotaForProvider: mock(),
-  listConfiguredQuotaProviders: mock(),
+  fetchQuotaForProvider,
+  listConfiguredQuotaProviders,
 }));
 mock.module('./opencodeGoQuota', () => ({ fetchOpenCodeGoUsage: mock() }));
 mock.module('./quotaCredentials', () => ({
@@ -217,5 +225,98 @@ describe('VS Code system bridge api:workspace:addFolder', () => {
       error: 'Directory path is required',
     });
     expect(updateWorkspaceFolders).not.toHaveBeenCalled();
+  });
+});
+
+describe('VS Code system bridge Claude provider status', () => {
+  beforeEach(() => {
+    getProviderSources.mockReset();
+    getProviderAuth.mockReset();
+    getClaudeCliAuthStatus.mockReset();
+    removeProviderAuth.mockReset();
+    removeProviderConfig.mockReset();
+    getProviderSources.mockReturnValue({
+      auth: { exists: false, status: 'unavailable', canDisconnect: false },
+      user: { exists: true, path: '/config/opencode.json' },
+      project: { exists: false, path: null },
+      custom: { exists: false, path: null },
+    });
+  });
+
+  test('uses Claude CLI state instead of an OpenCode proxy credential', async () => {
+    getProviderAuth.mockReturnValue({ type: 'api', key: 'claude-code-proxy' });
+    getClaudeCliAuthStatus.mockResolvedValue({ status: 'disconnected', connected: false, reason: 'logged-out' });
+
+    const response = await handleSystemBridgeMessage({
+      id: 'claude-source',
+      type: 'api:provider/source:get',
+      payload: { providerId: 'claude-code', directory: '/workspace/project' },
+    }, undefined, deps);
+
+    expect(response.data.sources.auth.exists).toBe(false);
+    expect(getProviderAuth).not.toHaveBeenCalled();
+    expect(getClaudeCliAuthStatus).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not inspect or mutate local auth for an external runtime', async () => {
+    const externalContext = {
+      manager: {
+        getDebugInfo: () => ({ mode: 'external' }),
+        getWorkingDirectory: () => '/workspace/project',
+      },
+    };
+
+    const sourceResponse = await handleSystemBridgeMessage({
+      id: 'claude-external-source',
+      type: 'api:provider/source:get',
+      payload: { providerId: 'claude-code' },
+    }, externalContext, deps);
+    const deleteResponse = await handleSystemBridgeMessage({
+      id: 'claude-external-delete',
+      type: 'api:provider/auth:delete',
+      payload: { providerId: 'claude-code', scope: 'all' },
+    }, externalContext, deps);
+
+    expect(sourceResponse.data.sources.auth).toEqual({
+      exists: false,
+      status: 'unavailable',
+      canDisconnect: false,
+    });
+    expect(deleteResponse.data).toMatchObject({ removed: false, capability: 'unavailable' });
+    expect(getClaudeCliAuthStatus).not.toHaveBeenCalled();
+    expect(getProviderAuth).not.toHaveBeenCalled();
+    expect(removeProviderAuth).not.toHaveBeenCalled();
+    expect(removeProviderConfig).not.toHaveBeenCalled();
+  });
+
+  test('does not report Claude disconnected while the CLI still owns login', async () => {
+    const response = await handleSystemBridgeMessage({
+      id: 'claude-local-delete',
+      type: 'api:provider/auth:delete',
+      payload: { providerId: 'claude-code', scope: 'all' },
+    }, undefined, deps);
+
+    expect(response.data).toMatchObject({ removed: false, capability: 'cli-owned' });
+    expect(removeProviderAuth).not.toHaveBeenCalled();
+    expect(removeProviderConfig).not.toHaveBeenCalled();
+  });
+
+  test('does not load local quota credentials for an external runtime', async () => {
+    const externalContext = { manager: { getDebugInfo: () => ({ mode: 'external' }) } };
+
+    const providersResponse = await handleSystemBridgeMessage({
+      id: 'quota-external-list',
+      type: 'api:quota:providers',
+    }, externalContext, deps);
+    const quotaResponse = await handleSystemBridgeMessage({
+      id: 'quota-external-get',
+      type: 'api:quota:get',
+      payload: { providerId: 'claude' },
+    }, externalContext, deps);
+
+    expect(providersResponse.data).toEqual({ providers: [], availability: 'unsupported' });
+    expect(quotaResponse.data).toMatchObject({ providerId: 'claude', availability: 'unsupported' });
+    expect(listConfiguredQuotaProviders).not.toHaveBeenCalled();
+    expect(fetchQuotaForProvider).not.toHaveBeenCalled();
   });
 });

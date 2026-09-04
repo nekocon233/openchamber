@@ -376,6 +376,13 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     });
   }
 
+  if (normalizedPathname === '/api/small-model' || normalizedPathname === '/api/small-model/generate') {
+    return jsonResponse({
+      error: 'Small Model is not supported in the VS Code runtime',
+      code: 'small-model-runtime-unsupported',
+    }, 501);
+  }
+
   if (normalizedPathname === '/api/preview/targets') {
     return unsupportedWebRouteResponse('Preview proxy');
   }

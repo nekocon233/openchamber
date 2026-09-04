@@ -49,7 +49,7 @@ const pendingRequests = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timeout?: ReturnType<typeof setTimeout>;
-  onAbort?: () => void;
+  removeAbortListener?: () => void;
 }>();
 
 let requestIdCounter = 0;
@@ -69,8 +69,8 @@ window.addEventListener('message', (event: MessageEvent<BridgeResponse>) => {
     if (pending.timeout) {
       clearTimeout(pending.timeout);
     }
-    if (pending.onAbort) {
-      pending.onAbort();
+    if (pending.removeAbortListener) {
+      pending.removeAbortListener();
     }
     if (response.success) {
       pending.resolve(response.data);
@@ -97,7 +97,7 @@ export function sendBridgeMessageWithOptions<T = unknown>(
       resolve: (value: unknown) => void;
       reject: (reason: Error) => void;
       timeout?: ReturnType<typeof setTimeout>;
-      onAbort?: () => void;
+      removeAbortListener?: () => void;
     } = {
       resolve: resolve as (value: unknown) => void,
       reject,
@@ -118,7 +118,7 @@ export function sendBridgeMessageWithOptions<T = unknown>(
         return;
       }
       options.signal.addEventListener('abort', abort, { once: true });
-      pending.onAbort = () => options.signal?.removeEventListener('abort', abort);
+      pending.removeAbortListener = () => options.signal?.removeEventListener('abort', abort);
     }
 
     pendingRequests.set(id, pending);
@@ -128,8 +128,8 @@ export function sendBridgeMessageWithOptions<T = unknown>(
       pending.timeout = setTimeout(() => {
         if (pendingRequests.has(id)) {
           pendingRequests.delete(id);
-          if (pending.onAbort) {
-            pending.onAbort();
+          if (pending.removeAbortListener) {
+            pending.removeAbortListener();
           }
           reject(new Error(`Request ${type} timed out`));
         }

@@ -115,6 +115,35 @@ describe('resolveSmallModel', () => {
     expect(resolveSmallModel({ auth: {}, catalog, configSmallModel: null })).toBeNull();
   });
 
+  it('never selects Claude Code from the automatic family scan', () => {
+    const result = resolveSmallModel({
+      auth: { 'claude-code': { type: 'api', key: 'runtime-key' } },
+      catalog: {
+        'claude-code': {
+          id: 'claude-code',
+          models: {
+            haiku: { id: 'haiku', family: 'claude-haiku', release_date: '2026-01-01' },
+          },
+        },
+      },
+      configSmallModel: null,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('never selects Claude Code from the implicit session model', () => {
+    const result = resolveSmallModel({
+      auth: { 'claude-code': { type: 'api', key: 'runtime-key' } },
+      catalog: {},
+      configSmallModel: null,
+      preferredProviderID: 'claude-code',
+      preferredModelID: 'haiku',
+    });
+
+    expect(result).toBeNull();
+  });
+
   it('prefers the session provider over other authenticated providers', () => {
     const result = resolveSmallModel({
       auth: {

@@ -161,6 +161,7 @@ mock.module('@/stores/useProjectsStore', () => ({
 }));
 
 mock.module('@/lib/opencode/client', () => ({
+  parseSessionStatusSnapshot: mock(() => null),
   opencodeClient: {
     setDirectory: mock(() => undefined),
     getDirectory: mock(() => DIRECTORY),
@@ -279,6 +280,35 @@ describe('useConfigStore provider persistence', () => {
       isConnected: true,
       isInitialized: false,
     });
+  });
+
+  test('uses live model capabilities over catalog metadata for every store consumer', () => {
+    const live = provider('claude-code', 'claude-sonnet');
+    live.models[0].capabilities.reasoning = true;
+    live.models[0].capabilities.attachment = true;
+    live.models[0].capabilities.input.image = true;
+    live.models[0].capabilities.input.pdf = true;
+    live.models[0].limit = { context: 200_000, output: 64_000 };
+    useConfigStore.setState({
+      providers: [live],
+      modelsMetadata: new Map([[
+        'claude-code/claude-sonnet',
+        {
+          id: 'claude-sonnet',
+          providerId: 'claude-code',
+          reasoning: false,
+          attachment: false,
+          modalities: { input: ['text'], output: ['text'] },
+          limit: { context: 100_000, output: 8_000 },
+        },
+      ]]),
+    });
+
+    const metadata = useConfigStore.getState().getModelMetadata('claude-code', 'claude-sonnet');
+    expect(metadata?.reasoning).toBe(true);
+    expect(metadata?.attachment).toBe(true);
+    expect(metadata?.modalities?.input).toEqual(['text', 'image', 'pdf']);
+    expect(metadata?.limit).toEqual({ context: 200_000, output: 64_000 });
   });
 
   test('hydrates persisted provider snapshots for instant paint, then refreshes to live data', async () => {

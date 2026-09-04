@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { fetchOpenCodeGoUsage } from './opencodeGoQuota';
 import { deleteLegacyOpenCodeGoCredential, readCredential } from './quotaCredentials';
 import { getProviderAuth, updateProviderAuth } from './opencodeAuth';
+import { loadClaudeCredential, type ClaudeCredential } from './claudeAuth';
 
 type AuthEntry = Record<string, unknown> | string;
 type AuthFile = Record<string, AuthEntry>;
@@ -187,6 +189,7 @@ export type ProviderResult = {
   usage: ProviderUsage | null;
   fetchedAt: number;
   error?: string;
+  availability?: 'available' | 'unsupported';
   planLabel?: string | null;
 };
 
@@ -775,9 +778,10 @@ export const listConfiguredQuotaProviders = () => {
   if (readCredential('ollama-cloud')) configured.add('ollama-cloud');
   if (readCredential('cursor')) configured.add('cursor');
 
-  const anthropicAuth = normalizeAuthEntry(getAuthEntry(auth, ['anthropic', 'claude']));
-  if (anthropicAuth && ((anthropicAuth as Record<string, unknown>).access || (anthropicAuth as Record<string, unknown>).token)) {
-    configured.add('claude');
+  try {
+    if (loadClaudeCredential()) configured.add('claude');
+  } catch {
+    // Other providers can still be listed when Claude credential files are unreadable.
   }
 
   const openaiAuth = normalizeAuthEntry(getAuthEntry(auth, ['openai', 'codex', 'chatgpt']));
@@ -1278,7 +1282,11 @@ const fetchGoogleQuota = async (): Promise<ProviderResult> => {
 const CLAUDE_DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const CLAUDE_MAX_COOLDOWN_MS = 60 * 60 * 1000;
 let claudeCredentialFingerprint: string | null = null;
-let claudeCachedUsage: ProviderUsage | null = null;
+let claudeCachedUsage: {
+  fingerprint: string;
+  usage: ProviderUsage;
+  planLabel: string | null;
+} | null = null;
 let claudeCooldownUntil = 0;
 
 const claudeCooldownFromResponse = (response: Response): number => {
@@ -1296,23 +1304,25 @@ const claudeCooldownFromResponse = (response: Response): number => {
   return CLAUDE_DEFAULT_COOLDOWN_MS;
 };
 
-const buildClaudeRateLimitResult = (): ProviderResult => (
-  claudeCachedUsage
-    ? buildResult({
-        providerId: 'claude',
-        providerName: 'Claude',
-        ok: true,
-        configured: true,
-        usage: claudeCachedUsage,
-      })
-    : buildResult({
-        providerId: 'claude',
-        providerName: 'Claude',
-        ok: false,
-        configured: true,
-        error: 'Rate limited. Retrying soon.',
-      })
-);
+const buildClaudeRateLimitResult = (fingerprint: string, planLabel: string | null): ProviderResult => {
+  if (claudeCachedUsage?.fingerprint === fingerprint) {
+    return buildResult({
+      providerId: 'claude',
+      providerName: 'Claude',
+      ok: true,
+      configured: true,
+      usage: claudeCachedUsage.usage,
+      planLabel: planLabel ?? claudeCachedUsage.planLabel,
+    });
+  }
+  return buildResult({
+    providerId: 'claude',
+    providerName: 'Claude',
+    ok: false,
+    configured: true,
+    error: 'Rate limited. Retrying soon.',
+  });
+};
 
 const buildClaudeUsage = (payload: Record<string, unknown>): ProviderUsage => {
   const windows: Record<string, UsageWindow> = {};
@@ -1381,12 +1391,11 @@ const buildClaudeUsage = (payload: Record<string, unknown>): ProviderUsage => {
   return Object.keys(models).length ? { windows, models } : { windows };
 };
 
-const fetchClaudeQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, ['anthropic', 'claude'])) as Record<string, unknown> | null;
-  const accessToken = (entry?.access as string | undefined) ?? (entry?.token as string | undefined);
-
-  if (!accessToken) {
+export const fetchClaudeQuota = async (
+  loadCredential: () => ClaudeCredential | null = loadClaudeCredential,
+): Promise<ProviderResult> => {
+  const credential = loadCredential();
+  if (!credential) {
     return buildResult({
       providerId: 'claude',
       providerName: 'Claude',
@@ -1396,27 +1405,30 @@ const fetchClaudeQuota = async (): Promise<ProviderResult> => {
     });
   }
 
-  const refreshToken = typeof entry?.refresh === 'string' ? entry.refresh : '';
-  const fingerprint = `${accessToken}\0${refreshToken}`;
+  const fingerprint = createHash('sha256')
+    .update(`${credential.accessToken}\0${credential.refreshToken ?? ''}`)
+    .digest('hex');
   if (claudeCredentialFingerprint !== fingerprint) {
     claudeCredentialFingerprint = fingerprint;
     claudeCachedUsage = null;
     claudeCooldownUntil = 0;
   }
-  if (Date.now() < claudeCooldownUntil) return buildClaudeRateLimitResult();
+  if (Date.now() < claudeCooldownUntil) {
+    return buildClaudeRateLimitResult(fingerprint, credential.planLabel);
+  }
 
   try {
     const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${credential.accessToken}`,
         'anthropic-beta': 'oauth-2025-04-20',
       },
     });
 
     if (response.status === 429) {
       claudeCooldownUntil = Date.now() + claudeCooldownFromResponse(response);
-      return buildClaudeRateLimitResult();
+      return buildClaudeRateLimitResult(fingerprint, credential.planLabel);
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -1441,13 +1453,14 @@ const fetchClaudeQuota = async (): Promise<ProviderResult> => {
 
     const payload = await response.json() as Record<string, unknown>;
     const usage = buildClaudeUsage(payload);
-    claudeCachedUsage = usage;
+    claudeCachedUsage = { fingerprint, usage, planLabel: credential.planLabel };
     return buildResult({
       providerId: 'claude',
       providerName: 'Claude',
       ok: true,
       configured: true,
       usage,
+      planLabel: credential.planLabel,
     });
   } catch (error) {
     return buildResult({
@@ -1458,6 +1471,12 @@ const fetchClaudeQuota = async (): Promise<ProviderResult> => {
       error: error instanceof Error ? error.message : 'Request failed',
     });
   }
+};
+
+export const resetClaudeQuotaCache = (): void => {
+  claudeCredentialFingerprint = null;
+  claudeCachedUsage = null;
+  claudeCooldownUntil = 0;
 };
 
 const buildCopilotWindows = (payload: Record<string, unknown>) => {

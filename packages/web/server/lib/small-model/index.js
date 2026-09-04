@@ -5,16 +5,23 @@ import { readAuthFile } from '../opencode/auth.js';
 import { readConfigLayers } from '../opencode/shared.js';
 import { getModelCatalog } from './catalog.js';
 import { resolveSmallModel, parseModelRef, isUsableAuthEntry, getAuthEntryForProvider } from './resolve.js';
-import { DEDICATED_WIRE_FORMAT_PROVIDERS, callSmallModel, resolveProviderLogin } from './call.js';
-import { getRuntimeProviderSnapshot } from './runtime-providers.js';
+import {
+  DEDICATED_WIRE_FORMAT_PROVIDERS,
+  callSmallModel,
+  getProviderTransportKind,
+  resolveClaudeCodeTransport,
+  resolveProviderLogin,
+} from './call.js';
+import { getRuntimeProviderSnapshot, getRuntimeProviderTransportFromSnapshot } from './runtime-providers.js';
 
-// Never a small model, whatever the transport looks like. A plugin can publish
-// an OpenAI-compatible endpoint for Claude Code, but it is a façade over the
-// Claude Agent SDK, which spawns the Claude Code CLI per request and spends
-// the user's Claude subscription rate limit. Paying that for a session title
-// or a summary is the wrong trade, so the refusal is unconditional rather than
-// conditional on an endpoint existing.
 const CLAUDE_CODE_PROVIDER = 'claude-code';
+const EXPLICIT_MODEL_SOURCES = new Set(['settings', 'config', 'request']);
+
+// Claude Code is intentionally opt-in. Its plugin endpoint starts the Claude
+// Code CLI for every call, so a session/family fallback must behave as if no
+// small model was found. A settings, config, or request model is user intent.
+const isAllowedResolution = (resolved) => resolved?.providerID !== CLAUDE_CODE_PROVIDER
+  || EXPLICIT_MODEL_SOURCES.has(resolved?.source);
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
   process.env.OPENCHAMBER_DATA_DIR
@@ -74,18 +81,21 @@ const resolveOutputTokens = ({ catalog, providerID, modelID, maxOutputTokens }) 
 // `truncate` keeps the historical behavior for callers whose prompt losing its
 // tail is survivable (summaries, commit messages). `error` is for callers whose
 // output would be quietly wrong on a clipped input — they need the failure.
-const clampPromptToModelLimit = ({ prompt, catalog, providerID, modelID, onOverflow, outputReserveTokens }) => {
+const clampPromptToModelLimit = ({ prompt, system, catalog, providerID, modelID, onOverflow, outputReserveTokens }) => {
   const { maxChars } = getModelInputCharBudget({ catalog, providerID, modelID, outputReserveTokens });
-  if (prompt.length <= maxChars) {
+  const systemChars = system?.length ?? 0;
+  const requiredChars = prompt.length + systemChars;
+  if (requiredChars <= maxChars) {
     return { prompt, truncated: false };
   }
-  if (onOverflow === 'error') {
+  const promptCharBudget = maxChars - systemChars;
+  if (onOverflow === 'error' || promptCharBudget <= 0) {
     throw Object.assign(
-      new Error(`Input is too large for ${providerID}/${modelID}: ${prompt.length} characters exceeds the ${maxChars} the model's context allows`),
-      { statusCode: 413, code: 'context-too-small', providerID, modelID, requiredChars: prompt.length, availableChars: maxChars },
+      new Error(`Input is too large for ${providerID}/${modelID}: ${requiredChars} characters exceeds the ${maxChars} the model's context allows`),
+      { statusCode: 413, code: 'context-too-small', providerID, modelID, requiredChars, availableChars: maxChars },
     );
   }
-  return { prompt: `${prompt.slice(0, maxChars)}…`, truncated: true };
+  return { prompt: `${prompt.slice(0, Math.max(0, promptCharBudget - 1))}…`, truncated: true };
 };
 
 const readConfiguredSmallModel = (workingDirectory) => {
@@ -102,10 +112,12 @@ const readConfiguredSmallModel = (workingDirectory) => {
  * Generates text with the user's small model, resolved and authenticated
  * entirely server-side from the OpenCode config and auth store.
  */
-export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, directory, preferredProviderID, preferredModelID, restrictToPreferredProvider = false, responseSchema, timeoutMs, signal, onOverflow = 'truncate' }) {
+export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, directory, preferredProviderID, preferredModelID, restrictToPreferredProvider, responseSchema, timeoutMs, signal, onOverflow = 'truncate' }) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
     throw Object.assign(new Error('prompt is required'), { statusCode: 400 });
   }
+  const normalizedPrompt = prompt.trim();
+  const normalizedSystem = typeof system === 'string' && system.trim() ? system.trim() : undefined;
 
   const auth = readAuthFile();
   const catalog = await getModelCatalog().catch(() => ({}));
@@ -122,26 +134,20 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
       preferredModelID,
     });
 
-  if (!resolved) {
+  if (!resolved || !isAllowedResolution(resolved)) {
     throw Object.assign(
       new Error('No small model available — no authenticated provider has a suitable model'),
       { statusCode: 404 },
     );
   }
 
-  if (resolved.providerID === CLAUDE_CODE_PROVIDER) {
-    throw Object.assign(
-      new Error('Claude Code cannot be used for background small-model actions. Choose another Small Model in Settings → Sessions.'),
-      { statusCode: 422, code: 'small-model-provider-unsupported' },
-    );
-  }
-
   // Callers with a session context can forbid silently switching providers:
   // an explicit user choice (settings override, opencode config, request
-  // model) is always allowed, anything else must stay on the session's
-  // provider.
-  if (restrictToPreferredProvider
-    && !['settings', 'config', 'request'].includes(resolved.source)
+  // model) is always allowed. Otherwise, supplying a preferred provider opts
+  // into same-provider resolution unless the caller explicitly passes false.
+  if (preferredProviderID
+    && restrictToPreferredProvider !== false
+    && !EXPLICIT_MODEL_SOURCES.has(resolved.source)
     && resolved.providerID !== preferredProviderID) {
     throw Object.assign(
       new Error('No small model available within the session provider'),
@@ -157,13 +163,24 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
   });
 
   const clamped = clampPromptToModelLimit({
-    prompt: prompt.trim(),
+    prompt: normalizedPrompt,
+    system: normalizedSystem,
     catalog,
     providerID: resolved.providerID,
     modelID: resolved.modelID,
     onOverflow,
     outputReserveTokens: outputTokens,
   });
+
+  const resolvedProviderTransport = resolved.providerID === CLAUDE_CODE_PROVIDER
+    ? await resolveClaudeCodeTransport({ workingDirectory: directory })
+    : undefined;
+  if (resolved.providerID === CLAUDE_CODE_PROVIDER && !resolvedProviderTransport) {
+    throw Object.assign(
+      new Error(`No OpenCode login found for provider "${CLAUDE_CODE_PROVIDER}"`),
+      { statusCode: 401, code: 'no-provider-login', providerID: CLAUDE_CODE_PROVIDER },
+    );
+  }
 
   const text = await callSmallModel({
     auth,
@@ -172,11 +189,12 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     providerID: resolved.providerID,
     modelID: resolved.modelID,
     prompt: clamped.prompt,
-    system: typeof system === 'string' && system.trim() ? system.trim() : undefined,
+    system: normalizedSystem,
     maxOutputTokens: outputTokens,
     responseSchema,
     timeoutMs,
     signal,
+    resolvedProviderTransport,
   });
 
   return {
@@ -194,11 +212,13 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
  * the Small Model and Changes Walkthrough pickers to hide providers that would
  * only ever fail (e.g. opencode free models without a token).
  */
-export async function listAuthenticatedProviders() {
+export async function listAuthenticatedProviders(directory) {
   try {
     const auth = readAuthFile();
     const ids = new Set(
-      Object.keys(auth || {}).filter((providerID) => isUsableAuthEntry(auth[providerID])),
+      Object.keys(auth || {}).filter((providerID) => (
+        providerID !== CLAUDE_CODE_PROVIDER && isUsableAuthEntry(auth[providerID])
+      )),
     );
     // The catalog id is github-copilot while legacy auth entries may sit
     // under the copilot alias.
@@ -208,11 +228,10 @@ export async function listAuthenticatedProviders() {
     // Kept separate so a runtime lookup that goes wrong costs the providers it
     // would have added, never the logins already established from disk.
     try {
-      for (const providerID of await listRuntimeCallableProviders()) ids.add(providerID);
+      for (const providerID of await listRuntimeCallableProviders(directory)) ids.add(providerID);
     } catch {
       // The auth.json set below stands on its own.
     }
-    ids.delete(CLAUDE_CODE_PROVIDER);
     return Array.from(ids);
   } catch {
     return [];
@@ -228,15 +247,14 @@ export async function listAuthenticatedProviders() {
  * speak is not knowable from any field OpenCode reports, and guessing it wrong
  * removes a working model from the picker with nothing to explain it.
  */
-async function listRuntimeCallableProviders() {
-  const snapshot = await getRuntimeProviderSnapshot();
+async function listRuntimeCallableProviders(directory) {
+  const snapshot = await getRuntimeProviderSnapshot(directory);
   if (!snapshot) return [];
   const ids = [];
   for (const id of snapshot.connected) {
-    const provider = snapshot.providers.get(id);
-    // No credential we may use — including the zen sentinel, whose free models
-    // belong to OpenCode's own server.
-    if (!provider?.apiKey || !provider.baseURL) continue;
+    // No credential or endpoint we may use, including the zen sentinel whose
+    // free models belong to OpenCode's own server.
+    if (!getRuntimeProviderTransportFromSnapshot(snapshot, id)) continue;
     // Reached through a dedicated wire format and already covered by the
     // auth.json scan above.
     if (DEDICATED_WIRE_FORMAT_PROVIDERS.has(id)) continue;
@@ -284,7 +302,7 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
       preferredProviderID,
       preferredModelID,
     });
-  if (!resolved) return resolved;
+  if (!resolved || !isAllowedResolution(resolved)) return null;
 
   const entry = catalog?.[resolved.providerID]?.models?.[resolved.modelID];
   const outputTokenLimit = Number(entry?.limit?.output) > 0 ? Number(entry.limit.output) : null;
@@ -295,7 +313,13 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
     providerID: resolved.providerID,
     modelID: resolved.modelID,
   });
-  const reserveTokens = resolveReserveTokens(outputReserveTokens, { contextTokens, outputTokenLimit });
+  const requestedReserveTokens = resolveReserveTokens(outputReserveTokens, { contextTokens, outputTokenLimit });
+  const reserveTokens = resolveOutputTokens({
+    catalog,
+    providerID: resolved.providerID,
+    modelID: resolved.modelID,
+    maxOutputTokens: requestedReserveTokens,
+  });
   const { maxChars } = getModelInputCharBudget({
     catalog,
     providerID: resolved.providerID,
@@ -305,11 +329,21 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
 
   // Settings/config/request overrides can name a provider with no usable login.
   // Report that here so readiness can refuse before the user pays for a 401.
-  const hasLogin = Boolean(await resolveProviderLogin({
-    auth,
-    workingDirectory: directory,
-    providerID: resolved.providerID,
-  }));
+  const claudeCodeTransport = resolved.providerID === CLAUDE_CODE_PROVIDER
+    ? await resolveClaudeCodeTransport({ workingDirectory: directory })
+    : null;
+  const login = resolved.providerID === CLAUDE_CODE_PROVIDER
+    ? null
+    : await resolveProviderLogin({
+      auth,
+      workingDirectory: directory,
+      providerID: resolved.providerID,
+    });
+  const hasLogin = resolved.providerID === CLAUDE_CODE_PROVIDER
+    ? Boolean(claudeCodeTransport)
+    : Boolean(login);
+  const transport = claudeCodeTransport?.transportID
+    ?? getProviderTransportKind({ providerID: resolved.providerID, login });
 
   return {
     ...resolved,
@@ -322,5 +356,6 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
     outputTokens: Number(reserveTokens) > 0 ? Number(reserveTokens) : null,
     structuredOutput: typeof entry?.structured_output === 'boolean' ? entry.structured_output : null,
     outputTokenLimit,
+    transport,
   };
 }

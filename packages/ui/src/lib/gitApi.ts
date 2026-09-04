@@ -51,19 +51,18 @@ const extractJsonObject = (value: string): Record<string, unknown> | null => {
   const text = value.trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = (fenced?.[1] ?? text).trim();
-  const starts = [candidate.indexOf('{')].filter((index) => index >= 0);
+  const start = candidate.indexOf('{');
+  if (start < 0) return null;
 
-  for (const start of starts) {
-    for (let end = candidate.length; end > start; end -= 1) {
-      if (candidate[end - 1] !== '}') continue;
-      try {
-        const parsed = JSON.parse(candidate.slice(start, end)) as unknown;
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          return parsed as Record<string, unknown>;
-        }
-      } catch {
-        // Keep scanning; models sometimes wrap JSON with prose or fences.
+  for (let end = candidate.length; end > start; end -= 1) {
+    if (candidate[end - 1] !== '}') continue;
+    try {
+      const parsed = JSON.parse(candidate.slice(start, end)) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
       }
+    } catch {
+      // Keep scanning; models sometimes wrap JSON with prose or fences.
     }
   }
 
@@ -360,6 +359,7 @@ export async function generateCommitMessage(
         system: visiblePrompt,
         prompt: `${hiddenPrompt}\n\nDiffs of the selected files:\n${diffs}`,
         directory,
+        restrictToPreferredProvider: true,
         ...(currentProviderId ? { preferredProviderID: currentProviderId } : {}),
         ...(currentModelId ? { preferredModelID: currentModelId } : {}),
       }),
@@ -559,6 +559,7 @@ export async function generatePullRequestDescription(
         system: visiblePrompt,
         prompt: hiddenPrompt,
         directory,
+        restrictToPreferredProvider: true,
         ...(currentProviderId ? { preferredProviderID: currentProviderId } : {}),
         ...(currentModelId ? { preferredModelID: currentModelId } : {}),
       }),

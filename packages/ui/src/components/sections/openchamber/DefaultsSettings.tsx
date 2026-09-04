@@ -16,6 +16,7 @@ import {
 import { SettingsInfoHint } from '@/components/sections/shared/SettingsInfoHint';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -64,6 +65,7 @@ export const DefaultsSettings: React.FC = () => {
   const setShowDeletionDialog = useUIStore((state) => state.setShowDeletionDialog);
   const providers = useConfigStore((state) => state.providers);
   const modelsMetadata = useConfigStore((state) => state.modelsMetadata);
+  const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
 
   const [defaultModel, setDefaultModel] = React.useState<string | undefined>();
   const [defaultVariant, setDefaultVariant] = React.useState<string | undefined>();
@@ -88,30 +90,28 @@ export const DefaultsSettings: React.FC = () => {
           walkthroughModelOverride?: string;
         } | null = null;
 
-        if (!data) {
-          const runtimeSettings = getRegisteredRuntimeAPIs()?.settings;
-          if (runtimeSettings) {
-            try {
-              const result = await runtimeSettings.load();
-              const settings = result?.settings;
-              if (settings) {
-                const raw = settings as Record<string, unknown>;
-                data = {
-                  defaultModel: typeof settings.defaultModel === 'string' ? settings.defaultModel : undefined,
-                  defaultVariant:
-                    typeof raw.defaultVariant === 'string'
-                      ? (raw.defaultVariant as string)
-                      : undefined,
-                  defaultAgent: typeof settings.defaultAgent === 'string' ? settings.defaultAgent : undefined,
-                  smallModelUseDefault: typeof raw.smallModelUseDefault === 'boolean' ? raw.smallModelUseDefault : undefined,
-                  smallModelOverride: typeof raw.smallModelOverride === 'string' ? raw.smallModelOverride : undefined,
-                  walkthroughModelOverride:
-                    typeof raw.walkthroughModelOverride === 'string' ? raw.walkthroughModelOverride : undefined,
-                };
-              }
-            } catch {
-              // fall through
+        const runtimeSettings = getRegisteredRuntimeAPIs()?.settings;
+        if (runtimeSettings) {
+          try {
+            const result = await runtimeSettings.load();
+            const settings = result?.settings;
+            if (settings) {
+              const raw = settings as Record<string, unknown>;
+              data = {
+                defaultModel: typeof settings.defaultModel === 'string' ? settings.defaultModel : undefined,
+                defaultVariant:
+                  typeof raw.defaultVariant === 'string'
+                    ? (raw.defaultVariant as string)
+                    : undefined,
+                defaultAgent: typeof settings.defaultAgent === 'string' ? settings.defaultAgent : undefined,
+                smallModelUseDefault: typeof raw.smallModelUseDefault === 'boolean' ? raw.smallModelUseDefault : undefined,
+                smallModelOverride: typeof raw.smallModelOverride === 'string' ? raw.smallModelOverride : undefined,
+                walkthroughModelOverride:
+                  typeof raw.walkthroughModelOverride === 'string' ? raw.walkthroughModelOverride : undefined,
+              };
             }
+          } catch {
+            // fall through
           }
         }
 
@@ -304,9 +304,14 @@ export const DefaultsSettings: React.FC = () => {
     // credential and an endpoint for, including plugin-registered ones that
     // exist only inside the running OpenCode.
     let cancelled = false;
+    setSmallModelProviders([]);
     (async () => {
       try {
-        const response = await runtimeFetch('/api/small-model', { method: 'GET', headers: { Accept: 'application/json' } });
+        const response = await runtimeFetch('/api/small-model', {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          query: { directory: currentDirectory },
+        });
         if (!response.ok) return;
         const payload = await response.json().catch(() => null) as { authenticatedProviders?: unknown } | null;
         if (!cancelled && Array.isArray(payload?.authenticatedProviders)) {
@@ -319,7 +324,7 @@ export const DefaultsSettings: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [currentDirectory]);
 
   const availableVariants = React.useMemo(() => {
     if (!parsedModel.providerId || !parsedModel.modelId) return [];

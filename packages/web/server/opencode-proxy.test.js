@@ -901,6 +901,46 @@ describe('OpenCode proxy SSE forwarding', () => {
     await expect(response.json()).resolves.toBe(true);
   });
 
+  it('exempts interactive MCP OAuth authentication from the outer request deadline', async () => {
+    const upstream = express();
+    upstream.post('/mcp/:name/auth/authenticate', async (_req, res) => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      res.json({ url: 'https://example.test/authorize' });
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const externalBaseUrl = `http://127.0.0.1:${upstreamPort}`;
+
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      LONG_REQUEST_TIMEOUT_MS: 50,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        openCodeBaseUrl: externalBaseUrl,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `${externalBaseUrl}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/mcp/github/auth/authenticate`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ url: 'https://example.test/authorize' });
+  });
+
   it('still applies the request deadline to the OAuth authorize call', async () => {
     const upstream = express();
     upstream.post('/provider/:providerID/oauth/authorize', (_req, _res) => {

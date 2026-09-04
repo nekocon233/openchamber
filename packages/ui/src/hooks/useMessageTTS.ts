@@ -7,6 +7,7 @@
 
 import { useCallback, useState } from 'react';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useServerTTS } from './useServerTTS';
 import { useSayTTS } from './useSayTTS';
 import { useLocalTTS } from './useLocalTTS';
@@ -23,6 +24,7 @@ const SUMMARIZE_SYSTEM_PROMPT = 'Summarize the assistant reply for text-to-speec
 async function summarizeForSpeech(
     text: string,
     preferred: { providerID?: string; modelID?: string },
+    directory?: string,
 ): Promise<string | null> {
     try {
         const response = await requestSmallModel({
@@ -31,6 +33,8 @@ async function summarizeForSpeech(
             body: JSON.stringify({
                 prompt: text,
                 system: SUMMARIZE_SYSTEM_PROMPT,
+                restrictToPreferredProvider: true,
+                directory,
                 ...(preferred.providerID ? { preferredProviderID: preferred.providerID } : {}),
                 ...(preferred.modelID ? { preferredModelID: preferred.modelID } : {}),
             }),
@@ -110,7 +114,7 @@ export function useMessageTTS(): UseMessageTTSReturn {
                 const summary = await summarizeForSpeech(text, {
                     providerID: currentProviderId || undefined,
                     modelID: currentModelId || undefined,
-                });
+                }, useDirectoryStore.getState().currentDirectory || undefined);
                 if (summary) {
                     sourceText = summary;
                 }

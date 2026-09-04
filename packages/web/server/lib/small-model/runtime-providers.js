@@ -34,9 +34,19 @@ const SNAPSHOT_TIMEOUT_MS = 5_000;
 export const ZEN_ANONYMOUS_API_KEY = 'public';
 
 let connection = null;
-let snapshot = null;
-let snapshotAt = 0;
-let inflight = null;
+let generation = 0;
+const scopes = new Map();
+
+const directoryKey = (directory) => directory ?? '';
+
+const getScope = (key) => {
+  let scope = scopes.get(key);
+  if (!scope) {
+    scope = { snapshot: null, snapshotAt: 0, inflight: null };
+    scopes.set(key, scope);
+  }
+  return scope;
+};
 
 /**
  * Wires this module to the running OpenCode instance. Called once at server
@@ -53,9 +63,8 @@ export function configureOpenCodeRuntimeProviders(next) {
  * change ports, keys and the provider list itself.
  */
 export function resetOpenCodeRuntimeProviders() {
-  snapshot = null;
-  snapshotAt = 0;
-  inflight = null;
+  generation += 1;
+  scopes.clear();
 }
 
 /**
@@ -79,15 +88,16 @@ function parseProviderListing(payload) {
   const endpoint = (value) => text(value)?.replace(/\/+$/, '') ?? null;
 
   for (const raw of Array.isArray(payload.all) ? payload.all : []) {
-    const id = text(record(raw).id);
+    const provider = record(raw);
+    const id = text(provider.id);
     if (!id) continue;
-    const options = record(record(raw).options);
-    const firstModel = record(Object.values(record(record(raw).models))[0]);
+    const options = record(provider.options);
+    const firstModel = record(Object.values(record(provider.models))[0]);
     const declaredKey = text(options.apiKey);
     providers.set(id, {
       id,
-      source: text(record(raw).source),
-      apiKey: declaredKey === ZEN_ANONYMOUS_API_KEY ? null : (declaredKey ?? text(record(raw).key)),
+      source: text(provider.source),
+      apiKey: declaredKey === ZEN_ANONYMOUS_API_KEY ? null : (declaredKey ?? text(provider.key)),
       baseURL: endpoint(options.baseURL) ?? endpoint(record(firstModel.api).url),
       // True only for the zen-without-login case: a provider that is present
       // and usable through OpenCode, but that we must not call ourselves.
@@ -105,9 +115,11 @@ function parseProviderListing(payload) {
   return { providers, connected };
 }
 
-const fetchSnapshot = async () => {
-  const response = await fetch(connection.buildOpenCodeUrl('/provider', ''), {
-    headers: { Accept: 'application/json', ...connection.getOpenCodeAuthHeaders() },
+const fetchSnapshot = async (activeConnection, directory) => {
+  const url = new URL(activeConnection.buildOpenCodeUrl('/provider', ''));
+  if (directory) url.searchParams.set('directory', directory);
+  const response = await fetch(url.toString(), {
+    headers: { Accept: 'application/json', ...activeConnection.getOpenCodeAuthHeaders() },
     signal: AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS),
   });
   if (!response.ok) {
@@ -124,33 +136,66 @@ const fetchSnapshot = async () => {
  * their file-based resolution rather than treat an unreachable OpenCode as an
  * empty provider list.
  */
-export async function getRuntimeProviderSnapshot() {
-  if (!connection) return null;
-  if (snapshot && Date.now() - snapshotAt < SNAPSHOT_TTL_MS) return snapshot;
-  if (!inflight) {
-    inflight = fetchSnapshot().finally(() => {
-      inflight = null;
-    });
+export async function getRuntimeProviderSnapshot(directory) {
+  const activeConnection = connection;
+  if (!activeConnection) return null;
+
+  const key = directoryKey(directory);
+  const scope = getScope(key);
+  if (scope.snapshot && Date.now() - scope.snapshotAt < SNAPSHOT_TTL_MS) return scope.snapshot;
+  if (!scope.inflight) {
+    const requestGeneration = generation;
+    const isCurrent = () => (
+      connection === activeConnection
+      && generation === requestGeneration
+      && scopes.get(key) === scope
+    );
+    const request = fetchSnapshot(activeConnection, key)
+      .then((nextSnapshot) => {
+        if (!isCurrent()) return null;
+        scope.snapshot = nextSnapshot;
+        scope.snapshotAt = Date.now();
+        return nextSnapshot;
+      }, () => {
+        // Keep serving the previous snapshot for this directory when there is
+        // one. A reset makes the old scope unauthoritative, so it returns null.
+        return isCurrent() ? scope.snapshot : null;
+      })
+      .finally(() => {
+        // A request from before reset must not clear the replacement request.
+        if (scope.inflight === request) scope.inflight = null;
+      });
+    scope.inflight = request;
   }
-  try {
-    snapshot = await inflight;
-    snapshotAt = Date.now();
-    return snapshot;
-  } catch {
-    // Keep serving the previous snapshot when there is one: a momentarily
-    // unreachable OpenCode should not retract providers that were resolving a
-    // second ago.
-    return snapshot;
-  }
+  return scope.inflight;
 }
 
 /**
  * Runtime credential and endpoint for one provider, or `null` when OpenCode
  * knows nothing about it.
  */
-export async function getRuntimeProvider(providerID) {
-  const current = await getRuntimeProviderSnapshot();
+export async function getRuntimeProvider(providerID, directory) {
+  const current = await getRuntimeProviderSnapshot(directory);
   return current?.providers.get(providerID) ?? null;
 }
 
+/**
+ * A runtime provider is directly callable only when OpenCode marks it
+ * connected and reports both parts of the transport. Return a fresh object so
+ * one generation can retain one authoritative key/URL pair.
+ */
+export function getRuntimeProviderTransportFromSnapshot(snapshot, providerID) {
+  if (!snapshot?.connected?.has(providerID)) return null;
+  const provider = snapshot.providers?.get(providerID);
+  if (!provider?.apiKey || !provider.baseURL) return null;
+  return Object.freeze({
+    providerID,
+    apiKey: provider.apiKey,
+    baseURL: provider.baseURL,
+  });
+}
 
+export async function getRuntimeProviderTransport(providerID, directory) {
+  const current = await getRuntimeProviderSnapshot(directory);
+  return getRuntimeProviderTransportFromSnapshot(current, providerID);
+}

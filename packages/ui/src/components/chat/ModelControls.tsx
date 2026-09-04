@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Model } from '@opencode-ai/sdk/v2';
 import { focusChatInput } from './composer/editor/dom';
 import type { EditPermissionMode } from '@/stores/types/sessionTypes';
 import type { ModelMetadata } from '@/types';
@@ -49,7 +50,7 @@ import { getSyncParts } from '@/sync/sync-refs';
 
 type IconComponent = IconName;
 
-type ProviderModel = Record<string, unknown> & { id?: string; name?: string };
+type ProviderModel = Model;
 
 type PermissionAction = 'allow' | 'ask' | 'deny';
 type PermissionRule = { permission: string; pattern: string; action: PermissionAction };
@@ -1261,7 +1262,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     };
 
     const getModelDisplayName = (model: ProviderModel | undefined, fallbackModelId?: string) => {
-        return getSharedModelDisplayName(model, fallbackModelId, { maxLength: 40 });
+        return getSharedModelDisplayName(
+            model ? { id: model.id, name: model.name } : undefined,
+            fallbackModelId,
+            { maxLength: 40 },
+        );
     };
 
     const getProviderDisplayName = () => {

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -5,7 +6,7 @@ import { readAuthFile, writeAuthFile } from '../opencode/auth.js';
 import { readConfig, readConfigLayers, isPlainObject } from '../opencode/shared.js';
 import { getCatalogProvider } from './catalog.js';
 import { getAuthEntryForProvider } from './resolve.js';
-import { getRuntimeProvider } from './runtime-providers.js';
+import { getRuntimeProviderTransport } from './runtime-providers.js';
 
 // Direct, non-streaming text generation against the provider APIs, replicating
 // how OpenCode authenticates each of them (see the plugin auth loaders in the
@@ -18,6 +19,20 @@ const COPILOT_MODELS_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4_000;
 
 const USER_AGENT = 'opencode/1.0 openchamber';
+const CLAUDE_CODE_PROVIDER = 'claude-code';
+const CLAUDE_CODE_REQUEST_KIND_HEADER = 'x-opencode-claude-request-kind';
+
+const noProviderLoginError = (providerID) => Object.assign(
+  new Error(`No OpenCode login found for provider "${providerID}"`),
+  { statusCode: 401, code: 'no-provider-login', providerID },
+);
+
+const providerConfigResolutionError = (providerID, configField) => Object.assign(
+  new Error(`Failed to resolve configured ${configField} for provider "${providerID}"`),
+  { statusCode: 422, code: 'provider-config-resolution-failed', providerID, configField },
+);
+
+const endpointFingerprint = (value) => crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);
 
 const mergeHeadersCaseInsensitive = (base, overrides) => {
   const merged = { ...base };
@@ -521,42 +536,50 @@ const callCodexResponses = async ({ accessToken, accountId, modelID, prompt, sys
 // Custom provider configuration support
 // ---------------------------------------------------------------------------
 
-const resolveConfigValue = (value, workingDirectory, providerID, headerName = null) => {
+const resolveConfigValue = (value, workingDirectory, providerID, headerName = null, fieldName = 'apiKey') => {
+  const configField = headerName ? `header "${headerName}"` : fieldName;
   const envMatch = value.match(/^\{env:([^}]+)\}$/i);
   if (envMatch) {
-    return process.env[envMatch[1].trim()]?.trim() || null;
+    const resolved = process.env[envMatch[1].trim()]?.trim();
+    if (!resolved) throw providerConfigResolutionError(providerID, configField);
+    return resolved;
   }
 
   const fileMatch = value.match(/^\{file:(.+)\}$/i);
-  if (!fileMatch) return value;
-
-  const configuredPath = fileMatch[1].trim();
-  let resolvedPath;
-  if (configuredPath === '~' || configuredPath.startsWith('~/') || configuredPath.startsWith('~\\')) {
-    resolvedPath = path.join(os.homedir(), configuredPath.slice(2));
-  } else if (path.isAbsolute(configuredPath)) {
-    resolvedPath = configuredPath;
-  } else {
-    const layers = readConfigLayers(workingDirectory);
-    const source = [
-      { config: layers.customConfig, filePath: layers.paths.customPath },
-      { config: layers.projectConfig, filePath: layers.paths.projectPath },
-      { config: layers.userConfig, filePath: layers.paths.userPath },
-    ].find(({ config }) => {
-      const options = config?.provider?.[providerID]?.options;
-      return headerName
-        ? options?.headers?.[headerName] === value
-        : options?.apiKey === value;
-    });
-    resolvedPath = path.resolve(source?.filePath ? path.dirname(source.filePath) : workingDirectory || process.cwd(), configuredPath);
+  if (!fileMatch) {
+    if (/^\{(?:env|file):/i.test(value)) {
+      throw providerConfigResolutionError(providerID, configField);
+    }
+    return value;
   }
 
   try {
+    const configuredPath = fileMatch[1].trim();
+    if (!configuredPath) throw new Error('empty path');
+    let resolvedPath;
+    if (configuredPath === '~' || configuredPath.startsWith('~/') || configuredPath.startsWith('~\\')) {
+      resolvedPath = path.join(os.homedir(), configuredPath.slice(2));
+    } else if (path.isAbsolute(configuredPath)) {
+      resolvedPath = configuredPath;
+    } else {
+      const layers = readConfigLayers(workingDirectory);
+      const source = [
+        { config: layers.customConfig, filePath: layers.paths.customPath },
+        { config: layers.projectConfig, filePath: layers.paths.projectPath },
+        { config: layers.userConfig, filePath: layers.paths.userPath },
+      ].find(({ config }) => {
+        const options = config?.provider?.[providerID]?.options;
+        return headerName
+          ? options?.headers?.[headerName] === value
+          : options?.[fieldName] === value;
+      });
+      resolvedPath = path.resolve(source?.filePath ? path.dirname(source.filePath) : workingDirectory || process.cwd(), configuredPath);
+    }
     const key = fs.readFileSync(resolvedPath, 'utf8').trim();
     if (!key) throw new Error('empty file');
     return key;
   } catch {
-    throw new Error(`Failed to resolve configured ${headerName ? `header "${headerName}"` : 'apiKey'} file for provider "${providerID}"`);
+    throw providerConfigResolutionError(providerID, configField);
   }
 };
 
@@ -584,26 +607,23 @@ const readConfiguredHeaders = (providerCfg, workingDirectory, providerID) => {
 };
 
 const readProviderConfig = (workingDirectory, providerID) => {
-  try {
-    const config = readConfig(workingDirectory);
-    const providerCfg = config?.provider?.[providerID];
-    if (!providerCfg || typeof providerCfg !== 'object') return null;
-    const baseURL = typeof providerCfg?.options?.baseURL === 'string' ? providerCfg.options.baseURL.trim() : null;
-    const rawApiKey = typeof providerCfg?.options?.apiKey === 'string' ? providerCfg.options.apiKey.trim() : null;
-    const apiKey = rawApiKey ? resolveConfigValue(rawApiKey, workingDirectory, providerID) : null;
-    return {
-      baseURL,
-      headers: readConfiguredHeaders(providerCfg, workingDirectory, providerID),
-      // Shape the config-supplied key as a regular api-key auth entry so it
-      // can win the precedence check below and flow through the dispatch's
-      // `entry.type === 'api' ? entry.key : ...` branch unchanged.
-      auth: apiKey ? { type: 'api', key: apiKey } : null,
-    };
-  } catch {
-    // Provider config is non-essential — continue with catalog-only resolution.
-    return null;
-  }
-}
+  const config = readConfig(workingDirectory);
+  const providerCfg = config?.provider?.[providerID];
+  if (!providerCfg || typeof providerCfg !== 'object') return null;
+  const configuredBaseURL = providerCfg?.options?.baseURL;
+  const rawBaseURL = String(configuredBaseURL) === configuredBaseURL ? configuredBaseURL.trim() : null;
+  const baseURL = rawBaseURL ? resolveConfigValue(rawBaseURL, workingDirectory, providerID, null, 'baseURL') : null;
+  const rawApiKey = typeof providerCfg?.options?.apiKey === 'string' ? providerCfg.options.apiKey.trim() : null;
+  const apiKey = rawApiKey ? resolveConfigValue(rawApiKey, workingDirectory, providerID) : null;
+  return {
+    baseURL,
+    headers: readConfiguredHeaders(providerCfg, workingDirectory, providerID),
+    // Shape the config-supplied key as a regular api-key auth entry so it
+    // can win the precedence check below and flow through the dispatch's
+    // `entry.type === 'api' ? entry.key : ...` branch unchanged.
+    auth: apiKey ? { type: 'api', key: apiKey } : null,
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Dispatch
@@ -630,6 +650,25 @@ const runtimeCredential = (providerID, runtime) => (
     : null
 );
 
+export async function resolveClaudeCodeTransport({ workingDirectory } = {}) {
+  const runtime = await getRuntimeProviderTransport(CLAUDE_CODE_PROVIDER, workingDirectory);
+  if (!runtime) return null;
+  return Object.freeze({
+    ...runtime,
+    kind: 'claude-code-runtime',
+    transportID: `claude-code-runtime:${endpointFingerprint(runtime.baseURL)}`,
+  });
+}
+
+export const getProviderTransportKind = ({ providerID, login }) => {
+  if (providerID === CLAUDE_CODE_PROVIDER) return 'claude-code-runtime';
+  if (providerID === 'github-copilot') return 'github-copilot-dynamic';
+  if (providerID === 'openai' && login?.type === 'oauth') return 'openai-codex-responses';
+  if (providerID === 'anthropic') return 'anthropic-messages';
+  if (providerID === 'google') return 'google-generate-content';
+  return 'openai-compatible';
+};
+
 /**
  * Same credential resolution the request path uses: config
  * `provider.<id>.options.apiKey` wins, then the runtime credential OpenCode
@@ -638,17 +677,44 @@ const runtimeCredential = (providerID, runtime) => (
  * must use this rather than inventing a second rule.
  */
 export async function resolveProviderLogin({ auth, workingDirectory, providerID }) {
+  if (providerID === CLAUDE_CODE_PROVIDER) {
+    const transport = await resolveClaudeCodeTransport({ workingDirectory });
+    return transport ? { type: 'api', key: transport.apiKey } : null;
+  }
   const providerConfig = readProviderConfig(workingDirectory, providerID);
   return providerConfig?.auth
-    || runtimeCredential(providerID, await getRuntimeProvider(providerID))
+    || runtimeCredential(providerID, await getRuntimeProviderTransport(providerID, workingDirectory))
     || getAuthEntryForProvider(auth, providerID)
     || null;
 }
 
-export async function callSmallModel({ auth, catalog, workingDirectory, providerID, modelID, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal }) {
+export async function callSmallModel({ auth, catalog, workingDirectory, providerID, modelID, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal, resolvedProviderTransport }) {
   const tokens = Number(maxOutputTokens) > 0 ? Number(maxOutputTokens) : DEFAULT_MAX_OUTPUT_TOKENS;
+
+  if (providerID === CLAUDE_CODE_PROVIDER) {
+    const transport = resolvedProviderTransport ?? await resolveClaudeCodeTransport({ workingDirectory });
+    if (!transport?.apiKey || !transport.baseURL || transport.providerID !== CLAUDE_CODE_PROVIDER) {
+      throw noProviderLoginError(providerID);
+    }
+    return callOpenaiCompatible({
+      baseURL: transport.baseURL,
+      headers: {
+        Authorization: `Bearer ${transport.apiKey}`,
+        [CLAUDE_CODE_REQUEST_KIND_HEADER]: 'utility',
+      },
+      modelID,
+      prompt,
+      system,
+      maxOutputTokens: tokens,
+      providerLabel: 'Claude Code',
+      responseSchema,
+      timeoutMs,
+      signal,
+    });
+  }
+
   const providerConfig = readProviderConfig(workingDirectory, providerID);
-  const runtimeProvider = await getRuntimeProvider(providerID);
+  const runtimeProvider = await getRuntimeProviderTransport(providerID, workingDirectory);
   // Match OpenCode's resolveSDK precedence: config `provider.<id>.options`
   // wins, then what OpenCode itself resolved at runtime (the only place a
   // plugin's credential exists), and the auth.json entry last.
@@ -658,11 +724,7 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
   if (!entry) {
     // Structured so the walkthrough (and any other caller) can show a blocker
     // instead of a raw 500 banner with this developer-oriented sentence.
-    throw Object.assign(new Error(`No OpenCode login found for provider "${providerID}"`), {
-      statusCode: 401,
-      code: 'no-provider-login',
-      providerID,
-    });
+    throw noProviderLoginError(providerID);
   }
 
   if (providerID === 'github-copilot') {
@@ -766,14 +828,19 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
   const provider = getCatalogProvider(catalog, providerID);
   const providerConfigUrl = providerConfig?.baseURL;
   const defaultOpenaiUrl = 'https://api.openai.com/v1';
-  const baseURL = typeof providerConfigUrl === 'string' && providerConfigUrl
+  let baseURL = typeof providerConfigUrl === 'string' && providerConfigUrl
     ? providerConfigUrl
-    : providerID === 'openai'
-      ? defaultOpenaiUrl
-      : runtimeProvider?.baseURL
-        ?? (typeof provider?.api === 'string' && provider.api
-          ? provider.api
-          : null);
+    : null;
+  if (!baseURL) {
+    if (providerID === 'openai') {
+      baseURL = defaultOpenaiUrl;
+    } else {
+      baseURL = runtimeProvider?.baseURL ?? null;
+      if (baseURL === null && typeof provider?.api === 'string' && provider.api) {
+        baseURL = provider.api;
+      }
+    }
+  }
   if (!baseURL) {
     throw new Error(`Provider "${providerID}" has no known API base URL`);
   }
@@ -790,12 +857,19 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
     || lowerModel.includes('glm')
     || lowerModel.includes('minimax-m3');
   const extraBody = supportsThinkingToggle ? { thinking: { type: 'disabled' } } : undefined;
+  const providerHeaders = mergeHeadersCaseInsensitive(
+    { Authorization: `Bearer ${apiKey}` },
+    providerConfig?.headers,
+  );
+  const reservedHeader = Object.keys(providerHeaders)
+    .find((name) => name.toLowerCase() === CLAUDE_CODE_REQUEST_KIND_HEADER);
+  if (reservedHeader) delete providerHeaders[reservedHeader];
 
   return callOpenaiCompatible({
     baseURL,
     // Configured headers last: a gateway that authenticates on its own header
     // must be able to override the bearer default rather than sit beside it.
-    headers: mergeHeadersCaseInsensitive({ Authorization: `Bearer ${apiKey}` }, providerConfig?.headers),
+    headers: providerHeaders,
     modelID,
     prompt,
     system,

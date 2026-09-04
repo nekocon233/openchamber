@@ -198,18 +198,18 @@ half of all models, and treating unknown as unsupported would hide models that
 work.
 
 Providers that do not declare the capability sometimes reject the schema at
-request time (a plain `400`, or Alibaba/Qwen's "'messages' must contain the word
-'json'"). A rejected request shape is not a dead end, so a `4xx` on a schema
-request triggers exactly one retry with the schema moved into the prompt and the
-tolerant parser handling the result. Only if *that* fails to yield usable JSON is
-`structured-output-unsupported` reported — at which point it is a real capability
-problem the user can fix by switching model.
+request time. Fallback is limited to `structured-output-unsupported`, or a
+`400`/`422` whose message identifies `response_format`, JSON Schema, tool choice,
+or a JSON requirement. Authentication, permission, timeout, and rate-limit
+responses (`401`, `403`, `408`, `429`) never trigger a second paid request, and
+neither does an unclassified `400`.
 
-The refusal is then remembered per `provider/model` and the fallback goes first
-from then on. Without that, every generation on such a provider pays for a call
-whose failure is already known. The memory is process-lifetime only on purpose:
-a provider that gains structured-output support should not need a settings
-change to be tried again, and one wasted first attempt after a restart is cheap.
+If the schema request succeeds but its body cannot be parsed into a usable
+walkthrough, generation gets one prompt-only retry. That parse fallback is not a
+lasting capability verdict. A clear schema refusal is remembered only after the
+fallback itself parses successfully, scoped by provider, model, and transport.
+The fallback goes first for that exact scope from then on. The memory remains
+process-lifetime, so a restart retries schema support once.
 
 The system prompt states "respond with a single JSON object" explicitly, which
 also satisfies the providers that scan the request for the word `json` before
@@ -347,8 +347,9 @@ the deadline twice, once per attempt.
 ## Progress
 
 A running job records a coarse stage: `collecting` (reading the diff, which for
-a pull request is seconds of network), `asking`, `retrying` when a provider
-rejects the schema and the prompt-side fallback runs, and `assembling`.
+a pull request is seconds of network), `asking`, `retrying` while the
+prompt-side fallback runs after a schema rejection or unusable schema reply,
+and `assembling`.
 
 Only phases a person can wait on are named. Building the digest and reading the
 cache take single-digit milliseconds; giving them rows would imply progress that
