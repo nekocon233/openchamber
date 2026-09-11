@@ -21,6 +21,7 @@ const AUTH = JSON.stringify({
   deepseek: { key: 'test-token' },
   'github-copilot': { access: 'test-token' },
   anthropic: { access: 'test-token', refresh: 'test-refresh' },
+  xai: { type: 'oauth', access: 'legacy-test-token' },
 });
 ((fs as unknown) as { existsSync: () => boolean }).existsSync = () => true;
 ((fs as unknown) as { readFileSync: () => string }).readFileSync = () => AUTH;
@@ -28,6 +29,7 @@ const AUTH = JSON.stringify({
 import {
   fetchClaudeQuota,
   fetchQuotaForProvider,
+  listConfiguredQuotaProviders,
   resetClaudeQuotaCache,
 } from './quotaProviders';
 import type { ClaudeCredential } from './claudeAuth';
@@ -88,6 +90,28 @@ const stubFetchReturning = (resolver: () => Promise<unknown>): void => {
 const stubFetchFailing = (json: () => Promise<unknown>, init: MockResponseInit): void => {
   globalThis.fetch = (async () => ({ json, ...init }) as unknown as Response) as typeof fetch;
 };
+
+describe('removed xAI quota provider', () => {
+  test('ignores legacy auth and returns unsupported without fetching', async () => {
+    assert.equal(listConfiguredQuotaProviders().includes('xai'), false);
+
+    let requested = false;
+    globalThis.fetch = (async () => {
+      requested = true;
+      throw new Error('Unexpected xAI quota request');
+    });
+
+    const result = await fetchQuotaForProvider('xai');
+
+    assert.equal(requested, false);
+    assert.equal(result.providerId, 'xai');
+    assert.equal(result.providerName, 'xai');
+    assert.equal(result.ok, false);
+    assert.equal(result.configured, false);
+    assert.equal(result.usage, null);
+    assert.equal(result.error, 'Unsupported provider');
+  });
+});
 
 describe('OpenCode Go quota provider (VS Code parity)', () => {
   test('uses the opencode-go key from auth.json', async () => {

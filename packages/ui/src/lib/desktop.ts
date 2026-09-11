@@ -172,6 +172,8 @@ export type DesktopSettings = {
   agentMemoryToolEnabled?: boolean;
   agentMemoryFeatureAvailable?: boolean;
   optimizeSystemPrompt?: boolean;
+  claudeCodeExecution?: boolean;
+  claudeCodeExecutionAvailable?: boolean;
   openCodeUpdateToastDismissedVersion?: string;
   showToolFileIcons?: boolean;
   codeBlockLineWrap?: boolean;

@@ -72,6 +72,7 @@ The webview build emits each worker as one self-contained file. VS Code webviews
 
 - `bridge-settings-runtime.ts`
   - Settings read/write and OpenCode skills discovery via API for bridge consumers.
+  - Reports Claude Code execution as unavailable and rejects enabling it. The managed execution plugin belongs to the OpenChamber server lifecycle; the webview returns an explicit unsupported response for its request-preparation routes.
 
 - `bridge-system-runtime.ts`
   - System/editor/provider/quota/notification/update-check message handlers.

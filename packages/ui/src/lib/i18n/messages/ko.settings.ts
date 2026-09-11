@@ -1,6 +1,11 @@
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
+  'settings.chat.execution.title': '작업 실행',
+  'settings.chat.execution.label': '실행 프레임워크',
+  'settings.chat.execution.info': '선택한 모델과 기존 공급자 로그인을 Claude Code에서 사용합니다. ChatGPT, Kimi Code, Anthropic 및 설정된 호환 공급자를 지원합니다. 기존 채팅에서도 다음 메시지부터 적용되며 실행 중인 작업은 먼저 완료됩니다. 지원하지 않는 모델은 오류를 표시합니다.',
+  'settings.chat.execution.unavailable': 'OpenChamber가 관리하는 OpenCode 서버가 필요합니다.',
+  'settings.chat.execution.failed': '실행 설정을 저장하지 못했습니다. 다시 시도하세요.',
   'settings.providers.page.openCodeGo.title': 'OpenCode Go 사용량 추적',
   'settings.providers.page.openCodeGo.description': 'OpenCode Go 대시보드를 연결하여 롤링, 주간 및 월간 할당량을 표시합니다.',
   'settings.providers.page.openCodeGo.workspaceId': '워크스페이스 ID',

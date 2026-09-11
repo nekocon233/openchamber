@@ -1,6 +1,11 @@
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
+  'settings.chat.execution.title': '任務執行',
+  'settings.chat.execution.label': '執行框架',
+  'settings.chat.execution.info': '讓 Claude Code 使用所選模型和現有供應商登入。支援 ChatGPT、Kimi Code、Anthropic 和已設定的相容供應商。現有對話從下一則訊息起生效，執行中的任務先完成。不相容的模型會明確報錯。',
+  'settings.chat.execution.unavailable': '需要連線至由 OpenChamber 管理的 OpenCode 伺服器。',
+  'settings.chat.execution.failed': '無法儲存執行設定，請重試。',
   'settings.providers.page.openCodeGo.title': 'OpenCode Go 用量追蹤',
   'settings.providers.page.openCodeGo.description': '連接 OpenCode Go 控制面板以顯示滾動、每週和每月配額。',
   'settings.providers.page.openCodeGo.workspaceId': '工作區 ID',

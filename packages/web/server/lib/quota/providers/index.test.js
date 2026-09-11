@@ -15,6 +15,19 @@ describe('quota provider registry', () => {
     expect(() => listConfiguredQuotaProviders()).not.toThrow();
   });
 
+  it('treats the removed xAI quota provider as unsupported', async () => {
+    expect(listConfiguredQuotaProviders()).not.toContain('xai');
+
+    await expect(fetchQuotaForProvider('xai')).resolves.toMatchObject({
+      providerId: 'xai',
+      providerName: 'xai',
+      ok: false,
+      configured: false,
+      usage: null,
+      error: 'Unsupported provider'
+    });
+  });
+
   it('coalesces concurrent refreshes by provider ID', async () => {
     const first = fetchQuotaForProvider('unsupported-test-provider');
     const second = fetchQuotaForProvider('unsupported-test-provider');

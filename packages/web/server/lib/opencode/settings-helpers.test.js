@@ -561,6 +561,12 @@ describe('settings helpers', () => {
       expect(helpers.sanitizeSettingsUpdate({ optimizeSystemPrompt: false })).toEqual({ optimizeSystemPrompt: false });
       expect(helpers.sanitizeSettingsUpdate({ optimizeSystemPrompt: 'true' })).toEqual({});
     });
+    it('persists the execution switch but never trusts client capability claims', () => {
+      const helpers = createTestHelpersWithRealSanitizers();
+      expect(helpers.sanitizeSettingsUpdate({ claudeCodeExecution: true, claudeCodeExecutionAvailable: true })).toEqual({ claudeCodeExecution: true });
+      expect(helpers.sanitizeSettingsUpdate({ claudeCodeExecution: false })).toEqual({ claudeCodeExecution: false });
+      expect(helpers.sanitizeSettingsUpdate({ claudeCodeExecution: 'true' })).toEqual({});
+    });
 
     it('survives a full settings.json payload containing all four previously-dropped fields (regression)', () => {
       const helpers = createTestHelpersWithRealSanitizers();

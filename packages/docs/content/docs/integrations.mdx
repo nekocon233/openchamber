@@ -34,6 +34,26 @@ Claude Code is the only integration here that requires its provider CLI to be in
 
 **How your Claude account stays safe:** this integration uses Anthropic's official Claude Agent SDK and your installed Claude Code CLI. It does not hijack OAuth, extract or replay browser tokens, impersonate an unsupported client, or bypass Anthropic's authentication flow. It stays on Anthropic's supported access path, so it does not carry the account-ban risk of token hijacking or unauthorized authentication workarounds.
 
+## Use Claude Code with another model
+
+In **Settings → Chat → Execution framework**, select **OpenCode** or
+**Claude Code**. With Claude Code selected, your model and provider login stay
+in use; Claude Code drives the task and OpenCode executes its tools with the
+existing permissions.
+
+OpenChamber registers the providers in your OpenCode login store automatically.
+It selects the adapter from each model's API format, so providers such as GLM
+Coding Plan do not need a separate switch or provider-specific setup. OpenAI
+Responses, Anthropic Messages and OpenAI-compatible models are supported;
+models that use a provider-specific, native or bypassing SDK report an error
+before inference. The setting applies to the next message in existing chats.
+Running turns finish with their original executor, and queued messages keep
+the executor captured when queued.
+
+This requires an OpenChamber-managed OpenCode server. Web, desktop and mobile
+clients connected to that server share the setting. External OpenCode servers
+and the VS Code extension's separate runtime do not support choosing Claude Code here.
+
 ## Cursor
 
 Cursor makes the models included in your Cursor plan available in OpenChamber.

@@ -20,6 +20,7 @@ import type { Session, Part, Message, TextPart } from "@opencode-ai/sdk/v2/clien
 import type { AttachedFile, SessionContextUsage, SessionWorktreeAttachment } from "@/stores/types/sessionTypes"
 import type { WorktreeMetadata } from "@/types/worktree"
 import { opencodeClient } from "@/lib/opencode/client"
+import { prepareClaudeExecutionRequest } from "@/lib/claudeExecution"
 import { runtimeFetch } from "@/lib/runtime-fetch"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { useProjectsStore } from "@/stores/useProjectsStore"
@@ -231,6 +232,7 @@ export async function ensurePendingDraftPermissionPolicy(
 }
 
 export async function routeMessage(params: {
+  executionFramework?: 'opencode' | 'claude-code'
   runtimeKey?: string
   sessionId: string
   directory?: string | null
@@ -252,9 +254,11 @@ export async function routeMessage(params: {
     throw new Error('Queue delivery must be handled by the OpenChamber follow-up queue')
   }
   const requestDirectory = params.directory ?? undefined
+  const requestRuntimeKey = params.runtimeKey ?? params.expectedRuntime?.runtimeKey
+  if (params.executionFramework && !requestDirectory) throw new Error('Queued execution requires a session directory')
   if (params.inputMode === "shell") {
     return opencodeClient.shellSession({
-      runtimeKey: params.runtimeKey,
+      runtimeKey: requestRuntimeKey,
       sessionId: params.sessionId,
       directory: requestDirectory,
       agent: params.agent ?? "",
@@ -283,7 +287,7 @@ export async function routeMessage(params: {
 
     if (isCommand) {
       return optimisticSend({
-        runtimeKey: params.runtimeKey,
+        runtimeKey: requestRuntimeKey,
         sessionId: params.sessionId,
         content: params.content,
         providerID: params.providerID,
@@ -293,26 +297,32 @@ export async function routeMessage(params: {
         files: params.files,
         messageId: params.messageId,
         expectedRuntime: params.expectedRuntime,
-        send: (messageID) => opencodeClient.sendCommand({
-          runtimeKey: params.runtimeKey,
-          id: params.sessionId,
-          providerID: params.providerID,
-          modelID: params.modelID,
-          command: cmdName,
-          arguments: tail.join(" "),
-          agent: params.agent,
-          variant: params.variant,
-          files: params.files,
-          messageId: messageID,
-          directory: requestDirectory,
-        }).then(() => {}),
+        send: async (messageID) => {
+          if (params.executionFramework && requestDirectory) {
+            await prepareClaudeExecutionRequest({ sessionID: params.sessionId, messageID, directory: requestDirectory, executionFramework: params.executionFramework })
+            assertExpectedRuntimeContext(params.expectedRuntime)
+          }
+          return opencodeClient.sendCommand({
+            runtimeKey: requestRuntimeKey,
+            id: params.sessionId,
+            providerID: params.providerID,
+            modelID: params.modelID,
+            command: cmdName,
+            arguments: tail.join(" "),
+            agent: params.agent,
+            variant: params.variant,
+            files: params.files,
+            messageId: messageID,
+            directory: requestDirectory,
+          }).then(() => {})
+        },
       })
     }
   }
 
   // Normal prompt — optimistic insert so message appears instantly
   return optimisticSend({
-    runtimeKey: params.runtimeKey,
+    runtimeKey: requestRuntimeKey,
     sessionId: params.sessionId,
     content: params.content,
     providerID: params.providerID,
@@ -322,21 +332,27 @@ export async function routeMessage(params: {
     files: params.files,
     messageId: params.messageId,
     expectedRuntime: params.expectedRuntime,
-    send: (messageID) => opencodeClient.sendMessage({
-      runtimeKey: params.runtimeKey,
-      id: params.sessionId,
-      providerID: params.providerID,
-      modelID: params.modelID,
-      text: params.content,
-      agent: params.agent,
-      agentMentions: params.agentMentionName ? [{ name: params.agentMentionName }] : undefined,
-      variant: params.variant,
-      files: params.files,
-      additionalParts: params.additionalParts,
-      delivery: params.delivery,
-      messageId: messageID,
-      directory: requestDirectory,
-    }).then(() => {}),
+    send: async (messageID) => {
+      if (params.executionFramework && requestDirectory) {
+        await prepareClaudeExecutionRequest({ sessionID: params.sessionId, messageID, directory: requestDirectory, executionFramework: params.executionFramework })
+        assertExpectedRuntimeContext(params.expectedRuntime)
+      }
+      return opencodeClient.sendMessage({
+        runtimeKey: requestRuntimeKey,
+        id: params.sessionId,
+        providerID: params.providerID,
+        modelID: params.modelID,
+        text: params.content,
+        agent: params.agent,
+        agentMentions: params.agentMentionName ? [{ name: params.agentMentionName }] : undefined,
+        variant: params.variant,
+        files: params.files,
+        additionalParts: params.additionalParts,
+        delivery: params.delivery,
+        messageId: messageID,
+        directory: requestDirectory,
+      }).then(() => {})
+    },
   })
 }
 
@@ -347,6 +363,7 @@ type CapturedSendTarget = {
 }
 
 type SendMessageOptions = {
+  executionFramework?: 'opencode' | 'claude-code'
   target?: CapturedSendTarget
   sessionId?: string
   directory?: string
@@ -1875,6 +1892,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         files,
         delivery: options?.delivery,
         messageId: options?.messageId,
+        executionFramework: options?.executionFramework,
         expectedRuntime: options?.expectedRuntime,
         additionalParts: mergedAdditionalParts?.map((p) => ({
           text: p.text,
@@ -1981,6 +1999,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       files,
       delivery: options?.delivery,
       messageId: options?.messageId,
+      executionFramework: options?.executionFramework,
       expectedRuntime: options?.expectedRuntime,
       additionalParts: partsWithPinnedContext?.map((p) => ({
         text: p.text,

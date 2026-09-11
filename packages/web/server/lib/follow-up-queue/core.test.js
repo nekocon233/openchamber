@@ -655,6 +655,7 @@ describe('follow-up queue core', () => {
         modelID: 'model-claim',
         agent: 'agent-claim',
         variant: 'variant-claim',
+        executionFramework: 'claude-code',
       },
     });
     await mutate(core, sessionId, 0, 'claim-add', { type: 'add', item: queuedItem });

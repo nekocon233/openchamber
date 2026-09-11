@@ -1,6 +1,11 @@
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
+  'settings.chat.execution.title': 'Aufgabenausführung',
+  'settings.chat.execution.label': 'Ausführungsframework',
+  'settings.chat.execution.info': 'Claude Code nutzt das gewählte Modell und die vorhandene Anbieteranmeldung. Unterstützt ChatGPT, Kimi Code, Anthropic und konfigurierte kompatible Anbieter. Gilt ab der nächsten Nachricht auch in bestehenden Chats; laufende Aufgaben werden zuerst beendet. Nicht unterstützte Modelle melden einen Fehler.',
+  'settings.chat.execution.unavailable': 'Erfordert einen von OpenChamber verwalteten OpenCode-Server.',
+  'settings.chat.execution.failed': 'Die Ausführungseinstellung konnte nicht gespeichert werden. Versuche es erneut.',
   'settings.providers.page.openCodeGo.title': 'OpenCode Go Nutzungsverfolgung',
   'settings.providers.page.openCodeGo.description': 'Verbinden Sie das OpenCode Go Dashboard, um rollierenden, wöchentlichen und monatlichen Verbrauch anzuzeigen.',
   'settings.providers.page.openCodeGo.workspaceId': 'Workspace-ID',

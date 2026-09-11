@@ -204,9 +204,11 @@ const parseAdditionalPart = (value: unknown, field: string): FollowUpQueueAdditi
 
 const parseSendConfig = (value: unknown, field: string): FollowUpQueueSendConfig => {
   if (!isRecord(value)) throw new Error(`Invalid follow-up queue ${field}`);
-  assertKeys(value, ['providerID', 'modelID', 'agent', 'variant'], field);
+  assertKeys(value, ['providerID', 'modelID', 'agent', 'variant', 'executionFramework'], field);
+  if (value.executionFramework !== undefined && value.executionFramework !== 'opencode' && value.executionFramework !== 'claude-code') throw new Error(`Invalid follow-up queue ${field}.executionFramework`);
   return {
     providerID: parseString(value.providerID, `${field}.providerID`, MAX_SEND_CONFIG_STRING_BYTES, { nonEmpty: true, controlFree: true }),
+    executionFramework: value.executionFramework,
     modelID: parseString(value.modelID, `${field}.modelID`, MAX_SEND_CONFIG_STRING_BYTES, { nonEmpty: true, controlFree: true }),
     ...(value.agent !== undefined ? {
       agent: parseString(value.agent, `${field}.agent`, MAX_SEND_CONFIG_STRING_BYTES, { controlFree: true }),

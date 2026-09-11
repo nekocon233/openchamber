@@ -1,6 +1,11 @@
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
+  'settings.chat.execution.title': 'Exécution des tâches',
+  'settings.chat.execution.label': 'Cadre d\'exécution',
+  'settings.chat.execution.info': 'Claude Code utilise le modèle choisi et votre connexion au fournisseur. Prend en charge ChatGPT, Kimi Code, Anthropic et les fournisseurs compatibles configurés. Le changement prend effet au prochain message, même dans les discussions existantes. Les tâches en cours se terminent avant le changement. Un modèle non pris en charge renvoie une erreur.',
+  'settings.chat.execution.unavailable': 'Nécessite un serveur OpenCode géré par OpenChamber.',
+  'settings.chat.execution.failed': 'Impossible de sauvegarder ce réglage. Réessayez.',
   'settings.providers.page.openCodeGo.title': 'Suivi de l’utilisation d’OpenCode Go',
   'settings.providers.page.openCodeGo.description': 'Connectez le tableau de bord OpenCode Go pour afficher les quotas glissant, hebdomadaire et mensuel.',
   'settings.providers.page.openCodeGo.workspaceId': 'ID de l’espace de travail',

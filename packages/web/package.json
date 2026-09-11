@@ -23,9 +23,13 @@
     "start": "node bin/cli.js serve"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "3.0.111",
+    "@ai-sdk/openai": "3.0.84",
+    "@ai-sdk/openai-compatible": "2.0.41",
+    "@anthropic-ai/claude-agent-sdk": "0.3.267",
     "@clack/prompts": "^1.1.0",
     "@octokit/rest": "^22.0.1",
-    "@opencode-ai/sdk": "1.18.26",
+    "@opencode-ai/sdk": "1.18.29",
     "@simplewebauthn/server": "13.3.1",
     "bun-pty": "^0.4.5",
     "compression": "^1.8.1",
@@ -43,7 +47,8 @@
     "simple-git": "^3.36.0",
     "web-push": "^3.6.7",
     "ws": "^8.18.3",
-    "yaml": "^2.8.1"
+    "yaml": "^2.8.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@base-ui/react": "^1.4.0",

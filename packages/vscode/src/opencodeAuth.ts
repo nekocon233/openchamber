@@ -46,16 +46,6 @@ const writeAuthFile = (auth: AuthFile): void => {
   }
 };
 
-export const updateProviderAuth = (providerId: string, entry: AuthEntry): void => {
-  if (!providerId || typeof providerId !== 'string') {
-    throw new Error('Provider ID is required');
-  }
-
-  const auth = readAuthFile();
-  auth[providerId] = entry;
-  writeAuthFile(auth);
-};
-
 export const removeProviderAuth = (providerId: string): boolean => {
   if (!providerId || typeof providerId !== 'string') {
     throw new Error('Provider ID is required');

@@ -33,6 +33,9 @@
         "src/mini-chat-main.tsx",
         "src/main.tsx",
         "src/sw.ts",
+        "server/lib/claude-execution/plugin.js",
+        "server/lib/claude-execution/provider-plugin.js",
+        "server/lib/claude-execution/*-provider.js",
         "bin/**/*.{test,spec}.{js,cjs,mjs}",
         "server/**/*.{test,spec}.{js,cjs,mjs}",
         "src/**/*.{test,spec}.{ts,tsx}"

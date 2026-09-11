@@ -237,7 +237,7 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
   app.get('/api/config/settings', async (_req, res) => {
     try {
       const settings = await readSettingsFromDiskMigrated();
-      res.json(formatSettingsResponse(settings));
+      res.json({ ...formatSettingsResponse(settings), claudeCodeExecutionAvailable: !isExternalOpenCode() });
     } catch (error) {
       console.error('Failed to read settings:', error);
       res.status(500).json({ error: 'Failed to read settings' });
@@ -448,6 +448,9 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
 
   app.put('/api/config/settings', async (req, res) => {
     try {
+      if (req.body?.claudeCodeExecution === true && isExternalOpenCode()) {
+        return res.status(409).json({ code: 'claude-execution-unsupported', error: 'Claude Code execution requires an OpenChamber-managed OpenCode server' });
+      }
       if (includesTunnelSettings(req.body) && !isTunnelManagementAllowed(req)) {
         return res.status(403).json({
           error: 'Tunnel management is only available from the host machine',

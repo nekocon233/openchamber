@@ -318,7 +318,7 @@ const normalizeAdditionalParts = (value, field) => {
 
 const normalizeSendConfig = (value, field) => {
   const sendConfig = requireRecord(value, field);
-  requireAllowedKeys(sendConfig, new Set(['providerID', 'modelID', 'agent', 'variant']), field);
+  requireAllowedKeys(sendConfig, new Set(['providerID', 'modelID', 'agent', 'variant', 'executionFramework']), field);
   const normalized = {
     providerID: requireUtf8String(
       sendConfig.providerID,
@@ -348,6 +348,10 @@ const normalizeSendConfig = (value, field) => {
       MAX_SEND_CONFIG_STRING_BYTES,
       { controlFree: true },
     );
+  }
+  if (hasOwn(sendConfig, 'executionFramework')) {
+    if (sendConfig.executionFramework !== 'opencode' && sendConfig.executionFramework !== 'claude-code') throw new FollowUpQueueValidationError(`${field}.executionFramework is invalid`);
+    normalized.executionFramework = sendConfig.executionFramework;
   }
   return normalized;
 };

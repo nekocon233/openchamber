@@ -392,6 +392,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['small model', 'utility', 'summary', 'recap', 'cheap', 'override'],
   },
   {
+    id: 'chat.claude-code-execution',
+    page: 'chat',
+    titleKey: 'settings.chat.execution.label',
+    descriptionKey: 'settings.chat.execution.info',
+    keywords: ['opencode', 'claude code', 'agent', 'execution', 'framework', 'kimi', 'chatgpt', 'gpt'],
+  },
+  {
     id: 'sessions.walkthrough-model',
     page: 'sessions',
     titleKey: 'settings.openchamber.defaults.walkthroughModel.title',

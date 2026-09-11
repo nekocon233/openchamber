@@ -63,7 +63,7 @@ Items are ordered FIFO records:
   agentMentionName?,
   createdAt,
   status: 'staged' | 'queued',
-  sendConfig?: { providerID, modelID, agent?, variant? },
+  sendConfig?: { providerID, modelID, agent?, variant?, executionFramework?: 'opencode' | 'claude-code' },
   claim?: { id, expiresAt },
 }
 ```
@@ -118,6 +118,12 @@ The result is:
 `mutationRevision` is the created revision or `null` for a first-seen no-op. A bounded FIFO ledger stores each `clientMutationId`, normalized-operation SHA-256 fingerprint, and mutation revision. The same retained ID and operation returns `deduplicated: true`; a different operation with that ID is a `409` idempotency conflict. Once an entry leaves the configured window it is no longer idempotent.
 
 ## Claims And Completion
+
+`executionFramework` is optional for compatibility with existing items. New
+managed-host items capture it on enqueue. The send path prepares that decision
+with the host before dispatching either a prompt or a command, so a later
+global switch cannot change the queued message's executor. The preparation
+contract is owned by `../claude-execution/DOCUMENTATION.md`.
 
 The host sets every acquired claim's `expiresAt` to its current clock plus exactly 120 seconds. The first successful claim also assigns an unclaimed item's OpenCode message ID atomically. `auto` can claim only `queued` items; `manual` can claim either status. Another unexpired claim blocks acquisition, while an expired claim can be replaced. A fresh claim mutation using the same claim ID may renew that claim; replaying the same mutation ID never renews it or reallocates the message ID.
 

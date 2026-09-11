@@ -753,6 +753,7 @@ export interface FollowUpQueueAdditionalPart {
 export interface FollowUpQueueSendConfig {
   providerID: string;
   modelID: string;
+  executionFramework?: 'opencode' | 'claude-code';
   agent?: string;
   variant?: string;
 }
@@ -812,6 +813,8 @@ export interface FollowUpQueueAPI {
 }
 
 export interface SettingsPayload {
+  claudeCodeExecution?: boolean;
+  claudeCodeExecutionAvailable?: boolean;
   themeId?: string;
   useSystemTheme?: boolean;
   themeVariant?: 'light' | 'dark';

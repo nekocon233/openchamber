@@ -54,6 +54,13 @@ const snapshot = (): FollowUpQueueSnapshot => ({
 });
 
 describe('follow-up queue protocol parsing', () => {
+  test('preserves the captured execution framework and rejects unknown executors', () => {
+    const value = snapshot();
+    value.items[0].sendConfig = { providerID: 'openai', modelID: 'gpt', executionFramework: 'claude-code' };
+    expect(parseFollowUpQueueSnapshot(value).items[0].sendConfig).toEqual(value.items[0].sendConfig);
+    const invalid = { ...value, items: [{ ...value.items[0], sendConfig: { ...value.items[0].sendConfig, executionFramework: 'unknown' } }] };
+    expect(() => parseFollowUpQueueSnapshot(invalid)).toThrow('executionFramework');
+  });
   test('round-trips the strict snapshot and mutation result', () => {
     const parsed = parseFollowUpQueueSnapshot(snapshot());
     expect(parsed).toEqual(snapshot());

@@ -1,6 +1,11 @@
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
+  'settings.chat.execution.title': 'Виконання завдань',
+  'settings.chat.execution.label': 'Середовище виконання',
+  'settings.chat.execution.info': 'Claude Code використовує вибрану модель і наявний вхід до провайдера. Підтримуються ChatGPT, Kimi Code, Anthropic і налаштовані сумісні провайдери. Зміна діє з наступного повідомлення в наявних чатах; поточні завдання спершу завершуються. Непідтримувані моделі повертають помилку.',
+  'settings.chat.execution.unavailable': 'Потрібен сервер OpenCode, яким керує OpenChamber.',
+  'settings.chat.execution.failed': 'Не вдалося зберегти налаштування виконання. Спробуйте ще раз.',
   'settings.providers.page.openCodeGo.title': 'Відстеження використання OpenCode Go',
   'settings.providers.page.openCodeGo.description': 'Підключіть панель OpenCode Go, щоб бачити ковзну, тижневу та місячну квоту.',
   'settings.providers.page.openCodeGo.workspaceId': 'ID робочого простору',

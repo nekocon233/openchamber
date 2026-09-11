@@ -584,6 +584,8 @@ const materializeAuthoritativeUiSettings = (settings: DesktopSettings): DesktopS
     inputSpellcheckEnabled: defaults.inputSpellcheckEnabled,
     showOpenCodeUpdateNotifications: defaults.showOpenCodeUpdateNotifications,
     agentControlToolEnabled: defaults.agentControlToolEnabled,
+    claudeCodeExecution: defaults.claudeCodeExecution,
+    claudeCodeExecutionAvailable: false,
     agentWebToolEnabled: defaults.agentWebToolEnabled,
     agentMemoryToolEnabled: defaults.agentMemoryToolEnabled,
     showToolFileIcons: defaults.showToolFileIcons,
@@ -762,6 +764,12 @@ const applyDesktopUiPreferences = (settings: DesktopSettings) => {
     && settings.agentControlToolEnabled !== store.agentControlToolEnabled
   ) {
     store.setAgentControlToolEnabled(settings.agentControlToolEnabled);
+  }
+  if (typeof settings.claudeCodeExecution === 'boolean' && settings.claudeCodeExecution !== store.claudeCodeExecution) {
+    store.setClaudeCodeExecution(settings.claudeCodeExecution);
+  }
+  if (typeof settings.claudeCodeExecutionAvailable === 'boolean' && settings.claudeCodeExecutionAvailable !== store.claudeCodeExecutionAvailable) {
+    store.setClaudeCodeExecutionAvailable(settings.claudeCodeExecutionAvailable);
   }
   if (
     typeof settings.agentWebToolEnabled === 'boolean'
@@ -1518,6 +1526,12 @@ const sanitizeWebSettings = (payload: unknown): DesktopSettings | null => {
   if (typeof candidate.agentControlToolEnabled === 'boolean') {
     result.agentControlToolEnabled = candidate.agentControlToolEnabled;
   }
+  if (typeof candidate.claudeCodeExecution === 'boolean') {
+    result.claudeCodeExecution = candidate.claudeCodeExecution;
+  }
+  if (typeof candidate.claudeCodeExecutionAvailable === 'boolean') {
+    result.claudeCodeExecutionAvailable = candidate.claudeCodeExecutionAvailable;
+  }
   if (typeof candidate.agentWebToolEnabled === 'boolean') {
     result.agentWebToolEnabled = candidate.agentWebToolEnabled;
   }
@@ -2206,6 +2220,7 @@ export const updateDesktopSettings = async (changes: Partial<DesktopSettings>): 
   }
   const writableChanges: Partial<DesktopSettings> & { sidebarCollapsed?: unknown } = { ...changes };
   delete writableChanges.projects;
+  delete writableChanges.claudeCodeExecutionAvailable;
   delete writableChanges.activeProjectId;
   delete writableChanges.sidebarCollapsed;
   if (Object.keys(writableChanges).length === 0) return;

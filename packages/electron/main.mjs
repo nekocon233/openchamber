@@ -1689,6 +1689,9 @@ const spawnLocalServer = async () => {
   }
   process.env.OPENCHAMBER_DIST_DIR = resolveWebDistDir();
   process.env.OPENCHAMBER_RUNTIME = 'desktop';
+  if (!isDev) {
+    process.env.OPENCHAMBER_CLAUDE_EXECUTION_PLUGIN = path.join(process.resourcesPath, 'claude-execution', 'plugin.js');
+  }
   // OpenCode uses process cwd as a fallback directory; app userData would make
   // packaged desktop look like a separate empty workspace.
   process.env.OPENCHAMBER_OPENCODE_CWD = resolveManagedOpenCodeCwd({

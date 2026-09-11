@@ -978,6 +978,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     directory: messageQueueTarget.directory,
                     messageId: queuedItem.messageId,
                     expectedRuntime,
+                    executionFramework: queuedItem.sendConfig?.executionFramework,
                 },
             );
             await completeQueuedMessage(messageQueueTarget, messageId, claim.claimId, claim.context);
@@ -1629,6 +1630,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     sendConfig: {
                         providerID: providerIdToSend,
                         modelID: modelIdToSend,
+                        executionFramework: useUIStore.getState().claudeCodeExecutionAvailable
+                            ? useUIStore.getState().claudeCodeExecution ? 'claude-code' : 'opencode'
+                            : undefined,
                         ...(agentNameToSend ? { agent: agentNameToSend } : {}),
                         ...(variantToSend ? { variant: variantToSend } : {}),
                     },
