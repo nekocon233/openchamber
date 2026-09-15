@@ -1040,6 +1040,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['claude', 'anthropic', 'claude code', 'pro', 'max', 'agent sdk', '@openchamber/opencode-claude'],
   },
   {
+    id: 'integrations.third-party.opencode-codex',
+    page: 'integrations',
+    titleKey: 'settings.integrations.thirdParty.opencodeCodex.name',
+    descriptionKey: 'settings.integrations.thirdParty.opencodeCodex.description',
+    keywords: ['codex', 'openai', 'chatgpt', 'gpt', 'plus', 'pro', 'codex cli', '@openchamber/opencode-codex'],
+  },
+  {
     id: 'integrations.third-party.opencode-cursor-oauth',
     page: 'integrations',
     titleKey: 'settings.integrations.thirdParty.opencodeCursorOauth.name',

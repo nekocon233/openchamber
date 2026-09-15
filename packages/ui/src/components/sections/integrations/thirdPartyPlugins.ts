@@ -26,6 +26,16 @@ export const THIRD_PARTY_PLUGINS: readonly ThirdPartyPluginDefinition[] = [
     homepage: 'https://github.com/openchamber/opencode-claude',
   },
   {
+    id: 'opencode-codex',
+    packageName: '@openchamber/opencode-codex',
+    providerId: 'codex',
+    icon: 'openai-fill',
+    brandClassName: 'text-foreground',
+    nameKey: 'settings.integrations.thirdParty.opencodeCodex.name',
+    descriptionKey: 'settings.integrations.thirdParty.opencodeCodex.description',
+    homepage: 'https://github.com/openchamber/opencode-codex',
+  },
+  {
     id: 'opencode-cursor-oauth',
     packageName: '@openchamber/opencode-cursor',
     providerId: 'cursor',
@@ -40,6 +50,8 @@ export const THIRD_PARTY_PLUGINS: readonly ThirdPartyPluginDefinition[] = [
 export interface CatalogPluginState {
   userEntry: PluginEntry | null;
   userEntryIsAmbiguous: boolean;
+  /** The entry is a local checkout, so npm has no say over its version. */
+  userEntryIsLocal: boolean;
   projectEntries: PluginEntry[];
   registry: RegistryResult | null;
 }
@@ -71,12 +83,41 @@ interface CatalogPluginPresentation {
 export const specMatchesPackage = (spec: string, packageName: string): boolean =>
   spec === packageName || spec.startsWith(`${packageName}@`);
 
+const unscopedPackageName = (packageName: string): string =>
+  packageName.slice(packageName.lastIndexOf('/') + 1);
+
+/**
+ * A local checkout linked with `opencode plugin file://<dir>`, which is the
+ * documented way to run one of these plugins from source.
+ *
+ * OpenCode records only the path, so this matches on the directory name: the
+ * settings UI has no filesystem access and cannot read the package.json behind
+ * it. A directory renamed away from the package name therefore reads as "not
+ * installed", which is the safe direction to be wrong in — the alternative is
+ * claiming some unrelated folder is this plugin.
+ */
+export const specMatchesLocalPackage = (spec: string, packageName: string): boolean => {
+  const trimmed = spec.trim();
+  const isLocalPath = trimmed.startsWith('file:')
+    || trimmed.startsWith('/')
+    || trimmed.startsWith('.');
+  if (!isLocalPath) return false;
+
+  const withoutScheme = trimmed.replace(/^file:(\/\/)?/, '');
+  const withoutSuffix = withoutScheme.split(/[?#]/)[0] ?? '';
+  const directory = withoutSuffix.replace(/\/+$/, '').split('/').pop() ?? '';
+  return directory !== '' && directory === unscopedPackageName(packageName);
+};
+
+const specMatchesAnyInstall = (spec: string, packageName: string): boolean =>
+  specMatchesPackage(spec, packageName) || specMatchesLocalPackage(spec, packageName);
+
 export function getCatalogPluginState(
   entries: PluginEntry[],
   packageName: string,
   registryInfo: Record<string, RegistryResult>,
 ): CatalogPluginState {
-  const matchingEntries = entries.filter((entry) => specMatchesPackage(entry.spec, packageName));
+  const matchingEntries = entries.filter((entry) => specMatchesAnyInstall(entry.spec, packageName));
   const userEntries = matchingEntries.filter((entry) => entry.scope === 'user');
   const projectEntries = matchingEntries.filter((entry) => entry.scope === 'project');
   const userEntry = userEntries.length === 1 ? userEntries[0] : null;
@@ -85,6 +126,7 @@ export function getCatalogPluginState(
   return {
     userEntry,
     userEntryIsAmbiguous: userEntries.length > 1,
+    userEntryIsLocal: userEntry ? specMatchesLocalPackage(userEntry.spec, packageName) : false,
     projectEntries,
     registry,
   };
@@ -112,6 +154,12 @@ export function getCatalogPluginPrimaryAction(
     return 'install';
   }
 
+  // A local checkout is updated by rebuilding it, not by npm. Offering "update"
+  // here would replace the user's linked source with a published version.
+  if (state.userEntryIsLocal) {
+    return 'setup';
+  }
+
   const latestSpec = getLatestNpmSpec(packageName, state.registry);
   return latestSpec && latestSpec !== state.userEntry.spec ? 'update' : 'setup';
 }
@@ -136,6 +184,12 @@ export function getCatalogPluginPresentation(
   }
   if (options.providerUnavailable) {
     return { status: 'provider-unavailable', latestVersion };
+  }
+  // A local checkout reads as plainly installed, and outranks anything npm has
+  // to say — including "could not reach npm", which has no bearing on a plugin
+  // loaded from a path. There is no published version to report either.
+  if (state.userEntryIsLocal) {
+    return { status: 'installed', latestVersion: null };
   }
   if (options.registryUnavailable) {
     return { status: 'registry-unavailable', latestVersion };

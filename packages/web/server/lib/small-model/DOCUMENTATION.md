@@ -39,16 +39,19 @@ other runtime API.
       **within the session's provider first** (`preferredProviderID`, like
       OpenCode resolves within the current provider), then over the other
       providers with a usable auth entry, newest `release_date` first.
-      `claude-code` is excluded from both automatic scans.
+      `claude-code` and `codex` are excluded from both automatic scans.
    3. GitHub Copilot hidden utility models (`gpt-*-nano/mini`) — these never
       appear in the catalog, so they participate as the `gpt-nano` family entry
       and as a final utility fallback.
    4. Last resort: the session's own model (`preferredModelID`) when no small
       model resolves anywhere — costlier, but always valid except for
-      `claude-code`, which requires an explicit source.
+      `claude-code` and `codex`, which require an explicit source.
    A request-level `model` is the third explicit source. Only `settings`,
-   `config`, and `request` resolutions may use `claude-code`; a Claude Code
-   session or Haiku family match never opts in on the user's behalf.
+   `config`, and `request` resolutions may use `claude-code` or `codex`; a
+   Claude Code or Codex session, or a family match, never opts in on the user's
+   behalf. Both start a subscription-billed CLI for every call, and Codex
+   re-sends its whole agent harness prompt each time, so even a session title
+   costs tens of thousands of input tokens.
    When a caller supplies `preferredProviderID`, implicit resolution is
    same-provider by default. `restrictToPreferredProvider: false` is the only
    opt-out. Settings, config, and request models remain explicit overrides.
@@ -141,16 +144,20 @@ other runtime API.
     substitutions. A missing, empty, or malformed substitution throws
     `provider-config-resolution-failed`; it never falls through to auth.json or
     a vendor endpoint. File contents and resolved credentials remain server-side.
-  - **Claude Code** (`claude-code`): uses the OpenAI-compatible endpoint from
-    the connected runtime provider and adds
-    `x-opencode-claude-request-kind: utility`. No other provider receives that
-    header. Resolution copies one `apiKey`/`baseURL` pair from one directory
-    snapshot and uses it for the generation. This branch does not read the
-    provider config or auth.json, so those sources cannot replace the runtime
-    bearer, redirect the prompt, or override the reserved header. The local
-    plugin can then run a single-turn, no-tools utility call. Credentials stay
-    in the normal authorization header and are never returned to the client or
-    written to diagnostics.
+  - **Runtime-only CLI providers** (`claude-code`, `codex`): use the
+    OpenAI-compatible endpoint from the connected runtime provider and add that
+    provider's request-kind header — `x-opencode-claude-request-kind: utility`
+    or `x-opencode-codex-request-kind: utility`. Resolution copies one
+    `apiKey`/`baseURL` pair from one directory snapshot and uses it for the
+    generation, and refuses when that snapshot reports a different provider.
+    These branches do not read the provider config or auth.json, so those
+    sources cannot replace the runtime bearer, redirect the prompt, or override
+    the reserved header; a request-kind header appearing in any provider's
+    configured headers is stripped before the call. The local plugin can then
+    run a single-turn, no-tools utility call. Credentials stay in the normal
+    authorization header and are never returned to the client or written to
+    diagnostics. `RUNTIME_ONLY_PROVIDERS` in `call.js` is the single list;
+    `isRuntimeOnlyProvider` is what every other module asks.
   - The runtime credential is refused for providers listed in
     `OWN_CREDENTIAL_HANDLING`. Their branches need the stored entry rather than
     a bearer token: the clearest case is the ChatGPT-plan `openai` login, whose
@@ -218,6 +225,9 @@ gets the normal no-model `404` instead of silently starting the CLI. This single
 rule covers session recap and suggestion, TTS summaries, selection notes, both
 goal-objective distillation paths, goal audits, commit and pull-request text,
 and walkthrough generation.
+
+`codex` is excluded from the same two automatic paths for the same reason, and
+gets the same runtime-only treatment in `call.js`.
 
 The result is served as `authenticatedProviders` on `GET /api/small-model`.
 The field name predates the runtime resolution; it now means "callable", which

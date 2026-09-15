@@ -117,6 +117,32 @@ describe('parsePathSpec', () => {
     expect(spec.isPathSpec('@scope/plugin')).toBe(false);
   });
 
+  // `opencode plugin file://$PWD` is the documented way to run a plugin from
+  // source, so this form must never be queried against npm.
+  test('identifies file:// specs as path specs', () => {
+    expect(spec.isPathSpec('file:///home/me/src/opencode-codex')).toBe(true);
+    expect(spec.isPathSpec('file://./local-plugin')).toBe(true);
+    expect(spec.isPathSpec('file:relative/plugin')).toBe(true);
+  });
+
+  test('file:// absolute URL resolves to the path it carries', () => {
+    expect(spec.parsePathSpec('file:///abs/x.js', { homedir: '/home/u', cwd: '/p' })).toEqual({
+      absolutePath: '/abs/x.js',
+    });
+  });
+
+  test('file:// relative URL resolves against the working directory', () => {
+    expect(spec.parsePathSpec('file://./x.js', { homedir: '/home/u', cwd: '/p' })).toEqual({
+      absolutePath: path.resolve('/p', 'x.js'),
+    });
+  });
+
+  test('file:// tilde URL resolves against the home directory', () => {
+    expect(spec.parsePathSpec('file://~/x.js', { homedir: '/home/u', cwd: '/p' })).toEqual({
+      absolutePath: path.resolve('/home/u', 'x.js'),
+    });
+  });
+
   test('tilde home shorthand with subpath', () => {
     expect(spec.parsePathSpec('~/x.js', { homedir: '/home/u', cwd: '/p' })).toEqual({
       absolutePath: path.resolve('/home/u', 'x.js'),

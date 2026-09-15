@@ -5,6 +5,7 @@ import {
   getCatalogPluginState,
   getCatalogPluginPrimaryAction,
   getLatestNpmSpec,
+  specMatchesLocalPackage,
   specMatchesPackage,
 } from './thirdPartyPlugins';
 
@@ -120,6 +121,80 @@ describe('third-party plugin catalog helpers', () => {
     expect(specMatchesPackage('@openchamber/opencode-claude-extra@0.6.0', claudePackage)).toBe(false);
   });
 
+  test('recognises a local checkout linked by path', () => {
+    expect(specMatchesLocalPackage('file:///home/me/src/opencode-claude', claudePackage)).toBe(true);
+    expect(specMatchesLocalPackage('file:///home/me/src/opencode-claude/', claudePackage)).toBe(true);
+    expect(specMatchesLocalPackage('/home/me/src/opencode-claude', claudePackage)).toBe(true);
+    expect(specMatchesLocalPackage('./plugins/opencode-claude', claudePackage)).toBe(true);
+  });
+
+  test('does not claim an unrelated path is the plugin', () => {
+    expect(specMatchesLocalPackage('file:///home/me/src/opencode-claude-extra', claudePackage)).toBe(false);
+    expect(specMatchesLocalPackage('file:///home/me/src', claudePackage)).toBe(false);
+    // An npm spec is not a local checkout, even though it is this package.
+    expect(specMatchesLocalPackage(claudePackage, claudePackage)).toBe(false);
+    expect(specMatchesLocalPackage(`${claudePackage}@0.6.0`, claudePackage)).toBe(false);
+  });
+
+  test('reports a local checkout as installed rather than missing', () => {
+    const state = getCatalogPluginState(
+      [entry('file:///home/me/src/opencode-claude')],
+      claudePackage,
+      {},
+    );
+
+    expect(state.userEntry).not.toBeNull();
+    expect(state.userEntryIsLocal).toBe(true);
+    expect(getCatalogPluginPresentation?.(state)).toEqual({ status: 'installed', latestVersion: null });
+  });
+
+  test('offers setup for a local checkout instead of an npm update', () => {
+    const state = getCatalogPluginState(
+      [entry('file:///home/me/src/opencode-claude')],
+      claudePackage,
+      { [claudePackage]: registry(claudePackage, null, '9.9.9') },
+    );
+
+    expect(getCatalogPluginPrimaryAction(state, claudePackage)).toBe('setup');
+  });
+
+  test('keeps a local checkout installed when npm cannot be reached', () => {
+    const state = getCatalogPluginState(
+      [entry('file:///home/me/src/opencode-claude')],
+      claudePackage,
+      {},
+    );
+
+    expect(getCatalogPluginPresentation?.(state, { registryUnavailable: true })).toEqual({
+      status: 'installed',
+      latestVersion: null,
+    });
+  });
+
+  test('still surfaces transient states over a local checkout', () => {
+    const state = getCatalogPluginState(
+      [entry('file:///home/me/src/opencode-claude')],
+      claudePackage,
+      {},
+    );
+
+    expect(getCatalogPluginPresentation?.(state, { restartRequired: true })?.status)
+      .toBe('restart-required');
+    expect(getCatalogPluginPresentation?.(state, { providerUnavailable: true })?.status)
+      .toBe('provider-unavailable');
+  });
+
+  test('treats a local checkout and an npm entry as competing installs', () => {
+    const state = getCatalogPluginState(
+      [entry('file:///home/me/src/opencode-claude'), entry(`${claudePackage}@0.6.0`)],
+      claudePackage,
+      {},
+    );
+
+    expect(state.userEntryIsAmbiguous).toBe(true);
+    expect(getCatalogPluginPrimaryAction(state, claudePackage)).toBe('manage');
+  });
+
   test('points catalog plugins at the OpenChamber GitHub and npm packages', () => {
     expect(thirdPartyCatalog.THIRD_PARTY_PLUGINS.map((plugin) => ({
       id: plugin.id,
@@ -130,6 +205,11 @@ describe('third-party plugin catalog helpers', () => {
         id: 'opencode-claude',
         packageName: '@openchamber/opencode-claude',
         homepage: 'https://github.com/openchamber/opencode-claude',
+      },
+      {
+        id: 'opencode-codex',
+        packageName: '@openchamber/opencode-codex',
+        homepage: 'https://github.com/openchamber/opencode-codex',
       },
       {
         id: 'opencode-cursor-oauth',

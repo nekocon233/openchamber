@@ -283,6 +283,7 @@ export const ThirdPartyIntegrationsSection: React.FC<ThirdPartyIntegrationsSecti
       case 'unpinned':
         status = t('settings.integrations.thirdParty.status.unpinned');
         break;
+
       case 'ambiguous':
         status = t('settings.integrations.thirdParty.status.ambiguous');
         break;

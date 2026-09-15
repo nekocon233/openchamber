@@ -60,8 +60,16 @@ export const getOAuthAuthMethods = (methods: AuthMethod[]): OAuthAuthMethodEntry
     .map((method, methodIndex) => ({ method, methodIndex }))
     .filter(({ method }) => normalizeAuthType(method) === 'oauth');
 
+/**
+ * Providers whose sign-in happens entirely inside their own CLI. Nothing in the
+ * running OpenCode process changes when they authenticate — no credential is
+ * written to its auth store and their local proxy is already listening — so
+ * asking the user to restart would be busywork.
+ */
+const CLI_OWNED_AUTH_PROVIDER_IDS = new Set(['claude-code', 'codex']);
+
 export const requiresOpenCodeRestartAfterOAuth = (providerId: string): boolean =>
-  providerId !== 'claude-code';
+  !CLI_OWNED_AUTH_PROVIDER_IDS.has(providerId);
 
 export interface ProviderCredentialInput {
   providerId?: string;

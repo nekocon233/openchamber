@@ -60,6 +60,56 @@ describe('createSessionOwnershipIndex', () => {
     expect(ownership.bySessionId.get('nested')?.kind).toBe('project');
   });
 
+  test('does not let an ancestor project claim a managed worktree the registry has not published', () => {
+    // A worktree created moments ago is still absent from the registry. Its
+    // path lives under the OpenCode data directory, so walking up would reach
+    // the home-directory project and file the session under it.
+    const worktreeRoot = '/home/dev/.local/share/opencode/worktree/8d0a4f25/chatgpt';
+    const ownership = createSessionOwnershipIndex(
+      // SAFETY: the index reads only `id` and the session directory, both set here.
+      [
+        { id: 'fresh-worktree', directory: worktreeRoot },
+        { id: 'fresh-worktree-nested', directory: `${worktreeRoot}/packages/ui` },
+        { id: 'home-session', directory: '/home/dev/notes' },
+      ] as Session[],
+      [
+        { id: 'home', normalizedPath: '/home/dev' },
+        { id: 'app', normalizedPath: '/projects/app' },
+      ],
+      new Map(),
+      false,
+    );
+
+    expect(ownership.bySessionId.has('fresh-worktree')).toBe(false);
+    expect(ownership.bySessionId.has('fresh-worktree-nested')).toBe(false);
+    expect(ownership.bySessionId.get('home-session')?.projectId).toBe('home');
+  });
+
+  test('owns a registered managed worktree through its project', () => {
+    const worktreeRoot = '/home/dev/.local/share/opencode/worktree/8d0a4f25/chatgpt';
+    const ownership = createSessionOwnershipIndex(
+      // SAFETY: the index reads only `id` and the session directory, both set here.
+      [
+        { id: 'worktree-root', directory: worktreeRoot },
+        { id: 'worktree-nested', directory: `${worktreeRoot}/packages/ui` },
+      ] as Session[],
+      [
+        { id: 'home', normalizedPath: '/home/dev' },
+        { id: 'app', normalizedPath: '/projects/app' },
+      ],
+      new Map([['/projects/app', [{ path: worktreeRoot }]]]),
+      false,
+    );
+
+    expect(ownership.bySessionId.get('worktree-root')).toEqual({
+      projectId: 'app',
+      projectRoot: '/projects/app',
+      scopeDirectory: worktreeRoot,
+      kind: 'worktree',
+    });
+    expect(ownership.bySessionId.get('worktree-nested')?.projectId).toBe('app');
+  });
+
   test('indexes archived sessions separately', () => {
     const ownership = createSessionOwnershipIndex(
       [],

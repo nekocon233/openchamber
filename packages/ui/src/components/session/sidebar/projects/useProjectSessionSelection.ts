@@ -34,17 +34,18 @@ export type MissingProjectSessionSelection =
  * Resolves the active-project action after its rendered session map does not
  * contain the current session.
  *
- * Authoritative ownership wins. If ownership is still unknown, a session that
- * already appears under another project's rendered map is treated as foreign,
- * while a session missing from every rendered map is preserved so stale
- * worktree metadata can catch up.
+ * Authoritative ownership decides. A session owned by this project is kept, and
+ * so is a session whose owner is still unknown: an unresolved owner is not
+ * evidence that the session belongs elsewhere, and replacing the selection on
+ * that basis discards a choice the user just made. The caller leaves the
+ * project unprocessed while ownership is unknown, so this runs again — and can
+ * still select — once ownership resolves.
  */
 export function resolveMissingProjectSessionSelection<T>({
   activeProjectId,
   currentSessionId,
   currentSessionOwnerProjectId,
   projectMap,
-  metaByProject,
   rememberedSessionId,
   fallbackSessionId,
 }: {
@@ -52,7 +53,6 @@ export function resolveMissingProjectSessionSelection<T>({
   currentSessionId: string | null;
   currentSessionOwnerProjectId?: string | null;
   projectMap: ReadonlyMap<string, T> | undefined;
-  metaByProject: ReadonlyMap<string, ReadonlyMap<string, T>>;
   rememberedSessionId: string | undefined;
   fallbackSessionId: string | null;
 }): MissingProjectSessionSelection {
@@ -60,16 +60,8 @@ export function resolveMissingProjectSessionSelection<T>({
     return { kind: 'preserve-current' };
   }
 
-  if (currentSessionOwnerProjectId == null) {
-    const currentSessionBelongsToAnotherProject = Boolean(
-      currentSessionId
-      && Array.from(metaByProject.entries()).some(
-        ([projectId, sessions]) => projectId !== activeProjectId && sessions.has(currentSessionId),
-      ),
-    );
-    if (currentSessionId && projectMap && !currentSessionBelongsToAnotherProject) {
-      return { kind: 'preserve-current' };
-    }
+  if (currentSessionId && currentSessionOwnerProjectId == null) {
+    return { kind: 'preserve-current' };
   }
 
   if (!projectMap || projectMap.size === 0) {
@@ -185,13 +177,13 @@ export const useProjectSessionSelection = (args: Args): void => {
       currentSessionId,
       currentSessionOwnerProjectId,
       projectMap,
-      metaByProject: projectSessionMeta.metaByProject,
       rememberedSessionId: activeSessionByProject.get(activeProjectId),
       fallbackSessionId: projectSessionMeta.firstSessionByProject.get(activeProjectId)?.id ?? null,
     });
 
-    // Keep the project unprocessed while ownership/maps may still catch up,
-    // so a later owner of another project can still select B.
+    // Only a confirmed owner marks this project done. While ownership is still
+    // resolving the project stays unprocessed, so the selection runs again once
+    // the owner is known instead of being skipped for the rest of the session.
     if (selection.kind === 'preserve-current') {
       if (currentSessionOwnerProjectId === activeProjectId) {
         previousActiveProjectRef.current = activeProjectId;

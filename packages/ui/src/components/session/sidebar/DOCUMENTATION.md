@@ -71,7 +71,7 @@ existing data; it is never treated as an authoritative empty list.
 - `shell/ConfirmDialogs.tsx`: Shared confirm dialog wrappers for session delete and folder delete flows.
 - `projects/sortableItems.tsx`: DnD sortable wrappers for project/group ordering and project headers.
 - `folders/sessionFolderDnd.tsx`: Folder/session DnD scope and wrappers for dropping sessions into folders.
-- `sessions/sessionOwnership.ts`: Resolves session directories once into shared project/worktree ownership and folder-scope indexes.
+- `sessions/sessionOwnership.ts`: Resolves session directories once into shared project/worktree ownership and folder-scope indexes. The ancestor walk stops at the managed worktree root, so a worktree the registry has not published yet is unowned rather than claimed by a project registered above the OpenCode data directory.
 
 ### Hooks
 
@@ -80,7 +80,7 @@ existing data; it is never treated as an authoritative empty list.
 - `list/useSessionPrefetch.ts`: Publishes directory-aware nearby/active session prefetch demand to the shared message loader. Pinned and Recent may prefetch across projects without substituting the current directory.
 - `projects/useSessionGrouping.ts`: Builds grouped session structures and search text/filter helpers.
 - `projects/useSessionSidebarSections.ts`: Composes final per-project sections and group search metadata for rendering.
-- `projects/useProjectSessionSelection.ts`: Resolves active/current project-session selection logic and session-directory context.
+- `projects/useProjectSessionSelection.ts`: Resolves active/current project-session selection logic and session-directory context. Only a confirmed owner lets the active project replace the current session; an unresolved owner keeps that session and leaves the project unprocessed, so the selection runs again once ownership is known.
 - `folders/useArchivedAutoFolders.ts`: Maintains archived auto-folder structure and assignment behavior.
 - `projects/useSessionProjectViewState.ts`: Restores and persists device-local project collapse, group order, and group collapse state. It never writes collapse state into host project settings.
 - `sessions/useExpandedParents.ts`: Restores device-local parent expansion and clears descendants only inside the collapsed row's render context.

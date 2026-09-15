@@ -20,6 +20,7 @@ const createApp = (overrides = {}) => {
     getProviderSources: vi.fn(createSources),
     removeProviderConfig: vi.fn(() => true),
     readClaudeCliAuthStatus: vi.fn(() => ({ status: 'connected', connected: true, reason: 'logged-in' })),
+    readCodexCliAuthStatus: vi.fn(() => ({ status: 'connected', connected: true, reason: 'logged-in' })),
     isExternalOpenCode: () => false,
     ...overrides,
   };
@@ -82,6 +83,50 @@ describe('provider auth runtime ownership', () => {
 
     const response = await request(app)
       .delete('/api/provider/claude-code/auth?scope=all')
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      success: false,
+      removed: false,
+      capability: 'cli-owned',
+      code: 'PROVIDER_AUTH_CLI_OWNED',
+    });
+    expect(dependencies.removeProviderConfig).not.toHaveBeenCalled();
+  });
+
+  it('reads Codex sign-in from its own CLI, not from OpenCode auth', async () => {
+    const { app, dependencies } = createApp();
+
+    const response = await request(app).get('/api/provider/codex/source').expect(200);
+
+    expect(response.body.sources.auth).toEqual({
+      exists: true,
+      status: 'connected',
+      canDisconnect: false,
+    });
+    expect(dependencies.readCodexCliAuthStatus).toHaveBeenCalled();
+    expect(dependencies.readClaudeCliAuthStatus).not.toHaveBeenCalled();
+  });
+
+  it('preserves an unavailable Codex CLI probe instead of reporting logged out', async () => {
+    const { app } = createApp({
+      readCodexCliAuthStatus: () => ({ status: 'unavailable', connected: false, reason: 'empty-status' }),
+    });
+
+    const response = await request(app).get('/api/provider/codex/source').expect(200);
+
+    expect(response.body.sources.auth).toEqual({
+      exists: false,
+      status: 'unavailable',
+      canDisconnect: false,
+    });
+  });
+
+  it('refuses to disconnect Codex, whose credentials the CLI owns', async () => {
+    const { app, dependencies } = createApp();
+
+    const response = await request(app)
+      .delete('/api/provider/codex/auth?scope=all')
       .expect(200);
 
     expect(response.body).toMatchObject({

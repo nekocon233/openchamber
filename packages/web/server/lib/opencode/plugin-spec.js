@@ -70,11 +70,17 @@ export function isExactSemver(version) {
  * Check whether a plugin spec is path-like instead of an npm package spec.
  * Includes Windows absolute paths so local paths are never queried against npm.
  *
+ * `file://` is a path too: it is the form `opencode plugin file://$PWD` writes,
+ * which is the documented way to run a plugin from source. Reading it as an npm
+ * spec sends a filesystem path to the registry and reports the local checkout
+ * as a published package.
+ *
  * @param {string} spec
  * @returns {boolean}
  */
 export function isPathSpec(spec) {
-  return spec.startsWith('/')
+  return spec.startsWith('file:')
+    || spec.startsWith('/')
     || spec.startsWith('./')
     || spec.startsWith('../')
     || spec.startsWith('~')
@@ -91,6 +97,10 @@ export function isPathSpec(spec) {
  * @returns {ParsedPathSpec}
  */
 export function parsePathSpec(spec, { homedir, cwd }) {
+  // `file:///abs/path` and `file://./rel` both reduce to the path they carry.
+  if (spec.startsWith('file:')) {
+    return parsePathSpec(spec.replace(/^file:(\/\/)?/, ''), { homedir, cwd });
+  }
   if (spec === '~') {
     return { absolutePath: path.resolve(homedir) };
   }

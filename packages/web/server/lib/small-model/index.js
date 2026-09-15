@@ -9,18 +9,19 @@ import {
   DEDICATED_WIRE_FORMAT_PROVIDERS,
   callSmallModel,
   getProviderTransportKind,
-  resolveClaudeCodeTransport,
+  isRuntimeOnlyProvider,
   resolveProviderLogin,
+  resolveRuntimeOnlyTransport,
 } from './call.js';
 import { getRuntimeProviderSnapshot, getRuntimeProviderTransportFromSnapshot } from './runtime-providers.js';
 
-const CLAUDE_CODE_PROVIDER = 'claude-code';
 const EXPLICIT_MODEL_SOURCES = new Set(['settings', 'config', 'request']);
 
-// Claude Code is intentionally opt-in. Its plugin endpoint starts the Claude
-// Code CLI for every call, so a session/family fallback must behave as if no
-// small model was found. A settings, config, or request model is user intent.
-const isAllowedResolution = (resolved) => resolved?.providerID !== CLAUDE_CODE_PROVIDER
+// Claude Code and Codex are intentionally opt-in. Their plugin endpoints start
+// a CLI on the user's subscription for every call, so a session/family fallback
+// must behave as if no small model was found. A settings, config, or request
+// model is user intent.
+const isAllowedResolution = (resolved) => !isRuntimeOnlyProvider(resolved?.providerID)
   || EXPLICIT_MODEL_SOURCES.has(resolved?.source);
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
@@ -172,13 +173,13 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     outputReserveTokens: outputTokens,
   });
 
-  const resolvedProviderTransport = resolved.providerID === CLAUDE_CODE_PROVIDER
-    ? await resolveClaudeCodeTransport({ workingDirectory: directory })
+  const resolvedProviderTransport = isRuntimeOnlyProvider(resolved.providerID)
+    ? await resolveRuntimeOnlyTransport(resolved.providerID, { workingDirectory: directory })
     : undefined;
-  if (resolved.providerID === CLAUDE_CODE_PROVIDER && !resolvedProviderTransport) {
+  if (isRuntimeOnlyProvider(resolved.providerID) && !resolvedProviderTransport) {
     throw Object.assign(
-      new Error(`No OpenCode login found for provider "${CLAUDE_CODE_PROVIDER}"`),
-      { statusCode: 401, code: 'no-provider-login', providerID: CLAUDE_CODE_PROVIDER },
+      new Error(`No OpenCode login found for provider "${resolved.providerID}"`),
+      { statusCode: 401, code: 'no-provider-login', providerID: resolved.providerID },
     );
   }
 
@@ -215,9 +216,12 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
 export async function listAuthenticatedProviders(directory) {
   try {
     const auth = readAuthFile();
+    // A runtime-only provider must earn its place from the runtime snapshot
+    // below: a leftover auth.json entry says nothing about whether its CLI is
+    // actually reachable right now.
     const ids = new Set(
       Object.keys(auth || {}).filter((providerID) => (
-        providerID !== CLAUDE_CODE_PROVIDER && isUsableAuthEntry(auth[providerID])
+        !isRuntimeOnlyProvider(providerID) && isUsableAuthEntry(auth[providerID])
       )),
     );
     // The catalog id is github-copilot while legacy auth entries may sit
@@ -329,20 +333,19 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
 
   // Settings/config/request overrides can name a provider with no usable login.
   // Report that here so readiness can refuse before the user pays for a 401.
-  const claudeCodeTransport = resolved.providerID === CLAUDE_CODE_PROVIDER
-    ? await resolveClaudeCodeTransport({ workingDirectory: directory })
+  const runtimeOnly = isRuntimeOnlyProvider(resolved.providerID);
+  const runtimeTransport = runtimeOnly
+    ? await resolveRuntimeOnlyTransport(resolved.providerID, { workingDirectory: directory })
     : null;
-  const login = resolved.providerID === CLAUDE_CODE_PROVIDER
+  const login = runtimeOnly
     ? null
     : await resolveProviderLogin({
       auth,
       workingDirectory: directory,
       providerID: resolved.providerID,
     });
-  const hasLogin = resolved.providerID === CLAUDE_CODE_PROVIDER
-    ? Boolean(claudeCodeTransport)
-    : Boolean(login);
-  const transport = claudeCodeTransport?.transportID
+  const hasLogin = runtimeOnly ? Boolean(runtimeTransport) : Boolean(login);
+  const transport = runtimeTransport?.transportID
     ?? getProviderTransportKind({ providerID: resolved.providerID, login });
 
   return {

@@ -1,10 +1,18 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { findNodeAtLocation, parseTree, type Node, type ParseError } from 'jsonc-parser';
 import { getProviderAuth, type AuthEntry } from './opencodeAuth';
-import { findExecutableInPath, resolveWindowsLaunchSpec } from './process-launch';
+import { findExecutableInPath } from './process-launch';
+import {
+  commandOutput,
+  defaultRunCommand,
+  resolveCommandFromShell,
+  runCliCommand,
+  type CliAuthStatus,
+  type CliStatusOptions,
+} from './cli-auth-probe';
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const OPENCODE_AUTH_ALIASES = ['anthropic', 'claude'] as const;
@@ -28,41 +36,10 @@ type ClaudeCredentialReadOptions = {
   readProviderAuth?: (providerId: string) => AuthEntry | string | null;
 };
 
-type ClaudeCommandOptions = {
-  encoding: 'utf8';
-  timeout: number;
-  env: NodeJS.ProcessEnv;
-  platform: NodeJS.Platform;
-  windowsHide: true;
-};
-
-type ClaudeCommandResult = {
-  stdout?: string | null;
-  error?: Error;
-};
-
-type ClaudeCommandRunner = (
-  command: string,
-  args: string[],
-  options: ClaudeCommandOptions,
-) => Promise<ClaudeCommandResult>;
-
-type ClaudeCliStatusOptions = {
-  runCommand?: ClaudeCommandRunner;
-  resolveExecutable?: (binaryName: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv) => string | null;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-};
-
 type KeychainReadResult =
   | { status: 'found'; value: string }
   | { status: 'missing' }
   | { status: 'unavailable' };
-
-type ClaudeCliAuthStatus =
-  | { status: 'connected'; connected: true; reason: 'logged-in' }
-  | { status: 'disconnected'; connected: false; reason: 'logged-out' }
-  | { status: 'unavailable'; connected: false; reason: 'cli-not-found' | 'probe-failed' | 'invalid-status' };
 
 const asNonEmptyString = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim() ?? '';
@@ -197,62 +174,6 @@ export const loadClaudeCredential = (options: ClaudeCredentialReadOptions = {}):
     : null;
 };
 
-const defaultRunCommand: ClaudeCommandRunner = (command, args, options) => new Promise((resolve) => {
-  const launch = resolveWindowsLaunchSpec(command, args, { platform: options.platform, env: options.env });
-  execFile(launch.binary, launch.args, {
-    encoding: options.encoding,
-    timeout: options.timeout,
-    env: options.env,
-    windowsHide: options.windowsHide,
-  }, (error, stdout) => {
-    resolve({ stdout: stdout || '', error: error ?? undefined });
-  });
-});
-
-const commandOutput = (result: ClaudeCommandResult): string => result.stdout?.trim() ?? '';
-
-const runClaudeStatus = (
-  runCommand: ClaudeCommandRunner,
-  command: string,
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): Promise<ClaudeCommandResult> => runCommand(command, ['auth', 'status', '--json'], {
-  encoding: 'utf8',
-  timeout: 6_000,
-  env,
-  platform,
-  windowsHide: true,
-});
-
-const resolveClaudeCommandFromShell = async (
-  runCommand: ClaudeCommandRunner,
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): Promise<string | null> => {
-  if (platform === 'win32') {
-    const result = await runCommand('where', ['claude'], {
-      encoding: 'utf8',
-      timeout: 6_000,
-      env,
-      platform,
-      windowsHide: true,
-    });
-    if (result.error) return null;
-    return commandOutput(result).split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
-  }
-
-  const shell = env.SHELL || '/bin/zsh';
-  const result = await runCommand(shell, ['-lic', 'command -v claude'], {
-    encoding: 'utf8',
-    timeout: 6_000,
-    env,
-    platform,
-    windowsHide: true,
-  });
-  if (result.error) return null;
-  return commandOutput(result) || null;
-};
-
 const parseLoggedIn = (raw: string): boolean | null => {
   const root = parseJsonRoot(raw);
   if (root?.type !== 'object') return null;
@@ -260,7 +181,7 @@ const parseLoggedIn = (raw: string): boolean | null => {
   return loggedIn?.type === 'boolean' ? loggedIn.value === true : null;
 };
 
-const probeClaudeCliAuthStatus = async (options: ClaudeCliStatusOptions): Promise<ClaudeCliAuthStatus> => {
+const probeClaudeCliAuthStatus = async (options: CliStatusOptions): Promise<CliAuthStatus> => {
   const runCommand = options.runCommand ?? defaultRunCommand;
   const resolveExecutable = options.resolveExecutable
     ?? ((binaryName, platform, env) => findExecutableInPath(binaryName, { platform, env }));
@@ -272,9 +193,15 @@ const probeClaudeCliAuthStatus = async (options: ClaudeCliStatusOptions): Promis
 
   try {
     const command = resolveExecutable('claude', platform, childEnv)
-      ?? await resolveClaudeCommandFromShell(runCommand, childEnv, platform);
+      ?? await resolveCommandFromShell('claude', runCommand, childEnv, platform);
     if (!command) return { status: 'unavailable', connected: false, reason: 'cli-not-found' };
-    const result = await runClaudeStatus(runCommand, command, childEnv, platform);
+    const result = await runCliCommand(
+      runCommand,
+      command,
+      ['auth', 'status', '--json'],
+      childEnv,
+      platform,
+    );
     const output = commandOutput(result);
     if (!output || result.error) return { status: 'unavailable', connected: false, reason: 'probe-failed' };
     const connected = parseLoggedIn(output);
@@ -287,9 +214,9 @@ const probeClaudeCliAuthStatus = async (options: ClaudeCliStatusOptions): Promis
   }
 };
 
-let claudeCliAuthStatusInFlight: Promise<ClaudeCliAuthStatus> | null = null;
+let claudeCliAuthStatusInFlight: Promise<CliAuthStatus> | null = null;
 
-export const getClaudeCliAuthStatus = (options: ClaudeCliStatusOptions = {}): Promise<ClaudeCliAuthStatus> => {
+export const getClaudeCliAuthStatus = (options: CliStatusOptions = {}): Promise<CliAuthStatus> => {
   if (claudeCliAuthStatusInFlight) return claudeCliAuthStatusInFlight;
   const pending = probeClaudeCliAuthStatus(options).finally(() => {
     if (claudeCliAuthStatusInFlight === pending) claudeCliAuthStatusInFlight = null;

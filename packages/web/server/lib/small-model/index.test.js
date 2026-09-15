@@ -23,7 +23,8 @@ vi.mock('./call.js', () => ({
   DEDICATED_WIRE_FORMAT_PROVIDERS: new Set(['github-copilot', 'copilot', 'openai', 'anthropic', 'google']),
   callSmallModel: vi.fn(),
   getProviderTransportKind: vi.fn(({ providerID }) => `${providerID}-transport`),
-  resolveClaudeCodeTransport: vi.fn(async () => null),
+  isRuntimeOnlyProvider: (providerID) => providerID === 'claude-code' || providerID === 'codex',
+  resolveRuntimeOnlyTransport: vi.fn(async () => null),
   resolveProviderLogin: vi.fn(async ({ auth, providerID }) => {
     const entry = auth?.[providerID];
     return entry && typeof entry === 'object' ? entry : null;
@@ -43,7 +44,7 @@ const { readAuthFile } = await import('../opencode/auth.js');
 const { getRuntimeProviderSnapshot } = await import('./runtime-providers.js');
 const { readConfigLayers } = await import('../opencode/shared.js');
 const { getModelCatalog, getCatalogProvider } = await import('./catalog.js');
-const { callSmallModel, resolveClaudeCodeTransport } = await import('./call.js');
+const { callSmallModel, resolveRuntimeOnlyTransport } = await import('./call.js');
 
 const claudeCodeSnapshot = ({ connected = true, apiKey = 'plugin-key', baseURL = 'http://127.0.0.1:60668/v1' } = {}) => ({
   providers: new Map([['claude-code', {
@@ -78,8 +79,8 @@ describe('Claude Code explicit small-model selection', () => {
     getCatalogProvider.mockImplementation((catalog, providerID) => catalog?.[providerID] ?? null);
     callSmallModel.mockReset();
     callSmallModel.mockResolvedValue('generated');
-    resolveClaudeCodeTransport.mockReset();
-    resolveClaudeCodeTransport.mockResolvedValue({
+    resolveRuntimeOnlyTransport.mockReset();
+    resolveRuntimeOnlyTransport.mockResolvedValue({
       providerID: 'claude-code',
       apiKey: 'plugin-key',
       baseURL: 'http://127.0.0.1:60668/v1',
@@ -103,8 +104,8 @@ describe('Claude Code explicit small-model selection', () => {
       modelID: 'haiku',
       resolvedProviderTransport: expect.objectContaining({ apiKey: 'plugin-key' }),
     }));
-    expect(resolveClaudeCodeTransport).toHaveBeenCalledOnce();
-    expect(resolveClaudeCodeTransport).toHaveBeenCalledWith({ workingDirectory: '/project' });
+    expect(resolveRuntimeOnlyTransport).toHaveBeenCalledOnce();
+    expect(resolveRuntimeOnlyTransport).toHaveBeenCalledWith('claude-code', { workingDirectory: '/project' });
   });
 
   it('allows an explicit OpenChamber settings model', async () => {
@@ -163,7 +164,7 @@ describe('Claude Code explicit small-model selection', () => {
     expect(JSON.stringify(available)).not.toContain('plugin-key');
     expect(JSON.stringify(available)).not.toContain('127.0.0.1');
 
-    resolveClaudeCodeTransport.mockResolvedValue(null);
+    resolveRuntimeOnlyTransport.mockResolvedValue(null);
     const unavailable = await describeSmallModel({ overrideModel: 'claude-code/haiku' });
     expect(unavailable).toMatchObject({ providerID: 'claude-code', modelID: 'haiku', hasLogin: false });
     await expect(generateSmallModelText({

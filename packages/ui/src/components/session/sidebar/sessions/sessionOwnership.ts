@@ -1,5 +1,6 @@
 import type { Session } from '@opencode-ai/sdk/v2';
 import { normalizePath } from '@/lib/pathNormalization';
+import { isManagedWorktreePath } from '@/lib/projectResolution';
 
 type Project = {
   id: string;
@@ -122,6 +123,13 @@ export const createSessionOwnershipIndex = (
       return owner;
     }
 
+    // A managed worktree is owned by whichever project the registry says cut
+    // it, never by an ancestor directory. The registry root lives under the
+    // OpenCode data directory, so climbing out of it would hand a worktree the
+    // registry has not published yet to any project registered above — the home
+    // directory, typically — and the sidebar would then treat the session as
+    // belonging there.
+    const startedInManagedWorktree = isManagedWorktreePath(directory);
     const visited: string[] = [];
     let current: string | null = directory;
     let owner: DirectoryOwner | null = null;
@@ -133,7 +141,9 @@ export const createSessionOwnershipIndex = (
       visited.push(current);
       owner = ownerByDirectory.get(current) ?? null;
       if (owner) break;
-      current = getParentDirectory(current);
+      const parent = getParentDirectory(current);
+      if (startedInManagedWorktree && parent && !isManagedWorktreePath(parent)) break;
+      current = parent;
     }
     for (const visitedDirectory of visited) {
       resolvedOwners.set(visitedDirectory, owner);

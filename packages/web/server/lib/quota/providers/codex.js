@@ -1,7 +1,13 @@
+import os from 'os';
+import path from 'path';
+
 import { readAuthFile } from '../../opencode/auth.js';
 import {
+  asNonEmptyString,
+  asObject,
   getAuthEntry,
   normalizeAuthEntry,
+  readJsonFile,
   buildResult,
   toUsageWindow,
   toNumber,
@@ -14,17 +20,46 @@ export const providerId = 'codex';
 export const providerName = 'Codex';
 const aliases = ['openai', 'codex', 'chatgpt'];
 
-export const isConfigured = () => {
-  const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
-  return Boolean(entry?.access || entry?.token);
+const codexHomeDirectory = () => {
+  const override = asNonEmptyString(process.env.CODEX_HOME);
+  return override ? path.resolve(override) : path.join(os.homedir(), '.codex');
 };
 
+/**
+ * Credentials the Codex CLI wrote for itself.
+ *
+ * The CLI owns its own sign-in, and the opencode-codex plugin deliberately
+ * stores nothing in OpenCode's auth file — so a user signed in through the CLI
+ * has no OpenCode entry to read, and without this source their quota would
+ * report "not configured" while Codex works fine.
+ *
+ * Read fresh per request: the CLI rewrites this file whenever it refreshes, so
+ * a cached token would outlive the record it came from.
+ */
+const readCodexCliCredential = () => {
+  const tokens = asObject(asObject(readJsonFile(path.join(codexHomeDirectory(), 'auth.json')))?.tokens);
+  const accessToken = asNonEmptyString(tokens?.access_token);
+  if (!accessToken) return null;
+  return { accessToken, accountId: asNonEmptyString(tokens.account_id) };
+};
+
+/**
+ * OpenCode's own entry wins: that is the account OpenCode itself signs requests
+ * with, so reporting the CLI's quota over it would describe the wrong session.
+ */
+const loadCodexCredential = () => {
+  const entry = normalizeAuthEntry(getAuthEntry(readAuthFile(), aliases));
+  const accessToken = asNonEmptyString(entry?.access) ?? asNonEmptyString(entry?.token);
+  if (accessToken) return { accessToken, accountId: asNonEmptyString(entry.accountId) };
+  return readCodexCliCredential();
+};
+
+export const isConfigured = () => Boolean(loadCodexCredential());
+
 export const fetchQuota = async () => {
-  const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
-  const accessToken = entry?.access ?? entry?.token;
-  const accountId = entry?.accountId;
+  const credential = loadCodexCredential();
+  const accessToken = credential?.accessToken;
+  const accountId = credential?.accountId;
 
   if (!accessToken) {
     return buildResult({

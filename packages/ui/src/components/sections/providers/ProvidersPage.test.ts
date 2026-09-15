@@ -74,8 +74,9 @@ describe('provider auth method helpers', () => {
     ]);
   });
 
-  test('Claude CLI OAuth does not require an OpenCode restart', () => {
+  test('CLI-owned OAuth does not require an OpenCode restart', () => {
     expect(requiresOpenCodeRestartAfterOAuth('claude-code')).toBe(false);
+    expect(requiresOpenCodeRestartAfterOAuth('codex')).toBe(false);
     expect(requiresOpenCodeRestartAfterOAuth('github-copilot')).toBe(true);
   });
 });

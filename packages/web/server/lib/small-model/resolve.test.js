@@ -144,6 +144,46 @@ describe('resolveSmallModel', () => {
     expect(result).toBeNull();
   });
 
+  it('never selects Codex from the automatic family scan', () => {
+    const result = resolveSmallModel({
+      auth: { codex: { type: 'api', key: 'runtime-key' } },
+      catalog: {
+        codex: {
+          id: 'codex',
+          models: {
+            'gpt-5.5': { id: 'gpt-5.5', family: 'gpt-nano', release_date: '2026-01-01' },
+          },
+        },
+      },
+      configSmallModel: null,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('never selects Codex from the implicit session model', () => {
+    const result = resolveSmallModel({
+      auth: { codex: { type: 'api', key: 'runtime-key' } },
+      catalog: {},
+      configSmallModel: null,
+      preferredProviderID: 'codex',
+      preferredModelID: 'gpt-5.5',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('still honours an explicit Codex small-model override', () => {
+    const result = resolveSmallModel({
+      auth: { codex: { type: 'api', key: 'runtime-key' } },
+      catalog: {},
+      settingsSmallModel: 'codex/gpt-5.5',
+      configSmallModel: null,
+    });
+
+    expect(result).toEqual({ providerID: 'codex', modelID: 'gpt-5.5', source: 'settings' });
+  });
+
   it('prefers the session provider over other authenticated providers', () => {
     const result = resolveSmallModel({
       auth: {

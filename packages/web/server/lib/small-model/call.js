@@ -19,8 +19,37 @@ const COPILOT_MODELS_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4_000;
 
 const USER_AGENT = 'opencode/1.0 openchamber';
-const CLAUDE_CODE_PROVIDER = 'claude-code';
-const CLAUDE_CODE_REQUEST_KIND_HEADER = 'x-opencode-claude-request-kind';
+
+/**
+ * Plugin providers whose credential and endpoint exist only inside the running
+ * OpenCode process.
+ *
+ * Both run a local CLI on the user's subscription, so their branch resolves one
+ * `apiKey`/`baseURL` pair from one runtime snapshot and uses nothing else. It
+ * deliberately does not read the provider config or auth.json: those sources
+ * must not be able to replace the runtime bearer, redirect the prompt to
+ * another endpoint, or override the reserved request-kind header that tells the
+ * plugin this is a single-turn utility call rather than an agent turn.
+ */
+const RUNTIME_ONLY_PROVIDERS = new Map([
+  ['claude-code', {
+    label: 'Claude Code',
+    transportKind: 'claude-code-runtime',
+    requestKindHeader: 'x-opencode-claude-request-kind',
+  }],
+  ['codex', {
+    label: 'Codex',
+    transportKind: 'codex-runtime',
+    requestKindHeader: 'x-opencode-codex-request-kind',
+  }],
+]);
+
+export const isRuntimeOnlyProvider = (providerID) => RUNTIME_ONLY_PROVIDERS.has(providerID);
+
+/** Lowercased, for case-insensitive stripping from configured headers. */
+const RESERVED_REQUEST_KIND_HEADERS = new Set(
+  Array.from(RUNTIME_ONLY_PROVIDERS.values(), (spec) => spec.requestKindHeader.toLowerCase()),
+);
 
 const noProviderLoginError = (providerID) => Object.assign(
   new Error(`No OpenCode login found for provider "${providerID}"`),
@@ -650,18 +679,21 @@ const runtimeCredential = (providerID, runtime) => (
     : null
 );
 
-export async function resolveClaudeCodeTransport({ workingDirectory } = {}) {
-  const runtime = await getRuntimeProviderTransport(CLAUDE_CODE_PROVIDER, workingDirectory);
+export async function resolveRuntimeOnlyTransport(providerID, { workingDirectory } = {}) {
+  const spec = RUNTIME_ONLY_PROVIDERS.get(providerID);
+  if (!spec) return null;
+  const runtime = await getRuntimeProviderTransport(providerID, workingDirectory);
   if (!runtime) return null;
   return Object.freeze({
     ...runtime,
-    kind: 'claude-code-runtime',
-    transportID: `claude-code-runtime:${endpointFingerprint(runtime.baseURL)}`,
+    kind: spec.transportKind,
+    transportID: `${spec.transportKind}:${endpointFingerprint(runtime.baseURL)}`,
   });
 }
 
 export const getProviderTransportKind = ({ providerID, login }) => {
-  if (providerID === CLAUDE_CODE_PROVIDER) return 'claude-code-runtime';
+  const runtimeOnly = RUNTIME_ONLY_PROVIDERS.get(providerID);
+  if (runtimeOnly) return runtimeOnly.transportKind;
   if (providerID === 'github-copilot') return 'github-copilot-dynamic';
   if (providerID === 'openai' && login?.type === 'oauth') return 'openai-codex-responses';
   if (providerID === 'anthropic') return 'anthropic-messages';
@@ -677,8 +709,8 @@ export const getProviderTransportKind = ({ providerID, login }) => {
  * must use this rather than inventing a second rule.
  */
 export async function resolveProviderLogin({ auth, workingDirectory, providerID }) {
-  if (providerID === CLAUDE_CODE_PROVIDER) {
-    const transport = await resolveClaudeCodeTransport({ workingDirectory });
+  if (isRuntimeOnlyProvider(providerID)) {
+    const transport = await resolveRuntimeOnlyTransport(providerID, { workingDirectory });
     return transport ? { type: 'api', key: transport.apiKey } : null;
   }
   const providerConfig = readProviderConfig(workingDirectory, providerID);
@@ -691,22 +723,26 @@ export async function resolveProviderLogin({ auth, workingDirectory, providerID 
 export async function callSmallModel({ auth, catalog, workingDirectory, providerID, modelID, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal, resolvedProviderTransport }) {
   const tokens = Number(maxOutputTokens) > 0 ? Number(maxOutputTokens) : DEFAULT_MAX_OUTPUT_TOKENS;
 
-  if (providerID === CLAUDE_CODE_PROVIDER) {
-    const transport = resolvedProviderTransport ?? await resolveClaudeCodeTransport({ workingDirectory });
-    if (!transport?.apiKey || !transport.baseURL || transport.providerID !== CLAUDE_CODE_PROVIDER) {
+  const runtimeOnly = RUNTIME_ONLY_PROVIDERS.get(providerID);
+  if (runtimeOnly) {
+    const transport = resolvedProviderTransport
+      ?? await resolveRuntimeOnlyTransport(providerID, { workingDirectory });
+    // The snapshot must be this provider's own: a transport carried over from
+    // another provider would send the prompt and bearer to the wrong CLI.
+    if (!transport?.apiKey || !transport.baseURL || transport.providerID !== providerID) {
       throw noProviderLoginError(providerID);
     }
     return callOpenaiCompatible({
       baseURL: transport.baseURL,
       headers: {
         Authorization: `Bearer ${transport.apiKey}`,
-        [CLAUDE_CODE_REQUEST_KIND_HEADER]: 'utility',
+        [runtimeOnly.requestKindHeader]: 'utility',
       },
       modelID,
       prompt,
       system,
       maxOutputTokens: tokens,
-      providerLabel: 'Claude Code',
+      providerLabel: runtimeOnly.label,
       responseSchema,
       timeoutMs,
       signal,
@@ -861,9 +897,15 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
     { Authorization: `Bearer ${apiKey}` },
     providerConfig?.headers,
   );
-  const reservedHeader = Object.keys(providerHeaders)
-    .find((name) => name.toLowerCase() === CLAUDE_CODE_REQUEST_KIND_HEADER);
-  if (reservedHeader) delete providerHeaders[reservedHeader];
+  // The request-kind headers are ours to set, and only on a runtime-only
+  // provider's own branch. Strip any that configured headers try to smuggle in:
+  // a forged one would tell that plugin an ordinary turn is a cheap utility
+  // call, or the reverse.
+  for (const name of Object.keys(providerHeaders)) {
+    if (RESERVED_REQUEST_KIND_HEADERS.has(name.toLowerCase())) {
+      delete providerHeaders[name];
+    }
+  }
 
   return callOpenaiCompatible({
     baseURL,

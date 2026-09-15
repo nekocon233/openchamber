@@ -13,6 +13,7 @@ import { buildDeferredRestartResponse } from './config-mutation-response';
 import { normalizeWindowsDriveLetter } from './pathUtils';
 import { resolveWorkspaceFolders } from './workspaceResolver';
 import { getClaudeCliAuthStatus } from './claudeAuth';
+import { getCodexCliAuthStatus } from './codexAuth';
 import type { BridgeContext, BridgeResponse } from './bridge';
 
 type BridgeMessageInput = {
@@ -33,6 +34,25 @@ const notificationClaims = new Map<string, number>();
 
 const isExternalOpenCodeRuntime = (ctx?: BridgeContext): boolean =>
   ctx?.manager?.getDebugInfo().mode === 'external';
+
+/**
+ * Providers whose credentials live in their own CLI, not in OpenCode's auth
+ * store. Their sign-in state has to be read from the CLI, and the extension
+ * must never offer to disconnect them: the credential is not ours to delete,
+ * and for Codex a re-sign-in revokes the working session before it starts.
+ */
+const cliOwnedProviderAuth = {
+  'claude-code': getClaudeCliAuthStatus,
+  codex: getCodexCliAuthStatus,
+} as const;
+
+type CliOwnedProviderId = keyof typeof cliOwnedProviderAuth;
+
+const isCliOwnedProvider = (providerId: string): providerId is CliOwnedProviderId =>
+  Object.prototype.hasOwnProperty.call(cliOwnedProviderAuth, providerId);
+
+const readCliOwnedProviderAuth = (providerId: CliOwnedProviderId) =>
+  cliOwnedProviderAuth[providerId]();
 
 const claimNotification = (key: string): boolean => {
   const now = Date.now();
@@ -427,7 +447,7 @@ export async function handleSystemBridgeMessage(
         return { id, type, success: false, error: 'Provider ID is required' };
       }
       const external = isExternalOpenCodeRuntime(ctx);
-      if (external || providerId === 'claude-code') {
+      if (external || isCliOwnedProvider(providerId)) {
         return {
           id,
           type,
@@ -496,15 +516,13 @@ export async function handleSystemBridgeMessage(
         const hasConfigSource = sources.user.exists || sources.project.exists || sources.custom.exists;
         if (isExternalOpenCodeRuntime(ctx)) {
           sources.auth = { exists: false, status: 'unavailable', canDisconnect: false };
-        } else if (providerId === 'claude-code') {
-          const cliStatus = await getClaudeCliAuthStatus();
-          sources.auth = isExternalOpenCodeRuntime(ctx)
-            ? { exists: false, status: 'unavailable', canDisconnect: false }
-            : {
-                exists: cliStatus.status === 'connected',
-                status: cliStatus.status,
-                canDisconnect: false,
-              };
+        } else if (isCliOwnedProvider(providerId)) {
+          const cliStatus = await readCliOwnedProviderAuth(providerId);
+          sources.auth = {
+            exists: cliStatus.status === 'connected',
+            status: cliStatus.status,
+            canDisconnect: false,
+          };
         } else {
           const auth = getProviderAuth(providerId);
           const connected = Boolean(auth);

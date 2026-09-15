@@ -7,6 +7,7 @@ import {
   buildDeferredRestartResponse,
 } from './config-mutation-response.js';
 import { getClaudeCliAuthStatus } from './claude-cli-auth.js';
+import { getCodexCliAuthStatus } from './codex-cli-auth.js';
 
 const TUNNEL_SETTINGS_KEYS = new Set([
   'tunnelBootstrapTtlMs',
@@ -51,9 +52,23 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     sidebarStateRuntime,
     isExternalOpenCode = () => false,
     readClaudeCliAuthStatus = getClaudeCliAuthStatus,
+    readCodexCliAuthStatus = getCodexCliAuthStatus,
     isTunnelManagementAllowed = () => false,
     fsPromises = fs.promises,
   } = dependencies;
+
+  /**
+   * Providers whose credentials live in their own CLI, not in OpenCode's auth
+   * store. Their sign-in state has to be read from the CLI, and OpenChamber
+   * must never offer to disconnect them: the credential is not ours to delete,
+   * and for Codex a re-sign-in revokes the working session before it starts.
+   */
+  const cliOwnedProviderAuth = {
+    'claude-code': readClaudeCliAuthStatus,
+    codex: readCodexCliAuthStatus,
+  };
+  const isCliOwnedProvider = (providerId) =>
+    Object.prototype.hasOwnProperty.call(cliOwnedProviderAuth, providerId);
 
   let authLibrary = null;
   const pendingMcpAuthContextByState = new Map();
@@ -659,8 +674,8 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
         || sources.sources.custom?.exists === true;
       if (isExternalOpenCode()) {
         sources.sources.auth = { exists: false, status: 'unavailable', canDisconnect: false };
-      } else if (providerId === 'claude-code') {
-        const cliStatus = readClaudeCliAuthStatus();
+      } else if (isCliOwnedProvider(providerId)) {
+        const cliStatus = cliOwnedProviderAuth[providerId]();
         sources.sources.auth = {
           exists: cliStatus.status === 'connected',
           status: cliStatus.status,
@@ -751,7 +766,7 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
         return res.status(400).json({ error: 'Provider ID is required' });
       }
       const external = isExternalOpenCode();
-      if (external || providerId === 'claude-code') {
+      if (external || isCliOwnedProvider(providerId)) {
         return res.json({
           success: false,
           removed: false,

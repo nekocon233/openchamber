@@ -4,6 +4,7 @@ const executeCommand = mock(async () => undefined);
 const getProviderSources = mock();
 const getProviderAuth = mock();
 const getClaudeCliAuthStatus = mock();
+const getCodexCliAuthStatus = mock();
 const removeProviderAuth = mock();
 const removeProviderConfig = mock();
 const fetchQuotaForProvider = mock();
@@ -55,6 +56,7 @@ mock.module('./opencodeAuth', () => ({
   removeProviderAuth,
 }));
 mock.module('./claudeAuth', () => ({ getClaudeCliAuthStatus }));
+mock.module('./codexAuth', () => ({ getCodexCliAuthStatus }));
 mock.module('./quotaProviders', () => ({
   fetchQuotaForProvider,
   listConfiguredQuotaProviders,
@@ -233,6 +235,7 @@ describe('VS Code system bridge Claude provider status', () => {
     getProviderSources.mockReset();
     getProviderAuth.mockReset();
     getClaudeCliAuthStatus.mockReset();
+    getCodexCliAuthStatus.mockReset();
     removeProviderAuth.mockReset();
     removeProviderConfig.mockReset();
     getProviderSources.mockReturnValue({
@@ -294,6 +297,54 @@ describe('VS Code system bridge Claude provider status', () => {
       id: 'claude-local-delete',
       type: 'api:provider/auth:delete',
       payload: { providerId: 'claude-code', scope: 'all' },
+    }, undefined, deps);
+
+    expect(response.data).toMatchObject({ removed: false, capability: 'cli-owned' });
+    expect(removeProviderAuth).not.toHaveBeenCalled();
+    expect(removeProviderConfig).not.toHaveBeenCalled();
+  });
+
+  test('reads Codex sign-in from its own CLI, not from OpenCode auth', async () => {
+    getProviderAuth.mockReturnValue({ type: 'api', key: 'codex-proxy' });
+    getCodexCliAuthStatus.mockResolvedValue({ status: 'connected', connected: true, reason: 'logged-in' });
+
+    const response = await handleSystemBridgeMessage({
+      id: 'codex-source',
+      type: 'api:provider/source:get',
+      payload: { providerId: 'codex', directory: '/workspace/project' },
+    }, undefined, deps);
+
+    expect(response.data.sources.auth).toEqual({
+      exists: true,
+      status: 'connected',
+      canDisconnect: false,
+    });
+    expect(getProviderAuth).not.toHaveBeenCalled();
+    expect(getCodexCliAuthStatus).toHaveBeenCalledTimes(1);
+    expect(getClaudeCliAuthStatus).not.toHaveBeenCalled();
+  });
+
+  test('keeps an unavailable Codex probe distinct from a signed-out CLI', async () => {
+    getCodexCliAuthStatus.mockResolvedValue({ status: 'unavailable', connected: false, reason: 'cli-not-found' });
+
+    const response = await handleSystemBridgeMessage({
+      id: 'codex-source-unavailable',
+      type: 'api:provider/source:get',
+      payload: { providerId: 'codex' },
+    }, undefined, deps);
+
+    expect(response.data.sources.auth).toEqual({
+      exists: false,
+      status: 'unavailable',
+      canDisconnect: false,
+    });
+  });
+
+  test('refuses to disconnect Codex, whose credentials the CLI owns', async () => {
+    const response = await handleSystemBridgeMessage({
+      id: 'codex-local-delete',
+      type: 'api:provider/auth:delete',
+      payload: { providerId: 'codex', scope: 'all' },
     }, undefined, deps);
 
     expect(response.data).toMatchObject({ removed: false, capability: 'cli-owned' });
