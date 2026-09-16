@@ -6,7 +6,6 @@ import { AppLinkSecuritySettings } from './AppLinkSecuritySettings';
 import { DefaultsSettings } from './DefaultsSettings';
 import { OpenCodeCliSettings } from './OpenCodeCliSettings';
 import { OpenChamberToolsSettings } from './OpenChamberToolsSettings';
-import { ClaudeExecutionSettings } from './ClaudeExecutionSettings';
 import { DesktopNetworkSettings } from './DesktopNetworkSettings';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
@@ -198,10 +197,8 @@ const VisualSectionContent: React.FC = () => {
 
 // Chat section: User message rendering, Diff layout, Mobile status bar, Show reasoning traces, Persist draft
 const ChatSectionContent: React.FC = () => {
-  const isVSCode = isVSCodeRuntime();
-  return (
-    <>
-        <ClaudeExecutionSettings />
+    const isVSCode = isVSCodeRuntime();
+    return (
         <OpenChamberVisualSettings
             visibleSettings={[
                 'sessionGoal',
@@ -233,8 +230,7 @@ const ChatSectionContent: React.FC = () => {
                 'enterToSend',
             ]}
         />
-    </>
-  );
+    );
 };
 
 // Sessions section: Default model & agent, Session retention

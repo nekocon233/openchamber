@@ -46,25 +46,6 @@ In the chat composer, choose **Link Linear Issue**. The issue rides along with y
 
 Turn on **Session comments** in the Linear card and a session started from an issue posts a comment on that issue when it starts, finishes, or fails, each with a link that opens the session. Comments are only posted when this OpenChamber server has a public address, so the link works for everyone on the issue; on a local or private address nothing is posted.
 
-## Use Claude Code with another model
-
-In **Settings → Chat → Execution framework**, select **OpenCode** or
-**Claude Code**. With Claude Code selected, your model and provider login stay
-in use; Claude Code drives the task and OpenCode executes its tools with the
-existing permissions.
-
-OpenChamber registers the providers in your OpenCode login store automatically.
-It selects the adapter from each model's API format, so providers such as GLM
-Coding Plan do not need a separate switch or provider-specific setup. OpenAI
-Responses, Anthropic Messages and OpenAI-compatible models are supported;
-models that use a provider-specific, native or bypassing SDK report an error
-before inference. The setting applies to the next message in existing chats.
-Running turns finish with their original executor, and queued messages keep
-the executor captured when queued.
-
-This requires an OpenChamber-managed OpenCode server. Web, desktop and mobile
-clients connected to that server share the setting. External OpenCode servers
-and the VS Code extension's separate runtime do not support choosing Claude Code here.
 
 ## Related
 

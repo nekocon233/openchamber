@@ -3,11 +3,6 @@ import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
-  'settings.chat.execution.title': 'Exécution des tâches',
-  'settings.chat.execution.label': 'Cadre d\'exécution',
-  'settings.chat.execution.info': 'Claude Code utilise le modèle choisi et votre connexion au fournisseur. Prend en charge ChatGPT, Kimi Code, Anthropic et les fournisseurs compatibles configurés. Le changement prend effet au prochain message, même dans les discussions existantes. Les tâches en cours se terminent avant le changement. Un modèle non pris en charge renvoie une erreur.',
-  'settings.chat.execution.unavailable': 'Nécessite un serveur OpenCode géré par OpenChamber.',
-  'settings.chat.execution.failed': 'Impossible de sauvegarder ce réglage. Réessayez.',
   'settings.openchamber.visual.field.alwaysShowScrollbars': 'Toujours afficher les barres de défilement',
   'settings.openchamber.visual.field.alwaysShowScrollbarsHint': 'Gardez les barres de défilement visibles même lorsque le pointeur se trouve hors de la zone défilante. Uniquement sur cet appareil.',
   'settings.providers.page.openCodeGo.title': 'Suivi de l’utilisation d’OpenCode Go',

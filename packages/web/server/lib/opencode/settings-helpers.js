@@ -700,9 +700,6 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.optimizeSystemPrompt === 'boolean') {
       result.optimizeSystemPrompt = candidate.optimizeSystemPrompt;
     }
-    if (typeof candidate.claudeCodeExecution === 'boolean') {
-      result.claudeCodeExecution = candidate.claudeCodeExecution;
-    }
     if (typeof candidate.openCodeUpdateToastDismissedVersion === 'string') {
       const version = candidate.openCodeUpdateToastDismissedVersion.trim();
       result.openCodeUpdateToastDismissedVersion = version.slice(0, VERSION_STRING_MAX_LENGTH);

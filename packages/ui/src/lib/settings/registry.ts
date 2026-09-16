@@ -320,20 +320,6 @@ export const SETTINGS_REGISTRY = {
   frpcCustomDomain: field({ scope: 'instance', parse: parseFrpcHostname }),
   frpcPublicHostname: field({ scope: 'instance', parse: parseFrpcHostname }),
 
-  // ── Claude Code execution framework ──
-  claudeCodeExecution: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('claudeCodeExecution', (v) => useUIStore.getState().setClaudeCodeExecution(v)) }),
-  /** Server-computed flag: whether this instance can drive Claude Code execution. */
-  claudeCodeExecutionAvailable: field({
-    scope: 'instance',
-    computed: true,
-    parse: parseBoolean,
-    ui: {
-      read: () => useUIStore.getState().claudeCodeExecutionAvailable,
-      write: (v) => useUIStore.getState().setClaudeCodeExecutionAvailable(v),
-      autoSave: false,
-    },
-  }),
-
   // ── Sidebar display (profile; useSessionDisplayStore) ──
   sidebarProjectDisplayMode: field({ scope: 'profile', parse: parseOneOf(['all', 'single']), ui: sessionDisplayField('projectDisplayMode') }),
   sidebarSessionGroupingMode: field({ scope: 'profile', parse: parseOneOf(['by-worktree', 'flat']), ui: sessionDisplayField('sessionGroupingMode') }),

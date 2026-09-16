@@ -29,12 +29,6 @@ const createApp = (overrides = {}) => {
 };
 
 describe('provider auth runtime ownership', () => {
-  it('rejects enabling Claude execution on an external server before writing settings', async () => {
-    const persistSettings = vi.fn();
-    const { app } = createApp({ isExternalOpenCode: () => true, persistSettings });
-    await request(app).put('/api/config/settings').send({ claudeCodeExecution: true }).expect(409);
-    expect(persistSettings).not.toHaveBeenCalled();
-  });
   it('reports external Claude auth as unavailable without probing the host CLI', async () => {
     const { app, dependencies } = createApp({ isExternalOpenCode: () => true });
 

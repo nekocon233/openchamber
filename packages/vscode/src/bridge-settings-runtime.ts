@@ -317,7 +317,7 @@ const writeSharedSettingsToDisk = async (
 };
 
 // Fields derived from runtime context — never persisted, always recomputed.
-const DERIVED_FIELDS = new Set(['themeVariant', 'lastDirectory', 'claudeCodeExecutionAvailable']);
+const DERIVED_FIELDS = new Set(['themeVariant', 'lastDirectory']);
 
 const sanitizeMagicPromptOverrides = (input: unknown): Record<string, string> => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -412,7 +412,6 @@ export const readSettings = (ctx?: BridgeContext): Record<string, unknown> => {
 
   return {
     ...persisted,
-    claudeCodeExecutionAvailable: false,
     themeVariant,
     lastDirectory: workspaceFolder,
     opencodeBinary: persistedOpencodeBinary || undefined,
@@ -420,9 +419,6 @@ export const readSettings = (ctx?: BridgeContext): Record<string, unknown> => {
 };
 
 export const persistSettings = async (changes: Record<string, unknown>, ctx?: BridgeContext): Promise<Record<string, unknown>> => {
-  if (changes.claudeCodeExecution === true) {
-    throw new Error('Claude Code execution requires an OpenChamber-managed OpenCode server');
-  }
   const current = readSettings(ctx);
   // Only keys the settings registry knows as stored shared fields reach disk.
   const restChanges = filterPersistableSettingsChanges(stripDerived({ ...(changes || {}) }));

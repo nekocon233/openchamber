@@ -3,11 +3,6 @@ import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
-  'settings.chat.execution.title': 'Task execution',
-  'settings.chat.execution.label': 'Execution framework',
-  'settings.chat.execution.info': 'Use Claude Code with your selected model and existing provider login. Supports ChatGPT, Kimi Code, Anthropic and configured compatible providers. Applies to the next message in existing chats; running tasks finish first. Unsupported models report an error.',
-  'settings.chat.execution.unavailable': 'Requires an OpenChamber-managed OpenCode server.',
-  'settings.chat.execution.failed': 'Could not save the execution setting. Try again.',
   'settings.openchamber.visual.field.alwaysShowScrollbars': 'Always show scrollbars',
   'settings.openchamber.visual.field.alwaysShowScrollbarsHint': 'Keep scrollbars visible even when the pointer is outside the scrollable area. Applies on this device only.',
   'settings.providers.page.openCodeGo.title': 'OpenCode Go usage tracking',

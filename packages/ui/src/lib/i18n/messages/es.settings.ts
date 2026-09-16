@@ -3,11 +3,6 @@ import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
-  'settings.chat.execution.title': 'Ejecución de tareas',
-  'settings.chat.execution.label': 'Marco de ejecución',
-  'settings.chat.execution.info': 'Claude Code usa el modelo elegido y tu conexión al proveedor. Compatible con ChatGPT, Kimi Code, Anthropic y proveedores compatibles configurados. Se aplica al siguiente mensaje en chats existentes; las tareas en curso terminan primero. Los modelos no compatibles muestran un error.',
-  'settings.chat.execution.unavailable': 'Requiere un servidor OpenCode gestionado por OpenChamber.',
-  'settings.chat.execution.failed': 'No se pudo guardar este ajuste. Inténtalo de nuevo.',
   'settings.openchamber.visual.field.alwaysShowScrollbars': 'Mostrar siempre las barras de desplazamiento',
   'settings.openchamber.visual.field.alwaysShowScrollbarsHint': 'Mantén las barras de desplazamiento visibles incluso cuando el puntero esté fuera del área desplazable. Solo se aplica en este dispositivo.',
   'settings.providers.page.openCodeGo.title': 'Seguimiento de uso de OpenCode Go',

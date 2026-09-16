@@ -802,6 +802,7 @@ export interface FollowUpQueueAdditionalPart {
 export interface FollowUpQueueSendConfig {
   providerID: string;
   modelID: string;
+  /** Legacy queue data only. Preserved for mutation replay; never selects an executor. */
   executionFramework?: 'opencode' | 'claude-code';
   agent?: string;
   variant?: string;

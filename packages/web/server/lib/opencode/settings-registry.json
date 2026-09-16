@@ -226,13 +226,6 @@
     "frpcPublicHostname": {
       "scope": "instance"
     },
-    "claudeCodeExecution": {
-      "scope": "profile"
-    },
-    "claudeCodeExecutionAvailable": {
-      "scope": "instance",
-      "computed": true
-    },
     "sidebarProjectDisplayMode": {
       "scope": "profile"
     },

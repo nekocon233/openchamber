@@ -254,7 +254,7 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
     try {
       // The surface kind resolves the per-surface profile keys; absent means base.
       const settings = await readSettingsFromDiskMigrated({ surface: settingsSurfaceOf(req) });
-      res.json({ ...formatSettingsResponse(settings), claudeCodeExecutionAvailable: !isExternalOpenCode() });
+      res.json(formatSettingsResponse(settings));
     } catch (error) {
       console.error('Failed to read settings:', error);
       res.status(500).json({ error: 'Failed to read settings' });
@@ -465,9 +465,6 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
 
   app.put('/api/config/settings', async (req, res) => {
     try {
-      if (req.body?.claudeCodeExecution === true && isExternalOpenCode()) {
-        return res.status(409).json({ code: 'claude-execution-unsupported', error: 'Claude Code execution requires an OpenChamber-managed OpenCode server' });
-      }
       if (includesTunnelSettings(req.body) && !isTunnelManagementAllowed(req)) {
         return res.status(403).json({
           error: 'Tunnel management is only available from the host machine',

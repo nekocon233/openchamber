@@ -20,7 +20,6 @@ import type { Session, Part, TextPart } from "@opencode-ai/sdk/v2/client"
 import type { AttachedFile, SessionContextUsage, SessionWorktreeAttachment } from "@/stores/types/sessionTypes"
 import type { WorktreeMetadata } from "@/types/worktree"
 import { opencodeClient } from "@/lib/opencode/client"
-import { prepareClaudeExecutionRequest } from "@/lib/claudeExecution"
 import { runtimeFetch } from "@/lib/runtime-fetch"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { useProjectsStore } from "@/stores/useProjectsStore"
@@ -236,7 +235,6 @@ export async function ensurePendingDraftPermissionPolicy(
 }
 
 export async function routeMessage(params: {
-  executionFramework?: 'opencode' | 'claude-code'
   runtimeKey?: string
   sessionId: string
   directory?: string | null
@@ -262,7 +260,6 @@ export async function routeMessage(params: {
   const requestRuntimeKey = params.runtimeKey ?? params.expectedRuntime?.runtimeKey
   let promptContent = params.content
   let promptAdditionalParts = params.additionalParts
-  if (params.executionFramework && !requestDirectory) throw new Error('Queued execution requires a session directory')
   if (params.inputMode === "shell") {
     await opencodeClient.shellSession({
       runtimeKey: requestRuntimeKey,
@@ -313,10 +310,6 @@ export async function routeMessage(params: {
           messageId: params.messageId,
           expectedRuntime: params.expectedRuntime,
           send: async (messageID) => {
-            if (params.executionFramework && requestDirectory) {
-              await prepareClaudeExecutionRequest({ sessionID: params.sessionId, messageID, directory: requestDirectory, executionFramework: params.executionFramework })
-              assertExpectedRuntimeContext(params.expectedRuntime)
-            }
             return opencodeClient.sendCommand({
               runtimeKey: requestRuntimeKey,
               id: params.sessionId,
@@ -367,10 +360,6 @@ export async function routeMessage(params: {
     messageId: params.messageId,
     expectedRuntime: params.expectedRuntime,
     send: async (messageID) => {
-      if (params.executionFramework && requestDirectory) {
-        await prepareClaudeExecutionRequest({ sessionID: params.sessionId, messageID, directory: requestDirectory, executionFramework: params.executionFramework })
-        assertExpectedRuntimeContext(params.expectedRuntime)
-      }
       return opencodeClient.sendMessage({
         runtimeKey: requestRuntimeKey,
         id: params.sessionId,
@@ -403,7 +392,6 @@ type CapturedSendTarget = {
 }
 
 type SendMessageOptions = {
-  executionFramework?: 'opencode' | 'claude-code'
   target?: CapturedSendTarget
   sessionId?: string
   directory?: string
@@ -2029,7 +2017,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         appendSubmissions,
         delivery: options?.delivery,
         messageId: options?.messageId,
-        executionFramework: options?.executionFramework,
         expectedRuntime: options?.expectedRuntime,
         additionalParts: mergedAdditionalParts?.map((p) => ({
           text: p.text,
@@ -2153,7 +2140,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       appendSubmissions,
       delivery: options?.delivery,
       messageId: options?.messageId,
-      executionFramework: options?.executionFramework,
       expectedRuntime: options?.expectedRuntime,
       additionalParts: partsWithPinnedContext?.map((p) => ({
         text: p.text,

@@ -813,11 +813,9 @@ export const updateDesktopSettings = async (changes: Partial<DesktopSettings>): 
     return { ok: false };
   }
   // Projects and the active project are owned by the sidebar-state host API in
-  // this build, never by the shared settings document; the availability flag
-  // is computed server-side.
+  // this build, never by the shared settings document.
   const writableChanges: Partial<DesktopSettings> & { sidebarCollapsed?: unknown } = { ...changes };
   delete writableChanges.projects;
-  delete writableChanges.claudeCodeExecutionAvailable;
   delete writableChanges.activeProjectId;
   delete writableChanges.sidebarCollapsed;
   if (Object.keys(writableChanges).length === 0) return { ok: true };

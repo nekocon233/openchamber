@@ -763,12 +763,6 @@ describe('settings helpers', () => {
       expect(helpers.sanitizeSettingsUpdate({ optimizeSystemPrompt: false })).toEqual({ optimizeSystemPrompt: false });
       expect(helpers.sanitizeSettingsUpdate({ optimizeSystemPrompt: 'true' })).toEqual({});
     });
-    it('persists the execution switch but never trusts client capability claims', () => {
-      const helpers = createTestHelpersWithRealSanitizers();
-      expect(helpers.sanitizeSettingsUpdate({ claudeCodeExecution: true, claudeCodeExecutionAvailable: true })).toEqual({ claudeCodeExecution: true });
-      expect(helpers.sanitizeSettingsUpdate({ claudeCodeExecution: false })).toEqual({ claudeCodeExecution: false });
-      expect(helpers.sanitizeSettingsUpdate({ claudeCodeExecution: 'true' })).toEqual({});
-    });
 
     it('survives a full settings.json payload containing all four previously-dropped fields (regression)', () => {
       const helpers = createTestHelpersWithRealSanitizers();
@@ -873,7 +867,6 @@ describe('settings registry gate', () => {
     managedRemoteTunnelSelectedPresetId: 'a', managedRemoteTunnelPresetTokens: { a: 'token' },
     frpcProxyType: 'tcp', frpcServerAddress: 'frps.example.com', frpcServerPort: 7000, frpcRemotePort: 18080,
     frpcPublicUrl: 'https://public.example.com:18080', frpcCustomDomain: 'vhost.example.com', frpcPublicHostname: 'public.example.com',
-    claudeCodeExecution: true,
     sidebarProjectDisplayMode: 'all', sidebarSessionGroupingMode: 'flat', sidebarProjectSortOrder: 'manual', sidebarShowRecentSection: true,
     workStatusPanelEnabled: true, workStatusHiddenSections: ['mcp'], workStatusHiddenSectionsExplicit: true, workStatusSectionOrder: ['mcp', 'session'],
     showReasoningTraces: true, streamingAutoFollowEnabled: true, collapsibleThinkingBlocks: true, showTextJustificationActivity: true,

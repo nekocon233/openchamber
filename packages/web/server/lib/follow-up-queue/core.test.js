@@ -72,6 +72,49 @@ const mutate = (core, sessionId, baseRevision, clientMutationId, operation) => c
 });
 
 describe('follow-up queue core', () => {
+  it('loads legacy executor metadata and preserves durable mutation replay through completion', async () => {
+    const { core, rootDirectory } = await createHarness();
+    const sessionId = 'session-retired-executor';
+    const scope = { kind: 'session', sessionId };
+    const scopeToken = createHash('sha256').update(JSON.stringify(scope)).digest('hex');
+    const item = createItem('legacy', {
+      status: 'queued',
+      sendConfig: {
+        providerID: 'codex', modelID: 'model-one', agent: 'build', variant: 'high', executionFramework: 'claude-code',
+      },
+    });
+    const operation = { type: 'add', item };
+    // This is the version-1 envelope and fingerprint written before the executor was retired.
+    const envelope = {
+      storageVersion: 1,
+      scope,
+      revision: 1,
+      items: [item],
+      recentMutations: [{
+        clientMutationId: 'legacy-add',
+        fingerprint: createHash('sha256').update(JSON.stringify(operation)).digest('hex'),
+        mutationRevision: 1,
+      }],
+    };
+    await fs.mkdir(rootDirectory, { recursive: true });
+    await fs.writeFile(path.join(rootDirectory, `${scopeToken}.json`), JSON.stringify(envelope), 'utf8');
+
+    await expect(core.load(sessionId)).resolves.toEqual({ scopeToken, revision: 1, items: [item] });
+    await expect(mutate(core, sessionId, 0, 'legacy-add', operation)).resolves.toMatchObject({
+      deduplicated: true, mutationRevision: 1, snapshot: { revision: 1, items: [item] },
+    });
+    const freshItem = createItem('fresh', { sendConfig: { providerID: 'claude-code', modelID: 'model-two' } });
+    await mutate(core, sessionId, 1, 'fresh-add', { type: 'add', item: freshItem });
+    const claimed = await mutate(core, sessionId, 2, 'legacy-claim', {
+      type: 'claim', itemId: item.id, claimId: 'legacy-claim-id', mode: 'auto',
+    });
+    expect(claimed.snapshot.items[0]).toMatchObject({ ...item, claim: { id: 'legacy-claim-id' } });
+    const completed = await mutate(core, sessionId, 3, 'legacy-complete', {
+      type: 'complete', itemId: item.id, claimId: 'legacy-claim-id',
+    });
+    expect(completed.snapshot.items).toEqual([freshItem]);
+  });
+
   it('serializes claims and terminalization across cores sharing one authority directory', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'openchamber-follow-up-multiprocess-'));
     temporaryRoots.add(root);
@@ -655,7 +698,6 @@ describe('follow-up queue core', () => {
         modelID: 'model-claim',
         agent: 'agent-claim',
         variant: 'variant-claim',
-        executionFramework: 'claude-code',
       },
     });
     await mutate(core, sessionId, 0, 'claim-add', { type: 'add', item: queuedItem });

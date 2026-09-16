@@ -24,7 +24,6 @@ const AUTH = JSON.stringify({
   hyper: { key: 'test-token' },
   'github-copilot': { access: 'test-token' },
   anthropic: { access: 'test-token', refresh: 'test-refresh' },
-  xai: { type: 'oauth', access: 'legacy-test-token' },
 });
 ((fs as unknown) as { existsSync: () => boolean }).existsSync = () => true;
 ((fs as unknown) as { readFileSync: () => string }).readFileSync = () => AUTH;
@@ -35,7 +34,6 @@ import {
   fetchHyperQuota,
   fetchOllamaCloudQuota,
   fetchQuotaForProvider,
-  listConfiguredQuotaProviders,
   resetClaudeQuotaCache,
 } from './quotaProviders';
 import type { ClaudeCredential } from './claudeAuth';
@@ -97,28 +95,6 @@ const stubFetchReturning = (resolver: () => Promise<unknown>): void => {
 const stubFetchFailing = (json: () => Promise<unknown>, init: MockResponseInit): void => {
   globalThis.fetch = (async () => ({ json, ...init }) as unknown as Response) as typeof fetch;
 };
-
-describe('removed xAI quota provider', () => {
-  test('ignores legacy auth and returns unsupported without fetching', async () => {
-    assert.equal(listConfiguredQuotaProviders().includes('xai'), false);
-
-    let requested = false;
-    globalThis.fetch = (async () => {
-      requested = true;
-      throw new Error('Unexpected xAI quota request');
-    });
-
-    const result = await fetchQuotaForProvider('xai');
-
-    assert.equal(requested, false);
-    assert.equal(result.providerId, 'xai');
-    assert.equal(result.providerName, 'xai');
-    assert.equal(result.ok, false);
-    assert.equal(result.configured, false);
-    assert.equal(result.usage, null);
-    assert.equal(result.error, 'Unsupported provider');
-  });
-});
 
 test('dispatches Charm Hyper through the generic quota API', async () => {
   stubFetchReturning(async () => Response.json({ balance: 100 }));

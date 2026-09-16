@@ -22,6 +22,14 @@ import { renderSettingsRegistrySnapshot, SETTINGS_REGISTRY_SNAPSHOT_PATHS } from
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..');
 
 describe('settings registry', () => {
+  test('drops retired execution settings while keeping unrelated preferences', () => {
+    expect(parseSettingsDocument({
+      claudeCodeExecution: true,
+      claudeCodeExecutionAvailable: true,
+      fontSize: 15,
+    })).toEqual({ fontSize: 15 });
+  });
+
   test('project paths retain absolute Windows roots across parsing and serialization', () => {
     const parsed = parseSettingsDocument({ projects: [
       { path: 'c:\\', label: 'Drive' },

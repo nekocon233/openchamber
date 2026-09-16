@@ -132,7 +132,6 @@ import { createDevServerScanner } from './lib/dev-servers/routes.js';
 import { createDevTunnelRuntime } from './lib/dev-tunnel/runtime.js';
 import { registerBrowserControlRoutes } from './lib/browser-control/routes.js';
 import { createSystemPromptRuntime } from './lib/system-prompt/runtime.js';
-import { createClaudeExecutionRuntime } from './lib/claude-execution/runtime.js';
 import { createOpenChamberSessionService } from './lib/openchamber-sessions/routes.js';
 import { createScheduledTaskService } from './lib/scheduled-tasks/service.js';
 import { createOpenChamberControlService } from './lib/openchamber-control/service.js';
@@ -277,7 +276,6 @@ const readCustomThemesFromDisk = (...args) => themeRuntime.readCustomThemesFromD
 let notificationTemplateRuntime = null;
 let agentToolRuntime = null;
 let systemPromptRuntime = null;
-let claudeExecutionRuntime = null;
 
 const createTimeoutSignal = (...args) => notificationTemplateRuntime.createTimeoutSignal(...args);
 const formatProjectLabel = (...args) => notificationTemplateRuntime.formatProjectLabel(...args);
@@ -1300,13 +1298,11 @@ const openCodeLifecycleRuntime = createOpenCodeLifecycleRuntime({
     const managedEnv = includeControl || includeWeb || includeMemory
       ? await (agentToolRuntime?.prepareManagedOpenCodeEnv({ includeControl, includeWeb, includeMemory }) || {})
       : {};
-    let configContent = managedEnv.OPENCODE_CONFIG_CONTENT ?? process.env.OPENCODE_CONFIG_CONTENT;
-    if (settings?.optimizeSystemPrompt === true) {
-      const systemPromptEnv = await systemPromptRuntime.prepareManagedOpenCodeEnv(configContent);
-      configContent = systemPromptEnv.OPENCODE_CONFIG_CONTENT;
-      Object.assign(managedEnv, systemPromptEnv);
-    }
-    return { ...managedEnv, ...claudeExecutionRuntime.prepareEnv(configContent) };
+    if (settings?.optimizeSystemPrompt !== true) return managedEnv;
+
+    const configContent = managedEnv.OPENCODE_CONFIG_CONTENT ?? process.env.OPENCODE_CONFIG_CONTENT;
+    const systemPromptEnv = await systemPromptRuntime.prepareManagedOpenCodeEnv(configContent);
+    return { ...managedEnv, ...systemPromptEnv };
   },
 });
 
@@ -1682,12 +1678,6 @@ async function main(options = {}) {
     path,
     dataDir: OPENCHAMBER_DATA_DIR,
   });
-  claudeExecutionRuntime = createClaudeExecutionRuntime({
-    readSettings: readSettingsFromDiskMigrated,
-    settingsPath: SETTINGS_FILE_PATH,
-    isExternal: () => ENV_SKIP_OPENCODE_START || isExternalOpenCode,
-    getActivePort: () => server?.address()?.port,
-  });
 
   // Pairing transports advertised to the create-device dialog. LAN reachability is
   // derived from the SERVER's actual bind (a wildcard bind → the machine's LAN IP;
@@ -1937,7 +1927,6 @@ async function main(options = {}) {
   // /api/system/info resolves port + tunnel URL lazily at request time.
   let tunnelRuntimeContextHolder = null;
 
-  claudeExecutionRuntime.registerInternal(app, express);
   const bootstrapResult = bootstrapRuntime.setupBaseRoutes(app, {
     process,
     openchamberVersion: OPENCHAMBER_VERSION,
@@ -2052,7 +2041,6 @@ async function main(options = {}) {
     desktopUpdater,
   });
   uiAuthController = bootstrapResult.uiAuthController;
-  claudeExecutionRuntime.registerPublic(app, express);
   realtimeProxyRuntime = attachRealtimeProxy({
     app,
     server,

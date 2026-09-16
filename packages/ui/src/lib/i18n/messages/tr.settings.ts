@@ -3,11 +3,6 @@ import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
-  'settings.chat.execution.title': 'Görev yürütme',
-  'settings.chat.execution.label': 'Yürütme altyapısı',
-  'settings.chat.execution.info': 'Claude Code, seçtiğiniz modeli ve mevcut sağlayıcı oturumunu kullanır. ChatGPT, Kimi Code, Anthropic ve yapılandırılmış uyumlu sağlayıcıları destekler. Mevcut sohbetlerde bir sonraki mesajdan itibaren geçerlidir; çalışan görevler önce tamamlanır. Desteklenmeyen modeller hata bildirir.',
-  'settings.chat.execution.unavailable': 'OpenChamber tarafından yönetilen bir OpenCode sunucusu gerektirir.',
-  'settings.chat.execution.failed': 'Yürütme ayarı kaydedilemedi. Yeniden deneyin.',
   'settings.openchamber.visual.field.alwaysShowScrollbars': 'Kaydırma çubuklarını her zaman göster',
   'settings.openchamber.visual.field.alwaysShowScrollbarsHint': 'İşaretçi kaydırılabilir alanın dışındayken bile kaydırma çubuklarını görünür tutar. Yalnızca bu cihazda geçerlidir.',
   'settings.providers.page.openCodeGo.title': 'OpenCode Go kullanım takibi',

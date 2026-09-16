@@ -3,11 +3,6 @@ import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 export const settingsDict = {
-  'settings.chat.execution.title': 'タスクの実行',
-  'settings.chat.execution.label': '実行フレームワーク',
-  'settings.chat.execution.info': '選択したモデルと既存のプロバイダーログインを Claude Code で使用します。ChatGPT、Kimi Code、Anthropic、設定済みの互換プロバイダーに対応します。既存のチャットでも次のメッセージから適用され、実行中のタスクは先に完了します。非対応モデルはエラーになります。',
-  'settings.chat.execution.unavailable': 'OpenChamber が管理する OpenCode サーバーが必要です。',
-  'settings.chat.execution.failed': '実行設定を保存できませんでした。もう一度お試しください。',
   'settings.openchamber.visual.field.alwaysShowScrollbars': 'スクロールバーを常に表示',
   'settings.openchamber.visual.field.alwaysShowScrollbarsHint': 'ポインターがスクロール領域の外にあるときも、スクロールバーを表示します。このデバイスにのみ適用されます。',
   'settings.providers.page.openCodeGo.title': 'OpenCode Go 使用量追跡',

@@ -6,6 +6,7 @@ import {
   applyFollowUpQueueOperation,
   isFollowUpQueueClaimAvailable,
   parseFollowUpQueueMutationResult,
+  parseFollowUpQueueOperation,
   parseFollowUpQueueSnapshot,
 } from './followUpQueue';
 
@@ -54,13 +55,23 @@ const snapshot = (): FollowUpQueueSnapshot => ({
 });
 
 describe('follow-up queue protocol parsing', () => {
-  test('preserves the captured execution framework and rejects unknown executors', () => {
-    const value = snapshot();
-    value.items[0].sendConfig = { providerID: 'openai', modelID: 'gpt', executionFramework: 'claude-code' };
-    expect(parseFollowUpQueueSnapshot(value).items[0].sendConfig).toEqual(value.items[0].sendConfig);
-    const invalid = { ...value, items: [{ ...value.items[0], sendConfig: { ...value.items[0].sendConfig, executionFramework: 'unknown' } }] };
-    expect(() => parseFollowUpQueueSnapshot(invalid)).toThrow('executionFramework');
+  test('preserves retired executor metadata only for legacy snapshot and outbox replay', () => {
+    for (const executionFramework of ['opencode', 'claude-code']) {
+      const legacy = snapshot();
+      const item = {
+        ...legacy.items[0],
+        sendConfig: { providerID: 'codex', modelID: 'model-one', agent: 'build', variant: 'high', executionFramework },
+      };
+      expect(parseFollowUpQueueSnapshot({ ...legacy, items: [item] }).items[0]).toEqual(item);
+      const operation = { type: 'add', item };
+      expect(parseFollowUpQueueOperation(operation)).toEqual(operation);
+    }
+    expect(() => parseFollowUpQueueSnapshot({
+      ...snapshot(),
+      items: [{ ...snapshot().items[0], sendConfig: { providerID: 'codex', modelID: 'model-one', executionFramework: 'unknown' } }],
+    })).toThrow('executionFramework');
   });
+
   test('round-trips the strict snapshot and mutation result', () => {
     const parsed = parseFollowUpQueueSnapshot(snapshot());
     expect(parsed).toEqual(snapshot());

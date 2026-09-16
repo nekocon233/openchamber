@@ -160,13 +160,6 @@ The macOS menu bar item is enabled by default and can be disabled in General set
 
 ## Bundled OpenCode CLI
 
-Claude Code execution also stages its plugin, model adapters and native SDK
-runtime under `resources/claude-execution`. These files must remain outside
-`app.asar`: OpenCode is a separate executable and cannot import Electron's
-virtual filesystem. `build:claude-execution` produces these resources during
-packaging; development uses the Web package's source entrypoint. See
-`../web/server/lib/claude-execution/DOCUMENTATION.md` for the execution contract.
-
 Packaged Desktop builds include the official OpenCode CLI that matches the pinned `@opencode-ai/sdk` version in the root `package.json`. `prepare:opencode-cli` downloads the platform-specific release artifact, caches it under `packages/electron/.cache/opencode-cli`, stages `opencode` or `opencode.exe` into `resources/opencode-cli`, and verifies `opencode --version` before packaging. Re-running the step is fast when the staged binary already matches the pinned version.
 
 Managed local Desktop startup prefers OpenCode binaries in this order:

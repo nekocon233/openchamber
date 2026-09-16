@@ -960,8 +960,6 @@ interface UIStore {
   persistChatDraft: boolean;
   showOpenCodeUpdateNotifications: boolean;
   agentControlToolEnabled: boolean;
-  claudeCodeExecution: boolean;
-  claudeCodeExecutionAvailable: boolean;
   agentWebToolEnabled: boolean;
   agentMemoryToolEnabled: boolean;
   /**
@@ -1164,8 +1162,6 @@ interface UIStore {
   setPersistChatDraft: (value: boolean) => void;
   setShowOpenCodeUpdateNotifications: (value: boolean) => void;
   setAgentControlToolEnabled: (value: boolean) => void;
-  setClaudeCodeExecution: (value: boolean) => void;
-  setClaudeCodeExecutionAvailable: (value: boolean) => void;
   setAgentWebToolEnabled: (value: boolean) => void;
   setAgentMemoryToolEnabled: (value: boolean) => void;
   setAgentMemoryFeatureAvailable: (value: boolean) => void;
@@ -1343,8 +1339,6 @@ export const useUIStore = create<UIStore>()(
         persistChatDraft: true,
         showOpenCodeUpdateNotifications: !isWindowsArm64(),
         agentControlToolEnabled: true,
-        claudeCodeExecution: false,
-        claudeCodeExecutionAvailable: false,
         agentWebToolEnabled: true,
         agentMemoryToolEnabled: false,
         agentMemoryFeatureAvailable: false,
@@ -2630,8 +2624,6 @@ export const useUIStore = create<UIStore>()(
         setAgentControlToolEnabled: (value) => {
           set({ agentControlToolEnabled: value });
         },
-        setClaudeCodeExecution: (value) => set({ claudeCodeExecution: value }),
-        setClaudeCodeExecutionAvailable: (value) => set({ claudeCodeExecutionAvailable: value }),
         setAgentWebToolEnabled: (value) => {
           set({ agentWebToolEnabled: value });
         },

@@ -349,8 +349,12 @@ const normalizeSendConfig = (value, field) => {
       { controlFree: true },
     );
   }
+  // Version-1 queues and their idempotency fingerprints may include this retired field.
+  // Preserve it as data only; dispatch no longer reads an execution framework.
   if (hasOwn(sendConfig, 'executionFramework')) {
-    if (sendConfig.executionFramework !== 'opencode' && sendConfig.executionFramework !== 'claude-code') throw new FollowUpQueueValidationError(`${field}.executionFramework is invalid`);
+    if (sendConfig.executionFramework !== 'opencode' && sendConfig.executionFramework !== 'claude-code') {
+      throw new FollowUpQueueValidationError(`${field}.executionFramework is invalid`);
+    }
     normalized.executionFramework = sendConfig.executionFramework;
   }
   return normalized;

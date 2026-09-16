@@ -384,9 +384,6 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
       code: 'small-model-runtime-unsupported',
     }, 501);
   }
-  if (normalizedPathname.startsWith('/api/claude-execution/')) {
-    return unsupportedWebRouteResponse('Claude Code execution');
-  }
 
   if (normalizedPathname === '/api/preview/targets') {
     return unsupportedWebRouteResponse('Preview proxy');
