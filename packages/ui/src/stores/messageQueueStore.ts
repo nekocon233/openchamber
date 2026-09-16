@@ -28,16 +28,20 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import type { AttachedFile } from './types/sessionTypes';
 import { getSafeStorage } from './utils/safeStorage';
+import { z } from 'zod';
+import type { Event } from '@opencode-ai/sdk/v2';
+import { isVSCodeRuntime } from '@/lib/desktop';
+import type { ContextPartMetadata } from '@/lib/messages/contextParts';
 
-type FollowUpBehavior = 'steer' | 'queue';
+export type FollowUpBehavior = 'steer' | 'queue';
 
-const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = 'queue';
+export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = 'queue';
 
-const isFollowUpBehavior = (value: unknown): value is FollowUpBehavior => (
+export const isFollowUpBehavior = (value: unknown): value is FollowUpBehavior => (
     value === 'steer' || value === 'queue'
 );
 
-const normalizeFollowUpBehavior = (
+export const normalizeFollowUpBehavior = (
     value: unknown,
     legacyQueueModeEnabled?: boolean | null,
 ): FollowUpBehavior => {
@@ -57,7 +61,43 @@ type QueuedAdditionalPart = Omit<FollowUpQueueAdditionalPart, 'attachments'> & {
 export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | 'additionalParts'> {
     attachments?: AttachedFile[];
     additionalParts?: QueuedAdditionalPart[];
+    /** Absent on a server projection item; a take brings it back. */
+    context?: QueuedContextPart[];
+    /** Bounded display-only context summary retained in server projections. */
+    contextPreview?: string;
 }
+
+/**
+ * Who delivers the queue. Web, desktop, and mobile talk to an OpenChamber
+ * server that owns the queue; VS Code has no server of its own, so the
+ * extension UI keeps the local fallback queue.
+ */
+export const isServerOwnedMessageQueue = (): boolean => !isVSCodeRuntime();
+
+/**
+ * Context captured with a queued message: whatever the composer had attached
+ * when the message was queued. It leaves the composer with the message, so
+ * delivery carries it and editing the message brings it back.
+ */
+export type QueuedContextPart =
+    | {
+        /** An attached context item: a draft chip or a linked issue/PR. Restored on edit. */
+        kind: 'context';
+        text: string;
+        metadata: ContextPartMetadata;
+        /** Delivered as its own synthetic part right before this one (a linked PR's reading instructions). */
+        instructions?: string;
+    }
+    | {
+        /** Derived from the message text (the skill instruction); re-derived when the text is sent again, so never restored. */
+        kind: 'instruction';
+        text: string;
+    }
+    | {
+        /** Handed to the composer by another surface (conflict resolution); restored as pending on edit. */
+        kind: 'synthetic';
+        text: string;
+    };
 
 export type MessageQueueTarget = {
     runtimeKey: string;
@@ -148,6 +188,17 @@ interface MessageQueueActions {
     handleTransportReady: (context?: MessageQueueRuntimeContext) => void;
     dropSession: (sessionId: string, context?: MessageQueueRuntimeContext) => void;
     switchRuntime: (runtimeKey: string) => void;
+    /** Removes the messages the composer is about to send itself and returns them in full. */
+    takeForSend: (identity: MessageQueueIdentity, messageId?: string) => Promise<QueuedMessage[]>;
+    /** Drops the local projection only (the session is gone); never a server call. */
+    forgetQueue: (identity: MessageQueueIdentity) => void;
+    /** Re-read the authoritative queues for the active runtime. */
+    hydrate: () => Promise<void>;
+    /** Re-read after an event-stream gap. */
+    resync: () => Promise<void>;
+    /** The follow-up queue only ever delivers through UI claims, so there is nothing to hold. */
+    setServerHold: (sessionId: string, held: boolean) => Promise<void>;
+    resetForRuntimeSwitch: (previousRuntimeKey: string | null | undefined) => void;
 }
 
 type MessageQueueStore = MessageQueueState & MessageQueueActions;
@@ -1573,6 +1624,49 @@ export const createMessageQueueStore = (
             getQueueForSession: (sessionId) => get().queuedMessages[sessionId] ?? [],
             getQueueForTarget: (target) => get().queuedMessages[getMessageQueueKey(target)] ?? [],
 
+            takeForSend: async (identity, messageId) => {
+                const key = getQueueKey(identity);
+                const queue = get().queuedMessages[key] ?? [];
+                const taken = queue.filter((message) => (messageId ? message.id === messageId : true));
+                if (taken.length === 0) return [];
+                for (const message of taken) {
+                    get().removeFromQueue(identity, message.id);
+                }
+                return taken;
+            },
+
+            forgetQueue: (identity) => {
+                const key = getQueueKey(identity);
+                set((state) => {
+                    if (!(key in state.queuedMessages)) return {};
+                    const queuedMessages = { ...state.queuedMessages };
+                    delete queuedMessages[key];
+                    return { queuedMessages };
+                });
+            },
+
+            hydrate: () => get().initialize(),
+
+            resync: () => get().initialize(),
+
+            setServerHold: () => Promise.resolve(),
+
+            resetForRuntimeSwitch: (previousRuntimeKey) => {
+                const previous = typeof previousRuntimeKey === 'string' && previousRuntimeKey.trim().length > 0
+                    ? normalizeRuntimeKey(previousRuntimeKey)
+                    : null;
+                if (!previous || previous === get().runtimeKey) return;
+                set((state) => {
+                    const queuedMessages = Object.fromEntries(
+                        Object.entries(state.queuedMessages).filter(([key]) => {
+                            const parsed = parseMessageQueueKey(key);
+                            return parsed?.runtimeKey !== previous;
+                        }),
+                    );
+                    return { queuedMessages };
+                });
+            },
+
             claim: async (identity, itemId, mode) => {
                 const context = { runtimeKey: get().runtimeKey, generation: get().generation };
                 if (
@@ -1761,4 +1855,30 @@ export const handleFollowUpQueueGlobalEvent = (
 
 export const notifyFollowUpQueueTransportReady = (context?: MessageQueueRuntimeContext): void => {
     useMessageQueueStore.getState().handleTransportReady(context);
+};
+
+/**
+ * The `message-queue.updated` broadcast contract other OpenChamber servers may
+ * emit. This build's queue authority is the follow-up queue (see
+ * `lib/followUpQueue.ts`), whose updates flow through
+ * `handleFollowUpQueueGlobalEvent`; these events are still parsed so the
+ * control-event pipeline stays well-formed, but applying them is a no-op.
+ */
+export const messageQueueUpdatedEventSchema = z.object({
+    type: z.literal('openchamber:message-queue.updated'),
+    properties: z.object({
+        revision: z.number(),
+        session: z.looseObject({
+            sessionId: z.string(),
+            directory: z.string().optional(),
+        }),
+    }),
+});
+
+export type MessageQueueUpdatedEvent = z.infer<typeof messageQueueUpdatedEventSchema>;
+
+export const applyMessageQueueUpdatedEvent = (payload: Event | MessageQueueUpdatedEvent, expectedRuntimeKey: string): void => {
+    if (expectedRuntimeKey !== getRuntimeKey()) return;
+    if (payload.type !== 'openchamber:message-queue.updated') return;
+    // Queue updates for this client arrive as follow-up-queue revision hints.
 };

@@ -52,7 +52,7 @@ export type EventPipelineInput = {
   sdk: OpencodeClient
   routeDirectory?: (directory: string, payload: Event) => string
   /** Called after stream reconnects (visibility restore or heartbeat timeout). */
-  onReconnect?: () => void
+  onReconnect?: (details: { replayReset: boolean }) => void
   /** Called when the stream disconnects (heartbeat timeout, network error, or transport failure). */
   onDisconnect?: (reason: string) => void
   /** Called when transport switches (e.g. WS timeout → SSE fallback) without actual disconnection. */
@@ -70,6 +70,7 @@ export type EventPipeline = {
 
 type MessageStreamWsFrame = {
   type: "ready" | "event" | "error" | "backpressure" | "replay-gap"
+  replayReset?: boolean
   payload?: unknown
   eventId?: string
   directory?: string
@@ -454,7 +455,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     onDisconnect?.(reason)
   }
 
-  const markConnected = () => {
+  const markConnected = (replayReset = false) => {
     disconnected = false
     consecutiveFailures = 0
     // Fire onReconnect on every successful connect — including the very
@@ -462,7 +463,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
     // to be flipped positively; without this the send button throws
     // "Connection lost" until something else (HTTP health check) happens
     // to race a setState({isConnected: true}) through.
-    onReconnect?.()
+    onReconnect?.({ replayReset })
   }
 
   const enqueueNormalizedEvent = (directory: string, normalizedPayload: Event) => {
@@ -735,6 +736,9 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
           // Replay frames precede ready. Commit them before reconnect repair
           // captures its authoritative mutation baseline.
           flushAll()
+          // The retained suffix no longer covers our cursor. The normal
+          // reconnect callback repairs authoritative state; retire that cursor.
+          if (frame.replayReset === true) lastEventId = undefined
           opened = true
           readyAt = Date.now()
           if (readyTimer) {
@@ -742,7 +746,7 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
             readyTimer = undefined
           }
           streamErrorLogged = false
-          markConnected()
+          markConnected(frame.replayReset === true)
           return
         }
 

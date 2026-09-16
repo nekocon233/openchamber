@@ -1,3 +1,4 @@
+import { SidebarTerminalActivity } from './SidebarTerminalActivity';
 import React from 'react';
 import type { Session } from '@opencode-ai/sdk/v2';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -10,7 +11,7 @@ import type { SessionTreeItemProps } from '../sessions/SessionTreeItem';
 import { useArchivedAutoFolders } from '../folders/useArchivedAutoFolders';
 import { ProjectSessionSelectionEffect } from '../projects/useProjectSessionSelection';
 import type { WorktreeMetadata } from '@/types/worktree';
-import { useRecentSessionCollection, useSessionProjectCollection } from './sessionCollection';
+import { buildActiveSessionNode, useRecentSessionCollection, useSessionProjectCollection } from './sessionCollection';
 import { buildSessionBootstrapDemands } from './sessionBootstrapDemands';
 import { useChildStoreManager } from '@/sync/sync-context';
 import { createSessionOwnershipIndex } from '../sessions/sessionOwnership';
@@ -147,8 +148,8 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
   const { getOrderedGroups, setGroupOrderByProject, toggleGroup, toggleProject } = projectViewActions;
   const collection = useSessionProjectCollection({ knownDirectories: topology.knownDirectories, isVSCode: topology.isVSCode, isVisible: true });
   const [visibleSessionCountByGroup, setVisibleSessionCountByGroup] = React.useState<Map<string, number>>(new Map());
-  const showMoreGroupSessions = React.useCallback((groupId: string, currentVisibleCount: number) => {
-    setVisibleSessionCountByGroup((current) => new Map(current).set(groupId, currentVisibleCount + 7));
+  const showMoreGroupSessions = React.useCallback((groupId: string, currentVisibleCount: number, increment = 7) => {
+    setVisibleSessionCountByGroup((current) => new Map(current).set(groupId, currentVisibleCount + increment));
   }, []);
   const resetGroupSessionLimit = React.useCallback((groupId: string) => {
     setVisibleSessionCountByGroup((current) => {
@@ -239,7 +240,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       draftTarget: 'chat',
       sessions: collection.chatSessions
         .filter((session) => !session.time?.archived && isRootSession(session))
-        .map((session) => ({ session, children: (collection.childrenMap.get(session.id) ?? []).filter((child) => !child.time?.archived).map((child) => ({ session: child, children: [], worktree: null })), worktree: null })),
+        .map((session) => buildActiveSessionNode(collection.childrenMap, session)),
     };
   }, [collection.chatSessions, collection.childrenMap, showChatsSection, topology.isVSCode, view.homeDirectory]);
   const standaloneGroups = React.useMemo<SessionGroup[]>(
@@ -472,12 +473,12 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       groupKey="managed-chats"
       projectId={null}
       hideGroupLabel
-      sessionBatchSize={20}
+      visibleSessionCount={visibleSessionCountByGroup.get('managed-chats')}
       scrollContainerRef={undefined}
       openSidebarMenuKey={openSidebarMenuKey}
       setOpenSidebarMenuKey={setOpenSidebarMenuKey}
     />;
-  }, [chatGroup, groupActions, groupProps, openSidebarMenuKey]);
+  }, [chatGroup, groupActions, groupProps, openSidebarMenuKey, visibleSessionCountByGroup]);
   const handleOpenNewChat = React.useCallback(() => {
     useUIStore.getState().closeMainSurfaces();
     if (view.mobileVariant) scrollerActions.setSessionSwitcherOpen(false);
@@ -672,6 +673,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     setSingleProjectId,
   ]);
   return <>
+    <SidebarTerminalActivity />
     <ProjectSessionSelectionEffect
       projectSections={projectSections}
       activeProjectId={view.activeProjectId}

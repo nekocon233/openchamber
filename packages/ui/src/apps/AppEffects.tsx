@@ -1,6 +1,7 @@
 import React from 'react';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { usePwaManifestSync } from '@/hooks/usePwaManifestSync';
+import { useMessageQueueHoldSync } from '@/hooks/useMessageQueueHoldSync';
 import { useSessionAutoCleanup } from '@/hooks/useSessionAutoCleanup';
 import { useWindowControlsOverlayLayout } from '@/hooks/useWindowControlsOverlayLayout';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
@@ -85,7 +86,11 @@ const PersistedSessionRestoreBridge: React.FC = () => {
 export function SyncRuntimeEffects({ embeddedBackgroundWorkEnabled }: {
   embeddedBackgroundWorkEnabled: boolean;
 }) {
-  useSessionAutoCleanup(embeddedBackgroundWorkEnabled);
+  useSessionAutoCleanup({ enabled: embeddedBackgroundWorkEnabled });
+  // The follow-up queue only delivers through UI claims (see ChatInput's
+  // auto-drain), but the hold sync stays so an auto-review run can pin a
+  // session's queue on server-owned runtimes.
+  useMessageQueueHoldSync();
 
   return <SyncOptimisticBridge />;
 }

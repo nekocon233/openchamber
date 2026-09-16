@@ -43,6 +43,7 @@ export async function summarizeSelectionForNotes(text: string, sessionId?: strin
         prompt: trimmed,
         system: NOTES_SYSTEM_PROMPT,
         directory,
+        sessionID: sessionId || undefined,
         restrictToPreferredProvider: true,
         ...(preferredProviderID ? { preferredProviderID } : {}),
         ...(preferredModelID ? { preferredModelID } : {}),

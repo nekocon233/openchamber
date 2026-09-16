@@ -63,8 +63,9 @@ export const mergeSessionDirectoryMetadata = (incoming: Session, existing?: Sess
     changed = true;
   }
   if (!incomingWorktree && existingWorktree) {
+    // The incoming project metadata is canonical; only the worktree path is a
+    // routing fallback borrowed from the older record.
     next.project = {
-      ...(existingRecord.project ?? {}),
       ...(incomingRecord.project ?? {}),
       worktree: existingRecord.project?.worktree,
     };

@@ -13,9 +13,11 @@
  * so the ordering can be tested rather than trusted.
  */
 
+import type { JsonValue } from '@openchamber/sdk';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
-import { contextPayloadFromDraft, createContextPart, type ContextPartMetadata } from '@/lib/messages/contextParts';
+import type { QueuedContextPart } from '@/stores/messageQueueStore';
+import { contextPayloadFromDraft, createContextPart, type ContextPartMetadata, type ContextPartPayload } from '@/lib/messages/contextParts';
 
 export interface OutgoingPart {
     text: string;
@@ -36,10 +38,20 @@ export interface OutgoingMessage {
     isEmpty: boolean;
 }
 
-export interface OutgoingMessageInput {
-    /** The composer's own text, or null when this send has no visible body. */
-    composerText: string | null;
-    composerAttachments: readonly AttachedFile[];
+/**
+ * A queued message is already resolved: its agent mention was stripped, its
+ * file mentions became attachments, and the context the composer had attached
+ * travels with it. Assembly only places it.
+ */
+export interface QueuedInput {
+    text: string;
+    agentMention?: string;
+    attachments?: AttachedFile[];
+    context?: readonly QueuedContextPart[];
+}
+
+/** What the composer has attached besides text and files. */
+export interface ComposerContextInput {
     /** Context drafts (code comments, terminal selections, annotations, PR context). */
     inlineComments: readonly InlineCommentDraft[];
     /** Additional context produced elsewhere (conflict resolution, and such). */
@@ -47,6 +59,24 @@ export interface OutgoingMessageInput {
     linkedIssue: { number: number; title: string; url: string; contextText: string } | null;
     linkedPr: { number: number; title: string; url: string; instructions: string; context: string } | null;
     linkedLinearIssue: { identifier: string; title: string; url: string; contextText: string } | null;
+    linkedGuestIssue: {
+        providerId: string;
+        id: string;
+        title: string;
+        url: string;
+        contextText: string;
+        thread?: 'issue' | 'pull';
+        /** Opaque guest payload; rides the context part metadata, not its text. */
+        data?: JsonValue;
+    } | null;
+}
+
+export interface OutgoingMessageInput extends ComposerContextInput {
+    /** Messages queued while a turn was running, oldest first. */
+    queued: readonly QueuedInput[];
+    /** The composer's own text, or null when this send skips it. */
+    composerText: string | null;
+    composerAttachments: readonly AttachedFile[];
 }
 
 /**
@@ -96,15 +126,37 @@ export function buildOutgoingMessage(
         return mentions;
     };
 
-    // The composer owns the one visible user body. Busy-session ordering is
-    // handled by OpenChamber's follow-up queue before this send is dispatched.
+    // Queued messages come first, in the order they were queued: the oldest
+    // becomes the primary message so the turn reads chronologically. Each one
+    // is followed by the context it was queued with.
+    input.queued.forEach((queued, index) => {
+        noteAgent(queued.agentMention);
+        const attachments = deps.sanitizeAttachments(queued.attachments);
+
+        if (index === 0) {
+            primaryText = queued.text;
+            primaryAttachments = attachments;
+        } else {
+            additionalParts.push({ text: queued.text, attachments });
+        }
+        additionalParts.push(...queuedContextToParts(queued.context ?? []));
+    });
+
+    // The composer's own text follows, becoming primary only when nothing was
+    // queued ahead of it.
     if (input.composerText !== null) {
         const resolved = resolve(input.composerText.replace(/^\n+|\n+$/g, ''));
-        primaryText = resolved.text;
-        primaryAttachments = [
+        const attachments = [
             ...deps.sanitizeAttachments(input.composerAttachments),
             ...resolved.attachments,
         ];
+
+        if (input.queued.length === 0) {
+            primaryText = resolved.text;
+            primaryAttachments = attachments;
+        } else {
+            additionalParts.push({ text: resolved.text, attachments });
+        }
     }
 
     // Everything below is context for the model, never plain user text. Each
@@ -144,6 +196,21 @@ export function buildOutgoingMessage(
         additionalParts.push(createContextPart({ kind: 'linear-issue', identifier, title, url }, contextText));
     }
 
+    if (input.linkedGuestIssue) {
+        const { providerId, id, title, url, contextText, thread, data } = input.linkedGuestIssue;
+        const payload: Extract<ContextPartPayload, { kind: 'guest-issue' | 'guest-pr' }> = {
+            kind: thread === 'pull' ? 'guest-pr' : 'guest-issue',
+            providerId,
+            id,
+            title,
+            url,
+        };
+        if (data !== undefined) {
+            payload.data = data;
+        }
+        additionalParts.push(createContextPart(payload, contextText));
+    }
+
     const skillInstruction = deps.buildSkillInstruction(skillNames);
     if (skillInstruction) {
         additionalParts.push({ text: skillInstruction, synthetic: true });
@@ -156,4 +223,88 @@ export function buildOutgoingMessage(
         agentMentionName,
         isEmpty: !primaryText && primaryAttachments.length === 0 && additionalParts.length === 0,
     };
+}
+
+/**
+ * Everything the composer has attached besides text and files, in send
+ * order. Each attached context item becomes its own synthetic part carrying
+ * structured metadata, so the timeline can render it as a context block after
+ * the server echoes the message back. Used both when sending and when queueing:
+ * a queued message takes this context with it, so whoever delivers it later
+ * sends exactly what the composer would have.
+ */
+export function buildComposerContext(
+    input: ComposerContextInput,
+    skillInstruction: string | null,
+): QueuedContextPart[] {
+    const context: QueuedContextPart[] = [];
+    const attach = (part: { text: string; metadata: ContextPartMetadata }, instructions?: string) => {
+        const entry: QueuedContextPart = { kind: 'context', text: part.text, metadata: part.metadata };
+        if (instructions) entry.instructions = instructions;
+        context.push(entry);
+    };
+
+    for (const draft of input.inlineComments) {
+        attach(createContextPart(contextPayloadFromDraft(draft)));
+    }
+
+    for (const part of input.additionalParts) {
+        if (part.metadata) {
+            context.push({ kind: 'context', text: part.text, metadata: part.metadata });
+        } else {
+            context.push({ kind: 'synthetic', text: part.text });
+        }
+    }
+
+    if (input.linkedIssue) {
+        const { number, title, url, contextText } = input.linkedIssue;
+        attach(createContextPart({ kind: 'github-issue', number, title, url }, contextText));
+    }
+
+    if (input.linkedPr) {
+        // Instructions before context: the model is told how to read the diff
+        // before it is given the diff.
+        const { number, title, url, instructions, context: prContext } = input.linkedPr;
+        attach(createContextPart({ kind: 'github-pr', number, title, url }, prContext), instructions);
+    }
+
+    if (input.linkedLinearIssue) {
+        const { identifier, title, url, contextText } = input.linkedLinearIssue;
+        attach(createContextPart({ kind: 'linear-issue', identifier, title, url }, contextText));
+    }
+
+    if (input.linkedGuestIssue) {
+        const { providerId, id, title, url, contextText, thread, data } = input.linkedGuestIssue;
+        const payload: Extract<ContextPartPayload, { kind: 'guest-issue' | 'guest-pr' }> = {
+            kind: thread === 'pull' ? 'guest-pr' : 'guest-issue',
+            providerId,
+            id,
+            title,
+            url,
+        };
+        if (data !== undefined) {
+            payload.data = data;
+        }
+        attach(createContextPart(payload, contextText));
+    }
+
+    if (skillInstruction) {
+        context.push({ kind: 'instruction', text: skillInstruction });
+    }
+
+    return context;
+}
+
+/** The synthetic parts a captured context is delivered as, in order. */
+export function queuedContextToParts(context: readonly QueuedContextPart[]): OutgoingPart[] {
+    const parts: OutgoingPart[] = [];
+    for (const part of context) {
+        if (part.kind !== 'context') {
+            parts.push({ text: part.text, synthetic: true });
+            continue;
+        }
+        if (part.instructions) parts.push({ text: part.instructions, synthetic: true });
+        parts.push({ text: part.text, synthetic: true, metadata: part.metadata });
+    }
+    return parts;
 }

@@ -782,7 +782,15 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     }
   });
 
+  const isGuestOauthCallback = (req) => (
+    req.method === 'GET'
+    && /^\/guests\/[a-z][a-z0-9-]*\/oauth\/callback$/.test(req.path || '')
+  );
+
   const requireApiAuth = async (req, res, next) => {
+    if (isGuestOauthCallback(req)) {
+      return next();
+    }
     if (req.openchamberExternalAuthenticated === true) return next();
     if (isPrivateRelayRequest(req)) {
       if (req.openchamberRelayClientAuthenticated === true) return next();
@@ -1316,6 +1324,7 @@ export const registerCommonRequestMiddleware = (app, dependencies) => {
       req.path.startsWith('/api/push') ||
       req.path.startsWith('/api/notifications') ||
       req.path.startsWith('/api/permission-auto-accept') ||
+      req.path.startsWith('/api/message-queue') ||
       req.path.startsWith('/api/provider') ||
       req.path.startsWith('/api/session-folders') ||
       req.path.startsWith('/api/small-model') ||

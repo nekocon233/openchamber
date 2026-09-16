@@ -10,7 +10,7 @@ import {
 import {
   deriveRecentSessions,
   RECENT_SESSION_MAX_AGE_MS,
-} from '../../components/session/sidebar/activitySections.ts'
+} from '../../components/session/sidebar/recent/activitySections.ts'
 
 const session = (id, directory, updated, extra = {}) => ({
   id,

@@ -15,11 +15,14 @@ vi.mock('../opencode/shared.js', () => ({
   isPlainObject: (value) => value instanceof Object && !Array.isArray(value),
 }));
 
-vi.mock('./runtime-providers.js', () => ({ getRuntimeProviderTransport: vi.fn(async () => null) }));
+vi.mock('./runtime-providers.js', () => ({
+  getRuntimeProvider: vi.fn(async () => null),
+  getRuntimeProviderTransport: vi.fn(async () => null),
+}));
 
 const { callSmallModel } = await import('./call.js');
 const { readConfig, readConfigLayers } = await import('../opencode/shared.js');
-const { getRuntimeProviderTransport } = await import('./runtime-providers.js');
+const { getRuntimeProvider, getRuntimeProviderTransport } = await import('./runtime-providers.js');
 
 // Minimal catalog fragment used by the catalog-based base URL resolution case.
 const CATALOG = {
@@ -62,6 +65,8 @@ describe('callSmallModel — custom provider config', () => {
     readConfig.mockReset();
     readConfigLayers.mockReset();
     // Default: OpenCode knows nothing, so resolution stays file-based.
+    getRuntimeProvider.mockReset();
+    getRuntimeProvider.mockResolvedValue(null);
     getRuntimeProviderTransport.mockReset();
     getRuntimeProviderTransport.mockResolvedValue(null);
   });
@@ -598,6 +603,29 @@ describe('callSmallModel — custom provider config', () => {
   });
 
   describe('catalog-based base URL (no config override)', () => {
+    it('identifies OpenCode Go requests with the owning conversation', async () => {
+      readConfig.mockReturnValue({});
+      fetchMock.mockResolvedValue(ok('ok'));
+
+      await callSmallModel({
+        auth: { 'opencode-go': { type: 'api', key: 'go-key' } },
+        catalog: {
+          'opencode-go': {
+            id: 'opencode-go',
+            api: 'https://opencode.ai/zen/go/v1',
+            models: { utility: { id: 'utility' } },
+          },
+        },
+        workingDirectory: '/proj',
+        sessionID: 'ses_conversation',
+        providerID: 'opencode-go',
+        modelID: 'utility',
+        prompt: 'hi',
+      });
+
+      expect(lastCall(fetchMock).init.headers['x-opencode-session']).toBe('ses_conversation');
+    });
+
     it('uses the catalog api field when no config baseURL is set', async () => {
       readConfig.mockReturnValue({});
       fetchMock.mockResolvedValue(ok('ok'));
@@ -813,6 +841,35 @@ describe('callSmallModel — custom provider config', () => {
 
       const { init } = lastCall(fetchMock);
       expect(init.headers['x-opencode-codex-request-kind']).toBeUndefined();
+    });
+
+    it('uses the selected runtime model endpoint', async () => {
+      readConfig.mockReturnValue({});
+      getRuntimeProvider.mockResolvedValue({
+        id: 'runtime-provider',
+        apiKey: 'plugin-key',
+        baseURL: 'https://runtime-provider/v1beta',
+        models: new Map([
+          ['first-model', { api: { url: 'https://runtime-provider/v1beta', npm: '@ai-sdk/google' } }],
+          ['selected-model', { api: { url: 'https://runtime-provider/v1', npm: '@ai-sdk/openai' } }],
+        ]),
+        anonymousZen: false,
+      });
+      fetchMock.mockResolvedValue(ok('done'));
+
+      await callSmallModel({
+        auth: {},
+        catalog: {},
+        workingDirectory: '/proj',
+        providerID: 'runtime-provider',
+        modelID: 'selected-model',
+        prompt: 'hi',
+      });
+
+      const { url, init } = lastCall(fetchMock);
+      expect(url).toBe('https://runtime-provider/v1/chat/completions');
+      expect(url).not.toContain('/v1beta');
+      expect(JSON.parse(init.body).model).toBe('selected-model');
     });
 
     it('keeps the ChatGPT-plan login on its own transport instead of the runtime key', async () => {

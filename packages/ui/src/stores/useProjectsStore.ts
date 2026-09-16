@@ -57,6 +57,8 @@ interface VSCodeWorkspaceFolderConfig {
 }
 
 interface ProjectsStore {
+  hasServerSnapshot: boolean;
+  serverSnapshotFailed: boolean;
   projects: ProjectEntry[];
   activeProjectId: string | null;
   manualProjectOrder: string[];
@@ -175,13 +177,6 @@ const normalizeProjectPath = (value: string): string => {
     return '';
   }
 };
-
-// VS Code workspace folder paths come from the extension host with uppercase
-// drive letters (see resolveWorkspaceFolders in packages/vscode), while paths
-// typed or browsed in the webview keep the lowercase drive of fsPath. Normalize
-// to the workspace form so dedupe and active-path matching agree on Windows.
-const normalizeVSCodeWorkspacePath = (value: string): string =>
-  value.replace(/^([a-z]):/, (_, letter: string) => letter.toUpperCase() + ':');
 
 // Folder names are shown verbatim: title-casing them turned `.ssh` into `.Ssh`
 // and made every project look like a name the user never chose.
@@ -604,6 +599,8 @@ if (vscodeWorkspace) {
 export const useProjectsStore = create<ProjectsStore>()(
   devtools((set, get) => ({
     projects: effectiveInitialProjects,
+    hasServerSnapshot: false,
+    serverSnapshotFailed: false,
     activeProjectId: initialActiveProjectId,
     manualProjectOrder: readPersistedManualOrder(),
 
@@ -629,7 +626,7 @@ export const useProjectsStore = create<ProjectsStore>()(
         if (!validation.ok || !validation.normalizedPath) {
           return null;
         }
-        const normalizedPath = normalizeVSCodeWorkspacePath(validation.normalizedPath);
+        const normalizedPath = validation.normalizedPath;
         const existing = get().projects.find((project) => project.path === normalizedPath);
         if (existing) {
           return existing;
@@ -1073,6 +1070,7 @@ export const useProjectsStore = create<ProjectsStore>()(
     },
 
     resetForRuntimeSwitch: () => {
+      set({ hasServerSnapshot: false, serverSnapshotFailed: false });
       if (isVSCodeProjectsRuntime) {
         return;
       }
@@ -1099,6 +1097,7 @@ export const useProjectsStore = create<ProjectsStore>()(
 
       const current = get();
       const incomingIds = new Set(incomingProjects.map((p) => p.id));
+      if (!current.hasServerSnapshot || current.serverSnapshotFailed) set({ hasServerSnapshot: true, serverSnapshotFailed: false });
 
       // The settings document is shared by every window on this server, so
       // outside a bootstrap sync the incoming active pointer is just another
@@ -1238,11 +1237,14 @@ useSidebarStateStore.subscribe(synchronizeProjectsFromSidebarState);
 synchronizeProjectsFromSidebarState();
 
 if (typeof window !== 'undefined') {
+  window.addEventListener('openchamber:settings-sync-failed', () => {
+    useProjectsStore.setState({ serverSnapshotFailed: true });
+  });
   window.addEventListener('openchamber:settings-synced', (event: Event) => {
     const detail = (event as CustomEvent<SettingsSyncedDetail>).detail;
     if (detail && typeof detail === 'object' && detail.settings) {
       useProjectsStore.getState().synchronizeFromSettings(detail.settings, {
-        adoptActiveProject: detail.adoptWorkspace,
+        adoptActiveProject: detail.bootstrap,
       });
     }
   });

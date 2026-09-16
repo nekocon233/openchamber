@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useGuestsStore } from '@/lib/guests/store';
 import {
   Tooltip,
   TooltipContent,
@@ -26,6 +27,7 @@ import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useQuotaAutoRefresh, useQuotaStore } from '@/stores/useQuotaStore';
 import { useGitBranchLabel } from '@/stores/useGitStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
+import { collectSessionSubtreeIds } from '@/components/session/sidebar/sessions/sessionSubtreeActions';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
 import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
 
@@ -67,6 +69,13 @@ import type { IconName } from "@/components/icon/icons";
 import { toast } from '@/components/ui';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { buildExportFilename, downloadAsMarkdown, formatSessionAsMarkdown, saveAsMarkdownDesktop } from '@/lib/exportSession';
+import { GuestIcon } from '@/components/layout/GuestRailIcon';
+import { useGuestActions } from '@/hooks/useGuestSurfaces';
+import { guestSessionActions, type GuestActionEntry } from '@/lib/guests/actions';
+import { runGuestSessionAction } from '@/lib/guests/session-action';
+import { SessionAiRenameMenuItem } from '@/components/session/SessionAiRenameMenuItem';
+import { handleSessionRenameKeyDown } from '@/components/session/sessionRenameKeyboard';
+import { useIsSessionAiRenamePending } from '@/sync/use-session-ai-rename';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { buildSessionTreeMoveMessages, requestSessionTreeMove, useIsSessionWorktreeMovePending } from '@/lib/worktrees/sessionWorktreeMove';
@@ -124,7 +133,6 @@ const HeaderIconActionButton = React.memo(function HeaderIconActionButton({
 type DesktopServicesMenuProps = {
   isDesktopApp: boolean;
   currentInstanceLabel: string;
-  compactCurrentInstanceLabel: string;
   currentInstanceIsLocal: boolean;
   isDesktopServicesOpen: boolean;
   setIsDesktopServicesOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -139,7 +147,6 @@ type DesktopServicesMenuProps = {
 const DesktopServicesMenu = React.memo(function DesktopServicesMenu({
   isDesktopApp,
   currentInstanceLabel,
-  compactCurrentInstanceLabel,
   currentInstanceIsLocal,
   isDesktopServicesOpen,
   setIsDesktopServicesOpen,
@@ -171,12 +178,12 @@ const DesktopServicesMenu = React.memo(function DesktopServicesMenu({
                 : t('header.services.open')}
               className={cn(
                 DESKTOP_HEADER_ICON_BUTTON_CLASS,
-                isDesktopApp ? 'w-auto max-w-[14rem] justify-start gap-1.5 px-2.5' : 'h-8 w-8'
+                isDesktopApp ? 'w-auto max-w-[20rem] justify-start gap-1.5 px-2.5' : 'h-8 w-8'
               )}
             >
               <Icon name="server" className="h-[18px] w-[18px]" />
               {isDesktopApp ? (
-                <span className="truncate typography-ui-label font-medium text-foreground">{compactCurrentInstanceLabel}</span>
+                <span className="truncate typography-ui-label font-medium text-foreground">{currentInstanceLabel}</span>
               ) : null}
             </button>
           </DropdownMenuTrigger>
@@ -250,27 +257,6 @@ const isSameContextUsage = (
     && a.thresholdLimit === b.thresholdLimit
     && (a.lastMessageId ?? '') === (b.lastMessageId ?? '');
 };
-
-const formatCompactHeaderLabel = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '';
-  }
-
-  const words = trimmed.split(/\s+/).filter(Boolean);
-  if (words.length >= 2) {
-    const first = words[0];
-    const second = words[1].slice(0, 3);
-    const shortTwoWord = `${first} ${second}`.trim();
-    if (words.length > 2 || shortTwoWord.length < trimmed.length) {
-      return `${shortTwoWord}...`;
-    }
-    return shortTwoWord;
-  }
-
-  return trimmed.length > 12 ? `${trimmed.slice(0, 9).trimEnd()}...` : trimmed;
-};
-
 
 const normalize = (value: string): string => {
   if (!value) return '';
@@ -447,7 +433,6 @@ export const Header: React.FC = () => {
   const [remoteUpdateInfo, setRemoteUpdateInfo] = React.useState<UpdateInfo | null>(null);
   const [remoteUpdateChecking, setRemoteUpdateChecking] = React.useState(false);
   const [remoteUpdateError, setRemoteUpdateError] = React.useState<string | null>(null);
-  const compactCurrentInstanceLabel = React.useMemo(() => formatCompactHeaderLabel(currentInstanceLabel), [currentInstanceLabel]);
   const isVSCode = React.useMemo(() => isVSCodeRuntime(), []);
   // While the work-status panel is on screen it already reports the project,
   // the branch and the context fill — three paces away in the same window.
@@ -704,6 +689,7 @@ export const Header: React.FC = () => {
     if (!worktreeAttachment) return null;
     return formatSessionWorktreeBadge(worktreeAttachment, {
       pending: t('gitView.empty.worktreeSetupInProgress'),
+      missing: t('sessions.sidebar.group.worktreeMissing'),
     });
   }, [t, worktreeAttachment]);
 
@@ -725,6 +711,7 @@ export const Header: React.FC = () => {
     const raw = typeof currentSession?.directory === 'string' ? currentSession.directory : '';
     return normalize(raw || '');
   }, [currentSession?.directory]);
+  const isCurrentSessionAiRenaming = useIsSessionAiRenamePending(currentSessionId ?? '', sessionDirectory);
 
   const draftDirectory = useSessionUIStore((state) => {
     if (!state.newSessionDraft?.open) {
@@ -806,6 +793,15 @@ export const Header: React.FC = () => {
 
   const beginHeaderSessionRenameRef = React.useRef(beginHeaderSessionRename);
   beginHeaderSessionRenameRef.current = beginHeaderSessionRename;
+
+  // The rename field opens with the whole title selected, so the first
+  // keystroke replaces it. Stable ref callback: an inline one would re-run on
+  // every render and re-select the text mid-edit.
+  const focusHeaderRenameInput = React.useCallback((node: HTMLInputElement | null) => {
+    if (!node) return;
+    node.focus();
+    node.select();
+  }, []);
 
   React.useEffect(() => {
     setIsHeaderSessionMenuOpen(false);
@@ -906,6 +902,33 @@ export const Header: React.FC = () => {
     toast.success(t('sessions.sidebar.session.export.success'));
   }, [currentSession?.title, currentSessionId, headerDirectoryStore, openDirectory, sync, t]);
 
+  // Extension session actions on the current session. The conversation is
+  // loaded the same way Export as Markdown loads it.
+  const guestActionEntries = useGuestActions();
+  const guestSessionActionEntries = React.useMemo(() => guestSessionActions(guestActionEntries), [guestActionEntries]);
+  const runCurrentSessionGuestAction = React.useCallback((entry: GuestActionEntry) => {
+    if (!currentSessionId) return;
+    void runGuestSessionAction({
+      entry,
+      session: { id: currentSessionId, title: currentSession?.title, directory: sessionDirectory ?? openDirectory },
+      loadRecords: async () => {
+        if (!openDirectory) return null;
+        try {
+          await sync.loadCompleteHistory(currentSessionId, openDirectory);
+        } catch {
+          return null;
+        }
+        return buildSessionMessageRecordsSnapshot(headerDirectoryStore.getState(), currentSessionId).list;
+      },
+      onLoadFailed: () => toast.error(t('sessions.sidebar.session.export.failedLoadHistory')),
+    });
+  }, [currentSession?.title, currentSessionId, headerDirectoryStore, openDirectory, sessionDirectory, sync, t]);
+  const renderGuestSessionActionItems = React.useCallback((Item: React.ElementType) => guestSessionActionEntries.map((entry) => (
+    <Item key={`${entry.guest.id}:${entry.action.id}`} onClick={() => runCurrentSessionGuestAction(entry)}>
+      <GuestIcon icon={entry.icon} iconSrc={entry.iconSrc} className="mr-2 size-4" />{entry.action.label}
+    </Item>
+  )), [guestSessionActionEntries, runCurrentSessionGuestAction]);
+
   const isCurrentSessionActive = currentSessionStatus?.type === 'busy' || currentSessionStatus?.type === 'retry';
   const moveCurrentSessionToWorktree = React.useCallback(() => {
     if (!currentSessionId || !sessionDirectory || isCurrentSessionActive || isCurrentSessionMovingToWorktree) return;
@@ -938,17 +961,11 @@ export const Header: React.FC = () => {
 
   const confirmHeaderRetentionAction = React.useCallback(async () => {
     if (!pendingHeaderRetentionAction) return;
-    const sessions = useGlobalSessionsStore.getState().activeSessions;
-    const ids = [pendingHeaderRetentionAction.sessionId];
-    for (let index = 0; index < ids.length; index += 1) {
-      const parentId = ids[index];
-      for (const session of sessions) {
-        if ((session as typeof session & { parentID?: string | null }).parentID === parentId && !ids.includes(session.id)) {
-          ids.push(session.id);
-        }
-      }
-    }
     const action = pendingHeaderRetentionAction.action;
+    const ids = [
+      pendingHeaderRetentionAction.sessionId,
+      ...collectSessionSubtreeIds(pendingHeaderRetentionAction.sessionId, [], action === 'delete'),
+    ];
     setPendingHeaderRetentionAction(null);
     const result = action === 'archive' ? await archiveSessions(ids) : await deleteSessions(ids);
     const failedIds = result.failedIds;
@@ -966,6 +983,8 @@ export const Header: React.FC = () => {
   // Full-page surfaces (Scheduled, Archive, Worktrees, Multi-run) replace the
   // chat area; while one is open the header shows the surface identity
   // instead of the session switcher.
+  const openGuestPageId = useUIStore((state) => state.openGuestPageId);
+  const guestPage = useGuestsStore((state) => state.guests.find((guest) => guest.id === openGuestPageId));
   const isScheduledSurfaceOpen = useUIStore((state) => state.isScheduledTasksDialogOpen);
   const isArchiveSurfaceOpen = useUIStore((state) => state.isArchivePageOpen);
   const worktreesSurfaceProjectId = useUIStore((state) => state.worktreesPageProjectId);
@@ -976,6 +995,7 @@ export const Header: React.FC = () => {
     return project?.label?.trim() || project?.path?.split('/').pop() || null;
   });
   const activeSurfaceHeader = React.useMemo<{ title: string; subtitle: string | null } | null>(() => {
+    if (guestPage) return { title: guestPage.pageTitle ?? guestPage.name, subtitle: null };
     if (isScheduledSurfaceOpen) {
       return { title: t('sessions.scheduledTasks.dialog.title'), subtitle: null };
     }
@@ -992,7 +1012,7 @@ export const Header: React.FC = () => {
       return { title: t('sessions.sidebar.header.actions.newMultiRun'), subtitle: null };
     }
     return null;
-  }, [isArchiveSurfaceOpen, isMultiRunSurfaceOpen, isScheduledSurfaceOpen, t, worktreesSurfaceProjectId, worktreesSurfaceProjectLabel]);
+  }, [guestPage, isArchiveSurfaceOpen, isMultiRunSurfaceOpen, isScheduledSurfaceOpen, t, worktreesSurfaceProjectId, worktreesSurfaceProjectLabel]);
 
 
   const actionDirectory = React.useMemo(() => {
@@ -1090,7 +1110,9 @@ export const Header: React.FC = () => {
   // `--oc-titlebar-left-inset` so the sidebar strip can mirror it.
   const titlebarLeftInset = React.useMemo(() => {
     if (isDesktopApp && isMacPlatform && !isDesktopWindowFullscreen) {
-      return '5.5rem';
+      // Native traffic lights have a fixed physical footprint. Keep this
+      // clearance in pixels so shrinking the interface cannot overlap them.
+      return '88px';
     }
     if (isTabletStandalonePwa) {
       return 'max(calc(0.75rem + var(--oc-wco-left-inset, 0px)), 5.5rem)';
@@ -1293,7 +1315,6 @@ export const Header: React.FC = () => {
       <DesktopServicesMenu
         isDesktopApp={isDesktopApp}
         currentInstanceLabel={currentInstanceLabel}
-        compactCurrentInstanceLabel={compactCurrentInstanceLabel}
         currentInstanceIsLocal={currentInstanceIsLocal}
         isDesktopServicesOpen={isDesktopServicesOpen}
         setIsDesktopServicesOpen={setIsDesktopServicesOpen}
@@ -1310,7 +1331,7 @@ export const Header: React.FC = () => {
 
   const showMiniChatHeaderAction = hasElectronDesktopIPC && (isNewSessionDraftOpen || Boolean(currentSessionId));
 
-  const renderSessionTabMenu = React.useCallback(({ session, isActive, select, closeOtherTabs, components }: SessionTabMenuArgs) => {
+  const renderSessionTabMenu = React.useCallback(({ session, open, isActive, select, closeOtherTabs, components }: SessionTabMenuArgs) => {
     const { Item, Separator } = components;
     const shareUrl = session.share?.url ?? null;
     const canMoveToWorktree = isActive && !isVSCode && !isChatContext && currentSession && !currentSession.parentId;
@@ -1319,6 +1340,7 @@ export const Header: React.FC = () => {
         <Item onClick={() => { if (!isActive) select(); pendingHeaderRenameRef.current = session.id; }}>
           <Icon name="pencil-ai" className="mr-2 size-4" />{t('sessions.sidebar.session.menu.rename')}
         </Item>
+        <SessionAiRenameMenuItem sessionID={session.id} directory={session.directory} open={open} Item={Item} />
         <Item onClick={() => copySessionIdFor(session.id)}>
           <Icon name="file-copy" className="mr-2 size-4" />{t('sessions.sidebar.session.menu.copyId')}
         </Item>
@@ -1342,6 +1364,7 @@ export const Header: React.FC = () => {
             <Icon name="download" className="mr-2 size-4" />{t('sessions.sidebar.session.menu.exportMarkdown')}
           </Item>
         ) : null}
+        {isActive ? renderGuestSessionActionItems(Item) : null}
         {canMoveToWorktree ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1378,7 +1401,7 @@ export const Header: React.FC = () => {
         </Item>
       </>
     );
-  }, [copySessionIdFor, copySessionShareUrl, currentSession, exportCurrentSession, isChatContext, isCurrentSessionActive, isCurrentSessionMovingToWorktree, isVSCode, moveCurrentSessionToWorktree, sessionDirectory, shareSessionFor, t, unshareSessionFor]);
+  }, [copySessionIdFor, copySessionShareUrl, currentSession, exportCurrentSession, isChatContext, isCurrentSessionActive, isCurrentSessionMovingToWorktree, isVSCode, moveCurrentSessionToWorktree, renderGuestSessionActionItems, sessionDirectory, shareSessionFor, t, unshareSessionFor]);
 
   const renderDesktop = () => (
     <div
@@ -1412,6 +1435,21 @@ export const Header: React.FC = () => {
           while the sidebar is closed. */}
       <div className="flex min-w-0 flex-1 items-center">
         {activeSurfaceHeader ? (
+          <>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="app-region-no-drag mr-1 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                aria-label={t('header.mainSurface.backToChat')}
+                onClick={() => useUIStore.getState().closeMainSurfaces()}
+              >
+                <Icon name="arrow-left" className="size-[18px]" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t('header.mainSurface.backToChat')}</TooltipContent>
+          </Tooltip>
           <div className="mr-3 flex min-w-0 flex-col items-start px-1 py-0.5 -my-0.5 text-left">
             <span className="truncate typography-ui-label text-[14px] font-normal leading-tight text-foreground max-w-full">
               {activeSurfaceHeader.title}
@@ -1422,8 +1460,10 @@ export const Header: React.FC = () => {
               </span>
             ) : null}
           </div>
+          </>
         ) : (isVSCode || !sessionTabsEnabled) ? (
           <div className="app-region-no-drag mr-3 flex min-w-0 max-w-full items-center gap-0.5 py-0.5 -my-0.5 text-left">
+            {isCurrentSessionAiRenaming ? <Icon name="loader-4" className="mr-1 size-3 shrink-0 animate-spin text-primary" aria-label={t('sessions.aiRename.generating')} /> : null}
             {!isSidebarOpen ? (
               <SessionSwitcherDropdown align="start">
                 <button
@@ -1447,15 +1487,10 @@ export const Header: React.FC = () => {
                   }}
                 >
                   <input
+                    ref={focusHeaderRenameInput}
                     value={headerSessionTitleDraft}
                     onChange={(event) => setHeaderSessionTitleDraft(event.target.value)}
-                    autoFocus
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.key === 'Escape') {
-                        setIsRenamingHeaderSession(false);
-                      }
-                    }}
+                    onKeyDown={(event) => handleSessionRenameKeyDown(event, () => setIsRenamingHeaderSession(false))}
                     placeholder={t('sessions.sidebar.session.menu.rename')}
                     className="min-w-0 flex-1 bg-transparent typography-ui-label text-[14px] font-normal leading-tight outline-none placeholder:text-muted-foreground"
                   />
@@ -1527,6 +1562,7 @@ export const Header: React.FC = () => {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[190px]">
                     <DropdownMenuItem onClick={() => { pendingHeaderRenameRef.current = currentSessionId; }}><Icon name="pencil-ai" className="mr-2 size-4" />{t('sessions.sidebar.session.menu.rename')}</DropdownMenuItem>
+                    <SessionAiRenameMenuItem sessionID={currentSessionId} directory={sessionDirectory} open={isHeaderSessionMenuOpen} Item={DropdownMenuItem} />
                     <DropdownMenuItem onClick={() => currentSessionId && copySessionIdFor(currentSessionId)}><Icon name="file-copy" className="mr-2 size-4" />{t('sessions.sidebar.session.menu.copyId')}</DropdownMenuItem>
                     <DropdownMenuSeparator />
                     {currentSession?.shareUrl ? (
@@ -1538,6 +1574,7 @@ export const Header: React.FC = () => {
                       <DropdownMenuItem onClick={() => { if (currentSessionId) void shareSessionFor(currentSessionId); }}><Icon name="share-2" className="mr-2 size-4" />{t('sessions.sidebar.session.menu.share')}</DropdownMenuItem>
                     )}
                     <DropdownMenuItem onClick={() => void exportCurrentSession()}><Icon name="download" className="mr-2 size-4" />{t('sessions.sidebar.session.menu.exportMarkdown')}</DropdownMenuItem>
+                    {renderGuestSessionActionItems(DropdownMenuItem)}
                     {!isVSCode && !isChatContext && currentSession && !currentSession.parentId ? (
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -1604,15 +1641,10 @@ export const Header: React.FC = () => {
                   }}
                 >
                   <input
+                    ref={focusHeaderRenameInput}
                     value={headerSessionTitleDraft}
                     onChange={(event) => setHeaderSessionTitleDraft(event.target.value)}
-                    autoFocus
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.key === 'Escape') {
-                        setIsRenamingHeaderSession(false);
-                      }
-                    }}
+                    onKeyDown={(event) => handleSessionRenameKeyDown(event, () => setIsRenamingHeaderSession(false))}
                     placeholder={t('sessions.sidebar.session.menu.rename')}
                     className="min-w-0 flex-1 bg-transparent text-[13px] font-medium leading-4 outline-none placeholder:text-muted-foreground"
                   />

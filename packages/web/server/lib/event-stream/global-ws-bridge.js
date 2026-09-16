@@ -1,4 +1,4 @@
-import { sendMessageStreamWsEvent, sendMessageStreamWsFrame } from './protocol.js';
+import { sendMessageStreamWsEvent, sendMessageStreamWsFrame, sendSerializedMessageStreamWsFrame, serializeMessageStreamWsEvent } from './protocol.js';
 
 function shouldTriggerUpstreamHealthCheck(upstream) {
   if (!upstream) {
@@ -31,22 +31,14 @@ export function createGlobalMessageStreamWsBridge({
     wsClients.delete(socket);
   };
 
-  const replayEvents = (socket, requestedLastEventId) => {
-    const replay = typeof globalHub.resolveReplay === 'function'
-      ? globalHub.resolveReplay(requestedLastEventId)
-      : { events: globalHub.replayAfter(requestedLastEventId), gap: false };
-    if (replay.gap) {
-      const sent = sendMessageStreamWsFrame(socket, { type: 'replay-gap', scope: 'global' });
-      if (!sent) {
-        removeClient(socket);
-        return false;
-      }
-    }
-    for (const entry of replay.events) {
-      const sent = sendMessageStreamWsEvent(socket, entry.payload, {
-        directory: entry.directory,
-        eventId: entry.eventId,
-      });
+  const replayEvents = (socket, entries) => {
+    for (const entry of entries) {
+      const sent = entry && typeof entry.serializedFrame === 'string'
+        ? sendSerializedMessageStreamWsFrame(socket, entry.serializedFrame)
+        : sendMessageStreamWsEvent(socket, entry.payload, {
+          directory: entry.directory,
+          eventId: entry.eventId,
+        });
       if (!sent) {
         removeClient(socket);
         return false;
@@ -60,7 +52,48 @@ export function createGlobalMessageStreamWsBridge({
       return;
     }
 
-    if (!replayEvents(socket, requestedLastEventId)) return;
+    const replay = globalHub.replayAfter(requestedLastEventId);
+    if (replay === null) {
+      // The cursor fell out of the retained suffix: declare the gap on the
+      // ready frame instead of replaying across it.
+      const sent = sendMessageStreamWsFrame(socket, {
+        type: 'ready',
+        scope: 'global',
+        replayReset: true,
+      });
+      if (!sent) {
+        removeClient(socket);
+        return;
+      }
+      readyClients.add(socket);
+      wsClients.add(socket);
+      return;
+    }
+
+    if (typeof globalHub.resolveReplay === 'function') {
+      // Recoverable replay events precede the browser-facing ready frame so
+      // the browser commits them before starting authoritative reconnect repair.
+      const resolved = globalHub.resolveReplay(requestedLastEventId);
+      if (resolved.gap) {
+        const sent = sendMessageStreamWsFrame(socket, { type: 'replay-gap', scope: 'global' });
+        if (!sent) {
+          removeClient(socket);
+          return;
+        }
+      }
+      if (!replayEvents(socket, resolved.events)) return;
+      const sent = sendMessageStreamWsFrame(socket, {
+        type: 'ready',
+        scope: 'global',
+      });
+      if (!sent) {
+        removeClient(socket);
+        return;
+      }
+      readyClients.add(socket);
+      wsClients.add(socket);
+      return;
+    }
 
     const sent = sendMessageStreamWsFrame(socket, {
       type: 'ready',
@@ -73,6 +106,7 @@ export function createGlobalMessageStreamWsBridge({
 
     readyClients.add(socket);
     wsClients.add(socket);
+    replayEvents(socket, replay);
   };
 
   const stopHubIfUnused = () => {
@@ -100,22 +134,25 @@ export function createGlobalMessageStreamWsBridge({
     }
   };
 
-  const broadcastEvent = (payload, options) => {
+  const broadcastEvent = (payload, options, serializedFrame) => {
+    const frame = serializedFrame ?? serializeMessageStreamWsEvent(payload, options);
     for (const socket of Array.from(clients)) {
       if (!readyClients.has(socket)) {
         continue;
       }
-      const sent = sendMessageStreamWsEvent(socket, payload, options);
+      const sent = sendSerializedMessageStreamWsFrame(socket, frame);
       if (!sent) {
         removeClient(socket);
       }
     }
   };
 
-  const unsubscribeEvent = globalHub.subscribeEvent(({ payload, directory, eventId }) => {
-    broadcastEvent(payload, { directory, eventId });
+  const unsubscribeEvent = globalHub.subscribeEvent((event) => {
+    const { payload, directory, eventId } = event;
+    broadcastEvent(payload, { directory, eventId }, event.serialize());
 
     processForwardedEventPayload(payload, (syntheticPayload) => {
+      if (readyClients.size === 0) return;
       broadcastEvent(syntheticPayload, { directory: 'global' });
     });
   });

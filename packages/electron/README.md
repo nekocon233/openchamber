@@ -10,6 +10,16 @@ Desktop starts the OpenChamber web server in the same Electron main process. The
 
 `main.mjs` imports `@openchamber/web/server/index.js` and calls `startWebUiServer()`. The Electron window then loads the UI from the local server in development, or from packaged `resources/web-dist` assets in packaged builds.
 
+Quit, relaunch, and update installation await the in-process server's `stop()`
+before exiting Electron. This lets the backend release its terminals, managed
+OpenCode process, and guest services. `server-shutdown.mjs` bounds the server
+wait to ten seconds and uses the detached OpenCode killer only if normal
+shutdown fails or times out. An external OpenCode server remains externally
+owned. Closing to the tray does not stop the backend.
+
+See [process ownership and the #3589 investigation](./process-lifecycle.md)
+for the launch paths, controlled reproductions, and Windows validation limits.
+
 Same-origin session-chat iframes complete an authenticated parent-frame handshake before creating their SDK client. The parent supplies its active in-memory endpoint and credentials; when relay is active it also supplies the public relay descriptor without any pairing grant, because Electron preload and IPC are unavailable inside the iframe. The iframe establishes its own transport and rebinds its SDK before rendering. Additional windows retain their own per-window runtime bootstrap instead of being overwritten by the main window. Credentials are never placed in iframe URLs, and other child pages do not receive this runtime state.
 
 The preload bridge exposes desktop-only APIs to the web UI through `window.__OPENCHAMBER_DESKTOP__`. Privileged commands are checked in `main.mjs`, not only in the UI.
@@ -19,6 +29,8 @@ The preload bridge exposes desktop-only APIs to the web UI through `window.__OPE
 | File | Purpose |
 |------|---------|
 | `main.mjs` | Electron main process, app lifecycle, windows, menus, deep links, native IPC handlers, updates, local server startup |
+| `electron-host-probe.mjs` | Chromium direct-host probes, identity checks, attempt deadlines, and response cleanup |
+| `host-probe-policy.mjs` | Selector fast attempt and unreachable-only retry policy |
 | `startup-url-selection.mjs` | Pure bundled/HMR startup probe and loopback connection-limit policy |
 | `preload.mjs` | Safe bridge from the rendered UI to Electron IPC |
 | `ssh-manager.mjs` | SSH host import, connection lifecycle, tunnel/port forwarding helpers |
@@ -33,6 +45,29 @@ The preload bridge exposes desktop-only APIs to the web UI through `window.__OPE
 
 ## Development
 
+### Direct-host probe invariants
+
+After app readiness, direct-host probes use Chromium `net.fetch`, not Node fetch.
+Each attempt shares one deadline across optional `/health` identity verification,
+`/api/version`, and `/auth/session`, including JSON body reads. The fast attempt
+has a 2-second budget. The selector retries once with a 10-second budget only
+after Unreachable. Reported latency is the final attempt's application-probe
+duration, excluding an earlier failed attempt. It is not raw network ping.
+
+Probes never follow redirects. A redirected identity check returns Wrong Service
+before any bearer-bearing request. An explicit server ID mismatch also stops the
+probe. Electron 43 reports a manual redirect as a rejected fetch rather than a
+3xx response; the identity gate handles both forms. Identity requests carry
+neither the client token nor custom headers;
+version and session requests use sanitized custom headers and the client bearer
+token. Older servers without identity metadata remain supported. HTTP 401 and
+403 mean authentication is required, not that the instance is offline.
+
+Every exit aborts the attempt's requests and cancels unused response bodies before
+clearing the deadline timer. This includes early HTTP classifications and a
+successful session response whose body is not needed. TLS verification remains
+enabled. These rules do not change relay probing or the preload/IPC contract.
+
 From the repo root:
 
 ```bash
@@ -40,14 +75,14 @@ bun install
 bun run electron:dev
 ```
 
-`bun run electron:dev` starts the web dev server with HMR, then launches Electron against `packages/electron/main.mjs`.
+`bun run electron:dev` starts the web dev server with HMR, then launches Electron against `packages/electron/main.mjs`. On Windows, the HMR launcher resolves npm's `bun.cmd` shim to the underlying `bun.exe` before spawning Bun child processes.
 
 The Electron workspace package trusts Electron's install script so `bun install` downloads the platform runtime in fresh checkouts and worktrees.
 
 Electron's postinstall (`node install.js`) is run by `bun install` with the system Node. Older Electron releases bundled `extract-zip@2.0.1`, which under Node 24 silently unpacked only the first entry of the Electron zip, leaving `dist/` without the binary and `path.txt` missing. Electron 43+ ships its own fixed extractor (`@electron-internal/extract-zip`), but to keep interrupted or wrong-architecture installs from blocking desktop work:
 
 - The root `postinstall` runs `ensure-electron.mjs --best-effort`, which detects an incomplete Electron install (missing binary, stale `dist/version`/`path.txt`, or a binary of the wrong architecture) and repairs it by re-running the postinstall under Bun (which extracts correctly), falling back to Node.
-- `electron-dev.mjs` runs the same check (fail-fast, not best-effort) before launching, so `bun run electron:dev` self-heals even when an install was interrupted.
+- `electron-dev.mjs` runs the same check (fail-fast, not best-effort) before launching, so `bun run electron:dev` self-heals even when an install was interrupted. On Windows, the repair resolves npm's `bun.cmd` shim to the underlying `bun.exe` before spawning it from Node.
 - The check can be run on demand with `bun run --cwd packages/electron ensure:electron`; set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` to skip repair (e.g. CI without a network).
 - Unit tests in `scripts/ensure-electron.test.mjs` (run via `bun run --cwd packages/electron test:architecture`) cover healthy/missing/stale installs, wrong-architecture binaries, repair fallback, and `--best-effort`.
 
@@ -107,7 +142,7 @@ Running a packaged Linux AppImage requires FUSE (`libfuse.so.2`, typically `libf
 
 Desktop clears AppImage `ARGV0` from `process.env` before probing the login shell and starting the in-process server. Leaving it set makes zsh rewrite argv[0] for integrated-terminal and managed-OpenCode child commands to the AppImage path.
 
-Linux updates are supported only when the packaged app is running from a writable AppImage. Update checks, downloads, and installation report an actionable error when `APPIMAGE` is missing, invalid, or read-only; a missing release feed (`latest-linux.yml` 404 before the first Linux publish) is treated as “no update available”. macOS and Windows updater behavior is unchanged. Release builds keep `latest-linux.yml` (x64) and `latest-linux-arm64.yml` separate and validate each manifest against its AppImage before upload. Linux AppImages download full updates (no `.blockmap` differential channel yet).
+Linux updates are supported only when the packaged app is running from a writable AppImage. Update checks, downloads, and installation report an actionable error when `APPIMAGE` is missing, invalid, or read-only; a missing release feed (`latest-linux.yml` 404 before the first Linux publish) is treated as “no update available”. Authenticated Web clients connected to the embedded Desktop Host use this same `electron-updater` check, download, and restart flow rather than a package-manager command. macOS and Windows updater behavior is unchanged. Release builds keep `latest-linux.yml` (x64) and `latest-linux-arm64.yml` separate and validate each manifest against its AppImage before upload. Linux AppImages download full updates (no `.blockmap` differential channel yet).
 
 Production release jobs embed the checked-out GitHub owner/repository into both the Desktop main bundle and Electron Builder publish metadata. Packages built by `nekocon233/openchamber` therefore update only from that fork, while canonical packages update only from `openchamber/openchamber`. Local builds default to the fork feed. The loopback E2E updater fixture remains available for controlled replacement testing.
 
@@ -165,6 +200,10 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 ## Native Features Owned Here
 
 - Floating Mini Chat windows.
+- Mini Chat loads from the resolved local UI origin in HMR development, not the
+  API server origin. Bundled mode keeps `openchamber-ui://` assets. Native zoom
+  targets the focused window directly; composer focus adjusts interface scale,
+  while terminal and file-editor focus adjust their own font sizes.
 - New Mini Chat windows default to the managed Chats target. Explicit project/worktree drafts retain their target, existing managed chat sessions reopen in their own directory, and the compact header omits project/branch metadata for Chats. Opening a managed draft back in the main window preserves that target.
 - Multiple native windows.
 - Native notifications. Windows toast bodies activate an opaque `openchamber://notification/<id>` deep link, so Action Center clicks can restart the app, recreate the main window, and defer exact session navigation until the renderer listener is ready. Actionable targets carry their source runtime identity and are rejected if the main renderer has switched to another runtime before the click. Readiness carries no renderer-supplied identity: main derives remote identity from the committed document URL, verifies configured-host identity against that origin, and tracks local-shell host switches only after validating the configured host in main. Main also injects the validated configured-host key at boot so direct and relay hosts keep the same identity across restart.
@@ -175,6 +214,7 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 - SSH host import, connections, logs, and port forwarding.
 - SSH uses OpenSSH ControlMaster on macOS/Linux. Windows uses independent hidden OpenSSH processes for setup commands and each long-lived forward because Win32 OpenSSH does not support ControlMaster reliably.
 - Tunnel lifecycle integration through the web server runtime.
+- Remote dev-server previews use a direct WebSocket tunnel when the instance has an HTTP address. Relay-only instances keep the encrypted relay transport in the renderer and bridge its raw bytes to the browser panel through a local Electron listener.
 - Auto-update checks, downloads, and restart/apply flow.
 - The browser panel's own session (`persist:openchamber-browser`): its storage is
   cleared only through the scoped clear-data command, and camera, microphone,

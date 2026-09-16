@@ -3,6 +3,7 @@ import { useI18n } from '@/lib/i18n';
 import { useGitStore } from '@/stores/useGitStore';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useNestedGitDirectory } from '@/hooks/useNestedGitDirectory';
+import { useWorktreeBootstrapPending } from '@/hooks/useWorktreeBootstrapPending';
 import { runBackgroundNetworkTask } from '@/lib/background-network';
 import { useFreshestPrVisualSummaryForBranch } from '@/stores/useGitHubPrStatusStore';
 import { useSessionMessages } from '@/sync/sync-context';
@@ -34,6 +35,8 @@ type Props = {
   goalRow: React.ReactNode;
   showSession: boolean;
   showRepository: boolean;
+  /** Lets the panel place the two readouts independently without duplicating their subscriptions. */
+  children: (sections: { session: React.ReactNode; repository: React.ReactNode }) => React.ReactNode;
 };
 
 // Matches the header readout exactly: one decimal, capped the same way, so the
@@ -45,7 +48,7 @@ const formatPercent = (percent: number): string => `${Math.min(percent, 999).toF
  * the pull request look like. All of it stays true for as long as the session
  * is open, so it sits above anything episodic.
  */
-export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, goalRow, showSession, showRepository }) => {
+export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, goalRow, showSession, showRepository, children }) => {
   const { t } = useI18n();
   const { git } = useRuntimeAPIs();
   const ensureStatus = useGitStore((state) => state.ensureStatus);
@@ -67,12 +70,45 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
     ),
   );
 
+  // A worktree that is still being created transiently looks dirty until its
+  // setup commands and initial git reset finish. Those files are not changes
+  // on the branch, so the changed-files readout stays hidden while the
+  // bootstrap runs — and stays hidden until one fresh status fetch completes
+  // afterwards, because the shared cache may still hold a snapshot captured
+  // mid-creation (refresh hints fire while setup commands touch files) and
+  // lifting the gate onto it would flash the transient state.
+  const worktreeCreationPending = useWorktreeBootstrapPending(gitDirectory);
+  const [postBootstrapRefreshDirectory, setPostBootstrapRefreshDirectory] = React.useState<string | null>(null);
+  const awaitingPostBootstrapStatus = postBootstrapRefreshDirectory !== null
+    && postBootstrapRefreshDirectory === gitDirectory;
+
   // Warm the shared git cache through the background-network gate so the panel
   // never competes with the chat's own bootstrap traffic for sockets.
   React.useEffect(() => {
     if (!showRepository || !gitDirectory || !git) return;
+    if (worktreeCreationPending) {
+      setPostBootstrapRefreshDirectory(gitDirectory);
+      return;
+    }
+    if (awaitingPostBootstrapStatus) {
+      let cancelled = false;
+      void runBackgroundNetworkTask(() => fetchStatus(gitDirectory, git, {
+        force: true,
+        silent: true,
+        throwOnError: true,
+      }))
+        .then(() => {
+          if (!cancelled) {
+            setPostBootstrapRefreshDirectory((current) => (current === gitDirectory ? null : current));
+          }
+        })
+        .catch(() => undefined);
+      return () => {
+        cancelled = true;
+      };
+    }
     void runBackgroundNetworkTask(() => ensureStatus(gitDirectory, git));
-  }, [gitDirectory, git, ensureStatus, showRepository]);
+  }, [gitDirectory, git, ensureStatus, fetchStatus, showRepository, worktreeCreationPending, awaitingPostBootstrapStatus]);
 
   // Own the live invalidation for the repository readout. The desktop
   // composer's changed-files row no longer renders, so this panel must not
@@ -175,6 +211,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
   // event is reset to an empty array too, and carries real content only on
   // revert. Git status is the one authoritative, already-cached answer.
   const changed = React.useMemo(() => {
+    if (worktreeCreationPending || awaitingPostBootstrapStatus) return null;
     const files = gitStatus?.files ?? [];
     if (files.length === 0) return null;
     const stats = gitStatus?.diffStats;
@@ -187,7 +224,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
       }
     }
     return { files: files.length, additions, deletions, hasStats: Boolean(stats) };
-  }, [gitStatus?.files, gitStatus?.diffStats]);
+  }, [gitStatus?.files, gitStatus?.diffStats, worktreeCreationPending, awaitingPostBootstrapStatus]);
 
   const attentionReason = gitStatus?.attentionReason
     ?? (gitStatus?.rebaseInProgress ? 'rebase' : null)
@@ -224,11 +261,8 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
 
   useReportWorkStatusPresence('session-repository', hasSession || hasRepository);
 
-  if (!hasSession && !hasRepository) return null;
-
-  return (
-    <>
-      {hasSession ? (
+  return children({
+      session: hasSession ? (
         <WorkStatusSection title={t('chat.workStatus.section.session')}>
           {usagePercent !== null ? (
             <>
@@ -264,9 +298,9 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
               while context is the live number the reader came for. */}
           {goalRow}
         </WorkStatusSection>
-      ) : null}
+      ) : null,
 
-      {hasRepository ? (
+      repository: hasRepository ? (
         <WorkStatusSection
           title={t('chat.workStatus.section.project')}
           summary={projectLabel}
@@ -372,7 +406,6 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
             </>
           ) : null}
         </WorkStatusSection>
-      ) : null}
-    </>
-  );
+      ) : null,
+  });
 };

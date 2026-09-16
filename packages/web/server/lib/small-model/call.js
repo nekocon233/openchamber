@@ -2,11 +2,12 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import { readAuthFile, writeAuthFile } from '../opencode/auth.js';
 import { readConfig, readConfigLayers, isPlainObject } from '../opencode/shared.js';
 import { getCatalogProvider } from './catalog.js';
 import { getAuthEntryForProvider } from './resolve.js';
-import { getRuntimeProviderTransport } from './runtime-providers.js';
+import { getRuntimeProvider, getRuntimeProviderTransport } from './runtime-providers.js';
 
 // Direct, non-streaming text generation against the provider APIs, replicating
 // how OpenCode authenticates each of them (see the plugin auth loaders in the
@@ -654,6 +655,8 @@ const readProviderConfig = (workingDirectory, providerID) => {
   };
 };
 
+const getRuntimeModel = (runtimeProvider, modelID) => runtimeProvider?.models?.get(modelID) ?? null;
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -720,7 +723,7 @@ export async function resolveProviderLogin({ auth, workingDirectory, providerID 
     || null;
 }
 
-export async function callSmallModel({ auth, catalog, workingDirectory, providerID, modelID, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal, resolvedProviderTransport }) {
+export async function callSmallModel({ auth, catalog, workingDirectory, sessionID, providerID, modelID, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal, resolvedProviderTransport }) {
   const tokens = Number(maxOutputTokens) > 0 ? Number(maxOutputTokens) : DEFAULT_MAX_OUTPUT_TOKENS;
 
   const runtimeOnly = RUNTIME_ONLY_PROVIDERS.get(providerID);
@@ -750,12 +753,14 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
   }
 
   const providerConfig = readProviderConfig(workingDirectory, providerID);
-  const runtimeProvider = await getRuntimeProviderTransport(providerID, workingDirectory);
+  const runtimeTransport = await getRuntimeProviderTransport(providerID, workingDirectory);
+  const runtimeProvider = await getRuntimeProvider(providerID);
+  const runtimeModel = getRuntimeModel(runtimeProvider, modelID);
   // Match OpenCode's resolveSDK precedence: config `provider.<id>.options`
   // wins, then what OpenCode itself resolved at runtime (the only place a
   // plugin's credential exists), and the auth.json entry last.
   const entry = providerConfig?.auth
-    || runtimeCredential(providerID, runtimeProvider)
+    || runtimeCredential(providerID, runtimeTransport ?? runtimeProvider)
     || getAuthEntryForProvider(auth, providerID);
   if (!entry) {
     // Structured so the walkthrough (and any other caller) can show a blocker
@@ -856,9 +861,10 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
   // base URL for that provider (openai itself included). When a custom provider
   // is not in the catalog (e.g. a user-configured OpenAI-compatible proxy),
   // fall back to its baseURL from the OpenCode provider config, then to the
-  // endpoint OpenCode resolved at runtime — which for a plugin provider is the
-  // only place it exists, and for several of them is a local proxy the plugin
-  // itself runs. The openai provider also respects
+  // selected model's endpoint OpenCode resolved at runtime, then to the
+  // provider-level runtime endpoint. For a plugin provider, the runtime listing
+  // is the only place those endpoints exist, and several are local proxies the
+  // plugin itself runs. The openai provider also respects
   // provider.openai.options.baseURL — OpenCode itself uses the same config for
   // all providers including openai.
   const provider = getCatalogProvider(catalog, providerID);
@@ -866,17 +872,14 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
   const defaultOpenaiUrl = 'https://api.openai.com/v1';
   let baseURL = typeof providerConfigUrl === 'string' && providerConfigUrl
     ? providerConfigUrl
-    : null;
-  if (!baseURL) {
-    if (providerID === 'openai') {
-      baseURL = defaultOpenaiUrl;
-    } else {
-      baseURL = runtimeProvider?.baseURL ?? null;
-      if (baseURL === null && typeof provider?.api === 'string' && provider.api) {
-        baseURL = provider.api;
-      }
-    }
-  }
+    : providerID === 'openai'
+      ? defaultOpenaiUrl
+      : runtimeModel?.api?.url
+        ?? runtimeTransport?.baseURL
+        ?? runtimeProvider?.baseURL
+        ?? (typeof provider?.api === 'string' && provider.api
+          ? provider.api
+          : null);
   if (!baseURL) {
     throw new Error(`Provider "${providerID}" has no known API base URL`);
   }
@@ -911,7 +914,12 @@ export async function callSmallModel({ auth, catalog, workingDirectory, provider
     baseURL,
     // Configured headers last: a gateway that authenticates on its own header
     // must be able to override the bearer default rather than sit beside it.
-    headers: providerHeaders,
+    headers: mergeHeadersCaseInsensitive(
+      providerHeaders,
+      providerID.startsWith('opencode')
+        ? { 'x-opencode-session': typeof sessionID === 'string' && sessionID.trim() ? sessionID.trim() : randomUUID() }
+        : null,
+    ),
     modelID,
     prompt,
     system,

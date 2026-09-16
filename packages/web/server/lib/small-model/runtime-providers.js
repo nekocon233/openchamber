@@ -8,7 +8,8 @@
 //
 // `GET /provider` is where that state becomes visible. It reports, per
 // provider, the resolved `options.baseURL` and `options.apiKey`, and per model
-// the wire adapter (`api.npm`) and endpoint (`api.url`).
+// the wire adapter (`api.npm`) and endpoint (`api.url`). The provider-level
+// endpoint remains only as a fallback when the selected model has no endpoint.
 //
 // What it does NOT report is `options.fetch`. OpenCode strips functions from
 // the response, and a plugin is free to put its whole protocol in there:
@@ -70,8 +71,8 @@ export function resetOpenCodeRuntimeProviders() {
 /**
  * The boundary. Everything the `/provider` payload claims is checked here, so
  * the rest of this module and its callers work with settled values:
- * a credential we may use, an endpoint, and whether the provider is the
- * anonymous zen case.
+ * a credential we may use, provider and model endpoints, and whether the
+ * provider is the anonymous zen case.
  *
  * The credential deliberately prefers `options.apiKey` over the `key` field:
  * for a plugin provider the former is what its auth loader produced and what
@@ -92,13 +93,22 @@ function parseProviderListing(payload) {
     const id = text(provider.id);
     if (!id) continue;
     const options = record(provider.options);
-    const firstModel = record(Object.values(record(provider.models))[0]);
+    const models = new Map();
+    for (const [modelID, rawModel] of Object.entries(record(provider.models))) {
+      const model = record(rawModel);
+      const api = record(model.api);
+      const modelURL = endpoint(api.url);
+      const modelNpm = text(api.npm);
+      models.set(modelID, { api: { url: modelURL, npm: modelNpm } });
+    }
+    const firstModel = models.values().next().value;
     const declaredKey = text(options.apiKey);
     providers.set(id, {
       id,
       source: text(provider.source),
       apiKey: declaredKey === ZEN_ANONYMOUS_API_KEY ? null : (declaredKey ?? text(provider.key)),
-      baseURL: endpoint(options.baseURL) ?? endpoint(record(firstModel.api).url),
+      baseURL: endpoint(options.baseURL) ?? firstModel?.api?.url ?? null,
+      models,
       // True only for the zen-without-login case: a provider that is present
       // and usable through OpenCode, but that we must not call ourselves.
       anonymousZen: declaredKey === ZEN_ANONYMOUS_API_KEY,

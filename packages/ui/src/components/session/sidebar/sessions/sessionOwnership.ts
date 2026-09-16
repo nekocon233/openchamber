@@ -1,5 +1,5 @@
 import type { Session } from '@opencode-ai/sdk/v2';
-import { normalizePath } from '@/lib/pathNormalization';
+import { getNormalizedParentDirectory, normalizePath } from '@/lib/pathNormalization';
 import { isManagedWorktreePath } from '@/lib/projectResolution';
 
 type Project = {
@@ -49,17 +49,6 @@ const resolveSessionDirectory = (session: Session): string | null => {
     project?: { worktree?: string | null } | null;
   };
   return normalizePath(record.directory) ?? normalizePath(record.project?.worktree);
-};
-
-const getParentDirectory = (directory: string): string | null => {
-  if (directory === '/' || /^[A-Z]:$/.test(directory)) {
-    return null;
-  }
-  const separator = directory.lastIndexOf('/');
-  if (separator < 0) return null;
-  if (separator === 0) return '/';
-  if (separator === 2 && /^[A-Z]:\//.test(directory)) return directory.slice(0, 2);
-  return directory.slice(0, separator);
 };
 
 export const createSessionOwnershipIndex = (
@@ -141,7 +130,7 @@ export const createSessionOwnershipIndex = (
       visited.push(current);
       owner = ownerByDirectory.get(current) ?? null;
       if (owner) break;
-      const parent = getParentDirectory(current);
+      const parent = getNormalizedParentDirectory(current);
       if (startedInManagedWorktree && parent && !isManagedWorktreePath(parent)) break;
       current = parent;
     }

@@ -50,6 +50,38 @@ const waitForReaderCount = async (count: number) => {
 
 const pngBytes = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
 
+describe("input-store composer restore", () => {
+  beforeEach(() => {
+    useInputStore.setState({ pendingComposerRestore: null })
+  })
+
+  test("only the destination can consume a restore, and only once", () => {
+    const target = { runtimeKey: "runtime", directory: "/repo", sessionId: "fork" }
+    const pending = { target, text: "replay", files: [] }
+    useInputStore.setState({ pendingComposerRestore: pending })
+    for (const identity of [
+      null,
+      { ...target, sessionId: "source" },
+      { ...target, directory: "/elsewhere" },
+      { ...target, runtimeKey: "other-runtime" },
+    ]) {
+      expect(useInputStore.getState().consumePendingComposerRestore(identity)).toBeNull()
+      expect(useInputStore.getState().pendingComposerRestore).toBe(pending)
+    }
+    expect(useInputStore.getState().consumePendingComposerRestore(target)).toBe(pending)
+    expect(useInputStore.getState().consumePendingComposerRestore(target)).toBeNull()
+  })
+
+  test("keeps ordinary pending text independent from fork restoration", () => {
+    const target = { runtimeKey: "runtime", directory: "/repo", sessionId: "fork" }
+    const pending = { target, text: "", files: [] }
+    useInputStore.setState({ pendingComposerRestore: pending })
+    useInputStore.getState().setPendingInputText("ordinary insertion", "append")
+    expect(useInputStore.getState().consumePendingInputText()).toEqual({ text: "ordinary insertion", mode: "append" })
+    expect(useInputStore.getState().consumePendingComposerRestore(target)).toBe(pending)
+  })
+})
+
 describe("input-store attachments", () => {
   beforeEach(() => {
     pendingReaders.length = 0
@@ -58,6 +90,8 @@ describe("input-store attachments", () => {
       pendingInputText: null,
       pendingInputMode: "replace",
       pendingSyntheticParts: null,
+      pendingGuestIssue: null,
+      pendingBtwComposerRequest: null,
       activeEditorFile: null,
     })
     useInputStore.getState().setAttachedFiles([])
@@ -369,5 +403,64 @@ describe("input-store attachments", () => {
     // Removing the text entry cascades to the slide image
     useInputStore.getState().removeAttachedFile(files[0].id)
     expect(useInputStore.getState().attachedFiles).toEqual([])
+  })
+})
+
+describe("input-store guest attach", () => {
+  beforeEach(() => {
+    useInputStore.setState({ pendingGuestIssue: null })
+  })
+
+  test("holds a guest issue until the composer consumes it", () => {
+    const issue = {
+      providerId: "clickup",
+      id: "abc",
+      title: "Login",
+      url: "https://app.clickup.com/t/abc",
+    }
+    useInputStore.getState().setPendingGuestIssue(issue)
+    expect(useInputStore.getState().pendingGuestIssue).toEqual(issue)
+    expect(useInputStore.getState().consumePendingGuestIssue()).toEqual(issue)
+    expect(useInputStore.getState().pendingGuestIssue).toBeNull()
+    expect(useInputStore.getState().consumePendingGuestIssue()).toBeNull()
+  })
+
+  test("holds a guest pull with author and branches", () => {
+    const pull = {
+      providerId: "gitlab",
+      id: "!12",
+      title: "Fix login",
+      url: "https://gitlab.com/acme/app/-/merge_requests/12",
+      kind: "pull" as const,
+      author: "ada",
+      branches: { head: "feature", base: "main" },
+    }
+    useInputStore.getState().setPendingGuestIssue(pull)
+    expect(useInputStore.getState().pendingGuestIssue).toEqual(pull)
+    expect(useInputStore.getState().consumePendingGuestIssue()).toEqual(pull)
+  })
+})
+
+describe("input-store BTW composer requests", () => {
+  test("keeps the request scoped to its parent without changing the normal composer", () => {
+    useInputStore.setState({
+      pendingInputText: "normal draft",
+      pendingInputMode: "replace",
+      pendingBtwComposerRequest: null,
+      attachedFiles: [],
+    })
+    useInputStore.getState().requestBtwComposer({
+      parentSessionId: "parent-1",
+      text: "> selected text",
+    })
+
+    expect(useInputStore.getState().consumePendingBtwComposerRequest("parent-2")).toBeNull()
+    expect(useInputStore.getState().pendingInputText).toBe("normal draft")
+    expect(useInputStore.getState().consumePendingBtwComposerRequest("parent-1")).toEqual({
+      parentSessionId: "parent-1",
+      text: "> selected text",
+    })
+    expect(useInputStore.getState().consumePendingBtwComposerRequest("parent-1")).toBeNull()
+    expect(useInputStore.getState().pendingInputText).toBe("normal draft")
   })
 })

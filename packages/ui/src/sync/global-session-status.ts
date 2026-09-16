@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Event, SessionStatus } from '@opencode-ai/sdk/v2/client';
+import type { Event, Session, SessionStatus } from '@opencode-ai/sdk/v2/client';
 import { normalizeProjectPath } from '@/lib/projectResolution';
 import {
   applySessionOrderingMutations,
@@ -13,9 +13,14 @@ import {
 } from './session-activity-timing';
 import { countSyncPerformance } from './performance-diagnostics';
 
-// Shared live status index for every directory. Events update it incrementally
-// and directory snapshots reconcile it without requiring each row to scan all
-// child stores. Recent idle resolutions are retained as bounded tombstones so
+// Shared live busy/retry index for every directory. Events update it
+// incrementally and authoritative directory snapshots reconcile it, so each
+// sidebar row can subscribe to one leaf instead of every child store.
+//
+// Only non-idle entries are kept; absence alone does not prove idle. Entries
+// carry their directory so a polled per-directory snapshot can authoritatively
+// replace that directory's slice (the server omits idle sessions from
+// snapshots). Recent idle resolutions are retained as bounded tombstones so
 // delayed child-store publications cannot revive stale activity.
 
 type ActiveStatusType = 'busy' | 'retry';
@@ -23,6 +28,7 @@ type ResolvedStatusType = ActiveStatusType | 'idle';
 
 const OPTIMISTIC_STATUS_GRACE_MS = 10_000;
 const MAX_STATUS_HISTORY_ENTRIES = 2_000;
+const MAX_OBSERVED_ENTRIES = 2_000;
 
 type GlobalSessionStatusEntry = {
   status: SessionStatus;
@@ -30,7 +36,11 @@ type GlobalSessionStatusEntry = {
   optimisticUntil?: number;
 };
 
+type ObservedOutcome = { directory: string; outcome: 'completed' | 'failed' | null };
+
 type GlobalSessionStatusState = {
+  /** Last explicitly observed activity/outcome. Bounded memory, never persisted. */
+  observedById: ReadonlyMap<string, ObservedOutcome>;
   statusById: Map<string, GlobalSessionStatusEntry>;
   activeSessionIds: ReadonlySet<string>;
   resolvedStatusById: Map<string, ResolvedStatusType>;
@@ -43,6 +53,7 @@ type GlobalSessionStatusState = {
 const EMPTY_ACTIVE_SESSION_IDS: ReadonlySet<string> = new Set();
 
 export const useGlobalSessionStatusStore = create<GlobalSessionStatusState>(() => ({
+  observedById: new Map(),
   statusById: new Map(),
   activeSessionIds: EMPTY_ACTIVE_SESSION_IDS,
   resolvedStatusById: new Map(),
@@ -63,6 +74,9 @@ const statusesEqual = (left: SessionStatus, right: SessionStatus): boolean => (
   left.type === right.type && JSON.stringify(left) === JSON.stringify(right)
 );
 
+// Both write paths normalize the directory key, so a polled snapshot can
+// authoritatively replace entries written by events (and vice versa) even when
+// the two sources format the same path differently (trailing slash, …).
 const normalizeDirectory = (directory: string): string => (
   normalizeProjectPath(directory) ?? directory
 );
@@ -81,6 +95,7 @@ export const resetGlobalSessionStatuses = (): void => {
   useGlobalSessionStatusStore.setState((state) => {
     const revision = state.revision + 1;
     return {
+      observedById: new Map(),
       statusById: new Map(),
       activeSessionIds: EMPTY_ACTIVE_SESSION_IDS,
       resolvedStatusById: new Map(),
@@ -92,7 +107,13 @@ export const resetGlobalSessionStatuses = (): void => {
   });
 };
 
-/** Replace every status-owned field together; primarily used by focused tests. */
+/**
+ * Replaces the status map wholesale and derives active membership from it.
+ * This is the ONE sanctioned way to swap statusById from outside the event
+ * reducers (runtime switch, tests) — previously a setState monkeypatch
+ * derived membership for arbitrary callers, which silently trusted any
+ * caller passing both fields to keep them consistent.
+ */
 export const replaceGlobalSessionStatusById = (statusById: Map<string, GlobalSessionStatusEntry>): void => {
   useGlobalSessionStatusStore.setState((state) => {
     const revision = state.revision + 1;
@@ -103,6 +124,7 @@ export const replaceGlobalSessionStatusById = (statusById: Map<string, GlobalSes
       revisionById.set(sessionId, revision);
     }
     return {
+      observedById: new Map(),
       statusById,
       activeSessionIds: deriveActiveSessionIds(statusById, state.activeSessionIds),
       resolvedStatusById,
@@ -131,6 +153,16 @@ export const resolveSessionStatusType = (
   globalStatus: ResolvedStatusType | undefined,
   childStatus: ResolvedStatusType | undefined,
 ): ResolvedStatusType => globalStatus ?? childStatus ?? 'idle';
+
+export const getDirectoryOwnedSessionIds = (directory: string, sessions: readonly Session[]): string[] => {
+  const scope = normalizeProjectPath(directory);
+  if (!scope) return [];
+  const ids: string[] = [];
+  for (const session of sessions) {
+    if (normalizeProjectPath(session.directory) === scope) ids.push(session.id);
+  }
+  return ids;
+};
 
 const trimStatusHistory = (
   revisionById: Map<string, number>,
@@ -242,6 +274,9 @@ export const setGlobalSessionStatus = (
   );
 };
 
+// Event-driven path: called by the sync dispatcher for status-bearing events
+// whose directory has no child store. Mirrors the child reducer's semantics
+// (`session.idle` / `session.error` both resolve to idle).
 export const applyGlobalSessionStatusEvents = (directory: string, payloads: readonly Event[]): void => {
   if (payloads.length === 0) return;
   const normalizedDirectory = normalizeDirectory(directory);
@@ -252,8 +287,28 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
     let statusById = state.statusById;
     let activeSessionIds = state.activeSessionIds;
     let resolvedStatusById = state.resolvedStatusById;
+    let observedById: Map<string, ObservedOutcome> | null = null;
     const touchedIds = new Set<string>();
+    const readObserved = (): ReadonlyMap<string, ObservedOutcome> => observedById ?? state.observedById;
+    const draftObserved = (): Map<string, ObservedOutcome> => (observedById ??= new Map(state.observedById));
 
+    const observe = (id: string, outcome: 'completed' | 'failed' | null): void => {
+      const previous = readObserved().get(id);
+      // OpenCode may publish idle after an error for the same failed turn.
+      const nextOutcome = outcome === 'completed' && previous?.outcome === 'failed' ? 'failed' : outcome;
+      if (previous?.directory === normalizedDirectory && previous.outcome === nextOutcome) return;
+      const draft = draftObserved();
+      draft.delete(id);
+      draft.set(id, { directory: normalizedDirectory, outcome: nextOutcome });
+      if (draft.size > MAX_OBSERVED_ENTRIES) {
+        const oldest = draft.keys().next().value;
+        if (oldest) draft.delete(oldest);
+      }
+    };
+    const forgetObservation = (sessionId: string): void => {
+      if (!readObserved().has(sessionId)) return;
+      draftObserved().delete(sessionId);
+    };
     const removeActiveStatus = (sessionId: string): void => {
       if (statusById.has(sessionId)) {
         if (statusById === state.statusById) statusById = new Map(statusById);
@@ -279,6 +334,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
     const remove = (sessionId: string): void => {
       touchedIds.add(sessionId);
       removeActiveStatus(sessionId);
+      forgetObservation(sessionId);
       if (resolvedStatusById.has(sessionId)) {
         if (resolvedStatusById === state.resolvedStatusById) resolvedStatusById = new Map(resolvedStatusById);
         resolvedStatusById.delete(sessionId);
@@ -292,6 +348,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
         const props = payload.properties as { sessionID?: string; status?: { type?: string } } | undefined;
         if (typeof props?.sessionID !== 'string' || !props.sessionID) continue;
         const type = normalizeStatusType(props.status?.type);
+        observe(props.sessionID, type === 'idle' ? readObserved().get(props.sessionID)?.outcome ?? null : null);
         if (type === 'idle') {
           settle(props.sessionID);
           continue;
@@ -320,7 +377,10 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
 
       if (payload.type === 'session.idle' || payload.type === 'session.error') {
         const props = payload.properties as { sessionID?: string } | undefined;
-        if (typeof props?.sessionID === 'string' && props.sessionID) settle(props.sessionID);
+        if (typeof props?.sessionID === 'string' && props.sessionID) {
+          observe(props.sessionID, payload.type === 'session.error' ? 'failed' : 'completed');
+          settle(props.sessionID);
+        }
         continue;
       }
 
@@ -341,7 +401,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
       }
     }
 
-    if (touchedIds.size === 0) return state;
+    if (touchedIds.size === 0 && observedById === null) return state;
     const revision = state.revision + 1;
     const revisionById = new Map(state.revisionById);
     for (const sessionId of touchedIds) {
@@ -355,6 +415,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
       revisionFloor = trimmed.revisionFloor;
     }
     return {
+      observedById: observedById ?? state.observedById,
       statusById,
       activeSessionIds,
       resolvedStatusById,
@@ -372,6 +433,14 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
   applyGlobalSessionStatusEvents(directory, [payload]);
 };
 
+// Polled path: an authoritative `/session/status?directory=X` snapshot. Entries
+// missing from the snapshot are idle now — cleared both by directory key and by
+// the caller's session-id list (the server may report a canonicalized directory
+// that differs from the key an event wrote, e.g. via symlinks). Seeds the
+// initial state (events only deliver changes) and reconciles missed events.
+// `baselineRevision` rejects entries changed after the request started, and
+// 'monotonic' mode never lowers an active status (periodic poll), while
+// 'authoritative' mode treats omissions as idle (reconnect / escalated resync).
 export const applyGlobalSessionStatusSnapshot = (
   rawDirectory: string,
   raw: Record<string, { type?: string }>,
@@ -386,6 +455,8 @@ export const applyGlobalSessionStatusSnapshot = (
 
   useGlobalSessionStatusStore.setState((state) => {
     let statusChanged = false;
+    let observedById: Map<string, ObservedOutcome> | null = null;
+    const draftObserved = (): Map<string, ObservedOutcome> => (observedById ??= new Map(state.observedById));
     const next = new Map(state.statusById);
     const touchedIds = new Set<string>();
     let resolvedStatusById = state.resolvedStatusById;
@@ -444,6 +515,10 @@ export const applyGlobalSessionStatusSnapshot = (
       const type = normalizeStatusType(status?.type);
       if (mode === 'monotonic' && type === 'idle') continue;
       if (type === 'idle' && isOptimisticallyProtected(sessionId)) continue;
+      const observed = (observedById ?? state.observedById).get(sessionId);
+      if (type !== 'idle' && observed?.outcome) {
+        draftObserved().set(sessionId, { directory, outcome: null });
+      }
       touchedIds.add(sessionId);
       setResolvedStatus(sessionId, type);
       markOrdering(sessionId, type);
@@ -480,9 +555,13 @@ export const applyGlobalSessionStatusSnapshot = (
       }
     }
     if (touchedIds.size === 0) {
-      return statusSnapshotAtByDirectory === state.statusSnapshotAtByDirectory
-        ? state
-        : { statusSnapshotAtByDirectory };
+      const observedChanged = observedById !== null;
+      const snapshotAtChanged = statusSnapshotAtByDirectory !== state.statusSnapshotAtByDirectory;
+      if (!observedChanged && !snapshotAtChanged) return state;
+      return {
+        ...(observedChanged ? { observedById: observedById ?? state.observedById } : {}),
+        ...(snapshotAtChanged ? { statusSnapshotAtByDirectory } : {}),
+      };
     }
 
     const revision = state.revision + 1;
@@ -499,6 +578,7 @@ export const applyGlobalSessionStatusSnapshot = (
       revisionFloor = trimmed.revisionFloor;
     }
     return {
+      observedById: observedById ?? state.observedById,
       statusById,
       activeSessionIds,
       resolvedStatusById,

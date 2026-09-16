@@ -1,196 +1,264 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createSessionAssistRuntime } from './runtime.js';
 
-const TEMP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'session-assist-'));
-process.env.OPENCHAMBER_DATA_DIR = TEMP_DATA_DIR;
+const resources = [];
+const message = (id, role, text, extra = {}) => ({
+  info: { id, role, parentID: 'user', finish: 'stop', time: { completed: 1 }, providerID: 'test-provider', modelID: 'test-model', ...extra },
+  parts: [{ type: 'text', text }],
+});
+const output = (recap = 'Зміни готові', suggestion = '') => ({ text: JSON.stringify({ recap, suggestion }), providerID: 'test-provider', modelID: 'test-model' });
+const pause = () => new Promise((resolve) => setTimeout(resolve, 15));
 
-const { createSessionAssistRuntime } = await import('./runtime.js');
+async function fixture(generate = async () => output()) {
+  const state = {
+    messages: [message('user', 'user', 'Виправ помилку'), message('answer', 'assistant', 'Виправлено')],
+    session: { id: 'session', directory: '/project', time: {}, metadata: { external: 'keep', openchamber: { note: 'keep' } } },
+    targets: { recap: true, suggestion: true },
+    gets: 0, failFresh: false, patches: [], requests: [], calls: [],
+  };
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    state.requests.push({ method: request.method, directory: url.searchParams.get('directory'), limit: url.searchParams.get('limit'), auth: request.headers['x-test-auth'] });
+    response.setHeader('content-type', 'application/json');
+    if (request.method === 'PATCH') {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      state.patches.push(JSON.parse(Buffer.concat(chunks).toString()));
+      response.end(JSON.stringify(state.session));
+    } else if (url.pathname.endsWith('/message')) {
+      response.end(JSON.stringify(url.searchParams.get('limit') === '1' ? state.messages.slice(-1) : state.messages));
+    } else {
+      state.gets++;
+      response.statusCode = state.failFresh && state.gets > 1 ? 500 : 200;
+      response.end(JSON.stringify(state.session));
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  state.base = base;
+  const runtime = createSessionAssistRuntime({
+    buildOpenCodeUrl: (route) => state.base + route,
+    getOpenCodeAuthHeaders: () => ({ 'x-test-auth': 'fixture' }),
+    getTargets: () => state.targets,
+    quietMs: 1,
+    getSmallModelService: async () => ({
+      describeSmallModel: async () => ({ inputCharBudget: 64_000 }),
+      generateSmallModelText: async (args) => { state.calls.push(args); return generate(args, state); },
+    }),
+  });
+  resources.push({ runtime, server });
+  const status = (type) => runtime.processPayload({ type: 'session.status', properties: { sessionID: 'session', status: { type } } }, '/project');
+  return { state, runtime, status };
+}
 
-const SESSION_ID = 'ses_assist';
-const DIRECTORY = '/workspace';
-const messages = [
-  {
-    info: {
-      id: 'msg_user',
-      sessionID: SESSION_ID,
-      role: 'user',
-      time: { created: 10 },
-    },
-    parts: [{ type: 'text', text: '请修复登录失败时把列表清空的问题。' }],
-  },
-  {
-    info: {
-      id: 'msg_assistant',
-      parentID: 'msg_user',
-      sessionID: SESSION_ID,
-      role: 'assistant',
-      providerID: 'claude-code',
-      modelID: 'haiku',
-      time: { created: 20, completed: 30 },
-    },
-    parts: [{ type: 'text', text: '已保留旧列表，并补充了失败回归测试。' }],
-  },
-];
-
-const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), {
-  status,
-  headers: { 'Content-Type': 'application/json' },
+afterEach(async () => {
+  for (const { runtime, server } of resources.splice(0)) {
+    runtime.stop();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+  vi.restoreAllMocks();
 });
 
-const requestPath = (input) => new URL(input?.url ?? input).pathname;
+describe('session assist runtime', () => {
+  it('uses bounded authenticated SDK reads and preserves metadata with an empty suggestion', async () => {
+    const { state, status } = await fixture(async (_args, current) => {
+      current.session.metadata.openchamber.concurrent = 'new';
+      return output();
+    });
+    status('idle');
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.requests.every((r) => r.directory === '/project' && r.auth === 'fixture')).toBe(true);
+    expect(state.requests.filter((r) => r.limit).map((r) => r.limit)).toEqual(['50', '1']);
+    expect(state.calls[0]).toMatchObject({ restrictToPreferredProvider: true, onOverflow: 'error', preferredProviderID: 'test-provider', preferredModelID: 'test-model', sessionID: 'session' });
+    expect(state.patches[0].metadata).toMatchObject({ external: 'keep', openchamber: {
+      note: 'keep', concurrent: 'new', assist: { recap: 'Зміни готові', suggestion: '', forMessageID: 'answer' },
+    } });
+  });
+
+  it('does no work with both settings off and skips child, archived, or reverted sessions', async () => {
+    const { state, status } = await fixture();
+    state.targets = { recap: false, suggestion: false };
+    status('idle');
+    await pause();
+    expect(state.requests).toHaveLength(0);
+    state.targets.recap = true;
+    state.session.parentID = 'parent';
+    status('idle');
+    await vi.waitFor(() => expect(state.gets).toBe(1));
+    delete state.session.parentID;
+    state.session.revert = { messageID: 'user' };
+    status('idle');
+    await vi.waitFor(() => expect(state.gets).toBe(2));
+    delete state.session.revert;
+    state.session.time.archived = 1;
+    status('idle');
+    await vi.waitFor(() => expect(state.gets).toBe(3));
+    expect(state.calls).toHaveLength(0);
+  });
+
+  it('keeps recent context for recap-only and performs no write for an empty suggestion-only result', async () => {
+    const { state, status } = await fixture();
+    state.targets.suggestion = false;
+    state.messages.unshift(message('previous-user', 'user', 'Попередня задача'), message('previous-answer', 'assistant', 'Зміст зробленого', { parentID: 'previous-user' }));
+    status('idle');
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.calls[0].prompt).toContain('Зміст зробленого');
+    expect(state.calls[0].system).not.toContain('suggestion');
+    state.targets = { recap: false, suggestion: true };
+    status('idle');
+    await vi.waitFor(() => expect(state.calls).toHaveLength(2));
+    await pause();
+    expect(state.patches).toHaveLength(1);
+  });
+
+  it('does not write a stale result when the tail moves during generation', async () => {
+    const { state, status } = await fixture(async (_args, current) => {
+      current.messages.push(message('new-user', 'user', 'Нова задача'));
+      return output();
+    });
+    status('idle');
+    await vi.waitFor(() => expect(state.requests.some((r) => r.limit === '1')).toBe(true));
+    await pause();
+    expect(state.patches).toHaveLength(0);
+  });
+
+  it('does not fall back to stale metadata when the fresh read fails', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { state, status } = await fixture();
+    state.failFresh = true;
+    status('idle');
+    await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+    expect(state.gets).toBe(2);
+    expect(state.patches).toHaveLength(0);
+  });
+
+  it('cancels old work and retains an expired newer idle timer until it can run', async () => {
+    const releases = [];
+    const { state, status } = await fixture(() => new Promise((resolve) => releases.push(resolve)));
+    status('idle');
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    status('busy');
+    expect(state.calls[0].signal.aborted).toBe(true);
+    state.messages.push(message('next-user', 'user', 'Далі'), message('next-answer', 'assistant', 'Готово', { parentID: 'next-user' }));
+    status('idle');
+    await pause();
+    releases[0](output('Старий результат'));
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(state.patches).toHaveLength(0);
+    releases[1](output('Новий результат'));
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.patches[0].metadata.openchamber.assist).toMatchObject({ recap: 'Новий результат', forMessageID: 'next-answer' });
+  });
+
+  it('aborts on stop and honors settings switched off during generation', async () => {
+    let release;
+    const { state, runtime, status } = await fixture(() => new Promise((resolve) => { release = resolve; }));
+    status('idle');
+    await vi.waitFor(() => expect(state.calls).toHaveLength(1));
+    runtime.stop();
+    expect(state.calls[0].signal.aborted).toBe(true);
+    release(output());
+    await pause();
+    expect(state.patches).toHaveLength(0);
+    const second = await fixture(async (_args, current) => {
+      current.targets = { recap: false, suggestion: false };
+      return output();
+    });
+    second.status('idle');
+    await vi.waitFor(() => expect(second.state.gets).toBe(2));
+    await pause();
+    expect(second.state.patches).toHaveLength(0);
+  });
+
+  it('ignores historical user updates but cancels a new request during generation', async () => {
+    let release;
+    const { state, runtime, status } = await fixture(() => new Promise((resolve) => { release = resolve; }));
+    status('idle');
+    await vi.waitFor(() => expect(state.calls).toHaveLength(1));
+    const userUpdate = (created) => runtime.processPayload({ type: 'message.updated', properties: {
+      info: { id: 'user', sessionID: 'session', role: 'user', time: { created } },
+    } });
+    userUpdate(1);
+    expect(state.calls[0].signal.aborted).toBe(false);
+    userUpdate(Date.now());
+    expect(state.calls[0].signal.aborted).toBe(true);
+    release(output());
+    await pause();
+    expect(state.patches).toHaveLength(0);
+  });
+
+  it('rejects endpoint changes before writing instead of carrying a session into a new runtime', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { state, status } = await fixture(async (_args, current) => {
+      current.base = 'http://unreachable.invalid';
+      return output();
+    });
+    status('idle');
+    await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+    expect(state.patches).toHaveLength(0);
+    expect(state.gets).toBe(1);
+  });
+});
 
 describe('session assist generation', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  });
-
   it('generates Chinese recap and suggestion together and merges them into fresh metadata', async () => {
-    const requests = [];
-    let sessionReads = 0;
-    const fetchMock = vi.fn(async (input, init = {}) => {
-      const pathname = requestPath(input);
-      requests.push({ pathname, method: init.method ?? 'GET', body: init.body });
-      if (pathname === `/session/${SESSION_ID}/message`) return jsonResponse(messages);
-      if (pathname === `/session/${SESSION_ID}` && init.method === 'PATCH') return jsonResponse({ ok: true });
-      if (pathname === `/session/${SESSION_ID}`) {
-        sessionReads += 1;
-        return jsonResponse({
-          id: SESSION_ID,
-          directory: DIRECTORY,
-          metadata: sessionReads === 1
-            ? { openchamber: { marker: 'initial' } }
-            : { concurrent: 'kept', openchamber: { goal: { id: 'goal_1' } } },
-        });
-      }
-      throw new Error(`Unexpected request: ${pathname}`);
+    const { state, status } = await fixture(async (_args, current) => {
+      current.session.metadata = { concurrent: 'kept', openchamber: { goal: { id: 'goal_1' } } };
+      return output('登录失败会保留旧列表。', '再验证重连后列表能正确刷新。');
     });
-    vi.stubGlobal('fetch', fetchMock);
-    const service = {
-      generateSmallModelText: vi.fn(async () => ({
-        text: '{"recap":"登录失败会保留旧列表。","suggestion":"再验证重连后列表能正确刷新。"}',
-        providerID: 'claude-code',
-        modelID: 'haiku',
-      })),
-    };
-    const runtime = createSessionAssistRuntime({
-      buildOpenCodeUrl: (pathname) => `http://opencode.test${pathname}`,
-      getOpenCodeAuthHeaders: () => ({}),
-      getSmallModelService: async () => service,
-      quietMs: 10,
-    });
-
-    runtime.processPayload({
-      type: 'session.status',
-      properties: { sessionID: SESSION_ID, status: { type: 'idle' }, directory: DIRECTORY },
-    });
-    await vi.runOnlyPendingTimersAsync();
-
-    expect(service.generateSmallModelText).toHaveBeenCalledOnce();
-    expect(service.generateSmallModelText).toHaveBeenCalledWith(expect.objectContaining({
+    state.messages = [
+      message('user', 'user', '请修复登录失败时把列表清空的问题。'),
+      message('answer', 'assistant', '已保留旧列表，并补充了失败回归测试。'),
+    ];
+    status('idle');
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.calls).toHaveLength(1);
+    expect(state.calls[0]).toMatchObject({
       restrictToPreferredProvider: true,
-      preferredProviderID: 'claude-code',
-      preferredModelID: 'haiku',
-    }));
-    const generation = service.generateSmallModelText.mock.calls[0][0];
-    expect(generation.prompt).toContain('请修复登录失败时把列表清空的问题。');
-    expect(generation.system).toContain('Shape: {"recap": string, "suggestion": string}');
-
-    const patch = requests.find((request) => (
-      request.pathname === `/session/${SESSION_ID}` && request.method === 'PATCH'
-    ));
-    expect(patch).toBeDefined();
-    const metadata = JSON.parse(patch.body).metadata;
-    expect(metadata).toMatchObject({
+      preferredProviderID: 'test-provider',
+      preferredModelID: 'test-model',
+    });
+    expect(state.calls[0].prompt).toContain('请修复登录失败时把列表清空的问题。');
+    expect(state.calls[0].system).toContain('"recap"');
+    expect(state.calls[0].system).toContain('"suggestion"');
+    expect(state.patches[0].metadata).toMatchObject({
       concurrent: 'kept',
       openchamber: {
         goal: { id: 'goal_1' },
         assist: {
           recap: '登录失败会保留旧列表。',
           suggestion: '再验证重连后列表能正确刷新。',
-          forMessageID: 'msg_assistant',
+          forMessageID: 'answer',
           generatedAt: expect.any(Number),
         },
       },
     });
-    runtime.stop();
   });
 
-  it('re-arms a quiet idle cycle that expires while generation is in flight', async () => {
-    let patchCount = 0;
-    let resolveFirstGeneration;
-    let resolveFirstPatch;
-    const firstPatch = new Promise((resolve) => { resolveFirstPatch = resolve; });
-    const fetchMock = vi.fn(async (input, init = {}) => {
-      const pathname = requestPath(input);
-      if (pathname === `/session/${SESSION_ID}/message`) return jsonResponse(messages);
-      if (pathname === `/session/${SESSION_ID}` && init.method === 'PATCH') {
-        patchCount += 1;
-        if (patchCount === 1) resolveFirstPatch();
-        return jsonResponse({ ok: true });
-      }
-      if (pathname === `/session/${SESSION_ID}`) {
-        return jsonResponse({ id: SESSION_ID, directory: DIRECTORY, metadata: {} });
-      }
-      throw new Error(`Unexpected request: ${pathname}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    const generated = {
-      text: '{"recap":"保留旧列表。","suggestion":"验证下一次刷新。"}',
-      providerID: 'anthropic',
-      modelID: 'haiku',
-    };
-    const service = {
-      generateSmallModelText: vi.fn()
-        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirstGeneration = resolve; }))
-        .mockResolvedValue(generated),
-    };
-    const runtime = createSessionAssistRuntime({
-      buildOpenCodeUrl: (pathname) => `http://opencode.test${pathname}`,
-      getOpenCodeAuthHeaders: () => ({}),
-      getSmallModelService: async () => service,
-      quietMs: 10,
-    });
-
-    runtime.processPayload({
-      type: 'session.status',
-      properties: { sessionID: SESSION_ID, status: { type: 'idle' }, directory: DIRECTORY },
-    });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(service.generateSmallModelText).toHaveBeenCalledOnce();
-
-    runtime.processPayload({
-      type: 'session.status',
-      properties: { sessionID: SESSION_ID, status: { type: 'busy' }, directory: DIRECTORY },
-    });
-    runtime.processPayload({
-      type: 'session.status',
-      properties: { sessionID: SESSION_ID, status: { type: 'idle' }, directory: '/workspace-next' },
-    });
-    await vi.advanceTimersByTimeAsync(10);
-    expect(service.generateSmallModelText).toHaveBeenCalledOnce();
-
-    resolveFirstGeneration(generated);
-    await firstPatch;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(service.generateSmallModelText).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(9);
-    expect(service.generateSmallModelText).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(service.generateSmallModelText).toHaveBeenCalledTimes(2);
-    expect(service.generateSmallModelText.mock.calls[1][0].directory).toBe('/workspace-next');
-    runtime.stop();
+  it('retains an idle cycle that expires during generation and reruns with the latest directory', async () => {
+    const releases = [];
+    const { state, runtime, status } = await fixture(() => new Promise((resolve) => releases.push(resolve)));
+    status('idle');
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    status('busy');
+    expect(state.calls[0].signal.aborted).toBe(true);
+    state.messages.push(
+      message('next-user', 'user', '下一个任务'),
+      message('next-answer', 'assistant', '完成了', { parentID: 'next-user' }),
+    );
+    runtime.processPayload(
+      { type: 'session.status', properties: { sessionID: 'session', status: { type: 'idle' } } },
+      '/workspace-next',
+    );
+    await pause();
+    releases[0](output('旧结果'));
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(state.patches).toHaveLength(0);
+    releases[1](output('新结果'));
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.calls[1].directory).toBe('/workspace-next');
+    expect(state.patches[0].metadata.openchamber.assist).toMatchObject({ recap: '新结果', forMessageID: 'next-answer' });
   });
-});
-
-afterAll(() => {
-  fs.rmSync(TEMP_DATA_DIR, { recursive: true, force: true });
 });

@@ -14,6 +14,7 @@ class TestRuntimeContextChangedError extends Error {
 }
 
 mock.module("./runtime-switch", () => ({
+  getRuntimeApiBaseUrl: () => "http://runtime.test",
   getRuntimeEndpointGeneration: () => runtimeGeneration,
   getRuntimeKey: () => runtimeKey,
   RuntimeContextChangedError: TestRuntimeContextChangedError,

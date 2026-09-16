@@ -33,6 +33,12 @@ interface SettingsSearchAvailabilityContext extends SettingsRuntimeContext {
 
 const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
+    id: 'chat.activity-default',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.section.activityDefault',
+    keywords: ['activity', 'collapsed', 'expanded', 'live', 'tools', 'history'],
+  },
+  {
     id: 'appearance.language',
     page: 'appearance',
     titleKey: 'settings.appearance.language.label',
@@ -74,6 +80,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     // Exactly matches the render guard in OpenChamberVisualSettings: any darwin
     // Electron shell (isMac already implies isDesktopShell), local or remote host.
     isAvailable: (ctx) => ctx.isMac,
+  },
+  {
+    id: 'appearance.scrollbars',
+    page: 'appearance',
+    titleKey: 'settings.openchamber.visual.field.alwaysShowScrollbars',
+    descriptionKey: 'settings.openchamber.visual.field.alwaysShowScrollbarsHint',
+    keywords: ['scrollbar', 'scrollbars', 'scroll', 'mouse', 'wheel', 'accessibility', 'always visible'],
   },
   {
     id: 'appearance.pwa-install-name',
@@ -335,6 +348,27 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
+    id: 'chat.follow-up-behavior',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.section.followUpBehavior',
+    descriptionKey: 'settings.openchamber.visual.field.followUpBehaviorDescription',
+    keywords: ['follow up', 'queue', 'steer', 'send immediately'],
+  },
+  {
+    id: 'chat.input-history-scope',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.inputHistoryScope',
+    descriptionKey: 'settings.openchamber.visual.field.inputHistoryScopeDescription',
+    keywords: ['input history', 'composer history', 'global', 'session', 'reuse'],
+  },
+  {
+    id: 'chat.input-history-limit',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.inputHistoryLimit',
+    descriptionKey: 'settings.openchamber.visual.field.inputHistoryLimitDescription',
+    keywords: ['history limit', 'prompt recall', 'remember prompts', 'composer history', 'submitted prompts', 'trim history'],
+  },
+  {
     id: 'chat.persist-drafts',
     page: 'chat',
     titleKey: 'settings.openchamber.visual.field.persistDraftMessages',
@@ -359,6 +393,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.visual.field.largeTextPaste',
     descriptionKey: 'settings.openchamber.visual.field.largeTextPasteHint',
     keywords: ['paste', 'clipboard', 'attachment', 'large', 'text', 'file'],
+  },
+  {
+    id: 'chat.enter-to-send',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.enterToSend',
+    descriptionKey: 'settings.openchamber.visual.field.enterToSendHint',
+    keywords: ['enter', 'shift enter', 'ctrl enter', 'cmd enter', 'mod enter', 'send', 'newline'],
   },
   {
     id: 'sessions.default-model',
@@ -411,6 +452,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.sessionRetention.field.enableAutoCleanup',
     descriptionKey: 'settings.openchamber.sessionRetention.tooltip',
     keywords: ['retention', 'archive', 'delete'],
+  },
+  {
+    id: 'sessions.retention-only-archived',
+    page: 'sessions',
+    titleKey: 'settings.openchamber.sessionRetention.field.onlyArchived',
+    descriptionKey: 'settings.openchamber.sessionRetention.field.onlyArchivedDescription',
+    keywords: ['archive', 'archived', 'only', 'delete', 'cleanup', 'retention'],
   },
   {
     id: 'sessions.retention-period',
@@ -606,6 +654,26 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'projects',
     titleKey: 'settings.openchamber.worktrees.setup.waitForCommands',
     keywords: ['worktree', 'setup commands', 'bootstrap', 'wait'],
+  },
+  {
+    id: 'projects.worktree.setup.replace',
+    page: 'projects',
+    titleKey: 'settings.projects.shared.replaceMode',
+    keywords: ['worktree', 'setup commands', 'shared', 'team', 'only mine'],
+  },
+  {
+    id: 'projects.shared',
+    page: 'projects',
+    titleKey: 'settings.projects.shared.title',
+    descriptionKey: 'settings.projects.shared.description',
+    keywords: ['shared', 'team', 'repository', '.openchamber', 'project.json', 'trust'],
+  },
+  {
+    id: 'projects.shared.plansDir',
+    page: 'projects',
+    titleKey: 'settings.projects.shared.plansDir',
+    descriptionKey: 'settings.projects.shared.plansDirInfo',
+    keywords: ['plans', 'folder', 'shared', 'team', 'docs'],
   },
   {
     id: 'remote-instances.client-auth',
@@ -1027,17 +1095,20 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
-    id: 'integrations.third-party',
+    id: 'integrations.guests',
     page: 'integrations',
-    titleKey: 'settings.integrations.thirdParty.title',
-    keywords: ['plugin', 'provider', 'oauth', 'install', 'update', 'remove'],
+    titleKey: 'settings.integrations.guests.title',
+    descriptionKey: 'settings.integrations.guests.info',
+    keywords: ['guest', 'extension', 'oauth', 'clickup', 'gitlab', 'panel', 'connect'],
+    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
-    id: 'integrations.third-party.opencode-claude',
-    page: 'integrations',
-    titleKey: 'settings.integrations.thirdParty.opencodeClaude.name',
-    descriptionKey: 'settings.integrations.thirdParty.opencodeClaude.description',
-    keywords: ['claude', 'anthropic', 'claude code', 'pro', 'max', 'agent sdk', '@openchamber/opencode-claude'],
+    id: 'extensions.add',
+    page: 'extensions',
+    titleKey: 'settings.extensions.add.label',
+    descriptionKey: 'settings.extensions.add.info',
+    keywords: ['folder', 'path', 'zip', 'git', 'url', 'install', 'guest', 'panel'],
+    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
   },
   {
     id: 'integrations.third-party.opencode-codex',
@@ -1052,6 +1123,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.integrations.thirdParty.opencodeCursorOauth.name',
     descriptionKey: 'settings.integrations.thirdParty.opencodeCursorOauth.description',
     keywords: ['cursor', 'oauth', 'subscription', 'openai compatible', '@openchamber/opencode-cursor'],
+  },
+  {
+    id: 'extensions.updates.check',
+    page: 'extensions',
+    titleKey: 'settings.extensions.updates.check',
+    keywords: ['update', 'upgrade', 'version', 'git', 'extension', 'guest', 'refresh'],
+    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
   },
 ] as const;
 

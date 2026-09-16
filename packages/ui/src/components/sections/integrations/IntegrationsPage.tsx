@@ -4,6 +4,7 @@ import { SettingsSection } from '@/components/sections/shared/SettingsSection';
 import { useI18n } from '@/lib/i18n';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import { GuestIntegrationsSection } from './GuestIntegrationsSection';
 import { GitHubIntegration } from './GitHubIntegration';
 import { LinearSettings } from './LinearSettings';
 import { ThirdPartyIntegrationsSection } from './ThirdPartyIntegrationsSection';
@@ -47,6 +48,7 @@ export const IntegrationsPage: React.FC<IntegrationsPageProps> = ({
         onOpenProviderSetup={onOpenProviderSetup}
         onOpenPluginManager={onOpenPluginManager}
       />
+      <GuestIntegrationsSection divider />
     </SettingsPageLayout>
   );
 };
