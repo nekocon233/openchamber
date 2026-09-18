@@ -52,7 +52,7 @@ So:
 | `viewport-store.ts` | Scroll anchors, session memory, loading indicators | App UI state |
 | `attachment-files.ts` | Attachment picker allowlists, MIME/content validation, structured-text sanitization, and HEIC conversion | Local chat attachments across shared UI runtimes |
 | `document-attachments.ts` | Bounded Office/OpenDocument extraction, document text serialization, embedded-image extraction, and positional citations | DOCX, PPTX, XLSX, ODT, ODP, and ODS chat attachments |
-| `input-store.ts` | Draft input state, attached files, synthetic parts, pending guest attach, destination-scoped fork replay handoff | App UI state; fork replay targets runtime + directory + session |
+| `input-store.ts` | Draft input state, attached files, synthetic parts, pending guest attach, destination-scoped fork replay handoff | Attachments and fork replay target runtime + directory + session; other pending input is app UI state |
 | `ChatInput.tsx` + `chatDraftPersistence.ts` | High-frequency composer text plus device-local draft persistence | Current component; runtime-scoped localStorage only, never synchronized through a host API |
 | `session-actions.ts` + `opencodeClient` | Optimistic message projection and official OpenCode message delivery, including steer and queue requests | Active runtime, directory, and session; OpenCode owns delivery state |
 | `selection-store.ts` | Model/agent/variant selections | App UI state |
@@ -64,6 +64,8 @@ Office and OpenDocument packages are metadata-validated before asynchronous extr
 
 The composer compares normalized attachment MIME types with the selected model's declared input modalities. It warns when a newly attached file or an existing attachment after a model change requires an unsupported modality, but does not block sending. Missing modality metadata remains unknown and does not produce a warning.
 
+Attachment drafts stay in memory for the page's lifetime, including composer remounts, independently of text persistence. `selectAttachmentDraft` saves the outgoing list and restores the rendered composer's runtime, directory, and session before paint. Switching cancels unfinished attachment reads. Send and queue recovery pass their captured draft identity so a late failure restores files to the source rather than the currently open session. Clearing or deleting a draft releases only its files. Opening a new-session draft leaves the outgoing session's files available for a return visit.
+
 ## Session list rules
 
 Opening a new draft applies its configured model identifier immediately, then
@@ -71,6 +73,19 @@ reconciles after project config activation. That continuation belongs to the
 same runtime and draft object and yields to a manual choice made while loading.
 The config store owns default selection and discovery-gap behavior, documented
 in `packages/ui/src/stores/DOCUMENTATION.md`.
+
+Changing a draft's project or switching between Project and Chat applies the
+target's agent, model, and effort defaults immediately. Worktree refinement
+within the same project preserves manual choices. Activation continuations
+check the runtime, draft identity, target revision, and manual-selection state
+before applying defaults again.
+
+`selection-store.ts` persists runtime/session-keyed effort overrides alongside model and
+agent choices. Both a named effort and explicit `Default` survive reload, with
+the same 150-session persistence bound as the existing selections. Old payloads
+without effort entries remain valid; malformed effort entries grant no authority.
+Session deletion clears these entries. A saved effort choice precedes older
+message history so a reload cannot undo an unsent picker change.
 
 ### Layout-mounted session-list lifecycle
 
@@ -83,14 +98,16 @@ in `packages/ui/src/stores/DOCUMENTATION.md`.
 - The scheduler runs at most two directory bootstraps concurrently.
 - Selected session/current directory demand outranks active-project, expanded, visible, and background demand.
 - Demand is deduplicated by normalized directory and can be promoted while queued.
-- The complete known project/worktree set is always published. Collapsed and off-screen directories remain background demand, so they refresh eventually rather than waiting for expansion.
+- `useSessionListSync` is the only demand owner, and it publishes only the current directory and the selected session's directory. Known projects and worktrees are never bootstrapped for being known, shown, expanded, or restored as expanded: their rows and sessions come from the global session list, and their live activity comes from the global status index. Every `?directory=` request makes OpenCode create and bootstrap an instance for that directory, so publishing the whole topology created one instance per project at startup. Sidebar notices still request bootstrap manually with `force`.
+- A directory that was never bootstrapped reads as `ready` in the sidebar group status, so a list failure or a denied folder permission surfaces only when the user selects it. This is intentional.
 - A bootstrap holds its scheduler slot only through the authoritative directory session-list fetch. `bootstrapDirectory` returns separate `sessions` and `environment` completions. `getBootstrapState` describes list loading; `getInitializationState` describes configuration and recovery. A complete empty list stops its spinner even while initialization is running. Initialization failure keeps the list and exposes its own retryable notice, including native directory access when the filesystem confirms a permission failure.
-- Every initialization read explicitly selects the requested directory. Status, question, and permission recovery start independently of configuration and optional command/MCP/LSP/VCS enrichment. Each successful read publishes its own fields; a failed read preserves prior data. Optional enrichment failure is logged without failing the workspace's core initialization.
+- Every initialization read explicitly selects the requested directory. Status, question, and permission recovery start independently of configuration and optional LSP/VCS enrichment. Each successful read publishes its own fields; a failed read preserves prior data. Optional enrichment failure is logged without failing the workspace's core initialization. MCP status and the command list are deliberately not read during bootstrap: reading MCP state initializes that directory's entire stdio server fleet as an OpenCode side effect, and listing commands enumerates MCP prompts, which touches the same state. The sidebar bootstraps every known project directory, so either read spawned one fleet per project at startup. The MCP and command surfaces fetch on demand through `useMcpStore` and `useCommandsStore` instead, and slash-command dispatch falls back to one live lookup before treating an unmatched name as a plain prompt.
 - Session pages and background reads share a three-request budget, with at most two running in either lane. Background work cannot consume the third slot, leaving capacity for lists even when two background reads stall. Queued lists take precedence over background work; active-session status recovery outranks queued metadata within the background lane. Retry backoff holds no network slot. Independent background reads can still progress concurrently.
 - Session pagination retries each failed page at most three times. The directory loader does not replay the whole list after those attempts, so one unavailable page cannot multiply retries or redownload earlier pages while holding its scheduler slot. The VS Code empty-success recovery remains separate.
 - A system-resume signal, including Capacitor foreground resume, refreshes pending questions and permissions only for the active materialized directory. The refresh is deduplicated while in flight, preserves existing state on fetch failure, and leaves unopened directories untouched; normal stream reconnect recovery remains the broader catch-up path.
 - When a materialized current turn contains a pending/running question tool but that session's pending question record is missing, the mounted chat performs a question-only recovery scoped to that session. It tries at most three times with delays of 0, 500, and 1,500 ms, stops when the chat unmounts or changes sessions, and guards every attempt against runtime changes. This closes cold-start races without adding requests to ordinary session opens or scanning unrelated sessions and directories.
 - A mounted directory-store consumer pins that store for its lifetime. Eviction may dispose only unmounted directories, so optimistic actions and realtime events cannot move to a replacement store while visible React consumers remain subscribed to an older identity.
+- Selected, active-project, expanded, and visible bootstrap demand also protects a store from eviction. This keeps virtualized off-screen directories alive while their owner still needs them; background demand remains evictable so the complete known topology does not make the cache unbounded.
 - Reconfiguration and runtime switching invalidate stale generations. A stale completion must not publish state into the new runtime.
 - Failure is recorded as `failed`; it is not converted into a successful empty snapshot. Forced demand can retry failed or completed work.
 - A failed bootstrap is classified as `os-permission` only when the owning runtime filesystem API independently confirms `EPERM`/`EACCES` for that exact directory. OpenCode/proxy error text is never used as permission evidence. The scheduler retains the directory-scoped reason so local Desktop can offer native folder selection before a forced retry.
@@ -193,6 +210,12 @@ Current consumers:
 
 Cross-directory selectors subscribe to the narrow child-store field they aggregate. Session aggregation listens to `state.session`. Live busy/retry state is also maintained in `global-session-status.ts`, where each row subscribes to one session ID instead of scanning every child store. Events update the index incrementally; authoritative per-directory status snapshots seed it, clear sessions omitted as idle, and reconcile missed events. Unrelated streaming events such as `message.part.delta` must not trigger global session/status scans.
 
+Directories that are not bootstrapped get their initial activity from the host instead: `host-session-status-seed.ts` fetches `/api/sessions/status`, the cross-project map the OpenChamber host keeps from its single upstream event stream, after each global session load. One request, no OpenCode instance creation. The seed is additive only. It adds busy entries (retry collapses to busy; the next live event restores details) for sessions the client has not observed itself, resolves each session's directory from the global session cache, skips entries the host last updated more than 30 minutes ago because nothing reconciles the host map after a stream gap, and never clears anything: the host payload carries no directory, so absence proves nothing. A live event that arrived first wins. In VS Code the webview shim answers the same route from the extension host's activity watcher, whose phases collapse busy and retry and settle themselves, so every entry it reports is current. The remaining gap is intentional and runtime-specific: on desktop with an external OpenCode, a turn that started before the OpenChamber host and has not emitted a status event since shows no dot until its next step.
+
+Pending permissions and questions get the same treatment in `global-blocking-requests.ts`: the dispatcher feeds it `permission.asked`/`permission.replied`, `question.asked`/`question.replied`/`question.rejected`, and `session.deleted` for every directory, and the host seed adds the `pending` map the server keeps from its own stream (`getPendingBlockingRequestsSnapshot` in `session-runtime.js`; dropped on reply, deletion, and OpenCode restart, so it carries no age cutoff). The index is additive from the seed and never cleared by absence. Directory stores stay the source for open directories and for row badges; the index serves the tray's approval list and any surface without a mounted row. In-app permission and question toasts for a directory without a store are shown from `handleEvent` directly, except in VS Code, whose extension host owns the auto-accept path. VS Code's `/api/sessions/status` shim reports no pending requests.
+
+Turn-complete and error notifications are recorded before the directory-store lookup in `handleEvent`, so an unopened directory still gets its unread dot. The subtask check reads the directory store when the directory is open and the global session cache otherwise. Event routing likewise consults the global session cache: a session-addressed event with no directory is routed to the directory the cache records for that session before any active-session or single-store fallback, so another project's events cannot land in the one open store.
+
 Session display order is independent from streaming-frequency `time.updated` publications. `session-ordering.ts` promotes a session exactly when its authoritative activity phase crosses `settled` (`idle`/`error`) and `active` (`busy`/`retry`) in either direction. Repeated busy/retry or idle/error events are no-ops. The first authoritative status snapshot establishes a baseline without synthetic promotions; later snapshots reconcile missed transitions. Root sessions compare lifecycle rank only with other roots, while child sessions compare lifecycle rank only with siblings sharing the same `parentID`, so child activity never moves its root conversation. Pins remain the first ordering bucket. The timestamp/creation fallback is frozen when a session first participates in ordering, so later metadata-only updates cannot reorder it; creation time and ID provide deterministic ties. Runtime switches clear all phases, baselines, and ranks.
 
 Recent membership includes non-archived root sessions that are currently active or fall within the timestamp window. Shared lifecycle ordering promotes authoritative active/settled transitions and uses session metadata as the deterministic baseline; persisted message history never proves current activity.
@@ -258,6 +281,10 @@ This keeps cold/global lists responsive without requiring a refetch after every 
 
 Live activity/status indicators must not depend on this cache. Per-session indicators use the event/snapshot-reconciled global live status index; bulk initialized-directory views may aggregate child-store statuses.
 
+### Viewed sessions and surface attention
+
+A `session.idle` or `session.error` for the selected session is recorded as viewed only while the user can see this surface; otherwise it raises an unread marker. `lib/surfaceAttention.ts` owns that answer. Web, desktop, and mobile use document focus; on web and desktop, `App.tsx` also marks the selected session viewed when the window regains focus. A VS Code webview document's focus does not track what the user sees: it loses focus whenever the code editor takes it while the chat stays on screen, and it can keep focus while VS Code is in the background. There the extension host reports window focus and webview visibility (`viewerStateChanged`); once a report arrives it replaces document focus, and `VSCodeApp` marks the selected session viewed whenever a report says the webview is seen again.
+
 ## Session message loading
 
 The event pipeline's reconnect callback carries `replayReset`. A global WS
@@ -320,6 +347,8 @@ The profiler also emits a user-timing mark when pending global-session recency i
 Streaming assistant and reasoning text is throttled once before reaching the markdown renderer. The renderer incrementally reconciles changed markdown blocks but does not add a second character-pacing timer, which would multiply parse/morph work while catching up on large streamed chunks.
 
 The event pipeline delivers each ordered per-directory flush as one reducer batch. Events retain their individual notifications, cleanup, routing, materialization, and debug side effects, while directory mutations accumulate in order and publish one store transaction per touched directory. Global session mutations and live status, ordering, and timing transitions also accumulate in event order and each owner publishes at most once for the flush. Each top-level state slice is cloned lazily at most once in that batch; no-op events do not change references.
+
+A sustained stream is flushed at most every 100ms (`FLUSH_FRAME_MS`); the first event after a quiet spell is flushed at once, so a lone permission or status event is never held back. The interval matches the 100ms at which streamed text is shown: each flush publishes the directory store and re-renders the streaming message, so a shorter interval pays for renders that change nothing on screen. Measure with `bun run profile:session` against the fixture provider before changing it.
 
 Streaming lifecycle derivation has two paths. Directory attach, switch, bootstrap, and reconnect may perform a full reconciliation. Normal store publications reconcile only sessions whose `session_status` or `message` bucket changed; part-only events update the affected streaming message heartbeat directly and must not rescan all busy sessions.
 
@@ -498,6 +527,13 @@ Existing sessions keep their directory when a worktree disappears. Session activ
 ### Managed chat directories
 
 Ordinary user-created drafts default to the OpenChamber-managed Chat target. The first submit creates one isolated directory under the server-resolved managed chats root (`OPENCHAMBER_CHATS_DIR`, default `~/.config/openchamber/chats`) as `YYYY-MM-DD/session-<id>` before creating the OpenCode session. That root acts as a system project owner for sidebar membership and Notes, Todo, Plans, pinned knowledge, and project memory, but it is never persisted or rendered as a user project and exposes no Git/worktree controls. Project and worktree actions remain explicit targets. Archiving retains a chat directory so restore remains lossless. Confirmed deletion accepts only descendants of the configured root or the actual server home's legacy chats root. It rejects both shared roots themselves, dot segments, lookalike paths elsewhere, and a runtime switch during root resolution. It also removes a directory only once no other known session still resolves to it: forks, side threads, and subagents share the directory of the chat that created them, and OpenCode fails every prompt in a session whose directory is gone. The deleted session's own subtree does not count, because the server cascade-deletes it, and an unloaded global cache keeps the directory because it cannot prove it is unused. It never removes project directories.
+
+The home API also supplies filesystem-confirmed `canonicalChatsRoot` and
+`canonicalLegacyChatsRoot` aliases. Membership and cleanup compare each alias
+exactly, protecting the shared roots themselves. Helpers still return the original
+configured/legacy root as the identity for folders and scopes. Older servers
+without these fields retain exact matching against their original roots; the UI
+never guesses filesystem case sensitivity from the client's operating system.
 
 Typing the first character in a managed Chat draft starts one deduplicated directory preparation for that draft. Materialization consumes the prepared directory before `createSession`, removing filesystem creation from the usual submit path. Closing the draft, changing it to a project target, or completing preparation after the runtime/draft changed deletes the unclaimed directory. A create failure also deletes the consumed directory.
 

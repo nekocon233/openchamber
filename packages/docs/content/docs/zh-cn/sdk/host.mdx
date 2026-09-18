@@ -37,6 +37,8 @@ const host = connectHost();
 
 `onDirectory`、`onSession`、`onSessionLifecycle`、`onConnection`、`onSettings` 和 `onItem` 在你较晚订阅时会重放最新值，之后随变化持续触发。
 
+`theme.tokens` 包含 `primaryText`、`successText`、`warningText`、`errorText` 和 `infoText`。这些必填字段提供宿主计算的文字颜色，用于中性背景和 UI kit 的浅色控件，而非实心彩色填充。`applyHostReady` 会在每次快照中应用这些值。CSS 变量见 [UI kit](/sdk/ui/)。
+
 ## 方法
 
 | 调用 | 作用 |

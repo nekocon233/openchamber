@@ -132,6 +132,7 @@ export const createBootstrapRuntime = (dependencies) => {
       writeSseEvent,
       getSessionActivitySnapshot: sessionRuntime.getSessionActivitySnapshot,
       getSessionStateSnapshot: sessionRuntime.getSessionStateSnapshot,
+      getPendingBlockingRequestsSnapshot: sessionRuntime.getPendingBlockingRequestsSnapshot,
       getSessionAttentionSnapshot: sessionRuntime.getSessionAttentionSnapshot,
       getSessionState: sessionRuntime.getSessionState,
       getSessionAttentionState: sessionRuntime.getSessionAttentionState,

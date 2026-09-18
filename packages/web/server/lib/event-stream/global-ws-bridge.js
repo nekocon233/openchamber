@@ -52,6 +52,7 @@ export function createGlobalMessageStreamWsBridge({
       return;
     }
 
+    globalHub.flushPending();
     const replay = globalHub.replayAfter(requestedLastEventId);
     if (replay === null) {
       // The cursor fell out of the retained suffix: declare the gap on the

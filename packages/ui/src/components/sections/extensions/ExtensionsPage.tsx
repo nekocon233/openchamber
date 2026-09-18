@@ -24,15 +24,22 @@ import { toast } from '@/components/ui';
 import { setGuestServiceSocketPath } from '@/lib/guests/service';
 import { guestNeedsApproval } from '@/lib/guests/capabilities';
 import { guestPackageIconSrc, resolveGuestIconName } from '@/lib/guests/icon';
+import { getGuestSourceUrl } from '@/lib/guests/source-url';
 import { approveGuestCapabilities, installGuest, setGuestEnabled, uninstallGuest, uploadGuestZip, type InstallGuestErrorCode } from '@/lib/guests/install';
 import { closeGuestTabsById } from '@/lib/guests/tabs';
 import { loadGuestCatalog } from '@/lib/guests/load-catalog';
+import { describeGuestRequestFailure } from '@/lib/guests/request-failure';
+import { getGitIdentities, getGlobalGitIdentity } from '@/lib/gitApi';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import type { GitIdentityProfile } from '@/stores/useGitIdentitiesStore';
+import { IdentityDropdown } from '@/components/views/git/GitHeader';
 import { checkGuestUpdates, updateGuest, type UpdateGuestErrorCode } from '@/lib/guests/updates';
 import type { GuestSource, InstalledGuest } from '@/lib/guests/types';
 import { useGuestsStore } from '@/lib/guests/store';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { cn } from '@/lib/utils';
+import { openExternalUrl } from '@/lib/url';
 import { canRequestNativeDirectoryAccess, pathForDroppedFile, requestDirectoryAccess, requestFileAccess } from '@/lib/desktop';
 import type { PublicSocketBinding } from '@openchamber/sdk';
 
@@ -41,6 +48,7 @@ const errorToastKey = (code: InstallGuestErrorCode): I18nKey => {
   if (code === 'invalid-url') return 'settings.extensions.toast.invalidUrl';
   if (code === 'not-found') return 'settings.extensions.toast.notFound';
   if (code === 'invalid-manifest') return 'settings.extensions.toast.invalidManifest';
+  if (code === 'reserved-id') return 'settings.extensions.toast.reservedId';
   if (code === 'id-taken') return 'settings.extensions.toast.idTaken';
   if (code === 'already-installed') return 'settings.extensions.toast.alreadyInstalled';
   if (code === 'missing-build') return 'settings.extensions.toast.missingBuild';
@@ -57,7 +65,7 @@ const errorToastKey = (code: InstallGuestErrorCode): I18nKey => {
  * holds that has to travel to the host.
  */
 type InstallSource =
-  | { kind: 'input'; input: string }
+  | { kind: 'input'; input: string; gitIdentityId?: string }
   | { kind: 'file'; file: File };
 
 const isZipFile = (file: File): boolean => file.name.toLowerCase().endsWith('.zip');
@@ -228,6 +236,8 @@ const ExtensionCard: React.FC<ExtensionCardProps> = ({
   const needsApproval = guestNeedsApproval(guest);
   const permissions = servicePermissionList(guest);
   const canRemove = Boolean(guest.source && guest.source !== 'bundled');
+  const builtIn = guest.source === 'bundled';
+  const sourceUrl = getGuestSourceUrl(guest);
   // Only a git install can move forward; folder and zip cards never get this.
   const update = guest.source === 'git' ? guest.update : undefined;
   const iconSrc = React.useMemo(
@@ -237,7 +247,7 @@ const ExtensionCard: React.FC<ExtensionCardProps> = ({
   // The path is one unbreakable word; it lives in the expanded body so the
   // header line never clamps right after the version.
   const meta = [
-    t(sourceKey(guest.source)),
+    builtIn ? null : t(sourceKey(guest.source)),
     guest.version ? `v${guest.version}` : null,
     guest.entry ? null : t('settings.extensions.source.noPanel'),
   ].filter(Boolean).join(' · ');
@@ -272,6 +282,11 @@ const ExtensionCard: React.FC<ExtensionCardProps> = ({
               {meta}
             </p>
           </div>
+          {builtIn ? (
+            <span className="shrink-0 rounded-full border border-[var(--interactive-border)] px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {t('settings.extensions.source.bundled')}
+            </span>
+          ) : null}
           {update ? (
             <span className="max-w-40 shrink-0 truncate rounded-full bg-[var(--status-info)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--status-info)]">
               {t('settings.extensions.update.badge', { version: update.version })}
@@ -296,6 +311,7 @@ const ExtensionCard: React.FC<ExtensionCardProps> = ({
             <p className="typography-meta truncate font-mono text-muted-foreground" title={location}>
               {location}
             </p>
+            {builtIn ? <p className="typography-meta text-muted-foreground">{t('settings.extensions.builtIn.info')}</p> : null}
             {permissions ? (
               <p className="typography-meta truncate text-muted-foreground">
                 {t('settings.extensions.service.permissions', { list: permissions })}
@@ -374,6 +390,18 @@ const ExtensionCard: React.FC<ExtensionCardProps> = ({
                   {t('settings.extensions.remove')}
                 </Button>
               ) : null}
+              {sourceUrl ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto"
+                  onClick={() => void openExternalUrl(sourceUrl)}
+                >
+                  <Icon name="external-link" className="size-4" />
+                  {t('settings.extensions.actions.openSource')}
+                </Button>
+              ) : null}
             </div>
           </div>
         </CollapsibleContent>
@@ -386,6 +414,15 @@ export const ExtensionsPage: React.FC = () => {
   const { t } = useI18n();
   const guests = useGuestsStore((state) => state.guests);
   const status = useGuestsStore((state) => state.status);
+  const catalogFailure = useGuestsStore((state) => state.failure);
+  const runtimeKey = useGuestsStore((state) => state.runtimeKey);
+  const [identityData, setIdentityData] = React.useState<{
+    runtimeKey: string;
+    profiles: GitIdentityProfile[];
+    global: Awaited<ReturnType<typeof getGlobalGitIdentity>>;
+  } | null>(null);
+  const [identityLoadFailed, setIdentityLoadFailed] = React.useState(false);
+  const [selectedGitIdentityId, setSelectedGitIdentityId] = React.useState('global');
   const unsupported = status === 'unsupported';
   const [installValue, setInstallValue] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -403,6 +440,33 @@ export const ExtensionsPage: React.FC = () => {
   React.useEffect(() => {
     void loadGuestCatalog();
   }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setIdentityData(null);
+    setIdentityLoadFailed(false);
+    setSelectedGitIdentityId('global');
+    setReinstall(null);
+    setApproval(null);
+    checkedOnOpen.current = false;
+    if (unsupported) return;
+    void Promise.all([getGitIdentities(), getGlobalGitIdentity()]).then(([profiles, global]) => {
+      if (!cancelled) setIdentityData({ runtimeKey, profiles, global });
+    }).catch(() => {
+      if (!cancelled) setIdentityLoadFailed(true);
+    });
+    return () => { cancelled = true; };
+  }, [runtimeKey, unsupported]);
+
+  const identities = React.useMemo<GitIdentityProfile[]>(() => {
+    const data = identityData?.runtimeKey === runtimeKey ? identityData : null;
+    return [{
+      id: 'global', name: t('settings.gitIdentities.editor.title.globalIdentity'),
+      userName: data?.global?.userName ?? '', userEmail: data?.global?.userEmail ?? '',
+      icon: 'fingerprint', color: 'info',
+    }, ...(data?.profiles.filter((profile) => profile.id !== 'global') ?? [])];
+  }, [identityData, runtimeKey, t]);
+  const selectedGitIdentity = identities.find((profile) => profile.id === selectedGitIdentityId) ?? identities[0];
 
   // One quiet check per page open, once the catalog is in. The server
   // answers from its hour cache, so this is cheap on a revisit.
@@ -482,9 +546,12 @@ export const ExtensionsPage: React.FC = () => {
           result.required
             ? t('settings.extensions.toast.hostTooOld', { version: result.required })
             : t('settings.extensions.toast.failed'),
+          { description: result.diagnostic ? describeGuestRequestFailure(result.diagnostic, t) : undefined },
         );
       } else {
-        toast.error(t(errorToastKey(result.code)));
+        toast.error(t(errorToastKey(result.code)), {
+          description: result.diagnostic ? describeGuestRequestFailure(result.diagnostic, t) : undefined,
+        });
       }
       return false;
     }
@@ -503,14 +570,16 @@ export const ExtensionsPage: React.FC = () => {
   };
 
   const runInstall = async (source: InstallSource, options: { replace?: boolean } = {}) => {
+    const requestRuntimeKey = getRuntimeKey();
     if (source.kind === 'input') {
       setInstallValue(source.input);
     }
     setBusy(true);
     const result = source.kind === 'file'
       ? await uploadGuestZip(source.file, options)
-      : await installGuest(source.input, options);
+      : await installGuest(source.input, { ...options, gitIdentityId: source.gitIdentityId });
     setBusy(false);
+    if (getRuntimeKey() !== requestRuntimeKey) return;
     await finishInstall(result, source, { allowConflictDialog: !options.replace });
   };
 
@@ -520,7 +589,7 @@ export const ExtensionsPage: React.FC = () => {
       toast.error(t('settings.extensions.toast.invalidPath'));
       return;
     }
-    await runInstall({ kind: 'input', input: trimmed });
+    await runInstall({ kind: 'input', input: trimmed, gitIdentityId: selectedGitIdentity.id });
   };
 
   const browseFolder = async () => {
@@ -665,48 +734,8 @@ export const ExtensionsPage: React.FC = () => {
     <SettingsPageLayout
       title={t('settings.page.extensions.title')}
       description={t('settings.page.extensions.description')}
+      outerClassName="extensions-settings-page"
     >
-      <SettingsSection
-        title={t('settings.extensions.section.installed')}
-        divider={false}
-        contentClassName="space-y-3"
-        headerAction={unsupported ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            data-settings-item="extensions.updates.check"
-            disabled={busy || checking || status !== 'ready'}
-            aria-label={t('settings.extensions.updates.check.aria')}
-            onClick={() => void checkForUpdates()}
-          >
-            <Icon name="refresh" className={cn('h-4 w-4', checking && 'animate-spin')} />
-            {t('settings.extensions.updates.check')}
-          </Button>
-        )}
-      >
-        {status === 'error' ? (
-          <p className="typography-meta text-destructive">{t('settings.extensions.toast.loadFailed')}</p>
-        ) : null}
-        {unsupported ? (
-          <p className="typography-meta text-muted-foreground">{t('settings.extensions.unsupported')}</p>
-        ) : null}
-        {status === 'ready' && guests.length === 0 ? (
-          <p className="typography-meta text-muted-foreground">{t('settings.extensions.empty')}</p>
-        ) : null}
-        {guests.map((guest) => (
-          <ExtensionCard
-            key={guest.id}
-            guest={guest}
-            busy={busy}
-            onReview={setApproval}
-            onRemove={remove}
-            onSetEnabled={setEnabled}
-            onUpdate={update}
-          />
-        ))}
-      </SettingsSection>
-
       {unsupported ? null : (
         <SettingsSection
           title={t('settings.extensions.add.action')}
@@ -789,6 +818,15 @@ export const ExtensionsPage: React.FC = () => {
                   </Button>
                 </div>
               </div>
+              <div className="shrink-0" data-settings-item="extensions.gitIdentity">
+                <IdentityDropdown
+                  activeProfile={selectedGitIdentity}
+                  identities={identities}
+                  onSelect={(profile) => setSelectedGitIdentityId(profile.id)}
+                  isApplying={busy || (!identityData && !identityLoadFailed)}
+                  iconOnly
+                />
+              </div>
               <Button
                 type="button"
                 size="sm"
@@ -801,8 +839,52 @@ export const ExtensionsPage: React.FC = () => {
               </Button>
             </div>
           </SettingsStackedField>
+          {identityLoadFailed ? <p className="typography-meta text-destructive">{t('settings.extensions.identity.loadFailed')}</p> : null}
         </SettingsSection>
       )}
+
+      <SettingsSection
+        title={t('settings.extensions.section.installed')}
+        contentClassName="space-y-3"
+        headerAction={unsupported ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-settings-item="extensions.updates.check"
+            disabled={busy || checking || status !== 'ready'}
+            aria-label={t('settings.extensions.updates.check.aria')}
+            onClick={() => void checkForUpdates()}
+          >
+            <Icon name="refresh" className={cn('h-4 w-4', checking && 'animate-spin')} />
+            {t('settings.extensions.updates.check')}
+          </Button>
+        )}
+      >
+        {status === 'error' || catalogFailure ? (
+          <p className="typography-meta whitespace-pre-line text-destructive">
+            {t('settings.extensions.toast.loadFailed')}
+            {catalogFailure ? `\n${describeGuestRequestFailure(catalogFailure, t)}` : ''}
+          </p>
+        ) : null}
+        {unsupported ? (
+          <p className="typography-meta text-muted-foreground">{t('settings.extensions.unsupported')}</p>
+        ) : null}
+        {status === 'ready' && guests.length === 0 ? (
+          <p className="typography-meta text-muted-foreground">{t('settings.extensions.empty')}</p>
+        ) : null}
+        {guests.map((guest) => (
+          <ExtensionCard
+            key={guest.id}
+            guest={guest}
+            busy={busy}
+            onReview={setApproval}
+            onRemove={remove}
+            onSetEnabled={setEnabled}
+            onUpdate={update}
+          />
+        ))}
+      </SettingsSection>
 
       <GuestApprovalDialog
         guest={approval}

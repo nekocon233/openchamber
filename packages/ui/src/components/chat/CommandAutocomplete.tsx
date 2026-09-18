@@ -375,24 +375,24 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
 
     switch (command.name) {
       case 'init':
-        return <Icon name="file" className="h-3.5 w-3.5 text-green-500" />;
+        return <Icon name="file" className="h-3.5 w-3.5 text-muted-foreground" />;
       case 'undo':
-        return <Icon name="arrow-go-back" className="h-3.5 w-3.5 text-orange-500" />;
+        return <Icon name="arrow-go-back" className="h-3.5 w-3.5 text-muted-foreground" />;
       case 'redo':
-        return <Icon name="arrow-go-forward" className="h-3.5 w-3.5 text-orange-500" />;
+        return <Icon name="arrow-go-forward" className="h-3.5 w-3.5 text-muted-foreground" />;
       case 'timeline':
         return <Icon name="time" className="h-3.5 w-3.5" />;
       case 'compact':
-        return <Icon name="scissors" className="h-3.5 w-3.5 text-purple-500" />;
+        return <Icon name="scissors" className="h-3.5 w-3.5 text-muted-foreground" />;
       case 'review':
-        return <Icon name="search-eye" className="h-3.5 w-3.5 text-blue-500" />;
+        return <Icon name="search-eye" className="h-3.5 w-3.5 text-muted-foreground" />;
       case 'test':
       case 'build':
       case 'run':
         return <Icon name="terminal-box" className="h-3.5 w-3.5 text-cyan-500" />;
       default:
         if (command.isBuiltIn) {
-          return <Icon name="flashlight" className="h-3.5 w-3.5 text-yellow-500" />;
+          return <Icon name="flashlight" className="h-3.5 w-3.5 text-muted-foreground" />;
         }
         if (command.source === 'extension') {
           return <Icon name="window" className="h-3.5 w-3.5 text-muted-foreground" />;

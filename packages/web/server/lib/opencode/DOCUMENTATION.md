@@ -32,7 +32,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/opencode/tunnel-wiring-runtime.js`: tunnel service/routes composition runtime and active-port wiring for main server startup.
 - `packages/web/server/lib/opencode/startup-pipeline-runtime.js`: server startup tail orchestration runtime for terminal/proxy/static/start-listen flow.
 - `packages/web/server/lib/opencode/startup-performance.js`: opt-in startup phase diagnostics with fixed labels and numeric metadata allowlists.
-- `packages/web/server/lib/agent-tool/runtime.js`: managed OpenCode custom-tool materialization, environment injection, loopback authentication, and fixed CLI action dispatch.
+- `packages/web/server/lib/agent-tool/runtime.js`: managed OpenCode custom-tool materialization, environment injection, same-machine authentication (loopback, or the bound address for a concrete bind), and fixed CLI action dispatch.
 - `packages/web/server/lib/system-prompt/runtime.js`: opt-in managed OpenCode system-prompt optimizer materialization and plugin injection.
 - `packages/web/server/lib/opencode/managed-plugin-config.js`: the one `OPENCODE_CONFIG_CONTENT` merge every managed plugin (agent tools, system prompt optimizer) appends itself through.
 - `packages/web/server/lib/opencode/server-utils-runtime.js`: shared server runtime utilities for OpenCode proxy wiring, OpenCode port/readiness helpers, and snapshot fetchers.
@@ -44,6 +44,28 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/opencode/settings-helpers.js`: Settings payload sanitization/format helpers runtime for response shaping and persisted merge prep.
 - `packages/web/server/lib/opencode/settings-normalization-runtime.js`: path/settings/tunnel normalization and sanitization helpers runtime used by settings/routes/config wiring.
 - `packages/web/server/lib/opencode/theme-runtime.js`: custom theme JSON validation and theme directory loading runtime for settings utility routes.
+
+  `POST /api/config/themes` saves a converted VS Code palette. The runtime validates
+  literal colors and required authored roles, assigns a content-derived filename,
+  and publishes through a same-directory hard link so partial files and overwrites
+  are impossible. Identical retries reuse the existing file; a manually edited
+  collision returns 409. Temporary files are ignored by the loader and removed
+  after publication or failure. Non-missing-directory read failures propagate to
+  the route instead of returning an authoritative empty library.
+
+  The common request middleware parses theme POST bodies before these routes;
+  integration tests must use that middleware rather than an unrestricted test parser.
+  `DELETE /api/config/themes/:id` finds a valid regular JSON file by its metadata ID
+  inside the custom themes directory. IDs are never used as filenames. Hand-added
+  themes are supported; symlinks and bundled themes are outside deletion ownership.
+  Duplicate matching IDs fail explicitly. Missing themes are an idempotent success;
+  filesystem failures remain errors.
+  `theme-catalog.js` owns POST catalog search/package routes under
+  `/api/config/themes/catalog/`. It fetches only Open VSX and its Eclipse CDN over
+  HTTPS, validates redirects and checksums, and verifies packaged identity.
+  `theme-archive.js` reads selected JSON entries in memory with bounded decompression.
+  JSON includes and token references stay inside the package. Each failed variant
+  is reported separately so valid siblings remain available. No extension code runs.
 - `packages/web/server/lib/opencode/proxy.js`: OpenCode API/SSE forwarding and readiness-gate route registration.
 - `packages/web/server/lib/opencode/session-runtime.js`: session status/attention/activity runtime for OpenCode SSE events.
 - `packages/web/server/lib/opencode/watcher.js`: global SSE watcher runtime for push/session event fanout.

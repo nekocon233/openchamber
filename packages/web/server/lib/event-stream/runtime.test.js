@@ -318,6 +318,7 @@ describe('message stream websocket runtime', () => {
       isConnected: () => true,
       resolveReplay: () => ({ events: [], gap: true }),
       replayAfter: () => [],
+      flushPending() {},
     };
     const runtime = createMessageStreamWsRuntime({
       server,

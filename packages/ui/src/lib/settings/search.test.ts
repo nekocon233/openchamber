@@ -15,6 +15,7 @@ const runtimeCtx = {
   isWindows: false,
   isLinux: false,
   isWindowsArm64: false,
+  routingAvailable: false,
 };
 
 describe('settings search', () => {

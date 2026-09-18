@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './ja.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
@@ -31,6 +32,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n.ja,
   ...linearPanelI18n.ja,
+  ...routingI18n.ja,
   ...pluginPanelI18n.ja,
   'terminalView.actions.attachSelection': '選択した出力を添付',
   'terminalView.actions.copySelection': '選択した出力をコピー',
@@ -427,6 +429,7 @@ export const dict: Record<I18nKey, string> = {
   'multirun.launcher.models.info': '2つ以上のモデルを選択。同じモデルを複数回追加できます。',
   'multirun.launcher.toast.fileTooLarge': 'ファイル「{fileName}」が大きすぎます（最大10MB）',
   'multirun.launcher.toast.attachFailed': '「{fileName}」の添付に失敗しました',
+  'multirun.launcher.toast.partialFailure': '一部のセッションを作成できませんでした。失敗数: {failed}。',
   'multirun.launcher.toast.attachedSingle': '{count}ファイルを添付しました',
   'multirun.launcher.toast.attachedPlural': '{count}ファイルを添付しました',
   'multirun.modelMultiSelect.actions.addModel': 'モデルを追加',
@@ -632,6 +635,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.status.permissionRequired': '権限が必要です',
   'sessions.sidebar.session.status.questionPendingSingle': '保留中の質問が1件あります',
   'sessions.sidebar.session.status.questionPendingMany': '保留中の質問が{count}件あります',
+  'sessions.sidebar.session.status.questionPending': '保留中の質問',
   'sessions.sidebar.session.status.activeFor': 'アクティブ時間 {duration}',
   'sessions.sidebar.session.status.lastTurnDuration': '前回のターンの所要時間 {duration}',
   'sessions.sidebar.session.subsessions.collapse': 'サブセッションを折りたたむ',
@@ -1305,6 +1309,7 @@ export const dict: Record<I18nKey, string> = {
   'contextRail.surface.chat.description': '並べて開いたセッション',
   'contextRail.surface.notes': 'プロジェクトナレッジ',
   'contextRail.editorTree.toggle': 'ファイルツリーの表示切替',
+  'contextRail.editor.toggle': 'ファイルエディターの表示切替',
   'contextPanel.browser.open': 'ブラウザパネルを開く',
   'contextPanel.browser.addressAria': 'ブラウザアドレス',
   'contextPanel.browser.history.label': '最近のアドレス',
@@ -1563,6 +1568,7 @@ export const dict: Record<I18nKey, string> = {
   'contextUsage.tooltip.contextLimit': 'コンテキスト制限: {tokens}',
   'contextUsage.tooltip.outputLimit': '出力制限: {tokens}',
   'contextUsage.tooltip.cost': 'コスト: {cost}',
+  'contextUsage.compacted.description': 'コンテキストを圧縮しました。使用量は次の応答後に更新されます。',
   'contextSidebar.session.untitled': '無題のセッション',
   'contextSidebar.empty.openSession': 'セッションを開いてコンテキストを確認します。',
   'contextSidebar.section.context': 'コンテキスト',
@@ -1622,6 +1628,21 @@ export const dict: Record<I18nKey, string> = {
   'diffView.state.cleanWorkingTree': 'ワーキングツリーはクリーンで、表示する変更はありません',
   'diffView.state.noLastTurnChanges': '表示する最後のターンの変更はありません',
   'diffView.state.failedToLoadDiff': '差分の読み込みに失敗しました',
+  'diffView.unavailable.missingTitle': 'ファイルはもう存在しません',
+  'diffView.unavailable.missingDescription': '変更一覧の読み込み後に削除されました。一覧を更新しています。',
+  'diffView.unavailable.nestedRepositoryTitle': '別の Git リポジトリ',
+  'diffView.unavailable.nestedRepositoryDescription': 'このフォルダーには独自の Git 履歴があります。変更を見るにはプロジェクトとして開いてください。',
+  'diffView.unavailable.untrackedDirectoryTitle': '新規ファイルのフォルダー',
+  'diffView.unavailable.untrackedDirectoryDescription': 'このフォルダーには新規ファイルが多すぎるため、個別に一覧表示できません。ステージするか、リポジトリに不要であれば .gitignore に追加してください。',
+  'diffView.submodule.title': 'サブモジュール',
+  'diffView.submodule.commitChanged': 'コミット {from} → {to}',
+  'diffView.submodule.commitUnchanged': 'コミット {commit} のまま',
+  'diffView.submodule.added': 'コミット {commit} の新しいサブモジュール',
+  'diffView.submodule.removed': 'サブモジュールは削除されました（以前はコミット {commit}）',
+  'diffView.submodule.notCheckedOut': 'チェックアウトされていません。記録されたコミット: {commit}',
+  'diffView.submodule.trackedChanges': 'コミットされていない変更があります',
+  'diffView.submodule.untrackedFiles': '追跡されていないファイルがあります',
+  'diffView.submodule.conflict': '記録されたコミットでマージの競合があります',
   'diffView.state.loadingDiff': '差分を読み込み中...',
   'diffView.state.loadingChanges': '変更を読み込み中...',
   'diffView.state.largeDiff': '大きな差分（{count}行変更）',
@@ -2447,6 +2468,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.someFilesSkipped': '一部のファイルがスキップされました:\n{summary}',
   'chat.chatInput.toast.vscodePickFailed': 'VS Codeでのファイル選択に失敗しました',
   'chat.chatInput.toast.openSessionFirst': '先にセッションを開いてください',
+  'chat.chatInput.toast.dictationKeptForOriginalSession': '音声入力は、開始したセッションの下書きとして保存されました',
   'chat.chatInput.toast.togglePermissionAutoAcceptFailed': '権限の自動承認の切り替えに失敗しました',
   'chat.chatInput.reviewComments': 'レビューコメント:',
   'chat.chatInput.reviewCommentsRemove': 'レビューコメントを削除',

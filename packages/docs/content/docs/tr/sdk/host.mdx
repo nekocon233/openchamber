@@ -37,6 +37,8 @@ Erişim token'ları burada da, `request` sonucunda da asla görünmez.
 
 `onDirectory`, `onSession`, `onSessionLifecycle`, `onConnection`, `onSettings` ve `onItem` geç abone olduğunuzda en son değeri yeniden gönderir, sonra değiştikçe tetiklenmeye devam eder.
 
+`theme.tokens`, `primaryText`, `successText`, `warningText`, `errorText` ve `infoText` alanlarını içerir. Bu zorunlu alanlar, host'un nötr arka planlar ve UI kit'in hafif renkli kontrolleri için hesapladığı metin renklerini taşır; düz renk dolguları için değildir. `applyHostReady` her durum güncellemesinde bunları uygular. CSS değişkenleri için [UI kit](/sdk/ui/) sayfasına bakın.
+
 ## Metodlar
 
 | Çağrı | Ne yapar |

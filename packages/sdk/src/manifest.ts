@@ -4,14 +4,19 @@ export const PANEL_ID = /^[a-z][a-z0-9-]*$/;
 
 /**
  * The extension's identity on the rail, the Extensions card, and the approval
- * dialog. `entry` is the panel page; without it the extension has no page and
- * may only declare `tools` (see `hasGuestPage`).
+ * dialog. `entry` is the optional visible panel page. Code can instead run
+ * from `background.entry` without adding a rail icon.
  */
 export type PanelContribution = {
   id: string;
   name: string;
   icon: string;
   entry?: string;
+};
+
+/** Sandboxed HTML loaded on demand for background actions and slash commands. */
+export type BackgroundContribution = {
+  entry: string;
 };
 
 export type AttachMode = 'panel' | 'dialog';
@@ -48,7 +53,7 @@ export const GUEST_COMMAND_DESCRIPTION_MAX = 80;
 export const GUEST_COMMAND_NAME = /^[a-z][a-z0-9-]{0,23}$/;
 
 /**
- * A menu entry on a message or a session. Clicking it opens the guest with
+ * A menu entry on a message or a session. By default it opens the guest with
  * the message or session as `ready.item`. `roles` narrows a message action
  * to user or assistant messages (default both); `payload: ["messages"]` on
  * a session action asks for the conversation and needs the `conversation`
@@ -60,6 +65,8 @@ export type GuestActionContribution = {
   /** Remixicon name or package `.svg` path, same as `panel.icon`. Falls back to the panel icon. */
   icon?: string;
   where: GuestActionWhere;
+  /** `background` calls `host.onAction` in a temporary hidden frame. Default: `open`. */
+  mode?: 'open' | 'background';
   roles?: GuestActionRole[];
   payload?: GuestActionPayload[];
 };
@@ -325,6 +332,7 @@ export const isGuestFilesystemPattern = (value: string): boolean => {
 
 export type OpenChamberContributes = {
   panel: PanelContribution;
+  background?: BackgroundContribution;
   attach?: AttachContribution;
   page?: PageContribution;
   capabilities?: DeclaredGuestCapability[];
@@ -363,10 +371,8 @@ export const requestedGuestCapabilities = (
 };
 
 /**
- * Whether the package ships a panel page. A page-less package (no
- * `panel.entry`) never mounts an iframe: no rail surface, attach row, action,
- * command, service, integration, or capability; parse refuses those without
- * an entry. `tools` is the only contribution it may carry.
+ * Whether the package ships a visible panel. Background-only extensions can
+ * execute code but have no rail surface, attach picker, or full-screen page.
  */
 export const hasGuestPage = (
   contributes: Pick<OpenChamberContributes, 'panel'>,
@@ -433,6 +439,7 @@ export type ParseManifestErrorCode =
   | 'invalid-panel-name'
   | 'invalid-panel-icon'
   | 'invalid-panel-entry'
+  | 'invalid-background'
   | 'invalid-attach'
   | 'invalid-page'
   | 'invalid-capabilities'

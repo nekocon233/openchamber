@@ -1,6 +1,7 @@
 import { settingsDict } from './tr.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict = {
@@ -30,6 +31,7 @@ export const dict = {
   ...settingsDict,
   ...linearIssuePickerI18n.tr,
   ...linearPanelI18n.tr,
+  ...routingI18n.tr,
   ...pluginPanelI18n.tr,
   'terminalView.actions.attachSelection': 'Seçili çıktıyı ekle',
   'terminalView.actions.copySelection': 'Seçili çıktıyı kopyala',
@@ -411,6 +413,7 @@ export const dict = {
   'multirun.launcher.models.info': '2 veya daha fazla model seçin. Aynı model birden çok kez eklenebilir.',
   'multirun.launcher.toast.fileTooLarge': '"{fileName}" dosyası çok büyük (en fazla 10MB)',
   'multirun.launcher.toast.attachFailed': '"{fileName}" eklenemedi',
+  'multirun.launcher.toast.partialFailure': 'Bazı oturumlar oluşturulamadı. Başarısız olan: {failed}.',
   'multirun.launcher.toast.attachedSingle': '{count} dosya eklendi',
   'multirun.launcher.toast.attachedPlural': '{count} dosya eklendi',
   'multirun.modelMultiSelect.actions.addModel': 'Model ekle',
@@ -608,6 +611,7 @@ export const dict = {
   'sessions.sidebar.session.status.permissionRequired': 'İzin gerekiyor',
   'sessions.sidebar.session.status.questionPendingSingle': '1 bekleyen soru',
   'sessions.sidebar.session.status.questionPendingMany': '{count} bekleyen soru',
+  'sessions.sidebar.session.status.questionPending': 'Bekleyen soru',
   'sessions.sidebar.session.status.activeFor': '{duration} süredir aktif',
   'sessions.sidebar.session.status.lastTurnDuration': 'Son tur {duration} sürdü',
   'sessions.sidebar.session.subsessions.collapse': 'Alt session\'ları daralt',
@@ -1279,6 +1283,7 @@ export const dict = {
   'contextRail.surface.chat.description': 'Yan yana açılan session',
   'contextRail.surface.notes': 'Proje bilgisi',
   'contextRail.editorTree.toggle': 'Dosya ağacını aç/kapat',
+  'contextRail.editor.toggle': 'Dosya düzenleyiciyi aç/kapat',
   'contextPanel.browser.open': 'Tarayıcı panelini aç',
   'contextPanel.browser.addressAria': 'Tarayıcı adresi',
   'contextPanel.browser.history.label': 'Son adresler',
@@ -1537,6 +1542,7 @@ export const dict = {
   'contextUsage.tooltip.contextLimit': 'Bağlam limiti: {tokens}',
   'contextUsage.tooltip.outputLimit': 'Çıktı limiti: {tokens}',
   'contextUsage.tooltip.cost': 'Maliyet: {cost}',
+  'contextUsage.compacted.description': 'Bağlam sıkıştırıldı. Kullanım bir sonraki yanıttan sonra güncellenecek.',
   'contextSidebar.session.untitled': 'Adsız Session',
   'contextSidebar.empty.openSession': 'Bağlamı incelemek için bir session açın.',
   'contextSidebar.section.context': 'Bağlam',
@@ -1596,6 +1602,21 @@ export const dict = {
   'diffView.state.cleanWorkingTree': 'Working tree temiz, görüntülenecek değişiklik yok',
   'diffView.state.noLastTurnChanges': 'Görüntülenecek son tur değişikliği yok',
   'diffView.state.failedToLoadDiff': 'Diff yüklenemedi',
+  'diffView.unavailable.missingTitle': 'Dosya artık yok',
+  'diffView.unavailable.missingDescription': 'Değişiklik listesi yüklendikten sonra kaldırıldı. Liste yenileniyor.',
+  'diffView.unavailable.nestedRepositoryTitle': 'Ayrı Git deposu',
+  'diffView.unavailable.nestedRepositoryDescription': 'Bu klasörün kendi Git geçmişi var. Değişikliklerini görmek için proje olarak açın.',
+  'diffView.unavailable.untrackedDirectoryTitle': 'Yeni dosyalar klasörü',
+  'diffView.unavailable.untrackedDirectoryDescription': 'Bu klasörde tek tek listelenemeyecek kadar çok yeni dosya var. Klasörü hazırlama alanına ekleyin ya da depoya ait değilse .gitignore dosyasına yazın.',
+  'diffView.submodule.title': 'Alt modül',
+  'diffView.submodule.commitChanged': 'Commit {from} → {to}',
+  'diffView.submodule.commitUnchanged': 'Hâlâ {commit} commit\'inde',
+  'diffView.submodule.added': '{commit} commit\'inde yeni alt modül',
+  'diffView.submodule.removed': 'Alt modül kaldırıldı, {commit} commit\'indeydi',
+  'diffView.submodule.notCheckedOut': 'Checkout yapılmadı. Kayıtlı commit: {commit}',
+  'diffView.submodule.trackedChanges': 'Commit edilmemiş değişiklikler var',
+  'diffView.submodule.untrackedFiles': 'İzlenmeyen dosyalar var',
+  'diffView.submodule.conflict': 'Kayıtlı commit üzerinde birleştirme çakışması',
   'diffView.state.loadingDiff': 'Diff yükleniyor...',
   'diffView.state.loadingChanges': 'Değişiklikler yükleniyor...',
   'diffView.state.largeDiff': 'Büyük diff ({count} değiştirilen satır)',
@@ -2366,6 +2387,7 @@ export const dict = {
   'chat.chatInput.toast.someFilesSkipped': 'Bazı dosyalar atlandı:\\n{summary}',
   'chat.chatInput.toast.vscodePickFailed': 'VS Code\'da dosya seçilemedi',
   'chat.chatInput.toast.openSessionFirst': 'Önce bir session açın',
+  'chat.chatInput.toast.dictationKeptForOriginalSession': 'Dikte, başlattığınız oturumda taslak olarak kaydedildi',
   'chat.chatInput.toast.togglePermissionAutoAcceptFailed': 'İzin otomatik kabulü değiştirilemedi',
   'chat.chatInput.reviewComments': 'İnceleme yorumları:',
   'chat.chatInput.reviewCommentsRemove': 'İnceleme yorumlarını kaldır',

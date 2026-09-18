@@ -10,6 +10,7 @@ import { SharedTrustConfirmDialog } from '@/components/projects/SharedTrustConfi
 import { usePushVisibilityBeacon } from '@/hooks/usePushVisibilityBeacon';
 import { useWindowTitle } from '@/hooks/useWindowTitle';
 import { useWebNotificationStream } from '@/hooks/useWebNotificationStream';
+import { useRoutingSync } from '@/hooks/useRoutingSync';
 import { useRootScrollLock } from '@/hooks/useRootScrollLock';
 import { opencodeClient } from '@/lib/opencode/client';
 import type { RuntimeAPIs } from '@/lib/api/types';
@@ -340,6 +341,7 @@ export function ElectronMiniChatApp({ apis }: ElectronMiniChatAppProps) {
   usePushVisibilityBeacon({ enabled: true });
   useWebNotificationStream({ deliverNotifications: false });
   useWindowTitle();
+  useRoutingSync();
   useRootScrollLock();
 
   return (

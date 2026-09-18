@@ -66,6 +66,11 @@ const themeTokensSchema = z.object({
   active: z.string().min(1),
   selectionForeground: z.string().min(1),
   primaryForeground: z.string().min(1),
+  primaryText: z.string().min(1),
+  successText: z.string().min(1),
+  warningText: z.string().min(1),
+  errorText: z.string().min(1),
+  infoText: z.string().min(1),
   success: z.string().min(1),
   warning: z.string().min(1),
   error: z.string().min(1),
@@ -207,7 +212,7 @@ const readyPayloadSchema = z.object({
   locale: z.string().min(1),
   directory: z.string().nullable(),
   session: sessionSnapshotSchema,
-  surface: z.enum(['panel', 'dialog', 'page']),
+  surface: z.enum(['panel', 'dialog', 'page', 'background']),
   connection: guestConnectionSchema,
   settings: guestSettingsSchema,
   item: guestItemSchema,
@@ -316,11 +321,26 @@ export const hostMessageSchema = z.union([
     }),
   }),
   hostResultSchema,
+  z.object({
+    ...envelope,
+    type: z.literal('action'),
+    id: z.string().min(1),
+    payload: z.union([messageItemSchema, sessionItemSchema]),
+  }),
 ]);
 
 const filePathSchema = z.string().min(1).max(GUEST_FILE_PATH_MAX).refine(isGuestFilePath);
 
 export const guestMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    ...envelope,
+    type: z.literal('action-result'),
+    id: z.string().min(1),
+    payload: z.discriminatedUnion('ok', [
+      z.object({ ok: z.literal(true) }),
+      z.object({ ok: z.literal(false), error: z.string().trim().min(1).max(GUEST_RESOLVE_ERROR_MAX) }),
+    ]),
+  }),
   z.object({ ...envelope, type: z.literal('workspace-read'), id: z.string().min(1), payload: guestWorkspaceQuerySchema }),
   z.object({ ...envelope, type: z.literal('workspace-subscribe'), id: z.string().min(1), payload: z.object({ subscriptionId: z.string().min(1).max(128), query: guestWorkspaceQuerySchema }) }),
   z.object({ ...envelope, type: z.literal('workspace-unsubscribe'), id: z.string().min(1), payload: z.object({ subscriptionId: z.string().min(1).max(128) }) }),
@@ -337,6 +357,9 @@ export const guestMessageSchema = z.discriminatedUnion('type', [
     payload: z.object({
       kind: z.enum(['info', 'success', 'error']),
       message: z.string().trim().min(1).max(GUEST_TOAST_MAX),
+      copy: z.union([z.boolean(), z.object({ text: z.string().min(1).max(GUEST_CLIPBOARD_TEXT_MAX) })]).optional(),
+      dismiss: z.boolean().optional(),
+      persistent: z.boolean().optional(),
     }),
   }),
   z.object({

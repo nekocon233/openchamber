@@ -4,6 +4,9 @@ import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { create } from 'zustand';
 import type { Model } from '@opencode-ai/sdk/v2';
+import { ThemeSystemContext, type ThemeContextValue } from '@/contexts/theme-system-context';
+import { getThemeById } from '@/lib/theme/themes';
+import { useRoutingStore } from '@/stores/useRoutingStore';
 
 /**
  * Restoring a session must not invent an effort choice.
@@ -214,7 +217,10 @@ mock.module('@/lib/messages/userModelChoice', () => ({
   ),
 }));
 
-mock.module('@/stores/useConfigStore', () => ({ useConfigStore }));
+mock.module('@/stores/useConfigStore', () => ({
+  useConfigStore,
+  selectCatalogLoadedForDirectory: (state: ConfigState, resource: 'models' | 'agents') => resource === 'models' ? state.providersLoaded : state.agentsLoaded,
+}));
 mock.module('@/sync/selection-store', () => ({ useSelectionStore }));
 mock.module('@/sync/session-ui-store', () => ({ useSessionUIStore }));
 mock.module('@/stores/useUIStore', () => ({ useUIStore }));
@@ -262,7 +268,6 @@ mock.module('@/hooks/useRuntimeAPIs', () => ({ useIsVSCodeRuntime: () => false }
 mock.module('@/hooks/useModelLists', () => ({ useModelLists: () => ({ favoriteModelsList: [], recentModelsList: [] }) }));
 mock.module('@/hooks/useIsTextTruncated', () => ({ useIsTextTruncated: () => false }));
 mock.module('@/lib/device', () => ({ useDeviceInfo: () => ({ isTouch: false }) }));
-mock.module('@/lib/desktop', () => ({ isDesktopShell: () => false }));
 mock.module('@/lib/startupTrace', () => ({ markStartupTrace: () => undefined }));
 
 const { ModelControls } = await import('./ModelControls');
@@ -336,10 +341,21 @@ const installDom = () => {
 const renderModelControls = async (props: React.ComponentProps<typeof ModelControls> = {}) => {
   const dom = installDom();
   const root = createRoot(dom.container);
+  const theme = getThemeById('openchamber-dark');
+  if (!theme) throw new Error('Expected built-in theme');
+  const themeContext: ThemeContextValue = {
+    currentTheme: theme, availableThemes: [theme], customThemeIds: [], customThemesLoading: false,
+    isSystemPreference: false, themeMode: 'dark', lightThemeId: 'openchamber-light', darkThemeId: 'openchamber-dark',
+    setTheme: () => undefined, setSystemPreference: () => undefined, setThemeMode: () => undefined,
+    setLightThemePreference: () => undefined, setDarkThemePreference: () => undefined,
+    reloadCustomThemes: async () => undefined, importTheme: async () => theme, deleteImportedTheme: async () => undefined,
+  };
   await act(async () => root.render(
-    <I18nProvider>
-      <ModelControls {...props} />
-    </I18nProvider>,
+    <ThemeSystemContext.Provider value={themeContext}>
+      <I18nProvider>
+        <ModelControls {...props} />
+      </I18nProvider>
+    </ThemeSystemContext.Provider>,
   ));
   return {
     dom,
@@ -352,6 +368,7 @@ const renderModelControls = async (props: React.ComponentProps<typeof ModelContr
 
 describe('ModelControls effort restore', () => {
   beforeEach(() => {
+    useRoutingStore.setState({ available: false, autoReady: false });
     variantWrites.length = 0;
     overrideWrites.length = 0;
     latestUserChoice = null;
@@ -411,7 +428,51 @@ describe('ModelControls effort restore', () => {
     }
   });
 
+  test('a project draft inherits its own effort instead of the global default', async () => {
+    useSessionUIStore.setState({ currentSessionId: null });
+    useConfigStore.setState({
+      currentVariant: 'high', settingsDefaultVariant: 'low',
+      currentVariantSelection: { override: undefined, inherited: 'high' },
+    });
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useConfigStore.getState().currentVariant).toBe('high');
+      expect(useConfigStore.getState().currentVariantSelection.override).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  for (const savedVariant of ['high', null]) {
+    test(`a saved effort choice wins over older message history: ${savedVariant}`, async () => {
+      latestUserChoice = { id: 'old', agent: AGENT, providerID: PROVIDER_ID, modelID: MODEL_ID, variant: 'low' };
+      useSelectionStore.setState({ savedVariant });
+      const { cleanup } = await renderModelControls();
+      try {
+        expect(useSelectionStore.getState().savedVariant).toBe(savedVariant);
+        expect(useConfigStore.getState().currentVariant).toBe(savedVariant ?? undefined);
+      } finally {
+        await cleanup();
+      }
+    });
+  }
+
   for (const mobile of [false, true]) {
+    if (mobile) test('renders Auto routing in the mobile sheet without provider capabilities', async () => {
+      useRoutingStore.setState({ available: true, autoReady: true });
+      useUIStore.setState({ isMobile: mobile, isModelSelectorOpen: !mobile });
+      const { cleanup } = await renderModelControls({
+        mobilePanel: mobile ? 'model' : undefined,
+        onMobilePanelChange: () => {},
+      });
+      try {
+        expect(document.body.textContent).toContain('Auto');
+      } finally {
+        await cleanup();
+        useRoutingStore.setState({ available: false, autoReady: false });
+      }
+    });
+
     test(`keeps loading labels until selections arrive (${mobile ? 'mobile' : 'desktop'})`, async () => {
       useUIStore.setState({ isMobile: mobile });
       useSessionUIStore.setState({ currentSessionId: null });
@@ -561,7 +622,7 @@ describe('ModelControls effort restore', () => {
         }
 
         await act(async () => dom.container.querySelector<HTMLButtonElement>('.model-controls__model-trigger')?.click());
-        const modelButton = Array.from(dom.container.querySelectorAll<HTMLButtonElement>('button:not(.model-controls__model-trigger)')).find((button) => button.textContent?.trim() === MODEL_ID);
+        const modelButton = Array.from(dom.container.querySelectorAll<HTMLButtonElement>('button:not(.model-controls__model-trigger)')).find((button) => button.textContent?.trim().startsWith(MODEL_ID));
         await act(async () => modelButton?.click());
         expect(saveModel.mock.calls.at(-1)).toEqual([btwSessionId, PROVIDER_ID, MODEL_ID]);
         expect(saveAgentModel.mock.calls.at(-1)).toEqual([btwSessionId, 'plan', PROVIDER_ID, MODEL_ID]);

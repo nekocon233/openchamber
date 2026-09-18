@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './uk.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
@@ -31,6 +32,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n.uk,
   ...linearPanelI18n.uk,
+  ...routingI18n.uk,
   ...pluginPanelI18n.uk,
   'terminalView.actions.attachSelection': 'Прикріпити вибраний вивід',
   'terminalView.actions.copySelection': 'Скопіювати вибраний вивід',
@@ -427,6 +429,7 @@ export const dict: Record<I18nKey, string> = {
   "multirun.launcher.models.info": "Вибрати 2 або більше моделей. Ту саму модель можна додавати кілька разів.",
   "multirun.launcher.toast.fileTooLarge": "Файл \"{fileName}\" завеликий (макс. 10 МБ)",
   "multirun.launcher.toast.attachFailed": "Не вдалося вкласти \"{fileName}\"",
+  'multirun.launcher.toast.partialFailure': 'Частину сесій не вдалося створити. Кількість невдалих: {failed}.',
   "multirun.launcher.toast.attachedSingle": "Прикріплено файл: {count}",
   "multirun.launcher.toast.attachedPlural": "Прикріплено файлів: {count}",
   "multirun.modelMultiSelect.actions.addModel": "Додати модель",
@@ -632,6 +635,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.session.status.permissionRequired": "Потрібен дозвіл",
   "sessions.sidebar.session.status.questionPendingSingle": "1 запитання очікує відповіді",
   "sessions.sidebar.session.status.questionPendingMany": "Кількість запитань, що очікують відповіді: {count}",
+  "sessions.sidebar.session.status.questionPending": "Запитання очікує відповіді",
   "sessions.sidebar.session.status.activeFor": "Активна вже {duration}",
   "sessions.sidebar.session.status.lastTurnDuration": "Останній хід тривав {duration}",
   "sessions.sidebar.session.subsessions.collapse": "Згорнути підсесії",
@@ -1309,6 +1313,7 @@ export const dict: Record<I18nKey, string> = {
   "contextRail.surface.chat.description": "Сесія, відкрита поруч",
   "contextRail.surface.notes": "Знання проєкту",
   "contextRail.editorTree.toggle": "Перемкнути дерево файлів",
+  "contextRail.editor.toggle": "Перемкнути редактор файлів",
   "contextPanel.browser.open": "Відкрити панель браузера",
   "contextPanel.browser.addressAria": "Адреса браузера",
   "contextPanel.browser.history.label": "Нещодавні адреси",
@@ -1533,6 +1538,7 @@ export const dict: Record<I18nKey, string> = {
   "contextUsage.tooltip.contextLimit": "Обмеження контексту: {tokens}",
   "contextUsage.tooltip.outputLimit": "Ліміт виводу: {tokens}",
   "contextUsage.tooltip.cost": "Вартість: {cost}",
+  "contextUsage.compacted.description": "Контекст стиснуто. Використання оновиться після наступної відповіді.",
   "contextSidebar.session.untitled": "Сесія без назви",
   "contextSidebar.empty.openSession": "Відкрийте сесію, щоб перевірити контекст.",
   "contextSidebar.section.context": "Контекст",
@@ -1592,6 +1598,21 @@ export const dict: Record<I18nKey, string> = {
   "diffView.state.cleanWorkingTree": "Worktree чистий, без змін для відображення",
   "diffView.state.noLastTurnChanges": "Немає змін останнього ходу для відображення",
   "diffView.state.failedToLoadDiff": "Не вдалося завантажити diff",
+  "diffView.unavailable.missingTitle": "Файлу більше немає",
+  "diffView.unavailable.missingDescription": "Його видалили після того, як завантажився список змін. Список оновлюється.",
+  "diffView.unavailable.nestedRepositoryTitle": "Окремий Git-репозиторій",
+  "diffView.unavailable.nestedRepositoryDescription": "Ця тека має власну історію Git. Відкрийте її як проєкт, щоб побачити її зміни.",
+  "diffView.unavailable.untrackedDirectoryTitle": "Тека з новими файлами",
+  "diffView.unavailable.untrackedDirectoryDescription": "У цій теці забагато нових файлів, щоб показувати їх окремо. Застейджте її або додайте в .gitignore, якщо їй не місце в репозиторії.",
+  "diffView.submodule.title": "Субмодуль",
+  "diffView.submodule.commitChanged": "Коміт {from} → {to}",
+  "diffView.submodule.commitUnchanged": "Досі на коміті {commit}",
+  "diffView.submodule.added": "Новий субмодуль на коміті {commit}",
+  "diffView.submodule.removed": "Субмодуль видалено, був на коміті {commit}",
+  "diffView.submodule.notCheckedOut": "Не завантажено. Записаний коміт: {commit}",
+  "diffView.submodule.trackedChanges": "Має незакомічені зміни",
+  "diffView.submodule.untrackedFiles": "Має невідстежувані файли",
+  "diffView.submodule.conflict": "Конфлікт злиття на записаному коміті",
   "diffView.state.loadingDiff": "Завантаження diff...",
   "diffView.state.loadingChanges": "Завантаження змін...",
   "diffView.state.largeDiff": "Великий diff ({count} змінених рядків)",
@@ -2414,6 +2435,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.toast.someFilesSkipped": "Деякі файли були пропущені:\n{summary}",
   "chat.chatInput.toast.vscodePickFailed": "Не вдалося вибрати файли в VS Code",
   "chat.chatInput.toast.openSessionFirst": "Спочатку відкрийте сесію",
+  "chat.chatInput.toast.dictationKeptForOriginalSession": "Диктування збережено як чернетку в сесії, де ви його почали",
   "chat.chatInput.toast.togglePermissionAutoAcceptFailed": "Не вдалося ввімкнути автоматичне прийняття дозволів",
   "chat.chatInput.reviewComments": "Коментарі рев’ю:",
   "chat.chatInput.reviewCommentsRemove": "Прибрати коментарі рев’ю",

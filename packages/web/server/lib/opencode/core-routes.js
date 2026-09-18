@@ -4,6 +4,8 @@ import {
   invalidateNotificationAuth,
 } from '../notifications/auth-runtime.js';
 import { buildExternalManualRestartResponse } from './config-mutation-response.js';
+import { ThemeImportStorageError } from './theme-runtime.js';
+import { registerThemeCatalogRoutes } from './theme-catalog.js';
 
 const parseLoopbackUrl = (rawUrl) => {
   if (typeof rawUrl !== 'string') {
@@ -1235,6 +1237,8 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
 export const registerSettingsUtilityRoutes = (app, dependencies) => {
   const {
     readCustomThemesFromDisk,
+    saveImportedTheme,
+    deleteImportedTheme,
     refreshOpenCodeAfterConfigChange,
     clientReloadDelayMs,
   } = dependencies;
@@ -1246,6 +1250,30 @@ export const registerSettingsUtilityRoutes = (app, dependencies) => {
     } catch (error) {
       console.error('Failed to load custom themes:', error);
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to load custom themes' });
+    }
+  });
+
+  app.post('/api/config/themes', async (req, res) => {
+    try {
+      const theme = await saveImportedTheme(req.body?.theme);
+      res.status(201).json({ theme });
+    } catch (error) {
+      if (error instanceof ThemeImportStorageError) {
+        res.status(error.status).json({ error: error.code });
+        return;
+      }
+      console.error('[themes] Failed to save imported theme');
+      res.status(500).json({ error: 'save' });
+    }
+  });
+
+  registerThemeCatalogRoutes(app);
+  app.delete('/api/config/themes/:id', async (req, res) => {
+    try {
+      await deleteImportedTheme(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(error instanceof ThemeImportStorageError ? error.status : 500).json({ error: 'delete' });
     }
   });
 
@@ -1288,6 +1316,8 @@ export const registerCommonRequestMiddleware = (app, dependencies) => {
     ) {
       res.setHeader('Cache-Control', 'no-store');
       next();
+    } else if (req.path === '/api/config/themes' || req.path.startsWith('/api/config/themes/')) {
+      express.json({ limit: '1mb' })(req, res, next);
     } else if (req.path.startsWith('/api/behavior')) {
       const contentLength = parseInt(req.headers['content-length'] || '0', 10);
       if (contentLength > 1024 * 1024) {

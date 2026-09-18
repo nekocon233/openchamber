@@ -37,6 +37,8 @@ Los tokens de acceso nunca aparecen aquí ni en el resultado de un `request`.
 
 `onDirectory`, `onSession`, `onSessionLifecycle`, `onConnection`, `onSettings` y `onItem` reproducen el último valor si te suscribes tarde, y luego siguen disparándose cada vez que cambia.
 
+`theme.tokens` incluye `primaryText`, `successText`, `warningText`, `errorText` e `infoText`. Estos campos obligatorios contienen colores de texto calculados por el host para fondos neutros y controles con tintes suaves del UI kit, no para rellenos de color sólido. `applyHostReady` los aplica en cada instantánea. Consulta [UI kit](/sdk/ui/) para las variables CSS.
+
 ## Métodos
 
 | Llamada | Qué hace |

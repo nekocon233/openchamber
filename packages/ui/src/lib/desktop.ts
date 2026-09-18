@@ -37,6 +37,7 @@ export type DesktopWindowControlsStyle = 'classic' | 'traffic-lights';
 export type { DesktopSettings } from '@/lib/settings/registry';
 
 type DesktopBridgeGlobal = {
+  pickThemeFile?: () => Promise<unknown>;
   invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
   openDialog?: (options: Record<string, unknown>) => Promise<unknown>;
   grantFileAccess?: (path: string) => Promise<unknown>;
@@ -120,6 +121,20 @@ export const hasDesktopInvoke = (): boolean => {
 };
 
 export const canUseElectronDesktopIPC = (): boolean => isElectronShell() && hasDesktopInvoke();
+
+export const createDesktopThemeFileAPI = (): RuntimeAPIs['themeFiles'] => {
+  // Preload exposes this capability only to trusted local UI pages. Unlike the
+  // active API endpoint, that page identity stays local during remote connections.
+  if (!getDesktopBridge()?.pickThemeFile) return undefined;
+  return {
+    async pick() {
+      const pick = getDesktopBridge()?.pickThemeFile;
+      if (!pick) return { status: 'unsupported' };
+      const file = z.object({ name: z.string(), size: z.number().nonnegative(), text: z.string() }).nullable().parse(await pick());
+      return { status: 'picked', file };
+    },
+  };
+};
 
 export const invokeDesktop = async <T = unknown>(command: string, args?: Record<string, unknown>): Promise<T | null> => {
   const bridge = getDesktopBridge();

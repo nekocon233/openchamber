@@ -43,6 +43,8 @@ export interface StartWebUiServerOptions {
   tunnelServerPort?: number;
   tunnelRemotePort?: number;
   desktopUpdater?: DesktopUpdater;
+  /** App-owned built-in resources outside Electron's ASAR archive. */
+  builtInExtensionsDir?: string;
 }
 
 export declare function startWebUiServer(

@@ -27,6 +27,7 @@ import {
 } from './catalog.js';
 import { runGuestFileOperation } from './files.js';
 import { injectGuestAssetTokens, parseGuestUrlToken } from './html-tokens.js';
+import { injectGuestDocumentStyles } from './html-styles.js';
 import { installGuest, installGuestFromZipBuffer, parseInstallRequest, uninstallGuest } from './install.js';
 import { guestUploadMaxBytes, readGuestUploadBody } from './upload.js';
 import { checkAllGuestUpdates, updateGuest, withGuestUpdate } from './updates.js';
@@ -574,7 +575,7 @@ export const registerGuestRoutes = (app, {
     try {
       const result = await runGuestStorage(persistPath, req.params.id, parsed.data, async () => {
         const guest = await loadGuest(req.params.id);
-        if (!guest || guest.enabled === false || !guest.entry) throw new Error('Extension is unavailable.');
+        if (!guest || guest.enabled === false || (!guest.entry && !guest.backgroundEntry)) throw new Error('Extension is unavailable.');
         if (!requestedGuestCapabilities(guest).every((capability) => guest.capabilityGrants.includes(capability))) throw new Error('Extension needs approval.');
       });
       return res.json(result);
@@ -693,6 +694,9 @@ export const registerGuestRoutes = (app, {
       if (!guest) {
         return res.status(404).json({ error: 'not-found' });
       }
+      if (guest.source === 'bundled') {
+        return res.status(400).json({ error: 'bundled' });
+      }
       const parsed = capabilityGrantSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: 'invalid-request' });
@@ -801,7 +805,7 @@ export const registerGuestRoutes = (app, {
         return res.status(404).end();
       }
       const served = await resolveGuestServedFile(guest.packageRoot, relativePath, {
-        hasPage: Boolean(guest.entry),
+        hasRuntime: Boolean(guest.entry || guest.backgroundEntry),
       });
       if (!served) {
         return res.status(404).end();
@@ -814,8 +818,8 @@ export const registerGuestRoutes = (app, {
         return res.status(404).end();
       }
       const token = parseGuestUrlToken(req.query.oc_url_token);
-      const body = contentType.startsWith('text/html') && token
-        ? injectGuestAssetTokens(raw.toString('utf8'), token)
+      const body = contentType.startsWith('text/html')
+        ? injectGuestDocumentStyles(injectGuestAssetTokens(raw.toString('utf8'), token))
         : raw;
       res.setHeader('Content-Type', contentType);
       res.setHeader('X-Content-Type-Options', 'nosniff');

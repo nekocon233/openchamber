@@ -4,7 +4,10 @@ import { SettingsSection } from '@/components/sections/shared/SettingsSection';
 import { useI18n } from '@/lib/i18n';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
-import { GuestIntegrationsSection } from './GuestIntegrationsSection';
+import { GuestIntegrationCard, GuestIntegrationsSection } from './GuestIntegrationsSection';
+import { useGuestsStore } from '@/lib/guests/store';
+import { isGuestActive } from '@/lib/guests/capabilities';
+import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { GitHubIntegration } from './GitHubIntegration';
 import { LinearSettings } from './LinearSettings';
 import { ThirdPartyIntegrationsSection } from './ThirdPartyIntegrationsSection';
@@ -23,7 +26,12 @@ export const IntegrationsPage: React.FC<IntegrationsPageProps> = ({
   // uses the editor's own GitHub session instead.
   const hasGitHub = !isVSCodeRuntime();
   const hasLinear = Boolean(getRegisteredRuntimeAPIs()?.linear);
-  const hasBuiltIn = hasGitHub || hasLinear;
+  const guests = useGuestsStore((state) => state.guests);
+  const runtimeKey = useGuestsStore((state) => state.runtimeKey);
+  const builtInGuests = !isVSCodeRuntime() && !isMobileSurfaceRuntime()
+    ? guests.filter((guest) => guest.source === 'bundled' && guest.integration && isGuestActive(guest))
+    : [];
+  const hasBuiltIn = hasGitHub || hasLinear || builtInGuests.length > 0;
 
   return (
     <SettingsPageLayout
@@ -41,6 +49,7 @@ export const IntegrationsPage: React.FC<IntegrationsPageProps> = ({
         >
           {hasGitHub ? <GitHubIntegration /> : null}
           {hasLinear ? <LinearSettings /> : null}
+          {builtInGuests.map((guest) => <GuestIntegrationCard key={`${runtimeKey}:${guest.id}`} guest={guest} />)}
         </SettingsSection>
       ) : null}
       <ThirdPartyIntegrationsSection

@@ -81,6 +81,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const { t } = useI18n();
   const [isSessionSearchOpen, setIsSessionSearchOpen] = React.useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = React.useState('');
+  const resetSessionSearch = React.useCallback(() => {
+    setSessionSearchQuery('');
+    setIsSessionSearchOpen(false);
+  }, []);
   // Reported by the session list below: the header cannot see what matched.
   const [searchMatchCount, setSearchMatchCount] = React.useState(0);
   const sessionSearchContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -346,6 +350,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     icon: string | null;
     color: string | null;
     iconBackground: string | null;
+    defaultAgent: string | null;
     defaultModel: string | null;
     defaultVariant: string | null;
   }) => {
@@ -357,6 +362,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       icon: data.icon,
       color: data.color,
       iconBackground: data.iconBackground,
+      defaultAgent: data.defaultAgent ?? null,
       defaultModel: data.defaultModel ?? null,
       defaultVariant: data.defaultVariant ?? null,
     });
@@ -515,9 +521,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const sessionGroupingMode = useSessionDisplayStore((state) => state.sessionGroupingMode);
   const useGroupedSections = sessionGroupingMode === 'by-worktree' && !isVSCode;
   const desktopHeaderActionButtonClass =
-    'inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md leading-none text-foreground hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-not-allowed';
+    'inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md leading-none text-foreground hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed';
   const mobileHeaderActionButtonClass =
-    'inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md leading-none text-muted-foreground hover:text-foreground hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-not-allowed';
+    'inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md leading-none text-muted-foreground hover:text-foreground hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed';
   const headerActionButtonClass = mobileVariant ? mobileHeaderActionButtonClass : desktopHeaderActionButtonClass;
   const headerActionIconClass = 'h-4.5 w-4.5';
 
@@ -689,10 +695,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
           rowActions: {
             allowReselect,
             onSessionSelected,
-            isSessionSearchOpen,
-            sessionSearchQuery,
-            setSessionSearchQuery,
-            setIsSessionSearchOpen,
+            resetSessionSearch,
           },
           alwaysShowActions: alwaysShowSidebarActions,
           notifyOnSubtasks,

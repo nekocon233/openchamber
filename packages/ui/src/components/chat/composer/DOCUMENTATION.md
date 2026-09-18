@@ -34,8 +34,9 @@ new-session drafts hide both queue and suggestion. Hiding the queue does not
 pause its delivery.
 
 The queue header toggles an `aria-expanded` disclosure with the current count.
-Its collapse state is local to the mounted runtime/directory/session queue key
-and survives temporary hiding behind BTW. Switching queue identity resets it.
+Its open/closed state is one persisted preference in `useUIStore`
+(`messageQueueExpanded`, open by default), shared by every session and
+surviving session switches and reloads.
 The expanded list retains its drag sensors, ordering, edit, send, and remove
 actions, and clamps to available space above the composer. It receives the
 composer's main-session queue target instead of resolving the global selection,
@@ -43,11 +44,11 @@ so embedded chat columns address their own queue.
 
 The shared frame measures its height and gap into the chat column's
 `--chat-floating-panel-clearance`. The floating status row and
-`ScrollToBottomButton` translate upward by that amount, and the column
+`ScrollToBottomButton` translate upward by that amount, the transcript's tail
+spacer grows by it (so the frame never covers the last rows), and the column
 carries `data-floating-panel` while any frame is mounted so the recap hint
-hides instead of landing over the transcript. Transcript height, insets, and
-scroll position remain unchanged. Unmounting clears the offset and the
-marker; resizing or collapsing the frame updates it.
+hides instead of landing over the transcript. Unmounting clears the offset
+and the marker; resizing or collapsing the frame updates it.
 
 ## Floating composer
 
@@ -185,10 +186,11 @@ makes WebKit re-measure them after every decoration redraw, and the composer
 rebuilds every decoration on every keystroke. That cost is felt worst during
 IME composition.
 
-The non-iOS native selection tint comes from `--primary`, not the selection
-token: themes define `--interactive-selection` with its own alpha, so mixing it
-with transparent again is nearly invisible. The iOS system overlay owns its
-visible selection fill.
+The non-iOS native selection uses `--interactive-selection` directly, including
+its authored alpha, with `--interactive-selection-foreground` for selected text.
+Do not dilute it again or substitute the primary action color. Both composer
+caret paths follow the elevated field foreground; the file editor/terminal cursor
+color may belong to a different background. The iOS system overlay owns its visible selection fill.
 
 The content element keeps the existing correction policy: on in the mobile UI,
 off elsewhere. CodeMirror also reads the attribute and reverts Apple and
@@ -259,6 +261,16 @@ and the send path reading the same grammar.
   them after loading that identity's draft. Selection alone is not enough:
   the deferred chat column can still show the source composer. Ordinary
   pending text insertions keep their existing path in `ChatInput`.
+  The hook also selects the attachment draft before paint. `input-store.ts`
+  owns its in-memory files and scoped send recovery, documented in
+  `packages/ui/src/sync/DOCUMENTATION.md`.
+- `state/useDictationOrigin.ts` — a dictation belongs to the draft that was on
+  screen when recording started. The transcript arrives later, after the user
+  may have switched sessions in the one mounted composer. `ChatInput` records
+  the origin from `ComposerDictation`'s `onStart`, and a transcript whose
+  origin is no longer the rendered draft is appended to the origin's draft
+  through `restoreDraft`. It is not inserted or sent in the visible session,
+  including for **Insert and send**, and a toast says where it went.
 - `state/useDraftTarget.ts` — the draft can target a directory that does not
   exist yet (a worktree being created). It must survive not appearing in the
   branch list, or the selector snaps back to the project root mid-creation. It
@@ -315,8 +327,12 @@ including in memory when persistence is disabled.
 Both modes reuse `ComposerEditor` and `ModelControls`; BTW transitions put the
 caret at the end. BTW copies the main model/effort once, including explicit
 Default, and uses `plan` or the first selectable agent. Its controlled model
-path only writes BTW selections. Attachments, goals, expansion, shell, and
-agent selection and file/agent mention autocomplete are unavailable. Auto-accept is applied before the first send.
+path only writes BTW selections. Files attach as in the normal composer
+(picker, paste, drop) and live in the BTW draft identity's attachment slot,
+so they never mix with the main draft's files; the attach control offers
+only local files. Goals, expansion, shell, linked context (issues, PRs,
+guests), agent selection and file/agent mention autocomplete are
+unavailable. Auto-accept is applied before the first send.
 On mobile, model and effort controls sit in the input's upper-left row; the
 footer only contains auto-accept and send/stop controls.
 
@@ -398,6 +414,35 @@ the raised keyboard.
 **Every timeout and `flushSync` in them has a reason recorded next to it, and
 none of them is verifiable outside a real device.** Change them only against
 hardware.
+
+`state/mobileComposerMorph.ts` plays the pill ↔ composer swap as a FLIP morph
+in the native iOS shell only, after t3code's resting-composer transition.
+The swap commits synchronously (`flushSync`); the glass box
+(`data-composer-box`) is then frozen at its old height and animated to the
+new one (WAAPI) with its rows anchored to the bottom edge, so the footer and
+model/agent rows stay where the pill's rows were; the prompt
+(`data-composer-morph-prompt`: the pill's text line or the editor block)
+travels from its old position to its new one, gained editor lines unfurl
+beneath it, and footer controls that exist only expanded fade in over the
+second half. The floating composer slot (`data-composer-slot="floating"`, in
+`ChatContainer`) is pinned for the tween at the height the transcript should
+see — the new one on expand, the old one on collapse — so its
+`ResizeObserver` publishes one final inset instead of chasing frames. The
+status row, recap hint and scroll-to-end button share one zero-height anchor
+on the slot's top edge (`data-composer-riders`, class `oc-composer-riders`):
+the keyboard choreography slides it as a mover and the morph moves it with the
+box's top edge through the individual `translate` property, so nothing above
+the composer jumps when the slot resizes. The
+motion starts on the `oc:keyboard-anim` event for its direction, runs on the
+shared keyboard timing (`lib/mobileKeyboardTiming.ts`) the composer slide
+also uses, and ends on `oc:keyboard-settled`; a fallback timer runs it alone
+without a keyboard. The transcript rides it through
+`lib/scroll/keyboardFollowGlide.ts` (owned by `useChatTimelineScroll`): the
+morph announces `oc:composer-morph` (`hold` with the slot's height delta,
+`glide` and `release` when it runs without a keyboard), the glide holds every
+automatic end write while a transition runs, lets the geometry land in one
+step, and drives scrollTop on the same curve. Mobile browsers, Android and
+reduced motion keep the instant swap.
 
 ## Testing
 

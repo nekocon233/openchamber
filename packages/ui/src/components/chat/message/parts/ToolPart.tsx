@@ -2255,7 +2255,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                                         type="button"
                                         onClick={handleQuickOpen}
                                         className={cn(
-                                            'flex-shrink-0 inline-flex h-4 w-4 items-center justify-center rounded transition-opacity hover:bg-[var(--surface-hover)]',
+                                            'flex-shrink-0 inline-flex h-4 w-4 items-center justify-center rounded transition-opacity hover:bg-interactive-hover',
                                             'opacity-60 hover:opacity-100 focus-visible:opacity-100',
                                         )}
                                         style={{ color: 'var(--tools-icon)' }}
@@ -2285,7 +2285,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                             {justificationText && (
                                 <span
                                     className={cn('min-w-0 truncate', TOOL_ROW_DESCRIPTION_CLASS)}
-                                    style={{ color: 'var(--tools-description)', opacity: 0.8 }}
+                                    style={{ color: 'var(--tools-description)' }}
                                     title={justificationText}
                                 >
                                     {justificationText}

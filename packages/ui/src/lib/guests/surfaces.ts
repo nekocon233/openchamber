@@ -10,8 +10,8 @@ import type { InstalledGuest } from './types.ts';
 
 /**
  * Rail surfaces for the enabled guests with a page, in catalog order. The
- * rail and the digit shortcuts must agree on this list. A page-less guest
- * (tools only) has nothing to mount, so it gets no surface.
+ * rail and the digit shortcuts must agree on this list. Background-only and
+ * tools-only extensions have no visible panel and get no surface.
  */
 export const enabledGuestSurfaces = (
   guests: readonly InstalledGuest[],

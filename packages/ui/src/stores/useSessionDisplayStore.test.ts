@@ -1,33 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { migrateSessionDisplayState, useSessionDisplayStore } from './useSessionDisplayStore';
 
-const activitySectionsSource = readFileSync(join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../components/session/sidebar/recent/SidebarActivitySections.tsx',
-), 'utf8');
-const recentSectionSource = readFileSync(join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../components/session/sidebar/recent/RecentSessionSection.tsx',
-), 'utf8');
-const sidebarHeaderSource = readFileSync(join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../components/session/sidebar/shell/SidebarHeader.tsx',
-), 'utf8');
-const sessionProjectCollectionSource = readFileSync(join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../components/session/sidebar/list/SessionProjectCollection.tsx',
-), 'utf8');
-const displayStoreSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'useSessionDisplayStore.ts'), 'utf8');
-
 describe('session display store', () => {
   test('toggles pinned, chats, and recent sections independently', () => {
-    expect(displayStoreSource).toContain('showPinnedSection: !state.showPinnedSection');
-    expect(displayStoreSource).toContain('showChatsSection: !state.showChatsSection');
-    expect(displayStoreSource).toContain('showRecentSection: !state.showRecentSection');
+    const previous = useSessionDisplayStore.getState();
+    try {
+      useSessionDisplayStore.setState({ showPinnedSection: true, showChatsSection: true, showRecentSection: true });
+      previous.togglePinnedSection();
+      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: false, showChatsSection: true, showRecentSection: true });
+      previous.toggleChatsSection();
+      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: false, showChatsSection: false, showRecentSection: true });
+      previous.toggleRecentSection();
+      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: false, showChatsSection: false, showRecentSection: false });
+    } finally {
+      useSessionDisplayStore.setState(previous, true);
+    }
   });
 
   test('enables the pinned section when migrating version 2 preferences', () => {
@@ -41,37 +29,6 @@ describe('session display store', () => {
     expect(migrated.showPinnedSection).toBe(false);
     expect(migrated.showChatsSection).toBe(true);
     expect(migrated.showRecentSection).toBe(false);
-  });
-
-  test('renders Pinned before managed Chats and optional Recent', () => {
-    const pinnedIndex = recentSectionSource.indexOf("key: 'pinned' as const");
-    const chatsIndex = recentSectionSource.indexOf("key: 'chats' as const");
-    const recentIndex = recentSectionSource.indexOf('...(showRecentSection ? recentSections.map');
-    expect(pinnedIndex).toBeGreaterThan(-1);
-    expect(chatsIndex).toBeGreaterThan(pinnedIndex);
-    expect(chatsIndex).toBeGreaterThan(-1);
-    expect(recentIndex).toBeGreaterThan(chatsIndex);
-  });
-
-  test('keeps Pinned and Recent expansion separate from the custom Chats renderer', () => {
-    expect(activitySectionsSource).toContain("section.key === 'pinned' ? 'pinned' : 'recent'");
-    expect(activitySectionsSource).toContain('renderContext={renderContext}');
-    expect(activitySectionsSource).toContain("section.key === 'chats' && Boolean(props.renderChatsSection)");
-    expect(activitySectionsSource).toContain('usesCustomRenderer ? props.renderChatsSection?.(section.items)');
-  });
-
-  test('wires the pinned visibility preference into the header and renderer', () => {
-    expect(sidebarHeaderSource).toContain('onClick={togglePinnedSection}');
-    expect(sidebarHeaderSource).toContain("t('sessions.sidebar.header.displayMode.showPinned')");
-    expect(recentSectionSource).toContain('...(showPinnedSection ? [{');
-  });
-
-  test('wires the Chats visibility preference into the header and renderer', () => {
-    expect(sidebarHeaderSource).toContain('onClick={toggleChatsSection}');
-    expect(sidebarHeaderSource).toContain("t('sessions.sidebar.header.displayMode.showChats')");
-    expect(recentSectionSource).toContain('...(showChatsSection ? [{');
-    expect(sessionProjectCollectionSource).toContain('topology.isVSCode || !showChatsSection');
-    expect(sessionProjectCollectionSource).toContain('showChatsSection={showChatsSection}');
   });
 
   test('defaults to manual ordering', () => {

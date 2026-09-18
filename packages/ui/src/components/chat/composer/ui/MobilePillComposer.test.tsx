@@ -51,7 +51,7 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
         </SyncProvider>));
         if (options.hasContent && options.canAbort) {
             // While a turn runs the draft can only be queued, never sent past it.
-            const queue = container.querySelector<HTMLButtonElement>('[aria-label="Queue message"]');
+            const queue = container.querySelector<HTMLButtonElement>('[aria-label="Stage message"]');
             expect(queue).not.toBeNull();
             await act(async () => { queue?.click(); });
             expect(queued).toBe(1);
@@ -83,16 +83,16 @@ describe('MobilePillComposer', () => {
     });
 
     test('uses the trailing action to queue content while the session is running', async () => {
-        // The expanded composer shows a rotated send icon labelled "Queue
+        // The expanded composer shows a rotated send icon labelled "Stage
         // message" in this state; the collapsed pill must read the same.
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, canAbort: true });
 
         expect(markup).toContain('aria-label="Stop generating"');
-        expect(markup).toContain('aria-label="Queue message"');
+        expect(markup).toContain('aria-label="Stage message"');
         expect(markup).toContain('-rotate-90');
         expect(markup).not.toContain('aria-label="Send message"');
         expect(markup).not.toContain('w-0 opacity-0 overflow-hidden');
-        expect(markup.indexOf('aria-label="Stop generating"')).toBeLessThan(markup.indexOf('aria-label="Queue message"'));
+        expect(markup.indexOf('aria-label="Stop generating"')).toBeLessThan(markup.indexOf('aria-label="Stage message"'));
     });
 
     test('uses the inline send action for content in a new-session draft', async () => {

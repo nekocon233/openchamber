@@ -378,7 +378,7 @@ const ImagePreviewDialog: React.FC<{
                 className={cn(
                     // Same scrim as DialogOverlay, so the image viewer sits on
                     // the app the way every other dialog does.
-                    'oc-glass-backdrop absolute inset-0 bg-black/25 dark:bg-black/40',
+                    'oc-glass-backdrop absolute inset-0 bg-surface-overlay/60',
                     isTransitioning && 'transition-opacity duration-150 ease-out',
                     isVisible ? 'opacity-100' : 'opacity-0'
                 )}
@@ -391,7 +391,7 @@ const ImagePreviewDialog: React.FC<{
                         type="button"
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={showPrevious}
-                        className="absolute left-3 top-1/2 -translate-y-1/2 z-10 h-10 w-10 flex items-center justify-center rounded-full bg-black/40 text-foreground/90 hover:bg-black/55 focus:outline-none focus:ring-2 focus:ring-primary/60"
+                        className="absolute left-3 top-1/2 -translate-y-1/2 z-10 h-10 w-10 flex items-center justify-center rounded-full bg-surface-elevated/90 text-surface-elevated-foreground hover:bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-ring"
                         aria-label={t('chat.toolOutputDialog.image.previousAria')}
                     >
                         <Icon name="arrow-left-s" className="h-6 w-6" />
@@ -400,7 +400,7 @@ const ImagePreviewDialog: React.FC<{
                         type="button"
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={showNext}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 z-10 h-10 w-10 flex items-center justify-center rounded-full bg-black/40 text-foreground/90 hover:bg-black/55 focus:outline-none focus:ring-2 focus:ring-primary/60"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 z-10 h-10 w-10 flex items-center justify-center rounded-full bg-surface-elevated/90 text-surface-elevated-foreground hover:bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-ring"
                         aria-label={t('chat.toolOutputDialog.image.nextAria')}
                     >
                         <Icon name="arrow-right-s" className="h-6 w-6" />
@@ -428,7 +428,7 @@ const ImagePreviewDialog: React.FC<{
                         </div>
                         <button
                             type="button"
-                            className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground/80 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/60"
+                            className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground/80 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                             onClick={() => onOpenChange(false)}
                             aria-label={t('chat.toolOutputDialog.image.closeAria')}
                         >
@@ -838,7 +838,7 @@ const MermaidPreviewDialog: React.FC<{
                     isTransitioning && 'transition-opacity duration-150 ease-out',
                     isVisible ? 'opacity-100' : 'opacity-0'
                 )}
-                style={{ backgroundColor: 'color-mix(in srgb, var(--surface-background) 70%, transparent)' }}
+                style={{ backgroundColor: 'color-mix(in srgb, var(--surface-elevated) 70%, transparent)', color: 'var(--surface-elevated-foreground)' }}
                 onMouseDown={() => onOpenChange(false)}
             />
 
@@ -860,7 +860,7 @@ const MermaidPreviewDialog: React.FC<{
                     <div className="flex items-center justify-end">
                         <button
                             type="button"
-                            className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground/80 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/60"
+                            className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground/80 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                             onClick={() => onOpenChange(false)}
                             aria-label={t('chat.toolOutputDialog.mermaid.closeAria')}
                         >

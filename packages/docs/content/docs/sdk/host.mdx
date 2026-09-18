@@ -37,6 +37,8 @@ Access tokens never appear here or in a `request` result.
 
 `onDirectory`, `onSession`, `onSessionLifecycle`, `onConnection`, `onSettings`, and `onItem` replay the latest value when you subscribe late, then keep firing as it changes.
 
+`theme.tokens` includes `primaryText`, `successText`, `warningText`, `errorText`, and `infoText`. These required fields contain host-computed text colors for neutral backgrounds and the UI kit's tinted controls, not solid fills. `applyHostReady` applies them on each snapshot. See [UI kit](/sdk/ui/) for the CSS variables.
+
 ## Methods
 
 | Call | What it does |

@@ -37,6 +37,8 @@ const host = connectHost();
 
 `onDirectory`, `onSession`, `onSessionLifecycle`, `onConnection`, `onSettings` і `onItem` віддають останнє значення, навіть якщо ви підписалися пізно, а далі спрацьовують при кожній зміні.
 
+`theme.tokens` містить `primaryText`, `successText`, `warningText`, `errorText` та `infoText`. Ці обов'язкові поля містять обчислені хостом кольори тексту для нейтрального фону й тонованих елементів UI-набору, а не суцільних кольорових заливок. `applyHostReady` застосовує їх із кожним знімком стану. CSS-змінні описані в [UI-наборі](/sdk/ui/).
+
 ## Методи
 
 | Виклик | Що робить |

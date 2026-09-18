@@ -37,6 +37,8 @@ const host = connectHost();
 
 `onDirectory`、`onSession`、`onSessionLifecycle`、`onConnection`、`onSettings`、`onItem` は、遅れて購読しても最新の値を再送し、その後は変化のたびに発火し続けます。
 
+`theme.tokens` には `primaryText`、`successText`、`warningText`、`errorText`、`infoText` が含まれます。これらは必須フィールドで、ホストが計算した文字色を持ちます。ニュートラルな背景や UI キットの淡い色付きコントロール用で、濃い単色の塗りつぶし用ではありません。`applyHostReady` はスナップショットごとにこれらを適用します。CSS 変数については [UI キット](/sdk/ui/)を参照してください。
+
 ## メソッド
 
 | 呼び出し | 動作 |

@@ -12,6 +12,7 @@ import { sanitizeTerminalHistoryChunk } from './history.js';
 import { consumeTerminalThemeQueries, terminalThemeModeReport } from './theme-response.js';
 import { buildTerminalShellLaunch, createTerminalShellResolver, normalizeTerminalShell } from './shells.js';
 import { stripAppImageArgv0Leak, resolvePosixPtyLaunch } from '../inherited-env.js';
+import { shutdownTerminalProcesses } from './shutdown.js';
 
 const MAX_SESSIONS = 20;
 const MAX_HISTORY_BYTES = 512 * 1024;
@@ -92,7 +93,7 @@ const trimHistory = (history) => {
 export function createTerminalRuntime({
   app, server, fs, path, uiAuthController, tunnelAuthController, buildAugmentedPath, searchPathFor, isExecutable,
   isRequestOriginAllowed, rejectWebSocketUpgrade, TERMINAL_INPUT_WS_HEARTBEAT_INTERVAL_MS,
-  loadPtyProvider, terminalTerminationGraceMs = TERMINATION_GRACE_MS, trackAuthChannel,
+  loadPtyProvider, terminalTerminationGraceMs = TERMINATION_GRACE_MS, shutdownProcesses = shutdownTerminalProcesses, trackAuthChannel,
 }) {
   const sessions = new Map();
   const pendingSessionCreates = new Map();
@@ -137,7 +138,7 @@ export function createTerminalRuntime({
         const launch = resolvePosixPtyLaunch(shellLaunch.executable, shellLaunch.args);
         const options = { name: 'xterm-256color', cwd, cols, rows, env };
         if (process.platform === 'win32') options.useConpty = true;
-        return { process: await provider.spawn(launch.executable, launch.args, options), backend: provider.backend, shell: resolvedShell.id, loginShell };
+        return { process: await provider.spawn(launch.executable, launch.args, options), backend: provider.backend, shell: resolvedShell.id, shellExecutable: executable, loginShell };
       } catch (error) { lastError = error; }
     }
     throw lastError ?? new Error('No executable shell found');
@@ -275,6 +276,7 @@ export function createTerminalRuntime({
     if (clear) { session.history = ''; session.pendingHistoryControlSequence = ''; session.pendingThemeControlSequence = ''; session.themeModeEnabled = false; }
     session.cwd = cwd; session.cols = cols; session.rows = rows; session.process = spawned.process;
     session.backend = spawned.backend; session.shell = spawned.shell; session.loginShell = spawned.loginShell; session.status = 'running'; session.exitCode = null; session.signal = null;
+    session.shellExecutable = spawned.shellExecutable;
     session.mode = mode; session.command = mode === COMMAND_TERMINAL_MODE ? command : null;
     session.purpose = purpose;
     session.themeMode = themeMode === 'light' ? 'light' : 'dark'; session.terminalBackground = terminalBackground; session.terminalForeground = terminalForeground;
@@ -505,6 +507,7 @@ export function createTerminalRuntime({
         throw new Error('Terminal session was closed during restart');
       }
       session.process = spawned.process; session.backend = spawned.backend; session.shell = spawned.shell; session.loginShell = spawned.loginShell; session.cwd = cwd; session.cols = cols; session.rows = rows;
+      session.shellExecutable = spawned.shellExecutable;
       session.history = ''; session.pendingHistoryControlSequence = ''; session.pendingThemeControlSequence = ''; session.themeModeEnabled = false; session.status = 'running'; session.exitCode = null; session.signal = null; session.eventQueue.length = 0;
       session.themeMode = themeMode === 'light' ? 'light' : 'dark'; session.terminalBackground = terminalBackground; session.terminalForeground = terminalForeground;
        wire(session, spawned.process); void terminateProcess(oldProcess); publish(session, { t: 'restarted', history: '' });
@@ -555,13 +558,17 @@ export function createTerminalRuntime({
 
   const stop = async () => {
     server.off('upgrade', upgradeHandler); clearInterval(idleSweep);
+    for (const client of wsServer?.clients ?? []) client.terminate();
     for (const pending of pendingSessionCreates.values()) pending.cancelled = true;
     await Promise.allSettled([
       ...[...pendingSessionCreates.values()].map((pending) => pending.promise),
       ...pendingSessionRestarts.values(),
     ]);
-    for (const session of sessions.values()) void terminateProcess(session.process, true);
+    const terminals = [...sessions.values()]
+      .filter(session => session.status === 'running' && session.process)
+      .map(session => ({ process: session.process, shellExecutable: session.shellExecutable }));
     sessions.clear();
+    await shutdownProcesses(terminals);
     await Promise.allSettled([...pendingTerminations]);
     if (!wsServer) return;
     for (const client of wsServer.clients) client.terminate();

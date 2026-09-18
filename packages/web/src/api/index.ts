@@ -1,4 +1,5 @@
 import type { RuntimeAPIs } from '@openchamber/ui/lib/api/types';
+import { createDesktopThemeFileAPI } from '@openchamber/ui/lib/desktop';
 import {
   createRuntimeUrlResolver,
   getRuntimeUrlResolver,
@@ -41,6 +42,7 @@ export const createWebAPIs = (options: WebAPIsOptions = {}): RuntimeAPIs => {
   const activeUrls = createActiveRuntimeUrlResolver();
 
   return {
+   themeFiles: createDesktopThemeFileAPI(),
   runtime: { platform: 'web', isDesktop: false, isVSCode: false, label: 'web' },
   terminal: createWebTerminalAPI(),
   git: createWebGitAPI(),

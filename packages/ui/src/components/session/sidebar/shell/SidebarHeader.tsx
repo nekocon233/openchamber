@@ -161,7 +161,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
             {guestPages.length > 0 && <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="xs" className="w-6 text-muted-foreground" aria-label={t('sessions.sidebar.header.actions.extensionPages')}>
-                  <Icon name="more" className={headerActionIconClass} />
+                  <Icon name="apps" className={headerActionIconClass} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">

@@ -65,6 +65,7 @@ const createGlobalHub = () => ({
   subscribeEvent: () => () => {},
   subscribeStatus: () => () => {},
   replayAfter: () => [],
+  flushPending() {},
   isConnected: () => true,
   start() {},
   stop() {},

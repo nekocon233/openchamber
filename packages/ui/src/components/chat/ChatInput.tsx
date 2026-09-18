@@ -177,6 +177,7 @@ import {
 import { useAutocompletePosition } from './composer/state/useAutocompletePosition';
 import { useMessageHistory } from './composer/state/useMessageHistory';
 import { useComposerDraft } from './composer/state/useComposerDraft';
+import { useDictationOrigin } from './composer/state/useDictationOrigin';
 import { useDraftTarget } from './composer/state/useDraftTarget';
 import { useMobileComposerShell } from './composer/state/useMobileComposerShell';
 import { useMobileViewportPin } from './composer/state/useMobileViewportPin';
@@ -229,7 +230,6 @@ const MAX_MOBILE_COMPOSER_LINES = 16;
  */
 const MOBILE_COMPOSER_BOUND_GAP_PX = 4;
 const EMPTY_QUEUE: QueuedMessage[] = [];
-const EMPTY_ATTACHMENTS: AttachedFile[] = [];
 const COMPACT_CHAT_PLACEHOLDER_MAX_WIDTH = 560;
 const renameFileForAttachmentCitation = (file: File, filename: string): File => {
     if (file.name === filename) {
@@ -510,6 +510,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         [activeRuntimeKey, btwComposerSessionId, currentDirectory, currentSessionDirectoryForSync, currentSessionId, isBtwActive],
     );
     const newSessionDraft = useSessionUIStore((s) => s.newSessionDraft);
+    const currentChatDraftIdentityRef = React.useRef(chatDraftIdentity);
+    currentChatDraftIdentityRef.current = chatDraftIdentity;
     const newSessionDraftOpen = Boolean(newSessionDraft?.open);
     const newSessionDraftAnnouncesDirtyState = newSessionDraftOpen && newSessionDraft?.openedAutomatically !== true;
     const draftPermissionAutoAcceptEnabled = useSessionUIStore((s) => (
@@ -520,7 +522,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const prepareChatDraftDirectory = useSessionUIStore((s) => s.prepareChatDraftDirectory);
     const abortPromptSessionId = useSessionUIStore((s) => s.abortPromptSessionId);
     const clearAbortPrompt = useSessionUIStore((s) => s.clearAbortPrompt);
-    const attachedFiles = useInputStore((s) => isBtwActive ? EMPTY_ATTACHMENTS : s.attachedFiles);
+    const attachedFiles = useInputStore((s) => s.attachedFiles);
     const addAttachedFile = useInputStore((s) => s.addAttachedFile);
     const clearAttachedFiles = useInputStore((s) => s.clearAttachedFiles);
     const saveSessionAgentSelection = useSelectionStore((s) => s.saveSessionAgentSelection);
@@ -683,7 +685,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     });
 
     React.useEffect(() => {
-        if (isBtwActive) return;
         const modelKey = `${currentProviderId ?? ''}/${currentModelId ?? ''}`;
         const inputModalities = currentModelMetadata?.modalities?.input;
         const modalitySignature = inputModalities?.slice().sort().join(',') ?? null;
@@ -723,7 +724,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             modalities: unsupportedModalities.map((modality) => modalityLabels[modality]).join(', '),
             files: fileSummary,
         }), { id: `attachment-modalities:${modelKey}` });
-    }, [attachedFiles, currentModelId, currentModelMetadata, currentProviderId, isBtwActive, t]);
+    }, [attachedFiles, currentModelId, currentModelMetadata, currentProviderId, t]);
 
     const handleShowAttachmentPreview = React.useCallback((content: ToolPopupContent) => {
         if (!content.image) return;
@@ -1333,11 +1334,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         }
         const inputState = useInputStore.getState();
         if (queuedMessage.attachments && queuedMessage.attachments.length > 0) {
-            const currentIds = new Set(inputState.attachedFiles.map((attachment) => attachment.id));
-            inputState.setAttachedFiles([
-                ...inputState.attachedFiles,
-                ...queuedMessage.attachments.filter((attachment) => !currentIds.has(attachment.id)),
-            ]);
+            inputState.restoreAttachedFiles(queuedMessage.attachments, chatDraftIdentity);
         }
         if (queuedMessage.additionalParts && queuedMessage.additionalParts.length > 0) {
             inputState.setPendingSyntheticParts([
@@ -1821,10 +1818,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             }
             restoreComposerText();
             if (!queuedOnly && attachedFiles.length > 0) {
-                const inputState = useInputStore.getState();
-                const present = new Set(inputState.attachedFiles.map((attachment) => attachment.id));
-                const missing = attachedFiles.filter((attachment) => !present.has(attachment.id));
-                if (missing.length > 0) inputState.setAttachedFiles([...inputState.attachedFiles, ...missing]);
+                useInputStore.getState().restoreAttachedFiles(attachedFiles, chatDraftIdentity);
             }
         };
 
@@ -1933,7 +1927,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         persistDraftImmediately(chatDraftIdentity, '');
         messageHistory.reset();
         if (attachedFiles.length > 0) {
-            clearAttachedFiles();
+            clearAttachedFiles(chatDraftIdentity);
         }
         // Close expanded input overlay when submitting
         setExpandedInput(false);
@@ -2386,10 +2380,22 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         void handleSubmitRef.current({ presetText });
     }, []);
 
+    const { markDictationStart, keepTranscriptForOrigin } = useDictationOrigin({
+        identityRef: currentChatDraftIdentityRef,
+        restoreDraft,
+        onKeptForOrigin: () => {
+            toast.info(t('chat.chatInput.toast.dictationKeptForOriginalSession'));
+        },
+    });
+
     // Dictation: insert the transcript inline; optionally submit immediately.
     // getCurrentInputSnapshot reads composerRef.current.getValue() first, so setting
     // it synchronously lets handleSubmit pick up the text in the same tick.
+    // A transcript belongs to the draft that was on screen when recording
+    // started. After a session switch it is kept for that draft and must not
+    // be inserted or sent here.
     const handleDictationInsert = React.useCallback((text: string) => {
+        if (keepTranscriptForOrigin(text)) return;
         setMessage((prev) => {
             // The editor is controlled by this state; getCurrentInputSnapshot
             // reads it back, so no imperative write is needed.
@@ -2398,15 +2404,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         setTimeout(() => {
             composerRef.current?.focus();
         }, 0);
-    }, []);
+    }, [keepTranscriptForOrigin]);
 
     const handleDictationInsertAndSend = React.useCallback((text: string) => {
+        if (keepTranscriptForOrigin(text)) return;
         // Same as preset chips: the composed text goes into the submit as an
         // explicit override instead of being staged in the textarea, which may
         // not be mounted (collapsed mobile pill).
         const next = appendInlineText(composerRef.current?.getValue() ?? messageRef.current, text);
         void handleSubmitRef.current({ presetText: next });
-    }, []);
+    }, [keepTranscriptForOrigin]);
 
     // A command with an argument sends once the isolated composer owns its draft.
     React.useEffect(() => {
@@ -2537,7 +2544,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             const recalled = messageHistory.older({ text: message, attachments: attachedFiles });
             if (recalled !== null) {
                 setMessage(recalled.text);
-                if (!isBtwActive) useInputStore.getState().setAttachedFiles([...recalled.attachments]);
+                useInputStore.getState().setAttachedFiles([...recalled.attachments]);
                 // Caret to the start, so the recalled message reads from its
                 // beginning rather than from wherever the draft's caret was.
                 requestAnimationFrame(() => composerRef.current?.setSelection(0, 0));
@@ -2550,7 +2557,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             const recalled = messageHistory.newer({ text: message, attachments: attachedFiles });
             if (recalled !== null) {
                 setMessage(recalled.text);
-                if (!isBtwActive) useInputStore.getState().setAttachedFiles([...recalled.attachments]);
+                useInputStore.getState().setAttachedFiles([...recalled.attachments]);
                 requestAnimationFrame(() => composerRef.current?.setSelection(recalled.text.length, recalled.text.length));
             }
             return;
@@ -2772,6 +2779,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         files: File[],
         leadingText: string = '',
     ): Promise<void> => {
+        const attachmentDraftKey = useInputStore.getState().attachmentDraftKey;
         const imageFiles = files.filter((file) => file.type.startsWith('image/'));
         const otherFiles = files.filter((file) => !file.type.startsWith('image/'));
 
@@ -2812,6 +2820,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             } finally {
                 pendingPastedAttachmentFilenamesRef.current.delete(filename);
             }
+            if (useInputStore.getState().attachmentDraftKey !== attachmentDraftKey) return;
         }
 
         const attachedOtherNames: string[] = [];
@@ -2824,6 +2833,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             } catch (error) {
                 console.error('File attach failed', error);
             }
+            if (useInputStore.getState().attachmentDraftKey !== attachmentDraftKey) return;
         }
         insertCitation(attachedOtherNames, '');
 
@@ -2833,10 +2843,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, [addAttachedFile, insertTextAtSelection, t]);
 
     const handlePaste = React.useCallback(async (event: ClipboardEvent) => {
-        if (isBtwActive && event.clipboardData?.files.length) {
-            event.preventDefault();
-            return;
-        }
         const clipboardData = event.clipboardData;
         if (!clipboardData) return;
         // Narrowed alias so the rest of the handler reads as it did when this
@@ -2899,7 +2905,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             const behavior: LargeTextPasteBehavior = largeTextPasteBehavior;
             const shouldOfferLargePaste = sessionReady
                 && inputMode === 'normal'
-                && !isBtwActive
                 && behavior !== 'inline'
                 && isLargePlainTextPaste(pastedText);
 
@@ -3027,7 +3032,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         e.preventDefault();
         await attachFilesWithCitation([...imageFiles, ...otherFiles], pastedText);
-    }, [addAttachedFile, attachFilesWithCitation, currentSessionId, inputMode, isBtwActive, largeTextPasteBehavior, markFileMentionPasteSuppression, message, newSessionDraftOpen, insertTextAtSelection, setMessage, t, updateAutocompleteState]);
+    }, [addAttachedFile, attachFilesWithCitation, currentSessionId, inputMode, largeTextPasteBehavior, markFileMentionPasteSuppression, message, newSessionDraftOpen, insertTextAtSelection, setMessage, t, updateAutocompleteState]);
 
     const handleFileSelect = (file: { name: string; path: string; relativePath?: string }) => {
 
@@ -3293,10 +3298,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     };
 
     const handleDrop = async (e: React.DragEvent) => {
-        if (isBtwActive) {
-            e.preventDefault();
-            return;
-        }
         dragEnterCountRef.current = 0;
         const draggedFiles = hasDraggedFiles(e.dataTransfer);
         if (!draggedFiles) {
@@ -3374,7 +3375,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const fileInputRef = React.useRef<HTMLInputElement>(null);
 
     const attachFiles = React.useCallback(async (files: FileList | File[]) => {
-        if (isBtwActive) return;
+        const attachmentDraftKey = useInputStore.getState().attachmentDraftKey;
         const list = Array.isArray(files) ? files : Array.from(files);
         let attached = false;
 
@@ -3384,14 +3385,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             } catch (error) {
                 console.error('File attach failed', error);
             }
+            if (useInputStore.getState().attachmentDraftKey !== attachmentDraftKey) return;
         }
         if (list.length > 0 && !attached) {
             toast.error(t('chat.chatInput.toast.attachFileFailed'));
         }
-    }, [addAttachedFile, isBtwActive, t]);
+    }, [addAttachedFile, t]);
 
     const handleVSCodePickFiles = React.useCallback(async () => {
-        if (isBtwActive) return;
         try {
             const data = (await vscodeApi?.pickFiles?.({ extensions: ACCEPTED_ATTACHMENT_EXTENSIONS })) as {
                 files?: Array<{ name: string; mimeType?: string; dataUrl?: string }>;
@@ -3435,27 +3436,22 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             console.error('VS Code file pick failed', error);
             toast.error(error instanceof Error ? error.message : t('chat.chatInput.toast.vscodePickFailed'));
         }
-    }, [attachFiles, isBtwActive, t, vscodeApi]);
+    }, [attachFiles, t, vscodeApi]);
 
     const handlePickLocalFiles = React.useCallback(() => {
-        if (isBtwActive) return;
         if (isVSCodeRuntime()) {
             void handleVSCodePickFiles();
             return;
         }
         fileInputRef.current?.click();
-    }, [handleVSCodePickFiles, isBtwActive]);
+    }, [handleVSCodePickFiles]);
 
     const handleLocalFileSelect = React.useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-        if (isBtwActive) {
-            event.target.value = '';
-            return;
-        }
         const files = event.target.files;
         if (!files) return;
         await attachFiles(files);
         event.target.value = '';
-    }, [attachFiles, isBtwActive]);
+    }, [attachFiles]);
 
     const footerGapClass = 'gap-x-1.5 gap-y-0';
     const isVSCode = isVSCodeRuntime();
@@ -3494,6 +3490,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         const installed = useGuestsStore.getState().guests.find((entry) => entry.id === issue.providerId);
         if (!installed || !isGuestActive(installed)) {
             toast.info(t('chat.chatInput.toast.guestUnavailableHere'));
+            return;
+        }
+        if (!installed.entry) {
+            toast.info(t('chat.chatInput.toast.guestHasNoPanel'));
             return;
         }
         const guest = guestAttachItems.find((entry) => entry.id === issue.providerId);
@@ -3852,6 +3852,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 ) : null}
 
                 <QueuedMessageChips
+                    target={messageQueueTarget}
+                    hidden={isBtwPanelVisible || !currentSessionId || newSessionDraftOpen}
                     onEditMessage={handleQueuedMessageEdit}
                     onQueueMessage={handleQueuedMessageQueue}
                     onSendMessage={handleQueuedMessageSend}
@@ -3973,6 +3975,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     )}
                     style={{ borderRadius: chatInputRadius }}
                     ref={dropZoneRef}
+                    // The mobile pill morph measures and animates this box.
+                    data-composer-box={isMobile ? 'true' : undefined}
                     onDropCapture={handleDropCapture}
                     onDragEnter={handleDragEnter}
                     onDragOver={handleDragOver}
@@ -4016,13 +4020,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             </div>
                         ) : null}
                         <div className="flex items-center gap-1 px-3 pt-1 flex-wrap relative z-10">
-                            {!isBtwActive ? <AttachedFilesList onShowPopup={handleShowAttachmentPreview} className="pt-2" /> : null}
+                            <AttachedFilesList onShowPopup={handleShowAttachmentPreview} className="pt-2" />
                             {!isBtwActive ? linkedReferenceChips : null}
-                            {!isBtwActive ? <AttachedVSCodeFileChips onShowPopup={handleShowAttachmentPreview} /> : null}
+                            <AttachedVSCodeFileChips onShowPopup={handleShowAttachmentPreview} />
                             {!isBtwActive ? <ActiveEditorFileSuggestion /> : null}
                         </div>
                         <div
                             className={cn("relative overflow-hidden", isComposerExpanded && 'flex flex-1 min-h-0 flex-col')}
+                            // The mobile pill morph moves this block from the
+                            // pill's text line and unfurls it.
+                            data-composer-morph-prompt={isMobile ? 'true' : undefined}
                             onDragEnter={handleDragEnter}
                             onDragOver={handleDragOver}
                             onDropCapture={handleDropCapture}
@@ -4119,6 +4126,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         onStartDictation={toggleDictation}
                         onDictationInsert={handleDictationInsert}
                         onDictationInsertAndSend={handleDictationInsertAndSend}
+                        onDictationStart={markDictationStart}
                         onDictationContentHeightChange={handleDictationContentHeightChange}
                         isBtw={isBtwActive}
                         modelSessionId={btwComposerSessionId}
@@ -4145,6 +4153,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         sendIconSizeClass={sendIconSizeClass}
                         onInsert={handleDictationInsert}
                         onInsertAndSend={handleDictationInsertAndSend}
+                        onStart={markDictationStart}
                         onActiveChange={mobileShell.onDictationActiveChange}
                         onContentHeightChange={handleDictationContentHeightChange}
                         renderTrigger={false}

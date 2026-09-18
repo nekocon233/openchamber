@@ -8,6 +8,21 @@ import { listRelativeGuestScriptHrefs, resolveGuestHtmlRelativePath } from './ht
 import { effectiveGrants, guestGrantScope } from './grant-scope.js';
 import { onExtensionStoreWrite, readExtensionStore } from './persist.js';
 import { buildPublicSocketBindings } from './sockets.js';
+import { isReservedBuiltInId, readBuiltInRegistry } from './builtins.js';
+
+const builtInsByStore = new Map();
+
+/** Registers the app-shipped catalog for one server instance, never a user install directory. */
+export const registerBuiltInGuests = async ({ persistPath, root }) => {
+  const registry = await readBuiltInRegistry(root);
+  builtInsByStore.set(persistPath, registry);
+  invalidateGuestCatalog(persistPath);
+  return () => {
+    if (builtInsByStore.get(persistPath) !== registry) return;
+    builtInsByStore.delete(persistPath);
+    invalidateGuestCatalog(persistPath);
+  };
+};
 
 const PANEL_ID = /^[a-z][a-z0-9-]*$/;
 
@@ -59,27 +74,26 @@ export const guestAssetContentType = (filePath) => {
   return MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? null;
 };
 
-/** What an iframe loads: the document and its scripts. A page-less guest has neither. */
+/** Documents and scripts are served only to extensions with an execution entry. */
 const isGuestFrameContentType = (contentType) => (
   contentType.startsWith('text/html') || contentType.startsWith('text/javascript')
 );
 
 /**
  * A `.js` URL can be served from a sibling `.ts` that the host compiles.
- * `hasPage` is whether the guest declared `panel.entry`; without one only
- * assets (its SVG icons) are served, never HTML or JS, so nothing of a
- * page-less package can end up mounted in a frame.
+ * `hasRuntime` means the guest declared panel.entry or background.entry.
+ * Tools-only packages can serve assets, never HTML or JS.
  */
-export const resolveGuestServedFile = async (packageRoot, relativePath, { hasPage = true } = {}) => {
+export const resolveGuestServedFile = async (packageRoot, relativePath, { hasRuntime = true } = {}) => {
   const filePath = await resolveGuestAssetPath(packageRoot, relativePath);
   const contentType = filePath ? guestAssetContentType(filePath) : null;
-  if (contentType && !hasPage && isGuestFrameContentType(contentType)) {
+  if (contentType && !hasRuntime && isGuestFrameContentType(contentType)) {
     return null;
   }
   if (filePath && contentType) {
     return { filePath, contentType };
   }
-  if (!hasPage || !relativePath.endsWith('.js')) {
+  if (!hasRuntime || !relativePath.endsWith('.js')) {
     return null;
   }
   const tsPath = await resolveGuestAssetPath(packageRoot, `${relativePath.slice(0, -3)}.ts`);
@@ -158,8 +172,7 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
     }
   }
   const panel = parsed.manifest.contributes.panel;
-  // A page-less package (tools only) has no HTML to check; parse already
-  // refused every contribution that would need a frame.
+  // The visible panel and background runtime are optional independent entries.
   if (hasGuestPage(parsed.manifest.contributes)) {
     const entryPath = await resolveGuestAssetPath(packageRoot, panel.entry);
     if (!entryPath) {
@@ -183,6 +196,16 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
   };
   if (panel.entry) {
     guest.entry = panel.entry;
+  }
+  const backgroundEntry = parsed.manifest.contributes.background?.entry;
+  if (backgroundEntry) {
+    if (!await resolveGuestAssetPath(packageRoot, backgroundEntry)) {
+      return { ok: false, code: 'invalid-manifest' };
+    }
+    if (!await guestBuiltScriptsReady(packageRoot, backgroundEntry)) {
+      return { ok: false, code: 'missing-build' };
+    }
+    guest.backgroundEntry = backgroundEntry;
   }
   if (parsed.version) {
     guest.version = parsed.version;
@@ -269,6 +292,9 @@ export const toPublicGuest = (guest) => {
   };
   if (guest.entry) {
     row.entry = guest.entry;
+  }
+  if (guest.backgroundEntry) {
+    row.backgroundEntry = guest.backgroundEntry;
   }
   if (typeof guest.version === 'string' && guest.version) {
     row.version = guest.version;
@@ -375,6 +401,32 @@ const listInstalledGuestsUncached = async ({ persistPath } = {}) => {
   const seen = new Set();
 
   const stored = await readExtensionStore(persistPath);
+  const builtIns = builtInsByStore.get(persistPath);
+  if (builtIns) {
+    for (const entry of builtIns.extensions) {
+      // Reserve the ID even when this individual package is broken.
+      seen.add(entry.id);
+      const root = await fs.realpath(path.join(builtIns.root, entry.directory)).catch(() => null);
+      if (!root || !root.startsWith(builtIns.root + path.sep)) {
+        console.warn(`Built-in extension is unavailable: ${entry.id}`);
+        continue;
+      }
+      const guest = await loadGuestFromPackageRoot(root, { skipEngineCheck: true }).catch(() => null);
+      if (!guest || guest.id !== entry.id) {
+        console.warn(`Built-in extension is invalid: ${entry.id}`);
+        continue;
+      }
+      const socketBindings = guest.service?.permissions?.sockets?.length
+        ? await buildPublicSocketBindings(guest.service.permissions.sockets, stored.serviceSocketOverrides?.[guest.id] ?? {})
+        : undefined;
+      guests.push({
+        ...withSource(guest, 'bundled', null),
+        capabilityGrants: requestedGuestCapabilities(guest),
+        enabled: !stored.disabledGuests?.[guest.id],
+        socketBindings,
+      });
+    }
+  }
   for (const storedPath of stored.paths) {
     const root = await resolveGuestPackageRoot(storedPath);
     if (!root) {
@@ -383,7 +435,7 @@ const listInstalledGuestsUncached = async ({ persistPath } = {}) => {
     // Already-installed packages stay listed even if engines.openchamber is newer
     // than this host. Install is the gate.
     const guest = await loadGuestFromPackageRoot(root, { skipEngineCheck: true });
-    if (!guest || seen.has(guest.id)) {
+    if (!guest || seen.has(guest.id) || isReservedBuiltInId(guest.id)) {
       continue;
     }
     seen.add(guest.id);

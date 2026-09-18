@@ -14,10 +14,9 @@ import {
     verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { createMessageQueueTarget, getMessageQueueKey, useMessageQueueStore, type MessageQueueTarget, type QueuedMessage } from '@/stores/messageQueueStore';
-import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useDirectoryStore } from '@/stores/useDirectoryStore';
-import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { getMessageQueueKey, useMessageQueueStore, type MessageQueueTarget, type QueuedMessage } from '@/stores/messageQueueStore';
+import { useUIStore } from '@/stores/useUIStore';
+import { ComposerFloatingPanel } from './composer/ui/ComposerFloatingPanel';
 import { useI18n } from '@/lib/i18n';
 import { Icon } from "@/components/icon/Icon";
 import { Button } from '@/components/ui/button';
@@ -178,6 +177,8 @@ const QueuedMessageChip = memo(({ message, target, sendingMessageId, onEdit, onQ
 QueuedMessageChip.displayName = 'QueuedMessageChip';
 
 interface QueuedMessageChipsProps {
+    target: MessageQueueTarget | null;
+    hidden?: boolean;
     onEditMessage: (message: QueuedMessage) => void;
     onQueueMessage: (messageId: string) => void;
     onSendMessage: (messageId: string) => void;
@@ -186,30 +187,13 @@ interface QueuedMessageChipsProps {
 
 const EMPTY_QUEUE: QueuedMessage[] = [];
 
-export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendMessage, sendingMessageId }: QueuedMessageChipsProps) => {
+export const QueuedMessageChips = memo(({ target, hidden = false, onEditMessage, onQueueMessage, onSendMessage, sendingMessageId }: QueuedMessageChipsProps) => {
     const { t } = useI18n();
-    const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
-    const currentSessionDirectory = useSessionUIStore(
-        React.useCallback(
-            (state) => currentSessionId
-                ? state.getDirectoryForSession(currentSessionId)
-                : null,
-            [currentSessionId],
-        ),
-    );
-    const fallbackDirectory = useDirectoryStore((state) => state.currentDirectory);
-    const currentDirectory = useEffectiveDirectory() ?? fallbackDirectory;
-    const runtimeKey = useMessageQueueStore((state) => state.runtimeKey);
-    const target = React.useMemo(
-        () => currentSessionId
-            ? createMessageQueueTarget(
-                currentSessionId,
-                currentSessionDirectory ?? currentDirectory,
-                runtimeKey,
-            )
-            : null,
-        [currentDirectory, currentSessionDirectory, currentSessionId, runtimeKey],
-    );
+    // One shared preference, so the list stays open (or closed) across
+    // session switches instead of resetting with the queue key.
+    const collapsed = !useUIStore((state) => state.messageQueueExpanded);
+    const setMessageQueueExpanded = useUIStore((state) => state.setMessageQueueExpanded);
+    const bodyId = React.useId();
     const queueKey = target ? getMessageQueueKey(target) : null;
     const queuedMessages = useMessageQueueStore(
         React.useCallback(
@@ -253,19 +237,27 @@ export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendM
         onSendMessage(message.id);
     }, [onSendMessage]);
 
-    if (queuedMessages.length === 0 || !target) {
+    if (hidden || queuedMessages.length === 0 || !target) {
         return null;
     }
 
     return (
-        <div className="w-full px-1 pb-2">
-            <div className="overflow-hidden rounded-xl border border-border/60 bg-[var(--surface-elevated)] text-[var(--surface-elevated-foreground)] shadow-sm">
-                <div className="flex w-full items-center gap-2 border-b border-border/50 px-3 py-1.5 text-left md:py-2">
-                    <span className="typography-ui-label font-medium text-foreground flex-shrink-0">
-                        {t('chat.queuedMessage.title', { count: queuedMessages.length })}
-                    </span>
-                    <Icon name="file-edit" className="ml-auto hidden h-4 w-4 text-muted-foreground md:block" aria-hidden="true" />
-                </div>
+        <ComposerFloatingPanel role="region" ariaLabel={t('chat.queuedMessage.title')} compact={collapsed} header={
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setMessageQueueExpanded(collapsed)}
+                    aria-expanded={!collapsed}
+                    aria-controls={collapsed ? undefined : bodyId}
+                    className="min-w-0 flex-1 shrink justify-start px-0 normal-case text-muted-foreground hover:!bg-transparent hover:text-foreground has-[>svg]:px-0"
+                >
+                    <Icon name="time" className="size-3.5 shrink-0" aria-hidden="true" />
+                    <Icon name={collapsed ? 'arrow-up-s' : 'arrow-down-s'} className="size-4 shrink-0" aria-hidden="true" />
+                    <span className="min-w-0 truncate">{t('chat.queuedMessage.title')} {queuedMessages.length}</span>
+                </Button>
+        }>
+            {!collapsed && (
                 <DndContext
                     sensors={sensors}
                     collisionDetection={closestCenter}
@@ -275,7 +267,7 @@ export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendM
                         items={queuedMessages.map((m) => m.id)}
                         strategy={verticalListSortingStrategy}
                     >
-                        <div className="flex max-h-[min(36dvh,18rem)] flex-col divide-y divide-border/50 overflow-y-auto overscroll-contain px-3 md:max-h-[10.5rem] md:divide-y-0">
+                        <div id={bodyId} className="flex max-h-[min(36dvh,18rem)] flex-col divide-y divide-border/50 overflow-y-auto overscroll-contain px-3 md:max-h-[10.5rem] md:divide-y-0">
                             {queuedMessages.map((message) => (
                                 <QueuedMessageChip
                                     key={message.id}
@@ -290,8 +282,8 @@ export const QueuedMessageChips = memo(({ onEditMessage, onQueueMessage, onSendM
                         </div>
                     </SortableContext>
                 </DndContext>
-            </div>
-        </div>
+            )}
+        </ComposerFloatingPanel>
     );
 });
 
