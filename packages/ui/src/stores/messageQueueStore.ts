@@ -630,6 +630,11 @@ export const createMessageQueueStore = (
             && contextIsCurrent({ runtimeKey: lane.runtimeKey, generation: lane.generation })
         );
 
+        const identityIsCurrent = (identity: MessageQueueIdentity): boolean => (
+            typeof identity === 'string'
+            || normalizeRuntimeKey(identity.runtimeKey) === get().runtimeKey
+        );
+
         const persistLane = (lane: QueueLane): boolean => {
             const stored: StoredQueueLane = {
                 version: 1,
@@ -1506,13 +1511,24 @@ export const createMessageQueueStore = (
                 const work: Promise<void>[] = [];
                 for (const [key, count] of watchCounts) {
                     const identity = watchIdentities.get(key);
-                    if (count > 0 && identity) work.push(initializeLane(getLane(identity)));
+                    // A watch from a replaced runtime stays registered until its
+                    // watcher re-renders. Skipping it keeps one retired entry
+                    // from aborting initialization for every current lane.
+                    if (count > 0 && identity && identityIsCurrent(identity)) {
+                        work.push(initializeLane(getLane(identity)));
+                    }
                 }
                 await Promise.all(work);
             },
 
             watchSession: (identity) => {
                 if (!getQueueSessionId(identity)) return () => {};
+                // A watcher renders against the runtime the store published and
+                // subscribes one commit later, so the runtime can be replaced in
+                // between. That watch has no lane left to observe and the next
+                // render re-subscribes against the current runtime, which makes
+                // this an expected lifecycle event rather than a caller error.
+                if (!identityIsCurrent(identity)) return () => {};
                 const key = getQueueKey(identity);
                 watchIdentities.set(key, identity);
                 watchCounts.set(key, (watchCounts.get(key) ?? 0) + 1);
