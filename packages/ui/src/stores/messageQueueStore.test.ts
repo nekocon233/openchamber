@@ -1051,6 +1051,44 @@ describe('message queue target ownership', () => {
         expect(parseMessageQueueKey(getMessageQueueKey(target))).toEqual(target);
     });
 
+    test('ignores a watch captured before a runtime switch instead of failing its caller', async () => {
+        let runtimeKey = 'runtime-a';
+        const { store } = createClient({ getRuntimeKey: () => runtimeKey });
+        const retired = createMessageQueueTarget('session-1', '/repo', 'runtime-a')!;
+
+        runtimeKey = 'runtime-b';
+        store.getState().switchRuntime(runtimeKey);
+
+        // Registering the retired watch must not throw into its caller.
+        const unwatchRetired = store.getState().watchSession(retired);
+        expect(typeof unwatchRetired).toBe('function');
+        unwatchRetired();
+
+        const current = createMessageQueueTarget('session-1', '/repo', 'runtime-b')!;
+        await watchAndInitialize(store, current);
+        await store.getState().addToQueue(current, { content: 'after the switch' });
+        expect(store.getState().getQueueForTarget(current).map((message) => message.content))
+            .toEqual(['after the switch']);
+    });
+
+    test('a watch left behind by a previous runtime does not block initializing current lanes', async () => {
+        let runtimeKey = 'runtime-a';
+        const { authority, store } = createClient({ getRuntimeKey: () => runtimeKey });
+        store.getState().watchSession(createMessageQueueTarget('session-retired', '/repo', 'runtime-a')!);
+
+        runtimeKey = 'runtime-b';
+        await store.getState().initialize();
+
+        const current = createMessageQueueTarget('session-current', '/repo', 'runtime-b')!;
+        store.getState().watchSession(current);
+        // The retired watch stays registered until its watcher re-renders; this
+        // pass must still reach the current lane instead of rejecting on it.
+        await store.getState().initialize();
+        await flush();
+
+        expect(authority.loadCalls).toContain('session-current');
+    });
+
     test('quarantines legacy session-only queues instead of assigning them to a target', () => {
         const migrated = migrateMessageQueueState({
             queuedMessages: {
