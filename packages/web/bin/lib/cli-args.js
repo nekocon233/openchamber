@@ -119,6 +119,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     timeout: undefined,
     lastAssistant: false,
     withStatus: false,
+    url: undefined,
   };
 
   const removedFlagErrors = [];
@@ -371,6 +372,15 @@ function parseArgs(argv = process.argv.slice(2)) {
         options.configPath = typeof value === 'string' ? value : null;
         break;
       }
+      case 'url': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        if (typeof value !== 'string' || value.trim().length === 0) {
+          throw new TunnelCliError('Missing value for --url.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.url = value.trim();
+        break;
+      }
       case 'token': {
         const { value, nextIndex } = consumeValue(i, inlineValue);
         i = nextIndex;
@@ -598,6 +608,7 @@ function parseArgs(argv = process.argv.slice(2)) {
   const scheduleAction = command === 'schedule' ? (positional[1] || 'help') : null;
   const sessionAction = command === 'session' ? (positional[1] || 'help') : null;
   const controlAction = command === 'control' ? (positional[1] || 'help') : null;
+  const forwardPort = command === 'forward' ? (positional[1] ?? null) : null;
 
   if (options.lan && typeof options.host !== 'string') {
     options.host = '0.0.0.0';
@@ -615,6 +626,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     scheduleAction,
     sessionAction,
     controlAction,
+    forwardPort,
     options,
     removedFlagErrors,
     helpRequested,
@@ -643,6 +655,7 @@ COMMANDS:
   startup        Manage launch at system startup
   logs           Tail OpenChamber logs
   connect-url    Generate URL/QR for connecting another client
+  forward        Open a remote OpenChamber's dev server on a local port
   update         Check for and install updates
 
 OPTIONS:
@@ -652,6 +665,8 @@ OPTIONS:
   --lan                   Bind to 0.0.0.0 for LAN access
   --server <url>          Public/server URL for connect-url links
   --relay                 connect-url: also include the end-to-end-encrypted relay transport
+  --url <url>             forward: base URL of the remote OpenChamber
+  --token <token>         forward/tunnel: client token (see --token-file, --token-stdin)
   --ui-password [password] Protect browser UI with a password (generates one when omitted)
   --api-only              Start API routes only, without serving browser UI assets
   --foreground            Run server in foreground (use with systemd/process managers)
@@ -664,6 +679,8 @@ ENVIRONMENT:
   OPENCHAMBER_UI_PASSWORD      Alternative to --ui-password flag
   OPENCHAMBER_API_ONLY         Set to true/1 to start API routes only
   OPENCHAMBER_DATA_DIR         Override OpenChamber data directory
+  OPENCHAMBER_URL              forward: default --url value
+  OPENCHAMBER_CLIENT_TOKEN     forward: default client token
   OPENCODE_HOST               External OpenCode server base URL, e.g. http://hostname:4096
   OPENCODE_PORT               Port of external OpenCode server to connect to
   OPENCODE_SKIP_START          Skip starting OpenCode, use external server
@@ -680,6 +697,8 @@ EXAMPLES:
   openchamber startup enable     # Start OpenChamber at user login
   openchamber tunnel help        # Show tunnel lifecycle help
   openchamber logs               # Follow logs for latest running instance
+  openchamber forward 5173 --url https://oc.example.com
+                                 # Serve the host's dev server on a local port
 `);
 }
 
@@ -894,7 +913,7 @@ _openchamber_tunnel() {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="serve stop restart status schedule session models projects tunnel logs update"
+    commands="serve stop restart status schedule session models projects tunnel logs forward update"
   tunnel_commands="help providers ready doctor status start stop profile completion"
   profile_commands="list show add remove"
   common_flags="--port --foreground --no-daemon --json --all --force --help --version --plain --quiet"
@@ -957,6 +976,7 @@ _openchamber() {
     'projects:Show configured projects and IDs'
     'tunnel:Tunnel lifecycle commands'
     'logs:Tail OpenChamber logs'
+    'forward:Open a remote dev server on a local port'
     'update:Check for and install updates'
   )
 
@@ -1022,6 +1042,9 @@ complete -c openchamber -n '__fish_use_subcommand' -a 'restart' -d 'Stop and sta
 complete -c openchamber -n '__fish_use_subcommand' -a 'status' -d 'Show server status'
 complete -c openchamber -n '__fish_use_subcommand' -a 'tunnel' -d 'Tunnel lifecycle commands'
 complete -c openchamber -n '__fish_use_subcommand' -a 'logs' -d 'Tail logs'
+complete -c openchamber -n '__fish_use_subcommand' -a 'forward' -d 'Open a remote dev server on a local port'
+complete -c openchamber -n '__fish_seen_subcommand_from forward' -l url -d 'Remote OpenChamber base URL'
+complete -c openchamber -n '__fish_seen_subcommand_from forward' -l token -d 'Client token'
 complete -c openchamber -n '__fish_use_subcommand' -a 'update' -d 'Check for updates'
 
 complete -c openchamber -n '__fish_seen_subcommand_from tunnel; and not __fish_seen_subcommand_from help providers ready doctor status start stop profile completion' -a 'help' -d 'Show tunnel help'

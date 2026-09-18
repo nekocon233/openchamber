@@ -1,13 +1,14 @@
 import React from 'react';
 
 import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui';
 import { Icon } from '@/components/icon/Icon';
 import { OpenChamberLogo } from '@/components/ui/OpenChamberLogo';
 import { useI18n } from '@/lib/i18n';
 import { fetchDevServers, mergeDevServerCandidates, type DevServerDiscovery } from '@/lib/browser/devServers';
 import { clearAnnouncedDevServers, useAnnouncedDevServers } from '@/lib/browser/announcedServers';
-import { browserUrlLabel, isLoopbackUrl } from '@/lib/browser/url';
-import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
+import { browserUrlLabel } from '@/lib/browser/url';
+import { useForwardedPorts, useIsPortForwardRelevant } from './useForwardedPorts';
 
 /**
  * What the panel shows before anything is loaded.
@@ -16,6 +17,11 @@ import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
  * which is almost always what the user came here to open. Discovery failure is
  * stated plainly instead of being rendered as "nothing is running" — the two
  * mean very different things to someone whose dev server is definitely up.
+ *
+ * When OpenChamber is on another machine, those servers are not reachable from
+ * here until one is forwarded, so each row carries that as an explicit action.
+ * Forwarding publishes a dev server on its own hostname, which is a decision
+ * the user makes rather than something opening a tab does for them.
  */
 
 /** The base path a server is served under, or '' when it sits at the root. */
@@ -31,23 +37,6 @@ const pathLabel = (url: string): string => {
 /** Re-checked while the panel is open: a project's servers appear seconds apart. */
 const REFRESH_INTERVAL_MS = 2_000;
 
-/**
- * True when the listed servers are on another machine and this client has no
- * way to reach them. The desktop shell tunnels a local port for exactly this
- * case; a browser tab has no equivalent, and its `localhost` is its own.
- */
-const isUnreachableFromHere = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  if (window.__OPENCHAMBER_ELECTRON__) return false;
-  const baseUrl = getRuntimeApiBaseUrl();
-  if (!baseUrl) return false;
-  try {
-    return !isLoopbackUrl(new URL(baseUrl, window.location.href).toString());
-  } catch {
-    return false;
-  }
-};
-
 export const BrowserEmptyState: React.FC<{
   onOpen: (url: string) => void;
   directory?: string;
@@ -55,7 +44,11 @@ export const BrowserEmptyState: React.FC<{
   const { t } = useI18n();
   const [discovery, setDiscovery] = React.useState<DevServerDiscovery>({ kind: 'loading' });
   const announced = useAnnouncedDevServers(directory);
-  const [remoteOnly] = React.useState(isUnreachableFromHere);
+  const remoteOnly = useIsPortForwardRelevant();
+  const forwards = useForwardedPorts({
+    enabled: remoteOnly,
+    onError: React.useCallback((message: string) => toast.error(message), []),
+  });
 
   React.useEffect(() => {
     let active = true;
@@ -104,32 +97,78 @@ export const BrowserEmptyState: React.FC<{
           </span>
           {remoteOnly ? (
             <span className="shrink-0 pb-1 text-left typography-micro text-muted-foreground">
-              {t('contextPanel.browser.devServers.remoteOnly')}
+              {forwards.state.kind === 'unconfigured'
+                ? t('contextPanel.browser.devServers.remoteOnlyUnconfigured')
+                : t('contextPanel.browser.devServers.remoteOnly')}
             </span>
           ) : null}
           <div className="flex min-h-0 flex-col gap-1 overflow-y-auto pr-0.5">
-            {candidates.map((candidate) => (
-              <Button
-                key={candidate.port}
-                type="button"
-                variant="outline"
-                size="sm"
-                className="w-full shrink-0 justify-start gap-2"
-                onClick={() => {
-                  // The offer is answered; leaving it up would keep suggesting
-                  // servers behind a page the user is already looking at.
-                  clearAnnouncedDevServers(directory);
-                  onOpen(candidate.url);
-                }}
-              >
-                <Icon name="global" className="size-3.5 shrink-0" aria-hidden="true" />
-                <span className="truncate">{browserUrlLabel(candidate.url) || candidate.url}</span>
-                <span className="ml-auto truncate typography-micro text-muted-foreground">
-                  {pathLabel(candidate.url)}
-                </span>
-              </Button>
-            ))}
+            {candidates.map((candidate) => {
+              const forwarded = forwards.isForwarded(candidate.port);
+              // Only a configured forward can be started; without a template
+              // the row offers nothing rather than a control that fails.
+              const canForward = remoteOnly && forwards.state.kind === 'ready';
+              const busy = forwards.pending.has(candidate.port);
+              const openable = !remoteOnly || forwarded;
+
+              return (
+                <div key={candidate.port} className="flex shrink-0 items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!openable}
+                    className="min-w-0 flex-1 justify-start gap-2"
+                    onClick={() => {
+                      // The offer is answered; leaving it up would keep suggesting
+                      // servers behind a page the user is already looking at.
+                      clearAnnouncedDevServers(directory);
+                      onOpen(candidate.url);
+                    }}
+                  >
+                    <Icon name="global" className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{browserUrlLabel(candidate.url) || candidate.url}</span>
+                    <span className="ml-auto truncate typography-micro text-muted-foreground">
+                      {pathLabel(candidate.url)}
+                    </span>
+                  </Button>
+
+                  {canForward ? (
+                    <Button
+                      type="button"
+                      variant={forwarded ? 'secondary' : 'default'}
+                      size="sm"
+                      disabled={busy}
+                      className="shrink-0"
+                      title={forwarded ? t('contextPanel.browser.portForward.exposureWarning') : undefined}
+                      onClick={() => {
+                        if (forwarded) {
+                          void forwards.stop(candidate.port);
+                          return;
+                        }
+                        void forwards.start(candidate.port).then((forward) => {
+                          if (!forward) return;
+                          clearAnnouncedDevServers(directory);
+                          onOpen(candidate.url);
+                        });
+                      }}
+                    >
+                      {busy
+                        ? t('contextPanel.browser.portForward.starting')
+                        : forwarded
+                          ? t('contextPanel.browser.portForward.stop')
+                          : t('contextPanel.browser.portForward.start')}
+                    </Button>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
+          {remoteOnly && forwards.state.kind === 'ready' ? (
+            <span className="shrink-0 pt-1 text-left typography-micro text-muted-foreground">
+              {t('contextPanel.browser.portForward.exposureWarning')}
+            </span>
+          ) : null}
         </div>
       ) : null}
 

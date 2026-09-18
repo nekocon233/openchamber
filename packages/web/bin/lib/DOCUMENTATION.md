@@ -45,6 +45,22 @@ Command modules implement user-facing commands and preserve output contracts acr
   - Implements `openchamber logs`.
   - Resolves log files, tails recent lines, and follows log output.
 
+- `commands-forward.js`
+  - Implements `openchamber forward <port> --url <remote>`.
+  - Binds a loopback port here and pipes it to a dev server on a remote
+    OpenChamber through the existing `/api/dev-tunnel` socket, reusing
+    `server/lib/dev-tunnel/client.js`. No server change belongs to this command.
+  - This is the fallback for deployments that cannot give each forwarded port
+    its own hostname (quick tunnels, the private relay, no wildcard
+    certificate); the hostname-based path is `server/lib/port-forward/`.
+  - The remote is checked over plain HTTP before any socket opens. A refused
+    WebSocket upgrade reaches the browser as a blank page, so bad token, port
+    not running, and discovery unavailable are turned into distinct messages and
+    exit codes here instead.
+  - Runs in the foreground for the life of the tunnel. It registers through the
+    same foreground-shutdown hook as `serve`, so Ctrl-C closes the tunnel rather
+    than printing the generic cancellation notice.
+
 - `commands-startup.js`
   - Implements `openchamber startup`.
   - Handles startup subcommand dispatch and presentation around the lower-level startup service helpers.

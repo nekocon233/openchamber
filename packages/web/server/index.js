@@ -127,6 +127,8 @@ import { createAgentToolRuntime } from './lib/agent-tool/runtime.js';
 import { createBrowserControlBroker } from './lib/browser-control/broker.js';
 import { createDevServerScanner } from './lib/dev-servers/routes.js';
 import { createDevTunnelRuntime } from './lib/dev-tunnel/runtime.js';
+import { createPortForwardRuntime } from './lib/port-forward/runtime.js';
+import { registerPortForwardRoutes } from './lib/port-forward/routes.js';
 import { registerBrowserControlRoutes } from './lib/browser-control/routes.js';
 import { createSystemPromptRuntime } from './lib/system-prompt/runtime.js';
 import { createClaudeExecutionRuntime } from './lib/claude-execution/runtime.js';
@@ -1865,7 +1867,35 @@ async function main(options = {}) {
     threshold: 1024,
   }));
   expressApp = app;
-  server = http.createServer(app);
+
+  // One scanner backs discovery, the desktop tunnel's allowlist, and the
+  // forward's: a port the user can see is exactly a port those two will dial.
+  const devServerScanner = createDevServerScanner({ spawn, platform: process.platform });
+  const listDevServers = () => devServerScanner.discover({
+    ownPorts: [port, openCodePort].filter((value) => Number.isInteger(value) && value > 0),
+  });
+
+  const portForwardRuntime = createPortForwardRuntime({ discoverDevServers: listDevServers });
+
+  // Split before Express, not inside it. A forwarded hostname owns its whole
+  // path space, and it carries none of OpenChamber's own credentials — letting
+  // it reach the app's routes would serve the app, and its sign-in page, from
+  // an origin OpenChamber does not authenticate.
+  server = http.createServer((req, res) => {
+    if (portForwardRuntime.handles(req)) {
+      void portForwardRuntime.handleRequest(req, res);
+      return;
+    }
+    app(req, res);
+  });
+
+  // Registered first so it claims a forwarded upgrade before the path-matching
+  // listeners below can answer it; Node runs every listener for every upgrade.
+  server.on('upgrade', (req, socket, head) => {
+    if (!portForwardRuntime.handles(req)) return;
+    void portForwardRuntime.handleUpgrade(req, socket, head);
+  });
+
   let realtimeProxyRuntime = { stop: () => {} };
 
   // The relay service is constructed further below (it depends on the tunnel
@@ -2054,11 +2084,9 @@ async function main(options = {}) {
 
   registerBrowserControlRoutes(app, { express, broker: browserControlBroker });
 
-  // One scanner backs both discovery and the tunnel allowlist, so a port the
-  // user can see is exactly a port the tunnel will dial.
-  const devServerScanner = createDevServerScanner({ spawn, platform: process.platform });
-  const listDevServers = () => devServerScanner.discover({
-    ownPorts: [port, openCodePort].filter((value) => Number.isInteger(value) && value > 0),
+  registerPortForwardRoutes(app, {
+    runtime: portForwardRuntime,
+    readHostTemplate: async () => (await readSettingsFromDiskMigrated())?.portForwardHostTemplate ?? null,
   });
 
   createDevTunnelRuntime({

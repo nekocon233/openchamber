@@ -135,6 +135,8 @@ export type DesktopSettings = {
   frpcPublicUrl?: string | null;
   frpcCustomDomain?: string | null;
   frpcPublicHostname?: string | null;
+  /** Hostname pattern forwarded dev servers are published under, e.g. `oc--{port}.example.com`. */
+  portForwardHostTemplate?: string | null;
   defaultModel?: string; // format: "provider/model"
   defaultVariant?: string;
   defaultAgent?: string;

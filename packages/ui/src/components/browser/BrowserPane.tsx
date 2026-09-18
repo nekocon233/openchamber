@@ -1,6 +1,8 @@
 import React from 'react';
 
 import { toast } from '@/components/ui';
+import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/icon/Icon';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { invokeDesktopCommand } from '@/lib/desktopNative';
 import { useI18n } from '@/lib/i18n';
@@ -42,8 +44,10 @@ import {
   viewportSummary,
   type BrowserViewport,
 } from '@/lib/browser/viewport';
+import { resolveForwardedUrl, type ForwardResolution } from '@/lib/browser/portForward';
 import { BrowserEmptyState } from './BrowserEmptyState';
 import { useAnnotationAttach, useAnnotationOverlayLabels } from './useAnnotationAttach';
+import { useForwardedPorts, useIsPortForwardRelevant } from './useForwardedPorts';
 import { readEventPayload, useWebviewNavigation } from './useWebviewNavigation';
 
 export type BrowserPaneProps = {
@@ -829,9 +833,69 @@ const WebviewBrowser: React.FC<BrowserPaneProps> = ({ initialUrl, directory, tab
 };
 
 /**
+ * What the panel shows instead of a page when a forward stands between them.
+ *
+ * Each case names something the user can act on. Falling back to the original
+ * `localhost` URL is never one of them: on a remote instance that changes which
+ * machine answers, so it would show whatever runs on that port here — possibly
+ * a different application — under the address they asked for.
+ */
+const ForwardBlocked: React.FC<{
+  resolution: ForwardResolution;
+  url: string;
+  busy: boolean;
+  onForward: () => void;
+}> = ({ resolution, url, busy, onForward }) => {
+  const { t } = useI18n();
+
+  const content = resolution.kind === 'not-forwarded'
+    ? {
+        title: t('contextPanel.browser.portForward.notForwarded', { port: resolution.port }),
+        hint: t('contextPanel.browser.portForward.notForwardedHint'),
+        action: true,
+      }
+    : resolution.kind === 'unconfigured'
+      ? {
+          title: t('contextPanel.browser.portForward.unconfigured'),
+          hint: resolution.templateError ?? t('contextPanel.browser.portForward.unconfiguredHint'),
+          action: false,
+        }
+      : {
+          title: t('contextPanel.browser.tunnelFailed'),
+          hint: t('contextPanel.browser.tunnelFailedHint', { url }),
+          action: false,
+        };
+
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+      <Icon name="global" className="size-8 shrink-0 text-muted-foreground/40" aria-hidden="true" />
+      <span className="typography-ui-header text-foreground">{content.title}</span>
+      <span className="max-w-sm typography-micro text-muted-foreground">{content.hint}</span>
+      {content.action ? (
+        <>
+          <Button type="button" size="sm" disabled={busy} onClick={onForward}>
+            {busy
+              ? t('contextPanel.browser.portForward.starting')
+              : t('contextPanel.browser.portForward.start')}
+          </Button>
+          <span className="max-w-sm typography-micro text-muted-foreground">
+            {t('contextPanel.browser.portForward.exposureWarning')}
+          </span>
+        </>
+      ) : null}
+    </div>
+  );
+};
+
+/**
  * Non-Chromium runtimes get a plain iframe. Same-origin policy makes the page
  * opaque to us here: no navigation events, no annotation, no console. The
  * toolbar reflects that instead of offering controls that would silently fail.
+ *
+ * The address the user sees and the URL the frame loads are deliberately
+ * different when OpenChamber is elsewhere: the tab keeps `localhost:5173`,
+ * which survives a restart and a change of forward hostname, while the frame
+ * gets a single-use forwarded URL minted for this load.
  */
 const IframeBrowser: React.FC<BrowserPaneProps> = ({ initialUrl, directory, tabID }) => {
   const { t } = useI18n();
@@ -844,6 +908,33 @@ const IframeBrowser: React.FC<BrowserPaneProps> = ({ initialUrl, directory, tabI
   const [history, setHistory] = React.useState<string[]>(startUrl ? [startUrl] : []);
   const [historyIndex, setHistoryIndex] = React.useState(startUrl ? 0 : -1);
   const [reloadNonce, bumpReload] = React.useReducer((value: number) => value + 1, 0);
+
+  // `null` means "still resolving"; rendering the frame before then would load
+  // the unforwarded address for one paint.
+  const [resolution, setResolution] = React.useState<ForwardResolution | null>(null);
+  // Bumped when a forward starts, so the blocked view re-resolves on demand
+  // rather than on the forward poll — that would re-mint the grant every few
+  // seconds and reload the page under the user.
+  const [resolveNonce, bumpResolve] = React.useReducer((value: number) => value + 1, 0);
+
+  const forwardRelevant = useIsPortForwardRelevant();
+  const forwards = useForwardedPorts({
+    enabled: forwardRelevant,
+    onError: React.useCallback((message: string) => toast.error(message), []),
+  });
+
+  React.useEffect(() => {
+    if (!loadedUrl) {
+      setResolution(null);
+      return;
+    }
+    let active = true;
+    setResolution(null);
+    void resolveForwardedUrl(loadedUrl).then((next) => {
+      if (active) setResolution(next);
+    });
+    return () => { active = false; };
+  }, [loadedUrl, reloadNonce, resolveNonce]);
 
   const persistUrl = React.useCallback((url: string) => {
     if (!url || url === BLANK_URL || !directory || !tabID) return;
@@ -904,16 +995,32 @@ const IframeBrowser: React.FC<BrowserPaneProps> = ({ initialUrl, directory, tabI
         isLoading={false}
       />
       <div className="relative min-h-0 flex-1 bg-background">
-        {loadedUrl ? (
+        {!loadedUrl ? (
+          <BrowserEmptyState onOpen={navigate} directory={directory} />
+        ) : resolution === null ? (
+          <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden">
+            <div className="h-full w-1/3 animate-[browser-progress_1.1s_ease-in-out_infinite] bg-[var(--primary)]" />
+          </div>
+        ) : resolution.kind === 'direct' || resolution.kind === 'forwarded' ? (
           <iframe
-            key={`${loadedUrl}|${reloadNonce}`}
-            src={loadedUrl}
+            key={`${resolution.url}|${reloadNonce}`}
+            src={resolution.url}
             title={t('contextPanel.browser.frameTitle')}
             className="h-full w-full border-none bg-white"
             sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
           />
         ) : (
-          <BrowserEmptyState onOpen={navigate} />
+          <ForwardBlocked
+            resolution={resolution}
+            url={loadedUrl}
+            busy={resolution.kind === 'not-forwarded' && forwards.pending.has(resolution.port)}
+            onForward={() => {
+              if (resolution.kind !== 'not-forwarded') return;
+              void forwards.start(resolution.port).then((forward) => {
+                if (forward) bumpResolve();
+              });
+            }}
+          />
         )}
       </div>
     </div>

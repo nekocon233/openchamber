@@ -25,6 +25,7 @@ import { WebSocketServer } from 'ws';
 import { authorizeWebSocketUpgrade } from '../ui-auth/channel-auth.js';
 import { DictationStreamManager } from './stream-manager.js';
 import { createDictationService } from './service.js';
+import { isUpgradeClaimed } from '../port-forward/claim.js';
 
 const DICTATION_WS_PATH = '/api/dictation/ws';
 
@@ -234,6 +235,7 @@ export function createDictationRuntime({
   });
 
   const upgradeHandler = (req, socket, head) => {
+    if (isUpgradeClaimed(req)) return;
     const pathname = parseRequestPathname(req.url);
     if (pathname !== DICTATION_WS_PATH) {
       return;

@@ -27,6 +27,8 @@
 import net from 'node:net';
 import { WebSocketServer } from 'ws';
 
+import { isUpgradeClaimed } from '../port-forward/claim.js';
+
 const DEV_TUNNEL_WS_PATH = '/api/dev-tunnel';
 /** One page load opens many sockets; the cap is per host, not per page. */
 const MAX_CONCURRENT_SOCKETS = 64;
@@ -129,6 +131,7 @@ export function createDevTunnelRuntime({
   });
 
   const upgradeHandler = (req, socket, head) => {
+    if (isUpgradeClaimed(req)) return;
     if (!isDevTunnelPath(req.url)) return;
     void (async () => {
       try {

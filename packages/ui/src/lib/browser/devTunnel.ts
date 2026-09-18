@@ -13,7 +13,7 @@
 import { invokeDesktopCommand } from '@/lib/desktopNative';
 import { getRuntimeBearerTokenSync, getRuntimeExtraHeadersSync } from '@/lib/runtime-auth';
 import { getRuntimeApiBaseUrl, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
-import { isLoopbackUrl } from './url';
+import { isLoopbackUrl, isRemoteOpenChamberOrigin, loopbackPort } from './url';
 
 type TunnelResult = { localPort: number; reused: boolean; url: string };
 
@@ -25,37 +25,6 @@ const originByLocalPort = new Map<number, string>();
 const isDesktopRuntime = (): boolean => (
   typeof window !== 'undefined' && Boolean(window.__OPENCHAMBER_ELECTRON__)
 );
-
-/**
- * True when the app is talking to an OpenChamber on another machine. A local
- * runtime resolves loopback URLs correctly on its own and must not be tunneled,
- * which would only add a hop.
- */
-const isRemoteRuntime = (baseUrl: string): boolean => {
-  if (!baseUrl) return false;
-  try {
-    const parsed = new URL(baseUrl, typeof window !== 'undefined' ? window.location.href : undefined);
-    const localOrigin = typeof window !== 'undefined' ? window.__OPENCHAMBER_LOCAL_ORIGIN__ : '';
-    if (localOrigin && parsed.origin === localOrigin) return false;
-    return !isLoopbackUrl(parsed.toString());
-  } catch {
-    return false;
-  }
-};
-
-/**
- * The port a loopback URL addresses, including the one it leaves implicit.
- * Both callers must agree on this: an omitted port is 80 or 443, not nothing.
- */
-const loopbackPort = (url: string): number => {
-  try {
-    const parsed = new URL(url);
-    const port = Number.parseInt(parsed.port || (parsed.protocol === 'https:' ? '443' : '80'), 10);
-    return Number.isInteger(port) && port > 0 ? port : 0;
-  } catch {
-    return 0;
-  }
-};
 
 const rewriteToLocalPort = (url: string, localPort: number): string => {
   try {
@@ -92,7 +61,7 @@ export const resolveBrowsableUrl = async (url: string): Promise<string> => {
   if (!url || !isDesktopRuntime() || !isLoopbackUrl(url)) return url;
 
   const baseUrl = getRuntimeApiBaseUrl();
-  if (!isRemoteRuntime(baseUrl)) return url;
+  if (!isRemoteOpenChamberOrigin(baseUrl)) return url;
 
   const port = loopbackPort(url);
   if (!port) return url;
@@ -146,7 +115,7 @@ export const resolveBrowsableUrl = async (url: string): Promise<string> => {
  */
 export const shouldTunnelLoopbackUrl = (url: string): boolean => {
   if (!url || !isDesktopRuntime() || !isLoopbackUrl(url)) return false;
-  if (!isRemoteRuntime(getRuntimeApiBaseUrl())) return false;
+  if (!isRemoteOpenChamberOrigin(getRuntimeApiBaseUrl())) return false;
   const port = loopbackPort(url);
   return port > 0 && !originByLocalPort.has(port);
 };

@@ -631,4 +631,45 @@ describe('settings helpers', () => {
       expect(sanitized.sessionRetentionAction).toBe('delete');
     });
   });
+
+  describe('portForwardHostTemplate persistence', () => {
+    it('round-trips a valid template, lowercased', () => {
+      const helpers = createTestHelpersWithRealSanitizers();
+
+      expect(helpers.sanitizeSettingsUpdate({ portForwardHostTemplate: 'OC--{port}.Example.com' })).toEqual({
+        portForwardHostTemplate: 'oc--{port}.example.com',
+      });
+    });
+
+    it('clears the template on null or an empty string', () => {
+      const helpers = createTestHelpersWithRealSanitizers();
+
+      expect(helpers.sanitizeSettingsUpdate({ portForwardHostTemplate: null })).toEqual({
+        portForwardHostTemplate: null,
+      });
+      expect(helpers.sanitizeSettingsUpdate({ portForwardHostTemplate: '  ' })).toEqual({
+        portForwardHostTemplate: null,
+      });
+    });
+
+    it.each([
+      ['no placeholder', 'oc.example.com'],
+      ['a wildcard', '*--{port}.example.com'],
+      ['a scheme', 'https://oc--{port}.example.com'],
+      ['a digit beside the placeholder', 'oc1{port}.example.com'],
+      ['a non-string', 42],
+    ])('rejects %s by omission, leaving the stored value alone', (_label, value) => {
+      const helpers = createTestHelpersWithRealSanitizers();
+
+      expect(helpers.sanitizeSettingsUpdate({ portForwardHostTemplate: value })).toEqual({});
+    });
+
+    it('is returned to clients, so the settings UI can show it', () => {
+      const helpers = createTestHelpersWithRealSanitizers();
+
+      const response = helpers.formatSettingsResponse({ portForwardHostTemplate: 'oc--{port}.example.com' });
+
+      expect(response.portForwardHostTemplate).toBe('oc--{port}.example.com');
+    });
+  });
 });

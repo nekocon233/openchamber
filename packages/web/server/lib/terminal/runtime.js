@@ -12,6 +12,7 @@ import { sanitizeTerminalHistoryChunk } from './history.js';
 import { consumeTerminalThemeQueries, terminalThemeModeReport } from './theme-response.js';
 import { createTerminalShellResolver, getTerminalShellLoginArgs, normalizeTerminalShell } from './shells.js';
 import { stripAppImageArgv0Leak, resolveLinuxPtyLaunch } from '../inherited-env.js';
+import { isUpgradeClaimed } from '../port-forward/claim.js';
 
 const MAX_SESSIONS = 20;
 const MAX_HISTORY_BYTES = 512 * 1024;
@@ -279,6 +280,7 @@ export function createTerminalRuntime({
   });
 
   const upgradeHandler = (req, socket, head) => {
+    if (isUpgradeClaimed(req)) return;
     if (parseRequestPathname(req.url) !== TERMINAL_WS_PATH) return;
     void (async () => {
       try {

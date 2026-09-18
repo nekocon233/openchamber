@@ -43,6 +43,7 @@ import { projectsCommand } from './lib/commands-projects.js';
 import { createUpdateCommand } from './lib/commands-update.js';
 import { DISTRIBUTION_POLICY } from '../server/lib/distribution-policy.js';
 import { createConnectUrlCommand } from './lib/commands-connect-url.js';
+import { createForwardCommand } from './lib/commands-forward.js';
 import { createLifecycleCommands } from './lib/commands-lifecycle.js';
 import { createServeCommand } from './lib/commands-serve.js';
 import { createTunnelCommand, isValidTunnelDoctorResponse, shouldDisplayTunnelQr } from './lib/commands-tunnel.js';
@@ -200,8 +201,15 @@ const commands = {
 
   startup: startupCommand,
 
+  forward: null,
+
   update: null,
 };
+
+commands.forward = createForwardCommand({
+  setForegroundActive(value) { foregroundServerActive = value; },
+  setForegroundShutdown(handler) { foregroundShutdown = handler; },
+});
 
 commands.serve = createServeCommand({
   serverPath: path.join(__dirname, '..', 'server', 'index.js'),
@@ -239,7 +247,7 @@ commands.update = createUpdateCommand({
 
 async function main() {
   const parsed = parseArgs();
-  const { command, subcommand, tunnelAction, startupAction, scheduleAction, sessionAction, controlAction, options, removedFlagErrors, helpRequested, versionRequested } = parsed;
+  const { command, subcommand, tunnelAction, startupAction, scheduleAction, sessionAction, controlAction, forwardPort, options, removedFlagErrors, helpRequested, versionRequested } = parsed;
   activeCommandOptions = options;
 
   if (versionRequested) {
@@ -329,8 +337,13 @@ async function main() {
     return;
   }
 
+  if (command === 'forward') {
+    await commands.forward(options, forwardPort);
+    return;
+  }
+
   if (!commands[command]) {
-    const knownCommands = ['serve', 'stop', 'restart', 'status', 'schedule', 'session', 'models', 'projects', 'control', 'tunnel', 'startup', 'logs', 'update'];
+    const knownCommands = ['serve', 'stop', 'restart', 'status', 'schedule', 'session', 'models', 'projects', 'control', 'tunnel', 'startup', 'logs', 'forward', 'update'];
     const suggestion = findClosestMatch(command, knownCommands);
     const hint = suggestion ? ` Did you mean '${suggestion}'?` : '';
     if (isJsonMode(options)) {

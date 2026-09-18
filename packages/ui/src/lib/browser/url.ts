@@ -49,6 +49,54 @@ export const isLoopbackUrl = (value: string): boolean => {
   }
 };
 
+/**
+ * The port a loopback URL addresses, including the one it leaves implicit.
+ *
+ * Every caller must agree on this: an omitted port is 80 or 443, not nothing.
+ * Returns 0 when the URL names no usable port.
+ */
+export const loopbackPort = (url: string): number => {
+  try {
+    const parsed = new URL(url);
+    const port = Number.parseInt(parsed.port || (parsed.protocol === 'https:' ? '443' : '80'), 10);
+    return Number.isInteger(port) && port > 0 ? port : 0;
+  } catch {
+    return 0;
+  }
+};
+
+/** Everything after the authority, which is what survives a change of origin. */
+export const urlPathWithQuery = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return '/';
+  }
+};
+
+/**
+ * True when OpenChamber is running on a machine other than this one.
+ *
+ * This is the question behind every "can I open that dev server" decision: a
+ * loopback base URL, or the desktop shell's own local server, resolves
+ * correctly wherever the client runs, so `localhost:5173` there means this
+ * machine. Anything else means the dev servers live somewhere this client's own
+ * `localhost` does not reach, and getting to them needs either the desktop
+ * tunnel or a port forward.
+ */
+export const isRemoteOpenChamberOrigin = (baseUrl: string): boolean => {
+  if (!baseUrl || !globalThis.window) return false;
+  try {
+    const parsed = new URL(baseUrl, window.location.href);
+    const localOrigin = window.__OPENCHAMBER_LOCAL_ORIGIN__ ?? '';
+    if (localOrigin && parsed.origin === localOrigin) return false;
+    return !isLoopbackUrl(parsed.toString());
+  } catch {
+    return false;
+  }
+};
+
 /** Short label for a tab or header: host plus port, falling back to the raw value. */
 export const browserUrlLabel = (value: string): string => {
   if (!value || value === BLANK_URL) return '';

@@ -1,5 +1,7 @@
 import { WebSocket, WebSocketServer } from 'ws';
 
+import { isUpgradeClaimed } from './port-forward/claim.js';
+
 const PROXY_SSE_PATH = '/api/openchamber/realtime-proxy/sse';
 const PROXY_WS_PATH = '/api/openchamber/realtime-proxy/ws';
 
@@ -243,6 +245,7 @@ export const attachRealtimeProxy = ({ app, server, getDesktopRuntimeConfig, getU
   });
 
   const upgradeHandler = (req, socket, head) => {
+    if (isUpgradeClaimed(req)) return;
     const pathname = (() => {
       try { return new URL(req.url || '/', 'http://127.0.0.1').pathname; } catch { return ''; }
     })();

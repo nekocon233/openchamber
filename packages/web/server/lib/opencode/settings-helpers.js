@@ -1,4 +1,5 @@
 import { isAgentMemoryFeatureAvailable } from '../agent-memory/feature-flag.js';
+import { normalizeForwardHostTemplate } from '../port-forward/host-template.js';
 
 export const createSettingsHelpers = (dependencies) => {
   const {
@@ -476,6 +477,22 @@ export const createSettingsHelpers = (dependencies) => {
         result.frpcRemotePort = normalizeFrpcRemotePort(candidate.frpcRemotePort);
       } catch {
         // Invalid values are rejected by omission, matching other settings sanitizers.
+      }
+    }
+    if (candidate.portForwardHostTemplate === null) {
+      result.portForwardHostTemplate = null;
+    } else if (typeof candidate.portForwardHostTemplate === 'string') {
+      const value = candidate.portForwardHostTemplate.trim();
+      if (!value) {
+        result.portForwardHostTemplate = null;
+      } else {
+        const template = normalizeForwardHostTemplate(value);
+        if (template) {
+          result.portForwardHostTemplate = template;
+        }
+        // Invalid values are rejected by omission, matching other settings
+        // sanitizers. `GET /api/port-forward` reports the template actually in
+        // force, so a rejected one cannot look accepted.
       }
     }
     if (candidate.frpcPublicUrl === null) {

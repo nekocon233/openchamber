@@ -20,7 +20,9 @@ and what made it fragile per framework.
 - `client.js` is the local end: it binds a loopback listener on the user's
   machine and pipes each accepted connection through one WebSocket. It lives in
   this package because it needs a WebSocket client the package already depends
-  on; the desktop shell drives it over IPC.
+  on. Two callers drive it: the desktop shell over IPC, and
+  `../../../bin/lib/commands-forward.js` for `openchamber forward`, which is how
+  a machine with no desktop app reaches the same tunnel.
 - Port discovery is not owned here. `runtime.js` is given the reachable set by
   the same dev-server discovery the user's own list is built from.
 - The browser panel decides when to tunnel; this module never chooses a target.

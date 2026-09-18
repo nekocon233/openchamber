@@ -36,6 +36,7 @@
         "server/lib/claude-execution/plugin.js",
         "server/lib/claude-execution/provider-plugin.js",
         "server/lib/claude-execution/*-provider.js",
+        "server/**/*.fixture.mjs",
         "bin/**/*.{test,spec}.{js,cjs,mjs}",
         "server/**/*.{test,spec}.{js,cjs,mjs}",
         "src/**/*.{test,spec}.{ts,tsx}"

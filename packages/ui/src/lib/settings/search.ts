@@ -185,6 +185,24 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['security', 'app link', 'deep link', 'scheme', 'protocol', 'obsidian', 'notion'],
   },
   {
+    id: 'general.port-forward-template',
+    page: 'general',
+    titleKey: 'settings.openchamber.portForward.field.template',
+    descriptionKey: 'settings.openchamber.portForward.info',
+    keywords: ['port', 'forward', 'forwarding', 'dev server', 'localhost', 'preview', 'hostname', 'wildcard'],
+    // Mirrors the render condition: the desktop shell and VS Code tunnel a
+    // local port instead and never show this section.
+    isAvailable: (ctx) => ctx.isWeb && !ctx.isVSCode,
+  },
+  {
+    id: 'general.port-forward-active',
+    page: 'general',
+    titleKey: 'settings.openchamber.portForward.active',
+    descriptionKey: 'settings.openchamber.portForward.warning',
+    keywords: ['port', 'forward', 'forwarding', 'dev server', 'stop', 'active'],
+    isAvailable: (ctx) => ctx.isWeb && !ctx.isVSCode,
+  },
+  {
     id: 'chat.render-mode',
     page: 'chat',
     titleKey: 'settings.openchamber.visual.section.chatRenderMode',

@@ -15,6 +15,7 @@ import {
   DEFAULT_UPSTREAM_RECONNECT_DELAY_MS,
   DEFAULT_UPSTREAM_STALL_TIMEOUT_MS,
 } from './upstream-reader.js';
+import { isUpgradeClaimed } from '../port-forward/claim.js';
 
 export function createGlobalUiEventBroadcaster({
   sseClients,
@@ -139,6 +140,7 @@ export function createMessageStreamWsRuntime({
   });
 
   const upgradeHandler = (req, socket, head) => {
+    if (isUpgradeClaimed(req)) return;
     const pathname = parseRequestPathname(req.url);
     if (pathname !== MESSAGE_STREAM_GLOBAL_WS_PATH && pathname !== MESSAGE_STREAM_DIRECTORY_WS_PATH) {
       return;

@@ -8,6 +8,7 @@ import { OpenCodeCliSettings } from './OpenCodeCliSettings';
 import { OpenChamberToolsSettings } from './OpenChamberToolsSettings';
 import { ClaudeExecutionSettings } from './ClaudeExecutionSettings';
 import { DesktopNetworkSettings } from './DesktopNetworkSettings';
+import { PortForwardSettings } from './PortForwardSettings';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { useDeviceInfo } from '@/lib/device';
@@ -48,6 +49,10 @@ export const OpenChamberPage: React.FC<OpenChamberPageProps> = ({ section }) => 
     const isVSCode = isVSCodeRuntime();
     void runtimeEndpointEpoch;
     const showDesktopNetworkSettings = isDesktopShell() && isDesktopLocalOriginActive();
+    // Forwarding is how a browser reaches a dev server on the OpenChamber host.
+    // The desktop shell and VS Code tunnel a local port instead, so the setting
+    // would configure a mechanism they never use.
+    const showPortForwardSettings = isWebRuntime() && !isDesktopShell() && !isVSCode;
 
     // If no section specified, show all (mobile/legacy behavior)
     if (!section) {
@@ -56,6 +61,7 @@ export const OpenChamberPage: React.FC<OpenChamberPageProps> = ({ section }) => 
                 <OpenChamberVisualSettings />
                 <DefaultsSettings />
                 {showDesktopNetworkSettings && <DesktopNetworkSettings />}
+                {showPortForwardSettings && <PortForwardSettings />}
                 {!isVSCode && <OpenCodeCliSettings />}
                 {!isVSCode && <OpenChamberToolsSettings />}
                 <SessionRetentionSettings />
@@ -159,6 +165,7 @@ const GeneralSectionContent: React.FC = () => {
     return (
         <>
             {showDesktopNetworkSettings && <DesktopNetworkSettings />}
+            {isWebRuntime() && !isDesktopShell() && !isVSCode && <PortForwardSettings />}
             {showPasskeySettings && <PasskeySettings />}
             <AppLinkSecuritySettings />
             {!isVSCode && <OpenCodeCliSettings />}
