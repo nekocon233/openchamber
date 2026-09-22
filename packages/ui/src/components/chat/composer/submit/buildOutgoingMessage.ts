@@ -38,18 +38,6 @@ export interface OutgoingMessage {
     isEmpty: boolean;
 }
 
-/**
- * A queued message is already resolved: its agent mention was stripped, its
- * file mentions became attachments, and the context the composer had attached
- * travels with it. Assembly only places it.
- */
-export interface QueuedInput {
-    text: string;
-    agentMention?: string;
-    attachments?: AttachedFile[];
-    context?: readonly QueuedContextPart[];
-}
-
 /** What the composer has attached besides text and files. */
 export interface ComposerContextInput {
     /** Context drafts (code comments, terminal selections, annotations, PR context). */
@@ -72,9 +60,7 @@ export interface ComposerContextInput {
 }
 
 export interface OutgoingMessageInput extends ComposerContextInput {
-    /** Messages queued while a turn was running, oldest first. */
-    queued: readonly QueuedInput[];
-    /** The composer's own text, or null when this send skips it. */
+    /** The current composer's text. Queue items have their own delivery path. */
     composerText: string | null;
     composerAttachments: readonly AttachedFile[];
 }
@@ -126,37 +112,14 @@ export function buildOutgoingMessage(
         return mentions;
     };
 
-    // Queued messages come first, in the order they were queued: the oldest
-    // becomes the primary message so the turn reads chronologically. Each one
-    // is followed by the context it was queued with.
-    input.queued.forEach((queued, index) => {
-        noteAgent(queued.agentMention);
-        const attachments = deps.sanitizeAttachments(queued.attachments);
-
-        if (index === 0) {
-            primaryText = queued.text;
-            primaryAttachments = attachments;
-        } else {
-            additionalParts.push({ text: queued.text, attachments });
-        }
-        additionalParts.push(...queuedContextToParts(queued.context ?? []));
-    });
-
-    // The composer's own text follows, becoming primary only when nothing was
-    // queued ahead of it.
+    // The current input is always primary, including when it is being staged.
     if (input.composerText !== null) {
         const resolved = resolve(input.composerText.replace(/^\n+|\n+$/g, ''));
-        const attachments = [
+        primaryText = resolved.text;
+        primaryAttachments = [
             ...deps.sanitizeAttachments(input.composerAttachments),
             ...resolved.attachments,
         ];
-
-        if (input.queued.length === 0) {
-            primaryText = resolved.text;
-            primaryAttachments = attachments;
-        } else {
-            additionalParts.push({ text: resolved.text, attachments });
-        }
     }
 
     // Everything below is context for the model, never plain user text. Each

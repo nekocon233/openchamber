@@ -45,7 +45,6 @@ const deps = (overrides: Partial<OutgoingMessageDeps> = {}): OutgoingMessageDeps
 });
 
 const input = (overrides: Partial<OutgoingMessageInput> = {}): OutgoingMessageInput => ({
-    queued: [],
     composerText: null,
     composerAttachments: [],
     inlineComments: [],
@@ -58,6 +57,36 @@ const input = (overrides: Partial<OutgoingMessageInput> = {}): OutgoingMessageIn
 });
 
 describe('composer content', () => {
+    test('keeps the current message independent of staged entries in the source state', () => {
+        const queued = [{ text: 'saved draft', agentMention: 'plan', attachments: [attachment('saved')] }];
+        const submission = {
+            ...input({
+                composerText: '@agent:build message A',
+                composerAttachments: [attachment('current')],
+                additionalParts: [{ text: 'A context', synthetic: true }],
+            }),
+            queued,
+        };
+
+        const result = buildOutgoingMessage(submission, deps());
+
+        expect(result.primaryText).toBe('message A');
+        expect(result.primaryAttachments.map((file) => file.id)).toEqual(['current']);
+        expect(result.agentMentionName).toBe('build');
+        expect(result.additionalParts).toEqual([{ text: 'A context', synthetic: true }]);
+        expect(queued.map((entry) => entry.text)).toEqual(['saved draft']);
+    });
+
+    test('an empty composer stays empty when the source state has staged entries', () => {
+        const submission = { ...input(), queued: [{ text: 'saved draft' }] };
+
+        const result = buildOutgoingMessage(submission, deps());
+
+        expect(result.isEmpty).toBe(true);
+        expect(result.primaryText).toBe('');
+        expect(result.additionalParts).toEqual([]);
+    });
+
     test('becomes the primary message and preserves interior blank lines', () => {
         const result = buildOutgoingMessage(input({ composerText: '\n\nhello\n\nworld\n\n' }), deps());
 
@@ -96,80 +125,10 @@ describe('composer content', () => {
     });
 });
 
-describe('queued messages', () => {
-    test('the oldest becomes primary and the rest follow in order', () => {
-        const result = buildOutgoingMessage(input({
-            queued: [{ text: 'first' }, { text: 'second' }, { text: 'third' }],
-        }), deps());
-        expect(result.primaryText).toBe('first');
-        expect(result.additionalParts.map((p) => p.text)).toEqual(['second', 'third']);
-    });
-
-    test('the composer text lands after everything queued', () => {
-        const result = buildOutgoingMessage(input({
-            queued: [{ text: 'queued' }],
-            composerText: 'typed now',
-        }), deps());
-        expect(result.primaryText).toBe('queued');
-        expect(result.additionalParts.map((p) => p.text)).toEqual(['typed now']);
-    });
-
-    test('the context a message was queued with follows it, before the next message', () => {
-        const metadata = { [CONTEXT_METADATA_KEY]: { kind: 'github-issue' as const, number: 3, title: 'Bug', url: 'https://x/issues/3' } };
-        const result = buildOutgoingMessage(input({
-            queued: [
-                { text: 'first', context: [{ kind: 'context', text: 'issue body', metadata }, { kind: 'instruction', text: 'use: deploy' }] },
-                { text: 'second' },
-            ],
-            composerText: 'typed now',
-        }), deps());
-        expect(result.primaryText).toBe('first');
-        expect(result.additionalParts.map((p) => p.text)).toEqual(['issue body', 'use: deploy', 'second', 'typed now']);
-        expect(result.additionalParts[0]).toEqual({ text: 'issue body', synthetic: true, metadata });
-        expect(result.additionalParts[1]).toEqual({ text: 'use: deploy', synthetic: true });
-    });
-
-    test('a queued message is placed as captured, never re-resolved', () => {
-        const result = buildOutgoingMessage(input({
-            queued: [{ text: '@agent:plan see @file:doc and /deploy' }],
-        }), deps());
-        expect(result.primaryText).toBe('@agent:plan see @file:doc and /deploy');
-        expect(result.primaryAttachments).toEqual([]);
-        expect(result.agentMentionName).toBe(undefined);
-        expect(result.additionalParts).toEqual([]);
-    });
-
-    test('each queued message keeps its own attachments', () => {
-        const result = buildOutgoingMessage(input({
-            queued: [
-                { text: 'a', attachments: [attachment('one')] },
-                { text: 'b', attachments: [attachment('two')] },
-            ],
-        }), deps());
-        expect(result.primaryAttachments.map((a) => a.id)).toEqual(['one']);
-        expect(result.additionalParts[0].attachments?.map((a) => a.id)).toEqual(['two']);
-    });
-});
-
 describe('agent mentions', () => {
     test('an agent named in the composer routes the send', () => {
         expect(buildOutgoingMessage(input({ composerText: '@agent:build do it' }), deps())
             .agentMentionName).toBe('build');
-    });
-
-    test('the first mention wins across queued messages', () => {
-        const result = buildOutgoingMessage(input({
-            queued: [{ text: 'a', agentMention: 'plan' }, { text: 'b', agentMention: 'build' }],
-        }), deps());
-        expect(result.agentMentionName).toBe('plan');
-    });
-
-    test('a queued mention outranks one typed later', () => {
-        const result = buildOutgoingMessage(input({
-            queued: [{ text: 'a', agentMention: 'plan' }],
-            composerText: '@agent:build b',
-        }), deps());
-        expect(result.agentMentionName).toBe('plan');
     });
 
     test('no mention leaves the routing unset', () => {
@@ -414,31 +373,6 @@ describe('additional context', () => {
     });
 });
 
-describe('full assembly order', () => {
-    test('queued, then typed, then synthetic, then references, then skills', () => {
-        const result = buildOutgoingMessage(input({
-            queued: [{ text: 'q1' }, { text: 'q2' }],
-            composerText: 'typed /deploy',
-            additionalParts: [{ text: 'synthetic', synthetic: true }],
-            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue' },
-            linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'pr-how', context: 'pr-diff' },
-            linkedLinearIssue: { identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear' },
-        }), deps());
-
-        expect(result.primaryText).toBe('q1');
-        expect(result.additionalParts.map((p) => p.text)).toEqual([
-            'q2',
-            'typed /deploy',
-            'synthetic',
-            'issue',
-            'pr-how',
-            'pr-diff',
-            'linear',
-            'use: deploy',
-        ]);
-    });
-});
-
 describe('capturing composer context for the queue', () => {
     const contextInput = (overrides: Partial<ComposerContextInput> = {}): ComposerContextInput => ({
         inlineComments: [],
@@ -484,7 +418,7 @@ describe('capturing composer context for the queue', () => {
             linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'pr-how', context: 'pr-diff' },
         });
         const captured: QueuedContextPart[] = buildComposerContext(input, 'use: deploy');
-        const direct = buildOutgoingMessage({ ...input, queued: [], composerText: 'use /deploy', composerAttachments: [] }, deps());
+        const direct = buildOutgoingMessage({ ...input, composerText: 'use /deploy', composerAttachments: [] }, deps());
         expect(queuedContextToParts(captured)).toEqual(direct.additionalParts);
     });
 });

@@ -189,7 +189,6 @@ interface MessageQueueActions {
     dropSession: (sessionId: string, context?: MessageQueueRuntimeContext) => void;
     switchRuntime: (runtimeKey: string) => void;
     /** Removes the messages the composer is about to send itself and returns them in full. */
-    takeForSend: (identity: MessageQueueIdentity, messageId?: string) => Promise<QueuedMessage[]>;
     /** Drops the local projection only (the session is gone); never a server call. */
     forgetQueue: (identity: MessageQueueIdentity) => void;
     /** Re-read the authoritative queues for the active runtime. */
@@ -1639,17 +1638,6 @@ export const createMessageQueueStore = (
 
             getQueueForSession: (sessionId) => get().queuedMessages[sessionId] ?? [],
             getQueueForTarget: (target) => get().queuedMessages[getMessageQueueKey(target)] ?? [],
-
-            takeForSend: async (identity, messageId) => {
-                const key = getQueueKey(identity);
-                const queue = get().queuedMessages[key] ?? [];
-                const taken = queue.filter((message) => (messageId ? message.id === messageId : true));
-                if (taken.length === 0) return [];
-                for (const message of taken) {
-                    get().removeFromQueue(identity, message.id);
-                }
-                return taken;
-            },
 
             forgetQueue: (identity) => {
                 const key = getQueueKey(identity);

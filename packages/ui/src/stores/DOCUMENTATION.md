@@ -130,38 +130,30 @@ per session, permissions the safety net is holding). Nothing is persisted; a
 failed read keeps what was known and records `loadError` instead of reading as
 "routing is off". See `packages/web/server/lib/routing/DOCUMENTATION.md`.
 
-`messageQueueStore.ts` has two owners, decided by `isServerOwnedMessageQueue()`.
-On web, desktop, and mobile the server delivers the queue independently of the
-UI. The store projects authoritative snapshots and revisioned session updates.
-`sync/message-queue-sync.ts` receives queue events through the shared control SSE
-stream at `/api/openchamber/events`, including while OpenCode uses SSE fallback.
-It adds no poller or per-session connection. Either stream reconnecting requests
-`resync()`, independently of directory-bootstrap suppression.
+`messageQueueStore.ts` owns staged follow-up content, revisioned snapshots,
+optimistic operations, durable outbox replay, revision hints, and
+claim/complete/release coordination. Web, desktop, and mobile use the version-2
+OpenChamber host API. Incompatible hosts are rejected before queue content is
+sent. VS Code exposes an unsupported queue API and uses the runtime-scoped
+local fallback.
 
-Hydration and recovery share one in-flight request per runtime. A recovery edge
-during its snapshot read earns one trailing read; legacy uploads are attempted
-once per runtime rather than repeated on reconnect or snapshot failure. Snapshot
-reads have a 15-second deadline. Failure preserves the projection and runtime
-switches reject stale completions. Full-snapshot revisions also cover omitted
-sessions, so a delayed mutation response cannot resurrect a cleared queue;
-session events newer than that snapshot survive reconciliation.
+Queue items retain their primary content and attachments, ordered additional
+text/synthetic parts, routed agent mention, and captured send configuration.
+The OpenCode message ID starts as null. The host or locked local fallback
+assigns it on the first claim and reuses it across retries. Queue delivery
+completes a claimed item after sending succeeds and releases it on failure.
+Endpoint generations guard in-flight sends without becoming persisted fields.
 
-Mutations are optimistic and then settled on the server's copy; failed
-round-trips re-read instead of guessing. Empty legacy events without a directory
-clear all projections of their session in that runtime. Projection items carry
-attachment metadata only, so `popToInput()` and `takeForSend()` asynchronously
-remove the message on the server and retrieve its complete captured payload.
+The composer sends its own payload independently of stored queue entries.
+The store exposes no bulk take-for-send operation. See
+`components/chat/composer/DOCUMENTATION.md` for submit and drain behavior.
+Runtime switches re-key lanes; failed loads preserve the last snapshot.
+Desktop runtime identity uses the host ID so an SSH port change retains the
+same queue.
 
-`lib/messages/queuedMessagePreview.ts` derives the queue row from typed text,
-then attached comments/context, then the first filename. The store sends a
-bounded `contextPreview` with the captured item so server projections can show
-context-only messages without carrying full quotes or diffs. VS Code derives
-the same preview from its local full item. Preview text is display-only;
-editing and delivery always use the original content and captured context.
-
-A queued message is captured whole, so whoever delivers it sends exactly what the composer would have: `text` (the content with its agent mention stripped and `@file` mentions already resolved into `attachments`), `agentMention`, and `context` — every chip the composer had attached (inline comments, terminal selections, browser annotations, PR comments/checks, quotes, linked issue/PR/Linear references, pending synthetic parts) plus the skill instruction derived from the text. `QueuedContextPart` distinguishes attached items (restored to the chips when the message is edited) from derived instructions (re-derived on send, never restored) and from synthetic parts other surfaces handed the composer (restored as pending). Context is captured by `buildComposerContext` and delivered by `queuedContextToParts` (`components/chat/composer/submit/buildOutgoingMessage.ts`), the same functions the composer uses for its own send. Nothing is re-resolved at delivery: the server has no agent list, no confirmed mentions, and no draft store. Messages a previous build left in this browser are uploaded once on the first hydration of a runtime and then dropped from persistence for that runtime (`partialize` skips server-owned runtime keys). VS Code has no server and keeps the local queue with the foreground auto-send hook (`useQueuedMessageAutoSend`, enabled only there); `useMessageQueueHoldSync` tells the server to hold a session's queue while a UI-driven auto-review run is going.
-
-In the local (VS Code) mode the store keeps a queued message until its own send resolves, so between dispatch and resolution the entry is still visible to every reader. Dispatchers must therefore mark the send (`markSending`/`clearSending`) and read `getSendableQueue()` — or filter `sendingIds` themselves — instead of dispatching straight from `queuedMessages`; otherwise a composer submit merges a message the auto-send hook is already delivering and it is sent twice (the window is seconds over a relay). `clearQueue()` retains in-flight entries for the same reason. `sendingIds` is deliberately not persisted: a restart has no in-flight sends, and a stale flag would strand a queued message; in the server-owned mode it mirrors the server's in-flight item. Desktop queues use the configured host id as runtime identity, not the current API URL, because an SSH reconnect allocates a new local forwarding port while the remote host remains the same.
+`useUIStore.ts` projects the `followUpBehavior` preference from settings.
+The shipped `queueModeEnabled` and `immediate` values remain read-only
+preference migrations.
 
 `useGlobalSessionsStore.ts` owns cold/global active and archived session coverage. Its entity map and active root, parent/child, and directory indexes are maintained in the same transaction as the compatibility arrays and `sessionsByDirectory`. Full authoritative snapshots may rebuild those indexes once; direct create, update, move, archive, and delete mutations update only affected hierarchy and directory buckets. Metadata-only updates preserve the structure reference. It is complementary to directory child stores: it is not the source of live busy/retry status or session messages.
 
@@ -208,7 +200,6 @@ Provider and agent catalogs carry separate successful-load flags in directory sn
 
 Settings reads retain overlapping local mutations until the read settles, including writes that finish before the older GET returns and toggles that cancel a pending write. Both the returned document and GET cache use that reconciled result. An older GET cannot replace newer server-value knowledge used to deduplicate writes.
 
-`useUIStore.ts` owns only the `followUpBehavior` delivery preference and its startup projection. Successful server settings synchronization remains authoritative. `messageQueueStore.ts` owns staged follow-up content and the host-authoritative queue protocol: revisioned snapshots, optimistic operations, durable outbox replay, revision hints, runtime-scoped local fallback, and claim/complete/release coordination. Queue items preserve primary content and attachments plus additional text/synthetic parts, the routed agent mention, and captured send configuration. Their OpenCode message ID is null before the first claim, assigned atomically by the host (or locked local fallback), then stable across every retry. Web and desktop synchronize through the version-2 OpenChamber host API; incompatible hosts are rejected before queue content is sent. VS Code exposes an explicit unsupported API and uses the local fallback. Queue drain runtime generations are transient guards rather than persisted item fields. The shipped `queueModeEnabled` and `immediate` settings remain read-only preference migrations.
 
 Project ordering defaults to manual. Session display persistence v3 migrates the previously shipped `recent` project order to `manual` while preserving every other explicit sort mode.
 

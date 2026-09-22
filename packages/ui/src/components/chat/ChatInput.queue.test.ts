@@ -27,6 +27,29 @@ describe('ChatInput follow-up queue integration', () => {
     expect(source.slice(branchIndex, sendIndex)).not.toContain('sendCapturedMessage(');
   });
 
+  test('ordinary submissions never consume or assemble existing queue items', () => {
+    const submitStart = source.indexOf('const handleSubmit = async');
+    const submitEnd = source.indexOf('await handledSendPromise;', submitStart);
+    expect(submitStart).toBeGreaterThan(-1);
+    expect(submitEnd).toBeGreaterThan(submitStart);
+    const submitSource = source.slice(submitStart, submitEnd);
+
+    for (const legacyQueueRead of ['takeForSend', 'queuedOnly', 'queuedMessageId', 'queuedProjection', 'queuedMessagesToSend']) {
+      expect(submitSource).not.toContain(legacyQueueRead);
+    }
+    expect(submitSource).not.toContain('claimQueuedMessage(');
+    expect(submitSource).not.toContain('queued:');
+    expect(submitSource).toContain('composerText: inputSnapshot.message');
+    expect(submitSource).toContain('queuedMessages: []');
+  });
+
+  test('an empty composer cannot send the waiting queue through the main submit action', () => {
+    const canSendSource = source.slice(source.indexOf('const canSend ='), source.indexOf('const canAbort ='));
+    expect(canSendSource).toContain('hasContent');
+    expect(canSendSource).not.toContain('hasQueuedMessages');
+    expect(source).toContain('if (!inputSnapshot.hasContent || (!currentSessionId && !newSessionDraftOpen))');
+  });
+
   test('checks authoritative activity before treating an existing idle session as directly sendable', () => {
     const statusIndex = source.indexOf('await opencodeClient.getSessionStatusForDirectory(statusDirectory)');
     const decisionIndex = source.indexOf('const deliveryDecision = resolveFollowUpDeliveryDecision({');
@@ -94,7 +117,7 @@ describe('ChatInput follow-up queue integration', () => {
   });
 
   test('keeps shell, known slash commands, and auto-review out of queue admission', () => {
-    const autoReviewIndex = source.indexOf('if (!queuedOnly && (autoReviewRunning || isAutoReviewRunningNow()))');
+    const autoReviewIndex = source.indexOf('if (autoReviewRunning || isAutoReviewRunningNow())');
     const consumeIndex = source.indexOf('const syntheticParts = isBtwActive ? [] : consumePendingSyntheticParts();');
     const slashIndex = source.indexOf("const parsedCommand = inputMode === 'normal'");
     const queueIndex = source.indexOf("if (delivery === 'queue')");

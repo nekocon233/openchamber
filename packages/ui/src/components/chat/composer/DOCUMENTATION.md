@@ -218,16 +218,10 @@ and the send path reading the same grammar.
   annotations, PR context, linked issue/PR) becomes its own synthetic text part
   carrying structured metadata** built by `lib/messages/contextParts.ts`; the timeline reads that
   metadata back to render context blocks. PR instructions precede the PR diff.
-  The same module's `buildComposerContext` captures that context when a message
-  is **queued** instead of sent: the chips leave the composer with the message
-  (as `QueuedContextPart`s on the queue item), the server or the VS Code
-  auto-send delivers them through `queuedContextToParts`, and editing the
-  queued message puts them back. A queued message is placed as captured — its
-  mention, file mentions, and skill instruction were resolved when it was
-  queued, never at delivery — and its context follows it before the next
-  queued message.
-  Busy normal prompts capture this assembled shape in OpenChamber's host queue
-  when configured for `queue`, or use immediate legacy delivery for `steer`.
+  Assembly accepts only the current composer payload. A staged submission
+  captures that result, including its ordered additional parts, attachments,
+  metadata, and agent mention. Queue delivery sends the captured payload
+  without resolving it again. See Follow-up delivery below for ownership.
 - Extension slash commands are routed first (`submit/guestCommands.ts`,
   entries from `useGuestCommands` minus every name the composer already
   knows, so an extension can never shadow a built-in, an OpenCode command, or
@@ -366,6 +360,13 @@ path. When the pre-send status probe cannot answer (network failure, timeout,
 or a malformed response), the submit stops before any input is consumed: the
 composer keeps its text and attachments and shows a retry hint, rather than
 staging the prompt or steering it into a turn whose state is unknown.
+
+Ordinary submit owns only the current composer text, attachments, and context.
+The current text is always the primary message, whether sent immediately,
+steered, or appended as a staged entry. Existing queue entries retain their
+identity and captured payload. An empty composer cannot send the queue through
+the main send button or Enter. Queue entries leave through their own manual
+send action or the idle auto-drain for entries explicitly marked `queued`.
 
 Queued entries are user-visible staged work, not read-only projections. They can
 be removed, edited back into the composer with attachments, additional parts,
