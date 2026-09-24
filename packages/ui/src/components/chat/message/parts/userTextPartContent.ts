@@ -14,6 +14,22 @@ const escapeHtml = (text: string): string => {
         .replace(/'/g, '&#x27;');
 };
 
+// A code span on one line, fenced by the same run of backticks on both sides.
+// Markdown shows its text literally and escapes it itself, so an entity written
+// here would print as `&amp;`. Spans are kept to one line so a stray backtick
+// cannot leave the rest of a paragraph unescaped.
+const INLINE_CODE_PATTERN = /(?<!`)(`+)(?!`)[^\n]*?[^`\n]\1(?!`)/g;
+
+const escapeHtmlOutsideInlineCode = (segment: string): string => {
+    let escaped = '';
+    let from = 0;
+    for (const span of segment.matchAll(INLINE_CODE_PATTERN)) {
+        escaped += escapeHtml(segment.slice(from, span.index)) + span[0];
+        from = span.index + span[0].length;
+    }
+    return escaped + escapeHtml(segment.slice(from));
+};
+
 const mapNonFencedSegments = (markdown: string, mapSegment: (segment: string) => string): string => {
     return markdown
         .split(FENCED_CODE_SEGMENT_PATTERN)
@@ -37,7 +53,7 @@ export const prepareUserMarkdownContent = ({
     agentMention?: AgentMentionInfo;
     skillNames: ReadonlySet<string>;
 }): string => {
-    let content = mapNonFencedSegments(textContent, escapeHtml);
+    let content = mapNonFencedSegments(textContent, escapeHtmlOutsideInlineCode);
 
     // Insert agent mention links with an internal href so markdown renders them as mentions, not external links.
     if (agentMention?.token && content.includes(agentMention.token)) {

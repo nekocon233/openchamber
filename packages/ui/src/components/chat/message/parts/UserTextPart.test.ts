@@ -27,6 +27,28 @@ describe('prepareUserMarkdownContent', () => {
         expect(content).not.toContain('<script>');
     });
 
+    test('keeps inline code literal and still escapes the HTML around it', () => {
+        const content = prepareUserMarkdownContent({
+            textContent: 'Run `sleep 8 && echo slept`, then ``a `<b>` b`` and <i>this</i>',
+            skillNames: new Set(),
+        });
+
+        expect(content).toContain('`sleep 8 && echo slept`');
+        expect(content).toContain('``a `<b>` b``');
+        expect(content).toContain('&lt;i&gt;this&lt;/i&gt;');
+        expect(content).not.toContain('&amp;');
+    });
+
+    test('escapes HTML after a backtick that never closes on its line', () => {
+        const content = prepareUserMarkdownContent({
+            textContent: 'a ` <b>x</b>\nnext ` line',
+            skillNames: new Set(),
+        });
+
+        expect(content).toContain('&lt;b&gt;x&lt;/b&gt;');
+        expect(content).not.toContain('<b>');
+    });
+
     test('adds hard line breaks outside fences but not inside', () => {
         const content = prepareUserMarkdownContent({
             textContent: 'first\nsecond\n```ts\nconst x = 1\nconst y = 2\n```\nthird',
