@@ -9,13 +9,11 @@ import { SyncProvider } from '@/sync/sync-context';
 import { I18nProvider } from '@/lib/i18n';
 import { ThemeSystemContext, type ThemeContextValue } from '@/contexts/theme-system-context';
 import { getDefaultTheme } from '@/lib/theme/themes';
-import { useGuestsStore } from '@/lib/guests/store';
 import { useUIStore } from '@/stores/useUIStore';
-import type { InstalledGuest } from '@/lib/guests/types';
 
 // Bun does not implement Vite's worker asset-query imports.
 plugin({
-  name: 'tool-guest-worker-url',
+  name: 'tool-concise-worker-url',
   setup(build) {
     build.onLoad({ filter: /markdown-shiki\.worker\.ts\?worker&url$/ }, ({ path }) => ({
       contents: `export default ${JSON.stringify(pathToFileURL(path.split('?')[0]).href)};`,
@@ -47,40 +45,36 @@ const themeContext: ThemeContextValue = {
   setDarkThemePreference: unexpectedThemeChange,
 };
 
-const tasksGuest: InstalledGuest = {
-  id: 'tasks-demo',
-  name: 'Tasks Demo',
-  icon: 'task',
-  entry: 'panel/index.html',
-  capabilities: { requested: [], granted: [] },
-  tools: [{
-    match: 'mcp.tasks.*',
-    name: 'Tasks',
-    icon: 'checkbox-circle',
-    title: 'Tasks for {input.project}',
-    subtitle: '{output.total} open',
-    output: 'table',
-    columns: ['id', 'title', 'assignee.name'],
-  }],
-};
+const toolPart = (id: string, tool: string, state: ToolPartData['state']): ToolPartData => ({
+  id, sessionID: 'ses_concise', messageID: 'msg_concise', type: 'tool', tool, callID: `call_${id}`, state,
+});
 
-const part: ToolPartData = {
-  id: 'prt_tasks_list', sessionID: 'ses_tasks', messageID: 'msg_tasks',
-  type: 'tool', tool: 'mcp.tasks.list', callID: 'call_tasks_list',
-  state: {
-    status: 'completed',
-    input: { project: 'DEMO' },
-    output: JSON.stringify({ total: 2, items: [
-      { id: 'DEMO-1', title: 'Write docs', assignee: { name: 'Ada' } },
-      { id: 'DEMO-2', title: 'Ship it' },
-    ] }),
-    title: 'List tasks',
-    metadata: {},
-    time: { start: 1, end: 2 },
-  },
-};
+const bash = toolPart('prt_bash', 'bash', {
+  status: 'completed',
+  input: { command: 'ls -la' },
+  output: 'total 8\nnotes.txt\nhello.txt\n',
+  title: 'ls -la',
+  metadata: {},
+  time: { start: 1, end: 2 },
+});
 
-test('a declared tool rule sets the header, icon, and table body of a matching tool part', async () => {
+const edit = toolPart('prt_edit', 'edit', {
+  status: 'completed',
+  input: { filePath: 'hello.txt', oldString: 'hello', newString: 'hello there' },
+  output: 'Edit applied.',
+  title: 'hello.txt',
+  metadata: { diff: '--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hello\n+hello there\n' },
+  time: { start: 1, end: 2 },
+});
+
+const failed = toolPart('prt_failed', 'bash', {
+  status: 'error',
+  input: { command: 'ls /missing' },
+  error: 'ls: /missing: No such file or directory\nexit code 1',
+  time: { start: 1, end: 2 },
+});
+
+test('the concise transcript shows a call as Name(argument) over one result line, details folded', async () => {
   const happyWindow = new Window({ url: 'http://localhost' });
   const globals = {
     window: happyWindow,
@@ -97,7 +91,6 @@ test('a declared tool rule sets the header, icon, and table body of a matching t
     requestAnimationFrame: happyWindow.requestAnimationFrame.bind(happyWindow),
     cancelAnimationFrame: happyWindow.cancelAnimationFrame.bind(happyWindow),
     getComputedStyle: happyWindow.getComputedStyle.bind(happyWindow),
-    ResizeObserver: happyWindow.ResizeObserver,
     MutationObserver: happyWindow.MutationObserver,
     IS_REACT_ACT_ENVIRONMENT: true,
   };
@@ -114,59 +107,49 @@ test('a declared tool rule sets the header, icon, and table body of a matching t
     baseUrl: 'http://localhost',
     fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }),
   });
-  const render = async () => {
+  const toggled: string[] = [];
+  const render = async (part: ToolPartData, isExpanded = false) => {
     await act(async () => {
       root.render(
         <SyncProvider sdk={sdk} directory="">
           <I18nProvider>
             <ThemeSystemContext.Provider value={themeContext}>
-              <ToolPart part={part} isExpanded isMobile={false} onToggle={() => {}} />
+              <ToolPart part={part} isExpanded={isExpanded} isMobile={false} onToggle={(id) => { toggled.push(id); }} />
             </ThemeSystemContext.Provider>
           </I18nProvider>
         </SyncProvider>,
       );
     });
+    // Let the row's timers and deferred mounts land inside act.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
   };
+  const row = () => container.querySelector<HTMLElement>('[role="button"][aria-expanded]');
 
   try {
-    // The icon hook shows in the standard row; the concise row is checked below.
-    useUIStore.setState({ conciseTranscript: false });
-    useGuestsStore.setState({ status: 'ready', guests: [], runtimeKey: 'test' });
-    await render();
-    // Without a rule the built-in path runs: generic wrench, formatted tool name, JSON views.
-    expect(container.querySelector('table')).toBeNull();
-    expect(container.querySelector('use[href="#oc-checkbox-circle"]')).toBeNull();
-    expect(container.textContent).not.toContain('Tasks for DEMO');
+    useUIStore.setState({ conciseTranscript: true });
 
-    await act(async () => {
-      useGuestsStore.getState().replaceCatalog([tasksGuest], 'test');
-    });
-    expect(container.textContent).toContain('Tasks for DEMO');
-    expect(container.textContent).toContain('2 open');
-    expect(container.querySelector('use[href="#oc-checkbox-circle"]')).not.toBeNull();
-    const headers = Array.from(container.querySelectorAll('th')).map((cell) => cell.textContent);
-    expect(headers).toEqual(['id', 'title', 'assignee.name']);
-    const rows = Array.from(container.querySelectorAll('tbody tr')).map((row) => (
-      Array.from(row.querySelectorAll('td')).map((cell) => cell.textContent)
-    ));
-    expect(rows).toEqual([
-      ['DEMO-1', 'Write docs', 'Ada'],
-      ['DEMO-2', 'Ship it', ''],
-    ]);
+    await render(bash);
+    expect(row()?.textContent).toBe('Bash(ls -la)3 lines');
+    expect(row()?.getAttribute('aria-expanded')).toBe('false');
+    expect(container.textContent).not.toContain('notes.txt');
+    await act(async () => { row()?.click(); });
+    expect(toggled).toEqual(['prt_bash']);
 
-    // The concise row names the call by the rule's title and keeps its subtitle as the argument.
-    await act(async () => {
-      useUIStore.setState({ conciseTranscript: true });
-    });
-    expect(container.textContent).toContain('Tasks for DEMO(2 open)');
-    expect(container.querySelector('table')).not.toBeNull();
+    await render(edit);
+    expect(row()?.textContent).toContain('Edit(hello.txt)');
+    expect(row()?.textContent).toContain('+1-1');
+    // What the edit did shows under it, line by line.
+    expect(container.textContent).toContain('1-hello');
+    expect(container.textContent).toContain('1+hello there');
 
-    // Pausing the extension takes its presentation away again.
-    await act(async () => {
-      useGuestsStore.getState().replaceCatalog([{ ...tasksGuest, enabled: false }], 'test');
-    });
-    expect(container.querySelector('table')).toBeNull();
-    expect(container.textContent).not.toContain('Tasks for DEMO');
+    await render(failed);
+    expect(row()?.textContent).toBe('Bash(ls /missing)ls: /missing: No such file or directory');
+
+    // Turning the setting off brings back the standard row.
+    await act(async () => { useUIStore.setState({ conciseTranscript: false }); });
+    await render(bash);
+    expect(container.textContent).toContain('Shell Command');
+    expect(container.textContent).not.toContain('Bash(ls -la)');
   } finally {
     await act(async () => { root.unmount(); });
     useUIStore.setState({ conciseTranscript: useUIStore.getInitialState().conciseTranscript });

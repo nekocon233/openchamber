@@ -312,6 +312,12 @@
     "showExpandedEditTools": {
       "scope": "profile"
     },
+    "conciseTranscript": {
+      "scope": "profile"
+    },
+    "transcriptFileChangesOnly": {
+      "scope": "profile"
+    },
     "toolJsonViewMode": {
       "scope": "profile"
     },

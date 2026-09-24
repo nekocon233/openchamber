@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { isExpandableTool, isStaticTool } from './toolRenderUtils';
+import { isExpandableTool, isStaticTool, showsWithFileChangesOnly } from './toolRenderUtils';
 
 describe('tool rendering classification', () => {
     test('keeps navigation tools compact', () => {
@@ -26,5 +26,14 @@ describe('tool rendering classification', () => {
     test('normalizes dotted and indexed tool names', () => {
         expect(isStaticTool('runtime.read:2')).toBe(true);
         expect(isExpandableTool('runtime.custom_tool:2')).toBe(true);
+    });
+
+    test('keeps file changes and the calls that ask the user or start work when only file changes show', () => {
+        for (const tool of ['edit', 'write', 'multiedit', 'apply_patch', 'task', 'question', 'plan_exit', 'Edit', 'runtime.write:1']) {
+            expect(showsWithFileChangesOnly(tool)).toBe(true);
+        }
+        for (const tool of ['bash', 'read', 'grep', 'glob', 'todowrite', 'webfetch', 'skill', 'linear_list_issues']) {
+            expect(showsWithFileChangesOnly(tool)).toBe(false);
+        }
     });
 });

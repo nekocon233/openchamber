@@ -302,7 +302,7 @@ const normalizeUserMessageRenderingMode = (mode: unknown): 'markdown' | 'plain' 
     return mode === 'markdown' ? 'markdown' : 'plain';
 };
 
-type VisibleSetting = 'sessionAssist' | 'sessionGoal' | 'theme' | 'windowControlsPosition' | 'pwaInstallName' | 'pwaOrientation' | 'mobileKeyboardMode' | 'timeFormat' | 'weekStart' | 'fontSize' | 'terminalFontSize' | 'terminalShell' | 'terminalLoginShell' | 'editorFontSize' | 'spacing' | 'scrollbars' | 'inputBarOffset' | 'mermaidRendering' | 'userMessageRendering' | 'chatRenderMode' | 'messageTransport' | 'activityRenderMode' | 'collapsibleUserMessages' | 'stickyUserHeader' | 'promptNavigatorEnabled' | 'wideChatLayout' | 'codeBlockLineWrap' | 'splitAssistantMessageActions' | 'subagentReadOnlyBanner' | 'diffLayout' | 'mobileStatusBar' | 'dotfiles' | 'fileViewerPreview' | 'reasoning' | 'showToolFileIcons' | 'showTurnChangedFiles' | 'expandedTools' | 'followUpBehavior' | 'inputHistoryScope' | 'inputHistoryLimit' | 'terminalQuickKeys' | 'fileEditorKeymap' | 'persistDraft' | 'inputSpellcheck' | 'largeTextPaste' | 'enterToSend' | 'reportUsage' | 'autoSaveEnabled' | 'sessionTabs';
+type VisibleSetting = 'sessionAssist' | 'sessionGoal' | 'theme' | 'windowControlsPosition' | 'pwaInstallName' | 'pwaOrientation' | 'mobileKeyboardMode' | 'timeFormat' | 'weekStart' | 'fontSize' | 'terminalFontSize' | 'terminalShell' | 'terminalLoginShell' | 'editorFontSize' | 'spacing' | 'scrollbars' | 'inputBarOffset' | 'mermaidRendering' | 'userMessageRendering' | 'chatRenderMode' | 'messageTransport' | 'activityRenderMode' | 'conciseTranscript' | 'transcriptFileChangesOnly' | 'collapsibleUserMessages' | 'stickyUserHeader' | 'promptNavigatorEnabled' | 'wideChatLayout' | 'codeBlockLineWrap' | 'splitAssistantMessageActions' | 'subagentReadOnlyBanner' | 'diffLayout' | 'mobileStatusBar' | 'dotfiles' | 'fileViewerPreview' | 'reasoning' | 'showToolFileIcons' | 'showTurnChangedFiles' | 'expandedTools' | 'followUpBehavior' | 'inputHistoryScope' | 'inputHistoryLimit' | 'terminalQuickKeys' | 'fileEditorKeymap' | 'persistDraft' | 'inputSpellcheck' | 'largeTextPaste' | 'enterToSend' | 'reportUsage' | 'autoSaveEnabled' | 'sessionTabs';
 
 const WINDOW_CONTROLS_POSITION_OPTIONS: Array<{ id: DesktopWindowControlsPosition; labelKey: string }> = [
     { id: 'left', labelKey: 'settings.openchamber.desktopNetwork.option.windowControlsLeft' },
@@ -416,6 +416,10 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
     const setShowExpandedBashTools = useUIStore(state => state.setShowExpandedBashTools);
     const showExpandedEditTools = useUIStore(state => state.showExpandedEditTools);
     const setShowExpandedEditTools = useUIStore(state => state.setShowExpandedEditTools);
+    const conciseTranscript = useUIStore(state => state.conciseTranscript);
+    const setConciseTranscript = useUIStore(state => state.setConciseTranscript);
+    const transcriptFileChangesOnly = useUIStore(state => state.transcriptFileChangesOnly);
+    const setTranscriptFileChangesOnly = useUIStore(state => state.setTranscriptFileChangesOnly);
     const timeFormatPreference = useUIStore(state => state.timeFormatPreference);
     const setTimeFormatPreference = useUIStore(state => state.setTimeFormatPreference);
     const weekStartPreference = useUIStore(state => state.weekStartPreference);
@@ -640,6 +644,15 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
         void updateDesktopSettings({ showExpandedEditTools: enabled });
     }, [setShowExpandedEditTools]);
 
+    const handleConciseTranscriptChange = React.useCallback((enabled: boolean) => {
+        setConciseTranscript(enabled);
+        void updateDesktopSettings({ conciseTranscript: enabled });
+    }, [setConciseTranscript]);
+    const handleTranscriptFileChangesOnlyChange = React.useCallback((enabled: boolean) => {
+        setTranscriptFileChangesOnly(enabled);
+        void updateDesktopSettings({ transcriptFileChangesOnly: enabled });
+    }, [setTranscriptFileChangesOnly]);
+
     const handleTimeFormatPreferenceChange = React.useCallback((value: 'auto' | '12h' | '24h') => {
         setTimeFormatPreference(value);
         void updateDesktopSettings({ timeFormatPreference: value });
@@ -699,6 +712,8 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
         || shouldShow('chatRenderMode')
         || shouldShow('messageTransport')
         || shouldShow('activityRenderMode')
+        || shouldShow('conciseTranscript')
+        || shouldShow('transcriptFileChangesOnly')
         || shouldShow('collapsibleUserMessages')
         || shouldShow('stickyUserHeader')
         || (shouldShow('promptNavigatorEnabled') && !isVSCode)
@@ -720,7 +735,9 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
         || (!isMobile && shouldShow('inputSpellcheck'))
         || shouldShow('enterToSend');
     const showBehaviorDisplaySettings = shouldShow('chatRenderMode')
-        || shouldShow('activityRenderMode');
+        || shouldShow('activityRenderMode')
+        || shouldShow('conciseTranscript')
+        || shouldShow('transcriptFileChangesOnly');
     const showTransportSection = shouldShow('messageTransport');
     const showBehaviorMessageOptions = shouldShow('userMessageRendering')
         || shouldShow('mermaidRendering')
@@ -1703,6 +1720,28 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
                                             ))}
                                         </SettingsRadioGroup>
                                     </SettingsControlGroup>
+                                )}
+
+                                {shouldShow('conciseTranscript') && (
+                                    <SettingsCheckboxRow
+                                        checked={conciseTranscript}
+                                        onChange={handleConciseTranscriptChange}
+                                        label={t('settings.openchamber.visual.field.conciseTranscript')}
+                                        ariaLabel={t('settings.openchamber.visual.field.conciseTranscriptAria')}
+                                        info={t('settings.openchamber.visual.field.conciseTranscriptInfo')}
+                                        settingsItem="chat.concise-transcript"
+                                    />
+                                )}
+                                {shouldShow('transcriptFileChangesOnly') && (
+                                    <SettingsCheckboxRow
+                                        checked={transcriptFileChangesOnly}
+                                        onChange={handleTranscriptFileChangesOnlyChange}
+                                        disabled={!conciseTranscript}
+                                        label={t('settings.openchamber.visual.field.transcriptFileChangesOnly')}
+                                        ariaLabel={t('settings.openchamber.visual.field.transcriptFileChangesOnlyAria')}
+                                        info={t('settings.openchamber.visual.field.transcriptFileChangesOnlyInfo')}
+                                        settingsItem="chat.transcript-file-changes-only"
+                                    />
                                 )}
                             </SettingsSection>
                         )}

@@ -5,6 +5,14 @@ const STATIC_TOOL_NAMES = new Set<string>(['read', 'skill']);
 
 const STANDALONE_TOOL_NAMES = new Set<string>(['task']);
 
+// What a transcript that shows only file changes keeps of the tool calls: the
+// changes, and the calls that ask the user something or start work of their
+// own (a subagent, plan mode).
+const FILE_CHANGES_ONLY_TOOL_NAMES = new Set<string>([
+    'edit', 'multiedit', 'write', 'apply_patch', 'patch', 'create', 'file_write', 'notebookedit',
+    'task', 'question', 'plan_enter', 'plan_exit',
+]);
+
 const normalizeToolName = (toolName: unknown): string => {
     if (typeof toolName !== 'string') return '';
     const trimmed = toolName.trim().toLowerCase();
@@ -28,6 +36,11 @@ export const isStandaloneTool = (toolName: unknown): boolean => {
 
 export const isStaticTool = (toolName: unknown): boolean => {
     return STATIC_TOOL_NAMES.has(normalizeToolName(toolName));
+};
+
+/** Whether a tool call shows in a transcript that shows only file changes. */
+export const showsWithFileChangesOnly = (toolName: unknown): boolean => {
+    return FILE_CHANGES_ONLY_TOOL_NAMES.has(normalizeToolName(toolName));
 };
 
 export const getToolDescriptionFallback = (

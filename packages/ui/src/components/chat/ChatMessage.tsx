@@ -32,6 +32,8 @@ import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { TurnGroupingContext } from './lib/turns/types';
 import { copyMarkdownToClipboard, copyTextToClipboard } from '@/lib/clipboard';
 import { FadeInOnReveal } from './message/FadeInOnReveal';
+import { CompactionMarker, CompactionSummary } from './message/CompactionMarker';
+import { getCompactionKind } from './lib/messageDisplayNormalization';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
 import { areOptionalRenderRelevantMessagesEqual, areRenderRelevantMessagesEqual, areRelevantTurnGroupingContextsEqual } from './message/renderCompare';
 import type { ReviewTransferDirection } from '@/lib/reviewFlow';
@@ -543,6 +545,10 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     }, [isUser, normalizedParts]);
 
     const shouldHideUserMessage = isUser && displayParts.length === 0;
+    // A compaction shows as a divider, and the summary it left stays folded.
+    const compactionKind = isUser ? getCompactionKind(message) : null;
+    const isCompactionSummary = !isUser && message.info.role === 'assistant' && message.info.summary === true;
+    const AssistantFold = isCompactionSummary ? CompactionSummary : PassThrough;
 
     const themeVariant = currentTheme?.metadata.variant;
     const isDarkTheme = React.useMemo(() => {
@@ -873,7 +879,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
             >
                 <div className="chat-message-column relative">
                     {isUser ? (
-                        displayParts.length === 0 ? null : (
+                        compactionKind ? (
+                            <CompactionMarker kind={compactionKind} />
+                        ) : displayParts.length === 0 ? null : (
                             <FadeInOnReveal
                                 forceAnimation
                                 skipAnimation={!animateUserOnMount}
@@ -968,6 +976,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                         )
                     ) : (
                         <div className="relative">
+                            <AssistantFold>
                             <MessageBody
                                 sessionId={message.info.sessionID}
                                 messageId={message.info.id}
@@ -1006,7 +1015,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                 isDarkTheme={isDarkTheme}
                                 extraActions={guestMessageActions}
                             />
-
+                            </AssistantFold>
                         </div>
                     )}
                 </div>
@@ -1021,6 +1030,8 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         </>
     );
 };
+
+const PassThrough: React.FC<{ children: React.ReactNode }> = ({ children }) => <>{children}</>;
 
 export default React.memo(ChatMessage, (prev, next) => {
     return areRenderRelevantMessagesEqual(

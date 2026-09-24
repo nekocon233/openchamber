@@ -10,6 +10,7 @@ Use this doc when you ask an agent to change tool/header/description behavior.
 - There are two tool rendering paths:
   - **Static grouped tools** -> `StaticToolRow` in `ProgressiveGroup.tsx`
   - **Expandable tools** -> `ToolPart.tsx`
+- Both paths have two row styles, chosen by the `conciseTranscript` setting (on by default): the concise transcript below, and the standard row this doc otherwise describes.
 - Shared tool icon mapping is centralized in `toolPresentation.tsx` (`getToolIcon`).
 
 ## Which file controls what
@@ -62,6 +63,9 @@ Use this doc when you ask an agent to change tool/header/description behavior.
     disclosure without changing sorted message context or tool rendering.
   - `lib/turns/liveActivity.ts` owns final-answer and interruption boundaries.
   - `lib/turns/liveActivitySummary.ts` derives the report from tool results.
+
+- `ConciseToolHeader.tsx` and `conciseToolRow.ts`
+  - The concise transcript's row and its pure rules (CLI-style names, result lines). See "Concise transcript".
 
 - `JustificationBlock.tsx`
   - Justification block wrapper over `ReasoningTimelineBlock`.
@@ -140,6 +144,28 @@ entries no own tool call touched are appended after the turn's own files. The
 list is projected once the last assistant message finished with `stop`, so no
 tool patch is parsed while the turn streams.
 
+### Concise transcript
+
+The `conciseTranscript` UI setting (Settings > Chat > Display, on by default, all sessions) prints each tool call the way the Claude Code terminal does: `● Name(argument)`, and under it one result line.
+
+- `ToolPart` takes an early return into `ConciseToolHeader`; the standard header block below it stays unchanged so upstream edits merge cleanly. Both styles share the same `taskDetails` and `expandedDetails`, so folding open a row shows exactly the standard details.
+- The name is the extension rule's title when one matches, else the CLI name from `getConciseToolName` (`bash` -> `Bash`, `apply_patch` -> `Patch`); any other tool keeps the name it was called by. The argument is the standard row's justification or description.
+- `getConciseToolResult` owns the result line: a failure's first error line; a running command's timer; `+added -removed` for edits and `+lines` for writes; a subagent's tool-call count; otherwise the finished output's line count or "no output". File tools without diff numbers, and tools whose body already says what happened (question, todos, plan mode, skill), get no line. Output lines are counted only once a call finishes, never while it streams.
+- A `task` row folds its subagent summary away until expanded, like any other row's details.
+- `StaticToolRow` (read, skill) renders the same row without a result line or expansion; its files and skills stay links.
+- The dot is green on success, red on failure, and pulses (opacity only) while running.
+- `MessageBody` hides the turn footer's facts (model, effort, agent, duration, time) until the message is hovered or focused. Touch has no hover, so there they stay hidden but keep their place, and the actions button does not move.
+- A finished file change (`isFileChangeTool`: edit, multiedit, write, apply_patch) shows what it did under its row in `ConciseDiff`: numbered lines, added on `--tools-edit-added-bg` and removed on `--tools-edit-removed-bg`, parsed by `parseConciseDiffRows` from the same per-file patches the expanded view uses (`getDiffPatchEntries`). A write whose metadata carries no diff shows its content as added lines (`addedFilePatch`). Past 16 rows the rest folds behind a "show more" button. Plain text only, no highlighting, so every edit in view stays cheap; opening the row shows the highlighted diff instead.
+- The `transcriptFileChangesOnly` setting (on by default, only with the concise transcript) keeps the conversation to replies, reasoning and file changes: `showsWithFileChangesOnly` (`toolRenderUtils.ts`) keeps file changes, questions, subagent tasks and plan-mode calls, and `MessageBody.shouldShowTool` and `ProgressiveGroup`'s rows leave every other call out. The floating status chip still says what the agent is running.
+
+### Compaction
+
+A compaction shows as a divider in the conversation, the way the CLI marks it, never as a `/compact` message: OpenCode and both CLIs record it as a user message with a `compaction` part, and the CLIs usually compact on their own when the context fills.
+
+- `getNormalizedMessageForDisplay` (`lib/messageDisplayNormalization.ts`) keeps the text `/compact` for the code that finds compactions by it, and sets `clientCompaction` from the part's `auto` flag; `ChatMessage` draws `CompactionMarker` ("compacted automatically" or "compacted") in place of the user bubble.
+- The summary the compaction left (`summary: true`) renders folded in `CompactionSummary`; the model reads it, the user opens it on demand.
+- Native sessions set `auto` from the CLI: Claude Code's boundary trigger (`manual` for /compact), and for Codex whether the compaction follows the turn's prompt (a /compact is a turn of its own).
+
 ### Message parts
 
 - Assistant markdown treats raw HTML as inert visible text. The final generated
@@ -200,7 +226,7 @@ Why: only navigation tools use the compact static path; all other tools need obs
 1. Update `toolRenderUtils.ts`:
    - add/remove a tool name from `STATIC_TOOL_NAMES` only when it has a reliable direct in-app navigation action
 2. Ensure `ToolPart.tsx` supports desired header + expanded output format for that tool.
-3. Validate both modes (`sorted` and `live`).
+3. Validate both modes (`sorted` and `live`) in both row styles (`conciseTranscript` on and off).
 
 ## Safe editing checklist
 
@@ -224,7 +250,7 @@ Why: only navigation tools use the compact static path; all other tools need obs
   `normalizeUserDisplayParts.ts`. Legacy pre-metadata messages still render
   via text sniffing (`<terminal_context>` blocks, `GitHub issue context (JSON)`
   and `Linear issue context (JSON)` prefixes).
-- Tools: `ToolPart.tsx`, `ToolPartDiffPreview.tsx`, `PlainDiffFallback.tsx`, `ProgressiveGroup.tsx`, `toolPresentation.tsx`, `toolRenderUtils.ts`, `ToolRevealOnMount.tsx`, `GuestToolTable.tsx`
+- Tools: `ToolPart.tsx`, `ToolPartDiffPreview.tsx`, `PlainDiffFallback.tsx`, `ProgressiveGroup.tsx`, `toolPresentation.tsx`, `toolRenderUtils.ts`, `ToolRevealOnMount.tsx`, `GuestToolTable.tsx`, `ConciseToolHeader.tsx`, `conciseToolRow.ts`
 - Reasoning/justification: `ReasoningPart.tsx`, `JustificationBlock.tsx`
 - Status/placeholders: `WorkingPlaceholder.tsx`, `SessionActiveSpinner.tsx`, `MigratingPart.tsx`, `BusyDots.tsx`
 - Utility renderers: `VirtualizedCodeBlock.tsx`, `MinDurationShineText.tsx`

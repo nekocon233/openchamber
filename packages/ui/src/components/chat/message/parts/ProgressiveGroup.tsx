@@ -15,7 +15,9 @@ import { FadeInOnReveal } from '../FadeInOnReveal';
 import { getToolIcon } from './toolPresentation';
 import { getToolMetadata } from '@/lib/toolHelpers';
 import { useGuestToolPresentation } from '@/lib/guests/tool-presentation';
-import { isExpandableTool, isStandaloneTool, isStaticTool } from './toolRenderUtils';
+import { isExpandableTool, isStandaloneTool, isStaticTool, showsWithFileChangesOnly } from './toolRenderUtils';
+import { ConciseToolHeader } from './ConciseToolHeader';
+import { getConciseToolName } from './conciseToolRow';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useUIStore } from '@/stores/useUIStore';
@@ -471,7 +473,7 @@ const MemoStaticGroupedToolRow = React.memo(StaticGroupedToolRow, (prev, next) =
  * Expandable tools (edit, bash, write, question) stay as individual rows.
  * Unknown tools stay as individual expandable rows (fallback).
  */
-const aggregateRows = (parts: TurnActivityPart[]): AggregatedRow[] => {
+const aggregateRows = (parts: TurnActivityPart[], fileChangesOnly: boolean): AggregatedRow[] => {
     const rows: AggregatedRow[] = [];
 
     let i = 0;
@@ -496,6 +498,12 @@ const aggregateRows = (parts: TurnActivityPart[]): AggregatedRow[] => {
 
         if (isStandaloneTool(toolName)) {
             // Standalone tools are rendered separately, skip
+            i++;
+            continue;
+        }
+
+        // A transcript that shows only file changes leaves the other calls out.
+        if (fileChangesOnly && !showsWithFileChangesOnly(toolName)) {
             i++;
             continue;
         }
@@ -559,6 +567,7 @@ const StaticToolRowInner: React.FC<{
     animateTailText: boolean;
 }> = ({ toolName, activities, animateTailText }) => {
     const showToolFileIcons = useUIStore((state) => state.showToolFileIcons);
+    const conciseTranscript = useUIStore((state) => state.conciseTranscript);
     // Grouped rows share one normalized name; the registry wants the full
     // name OpenCode reported, which every activity in the group carries.
     const firstPart = activities[0]?.part;
@@ -674,6 +683,49 @@ const StaticToolRowInner: React.FC<{
         || normalizedToolName === 'glob';
     const isFetchGroup = normalizedToolName === 'webfetch' || normalizedToolName === 'fetch' || normalizedToolName === 'curl' || normalizedToolName === 'wget';
     const isSkillGroup = normalizedToolName === 'skill';
+
+    if (conciseTranscript) {
+        const hasFailedActivity = activities.some((activity) => activity.part.type === 'tool' && activity.part.state.status === 'error');
+        const linkClassName = '!min-h-0 hover:underline focus-visible:underline';
+        const openFile = (event: React.MouseEvent, path: string, offset?: number) => {
+            event.preventDefault();
+            event.stopPropagation();
+            handleFileClick(path, offset);
+        };
+        // Files and skills stay links into the app; other groups list what they looked for.
+        const argument = isReadGroup && readFileEntries.length > 0
+            ? readFileEntries.map((entry, index) => (
+                <React.Fragment key={entry.path}>
+                    {index > 0 ? ', ' : null}
+                    <button
+                        type="button"
+                        onClick={(event) => openFile(event, entry.path, entry.offset)}
+                        className={linkClassName}
+                        title={entry.offset ? `${entry.displayPath}:${entry.offset}` : entry.displayPath}
+                    >
+                        {entry.displayPath}
+                    </button>
+                </React.Fragment>
+            ))
+            : isSkillGroup && skillEntries.length > 0
+                ? skillEntries.map((entry, index) => (
+                    <React.Fragment key={`${entry.name}-${entry.path}`}>
+                        {index > 0 ? ', ' : null}
+                        <button type="button" onClick={(event) => openFile(event, entry.path)} className={linkClassName} title={entry.path}>
+                            {entry.name}
+                        </button>
+                    </React.Fragment>
+                ))
+                : descriptions.join(', ');
+        return (
+            <ConciseToolHeader
+                name={presentation?.name ?? getConciseToolName(normalizedToolName, toolName)}
+                argument={argument}
+                status={hasRunningActivity ? 'running' : hasFailedActivity ? 'failed' : 'completed'}
+                result={null}
+            />
+        );
+    }
 
     return (
         <div
@@ -844,12 +896,13 @@ const ProgressiveGroup: React.FC<ProgressiveGroupProps> = ({
         return sortPartsByTime(parts);
     }, [parts, shouldRenderRows]);
 
+    const fileChangesOnly = useUIStore((state) => state.conciseTranscript && state.transcriptFileChangesOnly);
     const rows = React.useMemo(() => {
         if (!shouldRenderRows) {
             return [] as AggregatedRow[];
         }
-        return aggregateRows(sortedParts);
-    }, [shouldRenderRows, sortedParts]);
+        return aggregateRows(sortedParts, fileChangesOnly);
+    }, [fileChangesOnly, shouldRenderRows, sortedParts]);
 
     const previewHiddenCount = React.useMemo(() => {
         if (isExpanded || previewCount === 0) {

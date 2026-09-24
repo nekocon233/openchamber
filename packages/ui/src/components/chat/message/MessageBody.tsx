@@ -41,7 +41,7 @@ import { Icon } from "@/components/icon/Icon";
 import { formatTimestampForDisplay } from './timeFormat';
 import { ToolRevealOnMount } from './parts/ToolRevealOnMount';
 import { StaticToolRow } from './parts/ProgressiveGroup';
-import { isExpandableTool, isStandaloneTool } from './parts/toolRenderUtils';
+import { isExpandableTool, isStandaloneTool, showsWithFileChangesOnly } from './parts/toolRenderUtils';
 import TurnActivity from '../components/TurnActivity';
 import { LiveActivityCollapse } from '../components/LiveActivityCollapse';
 import { LiveFinalActivityContext } from '../components/liveActivityContext';
@@ -1536,6 +1536,7 @@ const AssistantMessageBody = React.memo(({
     const collapsibleThinkingBlocks = useUIStore((state) => state.collapsibleThinkingBlocks);
     const showSplitAssistantMessageActions = useUIStore((state) => state.showSplitAssistantMessageActions);
     const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
+    const conciseTranscript = useUIStore((state) => state.conciseTranscript);
     const vscodeApi = useRuntimeAPIs().vscode;
     const isSortedRenderMode = chatRenderMode === 'sorted';
     const liveFinalActivity = React.useContext(LiveFinalActivityContext);
@@ -1578,9 +1579,12 @@ const AssistantMessageBody = React.memo(({
         return true;
     }, []);
 
+    // A transcript that shows only file changes leaves the other calls out.
+    const fileChangesOnly = useUIStore((state) => state.conciseTranscript && state.transcriptFileChangesOnly);
     const shouldShowTool = React.useCallback((toolPart: ToolPartType): boolean => {
+        if (fileChangesOnly && !showsWithFileChangesOnly(toolPart.tool)) return false;
         return isActiveTool(toolPart) || isToolFinalized(toolPart);
-    }, [isActiveTool, isToolFinalized]);
+    }, [fileChangesOnly, isActiveTool, isToolFinalized]);
 
     const hasCopyableText = Boolean(hasTextContent) && !awaitingMessageCompletion;
 
@@ -2570,7 +2574,18 @@ const AssistantMessageBody = React.memo(({
                             narrows: first the time, then the agent, then the thinking
                             effort. Model and duration never leave — the model only
                             truncates once those two alone stop fitting. */}
-                        <div ref={footerFactsRef} className="message-footer__facts whitespace-nowrap text-sm text-muted-foreground/60">
+                        {/* The concise transcript keeps the facts out of the way: they
+                            appear with the actions on hover, and touch has no hover,
+                            so there they stay hidden while holding their place. */}
+                        <div
+                            ref={footerFactsRef}
+                            className={cn(
+                                'message-footer__facts whitespace-nowrap text-sm text-muted-foreground/60',
+                                conciseTranscript && (alwaysShowMessageActions || isTouchContext
+                                    ? 'invisible'
+                                    : 'opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100'),
+                            )}
+                        >
                             {footerModelName ? (
                                 <span className="flex min-w-0 shrink items-center gap-1.5">
                                     {footerHasLogo && footerLogoSrc ? (

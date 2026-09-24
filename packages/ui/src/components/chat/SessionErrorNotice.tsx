@@ -22,14 +22,16 @@ const useLastMessageState = (sessionId: string, directory?: string): LastMessage
   const cacheRef = React.useRef<LastMessageState>(null);
   const getSnapshot = React.useCallback((): LastMessageState => {
     if (!sessionId) return null;
-    const messages = store.getState().message[sessionId];
-    const next = readLastMessageState(messages && messages.length > 0 ? messages[messages.length - 1] : null);
+    const state = store.getState();
+    const messages = state.message[sessionId];
+    const last = messages && messages.length > 0 ? messages[messages.length - 1] : null;
+    const next = readLastMessageState(last, last ? state.part[last.id] : undefined);
     if (!next) {
       cacheRef.current = null;
       return null;
     }
     const cached = cacheRef.current;
-    if (cached && cached.role === next.role && cached.timestamp === next.timestamp && cached.hasError === next.hasError) {
+    if (cached && cached.role === next.role && cached.timestamp === next.timestamp && cached.hasError === next.hasError && cached.awaitsReply === next.awaitsReply) {
       return cached;
     }
     cacheRef.current = next;
@@ -62,7 +64,7 @@ export const SessionErrorNotice: React.FC<SessionErrorNoticeProps> = ({ sessionI
   // A user message that the session is idle on, with nothing after it for a
   // while, is a reply that never began: the send was accepted but OpenCode
   // produced neither a message nor an error for it.
-  const unansweredSince = !reportedError && isIdle && lastMessage?.role === 'user' && lastMessage.timestamp > 0
+  const unansweredSince = !reportedError && isIdle && lastMessage?.role === 'user' && lastMessage.awaitsReply && lastMessage.timestamp > 0
     ? lastMessage.timestamp
     : null;
   const [now, setNow] = React.useState(() => Date.now());

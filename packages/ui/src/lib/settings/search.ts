@@ -39,6 +39,18 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['activity', 'collapsed', 'expanded', 'live', 'tools', 'history'],
   },
   {
+    id: 'chat.concise-transcript',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.conciseTranscript',
+    keywords: ['claude code', 'compact', 'concise', 'tool calls', 'terminal', 'transcript'],
+  },
+  {
+    id: 'chat.transcript-file-changes-only',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.transcriptFileChangesOnly',
+    keywords: ['diff', 'edits', 'bash', 'commands', 'hide tools', 'transcript'],
+  },
+  {
     id: 'appearance.language',
     page: 'appearance',
     titleKey: 'settings.appearance.language.label',

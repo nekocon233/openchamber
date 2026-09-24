@@ -1020,6 +1020,10 @@ interface UIStore {
   showTurnChangedFiles: boolean;
   showExpandedBashTools: boolean;
   showExpandedEditTools: boolean;
+  /** Tool calls as one `Name(argument)` line with a short result, like the Claude Code terminal. */
+  conciseTranscript: boolean;
+  /** With the concise transcript, only file changes (with their diffs) among tool calls. */
+  transcriptFileChangesOnly: boolean;
   timeFormatPreference: TimeFormatPreference;
   weekStartPreference: WeekStartPreference;
   desktopWindowControlsPosition: DesktopWindowControlsPosition;
@@ -1215,6 +1219,8 @@ interface UIStore {
   setShowTurnChangedFiles: (value: boolean) => void;
   setShowExpandedBashTools: (value: boolean) => void;
   setShowExpandedEditTools: (value: boolean) => void;
+  setConciseTranscript: (value: boolean) => void;
+  setTranscriptFileChangesOnly: (value: boolean) => void;
   setTimeFormatPreference: (value: TimeFormatPreference) => void;
   setWeekStartPreference: (value: WeekStartPreference) => void;
   setDesktopWindowControlsPosition: (value: DesktopWindowControlsPosition) => void;
@@ -1395,6 +1401,8 @@ export const useUIStore = create<UIStore>()(
         showTurnChangedFiles: false,
         showExpandedBashTools: false,
         showExpandedEditTools: false,
+        conciseTranscript: true,
+        transcriptFileChangesOnly: true,
         timeFormatPreference: 'auto',
         weekStartPreference: 'auto',
         desktopWindowControlsPosition: 'right',
@@ -2760,6 +2768,12 @@ export const useUIStore = create<UIStore>()(
         setShowExpandedEditTools: (value) => {
           set({ showExpandedEditTools: value });
         },
+        setConciseTranscript: (value) => {
+          set({ conciseTranscript: value });
+        },
+        setTranscriptFileChangesOnly: (value) => {
+          set({ transcriptFileChangesOnly: value });
+        },
 
         setTimeFormatPreference: (value) => {
           set({ timeFormatPreference: value });
@@ -3192,6 +3206,8 @@ export const useUIStore = create<UIStore>()(
           showTurnChangedFiles: state.showTurnChangedFiles,
           showExpandedBashTools: state.showExpandedBashTools,
           showExpandedEditTools: state.showExpandedEditTools,
+          conciseTranscript: state.conciseTranscript,
+          transcriptFileChangesOnly: state.transcriptFileChangesOnly,
           timeFormatPreference: state.timeFormatPreference,
           weekStartPreference: state.weekStartPreference,
           desktopWindowControlsPosition: state.desktopWindowControlsPosition,

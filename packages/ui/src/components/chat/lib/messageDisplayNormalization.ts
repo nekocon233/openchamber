@@ -11,38 +11,43 @@ export const hasCompactionPart = (message: ChatMessageEntry): boolean => {
     });
 };
 
+/** Who compacted the conversation: the user with /compact, or the CLI or OpenCode making room. */
+export type CompactionKind = 'auto' | 'manual';
+
+/** The compaction a display message marks, or null for any other message. */
+export const getCompactionKind = (message: ChatMessageEntry): CompactionKind | null => {
+    // SAFETY: `clientCompaction` is the display-only field set below; the SDK
+    // type does not declare it, and the value is checked before use.
+    const kind = (message.info as { clientCompaction?: unknown }).clientCompaction;
+    return kind === 'auto' || kind === 'manual' ? kind : null;
+};
+
+// A compaction shows as a marker in the conversation, not as a message the
+// user sent. The text stays `/compact` for the code that finds compactions by
+// it; `clientCompaction` tells the renderer which marker to draw.
 const normalizeCompactionCommandMessage = (message: ChatMessageEntry): ChatMessageEntry => {
     if (!hasCompactionPart(message)) {
         return message;
     }
 
-    let changedParts = false;
+    let compaction: CompactionKind | null = null;
     const nextParts = message.parts.map((part) => {
-        const type = (part as { type?: unknown } | null | undefined)?.type;
-        if (type !== 'compaction') {
+        if (part.type !== 'compaction') {
             return part;
         }
-        changedParts = true;
+        compaction = part.auto ? 'auto' : 'manual';
+        // SAFETY: a display-only text part; renderers read `type` and `text`.
         return { type: 'text', text: '/compact' } as Part;
     });
 
-    const info = message.info as unknown as { clientRole?: string | null | undefined };
-    const needsClientRole = info.clientRole !== 'user';
-
-    if (!changedParts && !needsClientRole) {
-        return message;
-    }
-
-    return {
-        ...message,
-        info: needsClientRole
-            ? ({
-                ...(message.info as unknown as Record<string, unknown>),
-                clientRole: 'user',
-            } as unknown as typeof message.info)
-            : message.info,
-        parts: changedParts ? nextParts : message.parts,
+    // Display-only fields on a copy of the SDK record, read back through
+    // `clientRole` and `getCompactionKind`.
+    const info: ChatMessageEntry['info'] & { clientRole: 'user'; clientCompaction: CompactionKind | null } = {
+        ...message.info,
+        clientRole: 'user',
+        clientCompaction: compaction,
     };
+    return { ...message, info, parts: nextParts };
 };
 
 const normalizeMessageParts = (message: ChatMessageEntry): ChatMessageEntry => {

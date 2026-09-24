@@ -1,9 +1,11 @@
-import type { Message } from '@opencode-ai/sdk/v2';
+import type { Message, Part } from '@opencode-ai/sdk/v2';
 
 export type LastMessageState = {
   role: Message['role'];
   timestamp: number;
   hasError: boolean;
+  /** A prompt waits for a reply; a compaction, recorded as a user message, does not. */
+  awaitsReply: boolean;
 } | null;
 
 /**
@@ -15,7 +17,7 @@ export type LastMessageState = {
  * timestamp made every fresh send look unanswered since the epoch and flashed
  * the no-reply notice whenever the server acknowledged slower than a frame.
  */
-export const readLastMessageState = (last: Message | null | undefined): LastMessageState => {
+export const readLastMessageState = (last: Message | null | undefined, parts: readonly Part[] = []): LastMessageState => {
   if (!last) return null;
   if (last.role === 'assistant') {
     const completed = last.time.completed ?? 0;
@@ -23,7 +25,10 @@ export const readLastMessageState = (last: Message | null | undefined): LastMess
       role: last.role,
       timestamp: completed > 0 ? completed : last.time.created,
       hasError: Boolean(last.error),
+      awaitsReply: false,
     };
   }
-  return { role: last.role, timestamp: last.time.created, hasError: false };
+  // Codex answers a compaction with nothing at all.
+  const awaitsReply = !parts.some((part) => part.type === 'compaction');
+  return { role: last.role, timestamp: last.time.created, hasError: false, awaitsReply };
 };

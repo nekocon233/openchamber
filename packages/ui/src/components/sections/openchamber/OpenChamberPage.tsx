@@ -205,6 +205,8 @@ const ChatSectionContent: React.FC = () => {
                 'sessionAssist',
                 'chatRenderMode',
                 'activityRenderMode',
+                'conciseTranscript',
+                'transcriptFileChangesOnly',
                 'userMessageRendering',
                 'mermaidRendering',
                 'reasoning',

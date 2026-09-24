@@ -717,6 +717,12 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.showExpandedEditTools === 'boolean') {
       result.showExpandedEditTools = candidate.showExpandedEditTools;
     }
+    if (typeof candidate.conciseTranscript === 'boolean') {
+      result.conciseTranscript = candidate.conciseTranscript;
+    }
+    if (typeof candidate.transcriptFileChangesOnly === 'boolean') {
+      result.transcriptFileChangesOnly = candidate.transcriptFileChangesOnly;
+    }
     if (typeof candidate.timeFormatPreference === 'string') {
       const mode = candidate.timeFormatPreference.trim();
       if (mode === 'auto' || mode === '12h' || mode === '24h') {

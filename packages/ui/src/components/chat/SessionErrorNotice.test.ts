@@ -31,7 +31,12 @@ const assistantMessage = (time: { created: number; completed?: number }): Messag
 
 describe('readLastMessageState', () => {
   test('a stray completed: 0 on a user message is ignored in favour of created', () => {
-    expect(readLastMessageState(optimisticUserMessage)).toEqual({ role: 'user', timestamp: 1_000, hasError: false });
+    expect(readLastMessageState(optimisticUserMessage)).toEqual({ role: 'user', timestamp: 1_000, hasError: false, awaitsReply: true });
+  });
+
+  test('a compaction, recorded as a user message, waits for no reply', () => {
+    const compaction = { id: 'prt_1', sessionID: 'ses_1', messageID: 'msg_1', type: 'compaction' as const, auto: false };
+    expect(readLastMessageState(optimisticUserMessage, [compaction])?.awaitsReply).toBe(false);
   });
 
   test('an unfinished assistant message uses created, a finished one uses completed', () => {

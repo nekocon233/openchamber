@@ -79,6 +79,10 @@ import { toAbsoluteFilePath } from '@/lib/path-utils';
 import { getToolDescriptionFallback } from './toolRenderUtils';
 import { ApplyPatchFileButtons } from './ApplyPatchFileButtons';
 import { openApplyPatchFileInEditor } from './applyPatchEditorAction';
+import { ConciseToolHeader, type ConciseToolStatus } from './ConciseToolHeader';
+import { getConciseToolName, getConciseToolResult, isFileChangeTool } from './conciseToolRow';
+import { addedFilePatch, writeInputOf } from './conciseDiffRows';
+import { ConciseDiff, type ConciseDiffFile } from './ConciseDiff';
 
 type ToolJsonViewMode = 'summary' | 'formatted' | 'raw';
 
@@ -1770,6 +1774,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
     const metadata = stateWithData.metadata;
     const input = stateWithData.input;
     const showToolFileIcons = useUIStore((s) => s.showToolFileIcons);
+    const conciseTranscript = useUIStore((s) => s.conciseTranscript);
     const currentDirectory = useEffectiveDirectory() ?? '';
 
     const normalizedPartTool = normalizeToolName(part.tool);
@@ -1980,6 +1985,16 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
     const writeLineCount = React.useMemo(() => {
         return normalizedPartTool === 'write' ? parseWriteLineCount(input) : null;
     }, [input, normalizedPartTool]);
+    // The concise transcript shows under a file change what it did. A write
+    // whose metadata carries no diff shows its content as added.
+    const conciseDiffFiles = React.useMemo((): ConciseDiffFile[] => {
+        if (!conciseTranscript || status !== 'completed' || !isFileChangeTool(normalizedPartTool)) return [];
+        const entries = getDiffPatchEntries(metadata, getToolFallbackDiff(metadata), (path) => getRelativePath(path, currentDirectory))
+            .filter((entry) => entry.renderMode === 'diff');
+        if (entries.length > 0) return entries;
+        const written = normalizedPartTool === 'write' ? writeInputOf(input) : null;
+        return written ? [{ id: 'write', title: written.filePath ?? '', patch: addedFilePatch(written.content) }] : [];
+    }, [conciseTranscript, currentDirectory, input, metadata, normalizedPartTool, status]);
     const isMultiFileApplyPatch = normalizedPartTool === 'apply_patch' && Array.isArray(metadata?.files) && (metadata?.files as []).length > 1;
     const normalizedPart = normalizedPartTool !== part.tool ? ({ ...part, tool: normalizedPartTool } as ToolPartType) : part;
     const descriptionPath = getToolDescriptionPath(normalizedPart, state, currentDirectory);
@@ -2149,11 +2164,114 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
 
     const iconStyle = !isTaskTool && isError ? TOOL_ERROR_ICON_STYLE : TOOL_NORMAL_ICON_STYLE;
     const titleStyle = !isTaskTool && isError ? TOOL_ERROR_TITLE_STYLE : TOOL_NORMAL_TITLE_STYLE;
-    const shouldRenderTaskSummary = useDeferredExpandedContent(isTaskTool && (taskSummaryEntries.length > 0 || isActive || shouldTreatAsFinalized || !!taskSessionId));
+    // The concise transcript folds a subagent's calls away like any tool's details.
+    const shouldRenderTaskSummary = useDeferredExpandedContent(isTaskTool && (conciseTranscript
+        ? isExpanded
+        : (taskSummaryEntries.length > 0 || isActive || shouldTreatAsFinalized || !!taskSessionId)));
     const shouldRenderExpandedContent = useDeferredExpandedContent(!isTaskTool && isExpanded);
 
     if (!shouldTreatAsFinalized && !isActive && !isTaskTool) {
         return null;
+    }
+
+    const quickOpenButton = quickOpenTarget ? (
+        <button
+            type="button"
+            onClick={handleQuickOpen}
+            className={cn(
+                'flex-shrink-0 inline-flex h-4 w-4 items-center justify-center rounded transition-opacity hover:bg-interactive-hover',
+                'opacity-60 hover:opacity-100 focus-visible:opacity-100',
+            )}
+            style={{ color: 'var(--tools-icon)' }}
+            title={t('chat.toolPart.openFile')}
+            aria-label={t('chat.toolPart.openFile')}
+        >
+            <Icon name="external-link" className="h-3 w-3" />
+        </button>
+    ) : null;
+
+    const taskDetails = shouldRenderTaskSummary ? (
+        <TaskToolSummary
+            entries={taskSummaryEntries}
+            isExpanded={isExpanded}
+            isMobile={isMobile}
+            output={taskOutputString}
+            sessionId={taskSessionId}
+            onShowPopup={onShowPopup}
+            input={input}
+            animateTailText={animateTailText}
+            isActive={isActive}
+        />
+    ) : null;
+
+    const expandedDetails = !isTaskTool ? (
+        <div
+            ref={expandedContentRef}
+            aria-hidden={!isExpanded}
+            style={{
+                height: isExpanded ? 'auto' : '0px',
+                overflow: isExpanded ? 'visible' : 'hidden',
+                overflowAnchor: 'none',
+            }}
+        >
+            {shouldRenderExpandedContent ? (
+                <div
+                    className="relative ml-2 pl-3"
+                >
+                    <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute left-0 top-px bottom-0 w-px"
+                        style={{ backgroundColor: 'var(--tools-border)' }}
+                    />
+                    <ToolExpandedContent
+                        part={part}
+                        state={state}
+                        currentDirectory={currentDirectory}
+                        isExpanded={isExpanded}
+                        onShowPopup={onShowPopup}
+                        presentation={presentation}
+                    />
+                </div>
+            ) : null}
+        </div>
+    ) : null;
+
+    if (conciseTranscript) {
+        const conciseStatus: ConciseToolStatus = isError
+            ? 'failed'
+            : !isFinalized ? 'running' : status === 'completed' ? 'completed' : 'stopped';
+        const argument = justificationText || description;
+        return (
+            <div>
+                <ConciseToolHeader
+                    name={guestHeader?.title ?? getConciseToolName(normalizedPartTool, part.tool)}
+                    argument={argument}
+                    argumentTitle={argument}
+                    status={conciseStatus}
+                    result={getConciseToolResult({
+                        tool: normalizedPartTool,
+                        phase: isError ? 'failed' : isFinalized ? 'done' : 'running',
+                        error: stateWithData.error,
+                        output: stateOutput,
+                        diffStats,
+                        writeLines: writeLineCount,
+                        subagentToolCalls: taskSummaryEntries.length,
+                    })}
+                    timer={effectiveTimeStart !== undefined ? (
+                        <LiveDuration start={effectiveTimeStart} end={effectiveTimeEnd} active={isActive} />
+                    ) : undefined}
+                    expansion={{
+                        isExpanded,
+                        onToggle: () => onToggle(part.id),
+                        onActivate: isMultiFileApplyPatch ? () => onToggle(part.id) : handleMainClick,
+                    }}
+                    actions={quickOpenButton}
+                />
+                {!isExpanded && conciseDiffFiles.length > 0 ? <ConciseDiff files={conciseDiffFiles} /> : null}
+                {taskDetails}
+                {expandedDetails}
+            </div>
+        );
     }
 
     return (
@@ -2250,21 +2368,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                                 >
                                     {displayName}
                                 </MinDurationShineText>
-                                {quickOpenTarget ? (
-                                    <button
-                                        type="button"
-                                        onClick={handleQuickOpen}
-                                        className={cn(
-                                            'flex-shrink-0 inline-flex h-4 w-4 items-center justify-center rounded transition-opacity hover:bg-interactive-hover',
-                                            'opacity-60 hover:opacity-100 focus-visible:opacity-100',
-                                        )}
-                                        style={{ color: 'var(--tools-icon)' }}
-                                        title={t('chat.toolPart.openFile')}
-                                        aria-label={t('chat.toolPart.openFile')}
-                                    >
-                                        <Icon name="external-link" className="h-3 w-3" />
-                                    </button>
-                                ) : null}
+                                {quickOpenButton}
                             </div>
                             {normalizedPartTool === 'bash' && typeof effectiveTimeStart === 'number' ? (
                                 <span className={cn('flex-shrink-0 tabular-nums text-muted-foreground/80', TOOL_ROW_DESCRIPTION_CLASS)}>
@@ -2326,51 +2430,9 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
             </div>
 
             {}
-            {shouldRenderTaskSummary ? (
-                <TaskToolSummary
-                    entries={taskSummaryEntries}
-                    isExpanded={isExpanded}
-                    isMobile={isMobile}
-                    output={taskOutputString}
-                    sessionId={taskSessionId}
-                    onShowPopup={onShowPopup}
-                    input={input}
-                    animateTailText={animateTailText}
-                    isActive={isActive}
-                />
-            ) : null}
+            {taskDetails}
 
-            {!isTaskTool ? (
-                <div
-                    ref={expandedContentRef}
-                    aria-hidden={!isExpanded}
-                    style={{
-                        height: isExpanded ? 'auto' : '0px',
-                        overflow: isExpanded ? 'visible' : 'hidden',
-                        overflowAnchor: 'none',
-                    }}
-                >
-                    {shouldRenderExpandedContent ? (
-                        <div
-                            className="relative ml-2 pl-3"
-                        >
-                            <span
-                                aria-hidden="true"
-                                className="pointer-events-none absolute left-0 top-px bottom-0 w-px"
-                                style={{ backgroundColor: 'var(--tools-border)' }}
-                            />
-                            <ToolExpandedContent
-                                part={part}
-                                state={state}
-                                currentDirectory={currentDirectory}
-                                isExpanded={isExpanded}
-                                onShowPopup={onShowPopup}
-                                presentation={presentation}
-                            />
-                        </div>
-                    ) : null}
-                </div>
-            ) : null}
+            {expandedDetails}
         </div>
     );
 };
