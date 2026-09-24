@@ -14,6 +14,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import { isNativeSessionId } from '../native-agents/ids.js';
+
 const QUEUE_FILE_NAME = 'message-queue.json';
 const QUEUE_FILE_VERSION = 1;
 
@@ -619,6 +621,14 @@ export function createMessageQueueRuntime({
 
   const enqueue = async (sessionIdInput, directoryInput, itemInput) => {
     const sessionId = requireSessionId(sessionIdInput);
+    // This courier delivers through OpenCode; native CLI sessions queue
+    // follow-ups through the browser's follow-up queue instead.
+    if (isNativeSessionId(sessionId)) {
+      throw Object.assign(new Error('Native CLI sessions do not use the server message queue'), {
+        status: 409,
+        code: 'NATIVE_SESSION_UNSUPPORTED',
+      });
+    }
     const directory = asNonEmptyString(directoryInput);
     if (!directory) throw new TypeError('directory is required');
     const parsed = parseQueuedItemInput(itemInput);
@@ -817,7 +827,8 @@ export function createMessageQueueRuntime({
 export function registerMessageQueueRoutes(app, runtime) {
   const respondError = (res, error, fallback) => {
     const status = error instanceof TypeError ? 400 : (Number.isInteger(error?.status) ? error.status : 500);
-    res.status(status).json({ error: error?.message ?? fallback });
+    // `code` is omitted from the JSON when the error has none.
+    res.status(status).json({ error: error?.message ?? fallback, code: error?.code });
   };
 
   app.get('/api/message-queue', async (_req, res) => {

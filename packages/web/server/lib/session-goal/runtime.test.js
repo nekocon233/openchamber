@@ -605,3 +605,134 @@ describe('session goal live activity gate', () => {
     runtime.stop();
   });
 });
+
+describe('session goal on native CLI sessions', () => {
+  const NATIVE_ID = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
+
+  const nativePrompt = (id, model, agent = 'build') => ({
+    info: { id, sessionID: NATIVE_ID, role: 'user', time: { created: 1 }, agent, model },
+    parts: [{ type: 'text', text: 'Work on it.' }],
+  });
+
+  const nativeReply = (id, created, tokens) => ({
+    info: {
+      id,
+      sessionID: NATIVE_ID,
+      role: 'assistant',
+      providerID: 'claude-native',
+      modelID: 'claude-haiku-4-5',
+      time: { created, completed: created },
+      tokens,
+    },
+    parts: [{ type: 'text', text: 'Done: parser. Remaining: tests.' }],
+  });
+
+  // The native runtime as the goal loop sees it; OpenCode must never be asked.
+  const createNativeHarness = ({ messages, goalOverrides = {} }) => {
+    const stored = { id: NATIVE_ID, directory: DIRECTORY, metadata: { openchamber: { goal: { ...goal, ...goalOverrides } } } };
+    const prompts = [];
+    const updates = [];
+    const nativeSessions = {
+      isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
+      getSession: vi.fn(async () => stored),
+      statuses: vi.fn(async () => ({})),
+      loadMessages: vi.fn(async () => ({ records: messages, cursor: null })),
+      updateSession: vi.fn(async (_sessionId, _directory, patch) => {
+        updates.push(patch);
+        stored.metadata = patch.metadata;
+        return stored;
+      }),
+      prompt: vi.fn(async (_sessionId, request) => {
+        prompts.push(request);
+      }),
+    };
+    const openCodeFetch = vi.fn(async () => {
+      throw new Error('OpenCode must not be asked about a native session');
+    });
+    vi.stubGlobal('fetch', openCodeFetch);
+    const service = {
+      generateSmallModelText: vi.fn(async () => ({
+        text: '{"verdict":"continue","note":"Tests remain"}',
+        providerID: 'provider',
+        modelID: 'small',
+      })),
+    };
+    const runtime = createSessionGoalRuntime({
+      buildOpenCodeUrl: (pathname) => `http://opencode.test${pathname}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      getSmallModelService: async () => service,
+      nativeSessions,
+      isEnabled: () => true,
+      idleQuietMs: 10,
+    });
+    return { runtime, stored, prompts, updates, openCodeFetch };
+  };
+
+  const idleNative = async (runtime) => {
+    runtime.processPayload({ type: 'session.status', properties: { sessionID: NATIVE_ID, status: { type: 'idle' } } }, DIRECTORY);
+    await vi.runOnlyPendingTimersAsync();
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('continues through the CLI on the model, effort and agent of the last prompt', async () => {
+    const { runtime, stored, prompts, openCodeFetch } = createNativeHarness({
+      messages: [
+        nativePrompt('ncl_u_1', { providerID: 'claude-native', modelID: 'haiku', variant: 'high' }, 'plan'),
+        nativeReply('ncl_a_k_msg_1', 2, { input: 10, output: 5, cache: { read: 0 } }),
+      ],
+    });
+
+    await idleNative(runtime);
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({
+      directory: DIRECTORY,
+      model: { providerID: 'claude-native', modelID: 'haiku' },
+      variant: 'high',
+      agent: 'plan',
+    });
+    expect(prompts[0].parts[0].text).toContain('Continue working toward the active session goal.');
+    expect(stored.metadata.openchamber.goal).toMatchObject({ turnsUsed: 2, note: 'Tests remain', lastAccountedMessageID: 'ncl_a_k_msg_1' });
+    expect(openCodeFetch).not.toHaveBeenCalled();
+    runtime.stop();
+  });
+
+  it('accounts replies after its cursor by position, since native ids do not sort by time', async () => {
+    const { runtime, stored } = createNativeHarness({
+      goalOverrides: { lastAccountedMessageID: 'ncl_a_k_msg_Z', tokensUsed: 100 },
+      messages: [
+        nativePrompt('ncl_u_1', { providerID: 'claude-native', modelID: 'haiku' }),
+        nativeReply('ncl_a_k_msg_Z', 2, { input: 90, output: 10, cache: { read: 0 } }),
+        nativePrompt('ncl_u_2', { providerID: 'claude-native', modelID: 'haiku' }),
+        nativeReply('ncl_a_k_msg_A', 3, { input: 250, output: 50, cache: { read: 0 } }),
+      ],
+    });
+
+    await idleNative(runtime);
+
+    expect(stored.metadata.openchamber.goal).toMatchObject({ tokensUsed: 300, lastAccountedMessageID: 'ncl_a_k_msg_A' });
+    runtime.stop();
+  });
+
+  it('pauses when the CLI turn is interrupted', async () => {
+    const { runtime, stored, prompts } = createNativeHarness({ messages: [] });
+
+    runtime.processPayload({
+      type: 'message.updated',
+      properties: { info: { id: 'ncl_a_k_msg_1', sessionID: NATIVE_ID, role: 'assistant', error: { name: 'MessageAbortedError', data: { message: 'Interrupted' } } } },
+    }, DIRECTORY);
+    await vi.runAllTimersAsync();
+
+    expect(stored.metadata.openchamber.goal).toMatchObject({ status: 'paused', statusReason: 'paused after abort' });
+    expect(prompts).toEqual([]);
+    runtime.stop();
+  });
+});

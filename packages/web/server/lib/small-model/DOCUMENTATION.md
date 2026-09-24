@@ -55,6 +55,10 @@ other runtime API.
    When a caller supplies `preferredProviderID`, implicit resolution is
    same-provider by default. `restrictToPreferredProvider: false` is the only
    opt-out. Settings, config, and request models remain explicit overrides.
+   A native CLI session's provider (`claude-native`, `codex-native`) has no
+   login of its own, so under that restriction its utility calls (AI title,
+   notes and read-aloud summaries, session assist, goal audits) run only on an explicit
+   settings or config small model, as Claude Code and Codex plugin sessions do.
 - Input clamp: the prompt is measured against the resolved model's catalog
   `limit.context` together with the system prompt (minus an output reserve,
   ~4 chars/token estimate;

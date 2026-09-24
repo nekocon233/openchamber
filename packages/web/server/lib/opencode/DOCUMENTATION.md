@@ -123,7 +123,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - Keeps route behavior independent from composition root; `index.js` now supplies dependencies only.
 
 ## Public exports (session-runtime.js)
-- `createSessionRuntime({ writeSseEvent, getNotificationClients, broadcastEvent? })`: creates runtime-owned state machine and APIs for session status.
+- `createSessionRuntime({ writeSseEvent, getNotificationClients, broadcastEvent?, isNativeSessionId? })`: creates runtime-owned state machine and APIs for session status. Native CLI sessions (`lib/native-agents`) share the status, attention and pending-request tracking; `isNativeSessionId` keeps them out of the OpenCode active-session count and out of OpenCode restart handling.
 - Returned API:
   - `processOpenCodeSsePayload(payload)`
   - `getSessionActivitySnapshot()`
@@ -136,7 +136,7 @@ This module provides OpenCode server integration utilities for the web server ru
   - `markSessionUnviewed(sessionId, clientId)`
   - `markUserMessageSent(sessionId)`
   - `resetAllSessionActivityToIdle()`
-  - `interruptBusySessionsAfterRestart()`: settles every session whose authoritative status is `busy`/`retry` or whose activity phase is still busy, broadcasts `openchamber:session-status` idle plus an OpenCode-shaped `session.error`, resets leftover activity/cooldowns, and returns the interrupted session IDs in stable order.
+  - `interruptBusySessionsAfterRestart()`: settles every OpenCode session whose authoritative status is `busy`/`retry` or whose activity phase is still busy, broadcasts `openchamber:session-status` idle plus an OpenCode-shaped `session.error`, resets leftover OpenCode activity/cooldowns, drops OpenCode pending requests, and returns the interrupted session IDs in stable order. Native CLI sessions do not run inside OpenCode, so their status, activity and pending questions are left alone.
   - `dispose()`
 
 The runtime maintains active-session count incrementally from idempotent activity phase transitions. Upstream stall-timeout and lifecycle health checks read it in O(1); the hourly cleanup removes activity phases older than 24 hours without broadcasting synthetic state transitions. Snapshot generation remains reserved for the session-activity API.
@@ -483,8 +483,10 @@ within a ten-minute overall deadline.
 - `registerOpenCodeProxy(app, dependencies)`: registers OpenCode proxy routes and middleware.
 - Owns:
   - SSE forwarders: `GET /api/global/event`, `GET /api/event`
+    - `GET /api/global/event` also carries native CLI session events from the shared hub (`subscribeNativeEvents` dependency), written only between upstream SSE blocks; see `event-stream/DOCUMENTATION.md`.
     - Downstream heartbeats keep clients and intermediaries alive, while a separate upstream-only stall watchdog closes the downstream response when OpenCode stops producing bytes so clients reconnect instead of trusting synthetic heartbeats indefinitely. Each watchdog reset uses the current load-aware timeout, matching the shared event transport.
   - Session message forwarder: `POST /api/session/:sessionId/message`
+  - Native session guard: any `/api/session/:sessionId…` request whose id is a native CLI session (`ncl_`/`ncx_`) is answered with 409 `NATIVE_SESSION_ROUTE` before readiness gating, so OpenCode never receives a native id.
   - Interactive OAuth forwarders: `POST /api/provider/:providerID/oauth/callback` and `POST /api/mcp/:name/auth/authenticate`
     - Upstream blocks inside these calls for the whole browser sign-in (device-code polling or a loopback redirect), so both the outer response deadline and proxy use the 15-minute interactive timeout instead of `LONG_REQUEST_TIMEOUT_MS`. Other provider routes, including `oauth/authorize`, keep the ordinary deadline.
   - Generic `/api/*` forwarding with hop-by-hop header filtering. Express strips
@@ -510,7 +512,7 @@ The VS Code extension owns its separate Git and proxy implementation.
   - `start()`
   - `stop()`
 - Behavior:
-  - Waits for OpenCode readiness before attaching the watcher.
+  - With a shared hub, subscribes first and waits for OpenCode readiness only before starting the hub, so native CLI session events reach `onPayload` without OpenCode. `eventSources` selects hub sources; production wiring passes OpenCode and native so session status, push and follow-up terminalization cover native sessions. Without a hub it waits for readiness before opening its own reader.
   - In production wiring, subscribes to the shared global message-stream hub instead of opening its own `/global/event` connection.
   - Can still create its own `/global/event` reader when no shared hub is provided, which keeps module tests and isolated reuse simple.
   - Reuses event-stream parsing, `Last-Event-ID`, stall timeout, and reconnect behavior.

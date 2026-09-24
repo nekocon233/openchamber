@@ -20,6 +20,14 @@ const listen = (app, host = '127.0.0.1') => new Promise((resolve, reject) => {
   server.once('error', reject);
 });
 
+const waitForCondition = async (condition, timeoutMs = 1000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting for condition');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
+
 const closeServer = (server) => new Promise((resolve, reject) => {
   if (!server) {
     resolve();
@@ -90,6 +98,129 @@ describe('OpenCode proxy SSE forwarding', () => {
     expect(response.headers.get('x-upstream-test')).toBe('ok');
     expect(await response.text()).toBe('data: {"ok":true}\n\n');
     expect(seenAuthorization).toBe('Bearer test-token');
+  });
+
+  it('injects native session events into the global stream only between upstream blocks', async () => {
+    let releaseRest;
+    const restReleased = new Promise((resolve) => {
+      releaseRest = resolve;
+    });
+    const partial = 'data: {"directory":"/a","payload":{"type":"x","properties":{"n":';
+    const rest = '1}}}\n\n';
+
+    const upstream = express();
+    upstream.get('/global/event', async (_req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write(partial);
+      await restReleased;
+      res.write(rest);
+      res.end();
+    });
+    upstream.get('/event', (_req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write('data: {"ok":true}\n\n');
+      res.end();
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+
+    const listeners = new Set();
+    let subscribeCalls = 0;
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+      subscribeNativeEvents: (listener) => {
+        subscribeCalls += 1;
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    const directoryResponse = await fetch(`http://127.0.0.1:${proxyPort}/api/event`);
+    expect(await directoryResponse.text()).toBe('data: {"ok":true}\n\n');
+    expect(subscribeCalls).toBe(0);
+
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/global/event`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+    while (received.length < partial.length) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += decoder.decode(value, { stream: true });
+    }
+    expect(received).toBe(partial);
+    expect(listeners.size).toBe(1);
+
+    const nativeEvent = {
+      directory: '/work/project',
+      payload: { type: 'session.status', properties: { sessionID: 'ncl_a', status: { type: 'busy' } } },
+    };
+    for (const listener of listeners) listener(nativeEvent);
+    releaseRest();
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += decoder.decode(value, { stream: true });
+    }
+    expect(received).toBe(`${partial}${rest}data: ${JSON.stringify(nativeEvent)}\n\n`);
+    await waitForCondition(() => listeners.size === 0);
+  });
+
+  it('refuses OpenCode session routes for native CLI session ids without calling OpenCode', async () => {
+    const upstreamPaths = [];
+    const upstream = express();
+    upstream.use((req, res) => {
+      upstreamPaths.push(req.path);
+      res.json({ id: 'ses_opencode' });
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    const nativeResponse = await fetch(
+      `http://127.0.0.1:${proxyPort}/api/session/ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188/message`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    );
+    expect(nativeResponse.status).toBe(409);
+    expect(await nativeResponse.json()).toMatchObject({ code: 'NATIVE_SESSION_ROUTE' });
+
+    const openCodeResponse = await fetch(`http://127.0.0.1:${proxyPort}/api/session/ses_opencode`);
+    expect(openCodeResponse.status).toBe(200);
+    expect(upstreamPaths).toEqual(['/session/ses_opencode']);
   });
 
   it('preserves official SDK prompt request fidelity through the generic proxy', async () => {

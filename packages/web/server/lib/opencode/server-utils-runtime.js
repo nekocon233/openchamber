@@ -220,6 +220,7 @@ export const createServerUtilsRuntime = (dependencies) => {
       trackAuthChannel,
       readAuthoritativeProjects,
       onSessionDeleted: dependencies.onSessionDeleted,
+      subscribeNativeEvents: dependencies.subscribeNativeEvents,
     });
   };
 

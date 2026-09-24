@@ -91,3 +91,52 @@ describe('notification template message extraction', () => {
     );
   });
 });
+
+describe('notification template native sessions', () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const NATIVE_ID = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
+  const createNativeRuntime = (calls) => createNotificationTemplateRuntime({
+    readSettingsFromDisk: async () => ({}),
+    persistSettings: vi.fn(async () => {}),
+    buildOpenCodeUrl: (path) => path,
+    getOpenCodeAuthHeaders: () => ({}),
+    resolveGitBinaryForSpawn: () => 'git',
+    nativeSessions: {
+      isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
+      getSession: async (sessionId, directory) => {
+        calls.push(['session', sessionId, directory]);
+        return { id: sessionId, title: 'Native work' };
+      },
+      loadMessages: async (sessionId, directory, page) => {
+        calls.push(['messages', sessionId, directory, page]);
+        return {
+          records: [
+            { info: { id: 'ncl_u_1', role: 'user' }, parts: [{ type: 'text', text: 'Do it' }] },
+            { info: { id: 'ncl_a_1', role: 'assistant', finish: 'stop' }, parts: [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text: 'Done it' }] },
+          ],
+        };
+      },
+    },
+  });
+
+  it('reads the title and last reply of a native session from the native runtime, never from OpenCode', async () => {
+    const calls = [];
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('OpenCode must not be asked about a native session');
+    });
+    const runtime = createNativeRuntime(calls);
+
+    expect(await runtime.fetchLastAssistantMessageText(NATIVE_ID, undefined, undefined, '/work/project')).toBe('Done it');
+    const variables = await runtime.buildTemplateVariables({ properties: {} }, NATIVE_ID, '/work/project');
+    expect(variables.session_name).toBe('Native work');
+    expect(calls).toEqual([
+      ['messages', NATIVE_ID, '/work/project', { limit: 5 }],
+      ['session', NATIVE_ID, '/work/project'],
+    ]);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(await runtime.fetchLastAssistantMessageText(NATIVE_ID, undefined, undefined, undefined)).toBe('');
+  });
+});

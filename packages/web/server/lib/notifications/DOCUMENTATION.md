@@ -49,6 +49,7 @@ This module owns server-side notification preparation, trigger fanout, browser p
   - completion/error/question/permission trigger routing; permission suppression consults the authoritative permission-auto-accept runtime
   - authoritative envelope-directory propagation into session enrichment fetches and Web/PWA navigation targets
   - session parent cache for subtask suppression
+  - per-turn ready suppression while a session's goal is active, reading a native CLI session through the injected `nativeSessions`
   - template resolution and fallback behavior
   - native notification fanout and web push payload fanout
   - push suppression while any fresh UI visibility heartbeat reports a focused client
@@ -121,6 +122,11 @@ This module owns server-side notification preparation, trigger fanout, browser p
   - `maybeCacheSessionInfoFromEvent(payload)`
   - `buildTemplateVariables(payload, sessionId, directoryHint?)`
   - `getCachedZenModels()`
+- Native CLI sessions (`ncl_`/`ncx_` ids) are not in OpenCode. With the
+  `nativeSessions` dependency (`isNativeSessionId`, `getSession`,
+  `loadMessages`, backed by the native agents runtime), their title and last
+  reply come from the native runtime, which needs the notification's
+  directory; without a directory they get neither.
 
 ## Constants
 

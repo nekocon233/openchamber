@@ -198,6 +198,48 @@ describe('scheduled-tasks runtime helpers', () => {
   });
 });
 
+describe('scheduled-tasks runtime with a native CLI model', () => {
+  it('fails the run with a reason before it creates an OpenCode session', async () => {
+    let task = {
+      id: 'task-1',
+      name: 'Native model task',
+      enabled: true,
+      schedule: { kind: 'daily', times: ['23:59'], timezone: 'UTC' },
+      execution: { prompt: 'Run the task', providerID: 'claude-native', modelID: 'sonnet', permissionAutoAccept: true, goalEnabled: false },
+      state: {},
+    };
+    const fetchImpl = vi.fn(async () => Response.json({ id: 'session-1' }));
+    vi.stubGlobal('fetch', fetchImpl);
+
+    try {
+      const runtime = createScheduledTasksRuntime({
+        projectConfigRuntime: {
+          listScheduledTasks: async () => [task],
+          reconcileLoopTasks: async () => [task],
+          updateScheduledTaskState: async (_projectID, _taskID, patch) => {
+            task = { ...task, state: { ...task.state, ...patch } };
+            return { task };
+          },
+        },
+        listProjects: async () => [{ id: 'project-1', path: '/project' }],
+        buildOpenCodeUrl: (path) => `http://opencode.test${path}`,
+        getOpenCodeAuthHeaders: () => ({}),
+        setSessionAutoAccept: async () => undefined,
+        logger: { info: () => undefined, warn: () => undefined },
+      });
+
+      await runtime.syncProject('project-1');
+      await runtime.runNow('project-1', 'task-1');
+
+      expect(task.state.lastStatus).toBe('error');
+      expect(task.state.lastError).toContain('claude-native');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('scheduled-tasks runtime syncProject wiring', () => {
   const createTempProject = async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-runtime-loop-'));

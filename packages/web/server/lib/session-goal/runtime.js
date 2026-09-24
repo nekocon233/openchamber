@@ -290,11 +290,24 @@ const hasRepeatedLengthTail = (messages, latestAssistant, goalCreatedAt) => {
   );
 };
 
+/**
+ * @param {object} options
+ * @param {{
+ *   isNativeSessionId: (sessionId: string) => boolean,
+ *   getSession: Function,
+ *   statuses: Function,
+ *   loadMessages: Function,
+ *   updateSession: Function,
+ *   prompt: Function,
+ * } | null} [options.nativeSessions] the native CLI runtime, for Claude Code and
+ *   Codex sessions; `prompt` names the message itself
+ */
 export const createSessionGoalRuntime = ({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   getSmallModelService,
   emitGoalNotification,
+  nativeSessions = null,
   isEnabled = isSessionGoalEnabled,
   idleQuietMs = IDLE_QUIET_MS,
   kickoffQuietMs = KICKOFF_QUIET_MS,
@@ -355,12 +368,72 @@ export const createSessionGoalRuntime = ({
 
   const isWorkingStatus = (status) => status?.type === 'busy' || status?.type === 'retry';
 
+  // Where a session's record, status and history come from, and where the
+  // loop writes its goal and sends continuations.
+  const openCodeSource = (sessionId, directory) => ({
+    native: false,
+    readSession: () => openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, { directory }),
+    readStatuses: () => fetchSessionStatuses(directory),
+    readChildren: () => fetchSessionChildren(sessionId, directory),
+    readMessages: () => fetchRecentMessages(sessionId, directory),
+    writeMetadata: (metadata) => openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, {
+      directory,
+      method: 'PATCH',
+      body: { metadata },
+    }),
+    sendContinuation: ({ goal, lastAssistantInfo }) => sendContinuation({ sessionId, directory, goal, lastAssistantInfo }),
+  });
+
+  // A native CLI session (Claude Code, Codex) is read and prompted through the
+  // native runtime, which keeps its metadata in its own registry.
+  const nativeSource = (sessionId, directory) => ({
+    native: true,
+    readSession: () => nativeSessions.getSession(sessionId, directory),
+    readStatuses: () => nativeSessions.statuses(directory).catch(() => null),
+    // Claude Code's subagents are part of their parent's turns and Codex
+    // reports none: no child session works on while its parent is idle.
+    readChildren: async () => [],
+    readMessages: () => nativeSessions.loadMessages(sessionId, directory, { limit: MESSAGE_FETCH_LIMIT })
+      .then((page) => page.records)
+      .catch(() => null),
+    writeMetadata: (metadata) => nativeSessions.updateSession(sessionId, directory, { metadata }),
+    // The CLI continues on the model, effort and agent its last prompt was
+    // sent with; a reply names the API model rather than the one picked.
+    sendContinuation: async ({ goal, messages, lastAssistantInfo }) => {
+      let lastPrompt = null;
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const info = messages[i]?.info;
+        if (info?.role === 'user' && info.model?.modelID) {
+          lastPrompt = info;
+          break;
+        }
+      }
+      const providerID = lastPrompt?.model.providerID ?? lastAssistantInfo?.providerID ?? '';
+      const modelID = lastPrompt?.model.modelID ?? lastAssistantInfo?.modelID ?? '';
+      if (!providerID || !modelID) {
+        throw new Error('cannot continue goal: no prompt or reply names a model');
+      }
+      await nativeSessions.prompt(sessionId, {
+        directory,
+        parts: [{ type: 'text', text: buildContinuationPrompt(goal) }],
+        model: { providerID, modelID },
+        variant: lastPrompt?.model.variant,
+        agent: lastPrompt?.agent === 'plan' ? 'plan' : 'build',
+      });
+    },
+  });
+
+  const sourceFor = (sessionId, directory) => (
+    nativeSessions?.isNativeSessionId(sessionId) ? nativeSource(sessionId, directory) : openCodeSource(sessionId, directory)
+  );
+
   // Merge-write the goal payload from a FRESH session read so concurrent
   // metadata writes (assist payloads, dismissals, UI goal edits) survive.
   // Returns the written goal, or null when the stored goal no longer matches
   // the expected id (user replaced/cleared it while we worked).
   const writeGoal = async (sessionId, directory, expectedGoalId, mutate) => {
-    const session = await openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, { directory });
+    const source = sourceFor(sessionId, directory);
+    const session = await source.readSession();
     const currentGoal = parseGoalMetadata(session);
     if (!currentGoal || currentGoal.id !== expectedGoalId) return null;
     const nextGoal = { ...currentGoal, ...mutate(currentGoal), updatedAt: Date.now() };
@@ -368,15 +441,9 @@ export const createSessionGoalRuntime = ({
     const currentNamespace = currentMetadata.openchamber && typeof currentMetadata.openchamber === 'object'
       ? currentMetadata.openchamber
       : {};
-    await openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, {
-      directory,
-      method: 'PATCH',
-      body: {
-        metadata: {
-          ...currentMetadata,
-          openchamber: { ...currentNamespace, goal: nextGoal },
-        },
-      },
+    await source.writeMetadata({
+      ...currentMetadata,
+      openchamber: { ...currentNamespace, goal: nextGoal },
     });
     return nextGoal;
   };
@@ -494,7 +561,8 @@ export const createSessionGoalRuntime = ({
   const tick = async (sessionId, directory) => {
     if (!isEnabled()) return;
 
-    const session = await openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, { directory })
+    const source = sourceFor(sessionId, directory);
+    const session = await source.readSession()
       .catch((error) => {
         console.warn(`[session-goal] session fetch failed: ${error?.message || error}`);
         return null;
@@ -530,21 +598,21 @@ export const createSessionGoalRuntime = ({
     // its next idle event will arm a fresh tick. If a child is still working,
     // OpenCode will inject its result into the parent and produce the same
     // busy→idle cycle, so do not poll or audit the interim parent reply.
-    const statuses = await fetchSessionStatuses(directory);
+    const statuses = await source.readStatuses();
     if (!statuses) {
       armTimer(sessionId, directory, idleQuietMs);
       return;
     }
     if (isWorkingStatus(statuses[sessionId])) return;
 
-    const children = await fetchSessionChildren(sessionId, directory);
+    const children = await source.readChildren();
     if (!children) {
       armTimer(sessionId, directory, idleQuietMs);
       return;
     }
     if (children.some((child) => typeof child?.id === 'string' && isWorkingStatus(statuses[child.id]))) return;
 
-    const messages = await fetchRecentMessages(sessionId, directory);
+    const messages = await source.readMessages();
     if (!messages) return;
 
     let lastAssistant = null;
@@ -610,10 +678,16 @@ export const createSessionGoalRuntime = ({
     let lastAccountedMessageID = goal.lastAccountedMessageID;
     let segmentSnapshot = null;
     let sawNewMessages = false;
-    for (const message of messages) {
+    // OpenCode message ids sort by creation; a native CLI's do not, so its
+    // cursor is its position in the chronological page. A cursor outside the
+    // page is older than all of it.
+    const cursorIndex = source.native && lastAccountedMessageID
+      ? messages.findIndex((message) => message?.info?.id === lastAccountedMessageID)
+      : -1;
+    for (const [index, message] of messages.entries()) {
       const info = message?.info;
       if (info?.role !== 'assistant' || typeof info.id !== 'string') continue;
-      if (lastAccountedMessageID && info.id <= lastAccountedMessageID) continue;
+      if (lastAccountedMessageID && (source.native ? index <= cursorIndex : info.id <= lastAccountedMessageID)) continue;
       if (!(info.time?.completed > 0)) continue;
       sawNewMessages = true;
       const total = messageTokenTotal(info);
@@ -634,7 +708,7 @@ export const createSessionGoalRuntime = ({
       } else {
         segmentSnapshot = total;
       }
-      if (!lastAccountedMessageID || info.id > lastAccountedMessageID) {
+      if (source.native || !lastAccountedMessageID || info.id > lastAccountedMessageID) {
         lastAccountedMessageID = info.id;
       }
     }
@@ -789,7 +863,7 @@ export const createSessionGoalRuntime = ({
 
     // The tail may have moved while auditing (user sent a message) — a
     // continuation now would collide with the user's own turn.
-    const latest = await fetchRecentMessages(sessionId, directory);
+    const latest = await source.readMessages();
     const latestLastInfo = latest && latest.length > 0 ? latest[latest.length - 1]?.info : null;
     if (!latestLastInfo || latestLastInfo.id !== lastMessageInfo?.id) {
       console.log('[session-goal] tail moved on, dropping continuation');
@@ -797,7 +871,11 @@ export const createSessionGoalRuntime = ({
     }
 
     console.log(`[session-goal] continuing ${sessionId} (turn ${written.turnsUsed}/${maxAutoTurns}, tokens ${written.tokensUsed}${written.tokenBudget ? `/${written.tokenBudget}` : ''})`);
-    await sendContinuation({ sessionId, directory, goal: { ...written, objective: effectiveObjective }, lastAssistantInfo: executionInfo ?? lastAssistantInfo });
+    await source.sendContinuation({
+      goal: { ...written, objective: effectiveObjective },
+      messages,
+      lastAssistantInfo: executionInfo ?? lastAssistantInfo,
+    });
   };
 
   const armTimer = (sessionId, directory, quietMs) => {
@@ -823,7 +901,7 @@ export const createSessionGoalRuntime = ({
   // "stop". Messages the user sends afterwards leave the paused goal alone;
   // Resume re-arms the loop (and kicks off immediately on an idle session).
   const pauseAfterAbort = async (sessionId, directory) => {
-    const session = await openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, { directory })
+    const session = await sourceFor(sessionId, directory).readSession()
       .catch(() => null);
     const goal = parseGoalMetadata(session);
     if (!goal || goal.status !== 'active') return;

@@ -60,7 +60,8 @@
     ],
     "files": [
       "dist-bundle/main.mjs",
-      "preload.mjs"
+      "preload.mjs",
+      "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
     ],
     "extraResources": [
       {

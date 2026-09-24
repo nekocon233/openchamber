@@ -215,6 +215,34 @@ optional message boundary), then installs the goal on the new session. Both
 preserve the objective-file-before-metadata and metadata-before-dispatch
 ordering used by create and scheduled goals.
 
+## Native CLI sessions
+
+A Claude Code or Codex session (`packages/web/server/lib/native-agents/`) runs
+the same loop through the native runtime, which `createSessionGoalRuntime`
+takes as `nativeSessions`; `index.js` feeds the loop the native event source as
+well. A tick reads the session, its directory's statuses and its latest
+messages from that runtime, writes the goal into the metadata the runtime
+keeps in its registry, and sends the continuation as a native prompt. The
+differences:
+
+- No child sessions: Claude Code's subagents are part of their parent's turns
+  and Codex reports none, so the live-activity check looks at the parent only.
+- The continuation goes out on the model, effort and agent of the session's
+  last prompt that names a model, since a reply names the API model rather
+  than the one picked. It is an ordinary prompt, so it shows in the CLI's own
+  transcript, as it does in OpenCode's.
+- Native message ids do not sort by time, so the accounting cursor is the
+  message's position in the chronological page rather than an id comparison.
+- Codex reports no token usage in its history, so its goals account zero
+  tokens and the UI sets no token budget on them; the turn cap and the audit
+  still end them.
+- The audit follows the small-model rule: a native provider has no small
+  model of its own, so a native session is audited only with an explicit
+  small-model setting. Without one the audit is unavailable: the goal gets
+  one unaudited continuation, then blocks as `progress audit unavailable`.
+- The first turn's goal reminder reaches the CLI as the prompt's hidden
+  `instructions`.
+
 ## Limitations
 
 - Web-server feature: VS Code (extension-only) renders goal state via

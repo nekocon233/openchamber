@@ -10,6 +10,9 @@ export const createOpenCodeWatcherRuntime = (deps) => {
     upstreamStallTimeoutMs,
     upstreamReconnectDelayMs = 1000,
     globalEventHub = null,
+    // Hub event sources forwarded to onPayload; see GLOBAL_EVENT_SOURCE_* in
+    // event-stream/global-hub.js. Undefined keeps the hub default.
+    eventSources,
   } = deps;
 
   let abortController = null;
@@ -40,19 +43,19 @@ export const createOpenCodeWatcherRuntime = (deps) => {
       return;
     }
 
-    await waitForOpenCodePort();
-
     abortController = new AbortController();
     const signal = abortController.signal;
 
     if (globalEventHub) {
+      // Subscribe before OpenCode is reachable: native CLI sessions publish
+      // into the hub without depending on the OpenCode upstream.
       unsubscribeEvent = globalEventHub.subscribeEvent((event) => {
         const payload = unwrapGlobalEventPayload(event.payload);
         if (!payload || typeof payload !== 'object') {
           return;
         }
         onPayload(payload, normalizeEventDirectory(event.directory));
-      });
+      }, { sources: eventSources });
       unsubscribeStatus = globalEventHub.subscribeStatus((status) => {
         if (signal.aborted) {
           return;
@@ -65,7 +68,16 @@ export const createOpenCodeWatcherRuntime = (deps) => {
           console.warn('[PushWatcher] disconnected', status.error?.error?.message ?? status.error?.message ?? status.error);
         }
       });
+      await waitForOpenCodePort();
+      if (signal.aborted) {
+        return;
+      }
       globalEventHub.start();
+      return;
+    }
+
+    await waitForOpenCodePort();
+    if (signal.aborted) {
       return;
     }
 

@@ -1,3 +1,4 @@
+import { GLOBAL_EVENT_SOURCE_NATIVE, GLOBAL_EVENT_SOURCE_OPENCODE } from './global-hub.js';
 import { sendMessageStreamWsEvent, sendMessageStreamWsFrame, sendSerializedMessageStreamWsFrame, serializeMessageStreamWsEvent } from './protocol.js';
 
 function shouldTriggerUpstreamHealthCheck(upstream) {
@@ -148,6 +149,7 @@ export function createGlobalMessageStreamWsBridge({
     }
   };
 
+  // Browsers render native CLI sessions from the same stream as OpenCode ones.
   const unsubscribeEvent = globalHub.subscribeEvent((event) => {
     const { payload, directory, eventId } = event;
     broadcastEvent(payload, { directory, eventId }, event.serialize());
@@ -156,7 +158,7 @@ export function createGlobalMessageStreamWsBridge({
       if (readyClients.size === 0) return;
       broadcastEvent(syntheticPayload, { directory: 'global' });
     });
-  });
+  }, { sources: [GLOBAL_EVENT_SOURCE_OPENCODE, GLOBAL_EVENT_SOURCE_NATIVE] });
 
   const unsubscribeStatus = globalHub.subscribeStatus((status) => {
     if (status.type === 'connect') {

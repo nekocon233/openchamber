@@ -93,7 +93,11 @@ function collectTurns(messages) {
   return turns.slice(-TURN_LIMIT);
 }
 
-/** Failure is thrown; null means no eligible final answer within bounded history. */
+/**
+ * Failure is thrown; null means no eligible final answer within bounded history.
+ * `readPage` returns one page of chronological message records and the cursor
+ * of the page before it, null on the first page of the session.
+ */
 export async function loadAssistContext({ readPage, signal }) {
   let messages = [];
   let before;
@@ -103,9 +107,9 @@ export async function loadAssistContext({ readPage, signal }) {
     signal.throwIfAborted();
     const page = await readPage({ limit: PAGE_SIZE, before });
     signal.throwIfAborted();
-    if (!Array.isArray(page.data)) throw new Error('Session message page is unavailable');
+    if (!Array.isArray(page.records)) throw new Error('Session message page is unavailable');
     const older = [];
-    for (const record of page.data) {
+    for (const record of page.records) {
       if (ids.has(record.info.id)) continue;
       ids.add(record.info.id);
       older.push(readMessage(record));
@@ -114,7 +118,7 @@ export async function loadAssistContext({ readPage, signal }) {
     const last = messages.at(-1);
     if (!last?.complete || !last.text) return null;
     const turns = collectTurns(messages);
-    const cursor = page.response.headers.get('x-next-cursor');
+    const cursor = page.cursor;
     if (turns.length === TURN_LIMIT || !cursor || pageNumber === MAX_PAGES - 1) {
       if (!turns.at(-1)?.complete || turns.at(-1).assistant.id !== last.id) return null;
       return { turns, last };

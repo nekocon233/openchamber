@@ -10,6 +10,8 @@ import {
 } from '../../proxy-headers.js';
 import { createRealpathCache } from '../path-realpath-cache.js';
 import { DEFAULT_UPSTREAM_STALL_TIMEOUT_MS } from '../event-stream/upstream-reader.js';
+import { createSseNativeEventInjector } from '../event-stream/sse-native-injector.js';
+import { isNativeSessionId } from '../native-agents/ids.js';
 import { recordStartupPerformance } from './startup-performance.js';
 import { getWorktreeBootstrapStatus } from '../git/service.js';
 
@@ -291,6 +293,8 @@ export const registerOpenCodeProxy = (app, deps) => {
     getSseUpstreamStallTimeoutMs = () => SSE_UPSTREAM_STALL_TIMEOUT_MS,
     readWorktreeBootstrapStatus = getWorktreeBootstrapStatus,
     WORKTREE_READY_TIMEOUT_MS = 5 * 60 * 1000,
+    // Subscribes to native CLI session events for the global SSE route.
+    subscribeNativeEvents = null,
   } = deps;
 
   if (app.get('opencodeProxyConfigured')) {
@@ -498,7 +502,7 @@ export const registerOpenCodeProxy = (app, deps) => {
     next();
   };
 
-  const forwardSseRequest = async (req, res) => {
+  const forwardSseRequest = async (req, res, { injectNativeEvents = false } = {}) => {
     const abortController = new AbortController();
     const closeUpstream = () => abortController.abort();
     const closeForAuthInvalidation = () => {
@@ -520,6 +524,8 @@ export const registerOpenCodeProxy = (app, deps) => {
     let heartbeatTimer = null;
     let upstreamStallTimer = null;
     let didUpstreamStall = false;
+    let nativeInjector = null;
+    let didNativeOverflow = false;
     let writeQueue = Promise.resolve(true);
     const sseBoundary = createSseBoundaryTracker();
 
@@ -617,6 +623,18 @@ export const registerOpenCodeProxy = (app, deps) => {
       scheduleHeartbeat();
       resetUpstreamStallTimer();
 
+      if (injectNativeEvents && subscribeNativeEvents) {
+        nativeInjector = createSseNativeEventInjector({
+          subscribe: subscribeNativeEvents,
+          isAtBoundary: () => sseBoundary.isAtBoundary(),
+          write: enqueueSseWrite,
+          onOverflow: () => {
+            didNativeOverflow = true;
+            abortController.abort();
+          },
+        });
+      }
+
       reader = upstream.body.getReader();
       while (!abortController.signal.aborted) {
         const { done, value } = await reader.read();
@@ -626,7 +644,10 @@ export const registerOpenCodeProxy = (app, deps) => {
         if (value && value.length > 0) {
           resetUpstreamStallTimer();
           sseBoundary.observe(value);
-          const canContinue = await enqueueSseWrite(value);
+          const written = enqueueSseWrite(value);
+          // Frames that waited for this chunk to finish a block follow it.
+          nativeInjector?.flush();
+          const canContinue = await written;
           if (!canContinue) {
             break;
           }
@@ -636,7 +657,7 @@ export const registerOpenCodeProxy = (app, deps) => {
       res.end();
     } catch (error) {
       if (isAbortError(error)) {
-        if (didUpstreamStall && !res.writableEnded && !res.destroyed) {
+        if ((didUpstreamStall || didNativeOverflow) && !res.writableEnded && !res.destroyed) {
           await writeQueue.catch(() => false);
           res.end();
         }
@@ -650,6 +671,7 @@ export const registerOpenCodeProxy = (app, deps) => {
       }
     } finally {
       untrackAuth();
+      nativeInjector?.stop();
       if (heartbeatTimer) {
         clearTimeout(heartbeatTimer);
         heartbeatTimer = null;
@@ -753,6 +775,19 @@ export const registerOpenCodeProxy = (app, deps) => {
   app.use('/api', (_req, _res, next) => {
     ensureOpenCodeApiPrefix();
     next();
+  });
+
+  // Native CLI sessions are served by the /api/native routes and are unknown
+  // to OpenCode. Refuse explicitly instead of forwarding a guaranteed 404.
+  app.use('/api/session/:sessionId', (req, res, next) => {
+    if (!isNativeSessionId(req.params.sessionId)) {
+      next();
+      return;
+    }
+    res.status(409).json({
+      error: 'This is a native CLI session; use the /api/native routes',
+      code: 'NATIVE_SESSION_ROUTE',
+    });
   });
 
   // Readiness gate — while OpenCode is starting/restarting, HOLD the request and
@@ -947,7 +982,8 @@ export const registerOpenCodeProxy = (app, deps) => {
     return forwardSanitizedSessionListRequest(req, res, next, 'session.list');
   });
 
-  app.get('/api/global/event', forwardSseRequest);
+  // Native CLI sessions publish only to the global stream the UI consumes.
+  app.get('/api/global/event', (req, res) => forwardSseRequest(req, res, { injectNativeEvents: true }));
   app.get('/api/event', forwardSseRequest);
 
   app.get('/api/experimental/session', (req, res, next) => {

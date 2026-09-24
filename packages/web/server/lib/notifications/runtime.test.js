@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createNotificationTriggerRuntime } from './runtime.js';
 
-const createRuntime = ({ sendPushToAllUiSessions, sendApnsToAllUiSessions }) => createNotificationTriggerRuntime({
+const createRuntime = ({ sendPushToAllUiSessions, sendApnsToAllUiSessions, nativeSessions = null }) => createNotificationTriggerRuntime({
   readSettingsFromDisk: async () => ({
     nativeNotificationsEnabled: false,
     notificationMode: 'always',
@@ -23,6 +23,7 @@ const createRuntime = ({ sendPushToAllUiSessions, sendApnsToAllUiSessions }) => 
   isAnyInteractiveClientVisible: () => false,
   buildOpenCodeUrl: (path) => `https://opencode.example${path}`,
   getOpenCodeAuthHeaders: () => ({}),
+  nativeSessions,
 });
 
 describe('notification trigger directory context', () => {
@@ -80,5 +81,25 @@ describe('notification trigger directory context', () => {
       sessionId: 'ses_idle',
       directory: '/workspace/idle',
     });
+  });
+
+  it('reads a native session through the native runtime, whose active goal silences per-turn pushes', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false }));
+    vi.stubGlobal('fetch', fetchImpl);
+    const sendPushToAllUiSessions = vi.fn(async () => undefined);
+    const nativeSessions = {
+      isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
+      getSession: vi.fn(async (sessionId) => ({ id: sessionId, title: 'Native', metadata: { openchamber: { goal: { status: 'active' } } } })),
+    };
+    const runtime = createRuntime({ sendPushToAllUiSessions, sendApnsToAllUiSessions: vi.fn(async () => undefined), nativeSessions });
+
+    await runtime.maybeSendPushForTrigger({
+      type: 'session.idle',
+      properties: { sessionID: 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188' },
+    }, '/workspace/native');
+
+    expect(nativeSessions.getSession).toHaveBeenCalledWith('ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188', '/workspace/native');
+    expect(sendPushToAllUiSessions).not.toHaveBeenCalled();
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('ncl_'))).toBe(false);
   });
 });

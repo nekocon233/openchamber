@@ -262,3 +262,47 @@ describe('session assist generation', () => {
     expect(state.patches[0].metadata.openchamber.assist).toMatchObject({ recap: '新结果', forMessageID: 'next-answer' });
   });
 });
+
+describe('session assist runtime for native CLI sessions', () => {
+  it('reads the session and its history through the native runtime and stores the assist there', async () => {
+    const state = { reads: [], writes: [], openCodeUrls: 0 };
+    const records = [message('user', 'user', 'Fix the build'), message('answer', 'assistant', 'Fixed it')];
+    const runtime = createSessionAssistRuntime({
+      buildOpenCodeUrl: () => {
+        state.openCodeUrls += 1;
+        return 'http://127.0.0.1:9';
+      },
+      getOpenCodeAuthHeaders: () => ({}),
+      getTargets: () => ({ recap: true, suggestion: true }),
+      quietMs: 1,
+      getSmallModelService: async () => ({
+        describeSmallModel: async () => ({ inputCharBudget: 64_000 }),
+        generateSmallModelText: async () => output('Build fixed', 'Run the tests'),
+      }),
+      nativeSessions: {
+        isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
+        getSession: async (sessionId) => ({ id: sessionId, directory: '/project', time: {} }),
+        loadMessages: async (_sessionId, _directory, page) => {
+          state.reads.push(page);
+          return { records: page.limit === 1 ? records.slice(-1) : records, cursor: null, complete: true, childSessions: [] };
+        },
+        setSessionAssist: async (sessionId, directory, assist) => {
+          state.writes.push({ sessionId, directory, assist });
+        },
+      },
+    });
+    try {
+      runtime.processPayload({ type: 'session.status', properties: { sessionID: 'ncl_s', status: { type: 'idle' } } }, '/project');
+      await vi.waitFor(() => expect(state.writes).toHaveLength(1));
+      expect(state.writes[0]).toMatchObject({
+        sessionId: 'ncl_s',
+        directory: '/project',
+        assist: { recap: 'Build fixed', suggestion: 'Run the tests', forMessageID: 'answer' },
+      });
+      expect(state.reads.map((page) => page.limit)).toEqual([50, 1]);
+      expect(state.openCodeUrls).toBe(0);
+    } finally {
+      runtime.stop();
+    }
+  });
+});

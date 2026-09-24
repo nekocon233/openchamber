@@ -5,6 +5,8 @@ export {
 
 export {
   createGlobalMessageStreamHub,
+  GLOBAL_EVENT_SOURCE_NATIVE,
+  GLOBAL_EVENT_SOURCE_OPENCODE,
 } from './global-hub.js';
 
 export {

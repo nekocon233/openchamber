@@ -345,4 +345,43 @@ describe('session runtime', () => {
     expect(runtime.getSessionStateSnapshot()).toEqual({});
     expect(runtime.getSessionAttentionSnapshot()).toEqual({});
   });
+
+  it('keeps native CLI sessions out of OpenCode activity and restart interruption', () => {
+    const broadcasts = [];
+    const runtime = createSessionRuntime({
+      writeSseEvent() {},
+      getNotificationClients: () => new Set(),
+      broadcastEvent: (event) => broadcasts.push(event),
+      isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
+    });
+    runtimes.push(runtime);
+    const nativeQuestion = { id: 'q-native', sessionID: 'ncl_native', questions: [] };
+    const openCodeQuestion = { id: 'q-opencode', sessionID: 'ses_opencode', questions: [] };
+
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID: 'ncl_native', status: { type: 'busy' } } });
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID: 'ses_opencode', status: { type: 'busy' } } });
+    runtime.processOpenCodeSsePayload({ type: 'question.asked', properties: nativeQuestion });
+    runtime.processOpenCodeSsePayload({ type: 'question.asked', properties: openCodeQuestion });
+    expect(runtime.getActiveSessionCount()).toBe(1);
+    expect(runtime.getSessionActivitySnapshot()).toEqual({
+      ncl_native: { type: 'busy' },
+      ses_opencode: { type: 'busy' },
+    });
+
+    broadcasts.length = 0;
+    expect(runtime.interruptBusySessionsAfterRestart()).toEqual({ sessionIds: ['ses_opencode'] });
+    expect(broadcasts.filter((event) => event.type === 'session.error').map((event) => event.properties.sessionID))
+      .toEqual(['ses_opencode']);
+    expect(runtime.getPendingBlockingRequestsSnapshot()).toEqual({
+      ncl_native: { permissions: [], questions: [nativeQuestion] },
+    });
+    expect(runtime.getSessionActivitySnapshot()).toEqual({
+      ncl_native: { type: 'busy' },
+      ses_opencode: { type: 'idle' },
+    });
+    expect(runtime.getActiveSessionCount()).toBe(0);
+
+    runtime.processOpenCodeSsePayload({ type: 'session.status', properties: { sessionID: 'ncl_native', status: { type: 'idle' } } });
+    expect(runtime.getActiveSessionCount()).toBe(0);
+  });
 });

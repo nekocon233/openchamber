@@ -143,7 +143,7 @@ allowlists.
 | Route | Purpose |
 |---|---|
 | `GET /api/message-queue` | Full snapshot `{ revision, sessions[] }` |
-| `POST .../sessions/:id/items` | Append `{ directory, item }`; returns `{ revision, session, itemId }` and arms a dispatch (the session may already be idle) |
+| `POST .../sessions/:id/items` | Append `{ directory, item }`; returns `{ revision, session, itemId }` and arms a dispatch (the session may already be idle). Native CLI session ids (`ncl_`/`ncx_`) get `409` `NATIVE_SESSION_UNSUPPORTED`: this courier delivers through OpenCode |
 | `DELETE .../sessions/:id/items/:itemId` | Remove; `409` while that item is in flight |
 | `POST .../sessions/:id/items/:itemId/take` | Remove and return the full item (payloads included); `404`/`409` |
 | `POST .../sessions/:id/take` | Remove and return every item not in flight, in order |

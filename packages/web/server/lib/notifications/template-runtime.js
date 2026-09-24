@@ -1,4 +1,9 @@
+import { z } from 'zod';
+
 import { summarizeText as summarizeSharedText } from '../text/summarization.js';
+
+// The directory a notification belongs to, when its event names one.
+const directoryText = z.string().trim().min(1).nullish().catch(null);
 
 export const createNotificationTemplateRuntime = (deps) => {
   const {
@@ -6,7 +11,12 @@ export const createNotificationTemplateRuntime = (deps) => {
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
     resolveGitBinaryForSpawn,
+    // Native CLI sessions live outside OpenCode; their title and messages come
+    // from the native runtime. Without it they get neither.
+    nativeSessions = null,
   } = deps;
+
+  const isNative = (sessionId) => Boolean(nativeSessions?.isNativeSessionId(sessionId));
 
   const NOTIFICATION_BODY_MAX_CHARS = 1000;
   const SESSION_INFO_CACHE_TTL_MS = 60 * 1000;
@@ -132,6 +142,27 @@ export const createNotificationTemplateRuntime = (deps) => {
     return '';
   };
 
+  const fetchRecentMessages = async (sessionId, directoryHint) => {
+    const directory = directoryText.parse(directoryHint);
+    if (isNative(sessionId)) {
+      if (!directory) return null;
+      return (await nativeSessions.loadMessages(sessionId, directory, { limit: 5 })).records;
+    }
+    const url = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}/message`, '');
+    const search = new URLSearchParams({ limit: '5' });
+    if (directory) search.set('directory', directory);
+    const response = await fetch(`${url}?${search.toString()}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...getOpenCodeAuthHeaders(),
+      },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) return null;
+    return response.json().catch(() => null);
+  };
+
   const fetchLastAssistantMessageText = async (
     sessionId,
     messageId,
@@ -141,21 +172,7 @@ export const createNotificationTemplateRuntime = (deps) => {
     if (!sessionId) return '';
 
     try {
-      const url = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}/message`, '');
-      const search = new URLSearchParams({ limit: '5' });
-      if (typeof directory === 'string' && directory.trim()) search.set('directory', directory.trim());
-      const response = await fetch(`${url}?${search.toString()}`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...getOpenCodeAuthHeaders(),
-        },
-        signal: AbortSignal.timeout(3000),
-      });
-
-      if (!response.ok) return '';
-
-      const messages = await response.json().catch(() => null);
+      const messages = await fetchRecentMessages(sessionId, directory);
       if (!Array.isArray(messages)) return '';
 
       let target = null;
@@ -205,6 +222,19 @@ export const createNotificationTemplateRuntime = (deps) => {
     const cached = sessionInfoCache.get(sessionId);
     if (cached && Date.now() - cached.at < SESSION_INFO_CACHE_TTL_MS) {
       return cached.data;
+    }
+
+    if (isNative(sessionId)) {
+      const nativeDirectory = directoryText.parse(directory);
+      if (!nativeDirectory) return null;
+      try {
+        const data = await nativeSessions.getSession(sessionId, nativeDirectory);
+        sessionInfoCache.set(sessionId, { data, at: Date.now() });
+        return data;
+      } catch (error) {
+        console.warn(`[Notification] fetchSessionInfo failed for ${sessionId}:`, error?.message || error);
+        return null;
+      }
     }
 
     try {

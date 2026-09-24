@@ -418,6 +418,21 @@ describe('core-routes', () => {
     expect(response.body).toEqual({ body: { content: 'Snippet body' } });
   });
 
+  it('should parse JSON bodies for native CLI session routes', async () => {
+    const app = express();
+    registerCommonRequestMiddleware(app, { express });
+    app.post('/api/native/sessions/ncl_x/prompt', (req, res) => {
+      res.json({ body: req.body });
+    });
+
+    const response = await request(app)
+      .post('/api/native/sessions/ncl_x/prompt')
+      .send({ parts: [{ type: 'text', text: 'hi' }] })
+      .expect(200);
+
+    expect(response.body).toEqual({ body: { parts: [{ type: 'text', text: 'hi' }] } });
+  });
+
   it('should parse JSON bodies for custom provider upsert routes', async () => {
     const app = express();
     registerCommonRequestMiddleware(app, { express });

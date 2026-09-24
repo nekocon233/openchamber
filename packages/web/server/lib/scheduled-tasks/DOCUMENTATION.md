@@ -8,6 +8,7 @@ Server-owned scheduled task runtime and routes for OpenChamber-only automation.
 - Markdown loop discovery/parsing is owned by `packages/web/server/lib/scheduled-tasks/loops.js`.
 - Runtime orchestration and execution is owned by `packages/web/server/lib/scheduled-tasks/runtime.js`.
 - This module is OpenChamber feature logic; it is intentionally separate from OpenCode proxy/runtime internals.
+- Every run is a new OpenCode session. A task whose model is a native CLI's (`claude-native`, `codex-native`) fails its run before creating a session, with the reason in `lastError`; the UI's task model picker does not offer those models.
 
 ## Cross-instance occurrence claiming
 

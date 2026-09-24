@@ -1,3 +1,5 @@
+const NATIVE_AGENTS_SHUTDOWN_TIMEOUT_MS = 5000;
+
 export const createGracefulShutdownRuntime = (dependencies) => {
   const {
     process,
@@ -12,6 +14,7 @@ export const createGracefulShutdownRuntime = (dependencies) => {
     sessionGoalRuntime,
     contextObligatoryRuntime,
     messageQueueRuntime,
+    nativeAgentsRuntime,
     scheduledTasksRuntime,
     disposeAuthChannels,
     getHealthCheckInterval,
@@ -66,6 +69,17 @@ export const createGracefulShutdownRuntime = (dependencies) => {
       } finally {
         setTerminalRuntime(null);
       }
+    }
+
+    // Native CLI processes are children of this server; stop them before the
+    // event stream closes, within a bound so a stuck CLI cannot hold shutdown.
+    if (nativeAgentsRuntime) {
+      await Promise.race([
+        nativeAgentsRuntime.shutdown().catch(() => undefined),
+        new Promise((resolve) => {
+          setTimeout(resolve, NATIVE_AGENTS_SHUTDOWN_TIMEOUT_MS).unref?.();
+        }),
+      ]);
     }
 
     const messageStreamRuntime = getMessageStreamRuntime();

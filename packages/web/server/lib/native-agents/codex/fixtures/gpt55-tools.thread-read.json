@@ -1,0 +1,50 @@
+{
+ "thread": {
+  "id": "01a0d2a6-b55b-7162-a837-c62053537e00",
+  "environments": [
+   {
+    "environmentId": "local",
+    "cwd": "/work/project",
+    "runtimeWorkspaceRoots": [
+     "/work/project"
+    ]
+   }
+  ],
+  "extra": null,
+  "sessionId": "01a0d2a6-b55b-7162-a837-c62053537e00",
+  "forkedFromId": null,
+  "parentThreadId": null,
+  "preview": "Do these steps in order:\n1. Run the shell command: cat notes.txt\n2. Create a file greeting.txt containing exactly: hi\n3. Change greeting.txt so it contains exactly: hi there\n4. Reply with one short sentence summarising what you did.",
+  "ephemeral": false,
+  "section": null,
+  "sectionEnteredAt": null,
+  "projectId": null,
+  "historyMode": "paginated",
+  "modelProvider": "openai",
+  "model": "gpt-5.5",
+  "reasoningEffort": "low",
+  "createdAt": 1790240535,
+  "updatedAt": 1790240555,
+  "recencyAt": 1790240535,
+  "status": {
+   "type": "idle"
+  },
+  "path": "/home/user/.codex/sessions/2026/09/24/rollout-2026-09-24T17-02-15-01a0d2a6-b55b-7162-a837-c62053537e00.jsonl",
+  "cwd": "/work/project",
+  "cliVersion": "0.154.0",
+  "originator": "openchamber_fixture",
+  "source": "vscode",
+  "canAcceptDirectInput": true,
+  "threadSource": null,
+  "agentNickname": null,
+  "agentRole": null,
+  "gitInfo": {
+   "sha": "acbbeb60b43005ab20f8ba75f37fd5f1ee760ba9",
+   "branch": "main",
+   "originUrl": null
+  },
+  "name": null,
+  "daybreakEnabled": null,
+  "turns": []
+ }
+}

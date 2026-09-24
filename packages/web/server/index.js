@@ -55,6 +55,8 @@ import {
   createGlobalUiEventBroadcaster,
   createGlobalMessageStreamHub,
   createMessageStreamWsRuntime,
+  GLOBAL_EVENT_SOURCE_NATIVE,
+  GLOBAL_EVENT_SOURCE_OPENCODE,
   resolveDeltaCoalesceWindowMs,
   DEFAULT_UPSTREAM_STALL_TIMEOUT_MS,
   UPSTREAM_STALL_TIMEOUT_CONCURRENT_MS,
@@ -137,6 +139,12 @@ import { createSystemPromptRuntime } from './lib/system-prompt/runtime.js';
 import { createOpenChamberSessionService } from './lib/openchamber-sessions/routes.js';
 import { createScheduledTaskService } from './lib/scheduled-tasks/service.js';
 import { createOpenChamberControlService } from './lib/openchamber-control/service.js';
+import { isNativeSessionId, newNativeClientUserMessageId } from './lib/native-agents/ids.js';
+import { createNativeAgentsRuntime } from './lib/native-agents/runtime.js';
+import { createGlobalInstructionsReader } from './lib/native-agents/instructions.js';
+import { OPENCODE_CONFIG_DIR } from './lib/opencode/shared.js';
+import { createCliResolver } from './lib/native-agents/executables.js';
+import { buildCliChildEnv } from './lib/native-agents/process.js';
 import { OpenChamberControlError } from './lib/openchamber-control/error.js';
 import webPush from 'web-push';
 import { applyConnectAttemptTimeout } from './lib/network-defaults.js';
@@ -502,6 +510,7 @@ const sessionRuntime = createSessionRuntime({
   writeSseEvent,
   getNotificationClients: () => uiNotificationClients,
   broadcastEvent: broadcastGlobalUiEvent,
+  isNativeSessionId,
 });
 
 const getActiveSessionCount = () => sessionRuntime.getActiveSessionCount();
@@ -801,6 +810,12 @@ notificationTemplateRuntime = createNotificationTemplateRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   resolveGitBinaryForSpawn,
+  // Called only when a notification is built, after the native runtime below exists.
+  nativeSessions: {
+    isNativeSessionId,
+    getSession: (sessionId, directory) => nativeAgentsRuntime.getSession(sessionId, directory),
+    loadMessages: (sessionId, directory, page) => nativeAgentsRuntime.loadMessages(sessionId, directory, page),
+  },
 });
 
 const notificationTriggerRuntime = createNotificationTriggerRuntime({
@@ -818,6 +833,11 @@ const notificationTriggerRuntime = createNotificationTriggerRuntime({
   isAnyInteractiveClientVisible,
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
+  // Called only when a notification is built, after the native runtime below exists.
+  nativeSessions: {
+    isNativeSessionId,
+    getSession: (sessionId, directory) => nativeAgentsRuntime.getSession(sessionId, directory),
+  },
 });
 
 const maybeSendPushForTrigger = (...args) => notificationTriggerRuntime.maybeSendPushForTrigger(...args);
@@ -828,12 +848,28 @@ const sessionAssistRuntime = createSessionAssistRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   getSmallModelService: async () => import('./lib/small-model/index.js'),
+  // Called only after an idle event, once the native runtime below exists.
+  nativeSessions: {
+    isNativeSessionId,
+    getSession: (sessionId, directory) => nativeAgentsRuntime.getSession(sessionId, directory),
+    loadMessages: (sessionId, directory, page) => nativeAgentsRuntime.loadMessages(sessionId, directory, page),
+    setSessionAssist: (sessionId, directory, assist) => nativeAgentsRuntime.setSessionAssist(sessionId, directory, assist),
+  },
 });
 
 const sessionGoalRuntime = createSessionGoalRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   getSmallModelService: async () => import('./lib/small-model/index.js'),
+  // Called only after an event, once the native runtime below exists.
+  nativeSessions: {
+    isNativeSessionId,
+    getSession: (sessionId, directory) => nativeAgentsRuntime.getSession(sessionId, directory),
+    statuses: (directory) => nativeAgentsRuntime.statuses(directory),
+    loadMessages: (sessionId, directory, page) => nativeAgentsRuntime.loadMessages(sessionId, directory, page),
+    updateSession: (sessionId, directory, patch) => nativeAgentsRuntime.updateSession(sessionId, directory, patch),
+    prompt: (sessionId, request) => nativeAgentsRuntime.prompt(sessionId, { ...request, messageID: newNativeClientUserMessageId(sessionId) }),
+  },
   emitGoalNotification: async ({ sessionId, directory, status, goal }) => {
     // The goal settle notification replaces the per-turn ready notifications
     // (suppressed while the goal is active) — so it obeys the same toggle.
@@ -968,6 +1004,9 @@ const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
   getOpenCodeAuthHeaders,
   parseSseDataPayload: (...args) => parseSseDataPayload(...args),
   globalEventHub: globalMessageStreamHub,
+  // Session status, push notifications and follow-up terminalization apply to
+  // native CLI sessions as well as OpenCode ones.
+  eventSources: [GLOBAL_EVENT_SOURCE_OPENCODE, GLOBAL_EVENT_SOURCE_NATIVE],
   onPayload: (payload, directory) => {
     const terminalization = followUpQueueRuntime.terminalizeSessionFromEvent(payload);
     if (terminalization) {
@@ -984,18 +1023,32 @@ const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
 // Session-assist subscribes to the hub directly: it needs the envelope's
 // directory to route its own OpenCode calls to the right instance.
 console.log('[session-assist] listening for session events');
-globalMessageStreamHub.subscribeEvent((event) => {
+const hubEventOf = (event) => {
   const raw = event?.payload;
   const payload = raw?.payload && typeof raw.payload === 'object' ? raw.payload : raw;
-  if (!payload || typeof payload !== 'object') return;
+  if (!payload || typeof payload !== 'object') return null;
   const directory = typeof event?.directory === 'string' && event.directory && event.directory !== 'global'
     ? event.directory
     : '';
+  return { payload, directory };
+};
+globalMessageStreamHub.subscribeEvent((event) => {
+  const hubEvent = hubEventOf(event);
+  if (!hubEvent) return;
+  const { payload, directory } = hubEvent;
   sessionAssistRuntime.processPayload(payload, directory);
   sessionGoalRuntime.processPayload(payload, directory);
   contextObligatoryRuntime.processPayload(payload, directory);
   linearSessionStatusRuntime.processPayload(payload);
 });
+// Native CLI sessions get recaps, suggestions and goals too. Obligatory
+// context and Linear status work on OpenCode sessions only.
+globalMessageStreamHub.subscribeEvent((event) => {
+  const hubEvent = hubEventOf(event);
+  if (!hubEvent) return;
+  sessionAssistRuntime.processPayload(hubEvent.payload, hubEvent.directory);
+  sessionGoalRuntime.processPayload(hubEvent.payload, hubEvent.directory);
+}, { sources: [GLOBAL_EVENT_SOURCE_NATIVE] });
 
 const processForwardedEventPayload = (payload, emitSyntheticEvent) => {
   if (!payload || typeof payload !== 'object' || typeof emitSyntheticEvent !== 'function') {
@@ -1104,6 +1157,9 @@ const serverUtilsRuntime = createServerUtilsRuntime({
       });
     }
   },
+  subscribeNativeEvents: (listener) => globalMessageStreamHub.subscribeEvent(listener, {
+    sources: [GLOBAL_EVENT_SOURCE_NATIVE],
+  }),
 });
 
 const setOpenCodePort = (...args) => serverUtilsRuntime.setOpenCodePort(...args);
@@ -1111,6 +1167,17 @@ const waitForOpenCodePort = (...args) => serverUtilsRuntime.waitForOpenCodePort(
 const buildAugmentedPath = (...args) => serverUtilsRuntime.buildAugmentedPath(...args);
 const buildManagedOpenCodePath = (...args) => serverUtilsRuntime.buildManagedOpenCodePath(...args);
 const parseSseDataPayload = (...args) => serverUtilsRuntime.parseSseDataPayload(...args);
+
+// Native Claude Code / Codex sessions: OpenChamber drives the CLIs directly.
+const nativeAgentsRuntime = createNativeAgentsRuntime({
+  dataDir: OPENCHAMBER_DATA_DIR,
+  resolveExecutable: createCliResolver({ searchPathFor, isExecutable, buildSearchPath: buildAugmentedPath }),
+  buildChildEnv: () => buildCliChildEnv(process.env, buildAugmentedPath()),
+  clientVersion: OPENCHAMBER_VERSION,
+  publishNativeEvent: (event) => globalMessageStreamHub.publishNativeEvent(event),
+  // The global AGENTS.md the Behavior settings edit, which OpenCode reads too.
+  readGlobalInstructions: createGlobalInstructionsReader({ filePath: path.join(OPENCODE_CONFIG_DIR, 'AGENTS.md') }),
+});
 const staticRoutesRuntime = createStaticRoutesRuntime({
   fs,
   path,
@@ -1505,6 +1572,9 @@ const ensureGlobalWatcherStarted = async () => {
   return globalWatcherStartPromise;
 };
 const checkFollowUpQueueSessionExists = async (sessionId) => {
+  // Native CLI sessions are unknown to OpenCode; their own store answers.
+  // A failure throws, which keeps the queue instead of terminalizing it.
+  if (isNativeSessionId(sessionId)) return nativeAgentsRuntime.sessionExists(sessionId, undefined);
   const response = await fetch(buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, ''), {
     method: 'GET',
     headers: {
@@ -1639,6 +1709,7 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   sessionGoalRuntime,
   contextObligatoryRuntime,
   messageQueueRuntime,
+  nativeAgentsRuntime,
   sessionRuntime,
   getHealthCheckInterval: () => healthCheckInterval,
   clearHealthCheckInterval: (value) => clearInterval(value),
@@ -2152,6 +2223,7 @@ async function main(options = {}) {
     createFsSearchRuntime: createFsSearchRuntimeFactory,
     openchamberDataDir: OPENCHAMBER_DATA_DIR,
     openchamberVersion: OPENCHAMBER_VERSION,
+    nativeAgentsRuntime,
     builtInExtensionsDir: options.builtInExtensionsDir,
     openchamberUserConfigRoot: OPENCHAMBER_USER_CONFIG_ROOT,
     managedChatsRoot: OPENCHAMBER_CHATS_DIR,

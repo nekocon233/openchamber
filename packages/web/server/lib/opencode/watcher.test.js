@@ -242,4 +242,72 @@ describe('createOpenCodeWatcherRuntime', () => {
     expect(events.size).toBe(0);
     expect(statuses.size).toBe(0);
   });
+
+  it('receives native hub events before OpenCode is reachable when it opts in', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const hub = createGlobalMessageStreamHub({
+      buildOpenCodeUrl: (pathname) => `http://127.0.0.1:4096${pathname}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      upstreamReconnectDelayMs: 60_000,
+      fetchImpl: async () => new Promise(() => {}),
+    });
+    let releasePort;
+    const portReady = new Promise((resolve) => { releasePort = resolve; });
+    const payloads = [];
+    const watcher = createOpenCodeWatcherRuntime({
+      waitForOpenCodePort: () => portReady,
+      buildOpenCodeUrl: (path) => `http://127.0.0.1:4096${path}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      globalEventHub: hub,
+      eventSources: ['opencode', 'native'],
+      onPayload(payload, directory) {
+        payloads.push({ payload, directory });
+      },
+    });
+
+    const started = watcher.start();
+    hub.publishNativeEvent({
+      directory: '/work/project',
+      payload: { type: 'session.status', properties: { sessionID: 'ncl_s', status: { type: 'busy' } } },
+    });
+    expect(payloads).toEqual([{
+      payload: { type: 'session.status', properties: { sessionID: 'ncl_s', status: { type: 'busy' } } },
+      directory: '/work/project',
+    }]);
+
+    watcher.stop();
+    releasePort();
+    await started;
+    hub.stop();
+  });
+
+  it('ignores native hub events by default', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const hub = createGlobalMessageStreamHub({
+      buildOpenCodeUrl: (pathname) => `http://127.0.0.1:4096${pathname}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      upstreamReconnectDelayMs: 60_000,
+      fetchImpl: async () => new Promise(() => {}),
+    });
+    const payloads = [];
+    const watcher = createOpenCodeWatcherRuntime({
+      waitForOpenCodePort: async () => {},
+      buildOpenCodeUrl: (path) => `http://127.0.0.1:4096${path}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      globalEventHub: hub,
+      onPayload(payload) {
+        payloads.push(payload);
+      },
+    });
+
+    await watcher.start();
+    hub.publishNativeEvent({
+      directory: '/work/project',
+      payload: { type: 'session.status', properties: { sessionID: 'ncl_s', status: { type: 'busy' } } },
+    });
+    expect(payloads).toEqual([]);
+
+    watcher.stop();
+    hub.stop();
+  });
 });

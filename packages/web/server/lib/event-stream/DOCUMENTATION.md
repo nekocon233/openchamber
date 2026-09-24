@@ -11,6 +11,7 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 - `packages/web/server/lib/event-stream/directory-ws-bridge.js`: browser-facing per-directory WS bridge that owns one scoped upstream reader per connection.
 - `packages/web/server/lib/event-stream/protocol.js`: path constants, SSE envelope parsing, and WebSocket frame serialization helpers.
 - `packages/web/server/lib/event-stream/upstream-reader.js`: reusable upstream SSE reader with event-id tracking, stall recovery, and reconnect handling.
+- `packages/web/server/lib/event-stream/sse-native-injector.js`: writes native CLI session events into the raw `/api/global/event` SSE passthrough, only between upstream SSE blocks.
 - `packages/web/server/lib/event-stream/runtime.js`: thin WebSocket server runtime for upgrade handling and path dispatch to the global/directory bridges.
 - `packages/web/server/lib/event-stream/protocol.test.js`: unit tests for protocol helpers.
 - `packages/web/server/lib/event-stream/global-hub.test.js`: unit tests for shared global fan-out and bounded replay behavior.
@@ -30,6 +31,9 @@ This module contains the OpenChamber message-stream WebSocket protocol and runti
 
 ### Runtime helpers
 - `createGlobalMessageStreamHub(...)`: creates a shared `/global/event` upstream SSE hub with event/status subscribers and bounded event-id replay.
+  - `publishNativeEvent({ directory, payload })` commits an event produced by the native CLI runtime (`lib/native-agents`) into the same sequence as upstream events: it gets a hub event id, is delta-coalesced, enters bounded replay, and is fanned out.
+  - `subscribeEvent(subscriber, { sources })` filters by event source (`GLOBAL_EVENT_SOURCE_OPENCODE`, `GLOBAL_EVENT_SOURCE_NATIVE`). The default is OpenCode only, so subscribers written against OpenCode sessions never see native sessions. The global WS bridge, the OpenCode watcher (session status, push, follow-up terminalization), and the SSE injector opt in to native events; permission auto-accept, the message-queue courier, and the session-assist/goal/context/Linear subscriber stay OpenCode only.
+  - Normalized events carry `source`. The marker lives on the envelope because the delta coalescer rebuilds merged events from `{ envelope, payload }`.
 - `createGlobalUiEventBroadcaster({ sseClients, wsClients, writeSseEvent })`: returns a broadcaster that fans out the same synthetic UI event to SSE and WS clients.
 - `createMessageStreamWsRuntime(...)`: mounts the message-stream WS server, upgrade handler, and SSE-to-WS bridge onto the web HTTP server.
 
@@ -76,6 +80,10 @@ The hub commits pending text when it stops, so it reaches the retained replay su
 Verified against a live server by dropping the socket every 150ms to 3s during a stream and resuming from the cursor: the reconstructed text matched byte for byte with no duplicate ids. Server-side hub subscribers receive merged events as well. None of them reads individual deltas.
 
 The directory WS bridge and the SSE proxy (`/api/global/event`, used by Capacitor) still forward unmerged events.
+
+## Native events on the SSE fallback
+
+`/api/global/event` is a raw OpenCode passthrough (`opencode/proxy.js`). Clients that fall back from WS to SSE still need native CLI session events, so the route subscribes to native hub events and `sse-native-injector.js` writes them as `data: {"directory", "payload"}` frames, the framing OpenCode's global stream uses. A frame is written only when everything forwarded so far ends an SSE block (`createSseBoundaryTracker`); frames that arrive while upstream is mid-block wait and follow the chunk that completes the block. The wait is bounded (4,096 frames or 4 MiB); exceeding it ends the response so the client reconnects and repairs, rather than dropping frames. The SSE route has no replay, as before. `/api/event` (directory scoped) never carries native events.
 
 ## Notes for contributors
 - Keep protocol helpers pure and small so they can be unit tested without spinning up a server.

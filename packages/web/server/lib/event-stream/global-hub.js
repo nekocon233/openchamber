@@ -9,6 +9,15 @@ import { createDeltaCoalescer, DELTA_COALESCE_WINDOW_MS } from './delta-coalesce
 const MESSAGE_STREAM_GLOBAL_REPLAY_LIMIT = 2048;
 const MESSAGE_STREAM_GLOBAL_REPLAY_BYTES = 8 * 1024 * 1024;
 
+// Events either come from the OpenCode upstream or are published by
+// OpenChamber's native CLI runtime. Both share one committed sequence, so
+// replay, coalescing and browser fan-out treat them alike. Server-side
+// subscribers written against OpenCode sessions must never act on a native
+// session, so a subscriber receives OpenCode events only unless it opts in.
+export const GLOBAL_EVENT_SOURCE_OPENCODE = 'opencode';
+export const GLOBAL_EVENT_SOURCE_NATIVE = 'native';
+const DEFAULT_SUBSCRIBER_SOURCES = new Set([GLOBAL_EVENT_SOURCE_OPENCODE]);
+
 export function createGlobalMessageStreamHub({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
@@ -22,7 +31,8 @@ export function createGlobalMessageStreamHub({
   if (!Number.isSafeInteger(replayLimit) || replayLimit < 0 || !Number.isSafeInteger(replayByteLimit) || replayByteLimit < 0) {
     throw new RangeError('Replay limits must be nonnegative safe integers');
   }
-  const eventSubscribers = new Set();
+  // subscriber -> the event sources it accepts
+  const eventSubscribers = new Map();
   const statusSubscribers = new Set();
   const replay = [];
   let replayBytes = 0;
@@ -69,12 +79,18 @@ export function createGlobalMessageStreamHub({
     const eventId = typeof envelope?.eventId === 'string' && envelope.eventId.length > 0
       ? envelope.eventId
       : `${replayIdPrefix}${String(++replaySequence).padStart(12, '0')}`;
+    // The marker lives on the envelope because the delta coalescer rebuilds
+    // merged events from `{ envelope, payload }` only.
+    const source = envelope?.source === GLOBAL_EVENT_SOURCE_NATIVE
+      ? GLOBAL_EVENT_SOURCE_NATIVE
+      : GLOBAL_EVENT_SOURCE_OPENCODE;
     let serializedFrame;
     return {
       envelope,
       payload,
       directory,
       eventId,
+      source,
       serialize() {
         serializedFrame ??= serializeMessageStreamWsEvent(payload, { directory, eventId });
         return serializedFrame;
@@ -107,7 +123,8 @@ export function createGlobalMessageStreamHub({
       }
     }
 
-    for (const subscriber of Array.from(eventSubscribers)) {
+    for (const [subscriber, sources] of Array.from(eventSubscribers)) {
+      if (!sources.has(normalized.source)) continue;
       notifySubscriber('event', subscriber, normalized);
     }
   };
@@ -208,11 +225,25 @@ export function createGlobalMessageStreamHub({
     hasConnected() {
       return everConnected;
     },
-    subscribeEvent(subscriber) {
-      eventSubscribers.add(subscriber);
+    /**
+     * @param {(event: object) => void} subscriber
+     * @param {{ sources?: string[] }} [options] Event sources to receive.
+     *   Defaults to OpenCode events only.
+     */
+    subscribeEvent(subscriber, options = {}) {
+      eventSubscribers.set(subscriber, options.sources ? new Set(options.sources) : DEFAULT_SUBSCRIBER_SOURCES);
       return () => {
         eventSubscribers.delete(subscriber);
       };
+    },
+    /**
+     * Commits an event produced by the native CLI runtime into the same
+     * sequence as upstream events: it is numbered, coalesced, retained for
+     * replay and delivered to subscribers that accept native events.
+     * @param {{ directory: string, payload: object }} event
+     */
+    publishNativeEvent({ directory, payload }) {
+      coalescer.push({ envelope: { directory, source: GLOBAL_EVENT_SOURCE_NATIVE, payload }, payload });
     },
     subscribeStatus(subscriber) {
       statusSubscribers.add(subscriber);

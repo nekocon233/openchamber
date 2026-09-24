@@ -189,6 +189,10 @@ Managed local Desktop startup prefers OpenCode binaries in this order:
 
 Use an explicit override when testing a different OpenCode CLI build or when a user needs to point Desktop at a custom binary. The configured path must point to the standalone CLI, not the OpenCode Desktop app executable.
 
+## Native CLI Sessions
+
+The Claude Agent SDK ships in the app as JavaScript only. `build.files` excludes its per-platform Claude Code binaries (`@anthropic-ai/claude-agent-sdk-*`, 211 MB on macOS arm64): native sessions always start the user's own `claude` through `pathToClaudeCodeExecutable`, and the SDK looks for its bundled binary only when that option is absent. Keep the pattern while the backend passes the user's CLI. `packages/web/server/lib/native-agents/DOCUMENTATION.md` owns how the CLIs are found and started.
+
 ## Common Env Vars
 
 | Variable | Use |

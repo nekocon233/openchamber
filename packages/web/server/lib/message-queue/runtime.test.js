@@ -168,6 +168,14 @@ describe('parseQueuedItemInput', () => {
 });
 
 describe('message queue runtime', () => {
+  it('refuses native CLI sessions, which it cannot deliver through OpenCode', async () => {
+    const { runtime, openCode } = createRuntime();
+    await expect(runtime.enqueue('ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188', DIRECTORY, item({ content: 'x', text: 'x' })))
+      .rejects.toMatchObject({ status: 409, code: 'NATIVE_SESSION_UNSUPPORTED' });
+    expect(runtime.sessionSnapshot('ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188').items).toEqual([]);
+    expect(openCode.state.sent).toHaveLength(0);
+  });
+
   it('delivers the head of the queue when the session goes idle, in order', async () => {
     const { runtime, openCode, emit, promptSent, broadcasts } = createRuntime();
     runtime.start();

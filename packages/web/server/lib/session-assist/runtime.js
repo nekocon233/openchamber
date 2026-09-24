@@ -77,10 +77,16 @@ const extractUserMessage = (payload) => {
   };
 };
 
+/**
+ * @param {object} options
+ * @param {{ isNativeSessionId: (sessionId: string) => boolean, getSession: Function, loadMessages: Function, setSessionAssist: Function } | null} [options.nativeSessions]
+ *   the native CLI runtime, for Claude Code and Codex sessions
+ */
 export const createSessionAssistRuntime = ({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   getSmallModelService,
+  nativeSessions = null,
   getTargets = getSessionAssistTargets,
   quietMs = IDLE_QUIET_MS,
 }) => {
@@ -103,33 +109,68 @@ export const createSessionAssistRuntime = ({
     inflight.get(sessionId)?.controller.abort();
   };
 
-  const generateAssist = async (sessionId, directory, signal) => {
-    const targets = getTargets();
-    if (!targets.recap && !targets.suggestion) return;
+  // Where a session's record and history come from, and where its assist goes.
+  const openCodeSource = (sessionId, directory, signal) => {
     const baseUrl = buildOpenCodeUrl('/', '').replace(/\/$/, '');
     const client = createOpencodeClient({ baseUrl, headers: getOpenCodeAuthHeaders(), throwOnError: true });
     const requestOptions = () => ({ signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]) });
-    const checkCurrent = () => {
-      signal.throwIfAborted();
-      if (buildOpenCodeUrl('/', '').replace(/\/$/, '') !== baseUrl) throw new Error('Session assist runtime changed');
+    return {
+      checkCurrent: () => {
+        signal.throwIfAborted();
+        if (buildOpenCodeUrl('/', '').replace(/\/$/, '') !== baseUrl) throw new Error('Session assist runtime changed');
+      },
+      readSession: async () => (await client.session.get({ sessionID: sessionId, directory }, requestOptions())).data,
+      readPage: async (page) => {
+        const response = await client.session.messages({ sessionID: sessionId, directory, ...page }, requestOptions());
+        return { records: response.data, cursor: response.response.headers.get('x-next-cursor') || null };
+      },
+      latestMessageId: async () => (await client.session.messages({ sessionID: sessionId, directory, limit: 1 }, requestOptions())).data?.at(-1)?.info.id,
+      // Never merge into the pre-generation metadata snapshot: that would
+      // overwrite dismissals and unrelated metadata written meanwhile.
+      writeAssist: async (assist, freshSession) => {
+        const currentMetadata = freshSession.metadata ?? {};
+        const currentNamespace = currentMetadata.openchamber ?? {};
+        await client.session.update({
+          sessionID: sessionId, directory,
+          metadata: { ...currentMetadata, openchamber: { ...currentNamespace, assist } },
+        }, requestOptions());
+      },
     };
-    const { data: session } = await client.session.get({ sessionID: sessionId, directory }, requestOptions());
-    checkCurrent();
+  };
+
+  // A native CLI session is read through the native runtime, which keeps its
+  // assist in its own registry.
+  const nativeSource = (sessionId, directory, signal) => ({
+    checkCurrent: () => signal.throwIfAborted(),
+    readSession: () => nativeSessions.getSession(sessionId, directory),
+    readPage: async (page) => {
+      const result = await nativeSessions.loadMessages(sessionId, directory, page);
+      return { records: result.records, cursor: result.cursor };
+    },
+    latestMessageId: async () => (await nativeSessions.loadMessages(sessionId, directory, { limit: 1 })).records.at(-1)?.info.id,
+    writeAssist: (assist) => nativeSessions.setSessionAssist(sessionId, directory, assist),
+  });
+
+  const generateAssist = async (sessionId, directory, signal) => {
+    const targets = getTargets();
+    if (!targets.recap && !targets.suggestion) return;
+    const source = nativeSessions?.isNativeSessionId(sessionId)
+      ? nativeSource(sessionId, directory, signal)
+      : openCodeSource(sessionId, directory, signal);
+    const session = await source.readSession();
+    source.checkCurrent();
     // Reverted history is not the active conversation. A new prompt clears
     // the revert boundary before its next idle event.
     if (session?.id !== sessionId || session.parentID || session.revert?.messageID || session.time?.archived) return;
-    const context = await loadAssistContext({
-      signal,
-      readPage: (page) => client.session.messages({ sessionID: sessionId, directory, ...page }, requestOptions()),
-    });
-    checkCurrent();
+    const context = await loadAssistContext({ signal, readPage: source.readPage });
+    source.checkCurrent();
     if (!context) return;
     const { last, turns } = context;
     const { describeSmallModel, generateSmallModelText } = await getSmallModelService();
     const preferredProviderID = last.providerID;
     const preferredModelID = last.modelID;
     const described = await describeSmallModel({ directory, preferredProviderID, preferredModelID });
-    checkCurrent();
+    source.checkCurrent();
     if (!described) return;
     const system = buildAssistSystemPrompt(targets);
     const prompt = buildAssistPrompt(turns, targets, described.inputCharBudget - system.length - 512);
@@ -147,7 +188,7 @@ export const createSessionAssistRuntime = ({
       }
       return;
     }
-    checkCurrent();
+    source.checkCurrent();
     const structured = extractJsonObject(generated?.text);
     let recap = targets.recap && typeof structured?.recap === 'string' ? structured.recap.trim().slice(0, RECAP_CHAR_LIMIT) : '';
     let suggestion = targets.suggestion && typeof structured?.suggestion === 'string' ? structured.suggestion.trim().slice(0, SUGGESTION_CHAR_LIMIT) : '';
@@ -160,30 +201,19 @@ export const createSessionAssistRuntime = ({
     if (recap && scriptMismatch(recap)) recap = '';
     if (suggestion && scriptMismatch(suggestion)) suggestion = '';
     if (!recap && !suggestion) return;
-    const { data: latest } = await client.session.messages({ sessionID: sessionId, directory, limit: 1 }, requestOptions());
-    checkCurrent();
-    if (latest?.at(-1)?.info.id !== last.id) return;
-    // Never fall back to the pre-generation metadata snapshot after a failed
-    // fresh read: doing so overwrites dismissals and unrelated metadata.
-    const { data: freshSession } = await client.session.get({ sessionID: sessionId, directory }, requestOptions());
-    checkCurrent();
+    const latestId = await source.latestMessageId();
+    source.checkCurrent();
+    if (latestId !== last.id) return;
+    // A failed fresh read throws: the write never falls back to the
+    // pre-generation session.
+    const freshSession = await source.readSession();
+    source.checkCurrent();
     if (freshSession?.id !== sessionId || freshSession.revert?.messageID || freshSession.time?.archived || freshSession.directory !== session.directory) return;
     const enabled = getTargets();
     if (!enabled.recap) recap = '';
     if (!enabled.suggestion) suggestion = '';
     if (!recap && !suggestion) return;
-    const currentMetadata = freshSession.metadata ?? {};
-    const currentNamespace = currentMetadata.openchamber ?? {};
-    await client.session.update({
-      sessionID: sessionId, directory,
-      metadata: {
-        ...currentMetadata,
-        openchamber: {
-          ...currentNamespace,
-          assist: { recap, suggestion, forMessageID: last.id, generatedAt: Date.now() },
-        },
-      },
-    }, requestOptions());
+    await source.writeAssist({ recap, suggestion, forMessageID: last.id, generatedAt: Date.now() }, freshSession);
   };
 
   const startGeneration = (sessionId, directory, armedAt) => {

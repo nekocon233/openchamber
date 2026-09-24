@@ -359,3 +359,76 @@ describe('createGlobalMessageStreamHub', () => {
     }
   });
 });
+
+describe('native events in the global hub', () => {
+  const nativeStatus = (sessionID) => ({
+    type: 'session.status',
+    properties: { sessionID, status: { type: 'busy' } },
+  });
+  const nativeDelta = (delta) => ({
+    type: 'message.part.delta',
+    properties: { sessionID: 'ncl_s', messageID: 'ncl_a_m', partID: 'ncl_a_m_b0', field: 'text', delta },
+  });
+
+  it('delivers native events only to subscribers that accept them, in one sequence with upstream events', async () => {
+    const hub = createGlobalMessageStreamHub({
+      buildOpenCodeUrl: (pathname) => `http://127.0.0.1:4096${pathname}`,
+      getOpenCodeAuthHeaders: () => ({}),
+      upstreamReconnectDelayMs: 60_000,
+      fetchImpl: async () => createSseResponse({
+        blocks: ['id: evt-1\ndata: {"type":"session.updated","properties":{}}\n\n'],
+      }),
+    });
+    const openCodeOnly = [];
+    const both = [];
+    const nativeOnly = [];
+    hub.subscribeEvent((event) => openCodeOnly.push(event));
+    hub.subscribeEvent((event) => both.push(event), { sources: ['opencode', 'native'] });
+    hub.subscribeEvent((event) => nativeOnly.push(event), { sources: ['native'] });
+
+    try {
+      hub.start();
+      await waitForAssertion(() => expect(openCodeOnly.map((event) => event.eventId)).toEqual(['evt-1']));
+      hub.publishNativeEvent({ directory: '/work/project', payload: nativeStatus('ncl_s') });
+
+      expect(openCodeOnly.map((event) => event.eventId)).toEqual(['evt-1']);
+      expect(both.map((event) => event.source)).toEqual(['opencode', 'native']);
+      expect(nativeOnly).toHaveLength(1);
+      const [published] = nativeOnly;
+      expect(published).toMatchObject({ source: 'native', directory: '/work/project', payload: nativeStatus('ncl_s') });
+      expect(published.eventId).toMatch(/^oc-[0-9a-f]{8}-\d{12}$/);
+
+      const tail = hub.replayAfter('evt-1');
+      expect(tail.map((entry) => entry.eventId)).toEqual([published.eventId]);
+      expect(JSON.parse(tail[0].serializedFrame)).toMatchObject({
+        type: 'event',
+        eventId: published.eventId,
+        directory: '/work/project',
+        payload: nativeStatus('ncl_s'),
+      });
+    } finally {
+      hub.stop();
+    }
+  });
+
+  it('coalesces native deltas without losing their source', () => {
+    const hub = createGlobalMessageStreamHub({
+      buildOpenCodeUrl: (pathname) => `http://127.0.0.1:4096${pathname}`,
+      getOpenCodeAuthHeaders: () => ({}),
+    });
+    const openCodeOnly = [];
+    const nativeOnly = [];
+    hub.subscribeEvent((event) => openCodeOnly.push(event));
+    hub.subscribeEvent((event) => nativeOnly.push(event), { sources: ['native'] });
+
+    for (const text of ['a', 'b', 'c', 'd']) {
+      hub.publishNativeEvent({ directory: '/work/project', payload: nativeDelta(text) });
+    }
+    hub.flushPending();
+
+    expect(openCodeOnly).toEqual([]);
+    expect(nativeOnly.map((event) => event.payload.properties.delta)).toEqual(['a', 'bcd']);
+    expect(nativeOnly.map((event) => event.source)).toEqual(['native', 'native']);
+    expect(nativeOnly.map((event) => event.directory)).toEqual(['/work/project', '/work/project']);
+  });
+});

@@ -7,7 +7,7 @@ const record = (id, role, text, extra = {}, parts = []) => ({
   parts: [...(text ? [{ type: 'text', text }] : []), ...parts],
 });
 const pair = (id) => [record(`u${id}`, 'user', `request ${id}`), record(`a${id}`, 'assistant', `answer ${id}`, { parentID: `u${id}` })];
-const page = (data, cursor = '') => ({ data, response: { headers: new Headers({ 'x-next-cursor': cursor }) } });
+const page = (records, cursor = null) => ({ records, cursor });
 const load = (readPage) => loadAssistContext({ readPage, signal: new AbortController().signal });
 
 describe('session assist context', () => {

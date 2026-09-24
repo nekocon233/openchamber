@@ -131,6 +131,15 @@ the session is idle. A new message invalidates it without clearing writes.
 - `SessionRecapSpacer` shows the reminder in the reserved gap under the reply.
 - `SessionSuggestionChip` fills the composer; it never sends automatically.
 
+Native CLI sessions (`ncl_`, `ncx_`) get assists too. A separate hub
+subscription on the native event source feeds only this runtime; goals,
+obligatory context and Linear status stay OpenCode-only. Their record and
+history come from the native runtime (`nativeSessions`), and the assist is
+stored with the session's metadata in its registry rather than in OpenCode's;
+the UI's metadata patch reaches it through the native session PATCH. Under the session-provider rule a
+native session's small model must be set explicitly, so without one these
+sessions skip generation as Claude Code plugin sessions do.
+
 Web, Electron, hosted mobile, and Capacitor use the server watcher. VS Code's
 extension-only runtime does not generate assists; shared UI can render payloads
 produced by a server. The background watcher cannot use the browser's message

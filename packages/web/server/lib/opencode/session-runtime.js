@@ -40,7 +40,15 @@ const extractSessionStatusUpdate = (payload) => {
 
 const readRequestId = (value) => (typeof value === 'string' && value.trim() ? value.trim() : '');
 
-export const createSessionRuntime = ({ writeSseEvent, getNotificationClients, broadcastEvent }) => {
+export const createSessionRuntime = ({
+  writeSseEvent,
+  getNotificationClients,
+  broadcastEvent,
+  // Native CLI sessions share this status tracking, but an OpenCode restart
+  // neither interrupts them nor drops their pending questions, and they do
+  // not count as OpenCode activity.
+  isNativeSessionId = () => false,
+}) => {
   const sessionActivityPhases = new Map();
   const sessionActivityCooldowns = new Map();
   const sessionStates = new Map();
@@ -142,7 +150,7 @@ export const createSessionRuntime = ({ writeSseEvent, getNotificationClients, br
 
     const wasActive = current?.phase === 'busy';
     const isActive = phase === 'busy';
-    if (wasActive !== isActive) {
+    if (wasActive !== isActive && !isNativeSessionId(sessionId)) {
       activeSessionCount = Math.max(0, activeSessionCount + (isActive ? 1 : -1));
     }
     sessionActivityPhases.set(sessionId, { phase, updatedAt: Date.now() });
@@ -345,33 +353,38 @@ export const createSessionRuntime = ({ writeSseEvent, getNotificationClients, br
 
   const getActiveSessionCount = () => activeSessionCount;
 
+  // Resets OpenCode session activity; native sessions keep theirs.
   const resetAllSessionActivityToIdle = () => {
-    for (const timer of sessionActivityCooldowns.values()) {
-      clearTimeout(timer);
-    }
-    sessionActivityCooldowns.clear();
-    activeSessionCount = 0;
     const now = Date.now();
     for (const [sessionId] of sessionActivityPhases) {
+      if (isNativeSessionId(sessionId)) continue;
+      const timer = sessionActivityCooldowns.get(sessionId);
+      if (timer) clearTimeout(timer);
+      sessionActivityCooldowns.delete(sessionId);
       sessionActivityPhases.set(sessionId, { phase: 'idle', updatedAt: now });
     }
+    activeSessionCount = 0;
   };
 
   const interruptBusySessionsAfterRestart = () => {
     const interruptedSessionIds = new Set();
     for (const [sessionId, state] of sessionStates) {
+      if (isNativeSessionId(sessionId)) continue;
       if (state.status === 'busy' || state.status === 'retry') {
         interruptedSessionIds.add(sessionId);
       }
     }
     for (const [sessionId, activity] of sessionActivityPhases) {
+      if (isNativeSessionId(sessionId)) continue;
       if (activity.phase === 'busy') {
         interruptedSessionIds.add(sessionId);
       }
     }
 
     // A restarted OpenCode forgot every pending request with the turns.
-    pendingRequestsBySession.clear();
+    for (const sessionId of Array.from(pendingRequestsBySession.keys())) {
+      if (!isNativeSessionId(sessionId)) pendingRequestsBySession.delete(sessionId);
+    }
     const eventId = `opencode-restart-${Date.now()}`;
     for (const sessionId of interruptedSessionIds) {
       updateSessionState(sessionId, 'idle', eventId, {
@@ -412,7 +425,9 @@ export const createSessionRuntime = ({ writeSseEvent, getNotificationClients, br
       if (timer) clearTimeout(timer);
       sessionActivityCooldowns.delete(sessionId);
       sessionActivityPhases.delete(sessionId);
-      if (data.phase === 'busy') activeSessionCount = Math.max(0, activeSessionCount - 1);
+      if (data.phase === 'busy' && !isNativeSessionId(sessionId)) {
+        activeSessionCount = Math.max(0, activeSessionCount - 1);
+      }
     }
   };
 

@@ -14,6 +14,8 @@ export const createNotificationTriggerRuntime = (deps) => {
     isAnyInteractiveClientVisible,
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
+    // The native CLI runtime, for Claude Code and Codex sessions.
+    nativeSessions = null,
   } = deps;
   let getIsSessionAutoAccepting = deps.getIsSessionAutoAccepting;
   const setGetIsSessionAutoAccepting = (resolver) => {
@@ -286,21 +288,30 @@ export const createNotificationTriggerRuntime = (deps) => {
       .join(' ');
   };
 
+  // A session's record, or null when it cannot be read. A native CLI session
+  // is read through the native runtime, which needs its directory.
+  const readSessionRecord = async (sessionId, directory) => {
+    if (nativeSessions?.isNativeSessionId(sessionId)) {
+      return directory ? nativeSessions.getSession(sessionId, directory) : null;
+    }
+    const base = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, '');
+    const url = directory ? `${base}?directory=${encodeURIComponent(directory)}` : base;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!response.ok) return null;
+    return response.json().catch(() => null);
+  };
+
   // A session with an ACTIVE goal suppresses per-turn ready notifications;
   // the session-goal runtime sends its own notification when the goal
   // settles. Fetch failures fall through to normal notification behavior.
   const hasActiveSessionGoal = async (sessionId, directory) => {
     if (!sessionId) return false;
     try {
-      const base = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, '');
-      const url = directory ? `${base}?directory=${encodeURIComponent(directory)}` : base;
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (!response.ok) return false;
-      const session = await response.json().catch(() => null);
+      const session = await readSessionRecord(sessionId, directory);
       const goal = session?.metadata?.openchamber?.goal;
       return Boolean(goal && typeof goal === 'object' && goal.status === 'active');
     } catch {
@@ -724,17 +735,8 @@ export const createNotificationTriggerRuntime = (deps) => {
   const sendGoalSettlePush = async ({ sessionId, directory, status, title, body }) => {
     let sessionName = '';
     try {
-      const base = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, '');
-      const url = directory ? `${base}?directory=${encodeURIComponent(directory)}` : base;
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (response.ok) {
-        const session = await response.json().catch(() => null);
-        if (typeof session?.title === 'string') sessionName = session.title.trim();
-      }
+      const session = await readSessionRecord(sessionId, directory);
+      if (typeof session?.title === 'string') sessionName = session.title.trim();
     } catch {
       // Session name is presentation sugar for the mobile push — never block on it.
     }
