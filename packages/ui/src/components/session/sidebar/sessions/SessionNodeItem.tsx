@@ -860,7 +860,10 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       setOpenSidebarMenuKey(menuInstanceKey);
       return;
     }
-    if (!pendingRenameRef.current && openSidebarMenuKey === menuInstanceKey) {
+    // Base UI runs an item's onClick before the close it triggers, so a chosen
+    // Rename is already pending here. The controlled menu must still close:
+    // the rename starts from onOpenChangeComplete, which only a close reaches.
+    if (openSidebarMenuKey === menuInstanceKey) {
       setOpenSidebarMenuKey(null);
     }
   };
@@ -885,7 +888,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     }
     if (open) {
       setOpenSidebarMenuKey(contextMenuInstanceKey);
-    } else if (!pendingRenameRef.current && openSidebarMenuKey === contextMenuInstanceKey) {
+    } else if (openSidebarMenuKey === contextMenuInstanceKey) {
       setOpenSidebarMenuKey(null);
     }
   };
