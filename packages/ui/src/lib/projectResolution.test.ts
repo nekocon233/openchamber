@@ -68,6 +68,15 @@ describe('resolveProjectForSessionDirectory', () => {
       .toEqual(projects[0]);
   });
 
+  test('gives a managed worktree missing from the registry to a project registered at exactly its directory', () => {
+    const worktreeProject = { id: 'worktree', path: MANAGED_WORKTREE, label: 'Worktree' };
+    expect(resolveProjectForSessionDirectory([...projects, HOME_PROJECT, worktreeProject], new Map(), MANAGED_WORKTREE))
+      .toEqual(worktreeProject);
+    // Only the exact directory: a subdirectory still waits for the registry.
+    expect(resolveProjectForSessionDirectory([...projects, HOME_PROJECT, worktreeProject], new Map(), `${MANAGED_WORKTREE}/packages/ui`))
+      .toBeNull();
+  });
+
   test('leaves a managed worktree missing from the registry unresolved', () => {
     // Discovery has not published the freshly created worktree yet. Attributing
     // it to the home project would switch the sidebar to that project when the

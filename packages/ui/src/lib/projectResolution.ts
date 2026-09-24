@@ -97,14 +97,20 @@ const resolveExactProjectForDirectory = (
  * unrelated registered directory still belongs to the repository it was cut
  * from. A managed worktree missing from the registry — one created moments ago,
  * before discovery caught up — resolves to no project at all rather than to an
- * ancestor: attributing it to, say, a project registered at the home directory
- * makes selecting that session switch the sidebar to a different project.
+ * ancestor, unless a project is registered at exactly its directory:
+ * attributing it to, say, a project registered at the home directory makes
+ * selecting that session switch the sidebar to a different project.
  */
 export const resolveProjectForSessionDirectory = (
   projects: ProjectEntry[],
   availableWorktreesByProject: Map<string, WorktreeMetadata[]>,
   directory: string | null,
 ): ProjectEntry | null => {
+  // A project registered at exactly this directory owns it, even a managed
+  // worktree the registry has not published yet.
+  const exactProject = resolveExactProjectForDirectory(projects, directory);
+  if (exactProject) return exactProject;
+
   const directProject = resolveProjectForDirectory(projects, directory);
   const worktreeResolution = resolveProjectFromWorktreeDirectory(projects, availableWorktreesByProject, directory);
 
