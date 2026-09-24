@@ -12,7 +12,7 @@ import {
 } from '@/stores/messageQueueStore';
 import { isFollowUpQueueClaimAvailable } from '@/lib/followUpQueue';
 import { useSelectionStore } from '@/sync/selection-store';
-import { prepareLocalAttachments, useInputStore, type SyntheticContextPart } from '@/sync/input-store';
+import { prepareLocalAttachments, useInputStore } from '@/sync/input-store';
 import {
     ACCEPTED_ATTACHMENT_EXTENSIONS,
     ATTACHMENT_ACCEPT,
@@ -65,7 +65,6 @@ import { cn } from "@/lib/utils";
 import { ModelControls } from './ModelControls';
 import { focusChatInput } from './composer/editor/dom';
 import { parseAgentMentions } from '@/lib/messages/agentMentions';
-import { CONTEXT_METADATA_KEY, draftFromContextPayload } from '@/lib/messages/contextParts';
 import { ComposerStatusBar } from './ComposerStatusBar';
 import { shouldSubmitEnter } from './composer/keyboardPolicy';
 import { getDropdownNavigationKey } from '@/components/ui/dropdown-navigation';
@@ -2199,11 +2198,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             // away. A snapshot only — never re-fetched, never authoritative.
             // Failures are swallowed: the message went out, and a missing
             // bookkeeping entry must not surface as a send error.
-            const attachedThread = linkedIssue
-                ? { attachment: linkedIssue, kind: 'issue' as const }
-                : linkedPr
-                    ? { attachment: linkedPr, kind: 'pull' as const }
-                    : null;
             // On a draft there is no session yet in this closure: the send path
             // creates one and makes it current before resolving, so the id is
             // read from the store. The fallback is used only when the closure

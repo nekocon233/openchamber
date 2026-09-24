@@ -11,7 +11,6 @@ import {
   useSessionRetentionRunStore,
 } from '@/sync/session-retention';
 import { useUIStore } from '@/stores/useUIStore';
-import { archiveSession, deleteSessionInDirectory } from '@/sync/session-actions';
 
 const EMPTY_SESSIONS: Session[] = [];
 type CleanupOptions = { autoRun?: boolean; enabled?: boolean };

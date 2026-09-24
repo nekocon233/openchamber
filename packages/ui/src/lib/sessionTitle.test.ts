@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import type { AssistantMessage, Message, Part, Session, TextPart } from '@opencode-ai/sdk/v2';
-import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { collectSessionTitleTurns, formatSessionTitleContext, generatedSessionTitleSchema, generateSessionTitle } from './sessionTitle';
 import { configureRuntimeUrlResolver } from './runtime-url';
 import { createContextPart, type ContextPartPayload } from './messages/contextParts';
 import { formatMessageText } from './messages/messageMarkdown';
 import { formatSessionAsMarkdown } from './exportSession';
-import { ChildStoreManager } from '@/sync/child-store';
 import { SessionMessageLoader } from '@/sync/session-message-loader';
 import { loadSessionTitleTurns } from '@/sync/session-title-context';
 import { cancelSessionTitleGeneration, generateAndSaveSessionTitle, runSessionTitleGeneration } from '@/sync/session-title-generation';
