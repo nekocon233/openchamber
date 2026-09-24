@@ -441,12 +441,16 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
 // `baselineRevision` rejects entries changed after the request started, and
 // 'monotonic' mode never lowers an active status (periodic poll), while
 // 'authoritative' mode treats omissions as idle (reconnect / escalated resync).
+// `covers` names the sessions the snapshot decides; the others keep their
+// entries because their source could not be read (native CLI sessions whose
+// status read failed next to a successful OpenCode snapshot).
 export const applyGlobalSessionStatusSnapshot = (
   rawDirectory: string,
   raw: Record<string, { type?: string }>,
   knownSessionIds?: Iterable<string>,
   baselineRevision = Number.POSITIVE_INFINITY,
   mode: 'monotonic' | 'authoritative' = 'authoritative',
+  covers: (sessionId: string) => boolean = () => true,
 ): void => {
   const directory = normalizeDirectory(rawDirectory);
   const known = new Set(knownSessionIds ?? []);
@@ -472,7 +476,7 @@ export const applyGlobalSessionStatusSnapshot = (
       resolvedStatusById.set(sessionId, status);
     };
     const canApply = (sessionId: string): boolean => (
-      (state.revisionById.get(sessionId) ?? state.revisionFloor) <= baselineRevision
+      covers(sessionId) && (state.revisionById.get(sessionId) ?? state.revisionFloor) <= baselineRevision
     );
     const isOptimisticallyProtected = (sessionId: string): boolean => (
       (next.get(sessionId)?.optimisticUntil ?? 0) > now

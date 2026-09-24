@@ -68,3 +68,22 @@ export function commandMatchesSearch(command: CommandAutocompleteSearchItem, que
     || Boolean(command.description && fuzzyMatch(command.description, query))
     || Boolean(command.searchAliases?.some((alias) => fuzzyMatch(alias, query)));
 }
+
+/**
+ * The command picker of a native CLI session: the commands the composer runs
+ * itself (its `/compact` runs the CLI's compaction), then the CLI's own
+ * commands except those a composer command of the same name shadows. Commands
+ * whose name starts with the query come first, then by name.
+ */
+export function orderNativeCommandItems<T extends CommandAutocompleteSearchItem>(local: T[], cliCommands: T[], query: string): T[] {
+  const localNames = new Set(local.map((command) => command.name));
+  const items = [...local, ...cliCommands.filter((command) => !localNames.has(command.name))];
+  const matching = query ? items.filter((item) => commandMatchesSearch(item, query)) : items;
+  const prefix = query.toLowerCase();
+  return matching.sort((a, b) => {
+    const aStarts = a.name.toLowerCase().startsWith(prefix);
+    const bStarts = b.name.toLowerCase().startsWith(prefix);
+    if (aStarts !== bStarts) return aStarts ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}

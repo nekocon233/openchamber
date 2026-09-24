@@ -317,6 +317,7 @@ export const DefaultsSettings: React.FC = () => {
                 modelId={parsedModel.modelId}
                 onChange={handleModelChange}
                 className={SETTINGS_CUSTOM_TRIGGER_CLASS}
+                allowNativeModels
               />
             </SettingsFieldRow>
 

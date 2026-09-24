@@ -64,8 +64,8 @@ describe('MobileSessionsSheet session structure', () => {
     expect(source).toContain('directory: sessionDirectory');
     expect(source).toContain('sessionId: session.id');
     expect(source).toContain("<Icon name={pinned ? 'unpin' : 'pushpin'}");
-    expect(source).toContain('opencodeClient.getSessionStatusForDirectory(directory, { signal: controller.signal })');
-    expect(source).toContain('applyGlobalSessionStatusSnapshot(directory, snapshot, sessionIds, baselineRevision)');
+    expect(source).toContain('readDirectoryStatuses(directory, { signal: controller.signal })');
+    expect(source).toContain("applyGlobalSessionStatusSnapshot(directory, snapshot.statuses, sessionIds, baselineRevision, 'authoritative', snapshot.covers)");
     expect(source).toContain('state.resolvedStatusById');
     expect(source.indexOf('const globalStatus = globalResolvedStatusById.get(sessionId);')).toBeLessThan(
       source.indexOf('const liveStatus = sessionStatuses[sessionId]?.type;'),

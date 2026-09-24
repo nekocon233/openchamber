@@ -25,6 +25,8 @@ import { normalizePath } from "@/lib/pathNormalization";
 import { getSyncConfig, subscribeToSyncConfigChanges } from "@/sync/sync-refs";
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from "@/lib/runtime-switch";
 import { mergeModelMetadataWithLiveModel } from "@/lib/modelMetadata";
+import { loadNativeProviders } from "@/lib/native-agents/catalog";
+import { isNativeProviderId } from "@/lib/native-agents/ids";
 
 const MODELS_DEV_API_URL = "https://models.dev/api.json";
 const MODELS_DEV_PROXY_URL = "/api/openchamber/models-metadata";
@@ -268,7 +270,8 @@ const resolveProviderModelSelection = ({
         return { providerId: FALLBACK_PROVIDER_ID, modelId: FALLBACK_MODEL_ID };
     }
 
-    const firstProvider = providers[0];
+    // A native CLI is only ever chosen on purpose: it decides the kind of session.
+    const firstProvider = providers.find((provider) => !isNativeProviderId(provider.id));
     const firstModel = firstProvider?.models[0];
     if (firstProvider && firstModel) {
         return { providerId: firstProvider.id, modelId: firstModel.id };
@@ -1703,7 +1706,14 @@ export const useConfigStore = create<ConfigStore>()(
                                 { directoryKey, source, requestedDirectory, effectiveDirectory, attempt: attempt + 1 },
                             );
                             if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
-                            const providers = Array.isArray(apiResult?.providers) ? apiResult.providers : [];
+                            // Native CLIs join the list after OpenCode's providers; their
+                            // catalog never fails this load.
+                            const nativeProviders = await loadNativeProviders();
+                            if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
+                            const providers = [
+                                ...(Array.isArray(apiResult?.providers) ? apiResult.providers : []),
+                                ...nativeProviders,
+                            ];
                             const defaults = apiResult?.default || {};
 
                             const processedProviders: ProviderWithModelList[] = providers.map((provider) => {

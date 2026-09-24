@@ -73,6 +73,8 @@ export interface ComposerFooterProps {
     onDictationStart: () => void;
     onDictationContentHeightChange: (height: number | null) => void;
     isBtw?: boolean;
+    /** A native CLI session, or a draft that becomes one: the CLI approves every tool itself. */
+    nativeTarget?: boolean;
     modelSessionId?: string | null;
     btwSelection: BtwSelection;
 }
@@ -120,6 +122,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
         onDictationStart,
         onDictationContentHeightChange,
         isBtw = false,
+        nativeTarget = false,
         modelSessionId,
         btwSelection,
     } = props;
@@ -156,13 +159,13 @@ export function ComposerFooter(props: ComposerFooterProps) {
                                 onOpenGuestAttach={onOpenGuestAttach}
                                 filesOnly={isBtw}
                             />
-                            <PermissionAutoAcceptButton
+                            {!nativeTarget ? <PermissionAutoAcceptButton
                                 footerIconButtonClass={footerIconButtonClass}
                                 iconSizeClass={iconSizeClass}
                                 isInteractive={isPermissionAutoAcceptInteractive}
                                 permissionAutoAcceptEnabled={permissionAutoAcceptEnabled}
                                 handlePermissionAutoAcceptToggle={onTogglePermissionAutoAccept}
-                            />
+                            /> : null}
                             {!isBtw ? <SessionGoalButton
                                 sessionId={currentSessionId}
                                 directory={directory}
@@ -235,14 +238,14 @@ export function ComposerFooter(props: ComposerFooterProps) {
                             isExpandedInput={isExpandedInput}
                             onToggle={onToggleExpandedInput}
                         /> : null}
-                        <PermissionAutoAcceptButton
+                        {!nativeTarget ? <PermissionAutoAcceptButton
                             footerIconButtonClass={footerIconButtonClass}
                             iconSizeClass={iconSizeClass}
                             isInteractive={isPermissionAutoAcceptInteractive}
                             permissionAutoAcceptEnabled={permissionAutoAcceptEnabled}
                             handlePermissionAutoAcceptToggle={onTogglePermissionAutoAccept}
                             withTooltip
-                        />
+                        /> : null}
                         {!isBtw ? <SessionGoalButton
                             sessionId={currentSessionId}
                             directory={directory}

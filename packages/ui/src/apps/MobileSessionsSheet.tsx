@@ -55,7 +55,6 @@ import { sortProjectsByOrder } from '@/components/session/sidebar/list/projectSo
 import { collectSessionSubtreeIds, runSessionSubtreeAction, type SessionSubtreeAction } from '@/components/session/sidebar/sessions/sessionSubtreeActions';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n } from '@/lib/i18n';
-import { opencodeClient } from '@/lib/opencode/client';
 import { matchesRankQuery, rankByQuery } from '@/lib/search/fuzzySearch';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { PROJECT_COLOR_MAP, PROJECT_ICON_MAP, ProjectIconImage } from '@/lib/projectMeta';
@@ -77,6 +76,7 @@ import {
   orderSessionsByLifecycleScopes,
   useSessionOrderingStore,
 } from '@/sync/session-ordering';
+import { readDirectoryStatuses, type DirectoryStatusSnapshot } from '@/sync/native-directory-snapshots';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import {
   useAllAuthoritativeLiveSessionIds,
@@ -224,14 +224,14 @@ const getSessionTimestamp = (session: Session): number => {
 const fetchSessionStatusSnapshot = async (
   directory: string,
   signal?: AbortSignal,
-): Promise<Awaited<ReturnType<typeof opencodeClient.getSessionStatusForDirectory>>> => {
+): Promise<DirectoryStatusSnapshot | null> => {
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (signal?.aborted) controller.abort();
   else signal?.addEventListener('abort', abort, { once: true });
   const timeout = setTimeout(() => controller.abort(), STATUS_POLL_REQUEST_TIMEOUT_MS);
   try {
-    return await opencodeClient.getSessionStatusForDirectory(directory, { signal: controller.signal });
+    return await readDirectoryStatuses(directory, { signal: controller.signal });
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);
@@ -1408,7 +1408,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           try {
             const snapshot = await fetchSessionStatusSnapshot(directory, controller.signal);
             if (!disposed && snapshot !== null) {
-              applyGlobalSessionStatusSnapshot(directory, snapshot, sessionIds, baselineRevision);
+              applyGlobalSessionStatusSnapshot(directory, snapshot.statuses, sessionIds, baselineRevision, 'authoritative', snapshot.covers);
             }
           } finally {
             activeRequests.delete(controller);

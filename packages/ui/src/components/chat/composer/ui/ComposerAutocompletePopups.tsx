@@ -15,6 +15,7 @@
 import React from 'react';
 
 import { CommandAutocomplete, type CommandAutocompleteHandle, type CommandInfo } from '../../CommandAutocomplete';
+import type { NativeBackend } from '@/lib/native-agents/ids';
 import { FileMentionAutocomplete, type FileMentionHandle } from '../../FileMentionAutocomplete';
 import { SkillAutocomplete, type SkillAutocompleteHandle } from '../../SkillAutocomplete';
 import { SnippetAutocomplete, type SnippetAutocompleteHandle } from '../../SnippetAutocomplete';
@@ -62,6 +63,8 @@ export interface ComposerAutocompletePopupsProps {
     /** Caret placement in focus mode; null when the picker anchors itself. */
     overlayPosition: AutocompleteOverlayPosition | null;
     commandRef: React.RefObject<CommandAutocompleteHandle | null>;
+    /** The native CLI the composer sends to, whose commands the command picker offers. */
+    nativeBackend: NativeBackend | null;
     skillRef: React.RefObject<SkillAutocompleteHandle | null>;
     snippetRef: React.RefObject<SnippetAutocompleteHandle | null>;
     mentionRef: React.RefObject<FileMentionHandle | null>;
@@ -88,6 +91,7 @@ export function ComposerAutocompletePopups(props: ComposerAutocompletePopupsProp
                     onCommandSelect={props.onCommandSelect}
                     onClose={onClose}
                     style={style}
+                    nativeBackend={props.nativeBackend}
                 />
             );
         case 'skill':

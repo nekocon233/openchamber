@@ -4,6 +4,7 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { isNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import {
     createMessageQueueTarget,
     getMessageQueueKey,
@@ -22,6 +23,7 @@ import {
 } from '@/sync/attachment-files';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import * as sessionActions from '@/sync/session-actions';
+import { isNativeLocalCommand, nativeCompactCommand } from '@/sync/native-send';
 import { useSessionPermissions, useSessionQuestions } from "@/sync/sync-context";
 // Guest surfaces load on demand: VS Code and mobile never mount them, and the
 // composer must not pay for the guest bridge before an extension is installed.
@@ -557,6 +559,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const [reviewFlowSubmitting, setReviewFlowSubmitting] = React.useState(false);
 
     const currentProviderId = useConfigStore((state) => state.currentProviderId);
+    // A native CLI session, or a draft that becomes one on send. The CLI runs
+    // its own slash commands and has no shell mode.
+    const nativeTargetBackend = currentSessionId
+        ? nativeBackendOfSessionId(currentSessionId)
+        : newSessionDraftOpen && currentProviderId ? nativeBackendOfProviderId(currentProviderId) : null;
+    const isNativeTarget = nativeTargetBackend !== null;
     const currentModelId = useConfigStore((state) => state.currentModelId);
     const getModelMetadata = useConfigStore((state) => state.getModelMetadata);
     // Subscribe to both sources read by getModelMetadata so async metadata and provider updates are observed.
@@ -589,6 +597,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         savedVariant: btwSavedVariant,
         composerModel: currentProviderId && currentModelId ? { providerId: currentProviderId, modelId: currentModelId } : null,
         composerVariant: currentVariantSelection.override === null ? null : currentVariantSelection.override ?? currentVariant,
+        // A CLI's plan mode can switch to another model and answers far
+        // slower, so a side question in a native session builds instead.
+        defaultAgent: isNativeTarget ? 'build' : 'plan',
     });
     React.useEffect(() => {
         const { model, agent, variant } = effectiveBtwSelection;
@@ -1540,10 +1551,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // consumed. An action command must leave the queue and the attached
         // context where they are; a prompt command must send that context with
         // the prompt it produces. A command the composer cannot run here is not
-        // a local command at all and goes out as typed.
+        // a local command at all and goes out as typed; so does every command
+        // a native CLI owns.
         let commandPlan = inputSnapshot.hasContent
             ? planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, Boolean(currentSessionId))
             : null;
+        if (commandPlan && isNativeTarget && !isNativeLocalCommand(commandPlan.command.name)) commandPlan = null;
         if (commandPlan?.kind === 'prompt') {
             const magicCommand = findMagicPromptCommand(commandPlan.command.name);
             const commandIsAvailable = commandPlan.command.name === 'btw'
@@ -1647,8 +1660,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         }
 
         let authoritativeSessionPhase: 'idle' | 'busy' | 'retry' | null | undefined;
+        // A native CLI takes a prompt whether or not a turn runs, so there is
+        // no OpenCode status to confirm first.
         if (
             submissionSessionId
+            && !isNativeSessionId(submissionSessionId)
             && !isBtwActive
             && inputMode === 'normal'
             && currentSessionPhase === 'idle'
@@ -1668,6 +1684,32 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 toast.error(t('chat.chatInput.toast.sessionStatusUnavailable'));
                 return;
             }
+        }
+
+        // A native CLI compacts with its own command, which shows as the
+        // compaction marker; nothing goes out as a message.
+        const nativeCompaction = isNativeTarget && currentSessionId && !isBtwActive && inputMode === 'normal'
+            ? nativeCompactCommand(inputSnapshot.message)
+            : null;
+        if (nativeCompaction && currentSessionId) {
+            setMessage('');
+            confirmedMentionsRef.current.clear();
+            persistDraftImmediately(chatDraftIdentity, '');
+            messageHistory.reset();
+            try {
+                await sessionActions.compactNativeSession(currentSessionId, {
+                    providerID: providerIdToSend,
+                    modelID: modelIdToSend,
+                    variant: variantToSend,
+                    agent: agentNameToSend,
+                    instructions: nativeCompaction.instructions,
+                });
+                scrollToBottom?.();
+            } catch (error) {
+                restoreComposerText();
+                toast.error(getSubmitErrorMessage(error, t('chat.chatInput.toast.compactFailed')));
+            }
+            return;
         }
 
         // Action commands change session or UI state and send nothing. The
@@ -1761,6 +1803,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         } else if (deliveryDecision === 'follow-up') {
             delivery = followUpBehavior;
         }
+        // The host queue delivers through OpenCode. A native CLI queues a
+        // prompt that arrives mid-turn itself, so it goes out right away.
+        if (delivery === 'queue' && submissionSessionId && isNativeSessionId(submissionSessionId)) {
+            delivery = 'steer';
+        }
 
         const historySubmissions = buildChatInputHistorySubmissions({
             inputMode,
@@ -1810,7 +1857,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             inlineComments: drafts,
             additionalParts: [
                 ...buildBtwSyntheticTexts({ isBtwActive, isPromotedBtwSession })
-                    .map((text) => ({ text, synthetic: true })),
+                    .map((text) => ({ text, synthetic: true, systemContext: 'feature-instructions' as const })),
                 ...(syntheticParts ?? []),
             ],
             linkedIssue: !isBtwActive && linkedIssue
@@ -1897,8 +1944,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             composerRef.current?.blur();
         }
 
-        // Local slash commands, normal mode only.
-        const parsedCommand = inputMode === 'normal' ? parseSlashCommand(primaryText) : null;
+        // Local slash commands, normal mode only. A native session keeps only
+        // the ones that act on OpenChamber's view of it; the rest are the CLI's.
+        const typedCommand = inputMode === 'normal' ? parseSlashCommand(primaryText) : null;
+        const parsedCommand = typedCommand && (!isNativeTarget || isNativeLocalCommand(typedCommand.name))
+            ? typedCommand
+            : null;
         if (parsedCommand) {
             const { name: commandName, argument } = parsedCommand;
 
@@ -2382,7 +2433,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Enter shell mode before CodeMirror inserts the trigger. Keeping the
         // document unchanged also keeps the caret at the start for the first
         // command character.
-        if (!isBtwActive && inputMode === 'normal' && e.key === '!') {
+        if (!isBtwActive && !isNativeTarget && inputMode === 'normal' && e.key === '!') {
             const selection = composerRef.current?.getSelection();
             if (selection?.start === 0 && selection.end === 0) {
                 e.preventDefault();
@@ -2579,9 +2630,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             inputSource,
             insertedText,
         });
-        setOpenAutocomplete(trigger?.kind ?? null);
-        setAutocompleteQuery(trigger?.query ?? '');
-    }, [inputMode, isBtwActive]);
+        // OpenCode's skills mean nothing to a native CLI; its command picker
+        // offers the CLI's own commands, which go out as typed.
+        const offered = trigger && isNativeTarget && trigger.kind === 'skill' ? null : trigger;
+        setOpenAutocomplete(offered?.kind ?? null);
+        setAutocompleteQuery(offered?.query ?? '');
+    }, [inputMode, isBtwActive, isNativeTarget]);
 
     const insertTextAtSelection = React.useCallback((
         text: string,
@@ -2679,7 +2733,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Mobile keyboards and paste may update the document without a usable
         // keydown, so consume the trigger in the same editor transaction rather
         // than moving the caret in a later frame against stale text.
-        if (!isBtwActive && inputMode === 'normal' && value.startsWith('!')) {
+        if (!isBtwActive && !isNativeTarget && inputMode === 'normal' && value.startsWith('!')) {
             const shellCommand = value.slice(1);
             const nextCursor = Math.max(0, selection.start - 1);
             setInputMode('shell');
@@ -3732,7 +3786,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     ]);
 
     useKeybind('toggle_permission_auto_accept', () => {
-        if (!isPermissionAutoAcceptInteractive) return false;
+        // A native CLI approves every tool itself; there is nothing to toggle.
+        if (!isPermissionAutoAcceptInteractive || isNativeTarget) return false;
         handlePermissionAutoAcceptToggle();
     });
 
@@ -3891,6 +3946,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         query={autocompleteQuery}
                         overlayPosition={isDesktopExpanded ? autocompleteOverlayPosition : null}
                         commandRef={commandRef}
+                        nativeBackend={nativeTargetBackend}
                         skillRef={skillRef}
                         snippetRef={snippetRef}
                         mentionRef={mentionRef}
@@ -4003,7 +4059,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                     : currentSessionId || newSessionDraftOpen
                                         ? inputMode === 'shell'
                                             ? t('chat.chatInput.placeholder.shell')
-                                            : t(useCompactChatPlaceholder ? 'chat.chatInput.placeholder.chatCompact' : 'chat.chatInput.placeholder.chat')
+                                            : isNativeTarget
+                                                ? t(useCompactChatPlaceholder ? 'chat.chatInput.placeholder.nativeCliCompact' : 'chat.chatInput.placeholder.nativeCli')
+                                                : t(useCompactChatPlaceholder ? 'chat.chatInput.placeholder.chatCompact' : 'chat.chatInput.placeholder.chat')
                                         : t('chat.chatInput.placeholder.selectSession')}
                                 editable={Boolean(currentSessionId || newSessionDraftOpen)}
                                 autoCorrect={composerAutoCorrect({ isMobile })}
@@ -4067,6 +4125,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         onDictationStart={markDictationStart}
                         onDictationContentHeightChange={handleDictationContentHeightChange}
                         isBtw={isBtwActive}
+                        nativeTarget={isNativeTarget}
                         modelSessionId={btwComposerSessionId}
                         btwSelection={effectiveBtwSelection}
                     />

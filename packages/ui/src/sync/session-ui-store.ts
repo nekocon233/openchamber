@@ -79,6 +79,11 @@ import {
   type UnarchiveSessionsOptions,
 } from "./session-actions"
 import { useInputStore, type SyntheticContextPart } from "./input-store"
+import { nativePromptRequest, nativeSendMessageId } from "./native-send"
+import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
+import { NativeAgentsRequestError, NativeAgentsUnsupportedError } from "@/lib/native-agents/errors"
+import { isNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, type NativeBackend } from "@/lib/native-agents/ids"
+import type { I18nKey } from "@/lib/i18n"
 import { useSessionGoalArmStore } from "@/stores/useSessionGoalArmStore"
 import { setSessionGoal } from "@/lib/sessionGoalActions"
 import { wrapSystemReminder } from "@/lib/systemReminder"
@@ -246,7 +251,7 @@ export async function routeMessage(params: {
   variant?: string
   inputMode?: "normal" | "shell"
   files?: Array<{ type: "file"; mime: string; url: string; filename: string }>
-  additionalParts?: Array<{ text: string; synthetic?: boolean; metadata?: ContextPartMetadata; files?: Array<{ type: "file"; mime: string; url: string; filename: string }>; systemContext?: 'session-knowledge' }>
+  additionalParts?: Array<{ text: string; synthetic?: boolean; metadata?: ContextPartMetadata; files?: Array<{ type: "file"; mime: string; url: string; filename: string }>; systemContext?: 'session-knowledge' | 'feature-instructions' }>
   appendSubmissions?: () => void
   delivery?: 'steer' | 'queue'
   messageId?: string
@@ -256,6 +261,7 @@ export async function routeMessage(params: {
   if (params.delivery === 'queue') {
     throw new Error('Queue delivery must be handled by the OpenChamber follow-up queue')
   }
+  if (isNativeSessionId(params.sessionId)) return routeNativeMessage(params)
   const requestDirectory = params.directory ?? undefined
   const requestRuntimeKey = params.runtimeKey ?? params.expectedRuntime?.runtimeKey
   let promptContent = params.content
@@ -392,6 +398,42 @@ export async function routeMessage(params: {
         directory: requestDirectory,
       }).then(() => {})
     },
+  })
+  return 'prompt'
+}
+
+// A native CLI session gets the text as typed, slash commands included: the
+// CLI runs its own commands. Shell mode has no CLI counterpart, and the
+// composer does not offer it there.
+async function routeNativeMessage(params: Parameters<typeof routeMessage>[0]): Promise<'prompt'> {
+  if (params.inputMode === "shell") throw new Error("Shell mode is not available in native CLI sessions")
+  const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents
+  if (!nativeAgents?.supported) throw new NativeAgentsUnsupportedError()
+  const directory = params.directory
+  if (!directory) throw new Error("The native session's directory is unknown")
+  await optimisticSend({
+    runtimeKey: params.runtimeKey ?? params.expectedRuntime?.runtimeKey,
+    sessionId: params.sessionId,
+    content: params.content,
+    providerID: params.providerID,
+    modelID: params.modelID,
+    agent: params.agent,
+    directory,
+    files: params.files,
+    appendSubmissions: params.appendSubmissions,
+    messageId: nativeSendMessageId(params.sessionId, params.messageId),
+    expectedRuntime: params.expectedRuntime,
+    send: (messageID) => nativeAgents.prompt(params.sessionId, nativePromptRequest({
+      directory,
+      messageID,
+      content: params.content,
+      files: params.files,
+      additionalParts: params.additionalParts,
+      providerID: params.providerID,
+      modelID: params.modelID,
+      variant: params.variant,
+      agent: params.agent,
+    })),
   })
   return 'prompt'
 }
@@ -543,7 +585,7 @@ export type SessionUIState = {
     agent?: string,
     attachments?: AttachedFile[],
     agentMentionName?: string,
-    additionalParts?: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' }>,
+    additionalParts?: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' | 'feature-instructions' }>,
     variant?: string,
     inputMode?: "normal" | "shell",
     options?: SendMessageOptions,
@@ -564,7 +606,8 @@ export type SessionUIState = {
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>
   shareSession: (sessionId: string) => Promise<Session | null>
   unshareSession: (sessionId: string) => Promise<Session | null>
-  revertToMessage: (sessionId: string, messageId: string, options?: { skipRedoPush?: boolean }) => Promise<void>
+  /** Resolves false when a native CLI refused the revert point; a toast told the user why. */
+  revertToMessage: (sessionId: string, messageId: string, options?: { skipRedoPush?: boolean }) => Promise<boolean>
   forkFromMessage: (sessionId: string, messageId: string) => Promise<void>
   handleSlashUndo: (sessionId: string) => Promise<void>
   handleSlashRedo: (sessionId: string, options?: { fullUnrevert?: boolean }) => Promise<void>
@@ -1012,6 +1055,7 @@ const createSessionWithDraftLifecycle = async (
   selectionTransition?: "submitted-draft",
   draftOverride?: NewSessionDraftState,
   expectedRuntime?: ExpectedRuntimeContext,
+  nativeBackend: NativeBackend | null = null,
 ): Promise<Session | null> => {
   assertExpectedRuntimeContext(expectedRuntime)
   const store = useSessionUIStore.getState()
@@ -1031,6 +1075,8 @@ const createSessionWithDraftLifecycle = async (
       parentID ?? null,
       metadata,
       selectionTransition,
+      "open",
+      nativeBackend,
     )
     assertExpectedRuntimeContext(expectedRuntime)
     if (!session) return null
@@ -1127,16 +1173,19 @@ export function materializeOpenDraftSession(selection: {
     assertExpectedRuntimeContext(operationRuntime)
 
     const draftPins = draft.projectContextPins ?? { notes: [], plans: [] }
+    // Picking a CLI's model in the draft makes the session a native one.
+    const nativeBackend = nativeBackendOfProviderId(selection.providerID)
     const created = await createSessionWithDraftLifecycle(
       draft.title,
       draftDirectoryOverride,
       draft.parentID ?? null,
-      draftPins.notes.length > 0 || draftPins.plans.length > 0
+      !nativeBackend && (draftPins.notes.length > 0 || draftPins.plans.length > 0)
         ? { openchamber: { project_context_pins: draftPins } }
         : undefined,
       "submitted-draft",
       draft,
       operationRuntime,
+      nativeBackend,
     )
     assertExpectedRuntimeContext(operationRuntime)
     if (!created?.id) {
@@ -1180,23 +1229,26 @@ export function materializeOpenDraftSession(selection: {
 
     store.initializeNewOpenChamberSession(created.id, configState.agents ?? [])
 
-    const pendingPolicyToken = !draftPermissionAutoAcceptEnabled
-      ? setPendingDraftPermissionPolicy(created.id, false, operationRuntime.runtimeKey)
-      : null
-    try {
-      const { usePermissionStore } = await import("@/stores/permissionStore")
-      assertExpectedRuntimeContext(operationRuntime)
-      await usePermissionStore.getState().setSessionAutoAccept(
-        created.id,
-        draftPermissionAutoAcceptEnabled,
-        { preservePendingDraftIntent: true },
-      )
-      if (pendingPolicyToken) {
-        clearPendingDraftPermissionPolicy(created.id, operationRuntime.runtimeKey, pendingPolicyToken)
+    // Native sessions approve every tool themselves; no policy to apply.
+    if (!nativeBackend) {
+      const pendingPolicyToken = !draftPermissionAutoAcceptEnabled
+        ? setPendingDraftPermissionPolicy(created.id, false, operationRuntime.runtimeKey)
+        : null
+      try {
+        const { usePermissionStore } = await import("@/stores/permissionStore")
+        assertExpectedRuntimeContext(operationRuntime)
+        await usePermissionStore.getState().setSessionAutoAccept(
+          created.id,
+          draftPermissionAutoAcceptEnabled,
+          { preservePendingDraftIntent: true },
+        )
+        if (pendingPolicyToken) {
+          clearPendingDraftPermissionPolicy(created.id, operationRuntime.runtimeKey, pendingPolicyToken)
+        }
+      } catch (error) {
+        if (!draftPermissionAutoAcceptEnabled) throw error
+        console.warn("Failed to apply draft permission auto-accept to new session:", error)
       }
-    } catch (error) {
-      if (!draftPermissionAutoAcceptEnabled) throw error
-      console.warn("Failed to apply draft permission auto-accept to new session:", error)
     }
     assertExpectedRuntimeContext(operationRuntime)
 
@@ -1213,6 +1265,20 @@ export function materializeOpenDraftSession(selection: {
   })
   draftMaterializations.set(materializationKey, { promise: materialization })
   return materialization
+}
+
+// A native CLI can only rewind to certain points; its refusal says which rule
+// applied, so the toast can tell the user what to pick instead.
+const nativeRevertRefusal = (error: NativeAgentsRequestError): I18nKey | null => {
+  if (error.code === "NATIVE_REVERT_FIRST_MESSAGE") return "chat.revert.toast.nativeFirstMessage"
+  if (error.code === "NATIVE_REVERT_MID_TURN") return "chat.revert.toast.nativeMidTurn"
+  return null
+}
+
+const showRevertToast = async (kind: "info" | "error", key: I18nKey) => {
+  const { toast } = await import("sonner")
+  const { useI18nStore, formatMessage } = await import("@/lib/i18n/store")
+  toast[kind](formatMessage(useI18nStore.getState().dictionary, key))
 }
 
 // ---------------------------------------------------------------------------
@@ -1902,7 +1968,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     agent?: string,
     attachments?: AttachedFile[],
     agentMentionName?: string,
-    additionalParts?: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' }>,
+    additionalParts?: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' | 'feature-instructions' }>,
     variant?: string,
     inputMode?: "normal" | "shell",
     options?: SendMessageOptions,
@@ -1928,12 +1994,19 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       ? useSessionGoalArmStore.getState().consume()
       : { armed: false, objectiveOverride: null }
     const goalArmed = goalArm.armed
+    // Codex reports no token usage, so a token budget could never end its goal.
+    const nativeBackend = sid ? nativeBackendOfSessionId(sid) : nativeBackendOfProviderId(providerID)
+    const goalTokenBudget = (): number | null => {
+      const uiState = useUIStore.getState()
+      return uiState.sessionGoalDefaultBudgetEnabled && nativeBackend !== "codex" ? uiState.sessionGoalDefaultBudget : null
+    }
     if (goalArmed) {
       // Teach the agent the goal protocol from turn one — without this it
-      // only learns about goal mode from the first server continuation.
-      const uiState = useUIStore.getState()
-      const budgetLine = uiState.sessionGoalDefaultBudgetEnabled
-        ? ` A token budget of ${uiState.sessionGoalDefaultBudget} tokens applies to this goal.`
+      // only learns about goal mode from the first server continuation. A
+      // native CLI gets it as instructions the conversation does not show.
+      const tokenBudget = goalTokenBudget()
+      const budgetLine = tokenBudget !== null
+        ? ` A token budget of ${tokenBudget} tokens applies to this goal.`
         : ""
       const goalIntro = wrapSystemReminder(
         "Goal mode is active for this session. The user message above defines the goal objective. "
@@ -1941,14 +2014,14 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         + "Progress is evaluated independently after each turn, so end every turn with a clear, factual statement of what is done, what was verified, and what remains."
         + budgetLine,
       )
-      additionalParts = [...(additionalParts ?? []), { text: goalIntro, synthetic: true }]
+      additionalParts = [...(additionalParts ?? []), { text: goalIntro, synthetic: true, systemContext: 'feature-instructions' }]
     }
     const applyArmedGoal = async (goalSessionId: string, goalDirectory: string | null | undefined) => {
       if (!goalArmed) return
-      const uiState = useUIStore.getState()
-      const tokenBudget = uiState.sessionGoalDefaultBudgetEnabled ? uiState.sessionGoalDefaultBudget : null
+      const tokenBudget = goalTokenBudget()
       let objective = goalArm.objectiveOverride?.trim() || content
-      if (!goalArm.objectiveOverride && content.startsWith("/")) {
+      // A native CLI runs its own slash commands, whose templates OpenChamber does not have.
+      if (!goalArm.objectiveOverride && content.startsWith("/") && !isNativeSessionId(goalSessionId)) {
         // Same directory-scoped resolution as routeMessage: the objective must
         // come from this directory's template, not a same-named one elsewhere.
         const knownCommands = selectCommandsForDirectory(useCommandsStore.getState(), goalDirectory)
@@ -1984,16 +2057,16 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       if (!createdDraftSession) throw new Error("Failed to create session")
       options?.onSessionMaterialized?.(createdDraftSession.sessionId)
 
-      const draftParts: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' }> | undefined = createdDraftSession.syntheticParts?.length
+      const draftParts: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' | 'feature-instructions' }> | undefined = createdDraftSession.syntheticParts?.length
         ? [...(additionalParts || []), ...createdDraftSession.syntheticParts]
         : additionalParts
       // The server decides what this session still owes and assembles it; the
-      // client only carries it and reports it delivered.
-      const draftKnowledge = await fetchSessionKnowledge(
-        createdDraftSession.directory,
-        createdDraftSession.sessionId,
-      )
-      const draftPrefixParts: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' }> =
+      // client only carries it and reports it delivered. Native sessions take
+      // no OpenChamber context.
+      const draftKnowledge = isNativeSessionId(createdDraftSession.sessionId)
+        ? { text: '', signature: '' }
+        : await fetchSessionKnowledge(createdDraftSession.directory, createdDraftSession.sessionId)
+      const draftPrefixParts: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' | 'feature-instructions' }> =
         draftKnowledge.text ? [{ text: draftKnowledge.text, synthetic: true, systemContext: 'session-knowledge' }] : []
       // Left undefined when nothing was added, as before: an empty array is not
       // the same as no additional parts to everything downstream.
@@ -2128,8 +2201,10 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     // Standing project context — pinned notes and plans, and the memory index.
     // Prepended so it reads as background before the message it accompanies,
     // and empty unless the session is actually missing it.
-    const knowledge = await fetchSessionKnowledge(currentSessionDirectory, targetSessionId || "")
-    const prefixParts: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' }> =
+    const knowledge = targetSessionId && isNativeSessionId(targetSessionId)
+      ? { text: '', signature: '' }
+      : await fetchSessionKnowledge(currentSessionDirectory, targetSessionId || "")
+    const prefixParts: Array<{ text: string; attachments?: AttachedFile[]; synthetic?: boolean; metadata?: ContextPartMetadata; systemContext?: 'session-knowledge' | 'feature-instructions' }> =
       knowledge.text ? [{ text: knowledge.text, synthetic: true, systemContext: 'session-knowledge' }] : []
     const partsWithPinnedContext = prefixParts.length > 0
       ? [...prefixParts, ...(additionalParts || [])]
@@ -2225,7 +2300,16 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     // Ensure the complete message range is present before applying the revert
     // marker. Reverted UI is derived from session.revert + stored messages.
     await refetchSessionMessages(sessionId)
-    await revertToMessageAction(sessionId, messageId)
+    try {
+      const outcome = await revertToMessageAction(sessionId, messageId)
+      if (outcome.conversationOnly) await showRevertToast("info", "chat.revert.toast.conversationOnly")
+      return true
+    } catch (error) {
+      const refusal = error instanceof NativeAgentsRequestError ? nativeRevertRefusal(error) : null
+      if (!refusal) throw error
+      await showRevertToast("error", refusal)
+      return false
+    }
   },
 
   // ---------------------------------------------------------------------------
@@ -2260,7 +2344,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       : "[No text]"
 
     // revertToMessage handles the redo stack push internally
-    await get().revertToMessage(sessionId, targetMessage.id)
+    if (!(await get().revertToMessage(sessionId, targetMessage.id))) return
 
     const { toast } = await import("sonner")
     const { useI18nStore, formatMessage } = await import("@/lib/i18n/store")
@@ -2294,7 +2378,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     const targetMessage = revertIndex >= 0 ? userMessages[revertIndex + 1] : undefined
 
     if (targetMessage) {
-      await get().revertToMessage(sessionId, targetMessage.id, { skipRedoPush: true })
+      if (!(await get().revertToMessage(sessionId, targetMessage.id, { skipRedoPush: true }))) return
       const { toast } = await import("sonner")
       const { useI18nStore, formatMessage } = await import("@/lib/i18n/store")
       const { dictionary } = useI18nStore.getState()
@@ -2324,6 +2408,11 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       toast.success(`Forked from ${existingSession.title}`)
     } catch (error) {
       console.error("Failed to fork session:", error)
+      const refusal = error instanceof NativeAgentsRequestError ? nativeRevertRefusal(error) : null
+      if (refusal) {
+        await showRevertToast("error", refusal)
+        return
+      }
       const { toast } = await import("sonner")
       toast.error("Failed to fork session")
     }

@@ -152,6 +152,21 @@ describe('collectSessionSubtreeIds', () => {
     expect(collectSessionSubtreeIds('root', [], true)).toEqual(['archived-child', 'leaf']);
   });
 
+  test('leaves the subagent sessions of a Claude Code session to its server, and keeps Codex child threads', () => {
+    const claudeRoot = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
+    const codexRoot = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
+    const codexChild = 'ncx_01a0d2a6-c000-7000-8000-000000000001';
+    useGlobalSessionsStore.getState().upsertSessions([
+      linked(claudeRoot, null),
+      linked(`${claudeRoot}_t_toolu_1`, claudeRoot),
+      linked(codexRoot, null),
+      linked(codexChild, codexRoot),
+    ]);
+
+    expect(collectSessionSubtreeIds(claudeRoot, [`${claudeRoot}_t_toolu_1`], true)).toEqual([]);
+    expect(collectSessionSubtreeIds(codexRoot, [], true)).toEqual([codexChild]);
+  });
+
   test('keeps descendants the surface already knows that the global cache has not seen', () => {
     useGlobalSessionsStore.getState().upsertSessions([linked('root', null), linked('cached-child', 'root')]);
 

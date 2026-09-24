@@ -32,6 +32,13 @@ import { matchesRankQuery, rankByQuery } from '@/lib/search/fuzzySearch';
 import { useContextStore } from '@/stores/contextStore';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import {
+    isProviderPickableForSession,
+    NATIVE_AGENT_NAMES,
+    nativeBackendOfProviderId,
+    nativeBackendOfSessionId,
+} from '@/lib/native-agents/ids';
+import { modelForSessionKind } from '@/lib/native-agents/session-model';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionMessages, useSessionRenderable } from '@/sync/sync-context';
 import { useSync } from '@/sync/use-sync';
@@ -439,14 +446,33 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
     // Separate state for agent selector to avoid conflict with model selector
     const [isAgentSelectorOpen, setIsAgentSelectorOpen] = React.useState(false);
-    const { favoriteModelsList, recentModelsList } = useModelLists();
+    const { favoriteModelsList: allFavoriteModels, recentModelsList: allRecentModels } = useModelLists();
+    const pickerSessionId = selection ? controlledSessionId : currentSessionId;
+    const pickerBackend = pickerSessionId ? nativeBackendOfSessionId(pickerSessionId) : null;
+    const isProviderPickable = React.useCallback(
+        (providerId: string) => isProviderPickableForSession(pickerSessionId, providerId),
+        [pickerSessionId],
+    );
+    const pickableProviders = React.useMemo(
+        () => providers.filter((provider) => isProviderPickable(provider.id)),
+        [isProviderPickable, providers],
+    );
+    const favoriteModelsList = React.useMemo(
+        () => allFavoriteModels.filter((entry) => isProviderPickable(entry.providerID)),
+        [allFavoriteModels, isProviderPickable],
+    );
+    const recentModelsList = React.useMemo(
+        () => allRecentModels.filter((entry) => isProviderPickable(entry.providerID)),
+        [allRecentModels, isProviderPickable],
+    );
     // Auto routing: the server resolves `openchamber/auto` into a real model per
     // send. Offered only while the server says it can honour it, in the main
     // composer and in controlled selections (BTW) alike.
     const autoReady = useRoutingStore(selectAutoReady);
-    const autoEntry = React.useMemo<ModelPickerEntry | null>(() => (autoReady
+    // Auto routes among OpenCode providers; a native CLI has its own models.
+    const autoEntry = React.useMemo<ModelPickerEntry | null>(() => (autoReady && !pickerBackend
         ? { kind: 'auto', providerID: AUTO_PROVIDER_ID, modelID: AUTO_MODEL_ID, model: { id: AUTO_MODEL_ID, name: t('chat.modelControls.autoModel') } }
-        : null), [autoReady, t]);
+        : null), [autoReady, pickerBackend, t]);
     const isAutoSelected = isAutoModel(currentProviderId, currentModelId);
 
     const { isMobile: deviceIsMobile } = useDeviceInfo();
@@ -558,9 +584,13 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         }
     }, [isAgentSelectorOpen, isCompact, selection]);
 
+    // A native CLI runs as a build agent or in plan mode, nothing else; a
+    // draft with a CLI's model picked is about to become such a session.
+    const agentBackend = pickerBackend ?? (currentProviderId ? nativeBackendOfProviderId(currentProviderId) : null);
     const selectableDesktopAgents = React.useMemo(() => {
-        return agents.filter((agent) => isPrimaryMode(agent.mode));
-    }, [agents]);
+        const primary = agents.filter((agent) => isPrimaryMode(agent.mode));
+        return agentBackend ? primary.filter((agent) => NATIVE_AGENT_NAMES.has(agent.name)) : primary;
+    }, [agentBackend, agents]);
 
     const sortedAndFilteredAgents = React.useMemo(() => {
         const sorted = [...selectableDesktopAgents].sort((a, b) => a.name.localeCompare(b.name));
@@ -596,7 +626,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
     const visibleProviders = React.useMemo(() => {
         const result: typeof providers = [];
-        for (const provider of providers) {
+        for (const provider of pickableProviders) {
             const providerModels = Array.isArray(provider.models) ? provider.models : [];
             const visibleModels = providerModels.filter((model: ProviderModel) => {
                 const modelId = typeof model?.id === 'string' ? model.id : '';
@@ -609,7 +639,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             }
         }
         return result;
-    }, [providers, hiddenModels]);
+    }, [pickableProviders, hiddenModels]);
 
     const matchesModelSearch = React.useCallback(
         (candidate: string, query: string) => matchesRankQuery([candidate], query),
@@ -979,6 +1009,27 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         saveSessionModelSelection,
     ]);
 
+    // A session keeps its kind: a native session runs on its CLI, an OpenCode
+    // session on an OpenCode model. When a model of the other kind is selected
+    // (prompts typed in a terminal record no model, and an empty session has
+    // nothing to restore), a fitting model stands in at once, at its default
+    // effort, so a send is not refused. It is not saved as the session's
+    // choice, so the restore above still wins once history arrives.
+    React.useEffect(() => {
+        if (selection || !currentSessionId) return;
+        const config = useConfigStore.getState();
+        const replacement = modelForSessionKind({
+            sessionId: currentSessionId,
+            selectedProviderId: config.currentProviderId,
+            providers,
+            defaultModel: config.settingsDefaultModel,
+        });
+        if (!replacement) return;
+        setProvider(replacement.providerId);
+        setModel(replacement.modelId);
+        setCurrentVariant(undefined);
+    }, [currentProviderId, currentSessionId, providers, selection, setCurrentVariant, setModel, setProvider]);
+
     React.useEffect(() => {
         if (!currentSessionId) {
             latestLoadedUserChoiceRestoreRef.current = null;
@@ -1289,12 +1340,12 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     ]);
 
     const handleCycleAgentFromModelPicker = React.useCallback((direction: 1 | -1) => {
-        const nextAgentName = getCycledPrimaryAgentName(agents, currentAgentName, direction);
+        const nextAgentName = getCycledPrimaryAgentName(selectableDesktopAgents, currentAgentName, direction);
         if (!nextAgentName) {
             return;
         }
         handleAgentChange(nextAgentName, { closeModelSelector: false });
-    }, [agents, currentAgentName, handleAgentChange]);
+    }, [currentAgentName, handleAgentChange, selectableDesktopAgents]);
 
     const getCycleAgentDirectionFromEvent = React.useCallback((event: KeyboardEvent | React.KeyboardEvent): 1 | -1 | null => {
         if (selection) return null;
@@ -2437,7 +2488,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 </button>
                             </div>}
                             <ModelPickerList
-                                providers={providers}
+                                providers={pickableProviders}
                                 favoriteModels={favoriteModelsList}
                                 recentModels={recentModelsList}
                                 modelsMetadata={useConfigStore.getState().modelsMetadata}

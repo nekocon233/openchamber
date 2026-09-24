@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { commandMatchesSearch, mergeCommandAutocompleteItems } from '../commandAutocompleteItems';
+import { commandMatchesSearch, mergeCommandAutocompleteItems, orderNativeCommandItems } from '../commandAutocompleteItems';
 
 interface Item {
   name: string;
@@ -153,5 +153,29 @@ describe('mergeCommandAutocompleteItems', () => {
 
   test('handles empty inputs', () => {
     expect(mergeCommandAutocompleteItems([], [], [])).toEqual([]);
+  });
+});
+
+describe('orderNativeCommandItems', () => {
+  const compact = { name: 'compact', description: 'Compact the session', isBuiltIn: true };
+  const btw = { name: 'btw', description: 'Ask a side question' };
+  const cli = [
+    { name: 'review-code', description: 'Review the changes' },
+    { name: 'compact', description: 'Free up context' },
+    { name: 'cost', description: 'Show the session cost' },
+    { name: 'btw', description: 'The CLI side question' },
+  ];
+
+  test('offers each composer command once, shadowing the CLI command of the same name, in name order', () => {
+    const ordered = orderNativeCommandItems([compact, btw], cli, '');
+    expect(ordered.map((item) => item.name)).toEqual(['btw', 'compact', 'cost', 'review-code']);
+    expect(ordered[0]).toBe(btw);
+    expect(ordered[1]).toBe(compact);
+  });
+
+  test('puts names starting with the query first', () => {
+    // 'review-code' matches too, fuzzily, after the names that start with the query.
+    expect(orderNativeCommandItems([compact], cli, 'co').map((item) => item.name)).toEqual(['compact', 'cost', 'review-code']);
+    expect(orderNativeCommandItems([compact], cli, 'rev').map((item) => item.name)).toEqual(['review-code']);
   });
 });

@@ -9,6 +9,10 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useModelLists } from '@/hooks/useModelLists';
 import { useI18n } from '@/lib/i18n';
 import { ModelPickerList, type ModelPickerEntry, type ModelPickerProvider } from '@/components/model-picker/ModelPickerList';
+import { isNativeProviderId } from '@/lib/native-agents/ids';
+
+// Each run is a new OpenCode session, which cannot run a native CLI's model.
+const isOpenCodeModel = (providerID: string): boolean => !isNativeProviderId(providerID);
 
 /** Chip height class - shared between chips and add button */
 const CHIP_HEIGHT_CLASS = 'h-7';
@@ -269,6 +273,7 @@ export const ModelMultiSelect: React.FC<ModelMultiSelectProps> = ({
                 onSearchQueryChange={setSearchQuery}
                 onSelect={handleSelectModel}
                 labels={labels}
+                isModelAllowed={isOpenCodeModel}
                 selectionCount={(entry) => modelCounts.get(`${entry.providerID}:${entry.modelID}`) || 0}
                 disabled={!canAddModel}
                 maxHeightClassName="flex-1"

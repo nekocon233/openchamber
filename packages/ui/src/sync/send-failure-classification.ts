@@ -6,6 +6,7 @@
  * use the real classifier instead of re-implementing a partial mirror of it.
  */
 
+import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
 import { isAmbiguousTransportFailure } from "@/lib/relay/transport-error"
 
 export function getErrorStatus(error: unknown): number | null {
@@ -20,6 +21,10 @@ export function getErrorStatus(error: unknown): number | null {
 }
 
 export function isAmbiguousSendFailure(error: unknown): boolean {
+  // OpenChamber's native routes answer a refusal with their own error code
+  // (CLI missing, session busy, ...). That answer says the prompt was not
+  // taken, whatever the status; a coded 503 is not a lost request.
+  if (error instanceof NativeAgentsRequestError && error.code !== null) return false
   // Authoritative first: the transport that lost the request says whether it
   // had already been dispatched. The text matching below only covers direct
   // fetch/HTTP failures, whose wording we do not control either — relay tunnel

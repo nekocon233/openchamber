@@ -20,6 +20,7 @@ import { clearSessionGoal, setSessionGoal } from '@/lib/sessionGoalActions';
 import { useI18n } from '@/lib/i18n';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { useUIStore } from '@/stores/useUIStore';
+import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 
 interface SessionGoalDialogProps {
   open: boolean;
@@ -76,7 +77,9 @@ export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: 
   const trimmedObjective = objective.trim();
   const savedObjective = goal?.objectiveFile ? (objectiveContent ?? '') : (goal?.objective ?? '');
   const objectiveChanged = trimmedObjective !== savedObjective;
-  const budgetValue = budgetEnabled ? tokenBudget : null;
+  // Codex reports no token usage, so a token budget could never end its goal.
+  const budgetSupported = nativeBackendOfSessionId(sessionId) !== 'codex';
+  const budgetValue = budgetEnabled && budgetSupported ? tokenBudget : null;
   const budgetChanged = budgetValue !== (goal?.tokenBudget ?? null);
   // A completed goal is read-only: remove it and arm a new one instead of
   // "saving" over the outcome (re-saving used to spawn a fresh active goal
@@ -99,13 +102,17 @@ export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: 
                 <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: sessionGoalStatusColor[goal.status] }} aria-hidden="true" />
                 <span className="typography-ui-label text-foreground">{t(sessionGoalStatusLabelKey[goal.status] as never)}</span>
                 <span className="typography-meta text-muted-foreground tabular-nums">
-                  {goal.tokenBudget
-                    ? t('chat.goal.usage.tokensWithBudget', {
-                        used: formatGoalTokens(goal.tokensUsed),
-                        budget: formatGoalTokens(goal.tokenBudget),
-                      })
-                    : t('chat.goal.usage.tokens', { used: formatGoalTokens(goal.tokensUsed) })}
-                  {' · '}
+                  {budgetSupported ? (
+                    <>
+                      {goal.tokenBudget
+                        ? t('chat.goal.usage.tokensWithBudget', {
+                            used: formatGoalTokens(goal.tokensUsed),
+                            budget: formatGoalTokens(goal.tokenBudget),
+                          })
+                        : t('chat.goal.usage.tokens', { used: formatGoalTokens(goal.tokensUsed) })}
+                      {' · '}
+                    </>
+                  ) : null}
                   {t('chat.goal.usage.turns', { turns: goal.turnsUsed })}
                 </span>
               </div>
@@ -148,37 +155,41 @@ export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: 
                 />
               </div>
 
-              <div className="flex items-center gap-8">
-                <div
-                  className="flex cursor-pointer items-center gap-2"
-                  role="button"
-                  tabIndex={0}
-                  aria-pressed={budgetEnabled}
-                  onClick={() => setBudgetEnabled((value) => !value)}
-                  onKeyDown={(event) => {
-                    if (event.key === ' ' || event.key === 'Enter') {
-                      event.preventDefault();
-                      setBudgetEnabled((value) => !value);
-                    }
-                  }}
-                >
-                  <Checkbox
-                    checked={budgetEnabled}
-                    onChange={setBudgetEnabled}
-                    ariaLabel={t('chat.goal.dialog.budgetLabel')}
-                  />
-                  <span className="typography-ui-label text-foreground">{t('chat.goal.dialog.budgetLabel')}</span>
+              {!budgetSupported ? (
+                <p className="typography-meta text-muted-foreground">{t('chat.goal.dialog.budgetUnavailableCodex')}</p>
+              ) : (
+                <div className="flex items-center gap-8">
+                  <div
+                    className="flex cursor-pointer items-center gap-2"
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={budgetEnabled}
+                    onClick={() => setBudgetEnabled((value) => !value)}
+                    onKeyDown={(event) => {
+                      if (event.key === ' ' || event.key === 'Enter') {
+                        event.preventDefault();
+                        setBudgetEnabled((value) => !value);
+                      }
+                    }}
+                  >
+                    <Checkbox
+                      checked={budgetEnabled}
+                      onChange={setBudgetEnabled}
+                      ariaLabel={t('chat.goal.dialog.budgetLabel')}
+                    />
+                    <span className="typography-ui-label text-foreground">{t('chat.goal.dialog.budgetLabel')}</span>
+                  </div>
+                  {budgetEnabled && (
+                    <NumberInput
+                      value={tokenBudget}
+                      onValueChange={(value) => setTokenBudget(typeof value === 'number' && value > 0 ? Math.floor(value) : 1000)}
+                      min={1000}
+                      max={100_000_000}
+                      step={50_000}
+                    />
+                  )}
                 </div>
-                {budgetEnabled && (
-                  <NumberInput
-                    value={tokenBudget}
-                    onValueChange={(value) => setTokenBudget(typeof value === 'number' && value > 0 ? Math.floor(value) : 1000)}
-                    min={1000}
-                    max={100_000_000}
-                    step={50_000}
-                  />
-                )}
-              </div>
+              )}
             </>
           )}
 

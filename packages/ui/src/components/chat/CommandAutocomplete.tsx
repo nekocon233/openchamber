@@ -10,11 +10,16 @@ import { useI18n } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { useMobileAutocompleteMaxHeight } from './useMobileAutocompleteMaxHeight';
-import { commandMatchesSearch, mergeCommandAutocompleteItems } from './commandAutocompleteItems';
+import { commandMatchesSearch, mergeCommandAutocompleteItems, orderNativeCommandItems } from './commandAutocompleteItems';
 import { useGuestCommands } from '@/hooks/useGuestSurfaces';
 import { AutocompleteRowTooltip } from './composer/ui/AutocompleteRowTooltip';
+import type { NativeBackend } from '@/lib/native-agents/ids';
+import { useNativeCommands } from '@/lib/native-agents/useNativeCommands';
 
-type CommandSource = 'openchamber' | 'opencode' | 'skill' | 'extension';
+type CommandSource = 'openchamber' | 'opencode' | 'skill' | 'extension' | 'native';
+
+// Product names, shown as the badge of a native CLI's own commands.
+const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } satisfies Record<NativeBackend, string>;
 
 export interface CommandInfo {
   id: string;
@@ -30,6 +35,8 @@ export interface CommandInfo {
   scope?: string;
   /** Name of the extension that contributed the command; shown as its badge. */
   extensionName?: string;
+  /** Name of the native CLI whose command this is; shown as its badge. */
+  cliName?: string;
 }
 
 // Every name the composer runs itself; an extension command with one of
@@ -66,6 +73,11 @@ interface CommandAutocompleteProps {
   onCommandSelect: (command: CommandInfo) => void;
   onClose: () => void;
   style?: React.CSSProperties;
+  /**
+   * The native CLI the composer sends to, if any. Its own commands replace
+   * OpenCode's, and `/compact` runs the CLI's compaction.
+   */
+  nativeBackend?: NativeBackend | null;
 }
 
 export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, CommandAutocompleteProps>(({
@@ -73,6 +85,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   onCommandSelect,
   onClose,
   style,
+  nativeBackend = null,
 }, ref) => {
   const { t } = useI18n();
   const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
@@ -94,6 +107,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   const loadSkillsForDirectory = useSkillsStore((s) => s.loadSkills);
   const refreshCommands = React.useCallback(() => loadCommandsForDirectory(effectiveDirectory), [effectiveDirectory, loadCommandsForDirectory]);
   const refreshSkills = React.useCallback(() => loadSkillsForDirectory(effectiveDirectory), [effectiveDirectory, loadSkillsForDirectory]);
+  const nativeCommands = useNativeCommands(nativeBackend, nativeBackend ? effectiveDirectory ?? null : null);
   const [selectedIndex, setSelectedIndex] = React.useState(0);
   const selectedIndexRef = React.useRef(0);
   const keyboardNavigationRef = React.useRef(false);
@@ -124,9 +138,10 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
 
   React.useEffect(() => {
     // Force refresh to get latest project context when mounting
+    if (nativeBackend) return;
     void refreshCommands();
     void refreshSkills();
-  }, [refreshCommands, refreshSkills]);
+  }, [nativeBackend, refreshCommands, refreshSkills]);
 
   const reservedCommandNames = React.useMemo(() => {
     const names = new Set<string>(LOCAL_COMMAND_NAMES);
@@ -137,6 +152,34 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   const guestCommands = useGuestCommands(reservedCommandNames);
 
   React.useEffect(() => {
+    if (nativeBackend) {
+      const cliName = CLI_NAMES[nativeBackend];
+      const cliCommands = (nativeCommands.status === 'ready' ? nativeCommands.commands : []).map((command): CommandInfo => ({
+        id: `native:${command.name}`,
+        name: command.name,
+        source: 'native',
+        description: command.description || undefined,
+        cliName,
+      }));
+      // The composer's own commands that work on a native session.
+      const localCommands: CommandInfo[] = [
+        { id: 'native:compact', name: 'compact', source: 'openchamber', description: t('chat.commandAutocomplete.command.compactDescription'), isBuiltIn: true },
+        ...(hasSession
+          ? [
+              { id: 'openchamber:undo', name: 'undo', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.undoDescription'), isBuiltIn: true },
+              { id: 'openchamber:redo', name: 'redo', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.redoDescription'), isBuiltIn: true },
+              { id: 'openchamber:timeline', name: 'timeline', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.timelineDescription'), isBuiltIn: true },
+              { id: 'openchamber:btw', name: 'btw', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.btwDescription'), isOpenChamber: true },
+            ]
+          : []),
+        ...(canUseReviewHandoffFlow
+          ? [{ id: 'openchamber:handoff-review', name: 'handoff-review', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.handoffReviewDescription'), isOpenChamber: true }]
+          : []),
+      ];
+      setCommands(orderNativeCommandItems(localCommands, cliCommands, searchQuery));
+      setLoading(nativeCommands.status === 'loading');
+      return;
+    }
     const loadCommands = async () => {
       setLoading(true);
       try {
@@ -321,7 +364,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
     };
 
     loadCommands();
-  }, [searchQuery, hasSession, canStartSessionCommand, canUseReviewHandoffFlow, commandsWithMetadata, guestCommands, skills, t]);
+  }, [searchQuery, hasSession, canStartSessionCommand, canUseReviewHandoffFlow, commandsWithMetadata, guestCommands, skills, t, nativeBackend, nativeCommands]);
 
   React.useEffect(() => {
     setSelectedIndex(0);
@@ -418,9 +461,8 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
               const isSystem = command.isBuiltIn;
               const isOpenChamberBadge = command.isOpenChamber;
               return (
-                <AutocompleteRowTooltip description={command.description} active={!isMobile && index === selectedIndex}>
+                <AutocompleteRowTooltip key={command.id} description={command.description} active={!isMobile && index === selectedIndex}>
                 <div
-                  key={command.id}
                   ref={(el) => { itemRefs.current[index] = el; }}
                   className={cn(
                     "flex gap-2 px-3 py-2 cursor-pointer rounded-lg",
@@ -495,9 +537,9 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
                           {t('chat.commandAutocomplete.badge.command')}
                         </span>
                       )}
-                      {command.extensionName ? (
+                      {command.extensionName || command.cliName ? (
                         <span className={NEUTRAL_BADGE_CLASS}>
-                          {command.extensionName}
+                          {command.extensionName ?? command.cliName}
                         </span>
                       ) : isOpenChamberBadge ? (
                         <span className={NEUTRAL_BADGE_CLASS}>

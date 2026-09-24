@@ -3,6 +3,8 @@ import type { Message, Part, Session } from '@opencode-ai/sdk/v2';
 import type { StartBtwInput } from './btw';
 
 let forkSessionImpl: (sessionId: string, messageId?: string, directory?: string | null) => Promise<Session>;
+let forkNativeSessionImpl: (sessionId: string, beforeMessageId: string | null, directory: string | null | undefined) => Promise<Session>;
+let readNativeNewestMessageIdImpl: (sessionId: string, directory: string | null | undefined) => Promise<string | null>;
 let getSessionMessagesImpl: (id: string, limit?: number, directory?: string | null) => Promise<Array<{ info: Message; parts: Part[] }>>;
 let sendMessageImpl: (...args: unknown[]) => Promise<unknown>;
 let deleteSessionImpl: (sessionId: string) => Promise<boolean>;
@@ -19,6 +21,7 @@ const currentSessionSwitches: string[] = [];
 const metadataPatches: Array<{ sessionId: string; result: Record<string, unknown> }> = [];
 const parentSyncMessages: Message[] = [];
 const sessionMessageReads: string[] = [];
+let parentSyncStatus: { type: 'idle' } | { type: 'busy' } | undefined;
 
 mock.module('@/lib/opencode/client', () => ({
   opencodeClient: {
@@ -34,6 +37,10 @@ mock.module('@/sync/session-actions', () => ({
   waitForConnectionOrThrow: () => Promise.resolve(),
   captureSessionActionRuntime: () => ({}),
   deleteSession: (sessionId: string) => deleteSessionImpl(sessionId),
+  forkNativeSession: (sessionId: string, beforeMessageId: string | null, directory: string | null | undefined) =>
+    forkNativeSessionImpl(sessionId, beforeMessageId, directory),
+  readNativeNewestMessageId: (sessionId: string, directory: string | null | undefined) =>
+    readNativeNewestMessageIdImpl(sessionId, directory),
   updateSessionTitle: (sessionId: string, title: string) => updateSessionTitleImpl(sessionId, title),
   patchSessionMetadata: (
     sessionId: string,
@@ -55,6 +62,7 @@ mock.module('@/stores/useGlobalSessionsStore', () => ({
 mock.module('@/sync/sync-refs', () => ({
   registerSessionDirectory: (sessionId: string, directory: string) => { registeredDirectories.push(`${sessionId}:${directory}`); },
   getSyncMessages: () => parentSyncMessages,
+  getSyncSessionStatus: () => parentSyncStatus,
   getSyncChildStores: () => ({
     children: new Map([['/project', {
       getState: () => ({ session: childStoreSessions }),
@@ -63,7 +71,7 @@ mock.module('@/sync/sync-refs', () => ({
   }),
 }));
 
-const { preparePendingBtwSend, btwSessionTitle, startBtwSession, destroyBtwSession, promoteBtwSession, filterBtwTailMessages, findLastCompletedAssistantMessageID, BTW_BOUNDARY_INSTRUCTION, BTW_PROMOTION_NOTICE, buildBtwSyntheticTexts } =
+const { preparePendingBtwSend, btwSessionTitle, startBtwSession, destroyBtwSession, promoteBtwSession, filterBtwTailMessages, findLastCompletedAssistantMessageID, findNativeBtwForkPoint, BTW_BOUNDARY_INSTRUCTION, BTW_PROMOTION_NOTICE, buildBtwSyntheticTexts } =
   await import('@/lib/btw');
 const { useBtwStore } = await import('@/stores/useBtwStore');
 const { useSelectionStore } = await import('@/sync/selection-store');
@@ -91,6 +99,35 @@ const assistantMessage = (id: string, completed?: number) =>
 const userMessage = (id: string) =>
   ({ id, sessionID: 'parent-1', role: 'user', time: { created: 1 } }) as Message;
 
+const NATIVE_PARENT = 'ncl_7d0c1a52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
+const NATIVE_FORK = 'ncl_8e1d2b63-3a2a-4d4b-8e9f-1b8c7d6e5f40';
+
+const nativePrompt = (id: string): Message => ({
+  id,
+  sessionID: NATIVE_PARENT,
+  role: 'user',
+  time: { created: 1 },
+  agent: 'build',
+  model: { providerID: 'claude-native', modelID: 'opus' },
+});
+
+const nativeReply = (id: string, reply: { completed?: number; finish?: string; aborted?: boolean }): Message => ({
+  id,
+  sessionID: NATIVE_PARENT,
+  role: 'assistant',
+  parentID: 'ncl_u_prompt',
+  time: { created: 1, completed: reply.completed },
+  error: reply.aborted ? { name: 'MessageAbortedError', data: { message: 'Interrupted' } } : undefined,
+  modelID: 'opus',
+  providerID: 'claude-native',
+  mode: 'build',
+  agent: 'build',
+  path: { cwd: '/project', root: '/project' },
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  finish: reply.finish,
+});
+
 const startInput = {
   parentSessionId: 'parent-1',
   question: 'wtf is kafka',
@@ -111,6 +148,9 @@ beforeEach(() => {
   sessionMessageReads.length = 0;
   useBtwStore.setState({ byParent: {} });
   forkSessionImpl = () => Promise.reject(new Error('no forkSession stub'));
+  forkNativeSessionImpl = () => Promise.reject(new Error('no forkNativeSession stub'));
+  readNativeNewestMessageIdImpl = () => Promise.resolve('ncl_a_boundary');
+  parentSyncStatus = undefined;
   getSessionMessagesImpl = () => Promise.resolve([record('msg-boundary')]);
   sendMessageImpl = () => Promise.resolve();
   deleteSessionImpl = () => Promise.resolve(true);
@@ -159,6 +199,38 @@ describe('findLastCompletedAssistantMessageID', () => {
 
   test('a session with no completed assistant turn has no fork point', () => {
     expect(findLastCompletedAssistantMessageID([userMessage('msg-1')])).toBe(null);
+  });
+});
+
+describe('findNativeBtwForkPoint', () => {
+  test('an idle parent forks whole', () => {
+    expect(findNativeBtwForkPoint([nativePrompt('u1'), nativeReply('a1', { completed: 2, finish: 'stop' })], false)).toBe(null);
+  });
+
+  test('a busy parent forks before the running turn, past its tool calls and steered prompts', () => {
+    const messages = [
+      nativePrompt('u1'),
+      nativeReply('a1', { completed: 2, finish: 'stop' }),
+      nativePrompt('u2'),
+      nativeReply('a2', { completed: 3, finish: 'tool-calls' }),
+      nativePrompt('u3'),
+      nativeReply('a3', {}),
+    ];
+    expect(findNativeBtwForkPoint(messages, true)).toBe('u2');
+  });
+
+  test('an interrupted reply ended its turn even though it stopped on a tool call', () => {
+    const messages = [
+      nativePrompt('u1'),
+      nativeReply('a1', { completed: 2, finish: 'tool-calls', aborted: true }),
+      nativePrompt('u2'),
+      nativeReply('a2', {}),
+    ];
+    expect(findNativeBtwForkPoint(messages, true)).toBe('u2');
+  });
+
+  test('a first turn still running forks before its prompt', () => {
+    expect(findNativeBtwForkPoint([nativePrompt('u1'), nativeReply('a1', {})], true)).toBe('u1');
   });
 });
 
@@ -230,7 +302,7 @@ describe('startBtwSession', () => {
 
     await startBtwSession(startInput);
 
-    expect(sentParts).toEqual([[{ text: BTW_BOUNDARY_INSTRUCTION, synthetic: true }]]);
+    expect(sentParts).toEqual([[{ text: BTW_BOUNDARY_INSTRUCTION, synthetic: true, systemContext: 'feature-instructions' }]]);
   });
 
   test('the first question keeps inline comment context', async () => {
@@ -260,7 +332,7 @@ describe('startBtwSession', () => {
     await startBtwSession({ ...startInput, additionalParts: [commentPart] });
 
     expect(sentParts).toEqual([
-      { text: BTW_BOUNDARY_INSTRUCTION, synthetic: true },
+      { text: BTW_BOUNDARY_INSTRUCTION, synthetic: true, systemContext: 'feature-instructions' },
       commentPart,
     ]);
   });
@@ -296,6 +368,46 @@ describe('startBtwSession', () => {
     await expect(startBtwSession(startInput)).rejects.toThrow('messages failed');
     expect(deleted).toEqual(['fork-1']);
     expect(metadataPatches).toEqual([]);
+  });
+
+  test('a native parent forks in its CLI before the running turn and marks the boundary the fork holds', async () => {
+    parentSyncStatus = { type: 'busy' };
+    parentSyncMessages.push(nativePrompt('u1'), nativeReply('a1', { completed: 2, finish: 'stop' }), nativePrompt('u2'), nativeReply('a2', {}));
+    const forks: Array<[string, string | null, string | null | undefined]> = [];
+    forkNativeSessionImpl = (sessionId, beforeMessageId, directory) => {
+      forks.push([sessionId, beforeMessageId, directory]);
+      return Promise.resolve(makeSession(NATIVE_FORK, '/project'));
+    };
+    let sentParts: unknown;
+    sendMessageImpl = (...args) => {
+      sentParts = args[6];
+      return Promise.resolve();
+    };
+
+    // A native CLI approves everything itself: the permission store is never asked.
+    await startBtwSession({ ...startInput, parentSessionId: NATIVE_PARENT, providerID: 'claude-native', modelID: 'opus', permissionAutoAccept: true });
+
+    expect(forks).toEqual([[NATIVE_PARENT, 'u2', '/project']]);
+    expect(sessionMessageReads).toEqual([]);
+    expect(metadataPatches[0]).toEqual({
+      sessionId: NATIVE_FORK,
+      result: { openchamber: { kind: 'btw', originalSessionID: NATIVE_PARENT, btwBoundaryMessageID: 'ncl_a_boundary' } },
+    });
+    expect(sentParts).toEqual([{ text: BTW_BOUNDARY_INSTRUCTION, synthetic: true, systemContext: 'feature-instructions' }]);
+  });
+
+  test('an idle native parent forks its whole conversation', async () => {
+    parentSyncStatus = { type: 'idle' };
+    parentSyncMessages.push(nativePrompt('u1'), nativeReply('a1', { completed: 2, finish: 'stop' }));
+    const forkPoints: Array<string | null> = [];
+    forkNativeSessionImpl = (_sessionId, beforeMessageId) => {
+      forkPoints.push(beforeMessageId);
+      return Promise.resolve(makeSession(NATIVE_FORK, '/project'));
+    };
+
+    await startBtwSession({ ...startInput, parentSessionId: NATIVE_PARENT, providerID: 'claude-native', modelID: 'opus' });
+
+    expect(forkPoints).toEqual([null]);
   });
 
   test('rejects a second creation for the same parent before it forks', async () => {

@@ -244,6 +244,9 @@ and the send path reading the same grammar.
   send path. A local command is never queued as text: queueing runs it
   instead. A failed prompt command restores everything it consumed: text,
   confirmed mentions, files, comment drafts, and pending synthetic context.
+  A native CLI session keeps only the commands `isNativeLocalCommand` names;
+  the rest are the CLI's (`packages/ui/src/sync/DOCUMENTATION.md`, Native CLI
+  sessions).
 - `state/useComposerDraft.ts` — a draft belongs to a (runtime, directory,
   session) identity. Writes are debounced while typing but forced at every edge
   where the page may stop running, because a pending timer is not a saved

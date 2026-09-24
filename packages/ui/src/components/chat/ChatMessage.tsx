@@ -37,6 +37,7 @@ import { areOptionalRenderRelevantMessagesEqual, areRenderRelevantMessagesEqual,
 import type { ReviewTransferDirection } from '@/lib/reviewFlow';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/i18n';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { getContextObligatoryMessages } from '@/lib/contextObligatoryMessages';
 import { setContextObligatoryMessage } from '@/sync/session-actions';
@@ -160,7 +161,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     const { t } = useI18n();
     const { isMobile, isTablet, hasTouchInput } = useDeviceInfo();
     const alwaysShowMessageActions = isMobile || isTablet;
-    const canPinIntoContext = !isVSCodeRuntime();
+    // Pins ride along OpenCode prompts as OpenChamber context; a native CLI
+    // session gets none of that context, so there is nothing to pin into.
+    const canPinIntoContext = !isVSCodeRuntime() && !isNativeSessionId(message.info.sessionID);
     const { currentTheme } = useThemeSystem();
     const messageContainerRef = React.useRef<HTMLDivElement | null>(null);
 

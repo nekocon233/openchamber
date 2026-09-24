@@ -16,6 +16,7 @@ import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { selectProvidersForDirectory, useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { ModelPickerList, type ModelPickerEntry, type ModelPickerProvider } from '@/components/model-picker/ModelPickerList';
+import { isNativeProviderId } from '@/lib/native-agents/ids';
 
 interface ModelSelectorProps {
     providerId: string;
@@ -24,6 +25,12 @@ interface ModelSelectorProps {
     className?: string;
     allowedProviderIds?: string[];
     isModelAllowed?: (providerId: string, modelId: string) => boolean;
+    /**
+     * Offer the native CLIs' models too. Only a setting for the model a new
+     * session starts with may: every other model picked here runs through
+     * OpenCode, which cannot run a CLI.
+     */
+    allowNativeModels?: boolean;
     placeholder?: string;
     tooltipsEnabled?: boolean;
     dropdownPortalToBody?: boolean;
@@ -44,6 +51,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     className,
     allowedProviderIds,
     isModelAllowed,
+    allowNativeModels = false,
     placeholder,
     tooltipsEnabled = true,
     dropdownPortalToBody = false,
@@ -119,6 +127,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         return (typeof model?.name === 'string' && model.name.trim()) || modelId;
     }, [modelId, placeholder, providerId, providers, t]);
 
+    const allowModel = React.useCallback((pickedProviderId: string, pickedModelId: string) => (
+        (allowNativeModels || !isNativeProviderId(pickedProviderId))
+        && (isModelAllowed?.(pickedProviderId, pickedModelId) ?? true)
+    ), [allowNativeModels, isModelAllowed]);
+
     const picker = (
         <ModelPickerList
             providers={providers}
@@ -133,7 +146,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             selectedModel={selectedModel}
             hiddenModels={hiddenModels}
             allowedProviderIds={allowedProviderIds}
-            isModelAllowed={isModelAllowed}
+            isModelAllowed={allowModel}
             includeNotSelected
             onSelectNone={handleSelectNone}
             onEscape={closePicker}

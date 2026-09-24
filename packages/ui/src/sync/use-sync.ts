@@ -23,6 +23,8 @@ import { isMobileSurfaceRuntime } from "@/lib/runtimeSurface"
 import { clearSessionPrefetch } from "./session-prefetch-cache"
 import { getSessionMaterializationStatus } from "./materialization"
 import { getRuntimeKey } from "@/lib/runtime-switch"
+import { isNativeSessionId } from "@/lib/native-agents/ids"
+import { readNativeSession } from "./native-directory-snapshots"
 import type { SessionMessageLoader } from "./session-message-loader"
 
 const INITIAL_MESSAGE_PAGE_SIZE = 50
@@ -319,13 +321,15 @@ export function useSync() {
           shouldFetchSession
             ? (async () => {
                 try {
-                  const result = await retry(async () => {
-                    const response = await sdk.session.get({ sessionID, directory: targetDirectory })
-                    assertSdkSuccess(response, "session.get")
-                    return response
-                  })
-                  if (result.data && !isStale()) {
-                    const nextSession = stripSessionDiffSnapshots(result.data)
+                  const session = isNativeSessionId(sessionID)
+                    ? await readNativeSession(sessionID, targetDirectory)
+                    : (await retry(async () => {
+                      const response = await sdk.session.get({ sessionID, directory: targetDirectory })
+                      assertSdkSuccess(response, "session.get")
+                      return response
+                    })).data
+                  if (session && !isStale()) {
+                    const nextSession = stripSessionDiffSnapshots(session)
                     const s = targetStore.getState()
                     if (
                       nextSession.time?.archived

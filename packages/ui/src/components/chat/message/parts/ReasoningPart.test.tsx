@@ -39,6 +39,7 @@ const runtimeApis: RuntimeAPIs = {
   get tools() { return unavailable(); },
   get sidebarState() { return unavailable(); },
   get followUpQueue() { return unavailable(); },
+  get nativeAgents() { return unavailable(); },
 };
 const sdk = createOpencodeClient({
   baseUrl: 'http://localhost',

@@ -9,6 +9,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ModelSelector } from '@/components/sections/agents/ModelSelector';
+import { isNativeProviderId } from '@/lib/native-agents/ids';
 import { AgentSelector } from '@/components/sections/commands/AgentSelector';
 import { ThinkingPill } from '@/components/session/ThinkingPill';
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -55,7 +56,10 @@ export function ForkSessionDialog(props: ForkSessionDialogProps) {
   const loadProviders = useConfigStore((state) => state.loadProviders);
   const loadConfigAgents = useConfigStore((state) => state.loadAgents);
   const loadAgentsStoreAgents = useAgentsStore((state) => state.loadAgents);
-  const providers = useConfigStore((state) => state.providers);
+  // The session this starts is OpenCode's, which cannot run a CLI's model; a
+  // native session's current model falls back to OpenCode's first.
+  const allProviders = useConfigStore((state) => state.providers);
+  const providers = React.useMemo(() => allProviders.filter((provider) => !isNativeProviderId(provider.id)), [allProviders]);
   const currentProviderID = useConfigStore((state) => state.currentProviderId);
   const currentModelID = useConfigStore((state) => state.currentModelId);
   const currentVariant = useConfigStore((state) => state.currentVariant || '');

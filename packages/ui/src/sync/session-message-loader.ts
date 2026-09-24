@@ -1,4 +1,4 @@
-import type { Message, OpencodeClient, Part, SessionMessage } from "@opencode-ai/sdk/v2/client"
+import type { Message, OpencodeClient, Part, Session, SessionMessage } from "@opencode-ai/sdk/v2/client"
 import type { ChildStoreManager, DirectoryStore } from "./child-store"
 import { retry } from "./retry"
 import { mergeOptimisticPage, type OptimisticItem } from "./optimistic"
@@ -24,6 +24,10 @@ import { startSessionLoadPerformanceEvent } from "./session-load-performance"
 import { convertSessionNextMessages } from "./v2-session-records"
 import { opencodeClient } from "@/lib/opencode/client"
 import { getRuntimeKey, RuntimeContextChangedError } from "@/lib/runtime-switch"
+import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
+import type { NativeMessagePage } from "@/lib/api/types"
+import { NativeAgentsUnsupportedError } from "@/lib/native-agents/errors"
+import { isNativeSessionId } from "@/lib/native-agents/ids"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 const INITIAL_MESSAGE_PAGE_SIZE = 50
@@ -97,6 +101,23 @@ type LoadSessionNextMessages = (params: {
   cursor?: string
   expectedRuntimeKey: string
 }) => Promise<{ messages: SessionMessage[]; cursor?: string }>
+
+type LoadNativeMessages = (params: {
+  sessionID: string
+  directory: string
+  limit: number
+  before?: string
+  expectedRuntimeKey: string
+}) => Promise<NativeMessagePage>
+
+// Native CLI sessions read their history from the OpenChamber server, which
+// projects the CLI's own transcript; OpenCode has never heard of them.
+const loadNativeMessagesFromRuntime: LoadNativeMessages = (params) => {
+  if (getRuntimeKey() !== params.expectedRuntimeKey) throw new RuntimeContextChangedError()
+  const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents
+  if (!nativeAgents?.supported) throw new NativeAgentsUnsupportedError()
+  return nativeAgents.loadMessages(params.sessionID, params.directory, { limit: params.limit, before: params.before })
+}
 
 const COMBINED_CURSOR_PREFIX = "openchamber-message-cursor:"
 
@@ -236,6 +257,7 @@ export class SessionMessageLoader {
       if (getRuntimeKey() !== params.expectedRuntimeKey) throw new RuntimeContextChangedError()
       return opencodeClient.loadSessionNextMessages(params)
     },
+    private readonly loadNativeMessages: LoadNativeMessages = loadNativeMessagesFromRuntime,
   ) {
     this.sdk = configuration.sdk
     this.runtimeKey = configuration.runtimeKey
@@ -780,6 +802,7 @@ export class SessionMessageLoader {
     caller: "initial-page" | "older" | "refresh" = "initial-page",
     performance?: LoadPerformanceDetails,
   ): Promise<FetchedPage> {
+    if (isNativeSessionId(target.sessionID)) return this.fetchNativePage(target, limit, before, caller, performance)
     const finishPagePerformance = startSessionLoadPerformanceEvent({
       operation: "session-messages.page",
       caller,
@@ -885,6 +908,71 @@ export class SessionMessageLoader {
         performance.recordCount += recordCount
       }
     }
+  }
+
+  private async fetchNativePage(
+    target: SessionMessageTarget,
+    limit: number,
+    before: string | undefined,
+    caller: "initial-page" | "older" | "refresh",
+    performance?: LoadPerformanceDetails,
+  ): Promise<FetchedPage> {
+    const finishPagePerformance = startSessionLoadPerformanceEvent({
+      operation: "session-messages.page",
+      caller,
+      requestLimit: limit,
+      cursorPresent: before !== undefined,
+    })
+    const requestRuntimeKey = this.runtimeKey
+    let attempts = 0
+    let recordCount = 0
+    try {
+      const page = await retry(() => {
+        attempts += 1
+        if (this.runtimeKey !== requestRuntimeKey) throw new Error("Session message loader runtime changed")
+        return this.loadNativeMessages({
+          sessionID: target.sessionID,
+          directory: target.directory,
+          limit,
+          before,
+          expectedRuntimeKey: requestRuntimeKey,
+        })
+      })
+      this.holdNativeChildSessions(target.directory, page.childSessions)
+      const session = sortMessagesChronologically(page.records.map((record) => record.info))
+      const partsByMessageID = new Map(page.records.map((record) => [record.info.id, filterIdentifiedParts(record.parts)] as const))
+      recordCount = session.length
+      finishPagePerformance("complete", { retryCount: Math.max(0, attempts - 1), recordCount })
+      return { session, partsByMessageID, cursor: page.cursor ?? undefined, complete: page.complete }
+    } catch (error) {
+      finishPagePerformance("error", { retryCount: Math.max(0, attempts - 1), recordCount })
+      throw error
+    } finally {
+      if (performance) {
+        performance.retryCount += Math.max(0, attempts - 1)
+        performance.recordCount += recordCount
+      }
+    }
+  }
+
+  // Subagent sessions of a native session are not listed by its backend; its
+  // history names them. They join the directory's session list so the task
+  // part can open them.
+  private holdNativeChildSessions(directory: string, childSessions: Session[]): void {
+    if (childSessions.length === 0) return
+    const store = this.childStores.ensureChild(directory, { bootstrap: false })
+    const current = store.getState().session
+    const byId = new Map(current.map((session) => [session.id, session] as const))
+    let changed = false
+    for (const child of childSessions) {
+      const existing = byId.get(child.id)
+      if (existing && existing.time.updated >= child.time.updated) continue
+      byId.set(child.id, child)
+      changed = true
+    }
+    if (!changed) return
+    const sessions = [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    store.setState({ session: sessions, limit: Math.max(sessions.length, store.getState().limit) })
   }
 
   private commitPage(

@@ -5,11 +5,12 @@ import { withBtwSessionLink, withBtwSessionMarker, withoutBtwSessionLink, withou
 import { useBtwStore } from '@/stores/useBtwStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSelectionStore } from '@/sync/selection-store';
-import { getSyncChildStores, getSyncMessages, registerSessionDirectory } from '@/sync/sync-refs';
+import { getSyncChildStores, getSyncMessages, getSyncSessionStatus, registerSessionDirectory } from '@/sync/sync-refs';
 import { Binary } from '@/sync/binary';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
 
 /**
  * `/btw <question>`: fork the main session into a temporary session and send
@@ -23,6 +24,10 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
  * The parent session's metadata carries `openchamber.btwSessionID` (see
  * `sessionBtwMetadata`), so the panel belongs to the parent session alone,
  * follows the user as they navigate between sessions, and survives reloads.
+ *
+ * A native CLI session forks in its CLI's own store, and the fork is a CLI
+ * session too: it gets the boundary as instructions and approves everything
+ * itself.
  */
 export type StartBtwInput = {
   parentSessionId: string;
@@ -40,6 +45,7 @@ export type StartBtwInput = {
     attachments?: AttachedFile[];
     synthetic?: boolean;
     metadata?: ContextPartMetadata;
+    systemContext?: 'session-knowledge' | 'feature-instructions';
   }>;
 };
 
@@ -104,9 +110,12 @@ export const buildBtwSyntheticTexts = (state: {
   return state.isPromotedBtwSession ? [BTW_PROMOTION_NOTICE] : [];
 };
 
-/** The boundary as an `additionalParts` entry for `sendMessage`. */
-const btwBoundaryParts = (): Array<{ text: string; synthetic: true }> =>
-  [{ text: BTW_BOUNDARY_INSTRUCTION, synthetic: true }];
+/**
+ * The boundary as an `additionalParts` entry for `sendMessage`. A native CLI
+ * session gets it as instructions, since it takes no synthetic parts.
+ */
+const btwBoundaryParts = (): Array<{ text: string; synthetic: true; systemContext: 'feature-instructions' }> =>
+  [{ text: BTW_BOUNDARY_INSTRUCTION, synthetic: true, systemContext: 'feature-instructions' }];
 
 /**
  * The parent's last assistant turn that actually finished.
@@ -128,6 +137,30 @@ export const findLastCompletedAssistantMessageID = (messages: readonly Message[]
     if (message.time.completed !== undefined) return message.id;
   }
   return null;
+};
+
+/**
+ * Where a native CLI session forks for `/btw`: before the prompt of the turn
+ * the parent is still running, or `null` (the whole conversation) when the
+ * parent is idle.
+ *
+ * A CLI forks before a user message, and Codex only before one that starts a
+ * turn, so the point is the first prompt after the last assistant message that
+ * ended its turn. A reply that stopped on a tool call has not.
+ */
+export const findNativeBtwForkPoint = (messages: readonly Message[], parentBusy: boolean): string | null => {
+  if (!parentBusy) return null;
+  let forkPoint: string | null = null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) continue;
+    if (message.role === 'user') {
+      forkPoint = message.id;
+      continue;
+    }
+    if (message.time.completed !== undefined && (message.error !== undefined || message.finish !== 'tool-calls')) break;
+  }
+  return forkPoint;
 };
 
 export const btwSessionTitle = (question: string): string => `btw: ${question}`;
@@ -189,15 +222,19 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
     await sessionActions.waitForConnectionOrThrow();
     if (getRuntimeKey() !== expectedRuntimeKey) throw new Error('runtime changed');
     // Fork at the parent's last completed assistant turn rather than at HEAD,
-    // so a `/btw` typed mid-turn does not inherit a half-finished one.
-    const forkPointMessageID = findLastCompletedAssistantMessageID(
-      getSyncMessages(input.parentSessionId, input.directory),
-    );
-    const forked = await opencodeClient.forkSession(
-      input.parentSessionId,
-      forkPointMessageID ?? undefined,
-      input.directory,
-    );
+    // so a `/btw` typed mid-turn does not inherit a half-finished one. A
+    // native CLI forks before a prompt instead: the running turn's.
+    const native = isNativeSessionId(input.parentSessionId);
+    const parentMessages = getSyncMessages(input.parentSessionId, input.directory);
+    const forkPointMessageID = native
+      ? findNativeBtwForkPoint(
+        parentMessages,
+        (getSyncSessionStatus(input.parentSessionId, input.directory)?.type ?? 'idle') !== 'idle',
+      )
+      : findLastCompletedAssistantMessageID(parentMessages);
+    const forked = native
+      ? await sessionActions.forkNativeSession(input.parentSessionId, forkPointMessageID, input.directory)
+      : await opencodeClient.forkSession(input.parentSessionId, forkPointMessageID ?? undefined, input.directory);
 
     // The server may canonicalize the worktree path; the prompt must use the
     // same directory identity as the forked session.
@@ -214,21 +251,22 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
         selections.saveAgentModelForSession(forked.id, input.agent, input.providerID, input.modelID);
         selections.saveAgentModelVariantForSession(forked.id, input.agent, input.providerID, input.modelID, input.variant);
       }
-      if (input.permissionAutoAccept !== undefined) {
+      // A native CLI session approves everything itself.
+      if (input.permissionAutoAccept !== undefined && !native) {
         const { usePermissionStore } = await import('@/stores/permissionStore');
         if (getRuntimeKey() !== expectedRuntimeKey) throw new Error('runtime changed');
         await usePermissionStore.getState().setSessionAutoAccept(forked.id, input.permissionAutoAccept);
         if (getRuntimeKey() !== expectedRuntimeKey) throw new Error('runtime changed');
       }
       // Locate the inherited-history boundary by identity, not by ID ordering.
-      const newestCloned = await opencodeClient.getSessionMessages(forked.id, 1, sessionDirectory);
+      const newestClonedID = native
+        ? await sessionActions.readNativeNewestMessageId(forked.id, sessionDirectory)
+        : (await opencodeClient.getSessionMessages(forked.id, 1, sessionDirectory)).at(-1)?.info.id ?? null;
       // A `null` boundary makes the panel show every inherited message, so an
       // empty read must not be taken as "the fork inherited nothing" when we
       // know it did: having picked a fork point proves the parent had turns.
       // Retain the known fork point as a fallback marker.
-      const boundaryMessageID = newestCloned[newestCloned.length - 1]?.info.id
-        ?? forkPointMessageID
-        ?? null;
+      const boundaryMessageID = newestClonedID ?? forkPointMessageID ?? null;
 
       // The fork inherits the parent's metadata and title wholesale: replace
       // the metadata with the btw marker, and rename it (rename is

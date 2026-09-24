@@ -119,7 +119,7 @@ describe('ChatInput follow-up queue integration', () => {
   test('keeps shell, known slash commands, and auto-review out of queue admission', () => {
     const autoReviewIndex = source.indexOf('if (autoReviewRunning || isAutoReviewRunningNow())');
     const consumeIndex = source.indexOf('const syntheticParts = isBtwActive ? [] : consumePendingSyntheticParts();');
-    const slashIndex = source.indexOf("const parsedCommand = inputMode === 'normal'");
+    const slashIndex = source.indexOf("const typedCommand = inputMode === 'normal'");
     const queueIndex = source.indexOf("if (delivery === 'queue')");
     const forceQueueIndex = source.indexOf("options?.forceQueue === true && inputMode === 'normal'");
 

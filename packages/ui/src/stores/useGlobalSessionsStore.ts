@@ -12,6 +12,10 @@ import { persistManagedChatSessions, readManagedChatSessions } from '@/sync/pers
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { ensureChatsRootDirectory, getChatsRootForHome } from '@/lib/chatDirectories';
 import { countSyncPerformance } from '@/sync/performance-diagnostics';
+import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { fetchNativePartitions, resolveNativeSessions } from '@/sync/native-session-partitions';
+import { useProjectsStore } from '@/stores/useProjectsStore';
 import {
   applyGlobalSessionStructureMutations,
   buildGlobalSessionStructure,
@@ -283,6 +287,30 @@ const fetchDirectoryPages = async (
 
   return { directories: fulfilledDirectories, sessions, errors };
 };
+
+/**
+ * Native CLI sessions of `directories` combined with what the store already
+ * holds: fresh lists for backends that answered, the previous sessions of
+ * backends that did not. Runtimes without native sessions return none.
+ */
+const loadNativeSessions = async (
+  state: Pick<GlobalSessionsState, 'activeSessions' | 'archivedSessions'>,
+  directories: Iterable<string>,
+): Promise<Session[]> => {
+  const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
+  if (!nativeAgents?.supported) return [];
+  const partitions = await fetchNativePartitions(nativeAgents, directories);
+  return resolveNativeSessions([...state.activeSessions, ...state.archivedSessions], partitions);
+};
+
+// Projects are where native sessions are looked for: a project whose only
+// sessions came from the terminal has no OpenCode session to point at it.
+const nativeSessionDirectories = (state: Pick<GlobalSessionsState, 'activeSessions' | 'archivedSessions'>): string[] => [
+  ...useProjectsStore.getState().projects.map((project) => project.path),
+  ...[...state.activeSessions, ...state.archivedSessions]
+    .filter((session) => isNativeSessionId(session.id))
+    .map((session) => session.directory),
+];
 
 const upsertSessionIntoList = (sessions: Session[], session: Session): Session[] => {
   const index = sessions.findIndex((candidate) => candidate.id === session.id);
@@ -691,18 +719,21 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
         // `time_archived IS NULL` active filter would exclude restored
         // sessions (`time.archived` falsy-but-present), so an
         // `archived: false` request cannot produce a truthful active list.
-        const allSessions = await listGlobalSessionPages(sdk, {
-          archived: true,
-          narrowToArchived: false,
-          pageSize: PAGE_SIZE,
-        });
+        const [allSessions, nativeSessions] = await Promise.all([
+          listGlobalSessionPages(sdk, {
+            archived: true,
+            narrowToArchived: false,
+            pageSize: PAGE_SIZE,
+          }),
+          loadNativeSessions(get(), nativeSessionDirectories(get())),
+        ]);
 
         if (generation !== loadGeneration) {
           // Runtime switched mid-load: this snapshot belongs to the previous
           // instance — drop it.
           return { activeSessions: [], archivedSessions: [] };
         }
-        const { active, archived } = splitGlobalSessionsByArchived(allSessions);
+        const { active, archived } = splitGlobalSessionsByArchived([...allSessions, ...nativeSessions]);
         set((state) => {
           const reconciled = overlayMutationsSince(state, active, archived, baselineRevision);
           return applySnapshot(state, reconciled.activeSessions, reconciled.archivedSessions, 'ready');
@@ -769,7 +800,10 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
     }
     get().rehydrateManagedChatSessions();
     const sdk = opencodeClient.getSdkClient();
-    const fetched = await fetchDirectoryPages(sdk, directorySet);
+    const [fetched, nativeSessions] = await Promise.all([
+      fetchDirectoryPages(sdk, directorySet),
+      loadNativeSessions(get(), directorySet),
+    ]);
 
     if (generation !== loadGeneration) {
       const state = get();
@@ -780,7 +814,10 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
       console.warn('[GlobalSessions] Failed to refresh sessions for some directories:', fetched.errors[0]);
     }
 
-    const { active, archived } = splitGlobalSessionsByArchived(fetched.sessions);
+    // Native sessions of the refreshed directories replace theirs; a native
+    // backend that failed kept its previous sessions in `nativeSessions`.
+    const refreshedNative = nativeSessions.filter((session) => directorySet.has(normalizePath(session.directory) ?? ''));
+    const { active, archived } = splitGlobalSessionsByArchived([...fetched.sessions, ...refreshedNative]);
     const refreshedActiveIds = active.map((session) => session.id);
 
     set((state) => {

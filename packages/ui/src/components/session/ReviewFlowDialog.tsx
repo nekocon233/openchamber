@@ -2,6 +2,7 @@ import React from 'react';
 
 import { AgentSelector } from '@/components/sections/commands/AgentSelector';
 import { ModelSelector } from '@/components/sections/agents/ModelSelector';
+import { isNativeProviderId, NATIVE_AGENT_NAMES } from '@/lib/native-agents/ids';
 import { ThinkingPill } from '@/components/session/ThinkingPill';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
@@ -60,6 +61,8 @@ export function ReviewFlowDialog({
   const loadProviders = useConfigStore((state) => state.loadProviders);
   const loadConfigAgents = useConfigStore((state) => state.loadAgents);
   const loadAgentsStoreAgents = useAgentsStore((state) => state.loadAgents);
+  // A review runs in a session of its model's kind, so a CLI's model reviews
+  // in that CLI's own session.
   const providers = useConfigStore((state) => state.providers);
   const currentProviderID = useConfigStore((state) => state.currentProviderId);
   const currentModelID = useConfigStore((state) => state.currentModelId);
@@ -108,7 +111,12 @@ export function ReviewFlowDialog({
     }));
   }, [open, providers, execution.providerID, execution.modelID]);
 
-  const agentFilter = React.useCallback((agent: { mode?: string }) => isPrimaryMode(agent.mode), []);
+  // A CLI runs as its build agent or in plan mode.
+  const nativeModel = isNativeProviderId(execution.providerID);
+  const agentFilter = React.useCallback(
+    (agent: { name: string; mode?: string }) => isPrimaryMode(agent.mode) && (!nativeModel || NATIVE_AGENT_NAMES.has(agent.name)),
+    [nativeModel],
+  );
 
   const variantOptions = React.useMemo(() => {
     const provider = providers.find((item) => item.id === execution.providerID);
@@ -184,8 +192,15 @@ export function ReviewFlowDialog({
               modelId={execution.modelID}
               className="max-w-[320px] justify-between"
               dropdownPortalToBody
+              allowNativeModels
               onChange={(providerID, modelID) => {
-                setExecution((prev) => ({ ...prev, providerID, modelID, variant: '' }));
+                setExecution((prev) => ({
+                  ...prev,
+                  providerID,
+                  modelID,
+                  variant: '',
+                  agent: isNativeProviderId(providerID) && !NATIVE_AGENT_NAMES.has(prev.agent) ? 'build' : prev.agent,
+                }));
               }}
             />
           </div>

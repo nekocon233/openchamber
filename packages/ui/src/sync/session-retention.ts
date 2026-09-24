@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Session } from '@opencode-ai/sdk/v2';
 import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
 import { getBtwSessionID } from '@/lib/sessionBtwMetadata';
 import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useUIStore, type SessionRetentionAction } from '@/stores/useUIStore';
@@ -31,14 +32,18 @@ type CandidateOptions = {
   now?: number;
 };
 
-/** The unselected scope stays protected, including from cascading parent deletion. */
+/**
+ * The unselected scope stays protected, including from cascading parent deletion.
+ * Native CLI sessions are never cleaned up automatically: they belong to the
+ * CLI and the terminal uses them too. Users archive or delete them by hand.
+ */
 export function buildSessionRetentionCandidates({
   sessions, currentSessionId, cutoffDays, action, onlyArchived = false, activeSessionIds, now = Date.now(),
 }: CandidateOptions): string[] {
   if (!Number.isFinite(cutoffDays) || cutoffDays < 1) return [];
   const cutoff = now - cutoffDays * DAY_MS;
   const byId = new Map(sessions.map((session) => [session.id, session]));
-  const sorted = sessions.filter((session) => Boolean(session.time.archived) === onlyArchived)
+  const sorted = sessions.filter((session) => Boolean(session.time.archived) === onlyArchived && !isNativeSessionId(session.id))
     .sort((a, b) => retentionTimestamp(b, onlyArchived) - retentionTimestamp(a, onlyArchived));
   const protectedIds = new Set(sorted.slice(0, RETENTION_KEEP_RECENT).map((session) => session.id));
   for (const session of sessions) {

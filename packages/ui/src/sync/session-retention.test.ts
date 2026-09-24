@@ -60,6 +60,21 @@ describe('retention eligibility', () => {
     })).toEqual(['old']);
   });
 
+  test('never cleans up native CLI sessions, and leaves them out of the recent ones kept', () => {
+    // Every session is past the cutoff; only the five most recent OpenCode ones are kept.
+    const natives = Array.from({ length: 5 }, (_, index) => session(`ncl_0000000${index}-0000-4000-8000-000000000000`, {
+      time: { created: now - 50 * day, updated: now - 31 * day },
+    }));
+    const openCode = Array.from({ length: 6 }, (_, index) => session(`old-${index}`, {
+      time: { created: now - 60 * day, updated: now - (40 + index) * day },
+    }));
+    for (const action of ['delete', 'archive'] as const) {
+      expect(buildSessionRetentionCandidates({
+        sessions: [...natives, ...openCode], cutoffDays: 30, currentSessionId: null, action, activeSessionIds: new Set(), now,
+      })).toEqual(['old-5']);
+    }
+  });
+
   test('protects every ancestor of a recent, shared or archived child from cascade deletion', () => {
     for (const child of [recent[0], session('shared', { share: { url: 'https://share.test' } }),
       session('archived', { time: { created: 1, updated: 2, archived: 3 } })]) {

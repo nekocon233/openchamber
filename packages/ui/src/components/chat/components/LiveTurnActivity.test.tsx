@@ -47,6 +47,7 @@ const runtimeApis: RuntimeAPIs = {
     get tools() { return unavailable(); },
     get sidebarState() { return unavailable(); },
     get followUpQueue() { return unavailable(); },
+    get nativeAgents() { return unavailable(); },
 };
 const sdk = createOpencodeClient({ baseUrl: 'http://localhost', fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }) });
 let MessageBody: typeof import('../message/MessageBody').default;

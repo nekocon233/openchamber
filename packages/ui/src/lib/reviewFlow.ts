@@ -10,14 +10,19 @@ import {
   withReviewSessionLink,
   withReviewSessionMarker,
 } from '@/lib/sessionReviewMetadata';
+import { isNativeSessionId, isProviderPickableForSession, nativeBackendOfProviderId } from '@/lib/native-agents/ids';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useAutoReviewStore, type AutoReviewRun } from '@/stores/useAutoReviewStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useUIStore } from '@/stores/useUIStore';
+import { readNativeSession } from '@/sync/native-directory-snapshots';
+import { nativePromptRequest, nativeSendMessageId } from '@/sync/native-send';
 import {
+  createNativeSession,
   deleteSessionInDirectory,
   optimisticSend,
   patchSessionMetadata,
+  promptNativeSession,
   waitForConnectionOrThrow,
 } from '@/sync/session-actions';
 import { useSelectionStore } from '@/sync/selection-store';
@@ -55,6 +60,16 @@ type AssistantTextMessage = {
   id: string;
   text: string;
 };
+
+// What a review tells the agent besides its visible prompt. A native CLI
+// session gets it as instructions the conversation does not show.
+type ReviewInstructionPart = { text: string; synthetic: true; systemContext: 'feature-instructions' };
+
+// A native CLI session is read through the native API; OpenCode has never
+// heard of it.
+const readSession = (sessionID: string, directory: string): Promise<Session> => (
+  isNativeSessionId(sessionID) ? readNativeSession(sessionID, directory) : opencodeClient.getSession(sessionID, directory)
+);
 
 const isMessageCompleted = (message: Message): boolean => {
   const finish = (message as { finish?: unknown }).finish;
@@ -185,8 +200,9 @@ export const releaseAutoReviewForward = (key: string): void => {
   activeAutoReviewForwardKeys.delete(key);
 };
 
-const autoReviewReviewerInstructions = (): Array<{ text: string; synthetic: true }> => [{
+const autoReviewReviewerInstructions = (): ReviewInstructionPart[] => [{
   synthetic: true,
+  systemContext: 'feature-instructions',
   text: `This review is part of an automatic review loop. If there are no remaining issues, end your response with this exact final line:\n${AUTO_REVIEW_FINAL_MARKER}\nIf you found issues that require changes, do not include that final status line.`,
 }];
 
@@ -363,7 +379,7 @@ const sendPlainMessage = async (
   directory: string,
   text: string,
   modelContext?: SessionModelContext | null,
-  additionalParts?: Array<{ text: string; synthetic?: boolean }>,
+  additionalParts?: ReviewInstructionPart[],
   expectedRuntimeKey?: string,
 ): Promise<string> => {
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
@@ -378,6 +394,7 @@ const sendPlainMessage = async (
   }
   markPendingUserSendAnimation(sessionID);
   let sentMessageID: string | null = null;
+  const native = isNativeSessionId(sessionID);
   await optimisticSend({
     sessionId: sessionID,
     content: text,
@@ -385,6 +402,8 @@ const sendPlainMessage = async (
     providerID: resolved.providerID,
     modelID: resolved.modelID,
     agent: resolved.agent,
+    // A native CLI records the message under an id of its own kind.
+    messageId: native ? nativeSendMessageId(sessionID, undefined) : undefined,
     onMessageID: (messageID) => {
       sentMessageID = messageID;
     },
@@ -392,6 +411,18 @@ const sendPlainMessage = async (
     onOptimisticInsert: () => requestChatForceScrollBottom(sessionID),
     send: (messageID) => {
       assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
+      if (native) {
+        return promptNativeSession(sessionID, nativePromptRequest({
+          directory,
+          messageID,
+          content: text,
+          additionalParts,
+          providerID: resolved.providerID,
+          modelID: resolved.modelID,
+          variant: resolved.variant,
+          agent: resolved.agent,
+        }));
+      }
       return opencodeClient.sendMessage({
         id: sessionID,
         directory,
@@ -427,7 +458,7 @@ const openReviewSessionPanel = (directory: string, session: Session): void => {
 
 const getSessionOrNull = async (sessionID: string, directory: string): Promise<Session | null> => {
   try {
-    return await opencodeClient.getSession(sessionID, directory);
+    return await readSession(sessionID, directory);
   } catch {
     return null;
   }
@@ -438,15 +469,41 @@ const getReviewSessionTitle = (original: Session): string => {
   return `Review: ${implementationTitle}`;
 };
 
-const createOrReuseReviewSession = async (originalSessionID: string, directory: string, expectedRuntimeKey?: string): Promise<Session> => {
+/**
+ * A review runs in a session of its model's kind: the CLI's own session for a
+ * native model, an OpenCode session otherwise. A CLI session takes no
+ * metadata when it is created, so its marker lands right after; without it
+ * the session is not a review, and it goes again.
+ */
+const createReviewSession = async (originalSessionID: string, directory: string, providerID: string, title: string): Promise<Session> => {
+  const backend = nativeBackendOfProviderId(providerID);
+  if (!backend) {
+    return opencodeClient.createSession({ title, metadata: withReviewSessionMarker({}, originalSessionID) }, directory);
+  }
+  const created = await createNativeSession(backend, directory, title);
+  try {
+    return await patchSessionMetadata(created.id, directory, (metadata) => withReviewSessionMarker(metadata, originalSessionID));
+  } catch (error) {
+    await deleteSessionInDirectory(created.id, directory).catch(() => false);
+    throw error;
+  }
+};
+
+const createOrReuseReviewSession = async (
+  originalSessionID: string,
+  directory: string,
+  providerID: string,
+  expectedRuntimeKey?: string,
+): Promise<Session> => {
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-  const original = await opencodeClient.getSession(originalSessionID, directory);
+  const original = await readSession(originalSessionID, directory);
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
   const existingReviewID = getReviewSessionID(original);
   if (existingReviewID) {
     const existing = await getSessionOrNull(existingReviewID, directory);
     assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-    if (existing && isReviewSession(existing)) return existing;
+    // A native review session keeps its CLI; a model of another kind gets a new session.
+    if (existing && isReviewSession(existing) && isProviderPickableForSession(existing.id, providerID)) return existing;
     await patchSessionMetadata(originalSessionID, directory, (metadata) => {
       const next = { ...metadata };
       const openchamber = next.openchamber;
@@ -460,10 +517,7 @@ const createOrReuseReviewSession = async (originalSessionID: string, directory: 
   }
 
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-  const review = await opencodeClient.createSession({
-    title: getReviewSessionTitle(original),
-    metadata: withReviewSessionMarker({}, originalSessionID),
-  }, directory);
+  const review = await createReviewSession(originalSessionID, directory, providerID, getReviewSessionTitle(original));
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
   registerSessionDirectory(review.id, directory);
   try {
@@ -490,14 +544,14 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
     const instructionsText = await renderMagicPrompt('session.reviewHandoff.instructions');
     const startedAt = Date.now();
     await sendPlainMessage(input.originalSessionID, input.directory, visibleText, null, [
-      { text: instructionsText, synthetic: true },
+      { text: instructionsText, synthetic: true, systemContext: 'feature-instructions' },
     ], expectedAutoReviewRuntimeKey);
 
     const continueFromHandoff = async (): Promise<void> => {
       const handoff = await waitForAssistantText(input.originalSessionID, input.directory, startedAt);
       assertAutoReviewRuntimeStillCurrent(expectedAutoReviewRuntimeKey);
       const handoffReviewPrompt = await renderMagicPrompt('session.reviewSession.visible', { handoff });
-      const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, expectedAutoReviewRuntimeKey);
+      const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, input.providerID, expectedAutoReviewRuntimeKey);
       const runtimeKey = expectedAutoReviewRuntimeKey ?? getRuntimeKey();
       const waitAfterCreatedAt = Date.now();
       const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, handoffReviewPrompt, {
@@ -537,7 +591,7 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
   }
 
   const reviewPrompt = await renderMagicPrompt('session.reviewSessionWithoutHandoff.visible');
-  const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, expectedAutoReviewRuntimeKey);
+  const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, input.providerID, expectedAutoReviewRuntimeKey);
   const runtimeKey = expectedAutoReviewRuntimeKey ?? getRuntimeKey();
   const waitAfterCreatedAt = Date.now();
   const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, reviewPrompt, {
@@ -567,7 +621,7 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
 
 export const sendReviewFeedbackToOriginal = async (reviewSessionID: string, directory: string, reviewFeedback: string, expectedRuntimeKey?: string): Promise<string> => {
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-  const reviewSession = await opencodeClient.getSession(reviewSessionID, directory);
+  const reviewSession = await readSession(reviewSessionID, directory);
   const originalSessionID = getOriginalSessionID(reviewSession);
   if (!originalSessionID) throw new Error('Original session is missing');
   const prompt = await renderMagicPrompt('session.reviewFeedbackToImplementer.visible', { review_feedback: reviewFeedback });
@@ -577,12 +631,12 @@ export const sendReviewFeedbackToOriginal = async (reviewSessionID: string, dire
 
 export const sendImplementationResponseToReviewer = async (originalSessionID: string, directory: string, implementationResponse: string, autoReview = false, expectedRuntimeKey?: string): Promise<string> => {
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-  const originalSession = await opencodeClient.getSession(originalSessionID, directory);
+  const originalSession = await readSession(originalSessionID, directory);
   const reviewSessionID = getReviewSessionID(originalSession);
   if (!reviewSessionID) throw new Error('Review session is missing');
   let reviewSession: Session;
   try {
-    reviewSession = await opencodeClient.getSession(reviewSessionID, directory);
+    reviewSession = await readSession(reviewSessionID, directory);
   } catch (error) {
     assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
     await patchSessionMetadata(originalSessionID, directory, (metadata) => withoutReviewSessionLink(metadata, reviewSessionID));

@@ -128,6 +128,12 @@ The webview build emits each worker as one self-contained file. VS Code webviews
 
 Composer drafts use runtime-scoped device-local storage and have no RuntimeAPI. The VS Code webview reports the OpenChamber host queue API as unsupported, so shared UI keeps queued follow-ups in its runtime-scoped local fallback; `steer` remains immediate official OpenCode delivery through the generic SDK proxy.
 
+Native CLI sessions are unavailable in VS Code: nothing drives the Claude Code
+or Codex CLIs without the OpenChamber server. `webview/api/nativeAgents.ts`
+reports `supported: false` and throws `NativeAgentsUnsupportedError` if called
+anyway, and the webview answers `/api/native/*` locally with a stable JSON
+`501`, so a stray request never reaches OpenCode.
+
 The webview also handles `/api/small-model` and `/api/small-model/generate`
 locally with a stable JSON `501`. The extension has no OpenChamber server-side
 provider transport owner, so forwarding these paths to OpenCode would return its

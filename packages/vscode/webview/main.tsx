@@ -390,6 +390,12 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     return unsupportedWebRouteResponse('Preview proxy');
   }
 
+  // Native Claude Code / Codex sessions need the OpenChamber server that
+  // drives the CLIs; the extension host has none.
+  if (normalizedPathname.startsWith('/api/native/')) {
+    return unsupportedWebRouteResponse('Native CLI sessions');
+  }
+
   if (normalizedPathname === '/api/config/themes' || normalizedPathname.startsWith('/api/config/themes/')) {
     return unsupportedWebRouteResponse('Theme import and management');
   }

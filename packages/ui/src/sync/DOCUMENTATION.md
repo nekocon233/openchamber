@@ -316,6 +316,158 @@ A successful local session creation publishes its session record and calls `Sess
 
 Initial loads use smaller pages on constrained VS Code/mobile surfaces. Before publishing an incomplete initial page, the loader expands its tail window until every assistant can resolve to a loaded user turn or the bounded expansion limit is reached; seeing an unrelated later user does not make a truncated leading turn complete. Legacy and V2 older pages are fetched through the same loader with independent cursors, then merged chronologically with optimistic records before publication. If one source fails, records from the successful source are still materialized while the load remains retryable and neither source cursor advances. When a V2 page begins with an assistant whose user message is on the next older page, the merged history fills only the missing `parentID` after that user arrives. Timeline caches, pending work, prepend snapshots, and stale checks use runtime + directory + session identity so equal session IDs in different worktrees cannot share lifecycle state. The same chronology contract applies in the VS Code webview because it consumes this shared loader and sync store; the extension bridge must transport OpenCode records without introducing its own ID-based ordering.
 
+## Native CLI sessions
+
+Native Claude Code (`ncl_`) and Codex (`ncx_`) sessions come from the
+OpenChamber server through `RuntimeAPIs.nativeAgents`, never from OpenCode.
+The server contract is in `packages/web/server/lib/native-agents/DOCUMENTATION.md`.
+`lib/native-agents/ids.ts` tells the two kinds apart by prefix, and every native
+branch keys on it.
+
+Each source answers only for its own sessions. A native read that fails keeps
+what the stores hold for native sessions and never blocks OpenCode's:
+
+- Directory session list. `loadSessions` in `sync-context.tsx` lists native
+  roots next to OpenCode's pages (`native-session-partitions.ts`). A backend
+  that answered replaces its sessions for that directory; a backend that failed
+  keeps its previous sessions and the subagent sessions under them. Both kinds
+  merge through the same `mergeBootstrapSessions`.
+- Global session list. `useGlobalSessionsStore` lists native sessions for every
+  project directory and every directory that already holds a native session,
+  with the same per-backend rule.
+- History. `SessionMessageLoader` reads native pages through
+  `nativeAgents.loadMessages` with the server's message-id cursor and holds the
+  subagent sessions a page links to in the directory store.
+- Statuses. `readDirectoryStatuses` in `native-directory-snapshots.ts` merges
+  OpenCode's snapshot with the native one and says which sessions it `covers`.
+  After a failed native read it covers OpenCode sessions only. Resync filters
+  its candidates by `covers` and passes it to `applyGlobalSessionStatusSnapshot`,
+  whose sweep then skips uncovered sessions, so an unread native session keeps
+  its status instead of settling idle and having its turn marked interrupted.
+  Bootstrap folds the held native statuses into its snapshot after a failed
+  read and leaves native sessions out of its global settle.
+- Questions. Bootstrap and `resyncBlockingRequestsForDirectory` add native
+  questions. After a failed native read, bootstrap keeps the held native
+  questions and the resync settles only OpenCode sessions.
+- Session records. `syncSession` and reconnect repair read a native
+  session through `readNativeSession`, never OpenCode's `session.get`.
+
+Sending goes through the same `routeMessage` and `optimisticSend` as OpenCode,
+with a native branch (`sync/native-send.ts`):
+
+- The message id is one the CLI records (`ncl_u_<uuid>`, `ncx_u_<uuid>`), so the
+  optimistic message and the CLI's echo are the same record.
+- The text goes out as typed. The composer keeps `/undo`, `/redo`,
+  `/timeline`, `/btw` and `/handoff-review` (`isNativeLocalCommand`), which
+  OpenChamber runs itself; every other slash command is the CLI's and goes out
+  as typed. The
+  composer offers no OpenCode command or skill autocomplete. Shell mode is off.
+- Parts carry what the user wrote and attached: the text, files, and context
+  blocks with metadata. OpenChamber's own context (pinned knowledge,
+  response-style reminders, skill hints) stays out. A feature that must tell
+  the agent something (the btw boundary, a review's handoff rules, the goal
+  reminder of an armed send) tags its part `feature-instructions`;
+  `nativePromptRequest` sends it once as the prompt's `instructions`, which
+  the conversation does not show. An armed goal starts on a native
+  session as on an OpenCode one, without a token budget on Codex, which
+  reports no token usage; the server's goal loop runs it
+  (`packages/web/server/lib/session-goal/DOCUMENTATION.md`).
+- A refusal a native route explains with its own code (`NATIVE_CLI_MISSING`,
+  `NATIVE_SESSION_BUSY`, ...) fails the send at once, whatever its status. A
+  send whose answer was lost is confirmed from the native history, which
+  OpenCode cannot read for a native id.
+- A follow-up that would be queued goes out at once: the host queue delivers
+  through OpenCode, and the CLI itself holds a prompt that arrives mid-turn.
+- The agent is `build` or `plan`; the picker offers only those two for a
+  native session or a draft with a CLI's model picked.
+- Picking a CLI's model in a new-session draft makes the created session a
+  native one (`materializeOpenDraftSession` passes the backend through
+  `createSession`). Native sessions skip the draft's permission policy: the
+  CLI approves every tool itself.
+- Abort, question replies and rejections go to the native API.
+  `NATIVE_QUESTION_NOT_FOUND` clears a stale question like OpenCode's
+  not-found.
+
+Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
+(optimistic marker, composer restore, rollback) with a native branch:
+
+- The server stops a running turn and restores the files itself, so the UI
+  sends no abort, and it cascades nothing to subagent sessions, which are
+  views of the parent's transcript. The reverted message must already be in
+  the store; the store wrapper refreshes history first.
+- The session record keeps `revert` until the next prompt commits it, and the
+  native history keeps every message meanwhile, so unrevert only replaces the
+  session record. The send path removes the reverted messages as it does for
+  OpenCode; the server rewinds the CLI with that prompt.
+- The store wrapper tells the user when only the conversation went back
+  (`conversationOnly`). When a CLI refuses the point
+  (`NATIVE_REVERT_FIRST_MESSAGE`, `NATIVE_REVERT_MID_TURN`) it says why and
+  resolves `false`, so undo and redo skip their success toast.
+
+Rename, archive, restore and delete keep their flows with the remote step
+swapped for the native API (`updateSessionRemotely`, `deleteSessionRemotely`);
+a native `404` on delete counts as already deleted, as for OpenCode. Native
+sessions archive one by one, never through the OpenCode batch route. The review
+and btw link cleanup before a delete or archive reads a native session through
+the native API, since the server keeps its links. A Claude Code session's
+subagent sessions are left out of subtree actions
+(`collectSessionSubtreeIds`): the server archives and deletes them with their
+parent and announces them.
+
+Automatic session cleanup (`session-retention.ts`) never picks a native
+session, and native sessions do not count toward the recent ones it keeps:
+they belong to the CLI, and the terminal uses them too.
+
+The session menus leave out what needs OpenCode to own the session: share and
+moving to a worktree (`lib/native-agents/capabilities.ts`). `/btw` forks a
+native session in its CLI (`startBtwSession`): an idle parent whole, a busy one
+before the prompt of its running turn (`findNativeBtwForkPoint`), because a CLI
+forks before a user message rather than after a reply. The fork is a native
+session of the same CLI, and its boundary goes as instructions. Its question
+runs as the build agent until the user picks another (`resolveBtwSelection`'s
+`defaultAgent`): a CLI's plan mode can switch to another model and answers far
+slower. Rename with AI reads a native session
+through the native API and saves through the native rename. Its small model
+follows the session-provider rule in `packages/web/server/lib/small-model`: a
+native session gets one only from an explicit small-model setting. The rest of the UI leaves out what a
+native session does not use: the composer's permission auto-accept toggle
+(the CLI approves every tool itself), message pins, and the context panel's
+MCP, pinned-knowledge and context-source sections. `patchSessionMetadata`
+reads and writes a native session's metadata through the native API, which
+keeps it on the server, so the btw and review links and the session assist's
+recap and suggestion use one path for both kinds. Model
+pickers whose model runs through OpenCode (a new session from a message,
+multi-run, scheduled tasks, agents and commands) leave the CLIs' models out;
+the default-model settings and review offer them.
+
+A review (`lib/reviewFlow.ts`) runs in a session of its model's kind: a CLI's
+model reviews in that CLI's own session, created through the native API with
+its review marker patched on right after, and a review session that cannot run
+the picked model is replaced rather than reused. Every review message to a
+native session, in either direction, goes through the native prompt; the
+handoff and auto-review rules go as its `instructions`.
+
+In the composer, `/compact` in a native session calls
+`compactNativeSession`, which runs the CLI's own compaction; no message is
+sent, and the compaction marker shows it. The command picker offers the
+composer's `/compact`, `/undo`, `/redo`, `/timeline` and `/btw`, then the CLI's
+own commands (`useNativeCommands`) except those a composer command shadows;
+picking one inserts it as typed, and `/btw` opens the btw composer.
+
+A session keeps its kind. The model picker offers a native session only its
+own CLI and an OpenCode session no native CLI; a draft offers every provider
+(`isProviderPickableForSession`). When the selected model does not fit the
+session, `modelForSessionKind` supplies one at once without saving it as the
+session's choice, so the history restore still wins: a native session gets its
+CLI's first model, an OpenCode session the settings default or the first
+OpenCode model.
+
+VS Code reports `supported: false`, and the readers take that as a runtime with
+no native sessions. A mobile app connected to an older server without
+`/api/native/*` gets failed native reads, which keep the empty held state, so
+no native session appears. Native reads have a 30 s deadline; status reads
+share the 4 s status budget.
+
 ## Failed-turn diagnostics
 
 A `session.error` event is the only account of a turn OpenCode stopped, and

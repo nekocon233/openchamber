@@ -40,6 +40,11 @@ describe('resolveQuotaProviderId', () => {
     expect(resolveQuotaProviderId('claude-code')).toBe('claude');
   });
 
+  test('maps the native CLI providers onto their subscriptions', () => {
+    expect(resolveQuotaProviderId('claude-native')).toBe('claude');
+    expect(resolveQuotaProviderId('codex-native')).toBe('codex');
+  });
+
   test('is case and whitespace tolerant, and rejects empties', () => {
     expect(resolveQuotaProviderId('  OpenAI ')).toBe('codex');
     expect(resolveQuotaProviderId('')).toBeNull();

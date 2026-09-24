@@ -1,6 +1,20 @@
+import type { SessionMetadataRecord } from '@/lib/sessionReviewMetadata';
 import type { WorktreeMetadata } from '@/types/worktree';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
 import type { DesktopSettings } from '@/lib/settings/registry';
+import type { Session } from '@opencode-ai/sdk/v2/client';
+import type { z } from 'zod';
+import type {
+  nativeCapabilitiesSchema,
+  nativeCatalogSchema,
+  nativeCommandListSchema,
+  nativeMessagePageSchema,
+  nativeQuestionListSchema,
+  nativeRevertResultSchema,
+  nativeSessionListSchema,
+  nativeStatusSnapshotSchema,
+} from '@/lib/native-agents/schemas';
+import type { NativeBackend } from '@/lib/native-agents/ids';
 
 type RuntimePlatform = 'web' | 'desktop' | 'vscode';
 
@@ -1621,6 +1635,94 @@ export interface ClientAuthAPI {
   getPairingTransports(): Promise<{ local: string | null; lan: string | null; relayAvailable: boolean }>;
 }
 
+export type NativeCapabilities = z.infer<typeof nativeCapabilitiesSchema>;
+export type NativeCatalog = z.infer<typeof nativeCatalogSchema>;
+export type NativeSessionList = z.infer<typeof nativeSessionListSchema>;
+export type NativeMessagePage = z.infer<typeof nativeMessagePageSchema>;
+export type NativeStatusSnapshot = z.infer<typeof nativeStatusSnapshotSchema>;
+export type NativeQuestionList = z.infer<typeof nativeQuestionListSchema>;
+export type NativeRevertResult = z.infer<typeof nativeRevertResultSchema>;
+export type NativeCommandList = z.infer<typeof nativeCommandListSchema>;
+
+/** Cancels a native read early; every read also has its own deadline. */
+export type NativeReadOptions = { signal?: AbortSignal };
+
+export type NativePromptPart =
+  | { type: 'text'; text: string }
+  | { type: 'file'; mime: string; url: string; filename?: string };
+
+/** A compaction the CLI runs on the session's model; Claude Code may take summary instructions. */
+export type NativeCompactRequest = {
+  directory: string;
+  model: { providerID: string; modelID: string };
+  variant?: string;
+  agent: 'build' | 'plan';
+  instructions?: string;
+};
+
+/** A change to a native session's title or archive state. */
+/**
+ * `metadata` replaces the session's OpenChamber metadata (btw and review links,
+ * goals, the assist), which the server keeps since the CLI has none.
+ */
+export type NativeSessionPatch = { title?: string; archived?: boolean; metadata?: SessionMetadataRecord };
+
+/** A prompt for a native session. The message id is the one the CLI records. */
+export type NativePromptRequest = {
+  directory: string;
+  messageID: string;
+  parts: NativePromptPart[];
+  model: { providerID: string; modelID: string };
+  variant?: string;
+  agent: 'build' | 'plan';
+  /** A feature's instructions (the btw boundary): the CLI reads them, the conversation does not show them. */
+  instructions?: string;
+};
+
+/**
+ * Native Claude Code and Codex sessions, read and driven by the OpenChamber
+ * server. Every method throws on failure; none reports a failure as empty.
+ */
+export interface NativeAgentsAPI {
+  /** False for runtimes without an OpenChamber server, currently VS Code. */
+  supported: boolean;
+  capabilities(): Promise<NativeCapabilities>;
+  catalog(): Promise<NativeCatalog>;
+  /** The slash commands a CLI offers in a directory; Codex offers none. */
+  commands(backend: NativeBackend, directory: string, options?: NativeReadOptions): Promise<NativeCommandList>;
+  /** Root sessions of a directory, reported per backend. */
+  listSessions(directory: string, options?: NativeReadOptions): Promise<NativeSessionList>;
+  getSession(sessionId: string, directory: string, options?: NativeReadOptions): Promise<Session>;
+  /** Newest page first; `before` is the oldest message id of the previous page. */
+  loadMessages(sessionId: string, directory: string, page: { limit: number; before?: string }): Promise<NativeMessagePage>;
+  statuses(directory: string, options?: NativeReadOptions): Promise<NativeStatusSnapshot>;
+  questions(directory: string, options?: NativeReadOptions): Promise<NativeQuestionList>;
+  /** A new session in the backend's CLI. */
+  createSession(input: { backend: NativeBackend; directory: string; title?: string }): Promise<Session>;
+  /** Resolves once the CLI accepted the prompt; the turn streams as events. */
+  prompt(sessionId: string, request: NativePromptRequest): Promise<void>;
+  /** Stops the running turn; false when none was running. */
+  abort(sessionId: string): Promise<boolean>;
+  /** Resolves once the CLI took the compaction; it streams in as a turn. */
+  compact(sessionId: string, request: NativeCompactRequest): Promise<void>;
+  /** One list of chosen labels per question. */
+  replyQuestion(requestId: string, answers: string[][]): Promise<void>;
+  rejectQuestion(requestId: string): Promise<void>;
+  /**
+   * Reverts a user message and everything after it. Files go back at once;
+   * the conversation rewinds when the next prompt commits the revert.
+   */
+  revert(sessionId: string, messageId: string, directory: string): Promise<NativeRevertResult>;
+  /** Puts back what a revert the next prompt has not committed restored. */
+  unrevert(sessionId: string, directory: string): Promise<Session>;
+  /** A new session holding the conversation before a user message, or all of it when the message is null. */
+  fork(sessionId: string, messageId: string | null, directory: string): Promise<Session>;
+  /** Renames, archives or restores a session in its CLI; resolves with the updated record. */
+  updateSession(sessionId: string, directory: string, patch: NativeSessionPatch): Promise<Session>;
+  /** Deletes the session from its CLI's store. */
+  deleteSession(sessionId: string, directory: string): Promise<void>;
+}
+
 export interface RuntimeAPIs {
   /** Native local picker. Web/mobile fall back to their browser file input; VS Code does not import themes. */
   themeFiles?: {
@@ -1633,6 +1735,7 @@ export interface RuntimeAPIs {
   settings: SettingsAPI;
   sidebarState: SidebarStateAPI;
   followUpQueue: FollowUpQueueAPI;
+  nativeAgents: NativeAgentsAPI;
   permissions: PermissionsAPI;
   notifications: NotificationsAPI;
   github?: GitHubAPI;

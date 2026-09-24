@@ -55,6 +55,11 @@ import { messagesBefore, messagesFrom } from "./message-ordering"
 import { deleteChatDirectory } from "@/lib/chatDirectories"
 import { createChatDraftIdentity } from "@/lib/chatDraftPersistence"
 import { cancelSessionTitleGeneration } from "./session-title-generation"
+import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
+import type { NativeCompactRequest, NativePromptRequest } from "@/lib/api/types"
+import { NativeAgentsRequestError, NativeAgentsUnsupportedError } from "@/lib/native-agents/errors"
+import { isNativeSessionId, type NativeBackend } from "@/lib/native-agents/ids"
+import { nativeAgentOf } from "./native-send"
 
 export { isAmbiguousSendFailure } from "./send-failure-classification"
 
@@ -1004,6 +1009,61 @@ function getRequestReplyClient(
 // Session CRUD
 // ---------------------------------------------------------------------------
 
+// A native CLI session is created by the OpenChamber server in the CLI's own
+// store; OpenCode never sees it.
+const requireNativeAgents = () => {
+  const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents
+  if (!nativeAgents?.supported) throw new NativeAgentsUnsupportedError()
+  return nativeAgents
+}
+
+// Native sessions are driven through the OpenChamber server, which needs the
+// session's directory to find its CLI transcript.
+const requireNativeDirectory = (directory: string | null | undefined): string => {
+  if (!directory) throw new Error("A native session needs a directory")
+  return directory
+}
+
+const NATIVE_QUESTION_GONE = "NATIVE_QUESTION_NOT_FOUND"
+
+/** A new session in a CLI's own store; the server announces it. */
+export async function createNativeSession(backend: NativeBackend, directory: string | null, title: string | undefined): Promise<Session> {
+  const nativeAgents = requireNativeAgents()
+  const nativeDirectory = requireNativeDirectory(directory)
+  return nativeAgents.createSession(title === undefined ? { backend, directory: nativeDirectory } : { backend, directory: nativeDirectory, title })
+}
+
+/** Hands a prompt to a native session's CLI; the turn streams in as events. */
+export function promptNativeSession(sessionId: string, request: NativePromptRequest): Promise<void> {
+  return requireNativeAgents().prompt(sessionId, request)
+}
+
+// Rename, archive and restore reach a native session's CLI through the
+// OpenChamber server; OpenCode sessions keep their own update route.
+async function updateSessionRemotely(
+  sessionId: string,
+  directory: string | null | undefined,
+  change: { kind: "title"; title: string } | { kind: "archive"; archived: boolean; archivedAt: number },
+): Promise<Session> {
+  if (isNativeSessionId(sessionId)) {
+    const patch = change.kind === "title" ? { title: change.title } : { archived: change.archived }
+    return requireNativeAgents().updateSession(sessionId, requireNativeDirectory(directory), patch)
+  }
+  return opencodeClient.updateSession(
+    sessionId,
+    change.kind === "title" ? { title: change.title } : { time: { archived: change.archivedAt } },
+    directory,
+  )
+}
+
+// A native session is deleted from its CLI's store. A missing one answers 404,
+// which the callers treat as already deleted, as for OpenCode.
+async function deleteSessionRemotely(sessionId: string, directory: string | null | undefined): Promise<boolean> {
+  if (!isNativeSessionId(sessionId)) return opencodeClient.deleteSession(sessionId, directory)
+  await requireNativeAgents().deleteSession(sessionId, requireNativeDirectory(directory))
+  return true
+}
+
 export async function createSession(
   title?: string,
   directoryOverride?: string | null,
@@ -1011,6 +1071,7 @@ export async function createSession(
   metadata?: Record<string, unknown>,
   selectionTransition?: "submitted-draft",
   navigation: "open" | "preserve" = "open",
+  nativeBackend: NativeBackend | null = null,
 ): Promise<Session | null> {
   const runtimeContext = captureSessionActionRuntime()
   const runtimeClient = opencodeClient.getSdkClient()
@@ -1022,11 +1083,13 @@ export async function createSession(
     // opencodeClient.getDirectory() value and group the session under the
     // wrong project (closes #1637, #2270).
     const effectiveDirectory = directoryOverride ?? dir()
-    const session = await opencodeClient.createSession({
-      title,
-      parentID: parentID ?? undefined,
-      metadata,
-    }, effectiveDirectory)
+    const session = nativeBackend
+      ? await createNativeSession(nativeBackend, effectiveDirectory ?? null, title)
+      : await opencodeClient.createSession({
+        title,
+        parentID: parentID ?? undefined,
+        metadata,
+      }, effectiveDirectory)
     assertSessionActionRuntimeCurrent(runtimeContext)
 
     if (getRuntimeKey() !== runtimeContext.runtimeKey || opencodeClient.getSdkClient() !== runtimeClient) return null
@@ -1071,11 +1134,18 @@ export async function patchSessionMetadata(
 ): Promise<Session> {
   assertSessionActionRuntimeCurrent(runtimeContext)
   const targetDirectory = directory ?? getSessionDirectory(sessionId)
-  const current = await opencodeClient.getSession(sessionId, targetDirectory)
+  // A native session's OpenChamber metadata lives on the OpenChamber server;
+  // OpenCode has none for it.
+  const native = isNativeSessionId(sessionId)
+  const current = native
+    ? await requireNativeAgents().getSession(sessionId, requireNativeDirectory(targetDirectory))
+    : await opencodeClient.getSession(sessionId, targetDirectory)
   assertSessionActionRuntimeCurrent(runtimeContext)
   const nextMetadata = updater(getSessionMetadata(current))
   assertSessionActionRuntimeCurrent(runtimeContext)
-  const updated = await opencodeClient.updateSession(sessionId, { metadata: nextMetadata }, targetDirectory)
+  const updated = native
+    ? await requireNativeAgents().updateSession(sessionId, requireNativeDirectory(targetDirectory), { metadata: nextMetadata })
+    : await opencodeClient.updateSession(sessionId, { metadata: nextMetadata }, targetDirectory)
   assertSessionActionRuntimeCurrent(runtimeContext)
   useGlobalSessionsStore.getState().upsertSession(updated)
   const sessionDirectory = (updated as { directory?: string | null }).directory ?? targetDirectory
@@ -1112,7 +1182,11 @@ async function cleanupReviewMetadataBeforeDelete(
   let session: Session
   try {
     assertSessionActionRuntimeCurrent(runtimeContext)
-    session = await opencodeClient.getSession(sessionId, directory ?? getSessionDirectory(sessionId))
+    // A native session keeps its review and btw links on the OpenChamber server.
+    const sessionDirectory = directory ?? getSessionDirectory(sessionId)
+    session = isNativeSessionId(sessionId)
+      ? await requireNativeAgents().getSession(sessionId, requireNativeDirectory(sessionDirectory))
+      : await opencodeClient.getSession(sessionId, sessionDirectory)
     assertSessionActionRuntimeCurrent(runtimeContext)
   } catch (error) {
     if (error instanceof SessionActionRuntimeChangedError) throw error
@@ -1367,7 +1441,7 @@ export async function deleteSession(sessionId: string, options?: DeleteSessionOp
     await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory, runtimeContext)
     assertSessionActionRuntimeCurrent(runtimeContext)
     remoteMutationStarted = true
-    const deleted = await opencodeClient.deleteSession(sessionId, sessionDirectory)
+    const deleted = await deleteSessionRemotely(sessionId, sessionDirectory)
     if (!isSessionActionRuntimeCurrent(runtimeContext)) return false
     if (deleted !== true) {
       throw new Error("session.delete failed: server did not confirm deletion")
@@ -1405,7 +1479,7 @@ export async function deleteSessionInDirectory(
     await cleanupReviewMetadataBeforeDelete(sessionId, directory, runtimeContext)
     assertSessionActionRuntimeCurrent(runtimeContext)
     remoteMutationStarted = true
-    const deleted = await opencodeClient.deleteSession(sessionId, directory)
+    const deleted = await deleteSessionRemotely(sessionId, directory)
     if (!isSessionActionRuntimeCurrent(runtimeContext)) return false
     if (deleted !== true) {
       throw new Error("session.delete failed: server did not confirm deletion")
@@ -1465,7 +1539,7 @@ export async function archiveSession(
   try {
     await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory, runtimeContext)
     assertSessionActionRuntimeCurrent(runtimeContext)
-    const archived = await opencodeClient.updateSession(sessionId, { time: { archived: archivedAt } }, sessionDirectory)
+    const archived = await updateSessionRemotely(sessionId, sessionDirectory, { kind: "archive", archived: true, archivedAt })
     if (!isSessionActionRuntimeCurrent(runtimeContext)) return false
     if (!archived) {
       throw new Error("session.update failed: server did not return the archived session")
@@ -1617,7 +1691,8 @@ function planArchiveBatches(ids: string[]) {
     const directory = session
       ? resolveGlobalSessionDirectory(session) ?? getSessionDirectory(id)
       : undefined
-    if (!session || !directory || hasLinkedSessionCleanup(session)) {
+    // The batch route archives OpenCode sessions; native ones go one by one.
+    if (!session || !directory || hasLinkedSessionCleanup(session) || isNativeSessionId(id)) {
       individualIds.push(id)
       continue
     }
@@ -1683,7 +1758,7 @@ export async function unarchiveSession(sessionId: string, expectedRuntimeKey = g
   if (expectedRuntimeKey !== runtimeContext.runtimeKey) return false
   const sessionDirectory = getSessionDirectory(sessionId)
   try {
-    const restored = await opencodeClient.updateSession(sessionId, { time: { archived: UNARCHIVED_TIMESTAMP } }, sessionDirectory)
+    const restored = await updateSessionRemotely(sessionId, sessionDirectory, { kind: "archive", archived: false, archivedAt: UNARCHIVED_TIMESTAMP })
     if (!isSessionActionRuntimeCurrent(runtimeContext)) return false
     if (!restored) {
       throw new Error("session.update failed: server did not return the restored session")
@@ -1751,7 +1826,7 @@ export async function updateSessionTitle(
   if (options?.signal) options.signal.throwIfAborted()
   else cancelSessionTitleGeneration(sessionId)
   const sessionDirectory = options?.directory ?? getSessionDirectory(sessionId)
-  const session = await opencodeClient.updateSession(sessionId, { title }, sessionDirectory)
+  const session = await updateSessionRemotely(sessionId, sessionDirectory, { kind: "title", title })
   assertSessionActionRuntimeCurrent(runtimeContext)
   options?.signal?.throwIfAborted()
   useGlobalSessionsStore.getState().upsertSession(session)
@@ -2047,6 +2122,28 @@ type SendConfirmationOutcome =
   | { outcome: "not-found" }
   | { outcome: "unknown" }
 
+// The newest messages of a session, to look for a send whose answer was lost.
+// A native session's history comes from the OpenChamber server; OpenCode
+// refuses its id, which would leave every ambiguous native send unconfirmed.
+async function readSendConfirmationRecords(
+  sessionId: string,
+  directory?: string | null,
+): Promise<Array<{ info: Message; parts?: Part[] }>> {
+  if (isNativeSessionId(sessionId)) {
+    const page = await requireNativeAgents().loadMessages(sessionId, requireNativeDirectory(directory), {
+      limit: SEND_CONFIRMATION_REFETCH_LIMIT,
+    })
+    return page.records
+  }
+  const result = await sdk().session.messages({
+    sessionID: sessionId,
+    directory: directory ?? undefined,
+    limit: SEND_CONFIRMATION_REFETCH_LIMIT,
+  })
+  return (assertSdkSuccess(result, "session.messages") ?? [])
+    .filter((record: { info?: { id?: string } }) => !!record?.info?.id) as Array<{ info: Message; parts?: Part[] }>
+}
+
 async function fetchRecentSendConfirmationRecords(
   sessionId: string,
   messageID: string,
@@ -2069,13 +2166,7 @@ async function fetchRecentSendConfirmationRecords(
     if (attempt > 0) await wait(SEND_CONFIRMATION_REFETCH_BASE_RETRY_MS * 2 ** (attempt - 1))
     assertExpectedRuntime?.()
     try {
-      const result = await sdk().session.messages({
-        sessionID: sessionId,
-        directory: directory ?? undefined,
-        limit: SEND_CONFIRMATION_REFETCH_LIMIT,
-      })
-      const records = (assertSdkSuccess(result, "session.messages") ?? [])
-        .filter((record: { info?: { id?: string } }) => !!record?.info?.id) as Array<{ info: Message; parts?: Part[] }>
+      const records = await readSendConfirmationRecords(sessionId, directory)
       anyQuerySucceeded = true
       if (records.some((record) => record.info.id === messageID)) {
         assertExpectedRuntime?.()
@@ -2231,7 +2322,35 @@ function materializeConfirmedSendRecords(
 // Abort
 // ---------------------------------------------------------------------------
 
+/**
+ * Compacts a native session through its CLI's own compaction, on the model
+ * the composer has selected.
+ */
+export async function compactNativeSession(
+  sessionId: string,
+  selection: { providerID: string; modelID: string; variant?: string | null; agent?: string; instructions?: string },
+): Promise<void> {
+  await waitForConnectionOrThrow()
+  const { directory } = dirStoreForSession(sessionId)
+  const request: NativeCompactRequest = {
+    directory: requireNativeDirectory(directory),
+    model: { providerID: selection.providerID, modelID: selection.modelID },
+    agent: nativeAgentOf(selection.agent),
+  }
+  if (selection.variant) request.variant = selection.variant
+  if (selection.instructions !== undefined) request.instructions = selection.instructions
+  await requireNativeAgents().compact(sessionId, request)
+}
+
 export async function abortCurrentOperation(sessionId: string): Promise<void> {
+  if (isNativeSessionId(sessionId)) {
+    try {
+      await requireNativeAgents().abort(sessionId)
+    } catch (error) {
+      console.error("[session-actions] native abort failed", error)
+    }
+    return
+  }
   // The abort must carry the SESSION'S directory, not the active UI directory:
   // OpenCode routes the request to the per-directory instance, and an abort
   // sent to the wrong instance cancels nothing while still returning 200 true
@@ -2368,12 +2487,32 @@ export async function dismissOpenPermissionsForSession(sessionId: string): Promi
 // Questions
 // ---------------------------------------------------------------------------
 
+// A native question is answered by the OpenChamber server, which hands the
+// answer to the CLI waiting on it. Success and a question that is already gone
+// both clear it locally, as for OpenCode questions below.
+async function settleNativeQuestion(sessionId: string, requestId: string, settle: () => Promise<void>): Promise<void> {
+  try {
+    await settle()
+    removeQuestionRequestFromChildStores(sessionId, requestId)
+  } catch (error) {
+    if (error instanceof NativeAgentsRequestError && error.code === NATIVE_QUESTION_GONE) {
+      removeQuestionRequestFromChildStores(sessionId, requestId)
+    }
+    throw error
+  }
+}
+
 export async function respondToQuestion(
   sessionId: string,
   requestId: string,
   answers: string[] | string[][],
 ): Promise<void> {
   await waitForConnectionOrThrow()
+  if (isNativeSessionId(sessionId)) {
+    const perQuestion = answers.length === 0 ? [] : Array.isArray(answers[0]) ? answers as string[][] : [answers as string[]]
+    await settleNativeQuestion(sessionId, requestId, () => requireNativeAgents().replyQuestion(requestId, perQuestion))
+    return
+  }
   const directory = resolveDirectoryForBlockingRequest("question", sessionId, requestId)
     || getSessionDirectory(sessionId)
     || dir()
@@ -2413,6 +2552,10 @@ export async function rejectQuestion(
   requestId: string,
 ): Promise<void> {
   await waitForConnectionOrThrow()
+  if (isNativeSessionId(sessionId)) {
+    await settleNativeQuestion(sessionId, requestId, () => requireNativeAgents().rejectQuestion(requestId))
+    return
+  }
   const directory = resolveDirectoryForBlockingRequest("question", sessionId, requestId)
     || getSessionDirectory(sessionId)
     || dir()
@@ -2499,6 +2642,7 @@ export async function dismissOpenQuestionsForSession(sessionId: string): Promise
         await rejectQuestion(scopedSessionId, requestId)
       } catch (error) {
         if (isQuestionRequestNotFoundError(error)) return
+        if (error instanceof NativeAgentsRequestError && error.code === NATIVE_QUESTION_GONE) return
         // Swallow: a failed dismissal must not block the send. The next
         // question.asked / question.rejected event reconciles the store.
         console.error("[session-actions] Failed to dismiss open question on send:", error)
@@ -2512,6 +2656,12 @@ export async function dismissOpenQuestionsForSession(sessionId: string): Promise
 // Message history
 // ---------------------------------------------------------------------------
 
+/** What a revert did beyond hiding messages, when the user should know. */
+export type RevertOutcome = {
+  /** No snapshot of the files before the message exists, so only the conversation went back. */
+  conversationOnly: boolean
+}
+
 /**
  * Revert to a specific user message.
  *
@@ -2520,19 +2670,25 @@ export async function dismissOpenQuestionsForSession(sessionId: string): Promise
  * 3. Optimistically set revert marker so messages hide immediately
  * 4. Call the runtime revert endpoint and merge returned session
  * 5. Set pendingInputText so the reverted message text appears in the input
+ *
+ * A native session's server stops its running turn and restores its files
+ * itself; its history is loaded through the native loader, so the message
+ * must already be in the store.
  */
-export async function revertToMessage(sessionId: string, messageId: string): Promise<void> {
+export async function revertToMessage(sessionId: string, messageId: string): Promise<RevertOutcome> {
   const { store, directory } = dirStoreForSession(sessionId)
   const state = store.getState()
+  const native = isNativeSessionId(sessionId)
 
   const localTarget = state.message[sessionId]?.find((message) => message.id === messageId)
-  const targetMessage = localTarget
-    ?? (await fetchSessionMessages(sessionId, directory)).find((message) => message.id === messageId)
+  const targetMessage = localTarget ?? (native
+    ? undefined
+    : (await fetchSessionMessages(sessionId, directory)).find((message) => message.id === messageId))
   if (!targetMessage) throw new Error(`Cannot revert session: message ${messageId} was not found`)
 
   // Abort if busy before mutating session state
   const status = state.session_status[sessionId]
-  if (status && status.type !== "idle") {
+  if (!native && status && status.type !== "idle") {
     try {
       await sdk().session.abort({ sessionID: sessionId, directory })
     } catch {
@@ -2609,10 +2765,20 @@ export async function revertToMessage(sessionId: string, messageId: string): Pro
 
   // Call SDK and merge authoritative result into store
   try {
-    // Descendants go first because OpenCode also restores file snapshots during
-    // revert. All sessions share a directory, so the parent's snapshot must win.
-    await cascadeRevertToDescendants(sessionId, targetMessage.time.created)
-    const revertedSession = await opencodeClient.revertSession(sessionId, messageId, undefined, directory)
+    let revertedSession: Session
+    let conversationOnly = false
+    if (native) {
+      // Subagent sessions of a native session are views of its transcript;
+      // rewinding the parent is the whole revert.
+      const result = await requireNativeAgents().revert(sessionId, messageId, requireNativeDirectory(directory))
+      revertedSession = result.session
+      conversationOnly = result.conversationOnly
+    } else {
+      // Descendants go first because OpenCode also restores file snapshots during
+      // revert. All sessions share a directory, so the parent's snapshot must win.
+      await cascadeRevertToDescendants(sessionId, targetMessage.time.created)
+      revertedSession = await opencodeClient.revertSession(sessionId, messageId, undefined, directory)
+    }
     const current = store.getState()
     const updated = [...current.session]
     const idx = updated.findIndex((s) => s.id === sessionId)
@@ -2623,6 +2789,7 @@ export async function revertToMessage(sessionId: string, messageId: string): Pro
     if (directory) {
       sessionEvents.requestGitRefresh({ directory })
     }
+    return { conversationOnly }
   } catch (err) {
     // Rollback: restore removed messages + revert marker
     const current = store.getState()
@@ -2688,6 +2855,20 @@ export async function unrevertSession(sessionId: string): Promise<void> {
   const state = store.getState()
   const previousMessageCount = state.message[sessionId]?.length ?? 0
 
+  // A native revert only marks the session until the next prompt commits it;
+  // its messages never left the store, so clearing the marker shows them.
+  if (isNativeSessionId(sessionId)) {
+    const unrevertedSession = await requireNativeAgents().unrevert(sessionId, requireNativeDirectory(directory))
+    const sessions = [...store.getState().session]
+    const idx = sessions.findIndex((s) => s.id === sessionId)
+    if (idx >= 0) {
+      sessions[idx] = unrevertedSession
+      store.setState({ session: sessions })
+    }
+    if (directory) sessionEvents.requestGitRefresh({ directory })
+    return
+  }
+
   // Abort if busy
   const status = state.session_status[sessionId]
   if (status && status.type !== "idle") {
@@ -2719,6 +2900,20 @@ export async function unrevertSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * A copy of a native session holding the conversation before a user message,
+ * or all of it when `beforeMessageId` is null. The server announces the copy.
+ */
+export function forkNativeSession(sessionId: string, beforeMessageId: string | null, directory: string | null | undefined): Promise<Session> {
+  return requireNativeAgents().fork(sessionId, beforeMessageId, requireNativeDirectory(directory))
+}
+
+/** The id of a native session's newest message, or null when it has none. */
+export async function readNativeNewestMessageId(sessionId: string, directory: string | null | undefined): Promise<string | null> {
+  const page = await requireNativeAgents().loadMessages(sessionId, requireNativeDirectory(directory), { limit: 1 })
+  return page.records.at(-1)?.info.id ?? null
+}
+
+/**
  * Fork from a user message.
  *
  * 1. Extract text from the message for input restoration
@@ -2744,7 +2939,9 @@ export async function forkFromMessage(sessionId: string, messageId: string): Pro
     .trim()
   const fileParts = parts.filter((part): part is FilePart => part.type === "file" && !isSyntheticPart(part))
 
-  const forkedSession = await opencodeClient.forkSession(sessionId, messageId, directory)
+  const forkedSession = isNativeSessionId(sessionId)
+    ? await forkNativeSession(sessionId, messageId, directory)
+    : await opencodeClient.forkSession(sessionId, messageId, directory)
   if (isStaleRuntime(expectedRuntimeKey)) return
   const target = createChatDraftIdentity(expectedRuntimeKey, resolveSessionOwnedDirectory(forkedSession) ?? directory, forkedSession.id)
   if (!target) throw new Error("Forked session has no composer directory")

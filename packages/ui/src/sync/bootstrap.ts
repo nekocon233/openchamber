@@ -7,6 +7,8 @@ import { emitSyncConfigChanged } from "./sync-refs"
 import { warmChatsRootDirectory } from "../lib/chatDirectories"
 import { runBackgroundNetworkTask } from "../lib/background-network"
 import { sessionStatusSnapshotSchema } from "../lib/opencode/session-status"
+import { isNativeSessionId } from "../lib/native-agents/ids"
+import { heldNativeQuestions, heldNativeStatuses, readNativeQuestions, readNativeStatuses } from "./native-directory-snapshots"
 import {
   readDirectoryStatusSnapshot,
   readDirectoryQuestionSnapshot,
@@ -173,21 +175,38 @@ async function initializeDirectory(input: DirectoryBootstrapInput): Promise<Boot
       // Capture the global-status baseline before the fetch so statuses
       // changed by events while the request is in flight are not overwritten.
       const statusBaselineRevision = getGlobalSessionStatusRevision()
-      const session_status = await readDirectoryStatusSnapshot(store, async () => (
-        sessionStatusSnapshotSchema.parse(unwrap(await sdk.session.status({ directory }), "session.status"))
-      ))
+      // A failed native read keeps the held native statuses, and the global
+      // settle below leaves native sessions alone.
+      let covers: (sessionId: string) => boolean = () => true
+      const session_status = await readDirectoryStatusSnapshot(store, async () => {
+        const [openCode, native] = await Promise.all([
+          sdk.session.status({ directory }),
+          readNativeStatuses(directory),
+        ])
+        if (native === null) covers = (sessionId) => !isNativeSessionId(sessionId)
+        return {
+          ...sessionStatusSnapshotSchema.parse(unwrap(openCode, "session.status")),
+          ...(native ?? heldNativeStatuses(store.getState().session_status)),
+        }
+      })
       if (!commit({ session_status, sessionStatusReady: true })) return
       applyGlobalSessionStatusSnapshot(
         directory,
         session_status,
         getDirectoryOwnedSessionIds(directory, store.getState().session),
         statusBaselineRevision,
+        "authoritative",
+        covers,
       )
     }),
     read(async () => {
-      const question = await readDirectoryQuestionSnapshot(store, async () => (
-        unwrap(await sdk.question.list({ directory }), "question.list")
-      ))
+      const question = await readDirectoryQuestionSnapshot(store, async () => {
+        const [openCode, native] = await Promise.all([
+          sdk.question.list({ directory }),
+          readNativeQuestions(directory),
+        ])
+        return [...unwrap(openCode, "question.list"), ...(native ?? heldNativeQuestions(store.getState().question))]
+      })
       commit({ question })
     }),
     read(async () => {

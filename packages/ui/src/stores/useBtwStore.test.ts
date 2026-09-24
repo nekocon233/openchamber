@@ -56,6 +56,11 @@ describe('useBtwStore', () => {
     ] })).toEqual({ agent: 'custom', model: composerModel, variant: 'medium' });
   });
 
+  test('runs a side question as the default agent the composer asks for, unless one was picked', () => {
+    expect(resolveBtwSelection({ ...input, defaultAgent: 'build' }).agent).toBe('build');
+    expect(resolveBtwSelection({ ...input, defaultAgent: 'build', savedAgent: 'plan' }).agent).toBe('plan');
+  });
+
   test('prefers the saved BTW selection over the current composer', () => {
     const savedModel = { providerId: 'one', modelId: 'selected' };
     expect(resolveBtwSelection({ ...input, savedModel, savedVariant: null }))

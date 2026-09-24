@@ -1,6 +1,7 @@
 import type { Session } from '@opencode-ai/sdk/v2';
 import { toast } from '@/components/ui';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
+import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import type { SessionUIState } from '@/sync/session-ui-store';
 import { getDescendantIds } from '../list/sessionCollection';
@@ -30,12 +31,17 @@ export type SessionSubtreeOutcome = {
  * so walking it from the root reaches through archived intermediates. Archived
  * sessions are then dropped for archive, which must not retimestamp them, and
  * kept for delete, which removes the whole subtree.
+ *
+ * A Claude Code session's subagent sessions are part of its transcript: the
+ * server archives, restores and deletes them with it, so none is acted on
+ * alone.
  */
 export const collectSessionSubtreeIds = (
   rootId: string,
   knownDescendantIds: readonly string[],
   includeArchived: boolean,
 ): string[] => {
+  if (nativeBackendOfSessionId(rootId) === 'claude') return [];
   const global = useGlobalSessionsStore.getState();
   const childrenByParentId = new Map<string, Session[]>();
   for (const session of [...global.activeSessions, ...global.archivedSessions]) {

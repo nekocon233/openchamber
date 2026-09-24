@@ -57,6 +57,10 @@ import { shouldConsumeBulkArchiveEcho } from "./bulk-archive-echo"
 import { selectNewChildSessions } from "./child-session-discovery"
 import { syncDebug } from "./debug"
 import { getReconnectCandidateSessionIds, mergeBootstrapSessions } from "./reconnect-recovery"
+import { fetchNativePartition, resolveNativeSessions } from "./native-session-partitions"
+import { readDirectoryStatuses, readNativeQuestions, readNativeSession, type DirectoryStatusSnapshot } from "./native-directory-snapshots"
+import { isNativeSessionId } from "@/lib/native-agents/ids"
+import { normalizePath } from "@/lib/pathNormalization"
 import { messagesBefore } from "./message-ordering"
 import { opencodeClient } from "@/lib/opencode/client"
 import { usePermissionStore } from "@/stores/permissionStore"
@@ -189,6 +193,20 @@ function assertSdkSuccess<T>(result: SdkResult<T>, operation: string): T | undef
   if (!result.error) return result.data
   const status = result.response?.status
   throw new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`)
+}
+
+// A native CLI session is read from the native API; OpenCode has never heard
+// of it. `null` when the session could not be read.
+async function readRecoverySession(
+  scopedClient: OpencodeClient,
+  directory: string,
+  sessionId: string,
+): Promise<Session | null> {
+  if (isNativeSessionId(sessionId)) return readNativeSession(sessionId, directory).catch(() => null)
+  return retry(async () => {
+    const response = await scopedClient.session.get({ sessionID: sessionId })
+    return assertSdkSuccess(response, "session.get") ?? null
+  }).catch(() => null)
 }
 
 function useSyncSystem() {
@@ -847,7 +865,7 @@ async function resyncDirectorySessionStatuses(
   mode: StatusSnapshotMode,
   isStale: () => boolean = () => false,
   signal?: AbortSignal,
-): Promise<DirectorySessionStatusSnapshot | null> {
+): Promise<DirectoryStatusSnapshot | null> {
   if (isStale()) return null
   const baselineRevision = getGlobalSessionStatusRevision()
   const currentStatuses = store.getState().session_status
@@ -859,20 +877,22 @@ async function resyncDirectorySessionStatuses(
   if (signal?.aborted) controller.abort()
   else signal?.addEventListener("abort", abort, { once: true })
   const timeout = setTimeout(() => controller.abort(), SESSION_STATUS_REQUEST_TIMEOUT_MS)
-  let nextStatuses: DirectorySessionStatusSnapshot | null
+  let snapshot: DirectoryStatusSnapshot | null
   try {
-    nextStatuses = await opencodeClient.getSessionStatusForDirectory(directory, { signal: controller.signal })
+    snapshot = await readDirectoryStatuses(directory, { signal: controller.signal })
   } finally {
     clearTimeout(timeout)
     signal?.removeEventListener("abort", abort)
   }
   // null = fetch failed; preserve existing state. {} or populated = a snapshot
   // of active sessions — reconciled per `mode` (absence ≠ idle under monotonic).
-  if (nextStatuses === null || signal?.aborted || isStale()) return null
+  // Sessions the snapshot does not cover keep their state: their source failed.
+  if (snapshot === null || signal?.aborted || isStale()) return null
+  const coveredSessionIds = candidateSessionIds.filter(snapshot.covers)
   applySessionStatusSnapshot(
     store,
-    nextStatuses,
-    candidateSessionIds,
+    snapshot.statuses,
+    coveredSessionIds,
     mode,
     baselineStatuses,
     baselineRevision,
@@ -881,10 +901,11 @@ async function resyncDirectorySessionStatuses(
     store.setState({ sessionStatusReady: true })
     applyGlobalSessionStatusSnapshot(
       directory,
-      nextStatuses,
+      snapshot.statuses,
       getDirectoryOwnedSessionIds(directory, store.getState().session),
       baselineRevision,
       mode,
+      snapshot.covers,
     )
     // An authoritative snapshot that settles sessions previously observed
     // busy/retry can leave their trailing assistant message and tool parts
@@ -892,11 +913,11 @@ async function resyncDirectorySessionStatuses(
     // The snapshot write above already lowered their status to explicit idle,
     // which is the gate the helper requires — a session the snapshot reports
     // busy stays untouched.
-    for (const sessionId of candidateSessionIds) {
+    for (const sessionId of coveredSessionIds) {
       applyInterruptedTurnReconciliation(store, sessionId)
     }
   }
-  return nextStatuses
+  return snapshot
 }
 
 /**
@@ -938,10 +959,10 @@ export function maybePollStatusAfterMessageCompletion(
     statusPollingDirectories.add(directory)
     void (async () => {
       try {
-        const statuses = await runBackgroundNetworkTask(() =>
+        const snapshot = await runBackgroundNetworkTask(() =>
           resyncDirectorySessionStatuses(directory, store, [sessionID], "monotonic"), "active-session")
-        if (!statuses) return
-        if (needsSnapshotAfterStatusPoll(store.getState(), sessionID, statuses[sessionID])) {
+        if (!snapshot?.covers(sessionID)) return
+        if (needsSnapshotAfterStatusPoll(store.getState(), sessionID, snapshot.statuses[sessionID])) {
           await runBackgroundNetworkTask(() =>
             resyncDirectorySessionStatuses(directory, store, [sessionID], "authoritative"), "active-session")
         }
@@ -1539,10 +1560,17 @@ export async function resyncBlockingRequestsForDirectory(
     const beforeSignatures = new Map(
       candidates.map((sessionId) => [sessionId, requestSignature(before.question[sessionId])]),
     )
-    const pendingQuestions = await opencodeClient.listPendingQuestions({ directories: [directory] })
+    const [pendingQuestions, nativeQuestions] = await Promise.all([
+      opencodeClient.listPendingQuestions({ directories: [directory] }),
+      readNativeQuestions(directory),
+    ])
     if (!isCurrent()) return
+    // A failed native read leaves the native sessions' questions as they are.
+    const settledCandidates = nativeQuestions === null
+      ? candidates.filter((sessionId) => !isNativeSessionId(sessionId))
+      : candidates
     const grouped: Record<string, QuestionRequest[]> = {}
-    for (const question of pendingQuestions) {
+    for (const question of [...pendingQuestions, ...(nativeQuestions ?? [])]) {
       if (!question?.id || !question.sessionID) continue
       if (!candidateIds.has(question.sessionID)) continue
       const list = grouped[question.sessionID]
@@ -1581,7 +1609,7 @@ export async function resyncBlockingRequestsForDirectory(
       for (const [sessionId, questions] of Object.entries(grouped)) {
         merged[sessionId] = questions
       }
-      for (const sessionId of candidates) {
+      for (const sessionId of settledCandidates) {
         if (grouped[sessionId]) continue
         const beforeSignature = beforeSignatures.get(sessionId) ?? ""
         const currentSignature = requestSignature(state.question[sessionId])
@@ -1703,7 +1731,7 @@ async function resyncDirectoryAfterReconnect(
   if (statusCandidateSessionIds.length === 0) return
 
   const scopedClient = opencodeClient.getScopedSdkClient(directory)
-  const statuses = await resyncDirectorySessionStatuses(
+  const statusSnapshot = await resyncDirectorySessionStatuses(
     directory,
     store,
     statusCandidateSessionIds,
@@ -1712,7 +1740,7 @@ async function resyncDirectoryAfterReconnect(
   )
   if (!isCurrent()) return
 
-  const snapshotActiveSessionIds = Object.entries(statuses ?? {})
+  const snapshotActiveSessionIds = Object.entries(statusSnapshot?.statuses ?? {})
     .filter(([, status]) => status.type === "busy" || status.type === "retry")
     .map(([sessionId]) => sessionId)
   const currentSessionById = new Map(store.getState().session.map((session) => [session.id, session] as const))
@@ -1735,18 +1763,13 @@ async function resyncDirectoryAfterReconnect(
   await Promise.all(candidateSessionIds.map(async (sessionId) => {
     syncDebug.recovery.materializing({ reason, directory, sessionID: sessionId })
     const loader = getImperativeSessionMessageLoader()
-    const [sessionResponse] = await Promise.all([
-      retry(async () => {
-        const response = await scopedClient.session.get({ sessionID: sessionId })
-        assertSdkSuccess(response, "session.get")
-        return response
-      }).catch(() => null),
+    const [session] = await Promise.all([
+      readRecoverySession(scopedClient, directory, sessionId),
       loader?.refreshTail({ directory, sessionID: sessionId }, RECONNECT_MESSAGE_LIMIT) ?? Promise.resolve(),
     ])
     if (!isCurrent()) return
     await recoverInterruptedTurnAfterMessageLoad(directory, store, sessionId, () => !isCurrent())
     if (!isCurrent()) return
-    const session = sessionResponse?.data
     if (!session) return
 
     const nextSession = stripSessionDiffSnapshots(session)
@@ -2467,15 +2490,22 @@ export async function recoverInterruptedTurnAfterMessageLoad(
   if ((initial.permission?.[sessionID] ?? []).length > 0) return
 
   if (!initial.session_status?.[sessionID]) {
-    const snapshot = await opencodeClient.getSessionStatusForDirectory(directory)
-    if (snapshot === null || isStale?.()
+    const snapshot = await readDirectoryStatuses(directory)
+    if (snapshot === null || !snapshot.covers(sessionID) || isStale?.()
       || getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== sdk) return
 
     // Do not overwrite a live status event that arrived while the snapshot was
     // in flight. The snapshot only fills the previously unknown state.
     if (!store.getState().session_status?.[sessionID]) {
-      applySessionStatusSnapshot(store, snapshot, [sessionID], "authoritative")
-      applyGlobalSessionStatusSnapshot(directory, snapshot, [sessionID])
+      applySessionStatusSnapshot(store, snapshot.statuses, [sessionID], "authoritative")
+      applyGlobalSessionStatusSnapshot(
+        directory,
+        snapshot.statuses,
+        [sessionID],
+        Number.POSITIVE_INFINITY,
+        "authoritative",
+        snapshot.covers,
+      )
     }
   }
 
@@ -2669,6 +2699,10 @@ export function SyncProvider(props: {
             loadSessions: async (dir) => {
               if (!isCurrent()) return
               const baselineRevision = store.getState().sessionRevision ?? 0
+              // Native CLI sessions are listed by their own backends, in
+              // parallel; a backend that fails keeps the sessions it had.
+              const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents
+              const nativePartition = nativeAgents?.supported ? fetchNativePartition(nativeAgents, dir) : null
               const rootSessions = (await listGlobalSessionPages(props.sdk, {
                 directory: dir,
                 archived: false,
@@ -2691,17 +2725,27 @@ export function SyncProvider(props: {
               } catch {
                 // A failed child query is incomplete, not an authoritative empty list.
               }
+              const nativeSnapshot = nativePartition ? await nativePartition : null
               if (!isCurrent()) return
 
               // A cold OpenCode process can briefly return children before its
               // roots query catches up. Recover referenced parents from the
               // broader response or cache instead of publishing orphan rows.
               const current = store.getState()
-              const { sessions, rootCount } = mergeBootstrapSessions(rootSessions, allSessions, current.session, {
-                baselineRevision,
-                eventRevision: current.sessionEventRevision,
-                deletedRevision: current.sessionDeletedRevision,
-              })
+              const nativeSessions = nativeSnapshot
+                ? resolveNativeSessions(current.session, new Map([[normalizePath(dir) ?? dir, nativeSnapshot]]))
+                : current.session.filter((session) => isNativeSessionId(session.id))
+              const nativeChildren = nativeSessions.filter((session) => Boolean(session.parentID))
+              const { sessions, rootCount } = mergeBootstrapSessions(
+                [...rootSessions, ...nativeSessions.filter((session) => !session.parentID)],
+                allSessions === null ? null : [...allSessions, ...nativeChildren],
+                current.session,
+                {
+                  baselineRevision,
+                  eventRevision: current.sessionEventRevision,
+                  deletedRevision: current.sessionDeletedRevision,
+                },
+              )
               store.setState({
                 session: sessions,
                 sessionsLoaded: true,
@@ -2967,7 +3011,7 @@ export function SyncProvider(props: {
       statusRequestControllers.add(controller)
       try {
         const before = store.getState()
-        const statuses = await runBackgroundNetworkTask(() => (
+        const snapshot = await runBackgroundNetworkTask(() => (
           resyncDirectorySessionStatuses(
             directory,
             store,
@@ -2977,9 +3021,10 @@ export function SyncProvider(props: {
             controller.signal,
           )
         ), "active-session")
-        if (!statuses || stopped || controller.signal.aborted) return
+        if (!snapshot || stopped || controller.signal.aborted) return
         const needsSnapshot = candidateSessionIds.some((sessionId) => (
-          needsSnapshotAfterStatusPoll(before, sessionId, statuses[sessionId])
+          snapshot.covers(sessionId)
+          && needsSnapshotAfterStatusPoll(before, sessionId, snapshot.statuses[sessionId])
         ))
         if (needsSnapshot) {
           triggerDirectoryResync(directory, "stale-status-resync")

@@ -31,7 +31,7 @@ export const SessionSuggestionChip: React.FC<SessionSuggestionChipProps> = React
     if (!sessionId || dismissing) return;
     setDismissing(true);
     try {
-      await patchSessionMetadata(sessionId, undefined, (metadata) => {
+      await patchSessionMetadata(sessionId, directory, (metadata) => {
         const namespace = isRecord(metadata.openchamber) ? metadata.openchamber : {};
         const assist = isRecord(namespace.assist) ? namespace.assist : {};
         const nextAssist = { ...assist };
@@ -43,7 +43,7 @@ export const SessionSuggestionChip: React.FC<SessionSuggestionChipProps> = React
     } finally {
       setDismissing(false);
     }
-  }, [sessionId, dismissing]);
+  }, [sessionId, directory, dismissing]);
 
   if (!suggestion || hidden) {
     return null;

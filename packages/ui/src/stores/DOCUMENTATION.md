@@ -157,6 +157,8 @@ preference migrations.
 
 `useGlobalSessionsStore.ts` owns cold/global active and archived session coverage. Its entity map and active root, parent/child, and directory indexes are maintained in the same transaction as the compatibility arrays and `sessionsByDirectory`. Full authoritative snapshots may rebuild those indexes once; direct create, update, move, archive, and delete mutations update only affected hierarchy and directory buckets. Metadata-only updates preserve the structure reference. It is complementary to directory child stores: it is not the source of live busy/retry status or session messages.
 
+Native CLI sessions join the same snapshot. `loadSessions` and `refreshSessionsForDirectories` read them per project directory, plus every directory that already holds a native session, in parallel with OpenCode's listing. A native backend that fails keeps its previous sessions, and a refresh replaces native sessions only in the directories it read. The merge rules are in `packages/ui/src/sync/DOCUMENTATION.md` under "Native CLI sessions".
+
 User-visible session ordering is also not owned by the global cache array order. `sync/session-ordering.ts` combines lifecycle rank with timestamp fallbacks, and session surfaces must use that shared comparator instead of independently sorting global sessions by `time.updated`.
 
 Global refresh rules:
@@ -394,6 +396,15 @@ project in Settings cannot change what chat sees. Components select through
 `selectAgentsForDirectory` / `selectCommandsForDirectory` /
 `selectSkillsForDirectory` / `selectMcpServersForDirectory` /
 `selectProvidersForDirectory`, which return stored arrays.
+
+Native CLI providers (`claude-native`, `codex-native`) join the provider list
+after OpenCode's, from `lib/native-agents/catalog.ts`. That catalog is read once
+per runtime, and a CLI whose read fails keeps the provider an earlier read
+found. Automatic fallback never picks a native provider, because the model
+decides whether a new session is a native one; the settings default may name
+one on purpose. Which providers a picker offers for a session is
+`isProviderPickableForSession`, described in
+`packages/ui/src/sync/DOCUMENTATION.md` under "Native CLI sessions".
 
 Model metadata uses the active provider model as authority for runtime
 capabilities, modalities, costs, and limits. The models.dev catalog fills only

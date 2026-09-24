@@ -8,6 +8,16 @@ import { buildSessionMessageRecordsSnapshot, useSyncRuntime } from './sync-conte
 import { loadSessionTitleTurns } from './session-title-context';
 import { generateAndSaveSessionTitle, runSessionTitleGeneration, useSessionTitleGenerationPending } from './session-title-generation';
 import { updateSessionTitle } from './session-actions';
+import { readNativeSession } from './native-directory-snapshots';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
+
+// A native CLI session's record comes from the OpenChamber server; OpenCode
+// refuses its id.
+const readSessionRecord = (sessionID: string, directory: string) => (
+  isNativeSessionId(sessionID)
+    ? readNativeSession(sessionID, directory)
+    : opencodeClient.getSession(sessionID, directory)
+);
 
 export function useIsSessionAiRenamePending(sessionID: string, directory: string | null | undefined): boolean {
   const { runtimeKey } = useSyncRuntime();
@@ -21,7 +31,7 @@ export function useSessionAiRename(sessionID: string, directory: string | null |
     if (!directory || isVSCodeRuntime()) throw new Error('Session title generation is unavailable');
     signal.throwIfAborted();
     if (getRuntimeKey() !== runtimeKey) throw new Error('Runtime changed');
-    const session = await opencodeClient.getSession(sessionID, directory);
+    const session = await readSessionRecord(sessionID, directory);
     signal.throwIfAborted();
     if (getRuntimeKey() !== runtimeKey || normalizePath(session.directory) !== normalizePath(directory)) {
       throw new Error('Session moved');
@@ -46,7 +56,7 @@ export function useSessionAiRename(sessionID: string, directory: string | null |
         signal,
         prepare,
         generate: (turns, requestSignal) => generateSessionTitle({ turns, directory, sessionID, signal: requestSignal }),
-        readSession: () => opencodeClient.getSession(sessionID, directory),
+        readSession: () => readSessionRecord(sessionID, directory),
         saveTitle: (title, requestSignal) => updateSessionTitle(sessionID, title, { directory, expectedRuntimeKey: runtimeKey, signal: requestSignal }),
       });
     });

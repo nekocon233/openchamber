@@ -20,6 +20,7 @@ import { createWebLinearAPI } from './linear';
 import { createWebClientAuthAPI } from './clientAuth';
 import { createWebSidebarStateAPI } from './sidebarState';
 import { createWebFollowUpQueueAPI } from './followUpQueue';
+import { createWebNativeAgentsAPI } from './nativeAgents';
 
 export interface WebAPIsOptions {
   urls?: RuntimeUrlResolver;
@@ -50,6 +51,7 @@ export const createWebAPIs = (options: WebAPIsOptions = {}): RuntimeAPIs => {
   settings: createWebSettingsAPI(),
   sidebarState: createWebSidebarStateAPI(),
   followUpQueue: createWebFollowUpQueueAPI(),
+  nativeAgents: createWebNativeAgentsAPI(),
   permissions: createWebPermissionsAPI(),
   notifications: createWebNotificationsAPI(),
   github: createWebGitHubAPI({ urls: activeUrls }),

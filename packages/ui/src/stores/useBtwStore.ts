@@ -8,17 +8,19 @@ export type BtwSelection = {
   variant: string | null | undefined;
 };
 
-export const resolveBtwSelection = ({ agents, savedAgent, savedModel, savedVariant, composerModel, composerVariant }: {
+export const resolveBtwSelection = ({ agents, savedAgent, savedModel, savedVariant, composerModel, composerVariant, defaultAgent = 'plan' }: {
   agents: readonly Pick<Agent, 'name' | 'hidden' | 'mode'>[];
   savedAgent: string | null;
   savedModel: BtwModelSelection | null;
   savedVariant?: string | null;
   composerModel: BtwModelSelection | null;
   composerVariant: string | null | undefined;
+  /** The agent a side question runs as until one is picked. */
+  defaultAgent?: string;
 }): BtwSelection => {
   const selectable = agents.filter((agent) => !agent.hidden && (agent.mode === 'primary' || agent.mode === 'all'));
   const agent = selectable.find((candidate) => candidate.name === savedAgent)
-    ?? selectable.find((candidate) => candidate.name === 'plan')
+    ?? selectable.find((candidate) => candidate.name === defaultAgent)
     ?? selectable[0];
   return {
     agent: agent?.name,

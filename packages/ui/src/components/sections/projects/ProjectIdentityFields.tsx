@@ -131,6 +131,7 @@ export const ProjectIdentityFields: React.FC<ProjectIdentityFieldsProps> = ({ fo
             modelId={parsedDefaultModel.modelId}
             onChange={handleDefaultModelChange}
             className={SETTINGS_CUSTOM_TRIGGER_CLASS}
+            allowNativeModels
           />
         </SettingsFieldRow>
 

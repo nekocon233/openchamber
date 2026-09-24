@@ -24,6 +24,12 @@ import {
 } from './sections';
 import { WorkStatusPresenceProvider } from './presence';
 import { Icon } from '@/components/icon/Icon';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
+
+// What these list is OpenCode's (its MCP servers and skills) or context
+// OpenChamber adds to OpenCode prompts (pins, memory). A native CLI session
+// uses none of it, so the panel leaves them out there rather than misreport.
+const OPENCODE_CONTEXT_SECTIONS = new Set<WorkStatusSectionId>(['mcp', 'pinned', 'contextSources']);
 
 type Props = {
   /** Null on a new-session draft: repository readouts still apply. */
@@ -68,6 +74,7 @@ const PANEL_TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
  */
 export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, repositoryEnabled = true, overlay = false }) => {
   const { t } = useI18n();
+  const nativeSession = sessionId !== null && isNativeSessionId(sessionId);
   const setScrollTop = useUIStore((state) => state.setWorkStatusScrollTop);
   const setOverlayOpen = useUIStore((state) => state.setWorkStatusOverlayOpen);
   const hiddenSections = useUIStore((state) => state.workStatusHiddenSections);
@@ -271,7 +278,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
           goalRow={<WorkStatusGoalRow sessionId={sessionId} directory={directory} />}
         >
           {(primary) => sectionOrder.map((id) => {
-            if (!sectionVisible(id)) return null;
+            if (!sectionVisible(id) || (nativeSession && OPENCODE_CONTEXT_SECTIONS.has(id))) return null;
             return <React.Fragment key={id}>{id === 'session' || id === 'repository' ? primary[id] : secondarySections[id]}</React.Fragment>;
           })}
         </WorkStatusPrimaryGroup>

@@ -16,12 +16,15 @@ import type { UsageProviderGroup, UsageLimitRow } from '@/components/usage/usage
  *
  * `claude-code` is the provider the opencode-claude integration registers, and
  * it bills against the same Claude subscription the `claude` quota reports.
+ * The native CLI providers bill against their CLI's subscription the same way.
  */
 const QUOTA_PROVIDER_ALIASES = new Map<string, string>([
   ['openai', 'codex'],
   ['chatgpt', 'codex'],
   ['anthropic', 'claude'],
   ['claude-code', 'claude'],
+  ['claude-native', 'claude'],
+  ['codex-native', 'codex'],
   ['gemini', 'google'],
 ]);
 
