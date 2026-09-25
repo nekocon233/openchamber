@@ -401,8 +401,9 @@ Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
   OpenCode; the server rewinds the CLI with that prompt.
 - The store wrapper tells the user when only the conversation went back
   (`conversationOnly`). When a CLI refuses the point
-  (`NATIVE_REVERT_FIRST_MESSAGE`, `NATIVE_REVERT_MID_TURN`) it says why and
-  resolves `false`, so undo and redo skip their success toast.
+  (`NATIVE_REVERT_FIRST_MESSAGE`, `NATIVE_REVERT_MID_TURN`,
+  `NATIVE_REWIND_BEFORE_COMPACTION`) it says why and resolves `false`, so undo
+  and redo skip their success toast.
 
 Rename, archive, restore and delete keep their flows with the remote step
 swapped for the native API (`updateSessionRemotely`, `deleteSessionRemotely`);

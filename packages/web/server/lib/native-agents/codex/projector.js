@@ -5,9 +5,9 @@
 // follow item order; a message steered into a running turn starts a new user
 // message and a new assistant segment. A context compaction becomes a
 // compaction message, the marker the UI shows for OpenCode's own compactions.
-// Codex items carry no timestamps, so parts use the turn's start and
-// completion times, and message creation times are kept non-decreasing in
-// turn order.
+// Live item notifications carry start/completion times; persisted items do
+// not, so history parts fall back to turn times. Message creation times stay
+// non-decreasing in turn order.
 
 import { z } from 'zod';
 
@@ -33,6 +33,7 @@ import {
 import { codexCompactionItemId, parseCodexUserMessageItem, partsForCodexItem } from './items.js';
 
 const DEFAULT_AGENT = 'build';
+const itemIdentitySchema = z.object({ id: z.string() });
 
 const turnSchema = z.object({
   id: z.string(),
@@ -90,8 +91,9 @@ export const codexUserMessages = ({ threadId, turns }) => {
  * @param {unknown[]} input.turns oldest first
  * @param {string} input.threadModel model the thread last ran with
  * @param {(userMessageId: string) => ({ modelID: string, variant?: string, agent: string } | null)} [input.sendRecordFor]
+ * @param {Map<string, { start: number, end: number | null }>} [input.itemTimes] live item lifecycle timestamps in milliseconds
  */
-export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel, sendRecordFor = () => null }) => {
+export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel, sendRecordFor = () => null, itemTimes }) => {
   const records = [];
   let lastCreated = 0;
   const createdAfterPrevious = (time) => {
@@ -178,12 +180,15 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
         records.push(currentAssistant);
       }
 
+      const itemIdentity = itemTimes ? itemIdentitySchema.safeParse(rawItem) : null;
+      const itemTime = itemIdentity?.success ? itemTimes.get(itemIdentity.data.id) : null;
+      const partStart = itemTime?.start ?? start;
       const parts = partsForCodexItem(rawItem, {
         sessionId,
         threadId,
         messageId: currentAssistant.info.id,
-        start,
-        end: outcome === null ? null : (end ?? start),
+        start: partStart,
+        end: itemTime?.end ?? (outcome === null ? null : Math.max(end ?? start, partStart)),
       });
       currentAssistant.parts.push(...parts);
     }

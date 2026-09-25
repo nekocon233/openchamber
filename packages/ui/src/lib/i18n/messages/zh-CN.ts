@@ -2201,6 +2201,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.revert.toast.conversationOnly': '只撤回了对话。没有这条消息之前的文件快照，文件保持原样。',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code 无法撤回会话的第一条消息。请改为新建会话。',
   'chat.revert.toast.nativeMidTurn': 'Codex 以完整的一轮为单位工作。请选择开启这一轮的消息。',
+  'chat.revert.toast.nativeBeforeCompaction': '这条消息在最近一次压缩之前。Claude Code 只能从压缩之后的消息撤回或分叉。',
   'chat.toast.opencodeRestartInterrupted.title': '聊天已中断',
   'chat.toast.opencodeRestartInterrupted.description': 'OpenCode 在回复仍在生成时重启了。发送一条消息以继续。',
   'chat.toast.opencodeRestartInterrupted.openSession': '打开会话',

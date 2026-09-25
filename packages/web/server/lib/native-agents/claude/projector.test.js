@@ -102,8 +102,10 @@ describe('Claude history projection', () => {
 
 describe('Claude compaction projection', () => {
   const at = (seconds) => new Date(Date.UTC(2026, 8, 16, 20, 0, seconds)).toISOString();
+  // A system entry as the SDK's history read returns it: the type, nothing of its kind.
+  const systemEntry = (uuid, seconds) => ({ type: 'system', uuid, timestamp: at(seconds), message: undefined, parent_tool_use_id: null, parent_agent_id: null });
   const entries = [
-    { type: 'system', uuid: 'boundary-1', timestamp: at(30) },
+    systemEntry('boundary-1', 30),
     {
       type: 'user',
       uuid: 'summary-1',
@@ -124,7 +126,8 @@ describe('Claude compaction projection', () => {
   it('shows the boundary as a compaction turn answered by the summary', () => {
     const [boundary, summary, preserved] = records;
     expect(boundary.info).toMatchObject({ id: 'ncl_k_boundary-1', role: 'user' });
-    expect(boundary.parts).toEqual([expect.objectContaining({ type: 'compaction', auto: true })]);
+    // The history read does not say what started it, so the marker makes no claim.
+    expect(boundary.parts).toEqual([expect.objectContaining({ type: 'compaction', auto: false })]);
     expect(summary.info).toMatchObject({ role: 'assistant', summary: true, finish: 'stop', parentID: 'ncl_k_boundary-1' });
     expect(summary.parts[0].text).toContain('continued from a previous conversation');
     expect(preserved.info.parentID).toBe('ncl_k_boundary-1');
@@ -135,13 +138,35 @@ describe('Claude compaction projection', () => {
     expect(created).toEqual([...created].sort((left, right) => left - right));
   });
 
-  it('tells a /compact the user asked for from one the CLI made to free the context', () => {
-    const manual = projectHistory([{ type: 'system', uuid: 'boundary-2', timestamp: at(40), compactMetadata: { trigger: 'manual', preTokens: 9000 } }]);
-    const auto = projectHistory([{ type: 'system', uuid: 'boundary-3', timestamp: at(40), compactMetadata: { trigger: 'auto', preTokens: 190000 } }]);
-    const live = projectHistory([{ type: 'system', subtype: 'compact_boundary', uuid: 'boundary-4', timestamp: at(40), compact_metadata: { trigger: 'manual', pre_tokens: 9000 } }]);
+  it('shows nothing for the other system entries a history read returns', () => {
+    const prompt = (uuid, seconds, text) => ({ type: 'user', uuid, timestamp: at(seconds), message: { role: 'user', content: text } });
+    const projected = projectHistory([
+      prompt('5f0a4d1e-2b8c-4c1a-9e6f-0d2b3c4a5e61', 1, 'first'),
+      {
+        type: 'assistant',
+        uuid: 'answer-1',
+        timestamp: at(2),
+        message: { id: 'msg_answer', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' },
+      },
+      // A turn duration, an away summary, and the two entries of a local command.
+      systemEntry('turn-duration', 3),
+      systemEntry('away-summary', 4),
+      systemEntry('local-command-1', 5),
+      systemEntry('local-command-2', 5),
+      prompt('7c9e2f3a-4b5d-4e6f-8a1b-2c3d4e5f6a7b', 6, 'second'),
+      systemEntry('notice', 7),
+    ]);
+    expect(projected.flatMap((record) => record.parts).filter((part) => part.type === 'compaction')).toEqual([]);
+    expect(projected.map((record) => record.info.role)).toEqual(['user', 'assistant', 'user']);
+  });
+
+  it('tells a /compact the user asked for from one the CLI made to free the context when the entry names its trigger', () => {
+    const manual = projectHistory([{ type: 'system', subtype: 'compact_boundary', uuid: 'boundary-2', timestamp: at(40), compact_metadata: { trigger: 'manual', pre_tokens: 9000 } }]);
+    const auto = projectHistory([{ type: 'system', subtype: 'compact_boundary', uuid: 'boundary-3', timestamp: at(40), compactMetadata: { trigger: 'auto', preTokens: 190000 } }]);
+    const other = projectHistory([{ type: 'system', subtype: 'turn_duration', uuid: 'duration-1', timestamp: at(40) }]);
     expect(manual[0].parts).toEqual([expect.objectContaining({ type: 'compaction', auto: false })]);
     expect(auto[0].parts).toEqual([expect.objectContaining({ type: 'compaction', auto: true })]);
-    expect(live[0].parts).toEqual([expect.objectContaining({ type: 'compaction', auto: false })]);
+    expect(other).toEqual([]);
   });
 });
 
@@ -286,9 +311,17 @@ describe('Claude slash commands', () => {
   it('shows /compact only as its compaction', () => {
     const records = projectHistory([
       { type: 'system', uuid: 'boundary-1', timestamp: '2026-09-24T10:00:02.000Z' },
+      {
+        type: 'user',
+        uuid: 'summary-1',
+        timestamp: '2026-09-24T10:00:02.000Z',
+        isCompactSummary: true,
+        is_meta: true,
+        message: { role: 'user', content: 'This session is being continued from a previous conversation.' },
+      },
       command('a22f0a7a-a88c-4093-a5e3-6653ff44f6d3', '/compact'),
       output('out-1', 'Compacted '),
     ]);
-    expect(records.map((record) => record.info.id)).toEqual(['ncl_k_boundary-1']);
+    expect(records.map((record) => record.info.id)).toEqual(['ncl_k_boundary-1', 'ncl_k_boundary-1_summary']);
   });
 });

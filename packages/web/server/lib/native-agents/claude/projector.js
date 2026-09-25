@@ -67,8 +67,12 @@ const entrySchema = z.object({
   isCompletedLocalCommand: z.boolean().optional(),
   tool_use_result: z.unknown().optional(),
   origin: z.object({ kind: z.string() }).passthrough().optional().catch(undefined),
+  // The kind of a system entry. Live frames and raw transcript lines carry
+  // it; the SDK's history read keeps only `type`.
+  subtype: z.string().optional(),
   // What started a compaction: `manual` for /compact, `auto` when the context
-  // filled. Transcripts name it in camel case, live frames in snake case.
+  // filled. Transcripts name it in camel case, live frames in snake case; the
+  // SDK's history read drops it.
   compactMetadata: z.object({ trigger: z.string() }).passthrough().optional().catch(undefined),
   compact_metadata: z.object({ trigger: z.string() }).passthrough().optional().catch(undefined),
 }).passthrough();
@@ -214,6 +218,10 @@ export const createClaudeProjection = ({
   let currentAssistant = null;
   let lastCreated = 0;
   let lastEntryTime = 0;
+  // A history system entry that is a compaction boundary only if the compact
+  // summary comes right after it.
+  /** @type {{ uuid: string, timestamp: string | undefined, trigger: string | null } | null} */
+  let pendingBoundary = null;
 
   const monotonicTime = (timestamp) => {
     const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
@@ -573,20 +581,32 @@ export const createClaudeProjection = ({
     return none;
   };
 
-  const applySystemEntry = (entry, changed) => {
-    // With includeSystemMessages, a compact boundary is a system entry
-    // without a message body.
-    if (entry.message !== undefined && entry.message !== null) return;
-    const time = monotonicTime(entry.timestamp);
-    const record = startUserMessage(`ncl_k_${entry.uuid}`, time);
-    const trigger = (entry.compactMetadata ?? entry.compact_metadata)?.trigger;
+  const openCompaction = ({ uuid, timestamp, trigger }, changed) => {
+    const record = startUserMessage(`ncl_k_${uuid}`, monotonicTime(timestamp));
     upsertPart(record, buildCompactionPart({
       id: userTextPartId(record.info.id, 0),
       sessionID: sessionId,
       messageID: record.info.id,
-      auto: trigger !== 'manual',
+      // Only a trigger the CLI named says who compacted; without one the
+      // marker makes no claim.
+      auto: trigger === 'auto',
     }));
     changed.push(record.info.id);
+  };
+
+  // A live frame names its kind. The SDK's history read keeps only the type of
+  // a system entry, so there a compaction boundary is known by the compact
+  // summary right after it (see applyEntry). Every other system entry, such as
+  // turn durations, away summaries, local commands and notices, shows nothing.
+  const applySystemEntry = (entry, changed) => {
+    if (entry.message !== undefined && entry.message !== null) return;
+    if (entry.subtype === undefined) {
+      pendingBoundary = { uuid: entry.uuid, timestamp: entry.timestamp, trigger: null };
+      return;
+    }
+    if (entry.subtype !== 'compact_boundary') return;
+    const trigger = (entry.compactMetadata ?? entry.compact_metadata)?.trigger ?? null;
+    openCompaction({ uuid: entry.uuid, timestamp: entry.timestamp, trigger }, changed);
   };
 
   const settleTools = (reason) => {
@@ -620,6 +640,9 @@ export const createClaudeProjection = ({
       if (!parsed.success) return [];
       const entry = parsed.data;
       const changed = [];
+      const boundary = pendingBoundary;
+      pendingBoundary = null;
+      if (boundary && entry.type === 'user' && entry.isCompactSummary === true) openCompaction(boundary, changed);
       if (entry.type === 'user') applyUserEntry(entry, changed);
       else if (entry.type === 'assistant') applyAssistantEntry(entry, changed);
       else applySystemEntry(entry, changed);

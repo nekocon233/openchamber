@@ -14,14 +14,16 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { claudeModels, codexModels } from './catalog.js';
+import { claudeModels, codexVariantSettings } from './catalog.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
 import { claudeConfigDir, readClaudeTaskList } from './claude/tasks.js';
 import { createCodexAppServer } from './codex/app-server.js';
+import { createCodexCatalog } from './codex/catalog.js';
 import { createCodexLiveThreads } from './codex/live.js';
 import { createCodexSessionStore } from './codex/store.js';
+import { createCodexUtility } from './codex/utility.js';
 import {
   invalidRequestError,
   NativeAgentError,
@@ -51,7 +53,11 @@ const STOP_TIMEOUT_MS = 10_000;
 // Listing Claude Code's commands starts a CLI process; the list changes only
 // with the user's and the project's skills and commands.
 const COMMANDS_CACHE_MS = 10 * 60_000;
-const threadResponseSchema = z.object({ thread: z.object({ id: z.string() }).passthrough() }).passthrough();
+const threadResponseSchema = z.object({
+  thread: z.object({ id: z.string() }).passthrough(),
+  // The tier the thread starts on; absent for the standard tier.
+  serviceTier: z.string().nullish(),
+}).passthrough();
 
 const errorMessage = (error) => (error instanceof Error ? error.message : String(error));
 
@@ -218,12 +224,22 @@ export const createNativeAgentsRuntime = ({
   // The app-server and the live threads call each other; the live threads
   // exist before the app-server can deliver anything.
   let codexLive = null;
+  const codexCatalog = createCodexCatalog({ request: (method, params) => appServer.request(method, params), buildEnv: buildChildEnv });
+  const codexUtility = createCodexUtility({ request: (method, params) => appServer.request(method, params), catalog: codexCatalog });
   const appServer = createCodexAppServer({
     resolveExecutable: () => resolveExecutable('codex'),
     buildEnv: buildChildEnv,
-    onNotification: (method, params) => codexLive.handleNotification(method, params),
-    onServerRequest: (method, params) => codexLive.handleServerRequest(method, params),
-    onExit: (error) => codexLive.handleExit(errorMessage(error)),
+    onNotification: (method, params) => {
+      if (!codexUtility.handleNotification(method, params)) codexLive.handleNotification(method, params);
+    },
+    onServerRequest: (method, params) => {
+      if (codexUtility.ownsRequest(params)) return Promise.reject(new Error('Tools are unavailable for utility generation'));
+      return codexLive.handleServerRequest(method, params);
+    },
+    onExit: (error) => {
+      codexUtility.handleExit(error);
+      codexLive.handleExit(errorMessage(error));
+    },
     clientVersion,
   });
   codexLive = createCodexLiveThreads({
@@ -375,7 +391,7 @@ export const createNativeAgentsRuntime = ({
       }));
       nativeId = started.thread.id;
       sessionId = encodeCodexSessionId(nativeId);
-      codexLive.threadStarted(sessionId, directory);
+      codexLive.threadStarted(sessionId, directory, started.serviceTier ?? null);
       // Codex keeps a name from before the first turn; a failed naming leaves the preview.
       if (title !== undefined) {
         await codex.rename(sessionId, title).catch((error) => {
@@ -407,12 +423,12 @@ export const createNativeAgentsRuntime = ({
 
     /** Models per backend; a backend whose catalog cannot be read says why. */
     async catalog() {
-      const codexList = await settled(appServer.request('model/list', {}));
+      const codexList = await settled(codexCatalog());
       return {
         backends: {
           [NATIVE_BACKEND_CLAUDE]: { status: 'ok', models: claudeModels() },
           [NATIVE_BACKEND_CODEX]: codexList.status === 'ok'
-            ? { status: 'ok', models: codexModels(codexList.value) }
+            ? { status: 'ok', models: codexList.value }
             : codexList,
         },
       };
@@ -470,7 +486,7 @@ export const createNativeAgentsRuntime = ({
           directory: request.directory,
           messageId: request.messageID,
           input,
-          config: { model: request.model.modelID, effort: request.variant ?? null, mode: request.agent === 'plan' ? 'plan' : 'default' },
+          config: { model: request.model.modelID, ...codexVariantSettings(request.variant), mode: request.agent === 'plan' ? 'plan' : 'default' },
           send,
         });
       }
@@ -736,7 +752,14 @@ export const createNativeAgentsRuntime = ({
       questions.reject(requestId);
     },
 
+    smallModel: {
+      available: codexUtility.available,
+      describe: codexUtility.describe,
+      generate: codexUtility.generate,
+    },
+
     async shutdown() {
+      codexUtility.handleExit(new Error('Codex runtime is shutting down'));
       await claudeLive.shutdown();
       await appServer.stop();
     },

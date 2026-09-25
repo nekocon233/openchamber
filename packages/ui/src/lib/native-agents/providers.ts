@@ -9,6 +9,18 @@ const PROVIDER_NAMES = {
   codex: 'Codex CLI',
 } satisfies Record<NativeBackend, string>;
 
+// Effort levels are the picker's variants for these models. A model with
+// Codex's Fast tier offers each effort again as `<effort>-fast`, which the
+// server runs on that tier.
+const variantsOf = (model: NativeModelDescriptor): NonNullable<Model['variants']> => {
+  const variants: NonNullable<Model['variants']> = {};
+  for (const effort of model.efforts) variants[effort] = { reasoningEffort: effort };
+  if (model.fast) {
+    for (const effort of model.efforts) variants[`${effort}-fast`] = { reasoningEffort: effort, fast: true };
+  }
+  return variants;
+};
+
 const buildNativeModel = (providerID: string, model: NativeModelDescriptor): Model => ({
   id: model.id,
   providerID,
@@ -29,8 +41,7 @@ const buildNativeModel = (providerID: string, model: NativeModelDescriptor): Mod
   options: {},
   headers: {},
   release_date: '',
-  // Effort levels are the picker's variants for these models.
-  variants: Object.fromEntries(model.efforts.map((effort) => [effort, { reasoningEffort: effort }])),
+  variants: variantsOf(model),
 });
 
 /** An OpenCode-shaped provider for a native CLI, so the model picker lists it like any other. */

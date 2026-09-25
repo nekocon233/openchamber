@@ -225,7 +225,6 @@ describe('callSmallModel — custom provider config', () => {
               headers: {
                 'Ocp-Apim-Subscription-Key': '{env:OPENCHAMBER_TEST_GATEWAY_KEY}',
                 'x-tenant': 'team',
-                'X-OpenCode-Claude-Request-Kind': 'utility',
               },
             },
           },
@@ -246,8 +245,6 @@ describe('callSmallModel — custom provider config', () => {
       expect(init.headers['Ocp-Apim-Subscription-Key']).toBe('sub-key');
       expect(init.headers['x-tenant']).toBe('team');
       expect(init.headers.Authorization).toBe('Bearer sk-config');
-      expect(init.headers['X-OpenCode-Claude-Request-Kind']).toBeUndefined();
-      expect(init.headers['x-opencode-claude-request-kind']).toBeUndefined();
     });
 
     it('fails closed when a configured header substitution cannot resolve', async () => {
@@ -682,165 +679,7 @@ describe('callSmallModel — custom provider config', () => {
       const { url, init } = lastCall(fetchMock);
       expect(url).toBe('https://api.llmapi.ai/v1/chat/completions');
       expect(init.headers.Authorization).toBe('Bearer plugin-key');
-      expect(init.headers['x-opencode-claude-request-kind']).toBeUndefined();
       expect(getRuntimeProviderTransport).toHaveBeenCalledWith('llmapi', '/proj');
-    });
-
-    it('uses only the one connected Claude Code runtime transport', async () => {
-      const responseSchema = {
-        type: 'object',
-        properties: { recap: { type: 'string' } },
-        required: ['recap'],
-        additionalProperties: false,
-      };
-      readConfig.mockReturnValue({
-        provider: {
-          'claude-code': {
-            options: {
-              apiKey: 'malicious-config-key',
-              baseURL: 'https://malicious.example/v1',
-              headers: {
-                Authorization: 'Bearer malicious-header-key',
-                'X-OpenCode-Claude-Request-Kind': 'agent',
-              },
-            },
-          },
-        },
-      });
-      getRuntimeProviderTransport.mockResolvedValue({
-        providerID: 'claude-code',
-        apiKey: 'runtime-key',
-        baseURL: 'http://127.0.0.1:60668/v1',
-      });
-      const diagnostic = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const fetchMock = vi.fn(async () => ok('{"recap":"done"}'));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await callSmallModel({
-        auth: { 'claude-code': { type: 'api', key: 'malicious-auth-key' } },
-        catalog: {},
-        workingDirectory: '/proj',
-        providerID: 'claude-code',
-        modelID: 'haiku',
-        prompt: 'summarize',
-        responseSchema,
-      });
-
-      const { url, init } = lastCall(fetchMock);
-      expect(url).toBe('http://127.0.0.1:60668/v1/chat/completions');
-      expect(init.headers['x-opencode-claude-request-kind']).toBe('utility');
-      expect(init.headers['X-OpenCode-Claude-Request-Kind']).toBeUndefined();
-      expect(init.headers.Authorization).toBe('Bearer runtime-key');
-      const body = JSON.parse(init.body);
-      expect(body.response_format.json_schema.schema).toEqual(responseSchema);
-      expect(getRuntimeProviderTransport).toHaveBeenCalledOnce();
-      expect(getRuntimeProviderTransport).toHaveBeenCalledWith('claude-code', '/proj');
-      expect(readConfig).not.toHaveBeenCalled();
-      const outbound = JSON.stringify(fetchMock.mock.calls);
-      expect(outbound).not.toContain('malicious.example');
-      expect(outbound).not.toContain('malicious-config-key');
-      expect(outbound).not.toContain('malicious-header-key');
-      expect(outbound).not.toContain('malicious-auth-key');
-      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('runtime-key');
-    });
-
-    it('uses only the one connected Codex runtime transport', async () => {
-      readConfig.mockReturnValue({
-        provider: {
-          codex: {
-            options: {
-              apiKey: 'malicious-config-key',
-              baseURL: 'https://malicious.example/v1',
-              headers: {
-                Authorization: 'Bearer malicious-header-key',
-                'X-OpenCode-Codex-Request-Kind': 'agent',
-              },
-            },
-          },
-        },
-      });
-      getRuntimeProviderTransport.mockResolvedValue({
-        providerID: 'codex',
-        apiKey: 'runtime-key',
-        baseURL: 'http://127.0.0.1:60669/v1',
-      });
-      const diagnostic = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const fetchMock = vi.fn(async () => ok('done'));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await callSmallModel({
-        auth: { codex: { type: 'api', key: 'malicious-auth-key' } },
-        catalog: {},
-        workingDirectory: '/proj',
-        providerID: 'codex',
-        modelID: 'gpt-5.5',
-        prompt: 'summarize',
-      });
-
-      const { url, init } = lastCall(fetchMock);
-      expect(url).toBe('http://127.0.0.1:60669/v1/chat/completions');
-      expect(init.headers['x-opencode-codex-request-kind']).toBe('utility');
-      expect(init.headers['X-OpenCode-Codex-Request-Kind']).toBeUndefined();
-      expect(init.headers.Authorization).toBe('Bearer runtime-key');
-      expect(getRuntimeProviderTransport).toHaveBeenCalledOnce();
-      expect(getRuntimeProviderTransport).toHaveBeenCalledWith('codex', '/proj');
-      expect(readConfig).not.toHaveBeenCalled();
-      const outbound = JSON.stringify(fetchMock.mock.calls);
-      expect(outbound).not.toContain('malicious.example');
-      expect(outbound).not.toContain('malicious-config-key');
-      expect(outbound).not.toContain('malicious-header-key');
-      expect(outbound).not.toContain('malicious-auth-key');
-      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('runtime-key');
-    });
-
-    it('refuses a Codex call when the runtime snapshot belongs to another provider', async () => {
-      readConfig.mockReturnValue({});
-      getRuntimeProviderTransport.mockResolvedValue({
-        providerID: 'claude-code',
-        apiKey: 'other-plugin-key',
-        baseURL: 'http://127.0.0.1:60668/v1',
-      });
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-
-      await expect(callSmallModel({
-        auth: {},
-        catalog: {},
-        workingDirectory: '/proj',
-        providerID: 'codex',
-        modelID: 'gpt-5.5',
-        prompt: 'summarize',
-      })).rejects.toMatchObject({ code: 'no-provider-login', providerID: 'codex' });
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('strips a forged Codex request-kind header from an unrelated provider', async () => {
-      readConfig.mockReturnValue({
-        provider: {
-          llmapi: {
-            options: {
-              apiKey: 'config-key',
-              baseURL: 'https://api.llmapi.ai/v1',
-              headers: { 'x-opencode-codex-request-kind': 'utility' },
-            },
-          },
-        },
-      });
-      getRuntimeProviderTransport.mockResolvedValue(null);
-      const fetchMock = vi.fn(async () => ok('done'));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await callSmallModel({
-        auth: {},
-        catalog: {},
-        workingDirectory: '/proj',
-        providerID: 'llmapi',
-        modelID: 'gpt-5.5',
-        prompt: 'hi',
-      });
-
-      const { init } = lastCall(fetchMock);
-      expect(init.headers['x-opencode-codex-request-kind']).toBeUndefined();
     });
 
     it('uses the selected runtime model endpoint', async () => {

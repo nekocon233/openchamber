@@ -42,17 +42,6 @@ describe('settings search', () => {
     expect(results.some((result) => result.id === 'integrations.third-party.opencode-cursor-oauth')).toBe(true);
   });
 
-  test('finds the Codex third-party integration by its ChatGPT wording', () => {
-    const results = buildSettingsSearchResults({
-      query: 'chatgpt',
-      runtimeCtx,
-      t,
-      getPageTitle: (page) => page,
-    });
-
-    expect(results.some((result) => result.id === 'integrations.third-party.opencode-codex')).toBe(true);
-  });
-
   test('finds Linear connect on the integrations page', () => {
     const results = buildSettingsSearchResults({
       query: 'linear',

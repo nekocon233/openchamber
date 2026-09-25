@@ -9,21 +9,19 @@ import {
   DEDICATED_WIRE_FORMAT_PROVIDERS,
   callSmallModel,
   getProviderTransportKind,
-  isRuntimeOnlyProvider,
   resolveProviderLogin,
-  resolveRuntimeOnlyTransport,
 } from './call.js';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
 import { getRuntimeProviderSnapshot, getRuntimeProviderTransportFromSnapshot } from './runtime-providers.js';
+import { NATIVE_PROVIDER_CODEX } from '../native-agents/ids.js';
 
 const EXPLICIT_MODEL_SOURCES = new Set(['settings', 'config', 'request']);
 
-// Claude Code and Codex are intentionally opt-in. Their plugin endpoints start
-// a CLI on the user's subscription for every call, so a session/family fallback
-// must behave as if no small model was found. A settings, config, or request
-// model is user intent.
-const isAllowedResolution = (resolved) => !isRuntimeOnlyProvider(resolved?.providerID)
-  || EXPLICIT_MODEL_SOURCES.has(resolved?.source);
+let codexRuntime = null;
+
+export const configureCodexSmallModel = (runtime) => {
+  codexRuntime = runtime;
+};
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
   process.env.OPENCHAMBER_DATA_DIR
@@ -104,6 +102,51 @@ const readConfiguredSmallModel = (workingDirectory) => {
   }
 };
 
+const resolveModelContext = async ({ model, directory, preferredProviderID, preferredModelID }) => {
+  const settingsSmallModel = readSmallModelSettingsOverride();
+  const configSmallModel = readConfiguredSmallModel(directory);
+  const requested = parseModelRef(model);
+  const configured = requested ? { ...requested, source: 'request' } : resolveSmallModel({
+    auth: {}, catalog: {}, settingsSmallModel, configSmallModel,
+  });
+  if (configured?.providerID === NATIVE_PROVIDER_CODEX) {
+    const runtime = codexRuntime;
+    if (!runtime) {
+      throw Object.assign(new Error('Codex utility runtime is unavailable'), {
+        statusCode: 503, code: 'codex-runtime-unavailable',
+      });
+    }
+    const nativeModel = await runtime.describe(configured.modelID);
+    return {
+      resolved: configured,
+      nativeModel,
+      runtime,
+      auth: {},
+      catalog: {
+        [NATIVE_PROVIDER_CODEX]: {
+          models: {
+            [configured.modelID]: {
+              limit: { context: nativeModel.contextWindow, output: nativeModel.outputLimit },
+              structured_output: true,
+            },
+          },
+        },
+      },
+    };
+  }
+  const auth = readAuthFile();
+  const catalog = await getModelCatalog().catch(() => ({}));
+  return {
+    auth,
+    catalog,
+    resolved: configured ?? resolveSmallModel({
+      auth, catalog, settingsSmallModel, configSmallModel, preferredProviderID, preferredModelID,
+    }),
+    nativeModel: null,
+    runtime: null,
+  };
+};
+
 /**
  * Generates text with the user's small model, resolved and authenticated
  * entirely server-side from the OpenCode config and auth store.
@@ -115,22 +158,11 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
   const normalizedPrompt = prompt.trim();
   const normalizedSystem = typeof system === 'string' && system.trim() ? system.trim() : undefined;
 
-  const auth = readAuthFile();
-  const catalog = await getModelCatalog().catch(() => ({}));
+  const { auth, catalog, resolved, nativeModel, runtime } = await resolveModelContext({
+    model, directory, preferredProviderID, preferredModelID,
+  });
 
-  const explicit = parseModelRef(model);
-  const resolved = explicit
-    ? { ...explicit, source: 'request' }
-    : resolveSmallModel({
-      auth,
-      catalog,
-      settingsSmallModel: readSmallModelSettingsOverride(),
-      configSmallModel: readConfiguredSmallModel(directory),
-      preferredProviderID,
-      preferredModelID,
-    });
-
-  if (!resolved || !isAllowedResolution(resolved)) {
+  if (!resolved) {
     throw Object.assign(
       new Error('No small model available — no authenticated provider has a suitable model'),
       { statusCode: 404 },
@@ -168,17 +200,12 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     outputReserveTokens: outputTokens,
   });
 
-  const resolvedProviderTransport = isRuntimeOnlyProvider(resolved.providerID)
-    ? await resolveRuntimeOnlyTransport(resolved.providerID, { workingDirectory: directory })
-    : undefined;
-  if (isRuntimeOnlyProvider(resolved.providerID) && !resolvedProviderTransport) {
-    throw Object.assign(
-      new Error(`No OpenCode login found for provider "${resolved.providerID}"`),
-      { statusCode: 401, code: 'no-provider-login', providerID: resolved.providerID },
-    );
+  if (nativeModel && !nativeModel.hasLogin) {
+    throw Object.assign(new Error('Sign in to Codex before using its small model'), {
+      statusCode: 401, code: 'no-provider-login',
+    });
   }
-
-  const text = await callSmallModel({
+  const generation = {
     auth,
     catalog,
     workingDirectory: directory,
@@ -191,8 +218,10 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     responseSchema,
     timeoutMs,
     signal,
-    resolvedProviderTransport,
-  });
+  };
+  const text = runtime
+    ? await runtime.generate({ ...generation, directory, effort: nativeModel.effort })
+    : await callSmallModel(generation);
 
   return {
     text: text.trim(),
@@ -210,16 +239,12 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
  * only ever fail (e.g. opencode free models without a token).
  */
 export async function listAuthenticatedProviders(directory) {
+  const ids = new Set();
   try {
     const auth = readAuthFile();
-    // A runtime-only provider must earn its place from the runtime snapshot
-    // below: a leftover auth.json entry says nothing about whether its CLI is
-    // actually reachable right now.
-    const ids = new Set(
-      Object.keys(auth || {}).filter((providerID) => (
-        !isRuntimeOnlyProvider(providerID) && isUsableAuthEntry(auth[providerID])
-      )),
-    );
+    for (const providerID of Object.keys(auth || {})) {
+      if (isUsableAuthEntry(auth[providerID])) ids.add(providerID);
+    }
     // The catalog id is github-copilot while legacy auth entries may sit
     // under the copilot alias.
     if (isUsableAuthEntry(getAuthEntryForProvider(auth, 'github-copilot'))) {
@@ -232,10 +257,15 @@ export async function listAuthenticatedProviders(directory) {
     } catch {
       // The auth.json set below stands on its own.
     }
-    return Array.from(ids);
   } catch {
-    return [];
+    // Codex owns an independent login, so an OpenCode auth read cannot hide it.
   }
+  try {
+    if (await codexRuntime?.available()) ids.add(NATIVE_PROVIDER_CODEX);
+  } catch {
+    // A missing or disconnected CLI does not erase the other providers.
+  }
+  return Array.from(ids);
 }
 
 /**
@@ -287,22 +317,12 @@ const resolveReserveTokens = (outputReserveTokens, limits) => (
 );
 
 export async function describeSmallModel({ directory, preferredProviderID, preferredModelID, outputReserveTokens, overrideModel } = {}) {
-  const auth = readAuthFile();
-  const catalog = await getModelCatalog().catch(() => ({}));
   // A caller with its own model setting (the diff walkthrough) outranks the
   // small-model chain entirely — it asked for this model on purpose.
-  const explicit = parseModelRef(overrideModel);
-  const resolved = explicit
-    ? { ...explicit, source: 'request' }
-    : resolveSmallModel({
-      auth,
-      catalog,
-      settingsSmallModel: readSmallModelSettingsOverride(),
-      configSmallModel: readConfiguredSmallModel(directory),
-      preferredProviderID,
-      preferredModelID,
-    });
-  if (!resolved || !isAllowedResolution(resolved)) return null;
+  const { auth, catalog, resolved, nativeModel } = await resolveModelContext({
+    model: overrideModel, directory, preferredProviderID, preferredModelID,
+  });
+  if (!resolved) return null;
 
   const entry = catalog?.[resolved.providerID]?.models?.[resolved.modelID];
   const outputTokenLimit = Number(entry?.limit?.output) > 0 ? Number(entry.limit.output) : null;
@@ -329,20 +349,13 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
 
   // Settings/config/request overrides can name a provider with no usable login.
   // Report that here so readiness can refuse before the user pays for a 401.
-  const runtimeOnly = isRuntimeOnlyProvider(resolved.providerID);
-  const runtimeTransport = runtimeOnly
-    ? await resolveRuntimeOnlyTransport(resolved.providerID, { workingDirectory: directory })
-    : null;
-  const login = runtimeOnly
-    ? null
-    : await resolveProviderLogin({
-      auth,
-      workingDirectory: directory,
-      providerID: resolved.providerID,
-    });
-  const hasLogin = runtimeOnly ? Boolean(runtimeTransport) : Boolean(login);
-  const transport = runtimeTransport?.transportID
-    ?? getProviderTransportKind({ providerID: resolved.providerID, login });
+  const login = nativeModel ? null : await resolveProviderLogin({
+    auth,
+    workingDirectory: directory,
+    providerID: resolved.providerID,
+  });
+  const hasLogin = nativeModel ? nativeModel.hasLogin : Boolean(login);
+  const transport = nativeModel ? 'codex-app-server' : getProviderTransportKind({ providerID: resolved.providerID, login });
 
   return {
     ...resolved,

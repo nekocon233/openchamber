@@ -23,8 +23,6 @@ vi.mock('./call.js', () => ({
   DEDICATED_WIRE_FORMAT_PROVIDERS: new Set(['github-copilot', 'copilot', 'openai', 'anthropic', 'google']),
   callSmallModel: vi.fn(),
   getProviderTransportKind: vi.fn(({ providerID }) => `${providerID}-transport`),
-  isRuntimeOnlyProvider: (providerID) => providerID === 'claude-code' || providerID === 'codex',
-  resolveRuntimeOnlyTransport: vi.fn(async () => null),
   resolveProviderLogin: vi.fn(async ({ auth, providerID }) => {
     const entry = auth?.[providerID];
     return entry && typeof entry === 'object' ? entry : null;
@@ -44,136 +42,7 @@ const { readAuthFile } = await import('../opencode/auth.js');
 const { getRuntimeProviderSnapshot } = await import('./runtime-providers.js');
 const { readConfigLayers } = await import('../opencode/shared.js');
 const { getModelCatalog, getCatalogProvider } = await import('./catalog.js');
-const { callSmallModel, resolveRuntimeOnlyTransport } = await import('./call.js');
-
-const claudeCodeSnapshot = ({ connected = true, apiKey = 'plugin-key', baseURL = 'http://127.0.0.1:60668/v1' } = {}) => ({
-  providers: new Map([['claude-code', {
-    id: 'claude-code',
-    apiKey,
-    baseURL,
-    anonymousZen: false,
-  }]]),
-  connected: new Set(connected ? ['claude-code'] : []),
-});
-
-const CLAUDE_CODE_CATALOG = {
-  'claude-code': {
-    id: 'claude-code',
-    models: {
-      haiku: { id: 'haiku', family: 'claude-haiku', limit: { context: 200_000, output: 8_000 } },
-    },
-  },
-};
-
-describe('Claude Code explicit small-model selection', () => {
-  beforeEach(() => {
-    readAuthFile.mockReturnValue({
-      'claude-code': {
-        type: 'oauth',
-        access: 'claude-cli-managed',
-        refresh: 'claude-cli-managed',
-      },
-    });
-    readConfigLayers.mockReturnValue({ mergedConfig: {} });
-    getModelCatalog.mockResolvedValue(CLAUDE_CODE_CATALOG);
-    getCatalogProvider.mockImplementation((catalog, providerID) => catalog?.[providerID] ?? null);
-    callSmallModel.mockReset();
-    callSmallModel.mockResolvedValue('generated');
-    resolveRuntimeOnlyTransport.mockReset();
-    resolveRuntimeOnlyTransport.mockResolvedValue({
-      providerID: 'claude-code',
-      apiKey: 'plugin-key',
-      baseURL: 'http://127.0.0.1:60668/v1',
-      kind: 'claude-code-runtime',
-      transportID: 'claude-code-runtime:test',
-    });
-    getRuntimeProviderSnapshot.mockResolvedValue(claudeCodeSnapshot());
-    fs.rmSync(SETTINGS_FILE, { force: true });
-  });
-
-  it('allows an explicit request model', async () => {
-    const result = await generateSmallModelText({
-      prompt: 'summarize this',
-      model: 'claude-code/haiku',
-      directory: '/project',
-    });
-
-    expect(result).toMatchObject({ providerID: 'claude-code', modelID: 'haiku', source: 'request' });
-    expect(callSmallModel).toHaveBeenCalledWith(expect.objectContaining({
-      providerID: 'claude-code',
-      modelID: 'haiku',
-      resolvedProviderTransport: expect.objectContaining({ apiKey: 'plugin-key' }),
-    }));
-    expect(resolveRuntimeOnlyTransport).toHaveBeenCalledOnce();
-    expect(resolveRuntimeOnlyTransport).toHaveBeenCalledWith('claude-code', { workingDirectory: '/project' });
-  });
-
-  it('allows an explicit OpenChamber settings model', async () => {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({
-      smallModelUseDefault: false,
-      smallModelOverride: 'claude-code/haiku',
-    }));
-
-    const result = await generateSmallModelText({ prompt: 'summarize this' });
-
-    expect(result).toMatchObject({ providerID: 'claude-code', modelID: 'haiku', source: 'settings' });
-    expect(callSmallModel).toHaveBeenCalledOnce();
-  });
-
-  it('allows an explicit OpenCode config model', async () => {
-    readConfigLayers.mockReturnValue({ mergedConfig: { small_model: 'claude-code/haiku' } });
-
-    const result = await generateSmallModelText({ prompt: 'summarize this' });
-
-    expect(result).toMatchObject({ providerID: 'claude-code', modelID: 'haiku', source: 'config' });
-    expect(callSmallModel).toHaveBeenCalledOnce();
-  });
-
-  it('refuses the implicit session model with the normal no-model 404', async () => {
-    await expect(generateSmallModelText({
-      prompt: 'summarize this',
-      preferredProviderID: 'claude-code',
-      preferredModelID: 'haiku',
-    })).rejects.toMatchObject({
-      statusCode: 404,
-    });
-    expect(callSmallModel).not.toHaveBeenCalled();
-    await expect(describeSmallModel({
-      preferredProviderID: 'claude-code',
-      preferredModelID: 'haiku',
-    })).resolves.toBeNull();
-  });
-
-  it('refuses an implicit family match with the normal no-model 404', async () => {
-    await expect(generateSmallModelText({
-      prompt: 'summarize this',
-    })).rejects.toMatchObject({ statusCode: 404 });
-
-    expect(callSmallModel).not.toHaveBeenCalled();
-  });
-
-  it('keeps describe and generation aligned with runtime callability', async () => {
-    const available = await describeSmallModel({ overrideModel: 'claude-code/haiku' });
-    expect(available).toMatchObject({
-      providerID: 'claude-code',
-      modelID: 'haiku',
-      source: 'request',
-      hasLogin: true,
-      transport: 'claude-code-runtime:test',
-    });
-    expect(JSON.stringify(available)).not.toContain('plugin-key');
-    expect(JSON.stringify(available)).not.toContain('127.0.0.1');
-
-    resolveRuntimeOnlyTransport.mockResolvedValue(null);
-    const unavailable = await describeSmallModel({ overrideModel: 'claude-code/haiku' });
-    expect(unavailable).toMatchObject({ providerID: 'claude-code', modelID: 'haiku', hasLogin: false });
-    await expect(generateSmallModelText({
-      prompt: 'summarize this',
-      model: 'claude-code/haiku',
-    })).rejects.toMatchObject({ statusCode: 401, code: 'no-provider-login' });
-    expect(callSmallModel).not.toHaveBeenCalled();
-  });
-});
+const { callSmallModel } = await import('./call.js');
 
 describe('provider availability for the model pickers', () => {
   beforeEach(() => {
@@ -196,38 +65,33 @@ describe('provider availability for the model pickers', () => {
     expect(await listAuthenticatedProviders()).toEqual(expect.arrayContaining(['openai', 'llmapi']));
   });
 
-  it('offers runtime-only Claude Code when it is connected with a credential and endpoint', async () => {
-    readAuthFile.mockReturnValue({});
-    getRuntimeProviderSnapshot.mockResolvedValue(claudeCodeSnapshot());
+  const pluginProvider = (overrides = {}) => ({
+    id: 'llmapi', apiKey: 'plugin-key', baseURL: 'https://api.llmapi.ai/v1', anonymousZen: false, ...overrides,
+  });
 
-    expect(await listAuthenticatedProviders('/project')).toContain('claude-code');
+  it('reads the runtime providers of the directory it is asked about', async () => {
+    readAuthFile.mockReturnValue({});
+    getRuntimeProviderSnapshot.mockResolvedValue(snapshot([pluginProvider()]));
+
+    expect(await listAuthenticatedProviders('/project')).toContain('llmapi');
     expect(getRuntimeProviderSnapshot).toHaveBeenCalledWith('/project');
   });
 
-  it('does not offer Claude Code from auth.json without a callable runtime provider', async () => {
-    readAuthFile.mockReturnValue({
-      'claude-code': { type: 'oauth', access: 'claude-cli-managed', refresh: 'claude-cli-managed' },
-    });
-    getRuntimeProviderSnapshot.mockResolvedValue(null);
-
-    expect(await listAuthenticatedProviders()).not.toContain('claude-code');
-  });
-
-  it('does not offer a disconnected Claude Code runtime provider', async () => {
+  it('does not offer a disconnected runtime provider', async () => {
     readAuthFile.mockReturnValue({});
-    getRuntimeProviderSnapshot.mockResolvedValue(claudeCodeSnapshot({ connected: false }));
+    getRuntimeProviderSnapshot.mockResolvedValue(snapshot([pluginProvider()], []));
 
-    expect(await listAuthenticatedProviders()).not.toContain('claude-code');
+    expect(await listAuthenticatedProviders()).not.toContain('llmapi');
   });
 
   it.each([
     ['credential', { apiKey: null }],
     ['endpoint', { baseURL: null }],
-  ])('does not offer Claude Code without its runtime %s', async (_missing, overrides) => {
+  ])('does not offer a runtime provider without its %s', async (_missing, overrides) => {
     readAuthFile.mockReturnValue({});
-    getRuntimeProviderSnapshot.mockResolvedValue(claudeCodeSnapshot(overrides));
+    getRuntimeProviderSnapshot.mockResolvedValue(snapshot([pluginProvider(overrides)]));
 
-    expect(await listAuthenticatedProviders()).not.toContain('claude-code');
+    expect(await listAuthenticatedProviders()).not.toContain('llmapi');
   });
 
   it('hides a provider with no endpoint to send a request to', async () => {

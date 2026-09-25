@@ -164,7 +164,7 @@ A compaction shows as a divider in the conversation, the way the CLI marks it, n
 
 - `getNormalizedMessageForDisplay` (`lib/messageDisplayNormalization.ts`) keeps the text `/compact` for the code that finds compactions by it, and sets `clientCompaction` from the part's `auto` flag; `ChatMessage` draws `CompactionMarker` ("compacted automatically" or "compacted") in place of the user bubble.
 - The summary the compaction left (`summary: true`) renders folded in `CompactionSummary`; the model reads it, the user opens it on demand.
-- Native sessions set `auto` from the CLI: Claude Code's boundary trigger (`manual` for /compact), and for Codex whether the compaction follows the turn's prompt (a /compact is a turn of its own).
+- Native sessions set `auto` from the CLI: for Claude Code the trigger a live boundary frame names (a compaction read back from history names none and shows as "compacted"), and for Codex whether the compaction follows the turn's prompt (a /compact is a turn of its own).
 
 ### Message parts
 

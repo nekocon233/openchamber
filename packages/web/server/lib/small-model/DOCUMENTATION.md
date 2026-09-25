@@ -1,7 +1,8 @@
 # Small Model
 
-Server-side direct LLM calls that reuse the user's existing OpenCode provider
-logins (`~/.local/share/opencode/auth.json`). OpenCode uses a "small model"
+Server-side utility generation through OpenCode provider logins
+(`~/.local/share/opencode/auth.json`) or the user's native Codex CLI.
+OpenCode uses a "small model"
 internally (titles, summaries) but does not expose it through the SDK or
 plugins — this module replicates that mechanism as an OpenChamber runtime API.
 
@@ -15,6 +16,11 @@ other runtime API.
 ## Files
 
 - `index.js` — orchestration: `generateSmallModelText()` / `describeSmallModel()`.
+  An explicit `codex-native/<model>` resolves against Codex's own account and
+  model catalog, without reading OpenCode credentials or models.dev. The
+  server supplies the native runtime through `configureCodexSmallModel`.
+  Generation is owned by `../native-agents/codex/utility.js`; see the native
+  module's [utility generation contract](../native-agents/DOCUMENTATION.md#utility-text-generation).
 - `runtime-providers.js` — provider state that exists only inside the running
   OpenCode process. A plugin registers its provider from the `config` hook and
   supplies the credential from its `auth` loader, so neither reaches
@@ -29,36 +35,27 @@ other runtime API.
 - `resolve.js` — model selection, mirroring OpenCode's `getSmallModel` chain:
    0. OpenChamber's own settings override (Settings → Sessions → Small Model):
       when `smallModelUseDefault` is `false`, `smallModelOverride`
-      (`provider/model`) outranks everything below. This is an explicit user
-      choice, so it may name `claude-code`. Sanitized in
+      (`provider/model`) outranks everything below. Sanitized in
       `settings-helpers.js` (server), `persistence.ts` (client), and
       `bridge-settings-runtime.ts` (VS Code).
    1. `small_model` from the merged OpenCode config layers (`provider/model`).
-      This is also explicit and may name `claude-code`.
    2. Family-priority scan (`gemini-flash` → `gpt-nano` → `claude-haiku`)
       **within the session's provider first** (`preferredProviderID`, like
       OpenCode resolves within the current provider), then over the other
       providers with a usable auth entry, newest `release_date` first.
-      `claude-code` and `codex` are excluded from both automatic scans.
    3. GitHub Copilot hidden utility models (`gpt-*-nano/mini`) — these never
       appear in the catalog, so they participate as the `gpt-nano` family entry
       and as a final utility fallback.
    4. Last resort: the session's own model (`preferredModelID`) when no small
-      model resolves anywhere — costlier, but always valid except for
-      `claude-code` and `codex`, which require an explicit source.
-   A request-level `model` is the third explicit source. Only `settings`,
-   `config`, and `request` resolutions may use `claude-code` or `codex`; a
-   Claude Code or Codex session, or a family match, never opts in on the user's
-   behalf. Both start a subscription-billed CLI for every call, and Codex
-   re-sends its whole agent harness prompt each time, so even a session title
-   costs tens of thousands of input tokens.
+      model resolves anywhere — costlier, but always valid.
+   A request-level `model` is the third explicit source.
    When a caller supplies `preferredProviderID`, implicit resolution is
    same-provider by default. `restrictToPreferredProvider: false` is the only
    opt-out. Settings, config, and request models remain explicit overrides.
-   A native CLI session's provider (`claude-native`, `codex-native`) has no
-   login of its own, so under that restriction its utility calls (AI title,
-   notes and read-aloud summaries, session assist, goal audits) run only on an explicit
-   settings or config small model, as Claude Code and Codex plugin sessions do.
+   Native CLI sessions still require an explicit settings, config, or request
+   small model. Selecting `codex-native/<model>` lets their AI titles, notes,
+   read-aloud summaries, session assist and goal audits use Codex's own login,
+   including calls originating from a Claude Code session.
 - Input clamp: the prompt is measured against the resolved model's catalog
   `limit.context` together with the system prompt (minus an output reserve,
   ~4 chars/token estimate;
@@ -78,7 +75,8 @@ other runtime API.
   (whose OpenAPI-flavored dialect drops unknown JSON Schema keywords). The
   ChatGPT-plan codex backend has no equivalent and rejects a schema request
   with `code: 'structured-output-unsupported'` rather than silently returning
-  prose.
+  prose. Native `codex-native` uses app-server `turn/start.outputSchema` and
+  supports structured output.
 - Output budget: `maxOutputTokens` is capped at the catalog's `limit.output` for
   the model, and the **same number** is reserved from the input allowance. The
   two must not drift — a caller that asks for a large answer while the reserve
@@ -91,6 +89,8 @@ other runtime API.
   `outputTokens`, which is what the caller should then request, so the reserve
   and the request are the same number by construction. `describeSmallModel`
   applies the same output-limit cap before calculating its input budget.
+  Native Codex reserves the same input budget, but its turn API has no hard
+  output-token parameter. The output budget is a brevity instruction there.
 - Reasoning models can spend the entire output budget thinking and return
   nothing. That case (empty content with `finish_reason: 'length'`, or content
   empty while `reasoning_content` is populated) throws with
@@ -103,9 +103,7 @@ other runtime API.
   is whether the resolved provider has a usable credential (`auth.json` or
   config `provider.<id>.options.apiKey`) — settings/config overrides can name a
   provider with none, and callers such as the walkthrough refuse before the
-  request. For `claude-code`, `hasLogin` is true only when the running OpenCode
-  reports the provider as connected with both `apiKey` and `baseURL`. Generation
-  enforces the same condition and returns a non-secret `transport` identity for
+  request. It also returns a non-secret `transport` identity for
   transport-scoped capability memory. `structuredOutput` is tri-state: `true`/`false`
   from the catalog,
   `null` when the catalog omits the field — which it does for roughly half of
@@ -156,20 +154,6 @@ other runtime API.
     substitutions. A missing, empty, or malformed substitution throws
     `provider-config-resolution-failed`; it never falls through to auth.json or
     a vendor endpoint. File contents and resolved credentials remain server-side.
-  - **Runtime-only CLI providers** (`claude-code`, `codex`): use the
-    OpenAI-compatible endpoint from the connected runtime provider and add that
-    provider's request-kind header — `x-opencode-claude-request-kind: utility`
-    or `x-opencode-codex-request-kind: utility`. Resolution copies one
-    `apiKey`/`baseURL` pair from one directory snapshot and uses it for the
-    generation, and refuses when that snapshot reports a different provider.
-    These branches do not read the provider config or auth.json, so those
-    sources cannot replace the runtime bearer, redirect the prompt, or override
-    the reserved header; a request-kind header appearing in any provider's
-    configured headers is stripped before the call. The local plugin can then
-    run a single-turn, no-tools utility call. Credentials stay in the normal
-    authorization header and are never returned to the client or written to
-    diagnostics. `RUNTIME_ONLY_PROVIDERS` in `call.js` is the single list;
-    `isRuntimeOnlyProvider` is what every other module asks.
   - `thinking: { type: 'disabled' }` is sent in two cases, mirroring OpenCode's
     `transform.ts`. The GLM switch belongs to the endpoint, not the model
     family: it goes to a provider whose id contains `zai`/`zhipu` or whose
@@ -198,12 +182,14 @@ other runtime API.
 
 ## Which providers the pickers may offer
 
-`listAuthenticatedProviders(directory)` answers one question for the Small Model and
-Changes Walkthrough pickers alike: which providers can this module actually
-call. One rule decides it, applied the same way to every provider — **a
-credential we are allowed to use, and an endpoint to send it to.** The
-auth.json scan as before, plus the credential and endpoint OpenCode resolved
-for a plugin provider.
+`listAuthenticatedProviders(directory)` tells both the Small Model and Changes
+Walkthrough pickers which providers this module can call. Direct providers
+need a credential and an endpoint, from auth.json or OpenCode's runtime
+provider listing. Native Codex uses `account/read` instead; its provider is
+offered when the CLI reports a login or a provider that needs no OpenAI login.
+An unavailable Codex CLI does not remove working direct providers, and an
+OpenCode credential-read failure does not hide Codex. Both pickers allow
+native models only from this server-supplied provider list.
 
 **opencode zen is excluded without a real login.** When the user has no zen
 credential, OpenCode substitutes the sentinel `options.apiKey = "public"` and
@@ -233,31 +219,15 @@ left to the call. A provider whose protocol lives in a plugin's `fetch` stays
 selectable and fails when used — which is what it did before this resolution
 existed.
 
-Claude Code appears in the pickers only when the runtime snapshot reports it as
-connected and includes both a credential and an endpoint. Its `auth.json` entry
-alone is not enough. Selecting it in Small Model or Changes Walkthrough,
-configuring it as OpenCode's `small_model`, or naming it in a request is an
-explicit opt-in. Every generation starts the Claude Code CLI through the local
-plugin and consumes the user's Claude subscription allowance.
-
-Picker visibility does not make Claude Code an automatic candidate. Session
-model and family resolution still exclude it, so a default Claude Code session
-gets the normal no-model `404` instead of silently starting the CLI. This single
-rule covers session recap and suggestion, TTS summaries, selection notes, both
-goal-objective distillation paths, goal audits, commit and pull-request text,
-and walkthrough generation.
-
-`codex` is excluded from the same two automatic paths for the same reason, and
-gets the same runtime-only treatment in `call.js`.
-
 The result is served as `authenticatedProviders` on `GET /api/small-model`.
 The field name predates the runtime resolution; it now means "callable", which
 is a superset of "has an auth.json entry".
 
 ## Registration
 
-Mounted lazily from `feature-routes-runtime.js` (same pattern as quota): the
-module is imported on first request, not at server startup.
+Routes are mounted from `feature-routes-runtime.js`. `server/index.js` wires
+the native Codex utility runtime once. The app-server still starts only when
+an account, catalog, or generation request needs it.
 
 ## Known limitations
 

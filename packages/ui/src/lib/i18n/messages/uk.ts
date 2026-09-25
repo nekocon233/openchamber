@@ -2213,6 +2213,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.revert.toast.conversationOnly": "Відкочено лише розмову. Знімка ваших файлів до цього повідомлення немає, тому вони залишилися без змін.",
   "chat.revert.toast.nativeFirstMessage": "Claude Code не може відкотити перше повідомлення сесії. Натомість почніть нову сесію.",
   "chat.revert.toast.nativeMidTurn": "Codex працює цілими ходами. Виберіть повідомлення, з якого почався цей хід.",
+  "chat.revert.toast.nativeBeforeCompaction": "Це повідомлення з'явилося до останнього стиснення. Claude Code може відкотити або відгалузити розмову лише від повідомлення після нього.",
   "chat.toast.opencodeRestartInterrupted.title": "Чат перервано",
   "chat.toast.opencodeRestartInterrupted.description": "OpenCode перезапустився, поки відповідь ще формувалася. Надішліть повідомлення, щоб продовжити.",
   "chat.toast.opencodeRestartInterrupted.openSession": "Відкрити сесію",

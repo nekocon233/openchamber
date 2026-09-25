@@ -2213,6 +2213,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.revert.toast.conversationOnly": "Apenas a conversa foi revertida. Não há um snapshot dos seus arquivos anterior a esta mensagem, então eles ficaram como estavam.",
   "chat.revert.toast.nativeFirstMessage": "O Claude Code não consegue reverter a primeira mensagem de uma sessão. Inicie uma nova sessão.",
   "chat.revert.toast.nativeMidTurn": "O Codex trabalha em turnos completos. Escolha a mensagem que iniciou este turno.",
+  "chat.revert.toast.nativeBeforeCompaction": "Esta mensagem é anterior à última compressão. O Claude Code só consegue reverter ou criar uma branch a partir de uma mensagem depois dela.",
   "chat.toast.opencodeRestartInterrupted.title": "Conversa interrompida",
   "chat.toast.opencodeRestartInterrupted.description": "O OpenCode foi reiniciado enquanto uma resposta ainda estava em andamento. Envie uma mensagem para continuar.",
   "chat.toast.opencodeRestartInterrupted.openSession": "Abrir sessão",

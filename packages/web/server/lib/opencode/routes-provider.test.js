@@ -19,8 +19,6 @@ const createApp = (overrides = {}) => {
     resolveProjectDirectory: vi.fn(async () => ({ directory: null, error: null })),
     getProviderSources: vi.fn(createSources),
     removeProviderConfig: vi.fn(() => true),
-    readClaudeCliAuthStatus: vi.fn(() => ({ status: 'connected', connected: true, reason: 'logged-in' })),
-    readCodexCliAuthStatus: vi.fn(() => ({ status: 'connected', connected: true, reason: 'logged-in' })),
     isExternalOpenCode: () => false,
     ...overrides,
   };
@@ -29,25 +27,10 @@ const createApp = (overrides = {}) => {
 };
 
 describe('provider auth runtime ownership', () => {
-  it('reports external Claude auth as unavailable without probing the host CLI', async () => {
-    const { app, dependencies } = createApp({ isExternalOpenCode: () => true });
+  it('reports provider auth as unavailable for an external runtime', async () => {
+    const { app } = createApp({ isExternalOpenCode: () => true });
 
-    const response = await request(app).get('/api/provider/claude-code/source').expect(200);
-
-    expect(response.body.sources.auth).toEqual({
-      exists: false,
-      status: 'unavailable',
-      canDisconnect: false,
-    });
-    expect(dependencies.readClaudeCliAuthStatus).not.toHaveBeenCalled();
-  });
-
-  it('preserves an unavailable local CLI probe instead of reporting logged out', async () => {
-    const { app } = createApp({
-      readClaudeCliAuthStatus: () => ({ status: 'unavailable', connected: false, reason: 'invalid-status' }),
-    });
-
-    const response = await request(app).get('/api/provider/claude-code/source').expect(200);
+    const response = await request(app).get('/api/provider/anthropic/source').expect(200);
 
     expect(response.body.sources.auth).toEqual({
       exists: false,
@@ -60,7 +43,7 @@ describe('provider auth runtime ownership', () => {
     const { app, dependencies } = createApp({ isExternalOpenCode: () => true });
 
     const response = await request(app)
-      .delete('/api/provider/claude-code/auth?scope=all')
+      .delete('/api/provider/anthropic/auth?scope=all')
       .expect(200);
 
     expect(response.body).toMatchObject({
@@ -68,66 +51,6 @@ describe('provider auth runtime ownership', () => {
       removed: false,
       capability: 'unavailable',
       code: 'PROVIDER_AUTH_RUNTIME_UNAVAILABLE',
-    });
-    expect(dependencies.removeProviderConfig).not.toHaveBeenCalled();
-  });
-
-  it('does not treat local OpenCode auth removal as a Claude CLI logout', async () => {
-    const { app, dependencies } = createApp();
-
-    const response = await request(app)
-      .delete('/api/provider/claude-code/auth?scope=all')
-      .expect(200);
-
-    expect(response.body).toMatchObject({
-      success: false,
-      removed: false,
-      capability: 'cli-owned',
-      code: 'PROVIDER_AUTH_CLI_OWNED',
-    });
-    expect(dependencies.removeProviderConfig).not.toHaveBeenCalled();
-  });
-
-  it('reads Codex sign-in from its own CLI, not from OpenCode auth', async () => {
-    const { app, dependencies } = createApp();
-
-    const response = await request(app).get('/api/provider/codex/source').expect(200);
-
-    expect(response.body.sources.auth).toEqual({
-      exists: true,
-      status: 'connected',
-      canDisconnect: false,
-    });
-    expect(dependencies.readCodexCliAuthStatus).toHaveBeenCalled();
-    expect(dependencies.readClaudeCliAuthStatus).not.toHaveBeenCalled();
-  });
-
-  it('preserves an unavailable Codex CLI probe instead of reporting logged out', async () => {
-    const { app } = createApp({
-      readCodexCliAuthStatus: () => ({ status: 'unavailable', connected: false, reason: 'empty-status' }),
-    });
-
-    const response = await request(app).get('/api/provider/codex/source').expect(200);
-
-    expect(response.body.sources.auth).toEqual({
-      exists: false,
-      status: 'unavailable',
-      canDisconnect: false,
-    });
-  });
-
-  it('refuses to disconnect Codex, whose credentials the CLI owns', async () => {
-    const { app, dependencies } = createApp();
-
-    const response = await request(app)
-      .delete('/api/provider/codex/auth?scope=all')
-      .expect(200);
-
-    expect(response.body).toMatchObject({
-      success: false,
-      removed: false,
-      capability: 'cli-owned',
-      code: 'PROVIDER_AUTH_CLI_OWNED',
     });
     expect(dependencies.removeProviderConfig).not.toHaveBeenCalled();
   });

@@ -14,11 +14,11 @@ const THREAD_ID = '01a0d2a6-b55b-7162-a837-c62053537e00';
 const SESSION_ID = `ncx_${THREAD_ID}`;
 const TURN_ID = '01a0d2a6-b5a1-7672-908a-eedff3ad5fa9';
 const MESSAGE_ID = 'ncx_u_5b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
-const CONFIG = { model: 'gpt-5.5', effort: 'low', mode: 'default' };
+const CONFIG = { model: 'gpt-5.5', effort: 'low', fast: false, mode: 'default' };
 
 const notifications = fixture('gpt55-tools.notifications.json');
 
-const createHarness = ({ replay = true, failures = {}, onIdle, instructions = null } = {}) => {
+const createHarness = ({ replay = true, failures = {}, onIdle, instructions = null, resumeResponse = {}, now } = {}) => {
   const events = [];
   const requests = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
@@ -27,6 +27,7 @@ const createHarness = ({ replay = true, failures = {}, onIdle, instructions = nu
   const request = async (method, params) => {
     requests.push({ method, params });
     if (failures[method]) throw failures[method];
+    if (method === 'thread/resume') return resumeResponse;
     if (method !== 'turn/start') return {};
     if (replay) {
       setTimeout(() => {
@@ -35,7 +36,7 @@ const createHarness = ({ replay = true, failures = {}, onIdle, instructions = nu
     }
     return { turn: { id: TURN_ID, status: 'inProgress', items: [] } };
   };
-  live = createCodexLiveThreads({ request, publisher, questions, onIdle, readGlobalInstructions: async () => instructions });
+  live = createCodexLiveThreads({ request, publisher, questions, onIdle, readGlobalInstructions: async () => instructions, now });
   return { live, events, requests, questions };
 };
 
@@ -61,6 +62,87 @@ const sendPrompt = (live, overrides = {}) => live.prompt({
 });
 
 describe('Codex live threads', () => {
+  it('exposes completed patch results while later items still run', async () => {
+    const { live } = createHarness({ replay: false });
+    await sendPrompt(live);
+    const patchEvents = notifications.filter((event) => event.params?.item?.type === 'fileChange');
+    for (const event of patchEvents) live.handleNotification(event.method, event.params);
+
+    const parts = live.liveRecords(SESSION_ID).flatMap((record) => record.parts);
+    const patches = parts.filter((part) => part.type === 'tool' && part.tool === 'apply_patch');
+    const starts = patchEvents.filter((event) => event.method === 'item/started');
+    const completions = patchEvents.filter((event) => event.method === 'item/completed');
+    expect(patches).toHaveLength(2);
+    for (let index = 0; index < patches.length; index += 1) {
+      expect(patches[index].state).toMatchObject({
+        status: 'completed',
+        output: expect.stringContaining('greeting.txt'),
+        time: { start: starts[index].params.startedAtMs, end: completions[index].params.completedAtMs },
+        metadata: { files: [expect.objectContaining({ diff: expect.stringContaining('@@') })] },
+      });
+    }
+    expect(live.busySessionIds(DIRECTORY)).toEqual([SESSION_ID]);
+  });
+
+  it('ends each reasoning block at its completion and ignores late events', async () => {
+    const { live, events } = createHarness({ replay: false, now: () => 1000 });
+    await sendPrompt(live);
+    const item = { type: 'reasoning', id: 'reasoning-1', summary: [], content: [] };
+    const params = { threadId: THREAD_ID, turnId: TURN_ID, item };
+    const delta = { threadId: THREAD_ID, turnId: TURN_ID, itemId: item.id, summaryIndex: 0, delta: 'Checking the patch.' };
+    live.handleNotification('item/started', { ...params, startedAtMs: 1100 });
+    live.handleNotification('item/reasoning/summaryTextDelta', delta);
+    live.handleNotification('item/completed', { ...params, completedAtMs: 1400, item: { ...item, summary: [delta.delta] } });
+
+    const reasoning = () => live.liveRecords(SESSION_ID).flatMap((record) => record.parts).find((part) => part.type === 'reasoning');
+    expect(reasoning()).toMatchObject({ text: delta.delta, time: { start: 1100, end: 1400 } });
+    const eventCount = events.length;
+    live.handleNotification('item/started', params);
+    live.handleNotification('item/reasoning/summaryTextDelta', { ...delta, delta: ' stale' });
+    live.handleNotification('item/completed', { ...params, completedAtMs: 1500 });
+    expect(events).toHaveLength(eventCount);
+    expect(reasoning()).toMatchObject({ text: delta.delta, time: { start: 1100, end: 1400 } });
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', completedAt: 2 } });
+    expect(payloads(events, 'message.part.updated').at(-1).properties.part.time).toEqual({ start: 1100, end: 1400 });
+  });
+
+  it('uses receipt times without CLI timestamps and rejects deltas from another turn', async () => {
+    let clock = 1000;
+    const { live, events } = createHarness({ replay: false, now: () => clock });
+    await sendPrompt(live);
+    const item = { type: 'reasoning', id: 'reasoning-1', summary: [], content: [] };
+    const params = { threadId: THREAD_ID, turnId: TURN_ID, item };
+    live.handleNotification('item/started', params);
+    const eventCount = events.length;
+    for (let index = 0; index < 1000; index += 1) {
+      live.handleNotification('item/reasoning/summaryTextDelta', { threadId: THREAD_ID, turnId: 'earlier-turn', itemId: item.id, delta: 'stale', summaryIndex: 0 });
+    }
+    expect(events).toHaveLength(eventCount);
+    clock = 1300;
+    live.handleNotification('item/completed', { ...params, item: { ...item, summary: ['Finished.'] } });
+    const part = live.liveRecords(SESSION_ID).flatMap((record) => record.parts).find((entry) => entry.type === 'reasoning');
+    expect(part).toMatchObject({ text: 'Finished.', time: { start: 1000, end: 1300 } });
+  });
+
+  it('accepts a completion without a start and settles unfinished reasoning on interruption', async () => {
+    const { live, events } = createHarness({ replay: false, now: () => 1500 });
+    await sendPrompt(live);
+    live.handleNotification('item/completed', {
+      threadId: THREAD_ID, turnId: TURN_ID, completedAtMs: 1400,
+      item: { type: 'agentMessage', id: 'reply', text: 'Working.' },
+    });
+    expect(live.liveRecords(SESSION_ID).flatMap((record) => record.parts).find((part) => part.type === 'text' && part.text === 'Working.').time)
+      .toEqual({ start: 1400, end: 1400 });
+    live.handleNotification('item/started', {
+      threadId: THREAD_ID, turnId: TURN_ID, startedAtMs: 1500,
+      item: { type: 'reasoning', id: 'reasoning', summary: ['Still working.'], content: [] },
+    });
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'interrupted', completedAt: 1 } });
+    const lastReasoning = payloads(events, 'message.part.updated').map((event) => event.properties.part).filter((part) => part.type === 'reasoning').at(-1);
+    expect(lastReasoning.time).toEqual({ start: 1500, end: 1500 });
+    expect(live.liveRecords(SESSION_ID)).toBeNull();
+  });
+
   it('gives the global instructions to Codex as developer instructions when it loads the thread', async () => {
     const { live, requests } = createHarness({ replay: false, instructions: 'Instructions from: /home/ada/.config/opencode/AGENTS.md\nAnswer in English.' });
     await sendPrompt(live);
@@ -132,6 +214,35 @@ describe('Codex live threads', () => {
     expect(assistant.properties.info).toMatchObject({ finish: 'stop', variant: 'low', time: { completed: expect.any(Number) } });
     expect(live.liveRecords(SESSION_ID)).toBeNull();
     expect(live.busySessionIds(DIRECTORY)).toEqual([]);
+  });
+
+  it('runs a fast variant on the Fast tier and names the standard tier again only when a turn leaves it', async () => {
+    const { live, requests } = createHarness({ replay: false });
+    const complete = () => live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', startedAt: 1, completedAt: 2 } });
+    await sendPrompt(live, { config: { ...CONFIG, fast: true } });
+    complete();
+    await sendPrompt(live, { messageId: 'ncx_u_6c1f2d63-3a2a-4d5b-8e9f-1b2c3d4e5f60' });
+    complete();
+    await sendPrompt(live, { messageId: 'ncx_u_7d2f3e74-4b3b-4e6c-9f0a-2c3d4e5f6071' });
+    const tiers = requests.filter((entry) => entry.method === 'turn/start').map((entry) => entry.params.serviceTier);
+    expect(tiers).toEqual(['priority', 'default', undefined]);
+  });
+
+  it('moves a thread that loads on Fast off it for a standard variant, and keeps it there for a fast one', async () => {
+    const standard = createHarness({ replay: false, resumeResponse: { serviceTier: 'priority' } });
+    await sendPrompt(standard.live);
+    expect(standard.requests.at(-1).params.serviceTier).toBe('default');
+
+    const fast = createHarness({ replay: false, resumeResponse: { serviceTier: 'priority' } });
+    await sendPrompt(fast.live, { config: { ...CONFIG, fast: true } });
+    expect(fast.requests.at(-1).params).not.toHaveProperty('serviceTier');
+  });
+
+  it('knows the tier a thread it created started on', async () => {
+    const { live, requests } = createHarness({ replay: false });
+    live.threadStarted(SESSION_ID, DIRECTORY, 'priority');
+    await sendPrompt(live);
+    expect(requests.at(-1).params.serviceTier).toBe('default');
   });
 
   it('starts the first turn of a thread it just created without resuming it', async () => {

@@ -106,10 +106,6 @@ The webview build emits each worker as one self-contained file. VS Code webviews
 
 - `claudeAuth.ts`
   - Reads Claude authentication without mutating or refreshing credentials.
-  - Managed-runtime Provider status comes from an asynchronous, concurrent-call
-    coalesced `claude auth status --json` probe. It uses the same executable and
-    Windows shim rules as managed OpenCode launch. Missing, malformed, and
-    timed-out probes remain unavailable rather than becoming logged out.
   - Quota credentials resolve in order from macOS Keychain,
     `~/.claude/.credentials.json`, OpenCode auth, then
     `CLAUDE_CODE_OAUTH_TOKEN`. A missing Keychain item permits the legacy file

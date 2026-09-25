@@ -12,8 +12,6 @@ import { getOpenCodeUpgradeStatus, upgradeManagedOpenCode } from './opencode-upg
 import { buildDeferredRestartResponse } from './config-mutation-response';
 import { normalizeWindowsDriveLetter, pathsEqualWithNormalizedDriveLetter } from './pathUtils';
 import { resolveWorkspaceFolders } from './workspaceResolver';
-import { getClaudeCliAuthStatus } from './claudeAuth';
-import { getCodexCliAuthStatus } from './codexAuth';
 import type { BridgeContext, BridgeResponse } from './bridge';
 
 type BridgeMessageInput = {
@@ -34,25 +32,6 @@ const notificationClaims = new Map<string, number>();
 
 const isExternalOpenCodeRuntime = (ctx?: BridgeContext): boolean =>
   ctx?.manager?.getDebugInfo().mode === 'external';
-
-/**
- * Providers whose credentials live in their own CLI, not in OpenCode's auth
- * store. Their sign-in state has to be read from the CLI, and the extension
- * must never offer to disconnect them: the credential is not ours to delete,
- * and for Codex a re-sign-in revokes the working session before it starts.
- */
-const cliOwnedProviderAuth = {
-  'claude-code': getClaudeCliAuthStatus,
-  codex: getCodexCliAuthStatus,
-} as const;
-
-type CliOwnedProviderId = keyof typeof cliOwnedProviderAuth;
-
-const isCliOwnedProvider = (providerId: string): providerId is CliOwnedProviderId =>
-  Object.prototype.hasOwnProperty.call(cliOwnedProviderAuth, providerId);
-
-const readCliOwnedProviderAuth = (providerId: CliOwnedProviderId) =>
-  cliOwnedProviderAuth[providerId]();
 
 const claimNotification = (key: string): boolean => {
   const now = Date.now();
@@ -446,8 +425,7 @@ export async function handleSystemBridgeMessage(
       if (!providerId) {
         return { id, type, success: false, error: 'Provider ID is required' };
       }
-      const external = isExternalOpenCodeRuntime(ctx);
-      if (external || isCliOwnedProvider(providerId)) {
+      if (isExternalOpenCodeRuntime(ctx)) {
         return {
           id,
           type,
@@ -455,8 +433,8 @@ export async function handleSystemBridgeMessage(
           data: {
             success: false,
             removed: false,
-            capability: external ? 'unavailable' : 'cli-owned',
-            code: external ? 'PROVIDER_AUTH_RUNTIME_UNAVAILABLE' : 'PROVIDER_AUTH_CLI_OWNED',
+            capability: 'unavailable',
+            code: 'PROVIDER_AUTH_RUNTIME_UNAVAILABLE',
           },
         };
       }
@@ -516,13 +494,6 @@ export async function handleSystemBridgeMessage(
         const hasConfigSource = sources.user.exists || sources.project.exists || sources.custom.exists;
         if (isExternalOpenCodeRuntime(ctx)) {
           sources.auth = { exists: false, status: 'unavailable', canDisconnect: false };
-        } else if (isCliOwnedProvider(providerId)) {
-          const cliStatus = await readCliOwnedProviderAuth(providerId);
-          sources.auth = {
-            exists: cliStatus.status === 'connected',
-            status: cliStatus.status,
-            canDisconnect: false,
-          };
         } else {
           const auth = getProviderAuth(providerId);
           const connected = Boolean(auth);

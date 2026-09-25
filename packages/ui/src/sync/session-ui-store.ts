@@ -1272,6 +1272,7 @@ export function materializeOpenDraftSession(selection: {
 const nativeRevertRefusal = (error: NativeAgentsRequestError): I18nKey | null => {
   if (error.code === "NATIVE_REVERT_FIRST_MESSAGE") return "chat.revert.toast.nativeFirstMessage"
   if (error.code === "NATIVE_REVERT_MID_TURN") return "chat.revert.toast.nativeMidTurn"
+  if (error.code === "NATIVE_REWIND_BEFORE_COMPACTION") return "chat.revert.toast.nativeBeforeCompaction"
   return null
 }
 

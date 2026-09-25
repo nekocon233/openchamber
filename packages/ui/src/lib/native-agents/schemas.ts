@@ -173,6 +173,8 @@ const nativeModelSchema = z.object({
   outputLimit: z.number(),
   efforts: z.array(z.string()),
   defaultEffort: z.string().nullable(),
+  // Whether the model offers Codex's Fast tier; a server from before it has no field.
+  fast: z.boolean().catch(false),
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
 });
 

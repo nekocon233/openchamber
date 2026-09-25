@@ -193,3 +193,131 @@ describe('Claude session store', () => {
     expect(await store.loadHistory(`ncl_${OPENCHAMBER_UUID}_t_toolu_unknown`, DIRECTORY)).toBeNull();
   });
 });
+
+describe('Claude history before the last compaction', () => {
+  const SESSION_UUID = '66666666-6666-4666-8666-666666666666';
+  const SESSION_ID = `ncl_${SESSION_UUID}`;
+  const U1 = '77777777-7777-4777-8777-777777777771';
+  const U2 = '77777777-7777-4777-8777-777777777772';
+  const U3 = '77777777-7777-4777-8777-777777777773';
+  const U4 = '77777777-7777-4777-8777-777777777774';
+  const U5 = '77777777-7777-4777-8777-777777777775';
+  const at = (minute) => new Date(Date.UTC(2026, 8, 25, 1, minute)).toISOString();
+  const prompt = (uuid, minute, text) => ({ type: 'user', uuid, timestamp: at(minute), message: { role: 'user', content: text } });
+  const reply = (uuid, minute, id, text) => ({
+    type: 'assistant',
+    uuid,
+    timestamp: at(minute),
+    message: { id, model: 'claude-opus-5-5', content: [{ type: 'text', text }], stop_reason: 'end_turn' },
+  });
+  const summary = (uuid, minute, text) => ({ type: 'user', uuid, timestamp: at(minute), isCompactSummary: true, is_meta: true, message: { role: 'user', content: text } });
+  // A compaction as the raw transcript records it (the CLI can name an entry it
+  // writes after the boundary as its logical parent), and as a history read returns it.
+  const rawBoundary = (uuid, minute, logicalParentUuid) => ({
+    type: 'system', subtype: 'compact_boundary', uuid, timestamp: at(minute), parentUuid: null, logicalParentUuid, compactMetadata: { trigger: 'auto' },
+  });
+  const readBoundary = (uuid, minute) => ({ type: 'system', uuid, timestamp: at(minute), message: undefined, parent_tool_use_id: null, parent_agent_id: null });
+
+  const u1 = prompt(U1, 1, 'first question');
+  const a1 = reply('a1', 2, 'msg_1', 'first answer');
+  const u2 = prompt(U2, 3, 'second question');
+  const a2 = reply('a2', 4, 'msg_2', 'second answer');
+  const s1 = summary('s1', 5, 'summary one');
+  const u3 = prompt(U3, 7, 'third question');
+  const a3 = reply('a3', 8, 'msg_3', 'third answer');
+  const s2 = summary('s2', 9, 'summary two');
+  const u4 = prompt(U4, 11, 'fourth question');
+  const a4 = reply('a4', 12, 'msg_4', 'fourth answer');
+
+  const createCompactedHarness = ({ importFails = false } = {}) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-claude-compacted-'));
+    directories.push(dir);
+    const state = {
+      raw: [u1, a1, u2, a2, rawBoundary('b1', 5, 's1'), s1, u3, a3, rawBoundary('b2', 9, 's2'), s2, u4, a4],
+      // A history read of the whole transcript, and of a cut where a
+      // compaction started, keyed by the last entry the cut keeps.
+      current: [readBoundary('b2', 9), s2, u4, a4],
+      segments: {
+        // The first compaction carried the second exchange over.
+        a3: [readBoundary('b1', 5), s1, u2, a2, u3, a3],
+        a2: [u1, a1, u2, a2],
+      },
+      info: { sessionId: SESSION_UUID, summary: 'Long work', lastModified: 1000, fileSize: 2000, createdAt: 500 },
+    };
+    const calls = { imports: 0, cuts: [] };
+    const sdk = {
+      getSessionInfo: async () => state.info,
+      listSubagents: async () => [],
+      getSessionMessages: async (_sessionId, options = {}) => {
+        if (!options.sessionStore) return state.current;
+        const cut = await options.sessionStore.load({ projectKey: 'work-project', sessionId: SESSION_UUID });
+        const last = cut.at(-1).uuid;
+        calls.cuts.push(last);
+        return state.segments[last] ?? [];
+      },
+      importSessionToStore: async (sessionId, target) => {
+        calls.imports += 1;
+        if (importFails) throw new Error('transcript unreadable');
+        await target.append({ projectKey: 'work-project', sessionId }, state.raw);
+      },
+    };
+    const registry = createNativeRegistry({ filePath: path.join(dir, 'registry.json') });
+    return { store: createClaudeSessionStore({ loadSdk: async () => sdk, registry }), state, calls };
+  };
+
+  const conversationOf = (records) => records.map((record) => {
+    if (record.parts.some((part) => part.type === 'compaction')) return 'compaction';
+    const text = record.parts.filter((part) => part.type === 'text').map((part) => part.text).join('');
+    return record.info.summary === true ? `summary: ${text}` : `${record.info.role}: ${text}`;
+  });
+
+  it('shows the conversation before each compaction, a carried-over message once, and a marker at each compaction', async () => {
+    const { store } = createCompactedHarness();
+    const history = await store.loadHistory(SESSION_ID, DIRECTORY);
+    expect(conversationOf(history.records)).toEqual([
+      'user: first question', 'assistant: first answer',
+      'user: second question', 'assistant: second answer',
+      'compaction', 'summary: summary one',
+      'user: third question', 'assistant: third answer',
+      'compaction', 'summary: summary two',
+      'user: fourth question', 'assistant: fourth answer',
+    ]);
+    expect(new Set(history.records.map((record) => record.info.id)).size).toBe(history.records.length);
+  });
+
+  it('reads the earlier segments again only once another compaction is the last one', async () => {
+    const { store, state, calls } = createCompactedHarness();
+    await store.loadHistory(SESSION_ID, DIRECTORY);
+    expect(calls).toEqual({ imports: 1, cuts: ['a3', 'a2'] });
+
+    const u5 = prompt(U5, 13, 'fifth question');
+    state.current = [...state.current, u5];
+    state.info = { ...state.info, lastModified: 2000, fileSize: 2100 };
+    const grown = conversationOf((await store.loadHistory(SESSION_ID, DIRECTORY)).records);
+    expect(calls.imports).toBe(1);
+    expect([grown[0], grown.at(-1)]).toEqual(['user: first question', 'user: fifth question']);
+
+    state.raw = [...state.raw, u5, rawBoundary('b3', 14, 's3')];
+    state.segments[U5] = [readBoundary('b2', 9), s2, u4, a4, u5];
+    state.current = [readBoundary('b3', 14), summary('s3', 14, 'summary three')];
+    state.info = { ...state.info, lastModified: 3000, fileSize: 2400 };
+    const compacted = conversationOf((await store.loadHistory(SESSION_ID, DIRECTORY)).records);
+    expect(calls.imports).toBe(2);
+    expect(compacted.filter((entry) => entry === 'compaction')).toHaveLength(3);
+    expect(compacted.slice(-3)).toEqual(['user: fifth question', 'compaction', 'summary: summary three']);
+  });
+
+  it('shows the chain after the last compaction alone when the transcript cannot be read', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { store } = createCompactedHarness({ importFails: true });
+    const history = await store.loadHistory(SESSION_ID, DIRECTORY);
+    expect(conversationOf(history.records)).toEqual(['compaction', 'summary: summary two', 'user: fourth question', 'assistant: fourth answer']);
+  });
+
+  it('refuses to revert or fork from a message before the last compaction, which the CLI cannot resume at', async () => {
+    const { store } = createCompactedHarness();
+    await expect(store.rewindTarget(SESSION_ID, DIRECTORY, `ncl_u_${U3}`)).rejects.toMatchObject({ code: 'NATIVE_REWIND_BEFORE_COMPACTION' });
+    await expect(store.rewindTarget(SESSION_ID, DIRECTORY, 'ncl_u_88888888-8888-4888-8888-888888888888')).rejects.toMatchObject({ code: 'NATIVE_MESSAGE_NOT_FOUND' });
+    expect(await store.rewindTarget(SESSION_ID, DIRECTORY, `ncl_u_${U4}`)).toMatchObject({ resumeAt: 's2' });
+  });
+});

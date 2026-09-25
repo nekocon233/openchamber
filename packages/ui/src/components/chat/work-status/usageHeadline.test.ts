@@ -36,10 +36,6 @@ describe('resolveQuotaProviderId', () => {
     expect(resolveQuotaProviderId('anthropic')).toBe('claude');
   });
 
-  test('maps the opencode-claude integration provider onto Claude quota', () => {
-    expect(resolveQuotaProviderId('claude-code')).toBe('claude');
-  });
-
   test('maps the native CLI providers onto their subscriptions', () => {
     expect(resolveQuotaProviderId('claude-native')).toBe('claude');
     expect(resolveQuotaProviderId('codex-native')).toBe('codex');

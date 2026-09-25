@@ -2235,6 +2235,7 @@ export const dict = {
   'chat.revert.toast.conversationOnly': 'Only the conversation was reverted. There is no snapshot of your files from before this message, so they were left as they are.',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code cannot revert the first message of a session. Start a new session instead.',
   'chat.revert.toast.nativeMidTurn': 'Codex works in whole turns. Pick the message that started this turn.',
+  'chat.revert.toast.nativeBeforeCompaction': 'This message is from before the last compaction. Claude Code can only revert or fork from a message after it.',
   'chat.toast.opencodeRestartInterrupted.title': 'Chat interrupted',
   'chat.toast.opencodeRestartInterrupted.description': 'OpenCode restarted while a response was still running. Send a message to continue.',
   'chat.toast.opencodeRestartInterrupted.openSession': 'Open session',

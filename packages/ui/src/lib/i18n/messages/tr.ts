@@ -2190,6 +2190,7 @@ export const dict = {
   'chat.revert.toast.conversationOnly': 'Yalnızca konuşma geri alındı. Bu mesajdan öncesine ait bir dosya anlık görüntüsü olmadığından dosyalarınız olduğu gibi bırakıldı.',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code bir oturumun ilk mesajını geri alamaz. Bunun yerine yeni bir oturum başlatın.',
   'chat.revert.toast.nativeMidTurn': 'Codex tam turlar halinde çalışır. Bu turu başlatan mesajı seçin.',
+  'chat.revert.toast.nativeBeforeCompaction': 'Bu mesaj son sıkıştırmadan önceye ait. Claude Code yalnızca ondan sonraki bir mesajdan geri alabilir veya fork\'layabilir.',
   'chat.toast.opencodeRestartInterrupted.title': 'Sohbet kesildi',
   'chat.toast.opencodeRestartInterrupted.description': 'Yanıt hâlâ çalışırken OpenCode yeniden başlatıldı. Devam etmek için bir mesaj gönder.',
   'chat.toast.opencodeRestartInterrupted.openSession': 'Session\'ı aç',

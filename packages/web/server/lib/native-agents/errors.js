@@ -49,6 +49,14 @@ export const revertFirstMessageError = () => new NativeAgentError(
   { code: 'NATIVE_REVERT_FIRST_MESSAGE', status: 409 },
 );
 
+// Claude Code resumes only inside the chain after the last compaction. The
+// history shows the messages before it from the transcript, but the CLI cannot
+// resume there.
+export const rewindBeforeCompactionError = () => new NativeAgentError(
+  'Claude Code cannot revert or fork from a message before the last compaction',
+  { code: 'NATIVE_REWIND_BEFORE_COMPACTION', status: 409 },
+);
+
 // Codex rewinds whole turns; a message steered into a running turn does not
 // start one.
 export const revertMidTurnError = () => new NativeAgentError(

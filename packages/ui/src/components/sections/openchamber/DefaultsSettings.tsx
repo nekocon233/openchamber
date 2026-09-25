@@ -392,6 +392,7 @@ export const DefaultsSettings: React.FC = () => {
                   modelId={parsedSmallModel.modelId}
                   onChange={handleSmallModelOverrideChange}
                   allowedProviderIds={smallModelProviders}
+                  allowNativeModels
                   className={SETTINGS_CUSTOM_TRIGGER_CLASS}
                 />
               </SettingsFieldRow>
@@ -416,6 +417,7 @@ export const DefaultsSettings: React.FC = () => {
                   modelId={parsedWalkthroughModel.modelId}
                   onChange={handleWalkthroughModelOverrideChange}
                   allowedProviderIds={smallModelProviders}
+                  allowNativeModels
                   isModelAllowed={isStructuredOutputCapable}
                   placeholder={t('settings.openchamber.defaults.walkthroughModel.usesSmallModel')}
                   className={SETTINGS_CUSTOM_TRIGGER_CLASS}

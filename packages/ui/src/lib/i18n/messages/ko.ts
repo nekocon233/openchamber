@@ -2237,6 +2237,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.revert.toast.conversationOnly': '대화만 되돌렸습니다. 이 메시지 이전의 파일 스냅샷이 없어 파일은 그대로 두었습니다.',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code는 세션의 첫 메시지를 되돌릴 수 없습니다. 대신 새 세션을 시작하세요.',
   'chat.revert.toast.nativeMidTurn': 'Codex는 턴 단위로 작동합니다. 이 턴을 시작한 메시지를 선택하세요.',
+  'chat.revert.toast.nativeBeforeCompaction': '이 메시지는 마지막 압축 이전의 메시지입니다. Claude Code는 압축 이후의 메시지에서만 되돌리거나 분기할 수 있습니다.',
   'chat.toast.opencodeRestartInterrupted.title': '채팅이 중단되었습니다',
   'chat.toast.opencodeRestartInterrupted.description': '응답이 진행 중인 동안 OpenCode가 다시 시작되었습니다. 계속하려면 메시지를 보내세요.',
   'chat.toast.opencodeRestartInterrupted.openSession': '세션 열기',

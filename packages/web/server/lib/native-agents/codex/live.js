@@ -14,6 +14,7 @@
 
 import { z } from 'zod';
 
+import { CODEX_FAST_SERVICE_TIER, CODEX_STANDARD_SERVICE_TIER } from '../catalog.js';
 import { invalidRequestError } from '../errors.js';
 import { codexPartId, decodeNativeSessionId, isNativeClientUserMessageId } from '../ids.js';
 import { stoppedError, unknownError } from '../records.js';
@@ -38,6 +39,8 @@ const turnParams = z.object({
 const itemParams = z.object({
   threadId: z.string(),
   turnId: z.string(),
+  startedAtMs: z.number().nullish(),
+  completedAtMs: z.number().nullish(),
   item: z.object({ id: z.string(), type: z.string() }).passthrough(),
 }).passthrough();
 const textDeltaParams = z.object({
@@ -56,6 +59,8 @@ const planParams = z.object({
   plan: z.array(z.object({ step: z.string(), status: z.string() }).passthrough()),
 }).passthrough();
 const startedTurn = z.object({ turn: z.object({ id: z.string() }).passthrough() }).passthrough();
+// The tier a thread runs on, as a resume reports it; absent for the standard tier.
+const resumedThread = z.object({ serviceTier: z.string().nullish() }).passthrough();
 const userInputRequest = z.object({
   threadId: z.string(),
   itemId: z.string(),
@@ -79,7 +84,7 @@ const appendAt = (list, index, delta) => {
 };
 
 /**
- * @typedef {{ model: string | null, effort: string | null, mode: 'default' | 'plan' }} LiveConfig
+ * @typedef {{ model: string | null, effort: string | null, fast: boolean, mode: 'default' | 'plan' }} LiveConfig
  */
 
 /**
@@ -120,6 +125,7 @@ export const createCodexLiveThreads = ({
       }],
       threadModel: live.config?.model ?? '',
       sendRecordFor: (messageId) => live.sends.get(messageId) ?? null,
+      itemTimes: live.turn.itemTimes,
     });
     live.messageOfPart = new Map(records.flatMap((record) => record.parts.map((part) => [part.id, record.info.id])));
     return records;
@@ -153,13 +159,14 @@ export const createCodexLiveThreads = ({
   // a turn resumes it first.
   const ensureLoaded = async (live) => {
     if (live.loaded) return;
-    await request('thread/resume', {
+    const resumed = resumedThread.safeParse(await request('thread/resume', {
       threadId: live.threadId,
       excludeTurns: true,
       approvalPolicy: APPROVAL_POLICY,
       sandbox: FULL_ACCESS_SANDBOX,
       developerInstructions: (await readGlobalInstructions()) ?? undefined,
-    });
+    }));
+    live.serviceTier = resumed.success ? resumed.data.serviceTier ?? null : null;
     live.loaded = true;
   };
 
@@ -172,6 +179,9 @@ export const createCodexLiveThreads = ({
         sessionId,
         directory,
         loaded: false,
+        // The tier the loaded thread runs on as Codex last reported or a turn
+        // set it; null for the standard tier.
+        serviceTier: null,
         busy: false,
         turn: null,
         config: null,
@@ -203,6 +213,7 @@ export const createCodexLiveThreads = ({
     live.turn = {
       id: turn.id,
       items: new Map(),
+      itemTimes: new Map(),
       order: [],
       status: 'inProgress',
       error: null,
@@ -212,10 +223,18 @@ export const createCodexLiveThreads = ({
     setBusy(live, true);
   };
 
-  const onItem = (params) => {
+  const onItem = (params, completed) => {
     const parsed = itemParams.safeParse(params);
     const live = parsed.success ? threads.get(parsed.data.threadId) : null;
     if (!live?.turn || live.turn.id !== parsed.data.turnId) return;
+    const previous = live.turn.itemTimes.get(parsed.data.item.id);
+    // A completed item is immutable; duplicate starts must not erase deltas.
+    if (previous && (previous.end !== null || !completed)) return;
+    const receivedAt = now();
+    live.turn.itemTimes.set(parsed.data.item.id, {
+      start: previous?.start ?? parsed.data.startedAtMs ?? parsed.data.completedAtMs ?? receivedAt,
+      end: completed ? (parsed.data.completedAtMs ?? receivedAt) : null,
+    });
     upsertItem(live, parsed.data.item);
     publishTurn(live);
   };
@@ -224,7 +243,9 @@ export const createCodexLiveThreads = ({
   const deltaTarget = (schema, params) => {
     const parsed = schema.safeParse(params);
     const live = parsed.success ? threads.get(parsed.data.threadId) : null;
-    const item = live?.turn?.items.get(parsed.data.itemId);
+    if (!live?.turn || live.turn.id !== parsed.data.turnId) return null;
+    if (live.turn.itemTimes.get(parsed.data.itemId)?.end != null) return null;
+    const item = live.turn.items.get(parsed.data.itemId);
     return item ? { live, item, params: parsed.data } : null;
   };
 
@@ -241,8 +262,8 @@ export const createCodexLiveThreads = ({
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
       if (live) startTurn(live, parsed.data.turn);
     },
-    'item/started': onItem,
-    'item/completed': onItem,
+    'item/started': (params) => onItem(params, false),
+    'item/completed': (params) => onItem(params, true),
     'item/agentMessage/delta': (params) => {
       const target = deltaTarget(textDeltaParams, params);
       if (!target) return;
@@ -356,7 +377,15 @@ export const createCodexLiveThreads = ({
           settings: { model: config.model, reasoning_effort: config.effort, developer_instructions: null },
         };
       }
+      // A turn's tier stays with the thread for the turns after it, and Codex's
+      // own settings may load a thread on another tier, so the tier is named
+      // whenever the variant asks for a different one than the thread runs on.
+      const tier = config.fast ? CODEX_FAST_SERVICE_TIER : null;
+      const threadTier = live.serviceTier === CODEX_STANDARD_SERVICE_TIER ? null : live.serviceTier;
+      const changesTier = tier !== threadTier;
+      if (changesTier) params.serviceTier = tier ?? CODEX_STANDARD_SERVICE_TIER;
       const started = startedTurn.safeParse(await request('turn/start', params));
+      if (changesTier) live.serviceTier = tier;
       if (started.success) startTurn(live, { id: started.data.turn.id });
     },
 
@@ -373,9 +402,14 @@ export const createCodexLiveThreads = ({
     /**
      * A thread this app-server just started is loaded and has no rollout yet,
      * so its first prompt must not try to resume it.
+     * @param {string} sessionId
+     * @param {string} directory
+     * @param {string | null} [serviceTier] the tier the start reported
      */
-    threadStarted(sessionId, directory) {
-      liveThread(sessionId, directory).loaded = true;
+    threadStarted(sessionId, directory, serviceTier = null) {
+      const live = liveThread(sessionId, directory);
+      live.loaded = true;
+      live.serviceTier = serviceTier;
     },
 
     async abort(sessionId) {

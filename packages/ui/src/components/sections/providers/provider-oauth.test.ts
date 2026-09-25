@@ -8,18 +8,10 @@ import {
   isOAuthRuntimeContextCurrent,
   parseAuthPrompts,
   parseAuthorization,
-  shouldOpenAuthorizationUrl,
   visiblePrompts,
   type AuthPrompt,
   type ProviderOAuthTranslator,
 } from './provider-oauth';
-
-describe('shouldOpenAuthorizationUrl', () => {
-  test('lets Claude Code CLI own browser launch', () => {
-    expect(shouldOpenAuthorizationUrl('claude-code', 'https://docs.example')).toBe(false);
-    expect(shouldOpenAuthorizationUrl('github-copilot', 'https://github.com/login')).toBe(true);
-  });
-});
 
 describe('OAuth runtime ownership', () => {
   test('rejects callback work after either runtime identity or generation changes', () => {

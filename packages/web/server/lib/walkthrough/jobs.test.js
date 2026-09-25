@@ -347,10 +347,10 @@ describe('schema refusal memory', () => {
   beforeEach(() => {
     fs.rmSync(path.join(TEMP_DATA_DIR, 'walkthroughs'), { recursive: true, force: true });
     describeSmallModel.mockResolvedValue({
-      providerID: 'claude-code',
-      modelID: 'haiku',
+      providerID: 'llmapi',
+      modelID: 'claude-haiku-4-5',
       source: 'request',
-      transport: 'claude-code-runtime:a',
+      transport: 'openai-compatible:a',
       inputCharBudget: 1_000_000,
       structuredOutput: null,
     });
@@ -359,7 +359,7 @@ describe('schema refusal memory', () => {
     walkthroughTesting.clearSchemaRefusalMemory();
   });
 
-  it('keeps an explicit Claude Code model while remembering its schema fallback', async () => {
+  it('keeps an explicit model while remembering its schema fallback', async () => {
     const sentSchema = [];
     generateSmallModelText.mockImplementation(async ({ model, responseSchema }) => {
       sentSchema.push({ model, schema: Boolean(responseSchema) });
@@ -367,40 +367,40 @@ describe('schema refusal memory', () => {
       return { text: RESPONSE };
     });
 
-    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'claude-code/haiku' });
+    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'llmapi/claude-haiku-4-5' });
     expect(sentSchema).toEqual([
-      { model: 'claude-code/haiku', schema: true },
-      { model: 'claude-code/haiku', schema: false },
+      { model: 'llmapi/claude-haiku-4-5', schema: true },
+      { model: 'llmapi/claude-haiku-4-5', schema: false },
     ]);
 
     // A different diff, so the cache cannot answer instead.
     getDiff.mockImplementation(async (_dir, options) => (
       options?.staged ? '' : PATCH.replace('const added = true;', 'const added = false;')
     ));
-    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'claude-code/haiku' });
+    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'llmapi/claude-haiku-4-5' });
 
     expect(sentSchema).toEqual([
-      { model: 'claude-code/haiku', schema: true },
-      { model: 'claude-code/haiku', schema: false },
-      { model: 'claude-code/haiku', schema: false },
+      { model: 'llmapi/claude-haiku-4-5', schema: true },
+      { model: 'llmapi/claude-haiku-4-5', schema: false },
+      { model: 'llmapi/claude-haiku-4-5', schema: false },
     ]);
 
     describeSmallModel.mockResolvedValue({
-      providerID: 'claude-code',
-      modelID: 'haiku',
+      providerID: 'llmapi',
+      modelID: 'claude-haiku-4-5',
       source: 'request',
-      transport: 'claude-code-runtime:b',
+      transport: 'openai-compatible:b',
       inputCharBudget: 1_000_000,
       structuredOutput: null,
     });
     getDiff.mockImplementation(async (_dir, options) => (
       options?.staged ? '' : PATCH.replace('const added = true;', 'const added = null;')
     ));
-    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'claude-code/haiku' });
+    await generateWalkthrough({ directory: '/repo', source: SOURCE, model: 'llmapi/claude-haiku-4-5' });
 
     expect(sentSchema.slice(-2)).toEqual([
-      { model: 'claude-code/haiku', schema: true },
-      { model: 'claude-code/haiku', schema: false },
+      { model: 'llmapi/claude-haiku-4-5', schema: true },
+      { model: 'llmapi/claude-haiku-4-5', schema: false },
     ]);
   });
 });

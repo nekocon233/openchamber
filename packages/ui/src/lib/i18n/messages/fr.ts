@@ -1970,6 +1970,7 @@ export const dict = {
   'chat.revert.toast.conversationOnly': 'Seule la conversation est revenue en arrière. Aucun instantané de vos fichiers ne précède ce message, ils restent donc inchangés.',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code ne peut pas revenir sur le premier message d\'une session. Démarrez plutôt une nouvelle session.',
   'chat.revert.toast.nativeMidTurn': 'Codex fonctionne par tours complets. Choisissez le message qui a lancé ce tour.',
+  'chat.revert.toast.nativeBeforeCompaction': 'Ce message précède la dernière compression. Claude Code ne peut revenir en arrière ou créer une fourche qu\'à partir d\'un message qui la suit.',
   'chat.toast.opencodeRestartInterrupted.title': 'Discussion interrompue',
   'chat.toast.opencodeRestartInterrupted.description': 'OpenCode a redémarré alors qu’une réponse était encore en cours. Envoyez un message pour continuer.',
   'chat.toast.opencodeRestartInterrupted.openSession': 'Ouvrir la session',

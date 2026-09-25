@@ -115,10 +115,10 @@ This module provides OpenCode server integration utilities for the web server ru
   - `GET /api/opencode/upgrade-status` (returns version availability plus the authoritative `upgrade.supported`, `upgrade.manager`, and `upgrade.reason` capability)
   - `POST /api/opencode/directory` (validates and activates an existing project directory; `{ create: true }` explicitly creates the requested project directory before activation, including outside the previously active workspace)
   - `GET /api/provider/:providerId/source`
-    - Auth state is `connected`, `disconnected`, or `unavailable`; responses also state whether this runtime owns Disconnect. External OpenCode runtimes return unavailable without reading the host Claude CLI or auth file.
+    - Auth state is `connected`, `disconnected`, or `unavailable`; responses also state whether this runtime owns Disconnect. External OpenCode runtimes return unavailable without reading the host auth file.
   - `PUT /api/provider` (create/update custom OpenAI-compatible provider config in OpenCode user/project/custom layers via `scope`; secrets stay in auth via the OpenCode auth API)
   - `DELETE /api/provider/:providerId/auth`
-    - External runtimes and CLI-owned Claude Code auth return a non-mutating capability result instead of deleting host files or claiming the CLI logged out.
+    - External runtimes return a non-mutating capability result instead of deleting host files.
 - Owns lazy auth library loading for provider auth checks/removal.
 - Keeps route behavior independent from composition root; `index.js` now supplies dependencies only.
 

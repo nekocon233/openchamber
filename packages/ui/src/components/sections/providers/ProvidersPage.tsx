@@ -35,13 +35,11 @@ import {
 import { opencodeClient } from '@/lib/opencode/client';
 import { requiresProviderAuth, shouldLoadAvailableProviders } from './providerAvailability';
 import {
-  canDisconnectProvider,
   getOAuthAuthMethods,
   parseAuthPayload,
   parseProviderSourcesSnapshot,
   providerAuthWasRemoved,
   resolveProviderAuthenticationState,
-  requiresOpenCodeRestartAfterOAuth,
   shouldAutoOpenAuthPanel,
   shouldShowApiKeyAuth,
   shouldShowModelsSection,
@@ -403,7 +401,6 @@ export const ProvidersPage: React.FC = () => {
     const sources = providerSources[selectedProviderId];
     const provider = providers.find((entry) => entry.id === selectedProviderId);
     const authState = resolveProviderAuthenticationState({
-      providerId: selectedProviderId,
       sourceLoadStatus: providerSourceLoadStatuses[selectedProviderId] ?? 'loading',
       authSource: sources?.auth,
       credentials: {
@@ -567,9 +564,7 @@ export const ProvidersPage: React.FC = () => {
   const handleOAuthConnected = async (providerId: string) => {
     const runtimeKey = getRuntimeKey();
     const runtimeGeneration = getRuntimeEndpointGeneration();
-    if (requiresOpenCodeRestartAfterOAuth(providerId)) {
-      recordDeferredOpenCodeRestart('providers', { id: providerId });
-    }
+    recordDeferredOpenCodeRestart('providers', { id: providerId });
 
     const configStore = useConfigStore.getState();
     configStore.invalidateModelMetadataCache();
@@ -602,7 +597,7 @@ export const ProvidersPage: React.FC = () => {
     const runtimeOwnsMutation = sourceStatus === 'loaded'
       && providerSources[providerId]?.auth.status !== 'unavailable'
       && providerSources[providerId]?.auth.canDisconnect === true;
-    if (!canDisconnectProvider(providerId, runtimeOwnsMutation)) {
+    if (!runtimeOwnsMutation) {
       await loadProviderSources(providerId);
       return false;
     }
@@ -914,7 +909,6 @@ export const ProvidersPage: React.FC = () => {
   const isEditableCustomProvider = sourcesLoaded
     && isConfigDefinedCustomProvider(selectedProvider, selectedSources);
   const authState = resolveProviderAuthenticationState({
-    providerId: selectedProvider.id,
     sourceLoadStatus,
     authSource: selectedSources?.auth,
     credentials: {

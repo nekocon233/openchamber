@@ -202,16 +202,6 @@ describe('third-party plugin catalog helpers', () => {
       homepage: plugin.homepage,
     }))).toEqual([
       {
-        id: 'opencode-claude',
-        packageName: '@openchamber/opencode-claude',
-        homepage: 'https://github.com/openchamber/opencode-claude',
-      },
-      {
-        id: 'opencode-codex',
-        packageName: '@openchamber/opencode-codex',
-        homepage: 'https://github.com/openchamber/opencode-codex',
-      },
-      {
         id: 'opencode-cursor-oauth',
         packageName: '@openchamber/opencode-cursor',
         homepage: 'https://github.com/openchamber/opencode-cursor',

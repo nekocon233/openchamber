@@ -13,7 +13,6 @@ const requiredKeys = [
   'settings.integrations.thirdParty.actions.setup',
   'settings.integrations.thirdParty.actions.remove',
   'settings.integrations.thirdParty.status.notInstalled',
-  'settings.integrations.thirdParty.opencodeClaude.description',
   'settings.integrations.thirdParty.opencodeCursorOauth.description',
 ] as const;
 

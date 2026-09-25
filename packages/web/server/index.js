@@ -144,6 +144,7 @@ import { createNativeAgentsRuntime } from './lib/native-agents/runtime.js';
 import { createGlobalInstructionsReader } from './lib/native-agents/instructions.js';
 import { OPENCODE_CONFIG_DIR } from './lib/opencode/shared.js';
 import { createCliResolver } from './lib/native-agents/executables.js';
+import { configureCodexSmallModel } from './lib/small-model/index.js';
 import { buildCliChildEnv } from './lib/native-agents/process.js';
 import { OpenChamberControlError } from './lib/openchamber-control/error.js';
 import webPush from 'web-push';
@@ -1178,6 +1179,7 @@ const nativeAgentsRuntime = createNativeAgentsRuntime({
   // The global AGENTS.md the Behavior settings edit, which OpenCode reads too.
   readGlobalInstructions: createGlobalInstructionsReader({ filePath: path.join(OPENCODE_CONFIG_DIR, 'AGENTS.md') }),
 });
+configureCodexSmallModel(nativeAgentsRuntime.smallModel);
 const staticRoutesRuntime = createStaticRoutesRuntime({
   fs,
   path,

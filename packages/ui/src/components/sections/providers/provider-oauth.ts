@@ -37,9 +37,6 @@ export const isOAuthRuntimeContextCurrent = (
   generation: number,
 ): boolean => captured.runtimeKey === runtimeKey && captured.generation === generation;
 
-export const shouldOpenAuthorizationUrl = (providerId: string, url?: string): boolean =>
-  Boolean(url) && providerId !== 'claude-code';
-
 export interface AuthPromptOption {
   label: string;
   value: string;

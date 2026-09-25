@@ -13,7 +13,7 @@
 
 import { z } from 'zod';
 
-import { invalidRequestError, messageNotFoundError } from '../errors.js';
+import { invalidRequestError, messageNotFoundError, rewindBeforeCompactionError } from '../errors.js';
 import {
   claudeEntryUuidOfUserMessageId,
   claudeUserMessageId,
@@ -61,6 +61,28 @@ const rawToolResultEntrySchema = z.object({
   uuid: z.string(),
   toolUseResult: z.unknown(),
 }).passthrough();
+
+// A raw transcript entry, as far as finding compaction boundaries needs it.
+const rawChainEntrySchema = z.object({
+  uuid: z.string(),
+  type: z.string(),
+  subtype: z.string().optional(),
+}).passthrough();
+
+const compactSummarySchema = z.object({ isCompactSummary: z.literal(true) }).passthrough();
+
+const entryUuidOf = (entry) => {
+  const parsed = chainEntrySchema.safeParse(entry);
+  return parsed.success ? parsed.data.uuid : null;
+};
+
+// The compaction a history chain starts at: getSessionMessages begins after
+// the last compaction with its boundary, and the compact summary follows it.
+const compactionBoundaryUuid = (entries) => {
+  const first = chainEntrySchema.safeParse(entries[0]);
+  if (!first.success || first.data.type !== 'system') return null;
+  return compactSummarySchema.safeParse(entries[1]).success ? first.data.uuid : null;
+};
 
 const usesFileEditTool = (entry) => {
   const parsed = assistantToolUsesSchema.safeParse(entry);
@@ -179,11 +201,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     try {
       await sdk.importSessionToStore(sessionUuid, {
         append: async (_key, rawEntries) => {
-          for (const raw of rawEntries) {
-            const entry = rawToolResultEntrySchema.safeParse(raw);
-            const slim = entry.success ? slimFileEditResult(entry.data.toolUseResult) : null;
-            if (slim) results.set(entry.data.uuid, slim);
-          }
+          addEditResults(results, rawEntries);
         },
         load: async () => null,
       }, { dir: directory, includeSubagents });
@@ -191,6 +209,33 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
       console.warn('[native-agents] Claude edit diffs unavailable for session', sessionUuid, error);
     }
     return results;
+  };
+
+  // The diff fields of the raw entries that carry an edit result, by entry uuid.
+  const addEditResults = (results, rawEntries) => {
+    for (const raw of rawEntries) {
+      const entry = rawToolResultEntrySchema.safeParse(raw);
+      const slim = entry.success ? slimFileEditResult(entry.data.toolUseResult) : null;
+      if (slim) results.set(entry.data.uuid, slim);
+    }
+    return results;
+  };
+
+  // A root session's raw transcript in file order, or null when it cannot be read.
+  const readRawTranscript = async (sdk, sessionUuid, directory) => {
+    const raw = [];
+    try {
+      await sdk.importSessionToStore(sessionUuid, {
+        append: async (_key, rawEntries) => {
+          for (const entry of rawEntries) raw.push(entry);
+        },
+        load: async () => null,
+      }, { dir: directory, includeSubagents: false });
+      return raw;
+    } catch (error) {
+      console.warn('[native-agents] Claude transcript unavailable for session', sessionUuid, error);
+      return null;
+    }
   };
 
   const withFileEditResults = (entries, results) => (results.size === 0 ? entries : entries.map((entry) => {
@@ -241,6 +286,66 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     return childSessions.map((child) => ({ ...child, time: { ...child.time, archived: archivedAt } }));
   };
 
+  // The conversation before the last compaction, oldest first. The SDK reads
+  // only the chain after the last compaction, so each earlier segment comes
+  // from handing the SDK the raw transcript cut just before a compaction: it
+  // then returns, by its own chain rules, the chain from the compaction before
+  // (or the start) up to there. Messages a compaction carried over also open
+  // the chain after it; they stay in the segment they were written in.
+  const earlierEntries = async (sdk, sessionUuid, directory, raw, boundaryUuid) => {
+    const boundaries = new Map();
+    const positions = new Map();
+    raw.forEach((value, index) => {
+      const entry = rawChainEntrySchema.safeParse(value);
+      if (!entry.success) return;
+      positions.set(entry.data.uuid, index);
+      if (entry.data.type === 'system' && entry.data.subtype === 'compact_boundary') boundaries.set(entry.data.uuid, entry.data);
+    });
+    const segments = [];
+    const visited = new Set();
+    let boundary = boundaries.get(boundaryUuid);
+    while (boundary && !visited.has(boundary.uuid)) {
+      visited.add(boundary.uuid);
+      // The transcript as it stood just before this compaction. The boundary's
+      // logicalParentUuid is no guide: the CLI can name an entry it writes
+      // after the boundary.
+      const cut = raw.slice(0, positions.get(boundary.uuid));
+      const segment = await sdk.getSessionMessages(sessionUuid, {
+        dir: directory,
+        includeSystemMessages: true,
+        sessionStore: { append: async () => {}, load: async () => cut },
+      });
+      segments.unshift(segment);
+      boundary = boundaries.get(entryUuidOf(segment[0]));
+    }
+    const seen = new Set();
+    const entries = [];
+    for (const entry of segments.flat()) {
+      const uuid = entryUuidOf(entry);
+      if (uuid === null || seen.has(uuid)) continue;
+      seen.add(uuid);
+      entries.push(entry);
+    }
+    return entries;
+  };
+
+  // The earlier segments projected on their own, with the entry uuids they
+  // hold. They never change while their last compaction stays the last one.
+  // A failure leaves them out; the chain after the compaction still shows.
+  const projectEarlier = async ({ sdk, sessionId, sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents }) => {
+    try {
+      const entries = await earlierEntries(sdk, sessionUuid, directory, raw, boundaryUuid);
+      return {
+        boundaryUuid,
+        records: project({ sessionId, directory, entries: withFileEditResults(entries, editResults), sendRecords, subagents }),
+        uuids: new Set(entries.map(entryUuidOf)),
+      };
+    } catch (error) {
+      console.warn('[native-agents] Claude history before the last compaction unavailable for session', sessionUuid, error);
+      return null;
+    }
+  };
+
   /**
    * The whole projected conversation of a root or subagent session, plus the
    * subagent sessions a root session links to.
@@ -272,9 +377,25 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
         registry.sendRecords(sessionId),
         subagentsByToolUse(sdk, decoded.sessionUuid, directory),
       ]);
-      const editResults = await fileEditResults(sdk, entries, decoded.sessionUuid, directory, false);
-      const records = project({ sessionId, directory, entries: withFileEditResults(entries, editResults), sendRecords, subagents });
-      const value = { records, childSessions: childSessionRecords(sessionId, records, subagents, decoded.sessionUuid, directory) };
+      // A compacted conversation also shows what came before its last
+      // compaction. Those segments are reused while that compaction stays the
+      // last one; building them reads the raw transcript, which then gives the
+      // edit diffs too.
+      const boundaryUuid = compactionBoundaryUuid(entries);
+      const reusable = boundaryUuid !== null && cached?.value.earlier?.boundaryUuid === boundaryUuid ? cached.value.earlier : null;
+      const raw = boundaryUuid !== null && reusable === null ? await readRawTranscript(sdk, decoded.sessionUuid, directory) : null;
+      const editResults = raw === null
+        ? await fileEditResults(sdk, entries, decoded.sessionUuid, directory, false)
+        : addEditResults(new Map(), raw);
+      const earlier = reusable ?? (raw === null ? null : await projectEarlier({
+        sdk, sessionId, sessionUuid: decoded.sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents,
+      }));
+      const current = earlier === null ? entries : entries.filter((entry) => !earlier.uuids.has(entryUuidOf(entry)));
+      const records = [
+        ...(earlier?.records ?? []),
+        ...project({ sessionId, directory, entries: withFileEditResults(current, editResults), sendRecords, subagents }),
+      ];
+      const value = { records, childSessions: childSessionRecords(sessionId, records, subagents, decoded.sessionUuid, directory), earlier };
       rememberHistory(cacheKey, { fingerprint, bytes: info.fileSize ?? 0, value });
       return { records, childSessions: await withParentArchive(sessionId, value.childSessions) };
     }
@@ -358,7 +479,13 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     if (!entryUuid) throw invalidRequestError(`Not a Claude Code prompt: ${messageId}`);
     const chain = await chainOf(sessionId, directory);
     const index = chain.findIndex((entry) => entry.uuid === entryUuid);
-    if (index === -1) throw messageNotFoundError(messageId);
+    if (index === -1) {
+      // The history also shows the messages before the last compaction, and
+      // the CLI cannot resume at those.
+      await loadHistory(sessionId, directory);
+      if (historyCache.get(sessionId)?.value.earlier?.uuids.has(entryUuid)) throw rewindBeforeCompactionError();
+      throw messageNotFoundError(messageId);
+    }
     return {
       resumeAt: index === 0 ? null : chain[index - 1].uuid,
       messageIds: chain.slice(index).filter((entry) => entry.type === 'user').map((entry) => claudeUserMessageId(entry.uuid)),

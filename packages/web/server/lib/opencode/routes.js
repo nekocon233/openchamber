@@ -5,8 +5,6 @@ import path from 'path';
 import {
   buildDeferredRestartResponse,
 } from './config-mutation-response.js';
-import { getClaudeCliAuthStatus } from './claude-cli-auth.js';
-import { getCodexCliAuthStatus } from './codex-cli-auth.js';
 import { OPENCODE_CONFIG_DIR } from './shared.js';
 import { settingsSurfaceOf } from './settings-files.js';
 
@@ -52,24 +50,9 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     getOpenCodeAuthHeaders,
     sidebarStateRuntime,
     isExternalOpenCode = () => false,
-    readClaudeCliAuthStatus = getClaudeCliAuthStatus,
-    readCodexCliAuthStatus = getCodexCliAuthStatus,
     isTunnelManagementAllowed = () => false,
     fsPromises = fs.promises,
   } = dependencies;
-
-  /**
-   * Providers whose credentials live in their own CLI, not in OpenCode's auth
-   * store. Their sign-in state has to be read from the CLI, and OpenChamber
-   * must never offer to disconnect them: the credential is not ours to delete,
-   * and for Codex a re-sign-in revokes the working session before it starts.
-   */
-  const cliOwnedProviderAuth = {
-    'claude-code': readClaudeCliAuthStatus,
-    codex: readCodexCliAuthStatus,
-  };
-  const isCliOwnedProvider = (providerId) =>
-    Object.prototype.hasOwnProperty.call(cliOwnedProviderAuth, providerId);
 
   let authLibrary = null;
   const pendingMcpAuthContextByState = new Map();
@@ -673,13 +656,6 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
         || sources.sources.custom?.exists === true;
       if (isExternalOpenCode()) {
         sources.sources.auth = { exists: false, status: 'unavailable', canDisconnect: false };
-      } else if (isCliOwnedProvider(providerId)) {
-        const cliStatus = cliOwnedProviderAuth[providerId]();
-        sources.sources.auth = {
-          exists: cliStatus.status === 'connected',
-          status: cliStatus.status,
-          canDisconnect: false,
-        };
       } else {
         const { getProviderAuth } = await getAuthLibrary();
         const auth = getProviderAuth(providerId);
@@ -764,15 +740,12 @@ ${desktopReturn ? `<a class="return" href="openchamber://focus/mcp-auth">Return 
       if (!providerId) {
         return res.status(400).json({ error: 'Provider ID is required' });
       }
-      const external = isExternalOpenCode();
-      if (external || isCliOwnedProvider(providerId)) {
+      if (isExternalOpenCode()) {
         return res.json({
           success: false,
           removed: false,
-          capability: external ? 'unavailable' : 'cli-owned',
-          code: external
-            ? 'PROVIDER_AUTH_RUNTIME_UNAVAILABLE'
-            : 'PROVIDER_AUTH_CLI_OWNED',
+          capability: 'unavailable',
+          code: 'PROVIDER_AUTH_RUNTIME_UNAVAILABLE',
         });
       }
 

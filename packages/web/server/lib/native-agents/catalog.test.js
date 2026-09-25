@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { claudeModels, codexModels } from './catalog.js';
+import { claudeModels, codexModels, codexVariantSettings } from './catalog.js';
 
 describe('native model catalogs', () => {
   it('offers every Claude effort level on each alias', () => {
@@ -18,6 +18,7 @@ describe('native model catalogs', () => {
           hidden: false,
           defaultReasoningEffort: 'medium',
           supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'ultra' }],
+          serviceTiers: [{ id: 'priority', name: 'Fast', description: 'Faster responses at a higher price.' }],
           inputModalities: ['text', 'image'],
         },
         { id: 'internal-reviewer', displayName: 'Reviewer', hidden: true, supportedReasoningEfforts: [], inputModalities: ['text'] },
@@ -33,6 +34,7 @@ describe('native model catalogs', () => {
         outputLimit: 128_000,
         efforts: ['low', 'ultra'],
         defaultEffort: 'medium',
+        fast: true,
         input: { image: true, pdf: false },
       },
       {
@@ -42,8 +44,15 @@ describe('native model catalogs', () => {
         outputLimit: 128_000,
         efforts: ['high'],
         defaultEffort: null,
+        fast: false,
         input: { image: false, pdf: false },
       },
     ]);
+  });
+
+  it('reads a Codex variant as its effort and whether it runs on the Fast tier', () => {
+    expect(codexVariantSettings(undefined)).toEqual({ effort: null, fast: false });
+    expect(codexVariantSettings('high')).toEqual({ effort: 'high', fast: false });
+    expect(codexVariantSettings('xhigh-fast')).toEqual({ effort: 'xhigh', fast: true });
   });
 });

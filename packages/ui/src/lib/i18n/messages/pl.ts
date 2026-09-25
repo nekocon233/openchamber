@@ -865,6 +865,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.revert.toast.conversationOnly': 'Cofnięto tylko rozmowę. Nie ma migawki twoich plików sprzed tej wiadomości, więc pozostały bez zmian.',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code nie może cofnąć pierwszej wiadomości sesji. Zamiast tego rozpocznij nową sesję.',
   'chat.revert.toast.nativeMidTurn': 'Codex działa całymi turami. Wybierz wiadomość, od której zaczęła się ta tura.',
+  'chat.revert.toast.nativeBeforeCompaction': 'Ta wiadomość pochodzi sprzed ostatniej kompresji. Claude Code może cofnąć lub rozwidlić rozmowę tylko od wiadomości po niej.',
   'chat.toast.opencodeRestartInterrupted.title': 'Czat został przerwany',
   'chat.toast.opencodeRestartInterrupted.description': 'OpenCode uruchomił się ponownie podczas generowania odpowiedzi. Wyślij wiadomość, aby kontynuować.',
   'chat.toast.opencodeRestartInterrupted.openSession': 'Otwórz sesję',

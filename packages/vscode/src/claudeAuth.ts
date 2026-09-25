@@ -4,15 +4,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { findNodeAtLocation, parseTree, type Node, type ParseError } from 'jsonc-parser';
 import { getProviderAuth, type AuthEntry } from './opencodeAuth';
-import { findExecutableInPath } from './process-launch';
-import {
-  commandOutput,
-  defaultRunCommand,
-  resolveCommandFromShell,
-  runCliCommand,
-  type CliAuthStatus,
-  type CliStatusOptions,
-} from './cli-auth-probe';
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const OPENCODE_AUTH_ALIASES = ['anthropic', 'claude'] as const;
@@ -172,55 +163,4 @@ export const loadClaudeCredential = (options: ClaudeCredentialReadOptions = {}):
         source: 'env',
       }
     : null;
-};
-
-const parseLoggedIn = (raw: string): boolean | null => {
-  const root = parseJsonRoot(raw);
-  if (root?.type !== 'object') return null;
-  const loggedIn = findNodeAtLocation(root, ['loggedIn']);
-  return loggedIn?.type === 'boolean' ? loggedIn.value === true : null;
-};
-
-const probeClaudeCliAuthStatus = async (options: CliStatusOptions): Promise<CliAuthStatus> => {
-  const runCommand = options.runCommand ?? defaultRunCommand;
-  const resolveExecutable = options.resolveExecutable
-    ?? ((binaryName, platform, env) => findExecutableInPath(binaryName, { platform, env }));
-  const platform = options.platform ?? process.platform;
-  const childEnv = { ...(options.env ?? process.env) };
-  delete childEnv.ANTHROPIC_API_KEY;
-  delete childEnv.ANTHROPIC_AUTH_TOKEN;
-  delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
-
-  try {
-    const command = resolveExecutable('claude', platform, childEnv)
-      ?? await resolveCommandFromShell('claude', runCommand, childEnv, platform);
-    if (!command) return { status: 'unavailable', connected: false, reason: 'cli-not-found' };
-    const result = await runCliCommand(
-      runCommand,
-      command,
-      ['auth', 'status', '--json'],
-      childEnv,
-      platform,
-    );
-    const output = commandOutput(result);
-    if (!output || result.error) return { status: 'unavailable', connected: false, reason: 'probe-failed' };
-    const connected = parseLoggedIn(output);
-    if (connected === null) return { status: 'unavailable', connected: false, reason: 'invalid-status' };
-    return connected
-      ? { status: 'connected', connected: true, reason: 'logged-in' }
-      : { status: 'disconnected', connected: false, reason: 'logged-out' };
-  } catch {
-    return { status: 'unavailable', connected: false, reason: 'probe-failed' };
-  }
-};
-
-let claudeCliAuthStatusInFlight: Promise<CliAuthStatus> | null = null;
-
-export const getClaudeCliAuthStatus = (options: CliStatusOptions = {}): Promise<CliAuthStatus> => {
-  if (claudeCliAuthStatusInFlight) return claudeCliAuthStatusInFlight;
-  const pending = probeClaudeCliAuthStatus(options).finally(() => {
-    if (claudeCliAuthStatusInFlight === pending) claudeCliAuthStatusInFlight = null;
-  });
-  claudeCliAuthStatusInFlight = pending;
-  return pending;
 };

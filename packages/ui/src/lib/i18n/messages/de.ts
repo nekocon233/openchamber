@@ -2025,6 +2025,7 @@ export const dict = {
   'chat.revert.toast.conversationOnly': 'Nur die Unterhaltung wurde zurückgesetzt. Von vor dieser Nachricht gibt es keinen Snapshot Ihrer Dateien, deshalb bleiben sie unverändert.',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code kann die erste Nachricht einer Sitzung nicht zurücksetzen. Starten Sie stattdessen eine neue Sitzung.',
   'chat.revert.toast.nativeMidTurn': 'Codex arbeitet in ganzen Durchläufen. Wählen Sie die Nachricht, mit der dieser Durchlauf begann.',
+  'chat.revert.toast.nativeBeforeCompaction': 'Diese Nachricht stammt von vor der letzten Komprimierung. Claude Code kann nur ab einer Nachricht danach zurücksetzen oder abzweigen.',
   'chat.toast.opencodeRestartInterrupted.title': 'Chat unterbrochen',
   'chat.toast.opencodeRestartInterrupted.description': 'OpenCode wurde neu gestartet, während noch eine Antwort lief. Senden Sie eine Nachricht, um fortzufahren.',
   'chat.toast.opencodeRestartInterrupted.openSession': 'Sitzung öffnen',

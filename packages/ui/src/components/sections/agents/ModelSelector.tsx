@@ -26,9 +26,8 @@ interface ModelSelectorProps {
     allowedProviderIds?: string[];
     isModelAllowed?: (providerId: string, modelId: string) => boolean;
     /**
-     * Offer the native CLIs' models too. Only a setting for the model a new
-     * session starts with may: every other model picked here runs through
-     * OpenCode, which cannot run a CLI.
+     * Offer native CLI models when the caller can run them. Utility pickers
+     * additionally restrict providers to those their server can call.
      */
     allowNativeModels?: boolean;
     placeholder?: string;

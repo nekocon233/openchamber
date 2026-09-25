@@ -14,27 +14,8 @@ export interface ThirdPartyPluginDefinition {
   homepage: string;
 }
 
+// Claude Code and Codex run as native CLI sessions, not as OpenCode plugins.
 export const THIRD_PARTY_PLUGINS: readonly ThirdPartyPluginDefinition[] = [
-  {
-    id: 'opencode-claude',
-    packageName: '@openchamber/opencode-claude',
-    providerId: 'claude-code',
-    icon: 'claude-code',
-    brandClassName: 'text-[#D97757]',
-    nameKey: 'settings.integrations.thirdParty.opencodeClaude.name',
-    descriptionKey: 'settings.integrations.thirdParty.opencodeClaude.description',
-    homepage: 'https://github.com/openchamber/opencode-claude',
-  },
-  {
-    id: 'opencode-codex',
-    packageName: '@openchamber/opencode-codex',
-    providerId: 'codex',
-    icon: 'openai-fill',
-    brandClassName: 'text-foreground',
-    nameKey: 'settings.integrations.thirdParty.opencodeCodex.name',
-    descriptionKey: 'settings.integrations.thirdParty.opencodeCodex.description',
-    homepage: 'https://github.com/openchamber/opencode-codex',
-  },
   {
     id: 'opencode-cursor-oauth',
     packageName: '@openchamber/opencode-cursor',

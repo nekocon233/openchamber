@@ -60,19 +60,7 @@ export const getOAuthAuthMethods = (methods: AuthMethod[]): OAuthAuthMethodEntry
     .map((method, methodIndex) => ({ method, methodIndex }))
     .filter(({ method }) => normalizeAuthType(method) === 'oauth');
 
-/**
- * Providers whose sign-in happens entirely inside their own CLI. Nothing in the
- * running OpenCode process changes when they authenticate — no credential is
- * written to its auth store and their local proxy is already listening — so
- * asking the user to restart would be busywork.
- */
-const CLI_OWNED_AUTH_PROVIDER_IDS = new Set(['claude-code', 'codex']);
-
-export const requiresOpenCodeRestartAfterOAuth = (providerId: string): boolean =>
-  !CLI_OWNED_AUTH_PROVIDER_IDS.has(providerId);
-
 export interface ProviderCredentialInput {
-  providerId?: string;
   /** Present when OpenCode reports an active credential (api/env/oauth). */
   key?: string | null;
   /** OpenChamber auth.json provenance for this provider. */
@@ -140,11 +128,6 @@ type ProviderAuthenticationState =
  * credentials span several env vars it is the only signal OpenCode exposes.
  */
 export const providerHasCredentials = (input: ProviderCredentialInput): boolean => {
-  // The Claude Code plugin uses a fixed proxy key, while the Claude CLI owns
-  // the real login. The provider source endpoint resolves that CLI state.
-  if (input.providerId === 'claude-code') {
-    return input.authSourceExists === true;
-  }
   if (typeof input.key === 'string' && input.key.trim().length > 0) {
     return true;
   }
@@ -157,11 +140,7 @@ export const providerHasCredentials = (input: ProviderCredentialInput): boolean 
   return input.authSourceExists === true;
 };
 
-export const canDisconnectProvider = (providerId: string, runtimeOwnsMutation: boolean): boolean =>
-  providerId !== 'claude-code' && runtimeOwnsMutation;
-
 export const resolveProviderAuthenticationState = (input: {
-  providerId: string;
   sourceLoadStatus: ProviderSourceLoadStatus;
   authSource?: ProviderAuthSourceSnapshot;
   credentials: ProviderCredentialInput;
@@ -179,13 +158,9 @@ export const resolveProviderAuthenticationState = (input: {
 
   const hasCredentials = providerHasCredentials({
     ...input.credentials,
-    providerId: input.providerId,
     authSourceExists: input.authSource?.status === 'connected' || input.authSource?.exists === true,
   });
-  const canDisconnect = canDisconnectProvider(
-    input.providerId,
-    input.authSource?.canDisconnect === true,
-  );
+  const canDisconnect = input.authSource?.canDisconnect === true;
   if (hasCredentials) {
     return { status: 'connected', hasCredentials: true, canDisconnect };
   }

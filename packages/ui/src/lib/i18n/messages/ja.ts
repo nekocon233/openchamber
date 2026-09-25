@@ -2231,6 +2231,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.revert.toast.conversationOnly': '会話だけを元に戻しました。このメッセージより前のファイルのスナップショットがないため、ファイルはそのままです。',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code ではセッションの最初のメッセージを元に戻せません。代わりに新しいセッションを始めてください。',
   'chat.revert.toast.nativeMidTurn': 'Codex はターン単位で動作します。このターンを始めたメッセージを選んでください。',
+  'chat.revert.toast.nativeBeforeCompaction': 'このメッセージは直前の圧縮より前のものです。Claude Code では、圧縮より後のメッセージからしか元に戻したりフォークしたりできません。',
   'chat.toast.opencodeRestartInterrupted.title': 'チャットが中断されました',
   'chat.toast.opencodeRestartInterrupted.description': '応答の生成中に OpenCode が再起動しました。続行するにはメッセージを送信してください。',
   'chat.toast.opencodeRestartInterrupted.openSession': 'セッションを開く',

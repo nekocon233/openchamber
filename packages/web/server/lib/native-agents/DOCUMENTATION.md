@@ -98,18 +98,37 @@ depends on:
 
 Claude gotchas:
 
-- `getSessionMessages` returns only the chain after the last compaction, and
-  it drops `toolUseResult`, which holds the `structuredPatch` the edit diffs
-  are built from. When a conversation used Edit, MultiEdit or Write, the
-  store reads the raw transcript a second time through
-  `importSessionToStore` into a throwaway store and keeps only the diff
-  fields per entry uuid (the raw result also holds whole file contents). A
-  failed second read costs the diffs, never the history.
+- `getSessionMessages` drops `toolUseResult`, which holds the
+  `structuredPatch` the edit diffs are built from. When a conversation used
+  Edit, MultiEdit or Write, the store reads the raw transcript a second time
+  through `importSessionToStore` into a throwaway store and keeps only the
+  diff fields per entry uuid (the raw result also holds whole file
+  contents). A failed second read costs the diffs, never the history.
+- `getSessionMessages` returns only the chain after the last compaction. When
+  that chain opens with a compaction, the store adds the conversation before
+  it (`earlierEntries` in `claude/store.js`): it reads the raw transcript
+  once, cuts it just before the boundary, and hands the cut to
+  `getSessionMessages` through an in-memory `sessionStore` (an alpha SDK
+  option), which returns that segment by the SDK's own chain rules, from the
+  compaction before. It repeats while a segment opens with a compaction. The
+  boundary's `logicalParentUuid` is no guide to the cut: the CLI can name an
+  entry it writes after the boundary.
+  Messages a compaction carried over open the next chain too; they stay in
+  the segment they were written in, and each uuid shows once. The earlier
+  segments are projected on their own and kept with the history cache entry
+  while the same compaction stays the last one, so the raw transcript is read
+  again only after a new compaction (it then gives the edit diffs too). A
+  failure leaves the earlier segments out; the chain after the compaction
+  still shows. The UI pages through the whole history as before.
 - A compaction boundary becomes an `ncl_k_<uuid>` message with a compaction
   part, and the compact summary becomes a `summary: true` assistant message.
-  The part's `auto` is false only for the `manual` trigger (/compact) the
-  boundary records (`compactMetadata` in transcripts, `compact_metadata` in
-  live frames), so the UI can say the CLI compacted on its own.
+  `includeSystemMessages` returns every system entry on the chain (turn
+  durations, away summaries, local commands, notices) with only its `type`:
+  no `subtype`, no `compactMetadata`. A history system entry is therefore a
+  boundary only when the compact summary (`isCompactSummary`) comes right
+  after it, and any other shows nothing. The part's `auto` is true only for
+  the `auto` trigger a live `compact_boundary` frame names
+  (`compact_metadata`); a boundary read back from history makes no claim.
 - Meta and local-command entries are skipped, and so is the
   `origin.kind: 'task-notification'` entry the CLI adds when a background
   subagent finishes: the subagent's row and the reply after it already show
@@ -156,8 +175,8 @@ kept open between turns.
 - The projector's live mode opens the assistant message and its text and
   reasoning parts from stream events and completes the message on
   `message_stop`, because tools start while later blocks still stream. Only
-  `assistant` and `user` frames reach `applyEntry`; `system` frames would read
-  as compaction boundaries. Subagent frames are left to the subagent's session;
+  `assistant` and `user` frames and the `compact_boundary` system frame reach
+  `applyEntry`. Subagent frames are left to the subagent's session;
   a Task call announces the subagent session with `session.created`.
 - `canUseTool` answers `AskUserQuestion` from the question registry (the
   SDK warns that `bypassPermissions` shadows `canUseTool`, but it still asks
@@ -177,6 +196,13 @@ kept open between turns.
 
 Codex (`codex/live.js`): turns on the shared app-server.
 
+- `codex/catalog.js` combines `model/list` with `config/read` and the CLI's
+  model metadata in `model_catalog_json` or `$CODEX_HOME/models_cache.json`.
+  The working window respects `model_context_window`, each model's maximum,
+  and its reserved percentage. Chat and small-model calls share this catalog.
+  A missing default cache or missing model metadata keeps the legacy estimate;
+  other file or API failures report a catalog error. Codex owns automatic
+  compaction and applies context settings when it loads a thread.
 - The app-server unloads a thread once its turn ends, so a prompt resumes the
   thread first (`thread/resume` with approval policy `never` and full access),
   except a thread the runtime just started, which has no rollout to resume.
@@ -184,9 +210,24 @@ Codex (`codex/live.js`): turns on the shared app-server.
   model and effort, and `collaborationMode` `default` or `plan` with Codex's own
   instructions (`experimentalApi` is declared at initialize). A prompt sent
   mid-turn goes out as `turn/steer`.
+- Fast: `model/list` names a model's service tiers, and a model with the
+  `priority` tier (Codex calls it Fast) gets `fast: true` in the catalog. The
+  UI then offers each effort again as `<effort>-fast`; `codexVariantSettings`
+  (`catalog.js`) reads a variant back as its effort and whether it runs fast.
+  A turn's `serviceTier` stays with the thread for later turns, and Codex's
+  own settings may load a thread on Fast, so the live thread keeps the tier
+  that `thread/start` and `thread/resume` report and sets `serviceTier` on
+  `turn/start` only when the variant asks for another one: `priority`, or
+  `default` to leave Fast. A variant without `-fast` never runs fast.
 - Every `item/started` and `item/completed` re-projects the running turn with
-  the history projector; agent text streams as deltas. `turn/plan/updated`
-  becomes `todo.updated`.
+  the history projector; agent text streams as deltas. The live turn owns each
+  item's `startedAtMs` and `completedAtMs` (receipt time for older CLIs), so a
+  finished patch exposes its output and a finished reasoning block stops
+  streaming before the whole turn ends. Duplicate starts, events for another
+  turn, and deltas after item completion cannot reopen or overwrite it.
+  These timestamps leave memory with the turn; persisted history falls back
+  to turn times because its items carry no timing. `turn/plan/updated` becomes
+  `todo.updated`.
 - Approval requests are accepted, `item/tool/requestUserInput` goes to the
   question registry, MCP elicitation is declined, and anything else is refused.
 
@@ -262,6 +303,9 @@ Conversation:
   each prompt, and resumes at the entry again if the rewind never happened.
 - Claude Code has no entry to resume at before a session's first prompt, so
   reverting it is `409 NATIVE_REVERT_FIRST_MESSAGE`.
+- Claude Code resumes only inside the chain after the last compaction, so
+  reverting or forking from a message the history shows from before it is
+  `409 NATIVE_REWIND_BEFORE_COMPACTION`.
 - Codex rewinds with `thread/revert { beforeTurnId }` before the next turn
   starts, and the revert ends with that call. A turn that is already gone
   counts as rewound. Codex keeps whole turns, so a message steered into a
@@ -367,6 +411,33 @@ A missing file is an empty registry. An unparseable file is moved aside as
 `capabilities().registry.reset` reports it. A read error throws, so no caller
 mistakes it for "no sessions". Writes are serialized and atomic, and memory
 changes only after a write succeeds.
+
+## Utility text generation
+
+`codex/utility.js` runs small-model calls on the shared app-server. These are
+ephemeral threads with no registry entry or published chat events. The
+small-model service accepts an explicit `codex-native/<model>` setting and
+uses Codex's account and model catalog. The CLI owns credentials and refresh.
+An unavailable selected model fails instead of silently choosing another one.
+
+Each request creates its own thread and supplies only its prompt and system
+instructions. Environment access is disabled, the sandbox is read-only, and
+shell, MCP, apps, plugins, hooks and multi-agent tools are disabled for that
+thread. Any server-requested tool action is refused before reaching the normal
+chat approval handler. Structured output uses `turn/start.outputSchema`.
+The output-token budget is a brevity instruction because the turn API has no
+hard output-token limit.
+
+Only completed assistant text is returned; commentary and unrelated threads
+are ignored. Failed or empty output rejects. Abort and deadline handling
+return promptly, then interrupt and unsubscribe the owned thread, including
+when its start reply arrives after cancellation. App-server exit rejects all
+pending utility calls without restarting the process for cleanup. Notification
+routing does one thread lookup, with no scan of chat sessions.
+
+Web and Electron call this server runtime. Hosted mobile and Capacitor use the
+Codex installation on their connected server. VS Code retains the explicit
+`small-model-runtime-unsupported` response.
 
 ## Child processes
 

@@ -2205,6 +2205,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.revert.toast.conversationOnly': '只收回了對話。沒有這則訊息之前的檔案快照，檔案維持原樣。',
   'chat.revert.toast.nativeFirstMessage': 'Claude Code 無法收回工作階段的第一則訊息。請改為建立新的工作階段。',
   'chat.revert.toast.nativeMidTurn': 'Codex 以完整的一輪為單位運作。請選擇開啟這一輪的訊息。',
+  'chat.revert.toast.nativeBeforeCompaction': '這則訊息在最近一次壓縮之前。Claude Code 只能從壓縮之後的訊息收回或分支。',
   'chat.toast.opencodeRestartInterrupted.title': '聊天已中斷',
   'chat.toast.opencodeRestartInterrupted.description': 'OpenCode 在回覆仍在產生時重新啟動。傳送訊息以繼續。',
   'chat.toast.opencodeRestartInterrupted.openSession': '開啟會話',

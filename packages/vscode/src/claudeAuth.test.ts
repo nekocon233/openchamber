@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getClaudeCliAuthStatus, loadClaudeCredential } from './claudeAuth';
+import { loadClaudeCredential } from './claudeAuth';
 
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-claude-auth-'));
 
@@ -120,89 +120,5 @@ describe('VS Code Claude credential discovery', () => {
 
     assert.equal(missing?.source, 'credentials-file');
     assert.equal(unavailable, null);
-  });
-});
-
-describe('VS Code Claude CLI status', () => {
-  test('uses the CLI status while stripping credential overrides', async () => {
-    const invocations: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
-    const status = await getClaudeCliAuthStatus({
-      env: {
-        PATH: '/usr/bin',
-        ANTHROPIC_API_KEY: 'api-key',
-        ANTHROPIC_AUTH_TOKEN: 'auth-token',
-        CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token',
-      },
-      resolveExecutable: () => 'claude',
-      runCommand: async (command, args, options) => {
-        invocations.push({ command, args, env: options.env });
-        return { stdout: JSON.stringify({ loggedIn: true, authMethod: 'oauth' }) };
-      },
-    });
-
-    const invocation = invocations[0];
-    assert.deepEqual(status, { status: 'connected', connected: true, reason: 'logged-in' });
-    assert.equal(invocation?.command, 'claude');
-    assert.deepEqual(invocation?.args, ['auth', 'status', '--json']);
-    assert.equal(invocation?.env.ANTHROPIC_API_KEY, undefined);
-    assert.equal(invocation?.env.ANTHROPIC_AUTH_TOKEN, undefined);
-    assert.equal(invocation?.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-  });
-
-  test('resolves Claude through the login shell when the extension PATH misses it', async () => {
-    const commands: string[] = [];
-    const status = await getClaudeCliAuthStatus({
-      platform: 'darwin',
-      env: { PATH: '/usr/bin:/bin', SHELL: '/bin/zsh' },
-      resolveExecutable: () => null,
-      runCommand: async (command) => {
-        commands.push(command);
-        if (command === '/bin/zsh') return { stdout: '/Users/test/.local/bin/claude\n' };
-        return { stdout: JSON.stringify({ loggedIn: true }) };
-      },
-    });
-
-    assert.deepEqual(status, { status: 'connected', connected: true, reason: 'logged-in' });
-    assert.deepEqual(commands, ['/bin/zsh', '/Users/test/.local/bin/claude']);
-  });
-
-  test('treats timeout and invalid JSON as unavailable, not logged out', async () => {
-    const timedOut = await getClaudeCliAuthStatus({
-      resolveExecutable: () => 'claude',
-      runCommand: async () => ({ stdout: '', error: new Error('timed out') }),
-    });
-    const invalid = await getClaudeCliAuthStatus({
-      resolveExecutable: () => 'claude',
-      runCommand: async () => ({ stdout: '{invalid' }),
-    });
-
-    assert.deepEqual(timedOut, { status: 'unavailable', connected: false, reason: 'probe-failed' });
-    assert.deepEqual(invalid, { status: 'unavailable', connected: false, reason: 'invalid-status' });
-  });
-
-  test('coalesces concurrent CLI probes', async () => {
-    const probeResolvers: Array<(result: { stdout: string }) => void> = [];
-    let calls = 0;
-    const options = {
-      resolveExecutable: () => 'claude',
-      runCommand: async () => {
-        calls += 1;
-        return new Promise<{ stdout: string }>((resolve) => {
-          probeResolvers.push(resolve);
-        });
-      },
-    };
-
-    const first = getClaudeCliAuthStatus(options);
-    const second = getClaudeCliAuthStatus(options);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const finishProbe = probeResolvers[0];
-    assert.ok(finishProbe);
-    finishProbe({ stdout: JSON.stringify({ loggedIn: false }) });
-
-    const [firstStatus, secondStatus] = await Promise.all([first, second]);
-    assert.equal(calls, 1);
-    assert.deepEqual(firstStatus, { status: 'disconnected', connected: false, reason: 'logged-out' });
-    assert.deepEqual(secondStatus, firstStatus);
   });
 });

@@ -6,13 +6,6 @@ import { getCatalogProvider } from './catalog.js';
 // 3. Family-priority scan of the authenticated providers' catalog models.
 const FAMILY_PRIORITY = ['gemini-flash', 'gpt-nano', 'claude-haiku'];
 const COPILOT_UTILITY_MODELS = ['gpt-5.4-nano', 'gpt-4.1', 'gpt-4o', 'gpt-4o-mini'];
-// Claude Code and Codex start the provider CLI and spend subscription
-// allowance for every request — Codex additionally re-sends its whole agent
-// harness prompt, so even a session title costs tens of thousands of input
-// tokens. Settings/config/request overrides are handled before the automatic
-// chain; session and family resolution must never select either of them.
-const CLI_SUBSCRIPTION_PROVIDERS = new Set(['claude-code', 'codex']);
-const canAutoSelectProvider = (providerID) => !CLI_SUBSCRIPTION_PROVIDERS.has(providerID);
 // The ChatGPT-plan codex backend only accepts a small allowlist of models
 // (nano/API-key models are rejected with 400) — this is its cheapest one.
 const OPENAI_OAUTH_SMALL_MODEL = 'gpt-5.4-mini';
@@ -102,7 +95,7 @@ export function resolveSmallModel({ auth, catalog, settingsSmallModel, configSma
   const preferred = typeof preferredProviderID === 'string' && preferredProviderID
     ? preferredProviderID
     : null;
-  if (preferred && canAutoSelectProvider(preferred) && isUsableAuthEntry(getAuthEntryForProvider(auth, preferred))) {
+  if (preferred && isUsableAuthEntry(getAuthEntryForProvider(auth, preferred))) {
     for (const family of FAMILY_PRIORITY) {
       const match = pickWithinProvider(preferred, auth, catalog, family);
       if (match) return match;
@@ -116,7 +109,6 @@ export function resolveSmallModel({ auth, catalog, settingsSmallModel, configSma
   // authenticated providers by family priority.
   const authedProviders = Object.keys(auth || {}).filter((providerID) =>
     providerID !== preferred
-    && canAutoSelectProvider(providerID)
     && isUsableAuthEntry(auth[providerID]));
 
   for (const family of FAMILY_PRIORITY) {

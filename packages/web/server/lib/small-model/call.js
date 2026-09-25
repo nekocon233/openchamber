@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -21,37 +20,6 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 4_000;
 
 const USER_AGENT = 'opencode/1.0 openchamber';
 
-/**
- * Plugin providers whose credential and endpoint exist only inside the running
- * OpenCode process.
- *
- * Both run a local CLI on the user's subscription, so their branch resolves one
- * `apiKey`/`baseURL` pair from one runtime snapshot and uses nothing else. It
- * deliberately does not read the provider config or auth.json: those sources
- * must not be able to replace the runtime bearer, redirect the prompt to
- * another endpoint, or override the reserved request-kind header that tells the
- * plugin this is a single-turn utility call rather than an agent turn.
- */
-const RUNTIME_ONLY_PROVIDERS = new Map([
-  ['claude-code', {
-    label: 'Claude Code',
-    transportKind: 'claude-code-runtime',
-    requestKindHeader: 'x-opencode-claude-request-kind',
-  }],
-  ['codex', {
-    label: 'Codex',
-    transportKind: 'codex-runtime',
-    requestKindHeader: 'x-opencode-codex-request-kind',
-  }],
-]);
-
-export const isRuntimeOnlyProvider = (providerID) => RUNTIME_ONLY_PROVIDERS.has(providerID);
-
-/** Lowercased, for case-insensitive stripping from configured headers. */
-const RESERVED_REQUEST_KIND_HEADERS = new Set(
-  Array.from(RUNTIME_ONLY_PROVIDERS.values(), (spec) => spec.requestKindHeader.toLowerCase()),
-);
-
 const noProviderLoginError = (providerID) => Object.assign(
   new Error(`No OpenCode login found for provider "${providerID}"`),
   { statusCode: 401, code: 'no-provider-login', providerID },
@@ -62,7 +30,6 @@ const providerConfigResolutionError = (providerID, configField) => Object.assign
   { statusCode: 422, code: 'provider-config-resolution-failed', providerID, configField },
 );
 
-const endpointFingerprint = (value) => crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);
 // Providers whose endpoint lives inside their dedicated AI SDK package, so the
 // models.dev catalog carries no `api` URL and OpenCode reports none at runtime.
 // Each of these serves OpenAI-compatible `/chat/completions` at the URL below.
@@ -700,21 +667,7 @@ const runtimeCredential = (providerID, runtime) => (
     : null
 );
 
-export async function resolveRuntimeOnlyTransport(providerID, { workingDirectory } = {}) {
-  const spec = RUNTIME_ONLY_PROVIDERS.get(providerID);
-  if (!spec) return null;
-  const runtime = await getRuntimeProviderTransport(providerID, workingDirectory);
-  if (!runtime) return null;
-  return Object.freeze({
-    ...runtime,
-    kind: spec.transportKind,
-    transportID: `${spec.transportKind}:${endpointFingerprint(runtime.baseURL)}`,
-  });
-}
-
 export const getProviderTransportKind = ({ providerID, login }) => {
-  const runtimeOnly = RUNTIME_ONLY_PROVIDERS.get(providerID);
-  if (runtimeOnly) return runtimeOnly.transportKind;
   if (providerID === 'github-copilot') return 'github-copilot-dynamic';
   if (providerID === 'openai' && login?.type === 'oauth') return 'openai-codex-responses';
   if (providerID === 'anthropic') return 'anthropic-messages';
@@ -730,10 +683,6 @@ export const getProviderTransportKind = ({ providerID, login }) => {
  * must use this rather than inventing a second rule.
  */
 export async function resolveProviderLogin({ auth, workingDirectory, providerID }) {
-  if (isRuntimeOnlyProvider(providerID)) {
-    const transport = await resolveRuntimeOnlyTransport(providerID, { workingDirectory });
-    return transport ? { type: 'api', key: transport.apiKey } : null;
-  }
   const providerConfig = readProviderConfig(workingDirectory, providerID);
   return providerConfig?.auth
     || runtimeCredential(providerID, await getRuntimeProviderTransport(providerID, workingDirectory))
@@ -741,34 +690,8 @@ export async function resolveProviderLogin({ auth, workingDirectory, providerID 
     || null;
 }
 
-export async function callSmallModel({ auth, catalog, workingDirectory, sessionID, providerID, modelID, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal, resolvedProviderTransport }) {
+export async function callSmallModel({ auth, catalog, workingDirectory, sessionID, providerID, modelID, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal }) {
   const tokens = Number(maxOutputTokens) > 0 ? Number(maxOutputTokens) : DEFAULT_MAX_OUTPUT_TOKENS;
-
-  const runtimeOnly = RUNTIME_ONLY_PROVIDERS.get(providerID);
-  if (runtimeOnly) {
-    const transport = resolvedProviderTransport
-      ?? await resolveRuntimeOnlyTransport(providerID, { workingDirectory });
-    // The snapshot must be this provider's own: a transport carried over from
-    // another provider would send the prompt and bearer to the wrong CLI.
-    if (!transport?.apiKey || !transport.baseURL || transport.providerID !== providerID) {
-      throw noProviderLoginError(providerID);
-    }
-    return callOpenaiCompatible({
-      baseURL: transport.baseURL,
-      headers: {
-        Authorization: `Bearer ${transport.apiKey}`,
-        [runtimeOnly.requestKindHeader]: 'utility',
-      },
-      modelID,
-      prompt,
-      system,
-      maxOutputTokens: tokens,
-      providerLabel: runtimeOnly.label,
-      responseSchema,
-      timeoutMs,
-      signal,
-    });
-  }
 
   const providerConfig = readProviderConfig(workingDirectory, providerID);
   const runtimeTransport = await getRuntimeProviderTransport(providerID, workingDirectory);
@@ -930,15 +853,6 @@ export async function callSmallModel({ auth, catalog, workingDirectory, sessionI
     { Authorization: `Bearer ${apiKey}` },
     providerConfig?.headers,
   );
-  // The request-kind headers are ours to set, and only on a runtime-only
-  // provider's own branch. Strip any that configured headers try to smuggle in:
-  // a forged one would tell that plugin an ordinary turn is a cheap utility
-  // call, or the reverse.
-  for (const name of Object.keys(providerHeaders)) {
-    if (RESERVED_REQUEST_KIND_HEADERS.has(name.toLowerCase())) {
-      delete providerHeaders[name];
-    }
-  }
 
   return callOpenaiCompatible({
     baseURL,

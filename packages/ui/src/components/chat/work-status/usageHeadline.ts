@@ -14,15 +14,13 @@ import type { UsageProviderGroup, UsageLimitRow } from '@/components/usage/usage
  * Quota provider ids mostly match OpenCode provider ids; these are the ones
  * that do not. Unmatched providers simply produce no headline.
  *
- * `claude-code` is the provider the opencode-claude integration registers, and
- * it bills against the same Claude subscription the `claude` quota reports.
- * The native CLI providers bill against their CLI's subscription the same way.
+ * The native CLI providers bill against their CLI's subscription, which the
+ * `claude` and `codex` quotas report.
  */
 const QUOTA_PROVIDER_ALIASES = new Map<string, string>([
   ['openai', 'codex'],
   ['chatgpt', 'codex'],
   ['anthropic', 'claude'],
-  ['claude-code', 'claude'],
   ['claude-native', 'claude'],
   ['codex-native', 'codex'],
   ['gemini', 'google'],
