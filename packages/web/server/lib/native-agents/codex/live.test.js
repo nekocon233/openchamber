@@ -18,7 +18,7 @@ const CONFIG = { model: 'gpt-5.5', effort: 'low', fast: false, mode: 'default' }
 
 const notifications = fixture('gpt55-tools.notifications.json');
 
-const createHarness = ({ replay = true, failures = {}, onIdle, instructions = null, resumeResponse = {}, now } = {}) => {
+const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, instructions = null, resumeResponse = {}, now } = {}) => {
   const events = [];
   const requests = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
@@ -36,7 +36,7 @@ const createHarness = ({ replay = true, failures = {}, onIdle, instructions = nu
     }
     return { turn: { id: TURN_ID, status: 'inProgress', items: [] } };
   };
-  live = createCodexLiveThreads({ request, publisher, questions, onIdle, readGlobalInstructions: async () => instructions, now });
+  live = createCodexLiveThreads({ request, publisher, questions, onIdle, onTurnFinished, readGlobalInstructions: async () => instructions, now });
   return { live, events, requests, questions };
 };
 
@@ -62,6 +62,17 @@ const sendPrompt = (live, overrides = {}) => live.prompt({
 });
 
 describe('Codex live threads', () => {
+  it.each(['completed', 'interrupted', 'failed'])('announces the %s turn outcome once for initial-title eligibility', async (status) => {
+    const finished = [];
+    const { live } = createHarness({ replay: false, onTurnFinished: (...args) => finished.push(args) });
+    await sendPrompt(live);
+    const completion = { threadId: THREAD_ID, turn: { id: TURN_ID, status } };
+    live.handleNotification('turn/completed', completion);
+    live.handleNotification('turn/completed', completion);
+    expect(finished).toEqual([[SESSION_ID, DIRECTORY, { id: TURN_ID, status }]]);
+    expect(live.busySessionIds(DIRECTORY)).toEqual([]);
+  });
+
   it('exposes completed patch results while later items still run', async () => {
     const { live } = createHarness({ replay: false });
     await sendPrompt(live);

@@ -20,6 +20,7 @@ import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
 import { claudeConfigDir, readClaudeTaskList } from './claude/tasks.js';
 import { createCodexAppServer } from './codex/app-server.js';
+import { createCodexAutoTitles } from './codex/auto-title.js';
 import { createCodexCatalog } from './codex/catalog.js';
 import { createCodexLiveThreads } from './codex/live.js';
 import { createCodexSessionStore } from './codex/store.js';
@@ -104,6 +105,8 @@ const untilRewound = (records, pending) => {
  * @param {string} options.clientVersion OpenChamber version reported to the CLIs
  * @param {(event: { directory: string, payload: object }) => void} options.publishNativeEvent
  * @param {() => Promise<import('@anthropic-ai/claude-agent-sdk')>} [options.loadSdk]
+ * @param {() => Promise<typeof import('../small-model/index.js')>} [options.getSmallModelService]
+ * @param {ReturnType<typeof createSnapshotStore>} [options.snapshots]
  * @param {() => number} [options.now]
  */
 const openChamberNamespace = z.record(z.string(), z.unknown()).catch({});
@@ -126,11 +129,13 @@ export const createNativeAgentsRuntime = ({
   publishNativeEvent,
   // The global instructions every CLI session gets (OpenChamber's global AGENTS.md).
   readGlobalInstructions = async () => null,
+  getSmallModelService = async () => import('../small-model/index.js'),
+  snapshots = createSnapshotStore({ dataDir }),
   loadSdk = loadClaudeSdk,
   now = Date.now,
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
-  const reverts = createNativeReverts({ registry, snapshots: createSnapshotStore({ dataDir }) });
+  const reverts = createNativeReverts({ registry, snapshots });
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
   const questions = createQuestionRegistry({
     publish: (directory, payload) => publisher.emit(directory, payload.type, payload.properties),
@@ -195,13 +200,11 @@ export const createNativeAgentsRuntime = ({
     return null;
   };
 
-  // A finished turn confirms a session OpenChamber created and changes its
-  // record (title from the first prompt, update time), which goes out the way
-  // OpenCode announces a session after each message. A Claude session given a
-  // title at creation gets it written to its new transcript, whose title wins
-  // from then on.
-  const onTurnFinished = (sessionId, directory) => {
-    void (async () => {
+  // Publish the CLI record before automatic title generation. Keep the entry
+  // from before confirmation so only the first completion can request it.
+  // A Claude title supplied at creation is written to the new transcript.
+  const onTurnFinished = (sessionId, directory, turn) => {
+    const initialSession = (async () => {
       try {
         const entry = await registry.getSession(sessionId);
         await registry.confirmSession(sessionId);
@@ -210,10 +213,17 @@ export const createNativeAgentsRuntime = ({
           await settleClaudeRewind(sessionId, directory);
         }
         await publishSession(sessionId, directory);
+        return entry?.confirmedAt === undefined ? entry : null;
       } catch (error) {
         console.warn('[native-agents] could not refresh the session after a turn:', sessionId, errorMessage(error));
+        return null;
       }
     })();
+    if (decode(sessionId).backend === NATIVE_BACKEND_CODEX && turn?.status === 'completed') {
+      void codexTitles.generate({ sessionId, directory, turnId: turn.id, initialSession }).catch((error) => {
+        console.warn('[native-agents] could not generate the initial Codex title:', sessionId, errorMessage(error));
+      });
+    }
   };
 
   // What the turns changed on disk, for reverting them.
@@ -253,6 +263,12 @@ export const createNativeAgentsRuntime = ({
   });
   const claude = createClaudeSessionStore({ loadSdk, registry });
   const codex = createCodexSessionStore({ appServer, registry, readGlobalInstructions });
+  const codexTitles = createCodexAutoTitles({
+    store: codex,
+    pendingRevert: (sessionId) => reverts.pending(sessionId),
+    generateText: async (input) => (await getSmallModelService()).generateSmallModelText(input),
+    publishSession,
+  });
   const claudeLive = createClaudeLiveSessions({
     loadSdk,
     resolveExecutable: () => resolveExecutable('claude'),
@@ -551,6 +567,7 @@ export const createNativeAgentsRuntime = ({
     async updateSession(sessionId, directory, patch) {
       const decoded = decodeOwnSession(sessionId);
       const { backend } = decoded;
+      if (backend === NATIVE_BACKEND_CODEX && (patch.title !== undefined || patch.archived !== undefined)) await codexTitles.cancel(sessionId);
       if (patch.archived === true) await stopTurn(sessionId);
       if (backend === NATIVE_BACKEND_CLAUDE) {
         const { sessionUuid } = decoded;
@@ -609,6 +626,7 @@ export const createNativeAgentsRuntime = ({
      */
     async deleteSession(sessionId, directory) {
       const { backend } = decodeOwnSession(sessionId);
+      if (backend === NATIVE_BACKEND_CODEX) await codexTitles.cancel(sessionId);
       const session = await storeFor(sessionId).getSession(sessionId, directory);
       if (!session) throw sessionNotFoundError(sessionId);
       await stopTurn(sessionId);
@@ -637,6 +655,7 @@ export const createNativeAgentsRuntime = ({
      */
     async revert(sessionId, messageId, directory) {
       const { backend } = decode(sessionId);
+      if (backend === NATIVE_BACKEND_CODEX) await codexTitles.cancel(sessionId);
       await stopTurn(sessionId);
       let revert;
       if (backend === NATIVE_BACKEND_CLAUDE) {
@@ -759,6 +778,7 @@ export const createNativeAgentsRuntime = ({
     },
 
     async shutdown() {
+      await codexTitles.stop();
       codexUtility.handleExit(new Error('Codex runtime is shutting down'));
       await claudeLive.shutdown();
       await appServer.stop();

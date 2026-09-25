@@ -92,7 +92,7 @@ const appendAt = (list, index, delta) => {
  * @param {(method: string, params: object) => Promise<unknown>} options.request app-server JSON-RPC request
  * @param {ReturnType<typeof import('../publisher.js').createNativeEventPublisher>} options.publisher
  * @param {ReturnType<typeof import('../questions.js').createQuestionRegistry>} options.questions
- * @param {(sessionId: string, directory: string) => void} [options.onTurnFinished] Codex finished a turn and recorded it
+ * @param {(sessionId: string, directory: string, turn: { id: string, status: string }) => void} [options.onTurnFinished] Codex finished a turn and recorded it
  * @param {(sessionId: string, directory: string) => void} [options.onIdle] the thread stopped running a turn
  * @param {() => number} [options.now]
  */
@@ -297,7 +297,7 @@ export const createCodexLiveThreads = ({
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
       if (!live?.turn || live.turn.id !== parsed.data.turn.id) return;
       settleTurn(live, parsed.data.turn);
-      onTurnFinished(live.sessionId, live.directory);
+      onTurnFinished(live.sessionId, live.directory, { id: parsed.data.turn.id, status: parsed.data.turn.status });
     },
     'thread/status/changed': (params) => {
       const parsed = threadStatusParams.safeParse(params);

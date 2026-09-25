@@ -330,6 +330,32 @@ Titles belong to the CLIs. A rename is Claude Code's custom-title entry
 Claude transcript exists and is then written to it; Codex takes a name before
 the first turn. Once a transcript exists, the registry title is not used.
 
+`codex/auto-title.js` generates a title after an OpenChamber-created Codex
+session's first turn completes successfully. The completion callback registers
+the work before awaiting the initial session refresh, and uses the registry
+entry from before confirmation. Later turns, adopted sessions, named threads,
+forks and subagents do not trigger generation. No startup history scan runs.
+
+The title uses the configured Small Model with the same explicit-provider
+override rules as manual AI rename. It reads only the first persisted turn,
+supplying at most 4,000 characters of user text and 8,000 of final reply text.
+Tools, reasoning, commentary and injected OpenChamber instructions are excluded.
+A title is written through `thread/name/set` and announced as `session.updated`.
+This server operation works with the UI closed on web, Electron and connected
+mobile clients. VS Code still has no native CLI runtime.
+
+Generation is cancellable and limited to 60 seconds. Manual rename, archive,
+delete, revert and shutdown cancel pending work. Manual mutations wait for an
+automatic save/publication already in flight, but never wait for generation.
+The store serializes title writes per session and rechecks the CLI's name,
+directory, archive state and first-turn identity inside the automatic write.
+Directory checks resolve symlinks because Codex canonicalizes its working
+directory. The final check omits turn items. Codex has no name compare-and-set
+operation, so a concurrent write from another CLI client after the check remains outside this
+ordering. Failed or empty generation leaves the preview intact; manual AI
+rename remains available to retry. A failed first turn does not auto-title a
+later turn.
+
 Archive: Codex archives a thread by moving its rollout into
 `archived_sessions/` (`thread/archive`, `thread/unarchive`). Listing asks for
 archived threads separately, and a single read goes by that rollout path.

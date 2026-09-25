@@ -11,6 +11,7 @@
 // Listing asks for archived threads separately; a single read has no archive
 // flag, so it goes by that rollout path.
 
+import fs from 'node:fs/promises';
 import { z } from 'zod';
 
 import { deleteForkSourceError, invalidRequestError, messageNotFoundError, revertMidTurnError } from '../errors.js';
@@ -30,6 +31,18 @@ const MISSING_THREAD_MESSAGE = /^(thread not loaded|invalid thread id)/;
 const NO_ROLLOUT_MESSAGE = /^no rollout found/;
 const FORKED_SOURCE_MESSAGE = /forked history still references it/;
 const ARCHIVED_ROLLOUT = /[\\/]archived_sessions[\\/]/;
+const missingDirectory = z.object({ code: z.enum(['ENOENT', 'ENOTDIR']) });
+
+const sameDirectory = async (left, right) => {
+  if (left === right) return true;
+  try {
+    const [resolvedLeft, resolvedRight] = await Promise.all([fs.realpath(left), fs.realpath(right)]);
+    return resolvedLeft === resolvedRight;
+  } catch (error) {
+    if (missingDirectory.safeParse(error).success) return false;
+    throw error;
+  }
+};
 
 const threadSchema = z.object({
   id: z.string(),
@@ -56,6 +69,7 @@ const turnsPageSchema = z.object({
   data: z.array(z.unknown()),
   nextCursor: z.string().nullish(),
 }).passthrough();
+const titleTurnSchema = z.object({ id: z.string(), status: z.string(), items: z.array(z.unknown()) });
 
 const fitTitle = (title, length) => (title.length > length ? `${title.slice(0, length - 1)}…` : title);
 const fullTitleOf = (thread) => thread.name || thread.preview.split('\n')[0] || 'Codex session';
@@ -69,6 +83,16 @@ const forkTitleOf = (thread) => `${fitTitle(fullTitleOf(thread), MAX_TITLE_LENGT
  * @param {ReturnType<typeof import('../registry.js').createNativeRegistry>} options.registry
  */
 export const createCodexSessionStore = ({ appServer, registry, readGlobalInstructions = async () => null }) => {
+  const titleWrites = new Map();
+  const writeTitle = (sessionId, work) => {
+    const previous = titleWrites.get(sessionId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(work);
+    titleWrites.set(sessionId, next);
+    void next.finally(() => {
+      if (titleWrites.get(sessionId) === next) titleWrites.delete(sessionId);
+    }).catch(() => undefined);
+    return next;
+  };
   const sessionRecord = (thread, directory, { archived, parentID = null }) => buildSessionRecord({
     id: encodeCodexSessionId(thread.id),
     backend: 'codex',
@@ -266,9 +290,33 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
   };
 
   /** Names the thread; Codex shows the name in every client. */
-  const rename = async (sessionId, name) => {
+  const rename = (sessionId, name) => writeTitle(sessionId, async () => {
     await appServer.request('thread/name/set', { threadId: threadIdOf(sessionId), name });
+  });
+
+  /** The requested first turn, only while this root thread remains unnamed. */
+  const initialTitleTurn = async (sessionId, directory, turnId, itemsView) => {
+    const threadId = threadIdOf(sessionId);
+    const thread = await readThread(threadId);
+    if (!thread || thread.name || thread.parentThreadId || ARCHIVED_ROLLOUT.test(thread.path ?? '')
+      || !await sameDirectory(thread.cwd, directory)) return null;
+    const page = turnsPageSchema.parse(await appServer.request('thread/turns/list', {
+      threadId, sortDirection: 'asc', limit: 1, itemsView,
+    }));
+    if (!page.data.length) return null;
+    const turn = titleTurnSchema.parse(page.data[0]);
+    return turn.id === turnId && turn.status === 'completed' ? turn : null;
   };
+
+  // The check shares ordering with manual renames, including one that was
+  // already in flight before automatic generation started.
+  const renameInitialTurn = (sessionId, directory, turnId, name, signal) => writeTitle(sessionId, async () => {
+    signal.throwIfAborted();
+    if (!await initialTitleTurn(sessionId, directory, turnId, 'notLoaded')) return false;
+    signal.throwIfAborted();
+    await appServer.request('thread/name/set', { threadId: threadIdOf(sessionId), name });
+    return true;
+  });
 
   const setArchived = async (sessionId, archived) => {
     await appServer.request(archived ? 'thread/archive' : 'thread/unarchive', { threadId: threadIdOf(sessionId) });
@@ -290,5 +338,5 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     }
   };
 
-  return { listRootSessions, getSession, loadHistory, sessionExists, rewindTarget, fork, rename, setArchived, deleteThread };
+  return { listRootSessions, getSession, loadHistory, sessionExists, rewindTarget, fork, rename, initialTitleTurn, renameInitialTurn, setArchived, deleteThread };
 };
