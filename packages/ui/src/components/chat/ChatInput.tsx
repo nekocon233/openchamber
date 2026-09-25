@@ -96,6 +96,10 @@ import { runGuestCommand } from '@/lib/guests/run-command';
 import { useGuestsStore } from '@/lib/guests/store';
 import { isGuestActive } from '@/lib/guests/capabilities';
 import { routeGuestSlashCommand } from './composer/submit/guestCommands';
+import { CODEX_COMPOSER_COMMANDS, parseCodexComposerCommand } from '@/lib/native-agents/codex-commands';
+import { NativeAgentsRequestError } from '@/lib/native-agents/errors';
+import { executeCodexComposerCommand } from './composer/submit/codexCommands';
+import { CodexCommandOutput, type CodexCommandOutputState } from './CodexCommandOutput';
 import { pluginModeFromId } from '@/lib/surfaces/modes';
 import { opencodeClient } from '@/lib/opencode/client';
 import { useGitStore } from '@/stores/useGitStore';
@@ -557,6 +561,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     );
     const currentManagementSessionId = currentSessionId;
     const [reviewDialogOpen, setReviewDialogOpen] = React.useState(false);
+    const [codexCommandOutput, setCodexCommandOutput] = React.useState<CodexCommandOutputState | null>(null);
+    const codexCommandRunning = React.useRef(false);
+    React.useEffect(() => {
+        setCodexCommandOutput(null);
+    }, [activeRuntimeKey, currentSessionId, currentDirectory]);
     const [reviewFlowSubmitting, setReviewFlowSubmitting] = React.useState(false);
 
     const currentProviderId = useConfigStore((state) => state.currentProviderId);
@@ -657,7 +666,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const isExpandedInput = !isBtwActive && persistedExpandedInput;
     const setExpandedInput = useUIStore((state) => state.setExpandedInput);
     const setTimelineDialogOpen = useUIStore((state) => state.setTimelineDialogOpen);
-    const { git: runtimeGit, vscode: vscodeApi, linear: runtimeLinear } = useRuntimeAPIs();
+    const { git: runtimeGit, vscode: vscodeApi, linear: runtimeLinear, nativeAgents } = useRuntimeAPIs();
     const cycleAgentShortcutOverride = useUIStore((state) => state.shortcutOverrides.cycle_agent);
     const cycleAgentShortcut = React.useMemo(() => (
         getEffectiveShortcutCombo('cycle_agent', cycleAgentShortcutOverride ? { cycle_agent: cycleAgentShortcutOverride } : undefined)
@@ -860,6 +869,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const availableCommands = useCommandsStore((s) => selectCommandsForDirectory(s, currentDirectory));
     const availableSkills = useSkillsStore((s) => selectSkillsForDirectory(s, currentDirectory));
     const knownSlashNames = React.useMemo(() => {
+        if (nativeTargetBackend === 'codex') {
+            const names = new Set<string>(CODEX_COMPOSER_COMMANDS.map((command) => command.name));
+            for (const name of ['undo', 'redo', 'timeline', 'compact', 'btw']) names.add(name);
+            if (!isMobile && !isVSCodeRuntime()) names.add('handoff-review');
+            return names;
+        }
         const names = new Set<string>([
             'init', 'review', 'undo', 'redo', 'timeline', 'compact', 'btw', 'summary', 'workspace-review', 'plan-feature', 'craft-goal', 'schedule-task', 'catch-up', 'debug', 'weigh', 'explore',
         ]);
@@ -867,17 +882,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         for (const command of availableCommands) names.add(command.name.toLowerCase());
         for (const skill of availableSkills) names.add(skill.name.toLowerCase());
         return names;
-    }, [availableCommands, availableSkills, isMobile]);
+    }, [availableCommands, availableSkills, isMobile, nativeTargetBackend]);
 
     // Extension slash commands. Built-ins, OpenCode commands, and skills are
     // reserved: an extension command with one of those names is ignored.
     const guestCommands = useGuestCommands(knownSlashNames);
     const knownSlashNamesWithGuests = React.useMemo(() => {
-        if (guestCommands.length === 0) return knownSlashNames;
+        if (isNativeTarget || guestCommands.length === 0) return knownSlashNames;
         const names = new Set(knownSlashNames);
         for (const entry of guestCommands) names.add(entry.command.name);
         return names;
-    }, [guestCommands, knownSlashNames]);
+    }, [guestCommands, isNativeTarget, knownSlashNames]);
 
     const availableSnippets = useSnippetsStore((s) => s.snippets);
     const knownSnippetTriggers = React.useMemo(() => {
@@ -1482,6 +1497,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, []);
 
     const getSubmitErrorMessage = (error: unknown, fallback: string) => {
+        if (error instanceof NativeAgentsRequestError && error.code === 'NATIVE_CODEX_COMMAND_UNSUPPORTED') {
+            return t('chat.codexCommand.unsupported');
+        }
         const message = error instanceof Error ? error.message : '';
         return message.toLowerCase().includes('runtime changed')
             ? t('chat.chatInput.toast.messageSendFailed')
@@ -1519,7 +1537,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             toast.error(t('sessionAuth.expired.sendBlocked'));
             return;
         }
-        const inputSnapshot = options?.presetText != null
+        let inputSnapshot = options?.presetText != null
             ? {
                 message: options.presetText,
                 hasContent: options.presetText.trim().length > 0 || attachedFiles.length > 0 || hasDrafts,
@@ -1554,6 +1572,64 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         if (!inputSnapshot.hasContent || (!currentSessionId && !newSessionDraftOpen)) {
             return;
+        }
+
+        let codexAgentOverride: 'plan' | undefined;
+        const codexCommand = nativeTargetBackend === 'codex' && inputMode === 'normal' && !isBtwActive
+            ? parseCodexComposerCommand(inputSnapshot.message)
+            : null;
+        if (codexCommand) {
+            if (codexCommandRunning.current) return;
+            const directory = currentSessionDirectoryForSync ?? currentDirectory;
+            if (!directory || !currentModelId) {
+                toast.error(t('chat.chatInput.toast.noModelSelected'));
+                return;
+            }
+            const originalText = inputSnapshot.message;
+            const originalMentions = new Set(confirmedMentionsRef.current);
+            codexCommandRunning.current = true;
+            closeAutocomplete();
+            // Clear only the command. Attached files and context belong to the
+            // next prompt; a failed command restores its original draft.
+            messageRef.current = '';
+            setMessage('');
+            persistDraftImmediately(chatDraftIdentity, '');
+            try {
+                const result = await executeCodexComposerCommand(codexCommand, {
+                    sessionId: currentSessionId,
+                    directory,
+                    model: currentModelId,
+                    variant: currentVariant,
+                    agent: currentAgentName ?? 'build',
+                    api: nativeAgents,
+                    t,
+                    isCurrent: isSubmissionContextCurrent,
+                    openModelMenu: () => {
+                        if (isMobile) setMobileControlsPanel('model');
+                        useUIStore.getState().setModelSelectorOpen(true);
+                    },
+                });
+                if (!isSubmissionContextCurrent()) return;
+                if (result.kind === 'output') {
+                    setCodexCommandOutput({ command: codexCommand.name, output: result });
+                    return;
+                }
+                if (result.kind === 'done') return;
+                if (result.kind === 'edit') {
+                    setMessage(result.text);
+                    updateAutocompleteState(result.text, result.text.length);
+                    requestAnimationFrame(() => composerRef.current?.focus());
+                    return;
+                }
+                inputSnapshot = { message: result.text, hasContent: true };
+                if (result.kind === 'prompt') codexAgentOverride = result.agent;
+            } catch (error) {
+                restoreDraft(chatDraftIdentity, originalText, originalMentions);
+                if (isSubmissionContextCurrent()) toast.error(getSubmitErrorMessage(error, t('chat.codexCommand.failed')));
+                return;
+            } finally {
+                codexCommandRunning.current = false;
+            }
         }
 
         // Local slash commands are planned before anything is taken or
@@ -1617,7 +1693,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // An extension command never reaches the model: the extension turns
         // `/name args` into a chip, which lands through the same pending slot
         // a guest panel's `attach` uses. Nothing else in the composer moves.
-        const guestRoute = !isBtwActive && inputSnapshot.hasContent
+        const guestRoute = !isNativeTarget && !isBtwActive && inputSnapshot.hasContent
             ? routeGuestSlashCommand(inputSnapshot.message, inputMode, guestCommands)
             : null;
         if (guestRoute) {
@@ -1645,7 +1721,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         const providerIdToSend = isBtwActive ? effectiveBtwSelection.model?.providerId : currentProviderId;
         const modelIdToSend = isBtwActive ? effectiveBtwSelection.model?.modelId : currentModelId;
-        const agentNameToSend = isBtwActive ? effectiveBtwSelection.agent : currentAgentName;
+        const agentNameToSend = isBtwActive ? effectiveBtwSelection.agent : codexAgentOverride ?? currentAgentName;
         const variantToSend = isBtwActive ? effectiveBtwSelection.variant : currentVariant;
 
         if (!providerIdToSend || !modelIdToSend) {
@@ -4197,6 +4273,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             {currentSessionId ? <BtwPanel parentSessionId={currentSessionId} panel={btwPanel} onExit={handleExitBtw} /> : null}
         </form>
 
+        <CodexCommandOutput
+            value={codexCommandOutput}
+            onClose={() => setCodexCommandOutput(null)}
+            onCommand={(text) => {
+                setCodexCommandOutput(null);
+                setMessage((current) => current ? appendWithLineBreaks(current, text) : text);
+                requestAnimationFrame(() => composerRef.current?.focus());
+            }}
+        />
         {/* Issue Picker Dialog */}
         <GitHubIssuePickerDialog
             open={issuePickerOpen}

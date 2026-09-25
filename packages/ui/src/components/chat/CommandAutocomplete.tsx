@@ -15,6 +15,7 @@ import { useGuestCommands } from '@/hooks/useGuestSurfaces';
 import { AutocompleteRowTooltip } from './composer/ui/AutocompleteRowTooltip';
 import type { NativeBackend } from '@/lib/native-agents/ids';
 import { useNativeCommands } from '@/lib/native-agents/useNativeCommands';
+import { CODEX_COMMAND_USAGE, CODEX_COMPOSER_COMMANDS } from '@/lib/native-agents/codex-commands';
 
 type CommandSource = 'openchamber' | 'opencode' | 'skill' | 'extension' | 'native';
 
@@ -160,10 +161,15 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
         source: 'native',
         description: command.description || undefined,
         cliName,
+        isSkill: nativeBackend === 'codex',
       }));
       // The composer's own commands that work on a native session.
       const localCommands: CommandInfo[] = [
-        { id: 'native:compact', name: 'compact', source: 'openchamber', description: t('chat.commandAutocomplete.command.compactDescription'), isBuiltIn: true },
+        ...(nativeBackend === 'codex' ? CODEX_COMPOSER_COMMANDS.map((command): CommandInfo => ({
+          id: `native:${command.name}`, name: command.name, source: 'native', cliName,
+          description: [t(command.descriptionKey), CODEX_COMMAND_USAGE.get(command.name)].filter(Boolean).join('\n'),
+        })) : []),
+        ...(hasSession ? [{ id: 'native:compact', name: 'compact', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.compactDescription'), isBuiltIn: true }] : []),
         ...(hasSession
           ? [
               { id: 'openchamber:undo', name: 'undo', source: 'openchamber' as const, description: t('chat.commandAutocomplete.command.undoDescription'), isBuiltIn: true },
@@ -177,7 +183,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
           : []),
       ];
       setCommands(orderNativeCommandItems(localCommands, cliCommands, searchQuery));
-      setLoading(nativeCommands.status === 'loading');
+      setLoading(nativeBackend === 'claude' && nativeCommands.status === 'loading');
       return;
     }
     const loadCommands = async () => {
@@ -451,6 +457,9 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
       style={mobileMaxHeight !== undefined ? { ...style, maxHeight: mobileMaxHeight } : style}
     >
       <ScrollableOverlay preventOverscroll outerClassName="flex-1 min-h-0" className="px-0 pb-2">
+        {nativeCommands.status === 'ready' && nativeCommands.warnings?.map((warning, index) => (
+          <p key={index} className="px-3 py-2 break-words text-sm text-[var(--status-warning-text)]">{warning}</p>
+        ))}
         {loading ? (
           <div className="flex items-center justify-center py-4">
             <Icon name="refresh" className="h-4 w-4 animate-spin text-muted-foreground" />

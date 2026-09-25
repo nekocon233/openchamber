@@ -357,11 +357,12 @@ with a native branch (`sync/native-send.ts`):
 
 - The message id is one the CLI records (`ncl_u_<uuid>`, `ncx_u_<uuid>`), so the
   optimistic message and the CLI's echo are the same record.
-- The text goes out as typed. The composer keeps `/undo`, `/redo`,
-  `/timeline`, `/btw` and `/handoff-review` (`isNativeLocalCommand`), which
-  OpenChamber runs itself; every other slash command is the CLI's and goes out
-  as typed. The
-  composer offers no OpenCode command or skill autocomplete. Shell mode is off.
+- The composer keeps `/undo`, `/redo`, `/timeline`, `/btw` and
+  `/handoff-review` (`isNativeLocalCommand`), which OpenChamber runs itself.
+  Claude's other slash commands go to its CLI as typed. Codex built-ins are
+  dispatched before prompt preparation because app-server does not parse
+  terminal commands. Its enabled skills are resolved by the native server.
+  The composer offers no OpenCode command or skill autocomplete. Shell mode is off.
 - Parts carry what the user wrote and attached: the text, files, and context
   blocks with metadata. OpenChamber's own context (pinned knowledge,
   response-style reminders, skill hints) stays out. A feature that must tell
@@ -459,6 +460,18 @@ sent, and the compaction marker shows it. The command picker offers the
 composer's `/compact`, `/undo`, `/redo`, `/timeline` and `/btw`, then the CLI's
 own commands (`useNativeCommands`) except those a composer command shadows;
 picking one inserts it as typed, and `/btw` opens the btw composer.
+
+Codex's built-ins come from `lib/native-agents/codex-commands.ts`, and
+`composer/submit/codexCommands.ts` executes them. Model, effort, Fast and plan
+commands write the same config and session selections as the existing pickers.
+Fast uses the native catalog's default effort when the composer has no explicit
+effort. Session actions retain their existing owners. Inspections and reviews
+use `nativeAgents.codexCommand`; no optimistic user message is created for a
+control command. The composer clears only the command text and retains its
+attachments and context. Failure restores the originating draft, and a result
+from an old runtime or session cannot open a dialog in the current one.
+Native command discovery is scoped to runtime, directory, backend and adapter;
+aborted or superseded results cannot replace the current list.
 
 A session keeps its kind. The model picker offers a native session only its
 own CLI and an OpenCode session no native CLI; a draft offers every provider

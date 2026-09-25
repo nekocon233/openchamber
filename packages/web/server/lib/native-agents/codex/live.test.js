@@ -28,7 +28,7 @@ const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, i
     requests.push({ method, params });
     if (failures[method]) throw failures[method];
     if (method === 'thread/resume') return resumeResponse;
-    if (method !== 'turn/start') return {};
+    if (method !== 'turn/start' && method !== 'review/start') return {};
     if (replay) {
       setTimeout(() => {
         for (const notification of notifications) live.handleNotification(notification.method, notification.params);
@@ -62,6 +62,31 @@ const sendPrompt = (live, overrides = {}) => live.prompt({
 });
 
 describe('Codex live threads', () => {
+  it('starts native review through review/start and refuses a review during another turn', async () => {
+    const { live, requests } = createHarness({ replay: false });
+    const target = { type: 'baseBranch', branch: 'main' };
+    await live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target, config: CONFIG });
+    expect(requests.map((entry) => entry.method)).toEqual(['thread/resume', 'thread/settings/update', 'review/start']);
+    expect(requests.at(-1).params).toEqual({ threadId: THREAD_ID, delivery: 'inline', target });
+    expect(live.busySessionIds(DIRECTORY)).toEqual([SESSION_ID]);
+    await expect(live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target, config: CONFIG })).rejects.toMatchObject({ code: 'NATIVE_SESSION_BUSY' });
+    expect(requests).toHaveLength(3);
+  });
+
+  it('does not start a review if applying its selected settings fails', async () => {
+    const { live, requests } = createHarness({ replay: false, failures: { 'thread/settings/update': new Error('offline') } });
+    await expect(live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target: { type: 'uncommittedChanges' }, config: CONFIG })).rejects.toThrow('offline');
+    expect(requests.map((entry) => entry.method)).toEqual(['thread/resume', 'thread/settings/update']);
+    expect(live.busySessionIds(DIRECTORY)).toEqual([]);
+  });
+
+  it('remembers an applied review tier even when starting that review fails', async () => {
+    const { live, requests } = createHarness({ replay: false, failures: { 'review/start': new Error('review unavailable') } });
+    await expect(live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target: { type: 'uncommittedChanges' }, config: { ...CONFIG, fast: true } })).rejects.toThrow('review unavailable');
+    await sendPrompt(live);
+    expect(requests.at(-1)).toMatchObject({ method: 'turn/start', params: { serviceTier: 'default' } });
+  });
+
   it.each(['completed', 'interrupted', 'failed'])('announces the %s turn outcome once for initial-title eligibility', async (status) => {
     const finished = [];
     const { live } = createHarness({ replay: false, onTurnFinished: (...args) => finished.push(args) });

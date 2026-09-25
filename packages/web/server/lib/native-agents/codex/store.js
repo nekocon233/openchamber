@@ -230,7 +230,8 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
       const entry = await unconfirmedEntry(sessionId);
       return entry ? unconfirmedSessionRecord(entry) : null;
     }
-    return sessionRecord(thread, directory, {
+    if (!thread.cwd) throw new Error('Codex did not report this session’s working directory');
+    return sessionRecord(thread, thread.cwd, {
       archived: ARCHIVED_ROLLOUT.test(thread.path ?? ''),
       parentID: thread.parentThreadId ? encodeCodexSessionId(thread.parentThreadId) : null,
     });

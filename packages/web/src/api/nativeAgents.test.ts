@@ -29,6 +29,20 @@ afterEach(() => {
 });
 
 describe('web native agents API', () => {
+  it('uses the dedicated Codex command route and parses the output without creating a prompt', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
+      bodies.push(String(init?.body));
+      expect(init?.method).toBe('POST');
+      return Response.json({ kind: 'output', entries: [{ label: 'audit', detail: 'Audit code', command: '/audit ' }], notices: [] });
+    });
+    const result = await createWebNativeAgentsAPI().codexCommand({ name: 'skills', directory: '/work/project' });
+    expect(result).toMatchObject({ kind: 'output', entries: [{ command: '/audit ' }] });
+    expect(requests.map((url) => url.pathname)).toEqual(['/api/native/codex/command']);
+    expect(JSON.parse(bodies[0] ?? '')).toEqual({ name: 'skills', directory: '/work/project' });
+  });
+
   it('reads a directory snapshot from the native route', async () => {
     stubFetch(async () => Response.json({ ncl_a: { type: 'busy' } }));
 

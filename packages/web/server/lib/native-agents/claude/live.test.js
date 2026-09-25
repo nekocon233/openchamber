@@ -477,6 +477,51 @@ describe('Claude live compaction', () => {
   });
 });
 
+describe('Claude live notes to the model', () => {
+  // A reply that ran out of output tokens, modeled on a real transcript: the
+  // cut-off reply, the nudge Claude Code adds for the model before it asks
+  // again, and the reply after it. A live frame marks the nudge `isSynthetic`;
+  // a history read marks the same entry `is_meta`.
+  const cutOff = { type: 'assistant', uuid: '94063f6b-6da0-423f-acc9-a14f8d5cfcf6', timestamp: '2026-09-25T14:42:05.960Z', parent_tool_use_id: null, message: { id: 'msg_011CfQJckQcZrcAJusCrMoZd', model: 'claude-opus-5-5', stop_reason: 'max_tokens', content: [{ type: 'thinking', thinking: '', signature: 'sig' }] } };
+  const nudge = { type: 'user', uuid: 'a5353d6c-eca7-4a93-9014-942ca25855ba', timestamp: '2026-09-25T14:42:06.073Z', parent_tool_use_id: null, message: { role: 'user', content: 'Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.' } };
+  const reply = { type: 'assistant', uuid: '4dd23054-0f5a-41f7-af68-eae371d65324', timestamp: '2026-09-25T15:02:03.093Z', parent_tool_use_id: null, message: { id: 'msg_reply', model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Done.' }] } };
+
+  it('leaves out the nudge after a cut-off reply, as a history read does', async () => {
+    const events = [];
+    const frames = [cutOff, { ...nudge, isSynthetic: true }, reply, { type: 'result', subtype: 'success', is_error: false, queued_turn_count: 0 }];
+    const sdk = {
+      query: ({ prompt }) => {
+        const input = prompt[Symbol.asyncIterator]();
+        async function* run() {
+          await input.next();
+          for (const frame of frames) yield frame;
+          await input.next();
+        }
+        return Object.assign(run(), { interrupt: async () => {}, setModel: async () => {}, applyFlagSettings: async () => {}, setPermissionMode: async () => {} });
+      },
+    };
+    const live = createClaudeLiveSessions({
+      loadSdk: async () => sdk,
+      resolveExecutable: async () => '/usr/local/bin/claude',
+      buildEnv: () => ({}),
+      hasTranscript: async () => true,
+      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      questions: createQuestionRegistry({ publish: () => {} }),
+    });
+    await sendPrompt(live);
+    await waitFor(() => payloads(events, 'session.idle').length > 0);
+
+    const published = [...new Map(payloads(events, 'message.updated').map((payload) => [payload.properties.info.id, payload.properties.info.role]))];
+    const history = createClaudeProjection({ sessionId: SESSION_ID, cwd: DIRECTORY });
+    const prompt = { type: 'user', uuid: 'a22f0a7a-a88c-4093-a5e3-6653ff44f6d3', timestamp: '2026-09-25T14:20:05.302Z', message: { role: 'user', content: PROMPT } };
+    for (const entry of [prompt, cutOff, { ...nudge, is_meta: true }, reply]) history.applyEntry(entry);
+    expect(published).toEqual(history.records().map((record) => [record.info.id, record.info.role]));
+    expect(published.map(([, role]) => role)).toEqual(['user', 'assistant', 'assistant']);
+    expect(payloads(events, 'session.error')).toEqual([]);
+    await live.shutdown();
+  });
+});
+
 describe('Claude live task list', () => {
   const assistant = (id, content) => ({ type: 'assistant', uuid: `${id}-entry`, parent_tool_use_id: null, message: { id, model: 'claude-haiku-4-5', content } });
   const toolResult = (toolUseId) => ({ type: 'user', uuid: `${toolUseId}-result`, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'done' }] } });

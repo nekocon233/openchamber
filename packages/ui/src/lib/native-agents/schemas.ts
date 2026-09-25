@@ -202,7 +202,17 @@ export const nativeStatusSnapshotSchema = sessionStatusSnapshotSchema;
 
 export const nativeCommandListSchema = z.object({
   commands: z.array(z.object({ name: z.string().min(1), description: z.string(), argumentHint: z.string() })),
+  warnings: z.array(z.string()).optional(),
 });
+
+export const nativeCodexCommandResultSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('accepted') }),
+  z.object({
+    kind: z.literal('output'),
+    entries: z.array(z.object({ label: z.string(), detail: z.string(), command: z.string().optional() })),
+    notices: z.array(z.string()),
+  }),
+]);
 
 export const nativePromptAcceptedSchema = z.object({ accepted: z.literal(true) });
 export const nativeRevertResultSchema = z.object({

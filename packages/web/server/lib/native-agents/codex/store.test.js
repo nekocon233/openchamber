@@ -47,6 +47,16 @@ const createHarness = (handlers) => {
 };
 
 describe('Codex session store', () => {
+  it('returns the thread’s own directory when resuming by id from another project', async () => {
+    const { store } = createHarness({ 'thread/read': async () => ({ thread: thread(THREAD_ID, { cwd: '/work/actual-project' }) }) });
+    expect((await store.getSession(`ncx_${THREAD_ID}`, '/work/previous-project')).directory).toBe('/work/actual-project');
+  });
+
+  it('refuses a thread without a working directory instead of assigning the caller’s project', async () => {
+    const { store } = createHarness({ 'thread/read': async () => ({ thread: thread(THREAD_ID, { cwd: null }) }) });
+    await expect(store.getSession(`ncx_${THREAD_ID}`, DIRECTORY)).rejects.toThrow('working directory');
+  });
+
   it('lists interactive threads for the directory and hides the old plugin threads', async () => {
     const { store, calls } = createHarness({
       'thread/list': async ({ archived }) => ({

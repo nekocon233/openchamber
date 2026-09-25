@@ -15,7 +15,7 @@
 import { z } from 'zod';
 
 import { CODEX_FAST_SERVICE_TIER, CODEX_STANDARD_SERVICE_TIER } from '../catalog.js';
-import { invalidRequestError } from '../errors.js';
+import { invalidRequestError, sessionBusyError } from '../errors.js';
 import { codexPartId, decodeNativeSessionId, isNativeClientUserMessageId } from '../ids.js';
 import { stoppedError, unknownError } from '../records.js';
 import { projectCodexTurns } from './projector.js';
@@ -339,6 +339,11 @@ export const createCodexLiveThreads = ({
   }));
 
   return {
+    /** Commands that inspect a thread's tools or terminals need it loaded. */
+    async loadSession(sessionId, directory) {
+      await ensureLoaded(liveThread(sessionId, directory));
+    },
+
     /**
      * @param {object} input
      * @param {string} input.sessionId
@@ -397,6 +402,29 @@ export const createCodexLiveThreads = ({
       const live = liveThread(sessionId, directory);
       await ensureLoaded(live);
       await request('thread/compact/start', { threadId: live.threadId });
+    },
+
+    /** Runs Codex's review workflow, with the same live events as an ordinary turn. */
+    async review({ sessionId, directory, target, config }) {
+      const live = liveThread(sessionId, directory);
+      if (live.busy) throw sessionBusyError();
+      await ensureLoaded(live);
+      if (live.busy) throw sessionBusyError();
+      live.config = config;
+      await request('thread/settings/update', {
+        threadId: live.threadId,
+        model: config.model,
+        effort: config.effort,
+        serviceTier: config.fast ? CODEX_FAST_SERVICE_TIER : CODEX_STANDARD_SERVICE_TIER,
+        approvalPolicy: APPROVAL_POLICY,
+        sandboxPolicy: { type: 'dangerFullAccess' },
+      });
+      // Settings are already authoritative even if starting the review fails.
+      live.serviceTier = config.fast ? CODEX_FAST_SERVICE_TIER : null;
+      const response = startedTurn.parse(await request('review/start', {
+        threadId: live.threadId, delivery: 'inline', target,
+      }));
+      startTurn(live, { id: response.turn.id });
     },
 
     /**

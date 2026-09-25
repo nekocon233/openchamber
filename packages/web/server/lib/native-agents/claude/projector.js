@@ -62,8 +62,12 @@ const entrySchema = z.object({
   timestamp: z.string().optional(),
   message: z.unknown().optional(),
   isCompactSummary: z.boolean().optional(),
+  // The CLI's own notes to the model, such as its nudge to go on after a
+  // reply hit the output limit. The SDK's history read marks them `is_meta`,
+  // raw transcript lines `isMeta`, and live frames `isSynthetic`.
   is_meta: z.boolean().optional(),
   isMeta: z.boolean().optional(),
+  isSynthetic: z.boolean().optional(),
   isCompletedLocalCommand: z.boolean().optional(),
   tool_use_result: z.unknown().optional(),
   origin: z.object({ kind: z.string() }).passthrough().optional().catch(undefined),
@@ -404,7 +408,7 @@ export const createClaudeProjection = ({
       }
     }
 
-    if (entry.is_meta === true || entry.isMeta === true) return;
+    if (entry.is_meta === true || entry.isMeta === true || entry.isSynthetic === true) return;
     // The CLI tells the model a background subagent finished with a user entry
     // of XML. The subagent's row and the reply that follows already show it.
     if (entry.origin?.kind === 'task-notification') return;
