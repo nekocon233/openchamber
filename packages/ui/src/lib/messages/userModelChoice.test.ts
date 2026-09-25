@@ -40,6 +40,58 @@ const textPart = (id: string, text: string, synthetic = false): Part => ({
 } as Part)
 
 describe('findLatestUserModelChoice', () => {
+  const nativeAssistant = (parentID = 'u1'): Message => ({
+    id: 'a-plan', sessionID: 'ses_1', role: 'assistant', time: { created: 2 }, parentID,
+    providerID: 'claude-native', modelID: 'opus', agent: 'plan', mode: 'plan',
+    path: { cwd: '/work/project', root: '/work/project' }, cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  })
+  const planTool = (status: 'running' | 'completed' | 'error'): Part => ({
+    id: 'p-plan', sessionID: 'ses_1', messageID: 'a-plan', type: 'tool', callID: 'exit-plan', tool: 'plan_exit',
+    state: status === 'completed'
+      ? { status, input: {}, title: 'Plan', metadata: {}, output: 'Plan approved', time: { start: 2, end: 3 } }
+      : status === 'error'
+        ? { status, input: {}, error: 'Plan rejected', time: { start: 2, end: 3 } }
+        : { status, input: {}, time: { start: 2 } },
+  })
+
+  test('restores build after a successful Claude plan exit without changing the model', () => {
+    const messages = [userMessage('u1', { providerID: 'claude-native', modelID: 'opus' }, 'plan'), nativeAssistant()]
+    const choice = findLatestUserModelChoice(messages, (id) => id === 'u1' ? [textPart('p-user', 'Plan a fix')] : [planTool('completed')])
+    expect(choice).toEqual({ id: 'u1', agent: 'build', providerID: 'claude-native', modelID: 'opus', variant: undefined })
+  })
+
+  const unfinishedStatuses: Array<'running' | 'error'> = ['running', 'error']
+  for (const status of unfinishedStatuses) {
+    test(`keeps plan mode for a ${status} plan exit`, () => {
+      const messages = [userMessage('u1', { providerID: 'claude-native', modelID: 'opus' }, 'plan'), nativeAssistant()]
+      expect(findLatestUserModelChoice(messages, (id) => id === 'u1' ? [textPart('p-user', 'Plan')] : [planTool(status)])?.agent).toBe('plan')
+    })
+  }
+
+  test('does not use a plan exit belonging to another prompt', () => {
+    const messages = [userMessage('u1', { providerID: 'claude-native', modelID: 'opus' }, 'plan'), nativeAssistant('another-prompt')]
+    expect(findLatestUserModelChoice(messages, (id) => id === 'u1' ? [textPart('p-user', 'Plan')] : [planTool('completed')])?.agent).toBe('plan')
+  })
+
+  test('a later prompt can explicitly select plan again', () => {
+    const messages = [
+      userMessage('u1', { providerID: 'claude-native', modelID: 'opus' }, 'plan'), nativeAssistant(),
+      userMessage('u2', { providerID: 'claude-native', modelID: 'opus' }, 'plan'),
+    ]
+    expect(findLatestUserModelChoice(messages, (id) => id === 'a-plan' ? [planTool('completed')] : [textPart('p-' + id, 'Plan')])?.agent).toBe('plan')
+  })
+
+  test('does not read assistant parts for other providers', () => {
+    const reads: string[] = []
+    const messages = [userMessage('u1', { providerID: 'provider', modelID: 'model-a' }, 'plan'), assistantMessage('a1')]
+    expect(findLatestUserModelChoice(messages, (id) => {
+      reads.push(id)
+      return [textPart('p-user', 'Plan')]
+    })?.agent).toBe('plan')
+    expect(reads).toEqual(['u1'])
+  })
+
   test('returns the latest real user prompt model', () => {
     const messages = [
       userMessage('u1', { providerID: 'provider', modelID: 'model-a' }),

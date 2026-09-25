@@ -27,6 +27,17 @@ const toolParts = (records) => records.flatMap((record) => record.parts).filter(
 describe('Claude history projection', () => {
   const records = projectHistory(fixture('haiku-tools.session-messages.json'));
 
+  it.each([{}, { plan: 'Fix the parser.' }])('projects an ExitPlanMode call with input %j', (input) => {
+    const entries = fixture('haiku-tools.session-messages.json');
+    const original = entries.find((entry) => entry.type === 'assistant');
+    const result = projectHistory([
+      entries[0],
+      { ...original, message: { ...original.message, content: [{ type: 'tool_use', id: 'exit-plan', name: 'ExitPlanMode', input }] } },
+      { type: 'user', uuid: 'plan-result', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'exit-plan', content: 'Plan approved.' }] } },
+    ]);
+    expect(toolParts(result)).toMatchObject([{ tool: 'plan_exit', state: { status: 'completed', input } }]);
+  });
+
   it('starts with the user message OpenChamber sent, keyed by the uuid it chose', () => {
     const [first] = records;
     expect(first.info).toMatchObject({ id: USER_ID, role: 'user', sessionID: SESSION_ID, agent: 'build' });

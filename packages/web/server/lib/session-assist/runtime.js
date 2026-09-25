@@ -23,7 +23,8 @@ const getSessionAssistTargets = () => {
   };
 };
 
-const IDLE_QUIET_MS = 60_000;
+// Defer one event-loop turn so same-tick activity can cancel before any reads.
+const IDLE_QUIET_MS = 0;
 const RECAP_CHAR_LIMIT = 320;
 const SUGGESTION_CHAR_LIMIT = 500;
 const FETCH_TIMEOUT_MS = 5_000;

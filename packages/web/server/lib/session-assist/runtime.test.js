@@ -41,7 +41,6 @@ async function fixture(generate = async () => output()) {
     buildOpenCodeUrl: (route) => state.base + route,
     getOpenCodeAuthHeaders: () => ({ 'x-test-auth': 'fixture' }),
     getTargets: () => state.targets,
-    quietMs: 1,
     getSmallModelService: async () => ({
       describeSmallModel: async () => ({ inputCharBudget: 64_000 }),
       generateSmallModelText: async (args) => { state.calls.push(args); return generate(args, state); },
@@ -62,6 +61,47 @@ afterEach(async () => {
 });
 
 describe('session assist runtime', () => {
+  it('generates after a successful turn without a quiet wait and coalesces idle events in the same tick', async () => {
+    const { state, status } = await fixture(async () => output('Changes ready', 'Run the tests'));
+    status('idle');
+    status('idle');
+    status('idle');
+    expect(state.calls).toHaveLength(0);
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.calls).toHaveLength(1);
+    expect(state.patches[0].metadata.openchamber.assist).toMatchObject({
+      suggestion: 'Run the tests', forMessageID: 'answer',
+    });
+  });
+
+  it.each(['busy', 'retry', 'user', 'stop'])('cancels scheduled work before reading when %s follows idle in the same tick', async (activity) => {
+    const { state, runtime, status } = await fixture();
+    status('idle');
+    if (activity === 'stop') runtime.stop();
+    else if (activity === 'user') runtime.processPayload({ type: 'message.updated', properties: {
+      info: { id: 'next-user', sessionID: 'session', role: 'user', time: { created: Date.now() } },
+    } });
+    else status(activity);
+    await pause();
+    expect(state.requests).toHaveLength(0);
+    expect(state.calls).toHaveLength(0);
+    expect(state.patches).toHaveLength(0);
+  });
+
+  it.each([
+    { reason: 'unfinished', extra: { time: { created: 1 } } },
+    { reason: 'aborted', extra: { error: { name: 'MessageAbortedError', data: { message: 'aborted' } } } },
+    { reason: 'failed', extra: { error: { name: 'UnknownError', data: { message: 'Turn failed' } } } },
+  ])('does not generate for an $reason answer when the session becomes idle', async ({ extra }) => {
+    const { state, status } = await fixture();
+    state.messages[1] = message('answer', 'assistant', 'Partial answer', extra);
+    status('idle');
+    await vi.waitFor(() => expect(state.requests.some((request) => request.limit === '50')).toBe(true));
+    await pause();
+    expect(state.calls).toHaveLength(0);
+    expect(state.patches).toHaveLength(0);
+  });
+
   it('uses bounded authenticated SDK reads and preserves metadata with an empty suggestion', async () => {
     const { state, status } = await fixture(async (_args, current) => {
       current.session.metadata.openchamber.concurrent = 'new';
@@ -264,9 +304,12 @@ describe('session assist generation', () => {
 });
 
 describe('session assist runtime for native CLI sessions', () => {
-  it('reads the session and its history through the native runtime and stores the assist there', async () => {
+  it.each([
+    { sessionId: 'ncl_s', providerID: 'claude-native' },
+    { sessionId: 'ncx_s', providerID: 'codex-native' },
+  ])('generates for $providerID without a quiet wait using native reads and metadata', async ({ sessionId, providerID }) => {
     const state = { reads: [], writes: [], openCodeUrls: 0 };
-    const records = [message('user', 'user', 'Fix the build'), message('answer', 'assistant', 'Fixed it')];
+    const records = [message('user', 'user', 'Fix the build'), message('answer', 'assistant', 'Fixed it', { providerID })];
     const runtime = createSessionAssistRuntime({
       buildOpenCodeUrl: () => {
         state.openCodeUrls += 1;
@@ -274,13 +317,12 @@ describe('session assist runtime for native CLI sessions', () => {
       },
       getOpenCodeAuthHeaders: () => ({}),
       getTargets: () => ({ recap: true, suggestion: true }),
-      quietMs: 1,
       getSmallModelService: async () => ({
         describeSmallModel: async () => ({ inputCharBudget: 64_000 }),
         generateSmallModelText: async () => output('Build fixed', 'Run the tests'),
       }),
       nativeSessions: {
-        isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
+        isNativeSessionId: (id) => id === sessionId,
         getSession: async (sessionId) => ({ id: sessionId, directory: '/project', time: {} }),
         loadMessages: async (_sessionId, _directory, page) => {
           state.reads.push(page);
@@ -292,10 +334,10 @@ describe('session assist runtime for native CLI sessions', () => {
       },
     });
     try {
-      runtime.processPayload({ type: 'session.status', properties: { sessionID: 'ncl_s', status: { type: 'idle' } } }, '/project');
+      runtime.processPayload({ type: 'session.status', properties: { sessionID: sessionId, status: { type: 'idle' } } }, '/project');
       await vi.waitFor(() => expect(state.writes).toHaveLength(1));
       expect(state.writes[0]).toMatchObject({
-        sessionId: 'ncl_s',
+        sessionId,
         directory: '/project',
         assist: { recap: 'Build fixed', suggestion: 'Run the tests', forMessageID: 'answer' },
       });

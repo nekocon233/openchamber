@@ -84,11 +84,12 @@ model context is small. Page/count bounds are not a network-byte quota.
 
 1. The server's existing global event fan-out calls `processPayload`
    (`index.js` → `onPayload`), riding the same upstream connection as
-   notifications. An idle
-   event arms the 60-second quiet window. No history scan or startup backfill runs.
+   notifications. An idle event schedules generation for the next event-loop
+   turn, with no quiet window. Repeated idle events in that turn coalesce before
+   any reads. No history scan or startup backfill runs.
 2. Busy/retry events and newly created user messages clear pending work and
    abort in-flight reads/generation. Re-emitted old user updates do not cancel it.
-3. One generation runs per session. If a newer quiet window expires while an
+3. One generation runs per session. If a newer generation is due while an
    old canceled request is still settling, retain that pending run and start it
    after the old one finishes. Later activity cancels the pending run as well.
 4. Resolve the small model using the last answer's provider/model and the
@@ -128,8 +129,10 @@ the session is idle. A new message invalidates it without clearing writes.
 
 - `packages/ui/src/lib/sessionAssistMetadata.ts` parses the payload.
 - `packages/ui/src/hooks/useSessionAssist.ts` owns freshness/settings gating.
-- `SessionRecapSpacer` shows the reminder in the reserved gap under the reply.
-- `SessionSuggestionChip` fills the composer; it never sends automatically.
+- `SessionRecapSpacer` shows the reminder in the reserved gap under the reply
+  after 60 seconds of inactivity. This display delay does not delay generation.
+- `SessionSuggestionChip` can show a suggestion as soon as generation finishes.
+  Clicking it fills the composer; it never sends automatically.
 
 Native CLI sessions (`ncl_`, `ncx_`) get assists too. A separate hub
 subscription on the native event source feeds only this runtime; goals,

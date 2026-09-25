@@ -702,13 +702,13 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         }
         if (detail.trim().toLowerCase() === 'aborted') {
             return {
-                text: 'The running turn was stopped before OpenCode could send the next message.',
+                text: t('chat.message.turnStopped'),
             };
         }
         return {
             text: `Opencode failed to send message with error: ${detail}`,
         };
-    }, [isUser, message.info]);
+    }, [isUser, message.info, t]);
 
     const assistantErrorText = assistantError?.text;
 

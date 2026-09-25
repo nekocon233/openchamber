@@ -90,6 +90,7 @@ const CustomAnswerTextarea = React.memo(function CustomAnswerTextarea({
 
 export const QuestionCard: React.FC<QuestionCardProps> = ({ question }) => {
   const { t } = useI18n();
+  const isPlanExit = question.kind === 'claude-plan-exit';
   const respondToQuestion = sessionActions.respondToQuestion;
   const rejectQuestion = sessionActions.rejectQuestion;
   const isMobile = useUIStore((state) => state.isMobile);
@@ -115,9 +116,10 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ question }) => {
   const activeQuestion = isSummaryTab ? null : questions[activeIndex];
   const activeHeader = React.useMemo(() => {
     if (isSummaryTab) return null;
+    if (isPlanExit) return t('chat.questionCard.planExitTitle');
     const header = activeQuestion?.header?.trim();
     return header && header.length > 0 ? header : null;
-  }, [activeQuestion?.header, isSummaryTab]);
+  }, [activeQuestion?.header, isSummaryTab, isPlanExit, t]);
 
   React.useEffect(() => {
     setActiveTab('0');
@@ -425,7 +427,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ question }) => {
             ) : activeQuestion ? (
               <>
                 <QuestionMarkdown
-                  content={activeQuestion.question}
+                  content={isPlanExit
+                    ? [t('chat.questionCard.planExitQuestion'), activeQuestion.question].filter(Boolean).join('\n\n')
+                    : activeQuestion.question}
                   size="meta"
                   className="font-medium text-foreground mb-1.5"
                 />
@@ -475,7 +479,11 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ question }) => {
                                 'typography-meta break-all',
                                 selected ? 'text-foreground font-medium' : 'text-foreground/80'
                               )}>
-                                {option.label}
+                                {isPlanExit && option.label === 'build'
+                                  ? t('chat.questionCard.planExitApprove')
+                                  : isPlanExit && option.label === 'plan'
+                                    ? t('chat.questionCard.planExitKeepPlanning')
+                                    : option.label}
                               </span>
                               {recommended ? (
                                 <span className="typography-micro text-primary/80">{t('chat.questionCard.recommended')}</span>

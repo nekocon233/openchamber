@@ -25,7 +25,7 @@ const askInput = frames
 // recorded question through canUseTool right before its answer frame, the
 // way the CLI asks before the tool runs. Then waits for more input, and
 // exits `exitDelayMs` after its input ends.
-const createFakeSdk = ({ failAfter = null, exitDelayMs = 0 } = {}) => {
+const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = { name: 'AskUserQuestion', input: askInput } } = {}) => {
   const calls = { queries: [], setModel: [], applyFlagSettings: [], setPermissionMode: [], interrupt: 0 };
   const sdk = {
     query: ({ prompt, options }) => {
@@ -45,8 +45,9 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0 } = {}) => {
           const answersQuestion = frame.type === 'user'
             && frame.message.content.some((block) => block.tool_use_id === ASK_TOOL_ID);
           if (answersQuestion) {
-            record.decision = await options.canUseTool('AskUserQuestion', askInput, {
-              signal: new AbortController().signal,
+            record.permissionController = new AbortController();
+            record.decision = await options.canUseTool(permissionRequest.name, permissionRequest.input, {
+              signal: record.permissionController.signal,
               toolUseID: ASK_TOOL_ID,
             });
           }
@@ -77,13 +78,13 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0 } = {}) => {
   return { sdk, calls };
 };
 
-const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, idleTimeoutMs = 60_000, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null } = {}) => {
+const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, idleTimeoutMs = 60_000, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest } = {}) => {
   const events = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
   const questions = createQuestionRegistry({
     publish: (directory, payload) => events.push({ directory, payload }),
   });
-  const { sdk, calls } = createFakeSdk({ failAfter, exitDelayMs });
+  const { sdk, calls } = createFakeSdk({ failAfter, exitDelayMs, permissionRequest });
   const live = createClaudeLiveSessions({
     loadSdk: async () => sdk,
     resolveExecutable: async () => executable,
@@ -236,14 +237,80 @@ describe('Claude live sessions', () => {
     await waitFor(() => harness.calls.queries[0].inputs.length === 2);
   });
 
-  it('declines ExitPlanMode in plan mode so the plan stays on screen', async () => {
-    const harness = createHarness();
-    await sendPrompt(harness.live, { config: { model: 'haiku', effort: null, permissionMode: 'plan' } });
-    const { canUseTool } = harness.calls.queries[0].options;
-    expect(await canUseTool('ExitPlanMode', { plan: 'Do it' }, { signal: new AbortController().signal, toolUseID: 'toolu_x' }))
-      .toMatchObject({ behavior: 'deny' });
-    expect(await canUseTool('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 'toolu_y' }))
-      .toEqual({ behavior: 'allow', updatedInput: { command: 'ls' } });
+  describe('ExitPlanMode', () => {
+    const startPlan = async (input = { plan: 'Add a regression test, then fix the parser.' }) => {
+      const harness = createHarness({ permissionRequest: { name: 'ExitPlanMode', input } });
+      await sendPrompt(harness.live, {
+        config: { model: 'haiku', effort: null, permissionMode: 'plan' },
+        send: { modelID: 'haiku', agent: 'plan' },
+      });
+      const asked = await waitFor(() => payloads(harness.events, 'question.asked')[0]);
+      return { ...harness, asked, input };
+    };
+
+    it.each([{}, { plan: 'Fix the parser.' }])('waits for approval and returns a session mode update for %j', async (input) => {
+      const harness = await startPlan(input);
+      const { calls, questions, asked, events } = harness;
+      expect(calls.queries[0].decision).toBeNull();
+      expect(questions.list(DIRECTORY)).toEqual([asked.properties]);
+      expect(asked.properties).toMatchObject({
+        kind: 'claude-plan-exit', sessionID: SESSION_ID,
+        questions: [{ question: input.plan ?? '', options: [{ label: 'build' }, { label: 'plan' }] }],
+        tool: { callID: ASK_TOOL_ID },
+      });
+      questions.reply(asked.properties.id, [['build']]);
+      await waitFor(() => payloads(events, 'session.idle').length > 0);
+      expect(calls.queries[0].decision).toEqual({
+        behavior: 'allow', updatedInput: input,
+        updatedPermissions: [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }],
+      });
+      expect(questions.list(DIRECTORY)).toEqual([]);
+      // Choosing plan again must change the CLI back after the approved exit.
+      await sendPrompt(harness.live, { config: { model: 'haiku', effort: null, permissionMode: 'plan' } });
+      expect(calls.setPermissionMode).toEqual(['plan']);
+      await harness.live.shutdown();
+    });
+
+    it.each([[], [[]], [['plan']], [['build', 'plan']], [['build'], ['plan']]].map((answers) => ({ answers })))('keeps plan mode for an unapproved answer $answers', async ({ answers }) => {
+      const { live, calls, questions, asked, events } = await startPlan();
+      questions.reply(asked.properties.id, answers);
+      await waitFor(() => payloads(events, 'session.idle').length > 0);
+      expect(calls.queries[0].decision).toMatchObject({ behavior: 'deny', interrupt: true });
+      expect(calls.queries[0].decision.updatedPermissions).toBeUndefined();
+      await sendPrompt(live, { config: { model: 'haiku', effort: null, permissionMode: 'plan' } });
+      expect(calls.setPermissionMode).toEqual([]);
+      await live.shutdown();
+    });
+
+    it('returns requested changes to Claude while keeping plan mode', async () => {
+      const { live, calls, questions, asked, events } = await startPlan();
+      questions.reply(asked.properties.id, [['Cover malformed input first.']]);
+      await waitFor(() => payloads(events, 'session.idle').length > 0);
+      expect(calls.queries[0].decision).toEqual({ behavior: 'deny', message: 'The user requested changes to the plan: Cover malformed input first.' });
+      await live.shutdown();
+    });
+
+    it.each(['dismiss', 'abort', 'close', 'shutdown'])('rejects the approval on %s', async (action) => {
+      const { live, calls, questions, asked, events } = await startPlan();
+      if (action === 'dismiss') questions.reject(asked.properties.id);
+      if (action === 'abort') await live.abort(SESSION_ID);
+      if (action === 'close') await live.closeSession(SESSION_ID);
+      if (action === 'shutdown') await live.shutdown();
+      await waitFor(() => calls.queries[0].decision);
+      expect(calls.queries[0].decision).toMatchObject({ behavior: 'deny', interrupt: true });
+      expect(questions.list(DIRECTORY)).toEqual([]);
+      expect(payloads(events, 'question.rejected')).toHaveLength(1);
+      await live.shutdown();
+    });
+
+    it('does not approve a callback canceled just after the answer arrives', async () => {
+      const { live, calls, questions, asked } = await startPlan();
+      questions.reply(asked.properties.id, [['build']]);
+      calls.queries[0].permissionController.abort();
+      await waitFor(() => calls.queries[0].decision);
+      expect(calls.queries[0].decision).toMatchObject({ behavior: 'deny', interrupt: true });
+      await live.shutdown();
+    });
   });
 
   it('interrupts a running turn and rejects the questions it waits on', async () => {

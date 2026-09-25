@@ -39,7 +39,7 @@ const questionInput = loose({
     options: z.array(loose({ label: z.string(), description: z.string().optional() })).optional(),
   })),
 });
-const exitPlanInput = loose({ plan: z.string() });
+const exitPlanInput = loose({ plan: z.string().optional() });
 const skillInput = loose({ skill: z.string().optional(), command: z.string().optional() });
 const anyInput = z.record(z.string(), z.unknown());
 
@@ -166,7 +166,7 @@ const mapKnownTool = (name, rawInput) => {
     case 'ExitPlanMode': {
       const input = exitPlanInput.safeParse(rawInput);
       if (!input.success) return null;
-      return { tool: 'plan_exit', input: { plan: input.data.plan }, title: 'Plan' };
+      return { tool: 'plan_exit', input: input.data.plan === undefined ? {} : { plan: input.data.plan }, title: 'Plan' };
     }
     case 'Skill': {
       const input = skillInput.safeParse(rawInput);

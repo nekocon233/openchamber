@@ -387,6 +387,11 @@ with a native branch (`sync/native-send.ts`):
 - Abort, question replies and rejections go to the native API.
   `NATIVE_QUESTION_NOT_FOUND` clears a stale question like OpenCode's
   not-found.
+- Claude plan approvals use the same question API with
+  `kind: 'claude-plan-exit'`. The card translates its choices without changing
+  their wire values. A completed `plan_exit` tool after the latest real prompt
+  restores the composer to `build`, including after history reload. Pending
+  or failed calls do not change the selection, and a later prompt wins.
 
 Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
 (optimistic marker, composer restore, rollback) with a native branch:

@@ -1,5 +1,6 @@
 import type { Message, Part } from '@opencode-ai/sdk/v2'
 
+import { NATIVE_PROVIDER_CLAUDE } from '@/lib/native-agents/ids'
 import { isFullySyntheticMessage } from './synthetic'
 
 type UserModelChoice = {
@@ -57,9 +58,14 @@ export const findLatestUserModelChoice = (
   messages: readonly MessageLike[],
   getParts: (messageId: string) => Part[] | undefined,
 ): UserModelChoice | null => {
+  let approvedPlanParent: string | undefined
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
     if (message.role !== 'user') {
+      if (message.providerID === NATIVE_PROVIDER_CLAUDE && approvedPlanParent === undefined
+        && getParts(message.id)?.some((part) => part.type === 'tool' && part.tool === 'plan_exit' && part.state.status === 'completed')) {
+        approvedPlanParent = message.parentID
+      }
       continue
     }
 
@@ -71,7 +77,12 @@ export const findLatestUserModelChoice = (
       continue
     }
 
-    return extractUserModelChoice(message)
+    const choice = extractUserModelChoice(message)
+    // A successful native ExitPlanMode records the approved transition in
+    // the CLI transcript, including after a reload or on another device.
+    return choice?.providerID === NATIVE_PROVIDER_CLAUDE && choice.agent === 'plan' && approvedPlanParent === message.id
+      ? { ...choice, agent: 'build' }
+      : choice
   }
 
   return null

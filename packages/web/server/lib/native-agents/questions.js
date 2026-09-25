@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { NativeAgentError } from './errors.js';
 
 /** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean }} QuestionInfo */
-/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], tool?: { messageID: string, callID: string } }} QuestionRequest */
+/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
 /** @typedef {{ status: 'replied', answers: string[][] } | { status: 'rejected' }} QuestionOutcome */
 
 const questionNotFoundError = (requestId) => new NativeAgentError(
@@ -42,13 +42,16 @@ export const createQuestionRegistry = ({ publish }) => {
     /**
      * Publishes a question and resolves once it is answered or rejected. An
      * abort signal rejects it, as does ending the session's turn.
-     * @param {{ directory: string, sessionID: string, questions: QuestionInfo[], tool?: { messageID: string, callID: string }, signal?: AbortSignal }} input
+     * @param {{ directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal }} input
      * @returns {Promise<QuestionOutcome>}
      */
-    ask({ directory, sessionID, questions, tool, signal }) {
-      const request = tool === undefined
-        ? { id: `ncq_${randomUUID()}`, sessionID, questions }
-        : { id: `ncq_${randomUUID()}`, sessionID, questions, tool };
+    ask({ directory, sessionID, questions, kind, tool, signal }) {
+      /** @type {QuestionRequest} */
+      const request = {
+        id: `ncq_${randomUUID()}`, sessionID, questions,
+      };
+      if (kind !== undefined) request.kind = kind;
+      if (tool !== undefined) request.tool = tool;
       return new Promise((resolve) => {
         const onAbort = () => {
           if (pending.has(request.id)) settle(request.id, { status: 'rejected' });

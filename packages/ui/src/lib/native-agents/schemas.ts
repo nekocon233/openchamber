@@ -220,6 +220,7 @@ export const nativeQuestionRejectedSchema = z.object({ rejected: z.literal(true)
 export const nativeQuestionListSchema = z.array(z.object({
   id: z.string().min(1),
   sessionID: z.string().min(1),
+  kind: z.literal('claude-plan-exit').optional(),
   questions: z.array(z.object({
     question: z.string(),
     header: z.string(),

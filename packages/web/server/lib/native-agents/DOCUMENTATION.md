@@ -178,10 +178,15 @@ kept open between turns.
   `assistant` and `user` frames and the `compact_boundary` system frame reach
   `applyEntry`. Subagent frames are left to the subagent's session;
   a Task call announces the subagent session with `session.created`.
-- `canUseTool` answers `AskUserQuestion` from the question registry (the
-  SDK warns that `bypassPermissions` shadows `canUseTool`, but it still asks
-  for this tool) and declines `ExitPlanMode` in plan mode, so the plan stays on
-  screen and the turn ends.
+- `canUseTool` answers `AskUserQuestion` from the question registry. The SDK
+  still asks for this tool in `bypassPermissions` mode. `ExitPlanMode` creates
+  a pending question with `kind: 'claude-plan-exit'`, including the plan when
+  the CLI supplies it. Only the single answer `build` approves execution and
+  returns a session-scoped `setMode: bypassPermissions` permission update.
+  `plan`, dismissal, abort and query closure leave planning in place and stop
+  the turn. A custom answer returns feedback so Claude can revise the plan.
+  The shared UI translates the choices; their wire values remain `build` and
+  `plan`. Calls without a `plan` input still project as `plan_exit` tools.
 - A result frame with `queued_turn_count` 0 settles the turn. A stop is
   `terminal_reason` `aborted_*` and becomes the `MessageAbortedError`
   `{ message: 'aborted' }` the UI writes for turns it settles itself, with

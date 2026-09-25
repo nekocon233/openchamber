@@ -13,6 +13,7 @@ export interface QuestionInfo {
 export interface QuestionRequest {
   id: string;
   sessionID: string;
+  kind?: 'claude-plan-exit';
   questions: QuestionInfo[];
   tool?: {
     messageID: string;

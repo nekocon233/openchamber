@@ -34,8 +34,10 @@ const DEFAULT_MAX_LIVE_SESSIONS = 6;
 const STDERR_TAIL_CHARS = 4000;
 const USER_MESSAGE_ID = /^ncl_u_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-const PLAN_DECLINED = 'The user reviews the plan in OpenChamber. Stop here and wait for their next message.';
+const PLAN_DECLINED = 'The user did not approve implementation. Keep the session in plan mode.';
 const QUESTION_DISMISSED = 'The user dismissed the question without answering.';
+
+const exitPlanInput = z.object({ plan: z.string().optional() });
 
 const askUserQuestionInput = z.object({
   questions: z.array(z.object({
@@ -236,6 +238,7 @@ export const createClaudeLiveSessions = ({
     clearIdleTimer(live);
     if (live.closing) return;
     live.closing = true;
+    questions.rejectSession(live.sessionId);
     exits.set(live.sessionId, live.exited);
     live.input.close();
     // The CLI exits once its input ends; the abort is the backstop.
@@ -327,8 +330,36 @@ export const createClaudeLiveSessions = ({
   };
 
   const canUseTool = async (live, toolName, input, context) => {
-    if (toolName === 'ExitPlanMode' && live.config.permissionMode === 'plan') {
-      return { behavior: 'deny', message: PLAN_DECLINED };
+    if (toolName === 'ExitPlanMode') {
+      const messageID = live.projection.openAssistantId();
+      const outcome = await questions.ask({
+        directory: live.directory,
+        sessionID: live.sessionId,
+        kind: 'claude-plan-exit',
+        questions: [{
+          question: exitPlanInput.safeParse(input).data?.plan ?? '',
+          header: 'ExitPlanMode',
+          options: [{ label: 'build', description: '' }, { label: 'plan', description: '' }],
+          multiple: false,
+        }],
+        tool: messageID && context.toolUseID ? { messageID, callID: context.toolUseID } : undefined,
+        signal: context.signal,
+      });
+      if (outcome.status === 'rejected' || context.signal.aborted || live.closing) {
+        return { behavior: 'deny', message: PLAN_DECLINED, interrupt: true };
+      }
+      const answer = outcome.answers.length === 1 && outcome.answers[0].length === 1 ? outcome.answers[0][0] : '';
+      if (answer !== 'build') {
+        return answer && answer !== 'plan'
+          ? { behavior: 'deny', message: `The user requested changes to the plan: ${answer}` }
+          : { behavior: 'deny', message: PLAN_DECLINED, interrupt: true };
+      }
+      live.config = { ...live.config, permissionMode: 'bypassPermissions' };
+      return {
+        behavior: 'allow',
+        updatedInput: input,
+        updatedPermissions: [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }],
+      };
     }
     if (toolName !== 'AskUserQuestion') return { behavior: 'allow', updatedInput: input };
     const parsed = askUserQuestionInput.safeParse(input);
