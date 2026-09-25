@@ -8,6 +8,7 @@ import type {
   nativeCapabilitiesSchema,
   nativeCatalogSchema,
   nativeCommandListSchema,
+  nativeCodexCommandResultSchema,
   nativeMessagePageSchema,
   nativeQuestionListSchema,
   nativeRevertResultSchema,
@@ -1643,6 +1644,18 @@ export type NativeStatusSnapshot = z.infer<typeof nativeStatusSnapshotSchema>;
 export type NativeQuestionList = z.infer<typeof nativeQuestionListSchema>;
 export type NativeRevertResult = z.infer<typeof nativeRevertResultSchema>;
 export type NativeCommandList = z.infer<typeof nativeCommandListSchema>;
+export type NativeCodexCommandResult = z.infer<typeof nativeCodexCommandResultSchema>;
+export type NativeCodexReviewTarget =
+  | { type: 'uncommittedChanges' }
+  | { type: 'baseBranch'; branch: string }
+  | { type: 'commit'; sha: string }
+  | { type: 'custom'; instructions: string };
+export type NativeCodexCommandRequest = { directory: string } & (
+  | { name: 'skills'; sessionId?: string }
+  | { name: 'mcp'; sessionId: string; verbose?: boolean }
+  | { name: 'ps' | 'stop'; sessionId: string }
+  | { name: 'review'; sessionId: string; model: string; variant?: string; target: NativeCodexReviewTarget }
+);
 
 /** Cancels a native read early; every read also has its own deadline. */
 export type NativeReadOptions = { signal?: AbortSignal };
@@ -1688,8 +1701,9 @@ export interface NativeAgentsAPI {
   supported: boolean;
   capabilities(): Promise<NativeCapabilities>;
   catalog(): Promise<NativeCatalog>;
-  /** The slash commands a CLI offers in a directory; Codex offers none. */
+  /** Claude's slash commands or Codex's enabled skills in a directory. */
   commands(backend: NativeBackend, directory: string, options?: NativeReadOptions): Promise<NativeCommandList>;
+  codexCommand(request: NativeCodexCommandRequest): Promise<NativeCodexCommandResult>;
   /** Root sessions of a directory, reported per backend. */
   listSessions(directory: string, options?: NativeReadOptions): Promise<NativeSessionList>;
   getSession(sessionId: string, directory: string, options?: NativeReadOptions): Promise<Session>;

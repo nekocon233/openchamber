@@ -22,6 +22,7 @@ import { claudeConfigDir, readClaudeTaskList } from './claude/tasks.js';
 import { createCodexAppServer } from './codex/app-server.js';
 import { createCodexAutoTitles } from './codex/auto-title.js';
 import { createCodexCatalog } from './codex/catalog.js';
+import { createCodexCommands } from './codex/commands.js';
 import { createCodexLiveThreads } from './codex/live.js';
 import { createCodexSessionStore } from './codex/store.js';
 import { createCodexUtility } from './codex/utility.js';
@@ -41,7 +42,7 @@ import {
   NATIVE_BACKEND_CODEX,
   nativeBackendOfProviderId,
 } from './ids.js';
-import { claudePromptBlocks, codexPromptInput, withInstructions } from './prompt-parts.js';
+import { claudePromptBlocks, withInstructions } from './prompt-parts.js';
 import { createNativeEventPublisher } from './publisher.js';
 import { createQuestionRegistry } from './questions.js';
 import { unconfirmedSessionRecord } from './records.js';
@@ -235,6 +236,7 @@ export const createNativeAgentsRuntime = ({
   // exist before the app-server can deliver anything.
   let codexLive = null;
   const codexCatalog = createCodexCatalog({ request: (method, params) => appServer.request(method, params), buildEnv: buildChildEnv });
+  const codexCommands = createCodexCommands({ request: (method, params) => appServer.request(method, params) });
   const codexUtility = createCodexUtility({ request: (method, params) => appServer.request(method, params), catalog: codexCatalog });
   const appServer = createCodexAppServer({
     resolveExecutable: () => resolveExecutable('codex'),
@@ -494,7 +496,7 @@ export const createNativeAgentsRuntime = ({
       if (backend === NATIVE_BACKEND_CLAUDE) {
         await sendToClaude(sessionId, { ...request, parts }, send, { visible: true });
       } else {
-        const input = codexPromptInput(parts);
+        const input = await codexCommands.promptInput(parts, request.directory);
         await commitCodexRevert(sessionId, request.directory);
         await reverts.beforePrompt(sessionId, request.directory, request.messageID);
         await codexLive.prompt({
@@ -531,13 +533,12 @@ export const createNativeAgentsRuntime = ({
     },
 
     /**
-     * The slash commands a CLI offers in a directory. Codex runs its commands
-     * in its own terminal UI and offers none here; OpenChamber maps `/compact`.
+     * Claude's commands or Codex's enabled skills in the requested directory.
      * @param {'claude' | 'codex'} backend
      * @param {string} directory
      */
     async commands(backend, directory) {
-      if (backend !== NATIVE_BACKEND_CLAUDE) return { commands: [] };
+      if (backend === NATIVE_BACKEND_CODEX) return codexCommands.list(directory);
       const cached = claudeCommands.get(directory);
       if (cached && now() - cached.at < COMMANDS_CACHE_MS) return { commands: await cached.commands };
       const listing = { at: now(), commands: claudeLive.commands(directory) };
@@ -549,6 +550,31 @@ export const createNativeAgentsRuntime = ({
         if (claudeCommands.get(directory) === listing) claudeCommands.delete(directory);
         throw error;
       }
+    },
+
+    async codexCommand(input) {
+      let threadId;
+      let directory = input.directory;
+      if (input.sessionId) {
+        const decoded = decode(input.sessionId);
+        if (decoded.backend !== NATIVE_BACKEND_CODEX) throw invalidRequestError('A Codex command requires a Codex session');
+        const session = await codex.getSession(input.sessionId, directory);
+        if (!session) throw sessionNotFoundError(input.sessionId);
+        directory = session.directory;
+        threadId = decoded.threadId;
+      }
+      if (input.name === 'review') {
+        await commitCodexRevert(input.sessionId, directory);
+        await codexLive.review({
+          sessionId: input.sessionId,
+          directory,
+          target: input.target,
+          config: { model: input.model, ...codexVariantSettings(input.variant), mode: 'default' },
+        });
+        return { kind: 'accepted' };
+      }
+      if (input.sessionId && input.name !== 'skills') await codexLive.loadSession(input.sessionId, directory);
+      return { kind: 'output', ...await codexCommands.inspect({ ...input, directory, threadId }) };
     },
 
     /** Stops the running turn; false when none runs. */

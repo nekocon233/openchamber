@@ -13,6 +13,7 @@ export const createVSCodeNativeAgentsAPI = (): NativeAgentsAPI => ({
   capabilities: unsupported,
   catalog: unsupported,
   commands: unsupported,
+  codexCommand: unsupported,
   listSessions: unsupported,
   getSession: unsupported,
   loadMessages: unsupported,

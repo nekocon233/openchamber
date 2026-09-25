@@ -15,6 +15,7 @@ export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): Na
   capabilities: unsupported,
   catalog: unsupported,
   commands: unsupported,
+  codexCommand: unsupported,
   listSessions: unsupported,
   getSession: unsupported,
   loadMessages: unsupported,

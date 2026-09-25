@@ -244,9 +244,13 @@ and the send path reading the same grammar.
   send path. A local command is never queued as text: queueing runs it
   instead. A failed prompt command restores everything it consumed: text,
   confirmed mentions, files, comment drafts, and pending synthetic context.
-  A native CLI session keeps only the commands `isNativeLocalCommand` names;
-  the rest are the CLI's (`packages/ui/src/sync/DOCUMENTATION.md`, Native CLI
-  sessions).
+  Native sessions also run the commands `isNativeLocalCommand` names.
+  Codex built-ins are dispatched first by `submit/codexCommands.ts`; settings
+  commands update the existing selections, inspections use the native API,
+  and `/plan <prompt>` sends its argument with an explicit plan-mode selection.
+  Control commands retain attachments and restore their text on failure.
+  Claude's remaining commands go to its CLI as typed. See
+  `packages/ui/src/sync/DOCUMENTATION.md`, Native CLI sessions.
 - `state/useComposerDraft.ts` — a draft belongs to a (runtime, directory,
   session) identity. Writes are debounced while typing but forced at every edge
   where the page may stop running, because a pending timer is not a saved

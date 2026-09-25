@@ -143,6 +143,9 @@ Claude gotchas:
 
 Codex gotchas:
 
+- A single-session read returns the CLI's own `cwd`. A directory supplied by
+  a client is only a lookup hint, so `/resume <thread-id>` cannot move another
+  project's session into the currently selected project.
 - History comes from `thread/turns/list { itemsView: 'full' }`; reading it
   does not resume the thread.
 - A steer starts a new user message segment inside the same turn. Failed and
@@ -409,9 +412,47 @@ compaction part, and Claude's summary:
 
 `GET /commands?backend=&directory=` lists Claude Code's slash commands
 (`supportedCommands()`), from a query running in the directory or from one
-opened just to ask, which sends no prompt and leaves no transcript. Lists are
-kept for 10 minutes per directory; a failed listing is not kept. Codex runs
-its commands in its own terminal UI and lists none.
+opened just to ask, which sends no prompt and leaves no transcript. Claude
+lists are kept for 10 minutes per directory; a failed listing is not kept.
+
+Codex parses built-in slash commands in its terminal, not in `turn/start`.
+The composer therefore owns their dispatch. Model, effort and plan commands
+update its existing selections. Session commands reuse the session actions.
+`/status` reports the composer's next-turn settings, not token or account usage.
+`/diff` opens the workspace Git view, `/mention` opens file completion, and
+`/copy` copies the latest completed assistant text loaded in the session.
+`/side` uses OpenChamber's existing `/btw` flow.
+
+Codex command discovery calls `skills/list` with the requested directory and
+`forceReload: true`. It returns enabled skills and any per-skill errors as
+`warnings`, so one broken skill does not hide valid skills. The menu fetches
+on opening or changing runtime/directory, never on each keystroke. Built-in
+commands remain available while skills load or discovery fails.
+`codex/commands.js` resolves `/skill-name arguments` again at submission and
+sends both `$skill-name arguments` and the explicit native `skill` input with
+the discovered path. Files and feature instructions retain their order.
+`/init` becomes an explicit request to inspect the project and create or update
+its AGENTS.md. Ordinary prompts cause no command-discovery request.
+Unknown, disabled and unsupported slash commands fail with
+`NATIVE_CODEX_COMMAND_UNSUPPORTED` before a turn starts. Absolute file paths
+and slashes within prose remain ordinary text.
+
+`POST /codex/command` handles `/skills`, `/mcp`, `/ps`, `/stop` and `/review`.
+It accepts a closed command union, never arbitrary RPC methods. Results are
+`{ kind: 'output', entries, notices }` or `{ kind: 'accepted' }`. Skill
+inspection also works before the first session. Thread-specific inspections
+resume the thread when needed; history reads still never resume it.
+MCP and terminal listings consume all pages and expose only their display
+fields. `/stop` cleans the selected thread's background terminals.
+`/review` calls `review/start` with inline delivery after applying the selected
+model and effort. It accepts an uncommitted-changes target, a base branch, a
+commit, or custom instructions, and refuses a busy session. Its streamed
+events use the same projector as other turns.
+
+Terminal-only controls, such as `/raw`, `/statusline` and `/keymap`, are not
+forwarded as prompts. Commands without an OpenChamber handler, including
+`/permissions`, also report unsupported; native sessions still use the fixed
+approval policy documented above.
 
 Todos: Claude Code keeps a session's task list as files under
 `<config dir>/tasks/<session uuid>/`. After a TaskCreate or TaskUpdate result
@@ -517,6 +558,7 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 | `POST /sessions` | `{ backend, directory, title? }`: a new session, announced with `session.created` |
 | `POST /sessions/:id/prompt` | `{ directory, messageID, parts, model, variant?, agent, instructions? }`; answers once the CLI took it. A model of the other CLI is `409 NATIVE_BACKEND_MISMATCH` |
 | `GET /commands?backend=&directory=` | `{ commands: [{ name, description, argumentHint }] }` (see Compaction, commands and todos) |
+| `POST /codex/command` | A Codex inspection or review command; output entries or an accepted review |
 | `PATCH /sessions/:id` | `{ directory, title?, archived?, metadata? }`: the updated session, announced with `session.updated`; `metadata` replaces OpenChamber's session metadata |
 | `DELETE /sessions/:id?directory=` | `{ deleted: true }`, announced with `session.deleted` |
 | `POST /sessions/:id/abort` | Stops the running turn; `{ aborted: false }` when none runs |

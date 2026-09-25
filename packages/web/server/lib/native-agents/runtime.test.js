@@ -223,7 +223,7 @@ describe('native agents runtime', () => {
 
   it('keeps the command list of a directory for a while, and asks again after a failure', async () => {
     const runtime = createRuntime();
-    expect(await runtime.commands('codex', DIRECTORY)).toEqual({ commands: [] });
+    await expect(runtime.commands('codex', DIRECTORY)).rejects.toMatchObject({ code: 'NATIVE_CLI_MISSING' });
     const first = await runtime.commands('claude', DIRECTORY);
     expect(first.commands.map((command) => command.name)).toEqual(['compact']);
     await runtime.commands('claude', DIRECTORY);
@@ -635,6 +635,16 @@ describe('native agents routes', () => {
     registerNativeAgentRoutes(app, { runtime });
     return app;
   };
+
+  it('routes Codex commands separately from prompts and rejects arbitrary RPC and incomplete reviews', async () => {
+    const calls = [];
+    const app = createApp({ codexCommand: async (input) => { calls.push(input); return { kind: 'output', entries: [], notices: [] }; } });
+    await request(app).post('/api/native/codex/command').send({ name: 'skills', directory: DIRECTORY }).expect(200);
+    await request(app).post('/api/native/codex/command').send({ name: 'account/logout', directory: DIRECTORY }).expect(400);
+    await request(app).post('/api/native/codex/command').send({ name: 'review', directory: DIRECTORY }).expect(400);
+    await request(app).post('/api/native/codex/command').send({ name: 'stop', directory: DIRECTORY }).expect(400);
+    expect(calls).toEqual([{ name: 'skills', directory: DIRECTORY }]);
+  });
 
   it('serves status before the session-id route and requires a directory', async () => {
     const calls = [];

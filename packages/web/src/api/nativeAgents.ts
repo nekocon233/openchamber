@@ -1,4 +1,4 @@
-import type { NativeAgentsAPI, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
+import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
 import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
 import {
@@ -6,6 +6,7 @@ import {
   nativeCapabilitiesSchema,
   nativeCatalogSchema,
   nativeCommandListSchema,
+  nativeCodexCommandResultSchema,
   nativeDeleteResultSchema,
   nativeMessagePageSchema,
   nativePromptAcceptedSchema,
@@ -30,6 +31,7 @@ type NativeWriteBody =
   | { backend: NativeBackend; directory: string; title?: string }
   | NativePromptRequest
   | NativeCompactRequest
+  | NativeCodexCommandRequest
   | { answers: string[][] }
   | { directory: string; messageID?: string }
   | ({ directory: string } & NativeSessionPatch);
@@ -103,6 +105,7 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   supported: true,
   capabilities: () => readParsed('/api/native/capabilities', {}, nativeCapabilitiesSchema),
   catalog: () => readParsed('/api/native/catalog', {}, nativeCatalogSchema),
+  codexCommand: (request) => writeParsed('/api/native/codex/command', nativeCodexCommandResultSchema, request),
   commands: (backend, directory, options) => readParsed(
     '/api/native/commands',
     { backend, directory },

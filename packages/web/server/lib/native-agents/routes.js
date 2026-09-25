@@ -37,6 +37,20 @@ const compactBody = z.object({
   instructions: z.string().trim().min(1).max(4000).optional(),
 }).passthrough();
 const directoryBody = z.object({ directory: z.string().min(1) }).passthrough();
+const codexCommandBody = z.intersection(directoryBody, z.union([
+  z.object({ name: z.literal('skills'), sessionId: z.string().min(1).optional() }),
+  z.object({ name: z.literal('mcp'), sessionId: z.string().min(1), verbose: z.boolean().optional() }),
+  z.object({ name: z.enum(['ps', 'stop']), sessionId: z.string().min(1) }),
+  z.object({
+    name: z.literal('review'), sessionId: z.string().min(1), model: z.string().min(1), variant: z.string().optional(),
+    target: z.discriminatedUnion('type', [
+      z.object({ type: z.literal('uncommittedChanges') }),
+      z.object({ type: z.literal('baseBranch'), branch: z.string().trim().min(1) }),
+      z.object({ type: z.literal('commit'), sha: z.string().trim().min(1) }),
+      z.object({ type: z.literal('custom'), instructions: z.string().trim().min(1) }),
+    ]),
+  }),
+]));
 // OpenChamber's own session metadata, replaced whole as OpenCode's session
 // update does. Bounded: it is stored in the registry with every session.
 const METADATA_MAX_BYTES = 64 * 1024;
@@ -92,6 +106,8 @@ export const registerNativeAgentRoutes = (app, { runtime }) => {
   app.get('/api/native/capabilities', handle(() => runtime.capabilities()));
 
   app.get('/api/native/catalog', handle(() => runtime.catalog()));
+
+  app.post('/api/native/codex/command', handle((req) => runtime.codexCommand(codexCommandBody.parse(req.body))));
 
   app.get('/api/native/commands', handle((req) => {
     const query = commandsQuery.parse(req.query);
