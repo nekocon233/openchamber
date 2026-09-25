@@ -132,7 +132,10 @@ Claude gotchas:
 - Meta and local-command entries are skipped, and so is the
   `origin.kind: 'task-notification'` entry the CLI adds when a background
   subagent finishes: the subagent's row and the reply after it already show
-  the result.
+  the result. Meta entries are the CLI's own notes to the model, such as its
+  nudge to go on after a reply hit the output limit. A history read marks them
+  `is_meta` and a live frame `isSynthetic`. The projector checks both, so a
+  running turn leaves out what a later history read leaves out.
 - History is cached per session, keyed by transcript size and modification
   time, in an LRU bounded at 128 MiB of transcript. A 10 MB transcript with
   edits loads in about 160 ms cold, both reads included; later pages of the
