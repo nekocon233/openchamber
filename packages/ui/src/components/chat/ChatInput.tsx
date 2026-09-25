@@ -177,6 +177,7 @@ import {
 import { useAutocompletePosition } from './composer/state/useAutocompletePosition';
 import { useMessageHistory } from './composer/state/useMessageHistory';
 import { useComposerDraft } from './composer/state/useComposerDraft';
+import { usePromptSuggestion } from './composer/state/usePromptSuggestion';
 import { useDictationOrigin } from './composer/state/useDictationOrigin';
 import { useDraftTarget } from './composer/state/useDraftTarget';
 import { useMobileComposerShell } from './composer/state/useMobileComposerShell';
@@ -193,7 +194,7 @@ import { ComposerContextChips } from './composer/ui/ComposerContextChips';
 import { LinkedReferenceRow } from './composer/ui/LinkedReferenceRow';
 import { RevertedMessageDock } from './composer/ui/RevertedMessageDock';
 import { QueuedMessageChips } from './QueuedMessageChips';
-import { SessionSuggestionChip } from '@/components/chat/SessionSuggestionChip';
+import { PromptSuggestion } from './composer/ui/PromptSuggestion';
 import { SessionGoalRow } from '@/components/chat/SessionGoalRow';
 import {
     createInputHistoryIdentity,
@@ -1431,6 +1432,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
     const canAbort = sessionPhase !== 'idle';
 
+    const { suggestion: promptSuggestion, dismiss: dismissPromptSuggestion } = usePromptSuggestion({
+        runtimeKey: activeRuntimeKey,
+        sessionId: currentSessionId,
+        directory: currentSessionDirectoryForSync ?? currentDirectory,
+        hidden: Boolean(hasContent || message.length > 0 || newSessionDraftOpen || isBtwActive
+            || isBtwPanelVisible || hasQueuedMessages || canAbort || inputMode !== 'normal' || currentAgentName === 'plan'),
+    });
+
     const getCurrentInputSnapshot = React.useCallback(() => {
         const currentMessage = composerRef.current?.getValue() ?? message;
         return {
@@ -2468,6 +2477,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             return;
         }
 
+        if (promptSuggestion && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+            && (e.key === 'Tab' || e.key === 'ArrowRight')) {
+            e.preventDefault();
+            e.stopPropagation();
+            applyAssistSuggestion();
+            return;
+        }
+
         if (isBtwActive && currentSessionId && e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
@@ -2728,6 +2745,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             clearFileMentionPasteSuppression();
         }
         const inputSource: FileMentionAutocompleteInputSource = isPasteInput ? 'paste' : 'manual';
+
+        if (value.length > 0) dismissPromptSuggestion();
 
         // A leading `!` switches the composer into shell mode and is consumed.
         // Mobile keyboards and paste may update the document without a usable
@@ -3611,14 +3630,21 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const mobileTextareaFocused = mobileShell.focused;
 
 
-    const applyAssistSuggestion = React.useCallback((text: string) => {
-        setMessage(text);
+    const applyAssistSuggestion = React.useCallback(() => {
+        if (!promptSuggestion || (composerRef.current?.getValue() ?? messageRef.current).length > 0) return;
+        dismissPromptSuggestion();
+        const editor = composerRef.current;
+        if (editor) {
+            editor.insertText(promptSuggestion);
+            editor.focus();
+        } else {
+            messageRef.current = promptSuggestion;
+            setMessage(promptSuggestion);
+        }
         if (isMobile && !mobileComposerExpanded) {
             mobileShell.expand();
-        } else {
-            requestAnimationFrame(() => composerRef.current?.focus());
         }
-    }, [isMobile, mobileComposerExpanded, mobileShell]);
+    }, [dismissPromptSuggestion, isMobile, mobileComposerExpanded, mobileShell, promptSuggestion]);
 
     // Linked references render as chips beside the attached files, inside the
     // composer box and inside the mobile pill.
@@ -3680,18 +3706,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 />
             ) : null}
         </div>
-    ) : null;
-    // The suggested follow-up is the composer's own top row on every surface
-    // (inside the mobile pill and the box alike); on mobile the model and
-    // agent are its bottom row too, so the surface stays one shape.
-    const suggestionHidden = hasContent || newSessionDraftOpen || isBtwActive || isBtwPanelVisible || hasQueuedMessages;
-    const suggestionRow = !isBtwActive ? (
-        <SessionSuggestionChip
-            sessionId={currentSessionId}
-            directory={currentSessionDirectoryForSync ?? currentDirectory}
-            hidden={suggestionHidden}
-            onApply={applyAssistSuggestion}
-        />
     ) : null;
     const mobileModelAgentRow = isMobile && !isBtwActive ? (
         // px-3.5 lines the model logo and the agent label up with the attach
@@ -3909,7 +3923,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         iconSizeClass={iconSizeClass}
                         sendIconSizeClass={sendIconSizeClass}
                         stopIconSizeClass={stopIconSizeClass}
-                        topRow={suggestionRow}
+                        suggestion={promptSuggestion ? { text: promptSuggestion, onAccept: applyAssistSuggestion } : null}
                         attachments={(
                             <div className="px-3 pt-1">
                                 <AttachedFilesList onShowPopup={handleShowAttachmentPreview} className="pt-2" />
@@ -4003,7 +4017,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         text area + footer exactly. */}
                     <div className={cn('relative flex flex-col', isComposerExpanded && 'flex-1 min-h-0')}>
                     <div className={cn("overflow-hidden", isComposerExpanded && 'flex flex-1 min-h-0 flex-col')}>
-                        {suggestionRow}
                         {isMobile && isBtwActive ? (
                             <div className="scrollbar-none relative z-10 flex items-center gap-x-2 overflow-x-auto px-3 pb-0.5 pt-1.5">
                                 <ModelControls
@@ -4033,6 +4046,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 ? { minHeight: `${dictationContentHeight}px` }
                                 : undefined}
                         >
+                            {promptSuggestion ? (
+                                <PromptSuggestion
+                                    text={promptSuggestion}
+                                    showKeyboardHint={!isMobile || hasHardwareKeyboard}
+                                    onAccept={applyAssistSuggestion}
+                                />
+                            ) : null}
                             <ComposerEditor
                                 ref={composerRef}
                                 viewStore={composerViewStore}
@@ -4054,7 +4074,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 }}
                                 onFocus={mobileShell.onEditorFocus}
                                 onBlur={mobileShell.onEditorBlur}
-                                placeholder={isBtwActive
+                                placeholder={promptSuggestion ? '' : isBtwActive
                                     ? t('chat.btw.mainComposerPlaceholder')
                                     : currentSessionId || newSessionDraftOpen
                                         ? inputMode === 'shell'

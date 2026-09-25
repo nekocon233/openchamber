@@ -25,13 +25,20 @@ or collapsing a panel does not resize the transcript or composer.
 The frame also owns the header row through its `header` and `compact` props;
 callers supply controls and content, not their own header padding.
 
-`SessionSuggestionChip` is not a frame: it renders as the composer's own top
-row, inside the box and inside the mobile pill, so the surface stays one
-shape. Visibility priority is BTW, then a nonempty queue, then suggestion.
-Every BTW frame, including its collapsed strip, creation state, and pending
-draft, hides the other two. Composer content also hides suggestion;
-new-session drafts hide both queue and suggestion. Hiding the queue does not
-pause its delivery.
+`PromptSuggestion` renders gray proposed input over the empty editor without
+changing the document or composer height. Tab and Right arrow accept it;
+Enter submits only after acceptance. Touch users tap the proposal, including
+in the collapsed mobile pill. Typing dismisses the current proposal locally,
+even if that text is then erased. `state/usePromptSuggestion.ts` scopes that
+dismissal to its runtime, directory, session, and assistant message. A new
+reply can supply a new proposal. The session's recap is unaffected.
+
+Visibility priority is BTW, then a nonempty queue, then suggestion. Every BTW
+frame, including its collapsed strip, creation state, and pending draft, hides
+the other two. Composer content, shell mode, plan mode, and a running turn also
+hide suggestions; new-session drafts hide both queue and suggestion. Hiding
+the queue does not pause its delivery. IME and open autocomplete menus retain
+their existing keyboard handling before suggestion acceptance.
 
 The queue header toggles an `aria-expanded` disclosure with the current count.
 Its open/closed state is one persisted preference in `useUIStore`

@@ -102,11 +102,20 @@ model context is small. Page/count bounds are not a network-byte quota.
    skipped. Production does not pin the
    experimental model. Generation accepts an abort signal and a 120-second limit.
 5. Recap describes the substantive work and its current result, including the
-   work behind a closing commit or acknowledgment. Suggestion is independent:
-   only unfinished requested agent work should produce a sendable user message.
-   Completed work, optional offers, or a decision/action belonging to the user
-   should return an empty suggestion. This is model judgment, not authorization
-   enforcement or a guarantee that every generated field is factually correct.
+   work behind a closing commit or acknowledgment. Suggestion follows Claude
+   Code's next-input design: predict what the user is likely to type from their
+   recent messages, original request, and the latest reply. Completed work can
+   lead naturally to testing, trying a change, committing, pushing, or accepting
+   an offered next step. An unclear next input, an error or misunderstanding to
+   assess, or a sensitive or unsafe prediction produces an empty suggestion.
+   This is a prediction for the user to review, not authorization to perform it.
+   The existing Small Model selection remains the generation backend; this does
+   not use Claude Code's session prompt cache. Suggestions use the user's voice
+   in one short sentence, at most 12 space-separated words and fewer than 100
+   characters. Short confirmations and languages without word spaces are
+   supported. Malformed, overlong, evaluative, question, and assistant-voice
+   output is discarded without discarding a valid recap. Plan-mode answers
+   request only the recap; with recap disabled, no model call is made.
 6. Re-read the latest message and fresh session before writing. A moved tail,
    canceled run, changed endpoint/directory, archive, revert, or failed fresh
    read discards the result. Never merge from the old pre-generation metadata.
@@ -131,8 +140,9 @@ the session is idle. A new message invalidates it without clearing writes.
 - `packages/ui/src/hooks/useSessionAssist.ts` owns freshness/settings gating.
 - `SessionRecapSpacer` shows the reminder in the reserved gap under the reply
   after 60 seconds of inactivity. This display delay does not delay generation.
-- `SessionSuggestionChip` can show a suggestion as soon as generation finishes.
-  Clicking it fills the composer; it never sends automatically.
+- The composer's `PromptSuggestion` can show proposed input as soon as
+  generation finishes. Tab, Right arrow, or a tap fills the composer; a
+  separate submit sends it. Typing dismisses the current proposal locally.
 
 Native CLI sessions (`ncl_`, `ncx_`) get assists too. A separate hub
 subscription on the native event source feeds only this runtime; goals,

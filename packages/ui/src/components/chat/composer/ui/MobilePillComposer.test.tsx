@@ -10,7 +10,7 @@ import { I18nProvider } from '@/lib/i18n';
 
 import { MobilePillComposer } from './MobilePillComposer';
 
-const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean }) => {
+const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; suggestion?: string }) => {
     const win = new Window({ url: 'http://localhost' });
     const values = { window: win, document: win.document, navigator: win.navigator, localStorage: win.localStorage, IS_REACT_ACT_ENVIRONMENT: true };
     const previous = new Map(Object.keys(values).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
@@ -19,6 +19,7 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
     const root = createRoot(container);
     let primaryActions = 0;
     let queued = 0;
+    let acceptedSuggestions = 0;
     try {
         await act(async () => root.render(
         <SyncProvider directory="/fixture" sdk={createOpencodeClient({ baseUrl: "http://opencode.test", fetch: async () => new Response("[]", { headers: { "content-type": "application/json" } }) })}>
@@ -36,6 +37,7 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
                 iconSizeClass="icon-size"
                 sendIconSizeClass="send-icon-size"
                 stopIconSizeClass="stop-icon-size"
+                suggestion={options.suggestion ? { text: options.suggestion, onAccept: () => { acceptedSuggestions += 1; } } : null}
                 onExpand={() => {}}
                 onPrimaryAction={() => { primaryActions += 1; }}
                 onQueueMessage={() => { queued += 1; }}
@@ -62,6 +64,14 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
             await act(async () => { send?.click(); });
             expect(primaryActions).toBe(1);
             expect(queued).toBe(0);
+            expect(acceptedSuggestions).toBe(0);
+        } else if (options.suggestion) {
+            const suggestion = container.querySelector<HTMLButtonElement>('[aria-label="Use suggested message"]');
+            expect(suggestion).not.toBeNull();
+            await act(async () => { suggestion?.click(); });
+            expect(acceptedSuggestions).toBe(1);
+            expect(primaryActions).toBe(0);
+            expect(queued).toBe(0);
         }
         return container.innerHTML;
     } finally {
@@ -75,6 +85,18 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
 };
 
 describe('MobilePillComposer', () => {
+    test('accepts proposed input with a tap without sending or queueing it', async () => {
+        const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, suggestion: 'Run the tests' });
+        expect(markup).toContain('Run the tests');
+        expect(markup).not.toContain('aria-label="Send message"');
+    });
+
+    test('keeps existing draft text ahead of a proposal', async () => {
+        const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, suggestion: 'Run the tests' });
+        expect(markup).toContain('Draft message');
+        expect(markup).not.toContain('Run the tests');
+    });
+
     test('uses the inline action to send content while the session is idle', async () => {
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false });
 

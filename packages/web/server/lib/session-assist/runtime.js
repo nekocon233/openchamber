@@ -3,6 +3,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { z } from 'zod';
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
 import { loadAssistContext } from './context.js';
@@ -26,10 +27,30 @@ const getSessionAssistTargets = () => {
 // Defer one event-loop turn so same-tick activity can cancel before any reads.
 const IDLE_QUIET_MS = 0;
 const RECAP_CHAR_LIMIT = 320;
-const SUGGESTION_CHAR_LIMIT = 500;
+const SUGGESTION_CHAR_LIMIT = 100;
 const FETCH_TIMEOUT_MS = 5_000;
 const GENERATION_TIMEOUT_MS = 120_000;
 const QUIET_FAILURE_CODES = new Set(['context-too-small', 'output-exhausted']);
+const assistOutputSchema = z.object({
+  recap: z.string().catch(''),
+  suggestion: z.string().catch(''),
+});
+
+// Suggestions are proposed user input. Reject malformed output rather than
+// cutting a longer response into a different instruction.
+const normalizeSuggestion = (value) => {
+  const text = value.trim().replace(/^(["'])\s*([\s\S]*?)\s*\1$/, '$2').trim();
+  if (!text || text.length >= SUGGESTION_CHAR_LIMIT) return '';
+  if (/[\r\n*?？]/u.test(text) || /[.!。！]\s+\p{L}|[。！]\s*\p{L}/u.test(text)) return '';
+  const words = text.split(/\s+/u);
+  if (words.length > 12) return '';
+  if (words.length === 1 && !text.startsWith('/') && !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}].*[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(text)
+    && !/^(yes|yeah|yep|yup|sure|ok|okay|push|commit|deploy|stop|continue|check|exit|quit|no)$/i.test(text)) return '';
+  if (/^(no suggestion|nothing to suggest|nothing found|silence\b|done\b|无建议|没有建议|無建議|沒有建議|完成了?$)/iu.test(text)) return '';
+  if (/^(thanks?\b|thank you\b|looks good\b|sounds good\b|nice\b|great\b|perfect\b|谢谢|謝謝|看起来不错|看起來不錯|太好了)/iu.test(text)) return '';
+  if (/^(let me\b|i(?:['’]ll|['’]ve|['’]m| will\b| can\b| would\b| think\b)|here(?:['’]s| is\b| are\b)|you (?:can|should|could)\b|让我(?!们)|我来|我会|我将)/iu.test(text)) return '';
+  return text;
+};
 
 const extractJsonObject = (value) => {
   const text = String(value ?? '').trim();
@@ -153,8 +174,8 @@ export const createSessionAssistRuntime = ({
   });
 
   const generateAssist = async (sessionId, directory, signal) => {
-    const targets = getTargets();
-    if (!targets.recap && !targets.suggestion) return;
+    const requestedTargets = getTargets();
+    if (!requestedTargets.recap && !requestedTargets.suggestion) return;
     const source = nativeSessions?.isNativeSessionId(sessionId)
       ? nativeSource(sessionId, directory, signal)
       : openCodeSource(sessionId, directory, signal);
@@ -167,6 +188,8 @@ export const createSessionAssistRuntime = ({
     source.checkCurrent();
     if (!context) return;
     const { last, turns } = context;
+    const targets = { ...requestedTargets, suggestion: requestedTargets.suggestion && last.agent !== 'plan' };
+    if (!targets.recap && !targets.suggestion) return;
     const { describeSmallModel, generateSmallModelText } = await getSmallModelService();
     const preferredProviderID = last.providerID;
     const preferredModelID = last.modelID;
@@ -190,9 +213,10 @@ export const createSessionAssistRuntime = ({
       return;
     }
     source.checkCurrent();
-    const structured = extractJsonObject(generated?.text);
-    let recap = targets.recap && typeof structured?.recap === 'string' ? structured.recap.trim().slice(0, RECAP_CHAR_LIMIT) : '';
-    let suggestion = targets.suggestion && typeof structured?.suggestion === 'string' ? structured.suggestion.trim().slice(0, SUGGESTION_CHAR_LIMIT) : '';
+    const structured = assistOutputSchema.safeParse(extractJsonObject(generated?.text));
+    if (!structured.success) return;
+    let recap = targets.recap ? structured.data.recap.trim().slice(0, RECAP_CHAR_LIMIT) : '';
+    let suggestion = targets.suggestion ? normalizeSuggestion(structured.data.suggestion) : '';
     const hasCyrillic = (text) => /[\u0400-\u04FF]/.test(text);
     const hasCjk = (text) => /[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(text);
     // Quoted source and assistant replies cannot authorize a different script.

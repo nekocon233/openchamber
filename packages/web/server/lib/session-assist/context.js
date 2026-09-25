@@ -64,7 +64,7 @@ function readMessage({ info, parts }) {
   }
   return {
     id: info.id, role: info.role, parentID: info.parentID,
-    providerID: info.providerID, modelID: info.modelID,
+    providerID: info.providerID, modelID: info.modelID, agent: info.agent,
     complete: info.role === 'assistant' && info.finish === 'stop' && Boolean(info.time?.completed) && !info.error && !info.summary,
     summary: Boolean(info.summary),
     text: excerpt(blocks.join('\n\n').trim(), info.role === 'user' ? USER_CHAR_LIMIT : ANSWER_CHAR_LIMIT),

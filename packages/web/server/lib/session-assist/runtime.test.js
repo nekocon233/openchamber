@@ -243,6 +243,59 @@ describe('session assist runtime', () => {
 });
 
 describe('session assist generation', () => {
+  it.each([true, false])('skips plan-mode suggestions while retaining an enabled recap: %s', async (recap) => {
+    const { state, status } = await fixture(async () => output('Plan ready', 'go ahead'));
+    state.targets = { recap, suggestion: true };
+    state.messages[1] = message('answer', 'assistant', 'Plan ready', { agent: 'plan' });
+    status('idle');
+    if (recap) {
+      await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+      expect(state.calls[0].system).not.toContain('suggestion');
+      expect(state.patches[0].metadata.openchamber.assist).toMatchObject({ recap: 'Plan ready', suggestion: '' });
+    } else {
+      await vi.waitFor(() => expect(state.requests.some((request) => request.limit === '50')).toBe(true));
+      await pause();
+      expect(state.calls).toHaveLength(0);
+      expect(state.patches).toHaveLength(0);
+    }
+    expect(state.targets.suggestion).toBe(true);
+  });
+
+  it.each(['commit this', 'push it', 'go ahead', 'yes', '提交这些改动', '  "run the tests"  '])('keeps a natural next input after completed work: %s', async (suggestion) => {
+    const { state, status } = await fixture(async () => output('修改已完成。', suggestion));
+    state.messages = [
+      message('user', 'user', '执行'),
+      message('answer', 'assistant', '修改已完成并验证，还没有提交。'),
+    ];
+    status('idle');
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.patches[0].metadata.openchamber.assist.suggestion).toBe(suggestion.trim().replace(/^"|"$/g, ''));
+  });
+
+  it.each([
+    '继续'.repeat(50),
+    'one two three four five six seven eight nine ten eleven twelve thirteen',
+    'run the tests\ncommit this',
+    'Run the tests. Commit the changes.',
+    '运行测试。然后提交。',
+    '**run the tests**',
+    'What about adding a new feature?',
+    '是否需要提交？',
+    "I'll run the tests",
+    '我来检查一下',
+    'looks good',
+    '谢谢',
+    'No suggestion',
+  ])('discards unusable proposed input while preserving recap: %s', async (suggestion) => {
+    const { state, status } = await fixture(async () => output('修改已完成。', suggestion));
+    state.messages = [message('user', 'user', '执行'), message('answer', 'assistant', '已完成。')];
+    status('idle');
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.patches[0].metadata.openchamber.assist).toMatchObject({
+      recap: '修改已完成。', suggestion: '', forMessageID: 'answer',
+    });
+  });
+
   it('generates Chinese recap and suggestion together and merges them into fresh metadata', async () => {
     const { state, status } = await fixture(async (_args, current) => {
       current.session.metadata = { concurrent: 'kept', openchamber: { goal: { id: 'goal_1' } } };
