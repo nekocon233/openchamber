@@ -55,6 +55,8 @@ const createRuntime = () => {
   const transcripts = new Map([[SESSION_UUID, info]]);
   const events = [];
   const turns = { started: 0, finish: deferred(), listings: 0, failListing: false };
+  // The options of every query the runtime opens, as the CLI receives them.
+  const queries = [];
   const sdk = {
     listSessions: async () => Array.from(transcripts.values()),
     getSessionInfo: async (sessionId) => transcripts.get(sessionId),
@@ -68,6 +70,7 @@ const createRuntime = () => {
     listSubagents: async (sessionId) => (sessionId === SESSION_UUID ? ['agent-1'] : []),
     getSubagentMessages: async () => [{ type: 'user', uuid: 'sub-1', parent_tool_use_id: TASK_TOOL_USE, message: { role: 'user', content: 'Count lines' } }],
     query: ({ prompt, options }) => {
+      queries.push(options);
       const input = prompt[Symbol.asyncIterator]();
       async function* run() {
         while (true) {
@@ -104,7 +107,7 @@ const createRuntime = () => {
     publishNativeEvent: (event) => events.push(event),
     loadSdk: async () => sdk,
   });
-  return Object.assign(runtime, { events, turns });
+  return Object.assign(runtime, { events, turns, queries });
 };
 
 const waitFor = async (condition) => {
@@ -189,6 +192,21 @@ describe('native agents runtime', () => {
     const updated = runtime.events.find((event) => event.payload.type === 'session.updated').payload.properties.info;
     expect(updated).toMatchObject({ id: session.id, title: 'Fresh', time: { updated: 3000 } });
     expect(await listed()).toContain(session.id);
+    await runtime.shutdown();
+  });
+
+  it('runs a Claude alias with the window the catalog reports, and keeps the alias on the message', async () => {
+    const runtime = createRuntime();
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY, title: 'Wide' });
+    const messageID = 'ncl_u_4b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
+    await runtime.prompt(session.id, { ...promptRequest(messageID), model: { providerID: 'claude-native', modelID: 'opus' } });
+    await waitFor(() => runtime.turns.started === 1);
+    expect(runtime.queries.map((options) => options.model)).toEqual(['opus[1m]']);
+    const running = await runtime.loadMessages(session.id, DIRECTORY, { limit: 10 });
+    expect(running.records[0].info).toMatchObject({ id: messageID, model: { providerID: 'claude-native', modelID: 'opus' } });
+
+    runtime.turns.finish.resolve();
+    await waitFor(async () => Object.keys(await runtime.statuses(DIRECTORY)).length === 0);
     await runtime.shutdown();
   });
 

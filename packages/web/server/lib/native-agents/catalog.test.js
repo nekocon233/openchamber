@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import { claudeModels, codexModels, codexVariantSettings } from './catalog.js';
+import { claudeLaunchModel, claudeModels, codexModels, codexVariantSettings } from './catalog.js';
 
 describe('native model catalogs', () => {
   it('offers every Claude effort level on each alias', () => {
     const models = claudeModels();
     expect(models.map((model) => model.id)).toEqual(['opus', 'sonnet', 'fable', 'haiku']);
     for (const model of models) expect(model.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it('launches each Claude alias with the context window the catalog reports', () => {
+    expect(claudeModels().map((model) => [model.id, model.contextWindow, claudeLaunchModel(model.id)])).toEqual([
+      ['opus', 1_000_000, 'opus[1m]'],
+      ['sonnet', 1_000_000, 'sonnet[1m]'],
+      ['fable', 1_000_000, 'fable[1m]'],
+      ['haiku', 200_000, 'haiku'],
+    ]);
+    expect(claudeLaunchModel('claude-opus-5-5')).toBe('claude-opus-5-5');
   });
 
   it('keeps the visible Codex models with the efforts Codex reports for each', () => {

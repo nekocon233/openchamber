@@ -174,6 +174,11 @@ kept open between turns.
   `claude_code` system prompt preset with nothing appended, all setting
   sources, `bypassPermissions` or `plan`, partial messages on. A new session
   starts with `sessionId`, one with a transcript resumes with `resume`.
+- Model: `claudeLaunchModel` (`catalog.js`) hands the CLI `opus`, `sonnet`
+  and `fable` in their `[1m]` form, at launch and when switching in place.
+  Claude Code runs a plain alias with 200K, so only that form gets the 1M
+  window the catalog reports. Haiku has no 1M form. Messages, the registry
+  and saved selections keep the plain alias.
 - A prompt goes in with `priority: 'next'` and the uuid of the message id the
   UI sent, so a prompt sent mid-turn joins the turn at its next tool
   boundary. Model, effort (`applyFlagSettings({ effortLevel })`) and plan mode

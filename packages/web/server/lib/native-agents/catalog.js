@@ -5,11 +5,15 @@ import { z } from 'zod';
 
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+// Claude Code runs an alias with the 1M window only in its `[1m]` form; the
+// plain alias gets 200K. Models listed with this window launch in that form.
+const CLAUDE_1M_CONTEXT_WINDOW = 1_000_000;
+
 // Claude Code resolves these aliases to the newest model of each family.
 const CLAUDE_MODELS = [
-  { id: 'opus', name: 'Opus', contextWindow: 1_000_000, outputLimit: 128_000 },
-  { id: 'sonnet', name: 'Sonnet', contextWindow: 1_000_000, outputLimit: 64_000 },
-  { id: 'fable', name: 'Fable', contextWindow: 1_000_000, outputLimit: 128_000 },
+  { id: 'opus', name: 'Opus', contextWindow: CLAUDE_1M_CONTEXT_WINDOW, outputLimit: 128_000 },
+  { id: 'sonnet', name: 'Sonnet', contextWindow: CLAUDE_1M_CONTEXT_WINDOW, outputLimit: 64_000 },
+  { id: 'fable', name: 'Fable', contextWindow: CLAUDE_1M_CONTEXT_WINDOW, outputLimit: 128_000 },
   { id: 'haiku', name: 'Haiku', contextWindow: 200_000, outputLimit: 64_000 },
 ];
 
@@ -31,6 +35,17 @@ export const claudeModels = () => CLAUDE_MODELS.map((model) => ({
   fast: false,
   input: { image: true, pdf: true },
 }));
+
+/**
+ * The model Claude Code needs to run a catalog model with the window the
+ * catalog reports. Ids outside the catalog pass through unchanged.
+ * @param {string} id
+ * @returns {string}
+ */
+export const claudeLaunchModel = (id) => {
+  const model = CLAUDE_MODELS.find((entry) => entry.id === id);
+  return model?.contextWindow === CLAUDE_1M_CONTEXT_WINDOW ? `${id}[1m]` : id;
+};
 
 const codexModelSchema = z.object({
   id: z.string(),

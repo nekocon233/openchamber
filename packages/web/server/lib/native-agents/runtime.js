@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { claudeModels, codexVariantSettings } from './catalog.js';
+import { claudeLaunchModel, claudeModels, codexVariantSettings } from './catalog.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
@@ -353,7 +353,7 @@ export const createNativeAgentsRuntime = ({
         content: visible ? { kind: 'blocks', blocks } : null,
         sdkContent: blocks,
         config: {
-          model: request.model.modelID,
+          model: claudeLaunchModel(request.model.modelID),
           effort: request.variant !== undefined && CLAUDE_EFFORTS.has(request.variant) ? request.variant : null,
           permissionMode: request.agent === 'plan' ? 'plan' : 'bypassPermissions',
         },
