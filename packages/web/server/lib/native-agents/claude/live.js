@@ -23,10 +23,10 @@ import { z } from 'zod';
 
 import { invalidRequestError, NativeAgentError } from '../errors.js';
 import { launchableClaudeExecutable } from '../executables.js';
-import { decodeNativeSessionId, encodeClaudeChildSessionId } from '../ids.js';
-import { buildSessionRecord } from '../records.js';
+import { decodeNativeSessionId, encodeClaudeChildSessionId, encodeClaudeSessionId } from '../ids.js';
 import { claudeAbortedError, claudeTurnError, createClaudeProjection } from './projector.js';
 import { todosFromTodoWrite } from './tasks.js';
+import { createClaudeSubagents } from './subagents.js';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
 const COMMANDS_TIMEOUT_MS = 20_000;
@@ -67,8 +67,6 @@ const resultFrameSchema = z.object({
 const backgroundTasksSchema = z.object({
   tasks: z.array(z.object({ ambient: z.boolean().optional() })),
 });
-
-const taskToolUse = z.object({ description: z.string().optional(), subagent_type: z.string().optional() }).passthrough();
 
 // Tools that change the task list Claude Code keeps in files.
 const TASK_LIST_TOOLS = new Set(['TaskCreate', 'TaskUpdate']);
@@ -178,27 +176,6 @@ export const createClaudeLiveSessions = ({
     publisher.records(live.directory, live.sessionId, records);
   };
 
-  // A Task tool call opens a subagent session the UI can navigate to.
-  const announceSubagents = (live, messageIds) => {
-    for (const id of new Set(messageIds)) {
-      const record = live.projection.record(id);
-      for (const part of record?.parts ?? []) {
-        if (part.type !== 'tool' || part.tool !== 'task' || live.subagents.has(part.callID)) continue;
-        live.subagents.add(part.callID);
-        const input = taskToolUse.safeParse(part.state.input);
-        publisher.session(live.directory, buildSessionRecord({
-          id: encodeClaudeChildSessionId(live.sessionUuid, part.callID),
-          backend: 'claude',
-          directory: live.directory,
-          title: input.data?.description ?? input.data?.subagent_type ?? 'Subagent',
-          created: part.state.time.start,
-          updated: part.state.time.start,
-          parentID: live.sessionId,
-        }), { created: true });
-      }
-    }
-  };
-
   // Task lists go out one at a time per session, in the order the CLI changed them.
   const publishTodos = (live, todosOf) => {
     live.todoUpdates = live.todoUpdates.then(async () => {
@@ -262,6 +239,7 @@ export const createClaudeLiveSessions = ({
   const finishTurn = (live, frame) => {
     const error = turnErrorOf(frame);
     publishRecords(live, live.projection.finishTurn({ error }));
+    if (error?.name === 'MessageAbortedError') live.subagents.stop(error);
     onTurnFinished(live.sessionId, live.directory);
     if ((frame.queued_turn_count ?? 0) > 0) return;
     settleIdle(live, error);
@@ -269,6 +247,7 @@ export const createClaudeLiveSessions = ({
   };
 
   const handleFrame = (live, frame) => {
+    if (live.subagents.handleFrame(frame)) return;
     if (frame.type === 'stream_event') {
       const { changed, delta } = live.projection.applyStreamEvent(frame);
       if (changed.length > 0) publishRecords(live, changed);
@@ -297,15 +276,13 @@ export const createClaudeLiveSessions = ({
       return;
     }
     if (frame.type === 'assistant' || frame.type === 'user') {
-      // Subagent frames belong to the subagent's own session.
-      if (frame.parent_tool_use_id) return;
       // A replay echoes a local command's output, which the transcript keeps out of the conversation.
       if (frame.type === 'user' && frame.isReplay === true) return;
       const summary = frame.type === 'user' && live.compactSummaryNext && frame.isSynthetic === true;
       live.compactSummaryNext = false;
       const changed = live.projection.applyEntry(summary ? { ...frame, isCompactSummary: true } : frame);
       publishRecords(live, changed);
-      announceSubagents(live, changed);
+      live.subagents.announce(live.sessionId, live.projection, changed);
       trackTaskList(live, frame);
       return;
     }
@@ -325,6 +302,8 @@ export const createClaudeLiveSessions = ({
       publishRecords(live, live.projection.finishTurn({ error: reason }));
       settleIdle(live, reason);
     }
+    live.subagents.dispose(live.closing ? claudeAbortedError()
+      : claudeTurnError(failure ?? 'Claude Code exited before the subagent finished.'));
     publisher.forget(live.sessionId);
     if (exits.get(live.sessionId) === live.exited) exits.delete(live.sessionId);
     live.markExited();
@@ -432,7 +411,7 @@ export const createClaudeLiveSessions = ({
       input: createInputQueue(),
       abortController: new AbortController(),
       sends: new Map(),
-      subagents: new Set(),
+      subagents: createClaudeSubagents({ sessionUuid, directory, publisher, now }),
       busy: false,
       backgroundTasksRunning: false,
       closing: false,
@@ -466,6 +445,7 @@ export const createClaudeLiveSessions = ({
       permissionMode: config.permissionMode,
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
+      forwardSubagentText: true,
       abortController: live.abortController,
       canUseTool: (toolName, input, context) => canUseTool(live, toolName, input, context),
       stderr: (data) => {
@@ -625,15 +605,32 @@ export const createClaudeLiveSessions = ({
      * and a revert may have dropped them from the conversation.
      */
     liveRecords(sessionId) {
-      const live = sessions.get(sessionId);
-      return live && !live.closing ? live.projection.records() : null;
+      const decoded = decodeNativeSessionId(sessionId);
+      if (decoded?.backend !== 'claude') return null;
+      const live = sessions.get(encodeClaudeSessionId(decoded.sessionUuid));
+      if (!live || live.closing) return null;
+      return decoded.toolUseId ? live.subagents.records(sessionId) : live.projection.records();
+    },
+
+    childSession(sessionId) {
+      const decoded = decodeNativeSessionId(sessionId);
+      if (decoded?.backend !== 'claude' || !decoded.toolUseId) return null;
+      const live = sessions.get(encodeClaudeSessionId(decoded.sessionUuid));
+      return live && !live.closing ? live.subagents.session(sessionId) : null;
+    },
+
+    isSessionRunning(sessionId) {
+      const decoded = decodeNativeSessionId(sessionId);
+      if (decoded?.backend !== 'claude') return false;
+      const live = sessions.get(encodeClaudeSessionId(decoded.sessionUuid));
+      return decoded.toolUseId ? live?.subagents.isRunning(sessionId) === true : live?.busy === true;
     },
 
     /** @param {string} directory */
     busySessionIds(directory) {
       return Array.from(sessions.values())
-        .filter((live) => live.busy && live.directory === directory)
-        .map((live) => live.sessionId);
+        .filter((live) => live.directory === directory)
+        .flatMap((live) => [...(live.busy ? [live.sessionId] : []), ...live.subagents.busySessionIds()]);
     },
 
     async shutdown() {

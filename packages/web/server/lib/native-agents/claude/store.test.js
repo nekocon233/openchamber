@@ -321,3 +321,72 @@ describe('Claude history before the last compaction', () => {
     expect(await store.rewindTarget(SESSION_ID, DIRECTORY, `ncl_u_${U4}`)).toMatchObject({ resumeAt: 's2' });
   });
 });
+
+describe('Claude subagent tool outcomes', () => {
+  const childId = `ncl_${OPENCHAMBER_UUID}_t_${TASK_TOOL_USE}`;
+  const prompt = { type: 'user', uuid: 'child-user', timestamp: '2026-09-27T00:00:00.000Z', parent_tool_use_id: TASK_TOOL_USE, message: { role: 'user', content: 'Research' } };
+  const answer = { type: 'assistant', uuid: 'child-answer', timestamp: '2026-09-27T00:00:01.000Z', message: {
+    id: 'msg_child', model: 'claude-haiku-4-5', stop_reason: 'tool_use',
+    content: [
+      { type: 'tool_use', id: 'search-a', name: 'WebSearch', input: { query: 'topic' } },
+      { type: 'tool_use', id: 'search-b', name: 'WebFetch', input: { url: 'https://example.com' } },
+    ],
+  } };
+  const result = (uuid, tool, text, isError = false) => ({ type: 'user', uuid, timestamp: '2026-09-27T00:00:02.000Z', message: {
+    role: 'user', content: [{ type: 'tool_result', tool_use_id: tool, content: text, is_error: isError }],
+  } });
+  const fixture = ({ raw = [], active = false, fail = false, entries = [prompt, answer] } = {}) => {
+    const state = { active, imports: 0 };
+    const sdk = {
+      getSessionInfo: async () => ({ sessionId: OPENCHAMBER_UUID, lastModified: 10, fileSize: 100 }),
+      listSubagents: async () => ['child-agent'],
+      getSubagentMessages: async (_sessionId, _agentId, options) => options.limit === 1 ? [prompt] : entries,
+      importSessionToStore: async (_sessionId, sink) => {
+        state.imports++;
+        if (fail) throw new Error('Cannot read child transcript');
+        await sink.append({ subpath: 'subagents/agent-sibling' }, [result('sibling-result', 'search-a', 'Wrong child')]);
+        await sink.append({ subpath: 'subagents/agent-child-agent' }, raw);
+      },
+    };
+    const store = createClaudeSessionStore({ loadSdk: async () => sdk, registry: {}, isSessionRunning: (id) => id === childId && state.active });
+    return { state, store };
+  };
+
+  it('recovers parallel tool results omitted by the SDK chain without adding unrelated messages or borrowing a sibling result', async () => {
+    const { state, store } = fixture({ raw: [
+      result('result-a', 'search-a', 'Found references'),
+      result('result-b', 'search-b', 'Fetch timed out', true),
+      { ...prompt, uuid: 'unrelated-user', message: { role: 'user', content: 'Another branch' } },
+      result('unrelated-result', 'different-call', 'Unrelated result'),
+    ] });
+    const history = await store.loadHistory(childId, DIRECTORY);
+    expect(history.records.map((record) => record.info.role)).toEqual(['user', 'assistant']);
+    expect(history.records[1].parts.map((part) => part.state)).toEqual([
+      expect.objectContaining({ status: 'completed', output: 'Found references' }),
+      expect.objectContaining({ status: 'error', error: 'Fetch timed out' }),
+    ]);
+    expect(state.imports).toBe(1);
+  });
+
+  it('keeps unresolved tools running only while the live task owns them', async () => {
+    const { state, store } = fixture({ active: true, raw: [result('result-a', 'search-a', 'Found references')] });
+    const active = await store.loadHistory(childId, DIRECTORY);
+    expect(active.records[1].parts[1].state.status).toBe('running');
+    state.active = false;
+    const settled = await store.loadHistory(childId, DIRECTORY);
+    expect(settled.records[1].parts[1].state).toMatchObject({ status: 'error', error: 'The turn ended before this tool finished.' });
+    expect(settled.records[1].parts[0].state.status).toBe('completed');
+  });
+
+  it('rejects a failed recovery read instead of reporting missing results as failed tools', async () => {
+    const { store } = fixture({ fail: true });
+    await expect(store.loadHistory(childId, DIRECTORY)).rejects.toThrow('Cannot read child transcript');
+  });
+
+  it('does not import raw transcripts when every retained tool already has its result', async () => {
+    const { state, store } = fixture({ entries: [prompt, answer, result('result-a', 'search-a', 'Done'), result('result-b', 'search-b', 'Real error', true)] });
+    const history = await store.loadHistory(childId, DIRECTORY);
+    expect(history.records[1].parts[1].state).toMatchObject({ status: 'error', error: 'Real error' });
+    expect(state.imports).toBe(0);
+  });
+});

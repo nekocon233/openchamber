@@ -267,7 +267,7 @@ export const createNativeAgentsRuntime = ({
     onIdle,
     now,
   });
-  const claude = createClaudeSessionStore({ loadSdk, registry });
+  const claude = createClaudeSessionStore({ loadSdk, registry, isSessionRunning: (sessionId) => claudeLive.isSessionRunning(sessionId) });
   const codex = createCodexSessionStore({ appServer, registry, readGlobalInstructions });
   const codexTitles = createCodexAutoTitles({
     store: codex,
@@ -484,7 +484,7 @@ export const createNativeAgentsRuntime = ({
 
     /** @throws when the session does not exist */
     async getSession(sessionId, directory) {
-      const session = await storeFor(sessionId).getSession(sessionId, directory);
+      const session = liveFor(sessionId).childSession(sessionId) ?? await storeFor(sessionId).getSession(sessionId, directory);
       if (!session) throw sessionNotFoundError(sessionId);
       return decorate(session);
     },
@@ -761,9 +761,9 @@ export const createNativeAgentsRuntime = ({
      */
     async loadMessages(sessionId, directory, { limit, before }) {
       const history = await storeFor(sessionId).loadHistory(sessionId, directory);
-      if (!history) throw sessionNotFoundError(sessionId);
+      if (!history && !liveFor(sessionId).childSession(sessionId)) throw sessionNotFoundError(sessionId);
       const pending = await reverts.pending(sessionId);
-      const records = overlay(untilRewound(history.records, pending), liveFor(sessionId).liveRecords(sessionId));
+      const records = overlay(untilRewound(history?.records ?? [], pending), liveFor(sessionId).liveRecords(sessionId));
       let end = records.length;
       if (before !== undefined) {
         end = records.findIndex((record) => record.info.id === before);
@@ -774,7 +774,7 @@ export const createNativeAgentsRuntime = ({
         records: records.slice(start, end),
         cursor: start > 0 ? records[start].info.id : null,
         complete: start === 0,
-        childSessions: history.childSessions,
+        childSessions: history?.childSessions ?? [],
       };
     },
 

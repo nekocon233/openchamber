@@ -70,6 +70,7 @@ const entrySchema = z.object({
   isSynthetic: z.boolean().optional(),
   isCompletedLocalCommand: z.boolean().optional(),
   tool_use_result: z.unknown().optional(),
+  toolUseResult: z.unknown().optional(),
   origin: z.object({ kind: z.string() }).passthrough().optional().catch(undefined),
   // The kind of a system entry. Live frames and raw transcript lines carry
   // it; the SDK's history read keeps only `type`.
@@ -221,7 +222,7 @@ export const createClaudeProjection = ({
   let currentUser = null;
   let currentAssistant = null;
   let lastCreated = 0;
-  let lastEntryTime = 0;
+  let lastEntryTime = live ? now() : 0;
   // A history system entry that is a compaction boundary only if the compact
   // summary comes right after it.
   /** @type {{ uuid: string, timestamp: string | undefined, trigger: string | null } | null} */
@@ -452,7 +453,7 @@ export const createClaudeProjection = ({
       tokens: EMPTY_TOKENS,
       variant: sent?.variant ?? null,
     }));
-    currentAssistant = { record, apiMessageId: message.id, nextBlockIndex: 0 };
+    currentAssistant = { record, apiMessageId: message.id, nextBlockIndex: 0, finish: null };
     return currentAssistant;
   };
 
@@ -465,6 +466,7 @@ export const createClaudeProjection = ({
     if (!parsed.success) return;
     const message = parsed.data;
     const assistant = ensureAssistant(message, time);
+    if (message.stop_reason) assistant.finish = FINISH_BY_STOP_REASON.get(message.stop_reason) ?? 'other';
 
     const { record } = assistant;
     for (const block of message.content) {
@@ -663,9 +665,23 @@ export const createClaudeProjection = ({
       return settleTools(reason);
     },
 
+    /** Recover results for retained tool calls without replaying another branch's messages. */
+    applyToolResults(rawEntry) {
+      const parsed = entrySchema.safeParse(rawEntry);
+      if (!parsed.success || parsed.data.type !== 'user') return;
+      const entry = parsed.data;
+      const message = userMessageSchema.safeParse(entry.message);
+      if (!message.success || message.data.content.kind !== 'blocks') return;
+      for (const block of message.data.content.blocks) {
+        const result = toolResultBlock.safeParse(block);
+        if (!result.success || !toolParts.has(result.data.tool_use_id)) continue;
+        finishToolPart(result.data, entry.tool_use_result ?? entry.toolUseResult, monotonicTime(entry.timestamp));
+      }
+    },
+
     /**
-     * Applies one stream event of a live query. Subagent events are left to
-     * the subagent's own history.
+     * Applies one stream event of this conversation. The query owner routes
+     * subagent envelopes to their own projection before calling this method.
      * @returns {{ changed: string[], delta: { sessionID: string, messageID: string, partID: string, field: 'text', delta: string } | null }}
      */
     applyStreamEvent(rawFrame) {
@@ -702,6 +718,7 @@ export const createClaudeProjection = ({
       const changed = error === null ? [] : settleTools(error.name === 'MessageAbortedError' ? 'Interrupted' : error.data.message);
       if (currentAssistant) {
         const info = currentAssistant.record.info;
+        if (info.finish === undefined && currentAssistant.finish !== null) info.finish = currentAssistant.finish;
         if (info.time.completed === undefined) info.time = { created: info.time.created, completed: Math.max(info.time.created, time) };
         if (error !== null && info.error === undefined) info.error = error;
         changed.push(info.id);

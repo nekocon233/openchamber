@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { translateNativeEvent } from '@openchamber/ui/lib/native-agents/events';
 import { createNativeEventPublisher } from '../publisher.js';
 import { createQuestionRegistry } from '../questions.js';
 import { createCodexLiveThreads } from './live.js';
@@ -59,6 +60,111 @@ const sendPrompt = (live, overrides = {}) => live.prompt({
   config: CONFIG,
   send: { modelID: 'gpt-5.5', variant: 'low', agent: 'build' },
   ...overrides,
+});
+
+const CHILDREN = [
+  '01a0d2a6-b55b-7162-a837-c62053537e11',
+  '01a0d2a6-b55b-7162-a837-c62053537e12',
+  '01a0d2a6-b55b-7162-a837-c62053537e13',
+];
+const announceChild = (live, id, overrides = {}) => live.handleNotification('thread/started', {
+  thread: {
+    id, parentThreadId: THREAD_ID, cwd: DIRECTORY, model: 'gpt-5.5',
+    name: `Child ${id}`, createdAt: 2000, updatedAt: 2000, status: { type: 'active' },
+    ...overrides,
+  },
+});
+
+describe('Codex spawned threads', () => {
+  it('routes three child replies and statuses independently without sending another prompt', async () => {
+    const { live, events, requests } = createHarness({ replay: false });
+    await sendPrompt(live);
+    for (const threadId of CHILDREN) {
+      announceChild(live, threadId);
+      live.handleNotification('turn/started', { threadId, turn: { id: threadId, status: 'inProgress', startedAt: 2001 } });
+      live.handleNotification('item/completed', { threadId, turnId: threadId, item: {
+        type: 'userMessage', id: 'prompt', content: [{ type: 'text', text: 'Research' }],
+      } });
+      live.handleNotification('item/started', { threadId, turnId: threadId, item: { type: 'agentMessage', id: 'reply', text: '' } });
+    }
+    for (const threadId of [...CHILDREN].reverse()) {
+      live.handleNotification('item/agentMessage/delta', { threadId, turnId: threadId, itemId: 'reply', delta: `Reply from ${threadId}` });
+    }
+    expect(live.busySessionIds(DIRECTORY)).toEqual([SESSION_ID, ...CHILDREN.map(id => `ncx_${id}`)]);
+    const requestCount = requests.length;
+    for (const threadId of CHILDREN) {
+      expect(live.childSession(`ncx_${threadId}`)).toMatchObject({ parentID: SESSION_ID, directory: DIRECTORY });
+      const records = live.liveRecords(`ncx_${threadId}`);
+      expect(records.map(record => record.info.role)).toEqual(['user', 'assistant']);
+      expect(records[1].parts[0].text).toBe(`Reply from ${threadId}`);
+      expect(records[1].info.parentID).toBe(records[0].info.id);
+      const count = events.length;
+      announceChild(live, threadId);
+      expect(events).toHaveLength(count);
+    }
+    expect(live.liveRecords(SESSION_ID)).toEqual([]);
+    expect(events.every(event => translateNativeEvent(event.payload) !== null)).toBe(true);
+    expect(requests).toHaveLength(requestCount);
+    expect(requests.map(request => request.method)).toEqual(['thread/resume', 'turn/start']);
+
+    live.handleNotification('turn/completed', { threadId: CHILDREN[0], turn: { id: CHILDREN[0], status: 'completed' } });
+    live.handleNotification('turn/completed', { threadId: CHILDREN[1], turn: { id: CHILDREN[1], status: 'failed', error: { message: 'Child failed' } } });
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed' } });
+    expect(live.busySessionIds(DIRECTORY)).toEqual([`ncx_${CHILDREN[2]}`]);
+    expect(live.liveRecords(`ncx_${CHILDREN[2]}`)[1].parts[0].text).toContain(CHILDREN[2]);
+    expect(payloads(events, 'session.error').map(event => event.properties.sessionID)).toEqual([`ncx_${CHILDREN[1]}`]);
+    const completed = payloads(events, 'message.updated').filter(event => event.properties.info.sessionID === `ncx_${CHILDREN[0]}`).at(-1);
+    expect(completed.properties.info).toMatchObject({ finish: 'stop', time: { completed: expect.any(Number) } });
+  });
+
+  it('accepts nested children in their own directory and ignores unrelated or malformed announcements', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    const count = events.length;
+    announceChild(live, CHILDREN[0], { parentThreadId: null });
+    announceChild(live, CHILDREN[0], { parentThreadId: 'unowned-thread' });
+    announceChild(live, CHILDREN[0], { cwd: '' });
+    expect(events).toHaveLength(count);
+    announceChild(live, CHILDREN[0]);
+    announceChild(live, CHILDREN[1], { parentThreadId: CHILDREN[0], cwd: '/work/child' });
+    expect(live.childSession(`ncx_${CHILDREN[1]}`)).toMatchObject({ parentID: `ncx_${CHILDREN[0]}`, directory: '/work/child' });
+    expect(live.busySessionIds('/work/child')).toEqual([`ncx_${CHILDREN[1]}`]);
+  });
+
+  it('clears child activity and live metadata on unload or closure, even before turn/started', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    for (const id of CHILDREN) announceChild(live, id);
+    live.handleNotification('thread/status/changed', { threadId: CHILDREN[0], status: { type: 'notLoaded' } });
+    live.handleNotification('thread/closed', { threadId: CHILDREN[1] });
+    live.handleNotification('thread/status/changed', { threadId: CHILDREN[2], status: { type: 'systemError' } });
+    expect(live.busySessionIds(DIRECTORY)).toEqual([SESSION_ID]);
+    expect(live.childSession(`ncx_${CHILDREN[0]}`)).toBeNull();
+    expect(live.childSession(`ncx_${CHILDREN[1]}`)).toBeNull();
+    expect(payloads(events, 'session.error').map(event => event.properties.sessionID)).toEqual([`ncx_${CHILDREN[2]}`]);
+  });
+
+  it('settles active child tools and pending children when the app-server exits', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    announceChild(live, CHILDREN[0]);
+    announceChild(live, CHILDREN[1]);
+    const threadId = CHILDREN[0];
+    live.handleNotification('turn/started', { threadId, turn: { id: threadId, status: 'inProgress' } });
+    live.handleNotification('item/started', { threadId, turnId: threadId, item: {
+      type: 'commandExecution', id: 'read', command: 'cat notes.txt', cwd: DIRECTORY,
+      status: 'inProgress', commandActions: [], aggregatedOutput: null,
+    } });
+    live.handleExit('Connection lost');
+    expect(live.busySessionIds(DIRECTORY)).toEqual([]);
+    expect(live.childSession(`ncx_${threadId}`)).toBeNull();
+    expect(live.childSession(`ncx_${CHILDREN[1]}`)).toBeNull();
+    const message = payloads(events, 'message.updated').filter(event => event.properties.info.sessionID === `ncx_${threadId}`).at(-1);
+    expect(message.properties.info.error.data.message).toContain('Connection lost');
+    const count = events.length;
+    live.handleNotification('item/agentMessage/delta', { threadId, turnId: threadId, itemId: 'read', delta: 'Late' });
+    expect(events).toHaveLength(count);
+  });
 });
 
 describe('Codex live threads', () => {

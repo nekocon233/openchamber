@@ -18,8 +18,10 @@ const PRELOADED_LOGO_SRCS = new Set<string>();
 
 const LOGO_ALIAS = new Map<string, string>([
     ['codex', 'openai'],
+    ['codex-native', 'openai'],
     ['chatgpt', 'openai'],
     ['claude', 'anthropic'],
+    ['claude-native', 'anthropic'],
     ['cline-pass', 'cline'],
     ['gemini', 'google'],
     ['evroc-ai', 'evroc'],

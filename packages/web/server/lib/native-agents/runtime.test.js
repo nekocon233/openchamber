@@ -48,7 +48,7 @@ const scriptedTurnEnd = (apiMessageId) => [
   { type: 'result', subtype: 'success', is_error: false, result: 'Done.', terminal_reason: 'completed', queued_turn_count: 0 },
 ];
 
-const createRuntime = () => {
+const createRuntime = ({ childFrames = [] } = {}) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-native-runtime-'));
   directories.push(dataDir);
   const info = { sessionId: SESSION_UUID, summary: 'Terminal work', lastModified: 2000, fileSize: 10, createdAt: 1000 };
@@ -79,6 +79,7 @@ const createRuntime = () => {
           turns.started += 1;
           const apiMessageId = `msg_scripted_${turns.started}`;
           for (const frame of scriptedTurn(apiMessageId)) yield frame;
+          yield* childFrames;
           await turns.finish.promise;
           const uuid = options.sessionId ?? options.resume;
           transcripts.set(uuid, { sessionId: uuid, summary: 'Scripted', lastModified: 3000, fileSize: 20, createdAt: 2500 });
@@ -193,6 +194,37 @@ describe('native agents runtime', () => {
     expect(updated).toMatchObject({ id: session.id, title: 'Fresh', time: { updated: 3000 } });
     expect(await listed()).toContain(session.id);
     await runtime.shutdown();
+  });
+
+  it('opens a live child before the CLI has indexed its transcript', async () => {
+    const tool = 'tool-child-live';
+    const runtime = createRuntime({ childFrames: [
+      { type: 'assistant', uuid: 'parent-task-entry', message: { id: 'parent-task', model: 'claude-haiku-4-5', content: [{
+        type: 'tool_use', id: tool, name: 'Agent', input: { description: 'Research', subagent_type: 'general-purpose', prompt: 'Check the source' },
+      }] } },
+      { type: 'system', subtype: 'task_started', task_id: 'child-task', tool_use_id: tool },
+      { type: 'user', uuid: 'child-prompt', parent_tool_use_id: tool, message: { role: 'user', content: 'Check the source' } },
+      { type: 'assistant', uuid: 'child-reply-entry', parent_tool_use_id: tool, message: { id: 'child-reply', model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'Checking the source.' }] } },
+    ] });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    const childId = `${session.id}_t_${tool}`;
+    try {
+      await runtime.prompt(session.id, promptRequest('ncl_u_83d065d3-e4a6-4ccc-a739-45b0c75254e1'));
+      await waitFor(() => runtime.events.some((event) => event.payload.type === 'message.part.updated'
+        && event.payload.properties.part.sessionID === childId && event.payload.properties.part.text === 'Checking the source.'));
+      expect(await runtime.getSession(childId, DIRECTORY)).toMatchObject({ id: childId, parentID: session.id, title: 'Research' });
+      expect(await runtime.statuses(DIRECTORY)).toEqual({ [session.id]: { type: 'busy' }, [childId]: { type: 'busy' } });
+      const history = await runtime.loadMessages(childId, DIRECTORY, { limit: 10 });
+      expect(history.records.map((record) => [record.info.role, record.parts[0].text])).toEqual([
+        ['user', 'Check the source'], ['assistant', 'Checking the source.'],
+      ]);
+      expect(history.complete).toBe(true);
+    } finally {
+      runtime.turns.finish.resolve();
+      await waitFor(() => runtime.events.some((event) => event.payload.type === 'session.updated'
+        && event.payload.properties.info.id === session.id));
+      await runtime.shutdown();
+    }
   });
 
   it('runs a Claude alias with the window the catalog reports, and keeps the alias on the message', async () => {

@@ -16,8 +16,8 @@ import { z } from 'zod';
 
 import { CODEX_FAST_SERVICE_TIER, CODEX_STANDARD_SERVICE_TIER } from '../catalog.js';
 import { invalidRequestError, sessionBusyError } from '../errors.js';
-import { codexPartId, decodeNativeSessionId, isNativeClientUserMessageId } from '../ids.js';
-import { stoppedError, unknownError } from '../records.js';
+import { codexPartId, decodeNativeSessionId, encodeCodexSessionId, isNativeClientUserMessageId } from '../ids.js';
+import { buildSessionRecord, stoppedError, unknownError } from '../records.js';
 import { projectCodexTurns } from './projector.js';
 import { JsonRpcError } from './rpc.js';
 
@@ -54,6 +54,21 @@ const indexedDeltaParams = textDeltaParams.extend({
   contentIndex: z.number().optional(),
 });
 const threadStatusParams = z.object({ threadId: z.string(), status: z.object({ type: z.string() }).passthrough() }).passthrough();
+const childThreadStartedParams = z.object({
+  thread: z.object({
+    id: z.string().min(1),
+    parentThreadId: z.string().min(1),
+    cwd: z.string().min(1),
+    name: z.string().nullish(),
+    preview: z.string().optional(),
+    agentNickname: z.string().nullish(),
+    model: z.string().nullish(),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+    status: z.object({ type: z.enum(['active', 'idle', 'notLoaded', 'systemError']) }),
+  }),
+});
+const threadClosedParams = z.object({ threadId: z.string() });
 const planParams = z.object({
   threadId: z.string(),
   plan: z.array(z.object({ step: z.string(), status: z.string() }).passthrough()),
@@ -185,6 +200,7 @@ export const createCodexLiveThreads = ({
         busy: false,
         turn: null,
         config: null,
+        childSession: null,
         sends: new Map(),
         messageOfPart: new Map(),
         idleWaiters: [],
@@ -256,7 +272,35 @@ export const createCodexLiveThreads = ({
     publishTurn(target.live);
   };
 
+  const closeChild = (live) => {
+    if (!live.childSession) return;
+    if (live.turn) settleTurn(live, { status: 'interrupted' });
+    else setBusy(live, false);
+    threads.delete(live.threadId);
+    publisher.forget(live.sessionId);
+  };
+
   const handlers = new Map(Object.entries({
+    'thread/started': (params) => {
+      const parsed = childThreadStartedParams.safeParse(params);
+      if (!parsed.success) return;
+      const thread = parsed.data.thread;
+      // Follow children of a thread this connection already owns, including
+      // nested agents. Other roots and utility threads have their own owners.
+      if (!threads.has(thread.parentThreadId)) return;
+      const live = liveThread(encodeCodexSessionId(thread.id), thread.cwd);
+      if (live.childSession) return;
+      live.childSession = buildSessionRecord({
+        id: live.sessionId, backend: 'codex', directory: thread.cwd,
+        parentID: encodeCodexSessionId(thread.parentThreadId),
+        title: thread.name || thread.agentNickname || thread.preview?.split('\n')[0] || 'Subagent',
+        created: thread.createdAt * 1000, updated: thread.updatedAt * 1000,
+      });
+      live.config ??= { model: thread.model ?? null, effort: null, fast: false, mode: 'default' };
+      live.loaded = thread.status.type !== 'notLoaded';
+      publisher.session(live.directory, live.childSession, { created: true });
+      if (thread.status.type === 'active') setBusy(live, true);
+    },
     'turn/started': (params) => {
       const parsed = turnParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
@@ -302,7 +346,23 @@ export const createCodexLiveThreads = ({
     'thread/status/changed': (params) => {
       const parsed = threadStatusParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
-      if (live && parsed.data.status.type === 'notLoaded') live.loaded = false;
+      if (!live) return;
+      const status = parsed.data.status.type;
+      if (status === 'notLoaded') live.loaded = false;
+      if (!live.childSession) return;
+      if (status === 'active') setBusy(live, true);
+      else if (status === 'idle') setBusy(live, false);
+      else if (status === 'notLoaded') closeChild(live);
+      else if (status === 'systemError') {
+        const error = { message: 'Codex subagent encountered a system error' };
+        if (live.turn) settleTurn(live, { status: 'failed', error });
+        else setBusy(live, false, unknownError(error.message));
+      }
+    },
+    'thread/closed': (params) => {
+      const parsed = threadClosedParams.safeParse(params);
+      const live = parsed.success ? threads.get(parsed.data.threadId) : null;
+      if (live) closeChild(live);
     },
   }));
 
@@ -495,9 +555,17 @@ export const createCodexLiveThreads = ({
     handleExit(reason) {
       for (const live of threads.values()) {
         live.loaded = false;
-        if (!live.turn) continue;
-        settleTurn(live, { status: 'failed', error: { message: `Codex app-server stopped: ${reason}` } });
+        const error = { message: `Codex app-server stopped: ${reason}` };
+        if (live.turn) settleTurn(live, { status: 'failed', error });
+        else setBusy(live, false, unknownError(error.message));
+        if (live.childSession) closeChild(live);
       }
+    },
+
+    /** A spawned thread is navigable before its first turn is persisted. */
+    childSession(sessionId) {
+      const decoded = decodeNativeSessionId(sessionId);
+      return decoded?.backend === 'codex' ? threads.get(decoded.threadId)?.childSession ?? null : null;
     },
 
     /** Records of the running turn, for history reads to overlay. */

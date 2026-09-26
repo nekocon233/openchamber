@@ -13,6 +13,7 @@ const DIRECTORY = '/work/project';
 const SESSION_UUID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const SESSION_ID = `ncl_${SESSION_UUID}`;
 const USER_MESSAGE_ID = 'ncl_u_a22f0a7a-a88c-4093-a5e3-6653ff44f6d3';
+const CHILD_ID = `${SESSION_ID}_t_toolu_01VAnMEDHHeuo92ZtfbaNtwQ`;
 const ASK_TOOL_ID = 'toolu_014Xcz9vrMxMqg2EMycAspPn';
 const PROMPT = 'Do these steps in order, using the named tools:';
 
@@ -135,6 +136,39 @@ afterEach(() => {
 });
 
 describe('Claude live sessions', () => {
+  it('publishes child replies and exposes their live records and busy state independently of the parent', async () => {
+    const finished = Promise.withResolvers();
+    const tool = 'toolu_01VAnMEDHHeuo92ZtfbaNtwQ';
+    const harness = createHarness({
+      afterFrames: async function* () {
+        yield { type: 'user', uuid: 'child-user', parent_tool_use_id: tool, message: { role: 'user', content: 'Research the topic' } };
+        yield { type: 'assistant', uuid: 'child-answer', parent_tool_use_id: tool, message: {
+          id: 'msg_child', model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'The child found an answer.' }], stop_reason: 'end_turn',
+        } };
+        await finished.promise;
+        yield { type: 'system', subtype: 'task_notification', task_id: 'a6f8a95b426077fd7', status: 'completed' };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      },
+    });
+    try {
+      await sendPrompt(harness.live);
+      await answerQuestion(harness);
+      await waitFor(() => harness.live.liveRecords(CHILD_ID)?.length === 2);
+      expect(harness.calls.queries[0].options.forwardSubagentText).toBe(true);
+      expect(harness.live.childSession(CHILD_ID)).toMatchObject({ id: CHILD_ID, parentID: SESSION_ID, directory: DIRECTORY });
+      expect(harness.live.isSessionRunning(CHILD_ID)).toBe(true);
+      expect(harness.live.isSessionRunning(SESSION_ID)).toBe(false);
+      expect(harness.live.liveRecords(CHILD_ID)[1].parts[0].text).toBe('The child found an answer.');
+      expect(harness.live.liveRecords(SESSION_ID).flatMap((record) => record.parts).some((part) => part.text === 'The child found an answer.')).toBe(false);
+      finished.resolve();
+      await waitFor(() => !harness.live.isSessionRunning(CHILD_ID));
+      expect(harness.live.liveRecords(CHILD_ID)[1].info.finish).toBe('stop');
+    } finally {
+      finished.resolve();
+      await harness.live.closeSession(SESSION_ID);
+    }
+  });
+
   it('appends the global instructions to the system prompt of the query it starts', async () => {
     const harness = createHarness({ instructions: 'Instructions from: /home/ada/.config/opencode/AGENTS.md\nAnswer in English.' });
     await sendPrompt(harness.live);
@@ -161,6 +195,7 @@ describe('Claude live sessions', () => {
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: true,
+      forwardSubagentText: true,
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       model: 'haiku',
     });
@@ -204,7 +239,7 @@ describe('Claude live sessions', () => {
     expect(payloads(events, 'session.created').map((payload) => payload.properties.info)).toEqual([
       expect.objectContaining({ parentID: SESSION_ID, id: expect.stringMatching(new RegExp(`^${SESSION_ID}_t_toolu_`)) }),
     ]);
-    expect(harness.live.busySessionIds(DIRECTORY)).toEqual([]);
+    expect(harness.live.busySessionIds(DIRECTORY)).toEqual([CHILD_ID]);
   });
 
   it('names every message and part the way a later history read does', async () => {
@@ -453,7 +488,7 @@ describe('Claude live sessions', () => {
     expect(settled).toBe(false);
     await answerQuestion(harness);
     await waiting;
-    expect(harness.live.busySessionIds(DIRECTORY)).toEqual([]);
+    expect(harness.live.busySessionIds(DIRECTORY)).toEqual([CHILD_ID]);
     expect(idle).toEqual([[SESSION_ID, DIRECTORY]]);
   });
 

@@ -91,6 +91,29 @@ const usesFileEditTool = (entry) => {
   ));
 };
 
+const toolMessageSchema = z.object({
+  type: z.enum(['user', 'assistant']),
+  message: z.object({ content: z.array(z.object({
+    type: z.string(), id: z.string().optional(), tool_use_id: z.string().optional(),
+  })) }),
+});
+
+// Parallel results can fall outside the SDK's selected parentUuid chain.
+// Recover only results for tool calls that chain actually retained.
+const missingToolResultIds = (entries) => {
+  const calls = new Set();
+  const results = new Set();
+  for (const entry of entries) {
+    const parsed = toolMessageSchema.safeParse(entry);
+    if (!parsed.success) continue;
+    for (const block of parsed.data.message.content) {
+      if (parsed.data.type === 'assistant' && block.type === 'tool_use' && block.id) calls.add(block.id);
+      if (parsed.data.type === 'user' && block.type === 'tool_result' && block.tool_use_id) results.add(block.tool_use_id);
+    }
+  }
+  return new Set([...calls].filter((id) => !results.has(id)));
+};
+
 const titleOf = (info) => {
   const title = info.customTitle || info.summary || info.firstPrompt || 'Claude Code session';
   return title.length > MAX_TITLE_LENGTH ? `${title.slice(0, MAX_TITLE_LENGTH - 1)}…` : title;
@@ -102,7 +125,7 @@ const titleOf = (info) => {
  * @param {ReturnType<typeof import('../registry.js').createNativeRegistry>} options.registry
  * @param {number} [options.historyCacheBytes] transcript bytes whose projections are kept in memory
  */
-export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes = DEFAULT_HISTORY_CACHE_BYTES }) => {
+export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes = DEFAULT_HISTORY_CACHE_BYTES, isSessionRunning = () => false }) => {
   // Projecting a large transcript costs about 100 ms (89 MB, 1,642 messages),
   // and the UI reads history a page at a time, so projections are reused
   // while the transcript is unchanged. Least recently used first out.
@@ -243,7 +266,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     return result && entry.tool_use_result === undefined ? { ...entry, tool_use_result: result } : entry;
   }));
 
-  const project = ({ sessionId, directory, entries, sendRecords, subagents }) => {
+  const project = ({ sessionId, directory, entries, sendRecords, subagents, recoveredResults = [] }) => {
     const decoded = decodeNativeSessionId(sessionId);
     const projection = createClaudeProjection({
       sessionId,
@@ -254,8 +277,42 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
         : null),
     });
     for (const entry of entries) projection.applyEntry(entry);
-    projection.settleOpenTools('The turn ended before this tool finished.');
+    for (const entry of recoveredResults) projection.applyToolResults(entry);
+    if (decoded.toolUseId === null || !isSessionRunning(sessionId)) {
+      projection.settleOpenTools('The turn ended before this tool finished.');
+    }
     return projection.records();
+  };
+
+  const subagentToolResults = async (sdk, sessionUuid, agentId, directory, entries) => {
+    const edits = new Map();
+    const recoveredResults = [];
+    const missing = missingToolResultIds(entries);
+    if (missing.size === 0 && !entries.some(usesFileEditTool)) return { edits, recoveredResults };
+    let found = false;
+    try {
+      await sdk.importSessionToStore(sessionUuid, {
+        append: async (key, rawEntries) => {
+          if (key.subpath?.split('/').at(-1) !== `agent-${agentId}`) return;
+          found = true;
+          addEditResults(edits, rawEntries);
+          for (const entry of rawEntries) {
+            const parsed = toolMessageSchema.safeParse(entry);
+            if (parsed.success && parsed.data.type === 'user' && parsed.data.message.content.some((block) => (
+              block.type === 'tool_result' && missing.has(block.tool_use_id)
+            ))) recoveredResults.push(entry);
+          }
+        },
+        load: async () => null,
+      }, { dir: directory, includeSubagents: true });
+      if (!found && missing.size > 0) throw new Error('Subagent transcript is unavailable');
+    } catch (error) {
+      // Missing outcomes are required data; a failed read cannot turn a
+      // successful tool into an authoritative interruption. Diffs are optional.
+      if (missing.size > 0) throw error;
+      console.warn('[native-agents] Claude subagent edit diffs unavailable');
+    }
+    return { edits, recoveredResults };
   };
 
   const childSessionRecords = (parent, records, subagents, sessionUuid, directory) => {
@@ -406,9 +463,9 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     const agentId = subagents.get(decoded.toolUseId);
     if (!agentId) return null;
     const entries = await sdk.getSubagentMessages(decoded.sessionUuid, agentId, { dir: directory });
-    const editResults = await fileEditResults(sdk, entries, decoded.sessionUuid, directory, true);
+    const { edits, recoveredResults } = await subagentToolResults(sdk, decoded.sessionUuid, agentId, directory, entries);
     return {
-      records: project({ sessionId, directory, entries: withFileEditResults(entries, editResults), sendRecords: new Map(), subagents: new Map() }),
+      records: project({ sessionId, directory, entries: withFileEditResults(entries, edits), sendRecords: new Map(), subagents: new Map(), recoveredResults }),
       childSessions: [],
     };
   };

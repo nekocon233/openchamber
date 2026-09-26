@@ -105,6 +105,15 @@ Claude gotchas:
   through `importSessionToStore` into a throwaway store and keeps only the
   diff fields per entry uuid (the raw result also holds whole file
   contents). A failed second read costs the diffs, never the history.
+- Subagent history can omit parallel tool results from its selected
+  `parentUuid` chain. When a retained call has no result, the store reads raw
+  entries through `importSessionToStore`, selecting only that subagent's key,
+  and recovers results for those retained call IDs. It does not replay users
+  or assistants from discarded branches or borrow another child's results.
+  The read is shared with edit-diff recovery. A failed required recovery read
+  fails the page instead of declaring the tools interrupted. Unresolved tools
+  remain running while the live query reports that child running; completed
+  and interrupted child histories settle them as before.
 - `getSessionMessages` returns only the chain after the last compaction. When
   that chain opens with a compaction, the store adds the conversation before
   it (`earlierEntries` in `claude/store.js`): it reads the raw transcript
@@ -173,7 +182,8 @@ kept open between turns.
 
 - Options: the user's `claude` binary, the child environment, the
   `claude_code` system prompt preset with nothing appended, all setting
-  sources, `bypassPermissions` or `plan`, partial messages on. A new session
+  sources, `bypassPermissions` or `plan`, partial messages and
+  `forwardSubagentText` on. A new session
   starts with `sessionId`, one with a transcript resumes with `resume`.
 - Model: `claudeLaunchModel` (`catalog.js`) hands the CLI `opus`, `sonnet`
   and `fable` in their `[1m]` form, at launch and when switching in place.
@@ -188,8 +198,19 @@ kept open between turns.
   reasoning parts from stream events and completes the message on
   `message_stop`, because tools start while later blocks still stream. Only
   `assistant` and `user` frames and the `compact_boundary` system frame reach
-  `applyEntry`. Subagent frames are left to the subagent's session;
-  a Task call announces the subagent session with `session.created`.
+  `applyEntry`. A Task call announces the subagent session with
+  `session.created`. `claude/subagents.js` routes child frames by
+  `parent_tool_use_id` to an independent projection and publishes that child's
+  messages, reasoning, tools and deltas through the same event hub. Full-frame
+  UUIDs deduplicate replay; children never append messages to the parent.
+  Task-start events establish busy status, and foreground tool results or
+  task terminal events settle it. An asynchronous launch result leaves the
+  child running. The native status snapshot includes running children, and
+  message reads overlay their live records for cold opens and reconnects.
+  A live child's session record is available before its transcript is indexed.
+  Parent completion does not end background children; interruption and query
+  exit settle their outstanding work and clear their activity. Child state
+  stays scoped to its owning query and is released when that query exits.
 - `canUseTool` answers `AskUserQuestion` from the question registry. The SDK
   still asks for this tool in `bypassPermissions` mode. `ExitPlanMode` creates
   a pending question with `kind: 'claude-plan-exit'`, including the plan when
@@ -262,6 +283,14 @@ Codex (`codex/live.js`): turns on the shared app-server.
   These timestamps leave memory with the turn; persisted history falls back
   to turn times because its items carry no timing. `turn/plan/updated` becomes
   `todo.updated`.
+- A `thread/started` notification with a known `parentThreadId` registers a
+  child before its first turn is persisted. Its reported directory and model
+  belong to that child, including nested agents. Child turn/item events use
+  the same projector and native publisher as directly prompted threads, and
+  history reads overlay the child's live turn. Thread and turn notifications
+  own its busy status; finishing a parent does not settle its children.
+  Duplicate announcements do not reset a running child. Unload, closure and
+  app-server exit clear child activity and release its live metadata.
 - Approval requests are accepted, `item/tool/requestUserInput` goes to the
   question registry, MCP elicitation is declined, and anything else is refused.
 
