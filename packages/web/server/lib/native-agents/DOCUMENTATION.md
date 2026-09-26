@@ -22,7 +22,8 @@ and the task lists of both CLIs show as todos.
   OpenChamber version, `publishNativeEvent` (the global hub) and the reader of
   the global AGENTS.md (`instructions.js`), routes the
   follow-up queue's startup existence check for native ids to
-  `sessionExists`, and hands the runtime to shutdown.
+  `sessionExists`, gives `smallModels` to the small-model service
+  (`configureNativeSmallModels`), and hands the runtime to shutdown.
 - `opencode/feature-routes-runtime.js` registers `routes.js` first among the
   feature routes, before the generic OpenCode proxy. `opencode/core-routes.js`
   parses JSON bodies for `/api/native/`.
@@ -494,12 +495,14 @@ changes only after a write succeeds.
 
 ## Utility text generation
 
-`codex/utility.js` runs small-model calls on the shared app-server. These are
-ephemeral threads with no registry entry or published chat events. The
-small-model service accepts an explicit `codex-native/<model>` setting and
-uses Codex's account and model catalog. The CLI owns credentials and refresh.
-An unavailable selected model fails instead of silently choosing another one.
+The small-model service accepts an explicit `codex-native/<model>` or
+`claude-native/<model>` setting and reaches the CLIs through the runtime's
+`smallModels`, keyed by provider id. Each CLI uses its own login and model
+catalog and owns credentials and refresh. An unavailable selected model fails
+instead of silently choosing another one. Failed or empty output rejects.
 
+`codex/utility.js` runs these calls on the shared app-server. They are
+ephemeral threads with no registry entry or published chat events.
 Each request creates its own thread and supplies only its prompt and system
 instructions. Environment access is disabled, the sandbox is read-only, and
 shell, MCP, apps, plugins, hooks and multi-agent tools are disabled for that
@@ -509,14 +512,33 @@ The output-token budget is a brevity instruction because the turn API has no
 hard output-token limit.
 
 Only completed assistant text is returned; commentary and unrelated threads
-are ignored. Failed or empty output rejects. Abort and deadline handling
+are ignored. Abort and deadline handling
 return promptly, then interrupt and unsubscribe the owned thread, including
 when its start reply arrives after cancellation. App-server exit rejects all
 pending utility calls without restarting the process for cleanup. Notification
 routing does one thread lookup, with no scan of chat sessions.
 
-Web and Electron call this server runtime. Hosted mobile and Capacitor use the
-Codex installation on their connected server. VS Code retains the explicit
+`claude/utility.js` runs one Agent SDK query per request, with every built-in
+tool, setting source and MCP server off, thinking off and `dontAsk`
+permissions. `persistSession: false` keeps it out of the transcripts, so it
+never shows up as a session. Claude Code tells the model its working directory
+and that directory's git state, so the query runs in the system temp directory
+rather than the session's project. The model goes through `claudeLaunchModel`,
+which keeps the input budget in line with the window the catalog reports.
+Structured output uses the SDK's `outputFormat`. Claude Code answers it with a
+tool call of its own, one extra turn, so the query sets no turn limit. The
+output-token budget is a brevity instruction here too. Claude Code also makes
+a small Haiku call of its own for each query, visible in `modelUsage`.
+
+`claude auth status --json` reports the login. It exits 1 when signed out and
+still prints the state. An API failure such as an expired login ends the query
+as a success whose text is the error, and that text rejects. The SDK takes
+about two seconds to stop Claude Code, so abort and deadline answer the caller
+at once and the query ends in the background. Shutdown aborts every running
+query.
+
+Web and Electron call these server runtimes. Hosted mobile and Capacitor use
+the CLIs installed on their connected server. VS Code retains the explicit
 `small-model-runtime-unsupported` response.
 
 ## Child processes
@@ -530,7 +552,8 @@ Codex installation on their connected server. VS Code retains the explicit
   fixed arguments (`cliCommand`). A Claude shim is refused with
   `503 NATIVE_CLI_SHIM` before the Agent SDK starts it: the SDK would launch
   it without a shell, and its JSON arguments are not safe on a `cmd.exe`
-  command line. This path is unit-tested only; no Windows host has run it.
+  command line. `launchableClaudeExecutable` owns this rule for live sessions
+  and utility calls. This path is unit-tested only; no Windows host has run it.
 - `buildCliChildEnv` passes the user's environment minus `OPENCHAMBER_*` and
   `OPENCODE_SERVER_*` (agents must not read OpenChamber credentials through
   `env`) and minus `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and
@@ -545,6 +568,8 @@ Codex installation on their connected server. VS Code retains the explicit
 - The Agent SDK starts and stops the Claude Code processes itself. A query
   closes by ending its input; its abort controller is the backstop five
   seconds later, and shutdown aborts every query at once.
+- `claude auth status --json` runs through `execFile`, hidden on Windows and
+  stopped after 10 s.
 
 ## Routes (`/api/native`)
 

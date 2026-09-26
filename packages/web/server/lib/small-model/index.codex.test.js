@@ -6,22 +6,23 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 const previousDataDir = process.env.OPENCHAMBER_DATA_DIR;
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-codex-small-model-'));
 process.env.OPENCHAMBER_DATA_DIR = dataDir;
-const { configureCodexSmallModel, generateSmallModelText, describeSmallModel, listAuthenticatedProviders } = await import('./index.js');
+const { configureNativeSmallModels, generateSmallModelText, describeSmallModel, listAuthenticatedProviders } = await import('./index.js');
 const modelID = 'gpt-5.6-luna';
 const model = 'codex-native/' + modelID;
 const generations = [];
 const nativeModel = { id: modelID, hasLogin: true, contextWindow: 8_000, outputLimit: 2_000, effort: 'low' };
+const configureCodex = (runtime) => configureNativeSmallModels({ 'codex-native': { transport: 'codex-app-server', ...runtime } });
 
 beforeEach(() => {
   generations.length = 0;
-  configureCodexSmallModel({
+  configureCodex({
     available: async () => true,
     describe: async () => nativeModel,
     generate: async (request) => { generations.push(request); return 'Generated'; },
   });
 });
 afterEach(() => {
-  configureCodexSmallModel(null);
+  configureNativeSmallModels(null);
   fs.rmSync(path.join(dataDir, 'settings.json'), { force: true });
 });
 afterAll(() => {
@@ -62,9 +63,9 @@ describe('native Codex small-model routing', () => {
   });
 
   it('reports an unavailable runtime and refuses generation after logout', async () => {
-    configureCodexSmallModel(null);
+    configureNativeSmallModels(null);
     await expect(generateSmallModelText({ model, prompt: 'Title' })).rejects.toMatchObject({ statusCode: 503 });
-    configureCodexSmallModel({
+    configureCodex({
       available: async () => false,
       describe: async () => ({ ...nativeModel, hasLogin: false }),
       generate: async (request) => { generations.push(request); return ''; },

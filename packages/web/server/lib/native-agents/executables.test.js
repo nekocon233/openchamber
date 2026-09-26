@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { createCliResolver, isWindowsShim } from './executables.js';
+import { createCliResolver, isWindowsShim, launchableClaudeExecutable } from './executables.js';
 import { cliCommand } from './process.js';
 
 const HOME = path.join('/', 'home', 'ada');
@@ -40,6 +40,12 @@ describe('CLI resolution', () => {
     expect(isWindowsShim('C:\\npm\\codex.bat', 'win32')).toBe(true);
     expect(isWindowsShim('C:\\bin\\codex.exe', 'win32')).toBe(false);
     expect(isWindowsShim('/tmp/tool.cmd', 'linux')).toBe(false);
+  });
+
+  it('lets the Agent SDK start only a claude that runs without a shell', async () => {
+    await expect(launchableClaudeExecutable(async () => null, 'linux')).rejects.toMatchObject({ code: 'NATIVE_CLI_MISSING', status: 503 });
+    await expect(launchableClaudeExecutable(async () => 'C:\\npm\\claude.cmd', 'win32')).rejects.toMatchObject({ code: 'NATIVE_CLI_SHIM', status: 503 });
+    expect(await launchableClaudeExecutable(async () => 'C:\\bin\\claude.exe', 'win32')).toBe('C:\\bin\\claude.exe');
   });
 
   it('starts a Windows shim through cmd.exe and anything else directly', () => {

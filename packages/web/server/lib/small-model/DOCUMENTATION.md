@@ -1,7 +1,8 @@
 # Small Model
 
 Server-side utility generation through OpenCode provider logins
-(`~/.local/share/opencode/auth.json`) or the user's native Codex CLI.
+(`~/.local/share/opencode/auth.json`) or the user's native Codex or Claude Code
+CLI.
 OpenCode uses a "small model"
 internally (titles, summaries) but does not expose it through the SDK or
 plugins — this module replicates that mechanism as an OpenChamber runtime API.
@@ -16,11 +17,12 @@ other runtime API.
 ## Files
 
 - `index.js` — orchestration: `generateSmallModelText()` / `describeSmallModel()`.
-  An explicit `codex-native/<model>` resolves against Codex's own account and
-  model catalog, without reading OpenCode credentials or models.dev. The
-  server supplies the native runtime through `configureCodexSmallModel`.
-  Generation is owned by `../native-agents/codex/utility.js`; see the native
-  module's [utility generation contract](../native-agents/DOCUMENTATION.md#utility-text-generation).
+  An explicit `codex-native/<model>` or `claude-native/<model>` resolves
+  against that CLI's own login and model catalog, without reading OpenCode
+  credentials or models.dev. The server supplies the native runtimes, keyed by
+  provider id, through `configureNativeSmallModels`. Generation is owned by
+  `../native-agents/codex/utility.js` and `../native-agents/claude/utility.js`;
+  see the native module's [utility generation contract](../native-agents/DOCUMENTATION.md#utility-text-generation).
 - `runtime-providers.js` — provider state that exists only inside the running
   OpenCode process. A plugin registers its provider from the `config` hook and
   supplies the credential from its `auth` loader, so neither reaches
@@ -53,9 +55,10 @@ other runtime API.
    same-provider by default. `restrictToPreferredProvider: false` is the only
    opt-out. Settings, config, and request models remain explicit overrides.
    Native CLI sessions still require an explicit settings, config, or request
-   small model. Selecting `codex-native/<model>` lets their AI titles, notes,
-   read-aloud summaries, session assist and goal audits use Codex's own login,
-   including calls originating from a Claude Code session.
+   small model. Selecting `codex-native/<model>` or `claude-native/<model>`
+   lets their AI titles, notes, read-aloud summaries, session assist and goal
+   audits use that CLI's own login, including calls from the other CLI's
+   sessions.
 - Input clamp: the prompt is measured against the resolved model's catalog
   `limit.context` together with the system prompt (minus an output reserve,
   ~4 chars/token estimate;
@@ -76,7 +79,8 @@ other runtime API.
   ChatGPT-plan codex backend has no equivalent and rejects a schema request
   with `code: 'structured-output-unsupported'` rather than silently returning
   prose. Native `codex-native` uses app-server `turn/start.outputSchema` and
-  supports structured output.
+  supports structured output. Native `claude-native` uses the Agent SDK's
+  `outputFormat`.
 - Output budget: `maxOutputTokens` is capped at the catalog's `limit.output` for
   the model, and the **same number** is reserved from the input allowance. The
   two must not drift — a caller that asks for a large answer while the reserve
@@ -89,8 +93,9 @@ other runtime API.
   `outputTokens`, which is what the caller should then request, so the reserve
   and the request are the same number by construction. `describeSmallModel`
   applies the same output-limit cap before calculating its input budget.
-  Native Codex reserves the same input budget, but its turn API has no hard
-  output-token parameter. The output budget is a brevity instruction there.
+  Native Codex and Claude Code reserve the same input budget, but neither takes
+  a hard output-token limit per request. The output budget is a brevity
+  instruction there.
 - Reasoning models can spend the entire output budget thinking and return
   nothing. That case (empty content with `finish_reason: 'length'`, or content
   empty while `reasoning_content` is populated) throws with
@@ -187,9 +192,10 @@ Walkthrough pickers which providers this module can call. Direct providers
 need a credential and an endpoint, from auth.json or OpenCode's runtime
 provider listing. Native Codex uses `account/read` instead; its provider is
 offered when the CLI reports a login or a provider that needs no OpenAI login.
-An unavailable Codex CLI does not remove working direct providers, and an
-OpenCode credential-read failure does not hide Codex. Both pickers allow
-native models only from this server-supplied provider list.
+Native Claude Code is offered when `claude auth status` reports `loggedIn`.
+An unavailable CLI does not remove working direct providers or the other CLI,
+and an OpenCode credential-read failure does not hide either CLI. Both pickers
+allow native models only from this server-supplied provider list.
 
 **opencode zen is excluded without a real login.** When the user has no zen
 credential, OpenCode substitutes the sentinel `options.apiKey = "public"` and
@@ -226,8 +232,9 @@ is a superset of "has an auth.json entry".
 ## Registration
 
 Routes are mounted from `feature-routes-runtime.js`. `server/index.js` wires
-the native Codex utility runtime once. The app-server still starts only when
-an account, catalog, or generation request needs it.
+the native utility runtimes once. The Codex app-server still starts only when
+an account, catalog, or generation request needs it. Claude Code starts a
+process for each login check and each generation.
 
 ## Known limitations
 
@@ -243,7 +250,8 @@ an account, catalog, or generation request needs it.
 
 - Anthropic OAuth (Claude Pro/Max) entries are not supported — OpenCode itself
   keeps those outside `auth.json` in this generation; only `type: api` keys
-  work for Anthropic.
+  work for Anthropic. A Pro or Max login still works through
+  `claude-native/<model>`, which runs the user's Claude Code.
 - Amazon Bedrock, GitLab, Azure and other credential-chain providers are out
   of scope; they need more than a key/token (regions, resource names).
 - Responses from the codex backend are collected from the SSE stream; the

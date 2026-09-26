@@ -13,14 +13,16 @@ import {
 } from './call.js';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
 import { getRuntimeProviderSnapshot, getRuntimeProviderTransportFromSnapshot } from './runtime-providers.js';
-import { NATIVE_PROVIDER_CODEX } from '../native-agents/ids.js';
+import { nativeBackendOfProviderId } from '../native-agents/ids.js';
 
 const EXPLICIT_MODEL_SOURCES = new Set(['settings', 'config', 'request']);
 
-let codexRuntime = null;
+let nativeRuntimes = new Map();
 
-export const configureCodexSmallModel = (runtime) => {
-  codexRuntime = runtime;
+// The native CLIs' small-model runtimes by provider id: a transport identity
+// with `available`, `describe` and `generate`.
+export const configureNativeSmallModels = (runtimes) => {
+  nativeRuntimes = new Map(Object.entries(runtimes ?? {}));
 };
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
@@ -109,11 +111,12 @@ const resolveModelContext = async ({ model, directory, preferredProviderID, pref
   const configured = requested ? { ...requested, source: 'request' } : resolveSmallModel({
     auth: {}, catalog: {}, settingsSmallModel, configSmallModel,
   });
-  if (configured?.providerID === NATIVE_PROVIDER_CODEX) {
-    const runtime = codexRuntime;
+  const nativeBackend = configured ? nativeBackendOfProviderId(configured.providerID) : null;
+  if (nativeBackend !== null) {
+    const runtime = nativeRuntimes.get(configured.providerID);
     if (!runtime) {
-      throw Object.assign(new Error('Codex utility runtime is unavailable'), {
-        statusCode: 503, code: 'codex-runtime-unavailable',
+      throw Object.assign(new Error(`The ${nativeBackend} utility runtime is unavailable`), {
+        statusCode: 503, code: 'native-runtime-unavailable',
       });
     }
     const nativeModel = await runtime.describe(configured.modelID);
@@ -123,7 +126,7 @@ const resolveModelContext = async ({ model, directory, preferredProviderID, pref
       runtime,
       auth: {},
       catalog: {
-        [NATIVE_PROVIDER_CODEX]: {
+        [configured.providerID]: {
           models: {
             [configured.modelID]: {
               limit: { context: nativeModel.contextWindow, output: nativeModel.outputLimit },
@@ -201,7 +204,7 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
   });
 
   if (nativeModel && !nativeModel.hasLogin) {
-    throw Object.assign(new Error('Sign in to Codex before using its small model'), {
+    throw Object.assign(new Error(`Sign in to the ${nativeBackendOfProviderId(resolved.providerID)} CLI before using its small model`), {
       statusCode: 401, code: 'no-provider-login',
     });
   }
@@ -258,12 +261,14 @@ export async function listAuthenticatedProviders(directory) {
       // The auth.json set below stands on its own.
     }
   } catch {
-    // Codex owns an independent login, so an OpenCode auth read cannot hide it.
+    // The CLIs own independent logins, so an OpenCode auth read cannot hide them.
   }
-  try {
-    if (await codexRuntime?.available()) ids.add(NATIVE_PROVIDER_CODEX);
-  } catch {
-    // A missing or disconnected CLI does not erase the other providers.
+  for (const [providerID, runtime] of nativeRuntimes) {
+    try {
+      if (await runtime.available()) ids.add(providerID);
+    } catch {
+      // A missing or disconnected CLI does not erase the other providers.
+    }
   }
   return Array.from(ids);
 }
@@ -319,7 +324,7 @@ const resolveReserveTokens = (outputReserveTokens, limits) => (
 export async function describeSmallModel({ directory, preferredProviderID, preferredModelID, outputReserveTokens, overrideModel } = {}) {
   // A caller with its own model setting (the diff walkthrough) outranks the
   // small-model chain entirely — it asked for this model on purpose.
-  const { auth, catalog, resolved, nativeModel } = await resolveModelContext({
+  const { auth, catalog, resolved, nativeModel, runtime } = await resolveModelContext({
     model: overrideModel, directory, preferredProviderID, preferredModelID,
   });
   if (!resolved) return null;
@@ -355,7 +360,7 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
     providerID: resolved.providerID,
   });
   const hasLogin = nativeModel ? nativeModel.hasLogin : Boolean(login);
-  const transport = nativeModel ? 'codex-app-server' : getProviderTransportKind({ providerID: resolved.providerID, login });
+  const transport = runtime ? runtime.transport : getProviderTransportKind({ providerID: resolved.providerID, login });
 
   return {
     ...resolved,

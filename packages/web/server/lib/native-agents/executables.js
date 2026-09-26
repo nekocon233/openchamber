@@ -11,12 +11,29 @@
 import os from 'node:os';
 import path from 'node:path';
 
+import { claudeShimError, cliMissingError } from './errors.js';
+
 const WINDOWS_SHIM = /\.(?:cmd|bat)$/i;
 
 /** True for a Windows batch shim, which runs only through `cmd.exe`. */
 export const isWindowsShim = (executable, platform = process.platform) => (
   platform === 'win32' && WINDOWS_SHIM.test(executable)
 );
+
+/**
+ * The `claude` the Agent SDK may start. The SDK starts it without a shell,
+ * which a Windows npm shim needs; the shim's arguments are JSON that
+ * `cmd.exe` would mangle.
+ * @param {() => Promise<string | null>} resolveExecutable
+ * @param {NodeJS.Platform} [platform]
+ * @returns {Promise<string>}
+ */
+export const launchableClaudeExecutable = async (resolveExecutable, platform = process.platform) => {
+  const executable = await resolveExecutable();
+  if (!executable) throw cliMissingError('claude');
+  if (isWindowsShim(executable, platform)) throw claudeShimError(executable);
+  return executable;
+};
 
 const fallbackLocations = (cli, home, platform) => {
   const binary = platform === 'win32' ? `${cli}.exe` : cli;

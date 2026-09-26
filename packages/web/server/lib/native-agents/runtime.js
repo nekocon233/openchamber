@@ -19,6 +19,7 @@ import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
 import { claudeConfigDir, readClaudeTaskList } from './claude/tasks.js';
+import { createClaudeUtility } from './claude/utility.js';
 import { createCodexAppServer } from './codex/app-server.js';
 import { createCodexAutoTitles } from './codex/auto-title.js';
 import { createCodexCatalog } from './codex/catalog.js';
@@ -33,6 +34,7 @@ import {
   sessionBusyError,
   sessionNotFoundError,
 } from './errors.js';
+import { launchableClaudeExecutable } from './executables.js';
 import {
   claudeUserMessageId,
   decodeNativeSessionId,
@@ -40,6 +42,8 @@ import {
   encodeCodexSessionId,
   NATIVE_BACKEND_CLAUDE,
   NATIVE_BACKEND_CODEX,
+  NATIVE_PROVIDER_CLAUDE,
+  NATIVE_PROVIDER_CODEX,
   nativeBackendOfProviderId,
 } from './ids.js';
 import { claudePromptBlocks, withInstructions } from './prompt-parts.js';
@@ -283,6 +287,11 @@ export const createNativeAgentsRuntime = ({
     onIdle,
     readTaskList: (sessionUuid) => readClaudeTaskList({ configDir: claudeConfigDir(buildChildEnv()), sessionUuid }),
     now,
+  });
+  const claudeUtility = createClaudeUtility({
+    loadSdk,
+    launchableExecutable: () => launchableClaudeExecutable(() => resolveExecutable('claude')),
+    buildEnv: buildChildEnv,
   });
 
   const decode = (sessionId) => {
@@ -797,15 +806,26 @@ export const createNativeAgentsRuntime = ({
       questions.reject(requestId);
     },
 
-    smallModel: {
-      available: codexUtility.available,
-      describe: codexUtility.describe,
-      generate: codexUtility.generate,
+    /** The CLIs' small-model runtimes, by provider id. */
+    smallModels: {
+      [NATIVE_PROVIDER_CODEX]: {
+        transport: 'codex-app-server',
+        available: codexUtility.available,
+        describe: codexUtility.describe,
+        generate: codexUtility.generate,
+      },
+      [NATIVE_PROVIDER_CLAUDE]: {
+        transport: 'claude-agent-sdk',
+        available: claudeUtility.available,
+        describe: claudeUtility.describe,
+        generate: claudeUtility.generate,
+      },
     },
 
     async shutdown() {
       await codexTitles.stop();
       codexUtility.handleExit(new Error('Codex runtime is shutting down'));
+      claudeUtility.shutdown();
       await claudeLive.shutdown();
       await appServer.stop();
     },

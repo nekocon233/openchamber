@@ -21,8 +21,8 @@
 
 import { z } from 'zod';
 
-import { claudeShimError, cliMissingError, invalidRequestError, NativeAgentError } from '../errors.js';
-import { isWindowsShim } from '../executables.js';
+import { invalidRequestError, NativeAgentError } from '../errors.js';
+import { launchableClaudeExecutable } from '../executables.js';
 import { decodeNativeSessionId, encodeClaudeChildSessionId } from '../ids.js';
 import { buildSessionRecord } from '../records.js';
 import { claudeAbortedError, claudeTurnError, createClaudeProjection } from './projector.js';
@@ -161,14 +161,7 @@ export const createClaudeLiveSessions = ({
   /** @type {Map<string, object>} */
   const sessions = new Map();
 
-  // The Agent SDK starts `claude` without a shell, which a Windows npm shim
-  // needs; the shim's arguments are JSON that `cmd.exe` would mangle.
-  const launchableExecutable = async () => {
-    const executable = await resolveExecutable();
-    if (!executable) throw cliMissingError('claude');
-    if (isWindowsShim(executable, platform)) throw claudeShimError(executable);
-    return executable;
-  };
+  const launchableExecutable = () => launchableClaudeExecutable(resolveExecutable, platform);
   /** @type {Map<string, Promise<void>>} session id → exit of its closed query */
   const exits = new Map();
 
