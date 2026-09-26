@@ -243,21 +243,15 @@ describe('session assist runtime', () => {
 });
 
 describe('session assist generation', () => {
-  it.each([true, false])('skips plan-mode suggestions while retaining an enabled recap: %s', async (recap) => {
+  it.each([true, false])('generates plan-mode suggestions with recap enabled: %s', async (recap) => {
     const { state, status } = await fixture(async () => output('Plan ready', 'go ahead'));
     state.targets = { recap, suggestion: true };
     state.messages[1] = message('answer', 'assistant', 'Plan ready', { agent: 'plan' });
     status('idle');
-    if (recap) {
-      await vi.waitFor(() => expect(state.patches).toHaveLength(1));
-      expect(state.calls[0].system).not.toContain('suggestion');
-      expect(state.patches[0].metadata.openchamber.assist).toMatchObject({ recap: 'Plan ready', suggestion: '' });
-    } else {
-      await vi.waitFor(() => expect(state.requests.some((request) => request.limit === '50')).toBe(true));
-      await pause();
-      expect(state.calls).toHaveLength(0);
-      expect(state.patches).toHaveLength(0);
-    }
+    await vi.waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(state.calls).toHaveLength(1);
+    expect(state.calls[0].system).toContain('"suggestion"');
+    expect(state.patches[0].metadata.openchamber.assist).toMatchObject({ recap: recap ? 'Plan ready' : '', suggestion: 'go ahead' });
     expect(state.targets.suggestion).toBe(true);
   });
 
@@ -358,11 +352,13 @@ describe('session assist generation', () => {
 
 describe('session assist runtime for native CLI sessions', () => {
   it.each([
-    { sessionId: 'ncl_s', providerID: 'claude-native' },
-    { sessionId: 'ncx_s', providerID: 'codex-native' },
-  ])('generates for $providerID without a quiet wait using native reads and metadata', async ({ sessionId, providerID }) => {
+    { sessionId: 'ncl_s', providerID: 'claude-native', agent: 'build' },
+    { sessionId: 'ncl_s', providerID: 'claude-native', agent: 'plan' },
+    { sessionId: 'ncx_s', providerID: 'codex-native', agent: 'build' },
+    { sessionId: 'ncx_s', providerID: 'codex-native', agent: 'plan' },
+  ])('generates for $providerID in $agent mode without a quiet wait using native reads and metadata', async ({ sessionId, providerID, agent }) => {
     const state = { reads: [], writes: [], openCodeUrls: 0 };
-    const records = [message('user', 'user', 'Fix the build'), message('answer', 'assistant', 'Fixed it', { providerID })];
+    const records = [message('user', 'user', 'Fix the build'), message('answer', 'assistant', 'Fixed it', { providerID, agent })];
     const runtime = createSessionAssistRuntime({
       buildOpenCodeUrl: () => {
         state.openCodeUrls += 1;

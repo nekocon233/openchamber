@@ -204,10 +204,17 @@ kept open between turns.
   `{ message: 'aborted' }` the UI writes for turns it settles itself, with
   unfinished tools settled as `Interrupted`. The CLI's stop marker entries
   (`[Request interrupted by user]`) are not shown as user messages.
-- A query idle for 5 minutes closes; the CLI exits and the next prompt resumes
-  the session. At most 6 queries run; opening another closes the least
-  recently used idle one and fails with `429 NATIVE_TOO_MANY_SESSIONS` when
-  all are busy. A session's next query starts only after its previous query's
+- A query with neither a running turn nor background work for 5 minutes
+  closes; the CLI exits and the next prompt resumes the session. The CLI's
+  `background_tasks_changed` snapshot owns background activity for that
+  process, resets on a new query, and excludes tasks marked `ambient`.
+  Malformed snapshots preserve the preceding state. A finished parent turn
+  can remain idle and accept input while its background tasks keep the query
+  open. When the last task ends, the full idle timeout starts again.
+  At most 6 queries run; opening another closes the least recently used query
+  with no turn or background work and fails with `429 NATIVE_TOO_MANY_SESSIONS`
+  when all are working. Explicit closure and shutdown still stop background
+  work. A session's next query starts only after its previous query's
   process has exited, so two CLI processes never write one transcript. A
   closing query adds no live records to history reads.
 
@@ -227,6 +234,13 @@ Codex (`codex/live.js`): turns on the shared app-server.
   model and effort, and `collaborationMode` `default` or `plan` with Codex's own
   instructions (`experimentalApi` is declared at initialize). A prompt sent
   mid-turn goes out as `turn/steer`.
+- Turns explicitly request `summary: 'auto'`; native reviews apply the same
+  setting through `thread/settings/update`. Omitting the field can select a
+  model's default of no readable summary even when the saved turn context says
+  `auto`. Streamed summary text and completed reasoning items use the existing
+  reasoning parts. The UI's reasoning setting controls their visibility.
+  Encrypted reasoning alone has no displayable text; old turns without a
+  returned summary cannot be filled in retrospectively.
 - Fast: `model/list` names a model's service tiers, and a model with the
   `priority` tier (Codex calls it Fast) gets `fast: true` in the catalog. The
   UI then offers each effort again as `<effort>-fast`; `codexVariantSettings`

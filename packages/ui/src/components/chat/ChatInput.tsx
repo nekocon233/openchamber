@@ -181,7 +181,7 @@ import {
 import { useAutocompletePosition } from './composer/state/useAutocompletePosition';
 import { useMessageHistory } from './composer/state/useMessageHistory';
 import { useComposerDraft } from './composer/state/useComposerDraft';
-import { usePromptSuggestion } from './composer/state/usePromptSuggestion';
+import { useSessionAssistState } from '@/hooks/useSessionAssist';
 import { useDictationOrigin } from './composer/state/useDictationOrigin';
 import { useDraftTarget } from './composer/state/useDraftTarget';
 import { useMobileComposerShell } from './composer/state/useMobileComposerShell';
@@ -1447,13 +1447,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
     const canAbort = sessionPhase !== 'idle';
 
-    const { suggestion: promptSuggestion, dismiss: dismissPromptSuggestion } = usePromptSuggestion({
-        runtimeKey: activeRuntimeKey,
-        sessionId: currentSessionId,
-        directory: currentSessionDirectoryForSync ?? currentDirectory,
-        hidden: Boolean(hasContent || message.length > 0 || newSessionDraftOpen || isBtwActive
-            || isBtwPanelVisible || hasQueuedMessages || canAbort || inputMode !== 'normal' || currentAgentName === 'plan'),
-    });
+    const { suggestion: availableSuggestion } = useSessionAssistState(
+        currentSessionId ?? '',
+        currentSessionDirectoryForSync ?? currentDirectory,
+    );
+    const promptSuggestion = hasContent || message.length > 0 || newSessionDraftOpen || isBtwActive
+        || isBtwPanelVisible || hasQueuedMessages || canAbort || inputMode !== 'normal'
+        ? null : availableSuggestion;
 
     const getCurrentInputSnapshot = React.useCallback(() => {
         const currentMessage = composerRef.current?.getValue() ?? message;
@@ -2553,14 +2553,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             return;
         }
 
-        if (promptSuggestion && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
-            && (e.key === 'Tab' || e.key === 'ArrowRight')) {
-            e.preventDefault();
-            e.stopPropagation();
-            applyAssistSuggestion();
-            return;
-        }
-
         if (isBtwActive && currentSessionId && e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
@@ -2821,8 +2813,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             clearFileMentionPasteSuppression();
         }
         const inputSource: FileMentionAutocompleteInputSource = isPasteInput ? 'paste' : 'manual';
-
-        if (value.length > 0) dismissPromptSuggestion();
 
         // A leading `!` switches the composer into shell mode and is consumed.
         // Mobile keyboards and paste may update the document without a usable
@@ -3708,7 +3698,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
     const applyAssistSuggestion = React.useCallback(() => {
         if (!promptSuggestion || (composerRef.current?.getValue() ?? messageRef.current).length > 0) return;
-        dismissPromptSuggestion();
         const editor = composerRef.current;
         if (editor) {
             editor.insertText(promptSuggestion);
@@ -3720,7 +3709,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         if (isMobile && !mobileComposerExpanded) {
             mobileShell.expand();
         }
-    }, [dismissPromptSuggestion, isMobile, mobileComposerExpanded, mobileShell, promptSuggestion]);
+    }, [isMobile, mobileComposerExpanded, mobileShell, promptSuggestion]);
+
+    const suggestionRow = promptSuggestion ? (
+        <PromptSuggestion
+            text={promptSuggestion}
+            onAccept={applyAssistSuggestion}
+        />
+    ) : null;
 
     // Linked references render as chips beside the attached files, inside the
     // composer box and inside the mobile pill.
@@ -3999,7 +3995,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         iconSizeClass={iconSizeClass}
                         sendIconSizeClass={sendIconSizeClass}
                         stopIconSizeClass={stopIconSizeClass}
-                        suggestion={promptSuggestion ? { text: promptSuggestion, onAccept: applyAssistSuggestion } : null}
+                        topRow={suggestionRow}
                         attachments={(
                             <div className="px-3 pt-1">
                                 <AttachedFilesList onShowPopup={handleShowAttachmentPreview} className="pt-2" />
@@ -4093,6 +4089,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         text area + footer exactly. */}
                     <div className={cn('relative flex flex-col', isComposerExpanded && 'flex-1 min-h-0')}>
                     <div className={cn("overflow-hidden", isComposerExpanded && 'flex flex-1 min-h-0 flex-col')}>
+                        {suggestionRow}
                         {isMobile && isBtwActive ? (
                             <div className="scrollbar-none relative z-10 flex items-center gap-x-2 overflow-x-auto px-3 pb-0.5 pt-1.5">
                                 <ModelControls
@@ -4122,13 +4119,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 ? { minHeight: `${dictationContentHeight}px` }
                                 : undefined}
                         >
-                            {promptSuggestion ? (
-                                <PromptSuggestion
-                                    text={promptSuggestion}
-                                    showKeyboardHint={!isMobile || hasHardwareKeyboard}
-                                    onAccept={applyAssistSuggestion}
-                                />
-                            ) : null}
                             <ComposerEditor
                                 ref={composerRef}
                                 viewStore={composerViewStore}
@@ -4150,7 +4140,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 }}
                                 onFocus={mobileShell.onEditorFocus}
                                 onBlur={mobileShell.onEditorBlur}
-                                placeholder={promptSuggestion ? '' : isBtwActive
+                                placeholder={isBtwActive
                                     ? t('chat.btw.mainComposerPlaceholder')
                                     : currentSessionId || newSessionDraftOpen
                                         ? inputMode === 'shell'

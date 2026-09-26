@@ -67,6 +67,7 @@ describe('Codex live threads', () => {
     const target = { type: 'baseBranch', branch: 'main' };
     await live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target, config: CONFIG });
     expect(requests.map((entry) => entry.method)).toEqual(['thread/resume', 'thread/settings/update', 'review/start']);
+    expect(requests[1].params.summary).toBe('auto');
     expect(requests.at(-1).params).toEqual({ threadId: THREAD_ID, delivery: 'inline', target });
     expect(live.busySessionIds(DIRECTORY)).toEqual([SESSION_ID]);
     await expect(live.review({ sessionId: SESSION_ID, directory: DIRECTORY, target, config: CONFIG })).rejects.toMatchObject({ code: 'NATIVE_SESSION_BUSY' });
@@ -197,9 +198,9 @@ describe('Codex live threads', () => {
     expect(requests[0].params.developerInstructions).toBeUndefined();
   });
 
-  it('resumes the thread and starts a fully auto-approved turn', async () => {
+  it.each(['default', 'plan'])('requests reasoning summaries for a fully auto-approved %s turn', async (mode) => {
     const { live, requests } = createHarness({ replay: false });
-    await sendPrompt(live);
+    await sendPrompt(live, { config: { ...CONFIG, mode } });
     expect(requests.map((entry) => entry.method)).toEqual(['thread/resume', 'turn/start']);
     expect(requests[0].params).toEqual({ threadId: THREAD_ID, excludeTurns: true, approvalPolicy: 'never', sandbox: 'danger-full-access' });
     expect(requests[1].params).toEqual({
@@ -209,9 +210,10 @@ describe('Codex live threads', () => {
       cwd: DIRECTORY,
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'dangerFullAccess' },
+      summary: 'auto',
       model: 'gpt-5.5',
       effort: 'low',
-      collaborationMode: { mode: 'default', settings: { model: 'gpt-5.5', reasoning_effort: 'low', developer_instructions: null } },
+      collaborationMode: { mode, settings: { model: 'gpt-5.5', reasoning_effort: 'low', developer_instructions: null } },
     });
     expect(live.busySessionIds(DIRECTORY)).toEqual([SESSION_ID]);
   });

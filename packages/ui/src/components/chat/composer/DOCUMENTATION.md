@@ -25,20 +25,21 @@ or collapsing a panel does not resize the transcript or composer.
 The frame also owns the header row through its `header` and `compact` props;
 callers supply controls and content, not their own header padding.
 
-`PromptSuggestion` renders gray proposed input over the empty editor without
-changing the document or composer height. Tab and Right arrow accept it;
-Enter submits only after acceptance. Touch users tap the proposal, including
-in the collapsed mobile pill. Typing dismisses the current proposal locally,
-even if that text is then erased. `state/usePromptSuggestion.ts` scopes that
-dismissal to its runtime, directory, session, and assistant message. A new
-reply can supply a new proposal. The session's recap is unaffected.
+`PromptSuggestion` is the composer's top row, above the editor or the collapsed
+mobile pill's draft line. Clicking the text fills and focuses the editor;
+submission is separate. The editor keeps its placeholder and normal keyboard
+behavior. Typing hides the row until the draft is empty again. The row reads
+the current suggestion through `useSessionAssistState`. Tapping the mobile
+pill's draft line only expands the editor; applying a suggestion uses its own
+button above that line.
 
 Visibility priority is BTW, then a nonempty queue, then suggestion. Every BTW
 frame, including its collapsed strip, creation state, and pending draft, hides
-the other two. Composer content, shell mode, plan mode, and a running turn also
-hide suggestions; new-session drafts hide both queue and suggestion. Hiding
-the queue does not pause its delivery. IME and open autocomplete menus retain
-their existing keyboard handling before suggestion acceptance.
+the other two. Composer content, shell mode, and a running turn also hide
+suggestions; new-session drafts hide both queue and suggestion. Plan mode
+shows suggestions with the same accept-then-submit behavior. Hiding
+the queue does not pause its delivery. IME and autocomplete keyboard handling
+remain with the editor.
 
 The queue header toggles an `aria-expanded` disclosure with the current count.
 Its open/closed state is one persisted preference in `useUIStore`

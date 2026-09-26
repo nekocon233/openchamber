@@ -372,6 +372,8 @@ export const createCodexLiveThreads = ({
         cwd: live.directory,
         approvalPolicy: APPROVAL_POLICY,
         sandboxPolicy: { type: 'dangerFullAccess' },
+        // Omitting summary can select the model's default of no readable summary.
+        summary: 'auto',
       };
       if (config.effort !== null) params.effort = config.effort;
       if (config.model !== null) {
@@ -415,6 +417,7 @@ export const createCodexLiveThreads = ({
         threadId: live.threadId,
         model: config.model,
         effort: config.effort,
+        summary: 'auto',
         serviceTier: config.fast ? CODEX_FAST_SERVICE_TIER : CODEX_STANDARD_SERVICE_TIER,
         approvalPolicy: APPROVAL_POLICY,
         sandboxPolicy: { type: 'dangerFullAccess' },
