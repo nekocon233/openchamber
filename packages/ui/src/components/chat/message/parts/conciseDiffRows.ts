@@ -3,7 +3,7 @@
 // green for what was added and red for what was removed. See DOCUMENTATION.md,
 // "Concise transcript".
 
-import type { ToolPart } from '@opencode-ai/sdk/v2';
+import type { ToolPart } from '@/lib/opencode/model';
 import { z } from 'zod';
 
 export type ConciseDiffRow =

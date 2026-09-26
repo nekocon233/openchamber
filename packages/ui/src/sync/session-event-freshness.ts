@@ -1,4 +1,4 @@
-import type { Session } from "@opencode-ai/sdk/v2"
+import type { Session } from "@/lib/opencode/model"
 
 const MAX_REMOVAL_HISTORY = 5_000
 let removalRevision = 0

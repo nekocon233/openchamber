@@ -22,7 +22,7 @@ describe('MobileSessionsSheet session structure', () => {
     const pinnedSectionIndex = source.indexOf('showPinnedSection ? renderActivitySection');
     const chatsSectionIndex = source.indexOf('showChatsSection ? renderActivitySection');
     const recentSectionIndex = source.indexOf('showRecentSection ? renderActivitySection');
-    const projectTreeIndex = source.indexOf('{orderedNodes.map');
+    const projectTreeIndex = source.indexOf('orderedNodes.map');
 
     expect(pinnedSectionIndex).toBeGreaterThan(-1);
     expect(chatsSectionIndex).toBeGreaterThan(pinnedSectionIndex);
@@ -50,15 +50,11 @@ describe('MobileSessionsSheet session structure', () => {
 
   test('uses authoritative activity, exposes pin actions, and keeps mobile sheets mounted', () => {
     expect(source).toContain('useAllSessionStatuses()');
-    expect(source).toContain("statusType === 'busy' || statusType === 'retry'");
+    expect(source).toContain('useSessionTurnActive(session.id)');
     expect(source).toContain('useHasSessionActivityDuration(session.id, isStreaming)');
     expect(source).toContain('<SessionActivityDuration');
     expect(source).toContain('running={isStreaming}');
-    expect(source).toContain('<SessionRunningIndicator');
-    expect(source).toContain('className="size-1.5 rounded-full bg-[var(--status-info)]"');
-    expect(source.match(/aria-describedby=\{statusLabel \? statusDescriptionId : undefined\}/g)).toHaveLength(2);
-    expect(source).toContain('aria-describedby={statusDescriptionId}');
-    expect(source).not.toContain('disabled={!hasChildren || !onToggleChildren}');
+    expect(source).toContain('<SessionActivityIndicator');
     expect(source).not.toContain("t('mobile.sessions.status.running')");
     expect(source).toContain('togglePinnedSession({');
     expect(source).toContain('directory: sessionDirectory');

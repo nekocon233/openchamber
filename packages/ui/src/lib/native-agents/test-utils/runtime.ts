@@ -50,7 +50,6 @@ export const createTestRuntimeAPIs = (
   get settings() { return untouchable(); },
   get permissions() { return untouchable(); },
   get notifications() { return untouchable(); },
-  get tools() { return untouchable(); },
   get sidebarState() { return others.sidebarState ?? untouchable(); },
   get followUpQueue() { return untouchable(); },
   nativeAgents,

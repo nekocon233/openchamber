@@ -6,6 +6,10 @@
 // was called by, which already reads that way (`TaskCreate`, `github_search`).
 const CONCISE_TOOL_NAMES = new Map<string, string>([
     ['bash', 'Bash'],
+    ['shell', 'Shell'],
+    ['patch', 'Patch'],
+    ['subagent', 'Task'],
+    ['execute', 'Script'],
     ['read', 'Read'],
     ['write', 'Write'],
     ['edit', 'Edit'],
@@ -29,7 +33,7 @@ const CONCISE_TOOL_NAMES = new Map<string, string>([
 
 // File tools report what they changed. Their output is a status sentence, so
 // without diff numbers they show no result line rather than "1 line".
-const FILE_CHANGE_TOOLS = new Set(['write', 'edit', 'multiedit', 'apply_patch']);
+const FILE_CHANGE_TOOLS = new Set(['write', 'edit', 'multiedit', 'apply_patch', 'patch']);
 
 /** Whether a call changes files, so the concise transcript shows its diff. @param normalizedTool lowercase name without a namespace */
 export const isFileChangeTool = (normalizedTool: string): boolean => FILE_CHANGE_TOOLS.has(normalizedTool);
@@ -39,7 +43,7 @@ const TOOLS_WITHOUT_RESULT_LINE = new Set(['question', 'todowrite', 'todoread', 
 
 /** @param normalizedTool lowercase name without a namespace; @param calledAs the name the call used */
 export const getConciseToolName = (normalizedTool: string, calledAs: string): string => (
-    CONCISE_TOOL_NAMES.get(normalizedTool) ?? calledAs
+    CONCISE_TOOL_NAMES.get(calledAs.toLowerCase()) ?? CONCISE_TOOL_NAMES.get(normalizedTool) ?? calledAs
 );
 
 /** Lines in a finished tool's output, not counting trailing blank lines. */
@@ -81,11 +85,11 @@ export const getConciseToolResult = (call: ConciseToolCall): ConciseToolResult |
         const text = call.error?.split('\n').map((line) => line.trim()).find(Boolean);
         return text ? { kind: 'error', text } : null;
     }
-    if (call.tool === 'task') {
+    if ((call.tool === 'task' || call.tool === 'subagent')) {
         return call.subagentToolCalls > 0 ? { kind: 'toolCalls', count: call.subagentToolCalls } : null;
     }
     if (call.phase === 'running') {
-        return call.tool === 'bash' ? { kind: 'running' } : null;
+        return (call.tool === 'bash' || call.tool === 'shell') ? { kind: 'running' } : null;
     }
     if (call.diffStats) return { kind: 'diff', ...call.diffStats };
     if (call.writeLines !== null) return { kind: 'added', lines: call.writeLines };

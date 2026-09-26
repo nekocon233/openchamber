@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { createOpencodeClient, type Session } from '@opencode-ai/sdk/v2';
+import { type Session } from "@/lib/opencode/model"
 
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeSessionList } from '@/lib/api/types';
@@ -12,11 +12,10 @@ const DIRECTORY = '/work/project';
 
 const session = (id: string, directory = DIRECTORY): Session => ({
   id,
-  slug: id,
   projectID: '',
   directory,
   title: id,
-  version: 'test',
+  cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 1 },
 });
 
@@ -25,27 +24,21 @@ let nativeListing: (directory: string) => Promise<NativeSessionList> = async () 
   backends: { claude: { status: 'ok', sessions: [] }, codex: { status: 'ok', sessions: [] } },
 });
 
-// OpenCode answers its one-page session listing with the sessions the test sets.
-const sdk = createOpencodeClient({
-  baseUrl: 'http://opencode.test',
-  fetch: async () => Response.json(openCodeSessions),
-});
-
 const runtimeApis = createTestRuntimeAPIs(createTestNativeAgentsAPI({
   listSessions: (directory) => nativeListing(directory),
 }));
-const originalGetSdkClient = opencodeClient.getSdkClient;
+const originalListSessions = opencodeClient.listSessionsPage;
 
 describe('global sessions with native CLI sessions', () => {
   beforeEach(() => {
     openCodeSessions = [];
-    opencodeClient.getSdkClient = () => sdk;
+    opencodeClient.listSessionsPage = async () => ({ sessions: openCodeSessions, cursor: {} });
     registerRuntimeAPIs(runtimeApis);
     useGlobalSessionsStore.getState().resetForRuntimeSwitch();
   });
 
   afterEach(() => {
-    opencodeClient.getSdkClient = originalGetSdkClient;
+    opencodeClient.listSessionsPage = originalListSessions;
     registerRuntimeAPIs(null);
   });
 

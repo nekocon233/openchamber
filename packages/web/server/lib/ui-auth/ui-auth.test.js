@@ -50,6 +50,24 @@ const createResponse = () => {
 };
 
 describe('ui auth client credential seam', () => {
+  it('reuses the port-scoped passwordless cookie for an existing notification channel', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth();
+    const response = createResponse();
+    await auth.ensureSessionToken({ headers: { host: 'localhost:3001' } }, response);
+    const cookie = response.getHeader('set-cookie').split(';', 1)[0];
+    expect(cookie.startsWith('oc_ui_session_3001=')).toBe(true);
+    const notificationAuth = await auth.resolveNotificationAuth({
+      headers: { host: 'localhost:3001', cookie },
+    }, createResponse(), { allowSessionCreation: false });
+    expect(notificationAuth?.kind).toBe('ui-session');
+    expect(await auth.validateNotificationAuth(notificationAuth)).toBe(true);
+    expect(await auth.resolveNotificationAuth({
+      headers: { host: 'localhost:3002', cookie },
+    }, createResponse(), { allowSessionCreation: false })).toBeNull();
+    auth.dispose();
+  });
+
   it('accepts bearer client credentials when UI password auth is enabled', async () => {
     const createUiAuth = await loadCreateUiAuth();
     const auth = createUiAuth({
@@ -323,6 +341,32 @@ describe('ui auth client credential seam', () => {
     });
     expect(serveCalled).toBe(true);
 
+    // A served page's own images carry no token; the page URL in the Referer
+    // stands in, but only between two paths under /api/fs/serve/.
+    const pageUrl = `http://127.0.0.1:3001/api/fs/serve/tmp/index.html?oc_url_token=${encodeURIComponent(urlToken)}`;
+    const subresourceReq = { method: 'GET', path: '/api/fs/serve/tmp/images/photo.png', url: '/api/fs/serve/tmp/images/photo.png', headers: { referer: pageUrl } };
+    const subresourceRes = createResponse();
+    let subresourceCalled = false;
+    await auth.requireAuth(subresourceReq, subresourceRes, () => {
+      subresourceCalled = true;
+    });
+    expect(subresourceCalled).toBe(true);
+
+    for (const denied of [
+      // The same referer must not open anything outside the served tree.
+      { method: 'GET', path: '/api/fs/raw', url: '/api/fs/raw?path=%2Ftmp%2Fsecret.png', headers: { referer: pageUrl } },
+      // A referer that is not a served page opens nothing.
+      { method: 'GET', path: '/api/fs/serve/tmp/images/photo.png', url: '/api/fs/serve/tmp/images/photo.png', headers: { referer: `http://127.0.0.1:3001/?oc_url_token=${encodeURIComponent(urlToken)}` } },
+    ]) {
+      const deniedRes = createResponse();
+      let deniedCalled = false;
+      await auth.requireAuth(denied, deniedRes, () => {
+        deniedCalled = true;
+      });
+      expect(deniedCalled).toBe(false);
+      expect(deniedRes.statusCode).toBe(401);
+    }
+
     const absoluteServeReq = { method: 'GET', path: '/api/fs/serve/Users/test/project/preview-test.html', url: `/api/fs/serve/Users/test/project/preview-test.html?oc_url_token=${encodeURIComponent(urlToken)}`, headers: {} };
     const absoluteServeRes = createResponse();
     let absoluteServeCalled = false;
@@ -394,6 +438,22 @@ describe('ui auth client credential seam', () => {
     };
     expect(await auth.ensureSessionToken(dictationWsReq, null)).toBe('client:device-1');
 
+    // An extension surface socket takes the session-wide URL token, never a
+    // guest-scoped one: it carries the user's pointer and keyboard.
+    const surfaceWsReq = {
+      method: 'GET',
+      path: '/api/guests/server-chrome/surface/ws',
+      url: `/api/guests/server-chrome/surface/ws?oc_url_token=${encodeURIComponent(urlToken)}`,
+      headers: { upgrade: 'websocket' },
+    };
+    expect(await auth.ensureSessionToken(surfaceWsReq, null)).toBe('client:device-1');
+    expect(await auth.ensureSessionToken({ ...surfaceWsReq, url: `/api/guests/server-chrome/surface/ws?oc_url_token=${encodeURIComponent(guestToken)}` }, null)).toBe(null);
+    expect(await auth.ensureSessionToken({
+      ...surfaceWsReq,
+      path: '/api/guests/server-chrome/surface/ws/extra',
+      url: `/api/guests/server-chrome/surface/ws/extra?oc_url_token=${encodeURIComponent(urlToken)}`,
+    }, null)).toBe(null);
+
     const devTunnelWsReq = {
       method: 'GET',
       path: '/api/dev-tunnel',
@@ -401,6 +461,35 @@ describe('ui auth client credential seam', () => {
       headers: { upgrade: 'websocket' },
     };
     expect(await auth.ensureSessionToken(devTunnelWsReq, null)).toBe('client:device-1');
+
+    // The sockets and the raw file of an isolated space, by path shape, and nothing else under the prefix.
+    for (const socket of ['terminal/ws', 'dev-tunnel', 'event/ws', 'global/event/ws']) {
+      const spaceWsReq = {
+        method: 'GET',
+        path: `/api/spaces/a1b2c3d4e5f6/${socket}`,
+        url: `/api/spaces/a1b2c3d4e5f6/${socket}?oc_url_token=${encodeURIComponent(urlToken)}`,
+        headers: { upgrade: 'websocket' },
+      };
+      expect(await auth.ensureSessionToken(spaceWsReq, null)).toBe('client:device-1');
+    }
+    expect(await auth.ensureSessionToken({
+      method: 'GET',
+      path: '/api/spaces/a1b2c3d4e5f6/dictation/ws',
+      url: `/api/spaces/a1b2c3d4e5f6/dictation/ws?oc_url_token=${encodeURIComponent(urlToken)}`,
+      headers: { upgrade: 'websocket' },
+    }, null)).toBe(null);
+    expect(await auth.ensureSessionToken({
+      method: 'GET',
+      path: '/api/spaces/a1b2c3d4e5f6/fs/raw',
+      url: `/api/spaces/a1b2c3d4e5f6/fs/raw?path=x.png&oc_url_token=${encodeURIComponent(urlToken)}`,
+      headers: { accept: 'image/png' },
+    }, null)).toBe('client:device-1');
+    expect(await auth.ensureSessionToken({
+      method: 'GET',
+      path: '/api/spaces/a1b2c3d4e5f6/session',
+      url: `/api/spaces/a1b2c3d4e5f6/session?oc_url_token=${encodeURIComponent(urlToken)}`,
+      headers: { accept: 'application/json' },
+    }, null)).toBe(null);
 
     const devTunnelSubpathWsReq = {
       method: 'GET',

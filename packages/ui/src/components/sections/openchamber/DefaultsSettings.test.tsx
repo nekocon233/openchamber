@@ -1,12 +1,12 @@
 import React, { act } from 'react';
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import type { DesktopSettings } from '@/lib/desktop';
 
 type ProviderState = {
   id: string;
-  models: Array<{ id: string; variants?: Record<string, boolean> }>;
+  models: Array<{ id: string; variants?: Array<{ id: string }> }>;
 };
 
 type ConfigState = {
@@ -21,6 +21,9 @@ type ConfigState = {
   setSettingsDefaultVariant: () => void;
   setSettingsDefaultAgent: () => void;
   selectionSource: 'auto';
+  agentSelectionSource: 'auto';
+  agents: Array<{ name: string; model?: { providerID: string; id: string } }>;
+  currentAgentName: string | undefined;
 };
 
 const configState: ConfigState = {
@@ -35,6 +38,9 @@ const configState: ConfigState = {
   setSettingsDefaultVariant: () => undefined,
   setSettingsDefaultAgent: () => undefined,
   selectionSource: 'auto',
+  agentSelectionSource: 'auto',
+  agents: [],
+  currentAgentName: undefined,
 };
 
 const settingsState = {
@@ -63,18 +69,23 @@ mock.module('@/sync/selection-store', () => ({
 mock.module('@/sync/session-ui-store', () => ({
   useSessionUIStore: <T,>(selector: (state: typeof sessionState) => T): T => selector(sessionState),
 }));
-mock.module('@/lib/persistence', () => ({
-  loadDesktopSettings: async () => savedSettings,
-  updateDesktopSettings: async (changes: Partial<DesktopSettings>) => {
-    updateCalls.push(changes);
-    return { ok: true };
-  },
-}));
 mock.module('@/lib/runtime-fetch', () => ({
   runtimeFetch: async () => new Response(JSON.stringify({ authenticatedProviders: [] }), {
     headers: { 'Content-Type': 'application/json' },
   }),
 }));
+const persistenceModule = await import('@/lib/persistence');
+mock.module('@/lib/persistence', () => ({
+  ...persistenceModule,
+  loadDesktopSettings: async () => savedSettings,
+  updateDesktopSettings: async (changes: Partial<DesktopSettings>) => {
+    updateCalls.push(changes);
+    return { ok: true };
+  },
+  reportSettingsSaveState: () => {},
+}));
+const opencodeModule = await import('@/lib/opencode/client');
+const configRead = spyOn(opencodeModule.opencodeClient, 'getConfig').mockResolvedValue({});
 mock.module('@/lib/i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }));
@@ -124,7 +135,7 @@ describe('DefaultsSettings', () => {
       defaultVariant: 'high',
     };
     updateCalls.length = 0;
-    configState.providers = [{ id: 'sidecar', models: [{ id: 'model', variants: { high: true } }] }];
+    configState.providers = [{ id: 'sidecar', models: [{ id: 'model', variants: [{ id: 'high' }] }] }];
     windowInstance = new Window({ url: 'http://localhost/' });
     // SAFETY: the test installs a happy-dom Window for the component and restores the original global afterward.
     Object.assign(globalThis, {
@@ -148,6 +159,7 @@ describe('DefaultsSettings', () => {
   });
 
   afterEach(async () => {
+    configRead.mockRestore();
     await act(async () => root.unmount());
     windowInstance.close();
   });
@@ -170,7 +182,7 @@ describe('DefaultsSettings', () => {
     expect(host.textContent).toContain('High');
     expect(updateCalls).toEqual([]);
 
-    configState.providers = [{ id: 'sidecar', models: [{ id: 'model', variants: { high: true } }] }];
+    configState.providers = [{ id: 'sidecar', models: [{ id: 'model', variants: [{ id: 'high' }] }] }];
     await act(async () => {
       root.render(<DefaultsSettings />);
       await Promise.resolve();

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type {
   FollowUpQueueAdditionalPart,
   FollowUpQueueAttachment,
@@ -187,7 +188,7 @@ const parseAdditionalPart = (value: unknown, field: string): FollowUpQueueAdditi
   if (value.metadata !== undefined) {
     if (!isRecord(value.metadata)) throw new Error(`Invalid follow-up queue ${field}.metadata`);
     assertKeys(value.metadata, [CONTEXT_METADATA_KEY], `${field}.metadata`);
-    const payload = readContextPart({ type: 'text', metadata: value.metadata });
+    const payload = readContextPart({ type: 'text', metadata: z.record(z.string(), z.json()).parse(value.metadata) });
     if (!payload) throw new Error(`Invalid follow-up queue ${field}.metadata`);
     metadata = { [CONTEXT_METADATA_KEY]: payload };
     if (utf8Length(JSON.stringify(metadata)) > MAX_METADATA_BYTES) {

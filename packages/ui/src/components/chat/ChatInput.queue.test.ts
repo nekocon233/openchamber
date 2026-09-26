@@ -51,7 +51,7 @@ describe('ChatInput follow-up queue integration', () => {
   });
 
   test('checks authoritative activity before treating an existing idle session as directly sendable', () => {
-    const statusIndex = source.indexOf('await opencodeClient.getSessionStatusForDirectory(statusDirectory)');
+    const statusIndex = source.indexOf('await opencodeClient.getActiveSessionStatuses(statusDirectory)');
     const decisionIndex = source.indexOf('const deliveryDecision = resolveFollowUpDeliveryDecision({');
     const sendIndex = source.indexOf('const sendPromise = sendCapturedMessage(');
 

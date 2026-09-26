@@ -65,7 +65,7 @@ describe('createOpenCodeWatcherRuntime', () => {
         return createSseResponse({
           signal: options.signal,
           blocks: [
-            'id: evt-1\ndata: {"directory":"/tmp/project","payload":{"type":"session.updated","properties":{"sessionID":"ses_1"}}}\n\n',
+            'data: {"directory":"/tmp/project","payload":{"id":"evt-1","type":"session.renamed","location":{"directory":"/tmp/project"},"data":{"sessionID":"ses_1","title":"New"}}}\n\n',
           ],
         });
       },
@@ -76,7 +76,7 @@ describe('createOpenCodeWatcherRuntime', () => {
 
     expect(fetchCalls).toEqual([
       {
-        url: 'http://127.0.0.1:4096/global/event',
+        url: 'http://127.0.0.1:4096/api/event',
         headers: {
           Accept: 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -85,14 +85,13 @@ describe('createOpenCodeWatcherRuntime', () => {
         },
       },
     ]);
-    expect(payloads).toEqual([
-      {
-        type: 'session.updated',
-        properties: {
-          sessionID: 'ses_1',
-        },
-      },
-    ]);
+    // The watcher hands its consumers the server's own vocabulary, translated
+    // from the v2 wire event.
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      type: 'session.updated',
+      properties: { sessionID: 'ses_1', info: { id: 'ses_1', title: 'New' } },
+    });
     expect(directories).toEqual(['/tmp/project']);
   });
 
@@ -121,7 +120,7 @@ describe('createOpenCodeWatcherRuntime', () => {
             signal: options.signal,
             holdOpen: true,
             blocks: [
-              'id: evt-1\ndata: {"type":"server.connected","properties":{}}\n\n',
+              'data: {"id":"evt-1","type":"server.connected","data":{}}\n\n',
             ],
           });
         }
@@ -129,7 +128,7 @@ describe('createOpenCodeWatcherRuntime', () => {
         return createSseResponse({
           signal: options.signal,
           blocks: [
-            'id: evt-2\ndata: {"type":"session.updated","properties":{}}\n\n',
+            'data: {"id":"evt-2","type":"session.renamed","location":{"directory":"/tmp/project"},"data":{"sessionID":"ses_1","title":"New"}}\n\n',
           ],
         });
       },
@@ -161,7 +160,7 @@ describe('createOpenCodeWatcherRuntime', () => {
           signal: options.signal,
           holdOpen: true,
           blocks: [
-            'id: evt-1\ndata: {"directory":"/tmp/hub","payload":{"type":"session.updated","properties":{"sessionID":"ses_1"}}}\n\n',
+            'data: {"payload":{"id":"evt-1","type":"session.renamed","location":{"directory":"/tmp/project"},"data":{"sessionID":"ses_1","title":"New"}}}\n\n',
           ],
         });
       },
@@ -188,15 +187,12 @@ describe('createOpenCodeWatcherRuntime', () => {
 
     expect(hubFetchCalls).toBe(1);
     expect(watcherFetchCalls).toBe(0);
-    expect(payloads).toEqual([
-      {
-        type: 'session.updated',
-        properties: {
-          sessionID: 'ses_1',
-        },
-      },
-    ]);
-    expect(directories).toEqual(['/tmp/hub']);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      type: 'session.updated',
+      properties: { sessionID: 'ses_1', info: { id: 'ses_1', title: 'New' } },
+    });
+    expect(directories).toEqual(['/tmp/project']);
   });
 
   it('does not stop a shared global event hub when the watcher stops', async () => {

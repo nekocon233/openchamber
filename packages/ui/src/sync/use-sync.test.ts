@@ -1,5 +1,7 @@
+import { ChildStoreManager } from './child-store'
+import { SessionMessageLoader } from './session-message-loader'
 import { describe, expect, test } from 'bun:test'
-import type { Message, Part } from '@opencode-ai/sdk/v2/client'
+import type { Message, Part } from '@/lib/opencode/model'
 
 import {
   canCommitSessionDetailLoad,
@@ -59,12 +61,16 @@ describe('canCommitSessionDetailLoad', () => {
 
 describe('shouldReuseSyncSessionInflight', () => {
   test('reuses a request only for the same loader authority', () => {
-    const owner = {}
+    const childStores = new ChildStoreManager()
+    const source = { sdk: { getSessionMessages: async () => ({ items: [], cursor: {} }) }, runtimeKey: 'test' }
+    const owner = new SessionMessageLoader(childStores, source)
+    const other = new SessionMessageLoader(childStores, source)
     const existing = { owner, authorityEpoch: 3 }
 
     expect(shouldReuseSyncSessionInflight(existing, owner, 3)).toBe(true)
-    expect(shouldReuseSyncSessionInflight(existing, {}, 3)).toBe(false)
+    expect(shouldReuseSyncSessionInflight(existing, other, 3)).toBe(false)
     expect(shouldReuseSyncSessionInflight(existing, owner, 4)).toBe(false)
+    owner.dispose(); other.dispose(); childStores.disposeAll()
   })
 
   test('coalesces forced follow-ups and waits for the trailing run', async () => {
@@ -148,10 +154,6 @@ function assistantMessage(id: string, created = 1): Message {
 function userMessage(id: string, created = 1): Message {
   return { id, sessionID: 'ses_1', role: 'user', time: { created } } as Message
 }
-function assistantMessageWithClientRole(id: string): Message {
-  // OpenCode sets clientRole on the wire; role may be absent.
-  return { id, sessionID: 'ses_1', clientRole: 'user', time: { created: 1 } } as unknown as Message
-}
 function textPart(id: string, messageID: string): Part {
   return { id, messageID, sessionID: 'ses_1', type: 'text', text: id } as Part
 }
@@ -159,10 +161,6 @@ function textPart(id: string, messageID: string): Part {
 describe('hasUserMessage', () => {
   test('returns true when a user message is present', () => {
     expect(hasUserMessage([assistantMessage('m_1'), userMessage('m_2')])).toBe(true)
-  })
-
-  test('returns true when clientRole marks the message as user', () => {
-    expect(hasUserMessage([assistantMessageWithClientRole('m_1')])).toBe(true)
   })
 
   test('returns false when only assistant messages are present', () => {

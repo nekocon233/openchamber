@@ -1,5 +1,6 @@
+import { opencodeClient } from '@/lib/opencode/client';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { createOpencodeClient, type Message, type Part, type Session } from "@opencode-ai/sdk/v2/client"
+import { type Message, type Part, type Session } from "@/lib/opencode/model"
 
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import type { NativeRevertResult } from "@/lib/api/types"
@@ -8,9 +9,10 @@ import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from "@/lib/native-a
 import { useConfigStore } from "@/stores/useConfigStore"
 import { ChildStoreManager } from "./child-store"
 import { useInputStore } from "./input-store"
-import { forkFromMessage, revertToMessage, setActionRefs, unrevertSession } from "./session-actions"
+import { forkFromMessage, revertToMessage, setActionRefs, clearStagedRevert } from "./session-actions"
 import { useSessionUIStore } from "./session-ui-store"
 
+const originalGetSession = opencodeClient.getSession;
 const DIRECTORY = "/work/project"
 const SESSION = "ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188"
 const FORK = "ncl_77777777-7777-4777-8777-777777777777"
@@ -18,7 +20,7 @@ const PROMPT_1 = "ncl_u_11111111-2f1f-4c3a-9d8e-0a7b6c5d4e3f"
 const PROMPT_2 = "ncl_u_22222222-2f1f-4c3a-9d8e-0a7b6c5d4e3f"
 
 const nativeSession = (id: string, revert?: { messageID: string }): Session => {
-  const session: Session = { id, slug: id, projectID: "", directory: DIRECTORY, title: "Work", version: "claude-cli", time: { created: 1, updated: 2 } }
+  const session: Session = { id, projectID: "", directory: DIRECTORY, title: "Work", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 2 } }
   if (revert) session.revert = revert
   return session
 }
@@ -79,19 +81,17 @@ beforeEach(() => {
     },
   })))
   // Native sessions must never reach OpenCode; any request is recorded and refused.
-  const sdk = createOpencodeClient({
-    baseUrl: "http://opencode.test",
-    fetch: async (request) => {
-      openCodeRequests.push(new URL(request instanceof Request ? request.url : request.toString()).pathname)
-      return Response.json({ message: "OpenCode must not be asked about a native session" }, { status: 500 })
-    },
-  })
-  setActionRefs(sdk, childStores, () => DIRECTORY)
+  opencodeClient.getSession = async (sessionId) => {
+    openCodeRequests.push(sessionId)
+    throw new Error('OpenCode must not be asked about a native session')
+  }
+  setActionRefs(childStores, () => DIRECTORY)
   useConfigStore.setState({ isConnected: true })
   useInputStore.setState({ pendingInputText: "draft", pendingInputMode: "replace", attachedFiles: [] })
 })
 
 afterEach(() => {
+  opencodeClient.getSession = originalGetSession;
   registerRuntimeAPIs(null)
   childStores.disposeAll()
 })
@@ -122,7 +122,7 @@ describe("native session history actions", () => {
   test("unrevert through the server and show the messages again", async () => {
     seedConversation({ messageID: PROMPT_2 })
 
-    await unrevertSession(SESSION)
+    await clearStagedRevert(SESSION)
 
     expect(calls).toEqual([["unrevert", SESSION, DIRECTORY]])
     expect(sessionInStore(SESSION)?.revert).toBeUndefined()

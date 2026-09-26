@@ -1,5 +1,6 @@
 import React from 'react';
-import type { Session } from '@opencode-ai/sdk/v2';
+import { useSessionTurnActive } from '@/sync/global-session-status';
+import type { Session } from '@/lib/opencode/model';
 
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
 import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
@@ -13,7 +14,6 @@ import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSessionUnseenCount } from '@/sync/notification-store';
 import { useHasSessionActivityDuration } from '@/sync/session-activity-timing';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useGlobalSessionStatus } from '@/sync/sync-context';
 
 const RECENT_SESSIONS_LIMIT = 10;
 /** Matches the metadata popover's width so both header dropdowns read as a pair. */
@@ -32,10 +32,8 @@ const SwitcherRow: React.FC<{
   onSelect: () => void;
 }> = ({ session, meta, active, onSelect }) => {
   const { t } = useI18n();
-  const status = useGlobalSessionStatus(session.id);
   const unseenCount = useSessionUnseenCount(session.id);
-  const statusType = status?.type ?? 'idle';
-  const isStreaming = statusType === 'busy' || statusType === 'retry';
+  const isStreaming = useSessionTurnActive(session.id);
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
   const unreadStatusLabel = t('sessions.sidebar.session.status.unread');
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);

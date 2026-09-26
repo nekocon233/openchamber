@@ -7,14 +7,12 @@ describe('mergeModelMetadataWithLiveModel', () => {
       id: 'claude-sonnet-4-5',
       name: 'Claude Sonnet 4.5',
       capabilities: {
-        temperature: true,
-        reasoning: true,
-        attachment: true,
-        toolcall: true,
-        input: { text: true, audio: false, image: true, video: false, pdf: true },
-        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        tools: true,
+        input: ['text', 'image', 'pdf'],
+        output: ['text'],
       },
-      cost: { input: 3, output: 15, cache: { read: 0.3, write: 3.75 } },
+      cost: [{ input: 3, output: 15, cache: { read: 0.3, write: 3.75 } }],
+      variants: [{ id: 'high' }],
       limit: { context: 200_000, output: 64_000 },
     });
 
@@ -32,13 +30,12 @@ describe('mergeModelMetadataWithLiveModel', () => {
       {
         id: 'claude',
         capabilities: {
-          toolcall: false,
-          reasoning: true,
-          attachment: true,
-          input: { text: true, image: true, pdf: true },
-          output: { text: true },
+          tools: false,
+          input: ['text', 'image', 'pdf'],
+          output: ['text'],
         },
         limit: { context: 250_000, output: 32_000 },
+        variants: [{ id: 'high' }],
       },
       {
         id: 'claude',

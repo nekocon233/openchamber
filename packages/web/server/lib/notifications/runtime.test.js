@@ -41,6 +41,7 @@ describe('notification trigger directory context', () => {
       type: 'message.updated',
       properties: {
         directory: '/stale-directory',
+        turnEnded: true,
         info: {
           sessionID: 'ses_outer_directory',
           role: 'assistant',

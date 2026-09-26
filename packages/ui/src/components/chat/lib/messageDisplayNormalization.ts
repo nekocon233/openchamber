@@ -1,6 +1,4 @@
-import type { Part } from '@opencode-ai/sdk/v2';
-
-import { filterSyntheticParts } from '@/lib/messages/synthetic';
+import type { Part } from '@/lib/opencode/model';
 import { normalizeParts } from '../message/partUtils';
 import type { ChatMessageEntry } from './turns/types';
 
@@ -31,13 +29,12 @@ const normalizeCompactionCommandMessage = (message: ChatMessageEntry): ChatMessa
     }
 
     let compaction: CompactionKind | null = null;
-    const nextParts = message.parts.map((part) => {
+    const nextParts = message.parts.map((part): Part => {
         if (part.type !== 'compaction') {
             return part;
         }
         compaction = part.auto ? 'auto' : 'manual';
-        // SAFETY: a display-only text part; renderers read `type` and `text`.
-        return { type: 'text', text: '/compact' } as Part;
+        return { id: part.id, sessionID: part.sessionID, messageID: part.messageID, type: 'text', text: '/compact' } satisfies Part;
     });
 
     // Display-only fields on a copy of the SDK record, read back through
@@ -63,22 +60,20 @@ const normalizeMessageParts = (message: ChatMessageEntry): ChatMessageEntry => {
 
 const normalizedMessageBySource = new WeakMap<ChatMessageEntry, ChatMessageEntry>();
 
+/**
+ * The message a timeline row renders, with malformed parts dropped.
+ *
+ * Cached by source reference: streaming re-renders resolve an unchanged
+ * message without rebuilding it, which also keeps its identity stable for the
+ * turn projection.
+ */
 export const getNormalizedMessageForDisplay = (message: ChatMessageEntry): ChatMessageEntry => {
     const cached = normalizedMessageBySource.get(message);
     if (cached) {
         return cached;
     }
 
-    const normalizedPartMessage = normalizeMessageParts(message);
-    const normalizedCompactionMessage = normalizeCompactionCommandMessage(normalizedPartMessage);
-    const filteredParts = filterSyntheticParts(normalizedCompactionMessage.parts);
-    const normalized = filteredParts === normalizedCompactionMessage.parts
-        ? normalizedCompactionMessage
-        : {
-            ...normalizedCompactionMessage,
-            parts: filteredParts,
-        };
-
+    const normalized = normalizeMessageParts(normalizeCompactionCommandMessage(message));
     normalizedMessageBySource.set(message, normalized);
     return normalized;
 };

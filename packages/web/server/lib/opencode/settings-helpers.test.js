@@ -267,18 +267,18 @@ describe('settings helpers', () => {
 
     expect(helpers.sanitizeSettingsUpdate({
       sidebarProjectDisplayMode: 'single',
-      sidebarSessionGroupingMode: 'flat',
+      sidebarViewMode: 'timeline',
       sidebarProjectSortOrder: 'z-a',
       sidebarShowRecentSection: false,
     })).toEqual({
       sidebarProjectDisplayMode: 'single',
-      sidebarSessionGroupingMode: 'flat',
+      sidebarViewMode: 'timeline',
       sidebarProjectSortOrder: 'z-a',
       sidebarShowRecentSection: false,
     });
     expect(helpers.sanitizeSettingsUpdate({
       sidebarProjectDisplayMode: 'grid',
-      sidebarSessionGroupingMode: 'project',
+      sidebarViewMode: 'grid',
       sidebarProjectSortOrder: 'random',
       sidebarShowRecentSection: 'false',
     })).toEqual({});
@@ -759,9 +759,6 @@ describe('settings helpers', () => {
     it('persists only boolean system prompt optimization values', () => {
       const helpers = createTestHelpersWithRealSanitizers();
 
-      expect(helpers.sanitizeSettingsUpdate({ optimizeSystemPrompt: true })).toEqual({ optimizeSystemPrompt: true });
-      expect(helpers.sanitizeSettingsUpdate({ optimizeSystemPrompt: false })).toEqual({ optimizeSystemPrompt: false });
-      expect(helpers.sanitizeSettingsUpdate({ optimizeSystemPrompt: 'true' })).toEqual({});
     });
 
     it('survives a full settings.json payload containing all four previously-dropped fields (regression)', () => {
@@ -859,7 +856,7 @@ describe('settings registry gate', () => {
     desktopLanAccessEnabled: true, desktopKeepAwakeEnabled: true, desktopMinimizeToTrayEnabled: true, desktopMacMenuBarEnabled: true,
     desktopUiPassword: 'secret', githubClientId: 'client', githubScopes: 'repo', skillCatalogs: [{ id: 'c', label: 'C', source: 'https://x' }],
     defaultGitIdentityId: 'global', permissionAutoAccept: { sessions: { s: true }, revision: 1 },
-    agentControlToolEnabled: true, agentWebToolEnabled: true, agentMemoryToolEnabled: true, openCodeUpdateToastDismissedVersion: '1.0.0',
+    agentControlToolEnabled: true, agentWebToolEnabled: true, browserProvider: 'builtin', agentMemoryToolEnabled: true, agentNotifyToolEnabled: true, isolatedSpacesEnabled: true, openCodeUpdateToastDismissedVersion: '1.0.0',
     autoDeleteEnabled: true, autoDeleteAfterDays: 30, sessionRetentionOnlyArchived: false, sessionRetentionAction: 'archive', terminalShell: 'zsh', terminalLoginShells: ['zsh'],
     openInAppId: 'vscode', dictationEnabled: true, sttProvider: 'local', sttServerUrl: 'http://localhost:8001/v1', sttModel: 'm', sttLocalModel: 'm', sttLanguage: 'en',
     tunnelProvider: 'cloudflare', tunnelMode: 'quick', tunnelBootstrapTtlMs: 600000, tunnelSessionTtlMs: 86400000, managedLocalTunnelConfigPath: '/tmp/x',
@@ -867,7 +864,7 @@ describe('settings registry gate', () => {
     managedRemoteTunnelSelectedPresetId: 'a', managedRemoteTunnelPresetTokens: { a: 'token' },
     frpcProxyType: 'tcp', frpcServerAddress: 'frps.example.com', frpcServerPort: 7000, frpcRemotePort: 18080,
     frpcPublicUrl: 'https://public.example.com:18080', frpcCustomDomain: 'vhost.example.com', frpcPublicHostname: 'public.example.com',
-    sidebarProjectDisplayMode: 'all', sidebarSessionGroupingMode: 'flat', sidebarProjectSortOrder: 'manual', sidebarShowRecentSection: true,
+    sidebarProjectDisplayMode: 'all', sidebarViewMode: 'timeline', sidebarProjectSortOrder: 'manual', sidebarWorktreeSortOrder: 'recent', sidebarShowRecentSection: true,
     workStatusPanelEnabled: true, workStatusHiddenSections: ['mcp'], workStatusHiddenSectionsExplicit: true, workStatusSectionOrder: ['mcp', 'session'],
     showReasoningTraces: true, streamingAutoFollowEnabled: true, collapsibleThinkingBlocks: true, showTextJustificationActivity: true,
     chatRenderMode: 'live', activityRenderMode: 'summary', mermaidRenderingMode: 'svg', userMessageRenderingMode: 'markdown', collapsibleUserMessages: true,
@@ -875,7 +872,7 @@ describe('settings registry gate', () => {
     codeBlockLineWrap: true, showTurnChangedFiles: true, showExpandedBashTools: true, showExpandedEditTools: true, conciseTranscript: false, transcriptFileChangesOnly: false, toolJsonViewMode: 'raw',
     timeFormatPreference: '24h', weekStartPreference: 'monday', messageStreamTransport: 'ws', diffLayoutPreference: 'inline', diffWrapLines: true,
     gitChangesViewMode: 'tree', gitmojiEnabled: true, defaultFileViewerPreview: true, directoryShowHidden: true, filesViewShowGitignored: true,
-    fileEditorKeymap: 'vim', autoSaveEnabled: true, autoCreateWorktree: true, sessionTabsEnabled: true, showOpenCodeRestartConfirm: true,
+    fileEditorKeymap: 'vim', autoSaveEnabled: true, autoCreateWorktree: true, sessionTabsEnabled: true,
     allowPromptingSubagentSessions: true, inputSpellcheckEnabled: true, enterToSend: true, enterToSendConfigured: true, persistChatDraft: true,
     largeTextPasteBehavior: 'attach', followUpBehavior: 'steer', queueModeEnabled: true, inputHistoryScope: 'global', inputHistoryLimit: 40,
     draftStarters: [{ type: 'command', name: 'plan-feature' }], draftStartersVisible: true, draftStartersCraftGoalAdded: true, draftStartersScheduleTaskAdded: true,
@@ -891,7 +888,7 @@ describe('settings registry gate', () => {
     notificationTemplates: { completion: { title: 't', message: 'm' } }, showOpenCodeUpdateNotifications: true, reportUsage: true,
     usageDisplayMode: 'usage', usageDropdownProviders: ['anthropic'], usageSelectedModels: { anthropic: ['claude'] }, usageCollapsedFamilies: { anthropic: ['f'] },
     usageExpandedFamilies: { anthropic: ['f'] }, usageModelGroups: { anthropic: { customGroups: [{ id: 'g', label: 'G', models: ['claude'], order: 0 }] } },
-    globalBehaviorPrompt: 'Be brief.', responseStyleEnabled: true, responseStylePreset: 'concise', responseStyleCustomInstructions: 'x', optimizeSystemPrompt: true,
+    globalBehaviorPrompt: 'Be brief.', responseStyleEnabled: true, responseStylePreset: 'concise', responseStyleCustomInstructions: 'x',
     pwaAppName: 'OpenChamber', pwaOrientation: 'portrait', mobileKeyboardMode: 'native', desktopWindowControlsPosition: 'left', desktopWindowControlsStyle: 'classic',
     inputBarOffset: 10,
   };
@@ -977,7 +974,6 @@ describe('settings registry gate', () => {
       largeTextPasteBehavior: 'inline',
       fileEditorKeymap: 'vim',
       allowPromptingSubagentSessions: true,
-      showOpenCodeRestartConfirm: false,
       codeBlockLineWrap: true,
       streamingAutoFollowEnabled: false,
       autoSaveEnabled: false,
@@ -988,7 +984,6 @@ describe('settings registry gate', () => {
       largeTextPasteBehavior: 'inline',
       fileEditorKeymap: 'vim',
       allowPromptingSubagentSessions: true,
-      showOpenCodeRestartConfirm: false,
       codeBlockLineWrap: true,
       streamingAutoFollowEnabled: false,
       autoSaveEnabled: false,

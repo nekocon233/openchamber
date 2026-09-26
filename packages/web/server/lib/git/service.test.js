@@ -8,6 +8,7 @@ import { loadSourceSections, parseSource, sourceKey } from '../walkthrough/sourc
 import { registerGitRoutes } from './routes.js';
 
 import {
+  unsupportedRepositoryRootReason,
   checkoutBranch,
   checkoutCommit,
   cherryPick,
@@ -139,6 +140,23 @@ async function createTempRepo() {
 // ---------------------------------------------------------------------------
 // resolveBaseRefForLog
 // ---------------------------------------------------------------------------
+
+describe('unsupportedRepositoryRootReason', () => {
+  it('rejects a repository rooted at a filesystem root or the home directory', () => {
+    const home = path.join(os.tmpdir(), 'unsupported-root-home');
+    expect(unsupportedRepositoryRootReason('/', home)).toBe('filesystem-root');
+    expect(unsupportedRepositoryRootReason(path.parse(process.cwd()).root, home)).toBe('filesystem-root');
+    expect(unsupportedRepositoryRootReason(home, home)).toBe('home');
+    expect(unsupportedRepositoryRootReason(`${home}${path.sep}`, home)).toBe('home');
+  });
+
+  it('accepts an ordinary project root, including one directly under home', () => {
+    const home = path.join(os.tmpdir(), 'unsupported-root-home');
+    expect(unsupportedRepositoryRootReason(path.join(home, 'project'), home)).toBeNull();
+    expect(unsupportedRepositoryRootReason(path.join(os.tmpdir(), 'repo'), home)).toBeNull();
+    expect(unsupportedRepositoryRootReason('', home)).toBeNull();
+  });
+});
 
 describe('resolveBaseRefForLog', () => {
   it('returns the local ref unchanged when it exists, even if origin also exists', async () => {
@@ -2355,6 +2373,14 @@ describe.runIf(canRunGit())('getRangeDiff', () => {
       if (endpoint === 'range-diff') expect(body.diff).toContain('+current local work');
       else expect(body.files).toEqual([{ path: 'local.txt', status: 'A' }]);
     }
+  });
+
+  it('does not treat a branch checked out from its own remote copy as its base', async () => {
+    const { repository } = createRepositoryWithRemote();
+    runGit(repository, ['checkout', '-b', 'react', '--track', 'origin/react']);
+    expect(await getBranchBase(repository, 'react')).toEqual({ base: null });
+    runGit(repository, ['checkout', '--no-track', '-b', 'loose', 'origin/react']);
+    expect(await getBranchBase(repository, 'loose')).toEqual({ base: 'origin/react' });
   });
 
   it('asks for a new base after restacking and compares against the selected parent', async () => {

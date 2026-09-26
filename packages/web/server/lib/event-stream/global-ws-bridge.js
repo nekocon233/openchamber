@@ -158,7 +158,7 @@ export function createGlobalMessageStreamWsBridge({
       if (readyClients.size === 0) return;
       broadcastEvent(syntheticPayload, { directory: 'global' });
     });
-  }, { sources: [GLOBAL_EVENT_SOURCE_OPENCODE, GLOBAL_EVENT_SOURCE_NATIVE] });
+  }, { sources: [GLOBAL_EVENT_SOURCE_OPENCODE, GLOBAL_EVENT_SOURCE_NATIVE], spaces: true });
 
   const unsubscribeStatus = globalHub.subscribeStatus((status) => {
     if (status.type === 'connect') {

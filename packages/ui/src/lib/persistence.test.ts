@@ -586,16 +586,15 @@ describe('updateDesktopSettings', () => {
     getWindow();
     useSessionDisplayStore.setState({
       projectDisplayMode: 'all',
-      sessionGroupingMode: 'by-worktree',
+      sidebarViewMode: 'projects',
       projectSortOrder: 'manual',
       showRecentSection: true,
       singleProjectId: 'local-project',
-      stickyZoneHeaders: false,
     });
     registerSettingsApi(async () => ({}), async () => ({
       settings: {
         sidebarProjectDisplayMode: 'single',
-        sidebarSessionGroupingMode: 'flat',
+        sidebarViewMode: 'timeline',
         sidebarProjectSortOrder: 'recent',
         sidebarShowRecentSection: false,
         autoSaveEnabled: true,
@@ -610,18 +609,16 @@ describe('updateDesktopSettings', () => {
     const state = useSessionDisplayStore.getState();
     expect({
       projectDisplayMode: state.projectDisplayMode,
-      sessionGroupingMode: state.sessionGroupingMode,
+      sidebarViewMode: state.sidebarViewMode,
       projectSortOrder: state.projectSortOrder,
       showRecentSection: state.showRecentSection,
       singleProjectId: state.singleProjectId,
-      stickyZoneHeaders: state.stickyZoneHeaders,
     }).toEqual({
       projectDisplayMode: 'single',
-      sessionGroupingMode: 'flat',
+      sidebarViewMode: 'timeline',
       projectSortOrder: 'recent',
       showRecentSection: false,
       singleProjectId: 'local-project',
-      stickyZoneHeaders: false,
     });
   });
 
@@ -630,7 +627,7 @@ describe('updateDesktopSettings', () => {
     const saves: Array<Partial<SettingsPayload>> = [];
     useSessionDisplayStore.setState({
       projectDisplayMode: 'single',
-      sessionGroupingMode: 'flat',
+      sidebarViewMode: 'timeline',
       projectSortOrder: 'a-z',
       showRecentSection: false,
     });
@@ -653,12 +650,12 @@ describe('updateDesktopSettings', () => {
     const state = useSessionDisplayStore.getState();
     expect({
       projectDisplayMode: state.projectDisplayMode,
-      sessionGroupingMode: state.sessionGroupingMode,
+      sidebarViewMode: state.sidebarViewMode,
       projectSortOrder: state.projectSortOrder,
       showRecentSection: state.showRecentSection,
     }).toEqual({
       projectDisplayMode: 'single',
-      sessionGroupingMode: 'flat',
+      sidebarViewMode: 'timeline',
       projectSortOrder: 'a-z',
       showRecentSection: false,
     });
@@ -668,7 +665,7 @@ describe('updateDesktopSettings', () => {
     getWindow();
     useSessionDisplayStore.setState({
       projectDisplayMode: 'single',
-      sessionGroupingMode: 'flat',
+      sidebarViewMode: 'timeline',
       projectSortOrder: 'z-a',
       showRecentSection: false,
     });
@@ -681,12 +678,12 @@ describe('updateDesktopSettings', () => {
     const state = useSessionDisplayStore.getState();
     expect({
       projectDisplayMode: state.projectDisplayMode,
-      sessionGroupingMode: state.sessionGroupingMode,
+      sidebarViewMode: state.sidebarViewMode,
       projectSortOrder: state.projectSortOrder,
       showRecentSection: state.showRecentSection,
     }).toEqual({
       projectDisplayMode: 'single',
-      sessionGroupingMode: 'flat',
+      sidebarViewMode: 'timeline',
       projectSortOrder: 'z-a',
       showRecentSection: false,
     });

@@ -1,6 +1,7 @@
 import React from 'react';
+import { useSessionTurnActive } from '@/sync/global-session-status';
 import { Menu as BaseMenu } from '@base-ui/react/menu';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 
 import {
   DropdownMenu,
@@ -10,7 +11,6 @@ import {
 import { Icon } from '@/components/icon/Icon';
 import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useResolvedSessionStatusType } from '@/sync/sync-context';
 import { useSessionUnseenCount } from '@/sync/notification-store';
 import {
   findSwitcherItemAncestorIds,
@@ -231,14 +231,13 @@ function SwitcherRow({ session, depth, variant, secondaryMeta, hasChildren, isEx
   const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
   const notifyOnSubtasks = useUIStore((state) => state.notifyOnSubtasks);
 
-  const sessionStatusType = useResolvedSessionStatusType(session.id);
   const unseenCount = useSessionUnseenCount(session.id);
 
   const isActive = currentSessionId === session.id;
   const sessionTitle = session.title?.trim() || t('sessions.sidebar.session.untitled');
   const isSubtask = Boolean((session as Session & { parentID?: string | null }).parentID);
   const needsAttention = unseenCount > 0 && (!isSubtask || notifyOnSubtasks);
-  const isStreaming = sessionStatusType === 'busy' || sessionStatusType === 'retry';
+  const isStreaming = useSessionTurnActive(session.id);
   const showUnreadDot = !isStreaming && needsAttention && !isActive;
 
   const timestamp = session.time?.updated || session.time?.created || Date.now();

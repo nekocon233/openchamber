@@ -16,11 +16,15 @@
 import type { JsonValue } from '@openchamber/sdk';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
-import type { QueuedContextPart } from '@/stores/messageQueueStore';
 import { contextPayloadFromDraft, createContextPart, type ContextPartMetadata, type ContextPartPayload } from '@/lib/messages/contextParts';
+
+type QueuedContextPart =
+    | { kind: 'synthetic' | 'instruction'; text: string }
+    | { kind: 'context'; text: string; metadata: ContextPartMetadata; instructions?: string };
 
 export interface OutgoingPart {
     text: string;
+    systemContext?: 'session-knowledge' | 'feature-instructions';
     attachments?: AttachedFile[];
     /** Synthetic parts are context for the model, not shown as user content. */
     synthetic?: boolean;
@@ -34,6 +38,12 @@ export interface OutgoingMessage {
     additionalParts: OutgoingPart[];
     /** The agent the first `@agent` mention routed to, if any. */
     agentMentionName?: string;
+    /**
+     * Skills the composer text names inline, deduped in order of appearance.
+     * The send attaches them to the prompt (see `SkillMentions`); queued
+     * messages already carry the instruction they were queued with.
+     */
+    skillNames: string[];
     /** True when there is nothing worth sending. */
     isEmpty: boolean;
 }
@@ -78,8 +88,6 @@ export interface OutgoingMessageDeps {
     sanitizeAttachments: (files: readonly AttachedFile[] | undefined) => AttachedFile[];
     /** Skills named inline with `/name`. */
     collectSkillNames: (text: string) => string[];
-    /** Instruction telling the model which skills the user named. */
-    buildSkillInstruction: (names: string[]) => string | null;
 }
 
 export function buildOutgoingMessage(
@@ -127,23 +135,25 @@ export function buildOutgoingMessage(
     // metadata, so the timeline can render it as a context block after the
     // server echoes the message back.
     for (const draft of input.inlineComments) {
-        additionalParts.push(createContextPart(contextPayloadFromDraft(draft)));
+        additionalParts.push({ ...createContextPart(contextPayloadFromDraft(draft)), synthetic: true });
     }
 
     for (const part of input.additionalParts) {
-        additionalParts.push({
+        const outgoingPart: OutgoingPart = {
             text: part.text,
             ...(part.attachments && part.attachments.length > 0
                 ? { attachments: deps.sanitizeAttachments(part.attachments) }
                 : {}),
             ...(part.synthetic !== undefined ? { synthetic: part.synthetic } : {}),
             ...(part.metadata ? { metadata: part.metadata } : {}),
-        });
+        };
+        if (part.systemContext) outgoingPart.systemContext = part.systemContext;
+        additionalParts.push(outgoingPart);
     }
 
     if (input.linkedIssue) {
         const { number, title, url, contextText } = input.linkedIssue;
-        additionalParts.push(createContextPart({ kind: 'github-issue', number, title, url }, contextText));
+        additionalParts.push({ ...createContextPart({ kind: 'github-issue', number, title, url }, contextText), synthetic: true });
     }
 
     if (input.linkedPr) {
@@ -151,12 +161,12 @@ export function buildOutgoingMessage(
         // before it is given the diff.
         const { number, title, url, instructions, context } = input.linkedPr;
         additionalParts.push({ text: instructions, synthetic: true });
-        additionalParts.push(createContextPart({ kind: 'github-pr', number, title, url }, context));
+        additionalParts.push({ ...createContextPart({ kind: 'github-pr', number, title, url }, context), synthetic: true });
     }
 
     if (input.linkedLinearIssue) {
         const { identifier, title, url, contextText } = input.linkedLinearIssue;
-        additionalParts.push(createContextPart({ kind: 'linear-issue', identifier, title, url }, contextText));
+        additionalParts.push({ ...createContextPart({ kind: 'linear-issue', identifier, title, url }, contextText), synthetic: true });
     }
 
     if (input.linkedGuestIssue) {
@@ -171,12 +181,7 @@ export function buildOutgoingMessage(
         if (data !== undefined) {
             payload.data = data;
         }
-        additionalParts.push(createContextPart(payload, contextText));
-    }
-
-    const skillInstruction = deps.buildSkillInstruction(skillNames);
-    if (skillInstruction) {
-        additionalParts.push({ text: skillInstruction, synthetic: true });
+        additionalParts.push({ ...createContextPart(payload, contextText), synthetic: true });
     }
 
     return {
@@ -184,6 +189,7 @@ export function buildOutgoingMessage(
         primaryAttachments,
         additionalParts,
         agentMentionName,
+        skillNames,
         isEmpty: !primaryText && primaryAttachments.length === 0 && additionalParts.length === 0,
     };
 }

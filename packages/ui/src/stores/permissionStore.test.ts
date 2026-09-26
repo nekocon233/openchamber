@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { Session } from '@opencode-ai/sdk/v2/client';
+import type { Session } from '@/lib/opencode/model';
 
 let fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
 const sessionById = new Map<string, Session>();

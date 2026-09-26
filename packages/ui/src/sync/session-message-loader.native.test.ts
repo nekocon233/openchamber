@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createOpencodeClient, type Session } from "@opencode-ai/sdk/v2/client"
+import { type Session } from "@/lib/opencode/model"
 
 import type { NativeMessagePage } from "@/lib/api/types"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
@@ -23,12 +23,11 @@ const userRecord = (id: string, created: number): NativeMessagePage["records"][n
 
 const childSession: Session = {
   id: `${SESSION}_t_toolu_1`,
-  slug: `${SESSION}_t_toolu_1`,
   projectID: "",
   directory: DIRECTORY,
   parentID: SESSION,
   title: "Subagent",
-  version: "claude-cli",
+  cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 5, updated: 6 },
 }
 
@@ -38,20 +37,13 @@ const createLoader = (loadNativeMessages: (request: NativeRequest) => Promise<Na
   const childStores = new ChildStoreManager()
   const openCodeCalls: string[] = []
   // Native sessions must never reach OpenCode; any request is recorded and refused.
-  const sdk = createOpencodeClient({
-    baseUrl: "http://opencode.test",
-    fetch: async (request) => {
-      openCodeCalls.push(new URL(request instanceof Request ? request.url : request.toString()).pathname)
-      return Response.json({ message: "OpenCode must not be asked for a native session" }, { status: 500 })
-    },
-  })
+  const sdk = { getSessionMessages: async (sessionID: string) => {
+    openCodeCalls.push(sessionID)
+    throw new Error("OpenCode must not be asked for a native session")
+  } }
   const loader = new SessionMessageLoader(
     childStores,
     { sdk, runtimeKey: "runtime-a" },
-    async () => {
-      openCodeCalls.push("session-next")
-      return { messages: [] }
-    },
     (params) => loadNativeMessages(params),
   )
   return { childStores, loader, openCodeCalls }
@@ -69,6 +61,7 @@ describe("SessionMessageLoader with native sessions", () => {
     })
     const target = { directory: DIRECTORY, sessionID: SESSION }
 
+    const release = loader.retainSessionHistory(target)
     await loader.ensure(target, { reason: "navigation" })
     const store = childStores.getChild(DIRECTORY)
     expect(store?.getState().message[SESSION]?.map((message) => message.id)).toEqual(["ncl_u_2", "ncl_u_3"])
@@ -81,6 +74,7 @@ describe("SessionMessageLoader with native sessions", () => {
     expect(loader.getSnapshot(target)).toMatchObject({ complete: true })
     expect(requests.map((request) => request.before)).toEqual([undefined, "ncl_u_2"])
     expect(openCodeCalls).toEqual([])
+    release()
 
     loader.dispose()
     childStores.disposeAll()

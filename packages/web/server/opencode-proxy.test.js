@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { gzipSync } from 'node:zlib';
 import express from 'express';
 import path from 'path';
-import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import { OpenCode } from '@opencode/client';
 
 import { createSseBoundaryTracker, registerOpenCodeProxy, writeSseChunkWithBackpressure } from './lib/opencode/proxy.js';
 import { registerCommonRequestMiddleware } from './lib/opencode/core-routes.js';
@@ -45,8 +45,10 @@ const closeServer = (server) => new Promise((resolve, reject) => {
 describe('OpenCode proxy SSE forwarding', () => {
   let upstreamServer;
   let proxyServer;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 
   afterEach(async () => {
+    Object.defineProperty(process, 'platform', originalPlatform);
     await closeServer(proxyServer);
     await closeServer(upstreamServer);
     proxyServer = undefined;
@@ -57,7 +59,7 @@ describe('OpenCode proxy SSE forwarding', () => {
     let seenAuthorization = null;
 
     const upstream = express();
-    upstream.get('/global/event', (req, res) => {
+    upstream.get('/api/event', (req, res) => {
       seenAuthorization = req.headers.authorization ?? null;
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
       res.setHeader('Cache-Control', 'private, max-age=0');
@@ -109,7 +111,11 @@ describe('OpenCode proxy SSE forwarding', () => {
     const rest = '1}}}\n\n';
 
     const upstream = express();
-    upstream.get('/global/event', async (_req, res) => {
+    upstream.get('/api/event', async (req, res) => {
+      if (req.headers['x-opencode-directory']) {
+        res.type('text/event-stream').end('data: {"ok":true}\n\n');
+        return;
+      }
       res.setHeader('Content-Type', 'text/event-stream');
       res.write(partial);
       await restReleased;
@@ -150,7 +156,7 @@ describe('OpenCode proxy SSE forwarding', () => {
     proxyServer = await listen(app);
     const proxyPort = proxyServer.address().port;
 
-    const directoryResponse = await fetch(`http://127.0.0.1:${proxyPort}/api/event`);
+    const directoryResponse = await fetch(`http://127.0.0.1:${proxyPort}/api/event`, { headers: { 'x-opencode-directory': encodeURIComponent('/a') } });
     expect(await directoryResponse.text()).toBe('data: {"ok":true}\n\n');
     expect(subscribeCalls).toBe(0);
 
@@ -220,7 +226,7 @@ describe('OpenCode proxy SSE forwarding', () => {
 
     const openCodeResponse = await fetch(`http://127.0.0.1:${proxyPort}/api/session/ses_opencode`);
     expect(openCodeResponse.status).toBe(200);
-    expect(upstreamPaths).toEqual(['/session/ses_opencode']);
+    expect(upstreamPaths).toEqual(['/api/session/ses_opencode']);
   });
 
   it('preserves official SDK prompt request fidelity through the generic proxy', async () => {
@@ -243,7 +249,7 @@ describe('OpenCode proxy SSE forwarding', () => {
           admittedSeq: 1,
           id: 'msg_sdk_prompt',
           sessionID: req.params.id,
-          prompt: { text: 'Preserve this prompt exactly.' },
+          text: 'Preserve this prompt exactly.',
           delivery: 'queue',
           timeCreated: 1,
         },
@@ -274,14 +280,14 @@ describe('OpenCode proxy SSE forwarding', () => {
 
     const payload = {
       id: 'msg_sdk_prompt',
-      prompt: { text: 'Preserve this prompt exactly.' },
+      text: 'Preserve this prompt exactly.',
       delivery: 'queue',
     };
-    const client = createOpencodeClient({
-      baseUrl: `http://127.0.0.1:${proxyPort}/api`,
-      directory: '/workspace/repo',
+    const client = OpenCode.make({
+      baseUrl: `http://127.0.0.1:${proxyPort}`,
+      headers: { "x-opencode-directory": encodeURIComponent("/workspace/repo") },
     });
-    const promptResponse = client.v2.session.prompt({
+    const promptResponse = client.session.prompt({
       sessionID: 'session-one',
       ...payload,
     });
@@ -298,19 +304,15 @@ describe('OpenCode proxy SSE forwarding', () => {
     });
     expect(JSON.parse(seenRequest.body)).toEqual(payload);
     await expect(promptResponse).resolves.toMatchObject({
-      data: {
-        data: {
-          id: 'msg_sdk_prompt',
-          sessionID: 'session-one',
-          delivery: 'queue',
-        },
-      },
+      id: 'msg_sdk_prompt',
+      sessionID: 'session-one',
+      delivery: 'queue',
     });
   });
 
   it('terminates an established global event stream when its auth identity is revoked', async () => {
     const upstream = express();
-    upstream.get('/global/event', (_req, res) => {
+    upstream.get('/api/event', (_req, res) => {
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
       res.write('data: {"type":"ready"}\n\n');
     });
@@ -369,7 +371,7 @@ describe('OpenCode proxy SSE forwarding', () => {
   it('closes downstream SSE when the OpenCode upstream stalls despite proxy heartbeats', async () => {
     let stallTimeoutReads = 0;
     const upstream = express();
-    upstream.get('/global/event', (_req, res) => {
+    upstream.get('/api/event', (_req, res) => {
       res.setHeader('Content-Type', 'text/event-stream');
       res.flushHeaders();
       setTimeout(() => res.write(':upstream-alive\n\n'), 40);
@@ -417,7 +419,7 @@ describe('OpenCode proxy SSE forwarding', () => {
 
   it('holds a request through OpenCode warmup and succeeds once ready (no 503/backoff)', async () => {
     const upstream = express();
-    upstream.get('/config/providers', (_req, res) => {
+    upstream.get('/api/config/providers', (_req, res) => {
       res.json({ ok: true });
     });
     upstreamServer = await listen(upstream);
@@ -511,7 +513,7 @@ describe('OpenCode proxy SSE forwarding', () => {
 
   it('routes generic API requests through external OpenCode base URL', async () => {
     const upstream = express();
-    upstream.get('/config/providers', (_req, res) => {
+    upstream.get('/api/config/providers', (_req, res) => {
       res.json({ ok: true, source: 'external-host' });
     });
     upstreamServer = await listen(upstream);
@@ -546,7 +548,7 @@ describe('OpenCode proxy SSE forwarding', () => {
 
   it('preserves content encoding while streaming generic proxy responses', async () => {
     const upstream = express();
-    upstream.get('/compressed', (_req, res) => {
+    upstream.get('/api/compressed', (_req, res) => {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.setHeader('Content-Encoding', 'gzip');
       res.end(gzipSync('compressed upstream body'));
@@ -582,7 +584,7 @@ describe('OpenCode proxy SSE forwarding', () => {
   it('never forwards OpenChamber client credentials through the generic API proxy', async () => {
     let upstreamHeaders;
     const upstream = express();
-    upstream.get('/credential-check', (req, res) => {
+    upstream.get('/api/credential-check', (req, res) => {
       upstreamHeaders = req.headers;
       res.status(404).json({ error: 'not found' });
     });
@@ -627,7 +629,7 @@ describe('OpenCode proxy SSE forwarding', () => {
 
   it('replays parsed urlencoded bodies to generic API proxy requests', async () => {
     const upstream = express();
-    upstream.post('/form', express.urlencoded({ extended: true }), (req, res) => {
+    upstream.post('/api/form', express.urlencoded({ extended: true }), (req, res) => {
       res.json({ body: req.body });
     });
     upstreamServer = await listen(upstream);
@@ -667,7 +669,7 @@ describe('OpenCode proxy SSE forwarding', () => {
 
   it('replays parsed JSON bodies to generic API proxy requests', async () => {
     const upstream = express();
-    upstream.post('/session/abc/prompt_async', express.json(), (req, res) => {
+    upstream.post('/api/session/abc/prompt', express.json(), (req, res) => {
       res.json({
         body: req.body,
         authorization: req.headers.authorization,
@@ -700,7 +702,7 @@ describe('OpenCode proxy SSE forwarding', () => {
     const proxyPort = proxyServer.address().port;
 
     const payload = { messageID: 'msg_1', parts: [{ type: 'text', text: 'hello' }] };
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/session/abc/prompt_async`, {
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/session/abc/prompt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
@@ -713,44 +715,44 @@ describe('OpenCode proxy SSE forwarding', () => {
     expect(Number(data.contentLength)).toBeGreaterThan(0);
   });
 
-  it('sanitizes experimental session list responses and forwards query params', async () => {
+  it.each([
+    ['win32', ''],
+    ['win32', '&directory=%2Flink%2Frepo'],
+    ['linux', ''],
+    ['linux', '&directory=%2Flink%2Frepo'],
+  ])('sanitizes session pages and forwards query params (%s, %s)', async (platform, directoryQuery) => {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
     let seenQuery = null;
     let seenAuth = null;
 
     const upstream = express();
-    upstream.get('/experimental/session', (req, res) => {
+    upstream.get('/api/session', (req, res) => {
       seenQuery = req.query;
       seenAuth = req.headers.authorization ?? null;
       res.setHeader('X-Next-Cursor', '123');
-      res.json([
-        {
-          id: 'ses_1',
-          slug: 'alpha',
-          projectID: 'proj_1',
-          workspaceID: 'ws_1',
-          directory: '/repo/app',
-          path: '/repo/app',
-          parentID: 'ses_parent',
-          title: 'Alpha',
-          agent: 'build',
-          model: { id: 'gpt-5', providerID: 'openai', variant: 'default' },
-          version: '1.0.0',
-          time: { created: 1, updated: 2 },
-          cost: 7,
-          tokens: { input: 10, output: 20 },
-          share: { url: 'https://share.example/ses_1' },
-          project: { id: 'proj_1', worktree: '/repo/app' },
-          summary: {
-            additions: 5,
-            deletions: 3,
-            files: 2,
-            diffs: [{ patch: '@@ -1 +1 @@', additions: 5, deletions: 3 }],
+      res.json({
+        data: [
+          {
+            id: 'ses_1',
+            projectID: 'proj_1',
+            location: { directory: '/repo/app', workspaceID: 'ws_1' },
+            subpath: 'app',
+            parentID: 'ses_parent',
+            title: 'Alpha',
+            agent: 'build',
+            model: { id: 'gpt-5', providerID: 'openai', variant: 'default' },
+            time: { created: 1, updated: 2, archived: 3 },
+            cost: 7,
+            tokens: { input: 10, output: 20 },
+            outcome: 'succeeded',
+            fork: { sessionID: 'ses_source', boundary: { type: 'through' } },
+            metadata: { openchamber: { kind: 'review', originalSessionID: 'ses_original' } },
+            permissions: [{ action: 'deny', resources: ['*'] }],
+            revert: { messageID: 'msg_1', partID: 'part_1', snapshot: 'abc123', files: ['a.ts'] },
           },
-          metadata: { openchamber: { kind: 'review', originalSessionID: 'ses_original' } },
-          permission: [{ permission: 'todowrite', action: 'deny', pattern: '*' }],
-          revert: { messageID: 'msg_1', partID: 'part_1', snapshot: 'abc123', diff: 'diff --git a/x b/x' },
-        },
-      ]);
+        ],
+        cursor: { next: '123' },
+      });
     });
     upstreamServer = await listen(upstream);
     const upstreamPort = upstreamServer.address().port;
@@ -780,74 +782,104 @@ describe('OpenCode proxy SSE forwarding', () => {
     proxyServer = await listen(app);
     const proxyPort = proxyServer.address().port;
 
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/experimental/session?archived=false&limit=500&cursor=99&roots=true&directory=%2Flink%2Frepo`);
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/session?archived=false&limit=500&cursor=99&roots=true${directoryQuery}`);
 
     expect(response.status).toBe(200);
     expect(response.headers.get('x-next-cursor')).toBe('123');
     expect(seenAuth).toBe('Bearer session-token');
-    expect(seenQuery).toMatchObject({
+    const expectedQuery = {
       archived: 'false',
       limit: '500',
       cursor: '99',
       roots: 'true',
-      directory: '/real/repo',
-    });
+    };
+    if (directoryQuery) expectedQuery.directory = '/real/repo';
+    expect(seenQuery).toEqual(expectedQuery);
 
-    await expect(response.json()).resolves.toEqual([
-      {
-        id: 'ses_1',
-        slug: 'alpha',
-        projectID: 'proj_1',
-        workspaceID: 'ws_1',
-        directory: '/repo/app',
-        path: '/repo/app',
-        parentID: 'ses_parent',
-        title: 'Alpha',
-        agent: 'build',
-        model: { id: 'gpt-5', providerID: 'openai', variant: 'default' },
-        version: '1.0.0',
-        time: { created: 1, updated: 2 },
-        cost: 7,
-        tokens: { input: 10, output: 20 },
-        share: { url: 'https://share.example/ses_1' },
-        metadata: { openchamber: { kind: 'review', originalSessionID: 'ses_original' } },
-        project: { id: 'proj_1', worktree: '/repo/app' },
-        summary: { additions: 5, deletions: 3, files: 2 },
-        revert: { messageID: 'msg_1', partID: 'part_1' },
-      },
-    ]);
+    // The heavy parts of a revert and the per-session permission ruleset are
+    // dropped; everything the list view reads survives.
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        {
+          id: 'ses_1',
+          projectID: 'proj_1',
+          location: { directory: '/repo/app', workspaceID: 'ws_1' },
+          subpath: 'app',
+          parentID: 'ses_parent',
+          title: 'Alpha',
+          agent: 'build',
+          model: { id: 'gpt-5', providerID: 'openai', variant: 'default' },
+          time: { created: 1, updated: 2, archived: 3 },
+          cost: 7,
+          tokens: { input: 10, output: 20 },
+          outcome: 'succeeded',
+          fork: { sessionID: 'ses_source', boundary: { type: 'through' } },
+          metadata: { openchamber: { kind: 'review', originalSessionID: 'ses_original' } },
+          revert: { messageID: 'msg_1', partID: 'part_1' },
+        },
+      ],
+      cursor: { next: '123' },
+    });
+  });
+
+  it.each([
+    [200, { data: [], cursor: {} }],
+    [503, { error: 'Upstream unavailable' }],
+  ])('preserves Windows global list status and empty/error payload (%s)', async (status, payload) => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const upstream = express();
+    upstream.get('/api/session', (_req, res) => res.status(status).json(payload));
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const baseUrl = `http://127.0.0.1:${upstreamPort}`;
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        openCodeBaseUrl: baseUrl,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `${baseUrl}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+    });
+    proxyServer = await listen(app);
+    const response = await fetch(`http://127.0.0.1:${proxyServer.address().port}/api/session?limit=1`);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual(payload);
   });
 
   it('sanitizes session list responses without sanitizing session detail responses', async () => {
     let seenListQuery = null;
 
     const upstream = express();
-    upstream.get('/session', (req, res) => {
+    upstream.get('/api/session', (req, res) => {
       seenListQuery = req.query;
-      res.json([
-        {
-          id: 'ses_1',
-          directory: '/repo/app',
-          title: 'Alpha',
-          time: { created: 1, updated: 2 },
-          summary: {
-            additions: 5,
-            deletions: 3,
-            files: 2,
-            diffs: [{ patch: '@@ -1 +1 @@', additions: 5, deletions: 3 }],
+      res.json({
+        data: [
+          {
+            id: 'ses_1',
+            location: { directory: '/repo/app' },
+            title: 'Alpha',
+            time: { created: 1, updated: 2 },
+            metadata: { custom: { value: 'kept' } },
+            permissions: [{ action: 'deny', resources: ['*'] }],
+            revert: { messageID: 'msg_1', partID: 'part_1', snapshot: 'abc123', files: ['a.ts'] },
           },
-          metadata: { custom: { value: 'kept' } },
-          revert: { messageID: 'msg_1', partID: 'part_1', snapshot: 'abc123', diff: 'diff --git a/x b/x' },
-        },
-      ]);
+        ],
+        cursor: {},
+      });
     });
-    upstream.get('/session/abc', (_req, res) => {
+    upstream.get('/api/session/abc', (_req, res) => {
       res.json({
         id: 'abc',
-        directory: '/repo/app',
+        location: { directory: '/repo/app' },
         title: 'Detail',
-        summary: { diffs: [{ patch: '@@ -1 +1 @@' }] },
-        revert: { messageID: 'msg_1', snapshot: 'abc123', diff: 'diff --git a/x b/x' },
+        revert: { messageID: 'msg_1', snapshot: 'abc123', files: ['a.ts'] },
       });
     });
     upstreamServer = await listen(upstream);
@@ -882,33 +914,220 @@ describe('OpenCode proxy SSE forwarding', () => {
 
     expect(listResponse.status).toBe(200);
     expect(seenListQuery).toMatchObject({ directory: '/real/repo' });
-    await expect(listResponse.json()).resolves.toEqual([
-      {
-        id: 'ses_1',
-        directory: '/repo/app',
-        title: 'Alpha',
-        time: { created: 1, updated: 2 },
-        summary: { additions: 5, deletions: 3, files: 2 },
-        metadata: { custom: { value: 'kept' } },
-        revert: { messageID: 'msg_1', partID: 'part_1' },
-      },
-    ]);
+    await expect(listResponse.json()).resolves.toEqual({
+      data: [
+        {
+          id: 'ses_1',
+          location: { directory: '/repo/app' },
+          title: 'Alpha',
+          time: { created: 1, updated: 2 },
+          metadata: { custom: { value: 'kept' } },
+          revert: { messageID: 'msg_1', partID: 'part_1' },
+        },
+      ],
+      cursor: {},
+    });
 
     const detailResponse = await fetch(`http://127.0.0.1:${proxyPort}/api/session/abc`);
 
     expect(detailResponse.status).toBe(200);
     await expect(detailResponse.json()).resolves.toEqual({
       id: 'abc',
-      directory: '/repo/app',
+      location: { directory: '/repo/app' },
       title: 'Detail',
-      summary: { diffs: [{ patch: '@@ -1 +1 @@' }] },
-      revert: { messageID: 'msg_1', snapshot: 'abc123', diff: 'diff --git a/x b/x' },
+      revert: { messageID: 'msg_1', snapshot: 'abc123', files: ['a.ts'] },
     });
+  });
+
+  it('folds OpenChamber-owned archive state and metadata onto sessions it serves', async () => {
+    const upstream = express();
+    upstream.get('/api/session', (_req, res) => {
+      res.json({
+        data: [
+          { id: 'ses_1', location: { directory: '/repo/app' }, title: 'Alpha', time: { created: 1, updated: 2 }, metadata: { fromOpenCode: true, shared: 'theirs', removed: 'stale' } },
+          { id: 'ses_2', location: { directory: '/repo/app' }, title: 'Beta', time: { created: 1, updated: 3, archived: 999 }, metadata: { openchamber: { reviewSessionID: 'ses_old' } } },
+          { id: 'ses_3', metadata: { untouched: true } },
+        ],
+        cursor: {},
+      });
+    });
+    upstream.get('/api/session/ses_1', (_req, res) => {
+      res.json({ id: 'ses_1', location: { directory: '/repo/app' }, title: 'Alpha', metadata: { fromOpenCode: true, shared: 'theirs', removed: 'stale' } });
+    });
+    upstream.get('/api/session/ses_2', (_req, res) => {
+      res.json({ id: 'ses_2', metadata: { openchamber: { reviewSessionID: 'ses_old' } } });
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const externalBaseUrl = `http://127.0.0.1:${upstreamPort}`;
+
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {},
+      os: {},
+      path,
+      OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({
+        openCodePort: upstreamPort,
+        openCodeBaseUrl: externalBaseUrl,
+        isOpenCodeReady: true,
+        openCodeNotReadySince: 0,
+        isRestartingOpenCode: false,
+      }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `${externalBaseUrl}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+      getArchivedSessions: async () => ({ ses_1: 4242 }),
+      getStoredSessionMetadata: async () => ({
+        ses_1: { fromOpenCode: true, openchamber: { goal: { status: 'active' } }, shared: 'ours' },
+        ses_2: {},
+      }),
+    });
+    proxyServer = await listen(app);
+    const proxyPort = proxyServer.address().port;
+
+    const list = await (await fetch(`http://127.0.0.1:${proxyPort}/api/session`)).json();
+    // The seeded metadata includes unchanged upstream fields but excludes
+    // deleted keys. Empty metadata is authoritative too.
+    expect(list.data[0]).toMatchObject({
+      id: 'ses_1',
+      time: { created: 1, updated: 2, archived: 4242 },
+      metadata: { fromOpenCode: true, shared: 'ours', openchamber: { goal: { status: 'active' } } },
+    });
+    expect(list.data[0].metadata).not.toHaveProperty('removed');
+    expect(list.data[1].metadata).toEqual({});
+    expect(list.data[2].metadata).toEqual({ untouched: true });
+    // The archive file does not mention ses_2, so the stamp OpenCode carries
+    // (a session migrated from v1) stays as it is.
+    expect(list.data[1].time).toEqual({ created: 1, updated: 3, archived: 999 });
+
+    const detail = await (await fetch(`http://127.0.0.1:${proxyPort}/api/session/ses_1`)).json();
+    expect(detail).toMatchObject({
+      id: 'ses_1',
+      time: { archived: 4242 },
+      metadata: { fromOpenCode: true, shared: 'ours', openchamber: { goal: { status: 'active' } } },
+    });
+    expect(detail.metadata).not.toHaveProperty('removed');
+    const cleared = await (await fetch(`http://127.0.0.1:${proxyPort}/api/session/ses_2`)).json();
+    expect(cleared.metadata).toEqual({});
+  });
+
+  it('hands the first page of the session list to the spaces merge, and later pages not', async () => {
+    const upstream = express();
+    upstream.get('/api/session', (req, res) => res.json({ data: [{ id: 'h1', location: { directory: '/repo' }, title: 'host', permissions: {} }], cursor: { next: req.query.cursor ? undefined : 'p2' } }));
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const merges = [];
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {}, os: {}, path, OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({ openCodePort: upstreamPort, isOpenCodeReady: true, openCodeNotReadySince: 0, isRestartingOpenCode: false }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+      mergeSpaceSessionList: async (payload) => {
+        merges.push(payload);
+        return { ...payload, data: [...payload.data, { id: 's1', location: { directory: '/spaces/a1b2c3d4e5f6/repo' } }], spaces: [{ id: 'a1b2c3d4e5f6', state: 'complete', sessions: 1 }] };
+      },
+    });
+    proxyServer = await listen(app);
+    const base = `http://127.0.0.1:${proxyServer.address().port}`;
+
+    const first = await (await fetch(`${base}/api/session?limit=50`)).json();
+    expect(first.data.map((item) => item.id)).toEqual(['h1', 's1']);
+    expect(first.spaces).toEqual([{ id: 'a1b2c3d4e5f6', state: 'complete', sessions: 1 }]);
+    // The merge sees the host's list already sanitized.
+    expect(merges[0].data[0]).not.toHaveProperty('permissions');
+    const second = await (await fetch(`${base}/api/session?limit=50&cursor=p2`)).json();
+    expect(second.data.map((item) => item.id)).toEqual(['h1']);
+    expect(second.spaces).toBeUndefined();
+    // A list scoped to one directory, as the sidebar reads per project, is the host's alone.
+    const scoped = await (await fetch(`${base}/api/session?limit=50&directory=${encodeURIComponent('/repo')}`)).json();
+    expect(scoped.data.map((item) => item.id)).toEqual(['h1']);
+    expect(scoped.spaces).toBeUndefined();
+    const scopedByHeader = await (await fetch(`${base}/api/session?limit=50`, { headers: { 'x-opencode-directory': '/repo' } })).json();
+    expect(scopedByHeader.spaces).toBeUndefined();
+    expect(merges).toHaveLength(1);
+  });
+
+  it('writes the events of isolated spaces into the global event stream between the upstream\'s blocks', async () => {
+    const upstream = express();
+    let upstreamRes = null;
+    upstream.get('/api/event', (req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.flushHeaders();
+      res.write('data: {"id":"h1","type":"host"}\n\n');
+      upstreamRes = res;
+      req.on('close', () => { upstreamRes = null; });
+    });
+    upstreamServer = await listen(upstream);
+    const upstreamPort = upstreamServer.address().port;
+    const subscribers = new Set();
+    const spaceEventHub = {
+      subscribeEvent: (subscriber, options) => {
+        const entry = { subscriber, options };
+        subscribers.add(entry);
+        return () => subscribers.delete(entry);
+      },
+    };
+    const app = express();
+    registerOpenCodeProxy(app, {
+      fs: {}, os: {}, path, OPEN_CODE_READY_GRACE_MS: 0,
+      getRuntime: () => ({ openCodePort: upstreamPort, isOpenCodeReady: true, openCodeNotReadySince: 0, isRestartingOpenCode: false }),
+      getOpenCodeAuthHeaders: () => ({}),
+      buildOpenCodeUrl: (requestPath) => `http://127.0.0.1:${upstreamPort}${requestPath}`,
+      ensureOpenCodeApiPrefix: () => {},
+      spaceEventHub,
+    });
+    proxyServer = await listen(app);
+    const base = `http://127.0.0.1:${proxyServer.address().port}`;
+
+    // A stream scoped by the directory header is the host's alone: no subscription for it.
+    const scopedController = new AbortController();
+    const scoped = await fetch(`${base}/api/event`, { headers: { Accept: 'text/event-stream', 'x-opencode-directory': '/repo' }, signal: scopedController.signal });
+    expect(scoped.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(subscribers.size).toBe(0);
+    scopedController.abort();
+
+    const controller = new AbortController();
+    const response = await fetch(`${base}/api/global/event`, { headers: { Accept: 'text/event-stream' }, signal: controller.signal });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    const readUntil = async (needle) => {
+      while (!text.includes(needle)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+    };
+    await readUntil('"h1"');
+    expect(subscribers.size).toBe(1);
+    const [{ subscriber, options }] = subscribers;
+    expect(options).toEqual({ spaces: true });
+    // A host event of the hub is not written twice; a space event is written as one block.
+    subscriber({ spaceId: null, payload: { id: 'x', type: 'host-from-hub' } });
+    subscriber({ spaceId: 'a1b2c3d4e5f6', payload: { id: 's1', type: 'session.execution.started', location: { directory: '/spaces/a1b2c3d4e5f6/repo' } } });
+    await readUntil('"s1"');
+    expect(text).toBe('data: {"id":"h1","type":"host"}\n\ndata: {"id":"s1","type":"session.execution.started","location":{"directory":"/spaces/a1b2c3d4e5f6/repo"}}\n\n');
+    // Half a block of the host's holds a space event back until the block is whole.
+    upstreamRes.write('data: {"id":"h2",');
+    await readUntil('"h2"');
+    subscriber({ spaceId: 'a1b2c3d4e5f6', payload: { id: 's2', type: 'session.execution.succeeded' } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(text).not.toContain('"s2"');
+    upstreamRes.write('"type":"host"}\n\n');
+    await readUntil('"s2"');
+    expect(text.endsWith('data: {"id":"h2","type":"host"}\n\ndata: {"id":"s2","type":"session.execution.succeeded"}\n\n')).toBe(true);
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(subscribers.size).toBe(0);
   });
 
   it('forwards unparsed SDK JSON bodies to generic API proxy requests', async () => {
     const upstream = express();
-    upstream.post('/session/abc/revert', express.json(), (req, res) => {
+    upstream.post('/api/session/abc/revert', express.json(), (req, res) => {
       res.json({
         body: req.body,
         contentLength: req.headers['content-length'],
@@ -953,7 +1172,7 @@ describe('OpenCode proxy SSE forwarding', () => {
 
   it('uses the long proxy timeout budget for slow upstream responses', async () => {
     const upstream = express();
-    upstream.get('/slow', (_req, _res) => {
+    upstream.get('/api/slow', (_req, _res) => {
       // Leave the response open so the proxy timeout path is exercised.
     });
     upstreamServer = await listen(upstream);
@@ -989,126 +1208,4 @@ describe('OpenCode proxy SSE forwarding', () => {
     await expect(response.json()).resolves.toMatchObject({ error: 'OpenCode upstream timed out' });
   });
 
-  it('exempts interactive provider OAuth callbacks from the request deadline', async () => {
-    const upstream = express();
-    // Stands in for upstream blocking until the user finishes signing in.
-    upstream.post('/provider/:providerID/oauth/callback', async (_req, res) => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      res.json(true);
-    });
-    upstreamServer = await listen(upstream);
-    const upstreamPort = upstreamServer.address().port;
-    const externalBaseUrl = `http://127.0.0.1:${upstreamPort}`;
-
-    const app = express();
-    registerOpenCodeProxy(app, {
-      fs: {},
-      os: {},
-      path,
-      OPEN_CODE_READY_GRACE_MS: 0,
-      LONG_REQUEST_TIMEOUT_MS: 50,
-      getRuntime: () => ({
-        openCodePort: upstreamPort,
-        openCodeBaseUrl: externalBaseUrl,
-        isOpenCodeReady: true,
-        openCodeNotReadySince: 0,
-        isRestartingOpenCode: false,
-      }),
-      getOpenCodeAuthHeaders: () => ({}),
-      buildOpenCodeUrl: (requestPath) => `${externalBaseUrl}${requestPath}`,
-      ensureOpenCodeApiPrefix: () => {},
-    });
-    proxyServer = await listen(app);
-    const proxyPort = proxyServer.address().port;
-
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/provider/github-copilot/oauth/callback`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ method: 0 }),
-      signal: AbortSignal.timeout(5000),
-    });
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toBe(true);
-  });
-
-  it('exempts interactive MCP OAuth authentication from the outer request deadline', async () => {
-    const upstream = express();
-    upstream.post('/mcp/:name/auth/authenticate', async (_req, res) => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      res.json({ url: 'https://example.test/authorize' });
-    });
-    upstreamServer = await listen(upstream);
-    const upstreamPort = upstreamServer.address().port;
-    const externalBaseUrl = `http://127.0.0.1:${upstreamPort}`;
-
-    const app = express();
-    registerOpenCodeProxy(app, {
-      fs: {},
-      os: {},
-      path,
-      OPEN_CODE_READY_GRACE_MS: 0,
-      LONG_REQUEST_TIMEOUT_MS: 50,
-      getRuntime: () => ({
-        openCodePort: upstreamPort,
-        openCodeBaseUrl: externalBaseUrl,
-        isOpenCodeReady: true,
-        openCodeNotReadySince: 0,
-        isRestartingOpenCode: false,
-      }),
-      getOpenCodeAuthHeaders: () => ({}),
-      buildOpenCodeUrl: (requestPath) => `${externalBaseUrl}${requestPath}`,
-      ensureOpenCodeApiPrefix: () => {},
-    });
-    proxyServer = await listen(app);
-    const proxyPort = proxyServer.address().port;
-
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/mcp/github/auth/authenticate`, {
-      method: 'POST',
-      signal: AbortSignal.timeout(5000),
-    });
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ url: 'https://example.test/authorize' });
-  });
-
-  it('still applies the request deadline to the OAuth authorize call', async () => {
-    const upstream = express();
-    upstream.post('/provider/:providerID/oauth/authorize', (_req, _res) => {
-      // Leave the response open so the proxy timeout path is exercised.
-    });
-    upstreamServer = await listen(upstream);
-    const upstreamPort = upstreamServer.address().port;
-    const externalBaseUrl = `http://127.0.0.1:${upstreamPort}`;
-
-    const app = express();
-    registerOpenCodeProxy(app, {
-      fs: {},
-      os: {},
-      path,
-      OPEN_CODE_READY_GRACE_MS: 0,
-      LONG_REQUEST_TIMEOUT_MS: 50,
-      getRuntime: () => ({
-        openCodePort: upstreamPort,
-        openCodeBaseUrl: externalBaseUrl,
-        isOpenCodeReady: true,
-        openCodeNotReadySince: 0,
-        isRestartingOpenCode: false,
-      }),
-      getOpenCodeAuthHeaders: () => ({}),
-      buildOpenCodeUrl: (requestPath) => `${externalBaseUrl}${requestPath}`,
-      ensureOpenCodeApiPrefix: () => {},
-    });
-    proxyServer = await listen(app);
-    const proxyPort = proxyServer.address().port;
-
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/api/provider/github-copilot/oauth/authorize`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ method: 0 }),
-      signal: AbortSignal.timeout(2000),
-    });
-
-    expect(response.status).toBe(504);
-  });
 });

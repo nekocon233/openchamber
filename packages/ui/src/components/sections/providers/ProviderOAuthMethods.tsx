@@ -1,4 +1,5 @@
 import React from 'react';
+import type { FormField, FormValue, IntegrationOAuthMethod } from '@opencode/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -13,96 +14,113 @@ import { cn } from '@/lib/utils';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { openExternalUrl } from '@/lib/url';
 import { opencodeClient } from '@/lib/opencode/client';
+import { getRuntimeEndpointGeneration, getRuntimeKey, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
 import {
-  getRuntimeEndpointGeneration,
-  getRuntimeKey,
-  subscribeRuntimeEndpointWillChange,
-} from '@/lib/runtime-switch';
-import {
-  collectPromptInputs,
-  defaultPromptValues,
+  collectFieldAnswer,
+  defaultFieldValues,
   describeOAuthError,
-  firstUnansweredPrompt,
-  isOAuthRuntimeContextCurrent,
-  parseAuthPrompts,
-  parseAuthorization,
-  visiblePrompts,
-  type AuthPrompt,
-  type OAuthAuthorization,
-  type OAuthRuntimeContext,
+  extractUserCode,
+  fieldLabel,
+  firstUnansweredField,
+  isAnswerableField,
+  shouldOpenAuthorizationUrl,
+  visibleFields,
+  type OAuthAttempt,
 } from './provider-oauth';
 
-export interface ProviderOAuthMethod {
-  /** Index into the provider's full auth-method list, which is what OpenCode's `method` parameter addresses. */
-  index: number;
-  label: string;
-  prompts?: unknown;
-}
-
 interface ProviderOAuthMethodsProps {
-  providerId: string;
-  methods: ProviderOAuthMethod[];
+  /** The integration that owns these methods; it shares the provider's id. */
+  integrationId: string;
+  methods: IntegrationOAuthMethod[];
   /** Called once a credential has been stored, so the caller can reload providers. */
   onConnected: () => void | Promise<void>;
+  /**
+   * Location the integration belongs to. Provider integrations are global;
+   * an MCP server's OAuth integration exists only in the Location whose config
+   * declares the server, so its requests must resolve that directory.
+   */
+  directory?: string | null;
   /** Layout only — the caller owns separation from whatever sits above. */
   className?: string;
 }
 
 type Flow =
   | { phase: 'idle' }
-  | { phase: 'prompting'; methodIndex: number; prompts: AuthPrompt[]; error: string | null }
-  | { phase: 'authorizing'; methodIndex: number }
-  /** `auto`: the callback request is in flight and blocks until the browser sign-in finishes. */
-  | { phase: 'waiting'; methodIndex: number; authorization: OAuthAuthorization }
+  | { phase: 'prompting'; methodID: string; fields: FormField[]; error: string | null }
+  | { phase: 'connecting'; methodID: string }
+  /** `auto`: the attempt is polled until the browser sign-in finishes. */
+  | { phase: 'waiting'; methodID: string; attempt: OAuthAttempt }
   /** `code`: waiting for the user to paste a code out of the browser. */
-  | { phase: 'awaitingCode'; methodIndex: number; authorization: OAuthAuthorization; submitting: boolean }
-  | { phase: 'failed'; methodIndex: number; message: string };
+  | { phase: 'awaitingCode'; methodID: string; attempt: OAuthAttempt; submitting: boolean }
+  | { phase: 'failed'; methodID: string; message: string };
 
 const IDLE: Flow = { phase: 'idle' };
 
-type OAuthAttempt = OAuthRuntimeContext & {
-  controller: AbortController;
-  client: ReturnType<typeof opencodeClient.getSdkClient>;
-};
+/** How often an `auto` attempt is re-checked while the user signs in. */
+const STATUS_POLL_INTERVAL_MS = 1500;
+
+type OAuthRun = { runtimeKey: string; generation: number; controller: AbortController };
 
 /**
- * OAuth sign-in for a provider's auth methods.
+ * OAuth sign-in for a provider's integration methods.
  *
- * The completion method reported by `authorize` drives everything: `auto`
- * chains straight into `callback` and holds it open until the user finishes in
- * the browser, `code` collects a pasted code first. See `provider-oauth.ts`.
+ * The mode reported by `integration.oauth.connect` drives everything: `auto`
+ * polls `integration.oauth.status` until the attempt completes, `code` collects
+ * a pasted code and calls `integration.oauth.complete`. See `provider-oauth.ts`.
  *
- * Only one method can run at a time. The authorize/callback attempt is aborted
- * when this component unmounts or the runtime changes. Mount it with
- * `key={providerId}` so switching providers starts from a clean flow.
+ * Only one method can run at a time, and an abandoned attempt is cancelled
+ * upstream on unmount so it cannot linger until it expires. Mount this with
+ * `key={integrationId}` so switching providers starts from a clean flow.
  */
 export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
-  providerId,
+  integrationId,
   methods,
   onConnected,
+  directory,
   className,
 }) => {
   const { t } = useI18n();
+  const sdk = React.useCallback(
+    () => (directory ? opencodeClient.getScopedSdkClient(directory) : opencodeClient.getSdkClient()),
+    [directory],
+  );
   const [flow, setFlow] = React.useState<Flow>(IDLE);
-  const [promptValues, setPromptValues] = React.useState<Record<string, string>>({});
+  const [fieldValues, setFieldValues] = React.useState<Record<string, FormValue>>({});
   const [codeInput, setCodeInput] = React.useState('');
-  const attemptRef = React.useRef<OAuthAttempt | null>(null);
+  /** Set while a poll loop is live; clearing it stops the loop at its next tick. */
+  const activeAttemptRef = React.useRef<string | null>(null);
+  const runRef = React.useRef<OAuthRun | null>(null);
+  const isCurrentRun = (run: OAuthRun) => runRef.current === run && !run.controller.signal.aborted
+    && run.runtimeKey === getRuntimeKey() && run.generation === getRuntimeEndpointGeneration();
+
+  const cancelAttempt = React.useCallback((attemptID: string) => {
+    activeAttemptRef.current = null;
+    const run = runRef.current;
+    runRef.current = null;
+    run?.controller.abort();
+    if (!run || run.runtimeKey !== getRuntimeKey() || run.generation !== getRuntimeEndpointGeneration()) return;
+    void sdk()
+      .integration.oauth.cancel({ integrationID: integrationId, attemptID })
+      .catch(() => undefined);
+  }, [integrationId, sdk]);
 
   React.useEffect(() => {
+    const retire = () => {
+      const pending = activeAttemptRef.current;
+      if (pending) cancelAttempt(pending);
+      runRef.current?.controller.abort();
+      runRef.current = null;
+      activeAttemptRef.current = null;
+    };
     const unsubscribe = subscribeRuntimeEndpointWillChange(() => {
-      attemptRef.current?.controller.abort();
-      attemptRef.current = null;
+      retire();
       setFlow(IDLE);
     });
-    return () => {
-      unsubscribe();
-      attemptRef.current?.controller.abort();
-      attemptRef.current = null;
-    };
-  }, []);
+    return () => { unsubscribe(); retire(); };
+  }, [cancelAttempt]);
 
-  const activeIndex = flow.phase === 'idle' ? null : flow.methodIndex;
-  const busy = flow.phase === 'authorizing'
+  const activeMethodID = flow.phase === 'idle' ? null : flow.methodID;
+  const busy = flow.phase === 'connecting'
     || flow.phase === 'waiting'
     || (flow.phase === 'awaitingCode' && flow.submitting);
 
@@ -116,143 +134,120 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
     toast.error(t(failureKey));
   };
 
-  /**
-   * Runs the blocking half of the flow. Never throws: the caller has already
-   * handed control to the user, so a failure here is a flow state, not an
-   * exception to unwind.
-   */
-  const isCurrentAttempt = (attempt: OAuthAttempt): boolean =>
-    attemptRef.current === attempt
-    && !attempt.controller.signal.aborted
-    && isOAuthRuntimeContextCurrent(
-      attempt,
-      getRuntimeKey(),
-      getRuntimeEndpointGeneration(),
-    );
-
-  const runCallback = async (attempt: OAuthAttempt, methodIndex: number, code?: string) => {
-    if (!isCurrentAttempt(attempt)) return;
-
-    try {
-      const result = await attempt.client.provider.oauth.callback(
-        {
-          providerID: providerId,
-          method: methodIndex,
-          ...(code ? { code } : {}),
-        },
-        { signal: attempt.controller.signal },
-      );
-      if (!isCurrentAttempt(attempt)) return;
-      if (result.error) {
-        throw result.error;
-      }
-
-      await onConnected();
-      if (!isCurrentAttempt(attempt)) return;
-      setFlow(IDLE);
-      toast.success(t('settings.providers.page.toast.oauthCompleted'));
-    } catch (error) {
-      if (!isCurrentAttempt(attempt)) return;
-      console.error('Failed to complete OAuth flow:', error);
-      setFlow({
-        phase: 'failed',
-        methodIndex,
-        message: describeOAuthError(error, t, 'settings.providers.page.toast.oauthCompleteFailed'),
-      });
-    } finally {
-      if (attemptRef.current === attempt) attemptRef.current = null;
-    }
+  const succeed = async (run: OAuthRun) => {
+    if (!isCurrentRun(run)) return;
+    await onConnected();
+    if (!isCurrentRun(run)) return;
+    activeAttemptRef.current = null;
+    setFlow(IDLE);
+    toast.success(t('settings.providers.page.toast.oauthCompleted'));
   };
 
-  const runAuthorize = async (methodIndex: number, inputs: Record<string, string>) => {
-    attemptRef.current?.controller.abort();
-    const attempt: OAuthAttempt = {
-      controller: new AbortController(),
-      client: opencodeClient.getSdkClient(),
-      runtimeKey: getRuntimeKey(),
-      generation: getRuntimeEndpointGeneration(),
-    };
-    attemptRef.current = attempt;
-    setFlow({ phase: 'authorizing', methodIndex });
+  const fail = (methodID: string, error: unknown, fallbackKey: I18nKey) => {
+    activeAttemptRef.current = null;
+    console.error('OAuth flow failed:', error);
+    setFlow({ phase: 'failed', methodID, message: describeOAuthError(error, t, fallbackKey) });
+  };
 
-    let authorization: OAuthAuthorization;
-    try {
-      const result = await attempt.client.provider.oauth.authorize(
-        {
-          providerID: providerId,
-          method: methodIndex,
-          ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-        },
-        { signal: attempt.controller.signal },
-      );
-      if (!isCurrentAttempt(attempt)) return;
-      if (result.error) {
-        throw result.error;
-      }
-
-      const parsed = parseAuthorization(result.data);
-      if (!parsed) {
-        attemptRef.current = null;
-        setFlow({
-          phase: 'failed',
-          methodIndex,
-          message: t('settings.providers.page.toast.oauthDetailsMissing'),
-        });
+  /**
+   * Polls an `auto` attempt to completion. Never throws: the user already has
+   * control in the browser, so a failure here is a flow state, not an exception
+   * to unwind. Stops as soon as the attempt is no longer the active one, which
+   * is how cancel and unmount tear it down.
+   */
+  const pollAttempt = async (methodID: string, attemptID: string) => {
+    const run = runRef.current;
+    if (!run || !isCurrentRun(run)) return;
+    const client = sdk();
+    while (activeAttemptRef.current === attemptID && isCurrentRun(run)) {
+      await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_INTERVAL_MS));
+      if (activeAttemptRef.current !== attemptID || !isCurrentRun(run)) return;
+      try {
+        const { data: status } = await client.integration.oauth.status({ integrationID: integrationId, attemptID }, { signal: run.controller.signal });
+        if (activeAttemptRef.current !== attemptID || !isCurrentRun(run)) return;
+        if (status.status === 'complete') {
+          await succeed(run);
+          return;
+        }
+        if (status.status === 'failed') {
+          setFlow({ phase: 'failed', methodID, message: status.message });
+          activeAttemptRef.current = null;
+          return;
+        }
+      } catch (error) {
+        if (activeAttemptRef.current !== attemptID || !isCurrentRun(run)) return;
+        fail(methodID, error, 'settings.providers.page.toast.oauthCompleteFailed');
         return;
       }
-      authorization = parsed;
+    }
+  };
+
+  const runConnect = async (method: IntegrationOAuthMethod, answer: Record<string, FormValue>) => {
+    runRef.current?.controller.abort();
+    const run = { runtimeKey: getRuntimeKey(), generation: getRuntimeEndpointGeneration(), controller: new AbortController() };
+    runRef.current = run;
+    setFlow({ phase: 'connecting', methodID: method.id });
+
+    let attempt: OAuthAttempt;
+    try {
+      const { data } = await sdk().integration.oauth.connect({
+        integrationID: integrationId,
+        methodID: method.id,
+        ...(Object.keys(answer).length > 0 ? { answer } : {}),
+      }, { signal: run.controller.signal });
+      if (!isCurrentRun(run)) return;
+      attempt = { attemptID: data.attemptID, mode: data.mode, url: data.url, instructions: data.instructions };
     } catch (error) {
-      if (!isCurrentAttempt(attempt)) return;
-      console.error('Failed to start OAuth flow:', error);
-      attemptRef.current = null;
-      setFlow({
-        phase: 'failed',
-        methodIndex,
-        message: describeOAuthError(error, t, 'settings.providers.page.toast.oauthStartFailed'),
-      });
+      if (!isCurrentRun(run)) return;
+      fail(method.id, error, 'settings.providers.page.toast.oauthStartFailed');
       return;
     }
 
-    if (authorization.url) {
-      void openExternalUrl(authorization.url);
+    activeAttemptRef.current = attempt.attemptID;
+
+    // Claude Code CLI owns its OAuth flow and opens the browser itself. Its
+    // integration URL is informational only; opening it creates a misleading
+    // docs tab alongside the real sign-in page.
+    if (shouldOpenAuthorizationUrl(integrationId, attempt.url)) {
+      void openExternalUrl(attempt.url);
     }
 
-    if (authorization.method === 'code') {
+    if (attempt.mode === 'code') {
       setCodeInput('');
-      setFlow({ phase: 'awaitingCode', methodIndex, authorization, submitting: false });
+      setFlow({ phase: 'awaitingCode', methodID: method.id, attempt, submitting: false });
       return;
     }
 
-    setFlow({ phase: 'waiting', methodIndex, authorization });
-    await runCallback(attempt, methodIndex);
+    setFlow({ phase: 'waiting', methodID: method.id, attempt });
+    await pollAttempt(method.id, attempt.attemptID);
   };
 
-  const beginConnect = (method: ProviderOAuthMethod) => {
-    const prompts = parseAuthPrompts(method.prompts);
-    if (prompts.length === 0) {
-      void runAuthorize(method.index, {});
+  const beginConnect = (method: IntegrationOAuthMethod) => {
+    const fields = (method.form ?? []).filter(isAnswerableField);
+    if (fields.length === 0) {
+      void runConnect(method, {});
       return;
     }
-    setPromptValues(defaultPromptValues(prompts));
-    setFlow({ phase: 'prompting', methodIndex: method.index, prompts, error: null });
+    setFieldValues(defaultFieldValues(fields));
+    setFlow({ phase: 'prompting', methodID: method.id, fields, error: null });
   };
 
-  const submitPrompts = () => {
+  const submitFields = (method: IntegrationOAuthMethod) => {
     if (flow.phase !== 'prompting') {
       return;
     }
-    const unanswered = firstUnansweredPrompt(flow.prompts, promptValues);
+    const unanswered = firstUnansweredField(flow.fields, fieldValues);
     if (unanswered) {
       setFlow({
         ...flow,
-        error: t('settings.providers.page.auth.oauth.promptRequired', { field: unanswered.message }),
+        error: t('settings.providers.page.auth.oauth.promptRequired', { field: fieldLabel(unanswered) }),
       });
       return;
     }
-    void runAuthorize(flow.methodIndex, collectPromptInputs(flow.prompts, promptValues));
+    void runConnect(method, collectFieldAnswer(flow.fields, fieldValues));
   };
 
-  const submitCode = () => {
+  const submitCode = async () => {
     if (flow.phase !== 'awaitingCode') {
       return;
     }
@@ -260,53 +255,90 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
     if (!code) {
       return;
     }
-    const attempt = attemptRef.current;
-    if (!attempt || !isCurrentAttempt(attempt)) {
-      setFlow(IDLE);
-      return;
-    }
+    const { methodID, attempt } = flow;
+    const run = runRef.current;
+    if (!run || !isCurrentRun(run)) return;
     setFlow({ ...flow, submitting: true });
-    void runCallback(attempt, flow.methodIndex, code);
+    try {
+      await sdk().integration.oauth.complete({
+        integrationID: integrationId,
+        attemptID: attempt.attemptID,
+        code,
+      }, { signal: run.controller.signal });
+      await succeed(run);
+    } catch (error) {
+      if (!isCurrentRun(run)) return;
+      fail(methodID, error, 'settings.providers.page.toast.oauthCompleteFailed');
+    }
   };
 
-  /**
-   * Stops tracking the attempt. Upstream keeps its pending authorization until
-   * a new `authorize` replaces it, so reconnecting is always safe.
-   */
+  /** Drops the attempt upstream so a half-finished sign-in cannot be resumed by accident. */
   const cancel = () => {
-    attemptRef.current?.controller.abort();
-    attemptRef.current = null;
+    if (flow.phase === 'waiting' || flow.phase === 'awaitingCode') {
+      cancelAttempt(flow.attempt.attemptID);
+    }
+    runRef.current?.controller.abort();
+    runRef.current = null;
     setFlow(IDLE);
   };
 
-  const renderPrompt = (prompt: AuthPrompt) => {
-    const value = promptValues[prompt.key] ?? '';
-    const setValue = (next: string) =>
-      setPromptValues((prev) => ({ ...prev, [prompt.key]: next }));
+  const renderField = (field: FormField) => {
+    if (field.type === 'external') {
+      return (
+        <div key={field.key} className="space-y-1.5">
+          <label className="typography-ui-label text-foreground">{fieldLabel(field)}</label>
+          <Button
+            variant="outline"
+            size="xs"
+            className="!font-normal"
+            onClick={() => void openExternalUrl(field.url)}
+          >
+            {t('settings.providers.page.actions.open')}
+          </Button>
+        </div>
+      );
+    }
+
+    const raw = fieldValues[field.key];
+    const value = typeof raw === 'string' ? raw : '';
+    const setValue = (next: FormValue) =>
+      setFieldValues((prev) => ({ ...prev, [field.key]: next }));
+
+    const options = field.type === 'string' || field.type === 'multiselect' ? field.options ?? [] : [];
 
     return (
-      <div key={prompt.key} className="space-y-1.5">
-        <label className="typography-ui-label text-foreground">{prompt.message}</label>
-        {prompt.type === 'select' ? (
+      <div key={field.key} className="space-y-1.5">
+        <label className="typography-ui-label text-foreground">{fieldLabel(field)}</label>
+        {field.description && (
+          <p className="typography-meta text-muted-foreground">{field.description}</p>
+        )}
+        {options.length > 0 ? (
           <Select value={value} onValueChange={setValue}>
             <SelectTrigger size={SETTINGS_SELECT_SIZE} className={SETTINGS_SELECT_ROW_TRIGGER_CLASS}>
               <SelectValue>
-                {(current) => prompt.options.find((option) => option.value === current)?.label ?? null}
+                {(current) => options.find((option) => option.value === current)?.label ?? null}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {prompt.options.map((option) => (
+              {options.map((option) => (
                 <SelectItem key={option.value} value={option.value}>
-                  {option.hint ? `${option.label} · ${option.hint}` : option.label}
+                  {option.description ? `${option.label} · ${option.description}` : option.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+        ) : field.type === 'boolean' ? (
+          <input
+            type="checkbox"
+            checked={raw === true}
+            onChange={(event) => setValue(event.target.checked)}
+            aria-label={fieldLabel(field)}
+          />
         ) : (
           <Input
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder={prompt.placeholder}
+            placeholder={field.type === 'string' ? field.placeholder : undefined}
             className="max-w-[24rem] text-xs"
           />
         )}
@@ -314,79 +346,82 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
     );
   };
 
-  const renderAuthorizationDetails = (authorization: OAuthAuthorization) => (
-    <>
-      {authorization.instructions && (
-        <p className="typography-meta text-[var(--status-info-text)] bg-[var(--status-info-background)] px-2 py-1.5 rounded">
-          {authorization.instructions}
-        </p>
-      )}
+  const renderAttemptDetails = (attempt: OAuthAttempt) => {
+    const userCode = extractUserCode(attempt.instructions);
+    return (
+      <>
+        {attempt.instructions && (
+          <p className="typography-meta text-[var(--status-info-text)] bg-[var(--status-info-background)] px-2 py-1.5 rounded">
+            {attempt.instructions}
+          </p>
+        )}
 
-      {authorization.userCode && (
-        <div className="flex items-center gap-2">
-          <Input
-            value={authorization.userCode}
-            readOnly
-            aria-label={t('settings.providers.page.auth.oauth.deviceCodeLabel')}
-            className="font-mono text-center tracking-widest"
-          />
-          <Button
-            variant="outline"
-            size="xs"
-            className="!font-normal shrink-0"
-            onClick={() => void copy(
-              authorization.userCode ?? '',
-              'settings.providers.page.toast.deviceCodeCopied',
-              'settings.providers.page.toast.deviceCodeCopyFailed',
-            )}
-          >
-            {t('settings.providers.page.actions.copyCode')}
-          </Button>
-        </div>
-      )}
-
-      {authorization.url && (
-        <div className="flex items-center gap-2">
-          <Input
-            value={authorization.url}
-            readOnly
-            aria-label={t('settings.providers.page.auth.oauth.linkLabel')}
-            className="text-xs text-muted-foreground"
-          />
-          <div className="flex gap-1 shrink-0">
+        {userCode && (
+          <div className="flex items-center gap-2">
+            <Input
+              value={userCode}
+              readOnly
+              aria-label={t('settings.providers.page.auth.oauth.deviceCodeLabel')}
+              className="font-mono text-center tracking-widest"
+            />
             <Button
               variant="outline"
               size="xs"
-              className="!font-normal"
-              onClick={() => void openExternalUrl(authorization.url ?? '')}
-            >
-              {t('settings.providers.page.actions.open')}
-            </Button>
-            <Button
-              variant="outline"
-              size="xs"
-              className="!font-normal"
+              className="!font-normal shrink-0"
               onClick={() => void copy(
-                authorization.url ?? '',
-                'settings.providers.page.toast.oauthLinkCopied',
-                'settings.providers.page.toast.oauthLinkCopyFailed',
+                userCode,
+                'settings.providers.page.toast.deviceCodeCopied',
+                'settings.providers.page.toast.deviceCodeCopyFailed',
               )}
             >
-              {t('settings.providers.page.actions.copy')}
+              {t('settings.providers.page.actions.copyCode')}
             </Button>
           </div>
-        </div>
-      )}
-    </>
-  );
+        )}
+
+        {attempt.url && (
+          <div className="flex items-center gap-2">
+            <Input
+              value={attempt.url}
+              readOnly
+              aria-label={t('settings.providers.page.auth.oauth.linkLabel')}
+              className="text-xs text-muted-foreground"
+            />
+            <div className="flex gap-1 shrink-0">
+              <Button
+                variant="outline"
+                size="xs"
+                className="!font-normal"
+                onClick={() => void openExternalUrl(attempt.url)}
+              >
+                {t('settings.providers.page.actions.open')}
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                className="!font-normal"
+                onClick={() => void copy(
+                  attempt.url,
+                  'settings.providers.page.toast.oauthLinkCopied',
+                  'settings.providers.page.toast.oauthLinkCopyFailed',
+                )}
+              >
+                {t('settings.providers.page.actions.copy')}
+              </Button>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
 
   return (
     <div className={cn('space-y-4', className)}>
       {methods.map((method) => {
-        const isActive = activeIndex === method.index;
+        const isActive = activeMethodID === method.id;
 
         return (
-          <div key={method.index} className="space-y-3">
+          <div key={method.id} className="space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div className="typography-ui-label text-foreground">{method.label}</div>
               <Button
@@ -402,12 +437,12 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
 
             {isActive && flow.phase === 'prompting' && (
               <div className="space-y-3">
-                {visiblePrompts(flow.prompts, promptValues).map(renderPrompt)}
+                {visibleFields(flow.fields, fieldValues).map(renderField)}
                 {flow.error && (
                   <p className="typography-meta text-[var(--status-error)]">{flow.error}</p>
                 )}
                 <div className="flex items-center gap-2">
-                  <Button size="xs" className="!font-normal" onClick={submitPrompts}>
+                  <Button size="xs" className="!font-normal" onClick={() => submitFields(method)}>
                     {t('settings.providers.page.actions.continue')}
                   </Button>
                   <Button variant="ghost" size="xs" className="!font-normal" onClick={cancel}>
@@ -417,21 +452,16 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
               </div>
             )}
 
-            {isActive && flow.phase === 'authorizing' && (
-              <div className="flex items-center justify-between gap-2">
-                <p className="typography-meta text-muted-foreground flex items-center gap-2">
-                  <Icon name="loader" className="h-3.5 w-3.5 animate-spin" />
-                  {t('settings.providers.page.auth.oauth.starting')}
-                </p>
-                <Button variant="ghost" size="xs" className="!font-normal shrink-0" onClick={cancel}>
-                  {t('settings.providers.page.actions.cancel')}
-                </Button>
-              </div>
+            {isActive && flow.phase === 'connecting' && (
+              <p className="typography-meta text-muted-foreground flex items-center gap-2">
+                <Icon name="loader" className="h-3.5 w-3.5 animate-spin" />
+                {t('settings.providers.page.auth.oauth.starting')}
+              </p>
             )}
 
             {isActive && flow.phase === 'waiting' && (
               <div className="space-y-3">
-                {renderAuthorizationDetails(flow.authorization)}
+                {renderAttemptDetails(flow.attempt)}
                 <div className="flex items-center justify-between gap-2">
                   <p className="typography-meta text-muted-foreground flex items-center gap-2">
                     <Icon name="loader" className="h-3.5 w-3.5 animate-spin" />
@@ -449,7 +479,7 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
 
             {isActive && flow.phase === 'awaitingCode' && (
               <div className="space-y-3">
-                {renderAuthorizationDetails(flow.authorization)}
+                {renderAttemptDetails(flow.attempt)}
                 <p className="typography-meta text-muted-foreground">
                   {t('settings.providers.page.auth.oauth.codeHint')}
                 </p>
@@ -464,7 +494,7 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
                   <Button
                     size="xs"
                     className="!font-normal shrink-0"
-                    onClick={submitCode}
+                    onClick={() => void submitCode()}
                     disabled={flow.submitting || codeInput.trim().length === 0}
                   >
                     {flow.submitting

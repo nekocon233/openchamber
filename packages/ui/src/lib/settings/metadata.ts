@@ -7,6 +7,7 @@ export type SettingsPageSlug =
   | 'projects'
   | 'remote-instances'
   | 'providers'
+  | 'web-search'
   | 'usage'
   | 'agents'
   | 'behavior'
@@ -42,7 +43,7 @@ export interface SettingsRuntimeContext {
   isDesktop: boolean;
   isMobile: boolean;
   isHostLocalOrigin: boolean;
-  /** Whether this server build has Jev routing (`OPENCHAMBER_ROUTING_ENABLE`). */
+  /** Whether this runtime has Jev routing, which needs the OpenChamber server. */
   routingAvailable: boolean;
 }
 
@@ -93,6 +94,13 @@ export const SETTINGS_PAGE_METADATA: readonly SettingsPageMeta[] = [
     group: 'opencode',
     kind: 'split',
     keywords: ['provider', 'providers', 'models', 'model', 'api key', 'api keys', 'openai', 'anthropic', 'ollama', 'credentials'],
+  },
+  {
+    slug: 'web-search',
+    title: 'Web search',
+    group: 'opencode',
+    kind: 'single',
+    keywords: ['web search', 'websearch', 'search', 'internet', 'exa', 'tavily', 'firecrawl', 'parallel', 'tinyfish'],
   },
   {
     slug: 'usage',
@@ -293,6 +301,8 @@ export function getSettingsNavIcon(slug: SettingsPageSlug): IconName | null {
 
     case 'providers':
       return 'cloud';
+    case 'web-search':
+      return 'global';
     case 'agents':
       return 'ai-agent';
     case 'behavior':

@@ -1,5 +1,6 @@
+import { opencodeClient } from '@/lib/opencode/client';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { createOpencodeClient, type Session } from "@opencode-ai/sdk/v2/client"
+import { type Session } from "@/lib/opencode/model"
 
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import type { NativeCompactRequest, NativeSessionPatch } from "@/lib/api/types"
@@ -19,17 +20,17 @@ import {
   updateSessionTitle,
 } from "./session-actions"
 
+const originalGetSession = opencodeClient.getSession;
 const DIRECTORY = "/work/project"
 const SESSION = "ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188"
 const OTHER = "ncx_01a0d2a6-b55b-7162-a837-c62053537e00"
 
 const nativeSession = (id: string, patch: Partial<Session> = {}): Session => ({
   id,
-  slug: id,
   projectID: "",
   directory: DIRECTORY,
   title: "Work",
-  version: "claude-cli",
+  cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 2 },
   ...patch,
 })
@@ -80,14 +81,11 @@ beforeEach(() => {
     },
   }), { sidebarState: localSidebarState }))
   // Native sessions must never reach OpenCode or its batch routes; any request is recorded and refused.
-  const sdk = createOpencodeClient({
-    baseUrl: "http://opencode.test",
-    fetch: async (request) => {
-      openCodeRequests.push(new URL(request instanceof Request ? request.url : request.toString()).pathname)
-      return Response.json({ message: "OpenCode must not be asked about a native session" }, { status: 500 })
-    },
-  })
-  setActionRefs(sdk, childStores, () => DIRECTORY)
+  opencodeClient.getSession = async (sessionId) => {
+    openCodeRequests.push(sessionId)
+    throw new Error('OpenCode must not be asked about a native session')
+  }
+  setActionRefs(childStores, () => DIRECTORY)
   useConfigStore.setState({ isConnected: true })
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     openChamberRequests.push(String(input))
@@ -96,6 +94,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  opencodeClient.getSession = originalGetSession;
   registerRuntimeAPIs(null)
   childStores.disposeAll()
 })

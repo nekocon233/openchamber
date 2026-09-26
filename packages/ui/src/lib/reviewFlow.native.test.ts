@@ -1,5 +1,6 @@
+import { opencodeClient } from '@/lib/opencode/client';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { createOpencodeClient, type Session } from '@opencode-ai/sdk/v2/client';
+import { type Session } from "@/lib/opencode/model"
 
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativePromptRequest, NativeSessionPatch } from '@/lib/api/types';
@@ -11,6 +12,7 @@ import { useSelectionStore } from '@/sync/selection-store';
 import { setActionRefs, setOptimisticRefs } from '@/sync/session-actions';
 import { sendReviewFeedbackToOriginal, startReviewFlow } from './reviewFlow';
 
+const originalGetSession = opencodeClient.getSession;
 const DIRECTORY = '/work/project';
 const ORIGINAL = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const CLAUDE_REVIEW = 'ncl_2b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
@@ -18,11 +20,10 @@ const CODEX_REVIEW = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
 
 const nativeSession = (id: string, patch: Partial<Session> = {}): Session => ({
   id,
-  slug: id,
   projectID: '',
   directory: DIRECTORY,
   title: 'Work',
-  version: 'claude-cli',
+  cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 2 },
   ...patch,
 });
@@ -68,14 +69,11 @@ beforeEach(() => {
     },
   })));
   // Native sessions must never reach OpenCode; any request is recorded and refused.
-  const sdk = createOpencodeClient({
-    baseUrl: 'http://opencode.test',
-    fetch: async (request) => {
-      openCodeRequests.push(new URL(request instanceof Request ? request.url : request.toString()).pathname);
-      return Response.json({ message: 'OpenCode must not be asked about a native session' }, { status: 500 });
-    },
-  });
-  setActionRefs(sdk, childStores, () => DIRECTORY);
+  opencodeClient.getSession = async (sessionId) => {
+    openCodeRequests.push(sessionId)
+    throw new Error('OpenCode must not be asked about a native session')
+  }
+  setActionRefs(childStores, () => DIRECTORY);
   setOptimisticRefs(() => {}, () => {});
   useConfigStore.setState({ isConnected: true });
   // Magic prompt overrides cannot be read here, so the built-in templates apply.
@@ -83,6 +81,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  opencodeClient.getSession = originalGetSession;
   useAutoReviewStore.getState().stopRun(ORIGINAL);
   globalThis.fetch = realFetch;
   registerRuntimeAPIs(null);

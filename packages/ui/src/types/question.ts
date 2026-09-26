@@ -1,3 +1,4 @@
+/** The native Claude Code/Codex question protocol; OpenCode uses forms. */
 export interface QuestionOption {
   label: string;
   description: string;

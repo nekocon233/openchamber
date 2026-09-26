@@ -341,6 +341,37 @@ printf '4321\\n'`);
     });
     expect(settings.desktopHosts).toEqual([{ id: 'ssh-1', label: 'SSH Host', url: localUrl, apiUrl: localUrl, clientToken: 'ssh-client-token' }]);
   });
+  test('finds the newest nvm npm that the SSH login shell does not have on PATH', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-ssh-nvm-'));
+    const executable = (file, script) => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    };
+    // Numeric order, not text order: v9 sorts after v24 as text.
+    for (const version of ['v9.11.2', 'v24.18.0']) {
+      const bin = path.join(home, '.nvm', 'versions', 'node', version, 'bin');
+      executable(path.join(bin, 'node'), 'exit 0');
+      executable(path.join(bin, 'npm'), `printf '%s' "$PATH" > "$HOME/npm-path"; printf '${version}' > "$HOME/npm-version"`);
+    }
+    const env = { HOME: home, PATH: '/usr/bin:/bin' };
+    const manager = new ElectronSshManager({
+      settingsFilePath: path.join(home, 'settings.json'),
+      appVersion: '1.2.3',
+      emit: () => undefined,
+    });
+    manager.runRemoteCommand = async (_parsed, _controlPath, script) =>
+      execFileSync('/bin/sh', ['-c', script], { env, encoding: 'utf8', timeout: 5000 });
+
+    try {
+      await manager.installOpenChamberManaged({ destination: 'user@example.test', args: [] }, '/unused.sock', '1.2.3', 'auto');
+      expect(fs.readFileSync(path.join(home, 'npm-version'), 'utf8')).toBe('v24.18.0');
+      expect(fs.readFileSync(path.join(home, 'npm-path'), 'utf8').split(':')[0])
+        .toBe(path.join(home, '.nvm', 'versions', 'node', 'v24.18.0', 'bin'));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test('installs OpenChamber into a home-owned npm prefix instead of the root-owned global one', async () => {
     const commands = [];
     const manager = new ElectronSshManager({
@@ -497,5 +528,232 @@ printf '4321\\n'`);
     };
     await manager.startRemoteServerManaged(parsed, '/tmp/control.sock', secured, 4321, '/bin/openchamber');
     expect(started).toContain('--hostname 0.0.0.0');
+  });
+
+  describe('managed server reuse', () => {
+    const parsed = { destination: 'user@example.test', args: [] };
+    const managed = (remoteOpenchamber = {}) => ({
+      id: 'ssh-reuse', auth: {}, remoteOpenchamber: { mode: 'managed', installMethod: 'auto', keepRunning: true, ...remoteOpenchamber },
+    });
+
+    // A remote host reduced to what the manager asks of it: the CLI registry,
+    // the servers answering on their ports, and the serve/stop commands.
+    const createRemoteHost = (servers = []) => {
+      const host = { servers: [...servers], started: [], stopped: [], statusFails: false, stopFails: false, statusNoise: '' };
+      const manager = new ElectronSshManager({
+        settingsFilePath: path.join(os.tmpdir(), 'unused-settings.json'),
+        appVersion: '1.2.3',
+        emit: () => undefined,
+      });
+      manager.resolveRemoteTool = async () => '/home/pi/.opencode/bin/opencode';
+      manager.remoteOpenChamberCandidates = async () => [{ binPath: '/home/pi/.bun/bin/openchamber', version: '1.2.3' }];
+      manager.runRemoteCommand = async (_parsed, _controlPath, script) => {
+        const probedPort = script.match(/127\.0\.0\.1:(\d+)\/api\/system\/info/);
+        if (probedPort) {
+          const server = host.servers.find((entry) => entry.port === Number(probedPort[1]));
+          if (!server) return 'INFO_STATUS=000\nAUTH_STATUS=0\nHEALTH_STATUS=000\n';
+          // /api/system/info is public, so only the auth status tells a fitting password apart.
+          const offered = script.match(/"password":"([^"]*)"/);
+          let authStatus = 0;
+          if (offered) authStatus = !server.password ? 400 : offered[1] === server.password ? 200 : 401;
+          if (offered && server.rateLimited) authStatus = 429;
+          return `INFO_STATUS=200\nAUTH_STATUS=${authStatus}\nHEALTH_STATUS=200\n${JSON.stringify({ openchamberVersion: server.version, runtime: 'web' })}`;
+        }
+        if (script.endsWith(' status --json')) {
+          if (host.statusFails) throw new Error('status unavailable');
+          return host.statusNoise + JSON.stringify({
+            state: 'running',
+            instances: host.servers.filter((entry) => entry.registered !== false).map((entry) => ({
+              runtime: 'cli', port: entry.port, launchMode: entry.launchMode || 'daemon', bindHost: entry.bindHost || '127.0.0.1', passwordProtected: Boolean(entry.password),
+            })),
+          });
+        }
+        const stoppedPort = script.match(/ stop --port (\d+)$/);
+        if (stoppedPort) {
+          host.stopped.push(Number(stoppedPort[1]));
+          if (host.stopFails) return '';
+          host.servers = host.servers.filter((entry) => entry.port !== Number(stoppedPort[1]));
+          return '';
+        }
+        const servedPort = script.match(/ serve --hostname (\S+) --port (\d+)$/);
+        if (servedPort) {
+          host.started.push(Number(servedPort[2]));
+          const servedPassword = script.match(/OPENCHAMBER_UI_PASSWORD='([^']*)'/);
+          host.servers.push({ port: Number(servedPort[2]), version: '1.2.3', bindHost: servedPort[1], password: servedPassword?.[1] });
+          return `${servedPort[2]}\n`;
+        }
+        throw new Error(`Unexpected remote command: ${script}`);
+      };
+      return { host, manager };
+    };
+
+    test('reconnecting reuses the server the previous connect left running', async () => {
+      const { host, manager } = createRemoteHost();
+
+      const first = await manager.ensureRemoteServer(managed(), parsed, '/unused.sock');
+      const second = await manager.ensureRemoteServer(managed(), parsed, '/unused.sock');
+
+      expect(first.startedByUs).toBe(true);
+      expect(second).toEqual({ remotePort: first.remotePort, startedByUs: false, ownsRemoteServer: true, remoteBinPath: '/home/pi/.bun/bin/openchamber' });
+      expect(host.started).toEqual([first.remotePort]);
+      expect(host.servers).toHaveLength(1);
+    });
+
+    test('replaces a daemon left by another app version instead of starting next to it', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.1.0' }]);
+
+      const result = await manager.ensureRemoteServer(managed(), parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([30001]);
+      expect(result.startedByUs).toBe(true);
+      expect(host.servers.map((entry) => entry.version)).toEqual(['1.2.3']);
+    });
+
+    test('leaves a foreground server of another version to its process manager', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.1.0', launchMode: 'foreground' }]);
+
+      const result = await manager.ensureRemoteServer(managed(), parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([]);
+      expect(result.startedByUs).toBe(true);
+      expect(result.remotePort).not.toBe(30001);
+    });
+
+    test('does not hand a loopback-only server to an instance published to the network', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.2.3', bindHost: '127.0.0.1', password: 'remote-secret' }]);
+      const exposed = {
+        ...managed({ bindHost: '0.0.0.0' }),
+        auth: { openchamberPassword: { enabled: true, value: 'remote-secret', store: 'settings' } },
+      };
+
+      await manager.ensureRemoteServer(exposed, parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([30001]);
+      expect(host.servers.map((entry) => entry.bindHost)).toEqual(['0.0.0.0']);
+    });
+
+    const withPassword = (value, remoteOpenchamber) => ({
+      ...managed(remoteOpenchamber),
+      auth: { openchamberPassword: { enabled: true, value, store: 'settings' } },
+    });
+
+    test('neither reuses nor stops a server that rejects the instance password', async () => {
+      const { host, manager } = createRemoteHost([
+        { port: 30001, version: '1.2.3', password: 'old-secret' },
+        { port: 30002, version: '1.1.0', password: 'someone-else' },
+        { port: 30003, version: '1.2.3' },
+      ]);
+
+      const result = await manager.ensureRemoteServer(withPassword('new-secret'), parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([]);
+      expect(result.startedByUs).toBe(true);
+      expect(host.servers.find((entry) => entry.port === result.remotePort).password).toBe('new-secret');
+    });
+
+    test('an instance without a password leaves password-protected servers alone', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.1.0', password: 'secret' }]);
+
+      const result = await manager.ensureRemoteServer(managed(), parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([]);
+      expect(result.remotePort).not.toBe(30001);
+    });
+
+    test('reuses the server that accepts the instance password', async () => {
+      const { host, manager } = createRemoteHost([
+        { port: 30001, version: '1.2.3', password: 'someone-else' },
+        { port: 30002, version: '1.2.3', password: 'remote-secret' },
+      ]);
+
+      const result = await manager.ensureRemoteServer(withPassword('remote-secret'), parsed, '/unused.sock');
+
+      expect(result).toMatchObject({ remotePort: 30002, startedByUs: false });
+      expect(host.started).toEqual([]);
+    });
+
+    test('owns an adopted daemon but not an adopted foreground server', async () => {
+      const daemon = createRemoteHost([{ port: 30001, version: '1.2.3' }]);
+      const foreground = createRemoteHost([{ port: 30001, version: '1.2.3', launchMode: 'foreground' }]);
+
+      expect((await daemon.manager.ensureRemoteServer(managed(), parsed, '/unused.sock')).ownsRemoteServer).toBe(true);
+      expect((await foreground.manager.ensureRemoteServer(managed(), parsed, '/unused.sock')).ownsRemoteServer).toBe(false);
+    });
+
+    test('replaces a server still published to the network after the instance stopped publishing', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.2.3', bindHost: '0.0.0.0', password: 'remote-secret' }]);
+
+      await manager.ensureRemoteServer(withPassword('remote-secret'), parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([30001]);
+      expect(host.servers.map((entry) => entry.bindHost)).toEqual(['127.0.0.1']);
+    });
+
+    test('reads the registry past shell profile output', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.2.3' }]);
+      host.statusNoise = 'Welcome back\n';
+
+      const result = await manager.ensureRemoteServer(managed(), parsed, '/unused.sock');
+
+      expect(result).toMatchObject({ remotePort: 30001, startedByUs: false });
+    });
+
+    test('says in the connect log why a registered server was passed over', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.1.0', password: 'remote-secret', rateLimited: true }]);
+
+      await manager.ensureRemoteServer(withPassword('remote-secret'), parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([]);
+      expect(manager.logsForInstance('ssh-reuse', 50).join('\n')).toContain('remote port 30001: it does not take this instance\'s UI password (auth status 429)');
+    });
+
+    test('disconnecting with keepRunning off stops an adopted daemon', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.2.3' }]);
+      const instance = managed({ keepRunning: false });
+      const { remotePort, ownsRemoteServer, remoteBinPath } = await manager.ensureRemoteServer(instance, parsed, '/unused.sock');
+      manager.stopControlMasterBestEffort = async () => undefined;
+      manager.sessions.set(instance.id, {
+        instance, parsed, controlPath: '/unused.sock', askpassCleanupPaths: [], remotePort, ownsRemoteServer, remoteBinPath,
+        startedByUs: false, master: null, mainForward: null, extraForwards: [],
+      });
+
+      await manager.disconnectInternal(instance.id, false);
+
+      expect(host.stopped).toEqual([30001]);
+    });
+
+    test('falls back to the stale server on a pinned port when it cannot be stopped', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30777, version: '1.1.0' }]);
+      host.stopFails = true;
+
+      const result = await manager.ensureRemoteServer(managed({ preferredPort: 30777 }), parsed, '/unused.sock');
+
+      expect(host.stopped).toEqual([30777]);
+      expect(result).toMatchObject({ remotePort: 30777, startedByUs: false });
+      expect(host.started).toEqual([]);
+    });
+
+    test('keeps reusing a pinned port the registry does not know about', async () => {
+      const { host, manager } = createRemoteHost([
+        { port: 30001, version: '1.2.3' },
+        { port: 30777, version: '1.1.0', registered: false },
+      ]);
+
+      const result = await manager.ensureRemoteServer(managed({ preferredPort: 30777 }), parsed, '/unused.sock');
+
+      expect(result).toMatchObject({ remotePort: 30777, startedByUs: false });
+      expect(host.started).toEqual([]);
+      expect(host.stopped).toEqual([]);
+    });
+
+    test('starts a server and logs why when the remote registry cannot be read', async () => {
+      const { host, manager } = createRemoteHost([{ port: 30001, version: '1.2.3' }]);
+      host.statusFails = true;
+
+      const result = await manager.ensureRemoteServer(managed(), parsed, '/unused.sock');
+
+      expect(result.startedByUs).toBe(true);
+      expect(manager.logsForInstance('ssh-reuse', 50).join('\n')).toContain('Could not list OpenChamber servers');
+    });
   });
 });

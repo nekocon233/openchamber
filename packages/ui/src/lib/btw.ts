@@ -1,5 +1,5 @@
-import type { Message, Part, Session } from '@opencode-ai/sdk/v2';
-import { opencodeClient } from '@/lib/opencode/client';
+import type { Message, Part, Session } from '@/lib/opencode/model';
+import { opencodeClient, type SkillMentions } from '@/lib/opencode/client';
 import * as sessionActions from '@/sync/session-actions';
 import { withBtwSessionLink, withBtwSessionMarker, withoutBtwSessionLink, withoutBtwSessionMarker } from '@/lib/sessionBtwMetadata';
 import { useBtwStore } from '@/stores/useBtwStore';
@@ -47,6 +47,8 @@ export type StartBtwInput = {
     metadata?: ContextPartMetadata;
     systemContext?: 'session-knowledge' | 'feature-instructions';
   }>;
+  /** Skills the question names inline, attached to its prompt. */
+  skills?: SkillMentions;
 };
 
 /**
@@ -134,7 +136,9 @@ export const findLastCompletedAssistantMessageID = (messages: readonly Message[]
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== 'assistant') continue;
-    if (message.time.completed !== undefined) return message.id;
+    // A v2 turn is several steps, each completed on its own; only the step
+    // that ended with `stop` closes a turn.
+    if (message.time.completed !== undefined && message.finish === 'stop') return message.id;
   }
   return null;
 };
@@ -158,7 +162,7 @@ export const findNativeBtwForkPoint = (messages: readonly Message[], parentBusy:
       forkPoint = message.id;
       continue;
     }
-    if (message.time.completed !== undefined && (message.error !== undefined || message.finish !== 'tool-calls')) break;
+    if (message.role === 'assistant' && message.time.completed !== undefined && (message.error !== undefined || message.finish !== 'tool-calls')) break;
   }
   return forkPoint;
 };
@@ -170,7 +174,11 @@ export const btwSessionTitle = (question: string): string => `btw: ${question}`;
  * immediately, mirroring `forkFromMessage` in session-actions.
  */
 function insertForkIntoDirectoryStore(session: Session, directory: string): void {
-  const store = getSyncChildStores().children.get(directory);
+  // `getChild` normalizes the key: OpenCode returns native Windows paths
+  // (`C:\repo`) while child stores are keyed by `C:/repo`. OpenCode 2.x
+  // publishes no `session.created` for a fork, so a missed insert here leaves
+  // the fork out of the store and the btw panel never appears.
+  const store = getSyncChildStores().getChild(directory);
   if (!store) return;
   const current = store.getState();
   const sessions = [...current.session];
@@ -234,13 +242,11 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
       : findLastCompletedAssistantMessageID(parentMessages);
     const forked = native
       ? await sessionActions.forkNativeSession(input.parentSessionId, forkPointMessageID, input.directory)
-      : await opencodeClient.forkSession(input.parentSessionId, forkPointMessageID ?? undefined, input.directory);
+      : await opencodeClient.forkSession(input.parentSessionId, { before: forkPointMessageID ?? undefined, directory: input.directory });
 
     // The server may canonicalize the worktree path; the prompt must use the
     // same directory identity as the forked session.
-    // SAFETY: the SDK Session type omits the server's `directory` field; this
-    // widening only reads it, with the requested directory as the fallback.
-    const sessionDirectory = (forked as Session & { directory?: string | null }).directory ?? input.directory;
+    const sessionDirectory = forked.directory || input.directory;
     try {
       if (getRuntimeKey() !== expectedRuntimeKey) throw new Error('runtime changed');
       registerSessionDirectory(forked.id, sessionDirectory);
@@ -261,7 +267,7 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
       // Locate the inherited-history boundary by identity, not by ID ordering.
       const newestClonedID = native
         ? await sessionActions.readNativeNewestMessageId(forked.id, sessionDirectory)
-        : (await opencodeClient.getSessionMessages(forked.id, 1, sessionDirectory)).at(-1)?.info.id ?? null;
+        : (await opencodeClient.getSessionMessages(forked.id, { limit: 1 }, sessionDirectory)).items.at(-1)?.info.id ?? null;
       // A `null` boundary makes the panel show every inherited message, so an
       // empty read must not be taken as "the fork inherited nothing" when we
       // know it did: having picked a fork point proves the parent had turns.
@@ -303,7 +309,7 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
           [...btwBoundaryParts(), ...(input.additionalParts ?? [])],
           input.variant ?? undefined,
           'normal',
-          { sessionId: forked.id, directory: sessionDirectory },
+          { sessionId: forked.id, directory: sessionDirectory, skills: input.skills },
         );
       } catch (error) {
         // A fork without its first question is not a usable btw session:

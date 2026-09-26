@@ -2,6 +2,7 @@ import React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { cn } from '@/lib/utils';
+import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 
 type SessionRunningIndicatorProps = {
   label: string;
@@ -9,6 +10,7 @@ type SessionRunningIndicatorProps = {
 };
 
 export function SessionRunningIndicator({ label, className }: SessionRunningIndicatorProps): React.ReactElement {
+  const animated = useSessionDisplayStore((state) => state.animatedActivityIndicators);
   return (
     <span
       role="img"
@@ -19,7 +21,9 @@ export function SessionRunningIndicator({ label, className }: SessionRunningIndi
       aria-label={label}
       title={label}
     >
-      <Icon name="loader-4" className="session-running-spinner size-3.5 animate-spin text-[var(--status-info)]" />
+      {animated
+        ? <Icon name="loader-4" className="session-running-spinner size-3.5 animate-spin text-[var(--status-info)]" />
+        : <span className="size-1.5 rounded-full bg-[var(--status-info)]" />}
     </span>
   );
 }

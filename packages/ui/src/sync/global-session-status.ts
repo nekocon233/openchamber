@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { Event, Session, SessionStatus } from '@opencode-ai/sdk/v2/client';
+import type { Session, SessionStatus } from '@/lib/opencode/model';
+import type { SyncEvent } from '@/lib/opencode/events';
 import { normalizeProjectPath } from '@/lib/projectResolution';
 import {
   applySessionOrderingMutations,
@@ -64,7 +65,62 @@ export const useGlobalSessionStatusStore = create<GlobalSessionStatusState>(() =
 }));
 useGlobalSessionStatusStore.subscribe(() => countSyncPerformance('globalStatusPublications'));
 
-const normalizeStatusType = (type: unknown): ResolvedStatusType => {
+// A parent session goes idle while a background subagent keeps working in a
+// child session; OpenCode then hands the result back and the parent runs
+// again. For everything the user reads as "this session is working" (the row's
+// status dot and turn timer), that pause is still the same turn. The parent
+// lookup is injected by the sync provider: the sessions store sits above this
+// module in the import graph.
+type SessionParentResolver = (sessionId: string) => string | undefined;
+let resolveSessionParentId: SessionParentResolver = () => undefined;
+
+export const setSessionParentResolver = (resolver: SessionParentResolver): void => {
+  resolveSessionParentId = resolver;
+};
+
+/** Subagents nest; a deeper chain than this is treated as unrelated. */
+const MAX_SUBAGENT_DEPTH = 8;
+
+const forEachAncestorId = (sessionId: string, visit: (ancestorId: string) => void): void => {
+  let current = resolveSessionParentId(sessionId);
+  for (let depth = 0; current && depth < MAX_SUBAGENT_DEPTH; depth += 1) {
+    visit(current);
+    current = resolveSessionParentId(current);
+  }
+};
+
+/** True when a subagent anywhere below the session is running. */
+export const hasActiveSubagent = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => {
+  for (const activeId of activeSessionIds) {
+    if (activeId === sessionId) continue;
+    let found = false;
+    forEachAncestorId(activeId, (ancestorId) => {
+      if (ancestorId === sessionId) found = true;
+    });
+    if (found) return true;
+  }
+  return false;
+};
+
+/** Active sessions plus every ancestor whose turn they keep open. */
+const withSubagentAncestors = (activeSessionIds: ReadonlySet<string>): ReadonlySet<string> => {
+  let extended: Set<string> | null = null;
+  for (const activeId of activeSessionIds) {
+    forEachAncestorId(activeId, (ancestorId) => {
+      if (activeSessionIds.has(ancestorId)) return;
+      extended ??= new Set(activeSessionIds);
+      extended.add(ancestorId);
+    });
+  }
+  return extended ?? activeSessionIds;
+};
+
+/** The session's turn is still open: it runs itself, or one of its subagents does. */
+export const useSessionTurnActive = (sessionId: string): boolean => useGlobalSessionStatusStore(
+  (state) => state.activeSessionIds.has(sessionId) || hasActiveSubagent(sessionId, state.activeSessionIds),
+);
+
+const normalizeStatusType = (type: string | undefined): ResolvedStatusType => {
   if (type === 'busy') return 'busy';
   if (type === 'retry') return 'retry';
   return 'idle';
@@ -224,7 +280,7 @@ const setStatus = (
         statusById.delete(sessionId);
       }
     } else {
-      const normalizedStatus = { ...status, type } as SessionStatus;
+      const normalizedStatus = status;
       const optimisticUntil = options?.optimistic
         ? Date.now() + OPTIMISTIC_STATUS_GRACE_MS
         : undefined;
@@ -262,14 +318,14 @@ const setStatus = (
 export const setGlobalSessionStatus = (
   sessionId: string,
   directory: string | null | undefined,
-  status: ResolvedStatusType,
+  status: 'busy' | 'idle',
   options?: { optimistic?: boolean },
 ): void => {
   if (!sessionId) return;
   setStatus(
     sessionId,
     normalizeDirectory(directory ?? ''),
-    status === 'idle' ? { type: 'idle' } : { type: status } as SessionStatus,
+    { type: status },
     options,
   );
 };
@@ -277,7 +333,7 @@ export const setGlobalSessionStatus = (
 // Event-driven path: called by the sync dispatcher for status-bearing events
 // whose directory has no child store. Mirrors the child reducer's semantics
 // (`session.idle` / `session.error` both resolve to idle).
-export const applyGlobalSessionStatusEvents = (directory: string, payloads: readonly Event[]): void => {
+export const applyGlobalSessionStatusEvents = (directory: string, payloads: readonly SyncEvent[]): void => {
   if (payloads.length === 0) return;
   const normalizedDirectory = normalizeDirectory(directory);
   const orderingMutations: SessionOrderingMutation[] = [];
@@ -286,6 +342,12 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
   useGlobalSessionStatusStore.setState((state) => {
     let statusById = state.statusById;
     let activeSessionIds = state.activeSessionIds;
+    let mutableActiveIds: Set<string> | null = null;
+    const draftActiveIds = (): Set<string> => {
+      mutableActiveIds ??= new Set(activeSessionIds);
+      activeSessionIds = mutableActiveIds;
+      return mutableActiveIds;
+    };
     let resolvedStatusById = state.resolvedStatusById;
     let observedById: Map<string, ObservedOutcome> | null = null;
     const touchedIds = new Set<string>();
@@ -315,8 +377,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
         statusById.delete(sessionId);
       }
       if (activeSessionIds.has(sessionId)) {
-        if (activeSessionIds === state.activeSessionIds) activeSessionIds = new Set(activeSessionIds);
-        (activeSessionIds as Set<string>).delete(sessionId);
+        draftActiveIds().delete(sessionId);
       }
     };
     const setResolvedStatus = (sessionId: string, type: ResolvedStatusType): void => {
@@ -324,12 +385,16 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
       if (resolvedStatusById === state.resolvedStatusById) resolvedStatusById = new Map(resolvedStatusById);
       resolvedStatusById.set(sessionId, type);
     };
+    const settledIds: string[] = [];
     const settle = (sessionId: string): void => {
       touchedIds.add(sessionId);
       removeActiveStatus(sessionId);
       setResolvedStatus(sessionId, 'idle');
       orderingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
-      timingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
+      settledIds.push(sessionId);
+      if (!hasActiveSubagent(sessionId, activeSessionIds)) {
+        timingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
+      }
     };
     const remove = (sessionId: string): void => {
       touchedIds.add(sessionId);
@@ -345,8 +410,8 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
 
     for (const payload of payloads) {
       if (payload.type === 'session.status') {
-        const props = payload.properties as { sessionID?: string; status?: { type?: string } } | undefined;
-        if (typeof props?.sessionID !== 'string' || !props.sessionID) continue;
+        const props = payload.properties;
+        if (!props.sessionID) continue;
         const type = normalizeStatusType(props.status?.type);
         observe(props.sessionID, type === 'idle' ? readObserved().get(props.sessionID)?.outcome ?? null : null);
         if (type === 'idle') {
@@ -355,7 +420,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
         }
         touchedIds.add(props.sessionID);
         setResolvedStatus(props.sessionID, type);
-        const status = { ...(props.status ?? {}), type } as SessionStatus;
+        const status = props.status;
         const current = statusById.get(props.sessionID);
         if (
           !current
@@ -367,8 +432,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
           statusById.set(props.sessionID, { status, directory: normalizedDirectory });
         }
         if (!activeSessionIds.has(props.sessionID)) {
-          if (activeSessionIds === state.activeSessionIds) activeSessionIds = new Set(activeSessionIds);
-          (activeSessionIds as Set<string>).add(props.sessionID);
+          draftActiveIds().add(props.sessionID);
         }
         orderingMutations.push({ type: 'observe', sessionId: props.sessionID, phase: 'active' });
         timingMutations.push({ type: 'observe', sessionId: props.sessionID, phase: 'active' });
@@ -376,31 +440,29 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
       }
 
       if (payload.type === 'session.idle' || payload.type === 'session.error') {
-        const props = payload.properties as { sessionID?: string } | undefined;
-        if (typeof props?.sessionID === 'string' && props.sessionID) {
+        const props = payload.properties;
+        if (props.sessionID) {
           observe(props.sessionID, payload.type === 'session.error' ? 'failed' : 'completed');
           settle(props.sessionID);
         }
         continue;
       }
 
-      if (payload.type === 'session.updated') {
-        const props = payload.properties as {
-          sessionID?: string;
-          info?: { id?: string; time?: { archived?: number | null } };
-        } | undefined;
-        const sessionId = props?.sessionID ?? props?.info?.id;
-        if (sessionId && props?.info?.time?.archived) remove(sessionId);
+      if (payload.type === 'session.patched') {
+        if (payload.properties.patch.time?.archived) remove(payload.properties.sessionID);
         continue;
       }
 
-      if (payload.type === 'session.deleted') {
-        const props = payload.properties as { sessionID?: string; info?: { id?: string } } | undefined;
-        const sessionId = props?.sessionID ?? props?.info?.id;
-        if (sessionId) remove(sessionId);
-      }
+      if (payload.type === 'session.deleted') remove(payload.properties.sessionID);
+
     }
 
+    for (const settledId of settledIds) {
+      forEachAncestorId(settledId, (ancestorId) => {
+        if (activeSessionIds.has(ancestorId) || hasActiveSubagent(ancestorId, activeSessionIds)) return;
+        timingMutations.push({ type: 'observe', sessionId: ancestorId, phase: 'settled' });
+      });
+    }
     if (touchedIds.size === 0 && observedById === null) return state;
     const revision = state.revision + 1;
     const revisionById = new Map(state.revisionById);
@@ -429,7 +491,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
   applySessionActivityTimingMutations(timingMutations);
 };
 
-export const applyGlobalSessionStatusEvent = (directory: string, payload: Event): void => {
+export const applyGlobalSessionStatusEvent = (directory: string, payload: SyncEvent): void => {
   applyGlobalSessionStatusEvents(directory, [payload]);
 };
 
@@ -446,7 +508,7 @@ export const applyGlobalSessionStatusEvent = (directory: string, payload: Event)
 // status read failed next to a successful OpenCode snapshot).
 export const applyGlobalSessionStatusSnapshot = (
   rawDirectory: string,
-  raw: Record<string, { type?: string }>,
+  raw: Record<string, SessionStatus>,
   knownSessionIds?: Iterable<string>,
   baselineRevision = Number.POSITIVE_INFINITY,
   mode: 'monotonic' | 'authoritative' = 'authoritative',
@@ -465,6 +527,12 @@ export const applyGlobalSessionStatusSnapshot = (
     const touchedIds = new Set<string>();
     let resolvedStatusById = state.resolvedStatusById;
     let activeSessionIds = state.activeSessionIds;
+    let mutableActiveIds: Set<string> | null = null;
+    const draftActiveIds = (): Set<string> => {
+      mutableActiveIds ??= new Set(activeSessionIds);
+      activeSessionIds = mutableActiveIds;
+      return mutableActiveIds;
+    };
     const now = Date.now();
     const statusSnapshotAtByDirectory = mode === 'authoritative'
       ? new Map(state.statusSnapshotAtByDirectory).set(directory, now)
@@ -483,13 +551,11 @@ export const applyGlobalSessionStatusSnapshot = (
     );
     const removeActiveSession = (sessionId: string): void => {
       if (!activeSessionIds.has(sessionId)) return;
-      if (activeSessionIds === state.activeSessionIds) activeSessionIds = new Set(activeSessionIds);
-      (activeSessionIds as Set<string>).delete(sessionId);
+      draftActiveIds().delete(sessionId);
     };
     const addActiveSession = (sessionId: string): void => {
       if (activeSessionIds.has(sessionId)) return;
-      if (activeSessionIds === state.activeSessionIds) activeSessionIds = new Set(activeSessionIds);
-      (activeSessionIds as Set<string>).add(sessionId);
+      draftActiveIds().add(sessionId);
     };
     const markOrdering = (sessionId: string, type: ResolvedStatusType): void => {
       orderingKnown.add(sessionId);
@@ -536,7 +602,7 @@ export const applyGlobalSessionStatusSnapshot = (
         continue;
       }
 
-      const normalizedStatus = { ...status, type } as SessionStatus;
+      const normalizedStatus = status;
       if (
         !current
         || current.directory !== directory
@@ -596,7 +662,7 @@ export const applyGlobalSessionStatusSnapshot = (
   const orderingScope = mode === 'authoritative' ? orderingKnown : orderingActive;
   reconcileSessionActivitySnapshot(orderingActive, orderingScope);
   reconcileSessionActivityTiming(
-    orderingActive,
+    withSubagentAncestors(useGlobalSessionStatusStore.getState().activeSessionIds),
     (sessionId) => mode === 'authoritative' && orderingKnown.has(sessionId),
   );
 };

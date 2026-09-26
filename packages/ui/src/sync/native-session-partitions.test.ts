@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Session } from '@opencode-ai/sdk/v2/client';
+import type { Session } from '@/lib/opencode/model';
 
 import type { NativeAgentsAPI, NativeSessionList } from '@/lib/api/types';
 import { createTestNativeAgentsAPI } from '@/lib/native-agents/test-utils/runtime';
@@ -8,11 +8,10 @@ import { fetchNativePartition, fetchNativePartitions, resolveNativeSessions } fr
 const session = (id: string, directory: string, parentID?: string): Session => {
   const record: Session = {
     id,
-    slug: id,
     projectID: '',
     directory,
     title: id,
-    version: 'claude-cli',
+    cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1, updated: 1 },
   };
   if (parentID) record.parentID = parentID;

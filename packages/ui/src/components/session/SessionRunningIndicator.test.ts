@@ -25,17 +25,15 @@ describe('shared running session indicator', () => {
     expect(indicatorSource).toContain('text-[var(--status-info)]');
     expect(nodeSource).toContain('<SessionRunningIndicator');
     expect(nodeSource).toContain('const statusMarkerContent = isStreaming ? (');
-    expect(nodeSource).toContain('useResolvedSessionStatusType(session.id, !archivedBucket)');
-    expect(nodeSource).toContain('enabled: !archivedBucket');
+    expect(nodeSource).toContain('useSessionTurnActive(session.id)');
     expect(switcherSource).toContain('<SessionRunningIndicator');
-    expect(mobileSessionsSource).toContain('<SessionRunningIndicator');
+    expect(mobileSessionsSource).toContain('<SessionActivityIndicator');
     expect(mobileSwitcherSource).toContain('<SessionRunningIndicator');
     expect(commandPaletteSource).toContain('<SessionRunningIndicator');
   });
 
   test('keeps unread and collapsed aggregate markers as static dots', () => {
     expect(nodeSource).toContain('className="h-1.5 w-1.5 rounded-full bg-[var(--status-info)]"');
-    expect(mobileSessionsSource).toContain('className="size-1.5 rounded-full bg-[var(--status-info)]"');
     expect(mobileSwitcherSource).toContain('className="size-1.5 rounded-full bg-[var(--status-info)]"');
     expect(nodeSource).toContain('role="img"');
     expect(mobileSwitcherSource).toContain('role="img"');

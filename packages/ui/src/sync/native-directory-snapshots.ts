@@ -1,9 +1,10 @@
-import type { QuestionRequest, Session, SessionStatus } from '@opencode-ai/sdk/v2/client';
+import type { FormRequest, Session, SessionStatus } from '@/lib/opencode/model';
 
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
 import { isNativeSessionId } from '@/lib/native-agents/ids';
 import { opencodeClient } from '@/lib/opencode/client';
+import { projectNativeQuestion } from '@/lib/native-agents/forms';
 
 // Directory snapshots of statuses and pending questions come from OpenCode,
 // which has never heard of native CLI sessions; these readers add the native
@@ -31,11 +32,15 @@ export const readNativeStatuses = async (directory: string, options?: ReadOption
 };
 
 /** Questions the directory's native sessions wait on: `[]` where this runtime has none, `null` when the read failed. */
-export const readNativeQuestions = async (directory: string, options?: ReadOptions): Promise<QuestionRequest[] | null> => {
+export const readNativeForms = async (directory: string, options?: ReadOptions): Promise<FormRequest[] | null> => {
   const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
   if (!nativeAgents?.supported) return [];
   try {
-    return await nativeAgents.questions(directory, options);
+    const questions = await nativeAgents.questions(directory, options);
+    return questions.flatMap((question) => {
+      const form = projectNativeQuestion(question);
+      return form ? [form] : [];
+    });
   } catch (error) {
     if (!options?.signal?.aborted) {
       console.warn('[native-sessions] failed to read native session questions for', directory, error);
@@ -50,7 +55,7 @@ export const heldNativeStatuses = (held: Readonly<StatusMap>): StatusMap => (
 );
 
 /** The native sessions' questions of held question groups. */
-export const heldNativeQuestions = (held: Readonly<Record<string, QuestionRequest[]>>): QuestionRequest[] => (
+export const heldNativeForms = (held: Readonly<Record<string, FormRequest[]>>): FormRequest[] => (
   Object.entries(held)
     .filter(([sessionId]) => isNativeSessionId(sessionId))
     .flatMap(([, questions]) => questions)
@@ -88,7 +93,7 @@ export const readDirectoryStatuses = async (
   const deadline = setTimeout(abort, STATUS_READ_TIMEOUT_MS);
   try {
     const [openCode, native] = await Promise.all([
-      opencodeClient.getSessionStatusForDirectory(directory, { signal: controller.signal }),
+      opencodeClient.getActiveSessionStatuses(directory, { signal: controller.signal }),
       readNativeStatuses(directory, { signal: controller.signal }),
     ]);
     if (openCode === null) return null;

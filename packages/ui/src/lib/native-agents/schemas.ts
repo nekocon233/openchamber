@@ -1,23 +1,28 @@
 // Boundary schemas for the native CLI session API (/api/native/*). The server
-// projects native sessions into OpenCode's Session/Message/Part records; these
-// schemas turn the network payload back into those SDK types, and `satisfies`
+// projects native sessions into its own Session/Message/Part records; these
+// schemas adapt that protocol to the shared UI domain, and `satisfies`
 // keeps each schema's output assignable to the type the stores hold.
 
-import type { Message, Part, Session } from '@opencode-ai/sdk/v2/client';
+import type { Message, Part, Session, SessionStatus } from '@/lib/opencode/model';
 import { z } from 'zod';
 
-import { sessionStatusSnapshotSchema } from '@/lib/opencode/session-status';
+import { isNativeSessionId } from './ids';
 
-const metadataSchema = z.record(z.string(), z.unknown());
+const metadataSchema = z.record(z.string(), z.json());
+const nativeSessionIdSchema = z.string().min(1).refine(isNativeSessionId);
+const tokenUsageSchema = z.object({
+  input: z.number(), output: z.number(), reasoning: z.number(),
+  cache: z.object({ read: z.number(), write: z.number() }),
+});
 
 export const nativeSessionSchema = z.object({
-  id: z.string().min(1),
-  slug: z.string(),
+  id: nativeSessionIdSchema,
   projectID: z.string(),
   directory: z.string().min(1),
   parentID: z.string().optional(),
   title: z.string(),
-  version: z.string(),
+  cost: z.number().default(0),
+  tokens: tokenUsageSchema.default(() => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })),
   time: z.object({ created: z.number(), updated: z.number(), archived: z.number().optional() }),
   metadata: metadataSchema.optional(),
   // A revert the next prompt has not committed yet: the UI hides the messages
@@ -27,24 +32,27 @@ export const nativeSessionSchema = z.object({
 
 const userMessageSchema = z.object({
   id: z.string().min(1),
-  sessionID: z.string().min(1),
+  sessionID: nativeSessionIdSchema,
   role: z.literal('user'),
   time: z.object({ created: z.number() }),
   agent: z.string(),
   model: z.object({ providerID: z.string(), modelID: z.string(), variant: z.string().optional() }),
 });
 
-const messageErrorSchema = z.discriminatedUnion('name', [
+export const nativeMessageErrorSchema = z.discriminatedUnion('name', [
   z.object({ name: z.literal('MessageAbortedError'), data: z.object({ message: z.string() }) }),
   z.object({ name: z.literal('UnknownError'), data: z.object({ message: z.string() }) }),
-]);
+]).transform((error) => ({
+  type: error.name === 'MessageAbortedError' ? 'aborted' : error.name,
+  message: error.data.message,
+}));
 
 const assistantMessageSchema = z.object({
   id: z.string().min(1),
-  sessionID: z.string().min(1),
+  sessionID: nativeSessionIdSchema,
   role: z.literal('assistant'),
   time: z.object({ created: z.number(), completed: z.number().optional() }),
-  error: messageErrorSchema.optional(),
+  error: nativeMessageErrorSchema.optional(),
   parentID: z.string().min(1),
   modelID: z.string(),
   providerID: z.string(),
@@ -61,14 +69,14 @@ const assistantMessageSchema = z.object({
     cache: z.object({ read: z.number(), write: z.number() }),
   }),
   variant: z.string().optional(),
-  finish: z.string().optional(),
+  finish: z.enum(['stop', 'length', 'tool-calls', 'content-filter', 'error', 'unknown']).catch('unknown').optional(),
 });
 
-const nativeMessageSchema = z.discriminatedUnion('role', [userMessageSchema, assistantMessageSchema]) satisfies z.ZodType<Message>;
+export const nativeMessageSchema = z.discriminatedUnion('role', [userMessageSchema, assistantMessageSchema]) satisfies z.ZodType<Message>;
 
 const partBase = {
   id: z.string().min(1),
-  sessionID: z.string().min(1),
+  sessionID: nativeSessionIdSchema,
   messageID: z.string().min(1),
 };
 
@@ -97,7 +105,7 @@ const toolStateSchema = z.discriminatedUnion('status', [
   }),
 ]);
 
-const nativePartSchema = z.discriminatedUnion('type', [
+export const nativePartSchema = z.discriminatedUnion('type', [
   z.object({
     ...partBase,
     type: z.literal('text'),
@@ -198,7 +206,12 @@ export const nativeCapabilitiesSchema = z.object({
   registry: z.object({ reset: z.boolean(), resetAt: z.number().optional() }),
 });
 
-export const nativeStatusSnapshotSchema = sessionStatusSnapshotSchema;
+export const nativeSessionStatusSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('idle') }),
+  z.object({ type: z.literal('busy') }),
+  z.object({ type: z.literal('retry'), attempt: z.number(), message: z.string(), next: z.number() }),
+]) satisfies z.ZodType<SessionStatus>;
+export const nativeStatusSnapshotSchema = z.record(nativeSessionIdSchema, nativeSessionStatusSchema);
 
 export const nativeCommandListSchema = z.object({
   commands: z.array(z.object({ name: z.string().min(1), description: z.string(), argumentHint: z.string() })),
@@ -227,9 +240,9 @@ export const nativeDeleteResultSchema = z.object({ deleted: z.literal(true) });
 export const nativeQuestionRepliedSchema = z.object({ replied: z.literal(true) });
 export const nativeQuestionRejectedSchema = z.object({ rejected: z.literal(true) });
 
-export const nativeQuestionListSchema = z.array(z.object({
+export const nativeQuestionSchema = z.object({
   id: z.string().min(1),
-  sessionID: z.string().min(1),
+  sessionID: nativeSessionIdSchema,
   kind: z.literal('claude-plan-exit').optional(),
   questions: z.array(z.object({
     question: z.string(),
@@ -238,4 +251,5 @@ export const nativeQuestionListSchema = z.array(z.object({
     multiple: z.boolean().optional(),
   })),
   tool: z.object({ messageID: z.string(), callID: z.string() }).optional(),
-}));
+});
+export const nativeQuestionListSchema = z.array(nativeQuestionSchema);

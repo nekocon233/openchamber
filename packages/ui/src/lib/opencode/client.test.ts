@@ -1,359 +1,150 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from "bun:test"
 
-type ConfigResponse = { data: Record<string, unknown> };
-type ClientConfig = { baseUrl?: string; directory?: string; fetch?: unknown };
-type ProvidersResponse = { data: { providers: []; default: { default: string } } };
-const providerResolvers: Array<(response: ProvidersResponse) => void> = [];
+// The generated `@opencode/client` runs for real here; only the runtime
+// transport (`runtimeFetch`) and runtime identity are replaced. That keeps
+// request fidelity (paths, query, headers, bodies) under test rather than
+// whatever a hand-written SDK stub would accept.
 
-(mock as unknown as { restore?: () => void }).restore?.();
+type RuntimeFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 
-const configResolvers: Array<(response: ConfigResponse) => void> = [];
-let configCalls = 0;
-const createdClientConfigs: ClientConfig[] = [];
-const callOrder: string[] = [];
-const promptAsyncCalls: unknown[][] = [];
-const promptAsyncResults: unknown[] = [];
-const pathGetResults: unknown[] = [];
-const switchAgentCalls: unknown[][] = [];
-const switchAgentResults: unknown[] = [];
-const switchModelCalls: unknown[][] = [];
-const switchModelResults: unknown[] = [];
-const durablePromptCalls: unknown[][] = [];
-const durablePromptResults: unknown[] = [];
-const historyCalls: unknown[][] = [];
-const historyResults: unknown[] = [];
-const nextMessagesCalls: unknown[][] = [];
-const nextMessagesResults: unknown[] = [];
-const sessionStatusCalls: unknown[][] = [];
-let sessionStatusResult: unknown = { data: {} };
-const sessionActiveCalls: unknown[][] = [];
-let sessionActiveResult: unknown = { data: { data: {} } };
-
-const nextResult = (results: unknown[], fallback: unknown): unknown => {
-  const next = results.shift();
-  if (next instanceof Error) throw next;
-  return next ?? fallback;
-};
-
-const configuredResult = (result: unknown, args: unknown[]): unknown => (
-  typeof result === 'function' ? (result as (...input: unknown[]) => unknown)(...args) : result
-);
-
-const createDeferred = <T>() => {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-};
-
-const promptAsyncMock = mock(async (...args: unknown[]) => {
-  callOrder.push('promptAsync');
-  promptAsyncCalls.push(args);
-  return nextResult(promptAsyncResults, { response: new Response(null, { status: 200 }) });
-});
-
-const switchAgentMock = mock(async (...args: unknown[]) => {
-  callOrder.push('switchAgent');
-  switchAgentCalls.push(args);
-  return nextResult(switchAgentResults, { response: new Response(null, { status: 204 }) });
-});
-
-const switchModelMock = mock(async (...args: unknown[]) => {
-  callOrder.push('switchModel');
-  switchModelCalls.push(args);
-  return nextResult(switchModelResults, { response: new Response(null, { status: 204 }) });
-});
-
-const durablePromptMock = mock(async (...args: unknown[]) => {
-  callOrder.push('prompt');
-  durablePromptCalls.push(args);
-  const request = args[0] as {
-    sessionID?: string;
-    id?: string;
-    prompt?: unknown;
-    delivery?: 'steer' | 'queue';
-  };
-  return nextResult(durablePromptResults, {
-    data: {
-      data: {
-        admittedSeq: 1,
-        id: request.id,
-        sessionID: request.sessionID,
-        prompt: request.prompt,
-        delivery: request.delivery,
-        timeCreated: 1,
-      },
-    },
-  });
-});
-
-const historyMock = mock(async (...args: unknown[]) => {
-  callOrder.push('history');
-  historyCalls.push(args);
-  return nextResult(historyResults, {
-    data: {
-      data: [],
-      hasMore: false,
-    },
-  });
-});
-
-const nextMessagesMock = mock(async (...args: unknown[]) => {
-  callOrder.push('nextMessages');
-  nextMessagesCalls.push(args);
-  return nextResult(nextMessagesResults, {
-    data: {
-      data: [],
-      cursor: {},
-    },
-  });
-});
-
-const sessionActiveMock = mock(async (...args: unknown[]) => {
-  sessionActiveCalls.push(args);
-  return configuredResult(sessionActiveResult, args);
-});
-
-let pathGetCalls = 0;
-const pathGetMock = mock(async () => {
-  pathGetCalls += 1;
-  const next = pathGetResults.shift();
-  if (next instanceof Error) throw next;
-  return next ?? { data: { directory: '/workspace/project' } };
-});
-
-const createOpencodeClientMock = mock((config: ClientConfig) => {
-  createdClientConfigs.push(config);
-  return {
-    config: {
-      providers: () => new Promise<ProvidersResponse>((resolve) => { providerResolvers.push(resolve); }),
-      get: mock(() => {
-        configCalls += 1;
-        return new Promise<ConfigResponse>((resolve) => {
-          configResolvers.push(resolve);
-        });
-      }),
-    },
-    session: {
-      promptAsync: promptAsyncMock,
-      status: mock(async (...args: unknown[]) => {
-        sessionStatusCalls.push(args);
-        return configuredResult(sessionStatusResult, args);
-      }),
-    },
-    v2: {
-      session: {
-        switchAgent: switchAgentMock,
-        switchModel: switchModelMock,
-        prompt: durablePromptMock,
-        history: historyMock,
-        messages: nextMessagesMock,
-        active: sessionActiveMock,
-      },
-    },
-    path: {
-      get: pathGetMock,
-    },
-  };
-});
-
-mock.module('@opencode-ai/sdk/v2', () => ({
-  createOpencodeClient: createOpencodeClientMock,
-}));
-
-mock.module('@/contexts/runtimeAPIRegistry', () => ({
-  getRegisteredRuntimeAPIs: mock(() => null),
-}));
-
-mock.module('@/lib/runtime-url', () => ({
-  getRuntimeUrlResolver: mock(() => ({
-    api: (path: string) => path,
-  })),
-}));
-
-let runtimeKey = 'test-runtime';
-let runtimeGeneration = 0;
-class TestRuntimeContextChangedError extends Error {
-  constructor() {
-    super('Runtime changed before operation dispatch');
-    this.name = 'RuntimeContextChangedError';
-  }
+type CapturedRequest = {
+  url: URL
+  method: string
+  headers: Headers
+  body: unknown
 }
 
-mock.module('@/lib/runtime-switch', () => ({
-  getRuntimeApiBaseUrl: mock(() => ''),
-  getRuntimeEndpointGeneration: mock(() => runtimeGeneration),
-  getRuntimeKey: mock(() => runtimeKey),
-  RuntimeContextChangedError: TestRuntimeContextChangedError,
-}));
+const requests: CapturedRequest[] = []
+const responses: Array<Response | Error | ((request: CapturedRequest) => Response | Error)> = []
+let runtimeKey = "test-runtime"
 
-type DirectoryProbeQuery = { path?: string };
-const runtimeFetchCalls: Array<{ path: string; query: DirectoryProbeQuery | undefined }> = [];
-const runtimeFetchResults: Array<Response | Error> = [];
-const fsHomeResponses: Array<Response | Error> = [];
+const json = (value: unknown, status = 200) =>
+  new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } })
+const noContent = () => new Response(null, { status: 204 })
 
-mock.module('@/lib/runtime-fetch', () => ({
-  runtimeFetch: mock(async (input: string | URL | Request, init?: { query?: DirectoryProbeQuery }) => {
-    if (typeof input === 'string' && input.includes('/fs/home')) {
-      const next = fsHomeResponses.shift();
-      if (next instanceof Error) throw next;
-      if (next) return next;
+const runtimeFetchMock = mock<RuntimeFetch>(async (input, init) => {
+  const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url)
+  const request: CapturedRequest = {
+    url,
+    method: String(init?.method ?? "GET").toUpperCase(),
+    headers: new Headers(init?.headers),
+    body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+  }
+  requests.push(request)
+  const next = responses.shift()
+  const resolved = typeof next === "function" ? next(request) : next
+  if (resolved instanceof Error) throw resolved
+  if (resolved === HANG) return hangUntilAborted(init?.signal ?? undefined)
+  return resolved ?? json({})
+})
+
+/** Sentinel response: the transport never answers, only an abort ends the wait. */
+const HANG = new Response(null, { status: 599 })
+const hangUntilAborted = (signal: AbortSignal | undefined) =>
+  new Promise<Response>((_, reject) => {
+    if (!signal) return
+    // A real pending request keeps the event loop alive. AbortSignal.timeout does
+    // not, and Bun on Windows then never fires it, so hold the loop until abort.
+    const pending = setInterval(() => undefined, 1_000)
+    const abort = () => {
+      clearInterval(pending)
+      reject(new DOMException("Aborted", "AbortError"))
     }
-    if (typeof input === 'string') runtimeFetchCalls.push({ path: input, query: init?.query });
-    const next = runtimeFetchResults.shift();
-    if (next instanceof Error) throw next;
-    return next ?? new Response(JSON.stringify([]), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }),
-}));
+    if (signal.aborted) abort()
+    else signal.addEventListener("abort", abort, { once: true })
+  })
 
-mock.module('@/lib/startupTrace', () => ({
+;(mock as unknown as { restore?: () => void }).restore?.()
+
+mock.module("@/contexts/runtimeAPIRegistry", () => ({
+  getRegisteredRuntimeAPIs: mock(() => null),
+}))
+
+mock.module("@/lib/runtime-url", () => ({
+  getRuntimeUrlResolver: mock(() => ({
+    api: () => "http://runtime.test/api",
+  })),
+}))
+
+mock.module("@/lib/runtime-switch", () => ({
+  getRuntimeApiBaseUrl: mock(() => ""),
+  getRuntimeKey: mock(() => runtimeKey),
+}))
+
+mock.module("@/lib/runtime-fetch", () => ({
+  runtimeFetch: runtimeFetchMock,
+}))
+
+mock.module("@/lib/startupTrace", () => ({
   markStartupTrace: mock(() => undefined),
-}));
+}))
 
-const { opencodeClient } = await import(`./client?cache-test=${Date.now()}`);
+const { OpencodeApiError, createRuntimeOpencodeClient, opencodeClient } = await import(`./client?client-test=${Date.now()}`)
+const { readProjectConfigError } = await import("./configError")
+
+const sessionInfo = {
+  id: "ses_1",
+  projectID: "proj_1",
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  time: { created: 1, updated: 2 },
+  title: "First",
+  location: { directory: "/repo/app" },
+}
 
 beforeEach(() => {
-  runtimeKey = 'test-runtime';
-  runtimeGeneration = 0;
-  configCalls = 0;
-  configResolvers.length = 0;
-  createdClientConfigs.length = 0;
-  callOrder.length = 0;
-  promptAsyncCalls.length = 0;
-  promptAsyncResults.length = 0;
-  pathGetResults.length = 0;
-  switchAgentCalls.length = 0;
-  switchAgentResults.length = 0;
-  switchModelCalls.length = 0;
-  switchModelResults.length = 0;
-  durablePromptCalls.length = 0;
-  durablePromptResults.length = 0;
-  historyCalls.length = 0;
-  historyResults.length = 0;
-  nextMessagesCalls.length = 0;
-  nextMessagesResults.length = 0;
-  sessionStatusCalls.length = 0;
-  sessionStatusResult = { data: {} };
-  sessionActiveCalls.length = 0;
-  sessionActiveResult = { data: { data: {} } };
-  pathGetCalls = 0;
-  runtimeFetchCalls.length = 0;
-  runtimeFetchResults.length = 0;
-  fsHomeResponses.length = 0;
-  opencodeClient.clearConfigCache();
-});
+  requests.length = 0
+  responses.length = 0
+  runtimeKey = "test-runtime"
+  opencodeClient.setDirectory(undefined)
+  opencodeClient.clearConfigCache()
+})
 
-describe('opencodeClient session status', () => {
-  test('forwards the directory and one bounded signal to both status endpoints', async () => {
-    const controller = new AbortController();
+describe("request fidelity", () => {
+  test("a directory-scoped call carries the encoded directory header and lists that directory", async () => {
+    responses.push(json({ data: [sessionInfo], cursor: { next: "c2" } }))
+    const page = await opencodeClient.listSessionsPage({ directory: "/repo/app dir" })
+    const request = requests[0]
+    expect(request.url.origin + request.url.pathname).toBe("http://runtime.test/api/session")
+    expect(request.url.searchParams.get("directory")).toBe("/repo/app dir")
+    expect(request.url.searchParams.get("limit")).toBe("100")
+    expect(request.headers.get("x-opencode-directory")).toBe(encodeURIComponent("/repo/app dir"))
+    expect(page.sessions[0]).toMatchObject({ id: "ses_1", directory: "/repo/app", title: "First" })
+    expect(page.cursor).toEqual({ next: "c2" })
+  })
 
-    await opencodeClient.getSessionStatusForDirectory('/workspace/project', { signal: controller.signal });
+  test("a global list sends no directory scope at all", async () => {
+    opencodeClient.setDirectory("/repo/app")
+    responses.push(json({ data: [], cursor: {} }))
+    await opencodeClient.listSessionsPage({ global: true })
+    expect(requests[0].url.searchParams.has("directory")).toBe(false)
+    expect(requests[0].headers.has("x-opencode-directory")).toBe(false)
+  })
 
-    const legacySignal = (sessionStatusCalls[0]?.[1] as { signal?: AbortSignal })?.signal;
-    const activeSignal = (sessionActiveCalls[0]?.[0] as { signal?: AbortSignal })?.signal;
-    expect(sessionStatusCalls[0]?.[0]).toEqual({ directory: '/workspace/project' });
-    expect(legacySignal).toBeInstanceOf(AbortSignal);
-    expect(activeSignal).toBe(legacySignal);
-    expect(legacySignal).not.toBe(controller.signal);
-  });
+  test("the active-session snapshot is the host's, except for a directory inside an isolated space", async () => {
+    responses.push(json({ data: { ses_host: { type: "running" } } }))
+    await opencodeClient.getActiveSessionStatuses("/repo/app")
+    expect(requests[0].url.pathname).toBe("/api/session/active")
+    expect(requests[0].headers.has("x-opencode-directory")).toBe(false)
+    responses.push(json({ data: { ses_space: { type: "running" } } }))
+    const statuses = await opencodeClient.getActiveSessionStatuses("/spaces/a1b2c3d4e5f6/app")
+    // The space's directory travels on the request; `runtimeFetch` turns it into the space's prefix.
+    expect(requests[1].url.pathname).toBe("/api/session/active")
+    expect(requests[1].headers.get("x-opencode-directory")).toBe(encodeURIComponent("/spaces/a1b2c3d4e5f6/app"))
+    expect(statuses).toEqual({ ses_space: { type: "busy" } })
+  })
 
-  test('returns unknown after the bounded status request aborts a half-open endpoint', async () => {
-    let observedSignal: AbortSignal | undefined;
-    sessionStatusResult = (...args: unknown[]) => new Promise((resolve) => {
-      observedSignal = (args[1] as { signal?: AbortSignal })?.signal;
-      const finish = () => resolve({ error: new Error('aborted') });
-      if (observedSignal?.aborted) finish();
-      else observedSignal?.addEventListener('abort', finish, { once: true });
-    });
-
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project', { timeoutMs: 5 })).toBeNull();
-    expect(observedSignal?.aborted).toBe(true);
-  });
-
-  test('aborts the sibling status request when one endpoint rejects immediately', async () => {
-    let siblingSignal: AbortSignal | undefined;
-    sessionStatusResult = () => {
-      throw new Error('legacy rejected');
-    };
-    sessionActiveResult = (...args: unknown[]) => new Promise((resolve) => {
-      siblingSignal = (args[0] as { signal?: AbortSignal })?.signal;
-      const finish = () => resolve({ error: new Error('aborted') });
-      if (siblingSignal?.aborted) finish();
-      else siblingSignal?.addEventListener('abort', finish, { once: true });
-    });
-
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
-    expect(siblingSignal?.aborted).toBe(true);
-  });
-
-  test('merges live V2 running sessions with legacy status while preserving retry details', async () => {
-    sessionStatusResult = {
-      data: {
-        ses_idle: { type: 'idle' },
-        ses_retry: { type: 'retry', attempt: 2, message: 'waiting', next: 123 },
-      },
-    };
-    sessionActiveResult = {
-      data: {
-        data: {
-          ses_idle: { type: 'running' },
-          ses_retry: { type: 'running' },
-          ses_v2: { type: 'running' },
-        },
-      },
-    };
-
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toEqual({
-      ses_idle: { type: 'busy' },
-      ses_retry: { type: 'retry', attempt: 2, message: 'waiting', next: 123 },
-      ses_v2: { type: 'busy' },
-    });
-  });
-
-  test('rejects malformed payloads instead of treating them as authoritative empty state', async () => {
-    sessionStatusResult = { data: [] };
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
-
-    sessionStatusResult = { data: { error: { message: 'upstream failed' } } };
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
-
-    sessionStatusResult = { data: { ses_retry: { type: 'retry', attempt: '1' } } };
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
-
-    sessionStatusResult = { data: {} };
-    sessionActiveResult = { data: { data: { ses_bad: { type: 'stale' } } } };
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
-  });
-
-  test('preserves prior authority when either live status endpoint fails', async () => {
-    sessionActiveResult = { error: { message: 'unavailable' }, response: { status: 503 } };
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
-
-    sessionActiveResult = { data: { data: {} } };
-    sessionStatusResult = { error: { message: 'unavailable' }, response: { status: 503 } };
-    expect(await opencodeClient.getSessionStatusForDirectory('/workspace/project')).toBeNull();
-  });
-});
-
-test('same-URL reconnect isolates provider requests and old completion cannot delete new deduplication', async () => {
-  const oldClient = opencodeClient.getSdkClient();
-  const oldRequest = opencodeClient.getProvidersForConfig('/same/path');
-  opencodeClient.reconnectToRuntimeBaseUrl();
-  expect(opencodeClient.getSdkClient()).not.toBe(oldClient);
-  const newRequest = opencodeClient.getProvidersForConfig('/same/path');
-  expect(providerResolvers).toHaveLength(2);
-  providerResolvers[0]({ data: { providers: [], default: { default: 'old' } } });
-  await oldRequest;
-  const joinedRequest = opencodeClient.getProvidersForConfig('/same/path');
-  expect(providerResolvers).toHaveLength(2);
-  providerResolvers[1]({ data: { providers: [], default: { default: 'new' } } });
-  expect((await newRequest).default.default).toBe('new');
-  expect((await joinedRequest).default.default).toBe('new');
-});
-
+  test("a global page carries the isolated-space marks the host merged in, a directory page never does", async () => {
+    const spaces = [{ id: "a1b2c3d4e5f6", name: "One", state: "stale", sessions: 1, projectDirectory: "/repo/app", directory: "/spaces/a1b2c3d4e5f6/app" }]
+    responses.push(json({ data: [], cursor: {}, spaces }))
+    const page = await opencodeClient.listSessionsPage({ global: true })
+    expect(page.spaces).toEqual([{ id: "a1b2c3d4e5f6", name: "One", state: "stale", projectDirectory: "/repo/app", directory: "/spaces/a1b2c3d4e5f6/app" }])
+    responses.push(json({ data: [], cursor: {}, spaces }))
+    expect((await opencodeClient.listSessionsPage({ directory: "/repo/app" })).spaces).toBeUndefined()
+    // A mark the client cannot read is no mark, not a broken list.
+    responses.push(json({ data: [], cursor: {}, spaces: [{ id: "bad" }] }))
+    expect((await opencodeClient.listSessionsPage({ global: true })).spaces).toBeUndefined()
+  })
 test('Windows drive roots remain absolute in directory selection and SDK client identity', () => {
   const previous = opencodeClient.getDirectory();
   try {
@@ -376,586 +167,472 @@ test('Windows separators and UNC representations share SDK clients without lower
 });
 
 test('a drive-root system-info fallback stays absolute', async () => {
-  pathGetResults.push({ data: { directory: 'C:/' } });
+  responses.push(json({ directory: 'C:/', project: { id: 'project', directory: 'C:/', canonical: 'C:/' } }));
   expect((await opencodeClient.getSystemInfo()).homeDirectory).toBe('C:/');
 });
 
-describe('opencodeClient directory availability', () => {
-  type ProbeBody = { error: string; reason?: string } | { isDirectory: boolean } | { isFile: boolean; size: number };
-  const json = (status: number, body: ProbeBody): Response => new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+  test("the current directory scopes calls that pass none", async () => {
+    opencodeClient.setDirectory("/repo/current")
+    responses.push(json({ location: {}, data: [] }))
+    await opencodeClient.listAgents()
+    expect(requests[0].url.pathname).toBe("/api/agent")
+    expect(requests[0].headers.get("x-opencode-directory")).toBe(encodeURIComponent("/repo/current"))
+  })
+})
 
-  test('stats the directory through the OpenChamber filesystem route, never through OpenCode path resolution', async () => {
-    runtimeFetchResults.push(json(200, { isDirectory: true }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('available');
-    expect(runtimeFetchCalls).toEqual([{ path: '/api/fs/directory-stat', query: { path: '/private/deleted-worktree' } }]);
-    expect(pathGetCalls).toBe(0);
-  });
+describe("error normalisation", () => {
+  test("an invalid project config keeps its path and message reachable", async () => {
+    const body = {
+      name: "ConfigInvalidError",
+      data: { path: "/repo/bad/opencode.json", message: "bad file reference: {file:./.secrets/token} does not exist" },
+    }
+    responses.push(json(body, 400))
+    const error = await opencodeClient.listAgents("/repo/bad").catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(OpencodeApiError)
+    expect(readProjectConfigError(error)).toEqual({
+      name: "ConfigInvalidError",
+      path: "/repo/bad/opencode.json",
+      message: "bad file reference: {file:./.secrets/token} does not exist",
+    })
+  })
 
-  test('distinguishes a missing directory from an unavailable probe', async () => {
-    runtimeFetchResults.push(json(404, { error: 'Directory not found', reason: 'not-found' }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('missing');
+  test("a tagged error body gets its HTTP status restored", async () => {
+    responses.push(json({ _tag: "SessionNotFoundError", sessionID: "ses_x", message: "no such session" }, 404))
+    const error = await opencodeClient.getSession("ses_x").catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(OpencodeApiError)
+    expect(error).toMatchObject({ status: 404, tag: "SessionNotFoundError", operation: "session.get" })
+  })
 
-    runtimeFetchResults.push(json(400, { error: 'Specified path is not a directory', reason: 'not-directory' }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('missing');
+  // Only routes that declare a 500 body deliver it: the generated client
+  // cancels an undeclared status' body and reports the status alone.
+  test("a declared 500 body keeps the log ref OpenCode printed next to its stack", async () => {
+    responses.push(json({ _tag: "UnknownError", message: "Unexpected server error. Check server logs for details.", ref: "err_07817ddc" }, 500))
+    const error = await opencodeClient.getSessionMessages("ses_x", { limit: 10 }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(OpencodeApiError)
+    expect(error).toMatchObject({
+      status: 500,
+      tag: "UnknownError",
+      ref: "err_07817ddc",
+      detail: "Unexpected server error. Check server logs for details.",
+    })
+  })
 
-    runtimeFetchResults.push(json(200, { isFile: true, size: 12 }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('unknown');
+  test("an undeclared 500 arrives without its body, so no ref can be quoted", async () => {
+    responses.push(json({ _tag: "UnknownError", message: "boom", ref: "err_07817ddc" }, 500))
+    const error = await opencodeClient.renameSession("ses_x", "Title").catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(OpencodeApiError)
+    expect(error).toMatchObject({ status: 500, operation: "session.update", ref: undefined })
+  })
 
-    runtimeFetchResults.push(json(404, { error: 'Not Found' }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('unknown');
+  test("an undeclared status is reported with that status", async () => {
+    responses.push(new Response("boom", { status: 500 }))
+    const error = await opencodeClient.getSession("ses_x").catch((e: unknown) => e)
+    expect(error).toMatchObject({ status: 500, operation: "session.get" })
+  })
 
-    runtimeFetchResults.push(json(500, { error: 'Failed to stat path' }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('unknown');
+  test("a transport failure has no status", async () => {
+    responses.push(new TypeError("Failed to fetch"))
+    const error = await opencodeClient.getSession("ses_x").catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(OpencodeApiError)
+    expect((error as { status?: number }).status).toBeUndefined()
+  })
 
-    runtimeFetchResults.push(json(403, { error: 'Access to directory denied', reason: 'os-permission' }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('unknown');
+  test("fetchPermission maps 404 to resolved and everything else to unknown", async () => {
+    responses.push(json({ _tag: "PermissionNotFoundError", message: "gone" }, 404))
+    expect(await opencodeClient.fetchPermission("ses_1", "per_1")).toEqual({ state: "resolved" })
+    responses.push(new Response("", { status: 502 }))
+    expect(await opencodeClient.fetchPermission("ses_1", "per_1")).toEqual({ state: "unknown" })
+    responses.push(json({ data: { id: "per_1", sessionID: "ses_1", action: "bash", resources: ["ls"] } }))
+    expect(await opencodeClient.fetchPermission("ses_1", "per_1")).toMatchObject({
+      state: "ok",
+      permission: { id: "per_1", action: "bash" },
+    })
+    expect(requests[0].url.pathname).toBe("/api/session/ses_1/permission/per_1")
+  })
+})
 
-    runtimeFetchResults.push(json(501, { error: 'Unsupported' }));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('unknown');
+describe("sendMessage", () => {
+  test("switches model and agent, admits context as synthetic messages, then prompts", async () => {
+    responses.push(noContent(), noContent(), json({ id: "syn_1" }), json({ id: "msg_1" }))
+    const id = await opencodeClient.sendMessage({
+      id: "ses_1",
+      providerID: "openai",
+      model: { id: "gpt-5.6-luna", providerID: "openai" },
+      agent: "build",
+      text: "hello",
+      messageId: "msg_1",
+      context: [{ text: "selected code", metadata: { openchamberContext: { kind: "file-quote" } } as never }],
+      agentMentions: [{ name: "explore", source: { value: "@explore", start: 0, end: 8 } }],
+      directory: "/repo/app",
+    })
+    expect(id).toBe("msg_1")
+    expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([
+      "POST /api/session/ses_1/model",
+      "POST /api/session/ses_1/agent",
+      "POST /api/session/ses_1/synthetic",
+      "POST /api/session/ses_1/prompt",
+    ])
+    expect(requests[0].body).toEqual({ model: { id: "gpt-5.6-luna", providerID: "openai" } })
+    expect(requests[2].body).toMatchObject({ text: "selected code", resume: false, metadata: { openchamberContext: { kind: "file-quote" } } })
+    expect(requests[3].body).toEqual({
+      id: "msg_1",
+      text: "hello",
+      agents: [{ name: "explore", mention: { start: 0, end: 8, text: "@explore" } }],
+    })
+    expect(requests.every((r) => r.headers.get("x-opencode-directory") === encodeURIComponent("/repo/app"))).toBe(true)
+  })
 
-    runtimeFetchResults.push(new Error('offline'));
-    expect(await opencodeClient.getDirectoryAvailability('/private/deleted-worktree')).toBe('unknown');
-  });
-});
+  test("without a selection change only the prompt is sent, with files as URIs", async () => {
+    responses.push(json({ id: "msg_2" }))
+    await opencodeClient.sendMessage({
+      id: "ses_1",
+      providerID: "openai",
+      text: "look",
+      messageId: "msg_2",
+      files: [{ type: "file", mime: "text/markdown", filename: "notes.md", url: "data:text/markdown;base64,QQ==" }],
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toEqual({
+      id: "msg_2",
+      text: "look",
+      files: [{ uri: "data:text/plain;base64,QQ==", name: "notes.md" }],
+    })
+  })
 
-describe('opencodeClient getFilesystemHomeInfo', () => {
-  type HomePayload = { home?: string; chatsRoot?: string | number };
-  const fsHomeResponse = (body: HomePayload) => new Response(JSON.stringify(body), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  test("refuses to send when the runtime changed underneath the caller", async () => {
+    await expect(
+      opencodeClient.sendMessage({ runtimeKey: "other", id: "ses_1", providerID: "openai", text: "x" }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests).toHaveLength(0)
+  })
 
-  test('returns the server-provided chats root', async () => {
-    fsHomeResponses.push(fsHomeResponse({ home: '/Users/tester', chatsRoot: '/srv/openchamber-chats' }));
-    expect(await opencodeClient.getFilesystemHomeInfo()).toEqual({ home: '/Users/tester', chatsRoot: '/srv/openchamber-chats' });
-  });
+  // A runtime switch while the model switch is in flight: the agent switch,
+  // context and prompt must not go to the new server.
+  test("stops between the model and agent switch when the runtime changes mid-send", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendMessage({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        providerID: "openai",
+        model: { id: "m", providerID: "openai" },
+        agent: "build",
+        text: "hello",
+        context: [{ text: "ctx" }],
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/model"])
+  })
 
-  test('returns the home for an older server that answers without chatsRoot', async () => {
-    fsHomeResponses.push(fsHomeResponse({ home: '/Users/tester' }));
-    expect(await opencodeClient.getFilesystemHomeInfo()).toEqual({ home: '/Users/tester' });
-  });
+  test("stops before the prompt when the runtime changes after the agent switch", async () => {
+    responses.push(noContent(), () => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendMessage({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        providerID: "openai",
+        model: { id: "m", providerID: "openai" },
+        agent: "build",
+        text: "hello",
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/model", "/api/session/ses_1/agent"])
+  })
 
-  test('throws on a failed fetch', async () => {
-    fsHomeResponses.push(new Error('transient network failure'));
-    await expect(opencodeClient.getFilesystemHomeInfo()).rejects.toThrow('transient network failure');
-  });
+  test("stops between context messages when the runtime changes", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return json({ id: "syn_1" })
+    })
+    await expect(
+      opencodeClient.sendMessage({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        providerID: "openai",
+        text: "hello",
+        context: [{ text: "one" }, { text: "two" }],
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/synthetic"])
+  })
+})
 
-  test('throws on a non-ok response', async () => {
-    fsHomeResponses.push(new Response('unavailable', { status: 503 }));
-    await expect(opencodeClient.getFilesystemHomeInfo()).rejects.toThrow('503');
-  });
+describe("sendMessage with inline skills", () => {
+  const skillInfo = (id: string, name = id) => ({ id, name, path: `/skills/${id}/SKILL.md`, content: "body" })
+  const instructionFor = (names: readonly string[]) => (names.length ? `use: ${names.join(",")}` : null)
 
-  test('rejects missing home and relative roots rather than caching a fallback', async () => {
-    fsHomeResponses.push(fsHomeResponse({}));
-    await expect(opencodeClient.getFilesystemHomeInfo()).rejects.toThrow();
-    fsHomeResponses.push(fsHomeResponse({ home: '/home/user', chatsRoot: 'relative' }));
-    await expect(opencodeClient.getFilesystemHomeInfo()).rejects.toThrow();
-  });
+  test("attaches known skills to the prompt by id, without an instruction", async () => {
+    responses.push(json({ location: { directory: "/repo/app" }, data: [skillInfo("deploy"), skillInfo("code-audit", "audit")] }), json({ id: "msg_1" }))
+    await opencodeClient.sendMessage({
+      id: "ses_1",
+      providerID: "openai",
+      text: "/audit then /deploy",
+      messageId: "msg_1",
+      delivery: "steer",
+      directory: "/repo/app",
+      skills: { names: ["audit", "deploy"], instructionFor },
+    })
+    expect(requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual(["GET /api/skill", "POST /api/session/ses_1/prompt"])
+    expect(requests[1].body).toEqual({
+      id: "msg_1",
+      text: "/audit then /deploy",
+      skills: [{ id: "code-audit" }, { id: "deploy" }],
+      delivery: "steer",
+    })
+  })
 
-  test('throws on a malformed payload', async () => {
-    fsHomeResponses.push(fsHomeResponse({ chatsRoot: 42 }));
-    await expect(opencodeClient.getFilesystemHomeInfo()).rejects.toThrow();
-  });
-});
+  test("names OpenCode does not list fall back to an instruction admitted before the prompt", async () => {
+    responses.push(json({ location: { directory: "/repo/app" }, data: [skillInfo("deploy")] }), json({ id: "syn_1" }), json({ id: "msg_1" }))
+    await opencodeClient.sendMessage({
+      id: "ses_1",
+      providerID: "openai",
+      text: "x",
+      messageId: "msg_1",
+      skills: { names: ["deploy", "ghost"], instructionFor },
+    })
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/skill", "/api/session/ses_1/synthetic", "/api/session/ses_1/prompt"])
+    expect(requests[1].body).toMatchObject({ text: "use: ghost", resume: false })
+    expect(requests[2].body).toMatchObject({ skills: [{ id: "deploy" }] })
+  })
 
-describe('opencodeClient getConfig cache', () => {
-  test('cleared stale in-flight requests do not repopulate cache or delete newer in-flight requests', async () => {
-    const first = opencodeClient.getConfig('/workspace/project');
-    expect(configCalls).toBe(1);
+  test("a failed skill list still sends, naming every skill in the instruction", async () => {
+    responses.push(json({ _tag: "UnknownError", message: "boom" }, 500), json({ id: "syn_1" }), json({ id: "msg_1" }))
+    await opencodeClient.sendMessage({
+      id: "ses_1",
+      providerID: "openai",
+      text: "x",
+      messageId: "msg_1",
+      skills: { names: ["deploy"], instructionFor },
+    })
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/skill", "/api/session/ses_1/synthetic", "/api/session/ses_1/prompt"])
+    expect(requests[1].body).toMatchObject({ text: "use: deploy" })
+    const promptBody = requests[2].body
+    expect(typeof promptBody === "object" && promptBody !== null && "skills" in promptBody).toBe(false)
+  })
 
-    opencodeClient.clearConfigCache();
+  test("a skill removed before the prompt resends the same message with the instruction", async () => {
+    responses.push(
+      json({ location: { directory: "/repo/app" }, data: [skillInfo("deploy")] }),
+      json({ _tag: "InvalidRequestError", message: "Skill not found: deploy", field: "skills" }, 400),
+      json({ id: "syn_1" }),
+      json({ id: "msg_1" }),
+    )
+    const id = await opencodeClient.sendMessage({
+      id: "ses_1",
+      providerID: "openai",
+      text: "x",
+      messageId: "msg_1",
+      skills: { names: ["deploy"], instructionFor },
+    })
+    expect(id).toBe("msg_1")
+    expect(requests.map((r) => r.url.pathname)).toEqual([
+      "/api/skill",
+      "/api/session/ses_1/prompt",
+      "/api/session/ses_1/synthetic",
+      "/api/session/ses_1/prompt",
+    ])
+    expect(requests[1].body).toMatchObject({ id: "msg_1", skills: [{ id: "deploy" }] })
+    expect(requests[2].body).toMatchObject({ text: "use: deploy" })
+    expect(requests[3].body).toEqual({ id: "msg_1", text: "x" })
+  })
 
-    const second = opencodeClient.getConfig('/workspace/project');
-    expect(configCalls).toBe(2);
+  test("other prompt rejections are not retried", async () => {
+    responses.push(json({ location: { directory: "/repo/app" }, data: [skillInfo("deploy")] }), json({ _tag: "InvalidRequestError", message: "Attachment too big", field: "files" }, 400))
+    await expect(
+      opencodeClient.sendMessage({ id: "ses_1", providerID: "openai", text: "x", skills: { names: ["deploy"], instructionFor } }),
+    ).rejects.toThrow()
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/skill", "/api/session/ses_1/prompt"])
+  })
+})
 
-    configResolvers[0]?.({ data: { model: 'old/model' } });
-    expect(await first).toEqual({ model: 'old/model' });
+describe("sendCommand", () => {
+  test("switches model and agent, then runs the command", async () => {
+    responses.push(noContent(), noContent(), noContent())
+    await opencodeClient.sendCommand({
+      runtimeKey: "test-runtime",
+      id: "ses_1",
+      model: { id: "m", providerID: "openai" },
+      agent: "build",
+      command: "review",
+      arguments: "src",
+    })
+    expect(requests.map((r) => r.url.pathname)).toEqual([
+      "/api/session/ses_1/model",
+      "/api/session/ses_1/agent",
+      "/api/session/ses_1/command",
+    ])
+    expect(requests[2].body).toMatchObject({ name: "review", text: "src" })
+  })
 
-    const third = opencodeClient.getConfig('/workspace/project');
-    expect(configCalls).toBe(2);
+  test("stops after the model switch when the runtime changes mid-command", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendCommand({
+        runtimeKey: "test-runtime",
+        id: "ses_1",
+        model: { id: "m", providerID: "openai" },
+        agent: "build",
+        command: "review",
+      }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/model"])
+  })
 
-    configResolvers[1]?.({ data: { model: 'new/model' } });
-    expect(await second).toEqual({ model: 'new/model' });
-    expect(await third).toEqual({ model: 'new/model' });
+  test("stops before the command when the runtime changes after the agent switch", async () => {
+    responses.push(() => {
+      runtimeKey = "other"
+      return noContent()
+    })
+    await expect(
+      opencodeClient.sendCommand({ runtimeKey: "test-runtime", id: "ses_1", agent: "build", command: "review" }),
+    ).rejects.toThrow("runtime changed")
+    expect(requests.map((r) => r.url.pathname)).toEqual(["/api/session/ses_1/agent"])
+  })
+})
 
-    const cached = await opencodeClient.getConfig('/workspace/project');
-    expect(cached).toEqual({ model: 'new/model' });
-    expect(configCalls).toBe(2);
-  });
-});
-
-describe('opencodeClient session input history', () => {
-  const durableEvent = (input: {
-    type: 'session.next.prompt.admitted' | 'session.next.prompted';
-    seq: number;
-    messageID: string;
-    text: string;
-  }) => ({
-    type: input.type,
-    durable: { aggregateID: 'ses_history', seq: input.seq, version: 1 },
-    data: {
-      timestamp: input.seq * 1000,
-      sessionID: 'ses_history',
-      messageID: input.messageID,
-      prompt: { text: input.text },
-      delivery: 'queue',
-    },
-  });
-
-  test('pages admission history and marks promoted inputs without treating gaps as empty success', async () => {
-    historyResults.push(
-      {
-        data: {
-          data: [
-            durableEvent({ type: 'session.next.prompt.admitted', seq: 10, messageID: 'msg-a', text: 'first' }),
-            durableEvent({ type: 'session.next.prompted', seq: 20, messageID: 'msg-a', text: 'first' }),
-            durableEvent({ type: 'session.next.prompt.admitted', seq: 30, messageID: 'msg-b', text: 'second' }),
-          ],
-          hasMore: true,
-        },
-      },
-      {
-        data: {
-          data: [
-            durableEvent({ type: 'session.next.prompted', seq: 40, messageID: 'msg-b', text: 'second' }),
-            durableEvent({ type: 'session.next.prompt.admitted', seq: 50, messageID: 'msg-c', text: 'third' }),
-          ],
-          hasMore: false,
-        },
-      },
-    );
-
-    const result = await opencodeClient.loadSessionInputAdmissionHistory({
-      sessionID: 'ses_history',
-      directory: '/workspace/history',
-      limit: 100,
-    });
-
-    expect(result.complete).toBe(true);
-    expect(result.admissions).toEqual([
-      {
-        admittedSeq: 10,
-        id: 'msg-a',
-        sessionID: 'ses_history',
-        prompt: { text: 'first' },
-        delivery: 'queue',
-        timeCreated: 10_000,
-        promotedSeq: 20,
-      },
-      {
-        admittedSeq: 30,
-        id: 'msg-b',
-        sessionID: 'ses_history',
-        prompt: { text: 'second' },
-        delivery: 'queue',
-        timeCreated: 30_000,
-        promotedSeq: 40,
-      },
-      {
-        admittedSeq: 50,
-        id: 'msg-c',
-        sessionID: 'ses_history',
-        prompt: { text: 'third' },
-        delivery: 'queue',
-        timeCreated: 50_000,
-      },
-    ]);
-    expect(historyCalls).toEqual([
-      [{ sessionID: 'ses_history', limit: 100 }],
-      [{ sessionID: 'ses_history', limit: 100, after: 30 }],
-    ]);
-    expect(createdClientConfigs[0]?.directory).toBe('/workspace/history');
-  });
-
-  test('loads the projected V2 tail newest-first request and returns it chronologically', async () => {
-    nextMessagesResults.push({
-      data: {
+describe("messages and config", () => {
+  test("getSessionMessages projects a page into domain messages and parts", async () => {
+    responses.push(
+      json({
         data: [
+          { id: "msg_u", type: "user", time: { created: 1 }, text: "hi" },
           {
-            id: 'msg-new',
-            type: 'user',
-            text: 'newest',
-            time: { created: 2000 },
-          },
-          {
-            id: 'msg-old',
-            type: 'user',
-            text: 'oldest',
-            time: { created: 1000 },
+            id: "msg_a",
+            type: "assistant",
+            time: { created: 2, completed: 3 },
+            agent: "build",
+            model: { id: "m", providerID: "p" },
+            content: [{ type: "text", text: "hello" }],
           },
         ],
-        cursor: {},
+        cursor: { previous: "p1" },
+      }),
+    )
+    const page = await opencodeClient.getSessionMessages("ses_1", { limit: 20, order: "asc" })
+    expect(requests[0].url.pathname).toBe("/api/session/ses_1/message")
+    expect(requests[0].url.searchParams.get("limit")).toBe("20")
+    expect(requests[0].url.searchParams.get("order")).toBe("asc")
+    expect(page.items.map((item: { info: { role: string } }) => item.info.role)).toEqual(["user", "assistant"])
+    expect(page.items[0].parts[0]).toMatchObject({ type: "text", text: "hi", id: "msg_u:text:0" })
+    expect(page.items[1].parts[0]).toMatchObject({ type: "text", text: "hello", id: "msg_a:text:0" })
+    expect(page.cursor).toEqual({ previous: "p1" })
+  })
+
+  test("a page shorter than the limit drops the next cursor the server still attaches", async () => {
+    responses.push(json({
+      data: [{ id: "msg_only", type: "user", time: { created: 1 }, text: "hi" }],
+      cursor: { previous: "p1", next: "n1" },
+    }))
+    const short = await opencodeClient.getSessionMessages("ses_1", { limit: 20 })
+    expect(short.cursor).toEqual({ previous: "p1" })
+
+    responses.push(json({
+      data: [{ id: "msg_only", type: "user", time: { created: 1 }, text: "hi" }],
+      cursor: { previous: "p1", next: "n1" },
+    }))
+    const full = await opencodeClient.getSessionMessages("ses_1", { limit: 1 })
+    expect(full.cursor).toEqual({ previous: "p1", next: "n1" })
+  })
+
+  test("a cursor is never combined with an order", async () => {
+    responses.push(json({ data: [], cursor: {} }))
+    await opencodeClient.getSessionMessages("ses_1", { cursor: "abc", order: "asc" })
+    expect(requests[0].url.searchParams.get("cursor")).toBe("abc")
+    expect(requests[0].url.searchParams.has("order")).toBe(false)
+  })
+
+  test("getConfig folds documents and serves the fold from cache", async () => {
+    responses.push(
+      json([
+        { type: "document", path: "/g.json", info: { model: "a", agents: { build: {} } } },
+        { type: "document", path: "/p.json", info: { model: "b" } },
+      ]),
+    )
+    const first = await opencodeClient.getConfig("/repo/app")
+    const second = await opencodeClient.getConfig("/repo/app")
+    expect(first).toEqual({ model: "b", agents: { build: {} } })
+    expect(second).toBe(first)
+    expect(requests).toHaveLength(1)
+  })
+
+  test("getProvidersForConfig gathers providers, models, and the default", async () => {
+    responses.push(
+      (request) =>
+        request.url.pathname === "/api/provider"
+          ? json({ location: {}, data: [{ id: "openai", name: "OpenAI" }] })
+          : request.url.pathname === "/api/model"
+            ? json({ location: {}, data: [{ id: "openai/x", modelID: "x", providerID: "openai" }] })
+            : json({ location: {}, data: { id: "openai/x", modelID: "x", providerID: "openai" } }),
+      (request) =>
+        request.url.pathname === "/api/provider"
+          ? json({ location: {}, data: [{ id: "openai", name: "OpenAI" }] })
+          : request.url.pathname === "/api/model"
+            ? json({ location: {}, data: [{ id: "openai/x", modelID: "x", providerID: "openai" }] })
+            : json({ location: {}, data: { id: "openai/x", modelID: "x", providerID: "openai" } }),
+      (request) =>
+        request.url.pathname === "/api/provider"
+          ? json({ location: {}, data: [{ id: "openai", name: "OpenAI" }] })
+          : request.url.pathname === "/api/model"
+            ? json({ location: {}, data: [{ id: "openai/x", modelID: "x", providerID: "openai" }] })
+            : json({ location: {}, data: { id: "openai/x", modelID: "x", providerID: "openai" } }),
+    )
+    const catalog = await opencodeClient.getProvidersForConfig("/repo/app")
+    expect(catalog.providers).toEqual([{ id: "openai", name: "OpenAI" }])
+    expect(catalog.models).toHaveLength(1)
+    expect(catalog.default).toEqual({ id: "x", providerID: "openai" })
+  })
+})
+
+describe("read timeouts (#2470)", () => {
+  test("a hanging read fails after the timeout while a POST is left alone", async () => {
+    const client = createRuntimeOpencodeClient({ baseUrl: "http://runtime.test/api", requestTimeoutMs: 20 })
+    responses.push(HANG)
+    // The raw client reports transport failures as ClientError("Transport") with the cause attached.
+    const failure = await client.server.info().catch((error: Error) => error)
+    expect(failure).toMatchObject({ reason: "Transport", cause: { message: "OpenCode request timed out after 20ms" } })
+
+    let settled = false
+    responses.push(HANG)
+    void client.session.interrupt({ sessionID: "ses_1" }).then(
+      () => {
+        settled = true
       },
-    });
-
-    const page = await opencodeClient.loadSessionNextMessages({
-      sessionID: 'ses_history',
-      directory: '/workspace/history',
-      limit: 50,
-    });
-
-    expect(nextMessagesCalls).toEqual([[{ sessionID: 'ses_history', limit: 50, order: 'desc' }]]);
-    expect(page.messages.map((message: { id: string }) => message.id)).toEqual(['msg-old', 'msg-new']);
-    expect(page.cursor).toBe(undefined);
-  });
-
-  test('returns cursor.next so the shared loader can page without repeating order', async () => {
-    const shared = { id: 'msg-shared', type: 'user', text: 'shared', time: { created: 2000 } };
-    nextMessagesResults.push(
-      {
-        data: {
-          data: [
-            { id: 'msg-new', type: 'user', text: 'new', time: { created: 3000 } },
-            shared,
-          ],
-          cursor: { next: 'cursor-older' },
-        },
+      () => {
+        settled = true
       },
-      {
-        data: {
-          data: [
-            shared,
-            { id: 'msg-old', type: 'user', text: 'old', time: { created: 1000 } },
-          ],
-          cursor: {},
-        },
-      },
-    );
+    )
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(settled).toBe(false)
+  })
+})
 
-    const first = await opencodeClient.loadSessionNextMessages({
-      sessionID: 'ses_history',
-      directory: '/workspace/history',
-      limit: 4,
-    });
-    const second = await opencodeClient.loadSessionNextMessages({
-      sessionID: 'ses_history',
-      directory: '/workspace/history',
-      limit: 4,
-      cursor: first.cursor,
-    });
-
-    expect(nextMessagesCalls).toEqual([
-      [{ sessionID: 'ses_history', limit: 4, order: 'desc' }],
-      [{ sessionID: 'ses_history', limit: 4, cursor: 'cursor-older' }],
-    ]);
-    expect(first.messages.map((message: { id: string }) => message.id)).toEqual(['msg-shared', 'msg-new']);
-    expect(first.cursor).toBe('cursor-older');
-    expect(second.messages.map((message: { id: string }) => message.id)).toEqual(['msg-old', 'msg-shared']);
-    expect(second.cursor).toBe(undefined);
-  });
-
-  test('clamps each V2 messages page to the official 200-record limit', async () => {
-    nextMessagesResults.push({ data: { data: [], cursor: {} } });
-
-    await opencodeClient.loadSessionNextMessages({
-      sessionID: 'ses_history',
-      limit: 500,
-    });
-
-    expect(nextMessagesCalls).toEqual([[{ sessionID: 'ses_history', limit: 200, order: 'desc' }]]);
-  });
-
-  test('rejects a cursor that points back to the same V2 page', async () => {
-    nextMessagesResults.push({
-      data: {
-        data: [{ id: 'msg-old', type: 'user', text: 'old', time: { created: 1000 } }],
-        cursor: { next: 'cursor-repeat' },
-      },
-    });
-
-    await expect(opencodeClient.loadSessionNextMessages({
-      sessionID: 'ses_history',
-      cursor: 'cursor-repeat',
-    })).rejects.toThrow('invalid pagination cursor');
-    expect(nextMessagesCalls).toHaveLength(1);
-  });
-
-  test('returns an incomplete projection instead of pretending a bounded scan is authoritative empty', async () => {
-    historyResults.push({
-      data: {
-        data: [durableEvent({ type: 'session.next.prompt.admitted', seq: 10, messageID: 'msg-a', text: 'first' })],
-        hasMore: true,
-      },
-    });
-
-    const result = await opencodeClient.loadSessionInputAdmissionHistory({
-      sessionID: 'ses_history',
-      maxPages: 1,
-    });
-
-    expect(result.complete).toBe(false);
-    expect(result.admissions.map((admission: { id: string }) => admission.id)).toEqual(['msg-a']);
-  });
-});
-
-describe('opencodeClient follow-up delivery', () => {
-  test('rejects queue delivery before touching either OpenCode execution engine', async () => {
-    await expect(opencodeClient.sendMessage({
-      id: 'ses_queue',
-      providerID: 'anthropic',
-      modelID: 'claude-sonnet',
-      text: 'queue this',
-      delivery: 'queue',
-    })).rejects.toThrow('Queue delivery must be handled by the OpenChamber follow-up queue');
-
-    expect(callOrder).toEqual([]);
-    expect(promptAsyncCalls).toHaveLength(0);
-    expect(switchAgentCalls).toHaveLength(0);
-    expect(switchModelCalls).toHaveLength(0);
-    expect(durablePromptCalls).toHaveLength(0);
-  });
-
-  test('routes steer through ordinary promptAsync with the normalized directory and body', async () => {
-    await opencodeClient.sendMessage({
-      id: 'ses_steer',
-      providerID: 'openai',
-      modelID: 'gpt-5',
-      agent: 'build',
-      variant: 'high',
-      text: 'redirect now',
-      messageId: 'msg_steer',
-      delivery: 'steer',
-      directory: 'd:\\workspace\\project\\',
-    });
-
-    expect(callOrder).toEqual(['promptAsync']);
-    expect(promptAsyncCalls).toEqual([[
-      {
-        sessionID: 'ses_steer',
-        directory: 'D:/workspace/project',
-        model: { providerID: 'openai', modelID: 'gpt-5' },
-        agent: 'build',
-        variant: 'high',
-        messageID: 'msg_steer',
-        parts: [{ type: 'text', text: 'redirect now' }],
-      },
-    ]]);
-    expect(switchAgentCalls).toHaveLength(0);
-    expect(switchModelCalls).toHaveLength(0);
-    expect(durablePromptCalls).toHaveLength(0);
-  });
-
-  test('keeps steer structured and synthetic payload semantics identical to ordinary sends', async () => {
-    await opencodeClient.sendMessage({
-      id: 'ses_steer_body',
-      providerID: 'openai-steer-body',
-      modelID: 'gpt-5',
-      text: 'visible',
-      prefaceText: 'synthetic context',
-      messageId: 'msg_steer_body',
-      delivery: 'steer',
-      format: { type: 'json_schema', schema: { type: 'object' } },
-    });
-
-    expect(promptAsyncCalls[0]?.[0]).toEqual({
-      sessionID: 'ses_steer_body',
-      model: { providerID: 'openai-steer-body', modelID: 'gpt-5' },
-      agent: undefined,
-      variant: undefined,
-      messageID: 'msg_steer_body',
-      format: { type: 'json_schema', schema: { type: 'object' } },
-      parts: [
-        { type: 'text', text: 'synthetic context', synthetic: true },
-        { type: 'text', text: 'visible' },
-      ],
-    });
-    expect(durablePromptCalls).toHaveLength(0);
-  });
-
-  test('dispatches concurrent steer sends without the V2 delivery serialization queue', async () => {
-    const firstResponse = createDeferred<unknown>();
-    const secondResponse = createDeferred<unknown>();
-    promptAsyncResults.push(firstResponse.promise, secondResponse.promise);
-
-    const first = opencodeClient.sendMessage({
-      id: 'ses_concurrent_steer',
-      providerID: 'openai-steer-first',
-      modelID: 'gpt-5',
-      text: 'first',
-      delivery: 'steer',
-    });
-    const second = opencodeClient.sendMessage({
-      id: 'ses_concurrent_steer',
-      providerID: 'openai-steer-second',
-      modelID: 'gpt-5',
-      text: 'second',
-      delivery: 'steer',
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(promptAsyncCalls).toHaveLength(2);
-    expect(switchModelCalls).toHaveLength(0);
-    expect(durablePromptCalls).toHaveLength(0);
-
-    firstResponse.resolve({ response: new Response(null, { status: 200 }) });
-    secondResponse.resolve({ response: new Response(null, { status: 200 }) });
-    await Promise.all([first, second]);
-  });
-
-  test('keeps steer promptAsync error semantics identical to ordinary sends', async () => {
-    promptAsyncResults.push({ response: new Response('unavailable', { status: 503 }) });
-
-    await expect(opencodeClient.sendMessage({
-      id: 'ses_steer_failure',
-      providerID: 'openai-steer-failure',
-      modelID: 'gpt-5',
-      text: 'hello',
-      delivery: 'steer',
-    })).rejects.toThrow('Failed to send message (503): unavailable');
-
-    expect(promptAsyncCalls).toHaveLength(1);
-    expect(durablePromptCalls).toHaveLength(0);
-  });
-
-});
-
-describe('opencodeClient non-delivery promptAsync', () => {
-  const sendPrompt = (providerID = 'anthropic') => opencodeClient.sendMessage({
-    id: 'ses_1',
-    providerID,
-    modelID: 'claude-sonnet',
-    agent: 'build',
-    variant: 'high',
-    text: 'hello',
-    messageId: 'msg_async',
-  });
-
-  test('keeps ordinary sends on promptAsync with the existing payload', async () => {
-    await sendPrompt();
-
-    expect(promptAsyncCalls).toEqual([[
-      {
-        sessionID: 'ses_1',
-        model: { providerID: 'anthropic', modelID: 'claude-sonnet' },
-        agent: 'build',
-        variant: 'high',
-        messageID: 'msg_async',
-        parts: [{ type: 'text', text: 'hello' }],
-      },
-    ]]);
-    expect(switchAgentCalls).toHaveLength(0);
-    expect(switchModelCalls).toHaveLength(0);
-    expect(durablePromptCalls).toHaveLength(0);
-  });
-
-  test('preserves structured metadata on additional context parts', async () => {
-    const metadata = {
-      openchamberContext: {
-        kind: 'github-issue' as const,
-        number: 17,
-        title: 'Context',
-        url: 'https://example.test/issues/17',
-      },
-    };
-
-    await opencodeClient.sendMessage({
-      id: 'ses_context',
-      providerID: 'anthropic',
-      modelID: 'claude-sonnet',
-      text: 'use this context',
-      messageId: 'msg_context',
-      additionalParts: [{ text: 'issue body', synthetic: true, metadata }],
-    });
-
-    expect(promptAsyncCalls[0]?.[0]).toEqual({
-      sessionID: 'ses_context',
-      model: { providerID: 'anthropic', modelID: 'claude-sonnet' },
-      agent: undefined,
-      variant: undefined,
-      messageID: 'msg_context',
-      parts: [
-        { type: 'text', text: 'use this context' },
-        { type: 'text', text: 'issue body', synthetic: true, metadata },
-      ],
-    });
-  });
-
-  test('does not retry 504 prompt responses because the POST may already be accepted', async () => {
-    promptAsyncResults.push({ response: new Response('gateway timeout', { status: 504 }) });
-
-    await expect(sendPrompt('anthropic-504')).rejects.toThrow('Failed to send message (504)');
-
-    expect(promptAsyncCalls).toHaveLength(1);
-  });
-
-  test('does not retry transport failures because the tunnel may have lost only the response', async () => {
-    promptAsyncResults.push(new TypeError('Failed to fetch'));
-
-    await expect(sendPrompt('anthropic-network')).rejects.toThrow('Failed to fetch');
-
-    expect(promptAsyncCalls).toHaveLength(1);
-  });
-
-  test('does not fabricate an HTTP 500 when the SDK swallows a transport failure', async () => {
-    promptAsyncResults.push({
-      error: new TypeError('relay tunnel reset: plaintext frame on established channel'),
-      response: undefined,
-    });
-
-    let error: unknown = null;
-    try {
-      await sendPrompt('anthropic-transport');
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(promptAsyncCalls).toHaveLength(1);
-    const message = error instanceof Error ? error.message : String(error);
-    expect(message).not.toContain('Failed to send message (500)');
-    expect(message).toContain('transport failure');
-    expect(message).toContain('relay tunnel reset');
-    expect((error as Error & { status?: number }).status).toBe(undefined);
-  });
-
-  test('records late failures against the runtime that dispatched the request', async () => {
-    const providerID = 'anthropic-runtime-lane';
-    const deferred = Array.from({ length: 3 }, () => createDeferred<unknown>());
-    promptAsyncResults.push(...deferred.map((entry) => entry.promise));
-
-    const sends = deferred.map(() => sendPrompt(providerID));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(promptAsyncCalls).toHaveLength(3);
-
-    runtimeKey = 'runtime-b';
-    runtimeGeneration += 1;
-    for (const entry of deferred) {
-      entry.resolve({ response: new Response('unavailable', { status: 503 }) });
-    }
-    await Promise.allSettled(sends);
-
-    await sendPrompt(providerID);
-    expect(promptAsyncCalls).toHaveLength(4);
-  });
-
-  test('does not dispatch after the runtime changes while preparing attachments', async () => {
-    runtimeKey = 'runtime-a';
-    const pending = opencodeClient.sendMessage({
-      id: 'ses_runtime_race',
-      providerID: 'runtime-race-provider',
-      modelID: 'model-a',
-      text: 'hello',
-      runtimeKey: 'runtime-a',
-      files: [{
-        type: 'file',
-        mime: 'text/markdown',
-        filename: 'notes.md',
-        url: 'data:text/markdown,hello',
-      }],
-    });
-
-    runtimeKey = 'runtime-b';
-
-    let error: unknown = null;
-    try {
-      await pending;
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toBeInstanceOf(Error);
-    expect(error instanceof Error ? error.message : String(error)).toContain('runtime changed');
-    expect(promptAsyncCalls).toHaveLength(0);
-  });
-});
+describe("sendCommand context", () => {
+  test("delivers attached context as non-resuming synthetic messages before the command", async () => {
+    responses.push(new Response(null, { status: 204 })) // model switch
+    responses.push(new Response(null, { status: 204 })) // agent switch
+    responses.push(json({ data: { id: "msg_ctx" } })) // synthetic
+    responses.push(new Response(null, { status: 204 })) // command
+    await opencodeClient.sendCommand({
+      id: "ses_1",
+      model: { providerID: "p", modelID: "m" },
+      agent: "build",
+      command: "review",
+      arguments: "src",
+      context: [{ text: "quoted selection", description: "Selection" }],
+    })
+    const paths = requests.map((request) => request.url.pathname)
+    expect(paths.at(-2)).toBe("/api/session/ses_1/synthetic")
+    expect(paths.at(-1)).toBe("/api/session/ses_1/command")
+    expect(requests.at(-2)?.body).toMatchObject({ text: "quoted selection", resume: false })
+    expect(requests.at(-1)?.body).toMatchObject({ name: "review", text: "src" })
+  })
+})

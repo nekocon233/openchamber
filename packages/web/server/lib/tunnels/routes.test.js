@@ -72,6 +72,7 @@ const createRuntime = ({
     },
   };
   return createTunnelRoutesRuntime({
+    hasUiPassword: true,
     crypto: { randomUUID: () => 'tunnel-id' },
     URL,
     tunnelService,

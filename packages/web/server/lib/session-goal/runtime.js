@@ -20,6 +20,8 @@ import path from 'path';
 
 import { GOAL_OBJECTIVE_CHAR_LIMIT, readObjective } from './objectives.js';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { createSessionActivityProbe } from '../opencode/session-activity.js';
+import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
   process.env.OPENCHAMBER_DATA_DIR
@@ -158,24 +160,29 @@ const extractSessionStatus = (payload) => {
   return { sessionId, type, directory };
 };
 
-// A user abort lands as an assistant message carrying MessageAbortedError.
+/**
+ * A user abort no longer lands as an assistant message carrying
+ * `MessageAbortedError`: v2 reports `session.execution.interrupted`, which the
+ * translator turns into `session.idle` with `aborted: true`.
+ */
 const extractAbortedAssistant = (payload) => {
-  if (!payload || payload.type !== 'message.updated') return null;
-  const info = payload.properties?.info;
-  if (!info || typeof info !== 'object' || info.role !== 'assistant') return null;
-  if (info.error?.name !== 'MessageAbortedError') return null;
-  if (typeof info.sessionID !== 'string' || !info.sessionID) return null;
-  return { sessionId: info.sessionID };
+  if (!payload || payload.type !== 'session.idle') return null;
+  const properties = payload.properties;
+  if (!properties || typeof properties !== 'object' || properties.aborted !== true) return null;
+  if (typeof properties.sessionID !== 'string' || !properties.sessionID) return null;
+  return { sessionId: properties.sessionID };
 };
 
 const extractSessionUpdate = (payload) => {
   if (!payload || payload.type !== 'session.updated') return null;
   const info = payload.properties?.info;
   if (!info || typeof info !== 'object' || typeof info.id !== 'string' || !info.id) return null;
+  // No goal here any more: the record OpenCode publishes carries only what
+  // OpenCode owns, and the goal lives in OpenChamber's own metadata store. A
+  // new or resumed goal reaches this runtime through `notifyGoalChanged`.
   return {
     sessionId: info.id,
     directory: typeof info.directory === 'string' ? info.directory : '',
-    goal: parseGoalMetadata(info),
     parentID: typeof info.parentID === 'string' ? info.parentID : '',
   };
 };
@@ -214,6 +221,67 @@ const parseGoalMetadata = (session) => {
     createdAt: Number.isFinite(goal.createdAt) ? goal.createdAt : 0,
     updatedAt: Number.isFinite(goal.updatedAt) ? goal.updatedAt : 0,
   };
+};
+
+/**
+ * The loop reads the v1 view of a message — `{ info, parts }` with
+ * `info.role`, `info.summary`, `info.time`, `info.tokens`, `info.error`,
+ * `info.finish`, `info.providerID` / `modelID` / `agent` / `variant` — and v2
+ * records are flat: `type` instead of `role`, `content[]` instead of `parts`,
+ * `model.{providerID,id}`, and a compaction turn is its own `compaction` type
+ * rather than an assistant message flagged `summary`. This is the only place
+ * that knows both shapes. Roles the loop does not reason about (system,
+ * skill, shell, switches, idle) are dropped; a `synthetic` message folds into
+ * the user role so a trailing context item still reads as "user just sent".
+ */
+const toLoopMessage = (message) => {
+  const id = String(message?.id ?? '');
+  if (!id) return null;
+  const time = message.time && !Array.isArray(message.time) ? { ...message.time } : {};
+  const base = { id, sessionID: message.sessionID, time };
+  switch (message.type) {
+    case 'user':
+    case 'synthetic':
+      return {
+        info: { ...base, role: 'user' },
+        parts: message.text ? [{ type: 'text', text: String(message.text) }] : [],
+      };
+    case 'assistant': {
+      const model = message.model ?? {};
+      // v1 errors carried `name`; v2's structured error calls it `type`.
+      const error = message.error ? { name: message.error.type, ...message.error } : undefined;
+      return {
+        info: {
+          ...base,
+          role: 'assistant',
+          summary: false,
+          agent: message.agent,
+          providerID: model.providerID,
+          modelID: model.id,
+          variant: model.variant,
+          finish: message.finish,
+          tokens: message.tokens,
+          error,
+        },
+        parts: (Array.isArray(message.content) ? message.content : [])
+          .filter((part) => part?.type === 'text' && part.text)
+          .map((part) => ({ type: 'text', text: String(part.text) })),
+      };
+    }
+    case 'compaction': {
+      // A finished compaction plays the part of v1's `summary: true` assistant
+      // turn: it closes a token segment and is never audited or continued
+      // from. Its model must not be inherited either (v1: "the compaction
+      // summary carries the summarize model").
+      if (message.status !== 'completed') return null;
+      return {
+        info: { ...base, role: 'assistant', summary: true, tokens: message.tokens, finish: 'stop' },
+        parts: message.summary ? [{ type: 'text', text: String(message.summary) }] : [],
+      };
+    }
+    default:
+      return null;
+  }
 };
 
 const messagePartsToText = (message) => {
@@ -312,6 +380,8 @@ export const createSessionGoalRuntime = ({
   idleQuietMs = IDLE_QUIET_MS,
   kickoffQuietMs = KICKOFF_QUIET_MS,
   maxAutoTurns = MAX_AUTO_TURNS,
+  persistSessionGoal = null,
+  readSessionMetadata = null,
 }) => {
   const timers = new Map();
   const inflight = new Set();
@@ -344,43 +414,39 @@ export const createSessionGoalRuntime = ({
     if (!response.ok) {
       throw new Error(`OpenCode ${method} ${fetchPath} failed with ${response.status}`);
     }
-    return response.json().catch(() => null);
+    return unwrapOpenCodeResponse(await response.json().catch(() => null));
   };
 
   const fetchRecentMessages = async (sessionId, directory) => {
-    const messages = await openCodeFetch(`/session/${encodeURIComponent(sessionId)}/message`, {
+    // v2 pages messages as `{ data, cursor }`, newest first.
+    const page = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/message`, {
       directory,
       query: { limit: String(MESSAGE_FETCH_LIMIT) },
     }).catch(() => null);
-    return Array.isArray(messages) ? messages : null;
+    const messages = page && typeof page === 'object' ? page.data : null;
+    if (!Array.isArray(messages)) return null;
+    return messages.map(toLoopMessage).filter(Boolean).reverse();
   };
 
-  const fetchSessionStatuses = async (directory) => {
-    const statuses = await openCodeFetch('/session/status', { directory }).catch(() => null);
-    return statuses && typeof statuses === 'object' && !Array.isArray(statuses) ? statuses : null;
-  };
+  const activityProbe = createSessionActivityProbe({
+    buildOpenCodeUrl,
+    getOpenCodeAuthHeaders,
+    timeoutMs: FETCH_TIMEOUT_MS,
+  });
 
-  const fetchSessionChildren = async (sessionId, directory) => {
-    const children = await openCodeFetch(`/session/${encodeURIComponent(sessionId)}/children`, { directory })
-      .catch(() => null);
-    return Array.isArray(children) ? children : null;
-  };
-
-  const isWorkingStatus = (status) => status?.type === 'busy' || status?.type === 'retry';
+  // v2 reports only that a session is running.
+  const isWorkingStatus = (status, native) => native
+    ? status?.type === 'busy' || status?.type === 'retry'
+    : Boolean(status);
 
   // Where a session's record, status and history come from, and where the
   // loop writes its goal and sends continuations.
   const openCodeSource = (sessionId, directory) => ({
     native: false,
-    readSession: () => openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, { directory }),
-    readStatuses: () => fetchSessionStatuses(directory),
-    readChildren: () => fetchSessionChildren(sessionId, directory),
+    readSession: () => openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}`, { directory }),
+    readStatuses: () => activityProbe.fetchActiveSessionStatuses(),
+    hasWorkingChildren: (statuses) => activityProbe.hasWorkingChildren(sessionId, statuses),
     readMessages: () => fetchRecentMessages(sessionId, directory),
-    writeMetadata: (metadata) => openCodeFetch(`/session/${encodeURIComponent(sessionId)}`, {
-      directory,
-      method: 'PATCH',
-      body: { metadata },
-    }),
     sendContinuation: ({ goal, lastAssistantInfo }) => sendContinuation({ sessionId, directory, goal, lastAssistantInfo }),
   });
 
@@ -392,7 +458,7 @@ export const createSessionGoalRuntime = ({
     readStatuses: () => nativeSessions.statuses(directory).catch(() => null),
     // Claude Code's subagents are part of their parent's turns and Codex
     // reports none: no child session works on while its parent is idle.
-    readChildren: async () => [],
+    hasWorkingChildren: async () => false,
     readMessages: () => nativeSessions.loadMessages(sessionId, directory, { limit: MESSAGE_FETCH_LIMIT })
       .then((page) => page.records)
       .catch(() => null),
@@ -431,20 +497,33 @@ export const createSessionGoalRuntime = ({
   // metadata writes (assist payloads, dismissals, UI goal edits) survive.
   // Returns the written goal, or null when the stored goal no longer matches
   // the expected id (user replaced/cleared it while we worked).
+  /**
+   * The goal lives in OpenChamber's own metadata store: OpenCode 2.x accepts
+   * session metadata only at create time. Re-read before every write so a
+   * concurrent edit (the user pausing from the UI) is not overwritten.
+   */
+  const readGoal = async (sessionId, directory) => nativeSessions?.isNativeSessionId(sessionId)
+    ? parseGoalMetadata(await nativeSessions.getSession(sessionId, directory))
+    : parseGoalMetadata({ metadata: await readSessionMetadata(sessionId) });
+
   const writeGoal = async (sessionId, directory, expectedGoalId, mutate) => {
     const source = sourceFor(sessionId, directory);
-    const session = await source.readSession();
-    const currentGoal = parseGoalMetadata(session);
+    const session = source.native ? await source.readSession() : null;
+    const currentGoal = source.native ? parseGoalMetadata(session) : await readGoal(sessionId, directory);
     if (!currentGoal || currentGoal.id !== expectedGoalId) return null;
     const nextGoal = { ...currentGoal, ...mutate(currentGoal), updatedAt: Date.now() };
-    const currentMetadata = session?.metadata && typeof session.metadata === 'object' ? session.metadata : {};
-    const currentNamespace = currentMetadata.openchamber && typeof currentMetadata.openchamber === 'object'
-      ? currentMetadata.openchamber
-      : {};
-    await source.writeMetadata({
-      ...currentMetadata,
-      openchamber: { ...currentNamespace, goal: nextGoal },
-    });
+    if (source.native) {
+      const currentMetadata = session?.metadata && typeof session.metadata === 'object' ? session.metadata : {};
+      const currentNamespace = currentMetadata.openchamber && typeof currentMetadata.openchamber === 'object'
+        ? currentMetadata.openchamber
+        : {};
+      await source.writeMetadata({
+        ...currentMetadata,
+        openchamber: { ...currentNamespace, goal: nextGoal },
+      });
+    } else {
+      await persistSessionGoal(sessionId, directory, nextGoal);
+    }
     return nextGoal;
   };
 
@@ -536,25 +615,14 @@ export const createSessionGoalRuntime = ({
     }
   };
 
-  const sendContinuation = async ({ sessionId, directory, goal, lastAssistantInfo }) => {
-    const providerID = typeof lastAssistantInfo?.providerID === 'string' ? lastAssistantInfo.providerID : '';
-    const modelID = typeof lastAssistantInfo?.modelID === 'string' ? lastAssistantInfo.modelID : '';
-    if (!providerID || !modelID) {
-      throw new Error('cannot continue goal: last assistant message has no provider/model');
-    }
-    const agent = typeof lastAssistantInfo?.agent === 'string' && lastAssistantInfo.agent
-      ? lastAssistantInfo.agent
-      : (typeof lastAssistantInfo?.mode === 'string' ? lastAssistantInfo.mode : '');
-    const variant = typeof lastAssistantInfo?.variant === 'string' ? lastAssistantInfo.variant : '';
-    await openCodeFetch(`/session/${encodeURIComponent(sessionId)}/prompt_async`, {
+  // v2 keeps the model and agent on the session itself, so a plain prompt
+  // runs on whatever the session was already using. v1 had to repeat the
+  // selection on every request; there is nothing to repeat here.
+  const sendContinuation = async ({ sessionId, directory, goal }) => {
+    await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/prompt`, {
       directory,
       method: 'POST',
-      body: {
-        model: { providerID, modelID },
-        ...(agent ? { agent } : {}),
-        ...(variant ? { variant } : {}),
-        parts: [{ type: 'text', text: buildContinuationPrompt(goal) }],
-      },
+      body: { text: buildContinuationPrompt(goal) },
     });
   };
 
@@ -571,7 +639,7 @@ export const createSessionGoalRuntime = ({
     // Sub-agent/task sessions never carry user goals — skip them.
     if (typeof session.parentID === 'string' && session.parentID) return;
 
-    const goal = parseGoalMetadata(session);
+    const goal = await readGoal(sessionId, directory);
     if (!goal || goal.status !== 'active') return;
 
     // File-backed objectives: the metadata carries only a flag; the objective
@@ -603,14 +671,14 @@ export const createSessionGoalRuntime = ({
       armTimer(sessionId, directory, idleQuietMs);
       return;
     }
-    if (isWorkingStatus(statuses[sessionId])) return;
+    if (isWorkingStatus(statuses[sessionId], source.native)) return;
 
-    const children = await source.readChildren();
-    if (!children) {
+    const childrenWorking = await source.hasWorkingChildren(statuses);
+    if (childrenWorking === null) {
       armTimer(sessionId, directory, idleQuietMs);
       return;
     }
-    if (children.some((child) => typeof child?.id === 'string' && isWorkingStatus(statuses[child.id]))) return;
+    if (childrenWorking) return;
 
     const messages = await source.readMessages();
     if (!messages) return;
@@ -901,9 +969,7 @@ export const createSessionGoalRuntime = ({
   // "stop". Messages the user sends afterwards leave the paused goal alone;
   // Resume re-arms the loop (and kicks off immediately on an idle session).
   const pauseAfterAbort = async (sessionId, directory) => {
-    const session = await sourceFor(sessionId, directory).readSession()
-      .catch(() => null);
-    const goal = parseGoalMetadata(session);
+    const goal = await readGoal(sessionId, directory);
     if (!goal || goal.status !== 'active') return;
     await writeGoal(sessionId, directory, goal.id, () => ({
       status: 'paused',
@@ -912,10 +978,52 @@ export const createSessionGoalRuntime = ({
     console.log(`[session-goal] ${sessionId} paused after user abort`);
   };
 
+  const isWired = (sessionId) => nativeSessions?.isNativeSessionId(sessionId)
+    || (persistSessionGoal && readSessionMetadata);
+
+  /**
+   * A goal is created, edited or resumed through OpenChamber's own metadata
+   * route, not through an OpenCode event, so the write tells this runtime
+   * directly. That is also the authoritative moment: the store already holds it.
+   */
+  const notifyGoalChanged = async (sessionId, directory, metadata) => {
+    if (stopped || !isWired(sessionId)) return;
+    const goal = parseGoalMetadata({ metadata });
+    if (!goal || goal.status !== 'active') {
+      clearTimer(sessionId);
+      return;
+    }
+    if (goal.turnsUsed !== 0 && goal.statusReason !== 'resumed') return;
+    if (timers.has(sessionId) || inflight.has(sessionId)) return;
+
+    // A patch from the UI names no directory, and the loop needs one to scope
+    // its own OpenCode calls. The session record is authoritative for it.
+    let resolved = directory;
+    if (!resolved) {
+      const session = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}`).catch(() => null);
+      resolved = typeof session?.location?.directory === 'string' ? session.location.directory : '';
+    }
+    if (stopped || timers.has(sessionId) || inflight.has(sessionId)) return;
+    armTimer(sessionId, resolved, goal.statusReason === 'resumed' ? RESUME_KICKOFF_MS : kickoffQuietMs);
+  };
+
+  let parkedNoticeLogged = false;
   const processPayload = (payload, directoryHint = '') => {
     if (stopped) return;
+    const eventSessionId = payload?.properties?.sessionID ?? payload?.properties?.info?.sessionID ?? payload?.properties?.info?.id;
+    if (!isWired(eventSessionId)) {
+      if (!parkedNoticeLogged) {
+        parkedNoticeLogged = true;
+        console.log('[session-goal] parked: no session metadata store is wired, so goal progress cannot be saved');
+      }
+      return;
+    }
 
-    const aborted = extractAbortedAssistant(payload);
+    const nativeInfo = payload?.type === 'message.updated' ? payload.properties?.info : null;
+    const aborted = nativeInfo && nativeSessions?.isNativeSessionId(nativeInfo.sessionID)
+      && nativeInfo.error?.name === 'MessageAbortedError'
+      ? { sessionId: nativeInfo.sessionID }
+      : extractAbortedAssistant(payload);
     if (aborted) {
       clearTimer(aborted.sessionId);
       if (!inflight.has(aborted.sessionId)) {
@@ -946,17 +1054,19 @@ export const createSessionGoalRuntime = ({
     // transition, only session.updated. Arm a short timer; the tick's
     // quiescence check keeps this safe if the session is actually busy.
     const update = extractSessionUpdate(payload);
-    if (
-      update
-      && !update.parentID
-      && update.goal
-      && update.goal.status === 'active'
-      && (update.goal.turnsUsed === 0 || update.goal.statusReason === 'resumed')
-      && !timers.has(update.sessionId)
-      && !inflight.has(update.sessionId)
-    ) {
-      const quiet = update.goal.statusReason === 'resumed' ? RESUME_KICKOFF_MS : kickoffQuietMs;
-      armTimer(update.sessionId, update.directory || directoryHint, quiet);
+    if (update && !update.parentID && !timers.has(update.sessionId) && !inflight.has(update.sessionId)) {
+      void readGoal(update.sessionId, update.directory || directoryHint)
+        .then((goal) => {
+          if (stopped || !goal || goal.status !== 'active') return;
+          if (goal.turnsUsed !== 0 && goal.statusReason !== 'resumed') return;
+          if (timers.has(update.sessionId) || inflight.has(update.sessionId)) return;
+          armTimer(
+            update.sessionId,
+            update.directory || directoryHint,
+            goal.statusReason === 'resumed' ? RESUME_KICKOFF_MS : kickoffQuietMs,
+          );
+        })
+        .catch(() => undefined);
     }
   };
 
@@ -968,5 +1078,5 @@ export const createSessionGoalRuntime = ({
     timers.clear();
   };
 
-  return { processPayload, stop };
+  return { processPayload, notifyGoalChanged, stop };
 };

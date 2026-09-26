@@ -125,7 +125,15 @@ describe('web native agents API', () => {
 
     const result = await createWebNativeAgentsAPI().revert(session.id, 'ncl_u_1b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f', '/work/project');
 
-    expect(result).toEqual({ session, filesRestored: 2, conversationOnly: false });
+    expect(result).toEqual({
+      session: {
+        id: session.id, projectID: session.projectID, directory: session.directory,
+        title: session.title, time: session.time, revert: session.revert,
+        cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      filesRestored: 2,
+      conversationOnly: false,
+    });
     expect(requests[0]?.pathname).toBe(`/api/native/sessions/${session.id}/revert`);
     expect(JSON.parse(bodies[0] ?? '')).toEqual({ directory: '/work/project', messageID: 'ncl_u_1b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f' });
   });

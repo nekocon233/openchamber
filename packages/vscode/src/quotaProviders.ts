@@ -5,8 +5,9 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { fetchOpenCodeGoUsage } from './opencodeGoQuota';
 import { deleteLegacyOpenCodeGoCredential, readCredential } from './quotaCredentials';
-import { getProviderAuth, updateProviderAuth } from './opencodeAuth';
-import { loadClaudeCredential, type ClaudeCredential } from './claudeAuth';
+import { getProviderAuth, readAuthFile } from './opencodeAuth';
+import { loadClaudeCredential } from './claudeAuth';
+import type { ClaudeCredential } from './claudeAuth';
 import { fetchExeDevUsage } from './exeDevQuota';
 import { fetchOllamaUsage } from './ollamaQuota';
 
@@ -197,7 +198,6 @@ export type ProviderResult = {
 };
 
 const OPENCODE_DATA_DIR = path.join(os.homedir(), '.local', 'share', 'opencode');
-const AUTH_FILE = path.join(OPENCODE_DATA_DIR, 'auth.json');
 
 const XAI_USAGE_ENDPOINT = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
 const XAI_TOKEN_ENDPOINT = 'https://auth.x.ai/oauth2/token';
@@ -275,23 +275,6 @@ const resolveGoogleWindow = (sourceId: GoogleAuthSource['sourceId'], resetAt: nu
 const ZAI_TOKEN_WINDOW_SECONDS: Record<number, number> = {
   3: 60 * 60,
   6: 7 * 24 * 60 * 60,
-};
-
-const readAuthFile = (): AuthFile => {
-  if (!fs.existsSync(AUTH_FILE)) {
-    return {};
-  }
-  try {
-    const content = fs.readFileSync(AUTH_FILE, 'utf8');
-    const trimmed = content.trim();
-    if (!trimmed) {
-      return {};
-    }
-    return JSON.parse(trimmed) as AuthFile;
-  } catch (error) {
-    console.error('Failed to read auth file:', error);
-    throw new Error('Failed to read OpenCode auth configuration');
-  }
 };
 
 const readJsonFile = (filePath: string): Record<string, unknown> | null => {
@@ -537,8 +520,8 @@ const refreshXaiAuth = (entry: XaiAuthEntry): Promise<XaiAuthEntry> => {
       expires: Date.now() + expiresIn * 1000,
     };
 
-    // Validate the new access token before updating the existing secure auth file.
-    updateProviderAuth('xai', refreshed);
+    // Kept in memory for this process only: OpenCode 2.x owns the credential
+    // store, so writing it back would drift from what OpenCode actually uses.
     return refreshed;
   })();
 
@@ -807,7 +790,7 @@ export const listConfiguredQuotaProviders = () => {
     configured.add('zhipuai-coding-plan');
   }
 
-  const kimiAuth = normalizeAuthEntry(getAuthEntry(auth, ['kimi-for-coding', 'kimi']));
+  const kimiAuth = normalizeAuthEntry(getAuthEntry(auth, ['kimi-for-coding', 'kimi', 'kimi-code-plan-global']));
   if (kimiAuth && ((kimiAuth as Record<string, unknown>).key || (kimiAuth as Record<string, unknown>).token)) {
     configured.add('kimi-for-coding');
   }
@@ -1666,7 +1649,7 @@ const computeKimiUsedPercent = (
 
 const fetchKimiQuota = async (): Promise<ProviderResult> => {
   const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, ['kimi-for-coding', 'kimi'])) as Record<string, unknown> | null;
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ['kimi-for-coding', 'kimi', 'kimi-code-plan-global'])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
   if (!apiKey) {

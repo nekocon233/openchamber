@@ -1,7 +1,9 @@
 import React from 'react';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { isDesktopShell, isWebRuntime } from '@/lib/desktop';
-import { runtimeFetch, type RuntimeFetchOptions } from '@/lib/runtime-fetch';
+import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
+import { runtimeFetch } from '@/lib/runtime-fetch';
+import type { RuntimeFetchOptions } from '@/lib/runtime-fetch';
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { useUIStore } from '@/stores/useUIStore';
 import type { NotificationPayload } from '@/lib/api/types';
@@ -32,8 +34,8 @@ class NotificationStreamResponseError extends Error {
 }
 
 const isFocused = () => {
-  if (typeof document === 'undefined') return true;
-  return document.hasFocus();
+  if (!globalThis.document) return true;
+  return document.visibilityState === 'visible' && document.hasFocus();
 };
 
 const isPermanentClientError = (status?: number): boolean => (
@@ -279,29 +281,21 @@ export const useWebNotificationStream = (options?: { enabled?: boolean; deliverN
     const desktopShell = isDesktopShell();
     if (!enabled || (!desktopShell && !isWebRuntime()) || typeof window === 'undefined') return;
 
-    return startWebNotificationStream({
-      onEvent: (data) => {
-        if (!deliverNotifications) return;
-        const properties = data && typeof data === 'object'
-          ? (data as { properties?: unknown }).properties
-          : null;
-        const deliveredByLocalDesktop = properties && typeof properties === 'object' && (
-          (properties as Record<string, unknown>).desktopNotificationDelivered === true
-          || (properties as Record<string, unknown>).desktopStdoutActive === true
-        );
-        // A remote Electron host cannot notify this desktop. Suppress only the
-        // local in-process server's already-delivered native notification.
-        if (desktopShell && getRuntimeKey() === 'local' && deliveredByLocalDesktop) return;
-        const payload = toNotificationPayload(data);
-        if (!payload) return;
+    // The control stream already belongs to this runtime and reconnects with it.
+    // A second EventSource consumed another HTTP/1.1 slot in every browser tab.
+    return subscribeOpenchamberEvents((event) => {
+      if (event.type !== 'notification' || !deliverNotifications) return;
+      if (desktopShell && getRuntimeKey() === 'local' && (event.payload.desktopNotificationDelivered || event.payload.desktopStdoutActive)) return;
+      const settings = useUIStore.getState();
+      if (!settings.nativeNotificationsEnabled) return;
+      // `requireHidden: false` is the server's explicit opt-out (the always
+      // mode, or a plugin notice sent with showWhenFocused).
+      if (settings.notificationMode !== 'always' && event.payload.requireHidden !== false && isFocused()) return;
 
-        const settings = useUIStore.getState();
-        if (!settings.nativeNotificationsEnabled) return;
-        if (settings.notificationMode !== 'always' && isFocused()) return;
-
-        const apis = getRegisteredRuntimeAPIs();
-        void apis?.notifications?.notifyAgentCompletion(payload);
-      },
+      // Keep the identity fields so the runtime API deduplicates this delivery
+      // against the same notification arriving through the main event WebSocket.
+      const apis = getRegisteredRuntimeAPIs();
+      void apis?.notifications?.notifyAgentCompletion(event.payload);
     });
   }, [deliverNotifications, enabled]);
 };

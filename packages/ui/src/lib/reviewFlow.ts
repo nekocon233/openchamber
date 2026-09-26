@@ -1,4 +1,4 @@
-import type { Message, Session } from '@opencode-ai/sdk/v2/client';
+import type { Message, Session } from '@/lib/opencode/model';
 import { opencodeClient } from '@/lib/opencode/client';
 import { renderMagicPrompt } from '@/lib/magicPrompts';
 import { flattenAssistantTextParts } from '@/lib/messages/messageText';
@@ -15,21 +15,16 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useAutoReviewStore, type AutoReviewRun } from '@/stores/useAutoReviewStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useUIStore } from '@/stores/useUIStore';
+import { usePermissionStore } from '@/stores/permissionStore';
+import { optimisticSend, patchSessionMetadata, waitForConnectionOrThrow, createNativeSession, deleteSessionInDirectory, promptNativeSession } from '@/sync/session-actions';
 import { readNativeSession } from '@/sync/native-directory-snapshots';
 import { nativePromptRequest, nativeSendMessageId } from '@/sync/native-send';
-import {
-  createNativeSession,
-  deleteSessionInDirectory,
-  optimisticSend,
-  patchSessionMetadata,
-  promptNativeSession,
-  waitForConnectionOrThrow,
-} from '@/sync/session-actions';
 import { useSelectionStore } from '@/sync/selection-store';
-import { useSessionUIStore } from '@/sync/session-ui-store';
-import { getSyncMessages, getSyncParts, getSyncSessionStatus, registerSessionDirectory } from '@/sync/sync-refs';
+import { resolveSendSelection, useSessionUIStore } from '@/sync/session-ui-store';
+import { getSyncMessages, getSyncParts, getSyncSessionStatus, getSyncSessions, registerSessionDirectory } from '@/sync/sync-refs';
 import { markPendingUserSendAnimation } from '@/lib/userSendAnimation';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { fetchSessionKnowledge, reportSessionKnowledgeDelivered } from '@/lib/sessionKnowledgeApi';
 
 const HANDOFF_TIMEOUT_MS = 180_000;
 const HANDOFF_POLL_MS = 400;
@@ -88,11 +83,10 @@ const getMessageRole = (message: Message): string => {
   return typeof role === 'string' ? role : '';
 };
 
-const getMessageParentID = (message: Message): string | null => {
-  const parentID = (message as { parentID?: unknown }).parentID;
-  return typeof parentID === 'string' && parentID.trim().length > 0 ? parentID : null;
-};
-
+// OpenCode v2 messages carry no `parentID`, so a reply can no longer be tied to
+// the prompt that caused it. The wait loop identifies the handoff by ordering
+// instead: the first completed assistant message created after the prompt was
+// sent, skipping anything already forwarded.
 const isCompactionCommandMessage = (message: Message, directory: string): boolean => {
   const parts = getSyncParts(message.id, directory);
   return parts.some((part) => {
@@ -109,15 +103,8 @@ const getLatestAssistantTextMessage = (
   directory: string,
   lastForwardedMessageID?: string,
   afterCreatedAt = 0,
-  expectedParentID?: string,
 ): AssistantTextMessage | null => {
   const messages = getSyncMessages(sessionID, directory);
-  const compactionCommandIDs = new Set<string>();
-  for (const message of messages) {
-    if (isCompactionCommandMessage(message, directory)) {
-      compactionCommandIDs.add(message.id);
-    }
-  }
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -125,9 +112,7 @@ const getLatestAssistantTextMessage = (
     if (getMessageRole(message) !== 'assistant') continue;
     if (!isMessageCompleted(message)) continue;
     if (getMessageCreatedAt(message) < afterCreatedAt - 1000) continue;
-    const parentID = getMessageParentID(message);
-    if (!isExpectedAutoReviewAssistantParent(message, expectedParentID)) continue;
-    if (parentID && compactionCommandIDs.has(parentID)) continue;
+    if (isCompactionCommandMessage(message, directory)) continue;
     const text = flattenAssistantTextParts(getSyncParts(message.id, directory)).trim();
     if (!text) continue;
     return { id: message.id, text };
@@ -136,9 +121,20 @@ const getLatestAssistantTextMessage = (
   return null;
 };
 
+/**
+ * The turn is over only when the session is idle and none of its subagents is
+ * still running. A parent goes idle while a background subagent works; OpenCode
+ * then hands the result back and the parent runs again, so the reply it left
+ * at that pause is not the finished work. Child statuses come from the same
+ * live directory store as the parent's.
+ */
 const isSessionIdle = (sessionID: string, directory: string): boolean => {
-  const status = getSyncSessionStatus(sessionID, directory);
-  return status?.type === 'idle';
+  if (getSyncSessionStatus(sessionID, directory)?.type !== 'idle') return false;
+  return !getSyncSessions(directory).some((session) => {
+    if (session.parentID !== sessionID) return false;
+    const childStatus = getSyncSessionStatus(session.id, directory);
+    return childStatus !== undefined && childStatus.type !== 'idle';
+  });
 };
 
 export const isAutoReviewRuntimeCurrent = (runtimeKey: string): boolean => runtimeKey === getRuntimeKey();
@@ -174,11 +170,6 @@ export const stripFinalReviewMarker = (text: string): string => {
     lines.pop();
   }
   return lines.join('\n').trim();
-};
-
-export const isExpectedAutoReviewAssistantParent = (message: Message, expectedParentID?: string): boolean => {
-  if (!expectedParentID) return true;
-  return getMessageParentID(message) === expectedParentID;
 };
 
 const getAutoReviewForwardKey = (run: AutoReviewRun, messageID: string): string => [
@@ -226,7 +217,6 @@ const runAutoReviewLoop = async (originalSessionID: string): Promise<void> => {
       run.directory,
       run.lastForwardedMessageID,
       run.waitAfterCreatedAt,
-      run.expectedAssistantParentID,
     );
     if (!latest) {
       await new Promise((resolve) => setTimeout(resolve, AUTO_REVIEW_POLL_MS));
@@ -320,6 +310,12 @@ export const resumeAutoReviewRun = (originalSessionID: string): void => {
 const waitForAssistantText = async (sessionID: string, directory: string, afterCreatedAt: number): Promise<string> => {
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    // v2 completes every step, and a step that says "let me check" before a
+    // tool call has text too. Only the finished turn holds the handoff.
+    if (!isSessionIdle(sessionID, directory)) {
+      await new Promise((resolve) => setTimeout(resolve, HANDOFF_POLL_MS));
+      continue;
+    }
     const messages = getSyncMessages(sessionID, directory);
     const candidates = messages
       .filter((message) => getMessageRole(message) === 'assistant')
@@ -392,9 +388,14 @@ const sendPlainMessage = async (
     selection.saveAgentModelForSession(sessionID, resolved.agent, resolved.providerID, resolved.modelID);
     selection.saveAgentModelVariantForSession(sessionID, resolved.agent, resolved.providerID, resolved.modelID, resolved.variant);
   }
+  // Review sessions are real work sessions, so they carry the project's
+  // standing context (pinned notes, memory) exactly as a composer send would.
+  const native = isNativeSessionId(sessionID);
+  const knowledge = native ? null : await fetchSessionKnowledge(directory, sessionID);
+  assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
+  const sendContext = knowledge?.text ? [{ text: knowledge.text }, ...(additionalParts ?? [])] : additionalParts;
   markPendingUserSendAnimation(sessionID);
   let sentMessageID: string | null = null;
-  const native = isNativeSessionId(sessionID);
   await optimisticSend({
     sessionId: sessionID,
     content: text,
@@ -423,20 +424,25 @@ const sendPlainMessage = async (
           agent: resolved.agent,
         }));
       }
+      // Only a genuine change travels with the prompt; the review session was
+      // created on this selection, so normally nothing is switched.
+      const selection = resolveSendSelection(sessionID, directory, resolved);
       return opencodeClient.sendMessage({
         id: sessionID,
         directory,
         providerID: resolved.providerID,
-        modelID: resolved.modelID,
-        agent: resolved.agent,
-        variant: resolved.variant,
+        model: selection.model,
+        agent: selection.agent,
         text,
-        additionalParts,
+        context: sendContext,
         messageId: messageID,
       }).then(() => undefined);
     },
   });
   if (!sentMessageID) throw new Error('Failed to prepare review flow message');
+  if (knowledge?.text) {
+    void reportSessionKnowledgeDelivered(directory, sessionID, knowledge.signature);
+  }
   return sentMessageID;
 };
 
@@ -475,10 +481,10 @@ const getReviewSessionTitle = (original: Session): string => {
  * metadata when it is created, so its marker lands right after; without it
  * the session is not a review, and it goes again.
  */
-const createReviewSession = async (originalSessionID: string, directory: string, providerID: string, title: string): Promise<Session> => {
-  const backend = nativeBackendOfProviderId(providerID);
+const createReviewSession = async (originalSessionID: string, directory: string, selection: SessionModelContext, title: string): Promise<Session> => {
+  const backend = nativeBackendOfProviderId(selection.providerID);
   if (!backend) {
-    return opencodeClient.createSession({ title, metadata: withReviewSessionMarker({}, originalSessionID) }, directory);
+    return opencodeClient.createSession({ title, metadata: withReviewSessionMarker({}, originalSessionID), model: { providerID: selection.providerID, id: selection.modelID, variant: selection.variant }, agent: selection.agent }, directory);
   }
   const created = await createNativeSession(backend, directory, title);
   try {
@@ -489,10 +495,24 @@ const createReviewSession = async (originalSessionID: string, directory: string,
   }
 };
 
+// A review session runs tools too (reads other directories, verifies with commands),
+// so a fresh one starts with the same auto-accept choice as the session it reviews.
+// Failure only leaves the reviewer prompting for permissions the way it did before.
+const inheritPermissionAutoAccept = async (originalSessionID: string, reviewSessionID: string): Promise<void> => {
+  if (isNativeSessionId(reviewSessionID)) return;
+  const permissions = usePermissionStore.getState();
+  if (!permissions.isSessionAutoAccepting(originalSessionID)) return;
+  try {
+    await permissions.setSessionAutoAccept(reviewSessionID, true);
+  } catch (error) {
+    console.warn('[review-flow] failed to inherit permission auto-accept for review session', error);
+  }
+};
+
 const createOrReuseReviewSession = async (
   originalSessionID: string,
   directory: string,
-  providerID: string,
+  selection: SessionModelContext,
   expectedRuntimeKey?: string,
 ): Promise<Session> => {
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
@@ -503,12 +523,12 @@ const createOrReuseReviewSession = async (
     const existing = await getSessionOrNull(existingReviewID, directory);
     assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
     // A native review session keeps its CLI; a model of another kind gets a new session.
-    if (existing && isReviewSession(existing) && isProviderPickableForSession(existing.id, providerID)) return existing;
+    if (existing && isReviewSession(existing) && isProviderPickableForSession(existing.id, selection.providerID)) return existing;
     await patchSessionMetadata(originalSessionID, directory, (metadata) => {
       const next = { ...metadata };
       const openchamber = next.openchamber;
       if (openchamber && typeof openchamber === 'object' && !Array.isArray(openchamber)) {
-        const rest = { ...(openchamber as Record<string, unknown>) };
+        const rest = { ...openchamber };
         delete rest.reviewSessionID;
         next.openchamber = rest;
       }
@@ -517,7 +537,7 @@ const createOrReuseReviewSession = async (
   }
 
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
-  const review = await createReviewSession(originalSessionID, directory, providerID, getReviewSessionTitle(original));
+  const review = await createReviewSession(originalSessionID, directory, selection, getReviewSessionTitle(original));
   assertAutoReviewRuntimeStillCurrent(expectedRuntimeKey);
   registerSessionDirectory(review.id, directory);
   try {
@@ -532,12 +552,19 @@ const createOrReuseReviewSession = async (
     throw error;
   }
   useGlobalSessionsStore.getState().upsertSession(review);
+  await inheritPermissionAutoAccept(originalSessionID, review.id);
   return review;
 };
 
 export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void> => {
   await waitForConnectionOrThrow();
   const expectedAutoReviewRuntimeKey = input.autoReview ? getRuntimeKey() : undefined;
+  const reviewSelection: SessionModelContext = {
+    providerID: input.providerID,
+    modelID: input.modelID,
+    agent: input.agent,
+    variant: input.variant,
+  };
 
   if (input.generateHandoff ?? true) {
     const visibleText = await renderMagicPrompt('session.reviewHandoff.visible');
@@ -551,15 +578,10 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
       const handoff = await waitForAssistantText(input.originalSessionID, input.directory, startedAt);
       assertAutoReviewRuntimeStillCurrent(expectedAutoReviewRuntimeKey);
       const handoffReviewPrompt = await renderMagicPrompt('session.reviewSession.visible', { handoff });
-      const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, input.providerID, expectedAutoReviewRuntimeKey);
+      const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, reviewSelection, expectedAutoReviewRuntimeKey);
       const runtimeKey = expectedAutoReviewRuntimeKey ?? getRuntimeKey();
       const waitAfterCreatedAt = Date.now();
-      const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, handoffReviewPrompt, {
-        providerID: input.providerID,
-        modelID: input.modelID,
-        agent: input.agent,
-        variant: input.variant,
-      }, input.autoReview ? autoReviewReviewerInstructions() : undefined, input.autoReview ? runtimeKey : undefined);
+      const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, handoffReviewPrompt, reviewSelection, input.autoReview ? autoReviewReviewerInstructions() : undefined, input.autoReview ? runtimeKey : undefined);
       if (input.autoReview) {
         startAutoReviewRun({
           originalSessionID: input.originalSessionID,
@@ -591,15 +613,10 @@ export const startReviewFlow = async (input: StartReviewFlowInput): Promise<void
   }
 
   const reviewPrompt = await renderMagicPrompt('session.reviewSessionWithoutHandoff.visible');
-  const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, input.providerID, expectedAutoReviewRuntimeKey);
+  const reviewSession = await createOrReuseReviewSession(input.originalSessionID, input.directory, reviewSelection, expectedAutoReviewRuntimeKey);
   const runtimeKey = expectedAutoReviewRuntimeKey ?? getRuntimeKey();
   const waitAfterCreatedAt = Date.now();
-  const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, reviewPrompt, {
-    providerID: input.providerID,
-    modelID: input.modelID,
-    agent: input.agent,
-    variant: input.variant,
-  }, input.autoReview ? autoReviewReviewerInstructions() : undefined, input.autoReview ? runtimeKey : undefined);
+  const sentMessageID = await sendPlainMessage(reviewSession.id, input.directory, reviewPrompt, reviewSelection, input.autoReview ? autoReviewReviewerInstructions() : undefined, input.autoReview ? runtimeKey : undefined);
   if (input.autoReview) {
     startAutoReviewRun({
       originalSessionID: input.originalSessionID,

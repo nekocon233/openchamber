@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createUpstreamSseReader } from './upstream-reader.js';
 import { serializeMessageStreamWsEvent } from './protocol.js';
+import { translateWireEvent } from './translate-v2.js';
 import { createDeltaCoalescer, DELTA_COALESCE_WINDOW_MS } from './delta-coalescer.js';
 
 // Raised from 512 → 2048 to improve recovery after brief disconnects during
@@ -33,6 +34,7 @@ export function createGlobalMessageStreamHub({
   }
   // subscriber -> the event sources it accepts
   const eventSubscribers = new Map();
+  const spaceSubscribers = new Set();
   const statusSubscribers = new Set();
   const replay = [];
   let replayBytes = 0;
@@ -84,16 +86,29 @@ export function createGlobalMessageStreamHub({
     const source = envelope?.source === GLOBAL_EVENT_SOURCE_NATIVE
       ? GLOBAL_EVENT_SOURCE_NATIVE
       : GLOBAL_EVENT_SOURCE_OPENCODE;
+    // An event of an isolated space carries the space's id; subscribers see it only when they
+    // asked for space events, because a consumer that acts on the host's OpenCode by
+    // directory must never act on a space's directory.
+    const spaceId = typeof envelope?.spaceId === 'string' && envelope.spaceId.length > 0 ? envelope.spaceId : null;
     let serializedFrame;
+    let translated;
     return {
       envelope,
       payload,
       directory,
       eventId,
       source,
+      spaceId,
       serialize() {
         serializedFrame ??= serializeMessageStreamWsEvent(payload, { directory, eventId });
         return serializedFrame;
+      },
+      // Browser clients receive the raw wire payload and translate it
+      // themselves; server-side subscribers read this instead. Translating
+      // lazily keeps the cost off the WS fan-out path when nothing listens.
+      translated() {
+        translated ??= source === GLOBAL_EVENT_SOURCE_NATIVE ? [payload] : translateWireEvent(payload);
+        return translated;
       },
     };
   };
@@ -125,6 +140,7 @@ export function createGlobalMessageStreamHub({
 
     for (const [subscriber, sources] of Array.from(eventSubscribers)) {
       if (!sources.has(normalized.source)) continue;
+      if (normalized.spaceId !== null && !spaceSubscribers.has(subscriber)) continue;
       notifySubscriber('event', subscriber, normalized);
     }
   };
@@ -145,7 +161,7 @@ export function createGlobalMessageStreamHub({
       buildUrl: () => {
         buildUrlFailed = false;
         try {
-          return new URL(buildOpenCodeUrl('/global/event', ''));
+          return new URL(buildOpenCodeUrl('/api/event', ''));
         } catch {
           buildUrlFailed = true;
           throw new Error('OpenCode service unavailable');
@@ -227,13 +243,15 @@ export function createGlobalMessageStreamHub({
     },
     /**
      * @param {(event: object) => void} subscriber
-     * @param {{ sources?: string[] }} [options] Event sources to receive.
+     * @param {{ sources?: string[], spaces?: boolean }} [options] Event sources to receive.
      *   Defaults to OpenCode events only.
      */
     subscribeEvent(subscriber, options = {}) {
       eventSubscribers.set(subscriber, options.sources ? new Set(options.sources) : DEFAULT_SUBSCRIBER_SOURCES);
+      if (options.spaces) spaceSubscribers.add(subscriber);
       return () => {
         eventSubscribers.delete(subscriber);
+        spaceSubscribers.delete(subscriber);
       };
     },
     /**
@@ -244,6 +262,14 @@ export function createGlobalMessageStreamHub({
      */
     publishNativeEvent({ directory, payload }) {
       coalescer.push({ envelope: { directory, source: GLOBAL_EVENT_SOURCE_NATIVE, payload }, payload });
+    },
+    /**
+     * One event of an isolated space, from that space's own connection, entered here as if it
+     * had arrived upstream: numbered, coalesced, replayed and fanned out with the host's, so
+     * a client keeps one cursor for everything. `directory` is the space's, `spaceId` marks it.
+     */
+    injectEvent({ payload, directory, spaceId }) {
+      coalescer.push({ envelope: { directory, spaceId }, payload });
     },
     subscribeStatus(subscriber) {
       statusSubscribers.add(subscriber);

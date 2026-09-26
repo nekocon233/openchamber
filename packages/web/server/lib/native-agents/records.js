@@ -1,5 +1,5 @@
 // Builders for the OpenCode-shaped records the UI renders (Session, Message,
-// Part from @opencode-ai/sdk/v2). Native projectors produce these for both
+// Part in the shared UI domain). Native projectors produce these for both
 // history reads and live events, so the two paths cannot drift apart.
 //
 // Rendering contract the builders encode (see packages/ui sync and chat docs):

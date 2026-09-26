@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { summarizeText as summarizeSharedText } from '../text/summarization.js';
+import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 
 // The directory a notification belongs to, when its event names one.
 const directoryText = z.string().trim().min(1).nullish().catch(null);
@@ -146,9 +147,12 @@ export const createNotificationTemplateRuntime = (deps) => {
     const directory = directoryText.parse(directoryHint);
     if (isNative(sessionId)) {
       if (!directory) return null;
-      return (await nativeSessions.loadMessages(sessionId, directory, { limit: 5 })).records;
+      const page = await nativeSessions.loadMessages(sessionId, directory, { limit: 5 });
+      return [...page.records].reverse().map(({ info, parts }) => ({
+        id: info.id, type: info.role, finish: info.finish, content: parts,
+      }));
     }
-    const url = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}/message`, '');
+    const url = buildOpenCodeUrl(`/api/session/${encodeURIComponent(sessionId)}/message`, '');
     const search = new URLSearchParams({ limit: '5' });
     if (directory) search.set('directory', directory);
     const response = await fetch(`${url}?${search.toString()}`, {
@@ -160,7 +164,8 @@ export const createNotificationTemplateRuntime = (deps) => {
       signal: AbortSignal.timeout(3000),
     });
     if (!response.ok) return null;
-    return response.json().catch(() => null);
+    const page = await response.json().catch(() => null);
+    return Array.isArray(page?.data) ? page.data : null;
   };
 
   const fetchLastAssistantMessageText = async (
@@ -177,21 +182,15 @@ export const createNotificationTemplateRuntime = (deps) => {
 
       let target = null;
       if (messageId) {
-        target = messages.find((message) => message?.info?.id === messageId && message?.info?.role === 'assistant');
+        target = messages.find((message) => message?.id === messageId && message?.type === 'assistant');
       }
       if (!target) {
-        for (let i = messages.length - 1; i >= 0; i -= 1) {
-          const message = messages[i];
-          if (message?.info?.role === 'assistant' && message?.info?.finish === 'stop') {
-            target = message;
-            break;
-          }
-        }
+        target = messages.find((message) => message?.type === 'assistant' && message?.finish === 'stop') ?? null;
       }
 
-      if (!target || !Array.isArray(target.parts)) return '';
+      if (!target || !Array.isArray(target.content)) return '';
 
-      return extractTextFromParts(target.parts, maxLength);
+      return extractTextFromParts(target.content, maxLength);
     } catch {
       return '';
     }
@@ -238,7 +237,7 @@ export const createNotificationTemplateRuntime = (deps) => {
     }
 
     try {
-      const baseUrl = buildOpenCodeUrl(`/session/${encodeURIComponent(sessionId)}`, '');
+      const baseUrl = buildOpenCodeUrl(`/api/session/${encodeURIComponent(sessionId)}`, '');
       const url = typeof directory === 'string' && directory.trim()
         ? `${baseUrl}?directory=${encodeURIComponent(directory.trim())}`
         : baseUrl;
@@ -251,7 +250,7 @@ export const createNotificationTemplateRuntime = (deps) => {
         console.warn(`[Notification] fetchSessionInfo: ${response.status} for session ${sessionId}`);
         return null;
       }
-      const data = await response.json().catch(() => null);
+      const data = unwrapOpenCodeResponse(await response.json().catch(() => null));
       if (data && typeof data === 'object') {
         sessionInfoCache.set(sessionId, { data, at: Date.now() });
         return data;

@@ -1,3 +1,4 @@
+import { listModelVariantIds } from '@/lib/modelVariants';
 import type { NativeAgentsAPI, NativeCodexCommandResult } from '@/lib/api/types';
 import type { useI18n } from '@/lib/i18n';
 import { copyTextToClipboard } from '@/lib/clipboard';
@@ -74,7 +75,7 @@ export const executeCodexComposerCommand = async (
       const nextModel = models.find((entry) => entry.id === (name === 'model' ? requestedModel : model));
       if (!nextModel) throw invalid();
       const nextVariant = name === 'reasoning' ? requestedModel : effort;
-      if (nextVariant && !Object.hasOwn(nextModel.variants ?? {}, nextVariant)) throw invalid();
+      if (nextVariant && !listModelVariantIds(nextModel.variants).includes(nextVariant)) throw invalid();
       setSelection(nextModel.id, nextVariant);
       break;
     }
@@ -86,7 +87,7 @@ export const executeCodexComposerCommand = async (
         if (catalog.status === 'error') throw new Error(catalog.message);
         effort = catalog.models.find((entry) => entry.id === model)?.defaultEffort ?? undefined;
       }
-      const next = codexFastVariant(Object.keys(current?.variants ?? {}), effort, argument);
+      const next = codexFastVariant(listModelVariantIds(current?.variants), effort, argument);
       if (next === null) throw invalid();
       setSelection(model, next);
       break;

@@ -1,5 +1,8 @@
+import { applyDirectoryEvent } from './event-reducer'
+import { translateNativeEvent } from '@/lib/native-agents/events'
+import { opencodeClient } from '@/lib/opencode/client';
+import { projectNativeQuestion } from '@/lib/native-agents/forms';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import type { NativePromptRequest } from "@/lib/api/types"
@@ -14,13 +17,14 @@ import { ChildStoreManager } from "./child-store"
 import { isNativeLocalCommand, nativeCompactCommand, nativePromptParts, nativeSendMessageId } from "./native-send"
 import {
   abortCurrentOperation,
-  rejectQuestion,
-  respondToQuestion,
+  cancelForm,
+  replyToForm,
   setActionRefs,
   setOptimisticRefs,
 } from "./session-actions"
 import { routeMessage, useSessionUIStore } from "./session-ui-store"
 
+const originalGetSession = opencodeClient.getSession;
 const DIRECTORY = "/work/project"
 const SESSION = "ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188"
 const CONTEXT_METADATA: ContextPartMetadata = {
@@ -29,11 +33,17 @@ const CONTEXT_METADATA: ContextPartMetadata = {
 
 type OptimisticAddInput = Parameters<Parameters<typeof setOptimisticRefs>[0]>[0]
 
-const question = (id: string): QuestionRequest => ({
+const question = (id: string, sessionID = SESSION): QuestionRequest => ({
   id,
-  sessionID: SESSION,
+  sessionID,
   questions: [{ question: "Proceed?", header: "Proceed", options: [{ label: "Yes", description: "Go" }] }],
 })
+
+const form = (id: string, sessionID = SESSION) => {
+  const request = projectNativeQuestion(question(id, sessionID));
+  if (!request) throw new Error('The fixture needs a question');
+  return request;
+};
 
 let prompts: Array<{ sessionId: string; request: NativePromptRequest }> = []
 // What the next prompt throws, and the history a later read returns.
@@ -66,10 +76,10 @@ beforeEach(() => {
       if (promptFailure) throw promptFailure(request)
     },
     loadMessages: async () => nativeMessagePageSchema.parse({ records: nativeHistory, cursor: null, complete: true, childSessions: [] }),
-    getSession: async (sessionId) => ({ id: sessionId, slug: sessionId, projectID: "", directory: DIRECTORY, title: "Work", version: "claude-cli", time: { created: 1, updated: 2 } }),
+    getSession: async (sessionId) => ({ id: sessionId, projectID: "", directory: DIRECTORY, title: "Work", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 2 } }),
     updateSession: async (sessionId, directory, patch) => {
       metadataPatches.push({ sessionId, metadata: patch.metadata })
-      return { id: sessionId, slug: sessionId, projectID: "", directory, title: "Work", version: "claude-cli", time: { created: 1, updated: 3 }, metadata: patch.metadata }
+      return { id: sessionId, projectID: "", directory, title: "Work", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 3 }, metadata: patch.metadata }
     },
     abort: async (sessionId) => {
       aborts.push(sessionId)
@@ -83,14 +93,11 @@ beforeEach(() => {
     },
   })))
   // Native sessions must never reach OpenCode; any request is recorded and refused.
-  const sdk = createOpencodeClient({
-    baseUrl: "http://opencode.test",
-    fetch: async (request) => {
-      openCodeRequests.push(new URL(request instanceof Request ? request.url : request.toString()).pathname)
-      return Response.json({ message: "OpenCode must not be asked about a native session" }, { status: 500 })
-    },
-  })
-  setActionRefs(sdk, childStores, () => DIRECTORY)
+  opencodeClient.getSession = async (sessionId) => {
+    openCodeRequests.push(sessionId)
+    throw new Error('OpenCode must not be asked about a native session')
+  }
+  setActionRefs(childStores, () => DIRECTORY)
   setOptimisticRefs((input) => {
     optimisticAdds.push(input)
   }, () => {})
@@ -98,6 +105,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  opencodeClient.getSession = originalGetSession;
   registerRuntimeAPIs(null)
   childStores.disposeAll()
 })
@@ -167,6 +175,27 @@ describe("routeMessage for native sessions", () => {
     })
     expect(optimisticAdds.map((add) => add.message.id)).toEqual([messageID])
     expect(openCodeRequests).toEqual([])
+  })
+
+  test("a native text and attachment echo replace their optimistic parts", async () => {
+    await routeMessage({ sessionId: SESSION, directory: DIRECTORY, content: "Look at this", providerID: "claude-native", modelID: "opus", files: [
+      { type: "file", mime: "image/png", url: "data:image/png;base64,AAAA", filename: "shot.png" },
+    ] })
+    const added = optimisticAdds[0]
+    const store = childStores.getChild(DIRECTORY)
+    if (!added || !store) throw new Error("Missing optimistic native message")
+    const state = { ...store.getState(), message: { [SESSION]: [added.message] }, part: { [added.message.id]: added.parts } }
+    const echoParts = [
+      { id: `${added.message.id}_p0`, sessionID: SESSION, messageID: added.message.id, type: "text", text: "Look at this" },
+      { id: `${added.message.id}_f0`, sessionID: SESSION, messageID: added.message.id, type: "file", mime: "image/png", url: "data:image/png;base64,AAAA", filename: "shot.png" },
+    ]
+    for (const part of echoParts) {
+      const event = translateNativeEvent({ type: "message.part.updated", properties: { part } })
+      if (!event) throw new Error("Invalid native echo fixture")
+      applyDirectoryEvent(state, event)
+    }
+    expect(state.part[added.message.id]).toHaveLength(2)
+    expect(state.part[added.message.id].map((part) => part.id)).toEqual(echoParts.map((part) => part.id))
   })
 
   test("sends a feature's instructions once, apart from what the user wrote", async () => {
@@ -251,19 +280,19 @@ describe("session actions for native sessions", () => {
 
   test("answer a question through the native API and clear it locally", async () => {
     const store = childStores.getChild(DIRECTORY)
-    store?.setState({ question: { [SESSION]: [question("ncq_1")] } })
-    await respondToQuestion(SESSION, "ncq_1", [["Yes"]])
+    store?.setState({ form: { [SESSION]: [form("ncq_1")] } })
+    await replyToForm(SESSION, "ncq_1", { "question-0": "Yes" })
     expect(replies).toEqual([{ requestId: "ncq_1", answers: [["Yes"]] }])
-    expect(store?.getState().question[SESSION] ?? []).toEqual([])
+    expect(store?.getState().form[SESSION] ?? []).toEqual([])
     expect(openCodeRequests).toEqual([])
   })
 
   test("clear a question the CLI no longer waits on, and still report it", async () => {
     const store = childStores.getChild(DIRECTORY)
-    store?.setState({ question: { [SESSION]: [question("ncq_2")] } })
+    store?.setState({ form: { [SESSION]: [form("ncq_2")] } })
     rejectGone = true
-    const failure = await rejectQuestion(SESSION, "ncq_2").then(() => null, (error: Error) => error)
+    const failure = await cancelForm(SESSION, "ncq_2").then(() => null, (error: Error) => error)
     expect(failure).toMatchObject({ code: "NATIVE_QUESTION_NOT_FOUND" })
-    expect(store?.getState().question[SESSION] ?? []).toEqual([])
+    expect(store?.getState().form[SESSION] ?? []).toEqual([])
   })
 })

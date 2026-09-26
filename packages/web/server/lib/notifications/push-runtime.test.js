@@ -24,7 +24,7 @@ const createRuntimeHarness = (initialStore = { version: 2, registrationsByIdenti
   const runtime = createPushRuntime({
     fsPromises,
     path: { dirname: () => '/tmp' },
-    webPush,
+    loadWebPush: async () => webPush,
     PUSH_SUBSCRIPTIONS_FILE_PATH: '/tmp/push-subscriptions.json',
     readSettingsFromDiskMigrated: vi.fn(async () => ({})),
     writeSettingsToDisk: vi.fn(async () => {}),

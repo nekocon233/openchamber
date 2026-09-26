@@ -1,5 +1,6 @@
+import { projectNativeQuestion } from '@/lib/native-agents/forms';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { createOpencodeClient, type Message, type Session, type SessionStatus } from "@opencode-ai/sdk/v2/client"
+import { type Message, type Session, type SessionStatus } from "@/lib/opencode/model"
 import { create, type StoreApi } from "zustand"
 import { createStore } from "zustand/vanilla"
 
@@ -24,11 +25,10 @@ const BUSY: SessionStatus = { type: "busy" }
 
 const sessionRecord = (id: string): Session => ({
   id,
-  slug: id,
   projectID: "",
   directory: DIRECTORY,
   title: id,
-  version: "test",
+  cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 1 },
 })
 
@@ -38,6 +38,12 @@ const question = (id: string, sessionID: string): QuestionRequest => ({
   questions: [{ question: "Proceed?", header: "Proceed", options: [{ label: "Yes", description: "Go ahead" }] }],
 })
 
+const form = (id: string, sessionID = NATIVE) => {
+  const request = projectNativeQuestion(question(id, sessionID));
+  if (!request) throw new Error('The fixture needs a question');
+  return request;
+};
+
 const unfinishedAssistant: Message = {
   id: "ncl_a_0123456789abcdef_msg_1",
   sessionID: NATIVE,
@@ -46,9 +52,7 @@ const unfinishedAssistant: Message = {
   parentID: "ncl_u_1",
   modelID: "opus",
   providerID: "claude-native",
-  mode: "build",
   agent: "build",
-  path: { cwd: DIRECTORY, root: DIRECTORY },
   cost: 0,
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
 }
@@ -66,11 +70,14 @@ const nativeAgents = createTestNativeAgentsAPI({
 })
 
 let openCodeStatuses: Record<string, SessionStatus> | null = {}
-let openCodeQuestions: QuestionRequest[] = []
+let openCodeQuestions: ReturnType<typeof form>[] = []
 const original = {
-  getSessionStatusForDirectory: opencodeClient.getSessionStatusForDirectory,
-  listPendingQuestions: opencodeClient.listPendingQuestions,
+  getActiveSessionStatuses: opencodeClient.getActiveSessionStatuses,
+  listPendingForms: opencodeClient.listPendingForms,
   listPendingPermissions: opencodeClient.listPendingPermissions,
+  getConfig: opencodeClient.getConfig,
+  getLocation: opencodeClient.getLocation,
+  getVcs: opencodeClient.getVcs,
 }
 const originalWarn = console.warn
 let warnings = 0
@@ -84,30 +91,13 @@ const createDirectoryStore = (initial: Partial<State>): StoreApi<DirectoryStore>
   }))
 )
 
-// Answers OpenCode's directory reads during bootstrap: nothing pending, all idle.
-const createSdk = () => createOpencodeClient({
-  baseUrl: "https://native-snapshots.test",
-  fetch: async (request) => {
-    const url = new URL(request instanceof Request ? request.url : request.toString())
-    const directory = url.searchParams.get("directory")
-    const body = url.pathname === "/project/current" ? { id: "project-a" }
-      : url.pathname === "/path" ? { directory, worktree: directory, state: "", config: "", home: "/home" }
-      : url.pathname === "/config" ? {}
-      : url.pathname === "/session/status" ? {}
-      : url.pathname === "/vcs" ? { branch: "main" }
-      : []
-    return Response.json(body)
-  },
-})
-
 const bootstrapWith = async (state: Partial<State>) => {
   const store = createStore<State>(() => ({ ...INITIAL_STATE, ...state }))
   const bootstrap = bootstrapDirectory({
     directory: DIRECTORY,
-    sdk: createSdk(),
     store,
     set: (patch: Partial<State>) => { store.setState(patch) },
-    global: { config: {}, projects: [] },
+    global: { config: {}, projects: [], path: { home: "/home", directory: DIRECTORY, worktree: DIRECTORY } },
     loadSessions: async () => undefined,
   })
   await bootstrap.sessions
@@ -122,18 +112,22 @@ beforeEach(() => {
   nativeQuestions = async () => []
   openCodeStatuses = {}
   openCodeQuestions = []
-  opencodeClient.getSessionStatusForDirectory = async () => openCodeStatuses
-  opencodeClient.listPendingQuestions = async () => openCodeQuestions
+  opencodeClient.getActiveSessionStatuses = async () => openCodeStatuses
+  opencodeClient.listPendingForms = async () => openCodeQuestions
   opencodeClient.listPendingPermissions = async () => []
+  opencodeClient.getConfig = async () => ({})
+  opencodeClient.getLocation = async () => ({ directory: DIRECTORY, workspace: 'workspace-a', project: { id: 'project-a', directory: DIRECTORY, canonical: DIRECTORY } })
+  opencodeClient.getVcs = async () => ({ branch: 'main' })
   warnings = 0
   console.warn = () => { warnings += 1 }
 })
 
 afterEach(() => {
   registerRuntimeAPIs(null)
-  opencodeClient.getSessionStatusForDirectory = original.getSessionStatusForDirectory
-  opencodeClient.listPendingQuestions = original.listPendingQuestions
+  opencodeClient.getActiveSessionStatuses = original.getActiveSessionStatuses
+  opencodeClient.listPendingForms = original.listPendingForms
   opencodeClient.listPendingPermissions = original.listPendingPermissions
+  Object.assign(opencodeClient, original)
   console.warn = originalWarn
 })
 
@@ -201,7 +195,7 @@ describe("directory bootstrap with native sessions", () => {
     const store = await bootstrapWith({ session: [sessionRecord(NATIVE)] })
 
     expect(store.getState().session_status[NATIVE]).toEqual(BUSY)
-    expect(store.getState().question[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
+    expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
     expect(useGlobalSessionStatusStore.getState().statusById.get(NATIVE)?.status).toEqual(BUSY)
   })
 
@@ -216,12 +210,12 @@ describe("directory bootstrap with native sessions", () => {
     const store = await bootstrapWith({
       session: [sessionRecord(NATIVE), sessionRecord(NATIVE_CODEX), sessionRecord(OPENCODE)],
       session_status: { [NATIVE]: BUSY, [OPENCODE]: BUSY },
-      question: { [NATIVE]: [question("que_native", NATIVE)] },
+      form: { [NATIVE]: [form("que_native", NATIVE)] },
     })
 
     expect(store.getState().session_status[NATIVE]).toEqual(BUSY)
     expect(store.getState().session_status[OPENCODE]).toBeUndefined()
-    expect(store.getState().question[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
+    expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
     const global = useGlobalSessionStatusStore.getState().statusById
     expect(global.get(NATIVE)?.status).toEqual(BUSY)
     expect(global.get(NATIVE_CODEX)?.status).toEqual(BUSY)
@@ -232,9 +226,9 @@ describe("directory bootstrap with native sessions", () => {
 describe("blocking request resync with native sessions", () => {
   const heldQuestions = () => createDirectoryStore({
     session: [sessionRecord(OPENCODE), sessionRecord(NATIVE)],
-    question: {
-      [OPENCODE]: [question("que_opencode", OPENCODE)],
-      [NATIVE]: [question("que_native", NATIVE)],
+    form: {
+      [OPENCODE]: [form("que_opencode", OPENCODE)],
+      [NATIVE]: [form("que_native", NATIVE)],
     },
   })
 
@@ -244,8 +238,8 @@ describe("blocking request resync with native sessions", () => {
 
     await resyncBlockingRequestsForDirectory(DIRECTORY, store)
 
-    expect(store.getState().question[OPENCODE]).toBeUndefined()
-    expect(store.getState().question[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
+    expect(store.getState().form[OPENCODE]).toBeUndefined()
+    expect(store.getState().form[NATIVE]?.map((item) => item.id)).toEqual(["que_native"])
   })
 
   test("settles native questions from a successful native read", async () => {
@@ -253,7 +247,7 @@ describe("blocking request resync with native sessions", () => {
 
     await resyncBlockingRequestsForDirectory(DIRECTORY, store)
 
-    expect(store.getState().question[NATIVE]).toBeUndefined()
+    expect(store.getState().form[NATIVE]).toBeUndefined()
   })
 })
 

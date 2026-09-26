@@ -1,28 +1,35 @@
 import fs from 'fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import os from 'os';
 import path from 'path';
-import { readAuthFile } from '../opencode/auth.js';
-import { readConfigLayers } from '../opencode/shared.js';
-import { getModelCatalog } from './catalog.js';
-import { resolveSmallModel, parseModelRef, isUsableAuthEntry, getAuthEntryForProvider } from './resolve.js';
-import {
-  DEDICATED_WIRE_FORMAT_PROVIDERS,
-  callSmallModel,
-  getProviderTransportKind,
-  resolveProviderLogin,
-} from './call.js';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
-import { getRuntimeProviderSnapshot, getRuntimeProviderTransportFromSnapshot } from './runtime-providers.js';
 import { nativeBackendOfProviderId } from '../native-agents/ids.js';
+import {
+  findModelInfo,
+  getDefaultModelInfo,
+  getSmallModelClient,
+  listModelInfos,
+  listProviderInfos,
+} from './client.js';
 
-const EXPLICIT_MODEL_SOURCES = new Set(['settings', 'config', 'request']);
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 let nativeRuntimes = new Map();
 
-// The native CLIs' small-model runtimes by provider id: a transport identity
-// with `available`, `describe` and `generate`.
 export const configureNativeSmallModels = (runtimes) => {
   nativeRuntimes = new Map(Object.entries(runtimes ?? {}));
+};
+
+// Waits between retries of `Model unavailable`, ~31 s in total. Right after
+// OpenCode starts, plugin-provided models (claude-code) stay unavailable for
+// 20-40 s while plugins for the global location load lazily. The rejection
+// precedes provider dispatch, so a retry costs no tokens.
+const UNAVAILABLE_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 16_000];
+let unavailableRetryDelaysMs = UNAVAILABLE_RETRY_DELAYS_MS;
+
+/** Test hook: replace the backoff schedule; no argument restores the default. */
+export const setUnavailableRetryDelaysForTest = (delays = UNAVAILABLE_RETRY_DELAYS_MS) => {
+  unavailableRetryDelaysMs = delays;
 };
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
@@ -33,7 +40,7 @@ const OPENCHAMBER_SETTINGS_FILE = path.join(
 );
 
 // OpenChamber's own settings: when the user unchecks "use default small model"
-// their explicit override outranks every other resolution step.
+// their explicit override outranks the model OpenCode would pick.
 const readSmallModelSettingsOverride = () => {
   const settings = readMergedSettingsSync({ fs, path, settingsFilePath: OPENCHAMBER_SETTINGS_FILE });
   if (settings.smallModelUseDefault !== false) return null;
@@ -41,10 +48,20 @@ const readSmallModelSettingsOverride = () => {
   return override || null;
 };
 
+export function parseModelRef(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const slash = trimmed.indexOf('/');
+  if (slash <= 0 || slash === trimmed.length - 1) return null;
+  return {
+    providerID: trimmed.slice(0, slash),
+    modelID: trimmed.slice(slash + 1),
+  };
+}
+
 // Rough safety clamp so a huge input never blows the model's context window.
-// Token estimate is ~4 chars/token; when the catalog has no limit for the
-// model (Copilot/codex utility models are not listed) a conservative default
-// applies.
+// Token estimate is ~4 chars/token; when OpenCode reports no limit for the
+// model a conservative default applies.
 const DEFAULT_CONTEXT_TOKENS = 64_000;
 const OUTPUT_RESERVE_TOKENS = 4_000;
 
@@ -53,10 +70,10 @@ const OUTPUT_RESERVE_TOKENS = 4_000;
  * to leave for the answer. The reserve must match the output budget the caller
  * will actually request, or the two disagree and the model overruns its context.
  */
-export const getModelInputCharBudget = ({ catalog, providerID, modelID, outputReserveTokens }) => {
-  const limit = catalog?.[providerID]?.models?.[modelID]?.limit;
-  const known = Number(limit?.context) > 0;
-  const contextTokens = known ? Number(limit.context) : DEFAULT_CONTEXT_TOKENS;
+export const getModelInputCharBudget = ({ modelInfo, outputReserveTokens }) => {
+  const context = Number(modelInfo?.limit?.context);
+  const known = context > 0;
+  const contextTokens = known ? context : DEFAULT_CONTEXT_TOKENS;
   const reserve = Number(outputReserveTokens) > 0 ? Number(outputReserveTokens) : OUTPUT_RESERVE_TOKENS;
   const inputBudgetTokens = Math.max(1_000, contextTokens - reserve);
   return { maxChars: inputBudgetTokens * 4, contextTokens, contextKnown: known };
@@ -64,27 +81,29 @@ export const getModelInputCharBudget = ({ catalog, providerID, modelID, outputRe
 
 /**
  * The output budget to actually request: what the caller asked for, capped by
- * what the model admits it can emit. Asking for more than `limit.output` is
- * rejected outright by some providers and silently ignored by others.
+ * what the model admits it can emit.
+ *
+ * `/api/experimental/generate` takes no output budget of its own, so this number only
+ * shapes the input reserve — but it has to stay the same number on both sides
+ * or a caller that asks for a large answer overruns the context.
  */
-const resolveOutputTokens = ({ catalog, providerID, modelID, maxOutputTokens }) => {
+const resolveOutputTokens = ({ modelInfo, maxOutputTokens }) => {
   const requested = Number(maxOutputTokens) > 0 ? Number(maxOutputTokens) : 0;
   if (!requested) return undefined;
-  const limit = Number(catalog?.[providerID]?.models?.[modelID]?.limit?.output);
+  const limit = Number(modelInfo?.limit?.output);
   return limit > 0 ? Math.min(requested, limit) : requested;
 };
 
 // `truncate` keeps the historical behavior for callers whose prompt losing its
 // tail is survivable (summaries, commit messages). `error` is for callers whose
 // output would be quietly wrong on a clipped input — they need the failure.
-const clampPromptToModelLimit = ({ prompt, system, catalog, providerID, modelID, onOverflow, outputReserveTokens }) => {
-  const { maxChars } = getModelInputCharBudget({ catalog, providerID, modelID, outputReserveTokens });
-  const systemChars = system?.length ?? 0;
-  const requiredChars = prompt.length + systemChars;
+const clampPromptToModelLimit = ({ prompt, system, modelInfo, providerID, modelID, onOverflow, outputReserveTokens }) => {
+  const { maxChars } = getModelInputCharBudget({ modelInfo, outputReserveTokens });
+  const requiredChars = prompt.length + (system?.length ?? 0);
   if (requiredChars <= maxChars) {
     return { prompt, truncated: false };
   }
-  const promptCharBudget = maxChars - systemChars;
+  const promptCharBudget = maxChars - (system?.length ?? 0);
   if (onOverflow === 'error' || promptCharBudget <= 0) {
     throw Object.assign(
       new Error(`Input is too large for ${providerID}/${modelID}: ${requiredChars} characters exceeds the ${maxChars} the model's context allows`),
@@ -94,91 +113,202 @@ const clampPromptToModelLimit = ({ prompt, system, catalog, providerID, modelID,
   return { prompt: `${prompt.slice(0, Math.max(0, promptCharBudget - 1))}…`, truncated: true };
 };
 
-const readConfiguredSmallModel = (workingDirectory) => {
+const noClientError = () => Object.assign(
+  new Error('No small model available — OpenCode is not reachable'),
+  { statusCode: 404 },
+);
+
+/**
+ * The model families that count as "small", most preferred first. The same
+ * list OpenCode uses for its own session titles (`Catalog.model.small` in
+ * `packages/core/src/catalog.ts`); OpenCode does not expose that lookup over
+ * HTTP, so the scan is repeated here on `GET /api/model`.
+ */
+export const SMALL_MODEL_FAMILY_PRIORITY = ['gpt-luna', 'gemini-flash-lite', 'gemini-flash', 'claude-haiku', 'gpt-nano', 'gpt-mini'];
+// The last two are not on OpenCode's list; v1 counted them as small and a
+// provider with nothing else cheap (Copilot's utility models, for one)
+// would otherwise fall through to the session's big model.
+
+/**
+ * A model's family: the catalog's `family` (models.dev) when it has one,
+ * else read from the id. A custom provider or a subscription outside the
+ * catalog has no `family`, yet its `gemini-3.6-flash` is still a flash.
+ */
+export const familyOf = (model) => {
+  if (model?.family) return String(model.family);
+  const id = String(model?.id ?? '').toLowerCase();
+  if (id.includes('luna')) return 'gpt-luna';
+  if (id.includes('flash-lite') || id.includes('flash_lite')) return 'gemini-flash-lite';
+  if (id.includes('flash')) return 'gemini-flash';
+  if (id.includes('haiku')) return 'claude-haiku';
+  if (id.includes('nano')) return 'gpt-nano';
+  if (id.includes('mini') && !id.includes('minimax')) return 'gpt-mini';
+  return null;
+};
+
+/**
+ * The small model within one provider: the newest enabled, active, text-in
+ * text-out model of the first family in `SMALL_MODEL_FAMILY_PRIORITY` that the
+ * provider has. Null when the provider has none of those families.
+ */
+export const pickSmallModelInProvider = (models, providerID) => pickSmallModel(models, (model) => model.providerID === providerID);
+
+/**
+ * The small model across every provider OpenCode can call: same family
+ * order, newest release first within a family. What v1 did after the
+ * session provider came up empty; for callers without a session (commit
+ * messages, spoken summaries) it is the first place to look.
+ */
+export const pickSmallModelAnywhere = (models) => pickSmallModel(models, () => true);
+
+const pickSmallModel = (models, accept) => {
+  const candidates = models
+    .filter((model) => model && accept(model)
+      && model.enabled !== false
+      && (model.status === undefined || model.status === 'active')
+      && (model.capabilities?.input ?? ['text']).some((item) => String(item).startsWith('text'))
+      && (model.capabilities?.output ?? ['text']).some((item) => String(item).startsWith('text')))
+    .sort((a, b) => (Number(b.time?.released) || 0) - (Number(a.time?.released) || 0));
+  for (const family of SMALL_MODEL_FAMILY_PRIORITY) {
+    const found = candidates.find((model) => familyOf(model) === family);
+    if (found) return { providerID: found.providerID, modelID: found.id };
+  }
+  return null;
+};
+
+/**
+ * Which model this call runs on, in order:
+ *
+ * 1. An explicit request model.
+ * 2. OpenChamber's settings override (Settings → Sessions → Small Model).
+ * 3. The small model of the session's provider (family scan above) —
+ *    `session-provider-small`. A caller that must not leave that provider
+ *    then falls back to the session's own model (`session-model`): costlier
+ *    than a small model elsewhere, but never someone else's subscription.
+ * 4. The small model of any provider OpenCode can call, newest first —
+ *    `small`.
+ * 5. `GET /api/model/default`: OpenCode's default model — `default`. This is
+ *    the chat default, not a small model; OpenCode's own small-model chain is
+ *    not reachable over HTTP, which is why steps 3 and 4 live here.
+ */
+const resolveSmallModel = async ({ client, directory, model, preferredProviderID, preferredModelID, restrictToPreferredProvider }) => {
+  const explicit = parseModelRef(model);
+  if (explicit) return { ...explicit, source: 'request' };
+
+  const fromSettings = parseModelRef(readSmallModelSettingsOverride());
+  if (fromSettings) return { ...fromSettings, source: 'settings' };
+
+  const models = await listModelInfos(client, directory);
+  if (preferredProviderID) {
+    const small = pickSmallModelInProvider(models, preferredProviderID);
+    if (small) return { ...small, source: 'session-provider-small' };
+  }
+  if (restrictToPreferredProvider && preferredProviderID && preferredModelID) {
+    return { providerID: preferredProviderID, modelID: preferredModelID, source: 'session-model' };
+  }
+
+  const anywhere = pickSmallModelAnywhere(models);
+  if (anywhere) return { ...anywhere, source: 'small' };
+
+  const fallback = await getDefaultModelInfo(client);
+  if (!fallback) return null;
+  return { providerID: fallback.providerID, modelID: fallback.id, source: 'default' };
+};
+
+// Native utility calls use the CLI's login and require an explicit selection.
+// An unavailable OpenCode connection must not prevent a selected CLI from running.
+const resolveModelContext = async (options) => {
+  const requested = parseModelRef(options.model);
+  const settings = parseModelRef(readSmallModelSettingsOverride());
+  const explicit = requested
+    ? { ...requested, source: 'request' }
+    : settings ? { ...settings, source: 'settings' } : null;
+  const backend = explicit && nativeBackendOfProviderId(explicit.providerID);
+  if (backend) {
+    const runtime = nativeRuntimes.get(explicit.providerID);
+    if (!runtime) {
+      throw Object.assign(new Error(`The ${backend} utility runtime is unavailable`), {
+        statusCode: 503, code: 'native-runtime-unavailable',
+      });
+    }
+    const nativeModel = await runtime.describe(explicit.modelID);
+    return {
+      resolved: explicit,
+      modelInfo: { limit: { context: nativeModel.contextWindow, output: nativeModel.outputLimit } },
+      nativeModel,
+      runtime,
+      client: null,
+    };
+  }
+  if (!explicit && nativeBackendOfProviderId(options.preferredProviderID)) return null;
+  const client = getSmallModelClient(options.directory);
+  if (!client) return null;
+  const resolved = await resolveSmallModel({ ...options, client });
+  if (!resolved) return null;
+  const models = await listModelInfos(client, options.directory);
+  return {
+    resolved,
+    modelInfo: findModelInfo(models, resolved.providerID, resolved.modelID),
+    nativeModel: null,
+    runtime: null,
+    client,
+  };
+};
+
+const JSON_FENCE = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/;
+
+/**
+ * `/api/experimental/generate` has no structured-output mode, so the schema travels in the
+ * prompt and the reply is parsed here.
+ */
+const buildSchemaInstruction = (responseSchema) =>
+  `Reply with JSON matching this schema and nothing else: ${JSON.stringify(responseSchema)}`;
+
+const extractJsonText = (raw) => {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmed) return null;
+  const fenced = JSON_FENCE.exec(trimmed);
+  const candidate = (fenced ? fenced[1] : trimmed).trim();
   try {
-    const { mergedConfig } = readConfigLayers(workingDirectory);
-    const value = mergedConfig?.small_model;
-    return typeof value === 'string' ? value : null;
+    JSON.parse(candidate);
+    return candidate;
   } catch {
     return null;
   }
 };
 
-const resolveModelContext = async ({ model, directory, preferredProviderID, preferredModelID }) => {
-  const settingsSmallModel = readSmallModelSettingsOverride();
-  const configSmallModel = readConfiguredSmallModel(directory);
-  const requested = parseModelRef(model);
-  const configured = requested ? { ...requested, source: 'request' } : resolveSmallModel({
-    auth: {}, catalog: {}, settingsSmallModel, configSmallModel,
-  });
-  const nativeBackend = configured ? nativeBackendOfProviderId(configured.providerID) : null;
-  if (nativeBackend !== null) {
-    const runtime = nativeRuntimes.get(configured.providerID);
-    if (!runtime) {
-      throw Object.assign(new Error(`The ${nativeBackend} utility runtime is unavailable`), {
-        statusCode: 503, code: 'native-runtime-unavailable',
-      });
-    }
-    const nativeModel = await runtime.describe(configured.modelID);
-    return {
-      resolved: configured,
-      nativeModel,
-      runtime,
-      auth: {},
-      catalog: {
-        [configured.providerID]: {
-          models: {
-            [configured.modelID]: {
-              limit: { context: nativeModel.contextWindow, output: nativeModel.outputLimit },
-              structured_output: true,
-            },
-          },
-        },
-      },
-    };
-  }
-  const auth = readAuthFile();
-  const catalog = await getModelCatalog().catch(() => ({}));
-  return {
-    auth,
-    catalog,
-    resolved: configured ?? resolveSmallModel({
-      auth, catalog, settingsSmallModel, configSmallModel, preferredProviderID, preferredModelID,
-    }),
-    nativeModel: null,
-    runtime: null,
-  };
+const requestOptions = ({ timeoutMs, signal }) => {
+  const timeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
+  const signals = [AbortSignal.timeout(timeout)];
+  if (signal) signals.push(signal);
+  return { signal: AbortSignal.any(signals) };
 };
 
 /**
- * Generates text with the user's small model, resolved and authenticated
- * entirely server-side from the OpenCode config and auth store.
+ * Generates text with the user's small model through the running OpenCode.
+ * Credentials stay inside OpenCode; this server only sends a prompt.
  */
-export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, directory, sessionID, preferredProviderID, preferredModelID, restrictToPreferredProvider, responseSchema, timeoutMs, signal, onOverflow = 'truncate' }) {
+export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, directory, preferredProviderID, preferredModelID, restrictToPreferredProvider = Boolean(preferredProviderID), responseSchema, timeoutMs, signal, onOverflow = 'truncate' }) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
     throw Object.assign(new Error('prompt is required'), { statusCode: 400 });
   }
-  const normalizedPrompt = prompt.trim();
-  const normalizedSystem = typeof system === 'string' && system.trim() ? system.trim() : undefined;
 
-  const { auth, catalog, resolved, nativeModel, runtime } = await resolveModelContext({
-    model, directory, preferredProviderID, preferredModelID,
+  const context = await resolveModelContext({
+    directory,
+    model,
+    preferredProviderID,
+    preferredModelID,
+    restrictToPreferredProvider,
   });
 
-  if (!resolved) {
-    throw Object.assign(
-      new Error('No small model available — no authenticated provider has a suitable model'),
-      { statusCode: 404 },
-    );
-  }
+  if (!context) throw noClientError();
+  const { resolved, modelInfo, nativeModel, runtime, client } = context;
 
-  // Callers with a session context can forbid silently switching providers:
-  // an explicit user choice (settings override, opencode config, request
-  // model) is always allowed. Otherwise, supplying a preferred provider opts
-  // into same-provider resolution unless the caller explicitly passes false.
-  if (preferredProviderID
-    && restrictToPreferredProvider !== false
-    && !EXPLICIT_MODEL_SOURCES.has(resolved.source)
+  // A caller that must stay on its session's provider is only overruled by an
+  // explicit user choice (the settings override or a request model).
+  if (restrictToPreferredProvider
+    && !['settings', 'request'].includes(resolved.source)
+    && preferredProviderID
     && resolved.providerID !== preferredProviderID) {
     throw Object.assign(
       new Error('No small model available within the session provider'),
@@ -186,45 +316,98 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     );
   }
 
-  const outputTokens = resolveOutputTokens({
-    catalog,
-    providerID: resolved.providerID,
-    modelID: resolved.modelID,
-    maxOutputTokens,
-  });
+  const outputTokens = resolveOutputTokens({ modelInfo, maxOutputTokens });
+  const normalizedSystem = typeof system === 'string' && system.trim() ? system.trim() : undefined;
 
   const clamped = clampPromptToModelLimit({
-    prompt: normalizedPrompt,
+    prompt: prompt.trim(),
     system: normalizedSystem,
-    catalog,
+    modelInfo,
     providerID: resolved.providerID,
     modelID: resolved.modelID,
     onOverflow,
     outputReserveTokens: outputTokens,
   });
 
-  if (nativeModel && !nativeModel.hasLogin) {
-    throw Object.assign(new Error(`Sign in to the ${nativeBackendOfProviderId(resolved.providerID)} CLI before using its small model`), {
-      statusCode: 401, code: 'no-provider-login',
+  if (runtime) {
+    if (!nativeModel.hasLogin) {
+      throw Object.assign(new Error(`Sign in to the ${nativeBackendOfProviderId(resolved.providerID)} CLI before using its small model`), {
+        statusCode: 401, code: 'no-provider-login',
+      });
+    }
+    const text = await runtime.generate({
+      providerID: resolved.providerID,
+      modelID: resolved.modelID,
+      prompt: clamped.prompt,
+      system: normalizedSystem,
+      maxOutputTokens: outputTokens,
+      responseSchema,
+      timeoutMs,
+      signal,
+      directory,
+      effort: nativeModel.effort,
     });
+    const result = { ...resolved, text: text.trim() };
+    if (clamped.truncated) result.inputTruncated = true;
+    return result;
   }
-  const generation = {
-    auth,
-    catalog,
-    workingDirectory: directory,
-    sessionID,
-    providerID: resolved.providerID,
-    modelID: resolved.modelID,
-    prompt: clamped.prompt,
-    system: normalizedSystem,
-    maxOutputTokens: outputTokens,
-    responseSchema,
-    timeoutMs,
-    signal,
+
+  // `/api/experimental/generate` takes a single prompt, so the system instructions lead it.
+  const sections = [];
+  if (normalizedSystem) sections.push(normalizedSystem);
+  sections.push(clamped.prompt);
+  if (responseSchema) sections.push(buildSchemaInstruction(responseSchema));
+  const fullPrompt = sections.join('\n\n');
+
+  const generationOptions = requestOptions({ timeoutMs, signal });
+  const unavailableMessage = `Model unavailable: ${resolved.providerID}/${resolved.modelID}`;
+  const send = async () => {
+    const result = await client.generate.text(
+      { prompt: fullPrompt, model: { id: resolved.modelID, providerID: resolved.providerID } },
+      generationOptions,
+    );
+    return typeof result?.text === 'string' ? result.text : '';
   };
-  const text = runtime
-    ? await runtime.generate({ ...generation, directory, effort: nativeModel.effort })
-    : await callSmallModel(generation);
+
+  const sendWithCatalogRetry = async () => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await send();
+      } catch (error) {
+        if (error?._tag !== 'InvalidRequestError' || error.message !== unavailableMessage) throw error;
+        // OpenCode 2 can resolve a cold catalog before its models arrive.
+        // This rejection precedes provider dispatch; other failures must not retry.
+        if (attempt < unavailableRetryDelaysMs.length) {
+          await delay(unavailableRetryDelaysMs[attempt], undefined, { signal: generationOptions.signal });
+          continue;
+        }
+        throw Object.assign(new Error(unavailableMessage), {
+          statusCode: 503,
+          code: 'small-model-unavailable',
+        });
+      }
+    }
+  };
+
+  let text = await sendWithCatalogRetry();
+
+  if (responseSchema) {
+    // One retry: a model that ignored the shape once often honours it on a
+    // second pass, and the alternative is failing a walkthrough over a stray
+    // sentence of preamble.
+    let json = extractJsonText(text);
+    if (json === null) {
+      text = await sendWithCatalogRetry();
+      json = extractJsonText(text);
+    }
+    if (json === null) {
+      throw Object.assign(
+        new Error(`${resolved.providerID}/${resolved.modelID} did not return JSON matching the requested schema`),
+        { statusCode: 422, code: 'structured-output-unsupported', providerID: resolved.providerID, modelID: resolved.modelID },
+      );
+    }
+    text = json;
+  }
 
   return {
     text: text.trim(),
@@ -236,79 +419,44 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
 }
 
 /**
- * Provider ids the small model can actually call — an auth.json login, or a
- * credential and endpoint the running OpenCode resolved for a plugin. Used by
- * the Small Model and Changes Walkthrough pickers to hide providers that would
- * only ever fail (e.g. opencode free models without a token).
+ * Provider ids the small model can actually call. A provider counts when
+ * OpenCode has at least one enabled model for it — that is the same test
+ * OpenCode applies before letting a chat turn use it.
+ *
+ * The provider list alone is not enough: it comes back empty on setups where
+ * models are perfectly usable, so the model list is the authority and the
+ * provider list only contributes names.
  */
 export async function listAuthenticatedProviders(directory) {
   const ids = new Set();
+  const client = getSmallModelClient(directory);
   try {
-    const auth = readAuthFile();
-    for (const providerID of Object.keys(auth || {})) {
-      if (isUsableAuthEntry(auth[providerID])) ids.add(providerID);
+    const [providers, models] = client ? await Promise.all([
+      listProviderInfos(client, directory),
+      listModelInfos(client, directory),
+    ]) : [[], []];
+    const enabled = new Set();
+    for (const model of models) {
+      if (model?.enabled === false) continue;
+      if (typeof model?.providerID === 'string' && model.providerID) enabled.add(model.providerID);
     }
-    // The catalog id is github-copilot while legacy auth entries may sit
-    // under the copilot alias.
-    if (isUsableAuthEntry(getAuthEntryForProvider(auth, 'github-copilot'))) {
-      ids.add('github-copilot');
+    for (const provider of providers) {
+      if (typeof provider?.id === 'string' && enabled.has(provider.id)) ids.add(provider.id);
     }
-    // Kept separate so a runtime lookup that goes wrong costs the providers it
-    // would have added, never the logins already established from disk.
-    try {
-      for (const providerID of await listRuntimeCallableProviders(directory)) ids.add(providerID);
-    } catch {
-      // The auth.json set below stands on its own.
-    }
+    for (const id of enabled) ids.add(id);
   } catch {
-    // The CLIs own independent logins, so an OpenCode auth read cannot hide them.
+    // Native CLIs own independent logins.
   }
   for (const [providerID, runtime] of nativeRuntimes) {
     try {
       if (await runtime.available()) ids.add(providerID);
     } catch {
-      // A missing or disconnected CLI does not erase the other providers.
+      // One unavailable CLI does not hide the other providers.
     }
   }
   return Array.from(ids);
 }
 
-/**
- * Providers that only the running OpenCode knows about — plugin-registered
- * ones, and any whose endpoint is resolved at startup.
- *
- * The test is the same one applied to an auth.json login: a credential we may
- * use and somewhere to send it. Whether the endpoint answers the protocol we
- * speak is not knowable from any field OpenCode reports, and guessing it wrong
- * removes a working model from the picker with nothing to explain it.
- */
-async function listRuntimeCallableProviders(directory) {
-  const snapshot = await getRuntimeProviderSnapshot(directory);
-  if (!snapshot) return [];
-  const ids = [];
-  for (const id of snapshot.connected) {
-    // No credential or endpoint we may use, including the zen sentinel whose
-    // free models belong to OpenCode's own server.
-    if (!getRuntimeProviderTransportFromSnapshot(snapshot, id)) continue;
-    // Reached through a dedicated wire format and already covered by the
-    // auth.json scan above.
-    if (DEDICATED_WIRE_FORMAT_PROVIDERS.has(id)) continue;
-    ids.push(id);
-  }
-  return ids;
-}
-
-/**
- * Reports which model would be used, without calling it.
- *
- * `inputCharBudget` and `structuredOutput` let callers refuse work before
- * spending a request: the walkthrough needs both a big enough context and
- * schema-shaped output, and would rather tell the user to pick another model
- * than send a doomed prompt. `structuredOutput` is deliberately tri-state —
- * the catalog omits the field for roughly half of all models (aggregators and
- * proxies especially), and treating "unknown" as "unsupported" would hide
- * models that work fine.
- */
 /**
  * The reserve, resolved against the model that was actually picked.
  *
@@ -321,46 +469,42 @@ const resolveReserveTokens = (outputReserveTokens, limits) => (
   typeof outputReserveTokens === 'function' ? outputReserveTokens(limits) : outputReserveTokens
 );
 
+/**
+ * Reports which model would be used, without calling it.
+ *
+ * `structuredOutput` stays `null`: `/api/experimental/generate` has no structured-output
+ * mode for any model, and this module emulates it through the prompt. Callers
+ * must read `null` as "try it", which is exactly right here — the verdict
+ * comes from the reply, not from a capability flag.
+ */
 export async function describeSmallModel({ directory, preferredProviderID, preferredModelID, outputReserveTokens, overrideModel } = {}) {
   // A caller with its own model setting (the diff walkthrough) outranks the
   // small-model chain entirely — it asked for this model on purpose.
-  const { auth, catalog, resolved, nativeModel, runtime } = await resolveModelContext({
-    model: overrideModel, directory, preferredProviderID, preferredModelID,
+  const context = await resolveModelContext({
+    directory,
+    model: overrideModel,
+    preferredProviderID,
+    preferredModelID,
+    restrictToPreferredProvider: false,
   });
-  if (!resolved) return null;
+  if (!context) return null;
+  const { resolved, modelInfo, nativeModel, runtime } = context;
+  const outputTokenLimit = Number(modelInfo?.limit?.output) > 0 ? Number(modelInfo.limit.output) : null;
 
-  const entry = catalog?.[resolved.providerID]?.models?.[resolved.modelID];
-  const outputTokenLimit = Number(entry?.limit?.output) > 0 ? Number(entry.limit.output) : null;
   // Two passes: the first only to learn the context, which a caller-supplied
   // reserve function needs before it can answer.
-  const { contextTokens, contextKnown } = getModelInputCharBudget({
-    catalog,
-    providerID: resolved.providerID,
-    modelID: resolved.modelID,
-  });
-  const requestedReserveTokens = resolveReserveTokens(outputReserveTokens, { contextTokens, outputTokenLimit });
+  const { contextTokens, contextKnown } = getModelInputCharBudget({ modelInfo });
   const reserveTokens = resolveOutputTokens({
-    catalog,
-    providerID: resolved.providerID,
-    modelID: resolved.modelID,
-    maxOutputTokens: requestedReserveTokens,
+    modelInfo,
+    maxOutputTokens: resolveReserveTokens(outputReserveTokens, { contextTokens, outputTokenLimit }),
   });
-  const { maxChars } = getModelInputCharBudget({
-    catalog,
-    providerID: resolved.providerID,
-    modelID: resolved.modelID,
-    outputReserveTokens: reserveTokens,
-  });
+  const { maxChars } = getModelInputCharBudget({ modelInfo, outputReserveTokens: reserveTokens });
 
-  // Settings/config/request overrides can name a provider with no usable login.
-  // Report that here so readiness can refuse before the user pays for a 401.
-  const login = nativeModel ? null : await resolveProviderLogin({
-    auth,
-    workingDirectory: directory,
-    providerID: resolved.providerID,
-  });
-  const hasLogin = nativeModel ? nativeModel.hasLogin : Boolean(login);
-  const transport = runtime ? runtime.transport : getProviderTransportKind({ providerID: resolved.providerID, login });
+  // An override can name a model OpenCode has no credential for. It reports
+  // that as a disabled model, and readiness refuses before the user pays for
+  // a failed request. A model we cannot find at all is not evidence either
+  // way, so it counts as usable.
+  const hasLogin = nativeModel ? nativeModel.hasLogin : modelInfo ? modelInfo.enabled !== false : true;
 
   return {
     ...resolved,
@@ -371,8 +515,8 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
     // What the caller should ask for, so the request and the reserve above
     // cannot drift apart.
     outputTokens: Number(reserveTokens) > 0 ? Number(reserveTokens) : null,
-    structuredOutput: typeof entry?.structured_output === 'boolean' ? entry.structured_output : null,
+    structuredOutput: runtime ? true : null,
     outputTokenLimit,
-    transport,
+    transport: runtime?.transport,
   };
 }

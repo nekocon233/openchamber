@@ -45,11 +45,11 @@ describe('loadNativeProviders', () => {
       },
     }));
     const providers = await loadNativeProviders();
-    expect(providers.map((provider) => [provider.id, Object.keys(provider.models)])).toEqual([
+    expect(providers.map((provider) => [provider.id, provider.models.map((entry) => entry.id)])).toEqual([
       ['claude-native', ['opus', 'haiku']],
       ['codex-native', ['gpt-5.5']],
     ]);
-    expect(providers[0].models.opus.variants).toEqual({ low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } });
+    expect(providers[0].models[0].variants).toEqual([{ id: 'low', settings: { reasoningEffort: 'low' } }, { id: 'high', settings: { reasoningEffort: 'high' } }]);
     await loadNativeProviders();
     expect(runtime.reads()).toBe(1);
   });
@@ -62,8 +62,8 @@ describe('loadNativeProviders', () => {
       },
     }));
     const codex = (await loadNativeProviders()).find((provider) => provider.id === 'codex-native');
-    expect(Object.keys(codex?.models['gpt-5.5']?.variants ?? {})).toEqual(['low', 'high', 'low-fast', 'high-fast']);
-    expect(Object.keys(codex?.models['gpt-5.3-codex-spark']?.variants ?? {})).toEqual(['low', 'high']);
+    expect(codex?.models.find((entry) => entry.id === 'gpt-5.5')?.variants.map((entry) => entry.id)).toEqual(['low', 'high', 'low-fast', 'high-fast']);
+    expect(codex?.models.find((entry) => entry.id === 'gpt-5.3-codex-spark')?.variants.map((entry) => entry.id)).toEqual(['low', 'high']);
   });
 
   test('a failing backend keeps what an earlier read found and is not re-read right away', async () => {

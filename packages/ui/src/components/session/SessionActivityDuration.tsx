@@ -41,8 +41,9 @@ export const SessionActivityDuration: React.FC<{
     <span
       className={cn(
         'shrink-0 tabular-nums',
-        // Primary while the turn runs, info once it is waiting to be read.
-        running ? 'text-primary' : 'text-[var(--status-info)]',
+        // The readout wears its dot's color, so the row reads as one signal:
+        // primary while the turn runs, info once it is waiting to be read.
+        running ? 'text-[var(--status-info)]' : 'text-[var(--status-success)]',
         className,
       )}
       aria-label={description}

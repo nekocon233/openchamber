@@ -1,4 +1,4 @@
-import type { Message, SessionStatus } from '@opencode-ai/sdk/v2/client';
+import type { Message, SessionStatus } from '@/lib/opencode/model';
 
 export type SessionActivityPhase = 'idle' | 'busy' | 'retry';
 

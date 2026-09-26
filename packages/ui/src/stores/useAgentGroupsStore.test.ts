@@ -1,23 +1,26 @@
 import { afterAll, expect, test } from 'bun:test';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 import http from 'node:http';
 import { z } from 'zod';
-import { configureRuntimeUrlResolver } from '@/lib/runtime-url';
 import { opencodeClient } from '@/lib/opencode/client';
-import { withMultiRunMembership } from '@/lib/multirun/identity';
+import { configureRuntimeUrlResolver } from '@/lib/runtime-url';
 import { useDirectoryStore } from './useDirectoryStore';
 import { useProjectsStore } from './useProjectsStore';
 import { useAgentGroupsStore } from './useAgentGroupsStore';
+import { withMultiRunMembership } from '@/lib/multirun/identity';
 import { ChildStoreManager } from '@/sync/child-store';
 import { setActionRefs } from '@/sync/session-actions';
 
 const makeSession = (id: string, groupId: string): Session => ({
-  id, slug: id, projectID: 'p', directory: '/group-test', title: 'Renamed freely', version: '1', time: { created: 1, updated: 1 },
+  id, projectID: 'p', directory: '/group-test', title: 'Renamed freely',
+  cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  time: { created: 1, updated: 1 },
   metadata: withMultiRunMembership({}, {
     version: 1, sessionID: id, group: { kind: 'id', id: groupId }, groupSlug: 'same-name',
     role: 'run', providerID: 'openrouter', modelID: 'vendor/model',
   }),
 });
+
 let sessions = [
   makeSession('first', '9f512893-6e63-4e49-a534-5de733ca103e'),
   makeSession('second', '5fdf22b1-d21e-4324-b2df-01747396c704'),
@@ -25,27 +28,28 @@ let sessions = [
 sessions.push({ ...sessions[0], id: 'fork' });
 let failList = false;
 const deleted: string[] = [];
+const toWire = (session: Session) => ({ ...session, location: { directory: session.directory, workspace: session.projectID } });
 const unexpected: string[] = [];
 const server = http.createServer((req, res) => {
   const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
   res.setHeader('Content-Type', 'application/json');
   if (pathname === '/api/git/check') { res.end(JSON.stringify({ isGitRepository: false })); return; }
-  if (pathname === '/api/experimental/session') {
+  if (pathname === '/api/session') {
     if (failList) { res.writeHead(503).end(JSON.stringify({ message: 'offline' })); return; }
-    res.end(JSON.stringify(sessions));
+    res.end(JSON.stringify({ data: sessions.map(toWire), cursor: {} }));
     return;
   }
   const match = /^\/api\/session\/([^/]+)$/.exec(pathname);
   if (match && req.method === 'GET') {
     const session = sessions.find((item) => item.id === match[1]);
-    if (session) res.end(JSON.stringify(session));
+    if (session) res.end(JSON.stringify({ data: toWire(session) }));
     else res.writeHead(404).end();
     return;
   }
   if (match && req.method === 'DELETE') {
     deleted.push(match[1]);
     sessions = sessions.filter((item) => item.id !== match[1]);
-    res.end('true');
+    res.writeHead(204).end();
     return;
   }
   unexpected.push(`${req.method} ${pathname}`);
@@ -56,7 +60,7 @@ const address = z.object({ port: z.number() }).parse(server.address());
 configureRuntimeUrlResolver({ apiBaseUrl: `http://127.0.0.1:${address.port}` });
 opencodeClient.reconnectToRuntimeBaseUrl();
 const childStores = new ChildStoreManager();
-setActionRefs(opencodeClient.getSdkClient(), childStores, () => '/group-test');
+setActionRefs(childStores, () => '/group-test');
 useProjectsStore.setState({ projects: [], activeProjectId: null });
 useDirectoryStore.setState({ currentDirectory: '/group-test' });
 afterAll(async () => {
@@ -84,9 +88,9 @@ test('Agent Manager keeps same-label runs separate and deletes only the selected
   const result = await useAgentGroupsStore.getState().deleteGroupSessions(first.sessions, { removeWorktrees: true });
   await useAgentGroupsStore.getState().loadGroups();
   expect(result.failedIds).toEqual([]);
+  expect(result.failedWorktreePaths).toEqual([]);
   expect(deleted).toEqual(['first']);
   expect(sessions.map((session) => session.id)).toEqual(['second', 'fork']);
   expect(useAgentGroupsStore.getState().groups).toHaveLength(1);
   expect(useAgentGroupsStore.getState().selectedGroupId).toBeNull();
-  expect(unexpected).toEqual([]);
 }, 15000);

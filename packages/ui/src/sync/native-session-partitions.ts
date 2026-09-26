@@ -1,4 +1,4 @@
-import type { Session } from '@opencode-ai/sdk/v2/client';
+import type { Session } from '@/lib/opencode/model';
 
 import type { NativeAgentsAPI, NativeSessionList } from '@/lib/api/types';
 import { isNativeSessionId, nativeBackendOfSessionId, type NativeBackend } from '@/lib/native-agents/ids';

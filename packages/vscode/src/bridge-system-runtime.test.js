@@ -47,6 +47,7 @@ mock.module('vscode', () => ({
 mock.module('./opencodeConfig', () => ({
   removeProviderConfig,
   getProviderSources,
+  getStoredProviderConfig: mock(),
   upsertProviderConfig: mock(),
 }));
 mock.module('./opencodeAuth', () => ({
@@ -264,7 +265,7 @@ describe('VS Code system bridge provider status', () => {
       status: 'unavailable',
       canDisconnect: false,
     });
-    expect(deleteResponse.data).toMatchObject({ removed: false, capability: 'unavailable' });
+    expect(deleteResponse).toBeNull();
     expect(getProviderAuth).not.toHaveBeenCalled();
     expect(removeProviderAuth).not.toHaveBeenCalled();
     expect(removeProviderConfig).not.toHaveBeenCalled();
@@ -287,5 +288,22 @@ describe('VS Code system bridge provider status', () => {
     expect(quotaResponse.data).toMatchObject({ providerId: 'claude', availability: 'unsupported' });
     expect(listConfiguredQuotaProviders).not.toHaveBeenCalled();
     expect(fetchQuotaForProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('VS Code v2 migration bridge', () => {
+  test('waits for the manager to finish installing and restarting', async () => {
+    let completed = false;
+    const manager = { installV2: async () => { completed = true; } };
+    const response = await handleSystemBridgeMessage({ id: 'install', type: 'api:opencode/install-v2' }, { manager }, deps);
+    expect(completed).toBe(true);
+    expect(response).toEqual({ id: 'install', type: 'api:opencode/install-v2', success: true, data: { success: true } });
+  });
+
+  test('does not claim success without a manager or after installation failure', async () => {
+    const response = await handleSystemBridgeMessage({ id: 'missing', type: 'api:opencode/install-v2' }, undefined, deps);
+    expect(response.success).toBe(false);
+    const manager = { installV2: async () => { throw new Error('Installation failed'); } };
+    await expect(handleSystemBridgeMessage({ id: 'failed', type: 'api:opencode/install-v2' }, { manager }, deps)).rejects.toThrow('Installation failed');
   });
 });

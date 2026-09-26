@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { create, type StoreApi } from "zustand"
-import type { SessionStatus } from "@opencode-ai/sdk/v2/client"
+import type { SessionStatus } from "@/lib/opencode/model"
 
 import { INITIAL_STATE, type State } from "../types"
 import type { DirectoryStore } from "../child-store"
@@ -69,6 +69,16 @@ describe("applySessionStatusSnapshot", () => {
   })
 
   describe("authoritative mode (reconnect / escalated resync)", () => {
+    test("a successful empty snapshot clears an archived session's invalidation and confirms idle", () => {
+      const store = createDirectoryStore({
+        session_status: {},
+        sessionStatusInvalidated: { ses_a: true },
+      })
+      applySessionStatusSnapshot(store, {}, ["ses_a"], "authoritative")
+      expect(store.getState().session_status.ses_a).toEqual({ type: "idle" })
+      expect(store.getState().sessionStatusInvalidated?.ses_a).toBeUndefined()
+    })
+
     test("lowers a busy session to idle when the snapshot omits it", () => {
       const store = createDirectoryStore({
         session_status: { ses_a: BUSY },

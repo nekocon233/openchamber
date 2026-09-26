@@ -16,7 +16,7 @@ type DocumentStub = {
   body?: Element;
 };
 
-type GlobalValue = typeof globalThis | typeof ElementStub | DocumentStub | Storage | boolean;
+type GlobalValue = typeof globalThis | typeof ElementStub | DocumentStub | Storage | URL | boolean;
 
 export const installHookTestDom = (storage?: Storage) => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>();
@@ -82,6 +82,7 @@ export const installHookTestDom = (storage?: Storage) => {
   Object.assign(documentStub, { documentElement: container, body: container });
   setGlobal('document', documentStub);
   setGlobal('window', globalThis);
+  setGlobal('location', new URL('https://test.local/'));
   if (storage) setGlobal('localStorage', storage);
   setGlobal('Element', ElementStub);
   setGlobal('HTMLElement', ElementStub);

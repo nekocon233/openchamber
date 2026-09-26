@@ -1,4 +1,6 @@
 import { createUpstreamSseReader } from '../event-stream/upstream-reader.js';
+import { translateWireEvent } from '../event-stream/translate-v2.js';
+import { GLOBAL_EVENT_SOURCE_NATIVE } from '../event-stream/global-hub.js';
 
 export const createOpenCodeWatcherRuntime = (deps) => {
   const {
@@ -19,6 +21,12 @@ export const createOpenCodeWatcherRuntime = (deps) => {
   let reader = null;
   let unsubscribeEvent = null;
   let unsubscribeStatus = null;
+
+  // `onPayload` consumers speak the server's own event vocabulary, so the v2
+  // wire payload is translated here rather than in each consumer.
+  const emitTranslated = (payload, directory) => {
+    for (const translated of translateWireEvent(payload)) onPayload(translated, directory);
+  };
 
   const unwrapGlobalEventPayload = (eventData) => {
     if (!eventData || typeof eventData !== 'object') {
@@ -49,13 +57,16 @@ export const createOpenCodeWatcherRuntime = (deps) => {
     if (globalEventHub) {
       // Subscribe before OpenCode is reachable: native CLI sessions publish
       // into the hub without depending on the OpenCode upstream.
+      // The events of isolated spaces feed this watcher too, so live status, unread marks and
+      // notifications work for a space's sessions as for the host's.
       unsubscribeEvent = globalEventHub.subscribeEvent((event) => {
         const payload = unwrapGlobalEventPayload(event.payload);
         if (!payload || typeof payload !== 'object') {
           return;
         }
-        onPayload(payload, normalizeEventDirectory(event.directory));
-      }, { sources: eventSources });
+        const translated = event.translated?.() ?? (event.source === GLOBAL_EVENT_SOURCE_NATIVE ? [payload] : translateWireEvent(payload));
+        for (const item of translated) onPayload(item, normalizeEventDirectory(event.directory));
+      }, { sources: eventSources, spaces: true });
       unsubscribeStatus = globalEventHub.subscribeStatus((status) => {
         if (signal.aborted) {
           return;
@@ -83,7 +94,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
 
     reader = createUpstreamSseReader({
       signal,
-      buildUrl: () => buildOpenCodeUrl('/global/event', ''),
+      buildUrl: () => buildOpenCodeUrl('/api/event', ''),
       getHeaders: getOpenCodeAuthHeaders,
       fetchImpl,
       stallTimeoutMs: upstreamStallTimeoutMs,
@@ -96,7 +107,7 @@ export const createOpenCodeWatcherRuntime = (deps) => {
         if (!payload || typeof payload !== 'object') {
           return;
         }
-        onPayload(payload, normalizeEventDirectory(event.directory));
+        emitTranslated(payload, normalizeEventDirectory(event.directory));
       },
       onError(error) {
         if (signal.aborted) {

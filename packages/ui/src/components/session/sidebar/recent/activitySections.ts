@@ -1,22 +1,31 @@
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 import { isSessionPinned } from '@/stores/useSessionPinnedStore';
 import type { SessionNode } from '../types';
+import type { SidebarSessionLocation } from './sessionLocation';
 
-export type RecentSessionLocation = {
+type RecentSessionLocation = SidebarSessionLocation;
+
+type SidebarActivityItem = {
+  node: SessionNode;
   projectId: string | null;
   groupDirectory: string | null;
-  projectLabel: string | null;
-  branchLabel: string | null;
+  secondaryMeta: { projectLabel?: string | null; branchLabel?: string | null } | null;
+  getSecondaryMeta?: (sessionId: string) => SidebarActivityItem['secondaryMeta'];
 };
 
 type RecentActivitySection = {
   key: 'active-now';
-  items: Array<{
-    node: SessionNode;
-    projectId: string | null;
-    groupDirectory: string | null;
-    secondaryMeta: { projectLabel?: string | null; branchLabel?: string | null } | null;
-  }>;
+  items: SidebarActivityItem[];
+};
+
+// Recent and Timeline filter their own lists with the sidebar's rule: an
+// exact `ses_` id, otherwise a case-insensitive title match.
+const matchesSidebarSessionQuery = (session: Session, query: string): boolean => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  if (normalizedQuery.startsWith('ses_')) return session.id.toLowerCase() === normalizedQuery;
+  const title = typeof session.title === 'string' ? session.title.toLowerCase() : '';
+  return title.includes(query);
 };
 
 export const RECENT_SESSION_MAX_AGE_MS = 48 * 60 * 60 * 1000;
@@ -67,6 +76,18 @@ export const derivePinnedSessions = (
   && isSessionPinned(pinnedSessionIds, session.directory, session.id)
 ));
 
+const attachRecentWorktrees = (
+  node: SessionNode,
+  getSessionLocation: (sessionId: string) => RecentSessionLocation | null,
+): SessionNode => {
+  const worktree = getSessionLocation(node.session.id)?.worktree ?? null;
+  const children = node.children.map((child) => attachRecentWorktrees(child, getSessionLocation));
+  if (worktree === node.worktree && children.every((child, index) => child === node.children[index])) {
+    return node;
+  }
+  return { ...node, worktree, children };
+};
+
 export const deriveRecentActivitySections = ({
   sessions,
   getSessionLocation,
@@ -80,22 +101,51 @@ export const deriveRecentActivitySections = ({
 }): RecentActivitySection[] => [{
   key: 'active-now',
   items: sessions.flatMap((session) => {
-    const title = typeof session.title === 'string' ? session.title.toLowerCase() : '';
-    const normalizedQuery = query.trim().toLowerCase();
-    const isIdQuery = normalizedQuery.startsWith('ses_');
-    const matches = isIdQuery
-      ? session.id.toLowerCase() === normalizedQuery
-      : !query || title.includes(query);
-    if (!matches) return [];
+    if (!matchesSidebarSessionQuery(session, query)) return [];
     const location = getSessionLocation(session.id);
+    const node = getSessionNode?.(session) ?? { session, children: [], worktree: null };
     return [{
-      node: getSessionNode?.(session) ?? { session, children: [], worktree: null },
+      node: attachRecentWorktrees(node, getSessionLocation),
       projectId: location?.projectId ?? null,
       groupDirectory: location?.groupDirectory ?? session.directory ?? null,
       secondaryMeta: location ? {
         projectLabel: location.projectLabel,
         branchLabel: location.branchLabel,
       } : null,
+      getSecondaryMeta: (sessionId: string) => {
+        const childLocation = getSessionLocation(sessionId);
+        return childLocation ? {
+          projectLabel: childLocation.projectLabel,
+          branchLabel: childLocation.branchLabel,
+        } : null;
+      },
     }];
   }),
 }];
+
+// Timeline lists every non-archived root project session as one flat zone.
+// Ordering, membership, and branch/project metadata are resolved by the
+// caller; this projection only applies the search filter and shapes rows.
+export const deriveTimelineActivityItems = ({
+  sessions,
+  getSessionLocation,
+  getSessionNode,
+  query,
+}: {
+  sessions: readonly Session[];
+  getSessionLocation: (sessionId: string) => SidebarSessionLocation | null;
+  getSessionNode: (session: Session) => SessionNode;
+  query: string;
+}): SidebarActivityItem[] => sessions.flatMap((session) => {
+  if (!matchesSidebarSessionQuery(session, query)) return [];
+  const location = getSessionLocation(session.id);
+  return [{
+    node: getSessionNode(session),
+    projectId: location?.projectId ?? null,
+    groupDirectory: location?.groupDirectory ?? session.directory ?? null,
+    secondaryMeta: {
+      projectLabel: location?.projectLabel ?? null,
+      branchLabel: location?.branchLabel ?? null,
+    },
+  }];
+});

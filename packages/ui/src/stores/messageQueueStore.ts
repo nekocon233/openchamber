@@ -1,27 +1,8 @@
 import { create } from 'zustand';
-
+import type { SyncEvent } from '@/lib/opencode/events';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
-import type {
-    FollowUpQueueAPI,
-    FollowUpQueueAdditionalPart,
-    FollowUpQueueAttachment,
-    FollowUpQueueItem,
-    FollowUpQueueMutationResult,
-    FollowUpQueueOperation,
-    FollowUpQueueSnapshot,
-    FollowUpQueueStatus,
-} from '@/lib/api/types';
-import {
-    FOLLOW_UP_QUEUE_CLAIM_TTL_MS,
-    FollowUpQueueConflictError,
-    FollowUpQueueRequestError,
-    FollowUpQueueUnsupportedError,
-    applyFollowUpQueueOperation,
-    followUpQueueItemsEqual,
-    parseFollowUpQueueItem,
-    parseFollowUpQueueOperation,
-    parseFollowUpQueueSnapshot,
-} from '@/lib/followUpQueue';
+import type { FollowUpQueueAPI, FollowUpQueueAdditionalPart, FollowUpQueueAttachment, FollowUpQueueItem, FollowUpQueueMutationResult, FollowUpQueueOperation, FollowUpQueueSnapshot, FollowUpQueueStatus } from '@/lib/api/types';
+import { FOLLOW_UP_QUEUE_CLAIM_TTL_MS, FollowUpQueueConflictError, FollowUpQueueRequestError, FollowUpQueueUnsupportedError, applyFollowUpQueueOperation, followUpQueueItemsEqual, parseFollowUpQueueItem, parseFollowUpQueueOperation, parseFollowUpQueueSnapshot } from '@/lib/followUpQueue';
 import { createOpenCodeIdentifier } from '@/lib/opencode/identifier';
 import { normalizePath } from '@/lib/pathNormalization';
 import { updateDesktopSettings } from '@/lib/persistence';
@@ -29,7 +10,6 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 import type { AttachedFile } from './types/sessionTypes';
 import { getSafeStorage } from './utils/safeStorage';
 import { z } from 'zod';
-import type { Event } from '@opencode-ai/sdk/v2';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
 
@@ -1881,7 +1861,7 @@ export const messageQueueUpdatedEventSchema = z.object({
 
 export type MessageQueueUpdatedEvent = z.infer<typeof messageQueueUpdatedEventSchema>;
 
-export const applyMessageQueueUpdatedEvent = (payload: Event | MessageQueueUpdatedEvent, expectedRuntimeKey: string): void => {
+export const applyMessageQueueUpdatedEvent = (payload: SyncEvent | MessageQueueUpdatedEvent, expectedRuntimeKey: string): void => {
     if (expectedRuntimeKey !== getRuntimeKey()) return;
     if (payload.type !== 'openchamber:message-queue.updated') return;
     // Queue updates for this client arrive as follow-up-queue revision hints.

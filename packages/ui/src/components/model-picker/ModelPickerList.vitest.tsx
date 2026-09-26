@@ -15,7 +15,6 @@ const renderAutoPicker = (searchQuery: string) => renderToStaticMarkup(
     providers={[]}
     favoriteModels={[]}
     recentModels={[]}
-    modelsMetadata={new Map()}
     leadingEntry={autoEntry}
     searchQuery={searchQuery}
     onSearchQueryChange={() => {}}

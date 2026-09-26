@@ -20,7 +20,6 @@ import {
   usePluginsStore,
   type PluginMutationResult,
 } from '@/stores/usePluginsStore';
-import { usePendingOpenCodeRestartStore } from '@/stores/usePendingOpenCodeRestartStore';
 import {
   getCatalogPluginPrimaryAction,
   getCatalogPluginPresentation,
@@ -41,8 +40,7 @@ interface ThirdPartyIntegrationsSectionProps {
 }
 
 const requiresRestart = (result: PluginMutationResult): boolean =>
-  result.restartDeferred === true
-  || result.requiresManualRestart === true
+  result.requiresManualRestart === true
   || result.reloadFailed === true;
 
 export const ThirdPartyIntegrationsSection: React.FC<ThirdPartyIntegrationsSectionProps> = ({
@@ -106,30 +104,6 @@ export const ThirdPartyIntegrationsSection: React.FC<ThirdPartyIntegrationsSecti
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const pendingPluginRestartCount = usePendingOpenCodeRestartStore(
-    (state) => state.changes.filter((change) => change.scope === 'plugins').length,
-  );
-  const isApplyingRestart = usePendingOpenCodeRestartStore((state) => state.isApplying);
-  const previousPluginRestartCountRef = React.useRef(pendingPluginRestartCount);
-
-  // When deferred plugin restarts are applied (pending plugins scope clears), drop
-  // local restart/unavailable flags and reload so statuses update immediately.
-  React.useEffect(() => {
-    const previousCount = previousPluginRestartCountRef.current;
-    previousPluginRestartCountRef.current = pendingPluginRestartCount;
-
-    if (isApplyingRestart) {
-      return;
-    }
-    if (previousCount <= 0 || pendingPluginRestartCount > 0) {
-      return;
-    }
-
-    setRestartRequiredIds(new Set());
-    setProviderUnavailableIds(new Set());
-    void refresh();
-  }, [isApplyingRestart, pendingPluginRestartCount, refresh]);
 
   const setRestartRequired = React.useCallback((pluginId: string, required: boolean) => {
     setRestartRequiredIds((current) => {

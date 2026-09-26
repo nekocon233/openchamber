@@ -1,72 +1,37 @@
+import type { Model } from '@/lib/opencode/model';
 import type { ModelMetadata } from '@/types';
 
-type LiveModelModalities = {
-  text?: boolean;
-  audio?: boolean;
-  image?: boolean;
-  video?: boolean;
-  pdf?: boolean;
-};
-
-type LiveProviderModel = {
-  id: string;
-  name?: string;
-  capabilities?: {
-    toolcall?: boolean;
-    reasoning?: boolean;
-    temperature?: boolean;
-    attachment?: boolean;
-    input?: LiveModelModalities;
-    output?: LiveModelModalities;
-  };
-  cost?: {
-    input?: number;
-    output?: number;
-    cache?: { read?: number; write?: number };
-  };
-  limit?: { context?: number; output?: number };
-  release_date?: string;
-};
+type LiveProviderModel = Pick<Model, 'id'> & Partial<Pick<Model,
+  'modelID' | 'name' | 'capabilities' | 'cost' | 'limit' | 'time' | 'variants' | 'compatibility'
+>>;
 
 const finiteNumber = (value: number | undefined): number | undefined =>
   value !== undefined && Number.isFinite(value) ? value : undefined;
 
-const getModalities = (value: LiveModelModalities | undefined): string[] => {
-  const modalities: string[] = [];
-  if (value?.text) modalities.push('text');
-  if (value?.audio) modalities.push('audio');
-  if (value?.image) modalities.push('image');
-  if (value?.video) modalities.push('video');
-  if (value?.pdf) modalities.push('pdf');
-  return modalities;
-};
-
 const deriveLiveModelMetadata = (providerId: string, model: LiveProviderModel): ModelMetadata => {
   const capabilities = model.capabilities;
-  const cost = model.cost;
-  const inputModalities = getModalities(capabilities?.input);
-  const outputModalities = getModalities(capabilities?.output);
-
+  const cost = model.cost?.find((entry) => !entry.tier) ?? model.cost?.[0];
+  const reasoning = Boolean(model.variants?.length || model.compatibility?.reasoningField || model.compatibility?.requireReasoning);
+  const released = finiteNumber(model.time?.released);
   return {
-    id: model.id,
+    id: model.modelID ?? model.id,
     providerId,
     name: model.name,
-    tool_call: capabilities?.toolcall,
-    reasoning: capabilities?.reasoning,
-    temperature: capabilities?.temperature,
-    attachment: capabilities?.attachment,
-    modalities: capabilities ? { input: inputModalities, output: outputModalities } : undefined,
+    tool_call: capabilities?.tools,
+    reasoning: reasoning ? true : undefined,
+    attachment: capabilities ? capabilities.input.includes('image') || capabilities.input.includes('pdf') : undefined,
+    modalities: capabilities ? { input: capabilities.input, output: capabilities.output } : undefined,
     cost: cost ? {
       input: finiteNumber(cost.input),
       output: finiteNumber(cost.output),
-      cache_read: finiteNumber(cost.cache?.read),
-      cache_write: finiteNumber(cost.cache?.write),
+      cache_read: finiteNumber(cost.cache.read),
+      cache_write: finiteNumber(cost.cache.write),
     } : undefined,
     limit: model.limit ? {
-      context: finiteNumber(model.limit.context),
-      output: finiteNumber(model.limit.output),
+      context: model.limit.context > 0 ? finiteNumber(model.limit.context) : undefined,
+      output: model.limit.output > 0 ? finiteNumber(model.limit.output) : undefined,
     } : undefined,
-    release_date: model.release_date,
+    release_date: released && released > 0 ? new Date(released).toISOString().slice(0, 10) : undefined,
   };
 };
 
@@ -108,7 +73,7 @@ export const mergeModelMetadataWithLiveModel = (
     ...metadata,
     id: liveMetadata.id,
     providerId,
-    name: liveMetadata.name ?? metadata.name,
+    name: liveMetadata.name && liveMetadata.name !== liveMetadata.id ? liveMetadata.name : metadata.name ?? liveMetadata.name,
     tool_call: liveMetadata.tool_call ?? metadata.tool_call,
     reasoning: liveMetadata.reasoning ?? metadata.reasoning,
     temperature: liveMetadata.temperature ?? metadata.temperature,

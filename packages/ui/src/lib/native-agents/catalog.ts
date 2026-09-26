@@ -1,9 +1,7 @@
-import type { Provider } from '@opencode-ai/sdk/v2/client';
-
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import type { NativeBackend } from './ids';
-import { buildNativeProvider } from './providers';
+import { buildNativeProvider, type NativeProvider } from './providers';
 
 // Native CLI models for the model picker. The catalog is the same for every
 // directory, so it is read once per runtime. A backend whose read fails keeps
@@ -14,15 +12,15 @@ const RETRY_AFTER_FAILURE_MS = 60_000;
 const BACKENDS: NativeBackend[] = ['claude', 'codex'];
 
 type CatalogState = {
-  providers: Map<NativeBackend, Provider>;
+  providers: Map<NativeBackend, NativeProvider>;
   complete: boolean;
   failedAt: number;
-  inflight: Promise<Provider[]> | null;
+  inflight: Promise<NativeProvider[]> | null;
 };
 
 const states = new Map<string, CatalogState>();
 
-const listed = (state: CatalogState): Provider[] => (
+const listed = (state: CatalogState): NativeProvider[] => (
   BACKENDS.flatMap((backend) => {
     const provider = state.providers.get(backend);
     return provider ? [provider] : [];
@@ -30,7 +28,7 @@ const listed = (state: CatalogState): Provider[] => (
 );
 
 /** Providers for the installed native CLIs; empty where native sessions are unavailable. */
-export const loadNativeProviders = async (): Promise<Provider[]> => {
+export const loadNativeProviders = async (): Promise<NativeProvider[]> => {
   const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
   if (!nativeAgents?.supported) return [];
   const runtimeKey = getRuntimeKey();
