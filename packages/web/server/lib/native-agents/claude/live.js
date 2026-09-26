@@ -3,8 +3,8 @@
 // sent while a turn runs joins that turn at its next tool boundary, and model,
 // effort and plan mode change in place without starting a new session.
 //
-// A query that has been idle for `idleTimeoutMs` is closed; its CLI process
-// exits and the next prompt resumes the session from its transcript. At most
+// A query with no turn or background work for `idleTimeoutMs` is closed; its CLI
+// process exits and the next prompt resumes the session from its transcript. At most
 // `maxLiveSessions` queries run at once; opening another closes the least
 // recently used idle one, and fails when all of them are busy. A new query
 // for a session starts only after the previous one has exited, so two CLI
@@ -63,6 +63,10 @@ const resultFrameSchema = z.object({
   terminal_reason: z.string().nullish(),
   queued_turn_count: z.number().optional(),
 }).passthrough();
+
+const backgroundTasksSchema = z.object({
+  tasks: z.array(z.object({ ambient: z.boolean().optional() })),
+});
 
 const taskToolUse = z.object({ description: z.string().optional(), subagent_type: z.string().optional() }).passthrough();
 
@@ -240,6 +244,7 @@ export const createClaudeLiveSessions = ({
 
   const scheduleIdleClose = (live) => {
     clearIdleTimer(live);
+    if (live.busy || live.backgroundTasksRunning || live.closing) return;
     live.idleTimer = setTimeout(() => close(live), idleTimeoutMs);
     live.idleTimer.unref?.();
   };
@@ -271,6 +276,18 @@ export const createClaudeLiveSessions = ({
       return;
     }
     if (frame.type === 'system') {
+      if (frame.subtype === 'background_tasks_changed') {
+        const parsed = backgroundTasksSchema.safeParse(frame);
+        if (!parsed.success) return;
+        // The CLI supplies the full live set. Watchers marked ambient are
+        // not work, and a repeated snapshot must not postpone idle cleanup.
+        const running = parsed.data.tasks.some((task) => !task.ambient);
+        if (live.backgroundTasksRunning === running) return;
+        live.backgroundTasksRunning = running;
+        if (running) clearIdleTimer(live);
+        else scheduleIdleClose(live);
+        return;
+      }
       // A compaction's boundary opens its marker, as in the transcript; the
       // summary follows as a synthetic user frame. Other system frames report
       // state the records already show.
@@ -380,7 +397,7 @@ export const createClaudeLiveSessions = ({
 
   const makeRoom = () => {
     if (sessions.size < maxLiveSessions) return;
-    const idle = Array.from(sessions.values()).filter((live) => !live.busy && !live.closing);
+    const idle = Array.from(sessions.values()).filter((live) => !live.busy && !live.backgroundTasksRunning && !live.closing);
     if (idle.length === 0) {
       throw new NativeAgentError(
         `${maxLiveSessions} Claude Code sessions are already running`,
@@ -417,6 +434,7 @@ export const createClaudeLiveSessions = ({
       sends: new Map(),
       subagents: new Set(),
       busy: false,
+      backgroundTasksRunning: false,
       closing: false,
       idleTimer: null,
       idleWaiters: [],

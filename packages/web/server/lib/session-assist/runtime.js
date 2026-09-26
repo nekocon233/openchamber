@@ -199,8 +199,8 @@ export const createSessionAssistRuntime = ({
   });
 
   const generateAssist = async (sessionId, directory, signal) => {
-    const requestedTargets = getTargets();
-    if (!requestedTargets.recap && !requestedTargets.suggestion) return;
+    const targets = getTargets();
+    if (!targets.recap && !targets.suggestion) return;
     const source = nativeSessions?.isNativeSessionId(sessionId)
       ? nativeSource(sessionId, directory, signal)
       : openCodeSource(sessionId, directory, signal);
@@ -214,8 +214,6 @@ export const createSessionAssistRuntime = ({
     source.checkCurrent();
     if (!context) return;
     const { last, turns } = context;
-    const targets = { ...requestedTargets, suggestion: requestedTargets.suggestion && last.agent !== 'plan' };
-    if (!targets.recap && !targets.suggestion) return;
     const { describeSmallModel, generateSmallModelText } = await getSmallModelService();
     const preferredProviderID = last.providerID;
     const preferredModelID = last.modelID;

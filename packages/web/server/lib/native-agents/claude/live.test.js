@@ -25,7 +25,7 @@ const askInput = frames
 // recorded question through canUseTool right before its answer frame, the
 // way the CLI asks before the tool runs. Then waits for more input, and
 // exits `exitDelayMs` after its input ends.
-const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = { name: 'AskUserQuestion', input: askInput } } = {}) => {
+const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = { name: 'AskUserQuestion', input: askInput }, afterFrames = () => [] } = {}) => {
   const calls = { queries: [], setModel: [], applyFlagSettings: [], setPermissionMode: [], interrupt: 0 };
   const sdk = {
     query: ({ prompt, options }) => {
@@ -53,6 +53,7 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = 
           }
           yield frame;
         }
+        yield* afterFrames();
         while (true) {
           const next = await input.next();
           if (next.done) {
@@ -78,13 +79,13 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = 
   return { sdk, calls };
 };
 
-const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, idleTimeoutMs = 60_000, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest } = {}) => {
+const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, idleTimeoutMs = 60_000, maxLiveSessions, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest, afterFrames } = {}) => {
   const events = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
   const questions = createQuestionRegistry({
     publish: (directory, payload) => events.push({ directory, payload }),
   });
-  const { sdk, calls } = createFakeSdk({ failAfter, exitDelayMs, permissionRequest });
+  const { sdk, calls } = createFakeSdk({ failAfter, exitDelayMs, permissionRequest, afterFrames });
   const live = createClaudeLiveSessions({
     loadSdk: async () => sdk,
     resolveExecutable: async () => executable,
@@ -95,6 +96,7 @@ const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = fals
     readGlobalInstructions: async () => instructions,
     onIdle,
     idleTimeoutMs,
+    maxLiveSessions,
     platform,
   });
   return { live, events, questions, calls };
@@ -336,7 +338,11 @@ describe('Claude live sessions', () => {
   });
 
   it('closes an idle query, and the next prompt opens a new one', async () => {
-    const harness = createHarness({ idleTimeoutMs: 5 });
+    const harness = createHarness({
+      idleTimeoutMs: 5,
+      // The recording ends while its background agent is still running.
+      afterFrames: () => [{ type: 'system', subtype: 'background_tasks_changed', tasks: [] }],
+    });
     await sendPrompt(harness.live);
     await answerQuestion(harness);
     await waitFor(() => harness.calls.queries[0].closed);
@@ -344,6 +350,65 @@ describe('Claude live sessions', () => {
 
     await sendPrompt(harness.live, { messageId: 'ncl_u_c44f0a7a-a88c-4093-a5e3-6653ff44f6d3' });
     expect(harness.calls.queries).toHaveLength(2);
+  });
+
+  it.each(['completed', 'failed', 'stopped'])('retains a query until its background task has %s', async (status) => {
+    const finished = Promise.withResolvers();
+    const harness = createHarness({
+      idleTimeoutMs: 10,
+      afterFrames: async function* () {
+        // A malformed snapshot cannot erase the preceding live task set.
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: null };
+        await finished.promise;
+        yield { type: 'system', subtype: 'task_notification', task_id: 'a6f8a95b426077fd7', status };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      },
+    });
+    try {
+      await sendPrompt(harness.live);
+      await answerQuestion(harness);
+      await waitFor(() => payloads(harness.events, 'session.idle').length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(harness.live.liveRecords(SESSION_ID)).not.toBeNull();
+      expect(harness.calls.queries[0].closed).toBe(false);
+      finished.resolve();
+      await waitFor(() => harness.calls.queries[0].closed);
+      expect(harness.live.liveRecords(SESSION_ID)).toBeNull();
+    } finally {
+      finished.resolve();
+      await harness.live.closeSession(SESSION_ID);
+    }
+  });
+
+  it('does not evict a query with background work to make room for another session', async () => {
+    const harness = createHarness({ maxLiveSessions: 1 });
+    try {
+      await sendPrompt(harness.live);
+      await answerQuestion(harness);
+      await waitFor(() => payloads(harness.events, 'session.idle').length > 0);
+      await expect(sendPrompt(harness.live, {
+        sessionId: 'ncl_210333b7-a88c-45b7-8bec-6d63ec3a1188',
+      })).rejects.toMatchObject({ code: 'NATIVE_TOO_MANY_SESSIONS', status: 429 });
+      expect(harness.calls.queries).toHaveLength(1);
+      expect(harness.live.liveRecords(SESSION_ID)).not.toBeNull();
+    } finally {
+      // Explicit closure still stops the process and its background tasks.
+      await harness.live.closeSession(SESSION_ID);
+    }
+    expect(harness.calls.queries[0].closed).toBe(true);
+  });
+
+  it('allows idle cleanup when only ambient background watchers remain', async () => {
+    const harness = createHarness({
+      idleTimeoutMs: 5,
+      afterFrames: () => [{
+        type: 'system', subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 'watcher', task_type: 'local_bash', description: 'Watch files', ambient: true }],
+      }],
+    });
+    await sendPrompt(harness.live);
+    await answerQuestion(harness);
+    await waitFor(() => harness.calls.queries[0].closed);
   });
 
   it('rewinds by replacing the open query with one resumed at the entry, once it exited', async () => {

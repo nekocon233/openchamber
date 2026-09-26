@@ -120,7 +120,8 @@ model context is small. Page/count bounds are not a network-byte quota.
    characters. Short confirmations and languages without word spaces are
    supported. Malformed, overlong, evaluative, question, and assistant-voice
    output is discarded without discarding a valid recap. Plan-mode answers
-   request only the recap; with recap disabled, no model call is made.
+   request suggestions too, including when recap is disabled. Accepting a
+   suggestion only fills the composer; it does not approve or execute a plan.
 6. Re-read the latest message and fresh session before writing. A moved tail,
    canceled run, changed endpoint/directory, archive, revert, or failed fresh
    read discards the result. Never merge from the old pre-generation metadata.
@@ -154,8 +155,9 @@ payloads written by an earlier process; the `time.idle` rule retires those.
 - `SessionRecapSpacer` shows the reminder in the reserved gap under the reply
   after 60 seconds of inactivity. This display delay does not delay generation.
 - The composer's `PromptSuggestion` can show proposed input as soon as
-  generation finishes. Tab, Right arrow, or a tap fills the composer; a
-  separate submit sends it. Typing dismisses the current proposal locally.
+  generation finishes, in a row above the editor on desktop and mobile.
+  Clicking it fills the composer; a separate submit sends it. Typing hides the
+  row while the draft has content and clearing the draft reveals it again.
 
 Native CLI sessions (`ncl_`, `ncx_`) get assists too. A separate hub
 subscription on the native event source feeds only this runtime; goals use their own native subscription, while

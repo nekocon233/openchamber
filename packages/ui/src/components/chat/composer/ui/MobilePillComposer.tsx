@@ -33,8 +33,8 @@ export interface MobilePillComposerProps {
     iconSizeClass: string;
     sendIconSizeClass: string;
     stopIconSizeClass: string;
-    /** Empty-input proposal; accepting fills the draft before expanding. */
-    suggestion?: { text: string; onAccept: () => void } | null;
+    /** Suggested input, shown above the pill's draft line. */
+    topRow?: React.ReactNode;
     /** Attached files, shown inside the pill above the draft line. */
     attachments?: React.ReactNode;
     /** Rendered as the pill's own last row (mobile model/agent controls). */
@@ -67,7 +67,7 @@ export function MobilePillComposer(props: MobilePillComposerProps) {
         iconSizeClass,
         sendIconSizeClass,
         stopIconSizeClass,
-        suggestion,
+        topRow,
         attachments,
         bottomRow,
         onExpand,
@@ -99,9 +99,10 @@ export function MobilePillComposer(props: MobilePillComposerProps) {
                 data-composer-box="true"
                 className={cn(
                     'oc-glass-composer flex min-w-0 flex-1 flex-col border border-border/80 shadow-[0_4px_16px_-4px_rgb(0_0_0_/_0.12)]',
-                    bottomRow ? 'rounded-[1.5rem]' : 'rounded-full',
+                    topRow || bottomRow ? 'rounded-[1.5rem]' : 'rounded-full',
                 )}
             >
+            {topRow}
             {attachments}
             {/* pl-1 puts the attach icon at the same inset the expanded
                 footer gives it, and h-12 is the expanded footer's height
@@ -124,20 +125,19 @@ export function MobilePillComposer(props: MobilePillComposerProps) {
                     // The morph moves the editor block to and from this line.
                     data-composer-morph-prompt="true"
                     className="flex h-full min-w-0 flex-1 cursor-text items-center px-1.5 text-left"
-                    onClick={!message && suggestion ? suggestion.onAccept : onExpand}
-                    aria-label={!message && suggestion ? t('chat.suggestion.applyAria') : undefined}
+                    onClick={onExpand}
                 >
                     <span
                         className={cn(
                             'truncate typography-ui-label',
-                            message.trim() ? 'text-foreground' : suggestion ? 'text-muted-foreground' : 'text-muted-foreground/40',
+                            message.trim() ? 'text-foreground' : 'text-muted-foreground/40',
                         )}
                     >
                         {message.trim()
                             ? message
-                            : suggestion?.text ?? (currentSessionId || newSessionDraftOpen
+                            : currentSessionId || newSessionDraftOpen
                                 ? t('chat.chatInput.placeholder.chatCompact')
-                                : t('chat.chatInput.placeholder.selectSession'))}
+                                : t('chat.chatInput.placeholder.selectSession')}
                     </span>
                 </button>
                 <button

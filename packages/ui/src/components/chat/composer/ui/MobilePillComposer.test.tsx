@@ -9,10 +9,15 @@ import { ThemeSystemProvider } from '@/contexts/ThemeSystemContext';
 import { I18nProvider } from '@/lib/i18n';
 
 import { MobilePillComposer } from './MobilePillComposer';
+import { PromptSuggestion } from './PromptSuggestion';
 
 const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; suggestion?: string }) => {
     const win = new Window({ url: 'http://localhost' });
-    const values = { window: win, document: win.document, navigator: win.navigator, localStorage: win.localStorage, IS_REACT_ACT_ENVIRONMENT: true };
+    const values = {
+        window: win, document: win.document, navigator: win.navigator, localStorage: win.localStorage,
+        Element: win.Element, HTMLElement: win.HTMLElement, Node: win.Node,
+        getComputedStyle: win.getComputedStyle.bind(win), IS_REACT_ACT_ENVIRONMENT: true,
+    };
     const previous = new Map(Object.keys(values).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
     for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, value });
     const container = document.createElement('div');
@@ -20,6 +25,7 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
     let primaryActions = 0;
     let queued = 0;
     let acceptedSuggestions = 0;
+    let expanded = 0;
     try {
         await act(async () => root.render(
         <SyncProvider directory="/fixture" sdk={OpenCode.make({ baseUrl: "http://opencode.test", fetch: async () => new Response("[]", { headers: { "content-type": "application/json" } }) })}>
@@ -37,8 +43,13 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
                 iconSizeClass="icon-size"
                 sendIconSizeClass="send-icon-size"
                 stopIconSizeClass="stop-icon-size"
-                suggestion={options.suggestion ? { text: options.suggestion, onAccept: () => { acceptedSuggestions += 1; } } : null}
-                onExpand={() => {}}
+                topRow={options.suggestion && !options.hasContent ? (
+                    <PromptSuggestion
+                        text={options.suggestion}
+                        onAccept={() => { acceptedSuggestions += 1; }}
+                    />
+                ) : null}
+                onExpand={() => { expanded += 1; }}
                 onPrimaryAction={() => { primaryActions += 1; }}
                 onQueueMessage={() => { queued += 1; }}
                 onPickLocalFiles={() => {}}
@@ -66,6 +77,14 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
             expect(queued).toBe(0);
             expect(acceptedSuggestions).toBe(0);
         } else if (options.suggestion) {
+            const prompt = container.querySelector<HTMLButtonElement>('[data-composer-morph-prompt]');
+            expect(prompt?.textContent).not.toContain(options.suggestion);
+            await act(async () => { prompt?.click(); });
+            expect(expanded).toBe(1);
+            expect(acceptedSuggestions).toBe(0);
+
+            expect(container.querySelector('[aria-label="Dismiss suggestion"]')).toBeNull();
+
             const suggestion = container.querySelector<HTMLButtonElement>('[aria-label="Use suggested message"]');
             expect(suggestion).not.toBeNull();
             await act(async () => { suggestion?.click(); });
@@ -85,9 +104,10 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
 };
 
 describe('MobilePillComposer', () => {
-    test('accepts proposed input with a tap without sending or queueing it', async () => {
+    test('keeps suggestion actions in the top row and tapping the empty prompt only expands', async () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, suggestion: 'Run the tests' });
         expect(markup).toContain('Run the tests');
+        expect(markup.indexOf('Run the tests')).toBeLessThan(markup.indexOf('data-composer-morph-prompt'));
         expect(markup).not.toContain('aria-label="Send message"');
     });
 
