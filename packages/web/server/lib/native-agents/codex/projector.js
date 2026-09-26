@@ -5,9 +5,11 @@
 // follow item order; a message steered into a running turn starts a new user
 // message and a new assistant segment. A context compaction becomes a
 // compaction message, the marker the UI shows for OpenCode's own compactions.
+// Its item id also starts a new assistant segment, preserving both sides of
+// the boundary when the UI reconciles messages by id.
 // Live item notifications carry start/completion times; persisted items do
 // not, so history parts fall back to turn times. Message creation times stay
-// non-decreasing in turn order.
+// strictly increasing in turn order.
 
 import { z } from 'zod';
 
@@ -125,6 +127,7 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
           parts: [buildCompactionPart({ id: userTextPartId(id, 0), sessionID: sessionId, messageID: id, auto })],
         };
         records.push(currentUser);
+        segmentKey = compactionItemId;
         currentAssistant = null;
         continue;
       }

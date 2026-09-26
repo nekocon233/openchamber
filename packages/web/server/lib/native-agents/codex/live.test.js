@@ -396,6 +396,42 @@ describe('Codex live threads', () => {
     await expect(broken.live.revertThread(SESSION_ID, TURN_ID)).rejects.toThrow('thread not loaded');
   });
 
+  it('streams the continuation into a new message after compaction without republishing the earlier reply', async () => {
+    const { live, events } = createHarness({ replay: false, now: () => 10_000 });
+    await sendPrompt(live);
+    const items = [
+      { type: 'userMessage', id: 'user', clientId: MESSAGE_ID, content: [{ type: 'text', text: 'Continue' }] },
+      { type: 'agentMessage', id: 'before', text: 'Before compaction' },
+      { type: 'contextCompaction', id: 'compact' },
+      { type: 'agentMessage', id: 'after', text: '' },
+    ];
+    for (const item of items.slice(0, 3)) {
+      live.handleNotification('item/completed', { threadId: THREAD_ID, turnId: TURN_ID, item });
+    }
+    const before = live.liveRecords(SESSION_ID).find((record) => record.info.role === 'assistant');
+    const earlierUpdates = () => payloads(events, 'message.updated').filter((event) => event.properties.info.id === before.info.id);
+    const earlierCount = earlierUpdates().length;
+    live.handleNotification('item/started', { threadId: THREAD_ID, turnId: TURN_ID, item: items[3] });
+    const after = live.liveRecords(SESSION_ID).at(-1);
+    expect(after.info.id).not.toBe(before.info.id);
+    expect(earlierUpdates()).toHaveLength(earlierCount);
+
+    live.handleNotification('item/agentMessage/delta', { threadId: THREAD_ID, turnId: TURN_ID, itemId: 'after', delta: 'After compaction' });
+    expect(payloads(events, 'message.part.delta').at(-1).properties).toMatchObject({
+      messageID: after.info.id, delta: 'After compaction',
+    });
+    items[3] = { ...items[3], text: 'After compaction' };
+    live.handleNotification('item/completed', { threadId: THREAD_ID, turnId: TURN_ID, item: items[3] });
+    expect(earlierUpdates()).toHaveLength(earlierCount);
+
+    const history = projectCodexTurns({
+      sessionId: SESSION_ID, threadId: THREAD_ID, cwd: DIRECTORY, threadModel: CONFIG.model,
+      turns: [{ id: TURN_ID, status: 'completed', startedAt: 10, completedAt: 11, items }],
+    });
+    expect(history.map((record) => record.info.id)).toEqual(live.liveRecords(SESSION_ID).map((record) => record.info.id));
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', startedAt: 10, completedAt: 11 } });
+  });
+
   it('compacts through the thread it resumes, and streams the compaction in as a turn', async () => {
     const { live, requests, events } = createHarness({ replay: false });
     await live.compact(SESSION_ID, DIRECTORY);

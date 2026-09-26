@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseCodexUserMessageItem } from './items.js';
 import { projectCodexTurns } from './projector.js';
+import { materializeSessionSnapshots } from '@openchamber/ui/sync/materialization';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -123,6 +124,43 @@ describe('Codex history projection', () => {
 });
 
 describe('Codex compaction projection', () => {
+  const turnWithCompactions = {
+    id: 'turn-with-compactions', status: 'inProgress', startedAt: 10,
+    items: [
+      { type: 'userMessage', id: 'prompt', clientId: CLIENT_MESSAGE_ID, content: [{ type: 'text', text: 'Continue' }] },
+      { type: 'agentMessage', id: 'before', text: 'Before compaction' },
+      { type: 'contextCompaction', id: 'compact-one' },
+      { type: 'agentMessage', id: 'middle', text: 'After first compaction' },
+      { type: 'contextCompaction', id: 'compact-two' },
+      { type: 'agentMessage', id: 'after', text: 'After second compaction' },
+    ],
+  };
+
+  const transcript = (state) => state.messages.map((message) =>
+    state.part[message.id].map((part) => part.type === 'compaction' ? 'COMPACT' : part.text).join(''),
+  );
+
+  it('keeps every reply on its own side of repeated compactions after history materialization', () => {
+    const records = project([turnWithCompactions]);
+    expect(new Set(records.map((record) => record.info.id)).size).toBe(records.length);
+    const state = materializeSessionSnapshots({ message: {}, part: {} }, SESSION_ID, records);
+    expect(transcript(state)).toEqual([
+      'Continue', 'Before compaction', 'COMPACT', 'After first compaction', 'COMPACT', 'After second compaction',
+    ]);
+  });
+
+  it('preserves already-rendered replies when a compaction and its continuation arrive', () => {
+    const initial = project([{ ...turnWithCompactions, items: turnWithCompactions.items.slice(0, 2) }]);
+    const state = materializeSessionSnapshots({ message: {}, part: {} }, SESSION_ID, initial);
+    const records = project([turnWithCompactions]);
+    const next = materializeSessionSnapshots(state, SESSION_ID, records);
+    expect(next.messages[1]).toBe(state.messages[1]);
+    expect(transcript(next)).toEqual([
+      'Continue', 'Before compaction', 'COMPACT', 'After first compaction', 'COMPACT', 'After second compaction',
+    ]);
+    expect(records.slice(0, 2).map((record) => record.info.id)).toEqual(initial.map((record) => record.info.id));
+  });
+
   it('shows a compaction turn as the compaction marker, with no empty reply', () => {
     const records = project([
       { id: 'turn-1', status: 'completed', startedAt: 10, completedAt: 11, items: [

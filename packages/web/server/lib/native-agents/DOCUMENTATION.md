@@ -250,6 +250,9 @@ Codex (`codex/live.js`): turns on the shared app-server.
   that `thread/start` and `thread/resume` report and sets `serviceTier` on
   `turn/start` only when the variant asks for another one: `priority`, or
   `default` to leave Fast. A variant without `-fast` never runs fast.
+- A compaction starts a new assistant segment keyed by the compaction item id.
+  Replies before and after it keep distinct message ids across live updates
+  and history reads, so reconciliation cannot merge them across the marker.
 - Every `item/started` and `item/completed` re-projects the running turn with
   the history projector; agent text streams as deltas. The live turn owns each
   item's `startedAtMs` and `completedAtMs` (receipt time for older CLIs), so a
