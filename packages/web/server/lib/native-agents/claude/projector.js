@@ -22,9 +22,9 @@
 // - a slash command shows as typed; `/compact` shows as its compaction;
 // - the output of local commands and other meta entries is not shown.
 //
-// Message times are clamped to be non-decreasing in chain order: the UI orders
-// messages by time.created, and a compaction keeps preserved messages whose
-// timestamps predate the boundary.
+// Creation times increase strictly in chain order. The UI breaks timestamp
+// ties by message id, which would move preserved replies ahead of a compaction
+// boundary when their original timestamps predate it.
 
 import { z } from 'zod';
 
@@ -240,7 +240,7 @@ export const createClaudeProjection = ({
   };
 
   const createdAfterPrevious = (time) => {
-    lastCreated = Math.max(lastCreated, time);
+    lastCreated = Math.max(lastCreated + 1, time);
     return lastCreated;
   };
 
@@ -368,12 +368,13 @@ export const createClaudeProjection = ({
     if (entry.isCompactSummary === true) {
       const boundary = currentUser;
       if (!boundary) return;
+      const created = createdAfterPrevious(time);
       const summary = addRecord(buildAssistantMessage({
         id: `${boundary.info.id}_summary`,
         sessionID: sessionId,
         parentID: boundary.info.id,
-        created: createdAfterPrevious(time),
-        completed: time,
+        created,
+        completed: created,
         providerID: NATIVE_PROVIDER_CLAUDE,
         modelID: '',
         agent: DEFAULT_AGENT,
@@ -520,7 +521,7 @@ export const createClaudeProjection = ({
     info.tokens = tokensFromUsage(message.usage);
     if (message.model) info.modelID = normalizeClaudeModelId(message.model);
     if (!live) {
-      info.time = { created: info.time.created, completed: time };
+      info.time = { created: info.time.created, completed: Math.max(info.time.created, time) };
       const finish = message.stop_reason ? FINISH_BY_STOP_REASON.get(message.stop_reason) ?? 'other' : null;
       if (finish !== null) info.finish = finish;
     }
@@ -579,7 +580,7 @@ export const createClaudeProjection = ({
       return { changed: [messageID], delta: null };
     }
     if (event.type === 'message_stop') {
-      record.info.time = { created: record.info.time.created, completed: time };
+      record.info.time = { created: record.info.time.created, completed: Math.max(record.info.time.created, time) };
       return { changed: [messageID], delta: null };
     }
     return none;
@@ -701,23 +702,27 @@ export const createClaudeProjection = ({
       const changed = error === null ? [] : settleTools(error.name === 'MessageAbortedError' ? 'Interrupted' : error.data.message);
       if (currentAssistant) {
         const info = currentAssistant.record.info;
-        if (info.time.completed === undefined) info.time = { created: info.time.created, completed: time };
+        if (info.time.completed === undefined) info.time = { created: info.time.created, completed: Math.max(info.time.created, time) };
         if (error !== null && info.error === undefined) info.error = error;
         changed.push(info.id);
       } else if (error !== null && currentUser) {
-        const record = recordById.get(`${currentUser.info.id}_error`) ?? addRecord(buildAssistantMessage({
-          id: `${currentUser.info.id}_error`,
-          sessionID: sessionId,
-          parentID: currentUser.info.id,
-          created: createdAfterPrevious(time),
-          completed: time,
-          providerID: NATIVE_PROVIDER_CLAUDE,
-          modelID: currentUser.info.model.modelID,
-          agent: currentUser.info.agent,
-          cwd,
-          tokens: EMPTY_TOKENS,
-          error,
-        }));
+        let record = recordById.get(`${currentUser.info.id}_error`);
+        if (!record) {
+          const created = createdAfterPrevious(time);
+          record = addRecord(buildAssistantMessage({
+            id: `${currentUser.info.id}_error`,
+            sessionID: sessionId,
+            parentID: currentUser.info.id,
+            created,
+            completed: created,
+            providerID: NATIVE_PROVIDER_CLAUDE,
+            modelID: currentUser.info.model.modelID,
+            agent: currentUser.info.agent,
+            cwd,
+            tokens: EMPTY_TOKENS,
+            error,
+          }));
+        }
         changed.push(record.info.id);
       }
       currentAssistant = null;

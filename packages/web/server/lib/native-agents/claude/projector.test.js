@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { createClaudeProjection } from './projector.js';
+import { compareMessagesChronologically } from '@openchamber/ui/sync/message-ordering';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -145,8 +146,45 @@ describe('Claude compaction projection', () => {
   });
 
   it('keeps preserved messages after the boundary even though their timestamps are older', () => {
-    const created = records.map((record) => record.info.time.created);
-    expect(created).toEqual([...created].sort((left, right) => left - right));
+    const timeline = [...records].sort((left, right) => compareMessagesChronologically(left.info, right.info));
+    expect(timeline.map((record) => record.info.id)).toEqual(records.map((record) => record.info.id));
+  });
+
+  it('keeps a reply and the next prompt after the compaction when their timestamps tie', () => {
+    const projected = projectHistory([
+      ...entries,
+      { type: 'user', uuid: 'next-prompt', timestamp: at(30), message: { role: 'user', content: 'Continue' } },
+      { type: 'assistant', uuid: 'next-answer', timestamp: at(30), message: {
+        id: 'msg_next', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Next answer' }], stop_reason: 'end_turn',
+      } },
+    ]);
+    const timeline = [...projected].sort((left, right) => compareMessagesChronologically(left.info, right.info));
+    expect(timeline.map((record) => record.info.id)).toEqual(projected.map((record) => record.info.id));
+    for (const record of timeline) {
+      if (record.info.role === 'assistant') {
+        expect(record.info.time.completed).toBeGreaterThanOrEqual(record.info.time.created);
+      }
+    }
+  });
+
+  it.each(['message_stop', 'result'])('keeps the live reply after its compaction when %s arrives in the same millisecond', (ending) => {
+    const projection = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true, now: () => Date.parse(at(30)) });
+    projection.applyEntry({ type: 'system', subtype: 'compact_boundary', uuid: 'live-boundary', timestamp: at(30), compact_metadata: { trigger: 'auto' } });
+    projection.applyStreamEvent({ type: 'stream_event', event: { type: 'message_start', message: { id: 'msg_live', model: 'claude-opus-5-5', content: [] } } });
+    if (ending === 'message_stop') projection.applyStreamEvent({ type: 'stream_event', event: { type: 'message_stop' } });
+    else projection.finishTurn({ error: null });
+    const [boundary, reply] = projection.records();
+    expect(compareMessagesChronologically(boundary.info, reply.info)).toBeLessThan(0);
+    expect(reply.info.time.completed).toBeGreaterThanOrEqual(reply.info.time.created);
+  });
+
+  it('keeps an immediate failure after the prompt with a valid completion time', () => {
+    const projection = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true, now: () => Date.parse(at(30)) });
+    projection.startUserPrompt(USER_ID, { kind: 'text', text: 'Continue' });
+    projection.finishTurn({ error: { name: 'UnknownError', data: { message: 'CLI failed' } } });
+    const [prompt, failure] = projection.records();
+    expect(compareMessagesChronologically(prompt.info, failure.info)).toBeLessThan(0);
+    expect(failure.info.time.completed).toBeGreaterThanOrEqual(failure.info.time.created);
   });
 
   it('shows nothing for the other system entries a history read returns', () => {
