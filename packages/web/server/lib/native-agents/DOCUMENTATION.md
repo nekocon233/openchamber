@@ -225,6 +225,14 @@ kept open between turns.
   `{ message: 'aborted' }` the UI writes for turns it settles itself, with
   unfinished tools settled as `Interrupted`. The CLI's stop marker entries
   (`[Request interrupted by user]`) are not shown as user messages.
+- Claude Code also runs turns nobody prompted. When a background task
+  finishes, the CLI gives its notification to the model and answers it in a
+  turn of its own, which `queued_turn_count` does not count. The main
+  conversation's first `message_start` while the session is idle marks that
+  turn busy the way a prompt does, and its result settles it. A session left
+  idle through such a turn has no working stop, the UI settles its open reply
+  as interrupted, and the idle timeout the finished task started closes the
+  query mid-turn.
 - A query with neither a running turn nor background work for 5 minutes
   closes; the CLI exits and the next prompt resumes the session. The CLI's
   `background_tasks_changed` snapshot owns background activity for that

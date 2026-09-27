@@ -142,6 +142,8 @@ describe('Claude live sessions', () => {
     const harness = createHarness({
       afterFrames: async function* () {
         yield { type: 'user', uuid: 'child-user', parent_tool_use_id: tool, message: { role: 'user', content: 'Research the topic' } };
+        // A child's model request is not a turn of the parent.
+        yield { type: 'stream_event', parent_tool_use_id: tool, event: { type: 'message_start', message: { id: 'msg_child', model: 'claude-haiku-4-5', content: [] } } };
         yield { type: 'assistant', uuid: 'child-answer', parent_tool_use_id: tool, message: {
           id: 'msg_child', model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'The child found an answer.' }], stop_reason: 'end_turn',
         } };
@@ -444,6 +446,58 @@ describe('Claude live sessions', () => {
     await sendPrompt(harness.live);
     await answerQuestion(harness);
     await waitFor(() => harness.calls.queries[0].closed);
+  });
+
+  it('runs a turn the CLI starts itself after a background task like a prompted turn', async () => {
+    const notified = Promise.withResolvers();
+    const stopped = Promise.withResolvers();
+    const harness = createHarness({
+      idleTimeoutMs: 5,
+      afterFrames: async function* () {
+        await notified.promise;
+        // The last background task ends, and the CLI answers its notification.
+        yield { type: 'system', subtype: 'task_notification', task_id: 'a6f8a95b426077fd7', status: 'completed' };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+        yield { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_start', message: { id: 'msg_notified', model: 'claude-haiku-4-5', content: [] } } };
+        await stopped.promise;
+        yield { type: 'result', subtype: 'error_during_execution', is_error: false, terminal_reason: 'aborted_streaming', queued_turn_count: 0 };
+      },
+    });
+    const statuses = () => payloads(harness.events, 'session.status')
+      .filter((payload) => payload.properties.sessionID === SESSION_ID)
+      .map((payload) => payload.properties.status.type);
+    try {
+      await sendPrompt(harness.live);
+      await answerQuestion(harness);
+      await waitFor(() => statuses().length === 2);
+      expect(harness.live.isSessionRunning(SESSION_ID)).toBe(false);
+
+      notified.resolve();
+      await waitFor(() => statuses().length === 3);
+      expect(statuses()).toEqual(['busy', 'idle', 'busy']);
+      expect(harness.live.busySessionIds(DIRECTORY)).toContain(SESSION_ID);
+      let settled = false;
+      const idle = harness.live.whenIdle(SESSION_ID).then(() => {
+        settled = true;
+      });
+      // The idle timeout the ended background task started must not end the turn.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(harness.calls.queries[0].closed).toBe(false);
+      expect(settled).toBe(false);
+
+      expect(await harness.live.abort(SESSION_ID)).toBe(true);
+      expect(harness.calls.interrupt).toBe(1);
+      stopped.resolve();
+      await idle;
+      expect(statuses()).toEqual(['busy', 'idle', 'busy', 'idle']);
+      expect(payloads(harness.events, 'session.error').filter((payload) => payload.properties.sessionID === SESSION_ID)).toEqual([]);
+      // Once the turn ended, idle cleanup closes the query again.
+      await waitFor(() => harness.calls.queries[0].closed);
+    } finally {
+      notified.resolve();
+      stopped.resolve();
+      await harness.live.closeSession(SESSION_ID);
+    }
   });
 
   it('rewinds by replacing the open query with one resumed at the entry, once it exited', async () => {

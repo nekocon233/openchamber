@@ -3,6 +3,11 @@
 // sent while a turn runs joins that turn at its next tool boundary, and model,
 // effort and plan mode change in place without starting a new session.
 //
+// Not every turn starts with a prompt: when a background task finishes, the
+// CLI hands its notification to the model and runs a turn on its own. That
+// turn's first model request marks the session busy the way a prompt does,
+// and its result settles it.
+//
 // A query with no turn or background work for `idleTimeoutMs` is closed; its CLI
 // process exits and the next prompt resumes the session from its transcript. At most
 // `maxLiveSessions` queries run at once; opening another closes the least
@@ -67,6 +72,10 @@ const resultFrameSchema = z.object({
 const backgroundTasksSchema = z.object({
   tasks: z.array(z.object({ ambient: z.boolean().optional() })),
 });
+
+// The first event of a model request. Subagent frames are routed away before
+// this is checked, so it names a request of the main conversation.
+const messageStartSchema = z.object({ event: z.object({ type: z.literal('message_start') }) });
 
 // Tools that change the task list Claude Code keeps in files.
 const TASK_LIST_TOOLS = new Set(['TaskCreate', 'TaskUpdate']);
@@ -226,6 +235,14 @@ export const createClaudeLiveSessions = ({
     live.idleTimer.unref?.();
   };
 
+  // A running turn keeps its query open and shows the session working.
+  const markBusy = (live) => {
+    clearIdleTimer(live);
+    if (live.busy) return;
+    live.busy = true;
+    publisher.status(live.directory, live.sessionId, 'busy');
+  };
+
   const settleIdle = (live, error) => {
     live.busy = false;
     live.lastActive = now();
@@ -249,6 +266,8 @@ export const createClaudeLiveSessions = ({
   const handleFrame = (live, frame) => {
     if (live.subagents.handleFrame(frame)) return;
     if (frame.type === 'stream_event') {
+      // A turn the CLI started itself shows first as its model request.
+      if (!live.busy && messageStartSchema.safeParse(frame).success) markBusy(live);
       const { changed, delta } = live.projection.applyStreamEvent(frame);
       if (changed.length > 0) publishRecords(live, changed);
       if (delta) publisher.delta(live.directory, delta);
@@ -504,7 +523,6 @@ export const createClaudeLiveSessions = ({
         await exits.get(sessionId);
         live = await start({ sessionId, sessionUuid: decoded.sessionUuid, directory, config, rewind });
       }
-      clearIdleTimer(live);
       live.lastActive = now();
       live.sends.set(messageId, send);
       if (content !== null) publishRecords(live, live.projection.startUserPrompt(messageId, content));
@@ -516,10 +534,7 @@ export const createClaudeLiveSessions = ({
         origin: { kind: 'human' },
         priority: 'next',
       });
-      if (!live.busy) {
-        live.busy = true;
-        publisher.status(live.directory, sessionId, 'busy');
-      }
+      markBusy(live);
     },
 
     /** Stops the running turn; the CLI reports it as interrupted. */
