@@ -246,6 +246,16 @@ kept open between turns.
   work. A session's next query starts only after its previous query's
   process has exited, so two CLI processes never write one transcript. A
   closing query adds no live records to history reads.
+- Clients see those background tasks, because an idle session with tasks
+  will continue by itself. The query keeps each non-ambient task's id, type
+  and description, and publishes every change of the set as
+  `session.background.updated` `{ sessionID, tasks }`: the whole set, empty
+  once none run. The CLI's exit publishes the empty set, since nothing wakes
+  the session after it. `GET /api/native/sessions/background` returns every
+  open query's set as `{ [sessionId]: { directory, tasks } }` for clients
+  that missed the events. The map is complete: no task outlives its query.
+  Status, notifications and suggestions still follow turns only. Codex
+  reports no background work, and Claude's scheduled wakeups are not tasks.
 
 Codex (`codex/live.js`): turns on the shared app-server.
 

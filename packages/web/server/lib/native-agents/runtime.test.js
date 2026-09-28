@@ -713,6 +713,17 @@ describe('native agents routes', () => {
     expect(missing.body.code).toBe('NATIVE_INVALID_REQUEST');
   });
 
+  it('serves every session\'s background tasks before the session-id route', async () => {
+    const snapshot = { [SESSION_ID]: { directory: DIRECTORY, tasks: [{ id: 'bwait', type: 'local_bash', description: 'Wait for the job' }] } };
+    const app = createApp({
+      backgroundTasks: async () => snapshot,
+      getSession: async () => {
+        throw new Error('background tasks must not reach the session route');
+      },
+    });
+    await request(app).get('/api/native/sessions/background').expect(200, snapshot);
+  });
+
   it('maps runtime failures to stable status codes', async () => {
     const app = createApp({
       getSession: async (sessionId) => {

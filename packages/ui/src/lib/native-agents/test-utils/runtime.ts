@@ -20,6 +20,7 @@ export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): Na
   getSession: unsupported,
   loadMessages: unsupported,
   statuses: unsupported,
+  backgroundTasks: unsupported,
   questions: unsupported,
   createSession: unsupported,
   prompt: unsupported,

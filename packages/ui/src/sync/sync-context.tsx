@@ -63,6 +63,7 @@ import { syncDebug } from "./debug"
 import { getReconnectCandidateSessionIds, mergeBootstrapSessions } from "./reconnect-recovery"
 import { fetchNativePartition, resolveNativeSessions } from "./native-session-partitions"
 import { readDirectoryStatuses, readNativeForms, readNativeSession, type DirectoryStatusSnapshot } from "./native-directory-snapshots"
+import { applySessionBackgroundTasksEvent } from "./session-background-tasks"
 import { isNativeSessionId } from "@/lib/native-agents/ids"
 import { normalizePath } from "@/lib/pathNormalization"
 import { messagesBefore } from "./message-ordering"
@@ -1838,6 +1839,12 @@ export function handleEvent(
   if (payload.type === "openchamber.permission-auto-accept") {
     const { sessions, revision, defaultEnabled } = payload.properties
     usePermissionStore.getState().applySnapshot({ sessions, revision, defaultEnabled: defaultEnabled === true }, expectedRuntimeKey)
+    return
+  }
+
+  // Live-only state of its own store: no directory store holds it.
+  if (payload.type === "session.background.updated") {
+    applySessionBackgroundTasksEvent(payload.properties.sessionID, payload.properties.tasks, expectedRuntimeKey)
     return
   }
 

@@ -1,5 +1,7 @@
 import { DirectoryActionIndicator } from './DirectoryActionIndicator';
 import { useSessionTurnActive } from '@/sync/global-session-status';
+import { useSessionBackgroundTasks } from '@/sync/session-background-tasks';
+import { SessionBackgroundBadge } from '@/components/session/SessionBackgroundBadge';
 import React from 'react';
 import type { Session } from '@/lib/opencode/model';
 import { ContextMenu } from '@base-ui/react/context-menu';
@@ -503,6 +505,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     React.useCallback((state) => Boolean(state.sessionMemoryState.get(viewportSessionKey(session.id))?.isZombie), [session.id]),
   );
   const isStreaming = useSessionTurnActive(session.id);
+  const backgroundTaskCount = useSessionBackgroundTasks(session.id).length;
   // Read as a boolean, not as the value: the row must not re-render on every
   // tick of the counter it only decides to mount.
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
@@ -837,6 +840,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const pendingFormLabel = pendingFormCount === 1
     ? t('sessions.sidebar.session.status.questionPendingSingle')
     : t('sessions.sidebar.session.status.questionPendingMany', { count: pendingFormCount });
+  // A running row already shows that the session works.
+  const showBackgroundBadge = !isStreaming && backgroundTaskCount > 0;
   // Actions are permanently visible (with matching permanent padding) only in
   // the non-VSCode alwaysShowActions layout; every other layout hover-reveals
   // them over the row's right edge, where the badges live (#2284).
@@ -1432,7 +1437,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       </Tooltip>
     );
   };
-  const rowBadges = (pendingPermissionCount > 0 || pendingFormCount > 0 || openSuggestion) ? (
+  const rowBadges = (pendingPermissionCount > 0 || pendingFormCount > 0 || showBackgroundBadge || openSuggestion) ? (
     <>
       {nextStepBadge()}
       {pendingPermissionCount > 0 ? (
@@ -1447,6 +1452,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           <span className="leading-none">{pendingFormCount}</span>
         </span>
       ) : null}
+      {showBackgroundBadge ? <SessionBackgroundBadge count={backgroundTaskCount} /> : null}
     </>
   ) : null;
 
@@ -1736,6 +1742,9 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                           <Icon name="question" className="h-3 w-3" />
                           <span className="leading-none">{pendingFormCount}</span>
                         </span>
+                      ) : null}
+                      {showBackgroundBadge ? (
+                        <SessionBackgroundBadge count={backgroundTaskCount} className={badgeVisibilityClass} />
                       ) : null}
                     </div>
                     )}

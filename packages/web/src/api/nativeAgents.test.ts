@@ -53,6 +53,17 @@ describe('web native agents API', () => {
     expect(requests[0]?.searchParams.get('directory')).toBe('/work/project');
   });
 
+  it('reads every session\'s background tasks from the native route', async () => {
+    const snapshot = { ncl_a: { directory: '/work/project', tasks: [{ id: 'bwait', type: 'local_bash', description: 'Wait for the job' }] } };
+    stubFetch(async () => Response.json(snapshot));
+
+    const tasks = await createWebNativeAgentsAPI().backgroundTasks();
+
+    expect(tasks).toEqual(snapshot);
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/background');
+    expect([...requests[0]?.searchParams.keys() ?? []]).toEqual([]);
+  });
+
   it('reports a failed read with the error and code the server sent', async () => {
     stubFetch(async () => Response.json(
       { error: 'Native session not found', code: 'NATIVE_SESSION_NOT_FOUND' },

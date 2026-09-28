@@ -31,6 +31,14 @@ describe('native records in the shared v2 domain', () => {
     } } })).toBeNull();
   });
 
+  test('a background task set passes through whole, and a malformed one is dropped', () => {
+    const tasks = [{ id: 'bwait', type: 'local_bash', description: 'Wait for the training job' }];
+    expect(translateNativeEvent({ type: 'session.background.updated', properties: { sessionID, tasks } }))
+      .toEqual({ type: 'session.background.updated', properties: { sessionID, tasks } });
+    expect(translateNativeEvent({ type: 'session.background.updated', properties: { sessionID, tasks: [{ id: '' }] } }))
+      .toBeNull();
+  });
+
   test('question creation and settlement use the shared form lifecycle', () => {
     expect(translateNativeEvent({ type: 'question.asked', properties: question }))
       .toMatchObject({ type: 'form.created', properties: { form: { id: question.id, sessionID } } });

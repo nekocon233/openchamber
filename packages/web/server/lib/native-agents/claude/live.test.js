@@ -448,6 +448,62 @@ describe('Claude live sessions', () => {
     await waitFor(() => harness.calls.queries[0].closed);
   });
 
+  it('publishes the background tasks that keep a session going, without ambient watchers', async () => {
+    const release = Promise.withResolvers();
+    const recorded = { id: 'a6f8a95b426077fd7', type: 'local_agent', description: 'Count lines in notes.txt' };
+    const harness = createHarness({
+      idleTimeoutMs: 5,
+      afterFrames: async function* () {
+        // The same set again, one with an ambient watcher added, and a
+        // malformed one change nothing.
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: recorded.id, task_type: recorded.type, description: recorded.description }] };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [
+          { task_id: recorded.id, task_type: recorded.type, description: recorded.description },
+          { task_id: 'watcher', task_type: 'local_bash', description: 'Watch files', ambient: true },
+        ] };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: null };
+        await release.promise;
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'bwait', task_type: 'local_bash', description: 'Wait for the training job' }] };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      },
+    });
+    const updates = () => payloads(harness.events, 'session.background.updated').map((payload) => payload.properties);
+    try {
+      await sendPrompt(harness.live);
+      await answerQuestion(harness);
+      await waitFor(() => payloads(harness.events, 'session.idle').length > 0);
+      expect(updates()).toEqual([{ sessionID: SESSION_ID, tasks: [recorded] }]);
+      expect(harness.live.backgroundTaskSnapshot()).toEqual({ [SESSION_ID]: { directory: DIRECTORY, tasks: [recorded] } });
+      // Background work keeps the idle session's query open.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(harness.calls.queries[0].closed).toBe(false);
+
+      release.resolve();
+      await waitFor(() => harness.calls.queries[0].closed);
+      expect(updates().slice(1)).toEqual([
+        { sessionID: SESSION_ID, tasks: [{ id: 'bwait', type: 'local_bash', description: 'Wait for the training job' }] },
+        { sessionID: SESSION_ID, tasks: [] },
+      ]);
+      expect(harness.live.backgroundTaskSnapshot()).toEqual({});
+    } finally {
+      release.resolve();
+      await harness.live.closeSession(SESSION_ID);
+    }
+  });
+
+  it('clears the background tasks when the CLI exits with them running', async () => {
+    const harness = createHarness();
+    await sendPrompt(harness.live);
+    await answerQuestion(harness);
+    await waitFor(() => payloads(harness.events, 'session.idle').length > 0);
+    // The recording ends while its background agent is still running.
+    expect(Object.keys(harness.live.backgroundTaskSnapshot())).toEqual([SESSION_ID]);
+
+    await harness.live.closeSession(SESSION_ID);
+    expect(payloads(harness.events, 'session.background.updated').at(-1).properties).toEqual({ sessionID: SESSION_ID, tasks: [] });
+    expect(harness.live.backgroundTaskSnapshot()).toEqual({});
+  });
+
   it('runs a turn the CLI starts itself after a background task like a prompted turn', async () => {
     const notified = Promise.withResolvers();
     const stopped = Promise.withResolvers();

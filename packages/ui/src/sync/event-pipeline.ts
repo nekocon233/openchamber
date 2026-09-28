@@ -261,6 +261,8 @@ function coalesceKey(event: SyncEvent): string | undefined {
   switch (event.type) {
     case "session.status":
       return `session.status:${event.properties.sessionID}`
+    case "session.background.updated":
+      return `session.background.updated:${event.properties.sessionID}`
     case "session.patched":
       return `session.patched:${event.properties.sessionID}`
     case "message.patched":

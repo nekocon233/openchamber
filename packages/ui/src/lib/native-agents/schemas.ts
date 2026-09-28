@@ -3,6 +3,7 @@
 // schemas adapt that protocol to the shared UI domain, and `satisfies`
 // keeps each schema's output assignable to the type the stores hold.
 
+import type { SessionBackgroundTask } from '@/lib/opencode/events';
 import type { Message, Part, Session, SessionStatus } from '@/lib/opencode/model';
 import { z } from 'zod';
 
@@ -212,6 +213,16 @@ export const nativeSessionStatusSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('retry'), attempt: z.number(), message: z.string(), next: z.number() }),
 ]) satisfies z.ZodType<SessionStatus>;
 export const nativeStatusSnapshotSchema = z.record(nativeSessionIdSchema, nativeSessionStatusSchema);
+
+export const nativeBackgroundTaskSchema = z.object({
+  id: z.string().min(1),
+  type: z.string(),
+  description: z.string(),
+}) satisfies z.ZodType<SessionBackgroundTask>;
+export const nativeBackgroundTaskSnapshotSchema = z.record(
+  nativeSessionIdSchema,
+  z.object({ directory: z.string().min(1), tasks: z.array(nativeBackgroundTaskSchema) }),
+);
 
 export const nativeCommandListSchema = z.object({
   commands: z.array(z.object({ name: z.string().min(1), description: z.string(), argumentHint: z.string() })),

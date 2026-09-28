@@ -3,6 +3,7 @@ import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
 import {
   nativeAbortResultSchema,
+  nativeBackgroundTaskSnapshotSchema,
   nativeCapabilitiesSchema,
   nativeCatalogSchema,
   nativeCommandListSchema,
@@ -135,6 +136,12 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     '/api/native/sessions/status',
     { directory },
     nativeStatusSnapshotSchema,
+    options?.signal,
+  ),
+  backgroundTasks: (options) => readParsed(
+    '/api/native/sessions/background',
+    {},
+    nativeBackgroundTaskSnapshotSchema,
     options?.signal,
   ),
   questions: (directory, options) => readParsed(

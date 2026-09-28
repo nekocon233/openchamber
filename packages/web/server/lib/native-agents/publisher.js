@@ -94,6 +94,14 @@ export const createNativeEventPublisher = ({ publishNativeEvent, now = Date.now 
       emit(directory, 'todo.updated', { sessionID, todos: structuredClone(todos) });
     },
 
+    /**
+     * The session's whole live set of background tasks, empty once none run.
+     * @param {Array<{ id: string, type: string, description: string }>} tasks
+     */
+    backgroundTasks(directory, sessionID, tasks) {
+      emit(directory, 'session.background.updated', { sessionID, tasks: structuredClone(tasks) });
+    },
+
     /** Drops what was published for a session whose live state ended. */
     forget(sessionId) {
       published.delete(sessionId);

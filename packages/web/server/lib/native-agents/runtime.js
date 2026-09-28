@@ -789,6 +789,14 @@ export const createNativeAgentsRuntime = ({
       return Object.fromEntries(busy.map((sessionId) => [sessionId, { type: 'busy' }]));
     },
 
+    /**
+     * Every native session with background tasks still running, in any
+     * directory. Codex reports no background work.
+     */
+    async backgroundTasks() {
+      return claudeLive.backgroundTaskSnapshot();
+    },
+
     /** Questions native sessions of a directory are waiting on. */
     async questions(directory) {
       return questions.list(directory);

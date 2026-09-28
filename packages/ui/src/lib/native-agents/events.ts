@@ -4,6 +4,7 @@ import type { SyncEvent } from '@/lib/opencode/events';
 import { isNativeSessionId } from './ids';
 import { projectNativeQuestion } from './forms';
 import {
+  nativeBackgroundTaskSchema,
   nativeMessageErrorSchema,
   nativeMessageSchema,
   nativePartSchema,
@@ -23,6 +24,7 @@ const nativeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.updated'), properties: z.object({ info: nativeSessionSchema }) }),
   z.object({ type: z.literal('session.deleted'), properties: sessionIdentity }),
   z.object({ type: z.literal('session.status'), properties: sessionIdentity.extend({ status: nativeSessionStatusSchema }) }),
+  z.object({ type: z.literal('session.background.updated'), properties: sessionIdentity.extend({ tasks: z.array(nativeBackgroundTaskSchema) }) }),
   z.object({ type: z.literal('session.idle'), properties: sessionIdentity }),
   z.object({ type: z.literal('session.error'), properties: sessionIdentity.extend({ error: nativeMessageErrorSchema }) }),
   z.object({ type: z.literal('message.updated'), properties: z.object({ info: nativeMessageSchema }) }),

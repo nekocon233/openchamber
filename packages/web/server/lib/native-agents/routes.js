@@ -117,6 +117,8 @@ export const registerNativeAgentRoutes = (app, { runtime }) => {
   // Registered before /:sessionId so the literal segments win.
   app.get('/api/native/sessions/status', handle((req) => runtime.statuses(directoryQuery.parse(req.query).directory)));
 
+  app.get('/api/native/sessions/background', handle(() => runtime.backgroundTasks()));
+
   app.get('/api/native/questions', handle((req) => runtime.questions(directoryQuery.parse(req.query).directory)));
 
   app.get('/api/native/sessions', handle((req) => runtime.listSessions(directoryQuery.parse(req.query).directory)));

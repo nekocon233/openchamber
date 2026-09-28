@@ -115,6 +115,8 @@ export type SyncEvent =
    */
   | { type: "session.revert.committed"; properties: { sessionID: string; to: string } }
   | { type: "session.status"; properties: { sessionID: string; status: SessionStatus } }
+  /** A native session's whole live set of background tasks; empty once none run. */
+  | { type: "session.background.updated"; properties: { sessionID: string; tasks: SessionBackgroundTask[] } }
   | { type: "session.idle"; properties: { sessionID: string } }
   | { type: "session.error"; properties: { sessionID: string; error: StructuredError } }
   | { type: "message.updated"; properties: { info: Message } }
@@ -141,6 +143,16 @@ export type SyncEvent =
   // OpenChamber's own server frames that ride the same stream.
   | { type: "openchamber.notification"; properties: OpenchamberNotification }
   | { type: "openchamber.permission-auto-accept"; properties: { sessions: Record<string, boolean>; revision?: number; defaultEnabled?: boolean } }
+
+/**
+ * Work a native CLI keeps running after its turn ended. When a task finishes,
+ * the CLI starts a turn by itself. The description is the agent's own words.
+ */
+export type SessionBackgroundTask = {
+  id: string
+  type: string
+  description: string
+}
 
 /** Agent-completion / restart notices the OpenChamber server publishes for non-web runtimes. */
 export type OpenchamberNotification = {

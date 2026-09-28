@@ -6,7 +6,8 @@
 // Not every turn starts with a prompt: when a background task finishes, the
 // CLI hands its notification to the model and runs a turn on its own. That
 // turn's first model request marks the session busy the way a prompt does,
-// and its result settles it.
+// and its result settles it. Between turns the session's background tasks go
+// out as their own list, so clients can show that it will continue.
 //
 // A query with no turn or background work for `idleTimeoutMs` is closed; its CLI
 // process exits and the next prompt resumes the session from its transcript. At most
@@ -70,8 +71,18 @@ const resultFrameSchema = z.object({
 }).passthrough();
 
 const backgroundTasksSchema = z.object({
-  tasks: z.array(z.object({ ambient: z.boolean().optional() })),
+  tasks: z.array(z.object({
+    task_id: z.string().min(1),
+    task_type: z.string().catch(''),
+    description: z.string().catch(''),
+    ambient: z.boolean().optional(),
+  })),
 });
+
+const sameBackgroundTasks = (left, right) => left.length === right.length
+  && left.every((task, index) => task.id === right[index].id
+    && task.type === right[index].type
+    && task.description === right[index].description);
 
 // The first event of a model request. Subagent frames are routed away before
 // this is checked, so it names a request of the main conversation.
@@ -230,7 +241,7 @@ export const createClaudeLiveSessions = ({
 
   const scheduleIdleClose = (live) => {
     clearIdleTimer(live);
-    if (live.busy || live.backgroundTasksRunning || live.closing) return;
+    if (live.busy || live.backgroundTasks.length > 0 || live.closing) return;
     live.idleTimer = setTimeout(() => close(live), idleTimeoutMs);
     live.idleTimer.unref?.();
   };
@@ -241,6 +252,21 @@ export const createClaudeLiveSessions = ({
     if (live.busy) return;
     live.busy = true;
     publisher.status(live.directory, live.sessionId, 'busy');
+  };
+
+  // The CLI sends its full live set whenever it changes. Watchers marked
+  // ambient are not work. Only the edge between none and some moves idle
+  // cleanup, so a repeated or reworded set never postpones it.
+  const applyBackgroundTasks = (live, tasks) => {
+    const wasRunning = live.backgroundTasks.length > 0;
+    if (!sameBackgroundTasks(live.backgroundTasks, tasks)) {
+      live.backgroundTasks = tasks;
+      publisher.backgroundTasks(live.directory, live.sessionId, tasks);
+    }
+    const running = tasks.length > 0;
+    if (running === wasRunning) return;
+    if (running) clearIdleTimer(live);
+    else scheduleIdleClose(live);
   };
 
   const settleIdle = (live, error) => {
@@ -275,15 +301,12 @@ export const createClaudeLiveSessions = ({
     }
     if (frame.type === 'system') {
       if (frame.subtype === 'background_tasks_changed') {
+        // A malformed set keeps the preceding one.
         const parsed = backgroundTasksSchema.safeParse(frame);
         if (!parsed.success) return;
-        // The CLI supplies the full live set. Watchers marked ambient are
-        // not work, and a repeated snapshot must not postpone idle cleanup.
-        const running = parsed.data.tasks.some((task) => !task.ambient);
-        if (live.backgroundTasksRunning === running) return;
-        live.backgroundTasksRunning = running;
-        if (running) clearIdleTimer(live);
-        else scheduleIdleClose(live);
+        applyBackgroundTasks(live, parsed.data.tasks
+          .filter((task) => !task.ambient)
+          .map((task) => ({ id: task.task_id, type: task.task_type, description: task.description })));
         return;
       }
       // A compaction's boundary opens its marker, as in the transcript; the
@@ -323,6 +346,11 @@ export const createClaudeLiveSessions = ({
     }
     live.subagents.dispose(live.closing ? claudeAbortedError()
       : claudeTurnError(failure ?? 'Claude Code exited before the subagent finished.'));
+    // Nothing wakes the session once its CLI is gone.
+    if (live.backgroundTasks.length > 0) {
+      live.backgroundTasks = [];
+      publisher.backgroundTasks(live.directory, live.sessionId, []);
+    }
     publisher.forget(live.sessionId);
     if (exits.get(live.sessionId) === live.exited) exits.delete(live.sessionId);
     live.markExited();
@@ -395,7 +423,7 @@ export const createClaudeLiveSessions = ({
 
   const makeRoom = () => {
     if (sessions.size < maxLiveSessions) return;
-    const idle = Array.from(sessions.values()).filter((live) => !live.busy && !live.backgroundTasksRunning && !live.closing);
+    const idle = Array.from(sessions.values()).filter((live) => !live.busy && live.backgroundTasks.length === 0 && !live.closing);
     if (idle.length === 0) {
       throw new NativeAgentError(
         `${maxLiveSessions} Claude Code sessions are already running`,
@@ -432,7 +460,8 @@ export const createClaudeLiveSessions = ({
       sends: new Map(),
       subagents: createClaudeSubagents({ sessionUuid, directory, publisher, now }),
       busy: false,
-      backgroundTasksRunning: false,
+      /** @type {Array<{ id: string, type: string, description: string }>} this process's, non-ambient */
+      backgroundTasks: [],
       closing: false,
       idleTimer: null,
       idleWaiters: [],
@@ -646,6 +675,17 @@ export const createClaudeLiveSessions = ({
       return Array.from(sessions.values())
         .filter((live) => live.directory === directory)
         .flatMap((live) => [...(live.busy ? [live.sessionId] : []), ...live.subagents.busySessionIds()]);
+    },
+
+    /**
+     * Background tasks of every open query, for clients that missed the
+     * events announcing them. Every task is in this map: none outlives its query.
+     * @returns {Record<string, { directory: string, tasks: Array<{ id: string, type: string, description: string }> }>}
+     */
+    backgroundTaskSnapshot() {
+      return Object.fromEntries(Array.from(sessions.values())
+        .filter((live) => !live.closing && live.backgroundTasks.length > 0)
+        .map((live) => [live.sessionId, { directory: live.directory, tasks: structuredClone(live.backgroundTasks) }]));
     },
 
     async shutdown() {

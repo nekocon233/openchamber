@@ -7,6 +7,7 @@ import {
 } from '@/stores/useGlobalSessionsStore';
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { seedGlobalSessionStatusFromHost } from '@/sync/host-session-status-seed';
+import { seedSessionBackgroundTasksFromHost } from '@/sync/session-background-tasks';
 
 export const GLOBAL_SESSIONS_REFRESH_INTERVAL_MS = 45_000;
 const STARTUP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
@@ -62,6 +63,8 @@ export const useGlobalSessionsPolling = (enabled: boolean): void => {
         else await refreshGlobalSessions();
         if (!active || getRuntimeKey() !== runtimeKey) return false;
         void seedGlobalSessionStatusFromHost();
+        // Also repairs background task sets a reload or stream gap missed.
+        void seedSessionBackgroundTasksFromHost();
         // The store preserves cached sessions on failure instead of throwing.
         return useGlobalSessionsStore.getState().status === 'ready';
       };

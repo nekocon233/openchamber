@@ -1,6 +1,8 @@
 import React from 'react';
 import { useSessionTurnActive } from '@/sync/global-session-status';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
+import { SessionBackgroundBadge } from '@/components/session/SessionBackgroundBadge';
+import { useSessionBackgroundTasks } from '@/sync/session-background-tasks';
 import { createPortal } from 'react-dom';
 import {
   RiAddLine,
@@ -382,6 +384,7 @@ const SessionRow: React.FC<{
   // spinner; unseen activity on a non-active row → attention dot.
   const unseenCount = useSessionUnseenCount(session.id);
   const isStreaming = useSessionTurnActive(session.id);
+  const backgroundTaskCount = useSessionBackgroundTasks(session.id).length;
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
   const showActivityDuration = (isStreaming || showUnreadDot) && hasActivityDuration;
@@ -465,6 +468,7 @@ const SessionRow: React.FC<{
                     label={isStreaming ? t('sessions.sidebar.session.status.active') : t('sessions.sidebar.session.status.unread')}
                   />
             ) : null}
+            {!isStreaming && backgroundTaskCount > 0 ? <SessionBackgroundBadge count={backgroundTaskCount} /> : null}
             {/* The elapsed turn takes the time slot while it matters, then
                 hands it back to the relative timestamp. */}
             {showActivityDuration ? (

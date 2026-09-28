@@ -5,6 +5,7 @@ import type { DesktopSettings } from '@/lib/settings/registry';
 import type { Session } from '@/lib/opencode/model';
 import type { z } from 'zod';
 import type {
+  nativeBackgroundTaskSnapshotSchema,
   nativeCapabilitiesSchema,
   nativeCatalogSchema,
   nativeCommandListSchema,
@@ -1643,6 +1644,7 @@ export type NativeCatalog = z.infer<typeof nativeCatalogSchema>;
 export type NativeSessionList = z.infer<typeof nativeSessionListSchema>;
 export type NativeMessagePage = z.infer<typeof nativeMessagePageSchema>;
 export type NativeStatusSnapshot = z.infer<typeof nativeStatusSnapshotSchema>;
+export type NativeBackgroundTaskSnapshot = z.infer<typeof nativeBackgroundTaskSnapshotSchema>;
 export type NativeQuestionList = z.infer<typeof nativeQuestionListSchema>;
 export type NativeRevertResult = z.infer<typeof nativeRevertResultSchema>;
 export type NativeCommandList = z.infer<typeof nativeCommandListSchema>;
@@ -1712,6 +1714,8 @@ export interface NativeAgentsAPI {
   /** Newest page first; `before` is the oldest message id of the previous page. */
   loadMessages(sessionId: string, directory: string, page: { limit: number; before?: string }): Promise<NativeMessagePage>;
   statuses(directory: string, options?: NativeReadOptions): Promise<NativeStatusSnapshot>;
+  /** Every native session, in any directory, whose CLI still runs background tasks. */
+  backgroundTasks(options?: NativeReadOptions): Promise<NativeBackgroundTaskSnapshot>;
   questions(directory: string, options?: NativeReadOptions): Promise<NativeQuestionList>;
   /** A new session in the backend's CLI. */
   createSession(input: { backend: NativeBackend; directory: string; title?: string }): Promise<Session>;

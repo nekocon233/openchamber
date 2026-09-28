@@ -526,6 +526,17 @@ what the stores hold for native sessions and never blocks OpenCode's:
   its status instead of settling idle and having its turn marked interrupted.
   Bootstrap folds the held native statuses into its snapshot after a failed
   read and leaves native sessions out of its global settle.
+- Background tasks. A Claude session can end its turn while tasks it
+  started keep running, and it continues by itself when one finishes.
+  `session-background-tasks.ts` owns that live-only state per session:
+  `session.background.updated` replaces a session's set, and after every
+  global session load `seedSessionBackgroundTasksFromHost` reads the server's
+  complete snapshot and replaces the map, except sessions an event changed
+  while the read was in flight. A failed read keeps the held sets, and a
+  runtime switch clears them. Rows show `SessionBackgroundBadge` while they
+  are not turn-active; the chat shows `BackgroundTasksChip` in the status-row
+  slot while the session is not working. The session's status stays idle, so
+  sends, notifications and suggestions are unchanged.
 - Forms. `lib/native-agents/forms.ts` projects native questions into the shared
   form contract. Bootstrap and reconnect preserve held native forms when their
   source fails; replies and cancellation still use the native question API.
@@ -972,6 +983,7 @@ Keep this in sync with `handleDirectoryEvent` in `sync-context.tsx`:
 | `permission.asked/replied` | `permission` |
 | `form.created/settled` | `form` |
 | `openchamber.notification`, `openchamber.permission-auto-accept` | (none — side effects only) |
+| `session.background.updated` | (none — `session-background-tasks.ts` store) |
 
 These are `SyncEvent`s from `packages/ui/src/lib/opencode/events.ts`, not OpenCode wire events: the event pipeline translates every OpenCode 2.x wire event (`session.text.delta`, `session.tool.called`, `session.step.ended`, ...) into this vocabulary before coalescing. Wire-level knowledge lives only in that translator; the reducer applies patches and tool-state transitions against the store.
 
