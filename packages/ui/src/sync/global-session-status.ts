@@ -13,6 +13,7 @@ import {
   type SessionActivityTimingMutation,
 } from './session-activity-timing';
 import { countSyncPerformance } from './performance-diagnostics';
+import { useSessionBackgroundTasksStore } from './session-background-tasks';
 
 // Shared live busy/retry index for every directory. Events update it
 // incrementally and authoritative directory snapshots reconcile it, so each
@@ -115,10 +116,49 @@ const withSubagentAncestors = (activeSessionIds: ReadonlySet<string>): ReadonlyS
   return extended ?? activeSessionIds;
 };
 
-/** The session's turn is still open: it runs itself, or one of its subagents does. */
-export const useSessionTurnActive = (sessionId: string): boolean => useGlobalSessionStatusStore(
-  (state) => state.activeSessionIds.has(sessionId) || hasActiveSubagent(sessionId, state.activeSessionIds),
+// A native CLI can end its turn while background tasks it started keep
+// running, and starts a turn by itself when one finishes. For display that
+// wait is the same turn too, as with a subagent.
+const hasBackgroundTasks = (sessionId: string): boolean => (
+  useSessionBackgroundTasksStore.getState().tasksBySession.has(sessionId)
 );
+
+/** Sessions whose turn is open: active ones, their ancestors, and those waiting on background tasks. */
+const withOpenTurns = (activeSessionIds: ReadonlySet<string>): ReadonlySet<string> => {
+  const open = withSubagentAncestors(activeSessionIds);
+  const { tasksBySession } = useSessionBackgroundTasksStore.getState();
+  if (tasksBySession.size === 0) return open;
+  const extended = new Set(open);
+  for (const sessionId of tasksBySession.keys()) extended.add(sessionId);
+  return extended;
+};
+
+/**
+ * The session's turn is still open: it runs itself, one of its subagents
+ * does, or background tasks it started will wake it.
+ */
+export const useSessionTurnActive = (sessionId: string): boolean => {
+  const running = useGlobalSessionStatusStore(
+    (state) => state.activeSessionIds.has(sessionId) || hasActiveSubagent(sessionId, state.activeSessionIds),
+  );
+  const waiting = useSessionBackgroundTasksStore((state) => state.tasksBySession.has(sessionId));
+  return running || waiting;
+};
+
+// The end of a session's background tasks settles the timer they held open,
+// unless the session runs again or a subagent still holds it. A turn the CLI
+// starts afterwards gets a timer of its own, as after a subagent.
+useSessionBackgroundTasksStore.subscribe((state, previous) => {
+  if (state.tasksBySession === previous.tasksBySession) return;
+  const { activeSessionIds } = useGlobalSessionStatusStore.getState();
+  const settled: SessionActivityTimingMutation[] = [];
+  for (const sessionId of previous.tasksBySession.keys()) {
+    if (state.tasksBySession.has(sessionId)) continue;
+    if (activeSessionIds.has(sessionId) || hasActiveSubagent(sessionId, activeSessionIds)) continue;
+    settled.push({ type: 'observe', sessionId, phase: 'settled' });
+  }
+  applySessionActivityTimingMutations(settled);
+});
 
 const normalizeStatusType = (type: string | undefined): ResolvedStatusType => {
   if (type === 'busy') return 'busy';
@@ -392,7 +432,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
       setResolvedStatus(sessionId, 'idle');
       orderingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
       settledIds.push(sessionId);
-      if (!hasActiveSubagent(sessionId, activeSessionIds)) {
+      if (!hasActiveSubagent(sessionId, activeSessionIds) && !hasBackgroundTasks(sessionId)) {
         timingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
       }
     };
@@ -459,7 +499,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
 
     for (const settledId of settledIds) {
       forEachAncestorId(settledId, (ancestorId) => {
-        if (activeSessionIds.has(ancestorId) || hasActiveSubagent(ancestorId, activeSessionIds)) return;
+        if (activeSessionIds.has(ancestorId) || hasActiveSubagent(ancestorId, activeSessionIds) || hasBackgroundTasks(ancestorId)) return;
         timingMutations.push({ type: 'observe', sessionId: ancestorId, phase: 'settled' });
       });
     }
@@ -662,7 +702,7 @@ export const applyGlobalSessionStatusSnapshot = (
   const orderingScope = mode === 'authoritative' ? orderingKnown : orderingActive;
   reconcileSessionActivitySnapshot(orderingActive, orderingScope);
   reconcileSessionActivityTiming(
-    withSubagentAncestors(useGlobalSessionStatusStore.getState().activeSessionIds),
+    withOpenTurns(useGlobalSessionStatusStore.getState().activeSessionIds),
     (sessionId) => mode === 'authoritative' && orderingKnown.has(sessionId),
   );
 };

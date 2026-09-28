@@ -4,6 +4,7 @@ import type { SessionNode } from '../types';
 import { useGlobalSessionStatusStore } from '@/sync/global-session-status';
 import { useGlobalBlockingRequestsStore } from '@/sync/global-blocking-requests';
 import { useNotificationStore } from '@/sync/notification-store';
+import { useSessionBackgroundTasksStore } from '@/sync/session-background-tasks';
 
 // Ordered by how much the user is needed: a blocked turn outranks a running
 // one, which outranks something merely unread.
@@ -90,6 +91,14 @@ export const useCollapsedSessionActivityState = ({
     }
     return null;
   }, [enabled, ids.active]));
+  // A session waiting on its background tasks still has its turn open.
+  const waiting = useSessionBackgroundTasksStore(React.useCallback((state): CollapsedActivityState => {
+    if (!enabled) return null;
+    for (const sessionId of ids.active) {
+      if (state.tasksBySession.has(sessionId)) return 'active';
+    }
+    return null;
+  }, [enabled, ids.active]));
   const unread = useNotificationStore(React.useCallback((state): CollapsedActivityState => {
     if (!enabled) return null;
     for (const sessionId of ids.unread) {
@@ -112,5 +121,5 @@ export const useCollapsedSessionActivityState = ({
     }
     return result;
   }, [enabled, ids.active]));
-  return blocked ?? active ?? unread;
+  return blocked ?? active ?? waiting ?? unread;
 };

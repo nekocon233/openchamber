@@ -420,6 +420,8 @@ VS Code does not run the server permission-auto-accept runtime. The extension ho
 
 A background subagent keeps its parent's turn open for display. The parent goes idle while the child session works and runs again when OpenCode hands the result back; `global-session-status.ts` therefore holds the parent's timer through that pause (an idle parent with a running descendant does not settle, the last descendant to finish settles it, and snapshots count ancestors of running sessions as active), and `useSessionTurnActive` is what every session row, tab and switcher reads as "running". `statusById` and `activeSessionIds` stay the session's own status: sends, cleanup and retention must not treat an idle parent as busy. The parent lookup comes from the global sessions store through `setSessionParentResolver`, wired by `sync-context.tsx`.
 
+Background tasks a native CLI keeps running after its turn hold that session's turn open the same way, read from `session-background-tasks.ts`: `useSessionTurnActive` and the collapsed group marker count them, the timer does not settle while any runs and settles when the last one ends, and status snapshots count those sessions as active. The chat, composer, notifications and suggestions follow the session's own idle status.
+
 Starts are persisted so a reload resumes the same count, but a persisted start is a lookup table and never a claim of activity. **Nothing in the protocol marks where a turn begins.** OpenCode calls `SessionStatus.set` with `busy` at every step of the agent loop and publishes an event each time, so a busy event means "still running", not "just started"; after a refresh one of those repeats normally beats the first status snapshot, so treating it as a turn boundary reset the counter on nearly every reload. Turn *ends* are marked — `session.idle` and `session.error` fire once, live, and retire the persisted record — while a snapshot that omits a session is not evidence of anything, since it may simply not see it yet.
 
 That leaves the case with no observable answer: a turn that ended, and another that began, entirely while the tab was gone. Two bounds stand in for the evidence the client cannot have. A liveness stamp sits beside the start — refreshed while the session is observed active, at most every 15s, and stamped precisely as the page hides (`pagehide`/`visibilitychange`/`freeze`, written immediately rather than through deferred storage so it cannot lose that race) — and is compared against this page's `performance.timeOrigin`, so the measure is how long the app was absent rather than how long bootstrap took; a 20-second startup must not spend the allowance. Records may only be adopted within 90s of load, after which they are discarded — a backstop for a runtime whose event stream is down and where snapshots are therefore the only signal. A runtime switch resets the module, since the previous instance's turns are not ours.
@@ -533,10 +535,9 @@ what the stores hold for native sessions and never blocks OpenCode's:
   global session load `seedSessionBackgroundTasksFromHost` reads the server's
   complete snapshot and replaces the map, except sessions an event changed
   while the read was in flight. A failed read keeps the held sets, and a
-  runtime switch clears them. Rows show `SessionBackgroundBadge` while they
-  are not turn-active; the chat shows `BackgroundTasksChip` in the status-row
-  slot while the session is not working. The session's status stays idle, so
-  sends, notifications and suggestions are unchanged.
+  runtime switch clears them. Session lists show such a session as running,
+  as with a background subagent (see the live cross-directory status view
+  above); its own status stays idle.
 - Forms. `lib/native-agents/forms.ts` projects native questions into the shared
   form contract. Bootstrap and reconnect preserve held native forms when their
   source fails; replies and cancellation still use the native question API.

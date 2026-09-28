@@ -6,7 +6,8 @@ import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from '@/lib/runtime
 
 // Background tasks a native CLI keeps running after its turn ended. The
 // session's status is idle, yet work is in flight: when a task finishes, the
-// CLI starts a turn by itself. Rows and the chat read this store to say so.
+// CLI starts a turn by itself. `global-session-status.ts` reads this store to
+// keep such a session's turn open for display, as it does for subagents.
 //
 // Live only, never persisted. An event replaces one session's set. The
 // server's snapshot names every session with tasks, because no task outlives
@@ -19,8 +20,6 @@ type BackgroundTasksState = {
   eventRevisionBySession: ReadonlyMap<string, number>;
   revision: number;
 };
-
-const EMPTY_TASKS: readonly SessionBackgroundTask[] = Object.freeze([]);
 
 export const useSessionBackgroundTasksStore = create<BackgroundTasksState>(() => ({
   tasksBySession: new Map(),
@@ -125,8 +124,3 @@ export const seedSessionBackgroundTasksFromHost = (): Promise<void> => {
   seeding = { runtimeKey, read };
   return read;
 };
-
-/** The session's running background tasks; one shared empty list when none. */
-export const useSessionBackgroundTasks = (sessionId: string | null | undefined): readonly SessionBackgroundTask[] => (
-  useSessionBackgroundTasksStore((state) => (sessionId ? state.tasksBySession.get(sessionId) : undefined) ?? EMPTY_TASKS)
-);

@@ -16,6 +16,8 @@ import {
 } from "./global-session-status"
 import { resetSessionOrdering, useSessionOrderingStore } from "./session-ordering"
 import { resetSessionActivityTiming, useSessionActivityTimingStore } from "./session-activity-timing"
+import { applySessionBackgroundTasksEvent, useSessionBackgroundTasksStore } from "./session-background-tasks"
+import { getRuntimeKey } from "@/lib/runtime-switch"
 
 const statusEvent = (sessionID: string, type: "busy" | "retry" | "idle"): SyncEvent => ({
   type: "session.status",
@@ -420,5 +422,54 @@ describe("background subagent keeps its parent's turn open", () => {
     applyGlobalSessionStatusEvents("/repo", [busy("parent"), busy("child")])
     applyGlobalSessionStatusSnapshot("/repo", { child: { type: "busy" } }, ["parent", "child"])
     expect(timing().startedAt.has("parent")).toBe(true)
+  })
+})
+
+describe("background tasks keep a session's turn open", () => {
+  const idle = (sessionID: string): SyncEvent => ({ type: "session.idle", properties: { sessionID } } satisfies SyncEvent)
+  const timing = () => useSessionActivityTimingStore.getState()
+  const setTasks = (sessionID: string, count: number) => applySessionBackgroundTasksEvent(
+    sessionID,
+    Array.from({ length: count }, (_, index) => ({ id: `task-${index}`, type: "local_bash", description: "Wait for the job" })),
+    getRuntimeKey(),
+  )
+
+  beforeEach(() => {
+    setSessionParentResolver(() => undefined)
+    useSessionBackgroundTasksStore.setState({ tasksBySession: new Map(), eventRevisionBySession: new Map(), revision: 0 })
+  })
+
+  test("the timer runs through the wait and settles when the last task ends", () => {
+    applyGlobalSessionStatusEvents("/repo", [statusEvent("session", "busy")])
+    setTasks("session", 1)
+    applyGlobalSessionStatusEvents("/repo", [idle("session")])
+
+    expect(useGlobalSessionStatusStore.getState().activeSessionIds.has("session")).toBe(false)
+    expect(timing().startedAt.has("session")).toBe(true)
+    expect(timing().settledMs.has("session")).toBe(false)
+
+    setTasks("session", 0)
+    expect(timing().startedAt.has("session")).toBe(false)
+    expect(timing().settledMs.has("session")).toBe(true)
+  })
+
+  test("tasks ending while the session runs again leave its timer alone", () => {
+    applyGlobalSessionStatusEvents("/repo", [statusEvent("session", "busy")])
+    setTasks("session", 1)
+    applyGlobalSessionStatusEvents("/repo", [idle("session")])
+    applyGlobalSessionStatusEvents("/repo", [statusEvent("session", "busy")])
+    setTasks("session", 0)
+
+    expect(timing().startedAt.has("session")).toBe(true)
+    applyGlobalSessionStatusEvents("/repo", [idle("session")])
+    expect(timing().settledMs.has("session")).toBe(true)
+  })
+
+  test("a status snapshot does not settle a session waiting on background tasks", () => {
+    applyGlobalSessionStatusEvents("/repo", [statusEvent("session", "busy")])
+    setTasks("session", 1)
+    applyGlobalSessionStatusEvents("/repo", [idle("session")])
+    applyGlobalSessionStatusSnapshot("/repo", {}, ["session"])
+    expect(timing().startedAt.has("session")).toBe(true)
   })
 })
