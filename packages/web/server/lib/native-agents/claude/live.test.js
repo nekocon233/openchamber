@@ -27,7 +27,7 @@ const askInput = frames
 // way the CLI asks before the tool runs. Then waits for more input, and
 // exits `exitDelayMs` after its input ends.
 const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = { name: 'AskUserQuestion', input: askInput }, afterFrames = () => [] } = {}) => {
-  const calls = { queries: [], setModel: [], applyFlagSettings: [], setPermissionMode: [], interrupt: 0 };
+  const calls = { queries: [], setModel: [], applyFlagSettings: [], setPermissionMode: [], interrupt: 0, stopTask: [] };
   const sdk = {
     query: ({ prompt, options }) => {
       const previous = calls.queries.at(-1);
@@ -70,6 +70,7 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = 
         applyFlagSettings: async (settings) => { calls.applyFlagSettings.push(settings); },
         setPermissionMode: async (mode) => { calls.setPermissionMode.push(mode); },
         interrupt: async () => { calls.interrupt += 1; },
+        stopTask: async (taskId) => { calls.stopTask.push(taskId); },
         supportedCommands: async () => {
           record.listedCommands = true;
           return [{ name: 'compact', description: 'Free up context', argumentHint: '<instructions>', builtin: true }, { name: 'review-code', description: 'Review', argumentHint: '' }, { description: 'nameless' }];
@@ -487,6 +488,23 @@ describe('Claude live sessions', () => {
       expect(harness.live.backgroundTaskSnapshot()).toEqual({});
     } finally {
       release.resolve();
+      await harness.live.closeSession(SESSION_ID);
+    }
+  });
+
+  it('stops the background tasks an idle session still runs, and only those', async () => {
+    const harness = createHarness();
+    try {
+      await sendPrompt(harness.live);
+      await answerQuestion(harness);
+      await waitFor(() => payloads(harness.events, 'session.idle').length > 0);
+      // The recording ends while its background agent is still running.
+      expect(await harness.live.abort(SESSION_ID)).toBe(false);
+      expect(await harness.live.stopBackgroundTasks(SESSION_ID)).toBe(true);
+      expect(harness.calls.stopTask).toEqual(['a6f8a95b426077fd7']);
+      expect(harness.calls.interrupt).toBe(0);
+      expect(await harness.live.stopBackgroundTasks('ncl_210333b7-a88c-45b7-8bec-6d63ec3a1188')).toBe(false);
+    } finally {
       await harness.live.closeSession(SESSION_ID);
     }
   });

@@ -256,6 +256,13 @@ kept open between turns.
   that missed the events. The map is complete: no task outlives its query.
   Status, notifications and suggestions still follow turns only. Codex
   reports no background work, and Claude's scheduled wakeups are not tasks.
+- The Stop route (`POST .../abort`) interrupts the running turn. When no
+  turn runs, it stops the session's background tasks one by one with
+  `stopTask`; the CLI marks a task the user stopped as notified, so the model
+  is not woken to report it. OpenChamber does not declare
+  `perTaskStopAffordance`, so by the SDK's contract an interrupt also ends
+  background tasks. Reverts, archive and delete stop only the turn
+  (`stopTurn`) and close the query when they need to.
 
 Codex (`codex/live.js`): turns on the shared app-server.
 

@@ -24,6 +24,7 @@ import {
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import * as sessionActions from '@/sync/session-actions';
 import { isNativeLocalCommand, nativeCompactCommand } from '@/sync/native-send';
+import { useSessionHasBackgroundTasks } from '@/sync/session-background-tasks';
 import { useSessionPermissions, useSessionForms } from "@/sync/sync-context";
 // Guest surfaces load on demand: VS Code and mobile never mount them, and the
 // composer must not pay for the guest bridge before an extension is installed.
@@ -1460,7 +1461,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const preparingBtwSend = useBtwStore((state) => Boolean(currentSessionId && state.byParent[currentSessionId]?.pendingSend));
     const canSend = hasContent && !autoReviewRunning && !(isBtwActive && (btwPanel.creating || preparingBtwSend));
 
-    const canAbort = sessionPhase !== 'idle';
+    // Background tasks a native CLI still runs after its turn show the session
+    // as running in the lists; Stop ends them too.
+    const abortTargetHasBackgroundTasks = useSessionHasBackgroundTasks(isBtwActive && btwSessionId ? btwSessionId : currentSessionId);
+    const canAbort = sessionPhase !== 'idle' || abortTargetHasBackgroundTasks;
 
     const { suggestion: availableSuggestion } = useSessionAssistState(
         currentSessionId ?? '',

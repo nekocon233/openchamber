@@ -7,7 +7,8 @@ import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from '@/lib/runtime
 // Background tasks a native CLI keeps running after its turn ended. The
 // session's status is idle, yet work is in flight: when a task finishes, the
 // CLI starts a turn by itself. `global-session-status.ts` reads this store to
-// keep such a session's turn open for display, as it does for subagents.
+// keep such a session's turn open for display, as it does for subagents, and
+// the composer offers Stop, which ends those tasks.
 //
 // Live only, never persisted. An event replaces one session's set. The
 // server's snapshot names every session with tasks, because no task outlives
@@ -124,3 +125,8 @@ export const seedSessionBackgroundTasksFromHost = (): Promise<void> => {
   seeding = { runtimeKey, read };
   return read;
 };
+
+/** Whether the session's CLI still runs background tasks after its turn. */
+export const useSessionHasBackgroundTasks = (sessionId: string | null | undefined): boolean => (
+  useSessionBackgroundTasksStore((state) => Boolean(sessionId && state.tasksBySession.has(sessionId)))
+);

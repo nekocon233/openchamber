@@ -13,7 +13,7 @@ import {
   type SessionActivityTimingMutation,
 } from './session-activity-timing';
 import { countSyncPerformance } from './performance-diagnostics';
-import { useSessionBackgroundTasksStore } from './session-background-tasks';
+import { useSessionBackgroundTasksStore, useSessionHasBackgroundTasks } from './session-background-tasks';
 
 // Shared live busy/retry index for every directory. Events update it
 // incrementally and authoritative directory snapshots reconcile it, so each
@@ -141,7 +141,7 @@ export const useSessionTurnActive = (sessionId: string): boolean => {
   const running = useGlobalSessionStatusStore(
     (state) => state.activeSessionIds.has(sessionId) || hasActiveSubagent(sessionId, state.activeSessionIds),
   );
-  const waiting = useSessionBackgroundTasksStore((state) => state.tasksBySession.has(sessionId));
+  const waiting = useSessionHasBackgroundTasks(sessionId);
   return running || waiting;
 };
 

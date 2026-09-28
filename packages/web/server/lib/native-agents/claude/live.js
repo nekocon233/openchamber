@@ -566,6 +566,23 @@ export const createClaudeLiveSessions = ({
       markBusy(live);
     },
 
+    /**
+     * Stops the background tasks the session's CLI still runs after its turn.
+     * The CLI marks a task stopped by the user as notified, so the model is
+     * not woken to report it. False when none ran.
+     */
+    async stopBackgroundTasks(sessionId) {
+      const live = sessions.get(sessionId);
+      if (!live || live.closing || live.backgroundTasks.length === 0) return false;
+      const results = await Promise.allSettled(live.backgroundTasks.map((task) => live.query.stopTask(task.id)));
+      const failures = results.filter((result) => result.status === 'rejected');
+      if (failures.length === results.length) throw failures[0].reason;
+      for (const failure of failures) {
+        console.warn('[native-agents] could not stop a Claude Code background task:', sessionId, failure.reason instanceof Error ? failure.reason.message : failure.reason);
+      }
+      return true;
+    },
+
     /** Stops the running turn; the CLI reports it as interrupted. */
     async abort(sessionId) {
       const live = sessions.get(sessionId);

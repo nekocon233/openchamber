@@ -309,7 +309,7 @@ describe('native agents runtime', () => {
 const createTranscriptSdk = (directory) => {
   const chains = new Map();
   const infos = new Map();
-  const state = { queries: [], hold: null, exitGate: null, exiting: false, failStart: false, renames: [], deletes: [] };
+  const state = { queries: [], hold: null, exitGate: null, exiting: false, failStart: false, renames: [], deletes: [], stoppedTasks: [] };
   let clock = Date.parse('2026-09-24T10:00:00.000Z');
   const stamp = () => new Date((clock += 1000)).toISOString();
   const remember = (uuid, chain) => {
@@ -367,6 +367,10 @@ const createTranscriptSdk = (directory) => {
           for (const frame of scriptedTurn(apiMessageId)) yield frame;
           const [verb, file, content] = text.split(' ');
           if (verb === 'write') fs.writeFileSync(path.join(directory, file), content);
+          // `background` leaves a background task running after the turn.
+          if (verb === 'background') {
+            yield { type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'bwait', task_type: 'local_bash', description: 'Wait for the job' }] };
+          }
           if (state.hold) await state.hold.promise;
           let chain = chains.get(uuid) ?? [];
           if (rewindAt !== null) {
@@ -389,6 +393,9 @@ const createTranscriptSdk = (directory) => {
         interrupt: async () => {
           record.aborted = true;
           state.hold?.resolve();
+        },
+        stopTask: async (taskId) => {
+          state.stoppedTasks.push(taskId);
         },
         setModel: async () => {},
         applyFlagSettings: async () => {},
@@ -503,6 +510,20 @@ describe('native reverts through the runtime', () => {
     await handing;
     await waitFor(() => runtime.registryFile().reverts[id] === undefined);
     expect((await messageIds(runtime, id)).filter((messageId) => messageId.startsWith('ncl_u_'))).toEqual([promptId(1), promptId(2), promptId(5)]);
+    await runtime.shutdown();
+  });
+
+  it('the Stop control stops the background tasks a finished turn left running', async () => {
+    const runtime = createRevertRuntime();
+    const { id } = await runtime.createSession({ backend: 'claude', directory: runtime.project });
+    await runPrompt(runtime, id, 1, 'write a.txt one');
+    expect(await runtime.abort(id)).toBe(false);
+
+    await runPrompt(runtime, id, 2, 'background wait');
+    expect(await runtime.backgroundTasks()).toMatchObject({ [id]: { tasks: [{ id: 'bwait' }] } });
+    expect(await runtime.abort(id)).toBe(true);
+    expect(runtime.state.stoppedTasks).toEqual(['bwait']);
+    expect(runtime.state.queries.at(-1).aborted).toBe(false);
     await runtime.shutdown();
   });
 

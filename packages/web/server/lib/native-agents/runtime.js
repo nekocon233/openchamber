@@ -586,9 +586,14 @@ export const createNativeAgentsRuntime = ({
       return { kind: 'output', ...await codexCommands.inspect({ ...input, directory, threadId }) };
     },
 
-    /** Stops the running turn; false when none runs. */
-    abort(sessionId) {
-      return liveFor(sessionId).abort(sessionId);
+    /**
+     * The Stop control: the running turn, or when none runs, the background
+     * tasks the CLI still runs after it; false when neither runs. Codex
+     * reports no background work.
+     */
+    async abort(sessionId) {
+      if (await liveFor(sessionId).abort(sessionId)) return true;
+      return decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && claudeLive.stopBackgroundTasks(sessionId);
     },
 
     /**
