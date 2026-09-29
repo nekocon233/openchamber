@@ -194,10 +194,18 @@ const buildSidebarSessionStructure = ({
       !indexedRootIdSet.has(session.id) && !parentIdOf(session)
     )),
   ];
+  // Recent is recent activity wherever it happened: managed Chats roots join
+  // the project roots there, while Chats keep their own section and stay out
+  // of project ownership and Timeline.
+  const recentRootSessions = [
+    ...rootSessions,
+    ...partition.chatSessions.filter((session) => !parentIdOf(session)),
+  ];
   return {
     chatSessionIds: new Set(partition.chatSessions.map((session) => session.id)),
     projectSessions,
     rootSessions,
+    recentRootSessions,
     sessionById,
     sessions,
     hierarchy: globalStructure ? {
@@ -251,6 +259,7 @@ export const buildSidebarSessionProjection = ({
   return {
     ...ordering,
     projectSessions: structure.projectSessions,
+    recentRootSessions: structure.recentRootSessions,
     sessionById: structure.sessionById,
   };
 };
@@ -326,6 +335,7 @@ export const useSessionProjectCollection = ({
     sessionOrderRanks,
     sessions,
     rootSessions: structure.rootSessions,
+    recentRootSessions: structure.recentRootSessions,
   };
 };
 

@@ -81,7 +81,11 @@ three use the same row model and virtualizer, including search and reveal
 controls. Pinned, Recent and project copies of a session keep independent parent
 expansion keys. Single-project mode limits Pinned to that project's sessions.
 Chats use their shared managed root for folders and never expose worktree
-actions. The mobile sessions sheet (`apps/MobileSessionsSheet.tsx`) keeps the same
+actions. Recent takes its members from `recentRootSessions`: the project roots
+plus the managed Chats roots, so a recent chat shows in both Chats and Recent,
+as a project session shows in both its project and Recent. A chat row there has
+no project label, like a pinned chat. Chats stay out of project ownership and
+Timeline's list. The mobile sessions sheet's Recent already included them. The mobile sessions sheet (`apps/MobileSessionsSheet.tsx`) keeps the same
 activity sections through its own renderer. VS Code excludes these activity
 sections and worktrees, retaining its workspace-scoped groups and archived rows.
 
@@ -181,8 +185,9 @@ renders `projects`.
   under worktree subdirectories; an unresolved worktree stays null. Each visible
   row also resolves its own tooltip metadata rather than inheriting its parent's
   branch, preserving the resolver's deliberate branch suppression. The full
-  subtree remains available to archive/delete actions, and managed Chats keep
-  their separate projection.
+  subtree remains available to archive/delete actions. Managed Chats keep
+  their separate projection in the Chats section; the chat roots Recent also
+  lists resolve no project, so they carry no project, worktree or branch.
 - Search filters Timeline with the same rule as Recent (exact `ses_` id, else
   title contains) and counts one match per listed row.
 

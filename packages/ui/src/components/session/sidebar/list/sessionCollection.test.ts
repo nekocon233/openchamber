@@ -195,20 +195,24 @@ describe('projectSidebarCollection', () => {
     expect(recentAfter.map((entry) => entry.id)).toEqual(['old-root']);
   });
 
-  test('keeps managed Chats in a dedicated projection and out of project and Recent ownership', () => {
+  test('keeps managed Chats out of project ownership while their roots join Recent', () => {
     const managed = session('managed', '/home/.config/openchamber/chats/2026-08-24/session-managed');
+    const managedChild = { ...session('managed-child', '/home/.config/openchamber/chats/2026-08-24/session-managed'), parentID: 'managed' };
     const project = session('project', '/workspace/a');
-    const projects = projectSidebarCollection({
-      globalActiveSessions: [managed, project],
+    const input = {
+      globalActiveSessions: [managed, managedChild, project],
       liveSessions: [],
       knownDirectories: new Set(['/workspace/a']),
       isVSCode: false,
-    });
+    };
+    const projection = buildSidebarSessionProjection({ ...input, pinnedSessionIds: new Set(), sessionOrderRanks: new Map() });
 
-    expect(projects.map((entry) => entry.id)).toEqual(['project']);
+    expect(projectSidebarCollection(input).map((entry) => entry.id)).toEqual(['project']);
     expect(partitionSidebarSessions([managed, project], false).chatSessions.map((entry) => entry.id)).toEqual(['managed']);
-    expect(deriveRecentSessions(projects, new Set(['managed', 'project']), 200_000_000)
-      .map((entry) => entry.id)).toEqual(['project']);
+    // A chat's subagent stays under its root, as a project child does.
+    expect(projection.recentRootSessions.map((entry) => entry.id)).toEqual(['project', 'managed']);
+    expect(deriveRecentSessions(projection.recentRootSessions, new Set(['managed', 'project']), 200_000_000)
+      .map((entry) => entry.id)).toEqual(['project', 'managed']);
   });
 
   test('keeps managed Chats out of the VS Code sidebar', () => {
@@ -221,6 +225,10 @@ describe('projectSidebarCollection', () => {
       knownDirectories: new Set(),
       isVSCode: true,
     })).toEqual([]);
+    expect(buildSidebarSessionProjection({
+      globalActiveSessions: [managed], liveSessions: [], knownDirectories: new Set(), isVSCode: true,
+      pinnedSessionIds: new Set(), sessionOrderRanks: new Map(),
+    }).recentRootSessions).toEqual([]);
   });
 
   test('keeps a canonical managed chat visible when the server root uses different home casing', () => {
@@ -250,6 +258,9 @@ describe('projectSidebarCollection', () => {
 
     expect(projectSidebarCollection({ ...input, globalActiveSessions: [fork, project] }).map((entry) => entry.id)).toEqual(['project']);
     expect(partitionSidebarSessions([fork], false).chatSessions).toEqual([]);
+    expect(buildSidebarSessionProjection({
+      ...input, globalActiveSessions: [fork, project], pinnedSessionIds: new Set(), sessionOrderRanks: new Map(),
+    }).recentRootSessions.map((entry) => entry.id)).toEqual(['project']);
 
     const promoted = {
       ...fork,

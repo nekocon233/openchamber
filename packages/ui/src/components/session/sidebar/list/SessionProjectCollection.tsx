@@ -187,7 +187,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     isVSCode: topology.isVSCode,
     pinnedSessionIds: collection.pinnedSessionIds,
     sessionOrderRanks: collection.sessionOrderRanks,
-    sessions: collection.rootSessions,
+    sessions: collection.recentRootSessions,
   });
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const pinnedSessions = React.useMemo(
