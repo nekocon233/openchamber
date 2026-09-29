@@ -53,6 +53,15 @@ describe('web native agents API', () => {
     expect(requests[0]?.searchParams.get('directory')).toBe('/work/project');
   });
 
+  it('reads the managed chat directories that hold native sessions', async () => {
+    stubFetch(async () => Response.json({ directories: ['/home/ada/.config/openchamber/chats/2026-09-29/session-a'] }));
+
+    const directories = await createWebNativeAgentsAPI().chatDirectories();
+
+    expect(directories).toEqual(['/home/ada/.config/openchamber/chats/2026-09-29/session-a']);
+    expect(requests[0]?.pathname).toBe('/api/native/chat-directories');
+  });
+
   it('reads every session\'s background tasks from the native route', async () => {
     const snapshot = { ncl_a: { directory: '/work/project', tasks: [{ id: 'bwait', type: 'local_bash', description: 'Wait for the job' }] } };
     stubFetch(async () => Response.json(snapshot));

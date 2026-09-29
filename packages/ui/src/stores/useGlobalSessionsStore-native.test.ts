@@ -24,14 +24,18 @@ let nativeListing: (directory: string) => Promise<NativeSessionList> = async () 
   backends: { claude: { status: 'ok', sessions: [] }, codex: { status: 'ok', sessions: [] } },
 });
 
+let chatDirectories: () => Promise<string[]> = async () => [];
+
 const runtimeApis = createTestRuntimeAPIs(createTestNativeAgentsAPI({
   listSessions: (directory) => nativeListing(directory),
+  chatDirectories: () => chatDirectories(),
 }));
 const originalListSessions = opencodeClient.listSessionsPage;
 
 describe('global sessions with native CLI sessions', () => {
   beforeEach(() => {
     openCodeSessions = [];
+    chatDirectories = async () => [];
     opencodeClient.listSessionsPage = async () => ({ sessions: openCodeSessions, cursor: {} });
     registerRuntimeAPIs(runtimeApis);
     useGlobalSessionsStore.getState().resetForRuntimeSwitch();
@@ -52,6 +56,44 @@ describe('global sessions with native CLI sessions', () => {
     await useGlobalSessionsStore.getState().loadSessions();
 
     expect(useGlobalSessionsStore.getState().activeSessions.map((item) => item.id).sort()).toEqual(['ncl_new', 'ncx_thread', 'ses_opencode']);
+  });
+
+  test('lists the native sessions of managed chats this client never held', async () => {
+    const chat = '/home/user/.config/openchamber/chats/2026-09-29/session-a';
+    chatDirectories = async () => [chat];
+    nativeListing = async (directory) => ({
+      backends: {
+        claude: { status: 'ok', sessions: directory === chat ? [session('ncl_chat', chat)] : [] },
+        codex: { status: 'ok', sessions: [] },
+      },
+    });
+
+    await useGlobalSessionsStore.getState().loadSessions();
+
+    expect(useGlobalSessionsStore.getState().activeSessions.map((item) => item.id)).toContain('ncl_chat');
+  });
+
+  test('a failed read of the chat directories keeps the chats already held', async () => {
+    const chat = '/home/user/.config/openchamber/chats/2026-09-29/session-a';
+    useGlobalSessionsStore.getState().applySnapshot([session('ncl_chat', chat)], []);
+    chatDirectories = async () => {
+      throw new Error('the server is unreachable');
+    };
+    const listed: string[] = [];
+    nativeListing = async (directory) => {
+      listed.push(directory);
+      return {
+        backends: {
+          claude: { status: 'ok', sessions: directory === chat ? [session('ncl_chat', chat)] : [] },
+          codex: { status: 'ok', sessions: [] },
+        },
+      };
+    };
+
+    await useGlobalSessionsStore.getState().loadSessions();
+
+    expect(listed).toContain(chat);
+    expect(useGlobalSessionsStore.getState().activeSessions.map((item) => item.id)).toContain('ncl_chat');
   });
 
   test('keeps the sessions of a native backend that failed', async () => {

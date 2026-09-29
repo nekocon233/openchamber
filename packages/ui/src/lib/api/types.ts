@@ -1710,6 +1710,8 @@ export interface NativeAgentsAPI {
   codexCommand(request: NativeCodexCommandRequest): Promise<NativeCodexCommandResult>;
   /** Root sessions of a directory, reported per backend. */
   listSessions(directory: string, options?: NativeReadOptions): Promise<NativeSessionList>;
+  /** Directories of managed chats holding native sessions; no project names them. */
+  chatDirectories(options?: NativeReadOptions): Promise<string[]>;
   getSession(sessionId: string, directory: string, options?: NativeReadOptions): Promise<Session>;
   /** Newest page first; `before` is the oldest message id of the previous page. */
   loadMessages(sessionId: string, directory: string, page: { limit: number; before?: string }): Promise<NativeMessagePage>;

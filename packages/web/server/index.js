@@ -1261,6 +1261,7 @@ const nativeAgentsRuntime = createNativeAgentsRuntime({
   publishNativeEvent: (event) => globalMessageStreamHub.publishNativeEvent(event),
   // The global AGENTS.md the Behavior settings edit, which OpenCode reads too.
   readGlobalInstructions: createGlobalInstructionsReader({ filePath: path.join(OPENCODE_CONFIG_DIR, 'AGENTS.md') }),
+  managedChatsRoots: [...new Set([path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR])],
 });
 configureNativeSmallModels(nativeAgentsRuntime.smallModels);
 const staticRoutesRuntime = createStaticRoutesRuntime({

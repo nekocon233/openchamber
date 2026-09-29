@@ -123,6 +123,8 @@ export const registerNativeAgentRoutes = (app, { runtime }) => {
 
   app.get('/api/native/sessions', handle((req) => runtime.listSessions(directoryQuery.parse(req.query).directory)));
 
+  app.get('/api/native/chat-directories', handle(async () => ({ directories: await runtime.managedChatDirectories() })));
+
   app.get('/api/native/sessions/:sessionId', handle((req) => runtime.getSession(
     req.params.sessionId,
     directoryQuery.parse(req.query).directory,

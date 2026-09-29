@@ -6,6 +6,7 @@ import {
   nativeBackgroundTaskSnapshotSchema,
   nativeCapabilitiesSchema,
   nativeCatalogSchema,
+  nativeChatDirectoriesSchema,
   nativeCommandListSchema,
   nativeCodexCommandResultSchema,
   nativeDeleteResultSchema,
@@ -119,6 +120,12 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     nativeSessionListSchema,
     options?.signal,
   ),
+  chatDirectories: async (options) => (await readParsed(
+    '/api/native/chat-directories',
+    {},
+    nativeChatDirectoriesSchema,
+    options?.signal,
+  )).directories,
   getSession: (sessionId, directory, options) => readParsed(
     sessionPath(sessionId),
     { directory },

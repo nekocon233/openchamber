@@ -310,6 +310,26 @@ const nativeSessionDirectories = (state: Pick<GlobalSessionsState, 'activeSessio
     .map((session) => session.directory),
 ];
 
+/**
+ * Native sessions for the complete global list. Each managed chat has a
+ * directory of its own that no project names, so a client that did not create
+ * a chat learns from the server where to look. When that read fails, the
+ * chats this client already holds are still listed through their directories.
+ */
+const loadGlobalNativeSessions = async (
+  state: Pick<GlobalSessionsState, 'activeSessions' | 'archivedSessions'>,
+): Promise<Session[]> => {
+  const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
+  if (!nativeAgents?.supported) return [];
+  let chatDirectories: string[] = [];
+  try {
+    chatDirectories = await nativeAgents.chatDirectories();
+  } catch (error) {
+    console.warn('[native-sessions] failed to list managed chat directories', error);
+  }
+  return loadNativeSessions(state, [...nativeSessionDirectories(state), ...chatDirectories]);
+};
+
 const upsertSessionIntoList = (sessions: Session[], session: Session): Session[] => {
   const index = sessions.findIndex((candidate) => candidate.id === session.id);
   if (index === -1) {
@@ -760,7 +780,7 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
               mergingSessionPage = false;
             }
           },
-        }), loadNativeSessions(get(), nativeSessionDirectories(get()))]);
+        }), loadGlobalNativeSessions(get())]);
 
         if (generation !== loadGeneration) {
           // Runtime switched mid-load: this snapshot belongs to the previous

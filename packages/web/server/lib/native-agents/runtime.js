@@ -10,6 +10,7 @@
 // next prompt commits it by rewinding the CLI's conversation.
 
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { z } from 'zod';
@@ -138,6 +139,9 @@ export const createNativeAgentsRuntime = ({
   snapshots = createSnapshotStore({ dataDir }),
   loadSdk = loadClaudeSdk,
   now = Date.now,
+  // Roots of OpenChamber's managed chats: each chat gets a directory of its
+  // own below one of them, and no project names it.
+  managedChatsRoots = [],
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
   const reverts = createNativeReverts({ registry, snapshots });
@@ -480,6 +484,29 @@ export const createNativeAgentsRuntime = ({
           [NATIVE_BACKEND_CODEX]: await partition(codexSessions),
         },
       };
+    },
+
+    /**
+     * Directories of the native sessions OpenChamber created in managed
+     * chats. No project names a chat's directory, so a client that did not
+     * create the chat learns here where to list it. Roots match by their
+     * configured path and by their real path.
+     */
+    async managedChatDirectories() {
+      const roots = new Set();
+      for (const root of managedChatsRoots) {
+        roots.add(path.resolve(root));
+        try {
+          roots.add(fs.realpathSync.native(root));
+        } catch {
+          // A root no chat has used yet does not exist.
+        }
+      }
+      const directories = new Set((await registry.listSessions()).map((entry) => entry.directory));
+      return Array.from(directories).filter((directory) => {
+        const resolved = path.resolve(directory);
+        return Array.from(roots).some((root) => resolved.startsWith(`${root}${path.sep}`));
+      });
     },
 
     /** @throws when the session does not exist */

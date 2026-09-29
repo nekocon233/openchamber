@@ -516,7 +516,10 @@ what the stores hold for native sessions and never blocks OpenCode's:
   merge through the same `mergeBootstrapSessions`.
 - Global session list. `useGlobalSessionsStore` lists native sessions for every
   project directory and every directory that already holds a native session,
-  with the same per-backend rule.
+  with the same per-backend rule. A complete load adds the managed chat
+  directories the server reports (`nativeAgents.chatDirectories`), so a native
+  chat created on another device appears too. When that read fails, the chats
+  already held are still listed through their own directories.
 - History. `SessionMessageLoader` reads native pages through
   `nativeAgents.loadMessages` with the server's message-id cursor and holds the
   subagent sessions a page links to in the directory store.

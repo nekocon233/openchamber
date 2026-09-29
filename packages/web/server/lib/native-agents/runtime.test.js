@@ -442,6 +442,37 @@ const runPrompt = async (runtime, sessionId, n, text) => {
 const messageIds = async (runtime, sessionId) => (await runtime.loadMessages(sessionId, runtime.project, { limit: 50 }))
   .records.map((record) => record.info.id);
 
+describe('managed chat directories', () => {
+  it('lists the directories of native sessions created in managed chats, by configured or real root', async () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-native-chats-')));
+    directories.push(base);
+    const realRoot = path.join(base, 'real-chats');
+    const chatDir = path.join(realRoot, '2026-09-29', 'session-a');
+    const projectDir = path.join(base, 'project');
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.mkdirSync(projectDir, { recursive: true });
+    // The configured root links to where the chats really live.
+    const linkedRoot = path.join(base, 'chats');
+    fs.symlinkSync(realRoot, linkedRoot);
+    const linkedChatDir = path.join(linkedRoot, '2026-09-29', 'session-a');
+    const runtime = createNativeAgentsRuntime({
+      dataDir: path.join(base, 'data'),
+      resolveExecutable: async () => '/usr/bin/claude',
+      buildChildEnv: () => ({}),
+      clientVersion: 'test',
+      publishNativeEvent: () => {},
+      loadSdk: async () => createTranscriptSdk(projectDir).sdk,
+      managedChatsRoots: [linkedRoot],
+    });
+    await runtime.createSession({ backend: 'claude', directory: linkedChatDir });
+    await runtime.createSession({ backend: 'claude', directory: chatDir });
+    await runtime.createSession({ backend: 'claude', directory: projectDir });
+
+    expect((await runtime.managedChatDirectories()).sort()).toEqual([chatDir, linkedChatDir].sort());
+    await runtime.shutdown();
+  });
+});
+
 describe('native reverts through the runtime', () => {
   it('reverts files at once, unreverts, and rewinds the conversation with the next prompt', async () => {
     const runtime = createRevertRuntime();
@@ -732,6 +763,11 @@ describe('native agents routes', () => {
     expect(calls).toEqual([DIRECTORY]);
     const missing = await request(app).get('/api/native/sessions/status').expect(400);
     expect(missing.body.code).toBe('NATIVE_INVALID_REQUEST');
+  });
+
+  it('lists the managed chat directories that hold native sessions', async () => {
+    const app = createApp({ managedChatDirectories: async () => ['/chats/2026-09-29/session-a'] });
+    await request(app).get('/api/native/chat-directories').expect(200, { directories: ['/chats/2026-09-29/session-a'] });
   });
 
   it('serves every session\'s background tasks before the session-id route', async () => {

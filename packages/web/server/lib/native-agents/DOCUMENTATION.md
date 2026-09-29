@@ -69,6 +69,11 @@ and the UI keeps its previous sessions for a failed backend.
   source `vscode`.
 - Subagents are never listed. Loading a parent's history returns them as
   `childSessions`, the only place they open from.
+- `GET /api/native/chat-directories` returns `{ directories }`: the
+  directories of registry sessions below a managed chats root, matched by
+  the root's configured and real path. Each managed chat has a directory of
+  its own that no project names, so without this list a native chat created
+  on one device would not appear on another.
 
 ## History projection
 

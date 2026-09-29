@@ -219,6 +219,7 @@ export const nativeBackgroundTaskSchema = z.object({
   type: z.string(),
   description: z.string(),
 }) satisfies z.ZodType<SessionBackgroundTask>;
+export const nativeChatDirectoriesSchema = z.object({ directories: z.array(z.string().min(1)) });
 export const nativeBackgroundTaskSnapshotSchema = z.record(
   nativeSessionIdSchema,
   z.object({ directory: z.string().min(1), tasks: z.array(nativeBackgroundTaskSchema) }),
