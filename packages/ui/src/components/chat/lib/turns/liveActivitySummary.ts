@@ -7,6 +7,7 @@ import {
     isShellTool,
     isSubagentTool,
     isWebTool,
+    recordedFileChanges,
 } from '@/lib/opencode/tools';
 import type { ChatMessageEntry } from './types';
 
@@ -56,7 +57,7 @@ interface TurnFileChange {
 
 export interface LiveActivitySummary {
     files: number;
-    /** Files the turn's own edit/write/patch calls touched, in first-touch order. */
+    /** Files the turn's own edit/write/patch calls touched, and the commands whose CLI recorded their changes, in first-touch order. */
     changedFiles: TurnFileChange[];
     additions: number;
     deletions: number;
@@ -154,12 +155,17 @@ export function summarizeLiveActivity(messages: readonly ChatMessageEntry[]): Li
                 const childSession = metadata?.sessionID ?? metadata?.sessionId;
                 if (childSession) subagents.add(childSession);
             }
-            if (!isFileChangeTool(tool)) continue;
+            // A command changed files when its CLI recorded that it did; it
+            // names them only in that record.
+            const recorded = recordedFileChanges(tool, state.metadata);
+            if (!isFileChangeTool(tool) && !recorded) continue;
 
             const input = inputSchema.safeParse(state.input).data;
             if (metadata?.files?.some((file) => file === null)) summary.hasCompleteDiff = false;
             const entries = metadata?.files?.filter((file) => file !== null);
-            const files = entries?.length ? entries : [metadata?.filediff ?? {}];
+            const files = recorded
+                ? entries ?? []
+                : (entries?.length ? entries : [metadata?.filediff ?? {}]);
             let callAdditions = 0;
             let callDeletions = 0;
             const callRecords: FileChangeRecord[] = [];
@@ -238,6 +244,24 @@ export function summarizeLiveActivity(messages: readonly ChatMessageEntry[]): Li
                     summary.hasCompleteDiff = false;
                     for (const record of unstattedRecords) record.complete = false;
                 }
+            }
+            if (recorded) {
+                // Files named without a diff count as changed but have no
+                // numbers. Files the record only counts cannot be told apart
+                // from named ones, so they stay out of the file count.
+                for (const path of recorded.withoutDiff) {
+                    const canonical = canonicalPath(path);
+                    const key = keyOf(canonical);
+                    if (callPaths.has(key)) continue;
+                    callPaths.add(key);
+                    const record = changedFiles.get(key)
+                        ?? { path: getRelativeFilePath(canonical, root), additions: 0, deletions: 0, complete: true };
+                    record.complete = false;
+                    changedFiles.set(key, record);
+                }
+                // Another command's changes may be among these.
+                if (recorded.shared) for (const record of callRecords) record.complete = false;
+                if (!recorded.complete || recorded.shared) summary.hasCompleteDiff = false;
             }
             summary.additions += callAdditions;
             summary.deletions += callDeletions;

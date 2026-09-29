@@ -279,6 +279,57 @@ export function subagentSessionId(metadata: Metadata | undefined): string | unde
   return parsed.sessionID ?? parsed.sessionId
 }
 
+// What Claude Code recorded a command changing, on a native Claude session's
+// shell call: the diffs it kept in `metadata.files` (an edit's shape) and the
+// changed files it only named or counted in `metadata.recordedFileChanges`.
+const commandFileChangesSchema = z.object({
+  files: z.array(z.object({ filePath: z.string().min(1), diff: z.string().min(1) }).nullable().catch(null)).optional().catch(undefined),
+  recordedFileChanges: z.object({
+    withoutDiff: z.array(z.string().min(1)),
+    unnamed: z.number().int().nonnegative(),
+    unavailable: z.literal(true).optional(),
+    shared: z.literal(true).optional(),
+  }),
+})
+
+/** The files a command changed, as far as its CLI recorded them. */
+export type RecordedFileChanges = {
+  /** At least one changed file has a diff in `metadata.files`. */
+  hasDiffs: boolean
+  /** Changed files the CLI named without a diff: too large, binary, past its limit, or unreadable. */
+  withoutDiff: string[]
+  /** Changed files the CLI counted without naming them. */
+  unnamed: number
+  /** The CLI could not read some of the changes. */
+  unavailable: boolean
+  /** Another command changed the same repository at the same time, so some of these changes may be its own. */
+  shared: boolean
+  /** Every changed file the record counts has a diff. */
+  complete: boolean
+}
+
+/**
+ * The file changes the CLI recorded for a shell call, or null when it recorded
+ * none. Null means no record, not no change: a CLI records only some commands,
+ * and OpenCode shell calls never carry one.
+ */
+export function recordedFileChanges(toolName: ToolName, metadata: Metadata | undefined): RecordedFileChanges | null {
+  if (metadata?.recordedFileChanges === undefined || !isShellTool(toolName)) return null
+  const parsed = commandFileChangesSchema.safeParse(metadata)
+  if (!parsed.success) return null
+  const { withoutDiff, unnamed, unavailable, shared } = parsed.data.recordedFileChanges
+  const hasDiffs = (parsed.data.files ?? []).some((file) => file !== null)
+  if (!hasDiffs && withoutDiff.length === 0 && unnamed === 0) return null
+  return {
+    hasDiffs,
+    withoutDiff,
+    unnamed,
+    unavailable: unavailable === true,
+    shared: shared === true,
+    complete: withoutDiff.length === 0 && unnamed === 0 && unavailable !== true,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Row description
 // ---------------------------------------------------------------------------

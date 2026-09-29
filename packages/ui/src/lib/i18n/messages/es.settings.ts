@@ -2190,7 +2190,7 @@ export const settingsDict = {
   "settings.openchamber.visual.field.conciseTranscriptInfo": "Cada llamada a una herramienta ocupa una línea, con un resultado breve debajo. Haz clic en una llamada para ver sus detalles. El modelo y la duración bajo una respuesta solo aparecen al pasar el cursor.",
   "settings.openchamber.visual.field.transcriptFileChangesOnly": "Mostrar solo los cambios de archivos",
   "settings.openchamber.visual.field.transcriptFileChangesOnlyAria": "Mostrar solo los cambios de archivos en la transcripción al estilo de Claude Code",
-  "settings.openchamber.visual.field.transcriptFileChangesOnlyInfo": "Los comandos, las lecturas de archivos y las búsquedas no aparecen en la conversación. Se mantienen las respuestas, el razonamiento y cada cambio de archivo con su diff. Se aplica a la transcripción al estilo de Claude Code.",
+  "settings.openchamber.visual.field.transcriptFileChangesOnlyInfo": "Los comandos, las lecturas de archivos y las búsquedas no aparecen en la conversación. Se mantienen las respuestas, el razonamiento y cada cambio de archivo con su diff, incluidos los archivos que un comando modificó cuando su CLI lo registró. Se aplica a la transcripción al estilo de Claude Code.",
   "settings.openchamber.visual.field.showDotfilesAria": "Mostrar archivos ocultos",
   "settings.openchamber.visual.field.showDotfiles": "Mostrar archivos ocultos",
   "settings.openchamber.visual.field.persistDraftMessagesAria": "Mantener borradores de mensajes",

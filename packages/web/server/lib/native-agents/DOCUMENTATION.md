@@ -101,15 +101,38 @@ depends on:
   name (`TaskCreate`), and its title is the first set input field among
   `subject`, `description`, `query`, `pattern`, `url` and the like, never the
   name again.
+- A Claude Bash result can carry `bashEditDiff`: what Claude Code recorded
+  the command changing in the work tree. The CLI marks the field internal
+  (2.1.283); its `bashEditDiffEnabled` setting documents it for hooks. The
+  part stays `bash` and gets the recorded diffs as the edit renderer's
+  `files` and `diff`, plus `recordedFileChanges: { withoutDiff, unnamed,
+  unavailable?, shared? }` for the changed files the CLI named without a diff
+  or only counted. The CLI keeps hunks for at most 5 files per command and
+  none for a file whose change passes 400 lines or 64,000 characters, names
+  at most 200 files, and flags `shared` when another command changed the
+  same repository at the same time. It records nothing for read-only,
+  failed, interrupted or background commands, skips plain git commands, and
+  by default records only in `auto` and `bypassPermissions` modes while its
+  bash-first mode steers the model to edit through the shell. A `bash` part
+  without the metadata has no record, which never means it changed nothing.
+  Codex reports no such record.
 
 Claude gotchas:
 
 - `getSessionMessages` drops `toolUseResult`, which holds the
-  `structuredPatch` the edit diffs are built from. When a conversation used
-  Edit, MultiEdit or Write, the store reads the raw transcript a second time
-  through `importSessionToStore` into a throwaway store and keeps only the
-  diff fields per entry uuid (the raw result also holds whole file
-  contents). A failed second read costs the diffs, never the history.
+  `structuredPatch` the edit diffs are built from and a command's
+  `bashEditDiff`. When a conversation used Edit, MultiEdit, Write or Bash,
+  the store reads the raw transcript a second time through
+  `importSessionToStore` into a throwaway store and keeps only the diff
+  fields per entry uuid (the raw result also holds whole file contents and a
+  command's output). Entries without a structured result, most of them, skip
+  the result parsers; failed parses were most of that pass's cost. A failed
+  second read costs the diffs, never the history.
+- A subagent's history does that read only when the subagent edited files
+  or lost tool results: it goes through the whole session, nothing caches
+  it, and nearly every subagent runs commands. The file changes of a
+  subagent's commands therefore show live, and after a reload only when that
+  read runs anyway.
 - Subagent history can omit parallel tool results from its selected
   `parentUuid` chain. When a retained call has no result, the store reads raw
   entries through `importSessionToStore`, selecting only that subagent's key,
@@ -152,9 +175,11 @@ Claude gotchas:
   `is_meta` and a live frame `isSynthetic`. The projector checks both, so a
   running turn leaves out what a later history read leaves out.
 - History is cached per session, keyed by transcript size and modification
-  time, in an LRU bounded at 128 MiB of transcript. A 10 MB transcript with
-  edits loads in about 160 ms cold, both reads included; later pages of the
-  same transcript come from the cache.
+  time, in an LRU bounded at 128 MiB of transcript. On 2026-09-29, on a busy
+  machine, a cold load with both reads took about 0.2 to 0.3 s for a 4 MB
+  transcript, 1.5 to 1.8 s for a 41 MB one and 2.0 to 2.3 s for a 66 MB one
+  with five compactions; the second read alone costs about 10 ms per MB.
+  Later pages of the same transcript come from the cache.
 
 Codex gotchas:
 

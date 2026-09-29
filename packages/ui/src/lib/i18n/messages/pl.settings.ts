@@ -1239,7 +1239,7 @@ export const settingsDict = {
   'settings.openchamber.visual.field.conciseTranscriptInfo': 'Każde wywołanie narzędzia zajmuje jeden wiersz, a pod nim widać krótki wynik. Kliknij wywołanie, aby zobaczyć szczegóły. Model i czas pod odpowiedzią pojawiają się tylko po najechaniu kursorem.',
   'settings.openchamber.visual.field.transcriptFileChangesOnly': 'Pokazuj tylko zmiany w plikach',
   'settings.openchamber.visual.field.transcriptFileChangesOnlyAria': 'Pokazuj tylko zmiany w plikach w zapisie rozmowy w stylu Claude Code',
-  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Polecenia, odczyty plików i wyszukiwania nie pojawiają się w rozmowie. Zostają odpowiedzi, rozumowanie i każda zmiana pliku z jej diffem. Dotyczy zapisu rozmowy w stylu Claude Code.',
+  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Polecenia, odczyty plików i wyszukiwania nie pojawiają się w rozmowie. Zostają odpowiedzi, rozumowanie i każda zmiana pliku z jej diffem, także pliki zmienione przez polecenie, jeśli jego CLI je zapisało. Dotyczy zapisu rozmowy w stylu Claude Code.',
   'settings.openchamber.visual.field.showTurnChangedFilesAria': 'Pokaż zmienione pliki w ukończonych turach',
   'settings.openchamber.visual.field.spacingDensity': 'Gęstość odstępów',
   'settings.openchamber.visual.field.stickyUserHeader': 'Przyklejony nagłówek użytkownika',

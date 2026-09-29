@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { createClaudeProjection } from './projector.js';
+import { slimFileEditResult } from './tools.js';
 import { compareMessagesChronologically } from '@openchamber/ui/sync/message-ordering';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
@@ -254,6 +255,38 @@ describe('Claude tools the renderers do not know', () => {
       ['github_create_issue', 'Broken link'],
       ['TaskList', ''],
     ]);
+  });
+});
+
+describe('Claude commands that changed files', () => {
+  const record = {
+    files: [{ filePath: '/work/project/src/a.cs', hunks: [{ oldStart: 10, oldLines: 1, newStart: 10, newLines: 1, lines: ['-old', '+new'] }] }],
+    moreFiles: 1,
+    changedFiles: ['/work/project/src/a.cs', '/work/project/src/Big.cs'],
+  };
+  const prompt = { type: 'user', uuid: 'a22f0a7a-a88c-4093-a5e3-6653ff44f6d3', timestamp: '2026-09-29T04:12:00.000Z', message: { role: 'user', content: 'Rewrite the parser' } };
+  const call = { type: 'assistant', uuid: 'a-1', timestamp: '2026-09-29T04:12:28.000Z', message: {
+    id: 'msg_1', model: 'claude-opus-5-5', stop_reason: 'tool_use',
+    content: [{ type: 'tool_use', id: 'toolu_cmd', name: 'Bash', input: { command: 'python3 edit.py', description: 'Rewrite the parser' } }],
+  } };
+  const result = (toolUseResult) => ({
+    type: 'user', uuid: 'r-1', timestamp: '2026-09-29T04:12:30.000Z', tool_use_result: toolUseResult,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_cmd', content: 'done' }] },
+  });
+
+  it('shows the same changes on the live call as a later history read, which keeps only the record', () => {
+    const full = { stdout: 'done', stderr: '', interrupted: false, isImage: false, noOutputExpected: false, bashEditDiff: record };
+    const live = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true, now: () => Date.parse('2026-09-29T04:12:31.000Z') });
+    live.startUserPrompt(USER_ID, { kind: 'text', text: 'Rewrite the parser' });
+    live.applyEntry(call);
+    live.applyEntry(result(full));
+    const history = projectHistory([prompt, call, result(slimFileEditResult(full))]);
+
+    const [liveCommand] = toolParts(live.records());
+    const [historyCommand] = toolParts(history);
+    expect(liveCommand).toMatchObject({ tool: 'bash', state: { status: 'completed', output: 'done' } });
+    expect(liveCommand.state.metadata.recordedFileChanges).toEqual({ withoutDiff: ['/work/project/src/Big.cs'], unnamed: 0 });
+    expect(historyCommand.state.metadata).toEqual(liveCommand.state.metadata);
   });
 });
 

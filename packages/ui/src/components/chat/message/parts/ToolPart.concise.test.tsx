@@ -75,6 +75,35 @@ const failed = toolPart('prt_failed', 'bash', {
   time: { start: 1, end: 2 },
 });
 
+// Commands whose file changes Claude Code recorded, as the native server
+// projects them: the diffs it kept, and the files it named without one.
+const recordedDiff = '--- /p/src/a.cs\n+++ /p/src/a.cs\n@@ -1,1 +1,1 @@\n-old line\n+new line\n';
+const commandWithDiff = toolPart('prt_command_diff', 'bash', {
+  status: 'completed',
+  input: { command: 'python3 edit.py', description: 'Rewrite the parser' },
+  output: 'done\n',
+  metadata: {
+    files: [{ filePath: '/p/src/a.cs', type: 'update', diff: recordedDiff, additions: 1, deletions: 1 }],
+    diff: recordedDiff,
+    recordedFileChanges: { withoutDiff: [], unnamed: 0 },
+  },
+  time: { start: 1, end: 2 },
+});
+const commandNamesOnly = toolPart('prt_command_names', 'bash', {
+  status: 'completed',
+  input: { command: 'cat > /p/src/Big.cs' },
+  output: '',
+  metadata: { recordedFileChanges: { withoutDiff: ['/p/src/Big.cs'], unnamed: 0 } },
+  time: { start: 1, end: 2 },
+});
+const commandManyNames = toolPart('prt_command_many', 'bash', {
+  status: 'completed',
+  input: { command: 'python3 gen.py' },
+  output: 'done\n',
+  metadata: { recordedFileChanges: { withoutDiff: [1, 2, 3, 4, 5, 6].map((index) => `/p/gen/${index}.txt`), unnamed: 0 } },
+  time: { start: 1, end: 2 },
+});
+
 test('the concise transcript shows a call as Name(argument) over one result line, details folded', async () => {
   const happyWindow = new Window({ url: 'http://localhost' });
   const globals = {
@@ -145,6 +174,23 @@ test('the concise transcript shows a call as Name(argument) over one result line
 
     await render(failed);
     expect(row()?.textContent).toBe('Bash(ls /missing)ls: /missing: No such file or directory');
+
+    // A command shows what it changed, the file named even when it is the only one.
+    await render(commandWithDiff);
+    expect(row()?.textContent).toBe('Bash(python3 edit.py)+1-1');
+    expect(container.textContent).toContain('/p/src/a.cs');
+    expect(container.textContent).toContain('1-old line');
+    expect(container.textContent).toContain('1+new line');
+
+    // A file without a diff shows by name, and the row gives no partial total.
+    await render(commandNamesOnly);
+    expect(row()?.textContent).toBe('Bash(cat > /p/src/Big.cs)');
+    expect(container.textContent).toContain('Changed without a diff to show: binary, mode only or too large/p/src/Big.cs');
+
+    await render(commandManyNames);
+    expect(container.textContent).toContain('/p/gen/5.txt');
+    expect(container.textContent).not.toContain('/p/gen/6.txt');
+    expect(container.textContent).toContain('+1 more file');
 
     // Turning the setting off brings back the standard row.
     await act(async () => { useUIStore.setState({ conciseTranscript: false }); });

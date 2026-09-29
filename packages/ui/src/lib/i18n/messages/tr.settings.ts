@@ -2116,7 +2116,7 @@ export const settingsDict = {
   'settings.openchamber.visual.field.conciseTranscriptInfo': 'Her araç çağrısı tek satırda gösterilir ve altında kısa bir sonuç yer alır. Ayrıntıları görmek için çağrıya tıklayın. Bir yanıtın altındaki model ve süre yalnızca imleç üzerine gelince görünür.',
   'settings.openchamber.visual.field.transcriptFileChangesOnly': 'Yalnızca dosya değişikliklerini göster',
   'settings.openchamber.visual.field.transcriptFileChangesOnlyAria': 'Claude Code tarzı konuşma görünümünde yalnızca dosya değişikliklerini göster',
-  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Komutlar, dosya okumaları ve aramalar konuşmada gösterilmez. Yanıtlar, akıl yürütme ve diff\'iyle birlikte her dosya değişikliği görünür kalır. Claude Code tarzı konuşma görünümünde geçerlidir.',
+  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Komutlar, dosya okumaları ve aramalar konuşmada gösterilmez. Yanıtlar, akıl yürütme ve diff\'iyle birlikte her dosya değişikliği görünür kalır; CLI kaydettiyse bir komutun değiştirdiği dosyalar da buna dahildir. Claude Code tarzı konuşma görünümünde geçerlidir.',
   'settings.openchamber.visual.field.showDotfilesAria': 'Dotfile\'ları göster',
   'settings.openchamber.visual.field.showDotfiles': 'Dotfile\'ları göster',
   'settings.openchamber.visual.field.persistDraftMessagesAria': 'Taslak mesajları kalıcı olarak sakla',

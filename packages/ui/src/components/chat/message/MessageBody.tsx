@@ -1318,7 +1318,7 @@ const AssistantMessageBody = React.memo(({
     // A transcript that shows only file changes leaves the other calls out.
     const fileChangesOnly = useUIStore((state) => state.conciseTranscript && state.transcriptFileChangesOnly);
     const shouldShowTool = React.useCallback((toolPart: ToolPartType): boolean => {
-        if (fileChangesOnly && !showsWithFileChangesOnly(toolPart.tool)) return false;
+        if (fileChangesOnly && !showsWithFileChangesOnly(toolPart)) return false;
         return isActiveTool(toolPart) || isToolFinalized(toolPart);
     }, [fileChangesOnly, isActiveTool, isToolFinalized]);
 

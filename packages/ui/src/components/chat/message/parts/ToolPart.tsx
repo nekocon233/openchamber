@@ -93,6 +93,7 @@ import {
     isWebSearchTool,
     isWriteTool,
     normalizeToolName,
+    recordedFileChanges,
     toolDescription, type ToolDescription,
     toolInputPath,
     toolFileDiffs,
@@ -107,6 +108,10 @@ import { getConciseToolName, getConciseToolResult } from './conciseToolRow';
 import { addedFilePatch, writeInputOf } from './conciseDiffRows';
 import { ConciseDiff } from './ConciseDiff';
 import type { ConciseDiffFile } from './ConciseDiff';
+import { ChangedFilesWithoutDiff } from './ChangedFilesWithoutDiff';
+
+// Names of files a command changed without a diff, shown in its collapsed row.
+const COLLAPSED_CHANGED_FILE_NAMES = 5;
 
 type ToolJsonViewMode = 'summary' | 'formatted' | 'raw';
 
@@ -1276,6 +1281,12 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         [currentDirectory, diffContent, metadata]
     );
     const hasVisualDiffEntry = diffEntries.some((entry) => entry.renderMode === 'diff');
+    // A command whose file changes its CLI recorded shows them under its output.
+    const recordedChanges = React.useMemo(() => recordedFileChanges(part.tool, metadata), [metadata, part.tool]);
+    const recordedPaths = React.useMemo(
+        () => recordedChanges?.withoutDiff.map((path) => getRelativePath(path, currentDirectory)) ?? [],
+        [currentDirectory, recordedChanges],
+    );
     // `execute` renders its script and its call list itself, below.
     const hideToolInputPreview = part.tool === 'openchamber'
         || part.tool === 'openchamber_web'
@@ -1351,37 +1362,75 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         </ToolScrollableSection>
     );
 
+    const getEntryAbsolutePath = (entry: DiffPatchEntry) => toAbsoluteFilePath(currentDirectory, entry.filePath ?? entry.title);
+    const openEntryFile = (entry: DiffPatchEntry, event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        const line = extractFirstChangedLineFromDiff(entry.patch);
+        const absolutePath = getEntryAbsolutePath(entry);
+        if (runtime?.editor && runtime.runtime.isVSCode) {
+            void runtime.editor.openFile(absolutePath, line);
+            return;
+        }
+        useUIStore.getState().openContextFileAtLine(currentDirectory, absolutePath, line ?? 1, 1);
+        // Dedicated mobile app: the pending file navigation is consumed by
+        // the FilesView pane — surface it (workspace drawer Files tab).
+        mobileActions?.openFiles();
+    };
+    const openEntryDiff = (entry: DiffPatchEntry, event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        const line = extractFirstChangedLineFromDiff(entry.patch);
+        const absolutePath = getEntryAbsolutePath(entry);
+        if (runtime?.editor && runtime.runtime.isVSCode) {
+            void runtime.editor.openDiff('', absolutePath, `${getRelativePath(absolutePath, currentDirectory)} (changes)`, { line, patch: entry.patch });
+            return;
+        }
+        const store = useUIStore.getState();
+        const relativePath = getRelativePath(absolutePath, currentDirectory);
+        if (store.isMobile) {
+            store.navigateToDiff(relativePath);
+            return;
+        }
+        store.openContextDiff(currentDirectory, relativePath);
+    };
+    const renderDiffEntry = (entry: DiffPatchEntry) => (
+        <div key={entry.id} className="w-full min-w-0">
+            <div className="mb-1 flex min-w-0 items-center gap-1 px-2 py-1">
+                <div className="min-w-0 flex-1 typography-meta font-medium text-muted-foreground">
+                    {renderPathLikeGitChanges(entry.title)}
+                </div>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={(event) => openEntryFile(entry, event)}
+                    aria-label={t('chat.toolPart.openFileAtFirstChange')}
+                    title={t('chat.toolPart.openFileAtFirstChange')}
+                >
+                    <Icon name="file-edit" className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={(event) => openEntryDiff(entry, event)}
+                    aria-label={t('chat.toolPart.openFileDiff')}
+                    title={t('chat.toolPart.openFileDiff')}
+                >
+                    <Icon name="git-pull-request" className="h-3.5 w-3.5" />
+                </Button>
+            </div>
+            {entry.renderMode === 'diff' ? (
+                <DiffPreview
+                    diff={entry.patch}
+                    diffViewMode={diffViewMode}
+                />
+            ) : (
+                <PlainDiffFallback diff={entry.patch} />
+            )}
+        </div>
+    );
+
     const renderResultContent = () => {
-        const getEntryAbsolutePath = (entry: DiffPatchEntry) => toAbsoluteFilePath(currentDirectory, entry.filePath ?? entry.title);
-        const openEntryFile = (entry: DiffPatchEntry, event: React.MouseEvent<HTMLButtonElement>) => {
-            event.stopPropagation();
-            const line = extractFirstChangedLineFromDiff(entry.patch);
-            const absolutePath = getEntryAbsolutePath(entry);
-            if (runtime?.editor && runtime.runtime.isVSCode) {
-                void runtime.editor.openFile(absolutePath, line);
-                return;
-            }
-            useUIStore.getState().openContextFileAtLine(currentDirectory, absolutePath, line ?? 1, 1);
-            // Dedicated mobile app: the pending file navigation is consumed by
-            // the FilesView pane — surface it (workspace drawer Files tab).
-            mobileActions?.openFiles();
-        };
-        const openEntryDiff = (entry: DiffPatchEntry, event: React.MouseEvent<HTMLButtonElement>) => {
-            event.stopPropagation();
-            const line = extractFirstChangedLineFromDiff(entry.patch);
-            const absolutePath = getEntryAbsolutePath(entry);
-            if (runtime?.editor && runtime.runtime.isVSCode) {
-                void runtime.editor.openDiff('', absolutePath, `${getRelativePath(absolutePath, currentDirectory)} (changes)`, { line, patch: entry.patch });
-                return;
-            }
-            const store = useUIStore.getState();
-            const relativePath = getRelativePath(absolutePath, currentDirectory);
-            if (store.isMobile) {
-                store.navigateToDiff(relativePath);
-                return;
-            }
-            store.openContextDiff(currentDirectory, relativePath);
-        };
         const renderDiagnosticsSection = () => {
             if (!diagnosticSection) {
                 return null;
@@ -1519,43 +1568,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         if (isFileChangeTool(part.tool) && (diffEntries.length > 0 || !!diagnosticSection)) {
             return renderScrollableBlock(
                 <div className="space-y-3">
-                    {diffEntries.map((entry) => (
-                        <div key={entry.id} className="w-full min-w-0">
-                            <div className="mb-1 flex min-w-0 items-center gap-1 px-2 py-1">
-                                <div className="min-w-0 flex-1 typography-meta font-medium text-muted-foreground">
-                                    {renderPathLikeGitChanges(entry.title)}
-                                </div>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-                                    onClick={(event) => openEntryFile(entry, event)}
-                                    aria-label={t('chat.toolPart.openFileAtFirstChange')}
-                                    title={t('chat.toolPart.openFileAtFirstChange')}
-                                >
-                                    <Icon name="file-edit" className="h-3.5 w-3.5" />
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-                                    onClick={(event) => openEntryDiff(entry, event)}
-                                    aria-label={t('chat.toolPart.openFileDiff')}
-                                    title={t('chat.toolPart.openFileDiff')}
-                                >
-                                    <Icon name="git-pull-request" className="h-3.5 w-3.5" />
-                                </Button>
-                            </div>
-                            {entry.renderMode === 'diff' ? (
-                                <DiffPreview
-                                    diff={entry.patch}
-                                    diffViewMode={diffViewMode}
-                                />
-                            ) : (
-                                <PlainDiffFallback diff={entry.patch} />
-                            )}
-                        </div>
-                    ))}
+                    {diffEntries.map(renderDiffEntry)}
                     {renderDiagnosticsSection()}
                 </div>,
                 { className: 'p-1' }
@@ -1712,6 +1725,31 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                             ) : null}
                         </div>
                     )}
+
+                    {recordedChanges ? (
+                        <div>
+                            {hasVisualDiffEntry ? (
+                                <div className="mb-1 flex items-center justify-end gap-2">
+                                    <DiffViewToggle
+                                        mode={diffViewMode}
+                                        onModeChange={setDiffViewMode}
+                                        className="h-5 w-5 p-0"
+                                    />
+                                </div>
+                            ) : null}
+                            {diffEntries.length > 0 ? renderScrollableBlock(
+                                <div className="space-y-3">
+                                    {diffEntries.map(renderDiffEntry)}
+                                </div>,
+                                { className: 'p-1' },
+                            ) : null}
+                            <ChangedFilesWithoutDiff
+                                changes={recordedChanges}
+                                paths={recordedPaths}
+                                className="mt-1 max-h-60 overflow-y-auto"
+                            />
+                        </div>
+                    ) : null}
 
                     {state.status === 'error' && 'error' in state && (
                         <div>
@@ -1963,24 +2001,33 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         }
         return metadataTaskSummaryEntries;
     }, [childSessionTaskSummaryEntries, metadataTaskSummaryEntries]);
+    // The file changes a command's CLI recorded; null for every other call.
+    const recordedChanges = React.useMemo(() => recordedFileChanges(part.tool, metadata), [metadata, part.tool]);
+    const recordedPaths = React.useMemo(
+        () => recordedChanges?.withoutDiff.map((path) => getRelativePath(path, currentDirectory)) ?? [],
+        [currentDirectory, recordedChanges],
+    );
     const diffStats = React.useMemo(() => {
+        // A total that leaves out files without a diff would read as complete.
+        if (recordedChanges) return recordedChanges.complete ? parseDiffStats(metadata) : null;
         return (isEditTool(normalizedPartTool) || isPatchTool(normalizedPartTool))
             ? parseDiffStats(metadata)
             : null;
-    }, [metadata, normalizedPartTool]);
+    }, [metadata, normalizedPartTool, recordedChanges]);
     const writeLineCount = React.useMemo(() => {
         return isWriteTool(normalizedPartTool) ? parseWriteLineCount(input) : null;
     }, [input, normalizedPartTool]);
     // The concise transcript shows under a file change what it did. A write
     // whose metadata carries no diff shows its content as added.
     const conciseDiffFiles = React.useMemo((): ConciseDiffFile[] => {
-        if (!conciseTranscript || status !== 'completed' || !isFileChangeTool(normalizedPartTool)) return [];
+        if (!conciseTranscript || status !== 'completed') return [];
+        if (!recordedChanges && !isFileChangeTool(normalizedPartTool)) return [];
         const entries = getDiffPatchEntries(metadata, getToolFallbackDiff(metadata), (path) => getRelativePath(path, currentDirectory))
             .filter((entry) => entry.renderMode === 'diff');
         if (entries.length > 0) return entries;
         const written = normalizedPartTool === 'write' ? writeInputOf(input) : null;
         return written ? [{ id: 'write', title: written.filePath ?? '', patch: addedFilePatch(written.content) }] : [];
-    }, [conciseTranscript, currentDirectory, input, metadata, normalizedPartTool, status]);
+    }, [conciseTranscript, currentDirectory, input, metadata, normalizedPartTool, recordedChanges, status]);
     const isMultiFileApplyPatch = isPatchTool(normalizedPartTool) && Array.isArray(metadata?.files) && (metadata?.files as []).length > 1;
     const normalizedPart = normalizedPartTool !== part.tool ? ({ ...part, tool: normalizedPartTool } as ToolPartType) : part;
     const descriptionPath = getToolDescriptionPath(normalizedPart, state, currentDirectory);
@@ -2226,6 +2273,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                         error: stateWithData.error,
                         output: stateOutput,
                         diffStats,
+                        recordsFileChanges: recordedChanges !== null,
                         writeLines: writeLineCount,
                         subagentToolCalls: taskSummaryEntries.length,
                     })}
@@ -2239,7 +2287,15 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                     }}
                     actions={quickOpenButton}
                 />
-                {!isExpanded && conciseDiffFiles.length > 0 ? <ConciseDiff files={conciseDiffFiles} /> : null}
+                {!isExpanded && conciseDiffFiles.length > 0 ? <ConciseDiff files={conciseDiffFiles} alwaysNameFiles={recordedChanges !== null} /> : null}
+                {!isExpanded && recordedChanges ? (
+                    <ChangedFilesWithoutDiff
+                        changes={recordedChanges}
+                        paths={recordedPaths}
+                        limit={COLLAPSED_CHANGED_FILE_NAMES}
+                        className="mt-0.5 mb-1 ml-5"
+                    />
+                ) : null}
                 {taskDetails}
                 {expandedDetails}
             </div>

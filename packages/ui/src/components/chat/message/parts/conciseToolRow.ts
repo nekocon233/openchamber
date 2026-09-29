@@ -73,6 +73,8 @@ export type ConciseToolCall = {
     error: string | undefined;
     output: string | undefined;
     diffStats: { added: number; removed: number } | null;
+    /** A command whose file changes its CLI recorded: like a file tool, it gets no output line count. */
+    recordsFileChanges: boolean;
     /** Lines a write puts in its file. */
     writeLines: number | null;
     /** Calls a subagent has made so far. */
@@ -93,7 +95,7 @@ export const getConciseToolResult = (call: ConciseToolCall): ConciseToolResult |
     }
     if (call.diffStats) return { kind: 'diff', ...call.diffStats };
     if (call.writeLines !== null) return { kind: 'added', lines: call.writeLines };
-    if (FILE_CHANGE_TOOLS.has(call.tool) || TOOLS_WITHOUT_RESULT_LINE.has(call.tool) || call.output === undefined) return null;
+    if (FILE_CHANGE_TOOLS.has(call.tool) || call.recordsFileChanges || TOOLS_WITHOUT_RESULT_LINE.has(call.tool) || call.output === undefined) return null;
     const count = countOutputLines(call.output);
     return count === 0 ? { kind: 'noOutput' } : { kind: 'lines', count };
 };

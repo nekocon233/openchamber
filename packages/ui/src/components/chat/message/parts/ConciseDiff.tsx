@@ -39,9 +39,10 @@ const DiffRow: React.FC<{ row: ConciseDiffRow }> = ({ row }) => {
 
 /**
  * What a file change did, under its call in the concise transcript: the
- * changed lines on green and red, folded after a screenful.
+ * changed lines on green and red, folded after a screenful. A file is named
+ * when there are several, or when the row above names none (a command).
  */
-export const ConciseDiff: React.FC<{ files: ConciseDiffFile[] }> = ({ files }) => {
+export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?: boolean }> = ({ files, alwaysNameFiles = false }) => {
     const { t } = useI18n();
     const [unfolded, setUnfolded] = React.useState(false);
     const parsed = React.useMemo(
@@ -58,7 +59,7 @@ export const ConciseDiff: React.FC<{ files: ConciseDiffFile[] }> = ({ files }) =
         return { ...file, rows };
     }).filter((file) => file.rows.length > 0);
     const hiddenRows = totalRows - shown.reduce((sum, file) => sum + file.rows.length, 0);
-    const namesFiles = parsed.length > 1;
+    const namesFiles = alwaysNameFiles || parsed.length > 1;
 
     return (
         <div

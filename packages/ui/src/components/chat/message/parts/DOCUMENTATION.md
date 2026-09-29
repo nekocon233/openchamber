@@ -122,7 +122,11 @@ subcommands. Unknown tools and administrative tools stay in the disclosure
 without a guessed summary category.
 
 File statistics come exclusively from successful edit/write/patch tool
-results, not user-message summary diffs or the current workspace Git diff.
+results and from the file changes a command's CLI recorded
+(`recordedFileChanges`), not user-message summary diffs or the current
+workspace Git diff. A file a command's record names without a diff counts
+as changed without numbers; a record another command may share (`shared`)
+keeps its files and drops their numbers.
 Unique normalized paths determine file count; renames preserve identities.
 Line totals sum performed edits, including lines later removed by another
 call. Per-file patches/counts take precedence over a whole-call patch; the two
@@ -147,13 +151,14 @@ The `conciseTranscript` UI setting (Settings > Chat > Display, on by default, al
 
 - `ToolPart` takes an early return into `ConciseToolHeader`; the standard header block below it stays unchanged so upstream edits merge cleanly. Both styles share the same `taskDetails` and `expandedDetails`, so folding open a row shows exactly the standard details.
 - The name is the extension rule's title when one matches, else the CLI name from `getConciseToolName` (`bash` -> `Bash`, `apply_patch` -> `Patch`); any other tool keeps the name it was called by. The argument is the standard row's justification or description.
-- `getConciseToolResult` owns the result line: a failure's first error line; a running command's timer; `+added -removed` for edits and `+lines` for writes; a subagent's tool-call count; otherwise the finished output's line count or "no output". File tools without diff numbers, and tools whose body already says what happened (question, todos, plan mode, skill), get no line. Output lines are counted only once a call finishes, never while it streams.
+- `getConciseToolResult` owns the result line: a failure's first error line; a running command's timer; `+added -removed` for edits and `+lines` for writes; a subagent's tool-call count; otherwise the finished output's line count or "no output". File tools without diff numbers, and tools whose body already says what happened (question, todos, plan mode, skill), get no line. A command whose CLI recorded its file changes reads like a file tool: `+added -removed` when every changed file has a diff, no line otherwise. Output lines are counted only once a call finishes, never while it streams.
 - A `task` row folds its subagent summary away until expanded, like any other row's details.
 - `StaticToolRow` (read, skill) renders the same row without a result line or expansion; its files and skills stay links.
 - The dot is green on success, red on failure, and pulses (opacity only) while running.
 - `MessageBody` hides the turn footer's facts (model, effort, agent, duration, time) until the message is hovered or focused. Touch has no hover, so there they stay hidden but keep their place, and the actions button does not move.
 - A finished file change (`isFileChangeTool`: edit, multiedit, write, apply_patch) shows what it did under its row in `ConciseDiff`: numbered lines, added on `--tools-edit-added-bg` and removed on `--tools-edit-removed-bg`, parsed by `parseConciseDiffRows` from the same per-file patches the expanded view uses (`getDiffPatchEntries`). A write whose metadata carries no diff shows its content as added lines (`addedFilePatch`). Past 16 rows the rest folds behind a "show more" button. Plain text only, no highlighting, so every edit in view stays cheap; opening the row shows the highlighted diff instead.
-- The `transcriptFileChangesOnly` setting (on by default, only with the concise transcript) keeps the conversation to replies, reasoning and file changes: `showsWithFileChangesOnly` (`toolRenderUtils.ts`) keeps file changes, questions, subagent tasks and plan-mode calls, and `MessageBody.shouldShowTool` and `ProgressiveGroup`'s rows leave every other call out. The floating status chip still says what the agent is running.
+- A command whose file changes its CLI recorded (native Claude Code sessions; `recordedFileChanges` in `@/lib/opencode/tools` reads the record, and null means no record, not no change) shows them the same way, each file named because the row names none. `ChangedFilesWithoutDiff` follows with the changed files the CLI kept no diff for: too large, binary, mode only, past its five-file limit or unreadable. The row lists five of them and counts the rest; the opened row keeps the command's output and adds the highlighted diffs and every name under it.
+- The `transcriptFileChangesOnly` setting (on by default, only with the concise transcript) keeps the conversation to replies, reasoning and file changes: `showsWithFileChangesOnly` (`toolRenderUtils.ts`) keeps file changes, questions, subagent tasks, plan-mode calls and commands whose CLI recorded file changes, and `MessageBody.shouldShowTool` and `ProgressiveGroup`'s rows leave every other call out. The floating status chip still says what the agent is running.
 
 ### Compaction
 
@@ -262,7 +267,7 @@ Why: only navigation tools use the compact static path; all other tools need obs
   `normalizeUserDisplayParts.ts`. Legacy pre-metadata messages still render
   via text sniffing (`<terminal_context>` blocks, `GitHub issue context (JSON)`
   and `Linear issue context (JSON)` prefixes).
-- Tools: `ToolPart.tsx`, `ToolPartDiffPreview.tsx`, `PlainDiffFallback.tsx`, `ProgressiveGroup.tsx`, `toolPresentation.tsx`, `toolRenderUtils.ts`, `ToolRevealOnMount.tsx`, `GuestToolTable.tsx`, `ConciseToolHeader.tsx`, `conciseToolRow.ts`
+- Tools: `ToolPart.tsx`, `ToolPartDiffPreview.tsx`, `PlainDiffFallback.tsx`, `ProgressiveGroup.tsx`, `toolPresentation.tsx`, `toolRenderUtils.ts`, `ToolRevealOnMount.tsx`, `GuestToolTable.tsx`, `ConciseToolHeader.tsx`, `conciseToolRow.ts`, `ConciseDiff.tsx`, `ChangedFilesWithoutDiff.tsx`
 - Reasoning/justification: `ReasoningPart.tsx`, `JustificationBlock.tsx`
 - Status/placeholders: `WorkingPlaceholder.tsx`, `SessionActiveSpinner.tsx`, `MigratingPart.tsx`, `BusyDots.tsx`
 - Utility renderers: `VirtualizedCodeBlock.tsx`, `MinDurationShineText.tsx`

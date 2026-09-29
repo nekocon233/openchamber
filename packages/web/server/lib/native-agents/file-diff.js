@@ -51,22 +51,40 @@ export const fileDiffMetadata = (files) => ({
   diff: files.map((file) => file.diff).join(''),
 });
 
+/** @typedef {{ oldStart: number, oldLines: number, newStart: number, newLines: number, lines: string[] }} ClaudeHunk */
+
+/** @param {ClaudeHunk[]} hunks */
+const hunkBody = (hunks) => hunks
+  .map((hunk) => `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n${hunk.lines.join('\n')}\n`)
+  .join('');
+
 /**
  * Claude Edit/Write/MultiEdit results carry `structuredPatch` hunks; a created
  * file may carry only its content.
- * @param {{ filePath: string, type?: string, content?: string, structuredPatch?: Array<{ oldStart: number, oldLines: number, newStart: number, newLines: number, lines: string[] }> }} result
+ * @param {{ filePath: string, type?: string, content?: string, structuredPatch?: ClaudeHunk[] }} result
  */
 export const claudeFileEntry = (result) => {
   const type = result.type === 'create' ? 'add' : 'update';
   if (result.structuredPatch && result.structuredPatch.length > 0) {
-    const body = result.structuredPatch
-      .map((hunk) => `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n${hunk.lines.join('\n')}\n`)
-      .join('');
-    return fileEntry({ filePath: result.filePath, type, body });
+    return fileEntry({ filePath: result.filePath, type, body: hunkBody(result.structuredPatch) });
   }
   if (type === 'add' && result.content !== undefined) {
     return fileEntry({ filePath: result.filePath, type, body: addedFileHunk(result.content) });
   }
+  return null;
+};
+
+/**
+ * A file Claude Code recorded a Bash command changing (`bashEditDiff.files`).
+ * An empty file it created or deleted has no hunks; any other file without
+ * hunks has no diff to show, only its name (null).
+ * @param {{ filePath: string, hunks: ClaudeHunk[], created?: true, deleted?: true }} file
+ */
+export const claudeBashFileEntry = ({ filePath, hunks, created, deleted }) => {
+  const type = created ? 'add' : deleted ? 'delete' : 'update';
+  if (hunks.length > 0) return fileEntry({ filePath, type, body: hunkBody(hunks) });
+  if (type === 'add') return fileEntry({ filePath, type, body: addedFileHunk('') });
+  if (type === 'delete') return fileEntry({ filePath, type, body: deletedFileHunk('') });
   return null;
 };
 

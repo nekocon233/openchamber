@@ -158,7 +158,7 @@ describe('Claude session store', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('reads the raw transcript only for conversations that edit files', async () => {
+  it('reads the raw transcript only for conversations that edit files or run commands', async () => {
     const { store, calls } = await createHarness();
     await store.loadHistory(`ncl_${TERMINAL_UUID}`, DIRECTORY);
     await store.loadHistory(`ncl_${OPENCHAMBER_UUID}_t_${TASK_TOOL_USE}`, DIRECTORY);
@@ -191,6 +191,54 @@ describe('Claude session store', () => {
     expect(await store.sessionExists(`ncl_${TERMINAL_UUID}`, DIRECTORY)).toBe(true);
     expect(await store.sessionExists('ncl_22222222-2222-4222-8222-222222222222', DIRECTORY)).toBe(false);
     expect(await store.loadHistory(`ncl_${OPENCHAMBER_UUID}_t_toolu_unknown`, DIRECTORY)).toBeNull();
+  });
+});
+
+describe('Claude file changes recorded for commands', () => {
+  const SESSION_UUID = '99999999-9999-4999-8999-999999999999';
+  const at = (second) => new Date(Date.UTC(2026, 8, 29, 4, 12, second)).toISOString();
+  const record = {
+    files: [{ filePath: '/work/project/src/a.cs', hunks: [{ oldStart: 10, oldLines: 1, newStart: 10, newLines: 1, lines: ['-old', '+new'] }] }],
+    moreFiles: 1,
+    changedFiles: ['/work/project/src/a.cs', '/work/project/src/Big.cs'],
+  };
+  // A turn that changed files only through a command, as a history read
+  // returns it: the tool result entry has lost its structured result.
+  const chain = [
+    { type: 'user', uuid: 'a22f0a7a-a88c-4093-a5e3-6653ff44f6d3', timestamp: at(0), message: { role: 'user', content: 'Rewrite the parser' } },
+    { type: 'assistant', uuid: 'call-1', timestamp: at(1), message: {
+      id: 'msg_1', model: 'claude-opus-5-5', stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'toolu_cmd', name: 'Bash', input: { command: "python3 - <<'EOF'\nprint('edit')\nEOF", description: 'Rewrite the parser' } }],
+    } },
+    { type: 'user', uuid: 'result-1', timestamp: at(2), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_cmd', content: 'done' }] } },
+  ];
+
+  const createCommandHarness = () => {
+    const imports = [];
+    const sdk = {
+      getSessionInfo: async () => ({ sessionId: SESSION_UUID, summary: 'Parser', lastModified: 1000, fileSize: 3000 }),
+      listSubagents: async () => [],
+      getSessionMessages: async () => chain,
+      importSessionToStore: async (sessionId, target, options) => {
+        imports.push(options);
+        await target.append({ projectKey: 'work-project', sessionId }, [
+          { type: 'user', uuid: 'result-1', toolUseResult: { stdout: 'done', stderr: '', interrupted: false, isImage: false, bashEditDiff: record } },
+        ]);
+      },
+    };
+    const registry = { sendRecords: async () => new Map(), getSession: async () => null, unconfirmedSessions: async () => [] };
+    return { store: createClaudeSessionStore({ loadSdk: async () => sdk, registry }), imports };
+  };
+
+  it('reads the raw transcript once for a conversation that only ran commands and shows what they changed', async () => {
+    const { store, imports } = createCommandHarness();
+    const history = await store.loadHistory(`ncl_${SESSION_UUID}`, DIRECTORY);
+    const command = history.records.flatMap((entry) => entry.parts).find((part) => part.type === 'tool' && part.tool === 'bash');
+
+    expect(imports).toEqual([{ dir: DIRECTORY, includeSubagents: false }]);
+    expect(command.state).toMatchObject({ status: 'completed', output: 'done' });
+    expect(command.state.metadata.files).toEqual([expect.objectContaining({ filePath: '/work/project/src/a.cs', type: 'update', additions: 1, deletions: 1 })]);
+    expect(command.state.metadata.recordedFileChanges).toEqual({ withoutDiff: ['/work/project/src/Big.cs'], unnamed: 0 });
   });
 });
 
@@ -387,6 +435,16 @@ describe('Claude subagent tool outcomes', () => {
     const { state, store } = fixture({ entries: [prompt, answer, result('result-a', 'search-a', 'Done'), result('result-b', 'search-b', 'Real error', true)] });
     const history = await store.loadHistory(childId, DIRECTORY);
     expect(history.records[1].parts[1].state).toMatchObject({ status: 'error', error: 'Real error' });
+    expect(state.imports).toBe(0);
+  });
+
+  it('does not import raw transcripts for a subagent that only ran commands', async () => {
+    const command = { ...answer, uuid: 'child-command', message: { ...answer.message, content: [
+      { type: 'tool_use', id: 'command-a', name: 'Bash', input: { command: 'ls' } },
+    ] } };
+    const { state, store } = fixture({ entries: [prompt, command, result('result-command', 'command-a', 'notes.txt')] });
+    const history = await store.loadHistory(childId, DIRECTORY);
+    expect(history.records[1].parts[0].state).toMatchObject({ status: 'completed', output: 'notes.txt' });
     expect(state.imports).toBe(0);
   });
 });

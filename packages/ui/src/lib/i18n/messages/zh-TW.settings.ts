@@ -2080,7 +2080,7 @@ export const settingsDict = {
   'settings.openchamber.visual.field.conciseTranscriptInfo': '每個工具呼叫只佔一行，下方附一行簡短結果，點擊呼叫可查看詳情。回覆下方的模型和耗時只在滑鼠懸停時顯示。',
   'settings.openchamber.visual.field.transcriptFileChangesOnly': '只顯示檔案變更',
   'settings.openchamber.visual.field.transcriptFileChangesOnlyAria': '在 Claude Code 風格的對話紀錄中只顯示檔案變更',
-  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': '指令、讀取檔案和搜尋不會出現在對話中；回覆、思考過程以及每項檔案變更和它的 diff 都會保留。適用於 Claude Code 風格的對話紀錄。',
+  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': '指令、讀取檔案和搜尋不會出現在對話中；回覆、思考過程以及每項檔案變更和它的 diff 都會保留，指令變更的檔案只要 CLI 有記錄也會顯示。適用於 Claude Code 風格的對話紀錄。',
   'settings.openchamber.visual.field.showDotfilesAria': '顯示點檔案',
   'settings.openchamber.visual.field.showDotfiles': '顯示點檔案',
   'settings.openchamber.visual.field.persistDraftMessagesAria': '保留草稿訊息',

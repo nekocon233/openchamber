@@ -13,6 +13,7 @@ import {
   isSubagentTool,
   isWebTool,
   normalizeToolName,
+  recordedFileChanges,
   subagentSessionId,
   toolDescription,
   toolFileDiffs,
@@ -221,5 +222,34 @@ describe("execute call details", () => {
   test("reads the script off the input", () => {
     expect(executeScript({ code: "return 1" })).toBe("return 1")
     expect(executeScript({})).toBe(undefined)
+  })
+})
+
+describe("file changes a command's CLI recorded", () => {
+  const diff = { filePath: "/work/project/a.cs", type: "update", diff: "--- /work/project/a.cs\n+++ /work/project/a.cs\n@@ -1 +1 @@\n-a\n+b\n", additions: 1, deletions: 1 }
+
+  test("reads the diffs and the files named without one on a shell call", () => {
+    expect(recordedFileChanges("bash", { files: [diff], diff: diff.diff, recordedFileChanges: { withoutDiff: [], unnamed: 0 } }))
+      .toEqual({ hasDiffs: true, withoutDiff: [], unnamed: 0, unavailable: false, shared: false, complete: true })
+    expect(recordedFileChanges("bash", { recordedFileChanges: { withoutDiff: ["/work/project/Big.cs"], unnamed: 0 } }))
+      .toEqual({ hasDiffs: false, withoutDiff: ["/work/project/Big.cs"], unnamed: 0, unavailable: false, shared: false, complete: false })
+  })
+
+  test("is incomplete while any change has no diff", () => {
+    expect(recordedFileChanges("shell", { files: [diff], recordedFileChanges: { withoutDiff: [], unnamed: 3 } })?.complete).toBe(false)
+    expect(recordedFileChanges("bash", { files: [diff], recordedFileChanges: { withoutDiff: [], unnamed: 0, unavailable: true } }))
+      .toMatchObject({ unavailable: true, complete: false })
+    expect(recordedFileChanges("bash", { files: [diff], recordedFileChanges: { withoutDiff: [], unnamed: 0, shared: true } }))
+      .toMatchObject({ shared: true, complete: true })
+  })
+
+  test("answers no record for other tools, OpenCode and Codex commands, and malformed or empty records", () => {
+    const record = { files: [diff], recordedFileChanges: { withoutDiff: [], unnamed: 0 } }
+    expect(recordedFileChanges("edit", record)).toBe(null)
+    expect(recordedFileChanges("bash", { output: "done", exit: 0 })).toBe(null)
+    expect(recordedFileChanges("bash", undefined)).toBe(null)
+    expect(recordedFileChanges("bash", { recordedFileChanges: { withoutDiff: "a.cs", unnamed: 0 } })).toBe(null)
+    expect(recordedFileChanges("bash", { recordedFileChanges: { withoutDiff: [], unnamed: -1 } })).toBe(null)
+    expect(recordedFileChanges("bash", { recordedFileChanges: { withoutDiff: [], unnamed: 0 } })).toBe(null)
   })
 })

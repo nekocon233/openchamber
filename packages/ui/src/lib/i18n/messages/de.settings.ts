@@ -2136,7 +2136,7 @@ export const settingsDict = {
   'settings.openchamber.visual.field.conciseTranscriptInfo': 'Jeder Tool-Aufruf belegt eine Zeile, darunter steht ein kurzes Ergebnis. Ein Klick auf den Aufruf zeigt die Details. Modell und Dauer unter einer Antwort erscheinen nur, wenn Sie mit der Maus darüberfahren.',
   'settings.openchamber.visual.field.transcriptFileChangesOnly': 'Nur Dateiänderungen anzeigen',
   'settings.openchamber.visual.field.transcriptFileChangesOnlyAria': 'Im Verlauf im Claude-Code-Stil nur Dateiänderungen anzeigen',
-  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Befehle, gelesene Dateien und Suchen erscheinen nicht im Gespräch. Antworten, Denkschritte und jede Dateiänderung mit ihrem Diff bleiben. Gilt für den Verlauf im Claude-Code-Stil.',
+  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Befehle, gelesene Dateien und Suchen erscheinen nicht im Gespräch. Antworten, Denkschritte und jede Dateiänderung mit ihrem Diff bleiben, auch die Dateien, die ein Befehl geändert hat, wenn seine CLI das aufgezeichnet hat. Gilt für den Verlauf im Claude-Code-Stil.',
   'settings.openchamber.visual.field.showDotfilesAria': 'Dotfiles anzeigen',
   'settings.openchamber.visual.field.showDotfiles': 'Dotfiles anzeigen',
   'settings.openchamber.visual.field.persistDraftMessagesAria': 'Entwurfsnachrichten speichern',

@@ -379,7 +379,7 @@ const aggregateRows = (parts: TurnActivityPart[], fileChangesOnly: boolean): Agg
         }
 
         // A transcript that shows only file changes leaves the other calls out.
-        if (fileChangesOnly && !showsWithFileChangesOnly(toolName)) {
+        if (fileChangesOnly && !showsWithFileChangesOnly(toolPart)) {
             i++;
             continue;
         }

@@ -5,7 +5,7 @@
 
 import { z } from 'zod';
 
-import { claudeFileEntry, fileDiffMetadata } from '../file-diff.js';
+import { claudeBashFileEntry, claudeFileEntry, fileDiffMetadata } from '../file-diff.js';
 
 const loose = (fields) => z.object(fields).passthrough();
 
@@ -189,29 +189,84 @@ const toolResultContent = z.union([
     .join('\n')),
 ]).catch('');
 
+const hunk = z.object({
+  oldStart: z.number(),
+  oldLines: z.number(),
+  newStart: z.number(),
+  newLines: z.number(),
+  lines: z.array(z.string()),
+});
+
 const fileResult = z.object({
   filePath: z.string(),
   type: z.string().optional(),
   content: z.string().optional(),
-  structuredPatch: z.array(z.object({
-    oldStart: z.number(),
-    oldLines: z.number(),
-    newStart: z.number(),
-    newLines: z.number(),
-    lines: z.array(z.string()),
-  })).optional(),
+  structuredPatch: z.array(hunk).optional(),
 });
+
+// What Claude Code recorded a Bash command changing in the work tree
+// (`bashEditDiff`, CLI 2.1.283). The CLI marks the field internal; its
+// `bashEditDiffEnabled` setting documents it for PostToolUse hooks. It keeps
+// hunks for at most 5 files, none for a file whose change passes 400 lines or
+// 64,000 characters, and names at most 200 changed files in `changedFiles`,
+// the files with hunks included. It records nothing for read-only, failed,
+// interrupted or background commands and skips plain git commands, so a
+// missing record means no record, never no change.
+const bashEditDiff = z.object({
+  files: z.array(z.object({
+    filePath: z.string().min(1),
+    hunks: z.array(hunk),
+    created: z.literal(true).optional(),
+    deleted: z.literal(true).optional(),
+  })),
+  moreFiles: z.number().int().nonnegative(),
+  changedFiles: z.array(z.string().min(1)).optional(),
+  unavailable: z.literal(true).optional(),
+  skipped: z.literal(true).optional(),
+  // Another command changed the same repository at the same time.
+  shared: z.literal(true).optional(),
+});
+
+const bashResult = z.object({ bashEditDiff });
+
+const recordsAChange = (record) => record.skipped !== true
+  && (record.files.length > 0 || record.moreFiles > 0 || (record.changedFiles?.length ?? 0) > 0);
+
+/**
+ * Metadata for a Bash call Claude Code recorded changing files: the diffs it
+ * kept, in the shape the edit renderers read, and the changed files it named
+ * without one or only counted. Null when the command recorded no change.
+ * @param {z.infer<typeof bashEditDiff>} record
+ */
+const bashFileChanges = (record) => {
+  if (!recordsAChange(record)) return null;
+  const files = record.files.map(claudeBashFileEntry).filter((entry) => entry !== null);
+  const shown = new Set(files.map((file) => file.filePath));
+  const named = new Set([...record.files.map((file) => file.filePath), ...(record.changedFiles ?? [])]);
+  const recordedFileChanges = {
+    withoutDiff: [...named].filter((filePath) => !shown.has(filePath)),
+    unnamed: Math.max(0, record.files.length + record.moreFiles - named.size),
+  };
+  if (record.unavailable) recordedFileChanges.unavailable = true;
+  if (record.shared) recordedFileChanges.shared = true;
+  const metadata = files.length > 0 ? fileDiffMetadata(files) : {};
+  metadata.recordedFileChanges = recordedFileChanges;
+  return metadata;
+};
 
 const ANSWERED_PREFIX = /^Your questions have been answered:/;
 
 /**
- * The part of a Claude Edit, MultiEdit or Write result the diff needs, or
- * null for any other result. The raw result also carries whole file contents
- * (`originalFile`, and `content` after an overwrite), which history does not
- * keep.
+ * The part of a Claude tool result the diff needs, or null for any other
+ * result: the diff fields of an Edit, MultiEdit or Write result, or the file
+ * changes Claude Code recorded on a Bash result. The raw results also carry
+ * whole file contents (`originalFile`, and `content` after an overwrite) and a
+ * command's output, which history does not keep.
  * @param {unknown} toolUseResult
  */
 export const slimFileEditResult = (toolUseResult) => {
+  const command = bashResult.safeParse(toolUseResult);
+  if (command.success) return recordsAChange(command.data.bashEditDiff) ? { bashEditDiff: command.data.bashEditDiff } : null;
   const parsed = fileResult.safeParse(toolUseResult);
   if (!parsed.success) return null;
   const { filePath, type, structuredPatch, content } = parsed.data;
@@ -236,6 +291,11 @@ export const mapClaudeToolResult = (tool, content, toolUseResult) => {
     const parsed = fileResult.safeParse(toolUseResult);
     const entry = parsed.success ? claudeFileEntry(parsed.data) : null;
     if (entry) metadata = fileDiffMetadata([entry]);
+  }
+  if (tool === 'bash') {
+    const parsed = bashResult.safeParse(toolUseResult);
+    const changes = parsed.success ? bashFileChanges(parsed.data.bashEditDiff) : null;
+    if (changes) metadata = changes;
   }
   if (tool === 'question') {
     // The question renderer parses OpenCode's wording of the same answer.

@@ -8,6 +8,7 @@ const call = (overrides: Partial<ConciseToolCall>): ConciseToolCall => ({
     error: undefined,
     output: undefined,
     diffStats: null,
+    recordsFileChanges: false,
     writeLines: null,
     subagentToolCalls: 0,
     ...overrides,
@@ -40,6 +41,12 @@ describe('concise tool rows', () => {
         expect(getConciseToolResult(call({ tool: 'edit', output: 'The file has been updated.' }))).toBeNull();
         expect(getConciseToolResult(call({ tool: 'todowrite', output: '[{"content":"a"}]' }))).toBeNull();
         expect(getConciseToolResult(call({ tool: 'mystery' }))).toBeNull();
+    });
+
+    test('show what a command changed in files instead of its output, when its CLI recorded it', () => {
+        expect(getConciseToolResult(call({ output: 'done', recordsFileChanges: true, diffStats: { added: 20, removed: 3 } }))).toEqual({ kind: 'diff', added: 20, removed: 3 });
+        // Some files without a diff: no total rather than a partial one.
+        expect(getConciseToolResult(call({ output: 'done', recordsFileChanges: true }))).toBeNull();
     });
 
     test('show the first line of a failure', () => {

@@ -161,6 +161,37 @@ describe('live activity report', () => {
         expect(result.changedFiles).toEqual([{ path: '/project/new.ts', additions: 4, deletions: 2 }]);
     });
 
+    test('counts the files a command changed when its CLI recorded them, and the command as a command', () => {
+        const aDiff = '--- /project/a.cs\n+++ /project/a.cs\n@@ -1,1 +1,2 @@\n-before\n+after\n+added\n';
+        const complete = summarizeLiveActivity([assistant('a', [tool('rewrite', 'bash', { metadata: {
+            files: [{ filePath: '/project/a.cs', type: 'update', diff: aDiff, additions: 2, deletions: 1 }],
+            diff: aDiff,
+            recordedFileChanges: { withoutDiff: [], unnamed: 0 },
+        } })])]);
+        expect(complete).toMatchObject({ commands: 1, files: 1, additions: 2, deletions: 1, hasCompleteDiff: true });
+        expect(complete.changedFiles).toEqual([{ path: '/project/a.cs', additions: 2, deletions: 1 }]);
+
+        // A file named without a diff counts, but leaves the totals incomplete.
+        const named = summarizeLiveActivity([assistant('a', [tool('rewrite', 'bash', { metadata: {
+            files: [{ filePath: '/project/a.cs', type: 'update', diff: aDiff, additions: 2, deletions: 1 }],
+            recordedFileChanges: { withoutDiff: ['/project/Big.cs'], unnamed: 0 },
+        } })])]);
+        expect(named).toMatchObject({ commands: 1, files: 2, hasCompleteDiff: false });
+        expect(named.changedFiles).toEqual([{ path: '/project/a.cs', additions: 2, deletions: 1 }, { path: '/project/Big.cs' }]);
+
+        // Changes another command may share carry no numbers.
+        const shared = summarizeLiveActivity([assistant('a', [tool('rewrite', 'bash', { metadata: {
+            files: [{ filePath: '/project/a.cs', type: 'update', diff: aDiff, additions: 2, deletions: 1 }],
+            recordedFileChanges: { withoutDiff: [], unnamed: 0, shared: true },
+        } })])]);
+        expect(shared).toMatchObject({ files: 1, hasCompleteDiff: false });
+        expect(shared.changedFiles).toEqual([{ path: '/project/a.cs' }]);
+
+        // Without a record a command changed nothing the report can claim.
+        expect(summarizeLiveActivity([assistant('a', [tool('ls', 'bash', { metadata: { output: 'a.cs', exit: 0 } })])]))
+            .toMatchObject({ commands: 1, files: 0, hasCompleteDiff: true });
+    });
+
     test('uses the whole-call diff when per-file stats are missing, without adding partial numbers', () => {
         const result = summarizeLiveActivity([assistant('a', [tool('patch', 'patch', { metadata: {
             diff: `${diff}\n@@ -1,1 +1,0 @@\n-deleted`,

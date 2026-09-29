@@ -2190,7 +2190,7 @@ export const settingsDict = {
   "settings.openchamber.visual.field.conciseTranscriptInfo": "Кожен виклик інструмента займає один рядок, а під ним видно короткий результат. Натисніть на виклик, щоб побачити подробиці. Модель і тривалість під відповіддю з’являються лише під час наведення курсора.",
   "settings.openchamber.visual.field.transcriptFileChangesOnly": "Показувати лише зміни у файлах",
   "settings.openchamber.visual.field.transcriptFileChangesOnlyAria": "Показувати лише зміни у файлах у розмові в стилі Claude Code",
-  "settings.openchamber.visual.field.transcriptFileChangesOnlyInfo": "Команди, читання файлів і пошук не показуються в розмові. Залишаються відповіді, міркування та кожна зміна файлу з її diff. Діє для розмови в стилі Claude Code.",
+  "settings.openchamber.visual.field.transcriptFileChangesOnlyInfo": "Команди, читання файлів і пошук не показуються в розмові. Залишаються відповіді, міркування та кожна зміна файлу з її diff, зокрема файли, які змінила команда, якщо її CLI це записав. Діє для розмови в стилі Claude Code.",
   "settings.openchamber.visual.field.showDotfilesAria": "Показати dotfiles",
   "settings.openchamber.visual.field.showDotfiles": "Показати dotfiles",
   "settings.openchamber.visual.field.persistDraftMessagesAria": "Зберігати чернетки повідомлень",

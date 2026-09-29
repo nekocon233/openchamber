@@ -49,6 +49,8 @@ const chainEntrySchema = z.object({ type: z.string(), uuid: z.string() }).passth
 const forkResultSchema = z.object({ sessionId: z.string() }).passthrough();
 
 const FILE_EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write']);
+// A Bash result carries the file changes Claude Code recorded for the command.
+const DIFF_RESULT_TOOLS = new Set([...FILE_EDIT_TOOLS, 'Bash']);
 
 const assistantToolUsesSchema = z.object({
   type: z.literal('assistant'),
@@ -60,7 +62,7 @@ const assistantToolUsesSchema = z.object({
 const rawToolResultEntrySchema = z.object({
   uuid: z.string(),
   toolUseResult: z.unknown(),
-}).passthrough();
+});
 
 // A raw transcript entry, as far as finding compaction boundaries needs it.
 const rawChainEntrySchema = z.object({
@@ -84,12 +86,14 @@ const compactionBoundaryUuid = (entries) => {
   return compactSummarySchema.safeParse(entries[1]).success ? first.data.uuid : null;
 };
 
-const usesFileEditTool = (entry) => {
+const usesToolIn = (tools) => (entry) => {
   const parsed = assistantToolUsesSchema.safeParse(entry);
   return parsed.success && parsed.data.message.content.some((block) => (
-    block.type === 'tool_use' && block.name !== undefined && FILE_EDIT_TOOLS.has(block.name)
+    block.type === 'tool_use' && block.name !== undefined && tools.has(block.name)
   ));
 };
+const usesFileEditTool = usesToolIn(FILE_EDIT_TOOLS);
+const usesDiffResultTool = usesToolIn(DIFF_RESULT_TOOLS);
 
 const toolMessageSchema = z.object({
   type: z.enum(['user', 'assistant']),
@@ -216,11 +220,11 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
 
   // History reads drop the structured tool results the diff renderers need.
   // The raw transcript keeps them, and importing it into a throwaway store is
-  // the SDK's way to read it. Only transcripts that edit files pay for the
-  // second read, and a failure costs the diffs, never the history.
+  // the SDK's way to read it. Only transcripts that edit files or run commands
+  // pay for the second read, and a failure costs the diffs, never the history.
   const fileEditResults = async (sdk, entries, sessionUuid, directory, includeSubagents) => {
     const results = new Map();
-    if (!entries.some(usesFileEditTool)) return results;
+    if (!entries.some(usesDiffResultTool)) return results;
     try {
       await sdk.importSessionToStore(sessionUuid, {
         append: async (_key, rawEntries) => {
@@ -235,10 +239,14 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
   };
 
   // The diff fields of the raw entries that carry an edit result, by entry uuid.
+  // Most entries carry no structured result at all; they are skipped before
+  // the result parsers, whose failures are the expensive part of this pass
+  // (a 66 MB transcript has 19,151 entries, 2,698 of them with a result).
   const addEditResults = (results, rawEntries) => {
     for (const raw of rawEntries) {
       const entry = rawToolResultEntrySchema.safeParse(raw);
-      const slim = entry.success ? slimFileEditResult(entry.data.toolUseResult) : null;
+      if (!entry.success || entry.data.toolUseResult === undefined) continue;
+      const slim = slimFileEditResult(entry.data.toolUseResult);
       if (slim) results.set(entry.data.uuid, slim);
     }
     return results;
@@ -288,6 +296,10 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     const edits = new Map();
     const recoveredResults = [];
     const missing = missingToolResultIds(entries);
+    // This read goes through the root and every subagent transcript, is not
+    // cached, and nearly every subagent runs commands. Commands alone
+    // therefore do not trigger it; the file changes recorded for them come
+    // along when it runs anyway.
     if (missing.size === 0 && !entries.some(usesFileEditTool)) return { edits, recoveredResults };
     let found = false;
     try {

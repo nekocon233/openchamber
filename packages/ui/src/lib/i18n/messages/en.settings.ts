@@ -2213,7 +2213,7 @@ export const settingsDict = {
   'settings.openchamber.visual.field.conciseTranscriptInfo': 'Each tool call takes one line, with a short result under it. Click a call to see its details. The model and timing under a reply only show on hover.',
   'settings.openchamber.visual.field.transcriptFileChangesOnly': 'Only Show File Changes',
   'settings.openchamber.visual.field.transcriptFileChangesOnlyAria': 'Show only file changes in the Claude Code-style transcript',
-  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Commands, file reads and searches stay out of the conversation. Replies, reasoning and each file change with its diff remain. Applies to the Claude Code-style transcript.',
+  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'Commands, file reads and searches stay out of the conversation. Replies, reasoning and each file change with its diff remain, including the files a command changed when its CLI recorded them. Applies to the Claude Code-style transcript.',
   'settings.openchamber.visual.field.showDotfilesAria': 'Show dotfiles',
   'settings.openchamber.visual.field.showDotfiles': 'Show Dotfiles',
   'settings.openchamber.visual.field.persistDraftMessagesAria': 'Persist draft messages',

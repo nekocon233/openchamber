@@ -2190,7 +2190,7 @@ export const settingsDict = {
   'settings.openchamber.visual.field.conciseTranscriptInfo': '每个工具调用只占一行，下方附一行简短结果，点击调用可查看详情。回复下方的模型和耗时只在鼠标悬停时显示。',
   'settings.openchamber.visual.field.transcriptFileChangesOnly': '只显示文件改动',
   'settings.openchamber.visual.field.transcriptFileChangesOnlyAria': '在 Claude Code 风格的对话记录中只显示文件改动',
-  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': '命令、读文件和搜索不再出现在对话里；回答、思考过程以及每处文件改动和它的 diff 会保留。适用于 Claude Code 风格的对话记录。',
+  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': '命令、读文件和搜索不再出现在对话里；回答、思考过程以及每处文件改动和它的 diff 会保留，命令改动的文件只要 CLI 记录了也会显示。适用于 Claude Code 风格的对话记录。',
   'settings.openchamber.visual.field.showDotfilesAria': '显示点文件',
   'settings.openchamber.visual.field.showDotfiles': '显示点文件',
   'settings.openchamber.visual.field.persistDraftMessagesAria': '保留草稿消息',

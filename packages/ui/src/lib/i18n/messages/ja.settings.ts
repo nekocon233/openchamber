@@ -2223,7 +2223,7 @@ export const settingsDict = {
   'settings.openchamber.visual.field.conciseTranscriptInfo': '各ツール呼び出しを 1 行で表示し、その下に短い結果を添えます。呼び出しをクリックすると詳細を表示します。返信の下のモデルと所要時間はホバー時のみ表示されます。',
   'settings.openchamber.visual.field.transcriptFileChangesOnly': 'ファイルの変更だけを表示',
   'settings.openchamber.visual.field.transcriptFileChangesOnlyAria': 'Claude Code スタイルの会話表示でファイルの変更だけを表示',
-  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'コマンド、ファイルの読み込み、検索は会話に表示されません。返答、思考、差分付きの各ファイル変更は残ります。Claude Code スタイルの会話表示で有効です。',
+  'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo': 'コマンド、ファイルの読み込み、検索は会話に表示されません。返答、思考、差分付きの各ファイル変更は残ります。コマンドが変更したファイルも、CLI が記録していれば表示されます。Claude Code スタイルの会話表示で有効です。',
   'settings.openchamber.visual.field.showDotfilesAria': 'ドットファイルを表示',
   'settings.openchamber.visual.field.showDotfiles': 'ドットファイルを表示',
   'settings.openchamber.visual.field.persistDraftMessagesAria': '下書きメッセージを保持',
