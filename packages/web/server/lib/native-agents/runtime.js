@@ -26,6 +26,7 @@ import { createCodexAutoTitles } from './codex/auto-title.js';
 import { createCodexCatalog } from './codex/catalog.js';
 import { createCodexCommands } from './codex/commands.js';
 import { createCodexLiveThreads } from './codex/live.js';
+import { createCodexPlanDecisions } from './codex/plan-decisions.js';
 import { createCodexSessionStore } from './codex/store.js';
 import { createCodexUtility } from './codex/utility.js';
 import {
@@ -50,7 +51,7 @@ import {
 import { claudePromptBlocks, withInstructions } from './prompt-parts.js';
 import { createNativeEventPublisher } from './publisher.js';
 import { createQuestionRegistry } from './questions.js';
-import { unconfirmedSessionRecord } from './records.js';
+import { unconfirmedSessionRecord, unknownError } from './records.js';
 import { createNativeRegistry } from './registry.js';
 import { createNativeReverts } from './revert.js';
 import { createSnapshotStore } from './snapshots.js';
@@ -148,6 +149,11 @@ export const createNativeAgentsRuntime = ({
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
   const questions = createQuestionRegistry({
     publish: (directory, payload) => publisher.emit(directory, payload.type, payload.properties),
+  });
+  const planDecisions = createCodexPlanDecisions({
+    questions,
+    prompt: (sessionId, request, signal) => prompt(sessionId, request, signal),
+    failed: (plan, error) => publisher.error(plan.directory, plan.sessionId, unknownError(error.message)),
   });
 
   // The functions below run only after a turn or a request, once every store
@@ -257,6 +263,7 @@ export const createNativeAgentsRuntime = ({
       return codexLive.handleServerRequest(method, params);
     },
     onExit: (error) => {
+      planDecisions.clear();
       codexUtility.handleExit(error);
       codexLive.handleExit(errorMessage(error));
     },
@@ -269,6 +276,8 @@ export const createNativeAgentsRuntime = ({
     questions,
     onTurnFinished,
     onIdle,
+    onPlanReady: (plan) => planDecisions.propose(plan),
+    onSessionClosed: (sessionId) => planDecisions.cancel(sessionId),
     now,
   });
   const claude = createClaudeSessionStore({ loadSdk, registry, isSessionRunning: (sessionId) => claudeLive.isSessionRunning(sessionId) });
@@ -389,6 +398,7 @@ export const createNativeAgentsRuntime = ({
 
   // Stops a running turn and waits until the CLI has settled it.
   const stopTurn = async (sessionId) => {
+    planDecisions.cancel(sessionId);
     const live = liveFor(sessionId);
     await live.abort(sessionId);
     let timer = null;
@@ -400,6 +410,43 @@ export const createNativeAgentsRuntime = ({
     } finally {
       clearTimeout(timer);
     }
+  };
+
+  /**
+   * Sends a prompt through the same snapshot and transcript path for typed
+   * messages and approved plans. A superseded plan cannot start after an
+   * asynchronous skill lookup, snapshot or thread resume.
+   * @param {string} sessionId
+   * @param {PromptRequest} request
+   * @param {AbortSignal} [signal]
+   */
+  const prompt = async (sessionId, request, signal) => {
+    const { backend } = decode(sessionId);
+    assertSessionBackend(backend, request.model.providerID);
+    if (signal) signal.throwIfAborted();
+    else planDecisions.cancel(sessionId);
+    const send = sendRecordOf(request);
+    const parts = withInstructions(request.parts, request.instructions);
+    if (backend === NATIVE_BACKEND_CLAUDE) {
+      await sendToClaude(sessionId, { ...request, parts }, send, { visible: true });
+    } else {
+      const input = await codexCommands.promptInput(parts, request.directory);
+      signal?.throwIfAborted();
+      await commitCodexRevert(sessionId, request.directory);
+      signal?.throwIfAborted();
+      await reverts.beforePrompt(sessionId, request.directory, request.messageID);
+      signal?.throwIfAborted();
+      await codexLive.prompt({
+        sessionId,
+        directory: request.directory,
+        messageId: request.messageID,
+        input,
+        config: { model: request.model.modelID, ...codexVariantSettings(request.variant), mode: request.agent === 'plan' ? 'plan' : 'default' },
+        send,
+        signal,
+      });
+    }
+    await registry.recordSend(sessionId, { ...send, messageId: request.messageID, providerID: request.model.providerID, sentAt: now() });
   };
 
   /**
@@ -524,28 +571,7 @@ export const createNativeAgentsRuntime = ({
      * @param {string} sessionId
      * @param {PromptRequest} request
      */
-    async prompt(sessionId, request) {
-      const { backend } = decode(sessionId);
-      assertSessionBackend(backend, request.model.providerID);
-      const send = sendRecordOf(request);
-      const parts = withInstructions(request.parts, request.instructions);
-      if (backend === NATIVE_BACKEND_CLAUDE) {
-        await sendToClaude(sessionId, { ...request, parts }, send, { visible: true });
-      } else {
-        const input = await codexCommands.promptInput(parts, request.directory);
-        await commitCodexRevert(sessionId, request.directory);
-        await reverts.beforePrompt(sessionId, request.directory, request.messageID);
-        await codexLive.prompt({
-          sessionId,
-          directory: request.directory,
-          messageId: request.messageID,
-          input,
-          config: { model: request.model.modelID, ...codexVariantSettings(request.variant), mode: request.agent === 'plan' ? 'plan' : 'default' },
-          send,
-        });
-      }
-      await registry.recordSend(sessionId, { ...send, messageId: request.messageID, providerID: request.model.providerID, sentAt: now() });
-    },
+    prompt,
 
     /**
      * Compacts a session's context the way the CLI's own /compact does; it
@@ -557,6 +583,7 @@ export const createNativeAgentsRuntime = ({
     async compact(sessionId, request) {
       const { backend } = decodeOwnSession(sessionId);
       assertSessionBackend(backend, request.model.providerID);
+      planDecisions.cancel(sessionId);
       if (backend === NATIVE_BACKEND_CLAUDE) {
         const text = request.instructions === undefined ? '/compact' : `/compact ${request.instructions}`;
         const command = { ...request, messageID: claudeUserMessageId(randomUUID()), parts: [{ type: 'text', text }] };
@@ -600,6 +627,7 @@ export const createNativeAgentsRuntime = ({
         threadId = decoded.threadId;
       }
       if (input.name === 'review') {
+        planDecisions.cancel(input.sessionId);
         await commitCodexRevert(input.sessionId, directory);
         await codexLive.review({
           sessionId: input.sessionId,
@@ -619,8 +647,9 @@ export const createNativeAgentsRuntime = ({
      * reports no background work.
      */
     async abort(sessionId) {
+      const cancelledPlan = planDecisions.cancel(sessionId);
       if (await liveFor(sessionId).abort(sessionId)) return true;
-      return decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && claudeLive.stopBackgroundTasks(sessionId);
+      return cancelledPlan || (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && claudeLive.stopBackgroundTasks(sessionId));
     },
 
     /**
@@ -743,6 +772,7 @@ export const createNativeAgentsRuntime = ({
     /** Puts back what a pending revert restored; returns the session either way. */
     async unrevert(sessionId, directory) {
       decode(sessionId);
+      planDecisions.cancel(sessionId);
       await reverts.unrevert(sessionId);
       const session = await publishSession(sessionId, directory);
       if (!session) throw sessionNotFoundError(sessionId);
@@ -834,6 +864,11 @@ export const createNativeAgentsRuntime = ({
       return questions.list(directory);
     },
 
+    /** An automatic goal continuation must not supersede a plan decision. */
+    hasPendingPlanDecision(sessionId) {
+      return planDecisions.has(sessionId);
+    },
+
     /**
      * @param {string} requestId
      * @param {string[][]} answers
@@ -863,6 +898,7 @@ export const createNativeAgentsRuntime = ({
     },
 
     async shutdown() {
+      planDecisions.clear();
       await codexTitles.stop();
       codexUtility.handleExit(new Error('Codex runtime is shutting down'));
       claudeUtility.shutdown();

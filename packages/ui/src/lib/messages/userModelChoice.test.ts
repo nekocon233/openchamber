@@ -36,6 +36,17 @@ const textPart = (id: string, messageID: string, text: string): Part => ({
 })
 
 describe('findLatestUserModelChoice', () => {
+  test('a Codex approval restores build from its accepted prompt, and later feedback restores plan', () => {
+    const model = { providerID: 'codex-native', modelID: 'gpt-5.5' };
+    const messages = [userMessage('plan', model, 'plan')];
+    const partsFor = (id: string) => [textPart(`p-${id}`, id, id === 'implement' ? 'Implement the plan.' : 'Plan')];
+    expect(findLatestUserModelChoice(messages, partsFor)?.agent).toBe('plan');
+    messages.push(userMessage('implement', model, 'build'));
+    expect(findLatestUserModelChoice(messages, partsFor)).toMatchObject({ id: 'implement', agent: 'build', ...model });
+    messages.push(userMessage('revise', model, 'plan'));
+    expect(findLatestUserModelChoice(messages, partsFor)).toMatchObject({ id: 'revise', agent: 'plan', ...model });
+  });
+
   const nativeAssistant = (parentID = 'u1'): Message => ({
     id: 'a-plan', sessionID: 'ses_1', role: 'assistant', time: { created: 2 }, parentID,
     providerID: 'claude-native', modelID: 'opus', agent: 'plan',

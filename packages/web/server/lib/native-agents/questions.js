@@ -1,15 +1,15 @@
 // Questions native sessions wait on: Claude's AskUserQuestion and Codex's
-// requestUserInput. The CLI blocks until the question is answered, so a
-// question lives only as long as the live turn that asked it; nothing is
-// persisted. Replies and rejections resolve the CLI's pending callback and
-// publish the same `question.*` events OpenCode questions produce.
+// requestUserInput, plus the decision after a completed Codex plan. Tool
+// questions end with their turn; codex/plan-decisions.js owns the longer
+// lifetime of plan decisions. Nothing is persisted. Replies and rejections
+// publish the same `question.*` events the native UI already consumes.
 
 import { randomUUID } from 'node:crypto';
 
 import { NativeAgentError } from './errors.js';
 
 /** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean }} QuestionInfo */
-/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
+/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
 /** @typedef {{ status: 'replied', answers: string[][] } | { status: 'rejected' }} QuestionOutcome */
 
 const questionNotFoundError = (requestId) => new NativeAgentError(
@@ -42,7 +42,7 @@ export const createQuestionRegistry = ({ publish }) => {
     /**
      * Publishes a question and resolves once it is answered or rejected. An
      * abort signal rejects it, as does ending the session's turn.
-     * @param {{ directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal }} input
+     * @param {{ directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal }} input
      * @returns {Promise<QuestionOutcome>}
      */
     ask({ directory, sessionID, questions, kind, tool, signal }) {

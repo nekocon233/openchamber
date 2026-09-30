@@ -591,6 +591,14 @@ with a native branch (`sync/native-send.ts`):
   their wire values. A completed `plan_exit` tool after the latest real prompt
   restores the composer to `build`, including after history reload. Pending
   or failed calls do not change the selection, and a later prompt wins.
+- Codex plan decisions use `kind: 'codex-plan-exit'` and the same translated
+  form, with `build` / `plan` wire values and custom feedback. The server
+  keeps the question after the planning turn ends, so an idle status does
+  not settle it. Approval sends a new ordinary Build prompt; that prompt's
+  recorded agent restores the composer live and after history reload.
+  A proposed plan alone, a declined decision or a failed start never changes
+  the selection to Build. Decisions are recovered from the live questions
+  endpoint, not inferred from transcript text.
 
 Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
 (optimistic marker, composer restore, rollback) with a native branch:

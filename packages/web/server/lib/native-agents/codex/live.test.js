@@ -19,7 +19,7 @@ const CONFIG = { model: 'gpt-5.5', effort: 'low', fast: false, mode: 'default' }
 
 const notifications = fixture('gpt55-tools.notifications.json');
 
-const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, instructions = null, resumeResponse = {}, now } = {}) => {
+const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, onPlanReady, onSessionClosed, instructions = null, resumeResponse = {}, now } = {}) => {
   const events = [];
   const requests = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
@@ -37,7 +37,7 @@ const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, i
     }
     return { turn: { id: TURN_ID, status: 'inProgress', items: [] } };
   };
-  live = createCodexLiveThreads({ request, publisher, questions, onIdle, onTurnFinished, readGlobalInstructions: async () => instructions, now });
+  live = createCodexLiveThreads({ request, publisher, questions, onIdle, onTurnFinished, onPlanReady, onSessionClosed, readGlobalInstructions: async () => instructions, now });
   return { live, events, requests, questions };
 };
 
@@ -60,6 +60,118 @@ const sendPrompt = (live, overrides = {}) => live.prompt({
   config: CONFIG,
   send: { modelID: 'gpt-5.5', variant: 'low', agent: 'build' },
   ...overrides,
+});
+
+describe('Codex proposed plans', () => {
+  const planEvent = (live, id, text, completed = true) => live.handleNotification(completed ? 'item/completed' : 'item/started', {
+    threadId: THREAD_ID, turnId: TURN_ID, item: { type: 'plan', id, text },
+  });
+  const finish = (live, status = 'completed') => live.handleNotification('turn/completed', {
+    threadId: THREAD_ID, turn: { id: TURN_ID, status },
+  });
+  const planning = {
+    config: { ...CONFIG, mode: 'plan' },
+    send: { modelID: CONFIG.model, variant: 'low-fast', agent: 'plan' },
+  };
+
+  it('offers the final nonempty completed plan once, after settling its turn', async () => {
+    const proposed = [];
+    const { live, events } = createHarness({ replay: false, onPlanReady: (plan) => {
+      expect(live.busySessionIds(DIRECTORY)).toEqual([]);
+      expect(payloads(events, 'session.idle')).toHaveLength(1);
+      proposed.push(plan);
+    } });
+    await sendPrompt(live, planning);
+    planEvent(live, 'first', 'First draft');
+    planEvent(live, 'latest', 'Final plan');
+    planEvent(live, 'empty', '  ');
+    expect(proposed).toEqual([]);
+    finish(live);
+    finish(live);
+    expect(proposed).toEqual([{
+      sessionId: SESSION_ID, directory: DIRECTORY, turnId: TURN_ID,
+      text: 'Final plan', send: planning.send,
+    }]);
+  });
+
+  it.each(['failed', 'interrupted'])('does not offer a plan from a %s turn', async (status) => {
+    const proposed = [];
+    const { live } = createHarness({ replay: false, onPlanReady: (plan) => proposed.push(plan) });
+    await sendPrompt(live, planning);
+    planEvent(live, 'plan', 'Plan');
+    finish(live, status);
+    expect(proposed).toEqual([]);
+  });
+
+  it('ignores build turns, empty or unfinished plans, prose and task lists', async () => {
+    for (const mode of ['default', 'plan']) {
+      const proposed = [];
+      const { live } = createHarness({ replay: false, onPlanReady: (plan) => proposed.push(plan) });
+      await sendPrompt(live, { ...planning, config: { ...CONFIG, mode } });
+      if (mode === 'default') planEvent(live, 'plan', 'Not a planning turn');
+      else {
+        planEvent(live, 'empty', '');
+        planEvent(live, 'unfinished', 'Still streaming', false);
+      }
+      live.handleNotification('item/completed', { threadId: THREAD_ID, turnId: TURN_ID, item: {
+        type: 'agentMessage', id: 'prose', text: '<proposed_plan>Prose alone is not a plan event</proposed_plan>',
+      } });
+      live.handleNotification('turn/plan/updated', { threadId: THREAD_ID, plan: [{ step: 'Task', status: 'completed' }] });
+      finish(live);
+      expect(proposed).toEqual([]);
+    }
+  });
+
+  it('retains the planning turn selection when a steer changes the next-send selection', async () => {
+    const proposed = [];
+    const { live } = createHarness({ replay: false, onPlanReady: (plan) => proposed.push(plan) });
+    await sendPrompt(live, planning);
+    await sendPrompt(live, { config: { ...CONFIG, model: 'another-model' } });
+    planEvent(live, 'plan', 'Plan');
+    finish(live);
+    expect(proposed[0].send).toEqual(planning.send);
+  });
+
+  it('does not start an invalidated approval after resuming a thread', async () => {
+    const controller = new AbortController();
+    const calls = [];
+    const live = createCodexLiveThreads({
+      request: async (method) => { calls.push(method); controller.abort(); return {}; },
+      publisher: createNativeEventPublisher({ publishNativeEvent() {} }),
+      questions: createQuestionRegistry({ publish() {} }),
+    });
+    await expect(sendPrompt(live, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(calls).toEqual(['thread/resume']);
+    expect(live.busySessionIds(DIRECTORY)).toEqual([]);
+  });
+
+  it('announces thread closure and resumes it before the next prompt', async () => {
+    const closed = [];
+    const { live, requests } = createHarness({ replay: false, onSessionClosed: (sessionId) => closed.push(sessionId) });
+    await sendPrompt(live, planning);
+    finish(live);
+    live.handleNotification('thread/closed', { threadId: THREAD_ID });
+    expect(closed).toEqual([SESSION_ID]);
+    await sendPrompt(live);
+    expect(requests.map(entry => entry.method)).toEqual(['thread/resume', 'turn/start', 'thread/resume', 'turn/start']);
+  });
+
+  it('interrupts an approved turn when its decision is cancelled while turn/start is in flight', async () => {
+    const controller = new AbortController();
+    const requests = [];
+    const live = createCodexLiveThreads({
+      request: async (method, params) => {
+        requests.push({ method, params });
+        if (method !== 'turn/start') return {};
+        controller.abort();
+        return { turn: { id: TURN_ID } };
+      },
+      publisher: createNativeEventPublisher({ publishNativeEvent() {} }),
+      questions: createQuestionRegistry({ publish() {} }),
+    });
+    await sendPrompt(live, { signal: controller.signal });
+    expect(requests.at(-1)).toEqual({ method: 'turn/interrupt', params: { threadId: THREAD_ID, turnId: TURN_ID } });
+  });
 });
 
 const CHILDREN = [

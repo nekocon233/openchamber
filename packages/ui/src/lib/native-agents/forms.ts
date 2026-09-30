@@ -36,7 +36,8 @@ export const projectNativeQuestion = (question: QuestionRequest): FormRequest | 
 
 /** Localize the plan decision while retaining the CLI's exact answer values. */
 export const localizeNativeForm = (form: FormRequest, t: Translate): FormRequest => {
-  if (form.metadata?.openchamberNativeQuestionKind !== 'claude-plan-exit') return form;
+  const kind = form.metadata?.openchamberNativeQuestionKind;
+  if (kind !== 'claude-plan-exit' && kind !== 'codex-plan-exit') return form;
   const [first, ...rest] = form.fields.map((field): FormField => {
     if (field.type !== 'string' && field.type !== 'multiselect') return field;
     const options = field.options?.map((option) => ({
@@ -45,9 +46,10 @@ export const localizeNativeForm = (form: FormRequest, t: Translate): FormRequest
         : option.value === 'plan' ? t('chat.questionCard.planExitKeepPlanning') : option.label,
     }));
     const description = [t('chat.questionCard.planExitQuestion'), field.description].filter(Boolean).join('\n\n');
+    const title = kind === 'codex-plan-exit' ? t('chat.questionCard.planExitTitle') : field.title;
     return field.type === 'multiselect'
-      ? { ...field, description, options: options ?? [] }
-      : { ...field, description, options };
+      ? { ...field, title, description, options: options ?? [] }
+      : { ...field, title, description, options };
   });
   return { ...form, title: t('chat.questionCard.planExitTitle'), fields: [first, ...rest] };
 };

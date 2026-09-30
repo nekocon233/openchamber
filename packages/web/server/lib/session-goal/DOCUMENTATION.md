@@ -261,6 +261,11 @@ differences:
   one unaudited continuation, then blocks as `progress audit unavailable`.
 - The first turn's goal reminder reaches the CLI as the prompt's hidden
   `instructions`.
+- A completed Codex plan can be idle while its execution decision is still
+  waiting for the user. The loop checks the native runtime's
+  `hasPendingPlanDecision` before auditing, after an asynchronous audit and
+  before sending a continuation. It leaves the goal untouched while the
+  decision or its approved prompt preparation is pending.
 
 ## Limitations
 

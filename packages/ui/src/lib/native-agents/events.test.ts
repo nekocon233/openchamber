@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { translateNativeEvent } from './events';
 import { localizeNativeForm, nativeQuestionAnswers, projectNativeQuestion } from './forms';
-import { nativeMessagePageSchema } from './schemas';
+import { nativeMessagePageSchema, nativeQuestionListSchema } from './schemas';
 
 const sessionID = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const question = {
@@ -59,6 +59,31 @@ describe('native records in the shared v2 domain', () => {
     expect(nativeQuestionAnswers({ 'question-0': 'build' })).toEqual([['build']]);
     expect(nativeQuestionAnswers({ 'question-1': ['B', 'C'], 'question-0': 'A' })).toEqual([['A'], ['B', 'C']]);
     expect(() => nativeQuestionAnswers({ 'question-1': 'build' })).toThrow('incomplete');
+  });
+
+  test('Codex plan decisions survive snapshot parsing and use the same translated form as live events', () => {
+    const codexQuestion = {
+      ...question, sessionID: 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00', kind: 'codex-plan-exit',
+    };
+    const [restored] = nativeQuestionListSchema.parse([codexQuestion]);
+    const form = projectNativeQuestion(restored);
+    expect(translateNativeEvent({ type: 'question.asked', properties: codexQuestion }))
+      .toEqual({ type: 'form.created', properties: { form } });
+    if (!form) throw new Error('Missing Codex plan form');
+    const translated = localizeNativeForm(form, (key) => `localized:${key}`);
+    const field = translated.fields[0];
+    if (field.type !== 'string') throw new Error('Expected a single-choice field');
+    expect(translated.title).toBe('localized:chat.questionCard.planExitTitle');
+    expect(field.title).toBe(translated.title);
+    expect(field.description).toContain('Review this plan');
+    expect(field.options?.map((option) => option.value)).toEqual(['build', 'plan']);
+    expect(field.options?.map((option) => option.label)).toEqual([
+      'localized:chat.questionCard.planExitApprove', 'localized:chat.questionCard.planExitKeepPlanning',
+    ]);
+    expect(field.custom).toBe(true);
+    expect(translateNativeEvent({ type: 'question.replied', properties: {
+      sessionID: restored.sessionID, requestID: restored.id,
+    } })).toEqual({ type: 'form.settled', properties: { sessionID: restored.sessionID, formID: restored.id } });
   });
 
   test('one malformed history record or part does not discard unrelated records', () => {

@@ -348,11 +348,30 @@ Codex (`codex/live.js`): turns on the shared app-server.
   app-server exit clear child activity and release its live metadata.
 - Approval requests are accepted, `item/tool/requestUserInput` goes to the
   question registry, MCP elicitation is declined, and anything else is refused.
+- An OpenChamber planning turn captures its send selection when it starts.
+  On successful completion, its last completed, nonempty `plan` item opens
+  a `codex-plan-exit` question through `codex/plan-decisions.js`. Task lists,
+  ordinary text, child turns and history reads never open one. The Codex turn
+  is idle while the decision waits; the native questions endpoint restores
+  that pending decision when the UI reconnects.
+- Only the single answer `build` starts implementation. The runtime sends
+  `Implement the plan.` as an ordinary new prompt in `default` mode, using
+  the planning turn's directory, model and effort. The normal send path owns
+  snapshots, message IDs and recorded selections. Custom feedback starts a
+  new planning turn; `plan`, cancellation or an invalid answer sends nothing.
+  A failed start publishes a session error without retrying or recording a
+  successful Build prompt.
+- Plan decisions remain cancellable through prompt preparation and thread
+  resume. New prompts, stop, compaction, review, reverts, archive/delete,
+  thread closure and app-server exit invalidate them. Duplicate replies
+  cannot send again. They live only in the server's memory and are not
+  reconstructed from history after restart. The goal loop checks
+  `hasPendingPlanDecision` before auditing or continuing an idle native session.
 
-`questions.js` holds the questions running turns wait on, in memory only. A
-reply or rejection resolves the CLI's pending callback and publishes
-`question.replied` or `question.rejected`; stopping a turn or ending its query
-rejects them.
+`questions.js` holds native questions in memory. A reply or rejection resolves
+the pending callback and publishes `question.replied` or `question.rejected`.
+Tool questions end with their turn; a completed Codex plan's decision has the
+separate lifetime described above.
 
 `loadMessages` lays a running turn's live records over the history it read,
 so a reload mid-turn shows the streaming reply and the next delta lands on a

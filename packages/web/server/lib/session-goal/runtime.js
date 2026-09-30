@@ -364,6 +364,7 @@ const hasRepeatedLengthTail = (messages, latestAssistant, goalCreatedAt) => {
  *   isNativeSessionId: (sessionId: string) => boolean,
  *   getSession: Function,
  *   statuses: Function,
+ *   hasPendingPlanDecision: (sessionId: string) => boolean,
  *   loadMessages: Function,
  *   updateSession: Function,
  *   prompt: Function,
@@ -466,6 +467,7 @@ export const createSessionGoalRuntime = ({
     // The CLI continues on the model, effort and agent its last prompt was
     // sent with; a reply names the API model rather than the one picked.
     sendContinuation: async ({ goal, messages, lastAssistantInfo }) => {
+      if (nativeSessions.hasPendingPlanDecision(sessionId)) return;
       let lastPrompt = null;
       for (let i = messages.length - 1; i >= 0; i -= 1) {
         const info = messages[i]?.info;
@@ -672,6 +674,7 @@ export const createSessionGoalRuntime = ({
       return;
     }
     if (isWorkingStatus(statuses[sessionId], source.native)) return;
+    if (source.native && nativeSessions.hasPendingPlanDecision(sessionId)) return;
 
     const childrenWorking = await source.hasWorkingChildren(statuses);
     if (childrenWorking === null) {
@@ -866,6 +869,7 @@ export const createSessionGoalRuntime = ({
       blockedStreak = goal.blockedStreak;
     } else {
       audit = await runAudit({ goal: { ...goal, objective: effectiveObjective }, assistantText, directory, lastAssistantInfo: executionInfo ?? lastAssistantInfo });
+      if (source.native && nativeSessions.hasPendingPlanDecision(sessionId)) return;
 
       // Audit unavailable: tolerate one consecutive failure (transient
       // hiccup), then stop the goal instead of continuing blind. Blocked is

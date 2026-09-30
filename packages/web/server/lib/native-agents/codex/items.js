@@ -18,7 +18,7 @@ const reasoningItem = loose({
   summary: z.array(z.string()).catch([]),
   content: z.array(z.string()).catch([]),
 });
-const planItem = loose({ type: z.literal('plan'), id: z.string(), text: z.string().catch('') });
+export const codexPlanItemSchema = loose({ type: z.literal('plan'), id: z.string(), text: z.string().catch('') });
 const commandItem = loose({
   type: z.literal('commandExecution'),
   id: z.string(),
@@ -119,7 +119,7 @@ export const partsForCodexItem = (rawItem, { sessionId, threadId, messageId, sta
     const text = (reasoning.data.summary.length > 0 ? reasoning.data.summary : reasoning.data.content).join('\n\n');
     return [buildReasoningPart({ ...base, id: codexPartId(threadId, reasoning.data.id), text, start, end })];
   }
-  const plan = planItem.safeParse(rawItem);
+  const plan = codexPlanItemSchema.safeParse(rawItem);
   if (plan.success) {
     return [buildTextPart({ ...base, id: codexPartId(threadId, plan.data.id), text: plan.data.text, start, end })];
   }
@@ -284,4 +284,3 @@ export const parseCodexUserMessageItem = (rawItem) => {
   }
   return { id: parsed.data.id, clientId: parsed.data.clientId ?? null, texts, images };
 };
-

@@ -382,7 +382,7 @@ describe('session goal on native CLI sessions', () => {
   });
 
   // The native runtime as the goal loop sees it; OpenCode must never be asked.
-  const createNativeHarness = ({ messages, goalOverrides = {} }) => {
+  const createNativeHarness = ({ messages, goalOverrides = {}, pendingPlan = false }) => {
     const stored = { id: NATIVE_ID, directory: DIRECTORY, metadata: { openchamber: { goal: { ...goal, ...goalOverrides } } } };
     const prompts = [];
     const updates = [];
@@ -390,6 +390,7 @@ describe('session goal on native CLI sessions', () => {
       isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
       getSession: vi.fn(async () => stored),
       statuses: vi.fn(async () => ({})),
+      hasPendingPlanDecision: () => pendingPlan,
       loadMessages: vi.fn(async () => ({ records: messages, cursor: null })),
       updateSession: vi.fn(async (_sessionId, _directory, patch) => {
         updates.push(patch);
@@ -426,6 +427,14 @@ describe('session goal on native CLI sessions', () => {
     runtime.processPayload({ type: 'session.status', properties: { sessionID: NATIVE_ID, status: { type: 'idle' } } }, DIRECTORY);
     await vi.runOnlyPendingTimersAsync();
   };
+
+  it('waits for a native plan decision without auditing or sending a continuation', async () => {
+    const { runtime, prompts, updates } = createNativeHarness({ messages: [], pendingPlan: true });
+    await idleNative(runtime);
+    expect(prompts).toEqual([]);
+    expect(updates).toEqual([]);
+    runtime.stop();
+  });
 
   beforeEach(() => {
     vi.useFakeTimers();

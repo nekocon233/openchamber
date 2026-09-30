@@ -18,6 +18,7 @@ import { CODEX_FAST_SERVICE_TIER, CODEX_STANDARD_SERVICE_TIER } from '../catalog
 import { invalidRequestError, sessionBusyError } from '../errors.js';
 import { codexPartId, decodeNativeSessionId, encodeCodexSessionId, isNativeClientUserMessageId } from '../ids.js';
 import { buildSessionRecord, stoppedError, unknownError } from '../records.js';
+import { codexPlanItemSchema } from './items.js';
 import { projectCodexTurns } from './projector.js';
 import { JsonRpcError } from './rpc.js';
 
@@ -109,6 +110,8 @@ const appendAt = (list, index, delta) => {
  * @param {ReturnType<typeof import('../questions.js').createQuestionRegistry>} options.questions
  * @param {(sessionId: string, directory: string, turn: { id: string, status: string }) => void} [options.onTurnFinished] Codex finished a turn and recorded it
  * @param {(sessionId: string, directory: string) => void} [options.onIdle] the thread stopped running a turn
+ * @param {(plan: import('./plan-decisions.js').CodexPlan) => void} [options.onPlanReady] a completed planning turn proposed a plan
+ * @param {(sessionId: string) => void} [options.onSessionClosed] the app-server closed a thread
  * @param {() => number} [options.now]
  */
 export const createCodexLiveThreads = ({
@@ -119,6 +122,8 @@ export const createCodexLiveThreads = ({
   questions,
   onTurnFinished = () => {},
   onIdle = () => {},
+  onPlanReady = () => {},
+  onSessionClosed = () => {},
   now = Date.now,
 }) => {
   /** @type {Map<string, object>} thread id → live thread */
@@ -200,6 +205,7 @@ export const createCodexLiveThreads = ({
         busy: false,
         turn: null,
         config: null,
+        pendingPlanningSend: null,
         childSession: null,
         sends: new Map(),
         messageOfPart: new Map(),
@@ -235,7 +241,9 @@ export const createCodexLiveThreads = ({
       error: null,
       startedAt: turn.startedAt ?? Math.floor(now() / 1000),
       completedAt: null,
+      planningSend: live.pendingPlanningSend,
     };
+    live.pendingPlanningSend = null;
     setBusy(live, true);
   };
 
@@ -340,7 +348,22 @@ export const createCodexLiveThreads = ({
       const parsed = turnParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
       if (!live?.turn || live.turn.id !== parsed.data.turn.id) return;
+      let proposal = null;
+      if (parsed.data.turn.status === 'completed' && live.turn.planningSend && !live.childSession) {
+        for (let index = live.turn.order.length - 1; index >= 0; index -= 1) {
+          const itemId = live.turn.order[index];
+          if (live.turn.itemTimes.get(itemId)?.end == null) continue;
+          const plan = codexPlanItemSchema.safeParse(live.turn.items.get(itemId));
+          if (!plan.success || !plan.data.text.trim()) continue;
+          proposal = {
+            sessionId: live.sessionId, directory: live.directory, turnId: live.turn.id,
+            text: plan.data.text, send: live.turn.planningSend,
+          };
+          break;
+        }
+      }
       settleTurn(live, parsed.data.turn);
+      if (proposal) onPlanReady(proposal);
       onTurnFinished(live.sessionId, live.directory, { id: parsed.data.turn.id, status: parsed.data.turn.status });
     },
     'thread/status/changed': (params) => {
@@ -362,7 +385,11 @@ export const createCodexLiveThreads = ({
     'thread/closed': (params) => {
       const parsed = threadClosedParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
-      if (live) closeChild(live);
+      if (live) {
+        live.loaded = false;
+        onSessionClosed(live.sessionId);
+        closeChild(live);
+      }
     },
   }));
 
@@ -412,13 +439,15 @@ export const createCodexLiveThreads = ({
      * @param {object[]} input.input Codex user input items
      * @param {LiveConfig} input.config
      * @param {{ modelID: string, variant?: string, agent: string }} input.send what the user message shows
+     * @param {AbortSignal} [input.signal] invalidates an approved plan before its follow-up starts
      */
-    async prompt({ sessionId, directory, messageId, input, config, send }) {
+    async prompt({ sessionId, directory, messageId, input, config, send, signal }) {
       if (!messageId.startsWith('ncx_u_') || !isNativeClientUserMessageId(messageId)) {
         throw invalidRequestError(`Not a Codex user message id: ${messageId}`);
       }
       const live = liveThread(sessionId, directory);
       await ensureLoaded(live);
+      signal?.throwIfAborted();
       live.sends.set(messageId, send);
       live.config = config;
       if (live.busy && live.turn) {
@@ -451,9 +480,19 @@ export const createCodexLiveThreads = ({
       const threadTier = live.serviceTier === CODEX_STANDARD_SERVICE_TIER ? null : live.serviceTier;
       const changesTier = tier !== threadTier;
       if (changesTier) params.serviceTier = tier ?? CODEX_STANDARD_SERVICE_TIER;
-      const started = startedTurn.safeParse(await request('turn/start', params));
-      if (changesTier) live.serviceTier = tier;
-      if (started.success) startTurn(live, { id: started.data.turn.id });
+      live.pendingPlanningSend = config.mode === 'plan' ? { ...send } : null;
+      try {
+        const started = startedTurn.safeParse(await request('turn/start', params));
+        if (changesTier) live.serviceTier = tier;
+        if (started.success) {
+          startTurn(live, { id: started.data.turn.id });
+          if (signal?.aborted && live.turn?.id === started.data.turn.id) {
+            await request('turn/interrupt', { threadId: live.threadId, turnId: started.data.turn.id });
+          }
+        }
+      } finally {
+        live.pendingPlanningSend = null;
+      }
     },
 
     /**
