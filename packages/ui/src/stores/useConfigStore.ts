@@ -27,7 +27,7 @@ import { normalizePath } from "@/lib/pathNormalization";
 import { getSyncConfig, subscribeToSyncConfigChanges } from "@/sync/sync-refs";
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from "@/lib/runtime-switch";
 import { mergeModelMetadataWithLiveModel } from "@/lib/modelMetadata";
-import { loadNativeProviders } from "@/lib/native-agents/catalog";
+import { invalidateNativeProviders, loadNativeProviders } from "@/lib/native-agents/catalog";
 import { isNativeProviderId } from "@/lib/native-agents/ids";
 
 const MODELS_DEV_API_URL = "https://models.dev/api.json";
@@ -1200,6 +1200,7 @@ interface ConfigStore {
 
     activateDirectory: (directory: string | null | undefined, options?: { preserveManualModel?: boolean }) => Promise<void>;
 
+    refreshNativeProviders: () => Promise<void>;
     loadProviders: (options?: { directory?: string | null; source?: string }) => Promise<void>;
     loadSessionDefaults: () => Promise<boolean>;
     /** `fresh`: a request already in flight started before the caller's reason to reload, so it cannot answer it. */
@@ -1758,6 +1759,24 @@ export const useConfigStore = create<ConfigStore>()(
                         }
 
                         return Object.keys(nextState).length > 0 ? nextState : state;
+                    });
+                },
+
+                refreshNativeProviders: async () => {
+                    const context = captureConfigRuntimeContext();
+                    invalidateNativeProviders(getRuntimeKey());
+                    const native = await loadNativeProviders();
+                    if (!isConfigRuntimeContextCurrent(context)) return;
+                    set((state) => {
+                        const replace = (providers: ProviderWithModelList[]) => [
+                            ...providers.filter((provider) => !isNativeProviderId(provider.id)), ...native,
+                        ];
+                        return {
+                            providers: replace(state.providers),
+                            directoryScoped: Object.fromEntries(Object.entries(state.directoryScoped).map(([key, snapshot]) => [
+                                key, { ...snapshot, providers: replace(snapshot.providers) },
+                            ])),
+                        };
                     });
                 },
 

@@ -32,6 +32,13 @@ interface SettingsSearchAvailabilityContext extends SettingsRuntimeContext {
 
 const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
+    id: 'providers.claude-connections',
+    page: 'providers',
+    titleKey: 'settings.claudeConnections.title',
+    keywords: ['claude code', 'kimi', 'coding plan', 'anthropic', 'api key'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
     id: 'chat.activity-default',
     page: 'chat',
     titleKey: 'settings.openchamber.visual.section.activityDefault',

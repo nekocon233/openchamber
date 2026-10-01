@@ -487,7 +487,11 @@ project in Settings cannot change what chat sees. Components select through
 Native CLI providers (`claude-native`, `codex-native`) join the provider list
 after OpenCode's, from `lib/native-agents/catalog.ts`. That catalog is read once
 per runtime, and a CLI whose read fails keeps the provider an earlier read
-found. Automatic fallback never picks a native provider, because the model
+found. `refreshNativeProviders` invalidates that runtime's catalog after a
+Claude connection mutation and replaces only native providers in the active
+mirror and every loaded directory. It leaves model selections intact. A read
+started before invalidation adopts the new catalog instead of committing an
+old response; runtime switches reject old store updates. Automatic fallback never picks a native provider, because the model
 decides whether a new session is a native one; the settings default may name
 one on purpose. Which providers a picker offers for a session is
 `isProviderPickableForSession`, described in

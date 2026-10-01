@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 
+import { connectionWriteSchema } from './claude/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
 
@@ -104,6 +105,12 @@ const handle = (work) => async (req, res) => {
  */
 export const registerNativeAgentRoutes = (app, { runtime }) => {
   app.get('/api/native/capabilities', handle(() => runtime.capabilities()));
+
+  const connections = '/api/native/claude/connections';
+  app.get(connections, handle(() => runtime.claudeConnections.list()));
+  app.post(connections, handle((req) => runtime.claudeConnections.save(null, connectionWriteSchema.parse(req.body))));
+  app.patch(`${connections}/:id`, handle((req) => runtime.claudeConnections.save(z.string().uuid().parse(req.params.id), connectionWriteSchema.parse(req.body))));
+  app.delete(`${connections}/:id`, handle((req) => runtime.claudeConnections.remove(z.string().uuid().parse(req.params.id))));
 
   app.get('/api/native/catalog', handle(() => runtime.catalog()));
 

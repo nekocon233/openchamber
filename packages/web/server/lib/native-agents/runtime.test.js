@@ -738,6 +738,30 @@ describe('native agents routes', () => {
     return app;
   };
 
+  it('manages Claude connections without returning credentials and validates before writes', async () => {
+    const runtime = createRuntime();
+    const app = createApp(runtime);
+    const endpoint = '/api/native/claude/connections';
+    const draft = {
+      name: 'Kimi', baseURL: 'https://example.test/anthropic', auth: 'api-key', apiKey: 'test-only-key',
+      models: [{ id: SESSION_UUID, name: 'Kimi', modelID: 'kimi-for-coding', contextWindow: 262144, outputLimit: 32000, input: { image: false, pdf: false }, efforts: [] }],
+    };
+    const created = await request(app).post(endpoint).send(draft).expect(200);
+    expect(created.body.hasKey).toBe(true);
+    expect(created.body).not.toHaveProperty('apiKey');
+    await request(app).get(endpoint).expect(200, [created.body]);
+    await request(app).post(endpoint).send({ ...draft, models: [] }).expect(400);
+    const updated = await request(app).patch(`${endpoint}/${created.body.id}`).send({ ...draft, name: 'Changed', apiKey: undefined }).expect(200);
+    expect(updated.body.revision).toBe(2);
+    const catalog = await request(app).get('/api/native/catalog').expect(200);
+    const model = catalog.body.backends.claude.models.find((entry) => entry.name === 'Changed / Kimi');
+    expect((await runtime.claudeConnections.resolve(model.id)).env.ANTHROPIC_API_KEY).toBe('test-only-key');
+    await request(app).delete(`${endpoint}/${created.body.id}`).expect(200, { deleted: true });
+    await expect(runtime.claudeConnections.resolve(model.id)).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_UNAVAILABLE' });
+    await request(app).get(endpoint).expect(200, []);
+    await runtime.shutdown();
+  });
+
   it('routes Codex commands separately from prompts and rejects arbitrary RPC and incomplete reviews', async () => {
     const calls = [];
     const app = createApp({ codexCommand: async (input) => { calls.push(input); return { kind: 'output', entries: [], notices: [] }; } });

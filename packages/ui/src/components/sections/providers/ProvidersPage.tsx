@@ -1,3 +1,5 @@
+import { ClaudeConnectionsPage } from './ClaudeConnectionsPage';
+import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { matchesRankQuery, rankByQuery } from '@/lib/search/fuzzySearch';
 import React from 'react';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
@@ -152,7 +154,7 @@ const providerApiKeySetting = z.string();
 const readProviderApiKeySetting = (provider: Pick<Provider, 'settings'> | undefined): string | null =>
   providerApiKeySetting.safeParse(provider?.settings?.apiKey).data ?? null;
 
-export const ProvidersPage: React.FC = () => {
+const OpenCodeProvidersPage: React.FC = () => {
   const { t } = useI18n();
   // Settings browses whichever project its own selector points at; the app
   // stays where it is.
@@ -1134,4 +1136,12 @@ export const ProvidersPage: React.FC = () => {
       ) : null}
     </SettingsPageLayout>
   );
+};
+
+export const ProvidersPage: React.FC = () => {
+  const { nativeAgents } = useRuntimeAPIs();
+  const selectedProviderId = useConfigStore((state) => state.selectedProviderId);
+  return selectedProviderId === 'claude-native' && nativeAgents.supported
+    ? <ClaudeConnectionsPage />
+    : <OpenCodeProvidersPage />;
 };

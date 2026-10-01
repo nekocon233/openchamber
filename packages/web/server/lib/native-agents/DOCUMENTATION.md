@@ -613,6 +613,52 @@ A missing file is an empty registry. An unparseable file is moved aside as
 mistakes it for "no sessions". Writes are serialized and atomic, and memory
 changes only after a write succeeds.
 
+## Claude Code connections
+
+`claude/connections.js` owns named Anthropic-compatible connections in
+`<data dir>/native-agents/claude-connections.json`. This is server-local
+credential storage, outside preferences and OpenCode configuration. Writes
+are serialized and atomic, with owner-only file permissions on POSIX. Missing
+storage means no custom connections; malformed or unreadable storage fails
+without replacing it. API responses carry `hasKey`, never the key. Omitting
+`apiKey` when editing preserves it.
+
+The authenticated `/api/native/claude/connections` GET/POST and `/:id`
+PATCH/DELETE routes manage connections. Each model has a stable UUID separate
+from the upstream model ID. The native catalog keeps provider `claude-native`
+and names models `connection:<connection UUID>:<model UUID>`. User messages,
+assistant messages and registry send records retain this identity. The default
+CLI models remain available with their existing IDs and inherited settings.
+
+A connection resolves to a revisioned launch configuration. The main model,
+family aliases and subagents use its upstream model ID. Credentials, endpoint,
+context/output budgets and competing backend/auth variables are supplied per
+process. A private temporary settings file takes precedence over user/project
+settings without putting keys in command-line arguments or modifying terminal
+configuration. It is removed when the query exits, including failed starts.
+A hard process kill can leave an owner-only temporary file for OS temp cleanup.
+Provider error diagnostics redact the configured credential.
+
+Changing a connection, its revision or its model replaces an idle query and
+resumes the same transcript only after the old process exits. A running turn
+or background task rejects the change with `NATIVE_CONNECTION_BUSY`. Prompts
+for one session are serialized during launch so simultaneous sends cannot
+open two writers. Other sessions keep their own configuration. Deleted models
+or connections fail subsequent sends with `NATIVE_CONNECTION_UNAVAILABLE`;
+existing queries finish with their captured credentials. History is retained.
+No failure silently chooses another service. Managed Claude policies remain
+owned by the CLI and can refuse an otherwise valid connection.
+
+Utility generation resolves the same connection and does not require an
+Anthropic account login for a configured key. Third-party models retain their
+own thinking default. Image/PDF support and effort levels are configured per
+model; custom models do not inherit Claude capabilities. The Kimi Coding Plan
+preset is separate from Moonshot's pay-as-you-go API.
+
+Web and Electron use the connected server's connections. Hosted mobile and
+Capacitor use that same server and CLI. VS Code's native adapter rejects these
+operations as unsupported.
+
 ## Utility text generation
 
 The small-model service accepts an explicit `codex-native/<model>` or

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
+import { createClaudeConnections } from './connections.js';
 import { createClaudeUtility } from './utility.js';
 
 const WORK_DIR = path.join(os.tmpdir(), 'claude-utility-work');
@@ -155,4 +156,36 @@ describe('Claude Code utility calls', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+
+it('runs a configured utility model without requiring an Anthropic login', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-utility-connection-'));
+  try {
+    const connections = createClaudeConnections({ dataDir });
+    await connections.save(null, {
+      name: 'Kimi', baseURL: 'https://example.test/anthropic', auth: 'bearer', apiKey: 'test-only-key',
+      models: [{ id: 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188', name: 'Kimi', modelID: 'kimi-for-coding', contextWindow: 262144, outputLimit: 32000, input: { image: false, pdf: false }, efforts: [] }],
+    });
+    const model = (await connections.catalog()).find((entry) => entry.id.startsWith('connection:'));
+    let settings;
+    const utility = createClaudeUtility({
+      connections,
+      loadSdk: async () => ({ query: async function* ({ options }) {
+        settings = options.settings;
+        expect(options.model).toBe('kimi-for-coding');
+        expect(options.env.ANTHROPIC_AUTH_TOKEN).toBe('test-only-key');
+        expect(fs.existsSync(settings)).toBe(true);
+        yield success('Summary');
+      } }),
+      launchableExecutable: async () => EXECUTABLE,
+      buildEnv: () => ENV,
+      runCli: async () => { throw new Error('Must not require Anthropic login'); },
+    });
+    expect(await utility.describe(model.id)).toMatchObject({ hasLogin: true, effort: null });
+    expect(await generate(utility, { modelID: model.id, effort: null })).toBe('Summary');
+    expect(fs.existsSync(settings)).toBe(false);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });

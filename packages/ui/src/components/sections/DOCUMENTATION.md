@@ -81,6 +81,22 @@ already have a connection and minus MCP OAuth registrations (`mcp_*`); v2's
 `GET /api/provider` lists only what is configured or connected right now, so
 it cannot offer anything new.
 
+### Claude Code connections
+
+Selecting `claude-native` opens `providers/ClaudeConnectionsPage.tsx` instead
+of the OpenCode provider editor. It uses `RuntimeAPIs.nativeAgents` to manage
+server-local connections with explicit Save and Delete actions. API keys are
+write-only and empty edit fields preserve the saved key. The form and search
+entry are absent in VS Code. `providers.claude-connections` prepares the native
+provider selection before highlighting the connection section.
+
+Saving or deleting refreshes the native catalog and replaces native providers
+in every loaded directory snapshot without changing the chosen chat model.
+Missing selected models remain unavailable until the user selects another;
+connections never fall back to a different service. Failed reads retain the
+previous list, and stale reads cannot replace a newer mutation or another
+runtime's state.
+
 ### MCP OAuth
 
 A remote MCP server with OAuth enabled is registered by OpenCode as an

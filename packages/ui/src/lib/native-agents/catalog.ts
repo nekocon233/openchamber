@@ -27,6 +27,14 @@ const listed = (state: CatalogState): NativeProvider[] => (
   })
 );
 
+/** Drop only this runtime's freshness; failed refreshes retain its last catalog. */
+export const invalidateNativeProviders = (runtimeKey: string): void => {
+  const previous = states.get(runtimeKey);
+  states.set(runtimeKey, {
+    providers: new Map(previous?.providers), complete: false, failedAt: 0, inflight: null,
+  });
+};
+
 /** Providers for the installed native CLIs; empty where native sessions are unavailable. */
 export const loadNativeProviders = async (): Promise<NativeProvider[]> => {
   const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
@@ -44,6 +52,9 @@ export const loadNativeProviders = async (): Promise<NativeProvider[]> => {
   current.inflight = (async () => {
     try {
       const catalog = await nativeAgents.catalog();
+      if (states.get(runtimeKey) !== current) {
+        return getRuntimeKey() === runtimeKey ? loadNativeProviders() : listed(current);
+      }
       let complete = true;
       for (const backend of BACKENDS) {
         const partition = catalog.backends[backend];

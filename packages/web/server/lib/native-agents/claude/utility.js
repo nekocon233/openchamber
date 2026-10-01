@@ -8,6 +8,7 @@ import os from 'node:os';
 
 import { z } from 'zod';
 
+import { prepareClaudeConnection, redactClaudeConnectionError } from './connections.js';
 import { claudeLaunchModel, claudeModels } from '../catalog.js';
 
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -58,7 +59,7 @@ const answerText = (frame, structured) => {
  * @param {(executable: string, args: string[], env: Record<string, string>) => Promise<string>} [options.runCli] what `claude <args>` printed
  * @param {string} [options.workDir] where every query runs
  */
-export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, runCli = runClaude, workDir = os.tmpdir() }) => {
+export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, runCli = runClaude, workDir = os.tmpdir(), connections }) => {
   /** @type {Set<AbortController>} */
   const running = new Set();
 
@@ -68,18 +69,23 @@ export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, r
   };
 
   const describe = async (modelID) => {
-    const model = claudeModels().find((entry) => entry.id === modelID);
+    const models = connections ? await connections.catalog() : claudeModels();
+    const model = models.find((entry) => entry.id === modelID);
     if (!model) {
       throw Object.assign(new Error('The selected model is not available in Claude Code: ' + modelID), {
         statusCode: 404, code: 'claude-model-unavailable',
       });
     }
-    return { ...model, hasLogin: await available(), effort: model.efforts.includes('low') ? 'low' : model.defaultEffort };
+    const launch = connections ? await connections.resolve(modelID) : null;
+    if (launch?.env) await launchableExecutable();
+    return { ...model, hasLogin: launch?.env ? true : await available(), effort: model.efforts.includes('low') ? 'low' : model.defaultEffort };
   };
 
   const runQuery = async ({ modelID, effort, prompt, system, maxOutputTokens, responseSchema, abortController }) => {
     const [sdk, executable] = await Promise.all([loadSdk(), launchableExecutable()]);
     abortController.signal.throwIfAborted();
+    const launch = connections ? await connections.resolve(modelID) : null;
+    const connection = await prepareClaudeConnection(launch, buildEnv());
     let stderrTail = '';
     const options = {
       // Claude Code shows the model its working directory and that
@@ -87,9 +93,8 @@ export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, r
       // project out of the prompt.
       cwd: workDir,
       pathToClaudeCodeExecutable: executable,
-      env: buildEnv(),
-      model: claudeLaunchModel(modelID),
-      thinking: { type: 'disabled' },
+      env: connection.env,
+      model: launch?.model ?? claudeLaunchModel(modelID),
       systemPrompt: [UTILITY_INSTRUCTIONS, system, maxOutputTokens ? 'Keep the answer within ' + maxOutputTokens + ' tokens.' : null]
         .filter(Boolean)
         .join('\n\n'),
@@ -103,16 +108,25 @@ export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, r
         stderrTail = (stderrTail + data).slice(-STDERR_TAIL_CHARS);
       },
     };
+    if (connection.settings) options.settings = connection.settings;
+    if (!launch?.env) options.thinking = { type: 'disabled' };
     if (effort) options.effort = effort;
     // Claude Code answers a schema with a tool call of its own, one extra
     // turn, so the query sets no turn limit.
     if (responseSchema) options.outputFormat = { type: 'json_schema', schema: responseSchema };
     let answer = null;
-    for await (const frame of sdk.query({ prompt, options })) {
-      if (frame.type === 'result') answer = frame;
+    try {
+      for await (const frame of sdk.query({ prompt, options })) {
+        if (frame.type === 'result') answer = frame;
+      }
+      if (answer === null) throw new Error(stderrTail.trim() || 'Claude Code exited before answering');
+      return answerText(answer, Boolean(responseSchema));
+    } catch (error) {
+      if (launch?.env && error instanceof Error) error.message = redactClaudeConnectionError(error.message, launch);
+      throw error;
+    } finally {
+      await connection.dispose();
     }
-    if (answer === null) throw new Error(stderrTail.trim() || 'Claude Code exited before answering');
-    return answerText(answer, Boolean(responseSchema));
   };
 
   const generate = async ({ modelID, effort, prompt, system, maxOutputTokens, responseSchema, timeoutMs, signal }) => {

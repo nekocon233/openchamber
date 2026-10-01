@@ -1,3 +1,4 @@
+import type { ClaudeConnection, ClaudeConnectionWrite } from '@/lib/native-agents/connections';
 import type { SessionMetadataRecord } from '@/lib/sessionReviewMetadata';
 import type { WorktreeMetadata } from '@/types/worktree';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
@@ -1705,6 +1706,9 @@ export interface NativeAgentsAPI {
   supported: boolean;
   capabilities(): Promise<NativeCapabilities>;
   catalog(): Promise<NativeCatalog>;
+  listClaudeConnections(): Promise<ClaudeConnection[]>;
+  saveClaudeConnection(id: string | null, connection: ClaudeConnectionWrite): Promise<ClaudeConnection>;
+  deleteClaudeConnection(id: string): Promise<void>;
   /** Claude's slash commands or Codex's enabled skills in a directory. */
   commands(backend: NativeBackend, directory: string, options?: NativeReadOptions): Promise<NativeCommandList>;
   codexCommand(request: NativeCodexCommandRequest): Promise<NativeCodexCommandResult>;

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeCatalog } from '@/lib/api/types';
-import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
-import { loadNativeProviders } from './catalog';
+import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
+import { invalidateNativeProviders, loadNativeProviders } from './catalog';
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from './test-utils/runtime';
 
 const model = (id: string) => ({
@@ -98,5 +98,36 @@ describe('loadNativeProviders', () => {
     switchRuntimeEndpoint({ apiBaseUrl: `http://catalog-${runtimeIndex}.test`, runtimeKey: `catalog-${runtimeIndex}` });
     registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({ supported: false })));
     expect(await loadNativeProviders()).toEqual([]);
+  });
+});
+
+
+describe('native connection catalog changes', () => {
+  test('a response started before a connection save cannot restore the old models', async () => {
+    let resolvePending: (value: NativeCatalog) => void = () => { throw new Error('Promise not initialized'); };
+    const pending = new Promise<NativeCatalog>((resolve) => { resolvePending = resolve; });
+    let first = true;
+    const runtime = useRuntime(async () => {
+      if (first) { first = false; return pending; }
+      return { backends: { claude: { status: 'ok', models: [model('new-connection')] }, codex: { status: 'ok', models: [] } } };
+    });
+    const oldRead = loadNativeProviders();
+    invalidateNativeProviders(getRuntimeKey());
+    resolvePending({ backends: { claude: { status: 'ok', models: [model('old-connection')] }, codex: { status: 'ok', models: [] } } });
+    expect((await oldRead)[0].models[0].id).toBe('new-connection');
+    expect((await loadNativeProviders())[0].models[0].id).toBe('new-connection');
+    expect(runtime.reads()).toBe(2);
+  });
+
+  test('failed refresh keeps the preceding catalog without declaring an empty success', async () => {
+    let failed = false;
+    useRuntime(async () => {
+      if (failed) throw new Error('offline');
+      return { backends: { claude: { status: 'ok', models: [model('saved')] }, codex: { status: 'ok', models: [] } } };
+    });
+    await loadNativeProviders();
+    failed = true;
+    invalidateNativeProviders(getRuntimeKey());
+    expect((await loadNativeProviders())[0].models[0].id).toBe('saved');
   });
 });

@@ -15,7 +15,8 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-import { claudeLaunchModel, claudeModels, codexVariantSettings } from './catalog.js';
+import { codexVariantSettings } from './catalog.js';
+import { createClaudeConnections } from './claude/connections.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
@@ -145,6 +146,7 @@ export const createNativeAgentsRuntime = ({
   managedChatsRoots = [],
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
+  const claudeConnections = createClaudeConnections({ dataDir });
   const reverts = createNativeReverts({ registry, snapshots });
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
   const questions = createQuestionRegistry({
@@ -305,6 +307,7 @@ export const createNativeAgentsRuntime = ({
     loadSdk,
     launchableExecutable: () => launchableClaudeExecutable(() => resolveExecutable('claude')),
     buildEnv: buildChildEnv,
+    connections: claudeConnections,
   });
 
   const decode = (sessionId) => {
@@ -364,6 +367,10 @@ export const createNativeAgentsRuntime = ({
   // prompt, such as /compact, shows no user message: its effect does.
   const sendToClaude = async (sessionId, request, send, { visible }) => {
     const { directory, messageID } = request;
+    const launch = await claudeConnections.resolve(request.model.modelID);
+    if (launch.descriptor && request.variant !== undefined && !launch.descriptor.efforts.includes(request.variant)) {
+      throw invalidRequestError('This model does not support the selected reasoning effort');
+    }
     const blocks = claudePromptBlocks(request.parts);
     const pending = await settleClaudeRewind(sessionId, directory);
     await committing(sessionId, directory, pending, async () => {
@@ -375,7 +382,8 @@ export const createNativeAgentsRuntime = ({
         content: visible ? { kind: 'blocks', blocks } : null,
         sdkContent: blocks,
         config: {
-          model: claudeLaunchModel(request.model.modelID),
+          model: launch.model,
+          launch,
           effort: request.variant !== undefined && CLAUDE_EFFORTS.has(request.variant) ? request.variant : null,
           permissionMode: request.agent === 'plan' ? 'plan' : 'bypassPermissions',
         },
@@ -487,6 +495,8 @@ export const createNativeAgentsRuntime = ({
 
 
   return {
+    claudeConnections,
+
     async capabilities() {
       const [claudeCli, codexCli] = await Promise.all([resolveExecutable('claude'), resolveExecutable('codex')]);
       return {
@@ -501,10 +511,10 @@ export const createNativeAgentsRuntime = ({
 
     /** Models per backend; a backend whose catalog cannot be read says why. */
     async catalog() {
-      const codexList = await settled(codexCatalog());
+      const [codexList, claudeList] = await Promise.all([settled(codexCatalog()), settled(claudeConnections.catalog())]);
       return {
         backends: {
-          [NATIVE_BACKEND_CLAUDE]: { status: 'ok', models: claudeModels() },
+          [NATIVE_BACKEND_CLAUDE]: claudeList.status === 'ok' ? { status: 'ok', models: claudeList.value } : claudeList,
           [NATIVE_BACKEND_CODEX]: codexList.status === 'ok'
             ? { status: 'ok', models: codexList.value }
             : codexList,

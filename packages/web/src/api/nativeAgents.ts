@@ -1,3 +1,4 @@
+import { claudeConnectionListSchema, claudeConnectionSchema, type ClaudeConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
 import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
 import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
@@ -30,6 +31,7 @@ const NATIVE_READ_TIMEOUT_MS = 30_000;
 const errorBodySchema = z.object({ error: z.string().optional(), code: z.string().optional() }).passthrough();
 
 type NativeWriteBody =
+  | ClaudeConnectionWrite
   | { backend: NativeBackend; directory: string; title?: string }
   | NativePromptRequest
   | NativeCompactRequest
@@ -107,6 +109,15 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   supported: true,
   capabilities: () => readParsed('/api/native/capabilities', {}, nativeCapabilitiesSchema),
   catalog: () => readParsed('/api/native/catalog', {}, nativeCatalogSchema),
+  listClaudeConnections: () => readParsed('/api/native/claude/connections', {}, claudeConnectionListSchema),
+  saveClaudeConnection: (id, body) => sendParsed(
+    id ? `/api/native/claude/connections/${encodeURIComponent(id)}` : '/api/native/claude/connections',
+    claudeConnectionSchema,
+    { method: id ? 'PATCH' : 'POST', body },
+  ),
+  deleteClaudeConnection: async (id) => {
+    await sendParsed(`/api/native/claude/connections/${encodeURIComponent(id)}`, nativeDeleteResultSchema, { method: 'DELETE', query: {} });
+  },
   codexCommand: (request) => writeParsed('/api/native/codex/command', nativeCodexCommandResultSchema, request),
   commands: (backend, directory, options) => readParsed(
     '/api/native/commands',

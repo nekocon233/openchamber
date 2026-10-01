@@ -807,3 +807,80 @@ describe('Claude session store', () => {
     expect(await store.hasTranscript('22222222-2222-4222-8222-222222222222', DIRECTORY)).toBe(false);
   });
 });
+
+describe('Claude connection switching', () => {
+  const config = (key) => ({ model: 'kimi-for-coding', effort: null, permissionMode: 'bypassPermissions', launch: {
+    key, model: 'kimi-for-coding', env: { ANTHROPIC_BASE_URL: `https://${key}.example.test`, ANTHROPIC_API_KEY: 'test-only-key' },
+  } });
+
+  it('keeps simultaneous sessions on independent connection environments', async () => {
+    const harness = createHarness();
+    const secondId = 'ncl_a22f0a7a-a88c-4093-a5e3-6653ff44f6d3';
+    await Promise.all([
+      sendPrompt(harness.live, { config: config('first') }),
+      sendPrompt(harness.live, { sessionId: secondId, config: config('second') }),
+    ]);
+    const requests = await waitFor(() => {
+      const asked = payloads(harness.events, 'question.asked');
+      return asked.length === 2 ? asked : null;
+    });
+    expect(harness.calls.queries.map((query) => query.options.env.ANTHROPIC_BASE_URL).sort()).toEqual([
+      'https://first.example.test', 'https://second.example.test',
+    ]);
+    expect(harness.calls.queries[0].options.settings).not.toBe(harness.calls.queries[1].options.settings);
+    for (const asked of requests) harness.questions.reply(asked.properties.id, [['blue']]);
+    await Promise.all([harness.live.whenIdle(SESSION_ID), harness.live.whenIdle(secondId)]);
+    await harness.live.shutdown();
+  });
+
+  it('refuses a connection change while a turn is running', async () => {
+    const harness = createHarness();
+    await sendPrompt(harness.live, { config: config('first') });
+    await expect(sendPrompt(harness.live, { config: config('second') })).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_BUSY' });
+    expect(harness.calls.queries).toHaveLength(1);
+    await answerQuestion(harness);
+    await harness.live.whenIdle(SESSION_ID);
+    await harness.live.shutdown();
+  });
+
+  it('resumes an idle session with new credentials only after its old query exits', async () => {
+    const harness = createHarness({ hasTranscript: true, exitDelayMs: 10, afterFrames: () => [{ type: 'system', subtype: 'background_tasks_changed', tasks: [] }] });
+    await sendPrompt(harness.live, { config: config('first') });
+    await answerQuestion(harness);
+    await harness.live.whenIdle(SESSION_ID);
+    await waitFor(() => !harness.live.backgroundTaskSnapshot()[SESSION_ID]);
+    const oldSettings = harness.calls.queries[0].options.settings;
+    await sendPrompt(harness.live, { config: config('second') });
+    const second = harness.calls.queries[1];
+    expect(second.previousClosed).toBe(true);
+    expect(second.options.resume).toBe(SESSION_UUID);
+    expect(second.options.env.ANTHROPIC_BASE_URL).toBe('https://second.example.test');
+    await waitFor(() => !fs.existsSync(oldSettings));
+    await harness.live.shutdown();
+  });
+
+  it('serializes competing first prompts so two connections never open the same transcript', async () => {
+    const harness = createHarness();
+    const results = await Promise.allSettled([
+      sendPrompt(harness.live, { config: config('first') }),
+      sendPrompt(harness.live, { config: config('second') }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    expect(harness.calls.queries).toHaveLength(1);
+    await answerQuestion(harness);
+    await harness.live.whenIdle(SESSION_ID);
+    await harness.live.shutdown();
+  });
+
+  it('refuses switching while background tasks keep an otherwise idle session alive', async () => {
+    const harness = createHarness({ afterFrames: () => [{ type: 'system', subtype: 'background_tasks_changed', tasks: [
+      { task_id: 'background', task_type: 'agent', description: 'Working' },
+    ] }] });
+    await sendPrompt(harness.live, { config: config('first') });
+    await answerQuestion(harness);
+    await harness.live.whenIdle(SESSION_ID);
+    await waitFor(() => harness.live.backgroundTaskSnapshot()[SESSION_ID]?.tasks.length === 1);
+    await expect(sendPrompt(harness.live, { config: config('second') })).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_BUSY' });
+    await harness.live.shutdown();
+  });
+});

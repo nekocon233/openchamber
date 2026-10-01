@@ -1,3 +1,4 @@
+import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import React from 'react';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { ProviderLogo } from '@/components/ui/ProviderLogo';
@@ -41,6 +42,7 @@ interface ProvidersSidebarProps {
 
 export const ProvidersSidebar: React.FC<ProvidersSidebarProps> = ({ onItemSelect }) => {
   const { t } = useI18n();
+  const { nativeAgents } = useRuntimeAPIs();
   // Settings browses whichever project its own selector points at; the app
   // stays where it is.
   const settingsDirectory = useSettingsDirectory();
@@ -73,7 +75,7 @@ export const ProvidersSidebar: React.FC<ProvidersSidebarProps> = ({ onItemSelect
     let cancelled = false;
 
     const loadAllSources = async () => {
-      const tasks = providers.map(async (provider) => {
+      const tasks = providers.filter((provider) => provider.id !== 'claude-native' && provider.id !== 'codex-native').map(async (provider) => {
         try {
           const query = directory ? `?directory=${encodeURIComponent(directory)}` : '';
           // OpenChamber-only metadata endpoint: the SDK exposes provider data but
@@ -145,6 +147,11 @@ export const ProvidersSidebar: React.FC<ProvidersSidebarProps> = ({ onItemSelect
       </div>
 
       <ScrollableOverlay outerClassName="flex-1 min-h-0" className="space-y-1 px-3 py-2 overflow-x-hidden">
+        {nativeAgents.supported && !providers.some((provider) => provider.id === 'claude-native') ? (
+          <Button variant="ghost" onClick={() => { setSelectedProvider('claude-native'); onItemSelect?.(); }}>
+            {t('settings.claudeConnections.title')}
+          </Button>
+        ) : null}
         {providers.length === 0 ? (
           <div className="py-12 px-4 text-center text-muted-foreground">
             <Icon name="stack" className="mx-auto mb-3 h-10 w-10 opacity-50" />

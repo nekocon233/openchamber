@@ -31,6 +31,7 @@ import { invalidRequestError, NativeAgentError } from '../errors.js';
 import { launchableClaudeExecutable } from '../executables.js';
 import { decodeNativeSessionId, encodeClaudeChildSessionId, encodeClaudeSessionId } from '../ids.js';
 import { claudeAbortedError, claudeTurnError, createClaudeProjection } from './projector.js';
+import { prepareClaudeConnection, redactClaudeConnectionError } from './connections.js';
 import { todosFromTodoWrite } from './tasks.js';
 import { createClaudeSubagents } from './subagents.js';
 
@@ -132,15 +133,15 @@ const createInputQueue = () => {
   };
 };
 
-const turnErrorOf = (frame) => {
+const turnErrorOf = (frame, launch) => {
   if (frame.terminal_reason === 'aborted_streaming' || frame.terminal_reason === 'aborted_tools') return claudeAbortedError();
   if (frame.subtype === 'success' && !frame.is_error) return null;
   const message = [frame.result, ...(frame.errors ?? [])].filter((text) => text).join('\n') || frame.subtype;
-  return claudeTurnError(message);
+  return claudeTurnError(redactClaudeConnectionError(message, launch));
 };
 
 /**
- * @typedef {{ model: string | null, effort: string | null, permissionMode: 'bypassPermissions' | 'plan' }} LiveConfig
+ * @typedef {{ model: string | null, effort: string | null, permissionMode: 'bypassPermissions' | 'plan', launch?: Awaited<ReturnType<ReturnType<typeof import('./connections.js').createClaudeConnections>['resolve']>> }} LiveConfig
  * @typedef {{ kind: 'text', text: string } | { kind: 'blocks', blocks: object[] }} PromptContent
  * @typedef {{ messageId: string, resumeAt: string }} Rewind the reverted message, and the entry before it
  */
@@ -186,6 +187,15 @@ export const createClaudeLiveSessions = ({
   const launchableExecutable = () => launchableClaudeExecutable(resolveExecutable, platform);
   /** @type {Map<string, Promise<void>>} session id → exit of its closed query */
   const exits = new Map();
+  const pendingPrompts = new Map();
+  const serializePrompt = (sessionId, work) => {
+    const previous = pendingPrompts.get(sessionId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(work);
+    pendingPrompts.set(sessionId, next);
+    return next.finally(() => {
+      if (pendingPrompts.get(sessionId) === next) pendingPrompts.delete(sessionId);
+    });
+  };
 
   const publishRecords = (live, messageIds) => {
     const records = [];
@@ -280,7 +290,7 @@ export const createClaudeLiveSessions = ({
   };
 
   const finishTurn = (live, frame) => {
-    const error = turnErrorOf(frame);
+    const error = turnErrorOf(frame, live.config.launch);
     publishRecords(live, live.projection.finishTurn({ error }));
     if (error?.name === 'MessageAbortedError') live.subagents.stop(error);
     onTurnFinished(live.sessionId, live.directory);
@@ -335,6 +345,8 @@ export const createClaudeLiveSessions = ({
   };
 
   const ended = (live, failure) => {
+    if (failure) failure = redactClaudeConnectionError(failure, live.config.launch);
+    live.stderrTail = redactClaudeConnectionError(live.stderrTail, live.config.launch);
     clearIdleTimer(live);
     if (sessions.get(live.sessionId) === live) sessions.delete(live.sessionId);
     if (live.busy) {
@@ -362,6 +374,8 @@ export const createClaudeLiveSessions = ({
       ended(live, null);
     } catch (error) {
       ended(live, error instanceof Error ? error.message : String(error));
+    } finally {
+      await live.connection.dispose();
     }
   };
 
@@ -445,6 +459,7 @@ export const createClaudeLiveSessions = ({
       rewind === null ? hasTranscript(sessionUuid, directory) : true,
       readGlobalInstructions(),
     ]);
+    const connection = await prepareClaudeConnection(config.launch, buildEnv());
     let markExited = () => {};
     const exited = new Promise((resolve) => {
       markExited = resolve;
@@ -453,6 +468,7 @@ export const createClaudeLiveSessions = ({
       sessionId,
       sessionUuid,
       directory,
+      connection,
       config,
       rewind,
       input: createInputQueue(),
@@ -486,7 +502,7 @@ export const createClaudeLiveSessions = ({
     const options = {
       cwd: directory,
       pathToClaudeCodeExecutable: executable,
-      env: buildEnv(),
+      env: connection.env,
       systemPrompt: instructions === null
         ? { type: 'preset', preset: 'claude_code' }
         : { type: 'preset', preset: 'claude_code', append: instructions },
@@ -500,12 +516,18 @@ export const createClaudeLiveSessions = ({
         live.stderrTail = (live.stderrTail + data).slice(-STDERR_TAIL_CHARS);
       },
     };
+    if (connection.settings) options.settings = connection.settings;
     if (config.model !== null) options.model = config.model;
     if (config.effort !== null) options.effort = config.effort;
     if (resume) options.resume = sessionUuid;
     else options.sessionId = sessionUuid;
     if (rewind !== null) options.resumeSessionAt = rewind.resumeAt;
-    live.query = sdk.query({ prompt: live.input, options });
+    try {
+      live.query = sdk.query({ prompt: live.input, options });
+    } catch (error) {
+      await connection.dispose();
+      throw new Error(redactClaudeConnectionError(error instanceof Error ? error.message : String(error), config.launch));
+    }
     sessions.set(sessionId, live);
     void consume(live);
     return live;
@@ -534,36 +556,45 @@ export const createClaudeLiveSessions = ({
      * @param {Rewind | null} [input.rewind] a revert this prompt commits
      */
     async prompt({ sessionId, directory, messageId, content, sdkContent, config, send, rewind = null }) {
-      const decoded = decodeNativeSessionId(sessionId);
-      if (!decoded || decoded.backend !== 'claude' || decoded.toolUseId !== null) {
-        throw invalidRequestError('Prompts go to a Claude Code session, not a subagent');
-      }
-      const uuid = USER_MESSAGE_ID.exec(messageId)?.[1];
-      if (!uuid) throw invalidRequestError(`Not a Claude user message id: ${messageId}`);
-      let live = sessions.get(sessionId);
-      // A query started for this revert has rewound already; another prompt joins it.
-      if (live && (live.closing || (rewind !== null && live.rewind?.messageId !== rewind.messageId))) {
-        close(live);
-        live = undefined;
-      }
-      if (live) {
-        await applyConfig(live, config);
-      } else {
-        await exits.get(sessionId);
-        live = await start({ sessionId, sessionUuid: decoded.sessionUuid, directory, config, rewind });
-      }
-      live.lastActive = now();
-      live.sends.set(messageId, send);
-      if (content !== null) publishRecords(live, live.projection.startUserPrompt(messageId, content));
-      live.input.push({
-        type: 'user',
-        message: { role: 'user', content: sdkContent },
-        parent_tool_use_id: null,
-        uuid,
-        origin: { kind: 'human' },
-        priority: 'next',
+      return serializePrompt(sessionId, async () => {
+        const decoded = decodeNativeSessionId(sessionId);
+        if (!decoded || decoded.backend !== 'claude' || decoded.toolUseId !== null) {
+          throw invalidRequestError('Prompts go to a Claude Code session, not a subagent');
+        }
+        const uuid = USER_MESSAGE_ID.exec(messageId)?.[1];
+        if (!uuid) throw invalidRequestError(`Not a Claude user message id: ${messageId}`);
+        let live = sessions.get(sessionId);
+        if (live && (live.config.launch?.key ?? 'default') !== (config.launch?.key ?? 'default')) {
+          if (live.busy || live.backgroundTasks.length > 0) {
+            throw new NativeAgentError('Wait for the current turn and background tasks before switching connections', { status: 409, code: 'NATIVE_CONNECTION_BUSY' });
+          }
+          close(live);
+          live = undefined;
+        }
+        // A query started for this revert has rewound already; another prompt joins it.
+        if (live && (live.closing || (rewind !== null && live.rewind?.messageId !== rewind.messageId))) {
+          close(live);
+          live = undefined;
+        }
+        if (live) {
+          await applyConfig(live, config);
+        } else {
+          await exits.get(sessionId);
+          live = await start({ sessionId, sessionUuid: decoded.sessionUuid, directory, config, rewind });
+        }
+        live.lastActive = now();
+        live.sends.set(messageId, send);
+        if (content !== null) publishRecords(live, live.projection.startUserPrompt(messageId, content));
+        live.input.push({
+          type: 'user',
+          message: { role: 'user', content: sdkContent },
+          parent_tool_use_id: null,
+          uuid,
+          origin: { kind: 'human' },
+          priority: 'next',
+        });
+        markBusy(live);
       });
-      markBusy(live);
     },
 
     /**
