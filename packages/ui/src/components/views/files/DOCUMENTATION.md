@@ -81,7 +81,24 @@ tool, so the event never reaches it.
 never shows `FilesView`'s tree; it only hosts `FilesView` as the editor). Files
 arrive through desktop drag-and-drop or through the system picker, which folder
 menus ("Upload Files"), the tree toolbar, and the mobile browser header open.
-On mobile the header button uploads into the folder currently on screen. A single upload runs at a time, in batches of three. Existing
+On mobile the header button uploads into the folder currently on screen. The
+picker keeps its selected files until the upload settles, then clears the input
+so the same file can be picked again. A single upload runs at a time, in batches of three. Existing
 names are never replaced silently: they collect into a replace-confirmation
 dialog, which is dropped when the workspace or runtime changes. The feature is
 present only when the runtime exposes `files.uploadFile`.
+
+## Mobile file actions
+
+The mobile browser header creates folders in the displayed directory. Each row
+has an actions menu; folder menus can create a child folder, and runtimes with
+`files.delete` expose deletion for files and folders, including search results.
+Deletion requires confirmation. Folder confirmation states that all contents
+will be removed. These actions use the existing runtime filesystem APIs.
+
+Dialogs retain the target and runtime identity from when they opened. A runtime
+change rejects the pending confirmation. Failed mutations keep the dialog open
+with an error. Successful mutations refresh the current directory and search;
+older reads cannot restore stale results. Deletion also closes matching file
+tabs and clears matching expansion state. The workspace root is never a row
+deletion target, and folder names are single path segments.

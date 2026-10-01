@@ -151,13 +151,18 @@ export const useFileTreeUpload = ({ root, refreshDirectory }: FileTreeUploadOpti
     input.click();
   }, []);
 
-  const handlePickerChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePickerChange = React.useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
     const directory = pickerDirectoryRef.current;
-    const picked = Array.from(event.target.files ?? []);
+    const picked = Array.from(input.files ?? []);
     pickerDirectoryRef.current = null;
-    event.target.value = '';
     if (!directory || picked.length === 0) return;
-    void uploadFiles(directory, picked);
+    try {
+      await uploadFiles(directory, picked);
+    } finally {
+      // Keep the native picker selection alive while the browser reads its files.
+      input.value = '';
+    }
   }, [uploadFiles]);
 
   const uploadElements = (

@@ -12,6 +12,10 @@ import {
 
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import { Icon } from '@/components/icon/Icon';
@@ -23,6 +27,8 @@ import type { FileListEntry, FileSearchResult } from '@/lib/api/types';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { cn } from '@/lib/utils';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { notifyFileContentInvalidated } from '@/lib/fileContentInvalidation';
 
 // The full desktop file editor, loaded on demand — it's a heavy chunk and only
 // needed once a file is actually opened.
@@ -33,6 +39,12 @@ const LazyFilesEditor = React.lazy(() =>
 type MobileFilesRoute =
   | { type: 'browser'; directory: string }
   | { type: 'file'; path: string; returnDirectory: string };
+
+type FileActionTarget = Pick<FileListEntry, 'name' | 'path' | 'isDirectory'>;
+type FileActionDialog =
+  | { type: 'createFolder'; path: string; runtimeKey: string }
+  | { type: 'delete'; entry: FileActionTarget; runtimeKey: string };
+type FileActionError = 'nameRequired' | 'invalidName' | 'operationFailed';
 
 const normalizePath = (value?: string | null): string => (value || '').replace(/\\/g, '/').replace(/\/+$/g, '');
 
@@ -92,6 +104,19 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
   const [searchResults, setSearchResults] = React.useState<FileSearchResult[]>([]);
   const [isSearching, setIsSearching] = React.useState(false);
   const directoryLoadRequestIdRef = React.useRef(0);
+  const searchRequestIdRef = React.useRef(0);
+  const [contentRevision, setContentRevision] = React.useState(0);
+  const [actionDialog, setActionDialog] = React.useState<FileActionDialog | null>(null);
+  const [folderName, setFolderName] = React.useState('');
+  const [actionError, setActionError] = React.useState<FileActionError | null>(null);
+  const [isActionPending, setIsActionPending] = React.useState(false);
+  const actionPendingRef = React.useRef(false);
+  const mountedRef = React.useRef(true);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const currentDirectory = route.type === 'browser' ? route.directory : route.returnDirectory;
   const currentDirectoryRef = React.useRef(currentDirectory);
@@ -124,7 +149,7 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
   React.useEffect(() => {
     if (route.type !== 'browser') return;
     void loadDirectory(route.directory);
-  }, [loadDirectory, route]);
+  }, [loadDirectory, route, contentRevision]);
 
   // Reload the listing only when the upload landed in the folder still on screen.
   const refreshUploadedDirectory = React.useCallback(async (directory: string) => {
@@ -139,6 +164,7 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
   const isUploading = uploadingDirectory !== null;
 
   React.useEffect(() => {
+    const requestId = ++searchRequestIdRef.current;
     if (route.type !== 'browser') return;
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
@@ -152,13 +178,13 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
       setIsSearching(true);
       void files.search({ directory: route.directory, query: normalizedQuery, maxResults: 40 })
         .then((results) => {
-          if (!cancelled) setSearchResults(results);
+          if (!cancelled && requestId === searchRequestIdRef.current) setSearchResults(results);
         })
         .catch(() => {
-          if (!cancelled) setSearchResults([]);
+          if (!cancelled && requestId === searchRequestIdRef.current) setSearchResults([]);
         })
         .finally(() => {
-          if (!cancelled) setIsSearching(false);
+          if (!cancelled && requestId === searchRequestIdRef.current) setIsSearching(false);
         });
     }, 250);
 
@@ -166,7 +192,74 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [files, query, route]);
+  }, [files, query, route, contentRevision]);
+
+  const startCreateFolder = (directory: string) => {
+    if (actionPendingRef.current) return;
+    setFolderName('');
+    setActionError(null);
+    setActionDialog({ type: 'createFolder', path: directory, runtimeKey: getRuntimeKey() });
+  };
+
+  const startDelete = (entry: FileActionTarget) => {
+    if (actionPendingRef.current || isUploading || !files.delete) return;
+    if (!entry.path.startsWith(`${root}/`)) return;
+    setActionError(null);
+    setActionDialog({ type: 'delete', entry, runtimeKey: getRuntimeKey() });
+  };
+
+  const submitAction = async () => {
+    if (!actionDialog || actionPendingRef.current) return;
+    const operation = actionDialog;
+    if (operation.runtimeKey !== getRuntimeKey()) {
+      setActionDialog(null);
+      toast.error(t('sidebarFilesTree.toast.operationFailed'));
+      return;
+    }
+    const name = folderName.trim();
+    if (operation.type === 'createFolder') {
+      if (!name) { setActionError('nameRequired'); return; }
+      if (name === '.' || name === '..' || /[\\/]/.test(name)) {
+        setActionError('invalidName');
+        return;
+      }
+    }
+
+    actionPendingRef.current = true;
+    setIsActionPending(true);
+    setActionError(null);
+    try {
+      const target = operation.type === 'createFolder'
+        ? `${operation.path}/${name}`
+        : operation.entry.path;
+      const result = operation.type === 'createFolder'
+        ? await files.createDirectory(target)
+        : await files.delete?.(target);
+      if (operation.runtimeKey !== getRuntimeKey()) return;
+      if (!result?.success) {
+        if (mountedRef.current) setActionError('operationFailed');
+        return;
+      }
+      if (operation.type === 'delete') {
+        useFilesViewTabsStore.getState().removeOpenPathsByPrefix(root, target);
+        useFilesViewTabsStore.getState().removeExpandedPathsByPrefix(root, target);
+      }
+      notifyFileContentInvalidated({ runtimeKey: operation.runtimeKey, paths: [target] });
+      if (!mountedRef.current) return;
+      directoryLoadRequestIdRef.current += 1;
+      searchRequestIdRef.current += 1;
+      setContentRevision(revision => revision + 1);
+      setActionDialog(null);
+      toast.success(t(operation.type === 'createFolder'
+        ? 'sidebarFilesTree.toast.folderCreated'
+        : 'sidebarFilesTree.toast.deletedSuccessfully'));
+    } catch {
+      if (mountedRef.current && operation.runtimeKey === getRuntimeKey()) setActionError('operationFailed');
+    } finally {
+      actionPendingRef.current = false;
+      if (mountedRef.current) setIsActionPending(false);
+    }
+  };
 
   const openDirectory = (directory: string) => {
     setQuery('');
@@ -243,6 +336,58 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
       {uploadElements}
+      <Dialog open={actionDialog !== null} onOpenChange={open => {
+        if (!open && !actionPendingRef.current) setActionDialog(null);
+      }}>
+        <DialogContent>
+          <form onSubmit={event => { event.preventDefault(); void submitAction(); }}>
+            <DialogHeader>
+              <DialogTitle>{t(actionDialog?.type === 'delete'
+                ? 'sidebarFilesTree.dialog.delete.title'
+                : 'sidebarFilesTree.dialog.createFolder.title')}</DialogTitle>
+              <DialogDescription>
+                {actionDialog?.type === 'createFolder'
+                  ? t('sidebarFilesTree.dialog.createFolder.description', { path: actionDialog.path })
+                  : actionDialog?.type === 'delete'
+                    ? t(actionDialog.entry.isDirectory
+                      ? 'mobile.files.deleteFolderDescription'
+                      : 'sidebarFilesTree.dialog.delete.description', { name: getRelativePath(actionDialog.entry.path, root) })
+                    : null}
+              </DialogDescription>
+            </DialogHeader>
+            {actionDialog?.type === 'createFolder' ? (
+              <div className="py-4">
+                <Input
+                  aria-label={t('sidebarFilesTree.dialog.namePlaceholder')}
+                  placeholder={t('sidebarFilesTree.dialog.namePlaceholder')}
+                  value={folderName}
+                  onChange={event => { setFolderName(event.target.value); setActionError(null); }}
+                  autoFocus
+                  disabled={isActionPending}
+                  aria-invalid={actionError === 'invalidName' || actionError === 'nameRequired'}
+                />
+              </div>
+            ) : null}
+            {actionError ? (
+              <p role="alert" className="py-3 typography-ui-label text-[var(--status-error-text)]">
+                {t(actionError === 'invalidName' ? 'mobile.files.invalidFolderName'
+                  : actionError === 'nameRequired' ? 'sidebarFilesTree.toast.folderNameRequired'
+                    : 'sidebarFilesTree.toast.operationFailed')}
+              </p>
+            ) : null}
+            <DialogFooter className="mt-4">
+              <Button variant="outline" onClick={() => setActionDialog(null)} disabled={isActionPending}>
+                {t('sidebarFilesTree.dialog.cancel')}
+              </Button>
+              <Button type="submit" variant={actionDialog?.type === 'delete' ? 'destructive' : 'default'}
+                disabled={isActionPending || (actionDialog?.type === 'createFolder' && !folderName.trim())}>
+                {isActionPending ? <Icon name="loader-4" className="size-4 animate-spin" /> : null}
+                {t(actionDialog?.type === 'delete' ? 'sidebarFilesTree.dialog.delete.confirm' : 'sidebarFilesTree.dialog.confirm')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       <header className="flex h-[var(--oc-header-height,56px)] shrink-0 items-center gap-2 px-3 text-foreground">
         {onClose ? (
           <button
@@ -269,6 +414,10 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
         <div className="min-w-0 flex-1 px-1">
           <h2 className="truncate typography-ui-label text-foreground">{directoryLabel}</h2>
         </div>
+        <Button variant="ghost" size="icon" onClick={() => startCreateFolder(route.directory)} disabled={isActionPending}
+          title={t('sidebarFilesTree.actions.newFolderTitle')} aria-label={t('sidebarFilesTree.actions.newFolderTitle')}>
+          <Icon name="folder-add" className="size-5" />
+        </Button>
         <button
           type="button"
           className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -307,7 +456,8 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
         {directoryError ? (
           <MobileFilesState message={directoryError} />
         ) : query.trim() ? (
-          <MobileSearchResults results={visibleSearchResults} isSearching={isSearching} onOpenFile={openFile} />
+          <MobileSearchResults results={visibleSearchResults} isSearching={isSearching} onOpenFile={openFile}
+            onDelete={files.delete ? startDelete : undefined} actionsDisabled={isActionPending || isUploading} />
         ) : (
           <div className="overflow-hidden rounded-2xl border border-border/70 bg-[var(--surface-elevated)]">
             {entries.length === 0 && !isLoadingDirectory ? (
@@ -321,6 +471,9 @@ const MobileFilesSurfaceForRoot: React.FC<MobileFilesSurfaceProps & { root: stri
                 directory={entry.isDirectory}
                 meta={entry.isDirectory ? undefined : formatFileSize(entry.size)}
                 onClick={() => entry.isDirectory ? openDirectory(entry.path) : openFile(entry.path)}
+                onCreateFolder={entry.isDirectory ? () => startCreateFolder(entry.path) : undefined}
+                onDelete={files.delete ? () => startDelete(entry) : undefined}
+                actionsDisabled={isActionPending || isUploading}
               />
             ))}
           </div>
@@ -336,29 +489,56 @@ const MobileFileRow: React.FC<{
   directory: boolean;
   meta?: string;
   onClick: () => void;
-}> = ({ name, path, directory, meta, onClick }) => (
-  <button
-    type="button"
-    className="flex min-h-14 w-full items-center gap-3 border-b border-border/70 px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-    onClick={onClick}
-    style={{ touchAction: 'manipulation' }}
-  >
-    {directory ? (
-      <RiFolder3Fill className="size-5 shrink-0 text-primary/80" />
-    ) : (
-      <FileTypeIcon filePath={path} className="size-5 shrink-0" />
-    )}
-    <span className="block min-w-0 flex-1 truncate typography-ui-label text-foreground">{name}</span>
-    {meta ? <span className="shrink-0 typography-micro text-muted-foreground">{meta}</span> : null}
-    {directory ? <RiArrowRightSLine className="size-4 shrink-0 text-muted-foreground/60" /> : null}
-  </button>
-);
+  onCreateFolder?: () => void;
+  onDelete?: () => void;
+  actionsDisabled?: boolean;
+}> = ({ name, path, directory, meta, onClick, onCreateFolder, onDelete, actionsDisabled }) => {
+  const { t } = useI18n();
+  return (
+    <div className="flex items-center border-b border-border/70 pr-2 last:border-b-0">
+      <button
+        type="button"
+        className="flex min-h-14 min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        onClick={onClick}
+        style={{ touchAction: 'manipulation' }}
+      >
+        {directory ? (
+          <RiFolder3Fill className="size-5 shrink-0 text-primary/80" />
+        ) : (
+          <FileTypeIcon filePath={path} className="size-5 shrink-0" />
+        )}
+        <span className="block min-w-0 flex-1 truncate typography-ui-label text-foreground">{name}</span>
+        {meta ? <span className="min-w-0 max-w-[50%] shrink truncate typography-micro text-muted-foreground" title={meta}>{meta}</span> : null}
+        {directory ? <RiArrowRightSLine className="size-4 shrink-0 text-muted-foreground/60" /> : null}
+      </button>
+      {onCreateFolder || onDelete ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label={t('mobile.files.actionsForAria', { name })} disabled={actionsDisabled}>
+              <Icon name="more-2" className="size-5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {onCreateFolder ? <DropdownMenuItem onSelect={onCreateFolder}>
+              <Icon name="folder-add" />{t('sidebarFilesTree.menu.newFolder')}
+            </DropdownMenuItem> : null}
+            {onDelete ? <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              <Icon name="delete-bin" />{t('sidebarFilesTree.menu.delete')}
+            </DropdownMenuItem> : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </div>
+  );
+};
 
 const MobileSearchResults: React.FC<{
   results: FileSearchResult[];
   isSearching: boolean;
   onOpenFile: (path: string) => void;
-}> = ({ results, isSearching, onOpenFile }) => {
+  onDelete?: (entry: FileActionTarget) => void;
+  actionsDisabled: boolean;
+}> = ({ results, isSearching, onOpenFile, onDelete, actionsDisabled }) => {
   const { t } = useI18n();
   const root = normalizePath(useEffectiveDirectory() ?? null);
   if (isSearching) return <MobileFilesState loading message={t('common.loading')} />;
@@ -373,6 +553,8 @@ const MobileSearchResults: React.FC<{
           directory={false}
           meta={getRelativePath(result.path, root)}
           onClick={() => onOpenFile(result.path)}
+          onDelete={onDelete ? () => onDelete({ name: getNameFromPath(result.path), path: result.path, isDirectory: false }) : undefined}
+          actionsDisabled={actionsDisabled}
         />
       ))}
     </div>
