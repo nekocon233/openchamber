@@ -10,6 +10,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "settings.chatgpt.limitReached": "Osiągnięto limit użycia planu ChatGPT. Sprawdź limity aplikacji i planu w ustawieniach ChatGPT.",
+  "settings.chatgpt.notEligible": "To konto lub obszar roboczy ChatGPT nie może użyć planu do tego żądania.",
+  "settings.chatgpt.reauthorize": "Autoryzacja ChatGPT wygasła. Zaloguj się ponownie w Ustawienia → Dostawcy → Claude Code CLI.",
+
+  "settings.chatgpt.title": "Plan ChatGPT",
+  "settings.chatgpt.description": "Używaj modeli GPT w Claude Code w ramach planu ChatGPT. Obsługiwane są tekst i narzędzia programistyczne.",
+  "settings.chatgpt.connected": "Połączono",
+  "settings.chatgpt.signedOut": "Wylogowano",
+  "settings.chatgpt.permissionRequired": "Wymagana jest zgoda na używanie planu ChatGPT.",
+  "settings.chatgpt.signIn": "Kontynuuj z ChatGPT",
+  "settings.chatgpt.signOut": "Wyloguj",
+  "settings.chatgpt.localOnly": "Zaloguj się na komputerze, na którym działa ten serwer OpenChamber. Potem możesz używać połączenia tutaj.",
+  "settings.chatgpt.callback": "Wróć do OpenChamber, aby sprawdzić wynik logowania. Możesz zamknąć tę kartę.",
+  "settings.chatgpt.cancelled": "Logowanie anulowane.",
+  "settings.chatgpt.authFailed": "Logowanie nie zostało ukończone. Spróbuj ponownie.",
+  "settings.chatgpt.modelsUnavailable": "Nie udało się odświeżyć listy modeli. Zachowano poprzednie modele.",
+  "settings.chatgpt.exchanging": "Kończenie logowania…",
+  "settings.chatgpt.pending": "Dokończ autoryzację w przeglądarce i wróć tutaj.",
+  "settings.chatgpt.openBrowser": "Otwórz przeglądarkę",
+  "settings.chatgpt.revocationUnconfirmed": "Wylogowano lokalnie. Nie potwierdzono zdalnego cofnięcia zgody; odłącz aplikację w ustawieniach ChatGPT.",
+  "settings.chatgpt.manageUsage": "Zarządzaj użyciem",
+  "settings.chatgpt.usingPlan": "Korzystanie z planu ChatGPT",
+  "settings.chatgpt.welcome": "Obsługiwane żądania korzystają z planu ChatGPT. Dostępem i limitami możesz zarządzać w ustawieniach ChatGPT. Rozliczanie kluczem API nie jest włączane automatycznie.",
+  "settings.chatgpt.gotIt": "Rozumiem",
+
   "settings.claudeConnections.title": "Połączenia Claude Code",
   "settings.claudeConnections.description": "Wybierz połączenie na liście modeli czatu. Ustawienia są zapisane na tym serwerze OpenChamber; ustawienia terminala pozostają bez zmian.",
   "settings.claudeConnections.connections": "Zapisane połączenia",

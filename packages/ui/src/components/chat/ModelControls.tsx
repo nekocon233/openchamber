@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button';
+import { openExternalUrl } from '@/lib/url';
 import { OPENCODE_TOOLS } from '@/lib/opencode/tools';
 import React from 'react';
 import type { Model } from '@/lib/opencode/model';
@@ -3084,6 +3086,14 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 </div>
             </div>
 
+            {currentProviderId === 'claude-native' && currentModelId.startsWith('chatgpt:') ? (
+                <div className="flex flex-wrap items-center justify-end gap-2 typography-meta text-muted-foreground">
+                    <span>{t('settings.chatgpt.usingPlan')}</span>
+                    <Button type="button" variant="link" size="xs" onClick={() => void openExternalUrl('https://chatgpt.com/settings/usage')}>
+                        {t('settings.chatgpt.manageUsage')}
+                    </Button>
+                </div>
+            ) : null}
             {renderMobileModelPanel()}
             {renderMobileVariantPanel()}
             {!selection && !isAutoSelected && renderMobileAgentPanel()}

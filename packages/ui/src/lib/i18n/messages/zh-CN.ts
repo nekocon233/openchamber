@@ -10,6 +10,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "settings.chatgpt.limitReached": "已达到 ChatGPT 套餐用量限制，请在 ChatGPT 设置中查看应用和套餐的额度。",
+  "settings.chatgpt.notEligible": "此 ChatGPT 账号或工作区无法使用套餐完成该请求。",
+  "settings.chatgpt.reauthorize": "ChatGPT 授权已失效，请在设置 → 服务商 → Claude Code CLI 中重新登录。",
+
+  "settings.chatgpt.title": "ChatGPT 套餐",
+  "settings.chatgpt.description": "通过 ChatGPT 套餐在 Claude Code 中使用 GPT 模型，支持文本和编码工具。",
+  "settings.chatgpt.connected": "已连接",
+  "settings.chatgpt.signedOut": "已退出登录",
+  "settings.chatgpt.permissionRequired": "需要授权使用 ChatGPT 套餐。",
+  "settings.chatgpt.signIn": "使用 ChatGPT 继续",
+  "settings.chatgpt.signOut": "退出登录",
+  "settings.chatgpt.localOnly": "请在运行此 OpenChamber 服务的电脑上完成登录，之后即可在这里使用连接。",
+  "settings.chatgpt.callback": "请返回 OpenChamber 查看登录结果。你可以关闭此标签页。",
+  "settings.chatgpt.cancelled": "已取消登录。",
+  "settings.chatgpt.authFailed": "登录未完成，请重试。",
+  "settings.chatgpt.modelsUnavailable": "无法刷新模型列表，已保留之前加载的模型。",
+  "settings.chatgpt.exchanging": "正在完成登录…",
+  "settings.chatgpt.pending": "请在浏览器中完成授权，然后返回这里。",
+  "settings.chatgpt.openBrowser": "打开浏览器",
+  "settings.chatgpt.revocationUnconfirmed": "已在本地退出，尚未确认远程授权已撤销；请在 ChatGPT 设置中断开此应用。",
+  "settings.chatgpt.manageUsage": "管理用量",
+  "settings.chatgpt.usingPlan": "使用 ChatGPT 套餐",
+  "settings.chatgpt.welcome": "符合条件的请求会使用你的 ChatGPT 套餐。你可以在 ChatGPT 设置中管理访问权限和用量限制，不会自动改用 API 密钥计费。",
+  "settings.chatgpt.gotIt": "知道了",
+
   "settings.claudeConnections.title": "Claude Code 连接",
   "settings.claudeConnections.description": "在聊天模型选择器中选择连接。配置保存在当前 OpenChamber 服务端，终端设置保持不变。",
   "settings.claudeConnections.connections": "已保存的连接",

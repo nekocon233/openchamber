@@ -178,8 +178,9 @@ export const nativeSessionListSchema = z.object({
 const nativeModelSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
-  contextWindow: z.number(),
-  outputLimit: z.number(),
+  billing: z.literal('chatgpt-plan').optional(),
+  contextWindow: z.number().nullable(),
+  outputLimit: z.number().nullable(),
   efforts: z.array(z.string()),
   defaultEffort: z.string().nullable(),
   // Whether the model offers Codex's Fast tier; a server from before it has no field.

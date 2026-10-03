@@ -34,11 +34,15 @@ export const isConfigured = () => {
   return Boolean(entry?.key || entry?.token);
 };
 
-export const fetchQuota = async () => {
-  const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
-  const apiKey = entry?.key ?? entry?.token;
+export const isKimiCodingEndpoint = (baseURL) => {
+  try {
+    const url = new URL(baseURL);
+    return ['https://api.kimi.com', 'https://api.kimi.ai'].includes(url.origin)
+      && url.pathname.replace(/\/$/, '') === '/coding' && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+};
 
+export const fetchKimiQuota = async ({ apiKey, baseURL = 'https://api.kimi.com/coding/', fetchImpl = fetch }) => {
   if (!apiKey) {
     return buildResult({
       providerId,
@@ -50,8 +54,12 @@ export const fetchQuota = async () => {
   }
 
   try {
-    const response = await fetch('https://api.kimi.com/coding/v1/usages', {
+    if (!isKimiCodingEndpoint(baseURL)) throw new Error('Unsupported Kimi Coding endpoint');
+    const endpoint = new URL(`${baseURL.replace(/\/$/, '')}/v1/usages`);
+    const response = await fetchImpl(endpoint.href, {
       method: 'GET',
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
@@ -117,4 +125,10 @@ export const fetchQuota = async () => {
       error: error instanceof Error ? error.message : 'Request failed'
     });
   }
+};
+
+
+export const fetchQuota = async () => {
+  const entry = normalizeAuthEntry(getAuthEntry(readAuthFile(), aliases));
+  return fetchKimiQuota({ apiKey: entry?.key ?? entry?.token });
 };

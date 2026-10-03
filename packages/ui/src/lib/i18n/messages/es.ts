@@ -10,6 +10,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "settings.chatgpt.limitReached": "Se alcanzó el límite de uso del plan de ChatGPT. Revisa los límites de la aplicación y del plan en los ajustes de ChatGPT.",
+  "settings.chatgpt.notEligible": "Esta cuenta o espacio de trabajo de ChatGPT no puede usar el plan para esta solicitud.",
+  "settings.chatgpt.reauthorize": "La autorización de ChatGPT ha caducado. Inicia sesión de nuevo en Ajustes → Proveedores → Claude Code CLI.",
+
+  "settings.chatgpt.title": "Plan de ChatGPT",
+  "settings.chatgpt.description": "Usa modelos GPT en Claude Code con tu plan de ChatGPT. Admite texto y herramientas de programación.",
+  "settings.chatgpt.connected": "Conectado",
+  "settings.chatgpt.signedOut": "Sesión cerrada",
+  "settings.chatgpt.permissionRequired": "Se requiere permiso para usar tu plan de ChatGPT.",
+  "settings.chatgpt.signIn": "Continuar con ChatGPT",
+  "settings.chatgpt.signOut": "Cerrar sesión",
+  "settings.chatgpt.localOnly": "Inicia sesión en el equipo que ejecuta este servidor OpenChamber. Después podrás usar la conexión aquí.",
+  "settings.chatgpt.callback": "Vuelve a OpenChamber para comprobar el inicio de sesión. Puedes cerrar esta pestaña.",
+  "settings.chatgpt.cancelled": "Inicio de sesión cancelado.",
+  "settings.chatgpt.authFailed": "No se completó el inicio de sesión. Inténtalo de nuevo.",
+  "settings.chatgpt.modelsUnavailable": "No se pudo actualizar la lista de modelos. Se conservan los anteriores.",
+  "settings.chatgpt.exchanging": "Completando el inicio de sesión…",
+  "settings.chatgpt.pending": "Completa la autorización en tu navegador y vuelve aquí.",
+  "settings.chatgpt.openBrowser": "Abrir navegador",
+  "settings.chatgpt.revocationUnconfirmed": "Se cerró la sesión local. No se confirmó la revocación remota; desconecta la aplicación en los ajustes de ChatGPT.",
+  "settings.chatgpt.manageUsage": "Gestionar uso",
+  "settings.chatgpt.usingPlan": "Usando el plan de ChatGPT",
+  "settings.chatgpt.welcome": "Las solicitudes compatibles usan tu plan de ChatGPT. Gestiona el acceso y los límites en los ajustes de ChatGPT. No se cambia automáticamente a la facturación con clave de API.",
+  "settings.chatgpt.gotIt": "Entendido",
+
   "settings.claudeConnections.title": "Conexiones de Claude Code",
   "settings.claudeConnections.description": "Elige una conexión en el selector de modelos del chat. Se guardan en este servidor de OpenChamber; la configuración del terminal no cambia.",
   "settings.claudeConnections.connections": "Conexiones guardadas",

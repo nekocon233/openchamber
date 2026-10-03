@@ -14,8 +14,8 @@ const window = (windowSeconds: number | null) => ({
   resetAfterFormatted: null,
 });
 
-const group = (providerId: string, rows: Array<{ key: string; label: string; subtitle?: string; seconds: number | null }>): UsageProviderGroup => ({
-  providerId: providerId as UsageProviderGroup['providerId'],
+const group = (providerId: UsageProviderGroup['providerId'], rows: Array<{ key: string; label: string; subtitle?: string; seconds: number | null }>): UsageProviderGroup => ({
+  providerId,
   providerName: providerId,
   status: null,
   rows: rows.map((row) => ({
@@ -97,4 +97,20 @@ describe('pickUsageHeadline', () => {
   test('returns null for a matched provider that reported no rows', () => {
     expect(pickUsageHeadline([group('codex', [])], 'codex')).toBeNull();
   });
+});
+
+
+test('managed connections never show the default Claude or Codex account quota', () => {
+  expect(resolveQuotaProviderId('claude-native', 'connection:account:model')).toBe('kimi-claude:account');
+  expect(resolveQuotaProviderId('claude-native', 'chatgpt:account:model')).toBeNull();
+  expect(pickUsageHeadline([], 'claude-native', 'connection:account:model')).toBeNull();
+});
+
+
+test('selects the exact Kimi connection instead of either other account', () => {
+  const claude = group('claude', [{ key: 'claude', label: 'Claude', seconds: 18000 }]);
+  const opencode = group('kimi-for-coding', [{ key: 'opencode', label: 'OpenCode', seconds: 18000 }]);
+  const native = group('kimi-claude:account', [{ key: 'native', label: 'Native', seconds: 18000 }]);
+  expect(pickUsageHeadline([claude, opencode, native], 'claude-native', 'connection:account:model')?.group).toBe(native);
+  expect(pickUsageHeadline([claude, opencode], 'claude-native', 'connection:account:model')).toBeNull();
 });

@@ -1,3 +1,5 @@
+import { chatgptErrorLabel } from '@/lib/native-agents/chatgpt-error';
+import { openExternalUrl } from '@/lib/url';
 import React from 'react';
 import type { Part } from '@/lib/opencode/model';
 import { isQuestionTool } from '@/lib/opencode/tools';
@@ -1615,6 +1617,7 @@ const AssistantMessageBody = React.memo(({
     }, [toolParts]);
 
     const shouldDeferSortedInlineText = isSortedRenderMode && !hasStopFinish && !hasQuestionTool;
+    const chatgptError = sessionId?.startsWith('ncl_') && errorMessage ? chatgptErrorLabel(errorMessage) : null;
     const showErrorMessage = Boolean(errorMessage);
     const isPeekSurface = chatSurfaceMode === 'peek';
     const shouldShowMessageActions = hasCopyableText && !isPeekSurface;
@@ -2288,11 +2291,14 @@ const AssistantMessageBody = React.memo(({
                                     <Icon name="information" className="size-4 shrink-0 text-[var(--status-info)]" />
                                     <div className="min-w-0 flex-1 break-words">
                                         <SimpleMarkdownRenderer
-                                            content={errorMessage ?? ''}
+                                            content={chatgptError ? t(chatgptError) : errorMessage ?? ''}
                                             onShowPopup={onShowPopup}
                                             className="[&_.markdown-content>*:first-child]:mt-0 [&_.markdown-content>*:last-child]:mb-0"
                                             enableFileReferences={false}
                                         />
+                                        {chatgptError ? <Button type="button" variant="link" size="sm" onClick={() => void openExternalUrl('https://chatgpt.com/settings/usage')}>
+                                            {t('settings.chatgpt.manageUsage')}
+                                        </Button> : null}
                                     </div>
                                 </div>
                             </div>

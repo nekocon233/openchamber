@@ -97,6 +97,15 @@ connections never fall back to a different service. Failed reads retain the
 previous list, and stale reads cannot replace a newer mutation or another
 runtime's state.
 
+`ChatgptConnectionsSection` manages separate ChatGPT registrations below the
+API-key connection editor. It starts OAuth only when the server's local-management
+capability permits it, polls only during the bounded authorization attempt and
+cancels pending attempts when leaving the page. Terminal status and a fresh
+account list own the UI state. The first successful plan authorization requires
+acknowledging the plan-use notice once. Logout reports unconfirmed remote
+revocation separately. Model controls identify plan usage and link to ChatGPT's
+usage settings. Explicit bridge error codes receive localized recovery text.
+
 ### MCP OAuth
 
 A remote MCP server with OAuth enabled is registered by OpenCode as an

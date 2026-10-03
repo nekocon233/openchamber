@@ -117,6 +117,30 @@ saved list include ClinePass through the provider registry.
 
 Web and VS Code accept finite numeric balances and non-empty numeric strings. Missing, blank, or malformed balances remain explicit failures; zero is valid. Credential lookup uses a non-empty string `key`, then `token`, so malformed or blank keys cannot mark the provider configured or hide a valid fallback token. Hyper fetchers accept `readAuth` and `fetchImpl` dependencies for tests without replacing filesystem or auth modules.
 
+## Native Claude Code Kimi connections
+
+A Kimi Coding connection managed under Claude Code has its own quota identity,
+`kimi-claude:<connection UUID>`. The connection owner advertises that ID only
+for the official HTTPS `/coding` endpoints on `api.kimi.com` and `api.kimi.ai`.
+`GET /api/quota/:providerId` routes these IDs to the native connection store
+before the OpenCode-owned dispatcher and its external-OpenCode guard.
+
+The connection owner reads the current key and endpoint and passes them to
+`fetchKimiQuota`; it never copies credentials to OpenCode or falls back to its
+Kimi key. Requests use the configured official origin, refuse redirects, and
+share the normal Kimi response transformation. Unsupported or deleted
+connections report unconfigured. They cannot send another provider's key to Kimi.
+
+Shared UI discovers these sources through `nativeAgents.listClaudeConnections`
+and shows separate `... / Claude Code` cards. When both sources exist, the
+legacy Kimi card is labelled `... / OpenCode`; an old OpenCode key may still
+report 401 independently. Explicit quota visibility choices remain explicit;
+default visibility includes discovered native sources. Discovery shares the
+existing three-minute timer. A failed discovery retains the preceding metadata;
+a successful connection revision change aborts its older requests and removes
+its stale usage. Runtime switches discard old results. VS Code has no native
+sources. ChatGPT-plan Claude sessions never use the Claude subscription headline.
+
 ## Kimi for Coding field semantics
 
 `GET https://api.kimi.com/coding/v1/usages` is inconsistent about which field carries consumption:

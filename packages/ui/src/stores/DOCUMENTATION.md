@@ -58,6 +58,14 @@ and generation checks prevent their completions from changing the next runtime.
 request, including JSON body delivery. Compact usage cards and Settings display
 refresh errors alongside retained data. The mobile popover makes at most one
 refresh attempt per opening, so a failed first load cannot create a retry loop.
+Native Kimi sources are discovered from the connected runtime's Claude connection
+metadata, once per load/refresh rather than per render. Their connection revision
+owns invalidation: changed credentials abort older requests and clear only that
+source's sample; an authoritative deletion removes only that source. Failed
+metadata reads preserve the previous list and report `nativeProviderError`.
+Explicit visibility selections remain unchanged when a new source appears;
+without a saved selection the default includes discovered sources. Forced
+refresh after a connection mutation supersedes an older metadata read.
 
 `useSmallModelStore` answers one question: can OpenChamber's background model
 (the Small Model) run right now? `GET /api/small-model` says `available: false`

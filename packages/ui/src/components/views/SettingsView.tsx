@@ -485,7 +485,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       return result.id === 'skills.create' ? 'skills.basic-information' : result.id;
     }
 
-    if (result.id === 'providers.claude-connections') {
+    if (result.id === 'providers.claude-connections' || result.id === 'providers.chatgpt-plan') {
       useConfigStore.getState().setSelectedProvider('claude-native');
     }
 

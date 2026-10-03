@@ -10,6 +10,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "settings.chatgpt.limitReached": "Досягнуто ліміту використання плану ChatGPT. Перевірте ліміти застосунку та плану в налаштуваннях ChatGPT.",
+  "settings.chatgpt.notEligible": "Цей обліковий запис або робочий простір ChatGPT не може використати план для цього запиту.",
+  "settings.chatgpt.reauthorize": "Авторизація ChatGPT втратила чинність. Увійдіть знову в Налаштування → Постачальники → Claude Code CLI.",
+
+  "settings.chatgpt.title": "План ChatGPT",
+  "settings.chatgpt.description": "Використовуйте моделі GPT у Claude Code через свій план ChatGPT. Підтримуються текст та інструменти програмування.",
+  "settings.chatgpt.connected": "Підключено",
+  "settings.chatgpt.signedOut": "Вихід виконано",
+  "settings.chatgpt.permissionRequired": "Потрібен дозвіл на використання плану ChatGPT.",
+  "settings.chatgpt.signIn": "Продовжити з ChatGPT",
+  "settings.chatgpt.signOut": "Вийти",
+  "settings.chatgpt.localOnly": "Увійдіть на комп’ютері, де працює цей сервер OpenChamber. Після цього з’єднання можна використовувати тут.",
+  "settings.chatgpt.callback": "Поверніться до OpenChamber, щоб перевірити вхід. Цю вкладку можна закрити.",
+  "settings.chatgpt.cancelled": "Вхід скасовано.",
+  "settings.chatgpt.authFailed": "Вхід не завершено. Спробуйте ще раз.",
+  "settings.chatgpt.modelsUnavailable": "Не вдалося оновити список моделей. Попередні моделі збережено.",
+  "settings.chatgpt.exchanging": "Завершення входу…",
+  "settings.chatgpt.pending": "Завершіть авторизацію в браузері та поверніться сюди.",
+  "settings.chatgpt.openBrowser": "Відкрити браузер",
+  "settings.chatgpt.revocationUnconfirmed": "Локальний вихід виконано. Віддалене відкликання не підтверджено; від’єднайте застосунок у налаштуваннях ChatGPT.",
+  "settings.chatgpt.manageUsage": "Керувати використанням",
+  "settings.chatgpt.usingPlan": "Використовується план ChatGPT",
+  "settings.chatgpt.welcome": "Підтримувані запити використовують ваш план ChatGPT. Керуйте доступом і лімітами в налаштуваннях ChatGPT. Автоматичного переходу на оплату ключем API немає.",
+  "settings.chatgpt.gotIt": "Зрозуміло",
+
   "settings.claudeConnections.title": "З’єднання Claude Code",
   "settings.claudeConnections.description": "Виберіть з’єднання у списку моделей чату. Налаштування зберігаються на цьому сервері OpenChamber; налаштування термінала не змінюються.",
   "settings.claudeConnections.connections": "Збережені з’єднання",

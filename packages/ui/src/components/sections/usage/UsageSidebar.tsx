@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Icon } from "@/components/icon/Icon";
 import { cn } from '@/lib/utils';
-import { QUOTA_PROVIDERS, resolveUsageTone } from '@/lib/quota';
+import { getQuotaProviderList, resolveUsageTone } from '@/lib/quota';
 import { useQuotaStore } from '@/stores/useQuotaStore';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { useI18n } from '@/lib/i18n';
@@ -29,6 +29,9 @@ const getUsagePercent = (usage: { windows?: Record<string, { usedPercent: number
 export const UsageSidebar: React.FC<UsageSidebarProps> = ({ onItemSelect }) => {
   const { t } = useI18n();
   const results = useQuotaStore((state) => state.results);
+  const nativeProviders = useQuotaStore((state) => state.nativeProviders);
+  const nativeProviderError = useQuotaStore((state) => state.nativeProviderError);
+  const providers = React.useMemo(() => getQuotaProviderList(nativeProviders), [nativeProviders]);
   const selectedProviderId = useQuotaStore((state) => state.selectedProviderId);
   const setSelectedProvider = useQuotaStore((state) => state.setSelectedProvider);
   const fetchAllQuotas = useQuotaStore((state) => state.fetchAllQuotas);
@@ -64,7 +67,7 @@ export const UsageSidebar: React.FC<UsageSidebarProps> = ({ onItemSelect }) => {
       <div className="border-b px-3 pt-4 pb-3">
         <h2 className={`${SETTINGS_PANEL_TITLE_CLASS} mb-3`}>{t('settings.usage.sidebar.title')}</h2>
         <div className="flex items-center justify-between gap-2">
-          <span className="typography-meta text-muted-foreground">{t('settings.usage.sidebar.total', { count: QUOTA_PROVIDERS.length })}</span>
+          <span className="typography-meta text-muted-foreground">{t('settings.usage.sidebar.total', { count: providers.length })}</span>
           <div className="flex items-center gap-2">
             <Button size="sm"
               variant="ghost"
@@ -93,7 +96,8 @@ export const UsageSidebar: React.FC<UsageSidebarProps> = ({ onItemSelect }) => {
       </div>
 
       <ScrollableOverlay outerClassName="flex-1 min-h-0" className="space-y-1 px-3 py-2 overflow-x-hidden">
-        {QUOTA_PROVIDERS.map((provider) => {
+        {nativeProviderError ? <p role="alert" className="typography-meta text-[var(--status-error-text)]">{nativeProviderError}</p> : null}
+        {providers.map((provider) => {
           const result = results.find((entry) => entry.providerId === provider.id);
           const percent = getUsagePercent(result?.usage);
           const tone = resolveUsageTone(percent);

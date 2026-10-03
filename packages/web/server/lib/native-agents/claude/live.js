@@ -517,6 +517,7 @@ export const createClaudeLiveSessions = ({
       },
     };
     if (connection.settings) options.settings = connection.settings;
+    if (config.launch?.descriptor?.billing === 'chatgpt-plan') options.disallowedTools = ['WebSearch', 'ToolSearch'];
     if (config.model !== null) options.model = config.model;
     if (config.effort !== null) options.effort = config.effort;
     if (resume) options.resume = sessionUuid;
@@ -627,6 +628,12 @@ export const createClaudeLiveSessions = ({
      * Closes the session's query and waits for its CLI process to exit, so
      * nothing writes the transcript afterwards.
      */
+    async closeConnection(prefix) {
+      const owned = Array.from(sessions.values()).filter((live) => live.config.launch?.key.startsWith(prefix));
+      for (const live of owned) { close(live); live.abortController.abort(); }
+      await Promise.all(owned.map((live) => live.exited));
+    },
+
     async closeSession(sessionId) {
       const live = sessions.get(sessionId);
       if (live) close(live);

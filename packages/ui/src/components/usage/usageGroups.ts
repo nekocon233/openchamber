@@ -1,6 +1,6 @@
 import React from 'react';
 import { useI18n } from '@/lib/i18n';
-import { formatWindowLabel, QUOTA_PROVIDERS } from '@/lib/quota';
+import { formatWindowLabel, getQuotaProviderList } from '@/lib/quota';
 import { getDisplayModelName } from '@/lib/quota/model-families';
 import { useQuotaStore } from '@/stores/useQuotaStore';
 import type { QuotaProviderId, UsageWindow } from '@/types';
@@ -34,13 +34,14 @@ export type UsageProviderGroup = {
 export const useUsageProviderGroups = (): UsageProviderGroup[] => {
   const { t } = useI18n();
   const quotaResults = useQuotaStore((state) => state.results);
+  const nativeProviders = useQuotaStore((state) => state.nativeProviders);
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
   const dropdownProviderIds = useQuotaStore((state) => state.dropdownProviderIds);
   const selectedQuotaModels = useQuotaStore((state) => state.selectedModels);
 
   return React.useMemo<UsageProviderGroup[]>(() => {
     const resultsByProvider = new Map(quotaResults.map((result) => [result.providerId, result]));
-    return QUOTA_PROVIDERS
+    return getQuotaProviderList(nativeProviders)
       .filter((providerMeta) => dropdownProviderIds.includes(providerMeta.id))
       .filter((providerMeta) => {
         const result = resultsByProvider.get(providerMeta.id);
@@ -91,5 +92,5 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
           status,
         };
       });
-  }, [dropdownProviderIds, quotaResults, refreshErrors, selectedQuotaModels, t]);
+  }, [dropdownProviderIds, nativeProviders, quotaResults, refreshErrors, selectedQuotaModels, t]);
 };

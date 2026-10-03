@@ -28,3 +28,12 @@ export const QUOTA_PROVIDERS: QuotaProviderMeta[] = [
   { id: 'neuralwatt', name: 'NeuralWatt' },
   { id: 'xai', name: 'xAI' },
 ];
+
+
+/** Keep CLI connections distinct from the OpenCode credential for the same service. */
+export const getQuotaProviderList = (nativeProviders: readonly QuotaProviderMeta[]): QuotaProviderMeta[] => [
+  ...QUOTA_PROVIDERS.map((provider) => provider.id === 'kimi-for-coding' && nativeProviders.length > 0
+    ? { ...provider, name: `${provider.name} / OpenCode` }
+    : provider),
+  ...nativeProviders,
+];

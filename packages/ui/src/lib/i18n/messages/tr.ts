@@ -9,6 +9,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict = {
+  "settings.chatgpt.limitReached": "ChatGPT planı kullanım sınırına ulaşıldı. ChatGPT ayarlarından uygulama ve plan sınırlarını kontrol edin.",
+  "settings.chatgpt.notEligible": "Bu ChatGPT hesabı veya çalışma alanı bu istek için planını kullanamıyor.",
+  "settings.chatgpt.reauthorize": "ChatGPT yetkilendirmenizin süresi doldu. Ayarlar → Sağlayıcılar → Claude Code CLI bölümünden yeniden oturum açın.",
+
+  "settings.chatgpt.title": "ChatGPT planı",
+  "settings.chatgpt.description": "ChatGPT planınızla Claude Code içinde GPT modellerini kullanın. Metin ve kodlama araçları desteklenir.",
+  "settings.chatgpt.connected": "Bağlı",
+  "settings.chatgpt.signedOut": "Oturum kapalı",
+  "settings.chatgpt.permissionRequired": "ChatGPT planınızı kullanma izni gerekiyor.",
+  "settings.chatgpt.signIn": "ChatGPT ile devam et",
+  "settings.chatgpt.signOut": "Çıkış yap",
+  "settings.chatgpt.localOnly": "Bu OpenChamber sunucusunu çalıştıran bilgisayarda oturum açın. Ardından bağlantıyı burada kullanabilirsiniz.",
+  "settings.chatgpt.callback": "Giriş sonucunu kontrol etmek için OpenChamber’a dönün. Bu sekmeyi kapatabilirsiniz.",
+  "settings.chatgpt.cancelled": "Giriş iptal edildi.",
+  "settings.chatgpt.authFailed": "Giriş tamamlanamadı. Yeniden deneyin.",
+  "settings.chatgpt.modelsUnavailable": "Model listesi yenilenemedi. Önceki modeller korundu.",
+  "settings.chatgpt.exchanging": "Giriş tamamlanıyor…",
+  "settings.chatgpt.pending": "Tarayıcıda yetkilendirmeyi tamamlayıp buraya dönün.",
+  "settings.chatgpt.openBrowser": "Tarayıcıyı aç",
+  "settings.chatgpt.revocationUnconfirmed": "Yerel oturum kapatıldı. Uzaktan yetki iptali doğrulanamadı; ChatGPT ayarlarından uygulamanın bağlantısını kesin.",
+  "settings.chatgpt.manageUsage": "Kullanımı yönet",
+  "settings.chatgpt.usingPlan": "ChatGPT planı kullanılıyor",
+  "settings.chatgpt.welcome": "Uygun istekler ChatGPT planınızı kullanır. Erişim ve kullanım sınırlarını ChatGPT ayarlarından yönetin. API anahtarıyla ücretlendirmeye otomatik geçilmez.",
+  "settings.chatgpt.gotIt": "Anladım",
+
   "settings.claudeConnections.title": "Claude Code bağlantıları",
   "settings.claudeConnections.description": "Sohbetin model seçicisinden bir bağlantı seçin. Ayarlar bu OpenChamber sunucusunda saklanır; terminal ayarları değişmez.",
   "settings.claudeConnections.connections": "Kayıtlı bağlantılar",

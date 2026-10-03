@@ -1,4 +1,5 @@
 export type QuotaProviderId =
+  | `kimi-claude:${string}`
   | 'openai'
   | 'codex'
   | 'cursor'

@@ -103,7 +103,7 @@ const handle = (work) => async (req, res) => {
  * @param {import('express').Express} app
  * @param {{ runtime: ReturnType<typeof import('./runtime.js').createNativeAgentsRuntime> }} deps
  */
-export const registerNativeAgentRoutes = (app, { runtime }) => {
+export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementRequest = () => false }) => {
   app.get('/api/native/capabilities', handle(() => runtime.capabilities()));
 
   const connections = '/api/native/claude/connections';
@@ -111,6 +111,21 @@ export const registerNativeAgentRoutes = (app, { runtime }) => {
   app.post(connections, handle((req) => runtime.claudeConnections.save(null, connectionWriteSchema.parse(req.body))));
   app.patch(`${connections}/:id`, handle((req) => runtime.claudeConnections.save(z.string().uuid().parse(req.params.id), connectionWriteSchema.parse(req.body))));
   app.delete(`${connections}/:id`, handle((req) => runtime.claudeConnections.remove(z.string().uuid().parse(req.params.id))));
+
+  const chatgpt = '/api/native/claude/chatgpt';
+  const requireLocalLogin = (req) => {
+    if (!isLocalManagementRequest(req)) throw new NativeAgentError('Complete ChatGPT sign-in on the server computer', { status: 403, code: 'CHATGPT_LOCAL_LOGIN_REQUIRED' });
+  };
+  app.get(`${chatgpt}/accounts`, handle(async (req) => ({ accounts: await runtime.chatgpt.accounts(), localLogin: isLocalManagementRequest(req) })));
+  app.post(`${chatgpt}/authorize`, handle((req) => {
+    requireLocalLogin(req);
+    const input = z.object({ accountId: z.string().uuid().nullable().default(null), completionMessage: z.string().min(1).max(300) }).parse(req.body);
+    return runtime.chatgpt.auth.begin(input);
+  }));
+  app.get(`${chatgpt}/authorize/:id`, handle((req) => runtime.chatgpt.auth.status(z.string().uuid().parse(req.params.id))));
+  app.delete(`${chatgpt}/authorize/:id`, handle((req) => { requireLocalLogin(req); return runtime.chatgpt.auth.cancel(z.string().uuid().parse(req.params.id)); }));
+  app.post(`${chatgpt}/accounts/:id/welcome`, handle((req) => runtime.chatgpt.auth.welcome(z.string().uuid().parse(req.params.id))));
+  app.delete(`${chatgpt}/accounts/:id`, handle((req) => runtime.signOutChatgpt(z.string().uuid().parse(req.params.id))));
 
   app.get('/api/native/catalog', handle(() => runtime.catalog()));
 

@@ -63,22 +63,26 @@ export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, r
   /** @type {Set<AbortController>} */
   const running = new Set();
 
-  const available = async () => {
+  const defaultLogin = async () => {
     const executable = await launchableExecutable();
     return authStatus.parse(JSON.parse(await runCli(executable, ['auth', 'status', '--json'], buildEnv()))).loggedIn;
   };
+  const available = async () => {
+    await launchableExecutable();
+    return connections && await connections.hasCredentials() ? true : defaultLogin();
+  };
 
   const describe = async (modelID) => {
-    const models = connections ? await connections.catalog() : claudeModels();
-    const model = models.find((entry) => entry.id === modelID);
+    const launch = connections ? await connections.resolve(modelID) : null;
+    const model = launch?.descriptor ?? claudeModels().find((entry) => entry.id === modelID);
     if (!model) {
       throw Object.assign(new Error('The selected model is not available in Claude Code: ' + modelID), {
         statusCode: 404, code: 'claude-model-unavailable',
       });
     }
-    const launch = connections ? await connections.resolve(modelID) : null;
-    if (launch?.env) await launchableExecutable();
-    return { ...model, hasLogin: launch?.env ? true : await available(), effort: model.efforts.includes('low') ? 'low' : model.defaultEffort };
+    const managed = Boolean(launch?.env || launch?.acquire);
+    if (managed) await launchableExecutable();
+    return { ...model, hasLogin: managed ? true : await defaultLogin(), effort: model.efforts.includes('low') ? 'low' : model.defaultEffort };
   };
 
   const runQuery = async ({ modelID, effort, prompt, system, maxOutputTokens, responseSchema, abortController }) => {
@@ -109,7 +113,7 @@ export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, r
       },
     };
     if (connection.settings) options.settings = connection.settings;
-    if (!launch?.env) options.thinking = { type: 'disabled' };
+    if (!launch?.env && !launch?.acquire) options.thinking = { type: 'disabled' };
     if (effort) options.effort = effort;
     // Claude Code answers a schema with a tool call of its own, one extra
     // turn, so the query sets no turn limit.

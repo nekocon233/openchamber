@@ -659,12 +659,93 @@ Web and Electron use the connected server's connections. Hosted mobile and
 Capacitor use that same server and CLI. VS Code's native adapter rejects these
 operations as unsupported.
 
+## ChatGPT plan connections for Claude Code
+
+The Claude Code connection page also offers Sign in with ChatGPT. This uses
+OpenAI's SIWC public-client flow and Responses endpoint, not Codex credentials
+or ChatGPT backend endpoints. Account eligibility is decided upstream; a model
+catalog entry is not proof of inference entitlement. Protocol details come from
+https://developers.openai.com/siwc/token-sharing-open-source/sign-in and
+https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations.
+
+`claude/chatgpt-auth.js` owns authorization, validated account identity, model
+listing, token refresh and logout. Each attempt gets a loopback callback at
+`/auth/callback`, fresh state, nonce and PKCE. ID tokens are verified using the
+issuer's JWKS, audience, expiry and nonce. Reauthorization cannot replace the
+selected account with a different subject or client ID. Only callbacks with
+plan permission enable inference. A cancelled, failed or expired attempt does
+not replace saved credentials.
+
+The authenticated `/api/native/claude/chatgpt` routes are:
+
+- `GET /accounts`: public account labels/status and `localLogin`.
+- `POST /authorize`: optional account ID and localized callback completion text;
+  returns an attempt ID and authorization URL, with no ID-token hint.
+- `GET /authorize/:id`, `DELETE /authorize/:id`: status and pending cancellation.
+- `POST /accounts/:id/welcome`: acknowledges the first plan-use notice.
+- `DELETE /accounts/:id`: closes owned Claude queries, aborts inference, attempts
+  refresh-token revocation and clears local tokens. Unconfirmed revocation is
+  reported, not treated as confirmed remote logout.
+
+Authorization start and cancellation use the existing local-management guard.
+A relay, tunnel or remote request cannot start a listener on the wrong computer.
+Web and Electron authorize on the server computer. Hosted mobile, Capacitor and
+remote browsers use accounts already authorized there. VS Code rejects these
+native operations. This release has no remote credential-transfer assistant.
+
+`chatgpt-store.js` keeps `native-agents/chatgpt-accounts.json` separate from API
+key connections and UI preferences. It retains the stable host ID and each
+validated subject/client registration. Tokens and catalog snapshots are written
+atomically with owner-only POSIX permissions. A file lock serializes writes and
+rotating refreshes across server processes; live lock contention is bounded and
+unreadable storage fails instead of resetting. Refresh failure clears tokens
+only for an unusable grant; temporary failures retain them. Logout retains the
+registration and host identity for another sign-in. A storage failure after
+upstream token rotation can require reauthorization; it is never reported as a
+successful refresh. Old API-key connections
+remain version 1 and default to `kind: anthropic` when the field is absent.
+
+`chatgpt.js` exposes models as `chatgpt:<account UUID>:<base64url slug>` inside
+`claude-native`. It preserves the upstream visible ordering. A failed account
+catalog retains its last verified models and reports `catalogUnavailable` in
+settings; other accounts continue loading. Signed-out accounts offer no models.
+Unknown context/output limits remain null on the wire and use the UI's zero-as-
+unknown convention. Plan models have no invented API price or effort presets.
+Utility descriptions read the selected saved descriptor instead of fetching
+every account's catalog for each background generation.
+
+`chatgpt-bridge.js` starts a separate loopback listener on demand. Each Claude
+query gets a random grant scoped to one account and upstream model. Grants are
+removed on query disposal; logout revokes that account's grants and requests.
+OAuth tokens stay in the bridge, never in Claude's environment, settings file,
+command arguments, browser storage or logs. The listener refuses browser
+Origins, invalid grants, model mismatches and endpoints other than
+`POST /v1/messages`. Request bodies and unfinished SSE frames are bounded.
+
+`responses-protocol.js` sends `store: false`, `stream: true` and full text/tool
+history. Inline Claude system messages become developer messages. Functions are
+placed in the `claude` namespace with stable names and call IDs; Claude executes
+them and sends results back. The bridge never executes a tool. It translates
+text and tool-argument deltas, requires completed Responses before declaring
+success, propagates cancellation and handles backpressure. Error responses
+retain status, code and request ID without forwarding credential-bearing error
+text. Claude receives `x-should-retry: false`; there is no alternate billing
+path or fallback model.
+
+This version supports text and client-side coding tools. Tool search is disabled;
+attachments, hosted tools and exact token-count requests fail explicitly.
+Provider thinking signatures are not transferable and are omitted from history.
+Both streaming and non-streaming Claude requests are accepted, while upstream
+Responses always streams. Existing Claude session persistence, plan mode,
+subagents and compaction remain owned by Claude Code.
+
 ## Utility text generation
 
 The small-model service accepts an explicit `codex-native/<model>` or
 `claude-native/<model>` setting and reaches the CLIs through the runtime's
-`smallModels`, keyed by provider id. Each CLI uses its own login and model
-catalog and owns credentials and refresh. An unavailable selected model fails
+`smallModels`, keyed by provider id. Inherited CLI models use the CLI's login and catalog. Configured Claude
+connections use their owning credential store; ChatGPT plan connections own
+OAuth refresh in the native runtime. An unavailable selected model fails
 instead of silently choosing another one. Failed or empty output rejects.
 
 `codex/utility.js` runs these calls on the shared app-server. They are

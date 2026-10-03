@@ -1,7 +1,7 @@
 import React from 'react';
 import { UsageCard } from './UsageCard';
 import { QuotaCredentials } from './QuotaCredentials';
-import { QUOTA_PROVIDERS } from '@/lib/quota';
+import { QUOTA_PROVIDERS, getQuotaProviderList } from '@/lib/quota';
 import { useQuotaAutoRefresh, useQuotaStore } from '@/stores/useQuotaStore';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { ProviderLogo } from '@/components/ui/ProviderLogo';
@@ -40,6 +40,7 @@ export const UsagePage: React.FC = () => {
   const { t } = useI18n();
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const results = useQuotaStore((state) => state.results);
+  const nativeProviders = useQuotaStore((state) => state.nativeProviders);
   const selectedProviderId = useQuotaStore((state) => state.selectedProviderId);
   const setSelectedProvider = useQuotaStore((state) => state.setSelectedProvider);
   const loadSettings = useQuotaStore((state) => state.loadSettings);
@@ -73,7 +74,7 @@ export const UsagePage: React.FC = () => {
 
   const selectedResult = results.find((entry) => entry.providerId === selectedProviderId) ?? null;
 
-  const providerMeta = QUOTA_PROVIDERS.find((provider) => provider.id === selectedProviderId);
+  const providerMeta = getQuotaProviderList(nativeProviders).find((provider) => provider.id === selectedProviderId);
   const providerName = providerMeta?.name ?? selectedProviderId ?? t('settings.usage.sidebar.title');
   const usage = selectedResult?.usage;
   const refreshError = selectedProviderId ? refreshErrors[selectedProviderId] : undefined;

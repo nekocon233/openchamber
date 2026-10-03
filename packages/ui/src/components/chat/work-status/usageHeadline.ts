@@ -14,8 +14,7 @@ import type { UsageProviderGroup, UsageLimitRow } from '@/components/usage/usage
  * Quota provider ids mostly match OpenCode provider ids; these are the ones
  * that do not. Unmatched providers simply produce no headline.
  *
- * The native CLI providers bill against their CLI's subscription, which the
- * `claude` and `codex` quotas report.
+ * Managed Claude connections carry a different billing identity from the CLI.
  */
 const QUOTA_PROVIDER_ALIASES = new Map<string, string>([
   ['openai', 'codex'],
@@ -28,9 +27,14 @@ const QUOTA_PROVIDER_ALIASES = new Map<string, string>([
 
 const normalize = (value: string | null | undefined): string => (value ?? '').trim().toLowerCase();
 
-export const resolveQuotaProviderId = (modelProviderId: string | null | undefined): string | null => {
+export const resolveQuotaProviderId = (modelProviderId: string | null | undefined, modelId?: string | null): string | null => {
   const normalized = normalize(modelProviderId);
   if (!normalized) return null;
+  if (normalized === 'claude-native' && modelId?.startsWith('connection:')) {
+    const connectionId = modelId.split(':')[1];
+    return connectionId ? `kimi-claude:${connectionId}` : null;
+  }
+  if (normalized === 'claude-native' && modelId?.startsWith('chatgpt:')) return null;
   return QUOTA_PROVIDER_ALIASES.get(normalized) ?? normalized;
 };
 
@@ -44,8 +48,9 @@ export const resolveQuotaProviderId = (modelProviderId: string | null | undefine
 export const pickUsageHeadline = (
   groups: readonly UsageProviderGroup[],
   modelProviderId: string | null | undefined,
+  modelId?: string | null,
 ): { group: UsageProviderGroup; row: UsageLimitRow } | null => {
-  const quotaProviderId = resolveQuotaProviderId(modelProviderId);
+  const quotaProviderId = resolveQuotaProviderId(modelProviderId, modelId);
   if (!quotaProviderId) return null;
 
   const group = groups.find((candidate) => normalize(candidate.providerId) === quotaProviderId);
@@ -60,7 +65,7 @@ export const pickUsageHeadline = (
   let bestSeconds = Number.POSITIVE_INFINITY;
   for (const row of rows) {
     const seconds = row.window.windowSeconds;
-    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) continue;
+    if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) continue;
     if (seconds < bestSeconds) {
       best = row;
       bestSeconds = seconds;

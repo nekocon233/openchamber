@@ -1,3 +1,5 @@
+import { useQuotaStore } from '@/stores/useQuotaStore';
+import { ChatgptConnectionsSection } from './ChatgptConnectionsSection';
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +23,7 @@ const newModel = (): ClaudeConnectionModel => ({
   input: { image: false, pdf: false }, efforts: [],
 });
 const newConnection = (kimi: boolean): ClaudeConnectionWrite => ({
+  kind: 'anthropic',
   name: kimi ? 'Kimi Coding Plan' : '',
   baseURL: kimi ? 'https://api.kimi.ai/coding/' : '',
   auth: 'api-key',
@@ -64,8 +67,14 @@ export const ClaudeConnectionsPage: React.FC = () => {
   }, [nativeAgents, runtimeKey]);
   React.useEffect(() => { void load(); }, [load]);
 
-  const refreshModels = async () => {
-    if (getRuntimeKey() === runtimeKey) await useConfigStore.getState().refreshNativeProviders();
+  const refreshModels = async (quotaProviderId: ClaudeConnection['quotaProviderId'] = null) => {
+    if (getRuntimeKey() !== runtimeKey) return;
+    await useQuotaStore.getState().loadNativeProviders(true);
+    if (getRuntimeKey() !== runtimeKey) return;
+    if (quotaProviderId && useQuotaStore.getState().dropdownProviderIds.includes(quotaProviderId)) {
+      void useQuotaStore.getState().fetchProviderQuota(quotaProviderId);
+    }
+    await useConfigStore.getState().refreshNativeProviders();
   };
   const save = async () => {
     const parsed = claudeConnectionWriteSchema.safeParse(draft);
@@ -81,7 +90,7 @@ export const ClaudeConnectionsPage: React.FC = () => {
         setDraft(null);
         setInvalid(false);
       }
-      await refreshModels();
+      await refreshModels(saved.quotaProviderId);
     } catch {
       if (current()) setError(true);
     } finally {
@@ -131,7 +140,7 @@ export const ClaudeConnectionsPage: React.FC = () => {
               <Button variant="outline" disabled={busy || draft !== null} onClick={() => {
                 setDeleting(null);
                 setEditing(connection.id);
-                setDraft({ name: connection.name, baseURL: connection.baseURL, auth: connection.auth, models: connection.models });
+                setDraft({ kind: 'anthropic', name: connection.name, baseURL: connection.baseURL, auth: connection.auth, models: connection.models });
                 setInvalid(false);
               }}>{t('settings.claudeConnections.edit')}</Button>
               <Button variant="ghost" disabled={busy || draft !== null} onClick={() => setDeleting(connection.id)}>{t('settings.claudeConnections.delete')}</Button>
@@ -143,6 +152,7 @@ export const ClaudeConnectionsPage: React.FC = () => {
           <Button variant="outline" disabled={busy || loading} onClick={() => begin(false)}>{t('settings.claudeConnections.addCustom')}</Button>
         </div> : null}
       </SettingsSection>
+      <ChatgptConnectionsSection />
       {draft ? <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <fieldset disabled={busy}>
           <SettingsSection title={t('settings.claudeConnections.connection')} contentClassName="space-y-4">

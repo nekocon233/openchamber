@@ -731,12 +731,27 @@ describe('native compaction', () => {
 });
 
 describe('native agents routes', () => {
-  const createApp = (runtime) => {
+  const createApp = (runtime, isLocalManagementRequest = () => false) => {
     const app = express();
     registerCommonRequestMiddleware(app, { express });
-    registerNativeAgentRoutes(app, { runtime });
+    registerNativeAgentRoutes(app, { runtime, isLocalManagementRequest });
     return app;
   };
+
+  it('allows ChatGPT authorization only from the local management boundary', async () => {
+    const runtime = createRuntime();
+    const remote = createApp(runtime);
+    const local = createApp(runtime, () => true);
+    const base = '/api/native/claude/chatgpt';
+    await request(remote).get(`${base}/accounts`).expect(200, { accounts: [], localLogin: false });
+    await request(remote).post(`${base}/authorize`).send({ completionMessage: 'Return to the app.' }).expect(403);
+    const started = await request(local).post(`${base}/authorize`).send({ completionMessage: 'Return to the app.' }).expect(200);
+    expect(started.body.url).toMatch(/^https:\/\/auth.openai.com\/api\/accounts\/authorize/);
+    await request(remote).delete(`${base}/authorize/${started.body.attemptId}`).expect(403);
+    await request(local).delete(`${base}/authorize/${started.body.attemptId}`).expect(200, { cancelled: true });
+    await request(local).get(`${base}/authorize/${started.body.attemptId}`).expect(200, { status: 'cancelled', accountId: null });
+    await runtime.shutdown();
+  });
 
   it('manages Claude connections without returning credentials and validates before writes', async () => {
     const runtime = createRuntime();

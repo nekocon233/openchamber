@@ -3,7 +3,9 @@
 Background LLM calls for OpenChamber's own features — session titles, goal
 distillation, session assist, the changes walkthrough. Every call goes to the
 running OpenCode through `POST /api/experimental/generate`, except for an explicit
-native CLI model selection. OpenChamber never talks to a provider directly.
+native CLI model selection. For a Claude model backed by a ChatGPT plan, the native runtime's local bridge
+converts Claude's requests to Responses. Its authorization boundary is documented
+in `../native-agents/DOCUMENTATION.md` under "ChatGPT plan connections".
 
 ## Security boundary
 

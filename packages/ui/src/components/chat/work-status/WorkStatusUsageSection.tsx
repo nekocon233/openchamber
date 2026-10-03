@@ -43,12 +43,12 @@ export const WorkStatusUsageSection: React.FC = () => {
   const groups = useUsageProviderGroups();
   const displayMode = useQuotaStore((state) => state.displayMode);
   const isLoading = useQuotaStore((state) => state.isLoading);
-  const dropdownProviderIds = useQuotaStore((state) => state.dropdownProviderIds);
-  const fetchQuotas = useQuotaStore((state) => state.fetchQuotas);
+  const refreshQuotas = useQuotaStore((state) => state.refreshSelectedQuotas);
   const ensureQuotasLoadedForRuntime = useQuotaStore((state) => state.ensureLoadedForRuntime);
   const isInitialized = useConfigStore((state) => state.isInitialized);
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const currentProviderId = useConfigStore((state) => state.currentProviderId);
+  const currentModelId = useConfigStore((state) => state.currentModelId);
 
   // Keeps the periodic refresh running while the panel is mounted.
   useQuotaAutoRefresh();
@@ -80,7 +80,7 @@ export const WorkStatusUsageSection: React.FC = () => {
   // composer is pointed at — the number that decides whether the next turn
   // lands. With no match it falls back to the display-mode label rather than
   // showing some other provider's quota as if it were the active one.
-  const headline = pickUsageHeadline(groups, currentProviderId);
+  const headline = pickUsageHeadline(groups, currentProviderId, currentModelId);
   const headlineMetric = headline
     ? formatQuotaValueLabel(
       headline.row.window.valueLabel,
@@ -108,7 +108,7 @@ export const WorkStatusUsageSection: React.FC = () => {
           size="icon"
           variant="ghost"
           className="size-6 shrink-0 text-muted-foreground"
-          onClick={() => void fetchQuotas(dropdownProviderIds)}
+          onClick={() => void refreshQuotas()}
           aria-label={t('settings.usage.sidebar.actions.refreshAria')}
           title={t('settings.usage.sidebar.actions.refreshTitle')}
           disabled={isLoading}

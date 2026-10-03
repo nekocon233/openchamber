@@ -32,6 +32,13 @@ interface SettingsSearchAvailabilityContext extends SettingsRuntimeContext {
 
 const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
+    id: 'providers.chatgpt-plan',
+    page: 'providers',
+    titleKey: 'settings.chatgpt.title',
+    keywords: ['chatgpt', 'gpt', 'claude code', 'oauth', 'plan'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
     id: 'providers.claude-connections',
     page: 'providers',
     titleKey: 'settings.claudeConnections.title',

@@ -1,3 +1,5 @@
+import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import { z } from 'zod';
 import React from 'react';
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
@@ -15,12 +17,18 @@ const QUOTA_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
 // instance, so both belong to that instance. Bumped on every reset so a
 // response in flight for the previous instance cannot land in the new one.
 let quotaGeneration = 0;
+let nativeQuotaRevision = 0;
+let providerSelectionRevision = 0;
+let nativeQuotaLoad: Promise<void> | null = null;
+const nativeQuotaId = z.templateLiteral(['kimi-claude:', z.string().uuid()]);
+type NativeQuotaProvider = { id: QuotaProviderId; name: string; revision: number };
 let inFlightRuntimeLoad: Promise<void> | null = null;
 const quotaRequests = new Map<QuotaProviderId, { controller: AbortController; promise: Promise<boolean> }>();
 let quotaAutoRefreshConsumers = 0;
 let quotaAutoRefreshInterval: number | null = null;
 
 interface QuotaSettingsState {
+  dropdownProvidersExplicit: boolean;
   displayMode: 'usage' | 'remaining';
   dropdownProviderIds: QuotaProviderId[];
   selectedModels: Record<string, string[]>;  // Map of providerId -> selected model names
@@ -28,6 +36,10 @@ interface QuotaSettingsState {
 }
 
 interface QuotaStore extends QuotaSettingsState {
+  nativeProviders: NativeQuotaProvider[];
+  nativeProviderError: string | null;
+  loadNativeProviders: (force?: boolean) => Promise<void>;
+  refreshSelectedQuotas: () => Promise<boolean>;
   results: ProviderResult[];
   /** Instance whose quotas `results` describes, or `null` when nothing is loaded. */
   loadedRuntimeKey: string | null;
@@ -52,7 +64,7 @@ interface QuotaStore extends QuotaSettingsState {
   toggleModelSelected: (providerId: string, modelName: string) => void;
   setExpandedFamilies: (providerId: string, familyIds: string[]) => void;
   toggleFamilyExpanded: (providerId: string, familyId: string) => void;
-  applyDefaultSelections: (providerId: string, availableModels: string[]) => void;
+  applyDefaultSelections: (providerId: QuotaProviderId, availableModels: string[]) => void;
   /**
    * Load settings and quotas once per instance, when that instance is ready.
    *
@@ -72,11 +84,12 @@ const parseSettings = (data: DesktopSettings): QuotaSettingsState => {
   const displayMode = data.usageDisplayMode === 'remaining' ? 'remaining' : 'usage';
   const dropdownProviderIds = data.usageDropdownProviders
     ? data.usageDropdownProviders.filter((entry): entry is QuotaProviderId =>
-        allProviderIds.some((id) => id === entry)
+        allProviderIds.some((id) => id === entry) || nativeQuotaId.safeParse(entry).success
       )
     : allProviderIds;
 
   return {
+    dropdownProvidersExplicit: data.usageDropdownProviders !== undefined,
     displayMode,
     dropdownProviderIds,
     // Map of providerId -> selected model names
@@ -87,6 +100,7 @@ const parseSettings = (data: DesktopSettings): QuotaSettingsState => {
 };
 
 const defaultQuotaSettings = (): QuotaSettingsState => ({
+  dropdownProvidersExplicit: false,
   displayMode: 'usage',
   dropdownProviderIds: QUOTA_PROVIDERS.map((provider) => provider.id),
   selectedModels: {},
@@ -101,6 +115,9 @@ const loadSettingsFromRuntime = async (): Promise<QuotaSettingsState> => {
 export const useQuotaStore = create<QuotaStore>()(
   devtools(
     (set, get) => ({
+      nativeProviders: [],
+      nativeProviderError: null,
+      dropdownProvidersExplicit: false,
       results: [],
       loadedRuntimeKey: null,
       selectedProviderId: null,
@@ -116,13 +133,82 @@ export const useQuotaStore = create<QuotaStore>()(
 
       loadSettings: async () => {
         const generation = quotaGeneration;
+        const selectionRevision = providerSelectionRevision;
         try {
           const settings = await loadSettingsFromRuntime();
           if (generation !== quotaGeneration) return;
+          if (selectionRevision !== providerSelectionRevision) {
+            settings.dropdownProviderIds = get().dropdownProviderIds;
+            settings.dropdownProvidersExplicit = get().dropdownProvidersExplicit;
+          } else if (!settings.dropdownProvidersExplicit) {
+            settings.dropdownProviderIds = [...settings.dropdownProviderIds, ...get().nativeProviders.map((provider) => provider.id)];
+          }
           set(settings);
         } catch (error) {
           console.warn('Failed to load usage settings:', error);
         }
+      },
+
+      loadNativeProviders: async (force = false) => {
+        if (nativeQuotaLoad && !force) return nativeQuotaLoad;
+        const generation = quotaGeneration;
+        const revision = ++nativeQuotaRevision;
+        const api = getRegisteredRuntimeAPIs()?.nativeAgents;
+        nativeQuotaLoad = (async () => {
+          try {
+            const connections = api?.supported ? await api.listClaudeConnections() : [];
+            if (generation !== quotaGeneration || revision !== nativeQuotaRevision) return;
+            const providers: NativeQuotaProvider[] = connections.flatMap((connection) => connection.quotaProviderId
+              ? [{ id: connection.quotaProviderId, name: `${connection.name} / Claude Code`, revision: connection.revision }]
+              : []);
+            const previous = get().nativeProviders;
+            const hasMissingChoice = get().dropdownProviderIds.some((id) => id.startsWith('kimi-claude:') && !providers.some((provider) => provider.id === id));
+            if (!hasMissingChoice && providers.length === previous.length && providers.every((provider, index) => (
+              provider.id === previous[index].id && provider.name === previous[index].name && provider.revision === previous[index].revision
+            ))) {
+              if (get().nativeProviderError) set({ nativeProviderError: null, error: Object.values(get().refreshErrors)[0] ?? null });
+              return;
+            }
+            const invalidated = new Set(previous.filter((provider) => !providers.some((next) => next.id === provider.id && next.revision === provider.revision)).map((provider) => provider.id));
+            for (const id of invalidated) { quotaRequests.get(id)?.controller.abort(); quotaRequests.delete(id); }
+            const ids = new Set(providers.map((provider) => provider.id));
+            set((state) => {
+              const refreshErrors = { ...state.refreshErrors };
+              const isFetchingProvider = { ...state.isFetchingProvider };
+              for (const id of invalidated) { delete refreshErrors[id]; delete isFetchingProvider[id]; }
+              return {
+                nativeProviderError: null,
+                error: Object.values(refreshErrors)[0] ?? null,
+                nativeProviders: providers,
+                results: state.results.filter((result) => !invalidated.has(result.providerId)),
+                refreshErrors,
+                isFetchingProvider,
+                isLoading: quotaRequests.size > 0,
+                selectedProviderId: state.selectedProviderId?.startsWith('kimi-claude:') && !ids.has(state.selectedProviderId) ? null : state.selectedProviderId,
+                dropdownProviderIds: state.dropdownProvidersExplicit
+                  ? state.dropdownProviderIds.filter((id) => !id.startsWith('kimi-claude:') || ids.has(id))
+                  : [...QUOTA_PROVIDERS.map((provider) => provider.id), ...ids],
+              };
+            });
+          } catch (error) {
+            if (generation === quotaGeneration && revision === nativeQuotaRevision) {
+              const message = error instanceof Error ? error.message : 'Could not read native quota providers';
+              set({ error: message, nativeProviderError: message });
+            }
+          }
+        })().finally(() => { if (generation === quotaGeneration && revision === nativeQuotaRevision) nativeQuotaLoad = null; });
+        return nativeQuotaLoad;
+      },
+
+      refreshSelectedQuotas: async () => {
+        const generation = quotaGeneration;
+        const state = get();
+        if (state.dropdownProvidersExplicit && state.dropdownProviderIds.length === 0) return false;
+        if (!state.dropdownProvidersExplicit || state.dropdownProviderIds.some((id) => id.startsWith('kimi-claude:'))) {
+          await get().loadNativeProviders();
+        }
+        if (generation !== quotaGeneration) return false;
+        return get().fetchQuotas(get().dropdownProviderIds);
       },
 
       fetchQuotas: async (providerIds) => {
@@ -142,7 +228,10 @@ export const useQuotaStore = create<QuotaStore>()(
       },
 
       fetchAllQuotas: async () => {
-        await get().fetchQuotas(QUOTA_PROVIDERS.map((provider) => provider.id));
+        const generation = quotaGeneration;
+        await get().loadNativeProviders();
+        if (generation !== quotaGeneration) return;
+        await get().fetchQuotas([...QUOTA_PROVIDERS, ...get().nativeProviders].map((provider) => provider.id));
       },
 
       fetchProviderQuota: async (providerId) => {
@@ -153,7 +242,7 @@ export const useQuotaStore = create<QuotaStore>()(
         const promise = Promise.resolve().then(async () => {
           try {
             const result = await fetchQuota(providerId, { signal: controller.signal });
-            if (generation !== quotaGeneration) return false;
+            if (generation !== quotaGeneration || quotaRequests.get(providerId)?.controller !== controller) return false;
             // A reachable instance can still report that its provider request
             // failed. Configuration is known, but there is no new usage sample.
             if (!result.ok && result.configured) {
@@ -176,13 +265,14 @@ export const useQuotaStore = create<QuotaStore>()(
             });
             return true;
           } catch (error) {
-            if (generation !== quotaGeneration) return false;
+            if (generation !== quotaGeneration || quotaRequests.get(providerId)?.controller !== controller) return false;
             const message = error instanceof Error ? error.message : 'Failed to fetch quota';
             set(state => ({ refreshErrors: { ...state.refreshErrors, [providerId]: message }, error: message }));
             return false;
           } finally {
-            if (quotaRequests.get(providerId)?.controller === controller) quotaRequests.delete(providerId);
-            if (generation === quotaGeneration) {
+            const owned = quotaRequests.get(providerId)?.controller === controller;
+            if (owned) quotaRequests.delete(providerId);
+            if (generation === quotaGeneration && owned) {
               set((state) => ({
                 isFetchingProvider: { ...state.isFetchingProvider, [providerId]: false },
                 isLoading: quotaRequests.size > 0,
@@ -209,6 +299,9 @@ export const useQuotaStore = create<QuotaStore>()(
         inFlightRuntimeLoad = (async () => {
           await get().loadSettings();
           if (generation !== quotaGeneration) return;
+          if (get().dropdownProvidersExplicit && get().dropdownProviderIds.length === 0) return;
+          await get().loadNativeProviders();
+          if (generation !== quotaGeneration) return;
           const { dropdownProviderIds, fetchQuotas } = get();
           if (dropdownProviderIds.length === 0) return;
           const answered = await fetchQuotas(dropdownProviderIds);
@@ -224,6 +317,8 @@ export const useQuotaStore = create<QuotaStore>()(
 
       resetForRuntimeSwitch: () => {
         quotaGeneration += 1;
+        nativeQuotaRevision += 1;
+        nativeQuotaLoad = null;
         for (const request of quotaRequests.values()) request.controller.abort();
         quotaRequests.clear();
         inFlightRuntimeLoad = null;
@@ -233,6 +328,8 @@ export const useQuotaStore = create<QuotaStore>()(
           // `dropdownProviderIds` decides what gets fetched — carrying them
           // over would query the new instance through the old one's choices.
           ...defaultQuotaSettings(),
+          nativeProviders: [],
+          nativeProviderError: null,
           results: [],
           loadedRuntimeKey: null,
           selectedProviderId: null,
@@ -246,7 +343,7 @@ export const useQuotaStore = create<QuotaStore>()(
 
       setSelectedProvider: (providerId) => set({ selectedProviderId: providerId }),
       setDisplayMode: (mode) => set({ displayMode: mode }),
-      setDropdownProviderIds: (providerIds) => set({ dropdownProviderIds: providerIds }),
+      setDropdownProviderIds: (providerIds) => { providerSelectionRevision += 1; set({ dropdownProviderIds: providerIds, dropdownProvidersExplicit: true }); },
 
       setSelectedModels: (providerId, modelNames) => {
         set((state) => ({
@@ -295,7 +392,7 @@ export const useQuotaStore = create<QuotaStore>()(
         // Only apply if no prior selections exist
         if ((state.selectedModels[providerId]?.length ?? 0) > 0) return;
 
-        const defaults = getDefaultModels(providerId as QuotaProviderId, availableModels);
+        const defaults = getDefaultModels(providerId, availableModels);
         if (defaults.length === 0) return;
 
         set((s) => ({
@@ -314,10 +411,7 @@ export const useQuotaAutoRefresh = () => {
     quotaAutoRefreshConsumers += 1;
     if (quotaAutoRefreshInterval === null) {
       quotaAutoRefreshInterval = window.setInterval(() => {
-        const { dropdownProviderIds, fetchQuotas } = useQuotaStore.getState();
-        if (dropdownProviderIds.length > 0) {
-          void fetchQuotas(dropdownProviderIds);
-        }
+        void useQuotaStore.getState().refreshSelectedQuotas();
       }, QUOTA_REFRESH_INTERVAL_MS);
     }
 

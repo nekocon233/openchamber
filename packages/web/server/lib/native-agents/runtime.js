@@ -16,6 +16,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { codexVariantSettings } from './catalog.js';
+import { createChatgptConnections } from './claude/chatgpt.js';
 import { createClaudeConnections } from './claude/connections.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
@@ -146,7 +147,8 @@ export const createNativeAgentsRuntime = ({
   managedChatsRoots = [],
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
-  const claudeConnections = createClaudeConnections({ dataDir });
+  const chatgpt = createChatgptConnections({ dataDir });
+  const claudeConnections = createClaudeConnections({ dataDir, chatgpt });
   const reverts = createNativeReverts({ registry, snapshots });
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
   const questions = createQuestionRegistry({
@@ -496,6 +498,12 @@ export const createNativeAgentsRuntime = ({
 
   return {
     claudeConnections,
+    chatgpt,
+    async signOutChatgpt(id) {
+      const signingOut = chatgpt.signOut(id);
+      const [, result] = await Promise.all([claudeLive.closeConnection(`chatgpt:${id}:`), signingOut]);
+      return result;
+    },
 
     async capabilities() {
       const [claudeCli, codexCli] = await Promise.all([resolveExecutable('claude'), resolveExecutable('codex')]);
@@ -913,6 +921,7 @@ export const createNativeAgentsRuntime = ({
       codexUtility.handleExit(new Error('Codex runtime is shutting down'));
       claudeUtility.shutdown();
       await claudeLive.shutdown();
+      await chatgpt.shutdown();
       await appServer.stop();
     },
   };

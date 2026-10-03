@@ -9,6 +9,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict = {
+  "settings.chatgpt.limitReached": "Das Nutzungslimit des ChatGPT-Tarifs wurde erreicht. Prüfe die App- und Tariflimits in den ChatGPT-Einstellungen.",
+  "settings.chatgpt.notEligible": "Dieses ChatGPT-Konto oder dieser Arbeitsbereich kann den Tarif für diese Anfrage nicht verwenden.",
+  "settings.chatgpt.reauthorize": "Deine ChatGPT-Autorisierung ist abgelaufen. Melde dich unter Einstellungen → Anbieter → Claude Code CLI erneut an.",
+
+  "settings.chatgpt.title": "ChatGPT-Tarif",
+  "settings.chatgpt.description": "Nutze GPT-Modelle in Claude Code mit deinem ChatGPT-Tarif. Text und Programmierwerkzeuge werden unterstützt.",
+  "settings.chatgpt.connected": "Verbunden",
+  "settings.chatgpt.signedOut": "Abgemeldet",
+  "settings.chatgpt.permissionRequired": "Die Nutzung deines ChatGPT-Tarifs muss erlaubt werden.",
+  "settings.chatgpt.signIn": "Mit ChatGPT fortfahren",
+  "settings.chatgpt.signOut": "Abmelden",
+  "settings.chatgpt.localOnly": "Melde dich auf dem Computer an, auf dem dieser OpenChamber-Server läuft. Danach kannst du die Verbindung hier nutzen.",
+  "settings.chatgpt.callback": "Kehre zu OpenChamber zurück, um die Anmeldung zu prüfen. Du kannst diesen Tab schließen.",
+  "settings.chatgpt.cancelled": "Anmeldung abgebrochen.",
+  "settings.chatgpt.authFailed": "Die Anmeldung wurde nicht abgeschlossen. Versuche es erneut.",
+  "settings.chatgpt.modelsUnavailable": "Die Modellliste konnte nicht aktualisiert werden. Die vorherigen Modelle bleiben erhalten.",
+  "settings.chatgpt.exchanging": "Anmeldung wird abgeschlossen…",
+  "settings.chatgpt.pending": "Schließe die Autorisierung im Browser ab und kehre hierher zurück.",
+  "settings.chatgpt.openBrowser": "Browser öffnen",
+  "settings.chatgpt.revocationUnconfirmed": "Lokal abgemeldet. Der entfernte Widerruf wurde nicht bestätigt. Trenne die App in den ChatGPT-Einstellungen.",
+  "settings.chatgpt.manageUsage": "Nutzung verwalten",
+  "settings.chatgpt.usingPlan": "ChatGPT-Tarif wird verwendet",
+  "settings.chatgpt.welcome": "Berechtigte Anfragen nutzen deinen ChatGPT-Tarif. Verwalte Zugriff und Nutzungslimits in den ChatGPT-Einstellungen. Es erfolgt kein automatischer Wechsel zur API-Schlüsselabrechnung.",
+  "settings.chatgpt.gotIt": "Verstanden",
+
   "settings.claudeConnections.title": "Claude Code-Verbindungen",
   "settings.claudeConnections.description": "Wähle eine Verbindung in der Modellauswahl des Chats. Sie wird auf diesem OpenChamber-Server gespeichert; Terminaleinstellungen bleiben unverändert.",
   "settings.claudeConnections.connections": "Gespeicherte Verbindungen",

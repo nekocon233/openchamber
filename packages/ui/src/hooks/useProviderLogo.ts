@@ -17,6 +17,7 @@ const LOCAL_PROVIDER_LOGO_MAP = new Map<string, string>();
 const PRELOADED_LOGO_SRCS = new Set<string>();
 
 const LOGO_ALIAS = new Map<string, string>([
+    ['kimi-claude', 'kimi-for-coding'],
     ['codex', 'openai'],
     ['codex-native', 'openai'],
     ['chatgpt', 'openai'],

@@ -159,7 +159,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       nativeAgentsRuntime,
     } = routeDependencies;
 
-    registerNativeAgentRoutes(app, { runtime: nativeAgentsRuntime });
+    registerNativeAgentRoutes(app, { runtime: nativeAgentsRuntime, isLocalManagementRequest: isTunnelManagementAllowed });
     registerSidebarStateRoutes(app, sidebarStateRuntime);
     registerFollowUpQueueRoutes(app, followUpQueueRuntime);
 
@@ -341,7 +341,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       getProfile,
     });
 
-    registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode });
+    registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode, nativeConnections: nativeAgentsRuntime?.claudeConnections });
     registerSmallModelRoutes(app, { getSmallModelService });
     registerWalkthroughRoutes(app, { getWalkthroughService });
     registerSessionGoalRoutes(app);

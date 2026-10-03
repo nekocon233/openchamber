@@ -9,6 +9,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict = {
+  "settings.chatgpt.limitReached": "The ChatGPT plan usage limit was reached. Review the app and plan limits in ChatGPT settings.",
+  "settings.chatgpt.notEligible": "This ChatGPT account or workspace cannot use its plan for this request.",
+  "settings.chatgpt.reauthorize": "Your ChatGPT authorization has expired. Sign in again under Settings → Providers → Claude Code CLI.",
+
+  "settings.chatgpt.title": "ChatGPT plan",
+  "settings.chatgpt.description": "Use GPT models with Claude Code through your ChatGPT plan. Text and coding tools are supported.",
+  "settings.chatgpt.connected": "Connected",
+  "settings.chatgpt.signedOut": "Signed out",
+  "settings.chatgpt.permissionRequired": "Permission to use your ChatGPT plan is required.",
+  "settings.chatgpt.signIn": "Continue with ChatGPT",
+  "settings.chatgpt.signOut": "Sign out",
+  "settings.chatgpt.localOnly": "Complete sign-in on the computer running this OpenChamber server. You can then use the connection here.",
+  "settings.chatgpt.callback": "Return to OpenChamber to check sign-in. You can close this tab.",
+  "settings.chatgpt.cancelled": "Sign-in cancelled.",
+  "settings.chatgpt.authFailed": "Sign-in did not complete. Try again.",
+  "settings.chatgpt.modelsUnavailable": "The model list could not be refreshed. Previously loaded models are kept.",
+  "settings.chatgpt.exchanging": "Completing sign-in…",
+  "settings.chatgpt.pending": "Complete authorization in your browser, then return here.",
+  "settings.chatgpt.openBrowser": "Open browser",
+  "settings.chatgpt.revocationUnconfirmed": "Signed out locally. Remote revocation was not confirmed; disconnect the app in ChatGPT settings.",
+  "settings.chatgpt.manageUsage": "Manage usage",
+  "settings.chatgpt.usingPlan": "Using ChatGPT plan",
+  "settings.chatgpt.welcome": "Eligible requests use your ChatGPT plan. Manage access and usage limits in ChatGPT settings. No API-key billing fallback is used.",
+  "settings.chatgpt.gotIt": "Got it",
+
   "settings.claudeConnections.title": "Claude Code connections",
   "settings.claudeConnections.description": "Choose a connection in the chat model picker. Connections are stored on this OpenChamber server; terminal settings stay unchanged.",
   "settings.claudeConnections.connections": "Saved connections",

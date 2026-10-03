@@ -10,6 +10,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "settings.chatgpt.limitReached": "ChatGPT 요금제 사용량 제한에 도달했습니다. ChatGPT 설정에서 앱과 요금제 제한을 확인하세요.",
+  "settings.chatgpt.notEligible": "이 ChatGPT 계정 또는 워크스페이스는 이 요청에 요금제를 사용할 수 없습니다.",
+  "settings.chatgpt.reauthorize": "ChatGPT 인증이 만료되었습니다. 설정 → 제공업체 → Claude Code CLI에서 다시 로그인하세요.",
+
+  "settings.chatgpt.title": "ChatGPT 요금제",
+  "settings.chatgpt.description": "ChatGPT 요금제로 Claude Code에서 GPT 모델을 사용합니다. 텍스트와 코딩 도구를 지원합니다.",
+  "settings.chatgpt.connected": "연결됨",
+  "settings.chatgpt.signedOut": "로그아웃됨",
+  "settings.chatgpt.permissionRequired": "ChatGPT 요금제 사용 권한이 필요합니다.",
+  "settings.chatgpt.signIn": "ChatGPT로 계속",
+  "settings.chatgpt.signOut": "로그아웃",
+  "settings.chatgpt.localOnly": "이 OpenChamber 서버를 실행하는 컴퓨터에서 로그인하세요. 이후 여기에서 연결을 사용할 수 있습니다.",
+  "settings.chatgpt.callback": "OpenChamber로 돌아가 로그인 결과를 확인하세요. 이 탭을 닫아도 됩니다.",
+  "settings.chatgpt.cancelled": "로그인이 취소되었습니다.",
+  "settings.chatgpt.authFailed": "로그인이 완료되지 않았습니다. 다시 시도하세요.",
+  "settings.chatgpt.modelsUnavailable": "모델 목록을 새로 고치지 못했습니다. 이전 목록을 유지합니다.",
+  "settings.chatgpt.exchanging": "로그인 완료 중…",
+  "settings.chatgpt.pending": "브라우저에서 인증을 완료한 후 돌아오세요.",
+  "settings.chatgpt.openBrowser": "브라우저 열기",
+  "settings.chatgpt.revocationUnconfirmed": "로컬에서 로그아웃했습니다. 원격 권한 취소는 확인되지 않았습니다. ChatGPT 설정에서 앱 연결을 해제하세요.",
+  "settings.chatgpt.manageUsage": "사용량 관리",
+  "settings.chatgpt.usingPlan": "ChatGPT 요금제 사용 중",
+  "settings.chatgpt.welcome": "지원되는 요청은 ChatGPT 요금제를 사용합니다. ChatGPT 설정에서 접근 권한과 사용량 제한을 관리하세요. API 키 과금으로 자동 전환하지 않습니다.",
+  "settings.chatgpt.gotIt": "확인",
+
   "settings.claudeConnections.title": "Claude Code 연결",
   "settings.claudeConnections.description": "채팅 모델 선택기에서 연결을 선택하세요. 설정은 이 OpenChamber 서버에 저장되며 터미널 설정은 유지됩니다.",
   "settings.claudeConnections.connections": "저장된 연결",

@@ -1,4 +1,4 @@
-import type { ClaudeConnection, ClaudeConnectionWrite } from '@/lib/native-agents/connections';
+import type { ClaudeConnection, ClaudeConnectionWrite, ChatgptAccounts, ChatgptAuthorization, ChatgptAuthorizationStatus, ChatgptSignOut } from '@/lib/native-agents/connections';
 import type { SessionMetadataRecord } from '@/lib/sessionReviewMetadata';
 import type { WorktreeMetadata } from '@/types/worktree';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
@@ -1706,6 +1706,12 @@ export interface NativeAgentsAPI {
   supported: boolean;
   capabilities(): Promise<NativeCapabilities>;
   catalog(): Promise<NativeCatalog>;
+  chatgptAccounts(): Promise<ChatgptAccounts>;
+  beginChatgptAuthorization(input: { accountId: string | null; completionMessage: string }): Promise<ChatgptAuthorization>;
+  chatgptAuthorizationStatus(id: string): Promise<ChatgptAuthorizationStatus>;
+  cancelChatgptAuthorization(id: string): Promise<boolean>;
+  acknowledgeChatgptPlan(id: string): Promise<void>;
+  signOutChatgpt(id: string): Promise<ChatgptSignOut>;
   listClaudeConnections(): Promise<ClaudeConnection[]>;
   saveClaudeConnection(id: string | null, connection: ClaudeConnectionWrite): Promise<ClaudeConnection>;
   deleteClaudeConnection(id: string): Promise<void>;

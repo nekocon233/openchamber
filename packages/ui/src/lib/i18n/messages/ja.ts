@@ -10,6 +10,31 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "settings.chatgpt.limitReached": "ChatGPT プランの使用量上限に達しました。ChatGPT の設定でアプリとプランの上限を確認してください。",
+  "settings.chatgpt.notEligible": "この ChatGPT アカウントまたはワークスペースでは、このリクエストにプランを使用できません。",
+  "settings.chatgpt.reauthorize": "ChatGPT の認証が失効しました。設定 → プロバイダー → Claude Code CLI で再度ログインしてください。",
+
+  "settings.chatgpt.title": "ChatGPT プラン",
+  "settings.chatgpt.description": "ChatGPT プランで Claude Code から GPT モデルを使います。テキストとコーディングツールに対応しています。",
+  "settings.chatgpt.connected": "接続済み",
+  "settings.chatgpt.signedOut": "ログアウト済み",
+  "settings.chatgpt.permissionRequired": "ChatGPT プランを使うための許可が必要です。",
+  "settings.chatgpt.signIn": "ChatGPT で続行",
+  "settings.chatgpt.signOut": "ログアウト",
+  "settings.chatgpt.localOnly": "この OpenChamber サーバーを実行しているコンピューターでログインしてください。その後ここから接続を使えます。",
+  "settings.chatgpt.callback": "OpenChamber に戻ってログイン結果を確認してください。このタブは閉じられます。",
+  "settings.chatgpt.cancelled": "ログインをキャンセルしました。",
+  "settings.chatgpt.authFailed": "ログインが完了しませんでした。再試行してください。",
+  "settings.chatgpt.modelsUnavailable": "モデル一覧を更新できませんでした。以前の一覧を保持しています。",
+  "settings.chatgpt.exchanging": "ログインを完了しています…",
+  "settings.chatgpt.pending": "ブラウザーで認証を完了してから戻ってください。",
+  "settings.chatgpt.openBrowser": "ブラウザーを開く",
+  "settings.chatgpt.revocationUnconfirmed": "ローカルではログアウトしました。リモートの認可取り消しを確認できませんでした。ChatGPT の設定でアプリを切断してください。",
+  "settings.chatgpt.manageUsage": "使用量を管理",
+  "settings.chatgpt.usingPlan": "ChatGPT プランを使用中",
+  "settings.chatgpt.welcome": "対象のリクエストには ChatGPT プランを使用します。アクセスと使用量の上限は ChatGPT の設定で管理できます。API キー課金には自動で切り替わりません。",
+  "settings.chatgpt.gotIt": "了解",
+
   "settings.claudeConnections.title": "Claude Code 接続",
   "settings.claudeConnections.description": "チャットのモデル選択から接続を選べます。設定はこの OpenChamber サーバーに保存され、ターミナルの設定は変わりません。",
   "settings.claudeConnections.connections": "保存済みの接続",
