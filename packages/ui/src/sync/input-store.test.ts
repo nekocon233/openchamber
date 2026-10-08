@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import { strToU8, zipSync } from "fflate"
 import { useInputStore } from "./input-store"
+import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
+import type { RuntimeAPIs } from "@/lib/api/types"
 
 class MockFileReader {
   result: string | ArrayBuffer | null = null
@@ -94,6 +96,7 @@ describe("input-store attachments", () => {
       pendingBtwComposerRequest: null,
       activeEditorFile: null,
       attachmentDraftKey: null,
+      attachmentDraftIdentity: null,
       attachmentDrafts: new Map(),
     })
     useInputStore.getState().setAttachedFiles([])
@@ -293,6 +296,67 @@ describe("input-store attachments", () => {
     expect(await addPromise).toBe(true)
     expect(useInputStore.getState().attachedFiles[0]?.mimeType).toBe("image/webp")
     expect(useInputStore.getState().attachedFiles[0]?.dataUrl).toBe("data:image/webp;base64,AQID")
+  })
+
+  testWithMockFileReader("uploads zip attachments to the workspace instead of reading them inline", async () => {
+    const uploads: Array<{ path: string; directory?: string }> = []
+    registerRuntimeAPIs({
+      // SAFETY: the zip flow only touches `files`; any other API access fails
+      // the test as an undefined-property access.
+      files: {
+        createDirectory: async (path: string) => ({ success: true, path }),
+        uploadFile: async (path: string, _blob: Blob, options?: { directory?: string }) => {
+          uploads.push({ path, directory: options?.directory })
+          return { success: true, path }
+        },
+      },
+    } as RuntimeAPIs)
+    try {
+      useInputStore.getState().selectAttachmentDraft({ runtimeKey: "runtime", directory: "/repo", sessionId: null })
+      const added = await useInputStore.getState().addAttachedFile(
+        new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], "archive.zip", { type: "application/zip" })
+      )
+
+      expect(added).toBe(true)
+      expect(pendingReaders).toHaveLength(0)
+      expect(useInputStore.getState().attachedFiles[0]?.delivery).toBe("workspace-upload")
+      expect(useInputStore.getState().attachedFiles[0]?.uploadState).toBe("uploading")
+
+      for (let attempt = 0; attempt < 100 && useInputStore.getState().attachedFiles[0]?.uploadState === "uploading"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+
+      const attached = useInputStore.getState().attachedFiles[0]
+      expect(attached?.uploadState).toBe("ready")
+      expect(attached?.mimeType).toBe("application/zip")
+      expect(attached?.dataUrl).toBe("")
+      expect(attached?.workspacePath).toBe(uploads[0]?.path)
+      expect(uploads[0]?.path.startsWith("/repo/.openchamber/uploads/")).toBe(true)
+    } finally {
+      registerRuntimeAPIs(null)
+    }
+  })
+
+  test("marks zip attachments failed when the runtime cannot upload", async () => {
+    registerRuntimeAPIs({
+      // SAFETY: an empty files surface is exactly what runtimes without upload
+      // support (VS Code today) register.
+      files: {},
+    } as RuntimeAPIs)
+    try {
+      const added = await useInputStore.getState().addAttachedFile(
+        new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], "archive.zip", { type: "application/zip" })
+      )
+
+      expect(added).toBe(true)
+      for (let attempt = 0; attempt < 100 && useInputStore.getState().attachedFiles[0]?.uploadState === "uploading"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      expect(useInputStore.getState().attachedFiles[0]?.uploadState).toBe("failed")
+      expect(useInputStore.getState().attachedFiles[0]?.uploadError).toBe("unsupported-runtime")
+    } finally {
+      registerRuntimeAPIs(null)
+    }
   })
 
   testWithMockFileReader("adds extracted document text and referenced images atomically", async () => {

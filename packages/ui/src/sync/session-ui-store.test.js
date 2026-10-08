@@ -632,6 +632,48 @@ describe('sendMessage captured target', () => {
     expect(calls[0].directory).toBe('/captured/project');
   });
 
+  test('keeps workspace-upload attachments out of the prompt file parts', async () => {
+    await useSessionUIStore.getState().sendMessage(
+      'with zip',
+      'provider-a',
+      'model-a',
+      undefined,
+      [
+        {
+          id: 'inline',
+          file: new File(['hello'], 'notes.txt', { type: 'text/plain' }),
+          dataUrl: 'data:text/plain;base64,aGVsbG8=',
+          mimeType: 'text/plain',
+          filename: 'notes.txt',
+          size: 5,
+          source: 'local',
+        },
+        {
+          id: 'zip',
+          file: new File(['PK'], 'archive.zip', { type: 'application/zip' }),
+          dataUrl: '',
+          mimeType: 'application/zip',
+          filename: 'archive.zip',
+          size: 4,
+          source: 'local',
+          delivery: 'workspace-upload',
+          uploadState: 'ready',
+          workspacePath: '/captured/project/.openchamber/uploads/archive.zip',
+        },
+      ],
+      undefined,
+      undefined,
+      undefined,
+      'normal',
+      { target: { runtimeKey: getRuntimeKey(), sessionId: 'session-captured', directory: '/captured/project' } },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].files).toEqual([
+      { type: 'file', mime: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=', filename: 'notes.txt' },
+    ]);
+  });
+
   test('does not send a captured target through a different runtime', async () => {
     let error = null;
     try {

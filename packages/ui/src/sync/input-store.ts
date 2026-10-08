@@ -7,7 +7,9 @@ import { create } from "zustand"
 import type { AttachIssueRequest } from '@openchamber/sdk'
 import type { ContextPartMetadata } from '@/lib/messages/contextParts'
 import type { AttachedFile } from "@/stores/types/sessionTypes"
-import { prepareAttachmentFiles } from "./attachment-files"
+import { prepareAttachmentFiles, isZipAttachmentFile, ZIP_ATTACHMENT_MIME } from "./attachment-files"
+import { uploadZipAttachment, type ZipUploadFailure } from "./zip-attachments"
+import { useDirectoryStore } from "@/stores/useDirectoryStore"
 import { getChatDraftIdentityKey, subscribeChatDraftDeletion, type ChatDraftIdentity } from "@/lib/chatDraftPersistence"
 
 const FILE_URI_PREFIX = "file://"
@@ -43,6 +45,20 @@ const hasGeneratedFilenameCollision = (filenames: string[], attachedFiles: Attac
   if (filenames.length === 0) return false
   const attachedFilenames = new Set(attachedFiles.map((attachment) => attachment.filename.toLowerCase()))
   return filenames.some((filename) => attachedFilenames.has(filename.toLowerCase()))
+}
+
+const notifyZipUploadFailure = async (reason: ZipUploadFailure, filename: string): Promise<void> => {
+  const [{ toast }, { useI18nStore, formatMessage }] = await Promise.all([
+    import("sonner"),
+    import("@/lib/i18n/store"),
+  ])
+  const { dictionary } = useI18nStore.getState()
+  const key = reason === "too-large"
+    ? "chat.fileAttachment.zip.tooLarge"
+    : reason === "unsupported-runtime"
+      ? "chat.fileAttachment.zip.unsupportedRuntime"
+      : "chat.fileAttachment.zip.uploadFailed"
+  toast.error(formatMessage(dictionary, key, { name: filename }))
 }
 
 const readFileAsDataUrl = (file: File, mime: string): Promise<string> => new Promise((resolve, reject) => {
@@ -155,6 +171,7 @@ export type InputState = {
   pendingBtwComposerRequest: PendingBtwComposerRequest | null
   attachedFiles: AttachedFile[]
   attachmentDraftKey: string | null
+  attachmentDraftIdentity: ChatDraftIdentity | null
   attachmentDrafts: Map<string, AttachedFile[]>
   selectAttachmentDraft: (target: ChatDraftIdentity | null) => void
   restoreAttachedFiles: (files: AttachedFile[], target: ChatDraftIdentity | null) => void
@@ -172,6 +189,9 @@ export type InputState = {
   consumePendingSyntheticParts: () => SyntheticContextPart[] | null
   addAttachedFile: (file: File) => Promise<boolean>
   removeAttachedFile: (id: string) => void
+  updateAttachedFile: (id: string, patch: Partial<AttachedFile>) => void
+  runZipUpload: (id: string) => Promise<void>
+  retryZipUpload: (id: string) => Promise<void>
   setAttachedFiles: (files: AttachedFile[], target?: ChatDraftIdentity | null) => void
   clearAttachedFiles: (target?: ChatDraftIdentity | null) => void
   addVSCodeFileAttachment: (path: string, name: string, fileSize: number | null) => void
@@ -197,6 +217,7 @@ export const useInputStore = create<InputState>()((set, get) => ({
   pendingBtwComposerRequest: null,
   attachedFiles: [],
   attachmentDraftKey: null,
+  attachmentDraftIdentity: null,
   attachmentDrafts: new Map(),
   selectAttachmentDraft: (target) => {
     const key = target ? getChatDraftIdentityKey(target) : null
@@ -211,7 +232,7 @@ export const useInputStore = create<InputState>()((set, get) => ({
     const files = key ? (drafts.get(key) ?? (state.attachmentDraftKey === null ? state.attachedFiles : [])) : []
     if (key) drafts.delete(key)
     attachmentReadGeneration += 1
-    set({ attachmentDraftKey: key, attachmentDrafts: drafts, attachedFiles: files })
+    set({ attachmentDraftKey: key, attachmentDraftIdentity: target, attachmentDrafts: drafts, attachedFiles: files })
   },
   restoreAttachedFiles: (files, target) => {
     const state = get()
@@ -271,6 +292,27 @@ export const useInputStore = create<InputState>()((set, get) => ({
   },
 
   addAttachedFile: async (file: File) => {
+    // ZIP archives are uploaded to the session workspace instead of inlined:
+    // providers reject application/zip file parts, so the agent gets a path
+    // to extract (see zip-attachments.ts).
+    if (isZipAttachmentFile(file)) {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const attached: AttachedFile = {
+        id,
+        file,
+        dataUrl: "",
+        mimeType: ZIP_ATTACHMENT_MIME,
+        filename: file.name,
+        size: file.size,
+        source: "local",
+        delivery: "workspace-upload",
+        uploadState: "uploading",
+      }
+      set((state) => ({ attachedFiles: [...state.attachedFiles, attached] }))
+      void get().runZipUpload(id)
+      return true
+    }
+
     const generation = attachmentReadGeneration
     for (let attempt = 0; attempt < MAX_ATTACHMENT_PREPARATION_ATTEMPTS; attempt += 1) {
       const reservedFilenames = get().attachedFiles.map((attachment) => attachment.filename)
@@ -299,6 +341,48 @@ export const useInputStore = create<InputState>()((set, get) => ({
       }
       return { attachedFiles: s.attachedFiles.filter((f) => f.id !== id) }
     }),
+
+  updateAttachedFile: (id, patch) => {
+    const state = get()
+    if (state.attachedFiles.some((file) => file.id === id)) {
+      set({ attachedFiles: state.attachedFiles.map((file) => file.id === id ? { ...file, ...patch } : file) })
+      return
+    }
+    // The draft may have been switched away mid-upload; the chip then lives
+    // in the saved draft bucket and still needs its outcome.
+    for (const [key, files] of state.attachmentDrafts) {
+      if (!files.some((file) => file.id === id)) continue
+      const drafts = new Map(state.attachmentDrafts)
+      drafts.set(key, files.map((file) => file.id === id ? { ...file, ...patch } : file))
+      set({ attachmentDrafts: drafts })
+      return
+    }
+  },
+
+  runZipUpload: async (id) => {
+    const target = get().attachedFiles.find((file) => file.id === id)
+      ?? Array.from(get().attachmentDrafts.values()).flat().find((file) => file.id === id)
+    if (!target || target.delivery !== "workspace-upload") return
+    get().updateAttachedFile(id, { uploadState: "uploading", uploadError: undefined })
+    // Read the mutable current directory at call time; the draft identity is
+    // the authoritative target when the composer has one.
+    const directory = get().attachmentDraftIdentity?.directory
+      || useDirectoryStore.getState().currentDirectory
+      || ""
+    const outcome = await uploadZipAttachment(target.file, directory)
+    if (outcome.status === "ready") {
+      get().updateAttachedFile(id, { uploadState: "ready", workspacePath: outcome.workspacePath })
+      return
+    }
+    get().updateAttachedFile(id, { uploadState: "failed", uploadError: outcome.reason })
+    void notifyZipUploadFailure(outcome.reason, target.filename)
+  },
+
+  retryZipUpload: async (id) => {
+    const target = get().attachedFiles.find((file) => file.id === id)
+    if (!target || target.delivery !== "workspace-upload" || target.uploadState !== "failed") return
+    await get().runZipUpload(id)
+  },
 
   setAttachedFiles: (files, target) => {
     const state = get()

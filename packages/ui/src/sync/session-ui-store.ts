@@ -34,6 +34,7 @@ import { selectSkillsForDirectory, useSkillsStore } from "@/stores/useSkillsStor
 import { getDeferredSafeStorage } from "@/stores/utils/safeStorage"
 import { markPendingUserSendAnimation } from "@/lib/userSendAnimation"
 import { normalizePath } from "@/lib/pathNormalization"
+import { partitionAttachmentsForSend } from "./zip-attachments"
 import { CHAT_DRAFT_PROJECT_ID, createChatDirectory, deleteChatDirectory, getChatsRootFromDirectory, isChatDirectoryPath, warmChatsRootDirectory } from "@/lib/chatDirectories"
 import { isVSCodeRuntime } from "@/lib/desktop"
 import { composeForkSessionMessage } from "@/lib/messages/executionMeta"
@@ -2135,12 +2136,9 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
 
       markPendingUserSendAnimation(createdDraftSession.sessionId)
 
-      const files = attachments?.map((a) => ({
-        type: "file" as const,
-        mime: a.mimeType,
-        url: a.dataUrl,
-        filename: a.filename,
-      }))
+      // Workspace-uploaded attachments (zip) never become file parts; their
+      // path reaches the agent through a synthetic note added in ChatInput.
+      const files = attachments ? partitionAttachmentsForSend(attachments).fileParts : undefined
 
       await applyArmedGoal(createdDraftSession.sessionId, createdDraftSession.directory)
       const messageRoute = await routeMessage({
@@ -2164,12 +2162,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           synthetic: p.synthetic,
           metadata: p.metadata,
           systemContext: p.systemContext,
-          files: p.attachments?.map((a: AttachedFile) => ({
-            type: "file" as const,
-            mime: a.mimeType,
-            url: a.dataUrl,
-            filename: a.filename,
-          })),
+          files: p.attachments ? partitionAttachmentsForSend(p.attachments).fileParts : undefined,
         })),
       })
       // Recorded only after the send resolves: a failed send must carry the
@@ -2235,12 +2228,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       markPendingUserSendAnimation(targetSessionId)
     }
 
-    const files = attachments?.map((a) => ({
-      type: "file" as const,
-      mime: a.mimeType,
-      url: a.dataUrl,
-      filename: a.filename,
-    }))
+    const files = attachments ? partitionAttachmentsForSend(attachments).fileParts : undefined
 
     if (targetSessionId) {
       await applyArmedGoal(targetSessionId, currentSessionDirectory)
@@ -2289,12 +2277,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         synthetic: p.synthetic,
         metadata: p.metadata,
         systemContext: p.systemContext,
-        files: p.attachments?.map((a) => ({
-          type: "file" as const,
-          mime: a.mimeType,
-          url: a.dataUrl,
-          filename: a.filename,
-        })),
+        files: p.attachments ? partitionAttachmentsForSend(p.attachments).fileParts : undefined,
       })),
     })
     if (knowledge.text && messageRoute !== 'shell') {

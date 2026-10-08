@@ -24,6 +24,16 @@ export interface AttachedFile {
     /** Shared ID linking entries extracted from the same document (PPTX, DOCX, etc.).
      *  Removing any entry with this ID cascades to all entries in the group. */
     sourceDocumentId?: string;
+    /** How the attachment reaches the agent. Default ('inline') sends the
+     *  dataUrl as a file part; 'workspace-upload' files are already on the
+     *  server filesystem and are referenced by path in a synthetic note. */
+    delivery?: 'inline' | 'workspace-upload';
+    /** Absolute server-side path of a 'workspace-upload' attachment. */
+    workspacePath?: string;
+    /** Upload lifecycle for 'workspace-upload' attachments. */
+    uploadState?: 'uploading' | 'ready' | 'failed';
+    /** Machine-readable reason when uploadState is 'failed'. */
+    uploadError?: 'too-large' | 'unsupported-runtime' | 'upload-failed';
 }
 
 export type EditPermissionMode = 'allow' | 'ask' | 'deny' | 'full';

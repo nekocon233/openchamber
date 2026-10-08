@@ -14,6 +14,7 @@ import {
 import { isFollowUpQueueClaimAvailable } from '@/lib/followUpQueue';
 import { useSelectionStore } from '@/sync/selection-store';
 import { prepareLocalAttachments, useInputStore } from '@/sync/input-store';
+import { buildZipUploadNote } from '@/sync/zip-attachments';
 import {
     ACCEPTED_ATTACHMENT_EXTENSIONS,
     ATTACHMENT_ACCEPT,
@@ -1916,6 +1917,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         };
 
         const reservedFilenames = new Set(attachedFiles.map((attachment) => attachment.filename));
+        // A zip still uploading has no workspace path yet, and a failed one
+        // would silently drop out of the message; both block the send so the
+        // user makes an explicit call (wait / retry / remove).
+        if (attachedFiles.some((file) => file.delivery === 'workspace-upload' && file.uploadState === 'uploading')) {
+            toast.error(t('chat.fileAttachment.zip.sendBlockedUploading'));
+            return;
+        }
+        const failedZipUpload = attachedFiles.find(
+            (file) => file.delivery === 'workspace-upload' && file.uploadState === 'failed',
+        );
+        if (failedZipUpload) {
+            toast.error(t('chat.fileAttachment.zip.sendBlockedFailed', { name: failedZipUpload.filename }));
+            return;
+        }
         const documentMentions = await prepareDocumentMentions(
             !isBtwActive && inputSnapshot.hasContent ? [inputSnapshot.message] : [],
             reservedFilenames,
@@ -2061,6 +2076,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             primaryAttachments,
             opencodeClient,
         );
+
+        // Workspace-uploaded zips never travel as file parts (providers reject
+        // application/zip); the agent gets their paths as a synthetic note.
+        const readyZipUploads = sendableAttachments.filter(
+            (attachment) => attachment.delivery === 'workspace-upload'
+                && attachment.uploadState === 'ready'
+                && attachment.workspacePath,
+        );
+        if (readyZipUploads.length > 0) {
+            additionalParts.push({
+                text: buildZipUploadNote(readyZipUploads, currentDirectory ?? ''),
+                synthetic: true,
+            });
+        }
 
         if (!isSubmissionContextCurrent()) return;
 

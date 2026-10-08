@@ -1,5 +1,6 @@
 import React, { useRef, memo } from 'react';
 import { useInputStore } from '@/sync/input-store';
+import { deleteWorkspaceUpload } from '@/sync/zip-attachments';
 import type { AttachedFile } from '@/sync/session-ui-store';
 import { useUIStore } from '@/stores/useUIStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
@@ -281,6 +282,18 @@ interface FileChipProps {
 const FileChip = memo(({ file, onRemove }: FileChipProps) => {
   const { t } = useI18n();
   const { displayName, fileSize, extension } = useFileDetails(file);
+  const retryZipUpload = useInputStore((state) => state.retryZipUpload);
+
+  const isWorkspaceUpload = file.delivery === 'workspace-upload';
+  const isUploading = isWorkspaceUpload && file.uploadState === 'uploading';
+  const isFailed = isWorkspaceUpload && file.uploadState === 'failed';
+  const title = isFailed
+    ? t('chat.fileAttachment.zip.uploadFailedTitle', { name: displayName })
+    : isUploading
+      ? t('chat.fileAttachment.zip.uploadingTitle', { name: displayName })
+      : isWorkspaceUpload && file.workspacePath
+        ? t('chat.fileAttachment.zip.uploadedTitle', { path: file.workspacePath })
+        : displayName;
 
   return (
     <button
@@ -290,13 +303,25 @@ const FileChip = memo(({ file, onRemove }: FileChipProps) => {
         if ((e.target as HTMLElement).closest('[data-remove-button]')) {
           return;
         }
+        if (isFailed) {
+          void retryZipUpload(file.id);
+        }
       }}
       className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/80 bg-background pl-2 pr-1 text-xs text-foreground text-left hover:opacity-90 transition-opacity"
-      title={displayName}
+      title={title}
     >
-      <FileTypeIcon filePath={file.filename} extension={extension} className="h-4 w-4 flex-shrink-0" />
+      {isUploading ? (
+        <Icon name="loader-4" className="h-4 w-4 flex-shrink-0 animate-spin text-muted-foreground" />
+      ) : isFailed ? (
+        <Icon name="error-warning" className="h-4 w-4 flex-shrink-0 text-[var(--status-error)]" />
+      ) : (
+        <FileTypeIcon filePath={file.filename} extension={extension} className="h-4 w-4 flex-shrink-0" />
+      )}
       <span className="truncate max-w-[200px]">{displayName}</span>
       {fileSize && <span className="text-muted-foreground flex-shrink-0">{fileSize}</span>}
+      {isFailed && (
+        <span className="text-muted-foreground flex-shrink-0">{t('chat.fileAttachment.zip.retry')}</span>
+      )}
       <span
         data-remove-button
         onClick={(e) => {
@@ -409,6 +434,15 @@ export const AttachedFilesList = memo(({ onShowPopup, className }: AttachedFiles
     size: file.size,
   })).filter((image) => image.url);
 
+  // Removing a workspace-uploaded zip also removes the scratch file; the copy
+  // only exists to back this chip. Best-effort: leftovers are harmless.
+  const removeFile = (file: AttachedFile) => {
+    if (file.delivery === 'workspace-upload' && file.workspacePath) {
+      deleteWorkspaceUpload(file.workspacePath);
+    }
+    removeAttachedFile(file.id);
+  };
+
   return (
     <div className={cn('w-full space-y-2', className)}>
       {/* Images row - inline with previews */}
@@ -418,7 +452,7 @@ export const AttachedFilesList = memo(({ onShowPopup, className }: AttachedFiles
             <ImagePreview
               key={file.id}
               file={file}
-              onRemove={() => removeAttachedFile(file.id)}
+              onRemove={() => removeFile(file)}
               onShowPopup={onShowPopup}
               gallery={imageGallery}
               index={index}
@@ -426,7 +460,7 @@ export const AttachedFilesList = memo(({ onShowPopup, className }: AttachedFiles
           ))}
         </div>
       )}
-      
+
       {/* Other files row - inline text-only */}
       {otherFiles.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
@@ -434,7 +468,7 @@ export const AttachedFilesList = memo(({ onShowPopup, className }: AttachedFiles
             <FileChip
               key={file.id}
               file={file}
-              onRemove={() => removeAttachedFile(file.id)}
+              onRemove={() => removeFile(file)}
             />
           ))}
         </div>

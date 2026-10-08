@@ -6,6 +6,8 @@ const ACCEPTED_ATTACHMENT_TYPES = [
   "image/heic",
   "image/heif",
   "application/pdf",
+  "application/zip",
+  "application/x-zip-compressed",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -103,6 +105,7 @@ const ACCEPTED_ATTACHMENT_TYPES = [
   ".yaml",
   ".yml",
   ".zig",
+  ".zip",
   ".zsh",
 ] as const
 
@@ -411,4 +414,14 @@ export const prepareAttachmentFiles = (
     }
     return prepared
   })
+}
+
+// ZIP archives stay out of the inline pipeline above: model providers reject
+// application/zip file parts, so zip files are uploaded to the session
+// workspace instead (see zip-attachments.ts) and the agent extracts them.
+export const ZIP_ATTACHMENT_MIME = "application/zip"
+
+export const isZipAttachmentFile = (file: File): boolean => {
+  const type = declaredMimeOf(file)
+  return type === "application/zip" || type === "application/x-zip-compressed" || extensionOf(file.name) === "zip"
 }

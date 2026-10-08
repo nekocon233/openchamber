@@ -5,6 +5,7 @@ import {
   getAttachmentInputModality,
   getUnsupportedAttachmentInputs,
   isDocumentAttachmentFilename,
+  isZipAttachmentFile,
   prepareAttachmentFile,
 } from "./attachment-files"
 
@@ -41,11 +42,37 @@ describe("attachment file preparation", () => {
     for (const extension of [
       "diff", "patch", "ipynb", "jsonl", "ndjson", "har", "svg", "drawio",
       "vue", "svelte", "php", "cs", "kt", "swift", "lua", "dart", "tf", "hcl", "proto",
-      "docx", "pptx", "xlsx", "odt", "odp", "ods",
+      "docx", "pptx", "xlsx", "odt", "odp", "ods", "zip",
     ]) {
       expect(ACCEPTED_ATTACHMENT_EXTENSIONS.includes(extension)).toBe(true)
       expect(ATTACHMENT_ACCEPT.includes(`.${extension}`)).toBe(true)
     }
+  })
+
+  test("zip archives stay picker-visible but never become inline attachments", async () => {
+    // Zip content starts with the PK\x03\x04 magic, which fails the text sniff.
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00])
+
+    expect(ATTACHMENT_ACCEPT.includes("application/zip")).toBe(true)
+    expect(ATTACHMENT_ACCEPT.includes(".zip")).toBe(true)
+    expect(ACCEPTED_ATTACHMENT_EXTENSIONS.includes("zip")).toBe(true)
+    expect(getAttachmentInputModality("application/zip")).toBe(undefined)
+
+    // Providers reject application/zip file parts, so the inline pipeline
+    // refuses zip; zip-attachments.ts uploads it to the workspace instead.
+    expect(isZipAttachmentFile(new File([bytes], "archive.zip", { type: "application/zip" }))).toBe(true)
+    expect(isZipAttachmentFile(new File([bytes], "archive.zip", { type: "application/x-zip-compressed" }))).toBe(true)
+    expect(isZipAttachmentFile(new File([bytes], "archive.zip"))).toBe(true)
+    expect(isZipAttachmentFile(new File([bytes], "archive.zip", { type: "application/octet-stream" }))).toBe(true)
+    expect(isZipAttachmentFile(new File(["hello"], "notes.txt", { type: "text/plain" }))).toBe(false)
+    expect(isZipAttachmentFile(new File([bytes], "slides.pptx", {
+      type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }))).toBe(false)
+
+    const declared = await prepare(new File([bytes], "archive.zip", { type: "application/zip" }))
+    const untyped = await prepare(new File([bytes], "archive.zip"))
+    expect(declared).toBe(undefined)
+    expect(untyped).toBe(undefined)
   })
 
   test("identifies Office and OpenDocument filenames for shared mention preparation", () => {
