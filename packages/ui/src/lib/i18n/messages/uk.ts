@@ -15,11 +15,12 @@ export const dict: Record<I18nKey, string> = {
   "settings.chatgpt.reauthorize": "Авторизація ChatGPT втратила чинність. Увійдіть знову в Налаштування → Постачальники → Claude Code CLI.",
 
   "settings.chatgpt.title": "План ChatGPT",
-  "settings.chatgpt.description": "Використовуйте моделі GPT у Claude Code через свій план ChatGPT. Підтримуються текст та інструменти програмування.",
+  "settings.chatgpt.description": "Використовуйте моделі GPT у Claude Code через свій план ChatGPT. Підтримуються текст, зображення та інструменти програмування.",
   "settings.chatgpt.connected": "Підключено",
   "settings.chatgpt.signedOut": "Вихід виконано",
   "settings.chatgpt.permissionRequired": "Потрібен дозвіл на використання плану ChatGPT.",
   "settings.chatgpt.signIn": "Продовжити з ChatGPT",
+  "settings.chatgpt.addAccount": "Додати обліковий запис ChatGPT",
   "settings.chatgpt.signOut": "Вийти",
   "settings.chatgpt.localOnly": "Увійдіть на комп’ютері, де працює цей сервер OpenChamber. Після цього з’єднання можна використовувати тут.",
   "settings.chatgpt.callback": "Поверніться до OpenChamber, щоб перевірити вхід. Цю вкладку можна закрити.",

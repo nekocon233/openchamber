@@ -18,6 +18,34 @@ const send = (grant, patch = {}, headers = {}) => fetch(`${grant.baseURL}/v1/mes
 });
 
 describe('ChatGPT loopback bridge', () => {
+  it('permits image input only when the grant carries the model capability', async () => {
+    const requests = [];
+    const bridge = create(async (_url, options) => { requests.push(JSON.parse(options.body)); return response(events); });
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/gif', data: 'aW1hZ2U=' } };
+    const messages = [{ role: 'user', content: [image] }];
+    const visual = await bridge.acquire('account', 'gpt-fixture', 'max', true);
+    const textOnly = await bridge.acquire('account', 'gpt-fixture', 'max');
+    expect((await send(textOnly, { messages, supportsImages: true })).status).toBe(400);
+    expect(requests).toHaveLength(0);
+    expect((await send(visual, { messages })).status).toBe(200);
+    expect(requests[0]).toMatchObject({
+      reasoning: { effort: 'max' },
+      input: [{ role: 'user', content: [{ type: 'input_image', image_url: 'data:image/gif;base64,aW1hZ2U=', detail: 'auto' }] }],
+    });
+    expect(requests[0]).not.toHaveProperty('max_output_tokens');
+    visual.dispose();
+    expect((await send(visual, { messages })).status).toBe(401);
+  });
+
+  it('keeps effort choices isolated per grant and omits reasoning for Default', async () => {
+    const requests = [];
+    const bridge = create(async (_url, options) => { requests.push(JSON.parse(options.body)); return response(events); });
+    const grants = await Promise.all(['max', 'low', null].map((effort) => bridge.acquire('account', 'gpt-fixture', effort)));
+    for (const grant of grants) expect((await send(grant, { output_config: { effort: 'high' } })).status).toBe(200);
+    expect((await send(grants[0], { output_config: { effort: 'low' } })).status).toBe(200);
+    expect(requests.map((request) => request.reasoning)).toEqual([{ effort: 'max' }, { effort: 'low' }, undefined, { effort: 'max' }]);
+  });
+
   it('keeps account credentials on the upstream side and supports non-streaming callers', async () => {
     const calls = [];
     const bridge = create(async (url, options) => { calls.push({ url, options }); return response(events); });

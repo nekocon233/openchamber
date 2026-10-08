@@ -14,11 +14,12 @@ export const dict = {
   "settings.chatgpt.reauthorize": "ChatGPT yetkilendirmenizin süresi doldu. Ayarlar → Sağlayıcılar → Claude Code CLI bölümünden yeniden oturum açın.",
 
   "settings.chatgpt.title": "ChatGPT planı",
-  "settings.chatgpt.description": "ChatGPT planınızla Claude Code içinde GPT modellerini kullanın. Metin ve kodlama araçları desteklenir.",
+  "settings.chatgpt.description": "ChatGPT planınızla Claude Code içinde GPT modellerini kullanın. Metin, görseller ve kodlama araçları desteklenir.",
   "settings.chatgpt.connected": "Bağlı",
   "settings.chatgpt.signedOut": "Oturum kapalı",
   "settings.chatgpt.permissionRequired": "ChatGPT planınızı kullanma izni gerekiyor.",
   "settings.chatgpt.signIn": "ChatGPT ile devam et",
+  "settings.chatgpt.addAccount": "ChatGPT hesabı ekle",
   "settings.chatgpt.signOut": "Çıkış yap",
   "settings.chatgpt.localOnly": "Bu OpenChamber sunucusunu çalıştıran bilgisayarda oturum açın. Ardından bağlantıyı burada kullanabilirsiniz.",
   "settings.chatgpt.callback": "Giriş sonucunu kontrol etmek için OpenChamber’a dönün. Bu sekmeyi kapatabilirsiniz.",

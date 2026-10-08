@@ -14,11 +14,12 @@ export const dict = {
   "settings.chatgpt.reauthorize": "Votre autorisation ChatGPT a expiré. Reconnectez-vous dans Paramètres → Fournisseurs → Claude Code CLI.",
 
   "settings.chatgpt.title": "Abonnement ChatGPT",
-  "settings.chatgpt.description": "Utilisez les modèles GPT dans Claude Code avec votre abonnement ChatGPT. Le texte et les outils de programmation sont pris en charge.",
+  "settings.chatgpt.description": "Utilisez les modèles GPT dans Claude Code avec votre abonnement ChatGPT. Le texte, les images et les outils de programmation sont pris en charge.",
   "settings.chatgpt.connected": "Connecté",
   "settings.chatgpt.signedOut": "Déconnecté",
   "settings.chatgpt.permissionRequired": "Une autorisation est nécessaire pour utiliser votre abonnement ChatGPT.",
   "settings.chatgpt.signIn": "Continuer avec ChatGPT",
+  "settings.chatgpt.addAccount": "Ajouter un compte ChatGPT",
   "settings.chatgpt.signOut": "Se déconnecter",
   "settings.chatgpt.localOnly": "Connectez-vous sur l’ordinateur qui exécute ce serveur OpenChamber. Vous pourrez ensuite utiliser la connexion ici.",
   "settings.chatgpt.callback": "Revenez dans OpenChamber pour vérifier la connexion. Vous pouvez fermer cet onglet.",

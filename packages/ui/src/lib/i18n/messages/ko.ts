@@ -15,11 +15,12 @@ export const dict: Record<I18nKey, string> = {
   "settings.chatgpt.reauthorize": "ChatGPT 인증이 만료되었습니다. 설정 → 제공업체 → Claude Code CLI에서 다시 로그인하세요.",
 
   "settings.chatgpt.title": "ChatGPT 요금제",
-  "settings.chatgpt.description": "ChatGPT 요금제로 Claude Code에서 GPT 모델을 사용합니다. 텍스트와 코딩 도구를 지원합니다.",
+  "settings.chatgpt.description": "ChatGPT 요금제로 Claude Code에서 GPT 모델을 사용합니다. 텍스트, 이미지 입력 및 코딩 도구를 지원합니다.",
   "settings.chatgpt.connected": "연결됨",
   "settings.chatgpt.signedOut": "로그아웃됨",
   "settings.chatgpt.permissionRequired": "ChatGPT 요금제 사용 권한이 필요합니다.",
   "settings.chatgpt.signIn": "ChatGPT로 계속",
+  "settings.chatgpt.addAccount": "ChatGPT 계정 추가",
   "settings.chatgpt.signOut": "로그아웃",
   "settings.chatgpt.localOnly": "이 OpenChamber 서버를 실행하는 컴퓨터에서 로그인하세요. 이후 여기에서 연결을 사용할 수 있습니다.",
   "settings.chatgpt.callback": "OpenChamber로 돌아가 로그인 결과를 확인하세요. 이 탭을 닫아도 됩니다.",

@@ -15,11 +15,12 @@ export const dict: Record<I18nKey, string> = {
   "settings.chatgpt.reauthorize": "ChatGPT 授權已失效，請在設定 → 服務商 → Claude Code CLI 中重新登入。",
 
   "settings.chatgpt.title": "ChatGPT 方案",
-  "settings.chatgpt.description": "透過 ChatGPT 方案在 Claude Code 中使用 GPT 模型，支援文字和程式開發工具。",
+  "settings.chatgpt.description": "透過 ChatGPT 方案在 Claude Code 中使用 GPT 模型，支援文字、圖片輸入和程式開發工具。",
   "settings.chatgpt.connected": "已連線",
   "settings.chatgpt.signedOut": "已登出",
   "settings.chatgpt.permissionRequired": "需要授權使用 ChatGPT 方案。",
   "settings.chatgpt.signIn": "使用 ChatGPT 繼續",
+  "settings.chatgpt.addAccount": "新增 ChatGPT 帳號",
   "settings.chatgpt.signOut": "登出",
   "settings.chatgpt.localOnly": "請在執行此 OpenChamber 伺服器的電腦上完成登入，之後即可在這裡使用連線。",
   "settings.chatgpt.callback": "請返回 OpenChamber 查看登入結果。你可以關閉此分頁。",

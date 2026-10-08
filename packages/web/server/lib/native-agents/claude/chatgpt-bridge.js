@@ -38,7 +38,7 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
       let raw;
       try { raw = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw fail('CHATGPT_INVALID_JSON', 400); }
-      const translated = toResponsesRequest(raw, grant.model);
+      const translated = toResponsesRequest(raw, grant.model, grant.effort, grant.supportsImages);
       controller = new AbortController();
       requests.set(controller, { accountId: grant.accountId, token });
       const disconnected = () => { if (!res.writableEnded) controller.abort(); };
@@ -100,11 +100,11 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
     return starting;
   };
   return {
-    async acquire(accountId, model) {
+    async acquire(accountId, model, effort = null, supportsImages = false) {
       const baseURL = await start();
       if (closed) throw fail('CHATGPT_BRIDGE_CLOSED', 503);
       const token = randomBytes(32).toString('hex');
-      grants.set(token, { accountId, model });
+      grants.set(token, { accountId, model, effort, supportsImages });
       return {
         baseURL, token,
         dispose() {

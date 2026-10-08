@@ -11,6 +11,8 @@ import { JsonRpcError } from './codex/rpc.js';
 import { sessionNotFoundError } from './errors.js';
 import { registerNativeAgentRoutes } from './routes.js';
 import { createNativeAgentsRuntime } from './runtime.js';
+import { createSnapshotStore } from './snapshots.js';
+import { createChatgptStore } from './claude/chatgpt-store.js';
 
 const fixture = (name) => JSON.parse(fs.readFileSync(new URL(`./claude/fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -48,7 +50,7 @@ const scriptedTurnEnd = (apiMessageId) => [
   { type: 'result', subtype: 'success', is_error: false, result: 'Done.', terminal_reason: 'completed', queued_turn_count: 0 },
 ];
 
-const createRuntime = ({ childFrames = [] } = {}) => {
+const createRuntime = ({ childFrames = [], snapshotGit } = {}) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-native-runtime-'));
   directories.push(dataDir);
   const info = { sessionId: SESSION_UUID, summary: 'Terminal work', lastModified: 2000, fileSize: 10, createdAt: 1000 };
@@ -101,6 +103,7 @@ const createRuntime = ({ childFrames = [] } = {}) => {
   };
   const runtime = createNativeAgentsRuntime({
     dataDir,
+    snapshots: createSnapshotStore({ dataDir, git: snapshotGit }),
     // No codex binary: the Codex backend fails on its own.
     resolveExecutable: async (cli) => (cli === 'claude' ? '/usr/bin/claude' : null),
     buildChildEnv: () => ({}),
@@ -108,7 +111,7 @@ const createRuntime = ({ childFrames = [] } = {}) => {
     publishNativeEvent: (event) => events.push(event),
     loadSdk: async () => sdk,
   });
-  return Object.assign(runtime, { events, turns, queries });
+  return Object.assign(runtime, { dataDir, events, turns, queries });
 };
 
 const waitFor = async (condition) => {
@@ -128,6 +131,34 @@ const promptRequest = (messageID) => ({
 });
 
 describe('native agents runtime', () => {
+  it('captures ChatGPT effort for each resumed query and rejects changing it during a turn', async () => {
+    const runtime = createRuntime({ snapshotGit: async () => '' });
+    const store = createChatgptStore({ dataDir: runtime.dataDir });
+    await store.transaction((document) => { document.accounts = [{
+      id: SESSION_UUID, clientId: 'test-client', subject: 'test-user', email: '', revision: 1, welcomed: true,
+      credentials: { accessToken: 'fake-access', refreshToken: 'fake-refresh', idToken: 'fake-id', expiresAt: Date.now() + 3600000, scopes: ['chatgpt.tokens.use.direct'] },
+      models: [{ slug: 'gpt-fixture', display_name: 'GPT', visibility: 'list', supported_reasoning_levels: [{ effort: 'max' }, { effort: 'none' }] }],
+    }]; });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    const model = { providerID: 'claude-native', modelID: `chatgpt:${SESSION_UUID}:${Buffer.from('gpt-fixture').toString('base64url')}` };
+    const prompt = { ...promptRequest('ncl_u_4b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f'), model };
+    try {
+      await runtime.prompt(session.id, { ...prompt, variant: 'max' });
+      await waitFor(() => runtime.turns.started === 1);
+      expect(runtime.queries[0]).not.toHaveProperty('effort');
+      await expect(runtime.prompt(session.id, { ...prompt, variant: 'none' })).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_BUSY' });
+      runtime.turns.finish.resolve();
+      await waitFor(async () => Object.keys(await runtime.statuses(DIRECTORY)).length === 0);
+      await runtime.prompt(session.id, { ...prompt, messageID: 'ncl_u_83d065d3-e4a6-4ccc-a739-45b0c75254e1', variant: 'none' });
+      await waitFor(async () => runtime.queries.length === 2 && Object.keys(await runtime.statuses(DIRECTORY)).length === 0);
+      await runtime.prompt(session.id, { ...prompt, messageID: 'ncl_u_2b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f' });
+      await waitFor(() => runtime.queries.length === 3);
+      expect(runtime.queries.every((options) => options.effort === undefined)).toBe(true);
+      expect(runtime.queries.slice(1).map((options) => options.resume)).toEqual([session.id.slice(4), session.id.slice(4)]);
+      await expect(runtime.prompt(session.id, { ...prompt, variant: 'ultra' })).rejects.toMatchObject({ code: 'CHATGPT_UNSUPPORTED_EFFORT' });
+    } finally { runtime.turns.finish.resolve(); await runtime.shutdown(); }
+  });
+
   it('lists each backend on its own, so one failing does not hide the other', async () => {
     const runtime = createRuntime();
     const result = await runtime.listSessions(DIRECTORY);

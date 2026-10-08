@@ -6,6 +6,11 @@ import { NativeAgentError } from '../errors.js';
 
 export const chatgptModelSchema = z.object({
   slug: z.string().min(1), display_name: z.string().min(1), visibility: z.string(),
+  default_reasoning_level: z.string().nullish(),
+  supported_reasoning_levels: z.array(z.object({ effort: z.string().min(1) })).optional(),
+  context_window: z.number().int().positive().nullish(),
+  max_context_window: z.number().int().positive().nullish(),
+  input_modalities: z.array(z.string()).nullish(),
 });
 const credentialsSchema = z.object({
   accessToken: z.string().min(1), refreshToken: z.string().min(1), idToken: z.string().min(1),

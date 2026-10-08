@@ -21,11 +21,18 @@ const terminalRefreshErrors = new Set(['invalid_grant', 'invalid_refresh_token',
 const error = (code, status = 400) => new NativeAgentError(code, { code, status });
 const equal = (left, right) => Buffer.byteLength(left) === Buffer.byteLength(right) && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 const hasPlan = (account) => account.credentials?.scopes.includes(PLAN_SCOPE) === true;
-const publicAccount = (account) => ({
-  id: account.id, kind: 'chatgpt-plan', label: `${account.email || 'ChatGPT'} · ${account.id.slice(0, 8)}`,
-  status: account.credentials === null ? 'signed-out' : hasPlan(account) ? 'connected' : 'permission-required',
-  welcomed: account.welcomed,
-});
+const publicAccounts = (accounts) => {
+  const emailCounts = new Map();
+  for (const account of accounts) emailCounts.set(account.email, (emailCounts.get(account.email) ?? 0) + 1);
+  return accounts.map((account) => ({
+    id: account.id, kind: 'chatgpt-plan',
+    label: account.email && emailCounts.get(account.email) === 1
+      ? account.email
+      : `${account.email || 'ChatGPT'} · ${account.id.slice(0, 8)}`,
+    status: account.credentials === null ? 'signed-out' : hasPlan(account) ? 'connected' : 'permission-required',
+    welcomed: account.welcomed,
+  }));
+};
 
 /** Owns SIWC registrations, callback listeners and token refresh. Never reads Codex credentials. */
 export const createChatgptAuth = ({ dataDir, fetchImpl = fetch, issuer = ISSUER, apiBase = API_BASE, now = Date.now, attemptTimeoutMs = 300_000 }) => {
@@ -126,8 +133,12 @@ export const createChatgptAuth = ({ dataDir, fetchImpl = fetch, issuer = ISSUER,
   };
   return {
     accessToken,
-    async accounts() { return (await store.read()).accounts.map(publicAccount); },
-    async getAccount(id) { return publicAccount(await account(id)); },
+    async accounts() { return publicAccounts((await store.read()).accounts); },
+    async getAccount(id) {
+      const found = publicAccounts((await store.read()).accounts).find((entry) => entry.id === id);
+      if (!found) throw error('CHATGPT_ACCOUNT_NOT_FOUND', 404);
+      return found;
+    },
     async models(id) {
       const before = await account(id);
       const key = `${id}:${before.revision}`;

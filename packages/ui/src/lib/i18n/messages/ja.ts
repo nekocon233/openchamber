@@ -15,11 +15,12 @@ export const dict: Record<I18nKey, string> = {
   "settings.chatgpt.reauthorize": "ChatGPT の認証が失効しました。設定 → プロバイダー → Claude Code CLI で再度ログインしてください。",
 
   "settings.chatgpt.title": "ChatGPT プラン",
-  "settings.chatgpt.description": "ChatGPT プランで Claude Code から GPT モデルを使います。テキストとコーディングツールに対応しています。",
+  "settings.chatgpt.description": "ChatGPT プランで Claude Code から GPT モデルを使います。テキスト、画像入力、コーディングツールに対応しています。",
   "settings.chatgpt.connected": "接続済み",
   "settings.chatgpt.signedOut": "ログアウト済み",
   "settings.chatgpt.permissionRequired": "ChatGPT プランを使うための許可が必要です。",
   "settings.chatgpt.signIn": "ChatGPT で続行",
+  "settings.chatgpt.addAccount": "ChatGPT アカウントを追加",
   "settings.chatgpt.signOut": "ログアウト",
   "settings.chatgpt.localOnly": "この OpenChamber サーバーを実行しているコンピューターでログインしてください。その後ここから接続を使えます。",
   "settings.chatgpt.callback": "OpenChamber に戻ってログイン結果を確認してください。このタブは閉じられます。",

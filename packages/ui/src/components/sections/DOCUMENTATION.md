@@ -103,8 +103,12 @@ capability permits it, polls only during the bounded authorization attempt and
 cancels pending attempts when leaving the page. Terminal status and a fresh
 account list own the UI state. The first successful plan authorization requires
 acknowledging the plan-use notice once. Logout reports unconfirmed remote
-revocation separately. Model controls identify plan usage and link to ChatGPT's
-usage settings. Explicit bridge error codes receive localized recovery text.
+revocation separately. ChatGPT usage management is available in provider
+settings and relevant error notices. Explicit bridge error codes receive
+localized recovery text.
+Connected account rows show status and sign-out; sign-in remains available on
+signed-out accounts and accounts needing plan permission. When saved accounts
+exist, the separate sign-in entry is labeled as adding a ChatGPT account.
 
 ### MCP OAuth
 

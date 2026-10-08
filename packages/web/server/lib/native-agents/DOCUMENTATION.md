@@ -706,23 +706,43 @@ successful refresh. Old API-key connections
 remain version 1 and default to `kind: anthropic` when the field is absent.
 
 `chatgpt.js` exposes models as `chatgpt:<account UUID>:<base64url slug>` inside
-`claude-native`. It preserves the upstream visible ordering. A failed account
+`claude-native`. Account labels use the email, adding a short account ID only
+for duplicate or missing emails. Model names use the upstream display name,
+followed by the account label when multiple accounts are connected. Catalog
+and resolved descriptors use the same naming rule; display changes retain
+account and model IDs. Catalog order follows upstream. A failed account
 catalog retains its last verified models and reports `catalogUnavailable` in
 settings; other accounts continue loading. Signed-out accounts offer no models.
-Unknown context/output limits remain null on the wire and use the UI's zero-as-
-unknown convention. Plan models have no invented API price or effort presets.
+The context window uses the account catalog's `max_context_window`, falling
+back to `context_window`. Claude receives that same window for token budgeting
+and auto-compaction. Output limits use verified OpenAI model specifications for
+the exact model slugs listed in `chatgpt.js`, since SIWC omits that field. Unknown
+limits stay null on the wire and use the UI's zero-as-unknown convention.
+Image support comes from `input_modalities`. These optional catalog fields are
+retained in storage; older records stay readable and gain capabilities on the
+next successful refresh. Plan models have no invented API price. Effort choices
+and defaults come from the account catalog's `supported_reasoning_levels` and
+`default_reasoning_level`, retained in the cached model records. Only Responses
+efforts are exposed; agent modes such as `ultra` are excluded. Older cached
+records without these fields keep the default-only behavior until refreshed.
 Utility descriptions read the selected saved descriptor instead of fetching
 every account's catalog for each background generation.
 
 `chatgpt-bridge.js` starts a separate loopback listener on demand. Each Claude
-query gets a random grant scoped to one account and upstream model. Grants are
+query gets a random grant bound to its account, upstream model, selected effort
+and image capability. Efforts are validated against that model's catalog before
+launch. Changing effort or model capabilities replaces an idle query and resumes
+its transcript, using the same busy/background-task guard as connection changes. Grants are
 removed on query disposal; logout revokes that account's grants and requests.
 OAuth tokens stay in the bridge, never in Claude's environment, settings file,
 command arguments, browser storage or logs. The listener refuses browser
 Origins, invalid grants, model mismatches and endpoints other than
 `POST /v1/messages`. Request bodies and unfinished SSE frames are bounded.
 
-`responses-protocol.js` sends `store: false`, `stream: true` and full text/tool
+`responses-protocol.js` sends the grant's effort as `reasoning.effort`; Default
+omits it and leaves the upstream default intact. Claude's own effort settings
+do not override this selection. Utility queries use the same captured setting.
+It sends `store: false`, `stream: true` and full text/tool
 history. Inline Claude system messages become developer messages. Functions are
 placed in the `claude` namespace with stable names and call IDs; Claude executes
 them and sends results back. The bridge never executes a tool. It translates
@@ -732,8 +752,15 @@ retain status, code and request ID without forwarding credential-bearing error
 text. Claude receives `x-should-retry: false`; there is no alternate billing
 path or fallback model.
 
-This version supports text and client-side coding tools. Tool search is disabled;
-attachments, hosted tools and exact token-count requests fail explicitly.
+PNG, JPEG, GIF and WebP base64 image blocks become Responses `input_image`
+content, both in user messages and function-tool results. Text/image ordering
+and tool call IDs are preserved. The grant rejects images for models without
+advertised image support. Image data is forwarded directly; the bridge never
+fetches an image URL or reads a file. Existing request-body limits still apply.
+Tool search is disabled. Document blocks, hosted tools and exact
+token-count requests fail explicitly. The upstream request still omits
+`max_output_tokens`, which this ChatGPT plan route does not accept; the output
+limit configures Claude's budget and the upstream enforces its own limit.
 Provider thinking signatures are not transferable and are omitted from history.
 Both streaming and non-streaming Claude requests are accepted, while upstream
 Responses always streams. Existing Claude session persistence, plan mode,

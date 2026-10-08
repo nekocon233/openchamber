@@ -4,11 +4,23 @@ import { NativeAgentError } from '../errors.js';
 
 const textBlock = z.object({ type: z.literal('text'), text: z.string() });
 const textContent = z.union([z.string().transform((text) => [textBlock.parse({ type: 'text', text })]), z.array(textBlock)]);
+const imageBlock = z.object({
+  type: z.literal('image'),
+  source: z.object({
+    type: z.literal('base64'), media_type: z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp']),
+    data: z.base64().min(1),
+  }),
+});
+const toolResultContent = z.union([
+  z.string().transform((text) => [textBlock.parse({ type: 'text', text })]),
+  z.array(z.discriminatedUnion('type', [textBlock, imageBlock])),
+]);
 const jsonObject = z.record(z.string(), z.json());
 const blockSchema = z.discriminatedUnion('type', [
   textBlock,
+  imageBlock,
   z.object({ type: z.literal('tool_use'), id: z.string(), name: z.string(), input: jsonObject }),
-  z.object({ type: z.literal('tool_result'), tool_use_id: z.string(), content: textContent.default([]).transform((blocks) => blocks.map((block) => block.text).join('\n')), is_error: z.boolean().optional() }),
+  z.object({ type: z.literal('tool_result'), tool_use_id: z.string(), content: toolResultContent.default([]), is_error: z.boolean().optional() }),
   z.object({ type: z.literal('thinking'), thinking: z.string(), signature: z.string().optional() }),
   z.object({ type: z.literal('redacted_thinking'), data: z.string() }),
 ]);
@@ -20,11 +32,15 @@ const messagesSchema = z.object({
   tool_choice: z.object({ type: z.enum(['auto', 'any', 'tool', 'none']), name: z.string().optional(), disable_parallel_tool_use: z.boolean().optional() }).optional(),
   output_config: z.object({ effort: z.string().optional(), format: z.object({ type: z.literal('json_schema'), schema: jsonObject }).optional() }).optional(),
 });
-const unsupported = () => new NativeAgentError('This ChatGPT connection supports text and client-side function tools only', { status: 400, code: 'CHATGPT_UNSUPPORTED_REQUEST' });
+const unsupported = () => new NativeAgentError('This ChatGPT request contains unsupported content or tools', { status: 400, code: 'CHATGPT_UNSUPPORTED_REQUEST' });
 const toolName = (name) => /^[a-zA-Z0-9_-]{1,64}$/.test(name) ? name : `oc_${createHash('sha256').update(name).digest('hex').slice(0, 40)}`;
+const imageInput = (block, supportsImages) => {
+  if (!supportsImages) throw new NativeAgentError('This ChatGPT model does not support image input', { status: 400, code: 'CHATGPT_IMAGE_UNSUPPORTED' });
+  return { type: 'input_image', image_url: `data:${block.source.media_type};base64,${block.source.data}`, detail: 'auto' };
+};
 
 /** Translate the caller's full history; the bridge neither executes tools nor stores conversations. */
-export const toResponsesRequest = (raw, selectedModel) => {
+export const toResponsesRequest = (raw, selectedModel, effort = null, supportsImages = false) => {
   const parsed = messagesSchema.safeParse(raw);
   if (!parsed.success) throw new NativeAgentError(`CHATGPT_UNSUPPORTED_REQUEST: ${parsed.error.issues.map((issue) => issue.path.join('.')).join(', ')}`, { status: 400, code: 'CHATGPT_UNSUPPORTED_REQUEST' });
   const request = parsed.data;
@@ -37,13 +53,23 @@ export const toResponsesRequest = (raw, selectedModel) => {
     for (const block of blocks) {
       if (block.type === 'text') {
         input.push({ role: message.role === 'system' ? 'developer' : message.role, content: block.text });
+      } else if (block.type === 'image') {
+        if (message.role !== 'user') throw unsupported();
+        input.push({ role: 'user', content: [imageInput(block, supportsImages)] });
       } else if (block.type === 'tool_use') {
         if (message.role !== 'assistant') throw unsupported();
         input.push({ type: 'function_call', call_id: block.id, namespace: 'claude', name: toolName(block.name), arguments: JSON.stringify(block.input) });
       } else if (block.type === 'tool_result') {
         if (message.role !== 'user') throw unsupported();
-        const output = block.content;
-        input.push({ type: 'function_call_output', call_id: block.tool_use_id, output: block.is_error ? `Tool execution failed:\n${output}` : output });
+        if (block.content.some((part) => part.type === 'image')) {
+          const output = block.content.map((part) => part.type === 'image'
+            ? imageInput(part, supportsImages) : { type: 'input_text', text: part.text });
+          if (block.is_error) output.unshift({ type: 'input_text', text: 'Tool execution failed:' });
+          input.push({ type: 'function_call_output', call_id: block.tool_use_id, output });
+        } else {
+          const output = block.content.map((part) => part.text).join('\n');
+          input.push({ type: 'function_call_output', call_id: block.tool_use_id, output: block.is_error ? `Tool execution failed:\n${output}` : output });
+        }
       }
       // Provider-specific thinking/signatures are not portable model history.
     }
@@ -58,7 +84,9 @@ export const toResponsesRequest = (raw, selectedModel) => {
   } else if (choice) body.tool_choice = choice.type === 'any' ? 'required' : choice.type;
   if (choice?.disable_parallel_tool_use !== undefined) body.parallel_tool_calls = !choice.disable_parallel_tool_use;
   if (request.output_config?.format) body.text = { format: { type: 'json_schema', name: 'claude_output', schema: request.output_config.format.schema, strict: true } };
-  // The account catalog does not advertise effort levels yet. Keep GPT's own default.
+  // The grant captures the user's selection. Claude's effort can be clamped
+  // for an unfamiliar model, so its output_config.effort is not authoritative.
+  if (effort !== null) body.reasoning = { effort };
   return { body, names, stream: request.stream };
 };
 

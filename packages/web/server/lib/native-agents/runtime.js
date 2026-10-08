@@ -369,7 +369,7 @@ export const createNativeAgentsRuntime = ({
   // prompt, such as /compact, shows no user message: its effect does.
   const sendToClaude = async (sessionId, request, send, { visible }) => {
     const { directory, messageID } = request;
-    const launch = await claudeConnections.resolve(request.model.modelID);
+    const launch = await claudeConnections.resolve(request.model.modelID, request.variant ?? null);
     if (launch.descriptor && request.variant !== undefined && !launch.descriptor.efforts.includes(request.variant)) {
       throw invalidRequestError('This model does not support the selected reasoning effort');
     }
@@ -386,7 +386,7 @@ export const createNativeAgentsRuntime = ({
         config: {
           model: launch.model,
           launch,
-          effort: request.variant !== undefined && CLAUDE_EFFORTS.has(request.variant) ? request.variant : null,
+          effort: launch.descriptor?.billing !== 'chatgpt-plan' && request.variant !== undefined && CLAUDE_EFFORTS.has(request.variant) ? request.variant : null,
           permissionMode: request.agent === 'plan' ? 'plan' : 'bypassPermissions',
         },
         send,

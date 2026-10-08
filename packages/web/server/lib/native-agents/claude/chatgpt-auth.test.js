@@ -53,6 +53,18 @@ const fixture = async (options = {}) => {
 };
 
 describe('ChatGPT authorization', () => {
+  it('retains account-specific model capabilities across refresh and storage reload', async () => {
+    const model = { slug: 'gpt-fixture', display_name: 'GPT fixture', visibility: 'list',
+      default_reasoning_level: 'low', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'max' }],
+      context_window: 272_000, max_context_window: 872_000, input_modalities: ['text', 'image'],
+    };
+    const f = await fixture({ fetchImpl: (url, options) => new URL(url).pathname === '/v1/models'
+      ? Promise.resolve(Response.json({ models: [model] })) : fetch(url, options) });
+    const id = await f.login();
+    expect(await f.auth.models(id)).toEqual([model]);
+    expect(await f.create().cachedModels(id)).toEqual([model]);
+  });
+
   it('verifies OAuth identity, persists host/client identities and exposes no tokens', async () => {
     const f = await fixture();
     const attempt = await f.auth.begin();
@@ -67,6 +79,8 @@ describe('ChatGPT authorization', () => {
     expect(accounts).toHaveLength(1);
     expect(JSON.stringify(accounts)).not.toMatch(/fake-access|fake-refresh|idToken/);
     const account = accounts[0];
+    expect(account.label).toBe('fixture@example.test');
+    expect(await f.auth.getAccount(account.id)).toEqual(account);
     expect(await f.auth.models(account.id)).toEqual([{ slug: 'gpt-fixture', display_name: 'GPT fixture', visibility: 'list' }]);
     const reloaded = f.create();
     const again = new URL((await reloaded.begin({ accountId: account.id })).url);

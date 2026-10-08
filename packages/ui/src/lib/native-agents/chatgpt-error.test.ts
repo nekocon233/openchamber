@@ -2,8 +2,33 @@ import { describe, expect, test } from 'bun:test';
 import { chatgptErrorLabel } from './chatgpt-error';
 import { chatgptAuthorizationSchema } from './connections';
 import { buildNativeProvider } from './providers';
+import { mergeModelMetadataWithLiveModel } from '@/lib/modelMetadata';
 
 describe('ChatGPT connections in the UI', () => {
+  test('shows ChatGPT context, output capacity and image input from the native descriptor', () => {
+    const provider = buildNativeProvider('claude', [{
+      id: 'chatgpt:fixture:model', name: 'GPT', billing: 'chatgpt-plan',
+      contextWindow: 872_000, outputLimit: 128_000, efforts: ['low', 'high'], defaultEffort: 'low',
+      fast: false, input: { image: true, pdf: false },
+    }]);
+    const metadata = mergeModelMetadataWithLiveModel(provider.id, provider.models[0]);
+    expect(metadata.limit).toEqual({ context: 872_000, output: 128_000 });
+    expect(metadata.modalities).toEqual({ input: ['text', 'image'], output: ['text'] });
+    expect(metadata.attachment).toBe(true);
+    expect(provider.models[0].cost).toEqual([]);
+  });
+
+  test('exposes advertised ChatGPT efforts as selectable variants without changing model identity', () => {
+    const id = 'chatgpt:fixture:model';
+    const efforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+    const provider = buildNativeProvider('claude', [{
+      id, name: 'GPT', billing: 'chatgpt-plan', contextWindow: null, outputLimit: null,
+      efforts, defaultEffort: 'medium', fast: false, input: { image: false, pdf: false },
+    }]);
+    expect(provider.models[0].id).toBe(id);
+    expect(provider.models[0].variants).toEqual(efforts.map((effort) => ({ id: effort, settings: { reasoningEffort: effort } })));
+  });
+
   test('uses explicit error codes without mistaking generic HTTP failures for quota', () => {
     expect(chatgptErrorLabel('API Error: 429 subscription_sharing_usage_limit_exceeded')).toBe('settings.chatgpt.limitReached');
     expect(chatgptErrorLabel('CHATGPT_REAUTH_REQUIRED')).toBe('settings.chatgpt.reauthorize');

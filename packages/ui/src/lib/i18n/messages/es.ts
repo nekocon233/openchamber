@@ -15,11 +15,12 @@ export const dict: Record<I18nKey, string> = {
   "settings.chatgpt.reauthorize": "La autorización de ChatGPT ha caducado. Inicia sesión de nuevo en Ajustes → Proveedores → Claude Code CLI.",
 
   "settings.chatgpt.title": "Plan de ChatGPT",
-  "settings.chatgpt.description": "Usa modelos GPT en Claude Code con tu plan de ChatGPT. Admite texto y herramientas de programación.",
+  "settings.chatgpt.description": "Usa modelos GPT en Claude Code con tu plan de ChatGPT. Admite texto, imágenes y herramientas de programación.",
   "settings.chatgpt.connected": "Conectado",
   "settings.chatgpt.signedOut": "Sesión cerrada",
   "settings.chatgpt.permissionRequired": "Se requiere permiso para usar tu plan de ChatGPT.",
   "settings.chatgpt.signIn": "Continuar con ChatGPT",
+  "settings.chatgpt.addAccount": "Añadir cuenta de ChatGPT",
   "settings.chatgpt.signOut": "Cerrar sesión",
   "settings.chatgpt.localOnly": "Inicia sesión en el equipo que ejecuta este servidor OpenChamber. Después podrás usar la conexión aquí.",
   "settings.chatgpt.callback": "Vuelve a OpenChamber para comprobar el inicio de sesión. Puedes cerrar esta pestaña.",

@@ -143,10 +143,10 @@ export const createClaudeConnections = ({ dataDir, chatgpt, fetchKimiUsage = fet
       await writes;
       return [...claudeModels(), ...(await read()).flatMap(catalogModels), ...(chatgpt ? await chatgpt.catalog() : [])];
     },
-    async resolve(modelID) {
+    async resolve(modelID, effort = null) {
       if (modelID.startsWith('chatgpt:')) {
         if (!chatgpt) throw unavailable();
-        return chatgpt.resolve(modelID);
+        return chatgpt.resolve(modelID, effort);
       }
       if (!modelID.startsWith('connection:')) return { key: 'default', model: claudeLaunchModel(modelID), env: null };
       await writes;

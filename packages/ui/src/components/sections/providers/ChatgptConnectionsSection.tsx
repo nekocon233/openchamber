@@ -98,6 +98,11 @@ export const ChatgptConnectionsSection: React.FC = () => {
     catch { if (current()) setNotice('settings.claudeConnections.failed'); }
     finally { if (current()) setBusy(false); }
   };
+  const addAccountButton = (
+    <Button className="normal-case" variant="outline" disabled={!accounts?.localLogin || busy} onClick={() => void begin(null)}>
+      <ProviderLogo providerId="openai" className="size-4" />{t('settings.chatgpt.signIn')}
+    </Button>
+  );
   return (
     <SettingsSection title={t('settings.chatgpt.title')} settingsItem="providers.chatgpt-plan" contentClassName="space-y-4">
       <p className="typography-meta text-muted-foreground">{t('settings.chatgpt.description')}</p>
@@ -105,8 +110,8 @@ export const ChatgptConnectionsSection: React.FC = () => {
       {notice ? <p role="alert" className="text-[var(--status-error-text)]">{t(notice)}</p> : null}
       {accounts?.localLogin === false ? <p className="typography-meta text-muted-foreground">{t('settings.chatgpt.localOnly')}</p> : null}
       {accounts?.accounts.map((account) => (
-        <SettingsStackedField key={account.id} label={account.label} description={t(STATUS_LABELS[account.status])} controlClassName="flex-wrap">
-          <Button className="normal-case" variant="outline" disabled={!accounts.localLogin || busy || Boolean(attempt)} onClick={() => void begin(account.id)}>{t('settings.chatgpt.signIn')}</Button>
+        <SettingsStackedField key={account.id} label={<span className="break-all">{account.label}</span>} description={t(STATUS_LABELS[account.status])} controlClassName="flex-wrap">
+          {account.status !== 'connected' ? <Button className="normal-case" variant="outline" disabled={!accounts.localLogin || busy || Boolean(attempt)} onClick={() => void begin(account.id)}>{t('settings.chatgpt.signIn')}</Button> : null}
           {account.status !== 'signed-out' ? <Button variant="ghost" disabled={busy || Boolean(attempt)} onClick={() => void signOut(account.id)}>{t('settings.chatgpt.signOut')}</Button> : null}
           {account.catalogUnavailable ? <p role="status" className="typography-meta text-muted-foreground">{t('settings.chatgpt.modelsUnavailable')}</p> : null}
         </SettingsStackedField>
@@ -117,9 +122,11 @@ export const ChatgptConnectionsSection: React.FC = () => {
           <Button variant="outline" onClick={() => void openExternalUrl(attempt.url)}>{t('settings.chatgpt.openBrowser')}</Button>
           <Button variant="ghost" disabled={exchanging} onClick={() => { void nativeAgents.cancelChatgptAuthorization(attempt.attemptId).then((cancelled) => { if (current()) { if (cancelled) setAttempt(null); else setExchanging(true); } }).catch(() => { if (current()) setNotice('settings.claudeConnections.failed'); }); }}>{t('settings.claudeConnections.cancel')}</Button>
         </div>
-      </div> : <Button className="normal-case" variant="outline" disabled={!accounts?.localLogin || busy} onClick={() => void begin(null)}>
-        <ProviderLogo providerId="openai" className="size-4" />{t('settings.chatgpt.signIn')}
-      </Button>}
+      </div> : accounts && accounts.accounts.length > 0 ? (
+        <SettingsStackedField label={t('settings.chatgpt.addAccount')}>
+          {addAccountButton}
+        </SettingsStackedField>
+      ) : addAccountButton}
       <div className="flex flex-wrap gap-2">
         <Button variant="link" onClick={() => void openExternalUrl('https://chatgpt.com/settings/usage')}>{t('settings.chatgpt.manageUsage')}</Button>
         <Button variant="ghost" disabled={busy || Boolean(attempt)} onClick={() => { void refresh().catch(() => { if (current()) setNotice('settings.claudeConnections.failed'); }); }}>{t('settings.claudeConnections.retry')}</Button>
