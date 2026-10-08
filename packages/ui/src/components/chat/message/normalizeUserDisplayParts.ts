@@ -1,15 +1,17 @@
 /**
  * The parts a user message shows.
  *
- * Two things happen here. Linked issues and pull requests render as link
- * attachments rather than context cards, so their context parts are mapped to
- * the display-only file part `FileAttachment` understands. And a file part that
- * merely repeats the range an inline comment already quotes is dropped, so the
- * message does not show the same lines twice.
+ * Empty text without attached context is dropped, so a synthetic parent does
+ * not leave an empty user bubble. Automatic Codex plan approvals stay in the
+ * transcript but not in a user bubble. Linked issues and pull requests render as
+ * link attachments rather than context cards, so their context parts are mapped
+ * to the display-only file part `FileAttachment` understands. A file part that
+ * merely repeats the range an inline comment already quotes is also dropped.
  */
 
 import type { FilePart, Part, TextPart } from '@/lib/opencode/model';
 import { readContextPart } from '@/lib/messages/contextParts';
+import { isEmptyTextPart } from './partUtils';
 
 const redundantCommentFileUrls = (parts: Part[]): Set<string> => {
     const comments = parts
@@ -102,6 +104,10 @@ const linkAttachmentPart = (part: TextPart): FilePart | null => {
 export const normalizeUserDisplayParts = (parts: Part[]): Part[] => {
     const redundantFileUrls = redundantCommentFileUrls(parts);
     return parts
-        .filter((part) => !(part.type === 'file' && redundantFileUrls.has(part.url)))
+        .filter((part) => {
+            if (part.type === 'text' && part.metadata?.openchamberOrigin === 'codex-plan-approval') return false;
+            if (isEmptyTextPart(part) && readContextPart(part) === null) return false;
+            return !(part.type === 'file' && redundantFileUrls.has(part.url));
+        })
         .map((part) => (part.type === 'text' ? linkAttachmentPart(part) ?? part : part));
 };

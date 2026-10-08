@@ -18,6 +18,7 @@ export const NATIVE_PROVIDER_CODEX = 'codex-native';
 
 const CLAUDE_SESSION_PREFIX = 'ncl_';
 const CODEX_SESSION_PREFIX = 'ncx_';
+const CODEX_PLAN_APPROVAL_PREFIX = 'ncx_u_plan_';
 const CLAUDE_CHILD_SEPARATOR = '_t_';
 
 // Charset and length accepted by every OpenChamber route that carries a
@@ -116,7 +117,8 @@ export const decodeNativeSessionId = (sessionId) => {
 //   text/reasoning     <assistant id>_b<content block index>
 //   tool               <assistant id>_t_<tool_use id>
 // Codex:
-//   user message       the clientUserMessageId OpenChamber sent (ncx_u_<uuid>),
+//   user message       the clientUserMessageId OpenChamber sent (ncx_u_<uuid>,
+//                      or ncx_u_plan_<uuid> for an automatic plan approval),
 //                      else ncx_u_<TK>_<item id> for messages typed elsewhere
 //   assistant message  ncx_a_<TK>_<turn id>, or ncx_a_<TK>_<user item id> after a steer
 //   compaction         ncx_k_<TK>_<item id>
@@ -150,8 +152,19 @@ export const codexPartId = (threadId, itemId) => `${CODEX_SESSION_PREFIX}p_${thr
 
 export const codexCompactionMessageId = (threadId, itemId) => `${CODEX_SESSION_PREFIX}k_${threadKey(threadId)}_${itemId}`;
 
+/** Approval provenance travels with Codex's persisted user-item clientId. */
+export const newCodexPlanApprovalMessageId = () => `${CODEX_PLAN_APPROVAL_PREFIX}${randomUUID()}`;
+
+/** @param {string} messageId */
+export const isCodexPlanApprovalMessageId = (messageId) => (
+  messageId.startsWith(CODEX_PLAN_APPROVAL_PREFIX) && UUID_PATTERN.test(messageId.slice(CODEX_PLAN_APPROVAL_PREFIX.length))
+);
+
 /** A client-generated user message id OpenChamber sends with a native prompt. */
-export const isNativeClientUserMessageId = (messageId) => /^nc[lx]_u_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId);
+export const isNativeClientUserMessageId = (messageId) => (
+  /^nc[lx]_u_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)
+  || isCodexPlanApprovalMessageId(messageId)
+);
 
 /** A new id for a prompt OpenChamber's server sends to a native session itself. */
 export const newNativeClientUserMessageId = (sessionId) => {

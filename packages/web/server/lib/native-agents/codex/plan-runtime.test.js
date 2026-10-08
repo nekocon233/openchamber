@@ -61,7 +61,7 @@ const createHarness = async () => {
 
 describe('Codex plan decisions through the native runtime', () => {
   it('continues with an ordinary recorded prompt and preserves file-revert snapshots', async () => {
-    const { runtime, directory, session, question, sends, registry, idle, captures, restored } = await createHarness();
+    const { runtime, directory, session, question, sends, registry, idle, captures, restored, events } = await createHarness();
     expect(await runtime.statuses(directory)).toEqual({});
     expect(await runtime.questions(directory)).toEqual([question]);
     runtime.replyQuestion(question.id, [['build']]);
@@ -77,11 +77,37 @@ describe('Codex plan decisions through the native runtime', () => {
     const users = records.filter(record => record.info.role === 'user');
     expect(users.map(record => record.info.agent)).toEqual(['plan', 'build']);
     expect(users[1].info.model).toMatchObject({ providerID: 'codex-native', modelID: 'gpt-5.5', variant: 'high-fast' });
+    expect(users[1].info.id).toMatch(/^ncx_u_plan_/);
+    expect(users[1].parts[0]).toMatchObject({
+      text: 'Implement the plan.', metadata: { openchamberOrigin: 'codex-plan-approval' },
+    });
+    const liveApproval = events.find(event => event.payload.type === 'message.part.updated'
+      && event.payload.properties.part.messageID === users[1].info.id);
+    expect(liveApproval.payload.properties.part).toMatchObject({
+      text: 'Implement the plan.', metadata: { openchamberOrigin: 'codex-plan-approval' },
+    });
     await vi.waitFor(() => expect(registry().turns[session.id].every(turn => turn.after)).toBe(true));
     expect(captures).toHaveLength(4);
     expect(registry().sends[session.id].map(send => send.agent)).toEqual(['plan', 'build']);
     expect(await runtime.revert(session.id, users[1].info.id, directory)).toMatchObject({ filesRestored: 1, conversationOnly: false });
     expect(restored).toEqual([[directory, 'snapshot-2', ['changed.txt']]]);
+  });
+
+  it('keeps a manually submitted matching prompt visible', async () => {
+    const { runtime, directory, session, question, prompt, idle } = await createHarness();
+    runtime.replyQuestion(question.id, [['build']]);
+    await idle();
+    await prompt('Implement the plan.', 'build');
+    await idle();
+    await vi.waitFor(async () => {
+      const { records } = await runtime.loadMessages(session.id, directory, { limit: 20 });
+      const users = records.filter(record => record.info.role === 'user');
+      expect(users).toHaveLength(3);
+      expect(users[1].parts[0].metadata).toEqual({ openchamberOrigin: 'codex-plan-approval' });
+      expect(users[2].info.id).toMatch(/^ncx_u_[0-9a-f-]+$/);
+      expect(users[2].parts[0].text).toBe('Implement the plan.');
+      expect(users[2].parts[0].metadata).toBeUndefined();
+    });
   });
 
   it('revises in plan mode and lets the user decline the new proposal', async () => {

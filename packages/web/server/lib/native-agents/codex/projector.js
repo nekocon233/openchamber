@@ -17,6 +17,7 @@ import {
   codexAssistantMessageId,
   codexCompactionMessageId,
   codexUserMessageIdForItem,
+  isCodexPlanApprovalMessageId,
   isNativeClientUserMessageId,
   NATIVE_PROVIDER_CODEX,
   userFilePartId,
@@ -140,7 +141,11 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
           : { providerID: NATIVE_PROVIDER_CODEX, modelID: sent.modelID, variant: sent.variant };
         currentUser = { info: buildUserMessage({ id, sessionID: sessionId, created: createdAfterPrevious(start), agent: sent?.agent ?? DEFAULT_AGENT, model }), parts: [] };
         userItem.texts.forEach((text, index) => {
-          currentUser.parts.push(buildTextPart({ id: userTextPartId(id, index), sessionID: sessionId, messageID: id, text, start, end: start }));
+          const part = buildTextPart({ id: userTextPartId(id, index), sessionID: sessionId, messageID: id, text, start, end: start });
+          if (userItem.clientId !== null && isCodexPlanApprovalMessageId(userItem.clientId)) {
+            part.metadata = { openchamberOrigin: 'codex-plan-approval' };
+          }
+          currentUser.parts.push(part);
         });
         userItem.images.forEach((image, index) => {
           currentUser.parts.push(buildFilePart({ id: userFilePartId(id, index), sessionID: sessionId, messageID: id, mime: 'image/*', url: image.url, filename: image.filename }));

@@ -40,7 +40,7 @@ describe('Codex plan decisions between turns', () => {
     expect(() => questions.reply(question.id, [['build']])).toThrow('No pending native question');
     await vi.waitFor(() => expect(decisions.has(SESSION_ID)).toBe(false));
     expect(sent).toEqual([{ sessionId: SESSION_ID, request: {
-      directory: DIRECTORY, messageID: expect.stringMatching(/^ncx_u_[0-9a-f-]+$/),
+      directory: DIRECTORY, messageID: expect.stringMatching(/^ncx_u_plan_[0-9a-f-]+$/),
       parts: [{ type: 'text', text: 'Implement the plan.' }],
       model: { providerID: 'codex-native', modelID: PLAN.send.modelID }, variant: 'high-fast', agent: 'build',
     } }]);
@@ -60,7 +60,10 @@ describe('Codex plan decisions between turns', () => {
     const feedback = 'Cover malformed input first.\nKeep the existing API.';
     questions.reply(question.id, [[feedback]]);
     await vi.waitFor(() => expect(decisions.has(SESSION_ID)).toBe(false));
-    expect(sent[0].request).toMatchObject({ parts: [{ type: 'text', text: feedback }], agent: 'plan', variant: 'high-fast' });
+    expect(sent[0].request).toMatchObject({
+      messageID: expect.stringMatching(/^ncx_u_[0-9a-f-]+$/),
+      parts: [{ type: 'text', text: feedback }], agent: 'plan', variant: 'high-fast',
+    });
     decisions.propose({ ...PLAN, turnId: 'revision', text: 'Revised plan' });
     const [revision] = questions.list(DIRECTORY);
     expect(revision.id).not.toBe(question.id);

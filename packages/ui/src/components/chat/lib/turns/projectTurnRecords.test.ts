@@ -22,6 +22,11 @@ function createMessageEntry({
     };
 }
 
+const syntheticUserParent = (id: string, createdAt: number): ChatMessageEntry => ({
+    info: { id, sessionID: 'ncl_session', role: 'user', time: { created: createdAt } },
+    parts: [{ id: `${id}_p0`, sessionID: 'ncl_session', messageID: id, type: 'text', text: '', synthetic: true }],
+});
+
 describe('projectTurnRecords', () => {
     test('groups assistant replies under their parent user turn', () => {
         const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
@@ -179,6 +184,63 @@ describe('projectTurnRecords', () => {
         expect(projection.turns).toHaveLength(1);
         expect(projection.turns[0]?.turnId).toBe('u1');
         expect(projection.turns[0]?.assistantMessageIds).toEqual(['a1']);
+    });
+
+    test('keeps an initial empty synthetic parent and its assistant reply in the turn', () => {
+        const parent = syntheticUserParent('ncl_a_1_u', 1);
+        const assistant: ChatMessageEntry = {
+            info: {
+                id: 'ncl_a_1', sessionID: 'ncl_session', role: 'assistant', parentID: parent.info.id,
+                time: { created: 2, completed: 3 }, agent: 'build', providerID: 'claude-native', modelID: 'opus', finish: 'stop',
+            },
+            parts: [{ id: 'reply', sessionID: 'ncl_session', messageID: 'ncl_a_1', type: 'text', text: 'Subagent reply' }],
+        };
+        const projection = projectTurnRecords([parent, assistant], { mergeHiddenUserTurns: true });
+
+        expect(projection.turns).toHaveLength(1);
+        expect(projection.turns[0]?.userMessage).toBe(parent);
+        expect(projection.turns[0]?.assistantMessages).toEqual([assistant]);
+        expect(projection.indexes.messageToTurnId.get(assistant.info.id)).toBe(parent.info.id);
+
+        const repeated = projectTurnRecords([parent, assistant], {
+            mergeHiddenUserTurns: true, previousProjection: projection,
+        });
+        expect(repeated.turns).toBe(projection.turns);
+    });
+
+    for (const mergeHiddenUserTurns of [false, true]) {
+        test(`respects mergeHiddenUserTurns=${mergeHiddenUserTurns} for an empty synthetic continuation`, () => {
+            const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
+            user.parts = [{ id: 'prompt', sessionID: 'ncl_session', messageID: 'u1', type: 'text', text: 'Visible prompt' }];
+            const assistant1 = createMessageEntry({ id: 'a1', role: 'assistant', createdAt: 2 });
+            const parent = syntheticUserParent('ncl_a_2_u', 3);
+            const assistant2 = createMessageEntry({ id: 'a2', role: 'assistant', createdAt: 4 });
+            const projection = projectTurnRecords([user, assistant1, parent, assistant2], { mergeHiddenUserTurns });
+
+            expect(projection.turns).toHaveLength(mergeHiddenUserTurns ? 1 : 2);
+            expect(projection.indexes.messageToTurnId.get('a2')).toBe(mergeHiddenUserTurns ? 'u1' : parent.info.id);
+            expect(projection.turns.flatMap((turn) => turn.assistantMessageIds)).toEqual(['a1', 'a2']);
+            expect(parent.parts).toHaveLength(1);
+        });
+    }
+
+    test('keeps execution replies when an automatic plan approval is hidden', () => {
+        const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
+        user.parts = [{ id: 'prompt', sessionID: 'ncl_session', messageID: 'u1', type: 'text', text: 'Plan a fix' }];
+        const plan = createMessageEntry({ id: 'a1', role: 'assistant', createdAt: 2 });
+        const approval: ChatMessageEntry = {
+            info: { id: 'approval', sessionID: 'ncl_session', role: 'user', time: { created: 3 } },
+            parts: [{
+                id: 'approval_p0', sessionID: 'ncl_session', messageID: 'approval', type: 'text',
+                text: 'Implement the plan.', metadata: { openchamberOrigin: 'codex-plan-approval' },
+            }],
+        };
+        const execution = createMessageEntry({ id: 'a2', role: 'assistant', createdAt: 4 });
+        const projection = projectTurnRecords([user, plan, approval, execution], { mergeHiddenUserTurns: true });
+
+        expect(projection.turns).toHaveLength(1);
+        expect(projection.turns[0]?.assistantMessageIds).toEqual(['a1', 'a2']);
+        expect(approval.parts[0]).toMatchObject({ text: 'Implement the plan.' });
     });
 
     test('chains merges across consecutive hidden user messages', () => {

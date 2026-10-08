@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { Message, Part } from '@/lib/opencode/model'
+import type { Message, Part, TextPart } from '@/lib/opencode/model'
 
 import {
   extractAssistantModelChoice,
@@ -27,7 +27,7 @@ const assistantMessage = (id: string, modelID: string, options: { agent?: string
   ...(options.variant ? { variant: options.variant } : {}),
 })
 
-const textPart = (id: string, messageID: string, text: string): Part => ({
+const textPart = (id: string, messageID: string, text: string): TextPart => ({
   id,
   sessionID: 'ses_1',
   messageID,
@@ -39,7 +39,11 @@ describe('findLatestUserModelChoice', () => {
   test('a Codex approval restores build from its accepted prompt, and later feedback restores plan', () => {
     const model = { providerID: 'codex-native', modelID: 'gpt-5.5' };
     const messages = [userMessage('plan', model, 'plan')];
-    const partsFor = (id: string) => [textPart(`p-${id}`, id, id === 'implement' ? 'Implement the plan.' : 'Plan')];
+    const partsFor = (id: string): Part[] => {
+      const part = textPart(`p-${id}`, id, id === 'implement' ? 'Implement the plan.' : 'Plan');
+      if (id === 'implement') return [{ ...part, metadata: { openchamberOrigin: 'codex-plan-approval' } }];
+      return [part];
+    };
     expect(findLatestUserModelChoice(messages, partsFor)?.agent).toBe('plan');
     messages.push(userMessage('implement', model, 'build'));
     expect(findLatestUserModelChoice(messages, partsFor)).toMatchObject({ id: 'implement', agent: 'build', ...model });

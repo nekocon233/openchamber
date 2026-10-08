@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { NATIVE_PROVIDER_CODEX } from '../ids.js';
+import { NATIVE_PROVIDER_CODEX, newCodexPlanApprovalMessageId } from '../ids.js';
 
 /**
  * @typedef {{ sessionId: string, directory: string, turnId: string, text: string, send: { modelID: string, variant?: string, agent: string } }} CodexPlan
@@ -47,7 +47,7 @@ export const createCodexPlanDecisions = ({ questions, prompt, failed }) => {
     if (answer === 'plan' || !answer.trim()) return;
     await prompt(plan.sessionId, {
       directory: plan.directory,
-      messageID: `ncx_u_${randomUUID()}`,
+      messageID: answer === 'build' ? newCodexPlanApprovalMessageId() : `ncx_u_${randomUUID()}`,
       parts: [{ type: 'text', text: answer === 'build' ? 'Implement the plan.' : answer }],
       model: { providerID: NATIVE_PROVIDER_CODEX, modelID: plan.send.modelID },
       variant: plan.send.variant,

@@ -44,13 +44,17 @@ here resumes in the terminal by that id:
 |---|---|---|
 | Session | `ncl_<session uuid>` | `ncx_<thread id>` |
 | Subagent session | `ncl_<uuid>_t_<tool_use id>` | `ncx_<child thread id>` |
-| User message | `ncl_u_<entry uuid>` | the `ncx_u_<uuid>` id OpenChamber sent, else `ncx_u_<turn key>_<item id>` |
+| User message | `ncl_u_<entry uuid>` | the `ncx_u_<uuid>` or automatic plan-approval `ncx_u_plan_<uuid>` id OpenChamber sent, else `ncx_u_<turn key>_<item id>` |
 | Assistant message | `ncl_a_<sha16(session id)>_<API message id>` | `ncx_a_<turn key>_<turn or user item id>` |
 
 Part ids derive from the same native keys (content block index, `tool_use`
 id, Codex item id). Every id is deterministic, so a later live event and a
 history reload name the same record, and every id passes the
 `^[A-Za-z0-9_-]{4,128}$` check other OpenChamber routes apply.
+
+The server alone creates `ncx_u_plan_<uuid>` for approved plans. The UI's
+normal-send ID validator remains restricted to ordinary client IDs, so a
+manually sent prompt never reuses an automatic approval's provenance.
 
 ## Listing
 
@@ -357,8 +361,14 @@ Codex (`codex/live.js`): turns on the shared app-server.
 - Only the single answer `build` starts implementation. The runtime sends
   `Implement the plan.` as an ordinary new prompt in `default` mode, using
   the planning turn's directory, model and effort. The normal send path owns
-  snapshots, message IDs and recorded selections. Custom feedback starts a
-  new planning turn; `plan`, cancellation or an invalid answer sends nothing.
+  snapshots, message IDs and recorded selections. Its `ncx_u_plan_<uuid>`
+  client ID persists in Codex's user item. Live and historical projections
+  retain the original message and mark its text with
+  `metadata.openchamberOrigin: 'codex-plan-approval'`; the shared UI hides that
+  part without losing the execution turn or its Build selection. This does
+  not depend on the bounded send registry. Ordinary prompts with the same
+  text, custom feedback and older unmarked approvals remain visible.
+  Custom feedback starts a new planning turn; `plan`, cancellation or an invalid answer sends nothing.
   A failed start publishes a session error without retrying or recording a
   successful Build prompt.
 - Plan decisions remain cancellable through prompt preparation and thread

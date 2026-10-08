@@ -5,10 +5,12 @@ import {
   encodeClaudeChildSessionId,
   encodeClaudeSessionId,
   encodeCodexSessionId,
+  isCodexPlanApprovalMessageId,
   isNativeClientUserMessageId,
   isNativeSessionId,
   nativeBackendOfProviderId,
   nativeBackendOfSessionId,
+  newCodexPlanApprovalMessageId,
   newNativeClientUserMessageId,
 } from './ids.js';
 
@@ -63,6 +65,22 @@ describe('native session ids', () => {
     expect(() => encodeClaudeSessionId('nope')).toThrow();
     expect(() => encodeClaudeChildSessionId(CLAUDE_UUID, 'bad id with spaces')).toThrow();
     expect(() => encodeCodexSessionId('nope')).toThrow();
+  });
+
+  it('gives automatic Codex plan approvals a strict, persistent client id', () => {
+    const id = newCodexPlanApprovalMessageId();
+    expect(id).toMatch(/^ncx_u_plan_[0-9a-f-]+$/);
+    expect(id).toMatch(/^[A-Za-z0-9_-]{4,128}$/);
+    expect(isNativeClientUserMessageId(id)).toBe(true);
+    expect(isCodexPlanApprovalMessageId(id)).toBe(true);
+    expect(newCodexPlanApprovalMessageId()).not.toBe(id);
+    expect(isCodexPlanApprovalMessageId(`ncx_u_${CODEX_THREAD}`)).toBe(false);
+    for (const malformed of [
+      `ncl_u_plan_${CLAUDE_UUID}`, 'ncx_u_plan_not-a-uuid', `ncx_u_plan_${CODEX_THREAD}_extra`,
+    ]) {
+      expect(isCodexPlanApprovalMessageId(malformed)).toBe(false);
+      expect(isNativeClientUserMessageId(malformed)).toBe(false);
+    }
   });
 
   it('names a prompt the server sends itself the way a client names one, for the session\'s CLI', () => {

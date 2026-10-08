@@ -1,5 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+import { createNativeRegistry } from '../registry.js';
 
 import { parseCodexUserMessageItem } from './items.js';
 import { projectCodexTurns } from './projector.js';
@@ -120,6 +124,69 @@ describe('Codex history projection', () => {
     expect(projected[1].info.id).not.toBe(projected[3].info.id);
     const created = projected.map((record) => record.info.time.created);
     expect(created).toEqual([...created].sort((left, right) => left - right));
+  });
+});
+
+describe('Codex plan approval projection', () => {
+  const approvalId = 'ncx_u_plan_5b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
+  const turn = (clientId, status = 'completed') => ({
+    id: 'approval-turn', status, startedAt: 10, completedAt: status === 'completed' ? 11 : null,
+    items: [
+      { type: 'userMessage', id: 'approval-item', clientId, content: [{ type: 'text', text: 'Implement the plan.' }] },
+      { type: 'agentMessage', id: 'execution-item', text: 'Implementing.' },
+    ],
+  });
+
+  it('marks automatic prompts in live and historical turns without a send registry', () => {
+    for (const status of ['inProgress', 'completed']) {
+      const [user, assistant] = project([turn(approvalId, status)]);
+      expect(user.info.id).toBe(approvalId);
+      expect(user.parts).toEqual([expect.objectContaining({
+        type: 'text', text: 'Implement the plan.', metadata: { openchamberOrigin: 'codex-plan-approval' },
+      })]);
+      expect(assistant.info.parentID).toBe(approvalId);
+      expect(assistant.parts[0].text).toBe('Implementing.');
+    }
+  });
+
+  it('does not infer approval provenance from matching text or malformed client ids', () => {
+    for (const clientId of [CLIENT_MESSAGE_ID, 'ncx_u_plan_not-a-uuid', null]) {
+      const [user] = project([turn(clientId)]);
+      expect(user.parts[0].text).toBe('Implement the plan.');
+      expect(user.parts[0].metadata).toBeUndefined();
+    }
+  });
+
+  it('keeps approval provenance after registry reload and send-record eviction', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'openchamber-approval-projection-'));
+    try {
+      const filePath = path.join(root, 'registry.json');
+      const registry = createNativeRegistry({ filePath });
+      const send = { providerID: 'codex-native', modelID: 'gpt-5.5', agent: 'build', sentAt: 1 };
+      await registry.recordSend(SESSION_ID, { ...send, messageId: approvalId });
+      for (let index = 0; index < 201; index += 1) {
+        await registry.recordSend(SESSION_ID, { ...send, messageId: `later-${index}`, sentAt: index + 2 });
+      }
+      const reloaded = createNativeRegistry({ filePath });
+      const sends = await reloaded.sendRecords(SESSION_ID);
+      expect(sends.size).toBe(200);
+      expect(sends.has(approvalId)).toBe(false);
+      const [user, assistant] = project([turn(approvalId)], { sendRecordFor: id => sends.get(id) ?? null });
+      expect(user.info.id).toBe(approvalId);
+      expect(user.parts[0].metadata).toEqual({ openchamberOrigin: 'codex-plan-approval' });
+      expect(assistant.info.parentID).toBe(approvalId);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rebuilds the marker when retained native history is projected for a fork', () => {
+    const forkThreadId = '01a0d2a6-b55b-7162-a837-c62053537e11';
+    const [user, assistant] = project([turn(approvalId)], { sessionId: `ncx_${forkThreadId}`, threadId: forkThreadId });
+    expect(user.info.id).toBe(approvalId);
+    expect(user.parts[0].metadata).toEqual({ openchamberOrigin: 'codex-plan-approval' });
+    expect(user.parts[0].sessionID).toBe(`ncx_${forkThreadId}`);
+    expect(assistant.info.parentID).toBe(approvalId);
   });
 });
 

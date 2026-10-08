@@ -435,7 +435,7 @@ export const createCodexLiveThreads = ({
      * @param {object} input
      * @param {string} input.sessionId
      * @param {string} input.directory
-     * @param {string} input.messageId `ncx_u_<uuid>`, echoed back as the user item's clientId
+     * @param {string} input.messageId `ncx_u_<uuid>` or an automatic `ncx_u_plan_<uuid>`, echoed as the user item's clientId
      * @param {object[]} input.input Codex user input items
      * @param {LiveConfig} input.config
      * @param {{ modelID: string, variant?: string, agent: string }} input.send what the user message shows

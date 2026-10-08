@@ -86,6 +86,25 @@ describe('native records in the shared v2 domain', () => {
     } })).toEqual({ type: 'form.settled', properties: { sessionID: restored.sessionID, formID: restored.id } });
   });
 
+  test('preserves plan-approval provenance through live events and history parsing', () => {
+    const codexSession = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
+    const messageID = 'ncx_u_plan_5b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
+    const part = {
+      id: `${messageID}_p0`, sessionID: codexSession, messageID, type: 'text', text: 'Implement the plan.',
+      metadata: { openchamberOrigin: 'codex-plan-approval' },
+    };
+    const history = nativeMessagePageSchema.parse({
+      records: [{
+        info: { id: messageID, sessionID: codexSession, role: 'user', time: { created: 1 },
+          agent: 'build', model: { providerID: 'codex-native', modelID: 'gpt-5.5' } },
+        parts: [part],
+      }], cursor: null, complete: true, childSessions: [],
+    });
+    expect(history.records[0].parts[0]).toEqual(part);
+    expect(translateNativeEvent({ type: 'message.part.updated', properties: { part, sessionID: codexSession, time: 1 } }))
+      .toMatchObject({ properties: { part } });
+  });
+
   test('one malformed history record or part does not discard unrelated records', () => {
     const result = nativeMessagePageSchema.parse({
       records: [
