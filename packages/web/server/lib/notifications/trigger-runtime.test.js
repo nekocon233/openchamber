@@ -128,7 +128,7 @@ describe('ready notification while background subagents run', () => {
 });
 
 describe('subagent finish with subagent notifications off', () => {
-  const makeSubtaskRuntime = () => {
+  const makeSubtaskRuntime = ({ nativeSessions } = {}) => {
     const emitDesktopNotification = vi.fn(() => true);
     const runtime = createNotificationTriggerRuntime({
       readSettingsFromDisk: async () => ({ nativeNotificationsEnabled: true, notificationMode: 'always', notifyOnCompletion: true, notifyOnSubtasks: false }),
@@ -146,6 +146,7 @@ describe('subagent finish with subagent notifications off', () => {
       buildOpenCodeUrl: (path) => `http://opencode.test${path}`,
       getOpenCodeAuthHeaders: () => ({}),
       readSessionMetadata: async () => ({}),
+      nativeSessions,
     });
     return { runtime, emitDesktopNotification };
   };
@@ -182,6 +183,59 @@ describe('subagent finish with subagent notifications off', () => {
     await runtime.maybeSendPushForTrigger(stepStarted('ses_child', 'msg_c'));
     await runtime.maybeSendPushForTrigger(turnEnded('ses_child'));
     expect(emitDesktopNotification).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  // OpenCode refuses native CLI session ids, so their parent must be read
+  // from the native runtime; treating the 409 as "is a subtask" silenced
+  // every Claude Code / Codex session with this setting off.
+  const stubNativeSessions = (record) => ({
+    isNativeSessionId: (sessionId) => /^nc[lx]_/.test(sessionId),
+    getSession: vi.fn(async () => record),
+  });
+
+  const stubIdleProbe = () => {
+    vi.stubGlobal('fetch', vi.fn(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/session/active') return Response.json({ data: {} });
+      return Response.json({ data: [], cursor: {} });
+    }));
+  };
+
+  it('announces a native CLI main session, reading the parent from the native runtime', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubIdleProbe();
+    const nativeSessions = stubNativeSessions({ id: 'ncx_main', directory: '/tmp/proj' });
+    const { runtime, emitDesktopNotification } = makeSubtaskRuntime({ nativeSessions });
+
+    await runtime.maybeSendPushForTrigger(stepStarted('ncx_main', 'msg_n'));
+    await runtime.maybeSendPushForTrigger(turnEnded('ncx_main'), '/tmp/proj');
+    expect(emitDesktopNotification).toHaveBeenCalledTimes(1);
+    expect(emitDesktopNotification.mock.calls[0][0]).toMatchObject({ kind: 'ready', sessionId: 'ncx_main' });
+    expect(nativeSessions.getSession).toHaveBeenCalledWith('ncx_main', '/tmp/proj');
+    vi.unstubAllGlobals();
+  });
+
+  it('still suppresses a native CLI subtask with a known parent', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubIdleProbe();
+    const nativeSessions = stubNativeSessions({ id: 'ncl_child', directory: '/tmp/proj', parentID: 'ncl_parent' });
+    const { runtime, emitDesktopNotification } = makeSubtaskRuntime({ nativeSessions });
+
+    await runtime.maybeSendPushForTrigger(stepStarted('ncl_child', 'msg_c'));
+    await runtime.maybeSendPushForTrigger(turnEnded('ncl_child'), '/tmp/proj');
+    expect(emitDesktopNotification).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('announces when the parent lookup cannot be made at all', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 503 })));
+    const { runtime, emitDesktopNotification } = makeSubtaskRuntime();
+
+    await runtime.maybeSendPushForTrigger(stepStarted('ses_main', 'msg_m'));
+    await runtime.maybeSendPushForTrigger(turnEnded('ses_main'));
+    expect(emitDesktopNotification).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
   });
 });

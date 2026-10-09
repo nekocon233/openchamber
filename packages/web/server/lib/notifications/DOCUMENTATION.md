@@ -49,7 +49,7 @@ This module owns server-side notification preparation, trigger fanout, browser p
 - Owns:
   - completion/error/question/permission trigger routing; permission suppression consults the authoritative permission-auto-accept runtime
   - authoritative envelope-directory propagation into session enrichment fetches and Web/PWA navigation targets
-  - session parent cache for subtask suppression
+  - session parent cache for subtask suppression. The parent is read through `readSessionRecord`, so a native CLI session's parent comes from the injected `nativeSessions.getSession` (OpenCode refuses native ids); only a positively known parent suppresses — an unreadable parent announces as before
   - per-turn ready suppression while a session's goal is active, reading a native CLI session through the injected `nativeSessions`
   - no ready notification on a `session.idle` while a subagent of that session is still running (a background-subagent pause; OpenCode runs the parent again with the result and its next idle announces). The check comes from `../opencode/session-activity.js`; when it cannot be made, the idle announces as before
   - template resolution and fallback behavior

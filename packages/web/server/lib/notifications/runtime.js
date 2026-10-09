@@ -248,20 +248,9 @@ export const createNotificationTriggerRuntime = (deps) => {
     if (cached !== undefined) return cached;
 
     try {
-      const base = buildOpenCodeUrl(`/api/session/${encodeURIComponent(sessionId)}`, '');
-      const url = directory ? `${base}?directory=${encodeURIComponent(directory)}` : base;
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...getOpenCodeAuthHeaders(),
-        },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (!response.ok) {
-        return undefined;
-      }
-      const session = unwrapOpenCodeResponse(await response.json().catch(() => null));
+      // readSessionRecord routes native CLI sessions through the injected
+      // nativeSessions runtime; asking OpenCode for a native id answers 409.
+      const session = await readSessionRecord(sessionId, directory);
       if (!session || typeof session !== 'object') {
         return undefined;
       }
@@ -445,7 +434,10 @@ export const createNotificationTriggerRuntime = (deps) => {
             ? parentIDFromPayload
             : await fetchSessionParentId(sessionId, notificationDirectory);
 
-          if (parentID !== null) {
+          // Only a positively known parent suppresses. When the lookup cannot
+          // be made the turn announces as before: a missed "ready" is worse
+          // than an early one.
+          if (parentID) {
             return;
           }
         }
