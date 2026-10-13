@@ -32,6 +32,20 @@ interface SettingsSearchAvailabilityContext extends SettingsRuntimeContext {
 
 const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
+    id: 'chat.work-status.section.taskChecklist',
+    page: 'chat',
+    titleKey: 'chat.nativeTasks.cliChecklist',
+    keywords: ['claude', 'cli', 'checklist', 'tasks', 'work status'],
+    isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
+  },
+  {
+    id: 'chat.work-status.section.taskBackground',
+    page: 'chat',
+    titleKey: 'chat.nativeTasks.background',
+    keywords: ['claude', 'cli', 'background', 'tasks', 'work status'],
+    isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
+  },
+  {
     id: 'providers.chatgpt-plan',
     page: 'providers',
     titleKey: 'settings.chatgpt.title',
@@ -61,7 +75,8 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'chat.transcript-file-changes-only',
     page: 'chat',
     titleKey: 'settings.openchamber.visual.field.transcriptFileChangesOnly',
-    keywords: ['diff', 'edits', 'bash', 'commands', 'hide tools', 'transcript'],
+    descriptionKey: 'settings.openchamber.visual.field.transcriptFileChangesOnlyInfo',
+    keywords: ['diff', 'edits', 'bash', 'commands', 'hide tools', 'transcript', 'skills', 'mcp'],
   },
   {
     id: 'appearance.language',

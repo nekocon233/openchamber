@@ -33,8 +33,6 @@ import { isNativeProviderId } from "@/lib/native-agents/ids";
 const MODELS_DEV_API_URL = "https://models.dev/api.json";
 const MODELS_DEV_PROXY_URL = "/api/openchamber/models-metadata";
 
-const FALLBACK_PROVIDER_ID = "opencode";
-const FALLBACK_MODEL_ID = "big-pickle";
 // Sentinel selectedProviderId used by the providers UI while the "Add provider"
 // form is open. It is intentionally not a real provider id and must not be
 // persisted as a stable provider selection.
@@ -186,6 +184,16 @@ type ProviderModel = Model;
  */
 type ProviderWithModelList = Provider & { models: Model[] };
 
+// OpenCode Zen ("opencode") is never offered in OpenChamber: its free catalog
+// keeps gaining models, which made model-level hiding a treadmill. The provider
+// is excluded where the OpenCode catalog enters the store and where persisted
+// snapshots hydrate, so every picker and the Providers page never see it.
+const EXCLUDED_PROVIDER_IDS: ReadonlySet<string> = new Set(["opencode"]);
+
+const withoutExcludedProviders = <T extends { id: string }>(list: T[]): T[] => (
+    list.filter((provider) => !EXCLUDED_PROVIDER_IDS.has(provider.id))
+);
+
 type GitModelSelection = { providerId: string; modelId: string };
 type ProviderModelSelection = { providerId: string; modelId: string; variant?: string } | null;
 
@@ -299,9 +307,6 @@ const resolveProviderModelSelection = ({
     }
 
     if (!allowFallback) return null;
-    if (hasProviderModel(providers, FALLBACK_PROVIDER_ID, FALLBACK_MODEL_ID)) {
-        return { providerId: FALLBACK_PROVIDER_ID, modelId: FALLBACK_MODEL_ID };
-    }
 
     // A native CLI is only ever chosen on purpose: it decides the kind of session.
     const firstProvider = providers.find((provider) => !isNativeProviderId(provider.id));
@@ -431,16 +436,11 @@ const resolveDefaultAgentModelSelection = ({
     }
 
     if (!providerId) {
-        if (hasProviderModel(providers, FALLBACK_PROVIDER_ID, FALLBACK_MODEL_ID)) {
-            providerId = FALLBACK_PROVIDER_ID;
-            modelId = FALLBACK_MODEL_ID;
-        } else {
-            const firstProvider = providers[0];
-            const firstModel = firstProvider?.models[0];
-            if (firstProvider && firstModel) {
-                providerId = firstProvider.id;
-                modelId = firstModel.modelID;
-            }
+        const firstProvider = providers[0];
+        const firstModel = firstProvider?.models[0];
+        if (firstProvider && firstModel) {
+            providerId = firstProvider.id;
+            modelId = firstModel.modelID;
         }
     }
 
@@ -1847,7 +1847,7 @@ export const useConfigStore = create<ConfigStore>()(
                             // A provider the user switched off, or one with no usable
                             // model, is not offerable — v2 replaced the `connected` list
                             // with these two facts.
-                            const processedProviders: ProviderWithModelList[] = providers
+                            const processedProviders: ProviderWithModelList[] = withoutExcludedProviders(providers)
                                 .filter((provider) => provider.activation !== "disabled" && modelsByProvider.has(provider.id))
                                 .map((provider) => ({
                                     ...provider,
@@ -3837,7 +3837,23 @@ export const useConfigStore = create<ConfigStore>()(
                     // partial store. Only an explicitly matching runtime may hydrate it.
                     const persisted = persistedState as Partial<ConfigStore> | undefined;
                     if (!persisted || persisted.configRuntimeKey !== getRuntimeKey()) return currentState;
-                    return hydrateActiveDirectorySnapshot({ ...currentState, ...persisted });
+                    // An excluded provider must not paint from a stale persisted
+                    // snapshot while the fresh catalog loads.
+                    const sanitized: Partial<ConfigStore> = {
+                        ...persisted,
+                        providers: Array.isArray(persisted.providers)
+                            ? withoutExcludedProviders(persisted.providers)
+                            : persisted.providers,
+                        directoryScoped: persisted.directoryScoped
+                            ? Object.fromEntries(Object.entries(persisted.directoryScoped).map(([key, snapshot]) => [
+                                key,
+                                snapshot && Array.isArray(snapshot.providers)
+                                    ? { ...snapshot, providers: withoutExcludedProviders(snapshot.providers) }
+                                    : snapshot,
+                            ]))
+                            : persisted.directoryScoped,
+                    };
+                    return hydrateActiveDirectorySnapshot({ ...currentState, ...sanitized });
                 },
                 // Stale-while-revalidate: persist the last-known provider/agent
                 // snapshots so the model/agent pickers paint instantly on cold

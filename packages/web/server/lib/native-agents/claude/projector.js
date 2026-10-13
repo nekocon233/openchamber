@@ -511,7 +511,7 @@ export const createClaudeProjection = ({
           input: mapped.input,
           title: mapped.title,
           start: time,
-          metadata: childSessionId === null ? {} : { sessionId: childSessionId },
+          metadata: childSessionId === null ? (mapped.metadata ?? {}) : { ...mapped.metadata, sessionId: childSessionId },
           result: null,
         });
         upsertPart(record, part);

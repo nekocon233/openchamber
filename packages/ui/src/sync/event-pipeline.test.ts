@@ -30,7 +30,7 @@ function statusEvent(type: "busy" | "retry"): OpenCodeEvent {
 }
 
 /** A raw stream payload: wire events, or OpenChamber's own bridge events. */
-type StreamPayload = OpenCodeEvent | { type: string; properties: Record<string, string> }
+type StreamPayload = OpenCodeEvent | SyncEvent | { type: string; properties: Record<string, string> }
 
 function createSdk(events: StreamPayload[], streamFinished: () => void): OpenCodeClient {
   const subscribe = ({ signal }: { signal?: AbortSignal }) => ({
@@ -116,6 +116,29 @@ describe("createEventPipeline", () => {
     expect(events.map((event) => event.type)).toEqual(["session.status", "session.idle", "session.status"])
     const last = events[2]
     expect(last.type === "session.status" && last.properties.status.type).toBe("retry")
+  })
+
+  test("coalesces task details by revision without crossing deletion", async () => {
+    const sessionID = "ncl_tasks"
+    const update = (revision: number): SyncEvent => ({ type: "session.tasks.updated", properties: { sessionID,
+      snapshot: { state: "active", generation: "query", revision, tasks: [], omitted: 0 },
+    } })
+    const { events } = await collect([update(3), update(2), { type: "session.deleted", properties: { sessionID } }, update(4)], 3)
+    expect(events.map((event) => event.type)).toEqual(["session.tasks.updated", "session.deleted", "session.tasks.updated"])
+    expect(events[0]).toMatchObject({ properties: { snapshot: { revision: 3 } } })
+    expect(events[2]).toMatchObject({ properties: { snapshot: { revision: 4 } } })
+  })
+
+  test("keeps partial checklist events ordered so no valid item is dropped", async () => {
+    const sessionID = "ncl_checklist"
+    const update = (revision: number, id: string): SyncEvent => ({ type: "session.checklist.updated", properties: { sessionID,
+      snapshot: { state: "ready", source: "files", identity: "list", revision, observedAt: revision, complete: false, unreadable: 1,
+        items: [{ id, subject: id, status: "pending", blocks: [], blockedBy: [] }] },
+    } })
+    const { events } = await collect([update(1, "first"), update(2, "second")], 2)
+    expect(events).toHaveLength(2)
+    expect(events[0]).toMatchObject({ properties: { snapshot: { items: [{ id: "first" }] } } })
+    expect(events[1]).toMatchObject({ properties: { snapshot: { items: [{ id: "second" }] } } })
   })
 
   test("folds successive session patches into one", async () => {

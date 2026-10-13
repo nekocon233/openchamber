@@ -52,6 +52,24 @@ describe('native session registry', () => {
     expect(await createNativeRegistry({ filePath }).listSessions()).toEqual([]);
   });
 
+  it('round-trips only validated nonsecret checklist source and tolerates old entries', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const registry = createNativeRegistry({ filePath });
+    await registry.registerSession(SESSION, entry);
+    expect((await createNativeRegistry({ filePath }).getSession(SESSION)).claudeChecklistSource).toBeUndefined();
+    await registry.updateSession(SESSION, { claudeChecklistSource: { configDir: '/private/claude-config', listId: 'shared' } });
+    expect((await createNativeRegistry({ filePath }).getSession(SESSION)).claudeChecklistSource).toEqual({ configDir: '/private/claude-config', listId: 'shared' });
+    await expect(registry.updateSession(SESSION, { claudeChecklistSource: { configDir: 'relative', listId: 'shared' } })).rejects.toThrow();
+    await expect(registry.updateSession(SESSION, { claudeChecklistSource: { configDir: '/safe', listId: '../outside' } })).rejects.toThrow();
+    expect((await registry.getSession(SESSION)).claudeChecklistSource.listId).toBe('shared');
+    const document = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    document.sessions[SESSION].claudeChecklistSource = { configDir: 'relative', listId: '../unsafe' };
+    fs.writeFileSync(filePath, JSON.stringify(document));
+    const loaded = await createNativeRegistry({ filePath }).getSession(SESSION);
+    expect(loaded).toMatchObject(entry);
+    expect(loaded.claudeChecklistSource).toBeUndefined();
+  });
+
   it('persists turn snapshots and a pending revert, and forgets them with the session', async () => {
     const filePath = path.join(makeDir(), 'registry.json');
     const first = createNativeRegistry({ filePath });

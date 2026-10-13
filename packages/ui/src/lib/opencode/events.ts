@@ -14,6 +14,7 @@
  */
 
 import type { OpenCodeEvent } from "@opencode/client"
+import type { NativeChecklistSnapshot, NativeTaskSnapshot } from "@/lib/native-agents/task-schemas"
 import {
   compact,
   partIds,
@@ -117,6 +118,8 @@ export type SyncEvent =
   | { type: "session.status"; properties: { sessionID: string; status: SessionStatus } }
   /** A native session's whole live set of background tasks; empty once none run. */
   | { type: "session.background.updated"; properties: { sessionID: string; tasks: SessionBackgroundTask[] } }
+  | { type: "session.checklist.updated"; properties: { sessionID: string; snapshot: NativeChecklistSnapshot } }
+  | { type: "session.tasks.updated"; properties: { sessionID: string; snapshot: NativeTaskSnapshot } }
   | { type: "session.idle"; properties: { sessionID: string } }
   | { type: "session.error"; properties: { sessionID: string; error: StructuredError } }
   | { type: "message.updated"; properties: { info: Message } }
@@ -908,6 +911,9 @@ export function syncEventSessionID(event: SyncEvent): string | undefined {
     case "session.forked":
     case "session.revert.committed":
     case "session.status":
+    case "session.background.updated":
+    case "session.checklist.updated":
+    case "session.tasks.updated":
     case "session.idle":
     case "session.error":
     case "message.patched":

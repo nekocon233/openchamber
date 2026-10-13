@@ -5,7 +5,7 @@ import {
   type ContextPanelMode,
 } from '@/lib/surfaces/modes';
 
-export type BuiltInContextSurfaceId =
+type BuiltInContextSurfaceId =
   | 'editor'
   | 'git'
   | 'pr'
@@ -15,6 +15,7 @@ export type BuiltInContextSurfaceId =
   | 'terminal'
   | 'plan'
   | 'notes'
+  | 'tasks'
   | 'context'
   | 'browser'
   | 'chat';
@@ -130,6 +131,15 @@ export const CONTEXT_SURFACES: readonly ContextSurfaceDescriptor[] = [
     mode: 'notes',
     icon: 'book-marked',
     labelKey: 'contextRail.surface.notes',
+    availability: 'always',
+  },
+  {
+    id: 'tasks',
+    descriptionKey: 'contextRail.surface.tasks.description',
+    defaultWidthFraction: 0.45,
+    mode: 'tasks',
+    icon: 'list-check-2',
+    labelKey: 'contextPanel.mode.tasks',
     availability: 'always',
   },
   {

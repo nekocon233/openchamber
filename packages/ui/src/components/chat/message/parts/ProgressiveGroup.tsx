@@ -371,26 +371,27 @@ const aggregateRows = (parts: TurnActivityPart[], fileChangesOnly: boolean): Agg
         // Tool part
         const toolPart = activity.part as ToolPartType;
         const toolName = toolPart.tool?.toLowerCase() ?? '';
+        const toolMetadata = toolPart.state.status === 'pending' ? undefined : toolPart.state.metadata;
 
-        if (isStandaloneTool(toolName)) {
+        if (isStandaloneTool(toolName, toolMetadata)) {
             // Standalone tools are rendered separately, skip
             i++;
             continue;
         }
 
-        // A transcript that shows only file changes leaves the other calls out.
+        // Apply the same routine-tool filter as ungrouped transcript rows.
         if (fileChangesOnly && !showsWithFileChangesOnly(toolPart)) {
             i++;
             continue;
         }
 
-        if (isExpandableTool(toolName)) {
+        if (isExpandableTool(toolName, toolMetadata)) {
             rows.push({ type: 'tool-expandable', activity });
             i++;
             continue;
         }
 
-        if (isStaticTool(toolName)) {
+        if (isStaticTool(toolName, toolMetadata)) {
             rows.push({ type: 'tool-static-group', toolName, activities: [activity] });
             i++;
             continue;

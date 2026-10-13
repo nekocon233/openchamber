@@ -21,6 +21,7 @@ const GitView = lazyWithChunkRecovery(() => import('@/components/views/GitView')
 const LinearIssuesView = lazyWithChunkRecovery(() => import('@/components/views/LinearIssuesView').then((m) => ({ default: m.LinearIssuesView })));
 const PlanView = lazyWithChunkRecovery(() => import('@/components/views/PlanView').then((m) => ({ default: m.PlanView })));
 import { ProjectContextPanel } from './RightSidebarTabs';
+import { NativeTasksPane } from '@/components/chat/native-tasks/NativeTasksPane';
 import { SidebarFilesTree } from './SidebarFilesTree';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
@@ -181,6 +182,7 @@ const getModeLabel = (
   if (mode === 'pr') return t('contextPanel.mode.pr');
   if (mode === 'linear') return t('contextPanel.mode.linear');
   if (mode === 'notes') return t('contextRail.surface.notes');
+  if (mode === 'tasks') return t('contextPanel.mode.tasks');
   if (mode === 'terminal') return t('layout.mainTab.terminal');
   if (isPluginContextPanelMode(mode)) {
     const guest = useGuestsStore.getState().guests.find((entry) => entry.id === pluginIdFromMode(mode));
@@ -290,6 +292,10 @@ const getTabIcon = (
 
   if (tab.mode === 'notes') {
     return <Icon name="sticky-note" className="h-3.5 w-3.5" />;
+  }
+
+  if (tab.mode === 'tasks') {
+    return <Icon name="list-check-2" className="h-3.5 w-3.5" />;
   }
 
   if (tab.mode === 'terminal') {
@@ -1076,6 +1082,8 @@ export const ContextPanel: React.FC = () => {
                 ? <React.Suspense fallback={null}><LinearIssuesView /></React.Suspense>
             : activeTab?.mode === 'notes'
                 ? <ProjectContextPanel />
+            : activeTab?.mode === 'tasks'
+                ? <NativeTasksPane />
         : activeTab?.mode === 'plan'
             ? <React.Suspense fallback={null}><PlanView
                 targetPath={activeTab.targetPath}

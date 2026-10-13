@@ -505,6 +505,13 @@ one on purpose. Which providers a picker offers for a session is
 `isProviderPickableForSession`, described in
 `packages/ui/src/sync/DOCUMENTATION.md` under "Native CLI sessions".
 
+OpenCode Zen (`opencode`) never enters the store: `loadProviders` drops it when
+the catalog arrives, and persisted-snapshot hydration drops it again so a stale
+cache cannot paint it. Its free model list grows underneath model-level hiding,
+so exclusion lives at the catalog boundary, not in the pickers. With no Zen in
+the catalog there is no Big Pickle fallback either; an unconfigured default
+resolves to the first offerable provider's first model.
+
 Model metadata uses the active provider model as authority for runtime
 capabilities, modalities, costs, and limits. The models.dev catalog fills only
 fields the live model omits. `getModelMetadata` owns this merge so Provider

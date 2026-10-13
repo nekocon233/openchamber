@@ -20,6 +20,11 @@ Full-screen extension pages are separate from this rail registry. `contributes.p
   `availability: 'has-content'` surfaces (chat) are hidden from the
   rail until a tab of their mode exists, and stay visible for as long as one
   does — they must not disappear while in use.
+- The `tasks` surface is `always` so the entry point stays discoverable; its
+  pane (`components/chat/native-tasks/NativeTasksPane`) explains when the
+  selected session has no native Claude task data instead of hiding the rail
+  icon per session. On mobile the same pane is the workspace drawer's `tasks`
+  tab, which does not consume this registry.
 - `defaultWidthFraction` is the panel width as a fraction of the content area,
   used until the user manually resizes that surface. Manual widths are stored
   per mode in `useUIStore.contextPanelByDirectory[dir].widthFractionByMode`;

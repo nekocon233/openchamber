@@ -1,7 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapClaudeToolResult, slimFileEditResult } from './tools.js';
+import { mapClaudeToolResult, mapClaudeToolUse, slimFileEditResult } from './tools.js';
 import { recordedFileChanges } from '@openchamber/ui/lib/opencode/tools';
+
+describe('Claude tool source mapping', () => {
+  it('marks the raw MCP namespace without guessing from the mapped name', () => {
+    const input = { query: 'parser', limit: 3 };
+    const mcp = mapClaudeToolUse('mcp__docs__search', input);
+    const ordinary = mapClaudeToolUse('docs_search', input);
+    expect(mcp).toEqual({
+      tool: 'docs_search', input, title: 'parser', metadata: { openchamberToolSource: 'mcp' },
+    });
+    expect(ordinary).toEqual({ tool: 'docs_search', input, title: 'parser' });
+  });
+
+  it.each(['mcp__docs__read', 'mcp__docs__skill', 'mcp__docs__Bash'])('keeps %s in the MCP namespace with its original input', (name) => {
+    expect(mapClaudeToolUse(name, { query: 'parser' })).toEqual({
+      tool: name.slice('mcp__'.length).replace('__', '_'),
+      input: { query: 'parser' },
+      title: 'parser',
+      metadata: { openchamberToolSource: 'mcp' },
+    });
+  });
+
+  it.each(['docs_search', 'mcp__docs', 'mcp____search', 'mcp__docs__', 'MCP__docs__search'])('does not infer MCP provenance for %s', (name) => {
+    expect(mapClaudeToolUse(name, {}).metadata).toBeUndefined();
+  });
+
+  it('keeps Skill on its existing navigation input contract', () => {
+    expect(mapClaudeToolUse('Skill', { skill: 'theme-system', args: 'buttons' })).toEqual({
+      tool: 'skill', input: { name: 'theme-system' }, title: 'theme-system',
+    });
+  });
+});
 
 const hunk = (oldStart, oldLines, newStart, newLines, lines) => ({ oldStart, oldLines, newStart, newLines, lines });
 const file = (name, hunks, flags = {}) => ({ filePath: `/work/project/${name}`, hunks, ...flags });

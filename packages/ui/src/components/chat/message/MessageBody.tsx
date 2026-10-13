@@ -1317,7 +1317,7 @@ const AssistantMessageBody = React.memo(({
         return true;
     }, []);
 
-    // A transcript that shows only file changes leaves the other calls out.
+    // The simplified transcript shares its routine-tool filter with grouped rows.
     const fileChangesOnly = useUIStore((state) => state.conciseTranscript && state.transcriptFileChangesOnly);
     const shouldShowTool = React.useCallback((toolPart: ToolPartType): boolean => {
         if (fileChangesOnly && !showsWithFileChangesOnly(toolPart)) return false;
@@ -1891,8 +1891,9 @@ const AssistantMessageBody = React.memo(({
                     continue;
                 }
 
+                const toolMetadata = toolPart.state.status === 'pending' ? undefined : toolPart.state.metadata;
                 const activity = activityByPart.get(part);
-                if (activity?.kind === 'tool' && !isStandaloneTool(toolName)) {
+                if (activity?.kind === 'tool' && !isStandaloneTool(toolName, toolMetadata)) {
                     flushSegmentsAfterTool(toolPartId);
                     i += 1;
                     continue;
@@ -1905,7 +1906,7 @@ const AssistantMessageBody = React.memo(({
                 }
 
                 // Expandable tools: bash, edit, write, task, question — individual rows
-                if (isExpandableTool(toolName)) {
+                if (isExpandableTool(toolName, toolMetadata)) {
                     rendered.push(
                         <FadeInOnReveal key={`tool-${toolPart.id}`}>
                             <ToolRevealOnMount animate={animatedToolIdsLookup.has(toolPart.id)} wipe>

@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { createClaudeProjection } from './projector.js';
 import { slimFileEditResult } from './tools.js';
 import { compareMessagesChronologically } from '@openchamber/ui/sync/message-ordering';
+import { nativePartSchema } from '@openchamber/ui/lib/native-agents/schemas';
+import { showsWithFileChangesOnly } from '@openchamber/ui/components/chat/message/parts/toolRenderUtils';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -255,6 +257,68 @@ describe('Claude tools the renderers do not know', () => {
       ['github_create_issue', 'Broken link'],
       ['TaskList', ''],
     ]);
+  });
+});
+
+describe.each([['history', false], ['live', true]])('Claude MCP %s projection', (_mode, live) => {
+  const prompt = {
+    type: 'user', uuid: 'a22f0a7a-a88c-4093-a5e3-6653ff44f6d3', timestamp: '2026-10-13T10:00:00.000Z',
+    message: { role: 'user', content: 'Search the docs' },
+  };
+  const call = {
+    type: 'assistant', uuid: 'mcp-call', timestamp: '2026-10-13T10:00:01.000Z',
+    message: {
+      id: 'msg_mcp', model: 'claude-haiku-4-5', stop_reason: 'tool_use',
+      content: [
+        { type: 'tool_use', id: 'toolu_mcp', name: 'mcp__docs__search', input: { query: 'parser' } },
+        { type: 'tool_use', id: 'toolu_ordinary', name: 'docs_search', input: { query: 'parser' } },
+      ],
+    },
+  };
+  const start = () => {
+    const projection = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live, now: () => Date.parse('2026-10-13T10:00:03.000Z') });
+    if (live) projection.startUserPrompt(USER_ID, { kind: 'text', text: 'Search the docs' });
+    else projection.applyEntry(prompt);
+    projection.applyEntry(call);
+    return projection;
+  };
+  const assertSources = (projection, status) => {
+    const parts = toolParts(projection.records());
+    expect(parts).toHaveLength(2);
+    const [mcp, ordinary] = parts;
+    expect(mcp).toMatchObject({
+      tool: 'docs_search', state: { status, input: { query: 'parser' }, metadata: { openchamberToolSource: 'mcp' } },
+    });
+    expect(ordinary).toMatchObject({ tool: 'docs_search', state: { status, metadata: {} } });
+    // Exercise the UI's native boundary as well as the transcript filter.
+    expect(showsWithFileChangesOnly(nativePartSchema.parse(mcp))).toBe(true);
+    expect(showsWithFileChangesOnly(nativePartSchema.parse(ordinary))).toBe(false);
+    return parts;
+  };
+
+  it.each([false, true])('keeps source through running and result settlement, is_error=%s', (isError) => {
+    const projection = start();
+    const running = assertSources(projection, 'running');
+    projection.applyEntry({
+      type: 'user', uuid: 'mcp-result', timestamp: '2026-10-13T10:00:02.000Z',
+      message: { role: 'user', content: ['toolu_mcp', 'toolu_ordinary'].map((id) => ({
+        type: 'tool_result', tool_use_id: id, is_error: isError, content: 'Search result',
+      })) },
+    });
+    const settled = assertSources(projection, isError ? 'error' : 'completed');
+    expect(settled.map((part) => part.id)).toEqual(running.map((part) => part.id));
+    for (const part of settled) {
+      expect(isError ? part.state.error : part.state.output).toBe('Search result');
+    }
+  });
+
+  it('keeps source when an unfinished call is settled without a result', () => {
+    const projection = start();
+    if (live) projection.finishTurn({ error: { name: 'MessageAbortedError', data: { message: 'aborted' } } });
+    else projection.settleOpenTools('Interrupted');
+    for (const part of assertSources(projection, 'error')) {
+      expect(part.state.error).toBe('Interrupted');
+    }
   });
 });
 

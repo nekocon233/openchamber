@@ -102,6 +102,14 @@ export const createNativeEventPublisher = ({ publishNativeEvent, now = Date.now 
       emit(directory, 'session.background.updated', { sessionID, tasks: structuredClone(tasks) });
     },
 
+    checklist(directory, sessionID, snapshot) {
+      emit(directory, 'session.checklist.updated', { sessionID, snapshot: structuredClone(snapshot) });
+    },
+
+    tasks(directory, sessionID, snapshot) {
+      emit(directory, 'session.tasks.updated', { sessionID, snapshot: structuredClone(snapshot) });
+    },
+
     /** Drops what was published for a session whose live state ended. */
     forget(sessionId) {
       published.delete(sessionId);

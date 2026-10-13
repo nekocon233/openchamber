@@ -532,22 +532,59 @@ what the stores hold for native sessions and never blocks OpenCode's:
   its status instead of settling idle and having its turn marked interrupted.
   Bootstrap folds the held native statuses into its snapshot after a failed
   read and leaves native sessions out of its global settle.
-- Background tasks. A Claude session can end its turn while tasks it
-  started keep running, and it continues by itself when one finishes.
-  `session-background-tasks.ts` owns that live-only state per session:
-  `session.background.updated` replaces a session's set, and after every
-  global session load `seedSessionBackgroundTasksFromHost` reads the server's
-  complete snapshot and replaces the map, except sessions an event changed
-  while the read was in flight. A failed read keeps the held sets, and a
-  runtime switch clears them. Session lists show such a session as running,
-  as with a background subagent (see the live cross-directory status view
-  above); its own status stays idle. The composer offers Stop while the
-  session has background tasks, and the native abort then ends them.
+- Background activity. `session-background-tasks.ts` keeps the existing
+  `tasksBySession` map of non-ambient running tasks. Only
+  `session.background.updated` and the complete host background snapshot may
+  replace it. Events received after a snapshot started win, including removals.
+  A failed read preserves the map. Session lists and turn timers count these
+  tasks as active; the session's own status stays idle and its composer Stop
+  still aborts the session.
+- Background details. The same owner keeps a separate, non-persisted collection
+  for each runtime, normalized directory and session. `session.tasks.updated`
+  and `nativeAgents.sessionTasks` carry the full detail snapshot, including
+  ambient tasks, recent terminal records and the server's `omitted` count.
+  These records never change `tasksBySession`. `unknown` means a query exists
+  but the CLI has not confirmed task membership; `inactive` ends observation
+  and clears its records. A generation change replaces all old query records.
+- Native checklist. `session-native-checklist.ts` owns the read-only CLI list,
+  separate from project Todos and OpenCode directory state. It retains source,
+  list identity and completeness from `session.checklist.updated` and
+  `nativeAgents.checklist`. Partial reads update valid items and retain missing
+  items as unconfirmed. Only a complete read replaces the entire list.
+  A new list identity starts a separate collection. Sessions with a confirmed
+  shared list identity receive each other's updates and share overlapping reads.
 - Forms. `lib/native-agents/forms.ts` projects native questions into the shared
   form contract. Bootstrap and reconnect preserve held native forms when their
   source fails; replies and cancellation still use the native question API.
 - Session records. `syncSession` and reconnect repair read a native
   session through `readNativeSession`, never OpenCode's `session.get`.
+
+The task consumers use `useSessionNativeChecklist` and
+`useSessionNativeTaskDetails`, with explicit session and directory arguments.
+`enabled: false` makes no reads or subscriptions. Summary consumers load once;
+`visible: true` refreshes on opening and schedules one shared 45-second timer
+per viewed session. Hidden documents stop that timer. Manual `loadSessionNative*`
+calls share in-flight work. Closing the last consumer releases its records and
+cancels pending reads after the render/commit task, allowing Strict Mode to
+reacquire them. Events for unobserved sessions allocate no detail cache.
+
+Both owners expose explicit loading, ready, stale, error and unsupported states;
+the checklist additionally reports partial data and an unknown source. Read
+failure retains valid data as stale, never successful empty. Missing task fields
+in old-server capabilities mean unsupported; `nativeAgents.supported: false`
+skips all native requests. Web, Electron, hosted mobile and Capacitor share these
+owners through RuntimeAPIs; VS Code stays explicitly unsupported.
+
+Task events route before directory-store lookup, so viewing a session does not
+bootstrap its directory just to receive task updates. Checklist partial events
+stay ordered rather than being coalesced away. Task detail snapshots coalesce
+by the highest revision and never across session deletion. Each server runtime
+increments revisions across query changes; reconnect invalidates pending reads
+and resets revision authority so a restarted server can begin at a lower number.
+Each HTTP read also captures the owner's local mutation revision, so a newer
+event or deletion wins even when the response belongs to the current runtime.
+Session deletion clears both owners, including confirmed local deletion without
+an event echo. Runtime switches clear all task state. Idle does not clear it.
 
 Sending goes through the same `routeMessage` and `optimisticSend` as OpenCode,
 with a native branch (`sync/native-send.ts`):
@@ -997,7 +1034,8 @@ Keep this in sync with `handleDirectoryEvent` in `sync-context.tsx`:
 | `permission.asked/replied` | `permission` |
 | `form.created/settled` | `form` |
 | `openchamber.notification`, `openchamber.permission-auto-accept` | (none — side effects only) |
-| `session.background.updated` | (none — `session-background-tasks.ts` store) |
+| `session.background.updated`, `session.tasks.updated` | None. `session-background-tasks.ts` owns active membership and detail records separately. |
+| `session.checklist.updated` | None. `session-native-checklist.ts` owns the CLI checklist. |
 
 These are `SyncEvent`s from `packages/ui/src/lib/opencode/events.ts`, not OpenCode wire events: the event pipeline translates every OpenCode 2.x wire event (`session.text.delta`, `session.tool.called`, `session.step.ended`, ...) into this vocabulary before coalescing. Wire-level knowledge lives only in that translator; the reducer applies patches and tool-state transitions against the store.
 

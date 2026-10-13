@@ -6,6 +6,7 @@ import { createQuestionRegistry } from '../questions.js';
 import { createClaudeSessionStore } from './store.js';
 import { createClaudeLiveSessions } from './live.js';
 import { createClaudeProjection } from './projector.js';
+import { createClaudeChecklists } from './tasks.js';
 
 const fixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -204,7 +205,7 @@ describe('Claude live sessions', () => {
     });
     expect(calls.queries[0].inputs[0]).toMatchObject({ uuid: USER_MESSAGE_ID.slice('ncl_u_'.length), priority: 'next' });
 
-    const types = events.map((event) => event.payload.type);
+    const types = events.map((event) => event.payload.type).filter((type) => type !== 'session.tasks.updated');
     expect(types[0]).toBe('message.updated');
     expect(types.indexOf('session.status')).toBeLessThan(types.indexOf('message.part.delta'));
     expect(types.slice(-2)).toEqual(['session.status', 'session.idle']);
@@ -754,7 +755,7 @@ describe('Claude live task list', () => {
   const assistant = (id, content) => ({ type: 'assistant', uuid: `${id}-entry`, parent_tool_use_id: null, message: { id, model: 'claude-haiku-4-5', content } });
   const toolResult = (toolUseId) => ({ type: 'user', uuid: `${toolUseId}-result`, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'done' }] } });
 
-  it('publishes the task list after a task tool finished, and the list a TodoWrite sets', async () => {
+  it('publishes task files after tool results and rejects later TodoWrite replacing that authority', async () => {
     const events = [];
     const reads = [];
     const frames = [
@@ -775,25 +776,58 @@ describe('Claude live task list', () => {
         return Object.assign(run(), { interrupt: async () => {}, setModel: async () => {}, applyFlagSettings: async () => {}, setPermissionMode: async () => {} });
       },
     };
+    const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
+    const checklists = createClaudeChecklists({ publisher, readFiles: async (source) => {
+      reads.push(source);
+      return { exists: true, complete: true, unreadable: 0, items: [{ id: '1', subject: 'alpha', status: 'pending', blocks: [], blockedBy: [] }] };
+    } });
     const live = createClaudeLiveSessions({
       loadSdk: async () => sdk,
       resolveExecutable: async () => '/usr/local/bin/claude',
-      buildEnv: () => ({}),
+      buildEnv: () => ({ CLAUDE_CONFIG_DIR: '/captured/config', CLAUDE_CODE_TASK_LIST_ID: 'shared' }),
       hasTranscript: async () => true,
-      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      publisher,
       questions: createQuestionRegistry({ publish: () => {} }),
-      readTaskList: async (sessionUuid) => {
-        reads.push(sessionUuid);
-        return [{ id: '1', content: 'alpha', status: 'pending', priority: 'medium' }];
-      },
+      checklists,
     });
     await sendPrompt(live);
-    await waitFor(() => payloads(events, 'todo.updated').length === 2);
-    expect(reads).toEqual([SESSION_UUID]);
-    expect(payloads(events, 'todo.updated').map((payload) => payload.properties)).toEqual([
-      { sessionID: SESSION_ID, todos: [{ id: '1', content: 'alpha', status: 'pending', priority: 'medium' }] },
-      { sessionID: SESSION_ID, todos: [{ id: 'todo-1', content: 'Plan', status: 'pending', priority: 'medium' }] },
+    await waitFor(() => payloads(events, 'session.idle').length === 1);
+    await waitFor(() => payloads(events, 'session.checklist.updated').length === 1);
+    expect(reads).toEqual([expect.objectContaining({ configDir: '/captured/config', listId: 'shared' })]);
+    expect(payloads(events, 'session.checklist.updated').map((payload) => payload.properties)).toEqual([
+      { sessionID: SESSION_ID, snapshot: expect.objectContaining({ source: 'files', items: [{ id: '1', subject: 'alpha', status: 'pending', blocks: [], blockedBy: [] }] }) },
     ]);
+    expect(payloads(events, 'todo.updated')).toEqual([]);
+    await live.shutdown();
+  });
+});
+
+describe('Claude child checklist routing', () => {
+  it('observes child TodoWrite tool results without publishing into the parent list', async () => {
+    const events = [];
+    const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
+    const checklists = createClaudeChecklists({ publisher, readFiles: async () => ({ exists: false, complete: true, unreadable: 0, items: [] }) });
+    const frames = [
+      { type: 'assistant', parent_tool_use_id: 'child-tool', message: { content: [{ type: 'tool_use', id: 'todo-child', name: 'TodoWrite', input: { todos: [{ content: 'Child only', status: 'pending' }] } }] } },
+      { type: 'user', parent_tool_use_id: 'child-tool', message: { content: [{ type: 'tool_result', tool_use_id: 'todo-child', content: 'ok' }] } },
+      { type: 'result', subtype: 'success', is_error: false, queued_turn_count: 0 },
+    ];
+    const live = createClaudeLiveSessions({
+      loadSdk: async () => ({ query: ({ prompt }) => (async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield* frames;
+        await input.next();
+      })() }),
+      resolveExecutable: async () => '/fixture/claude', buildEnv: () => ({}), hasTranscript: async () => false,
+      publisher, checklists, questions: createQuestionRegistry({ publish: () => {} }),
+    });
+    await sendPrompt(live);
+    await waitFor(() => payloads(events, 'session.checklist.updated').length === 1);
+    expect(payloads(events, 'session.checklist.updated')[0].properties).toMatchObject({
+      sessionID: `${SESSION_ID}_t_child-tool`, snapshot: { source: 'history', items: [{ subject: 'Child only' }] },
+    });
+    expect(await checklists.read(SESSION_ID)).toMatchObject({ source: 'files', items: [] });
     await live.shutdown();
   });
 });

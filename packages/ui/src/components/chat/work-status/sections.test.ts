@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { buildSettingsSearchResults } from '@/lib/settings/search';
 import {
   WORK_STATUS_SECTION_IDS,
   WORK_STATUS_SECTION_LABEL_KEYS,
@@ -11,6 +12,21 @@ import {
 } from './sections';
 
 describe('section registry', () => {
+  test('task settings search exposes only existing desktop section anchors', () => {
+    for (const platform of ['web', 'desktop', 'mobile', 'vscode']) {
+      const results = buildSettingsSearchResults({
+        query: 'claude work status',
+        runtimeCtx: {
+          isVSCode: platform === 'vscode', isWeb: platform === 'web', isDesktop: platform === 'desktop',
+          isMobile: platform === 'mobile', isHostLocalOrigin: true, isDesktopLocalOrigin: false,
+          isMac: false, isWindows: false, isLinux: false, routingAvailable: false,
+        },
+        t: (key) => key, getPageTitle: (page) => page,
+      });
+      expect(results.map((result) => result.id)).toEqual(platform === 'web' || platform === 'desktop'
+        ? ['chat.work-status.section.taskChecklist', 'chat.work-status.section.taskBackground'] : []);
+    }
+  });
   test('restores defaults for missing or empty saved order', () => {
     for (const value of [undefined, null, []]) {
       expect(sanitizeWorkStatusSectionOrder(value)).toEqual([...WORK_STATUS_SECTION_IDS]);
@@ -19,7 +35,7 @@ describe('section registry', () => {
 
   test('preserves chosen positions and appends missing sections once', () => {
     const order = sanitizeWorkStatusSectionOrder(['pinned', 'repository', 'pinned', 'obsolete', 'session']);
-    expect(order).toEqual(['pinned', 'repository', 'session', 'usage', 'telemetry', 'subagents', 'mcp', 'contextSources']);
+    expect(order).toEqual(['pinned', 'repository', 'session', 'usage', 'telemetry', 'subagents', 'taskChecklist', 'taskBackground', 'mcp', 'contextSources']);
     expect(sanitizeWorkStatusSectionOrder(JSON.parse(JSON.stringify(order)))).toEqual(order);
   });
 

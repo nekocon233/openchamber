@@ -10,6 +10,8 @@ import { WorkStatusPrimaryGroup } from './WorkStatusPrimaryGroup';
 import { WorkStatusUsageSection } from './WorkStatusUsageSection';
 import { WorkStatusTelemetrySection } from './WorkStatusTelemetrySection';
 import { WorkStatusSubagentsSection } from './WorkStatusSubagentsSection';
+import { WorkStatusChecklistSection } from './WorkStatusChecklistSection';
+import { WorkStatusBackgroundTasksSection } from './WorkStatusBackgroundTasksSection';
 import { WorkStatusMcpSection } from './WorkStatusMcpSection';
 import { WorkStatusPinnedSection } from './WorkStatusPinnedSection';
 import { WorkStatusContextSection } from './WorkStatusContextSection';
@@ -187,6 +189,8 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
     usage: <WorkStatusUsageSection />,
     telemetry: <WorkStatusTelemetrySection sessionId={sessionId} directory={directory} />,
     subagents: <WorkStatusSubagentsSection sessionId={sessionId} directory={directory} />,
+    taskChecklist: <WorkStatusChecklistSection sessionId={sessionId} directory={directory} />,
+    taskBackground: <WorkStatusBackgroundTasksSection sessionId={sessionId} directory={directory} />,
     mcp: <WorkStatusMcpSection directory={directory} />,
     pinned: <WorkStatusPinnedSection sessionId={sessionId} directory={directory} />,
     contextSources: <WorkStatusContextSection sessionId={sessionId} directory={directory} />,

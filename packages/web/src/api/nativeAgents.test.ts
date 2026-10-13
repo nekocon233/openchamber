@@ -73,6 +73,81 @@ describe('web native agents API', () => {
     expect([...requests[0]?.searchParams.keys() ?? []]).toEqual([]);
   });
 
+  it('reads a partial checklist without dropping its provenance or item details', async () => {
+    const snapshot = {
+      state: 'ready', identity: 'list-a', source: 'files', revision: 2, observedAt: 123,
+      complete: false, unreadable: 1,
+      items: [{ id: '1', subject: 'Run tests', status: 'in_progress', description: 'Focused checks', owner: 'worker', blocks: [], blockedBy: ['2'] }],
+    };
+    stubFetch(async () => Response.json(snapshot));
+
+    expect(await createWebNativeAgentsAPI().checklist('ncl_a', '/work/project')).toEqual(snapshot);
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/ncl_a/checklist');
+    expect(requests[0]?.searchParams.get('directory')).toBe('/work/project');
+  });
+
+  it('keeps task details separate from the global active-task snapshot', async () => {
+    const snapshot = {
+      state: 'active', generation: 'query-a', revision: 4, omitted: 0,
+      tasks: [{ id: 'task-a', type: 'local_bash', description: 'Build', active: false, ambient: false, status: 'completed', canStop: false, outputAvailable: true }],
+    };
+    stubFetch(async () => Response.json(snapshot));
+
+    expect(await createWebNativeAgentsAPI().sessionTasks('ncl_a', '/work/project')).toEqual(snapshot);
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/ncl_a/tasks');
+  });
+
+  it('reads bounded output by task identity, never a client-supplied file path', async () => {
+    stubFetch(async () => Response.json({ state: 'ready', text: 'build output', truncated: true }));
+    const output = await createWebNativeAgentsAPI().taskOutput('ncl_a', 'task/a', '/work/project', 'query-a');
+
+    expect(output).toEqual({ state: 'ready', text: 'build output', truncated: true });
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/ncl_a/tasks/task%2Fa/output');
+    expect(requests[0]?.searchParams.get('generation')).toBe('query-a');
+    expect(requests[0]?.searchParams.has('path')).toBe(false);
+  });
+
+  it('posts a single-task stop with its process generation, not session abort', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
+      bodies.push(String(init?.body));
+      expect(init?.method).toBe('POST');
+      return Response.json({ accepted: true });
+    });
+
+    await createWebNativeAgentsAPI().stopTask('ncl_a', 'task-a', '/work/project', 'query-a');
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/ncl_a/tasks/task-a/stop');
+    expect(JSON.parse(bodies[0] ?? '')).toEqual({ directory: '/work/project', generation: 'query-a' });
+  });
+
+  it('distinguishes unavailable task output from empty successful output', async () => {
+    stubFetch(async () => Response.json({ state: 'unavailable', reason: 'not_recorded' }));
+    expect(await createWebNativeAgentsAPI().taskOutput('ncl_a', 'task-a', '/work/project', 'query-a'))
+      .toEqual({ state: 'unavailable', reason: 'not_recorded' });
+  });
+
+  it('rejects malformed task snapshots rather than treating them as an empty task list', async () => {
+    stubFetch(async () => Response.json({ state: 'active', generation: null, revision: 1, tasks: [], omitted: 0 }));
+    await expect(createWebNativeAgentsAPI().sessionTasks('ncl_a', '/work/project')).rejects.toThrow();
+  });
+
+  it('cancels a task output read when its view closes', async () => {
+    stubFetch(stalled);
+    const controller = new AbortController();
+    const read = createWebNativeAgentsAPI().taskOutput('ncl_a', 'task-a', '/work/project', 'query-a', { signal: controller.signal });
+    controller.abort(new DOMException('Task view closed', 'AbortError'));
+    await expect(read).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('reports a stale task stop as a failure without issuing a second request', async () => {
+    stubFetch(async () => Response.json({ error: 'Task process changed', code: 'NATIVE_TASK_STALE' }, { status: 409 }));
+    await expect(createWebNativeAgentsAPI().stopTask('ncl_a', 'task-a', '/work/project', 'old-query'))
+      .rejects.toMatchObject({ status: 409, code: 'NATIVE_TASK_STALE' });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/ncl_a/tasks/task-a/stop');
+  });
+
   it('reports a failed read with the error and code the server sent', async () => {
     stubFetch(async () => Response.json(
       { error: 'Native session not found', code: 'NATIVE_SESSION_NOT_FOUND' },

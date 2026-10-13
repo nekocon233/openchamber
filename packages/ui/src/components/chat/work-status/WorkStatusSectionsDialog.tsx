@@ -40,13 +40,26 @@ const SortableSectionRow: React.FC<{
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
-}> = ({ sectionId, label, checked, onChange }) => {
+  highlighted: boolean;
+}> = ({ sectionId, label, checked, onChange, highlighted }) => {
   const { t } = useI18n();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: sectionId });
   const extension = isExtensionSectionId(sectionId);
+  const highlightTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(() => () => { if (highlightTimer.current) clearTimeout(highlightTimer.current); }, []);
+  const attachRow = React.useCallback((node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    if (!node || !highlighted) return;
+    const target = node.querySelector<HTMLElement>('[data-settings-item]');
+    if (!target) return;
+    target.scrollIntoView({ block: 'center' });
+    target.setAttribute('data-settings-search-highlight', 'true');
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => target.removeAttribute('data-settings-search-highlight'), 1600);
+  }, [highlighted, setNodeRef]);
   return (
     <div
-      ref={setNodeRef}
+      ref={attachRow}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn('relative flex items-center gap-2', isDragging && 'z-10 opacity-60')}
     >
@@ -81,7 +94,8 @@ const SortableSectionRow: React.FC<{
 export const WorkStatusSectionsDialog: React.FC<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}> = ({ open, onOpenChange }) => {
+  highlightItem?: string | null;
+}> = ({ open, onOpenChange, highlightItem }) => {
   const { t } = useI18n();
   const hidden = useUIStore((state) => state.workStatusHiddenSections);
   const setSectionVisible = useUIStore((state) => state.setWorkStatusSectionVisible);
@@ -150,7 +164,7 @@ export const WorkStatusSectionsDialog: React.FC<{
       dragging.current = false;
       onOpenChange(nextOpen);
     }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" data-work-status-sections-dialog>
         <DialogHeader>
           <DialogTitle>{t('chat.workStatus.sections.dialogTitle')}</DialogTitle>
           <DialogDescription>{t('chat.workStatus.sections.dialogDescription')}</DialogDescription>
@@ -172,6 +186,7 @@ export const WorkStatusSectionsDialog: React.FC<{
                   sectionId={sectionId}
                   label={sectionLabel(sectionId)}
                   checked={isWorkStatusSectionVisible(hidden, sectionId)}
+                  highlighted={highlightItem === `chat.work-status.section.${sectionId}`}
                   onChange={(checked) => setSectionVisible(sectionId, checked)}
                 />
               ))}

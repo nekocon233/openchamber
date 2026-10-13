@@ -18,6 +18,7 @@ import type {
   nativeStatusSnapshotSchema,
 } from '@/lib/native-agents/schemas';
 import type { NativeBackend } from '@/lib/native-agents/ids';
+import type { NativeChecklistSnapshot, NativeTaskOutput, NativeTaskSnapshot } from '@/lib/native-agents/task-schemas';
 
 type RuntimePlatform = 'web' | 'desktop' | 'vscode';
 
@@ -1728,6 +1729,13 @@ export interface NativeAgentsAPI {
   statuses(directory: string, options?: NativeReadOptions): Promise<NativeStatusSnapshot>;
   /** Every native session, in any directory, whose CLI still runs background tasks. */
   backgroundTasks(options?: NativeReadOptions): Promise<NativeBackgroundTaskSnapshot>;
+  /** CLI-owned checklist; reading does not start a model turn. */
+  checklist(sessionId: string, directory: string, options?: NativeReadOptions): Promise<NativeChecklistSnapshot>;
+  /** Task details for the current CLI process, separate from the active set. */
+  sessionTasks(sessionId: string, directory: string, options?: NativeReadOptions): Promise<NativeTaskSnapshot>;
+  taskOutput(sessionId: string, taskId: string, directory: string, generation: string, options?: NativeReadOptions): Promise<NativeTaskOutput>;
+  /** Requests one task to stop; the CLI's events confirm its final state. */
+  stopTask(sessionId: string, taskId: string, directory: string, generation: string): Promise<void>;
   questions(directory: string, options?: NativeReadOptions): Promise<NativeQuestionList>;
   /** A new session in the backend's CLI. */
   createSession(input: { backend: NativeBackend; directory: string; title?: string }): Promise<Session>;

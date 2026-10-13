@@ -202,7 +202,15 @@ export const nativeCatalogSchema = z.object({
 export const nativeCapabilitiesSchema = z.object({
   supported: z.literal(true),
   backends: z.object({
-    claude: z.object({ cli: z.boolean() }),
+    claude: z.object({
+      cli: z.boolean(),
+      tasks: z.object({
+        checklist: z.boolean(),
+        background: z.boolean(),
+        output: z.boolean(),
+        stop: z.boolean(),
+      }).optional(),
+    }),
     codex: z.object({ cli: z.boolean() }),
   }),
   registry: z.object({ reset: z.boolean(), resetAt: z.number().optional() }),

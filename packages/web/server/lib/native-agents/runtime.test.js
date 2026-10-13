@@ -50,13 +50,13 @@ const scriptedTurnEnd = (apiMessageId) => [
   { type: 'result', subtype: 'success', is_error: false, result: 'Done.', terminal_reason: 'completed', queued_turn_count: 0 },
 ];
 
-const createRuntime = ({ childFrames = [], snapshotGit } = {}) => {
+const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}) } = {}) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-native-runtime-'));
   directories.push(dataDir);
   const info = { sessionId: SESSION_UUID, summary: 'Terminal work', lastModified: 2000, fileSize: 10, createdAt: 1000 };
   const transcripts = new Map([[SESSION_UUID, info]]);
   const events = [];
-  const turns = { started: 0, finish: deferred(), listings: 0, failListing: false };
+  const turns = { started: 0, finish: deferred(), listings: 0, failListing: false, stoppedTasks: [], interrupts: 0 };
   // The options of every query the runtime opens, as the CLI receives them.
   const queries = [];
   const sdk = {
@@ -89,7 +89,8 @@ const createRuntime = ({ childFrames = [], snapshotGit } = {}) => {
         }
       }
       return Object.assign(run(), {
-        interrupt: async () => {},
+        interrupt: async () => { turns.interrupts += 1; },
+        stopTask: async (taskId) => { turns.stoppedTasks.push(taskId); },
         setModel: async () => {},
         applyFlagSettings: async () => {},
         setPermissionMode: async () => {},
@@ -106,7 +107,7 @@ const createRuntime = ({ childFrames = [], snapshotGit } = {}) => {
     snapshots: createSnapshotStore({ dataDir, git: snapshotGit }),
     // No codex binary: the Codex backend fails on its own.
     resolveExecutable: async (cli) => (cli === 'claude' ? '/usr/bin/claude' : null),
-    buildChildEnv: () => ({}),
+    buildChildEnv: childEnv,
     clientVersion: 'test',
     publishNativeEvent: (event) => events.push(event),
     loadSdk: async () => sdk,
@@ -761,6 +762,78 @@ describe('native compaction', () => {
   });
 });
 
+describe('native task runtime without process launches', () => {
+  it('reads snapshots without opening queries and leaves Codex unsupported', async () => {
+    const runtime = createRuntime({ snapshotGit: async () => '' });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    expect(await runtime.checklist(session.id, DIRECTORY)).toEqual({ state: 'unavailable', reason: 'source_unknown' });
+    expect(await runtime.sessionTasks(session.id, DIRECTORY)).toMatchObject({ state: 'inactive', generation: null, tasks: [], omitted: 0 });
+    expect(await runtime.taskOutput(session.id, DIRECTORY, 'a', 'closed')).toEqual({ state: 'unavailable', reason: 'query_closed' });
+    await expect(runtime.stopTask(session.id, DIRECTORY, 'a', 'closed')).rejects.toMatchObject({ code: 'NATIVE_TASK_QUERY_CLOSED' });
+    const codexId = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
+    expect(await runtime.checklist(codexId, DIRECTORY)).toEqual({ state: 'unavailable', reason: 'unsupported' });
+    expect(await runtime.sessionTasks(codexId, DIRECTORY)).toMatchObject({ state: 'unsupported', generation: null });
+    expect(runtime.queries).toHaveLength(0);
+    expect((await runtime.capabilities()).backends.claude.tasks).toEqual({ checklist: true, background: true, output: true, stop: true });
+    await runtime.shutdown();
+  });
+
+  it('scopes operations by session/directory/generation without changing session Stop', async () => {
+    const runtime = createRuntime({ snapshotGit: async () => '', childFrames: [
+      { type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'a', task_type: 'local_bash', description: 'one' }, { task_id: 'b', task_type: 'local_bash', description: 'two' }] },
+    ] });
+    const first = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    const second = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    await runtime.prompt(first.id, promptRequest('ncl_u_a22f0a7a-a88c-4093-a5e3-6653ff44f6d3'));
+    await runtime.prompt(second.id, promptRequest('ncl_u_b22f0a7a-a88c-4093-a5e3-6653ff44f6d3'));
+    await waitFor(async () => (await runtime.sessionTasks(first.id, DIRECTORY)).state === 'active' && (await runtime.sessionTasks(second.id, DIRECTORY)).state === 'active');
+    const snapshot = await runtime.sessionTasks(first.id, DIRECTORY);
+    await expect(runtime.stopTask(second.id, DIRECTORY, 'a', snapshot.generation)).rejects.toMatchObject({ code: 'NATIVE_TASK_GENERATION_MISMATCH' });
+    await expect(runtime.stopTask(first.id, '/foreign', 'a', snapshot.generation)).rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
+    expect(await runtime.stopTask(first.id, DIRECTORY, 'a', snapshot.generation)).toEqual({ accepted: true });
+    expect(runtime.turns.stoppedTasks).toEqual(['a']);
+    expect(runtime.turns.interrupts).toBe(0);
+    expect((await runtime.backgroundTasks())[first.id].tasks).toHaveLength(2);
+    await runtime.abort(first.id);
+    expect(runtime.turns.interrupts).toBe(1);
+    runtime.turns.finish.resolve();
+    await waitFor(() => runtime.events.some((event) => event.payload.type === 'session.idle'));
+    await runtime.shutdown();
+    expect(await runtime.sessionTasks(first.id, DIRECTORY)).toMatchObject({ state: 'inactive', generation: null, tasks: [], omitted: 0 });
+  });
+
+  it('captures actual connection env for checklists and never retargets to a changed environment', async () => {
+    const configDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oc-runtime-checklist-')));
+    directories.push(configDir);
+    fs.mkdirSync(path.join(configDir, 'tasks', 'original'), { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'tasks', 'original', '1.json'), JSON.stringify({ id: '1', subject: 'original', status: 'pending' }));
+    let listId = 'original';
+    const runtime = createRuntime({ snapshotGit: async () => '', childEnv: () => ({ CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_TASK_LIST_ID: listId }) });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    await runtime.prompt(session.id, promptRequest('ncl_u_a22f0a7a-a88c-4093-a5e3-6653ff44f6d3'));
+    listId = 'different';
+    const snapshot = await runtime.checklist(session.id, DIRECTORY);
+    expect(snapshot).toMatchObject({ state: 'ready', source: 'files', complete: true, items: [{ subject: 'original' }] });
+    expect(snapshot.identity).not.toContain(configDir);
+    await expect(runtime.checklist(session.id, '/foreign')).rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
+    const sessionRecord = await runtime.getSession(session.id, DIRECTORY);
+    expect(JSON.stringify(sessionRecord)).not.toContain(configDir);
+    runtime.turns.finish.resolve();
+    await runtime.shutdown();
+    const restarted = createNativeAgentsRuntime({
+      dataDir: runtime.dataDir,
+      resolveExecutable: async () => null,
+      buildChildEnv: () => ({ CLAUDE_CONFIG_DIR: '/different', CLAUDE_CODE_TASK_LIST_ID: 'changed' }),
+      clientVersion: 'test', publishNativeEvent: () => {},
+      loadSdk: async () => { throw new Error('Checklist reads must not start or read a query'); },
+      snapshots: createSnapshotStore({ dataDir: runtime.dataDir, git: async () => '' }),
+    });
+    expect(await restarted.checklist(session.id, DIRECTORY)).toMatchObject({ identity: snapshot.identity, items: [{ subject: 'original' }] });
+    expect(await restarted.sessionTasks(session.id, DIRECTORY)).toMatchObject({ state: 'inactive', generation: null });
+    await restarted.shutdown();
+  });
+});
+
 describe('native agents routes', () => {
   const createApp = (runtime, isLocalManagementRequest = () => false) => {
     const app = express();
@@ -849,6 +922,30 @@ describe('native agents routes', () => {
       },
     });
     await request(app).get('/api/native/sessions/background').expect(200, snapshot);
+  });
+
+  it('serves native task routes with identity only and validates generation before runtime calls', async () => {
+    const calls = [];
+    const inactive = { state: 'inactive', generation: null, revision: 3, tasks: [], omitted: 0 };
+    const app = createApp({
+      checklist: async (...args) => { calls.push(['checklist', ...args]); return { state: 'unavailable', reason: 'source_unknown' }; },
+      sessionTasks: async (...args) => { calls.push(['tasks', ...args]); return inactive; },
+      taskOutput: async (...args) => { calls.push(['output', ...args]); return { state: 'ready', text: '', truncated: false }; },
+      stopTask: async (...args) => { calls.push(['stop', ...args]); return { accepted: true }; },
+    });
+    const base = `/api/native/sessions/${SESSION_ID}`;
+    await request(app).get(`${base}/checklist`).query({ directory: DIRECTORY }).expect(200);
+    await request(app).get(`${base}/tasks`).query({ directory: DIRECTORY }).expect(200, inactive);
+    await request(app).get(`${base}/tasks/a/output`).query({ directory: DIRECTORY, generation: 'current' }).expect(200, { state: 'ready', text: '', truncated: false });
+    await request(app).post(`${base}/tasks/a/stop`).send({ directory: DIRECTORY, generation: 'current' }).expect(200, { accepted: true });
+    await request(app).get(`${base}/tasks/a/output`).query({ directory: DIRECTORY }).expect(400);
+    await request(app).get(`${base}/tasks/a/output`).query({ directory: DIRECTORY, generation: 'current', path: '/private/log' }).expect(400);
+    await request(app).post(`${base}/tasks/a/stop`).send({ directory: DIRECTORY, generation: 'current', path: '/private/log' }).expect(400);
+    await request(app).post(`${base}/tasks/a/stop`).send({ generation: 'current' }).expect(400);
+    expect(calls).toEqual([
+      ['checklist', SESSION_ID, DIRECTORY], ['tasks', SESSION_ID, DIRECTORY],
+      ['output', SESSION_ID, DIRECTORY, 'a', 'current'], ['stop', SESSION_ID, DIRECTORY, 'a', 'current'],
+    ]);
   });
 
   it('maps runtime failures to stable status codes', async () => {

@@ -62,15 +62,24 @@ const titleOf = (input) => {
 /**
  * @param {string} name Claude tool name
  * @param {Record<string, unknown>} rawInput
- * @returns {{ tool: string, input: Record<string, unknown>, title: string }}
+ * @returns {{ tool: string, input: Record<string, unknown>, title: string, metadata?: { openchamberToolSource: 'mcp' } }}
  */
 export const mapClaudeToolUse = (name, rawInput) => {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (mcp) {
+    const input = anyInput.catch({}).parse(rawInput);
+    return {
+      tool: `${mcp[1]}_${mcp[2]}`,
+      input,
+      title: titleOf(input),
+      metadata: { openchamberToolSource: 'mcp' },
+    };
+  }
   const mapped = mapKnownTool(name, rawInput);
   if (mapped) return mapped;
   const input = anyInput.catch({}).parse(rawInput);
-  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   // The renderers already show the tool's name; the title says what this call did.
-  return { tool: mcp ? `${mcp[1]}_${mcp[2]}` : name, input, title: titleOf(input) };
+  return { tool: name, input, title: titleOf(input) };
 };
 
 const mapKnownTool = (name, rawInput) => {

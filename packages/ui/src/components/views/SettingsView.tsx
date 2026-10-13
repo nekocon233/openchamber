@@ -41,6 +41,7 @@ import {
 } from '@/lib/settings/metadata';
 import { buildSettingsSearchResults, type SettingsSearchResult } from '@/lib/settings/search';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
+import { WorkStatusSectionsDialog } from '@/components/chat/work-status/WorkStatusSectionsDialog';
 
 const AgentsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/agents/AgentsSidebar').then((m) => ({ default: m.AgentsSidebar })));
 const AgentsPage = lazyWithChunkRecovery(() => import('@/components/sections/agents/AgentsPage').then((m) => ({ default: m.AgentsPage })));
@@ -218,6 +219,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
 
   const [settingsSearchQuery, setSettingsSearchQuery] = React.useState('');
   const [pendingSearchItemId, setPendingSearchItemId] = React.useState<string | null>(null);
+  const [workStatusSearchItem, setWorkStatusSearchItem] = React.useState<string | null>(null);
   const [activeSearchResultIndex, setActiveSearchResultIndex] = React.useState(0);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const shouldFocusMobilePageContentRef = React.useRef(false);
@@ -424,6 +426,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
   }, [getPageTitle, isDesktopLocalOrigin, isMac, isWindows, isLinux, runtimeCtx, settingsSearchQuery, t, visiblePageSlugs]);
 
   const prepareSettingsSearchTarget = React.useCallback((result: SettingsSearchResult): string => {
+    if (result.id === 'chat.work-status.section.taskChecklist' || result.id === 'chat.work-status.section.taskBackground') {
+      setWorkStatusSearchItem(result.id);
+      return result.id;
+    }
     if (result.id.startsWith('agents.')) {
       const store = useAgentsStore.getState();
       const name = nextUniqueName('new-agent', store.agents.map((agent) => agent.name));
@@ -538,7 +544,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
 
   const openSearchResult = React.useCallback((result: SettingsSearchResult) => {
     const targetId = prepareSettingsSearchTarget(result);
-    setPendingSearchItemId(targetId);
+    setPendingSearchItemId(targetId.startsWith('chat.work-status.section.task') ? null : targetId);
     openPage(result.page);
     if (isMobile) {
       setMobileStage('page-content');
@@ -1100,6 +1106,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
 
   return (
     <div ref={containerRef} data-settings-view="true" className={cn('relative flex h-full min-h-0 flex-col overflow-hidden bg-background')}>
+      {workStatusSearchItem !== null ? <WorkStatusSectionsDialog
+        open
+        onOpenChange={(open) => { if (!open) setWorkStatusSearchItem(null); }}
+        highlightItem={workStatusSearchItem}
+      /> : null}
       {isMobile ? (
         <div
           className={cn(

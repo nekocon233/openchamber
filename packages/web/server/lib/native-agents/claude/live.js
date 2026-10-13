@@ -16,9 +16,8 @@
 // for a session starts only after the previous one has exited, so two CLI
 // processes never write one transcript.
 //
-// The session's task list goes out as OpenCode's todos: TodoWrite sets it in
-// its input, and after TaskCreate or TaskUpdate the list is read again from
-// the files Claude Code keeps it in.
+// Checklists and query-scoped task details publish native snapshots. Successful
+// tool results trigger checklist reads; token events never touch task files.
 //
 // A prompt that commits a revert carries the rewind: the reverted message and
 // the chain entry to resume at. The open query holds the whole conversation,
@@ -32,7 +31,8 @@ import { launchableClaudeExecutable } from '../executables.js';
 import { decodeNativeSessionId, encodeClaudeChildSessionId, encodeClaudeSessionId } from '../ids.js';
 import { claudeAbortedError, claudeTurnError, createClaudeProjection } from './projector.js';
 import { prepareClaudeConnection, redactClaudeConnectionError } from './connections.js';
-import { todosFromTodoWrite } from './tasks.js';
+import { claudeChecklistSource, createClaudeChecklists, todosFromTodoWrite } from './tasks.js';
+import { claudeTaskOutputRoot, createClaudeBackgroundTasks } from './background-tasks.js';
 import { createClaudeSubagents } from './subagents.js';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
@@ -71,15 +71,6 @@ const resultFrameSchema = z.object({
   queued_turn_count: z.number().optional(),
 }).passthrough();
 
-const backgroundTasksSchema = z.object({
-  tasks: z.array(z.object({
-    task_id: z.string().min(1),
-    task_type: z.string().catch(''),
-    description: z.string().catch(''),
-    ambient: z.boolean().optional(),
-  })),
-});
-
 const sameBackgroundTasks = (left, right) => left.length === right.length
   && left.every((task, index) => task.id === right[index].id
     && task.type === right[index].type
@@ -102,6 +93,11 @@ const frameBlocksSchema = z.object({
     }).passthrough()).catch([]),
   }).passthrough(),
 }).passthrough();
+
+const structuredTaskOutput = z.object({
+  agentId: z.string().optional(), taskId: z.string().optional(), backgroundTaskId: z.string().optional(),
+  output_file: z.string().optional(), outputFile: z.string().optional(),
+});
 
 const createInputQueue = () => {
   const items = [];
@@ -156,8 +152,7 @@ const turnErrorOf = (frame, launch) => {
  * @param {ReturnType<typeof import('../questions.js').createQuestionRegistry>} options.questions
  * @param {(sessionId: string, directory: string) => void} [options.onTurnFinished] the CLI finished a turn and wrote it to the transcript
  * @param {(sessionId: string, directory: string) => void} [options.onIdle] the session stopped running turns
- * @param {(sessionUuid: string) => Promise<Array<{ id: string, content: string, status: string, priority: string }>>} [options.readTaskList]
- *   the session's task list as todos
+ * @param {ReturnType<typeof createClaudeChecklists>} [options.checklists] shared checklist owner
  * @param {() => number} [options.now]
  * @param {number} [options.idleTimeoutMs]
  * @param {number} [options.maxLiveSessions]
@@ -175,14 +170,18 @@ export const createClaudeLiveSessions = ({
   readGlobalInstructions = async () => null,
   onTurnFinished = () => {},
   onIdle = () => {},
-  readTaskList = async () => [],
+  onChecklistSource = async () => {},
   now = Date.now,
+  checklists = createClaudeChecklists({ publisher, now }),
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
   maxLiveSessions = DEFAULT_MAX_LIVE_SESSIONS,
   platform = process.platform,
 }) => {
   /** @type {Map<string, object>} */
   const sessions = new Map();
+  // A runtime-wide sequence is monotonic for each session across query replacement.
+  let taskRevision = 0;
+  const nextTaskRevision = () => ++taskRevision;
 
   const launchableExecutable = () => launchableClaudeExecutable(resolveExecutable, platform);
   /** @type {Map<string, Promise<void>>} session id → exit of its closed query */
@@ -206,31 +205,41 @@ export const createClaudeLiveSessions = ({
     publisher.records(live.directory, live.sessionId, records);
   };
 
-  // Task lists go out one at a time per session, in the order the CLI changed them.
-  const publishTodos = (live, todosOf) => {
-    live.todoUpdates = live.todoUpdates.then(async () => {
-      try {
-        publisher.todos(live.directory, live.sessionId, await todosOf());
-      } catch (error) {
-        console.warn('[native-agents] could not read the Claude Code task list:', live.sessionId, error instanceof Error ? error.message : error);
-      }
-    });
-  };
-
-  const trackTaskList = (live, frame) => {
+  const observeTools = (live, frame) => {
+    if (frame.isReplay === true) return;
     const blocks = frameBlocksSchema.safeParse(frame).data?.message.content ?? [];
-    let changed = false;
+    const owner = frame.parent_tool_use_id
+      ? encodeClaudeChildSessionId(live.sessionUuid, frame.parent_tool_use_id) : live.sessionId;
     for (const block of blocks) {
-      if (block.type === 'tool_use' && block.name === 'TodoWrite') {
-        const todos = todosFromTodoWrite(block.input);
-        if (todos) publishTodos(live, async () => todos);
-      } else if (block.type === 'tool_use' && block.id && block.name && TASK_LIST_TOOLS.has(block.name)) {
-        live.taskToolUses.add(block.id);
-      } else if (block.type === 'tool_result' && block.tool_use_id && live.taskToolUses.delete(block.tool_use_id)) {
-        changed = true;
+      if (block.type === 'tool_use' && block.id && block.name) {
+        if (TASK_LIST_TOOLS.has(block.name) || block.name === 'TodoWrite' || ['Agent', 'Task', 'Bash'].includes(block.name)) {
+          live.taskToolUses.set(block.id, { name: block.name, owner, todos: block.name === 'TodoWrite' ? todosFromTodoWrite(block.input) : null });
+        }
+      } else if (block.type === 'tool_result' && block.tool_use_id) {
+        const call = live.taskToolUses.get(block.tool_use_id);
+        if (!call) continue;
+        live.taskToolUses.delete(block.tool_use_id);
+        if (block.is_error === true) continue;
+        if (TASK_LIST_TOOLS.has(call.name)) {
+          // Task tools in children share the query's explicit file-list source.
+          void checklists.changed(live.sessionId).catch(() => {});
+        } else if (call.name === 'TodoWrite' && call.todos) {
+          if (call.owner !== live.sessionId && !checklists.source(call.owner)) {
+            checklists.bind(call.owner, live.directory, { identity: `todo:${call.owner}`, todoOnly: true });
+            live.childChecklists.add(call.owner);
+          }
+          checklists.todoWrite(call.owner, call.todos);
+        }
+        // Only CLI-owned structured results of built-in task tools can grant
+        // an output path. A tool's rendered text or an MCP payload cannot.
+        const result = structuredTaskOutput.safeParse(frame.tool_use_result);
+        if (result.success && ['Agent', 'Task', 'Bash'].includes(call.name)) {
+          const data = result.data;
+          const taskId = data.agentId ?? data.taskId ?? data.backgroundTaskId;
+          if (taskId) live.tasks.outputFromTool({ taskId, toolUseId: block.tool_use_id, file: data.output_file ?? data.outputFile });
+        }
       }
     }
-    if (changed) publishTodos(live, () => readTaskList(live.sessionUuid));
   };
 
   const clearIdleTimer = (live) => {
@@ -242,6 +251,7 @@ export const createClaudeLiveSessions = ({
     clearIdleTimer(live);
     if (live.closing) return;
     live.closing = true;
+    live.tasks.close();
     questions.rejectSession(live.sessionId);
     exits.set(live.sessionId, live.exited);
     live.input.close();
@@ -300,6 +310,8 @@ export const createClaudeLiveSessions = ({
   };
 
   const handleFrame = (live, frame) => {
+    if (live.tasks.observe(frame)) applyBackgroundTasks(live, live.tasks.activity());
+    if (frame.type === 'assistant' || frame.type === 'user') observeTools(live, frame);
     if (live.subagents.handleFrame(frame)) return;
     if (frame.type === 'stream_event') {
       // A turn the CLI started itself shows first as its model request.
@@ -310,15 +322,6 @@ export const createClaudeLiveSessions = ({
       return;
     }
     if (frame.type === 'system') {
-      if (frame.subtype === 'background_tasks_changed') {
-        // A malformed set keeps the preceding one.
-        const parsed = backgroundTasksSchema.safeParse(frame);
-        if (!parsed.success) return;
-        applyBackgroundTasks(live, parsed.data.tasks
-          .filter((task) => !task.ambient)
-          .map((task) => ({ id: task.task_id, type: task.task_type, description: task.description })));
-        return;
-      }
       // A compaction's boundary opens its marker, as in the transcript; the
       // summary follows as a synthetic user frame. Other system frames report
       // state the records already show.
@@ -335,7 +338,6 @@ export const createClaudeLiveSessions = ({
       const changed = live.projection.applyEntry(summary ? { ...frame, isCompactSummary: true } : frame);
       publishRecords(live, changed);
       live.subagents.announce(live.sessionId, live.projection, changed);
-      trackTaskList(live, frame);
       return;
     }
     if (frame.type === 'result') {
@@ -363,6 +365,8 @@ export const createClaudeLiveSessions = ({
       live.backgroundTasks = [];
       publisher.backgroundTasks(live.directory, live.sessionId, []);
     }
+    live.tasks.close();
+    for (const child of live.childChecklists) checklists.forget(child);
     publisher.forget(live.sessionId);
     if (exits.get(live.sessionId) === live.exited) exits.delete(live.sessionId);
     live.markExited();
@@ -482,8 +486,9 @@ export const createClaudeLiveSessions = ({
       idleTimer: null,
       idleWaiters: [],
       compactSummaryNext: false,
-      taskToolUses: new Set(),
-      todoUpdates: Promise.resolve(),
+      taskToolUses: new Map(),
+      childChecklists: new Set(),
+      tasks: null,
       exited,
       markExited,
       lastActive: now(),
@@ -529,8 +534,24 @@ export const createClaudeLiveSessions = ({
       await connection.dispose();
       throw new Error(redactClaudeConnectionError(error instanceof Error ? error.message : String(error), config.launch));
     }
+    live.tasks = createClaudeBackgroundTasks({
+      sessionUuid, query: live.query, outputRoot: claudeTaskOutputRoot(connection.env, platform),
+      nextRevision: nextTaskRevision,
+      publish: (snapshot) => publisher.tasks(directory, sessionId, snapshot),
+      childSessionForTool: (toolUseId) => live.subagents.session(encodeClaudeChildSessionId(sessionUuid, toolUseId))?.id ?? null,
+    });
+    const source = claudeChecklistSource({ env: connection.env, sessionUuid, directory });
+    checklists.bind(sessionId, directory, source);
+    publisher.tasks(directory, sessionId, live.tasks.snapshot());
     sessions.set(sessionId, live);
     void consume(live);
+    try {
+      await onChecklistSource(sessionId, directory, source ? { configDir: source.configDir, listId: source.listId } : null);
+    } catch {
+      // Live reads remain valid. Do not fail an accepted prompt or imply that
+      // the captured source will survive a server restart after a failed write.
+      console.warn('[native-agents] Claude checklist source could not be saved; restart recovery is unavailable');
+    }
     return live;
   };
 
@@ -687,6 +708,27 @@ export const createClaudeLiveSessions = ({
         input.close();
         setTimeout(() => abortController.abort(), 5_000).unref?.();
       }
+    },
+
+    sessionTasks(sessionId, directory) {
+      const live = sessions.get(sessionId);
+      if (live && live.directory !== directory) throw invalidRequestError('Task directory does not match its session');
+      return live && !live.closing ? live.tasks.snapshot()
+        : { state: 'inactive', generation: null, revision: taskRevision, tasks: [], omitted: 0 };
+    },
+
+    taskOutput(sessionId, directory, taskId, generation) {
+      const live = sessions.get(sessionId);
+      if (live && live.directory !== directory) throw invalidRequestError('Task directory does not match its session');
+      if (!live || live.closing) return { state: 'unavailable', reason: 'query_closed' };
+      return live.tasks.output(taskId, generation);
+    },
+
+    stopTask(sessionId, directory, taskId, generation) {
+      const live = sessions.get(sessionId);
+      if (live && live.directory !== directory) throw invalidRequestError('Task directory does not match its session');
+      if (!live || live.closing) throw new NativeAgentError('The task query is closed', { status: 409, code: 'NATIVE_TASK_QUERY_CLOSED' });
+      return live.tasks.stop(taskId, generation);
     },
 
     /** Resolves once the session runs no turn. */

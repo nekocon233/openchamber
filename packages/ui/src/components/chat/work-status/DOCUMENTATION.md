@@ -90,9 +90,9 @@ and therefore displaces nothing.
 
 ## Data sources
 
-Everything is read from already-warm caches. The panel adds no aggregated
-endpoint; quota data refreshes through the shared fixed three-minute quota timer,
-which requests only providers enabled for this panel.
+Most sections read shared caches, warming their owning loader when needed.
+The panel adds no aggregated endpoint. Quotas use the shared three-minute timer;
+native task summaries request their session snapshot once and follow live events.
 
 | Block | Source | Notes |
 |---|---|---|
@@ -108,7 +108,61 @@ which requests only providers enabled for this panel.
 | Goal | `useSessionGoal` | respects the Settings toggle |
 | MCP | `useMcpStore` | connect/disconnect reuses the dropdown's actions |
 | Pinned messages | `getContextObligatoryMessages` + `state.part` | see below |
-| Todos | live `state.todo[sessionId]`, persisted fallback | live channel wins |
+| CLI checklist | `sync/session-native-checklist.ts` | Native Claude Code only; read-only and separate from project Todos |
+| Background tasks | `useSessionNativeTaskDetails` in `sync/session-background-tasks.ts` | Current CLI process only; summary counts active non-ambient tasks |
+
+### Native task surface
+
+Native tasks live in the context panel's `tasks` rail surface
+(`lib/surfaces/registry.ts`, mode `tasks`), rendered by
+`components/chat/native-tasks/NativeTasksPane` inside `ContextPanel`.
+`WorkStatusChecklistSection` and `WorkStatusBackgroundTasksSection` open that
+surface on their matching tab via `openContextSurface` plus the shared tab
+selection in `native-tasks/task-ui-store`. Both remain discoverable when
+empty, failed or unsupported. Stable `taskChecklist` and `taskBackground` ids
+use the existing section visibility and order settings. Settings search opens
+`WorkStatusSectionsDialog` directly and highlights its mounted checkbox, even
+when the panel cannot fit.
+
+On phones and tablets the workspace drawer hosts the same pane as its `tasks`
+tab (`apps/MobileWorkspaceDrawer.tsx`), passing `onClose` so a child-session
+link can dismiss the drawer. The pane follows the currently selected session;
+Codex and non-native sessions get an explicit explanation instead of a task
+list, and VS Code's unsupported native runtime reports unsupported. An older
+server without task capability flags shows an explicit unsupported message
+rather than a successful empty list. There is no header button or dialog:
+the rail, the drawer tab and the work-status summaries are the entry points.
+
+The sync modules own task records, source identity, revisions and refresh. The
+UI does not infer activity from checklist status or recent task outcomes. An
+unknown background snapshot shows known edge details while explaining that CLI
+task information is still pending; it supplies no active count. Ambient tasks
+remain visible without contributing to session activity. Non-active records keep
+the CLI's reported status; disappearing from the full set does not mean success.
+
+Summaries load once and follow events without polling. An external process's
+shared-list edits without an event become visible when the user opens the task
+surface or refreshes it. Only the visible surface requests the owner's shared
+45-second refresh. Hidden panel content unmounts through the panel's existing
+visibility gate. Checklist partial and failed reads retain valid records with
+explicit incomplete or stale feedback; they never become an empty success.
+
+Task details mount on expansion. Output loads on that edge and on manual
+refresh, at the server's 256 KiB limit. Collapse, surface close, session/runtime
+switch or query-generation replacement aborts the read and rejects late results.
+Truncation, empty output, unavailable output and failure remain distinct. The UI
+never accepts output paths or polls every task log.
+
+Stop calls only `nativeAgents.stopTask` for the captured session, directory,
+query generation and task id. Server-provided `canStop` and `outputAvailable`
+flags already include CLI capability and current-query eligibility. Pending and
+accepted stop requests disable repeated submission, including after changing the
+pane's tabs or closing and reopening the surface. This temporary UI state holds
+one scope only, prunes non-active task ids when snapshots confirm them, and
+clears on session/runtime or query changes. Acceptance means waiting for CLI
+confirmation, not a locally invented terminal result. Failure remains on the
+affected task and can be retried.
+The existing whole-session Stop action is unchanged.
 
 ### Turn stats
 
@@ -249,8 +303,8 @@ The default order is by durability:
    throughput, duration, TTFT, cache hit rate) — true for as long as the session
    is open. Usage sits here rather than lower down because a spent quota stops the
    work outright;
-2. **Subagents** — what is happening right now;
-3. **MCP**, **Pinned messages**, **Context sources** — supporting material.
+2. **Subagents**, **CLI checklist** and **Background tasks**, for current work;
+3. **MCP**, **Pinned messages**, **Context sources**, for supporting material.
 
 The sections dialog has drag handles for changing this order, including hidden
 sections. A drop updates the panel immediately. `workStatusSectionOrder` is a

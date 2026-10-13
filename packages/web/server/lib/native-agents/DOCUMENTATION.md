@@ -12,8 +12,9 @@ never sees them.
 OpenChamber lists and reads both CLIs' sessions, creates sessions, and drives
 turns: prompts, steering, stops, model and effort changes, plan mode and the
 model's questions. Every tool runs without asking. Reverts, forks, rename,
-archive, delete and compaction work the way they do for OpenCode sessions,
-and the task lists of both CLIs show as todos.
+archive, delete and compaction work the way they do for OpenCode sessions.
+Claude checklists and background-task details have native snapshot APIs;
+Codex still publishes its plan updates as todos.
 
 ## Wiring
 
@@ -590,11 +591,116 @@ forwarded as prompts. Commands without an OpenChamber handler, including
 `/permissions`, also report unsupported; native sessions still use the fixed
 approval policy documented above.
 
-Todos: Claude Code keeps a session's task list as files under
-`<config dir>/tasks/<session uuid>/`. After a TaskCreate or TaskUpdate result
-the live session reads the list again, and a TodoWrite call carries the whole
-list; either way it goes out as `todo.updated`, in order. Codex's plan updates
-go out the same way (see Live turns).
+### Claude checklists
+
+`claude/tasks.js` owns checklist reads and publications. The query captures
+`CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_TASK_LIST_ID` from its actual connection
+environment. Without an explicit list ID, it uses the session UUID. Only the
+absolute config directory and safe list ID are saved in the registry's private
+`claudeChecklistSource` field. They never enter public session metadata; the
+snapshot identity is a hash of the source. A restart reads that captured source,
+not the current connection or environment. Older entries without a capture
+report `source_unknown` until a query supplies one. A failed source write leaves
+live reads working, logs a fixed warning without paths or environment, and does
+not guarantee recovery of the new source after restart.
+
+`GET /sessions/:id/checklist` does not open a query. A ready snapshot carries
+`identity`, `source`, `revision`, `observedAt`, `complete`, `unreadable` and
+`items`. Items retain description, active form, owner and dependency IDs when
+provided. Missing task directories are a successful empty file observation,
+except for a confirmed TodoWrite-only history fallback. Successful empty file
+lists, file-tool observations and previously observed files take precedence over
+that fallback. Compacted history cannot establish TodoWrite-only usage. History
+is inspected at most once per bound source, using the existing store; a source
+outside the SDK's config root has no history fallback.
+
+File reads reject unsafe list IDs, directory links, non-regular files and
+filename/record ID mismatches. Limits are 64 KiB per file, 8 MiB total, 2,000
+items and 4,000 directory entries per read. Bad files and read races increment
+`unreadable` and make the result partial; directory read failures throw. Clients
+merge valid partial entries without deleting missing ones. A complete empty
+snapshot can clear the list; failure cannot.
+
+Successful TaskCreate/TaskUpdate results trigger a shared-list read, including
+those inside subagents. Reads coalesce by list identity and repeat if a mutation
+arrived while reading. All bound sessions sharing that file list receive the
+same `session.checklist.updated` snapshot. Successful TodoWrite results publish
+directly to their own conversation's history list, never another session sharing
+a file source. File authority wins over TodoWrite. Child TodoWrite has a child
+identity and cannot replace the parent's list. Token deltas do no checklist
+work. Idle keeps the checklist; session deletion releases its binding.
+
+### Claude background-task details
+
+`claude/background-tasks.js` owns one query generation, its task records and
+output grants. `background_tasks_changed` alone owns membership. Start, progress,
+update and notification edges supply details and outcomes without changing the
+live set. A disappearing task has no inferred successful outcome. Ambient
+members appear in details but never in the existing non-ambient activity set or
+query keepalive calculation.
+
+A query starts with `state: unknown`, a random generation and empty observations.
+The first valid full-set signal, including an empty set, establishes `active`
+observation. No timeout or SDK version claims support. `inactive` on close and
+`unsupported` on unsupported backends have null generation and no records.
+`session.tasks.updated` and GET return the same full snapshot and revision.
+Revisions increase across query replacements during one server runtime. They
+restart with the server, so reconnect readers must reset revision authority and
+reject their old in-flight requests. Equivalent updates do not publish again.
+
+The owner retains at most 100 recent nonmember records, including terminal tasks
+and tasks whose end edge was missed. It never truncates current full-set members.
+`omitted` reports eviction. Closing the query clears records and output grants
+and publishes an inactive snapshot. Records are not durable task history.
+
+Single-task stop requires the current session, directory, generation and full-set
+membership, and calls only that query's `stopTask`. Concurrent requests for the
+same task share one operation. Success means accepted, not completed; failure is
+reported on that record without changing another task. Existing session Stop,
+`perTaskStopAffordance` and `agentProgressSummaries` remain unchanged.
+
+The installed Agent SDK README links the SDK overview. Its `sdk.d.ts` documents
+`stopTask(taskId)` and `readFile(path, { maxBytes, encoding })`; it has no general
+task-list API. `sdk-tools.d.ts` documents structured Agent `outputFile` results,
+and task notifications expose `output_file`. Only those structured CLI fields,
+associated with this query's task identity and built-in tool calls, can grant
+output access. Rendered tool text, MCP payloads and caller-provided paths cannot.
+
+The output root follows the official Claude environment-variable contract:
+`CLAUDE_CODE_TMPDIR` overrides the temp base; macOS otherwise uses `/tmp`, other
+platforms the OS temp directory; Claude adds `claude-<uid>` on Unix or `claude`
+on Windows. Claude Code 2.1.293's installed source places task outputs under
+`<root>/<project>/<session UUID>/tasks/<task ID>.output`. The reader validates a
+CLI-provided path against that layout rather than constructing or searching for
+one. Only the configured root's OS alias is normalized, such as macOS `/tmp`.
+The root and all components below it must be real directories/regular files;
+symlinks and another session/task are refused. The server opens the verified
+artifact with `O_NOFOLLOW`, checks that its file descriptor still names the
+verified regular-file inode, and reads from that descriptor. A path swap between
+validation and opening is rejected; a swap after opening cannot retarget the
+read. This deliberately avoids the SDK's path-based `readFile` race. The existing
+bypass-permission native runtime authorizes only this captured task artifact,
+not arbitrary files. The query must still have its read method and remain open.
+
+Outputs are fetched only on request with a 256 KiB response cap and at most one
+extra byte to detect truncation. Empty, truncated, not-recorded, unreadable and
+query-closed responses stay distinct. `outputAvailable` means a structured path
+and the current query's read method are present, not a promise the file still
+exists. A temp override only present in CLI settings, or a different CLI path
+layout, can therefore be unreadable rather than broadening the allowed root.
+`canStop` likewise reflects current query membership and its real stop method.
+No output content or connection environment is logged.
+
+Web and Electron run this owner on their server. Hosted mobile and Capacitor use
+the same HTTP and event contracts without local file access. VS Code remains
+explicitly unsupported. Existing global background snapshots and
+`session.background.updated` retain their non-ambient activity-only meaning.
+
+Focused validation uses `tasks.test.js`, `background-tasks.test.js`,
+`live.test.js`, `subagents.test.js`, `registry.test.js` and the task/runtime route
+cases in `runtime.test.js`. The latter also contains revert fixtures that invoke
+git; a no-git validation run selects only the task-runtime and route groups.
+These fixtures do not launch a real Claude query or prove platform/relay behavior.
 
 ## Registry
 
@@ -603,7 +709,8 @@ tell us: which sessions OpenChamber created or adopted (so they stay listed),
 an archive flag for Claude (which has no archive), the model, effort and
 agent of each OpenChamber send (at most 200 per session), the work-tree
 snapshots of each OpenChamber prompt (at most 200 per session), the revert
-in effect, and OpenChamber's own session metadata (btw and review links,
+in effect, the private captured Claude checklist config directory/list ID,
+and OpenChamber's own session metadata (btw and review links,
 goals, the session assist's recap and suggestion), which OpenCode keeps in its
 session metadata and a CLI has nowhere to keep. Session records carry that
 metadata as OpenCode's do; `openchamber.native` is the server's and a client
@@ -862,13 +969,17 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 
 | Route | Answer |
 |---|---|
-| `GET /capabilities` | `{ supported: true, backends: { claude: { cli }, codex: { cli } }, registry }` |
+| `GET /capabilities` | `{ supported: true, backends: { claude: { cli, tasks: { checklist, background, output, stop } }, codex: { cli } }, registry }`; task flags describe host implementation, query snapshots describe current observations |
 | `GET /catalog` | Models per backend; Codex from `model/list`, reported per backend like listing |
 | `GET /sessions?directory=` | Root sessions per backend (see Listing) |
 | `GET /sessions/status?directory=` | Sessions with a running turn, as busy; every other session is idle |
 | `GET /questions?directory=` | Questions native sessions wait on |
 | `GET /sessions/:id?directory=` | One session record, `404 NATIVE_SESSION_NOT_FOUND` when missing |
 | `GET /sessions/:id/messages?directory=` | A history page (see History projection) |
+| `GET /sessions/:id/checklist?directory=` | Ready checklist snapshot or unavailable source, without opening a query |
+| `GET /sessions/:id/tasks?directory=` | Full query task snapshot, generation, revision and omitted count |
+| `GET /sessions/:id/tasks/:taskId/output?directory=&generation=` | Bounded task output or explicit unavailable reason; no path parameter |
+| `POST /sessions/:id/tasks/:taskId/stop` | `{ directory, generation }`: stops only the owned current task; `{ accepted: true }` |
 | `POST /sessions` | `{ backend, directory, title? }`: a new session, announced with `session.created` |
 | `POST /sessions/:id/prompt` | `{ directory, messageID, parts, model, variant?, agent, instructions? }`; answers once the CLI took it. A model of the other CLI is `409 NATIVE_BACKEND_MISMATCH` |
 | `GET /commands?backend=&directory=` | `{ commands: [{ name, description, argumentHint }] }` (see Compaction, commands and todos) |

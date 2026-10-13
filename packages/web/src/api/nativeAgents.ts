@@ -22,6 +22,12 @@ import {
   nativeSessionSchema,
   nativeStatusSnapshotSchema,
 } from '@openchamber/ui/lib/native-agents/schemas';
+import {
+  nativeChecklistSnapshotSchema,
+  nativeTaskOutputSchema,
+  nativeTaskSnapshotSchema,
+  nativeTaskStopResultSchema,
+} from '@openchamber/ui/lib/native-agents/task-schemas';
 import { runtimeFetch } from '@openchamber/ui/lib/runtime-fetch';
 import { z } from 'zod';
 
@@ -40,6 +46,7 @@ type NativeWriteBody =
   | NativeCodexCommandRequest
   | { answers: string[][] }
   | { directory: string; messageID?: string }
+  | { directory: string; generation: string }
   | ({ directory: string } & NativeSessionPatch);
 
 type NativeWrite =
@@ -170,6 +177,31 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     nativeBackgroundTaskSnapshotSchema,
     options?.signal,
   ),
+  checklist: (sessionId, directory, options) => readParsed(
+    `${sessionPath(sessionId)}/checklist`,
+    { directory },
+    nativeChecklistSnapshotSchema,
+    options?.signal,
+  ),
+  sessionTasks: (sessionId, directory, options) => readParsed(
+    `${sessionPath(sessionId)}/tasks`,
+    { directory },
+    nativeTaskSnapshotSchema,
+    options?.signal,
+  ),
+  taskOutput: (sessionId, taskId, directory, generation, options) => readParsed(
+    `${sessionPath(sessionId)}/tasks/${encodeURIComponent(taskId)}/output`,
+    { directory, generation },
+    nativeTaskOutputSchema,
+    options?.signal,
+  ),
+  stopTask: async (sessionId, taskId, directory, generation) => {
+    await writeParsed(
+      `${sessionPath(sessionId)}/tasks/${encodeURIComponent(taskId)}/stop`,
+      nativeTaskStopResultSchema,
+      { directory, generation },
+    );
+  },
   questions: (directory, options) => readParsed(
     '/api/native/questions',
     { directory },

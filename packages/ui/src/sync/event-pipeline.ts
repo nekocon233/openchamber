@@ -263,6 +263,8 @@ function coalesceKey(event: SyncEvent): string | undefined {
       return `session.status:${event.properties.sessionID}`
     case "session.background.updated":
       return `session.background.updated:${event.properties.sessionID}`
+    case "session.tasks.updated":
+      return `session.tasks.updated:${event.properties.sessionID}`
     case "session.patched":
       return `session.patched:${event.properties.sessionID}`
     case "message.patched":
@@ -278,6 +280,9 @@ function coalesceKey(event: SyncEvent): string | undefined {
 
 /** Merges a later event into the queued one it coalesces with. */
 function mergeCoalesced(previous: SyncEvent, next: SyncEvent): SyncEvent {
+  if (previous.type === "session.tasks.updated" && next.type === "session.tasks.updated") {
+    return previous.properties.snapshot.revision > next.properties.snapshot.revision ? previous : next
+  }
   if (previous.type === "message.part.delta" && next.type === "message.part.delta") {
     return { ...next, properties: { ...next.properties, delta: previous.properties.delta + next.properties.delta } }
   }
@@ -525,6 +530,8 @@ export function createEventPipeline(input: EventPipelineInput): EventPipeline {
         d.coalesced.delete(`session.status:${sessionID}`)
         if (event.type === "session.created" || event.type === "session.deleted") {
           d.coalesced.delete(`session.patched:${sessionID}`)
+          d.coalesced.delete(`session.background.updated:${sessionID}`)
+          d.coalesced.delete(`session.tasks.updated:${sessionID}`)
         }
       }
     }

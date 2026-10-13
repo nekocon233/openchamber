@@ -39,6 +39,30 @@ describe('native records in the shared v2 domain', () => {
       .toBeNull();
   });
 
+  test('checklist snapshots retain completeness and reject malformed identity or item records', () => {
+    const snapshot = { state: 'ready', identity: 'shared-list', source: 'files', revision: 2, observedAt: 3,
+      complete: false, unreadable: 1, items: [{ id: '1', subject: 'Build', status: 'pending', owner: 'worker', blocks: ['2'], blockedBy: [] }] };
+    expect(translateNativeEvent({ type: 'session.checklist.updated', properties: { sessionID, snapshot } }))
+      .toEqual({ type: 'session.checklist.updated', properties: { sessionID, snapshot } });
+    expect(translateNativeEvent({ type: 'session.checklist.updated', properties: { sessionID, snapshot: { ...snapshot, identity: '' } } })).toBeNull();
+    expect(translateNativeEvent({ type: 'session.checklist.updated', properties: { sessionID, snapshot: { ...snapshot, items: [{ id: '1', status: 'broken' }] } } })).toBeNull();
+    expect(translateNativeEvent({ type: 'session.checklist.updated', properties: { sessionID,
+      snapshot: { state: 'unavailable', reason: 'source_unknown' } } }))
+      .toMatchObject({ properties: { snapshot: { state: 'unavailable', reason: 'source_unknown' } } });
+  });
+
+  test('task details carry generation and terminal membership without entering the active-set channel', () => {
+    const snapshot = { state: 'active', generation: 'query-1', revision: 4, omitted: 0, tasks: [{
+      id: 'done', type: 'local_bash', description: 'Finished', active: false, ambient: false, status: 'completed',
+      canStop: false, outputAvailable: true, summary: 'Done', endedAt: 8,
+    }] };
+    expect(translateNativeEvent({ type: 'session.tasks.updated', properties: { sessionID, snapshot } }))
+      .toEqual({ type: 'session.tasks.updated', properties: { sessionID, snapshot } });
+    expect(translateNativeEvent({ type: 'session.tasks.updated', properties: { sessionID, snapshot: { ...snapshot, generation: null } } })).toBeNull();
+    expect(translateNativeEvent({ type: 'session.tasks.updated', properties: { sessionID, snapshot: { ...snapshot, state: 'inactive', generation: null } } })).toBeNull();
+    expect(translateNativeEvent({ type: 'session.tasks.updated', properties: { sessionID: 'ses_1', snapshot } })).toBeNull();
+  });
+
   test('question creation and settlement use the shared form lifecycle', () => {
     expect(translateNativeEvent({ type: 'question.asked', properties: question }))
       .toMatchObject({ type: 'form.created', properties: { form: { id: question.id, sessionID } } });

@@ -28,6 +28,11 @@ const MAX_TURNS_PER_SESSION = 200;
 // session does not have.
 const metadataSchema = z.record(z.string(), z.unknown());
 
+const checklistSourceSchema = z.object({
+  configDir: z.string().min(1).max(4096).refine((value) => path.isAbsolute(value) && !value.includes('\0')),
+  listId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
+});
+
 const sessionEntrySchema = z.object({
   backend: z.enum(['claude', 'codex']),
   nativeId: z.string().min(1),
@@ -39,6 +44,8 @@ const sessionEntrySchema = z.object({
   title: z.string().optional(),
   // Malformed metadata is dropped; it never costs the session its entry.
   metadata: metadataSchema.optional().catch(undefined),
+  // Captured launch source only. Never exposed in a session/API record.
+  claudeChecklistSource: checklistSourceSchema.optional().catch(undefined),
 });
 
 const sendRecordSchema = z.object({
@@ -246,7 +253,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
       });
     },
 
-    /** @param {{ archivedAt?: number | null, title?: string, metadata?: Record<string, unknown> | null }} patch */
+    /** @param {{ archivedAt?: number | null, title?: string, metadata?: Record<string, unknown> | null, claudeChecklistSource?: { configDir: string, listId: string } | null }} patch */
     updateSession(sessionId, patch) {
       return mutate((next) => {
         const existing = next.sessions.get(sessionId);
@@ -255,6 +262,8 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
         if (patch.archivedAt === null) delete updated.archivedAt;
         else if (patch.archivedAt !== undefined) updated.archivedAt = patch.archivedAt;
         if (patch.title !== undefined) updated.title = patch.title;
+        if (patch.claudeChecklistSource === null) delete updated.claudeChecklistSource;
+        else if (patch.claudeChecklistSource !== undefined) updated.claudeChecklistSource = checklistSourceSchema.parse(patch.claudeChecklistSource);
         if (patch.metadata === null) delete updated.metadata;
         else if (patch.metadata !== undefined) updated.metadata = patch.metadata;
         next.sessions.set(sessionId, sessionEntrySchema.parse(updated));

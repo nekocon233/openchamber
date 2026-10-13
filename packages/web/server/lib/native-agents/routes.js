@@ -9,6 +9,8 @@ import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
 
 const directoryQuery = z.object({ directory: z.string().min(1) }).passthrough();
+const taskOperationInput = z.object({ directory: z.string().min(1), generation: z.string().min(1).max(128) }).strict();
+const taskIdParam = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const commandsQuery = z.object({ backend: z.enum(['claude', 'codex']), directory: z.string().min(1) }).passthrough();
 const createSessionBody = z.object({
   backend: z.enum(['claude', 'codex']),
@@ -155,6 +157,24 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.get('/api/native/sessions/:sessionId/messages', handle((req) => {
     const query = messagesQuery.parse(req.query);
     return runtime.loadMessages(req.params.sessionId, query.directory, { limit: query.limit, before: query.before });
+  }));
+
+  app.get('/api/native/sessions/:sessionId/checklist', handle((req) => runtime.checklist(
+    req.params.sessionId, directoryQuery.parse(req.query).directory,
+  )));
+
+  app.get('/api/native/sessions/:sessionId/tasks', handle((req) => runtime.sessionTasks(
+    req.params.sessionId, directoryQuery.parse(req.query).directory,
+  )));
+
+  app.get('/api/native/sessions/:sessionId/tasks/:taskId/output', handle((req) => {
+    const input = taskOperationInput.parse(req.query);
+    return runtime.taskOutput(req.params.sessionId, input.directory, taskIdParam.parse(req.params.taskId), input.generation);
+  }));
+
+  app.post('/api/native/sessions/:sessionId/tasks/:taskId/stop', handle((req) => {
+    const input = taskOperationInput.parse(req.body);
+    return runtime.stopTask(req.params.sessionId, input.directory, taskIdParam.parse(req.params.taskId), input.generation);
   }));
 
   app.post('/api/native/sessions', handle((req) => runtime.createSession(createSessionBody.parse(req.body))));

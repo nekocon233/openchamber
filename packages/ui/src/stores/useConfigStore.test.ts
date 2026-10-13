@@ -570,6 +570,52 @@ describe('useConfigStore provider persistence', () => {
     expect(reloaded.currentModelId).toBe('fresh-model');
   });
 
+  test('never offers OpenCode Zen: the opencode provider is excluded from the loaded catalog', async () => {
+    getProvidersForConfigImpl = async () => ({
+      providers: [providerInfo('opencode'), providerInfo('peropero')],
+      models: [model('opencode', 'big-pickle'), model('peropero', 'peropero-model')],
+      default: { providerID: 'opencode', id: 'big-pickle' },
+    });
+
+    await useConfigStore.getState().loadProviders({ directory: DIRECTORY, source: 'test:zen-excluded' });
+
+    const state = useConfigStore.getState();
+    expect(state.providers.map((entry) => entry.id)).toEqual(['peropero']);
+    expect(state.directoryScoped[DIRECTORY]?.providers.map((entry) => entry.id)).toEqual(['peropero']);
+    // Default resolution must not resurrect Zen's Big Pickle either.
+    expect(state.currentProviderId).toBe('peropero');
+    expect(state.currentModelId).toBe('peropero-model');
+  });
+
+  test('hydration strips a persisted OpenCode Zen snapshot instead of painting it', async () => {
+    storage.set(STORAGE_KEY, JSON.stringify({
+      state: {
+        configRuntimeKey: getRuntimeKey(),
+        activeDirectoryKey: DIRECTORY,
+        providers: [provider('opencode', 'big-pickle'), provider('peropero', 'peropero-model')],
+        directoryScoped: {
+          [DIRECTORY]: {
+            providers: [provider('opencode', 'big-pickle'), provider('peropero', 'peropero-model')],
+            agents: [{ name: 'build', mode: 'primary' }],
+            currentProviderId: 'peropero',
+            currentModelId: 'peropero-model',
+            currentAgentName: 'build',
+            selectedProviderId: 'peropero',
+            agentModelSelections: {},
+            defaultProviders: {},
+          },
+        },
+      },
+      version: 0,
+    }));
+
+    await useConfigStore.persist.rehydrate();
+
+    const hydrated = useConfigStore.getState();
+    expect(hydrated.providers.map((entry) => entry.id)).toEqual(['peropero']);
+    expect(hydrated.directoryScoped[DIRECTORY]?.providers.map((entry) => entry.id)).toEqual(['peropero']);
+  });
+
   test('provider config events refresh all known directory provider caches immediately', async () => {
     useConfigStore.setState({
       activeDirectoryKey: DIRECTORY,

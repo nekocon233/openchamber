@@ -22,9 +22,9 @@ describe('section arrangement dialog', () => {
     if (!button) throw new Error('Expected a drag handle');
     return button;
   };
-  const render = async () => {
+  const render = async (highlightItem?: string) => {
     await act(async () => root.render(
-      <I18nProvider><WorkStatusSectionsDialog open onOpenChange={() => { closeCount += 1; }} /></I18nProvider>,
+      <I18nProvider><WorkStatusSectionsDialog open highlightItem={highlightItem} onOpenChange={() => { closeCount += 1; }} /></I18nProvider>,
     ));
     // happy-dom has no layout. Supply the vertical list geometry used by the
     // real dnd-kit sensors and collision detector, leaving event handling intact.
@@ -75,6 +75,16 @@ describe('section arrangement dialog', () => {
     useGuestsStore.setState({ guests: [] });
     await win.happyDOM.close();
     restoreGlobals();
+  });
+
+  test('task search targets highlight the real checkbox after its portal mounts', async () => {
+    await act(async () => root.render(null));
+    await render('chat.work-status.section.taskChecklist');
+    const target = document.querySelector<HTMLElement>('[data-settings-item="chat.work-status.section.taskChecklist"]');
+    expect(target?.getAttribute('data-settings-search-highlight')).toBe('true');
+    expect(target?.textContent).toContain('CLI checklist');
+    await act(async () => target?.click());
+    expect(useUIStore.getState().workStatusHiddenSections).toEqual(['taskChecklist']);
   });
 
   test('mouse dragging commits once on drop and leaves visibility alone', async () => {

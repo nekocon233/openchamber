@@ -63,7 +63,19 @@ import { syncDebug } from "./debug"
 import { getReconnectCandidateSessionIds, mergeBootstrapSessions } from "./reconnect-recovery"
 import { fetchNativePartition, resolveNativeSessions } from "./native-session-partitions"
 import { readDirectoryStatuses, readNativeForms, readNativeSession, type DirectoryStatusSnapshot } from "./native-directory-snapshots"
-import { applySessionBackgroundTasksEvent } from "./session-background-tasks"
+import {
+  applySessionBackgroundTasksEvent,
+  applySessionNativeTaskDetailsEvent,
+  clearSessionNativeTaskDetails,
+  markSessionNativeTaskDetailsStale,
+  refreshSessionNativeTaskDetails,
+} from "./session-background-tasks"
+import {
+  applySessionNativeChecklistEvent,
+  clearSessionNativeChecklist,
+  markSessionNativeChecklistsStale,
+  refreshSessionNativeChecklists,
+} from "./session-native-checklist"
 import { isNativeSessionId } from "@/lib/native-agents/ids"
 import { normalizePath } from "@/lib/pathNormalization"
 import { messagesBefore } from "./message-ordering"
@@ -1852,6 +1864,16 @@ export function handleEvent(
 
   const directory = resolveDirectoryFromRoutingIndex(routingIndex, rawDirectory, payload, childStores, batch)
 
+  if (payload.type === "session.checklist.updated" || payload.type === "session.tasks.updated") {
+    if (!directory || directory === "global") return
+    if (payload.type === "session.checklist.updated") {
+      applySessionNativeChecklistEvent(payload.properties.sessionID, directory, payload.properties.snapshot, expectedRuntimeKey)
+    } else {
+      applySessionNativeTaskDetailsEvent(payload.properties.sessionID, directory, payload.properties.snapshot, expectedRuntimeKey)
+    }
+    return
+  }
+
   // OpenCode dropped this directory's in-memory services (an hour idle, or an
   // explicit reload). Session records and messages live in its database and
   // stay valid; what went away is the live state read from that graph, so the
@@ -1905,6 +1927,10 @@ export function handleEvent(
   if (payload.type === "session.deleted" && expectedRuntimeKey === getRuntimeKey()) {
     const sessionID = syncEventSessionID(payload)
     if (sessionID && directory && directory !== "global") {
+      if (isNativeSessionId(sessionID)) {
+        clearSessionNativeChecklist(sessionID, directory, expectedRuntimeKey)
+        clearSessionNativeTaskDetails(sessionID, directory, expectedRuntimeKey)
+      }
       cleanupPersistedSessionState({ runtimeKey: expectedRuntimeKey, directory, sessionId: sessionID })
       useMessageQueueStore.getState().dropSession(sessionID)
     }
@@ -2859,6 +2885,8 @@ export function SyncProvider(props: {
         void useGlobalSessionsStore.getState().refreshSessionsForDirectories(directories).catch(() => undefined)
       },
       onReconnect: ({ replayReset }) => {
+        refreshSessionNativeChecklists()
+        refreshSessionNativeTaskDetails()
         notifySidebarStateTransportReady(sidebarRuntimeContext)
         notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         // Queue recovery is independent of the directory-bootstrap debounce.
@@ -2878,6 +2906,8 @@ export function SyncProvider(props: {
         resyncAfterStreamGap("stream-reconnect")
       },
       onDisconnect: (reason) => {
+        markSessionNativeChecklistsStale()
+        markSessionNativeTaskDetailsStale()
         if (!pipelineHasConnectedRef.current) {
           pipelineDisconnectedBeforeFirstConnectRef.current = true
         }
@@ -2889,6 +2919,8 @@ export function SyncProvider(props: {
         })
       },
       onTransportSwitch: () => {
+        refreshSessionNativeChecklists()
+        refreshSessionNativeTaskDetails()
         notifySidebarStateTransportReady(sidebarRuntimeContext)
         notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         void useMessageQueueStore.getState().resync().catch(() => undefined)

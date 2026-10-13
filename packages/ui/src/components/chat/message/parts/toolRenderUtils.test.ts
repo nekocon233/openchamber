@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { Metadata, ToolPart } from '@/lib/opencode/model';
-import { isExpandableTool, isStaticTool, showsWithFileChangesOnly } from './toolRenderUtils';
+import { isExpandableTool, isStandaloneTool, isStaticTool, showsWithFileChangesOnly } from './toolRenderUtils';
 
 const finished = (tool: string, metadata: Metadata = {}): Pick<ToolPart, 'tool' | 'state'> => ({
     tool,
@@ -36,13 +36,47 @@ describe('tool rendering classification', () => {
         expect(isExpandableTool('runtime.custom_tool:2')).toBe(true);
     });
 
-    test('keeps file changes and the calls that ask the user or start work when only file changes show', () => {
-        for (const tool of ['edit', 'write', 'multiedit', 'apply_patch', 'task', 'question', 'plan_exit', 'Edit', 'runtime.write:1']) {
+    test('keeps file changes, questions, subagents, plan mode and skills in the simplified transcript', () => {
+        for (const tool of ['edit', 'write', 'multiedit', 'apply_patch', 'patch', 'create', 'file_write', 'notebookedit', 'task', 'subagent', 'question', 'plan_enter', 'plan_exit', 'skill', 'Skill', 'Edit', 'runtime.write:1']) {
             expect(showsWithFileChangesOnly(finished(tool))).toBe(true);
         }
-        for (const tool of ['bash', 'read', 'grep', 'glob', 'todowrite', 'webfetch', 'skill', 'linear_list_issues']) {
+        for (const tool of ['bash', 'shell', 'Read', 'read', 'Grep', 'grep', 'Glob', 'glob', 'todowrite', 'webfetch', 'websearch', 'linear_list_issues', 'mcp__linear__list_issues', 'unknown']) {
             expect(showsWithFileChangesOnly(finished(tool))).toBe(false);
         }
+    });
+
+    test('keeps explicitly marked MCP calls in every execution state, not unmarked namesakes', () => {
+        const states: Array<Exclude<ToolPart['state'], { status: 'pending' }>> = [
+            { status: 'running', input: {}, time: { start: 1 } },
+            { status: 'completed', input: {}, output: 'found', time: { start: 1, end: 2 } },
+            { status: 'error', input: {}, error: 'failed', time: { start: 1, end: 2 } },
+        ];
+        for (const state of states) {
+            const tool = 'docs_search';
+            expect(showsWithFileChangesOnly({ tool, state: { ...state, metadata: { openchamberToolSource: 'mcp' } } })).toBe(true);
+            expect(showsWithFileChangesOnly({ tool, state })).toBe(false);
+        }
+    });
+
+    test('uses explicit MCP provenance before built-in row classification', () => {
+        const metadata: Metadata = { openchamberToolSource: 'mcp' };
+        for (const tool of ['docs_read', 'docs_skill', 'read', 'skill', 'runtime.read:2', 'subagent']) {
+            expect(isExpandableTool(tool, metadata)).toBe(true);
+            expect(isStaticTool(tool, metadata)).toBe(false);
+            expect(isStandaloneTool(tool, metadata)).toBe(false);
+        }
+        expect(isStandaloneTool('task')).toBe(true);
+        expect(isStaticTool('skill', {})).toBe(true);
+        expect(isExpandableTool('skill', {})).toBe(false);
+    });
+
+    test('does not infer missing or malformed provenance on cached tools', () => {
+        const unmarked: Metadata[] = [{}, { openchamberToolSource: 'MCP' }, { openchamberToolSource: true }, { openchamberToolSource: { type: 'mcp' } }];
+        for (const metadata of unmarked) {
+            expect(showsWithFileChangesOnly(finished('docs_search', metadata))).toBe(false);
+        }
+        expect(showsWithFileChangesOnly({ tool: 'docs_search', state: { status: 'pending', input: {}, raw: '' } })).toBe(false);
+        expect(showsWithFileChangesOnly({ tool: 'skill', state: { status: 'pending', input: {}, raw: '' } })).toBe(true);
     });
 
     test('keeps a command once its CLI recorded the files it changed', () => {

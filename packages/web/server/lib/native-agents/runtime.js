@@ -21,7 +21,7 @@ import { createClaudeConnections } from './claude/connections.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
-import { claudeConfigDir, readClaudeTaskList } from './claude/tasks.js';
+import { claudeChecklistSource, createClaudeChecklists } from './claude/tasks.js';
 import { createClaudeUtility } from './claude/utility.js';
 import { createCodexAppServer } from './codex/app-server.js';
 import { createCodexAutoTitles } from './codex/auto-title.js';
@@ -292,6 +292,7 @@ export const createNativeAgentsRuntime = ({
     generateText: async (input) => (await getSmallModelService()).generateSmallModelText(input),
     publishSession,
   });
+  const checklists = createClaudeChecklists({ publisher, now });
   const claudeLive = createClaudeLiveSessions({
     loadSdk,
     resolveExecutable: () => resolveExecutable('claude'),
@@ -302,7 +303,11 @@ export const createNativeAgentsRuntime = ({
     questions,
     onTurnFinished,
     onIdle,
-    readTaskList: (sessionUuid) => readClaudeTaskList({ configDir: claudeConfigDir(buildChildEnv()), sessionUuid }),
+    checklists,
+    onChecklistSource: async (sessionId, directory, source) => {
+      if (!await registry.getSession(sessionId)) await adoptSession(sessionId, directory);
+      await registry.updateSession(sessionId, { claudeChecklistSource: source });
+    },
     now,
   });
   const claudeUtility = createClaudeUtility({
@@ -510,7 +515,7 @@ export const createNativeAgentsRuntime = ({
       return {
         supported: true,
         backends: {
-          [NATIVE_BACKEND_CLAUDE]: { cli: claudeCli !== null },
+          [NATIVE_BACKEND_CLAUDE]: { cli: claudeCli !== null, tasks: { checklist: true, background: true, output: true, stop: true } },
           [NATIVE_BACKEND_CODEX]: { cli: codexCli !== null },
         },
         registry: registry.status(),
@@ -755,7 +760,11 @@ export const createNativeAgentsRuntime = ({
         codexLive.forget(sessionId);
       }
       await registry.removeSession(sessionId);
-      for (const child of children) publisher.sessionDeleted(directory, child);
+      checklists.forget(sessionId);
+      for (const child of children) {
+        checklists.forget(child.id);
+        publisher.sessionDeleted(directory, child);
+      }
       publisher.sessionDeleted(directory, session);
       return { deleted: true };
     },
@@ -875,6 +884,55 @@ export const createNativeAgentsRuntime = ({
      */
     async backgroundTasks() {
       return claudeLive.backgroundTaskSnapshot();
+    },
+
+    async checklist(sessionId, directory) {
+      const decoded = decode(sessionId);
+      if (decoded.backend !== NATIVE_BACKEND_CLAUDE) return { state: 'unavailable', reason: 'unsupported' };
+      const rootId = encodeClaudeSessionId(decoded.sessionUuid);
+      const boundDirectory = checklists.directory(sessionId);
+      if (boundDirectory && boundDirectory !== directory) throw invalidRequestError('Checklist directory does not match its session');
+      const entry = await registry.getSession(rootId);
+      if (entry && entry.directory !== directory) throw invalidRequestError('Checklist directory does not match its session');
+      if (!checklists.source(sessionId)) {
+        // Only the query's captured, nonsecret source survives restart. A last
+        // model/send cannot prove which config/shared list its old environment used.
+        const saved = entry?.claudeChecklistSource;
+        if (!saved) return { state: 'unavailable', reason: 'source_unknown' };
+        const source = claudeChecklistSource({ env: { CLAUDE_CONFIG_DIR: saved.configDir, CLAUDE_CODE_TASK_LIST_ID: saved.listId }, sessionUuid: decoded.sessionUuid, directory });
+        if (decoded.toolUseId) {
+          checklists.bind(sessionId, directory, { ...source, identity: `todo:${sessionId}`, todoOnly: true });
+        } else checklists.bind(sessionId, directory, source);
+      }
+      const source = checklists.source(sessionId);
+      const sdkSource = claudeChecklistSource({ env: process.env, sessionUuid: decoded.sessionUuid, directory });
+      // Existing history helpers read the SDK's own config root. A different
+      // captured root has no verified history source and stays file-only.
+      const history = source?.configDir === sdkSource?.configDir
+        ? async () => {
+          const result = await claude.loadHistory(sessionId, directory);
+          if (!result) throw sessionNotFoundError(sessionId);
+          return result.records;
+        } : undefined;
+      return checklists.read(sessionId, history);
+    },
+
+    async sessionTasks(sessionId, directory) {
+      const decoded = decode(sessionId);
+      if (decoded.backend !== NATIVE_BACKEND_CLAUDE || decoded.toolUseId) return { state: 'unsupported', generation: null, revision: 0, tasks: [], omitted: 0 };
+      return claudeLive.sessionTasks(sessionId, directory);
+    },
+
+    async taskOutput(sessionId, directory, taskId, generation) {
+      const decoded = decodeOwnSession(sessionId);
+      if (decoded.backend !== NATIVE_BACKEND_CLAUDE) return { state: 'unavailable', reason: 'not_recorded' };
+      return claudeLive.taskOutput(sessionId, directory, taskId, generation);
+    },
+
+    async stopTask(sessionId, directory, taskId, generation) {
+      const decoded = decodeOwnSession(sessionId);
+      if (decoded.backend !== NATIVE_BACKEND_CLAUDE) throw new NativeAgentError('Task stopping is unsupported', { status: 501, code: 'NATIVE_TASK_STOP_UNAVAILABLE' });
+      return claudeLive.stopTask(sessionId, directory, taskId, generation);
     },
 
     /** Questions native sessions of a directory are waiting on. */
