@@ -2638,6 +2638,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachmentsTooLarge': '附件过大，无法发送。请减少图片数量或大小。',
   'chat.chatInput.toast.sendAttachmentsFailed': '发送附件失败。请尝试更少文件或更小图片。',
   'chat.chatInput.toast.messageSendFailed': '消息发送失败，附件已恢复。',
+  'chat.chatInput.toast.historyNotPortable': '这个会话的历史里有 Claude Code Tool Search 记录，当前模型的端点不接受（HTTP 400），发送必然失败。请改用原来的 Anthropic 登录继续这个会话，或用这个模型开一个新会话。',
   'chat.chatInput.toast.sendUnconfirmed': '发送状态未知，消息可能已发送。请检查会话后再重试。',
   'chat.chatInput.toast.sessionStatusUnavailable': '无法确认会话是否空闲，消息未发送。请检查连接后重试。',
   'chat.chatInput.toast.noModelSelected': '发送前请先选择提供商和模型。',

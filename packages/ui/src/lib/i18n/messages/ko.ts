@@ -2672,6 +2672,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachmentsTooLarge': '첨부 파일이 너무 커서 보낼 수 없습니다. 이미지 수나 크기를 줄여 보세요.',
   'chat.chatInput.toast.sendAttachmentsFailed': '첨부 파일 전송 실패. 파일 수나 이미지 크기를 줄여 보세요.',
   'chat.chatInput.toast.messageSendFailed': '메시지 전송에 실패했습니다. 첨부 파일을 복원했습니다.',
+  'chat.chatInput.toast.historyNotPortable': '이 세션의 기록에는 이 모델의 엔드포인트가 거부하는 Claude Code Tool Search 레코드가 포함되어 있어(HTTP 400) 전송할 수 없습니다. 원래 Anthropic 로그인으로 세션을 계속하거나 이 모델로 새 세션을 시작하세요.',
   'chat.chatInput.toast.sendUnconfirmed': '전송 상태를 확인할 수 없습니다. 메시지가 이미 전송되었을 수 있습니다. 대화를 확인한 후 다시 시도하세요.',
   'chat.chatInput.toast.sessionStatusUnavailable': '세션이 유휴 상태인지 확인할 수 없습니다. 메시지가 전송되지 않았습니다. 연결을 확인한 후 다시 시도하세요.',
   'chat.chatInput.toast.noModelSelected': '전송하기 전에 제공업체와 모델을 선택하세요.',

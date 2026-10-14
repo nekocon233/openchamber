@@ -2642,6 +2642,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachmentsTooLarge': '附件過大，無法傳送。請減少圖片數量或大小。',
   'chat.chatInput.toast.sendAttachmentsFailed': '傳送附件失敗。請嘗試更少檔案或更小圖片。',
   'chat.chatInput.toast.messageSendFailed': '訊息傳送失敗，附件已恢復。',
+  'chat.chatInput.toast.historyNotPortable': '這個工作階段的歷史裡有 Claude Code Tool Search 記錄，目前模型的端點不接受（HTTP 400），傳送必定失敗。請改用原來的 Anthropic 登入繼續這個工作階段，或用這個模型開一個新工作階段。',
   'chat.chatInput.toast.sendUnconfirmed': '傳送狀態未知，訊息可能已送出。請檢查工作階段後再重試。',
   'chat.chatInput.toast.sessionStatusUnavailable': '無法確認工作階段是否閒置，訊息尚未傳送。請檢查連線後重試。',
   'chat.chatInput.toast.noModelSelected': '傳送前請先選擇提供者與模型。',

@@ -48,6 +48,13 @@ const subagentFirstMessageSchema = z.object({
 const chainEntrySchema = z.object({ type: z.string(), uuid: z.string() }).passthrough();
 const forkResultSchema = z.object({ sessionId: z.string() }).passthrough();
 
+// A replay-chain entry as far as portability scanning needs it.
+const replayEntrySchema = z.object({
+  isSidechain: z.boolean().optional(),
+  message: z.object({ content: z.unknown() }).passthrough().optional(),
+}).passthrough();
+const contentBlockSchema = z.object({ type: z.string() }).passthrough();
+
 const FILE_EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write']);
 // A Bash result carries the file changes Claude Code recorded for the command.
 const DIFF_RESULT_TOOLS = new Set([...FILE_EDIT_TOOLS, 'Bash']);
@@ -536,6 +543,39 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
   };
 
   /**
+   * Tool Search writes tool_reference blocks into tool results. A resume
+   * replays this chain to the configured endpoint, and Anthropic-compatible
+   * third-party endpoints reject those blocks with HTTP 400 on every send.
+   * Block-level scan of the chain (never a substring match: the type string
+   * also appears inside ordinary text). @returns {Promise<string[]>} the
+   * referenced tool names
+   */
+  const nonPortableReplayBlocks = async (sessionUuid, directory) => {
+    const sdk = await loadSdk();
+    const entries = await sdk.getSessionMessages(sessionUuid, { dir: directory, includeSystemMessages: true });
+    const names = new Set();
+    const visit = (content) => {
+      if (!Array.isArray(content)) return;
+      for (const block of content) {
+        const parsed = contentBlockSchema.safeParse(block);
+        if (!parsed.success) continue;
+        if (parsed.data.type === 'tool_reference') {
+          const toolName = z.string().safeParse(parsed.data.tool_name);
+          names.add(toolName.success ? toolName.data : 'unknown');
+        } else if (parsed.data.type === 'tool_result') {
+          visit(parsed.data.content);
+        }
+      }
+    };
+    for (const entry of entries) {
+      const parsed = replayEntrySchema.safeParse(entry);
+      if (!parsed.success || parsed.data.isSidechain) continue;
+      visit(parsed.data.message?.content);
+    }
+    return [...names];
+  };
+
+  /**
    * Where a revert or fork of a prompt rewinds the conversation: the last
    * chain entry before the prompt (null when the prompt is the first entry).
    * Also returns the ids of that prompt and every later user entry.
@@ -602,6 +642,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     loadHistory,
     sessionExists,
     hasTranscript,
+    nonPortableReplayBlocks,
     rewindTarget,
     chainHolds,
     fork,

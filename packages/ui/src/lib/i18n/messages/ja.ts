@@ -2668,6 +2668,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.attachmentsTooLarge': '添付ファイルが大きすぎて送信できません。画像の数またはサイズを減らしてください。',
   'chat.chatInput.toast.sendAttachmentsFailed': '添付ファイルの送信に失敗しました。ファイルを減らすかサイズを小さくしてください。',
   'chat.chatInput.toast.messageSendFailed': 'メッセージの送信に失敗しました。添付ファイルは復元されました。',
+  'chat.chatInput.toast.historyNotPortable': 'このセッションの履歴には、このモデルのエンドポイントが拒否する Claude Code Tool Search の記録が含まれているため（HTTP 400）、送信できません。元の Anthropic ログインでセッションを続けるか、このモデルで新しいセッションを開始してください。',
   'chat.chatInput.toast.sendUnconfirmed': '送信状態が不明です。メッセージはすでに送信済みの可能性があります。会話を確認してから再試行してください。',
   'chat.chatInput.toast.sessionStatusUnavailable': 'セッションがアイドルか確認できませんでした。メッセージは送信されていません。接続を確認して再試行してください。',
   'chat.chatInput.toast.noModelSelected': '送信する前にプロバイダーとモデルを選択してください。',

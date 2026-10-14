@@ -82,7 +82,7 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = 
   return { sdk, calls };
 };
 
-const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, idleTimeoutMs = 60_000, maxLiveSessions, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest, afterFrames } = {}) => {
+const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, nonPortableReplayBlocks = async () => [], idleTimeoutMs = 60_000, maxLiveSessions, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest, afterFrames } = {}) => {
   const events = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
   const questions = createQuestionRegistry({
@@ -94,6 +94,7 @@ const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = fals
     resolveExecutable: async () => executable,
     buildEnv: () => ({ PATH: '/usr/bin' }),
     hasTranscript: async () => hasTranscript,
+    nonPortableReplayBlocks,
     publisher,
     questions,
     readGlobalInstructions: async () => instructions,
@@ -871,6 +872,26 @@ describe('Claude connection switching', () => {
     const harness = createHarness();
     await sendPrompt(harness.live, { config: config('first') });
     await expect(sendPrompt(harness.live, { config: config('second') })).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_BUSY' });
+    expect(harness.calls.queries).toHaveLength(1);
+    await answerQuestion(harness);
+    await harness.live.whenIdle(SESSION_ID);
+    await harness.live.shutdown();
+  });
+
+  it('refuses to resume Tool Search history onto an endpoint that rejects it, before spawning', async () => {
+    const harness = createHarness({ hasTranscript: true, nonPortableReplayBlocks: async () => ['Monitor', 'ExitPlanMode'] });
+    await expect(sendPrompt(harness.live, { config: config('first') })).rejects.toMatchObject({
+      code: 'NATIVE_HISTORY_NOT_PORTABLE', status: 400, message: expect.stringContaining('Monitor'),
+    });
+    expect(harness.calls.queries).toHaveLength(0);
+    await harness.live.shutdown();
+  });
+
+  it('does not scan history when the default Anthropic login resumes a session', async () => {
+    const scanned = [];
+    const harness = createHarness({ hasTranscript: true, nonPortableReplayBlocks: async (...args) => { scanned.push(args); return ['Monitor']; } });
+    await sendPrompt(harness.live);
+    expect(scanned).toHaveLength(0);
     expect(harness.calls.queries).toHaveLength(1);
     await answerQuestion(harness);
     await harness.live.whenIdle(SESSION_ID);

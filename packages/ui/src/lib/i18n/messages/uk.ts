@@ -2638,6 +2638,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.toast.attachmentsTooLarge": "Вкладені файли завеликі для надсилання. Спробуйте зменшити кількість або розмір зображень.",
   "chat.chatInput.toast.sendAttachmentsFailed": "Не вдалося надіслати вкладення. Спробуйте зменшити кількість файлів або зображень.",
   "chat.chatInput.toast.messageSendFailed": "Не вдалося надіслати повідомлення. Вкладення відновлено.",
+  "chat.chatInput.toast.historyNotPortable": "Історія цієї сесії містить записи Tool Search із Claude Code, які кінцева точка цієї моделі відхиляє (HTTP 400), тому надіслати повідомлення неможливо. Продовжіть сесію з початковим входом Anthropic або почніть нову сесію з цією моделлю.",
   "chat.chatInput.toast.sendUnconfirmed": "Стан надсилання невідомий — повідомлення, можливо, вже надіслано. Перевірте розмову перед повторною спробою.",
   "chat.chatInput.toast.sessionStatusUnavailable": "Не вдалося підтвердити, чи сесія неактивна. Повідомлення не надіслано. Перевірте з’єднання та повторіть спробу.",
   "chat.chatInput.toast.noModelSelected": "Виберіть постачальника та модель перед надсиланням.",

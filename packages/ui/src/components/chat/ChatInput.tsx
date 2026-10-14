@@ -2524,6 +2524,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 return;
             }
 
+            if (error instanceof NativeAgentsRequestError && error.code === 'NATIVE_HISTORY_NOT_PORTABLE') {
+                toast.error(t('chat.chatInput.toast.historyNotPortable'));
+                return;
+            }
+
             if (isSoftNetworkError) {
                 if (attachedFiles.length > 0) {
                     toast.error(t('chat.chatInput.toast.sendAttachmentsFailed'));

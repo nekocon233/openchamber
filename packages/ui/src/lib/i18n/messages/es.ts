@@ -2638,6 +2638,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.toast.attachmentsTooLarge": "Los adjuntos son demasiado grandes para enviar. Intenta reducir la cantidad o el tamaño de las imágenes.",
   "chat.chatInput.toast.sendAttachmentsFailed": "No se pudieron enviar los adjuntos. Intenta con menos archivos o imágenes más pequeñas.",
   "chat.chatInput.toast.messageSendFailed": "El mensaje no se pudo enviar. Los adjuntos se restauraron.",
+  "chat.chatInput.toast.historyNotPortable": "El historial de esta sesión contiene registros de Tool Search de Claude Code que el endpoint de este modelo rechaza (HTTP 400), por lo que el envío no puede funcionar. Continúa la sesión con la cuenta de Anthropic original o inicia una sesión nueva con este modelo.",
   "chat.chatInput.toast.sendUnconfirmed": "Estado de envío desconocido: es posible que el mensaje ya se haya enviado. Revisa la conversación antes de reintentar.",
   "chat.chatInput.toast.sessionStatusUnavailable": "No se pudo confirmar si la sesión está inactiva. El mensaje no se envió. Comprueba tu conexión e inténtalo de nuevo.",
   "chat.chatInput.toast.noModelSelected": "Selecciona un proveedor y un modelo antes de enviar.",

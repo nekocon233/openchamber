@@ -2361,6 +2361,7 @@ export const dict = {
   'chat.chatInput.toast.attachmentsTooLarge': 'Les pièces jointes sont trop volumineuses pour être envoyées. Veuillez essayer de réduire le nombre ou la taille des images.',
   'chat.chatInput.toast.sendAttachmentsFailed': 'Échec de l\'envoi des pièces jointes. Essayez moins de fichiers ou des images plus petites.',
   'chat.chatInput.toast.messageSendFailed': 'Le message n\'a pas pu être envoyé. Pièces jointes restaurées.',
+  'chat.chatInput.toast.historyNotPortable': 'L\'historique de cette session contient des enregistrements Tool Search de Claude Code que le point de terminaison de ce modèle rejette (HTTP 400) ; l\'envoi ne peut donc pas aboutir. Reprenez la session avec la connexion Anthropic d\'origine, ou démarrez une nouvelle session avec ce modèle.',
   'chat.chatInput.toast.sendUnconfirmed': 'État d\'envoi inconnu — le message a peut-être déjà été envoyé. Vérifiez la conversation avant de réessayer.',
   'chat.chatInput.toast.sessionStatusUnavailable': 'Impossible de confirmer si la session est inactive. Le message n\'a pas été envoyé. Vérifiez la connexion et réessayez.',
   'chat.chatInput.toast.noModelSelected': 'Sélectionnez un fournisseur et un modèle avant d\'envoyer.',

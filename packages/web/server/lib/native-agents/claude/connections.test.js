@@ -81,7 +81,7 @@ describe('Claude connections', () => {
     const launch = await store.resolve(model.id);
     const ambient = { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'ambient-test-key', CLAUDE_CODE_USE_BEDROCK: '1' };
     const prepared = await prepareClaudeConnection(launch, ambient);
-    expect(prepared.env).toMatchObject({ ANTHROPIC_API_KEY: '', ANTHROPIC_AUTH_TOKEN: 'test-only-key', CLAUDE_CODE_USE_BEDROCK: '0', CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-for-coding', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'kimi-for-coding' });
+    expect(prepared.env).toMatchObject({ ANTHROPIC_API_KEY: '', ANTHROPIC_AUTH_TOKEN: 'test-only-key', CLAUDE_CODE_USE_BEDROCK: '0', CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-for-coding', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'kimi-for-coding', ENABLE_TOOL_SEARCH: 'false' });
     expect(ambient.ANTHROPIC_API_KEY).toBe('ambient-test-key');
     expect(JSON.parse(await fs.readFile(prepared.settings, 'utf8')).env).toEqual(launch.env);
     if (process.platform !== 'win32') expect((await fs.stat(prepared.settings)).mode & 0o777).toBe(0o600);

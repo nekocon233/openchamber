@@ -2672,6 +2672,7 @@ export const dict = {
   'chat.chatInput.toast.attachmentsTooLarge': 'Attachments are too large to send. Please try reducing the number or size of images.',
   'chat.chatInput.toast.sendAttachmentsFailed': 'Failed to send attachments. Try fewer files or smaller images.',
   'chat.chatInput.toast.messageSendFailed': 'Message failed to send. Attachments restored.',
+  'chat.chatInput.toast.historyNotPortable': "This session's history contains Claude Code Tool Search records that this model's endpoint rejects (HTTP 400), so sending cannot succeed. Continue the session with the original Anthropic login, or start a new session with this model.",
   'chat.chatInput.toast.sendUnconfirmed': 'Send status unknown — the message may already have been sent. Check the conversation before retrying.',
   'chat.chatInput.toast.sessionStatusUnavailable': 'Could not confirm whether the session is idle. The message was not sent. Check your connection and try again.',
   'chat.chatInput.toast.noModelSelected': 'Select a provider and model before sending.',

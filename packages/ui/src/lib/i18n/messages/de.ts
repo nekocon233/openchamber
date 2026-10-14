@@ -2460,6 +2460,7 @@ export const dict = {
   'chat.chatInput.toast.attachmentsTooLarge': 'Anhänge sind zu groß zum Senden. Bitte versuche, die Anzahl oder Größe der Bilder zu reduzieren.',
   'chat.chatInput.toast.sendAttachmentsFailed': 'Fehler beim Senden der Anhänge. Versuche weniger Dateien oder kleinere Bilder.',
   'chat.chatInput.toast.messageSendFailed': 'Nachricht konnte nicht gesendet werden. Anhänge wurden wiederhergestellt.',
+  'chat.chatInput.toast.historyNotPortable': 'Der Verlauf dieser Sitzung enthält Claude Code Tool Search-Einträge, die der Endpunkt dieses Modells ablehnt (HTTP 400); das Senden schlägt daher fehl. Setze die Sitzung mit dem ursprünglichen Anthropic-Login fort oder starte eine neue Sitzung mit diesem Modell.',
   'chat.chatInput.toast.sendUnconfirmed': 'Sendestatus unbekannt – die Nachricht wurde möglicherweise bereits gesendet. Prüfen Sie die Unterhaltung, bevor Sie es erneut versuchen.',
   'chat.chatInput.toast.sessionStatusUnavailable': 'Es konnte nicht bestätigt werden, ob die Sitzung bereit ist. Die Nachricht wurde nicht gesendet. Prüfe die Verbindung und versuche es erneut.',
   'chat.chatInput.toast.noModelSelected': 'Wähle vor dem Senden einen Anbieter und ein Modell aus.',

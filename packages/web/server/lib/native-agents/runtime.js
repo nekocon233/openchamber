@@ -299,6 +299,7 @@ export const createNativeAgentsRuntime = ({
     buildEnv: buildChildEnv,
     readGlobalInstructions,
     hasTranscript: claude.hasTranscript,
+    nonPortableReplayBlocks: claude.nonPortableReplayBlocks,
     publisher,
     questions,
     onTurnFinished,

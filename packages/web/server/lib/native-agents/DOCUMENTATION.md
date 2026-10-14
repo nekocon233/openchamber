@@ -772,6 +772,19 @@ own thinking default. Image/PDF support and effort levels are configured per
 model; custom models do not inherit Claude capabilities. The Kimi Coding Plan
 preset is separate from Moonshot's pay-as-you-go API.
 
+Connection launches set `ENABLE_TOOL_SEARCH=false`: Tool Search writes
+`tool_reference` blocks into tool results, and Anthropic-compatible
+third-party endpoints reject that block type with HTTP 400 on every send that
+replays it. Blocks already in a transcript — produced under the Anthropic
+login, where Tool Search stays on — poison a resume onto a connection the
+same way. Before a managed launch (connection or ChatGPT grant) resumes a
+transcript, `store.js` scans the chain the CLI would replay (entries after the
+last compaction, block-level, sidechains excluded) and the send fails with
+`NATIVE_HISTORY_NOT_PORTABLE` naming the referenced tools instead of spawning
+a query that must fail. The default Anthropic login resumes unchecked. The
+guard knows only the `tool_reference` block type; new non-portable blocks
+extend it as they are confirmed upstream.
+
 Web and Electron use the connected server's connections. Hosted mobile and
 Capacitor use that same server and CLI. VS Code's native adapter rejects these
 operations as unsupported.

@@ -148,6 +148,7 @@ const turnErrorOf = (frame, launch) => {
  * @param {() => Promise<string | null>} options.resolveExecutable path of the user's `claude`
  * @param {() => Record<string, string>} options.buildEnv
  * @param {(sessionUuid: string, directory: string) => Promise<boolean>} options.hasTranscript
+ * @param {(sessionUuid: string, directory: string) => Promise<string[]>} [options.nonPortableReplayBlocks] tool_reference tool names in the chain a resume replays
  * @param {ReturnType<typeof import('../publisher.js').createNativeEventPublisher>} options.publisher
  * @param {ReturnType<typeof import('../questions.js').createQuestionRegistry>} options.questions
  * @param {(sessionId: string, directory: string) => void} [options.onTurnFinished] the CLI finished a turn and wrote it to the transcript
@@ -163,6 +164,7 @@ export const createClaudeLiveSessions = ({
   resolveExecutable,
   buildEnv,
   hasTranscript,
+  nonPortableReplayBlocks = async () => [],
   publisher,
   questions,
   // Appended to Claude Code's system prompt, which the CLI records with the
@@ -463,6 +465,20 @@ export const createClaudeLiveSessions = ({
       rewind === null ? hasTranscript(sessionUuid, directory) : true,
       readGlobalInstructions(),
     ]);
+    // A managed launch replays the chain to a third-party endpoint; Anthropic
+    // login accepts tool_reference blocks, those endpoints answer HTTP 400 on
+    // every send. Refuse before the CLI writes its own opaque error into the
+    // transcript.
+    if (resume && (config.launch?.env || config.launch?.acquire)) {
+      const blocks = await nonPortableReplayBlocks(sessionUuid, directory);
+      if (blocks.length > 0) {
+        const target = config.launch.descriptor?.name ?? 'this connection';
+        throw new NativeAgentError(
+          `This session's history contains Tool Search references (${blocks.join(', ')}) that only Anthropic's endpoint accepts; ${target} rejects them with HTTP 400 on every send. Continue the session with the original Anthropic login, or start a new session with this model.`,
+          { code: 'NATIVE_HISTORY_NOT_PORTABLE', status: 400 },
+        );
+      }
+    }
     const connection = await prepareClaudeConnection(config.launch, buildEnv());
     let markExited = () => {};
     const exited = new Promise((resolve) => {

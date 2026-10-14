@@ -13,6 +13,15 @@ const TERMINAL_UUID = '11111111-1111-4111-8111-111111111111';
 const OPENCHAMBER_UUID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const TASK_TOOL_USE = 'toolu_01VAnMEDHHeuo92ZtfbaNtwQ';
 const REWIND_UUID = '33333333-3333-4333-8333-333333333333';
+const POISON_UUID = '66666666-6666-4666-8666-666666666666';
+// A chain holding a real Tool Search reference, a text mention of the type
+// string (not a block), and a sidechain reference a root resume never replays.
+const poisonedChain = [
+  { type: 'user', uuid: 'p-1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'tool_reference', tool_name: 'Monitor' }] }] } },
+  { type: 'user', uuid: 'p-2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: 'output mentioning {"type":"tool_reference"} as text' }] } },
+  { type: 'assistant', uuid: 'p-3', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_result', tool_use_id: 'toolu_3', content: [{ type: 'tool_reference', tool_name: 'WebFetch' }] }] } },
+  { type: 'assistant', uuid: 'p-4', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'reasoning', signature: 'sig' }, { type: 'tool_use', id: 'toolu_4', name: 'Bash', input: {} }] } },
+];
 const PROMPT_1 = '44444444-4444-4444-8444-444444444441';
 const PROMPT_2 = '44444444-4444-4444-8444-444444444442';
 const PROMPT_3 = '44444444-4444-4444-8444-444444444443';
@@ -67,6 +76,7 @@ const createHarness = async ({ importFails = false } = {}) => {
     getSessionMessages: async (sessionId) => {
       calls.getSessionMessages += 1;
       if (sessionId === REWIND_UUID) return rewindChain;
+      if (sessionId === POISON_UUID) return poisonedChain;
       return sessionId === OPENCHAMBER_UUID ? fixture('haiku-tools.session-messages.json') : [];
     },
     forkSession: async (sessionId, options) => {
@@ -164,6 +174,12 @@ describe('Claude session store', () => {
     await store.loadHistory(`ncl_${OPENCHAMBER_UUID}_t_${TASK_TOOL_USE}`, DIRECTORY);
 
     expect(calls.imports).toEqual([]);
+  });
+
+  it('finds Tool Search references in the chain a resume replays, ignoring text mentions and sidechains', async () => {
+    const { store } = await createHarness();
+    await expect(store.nonPortableReplayBlocks(POISON_UUID, DIRECTORY)).resolves.toEqual(['Monitor']);
+    await expect(store.nonPortableReplayBlocks(TERMINAL_UUID, DIRECTORY)).resolves.toEqual([]);
   });
 
   it('rewinds to the chain entry before a prompt and names the user entries it drops', async () => {

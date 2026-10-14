@@ -1591,6 +1591,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.toast.forkNothingToFork': 'Nie ma jeszcze czego rozgałęzić: w tej sesji nie zakończyła się żadna odpowiedź',
   'chat.chatInput.toast.forkSendFailed': 'Rozgałęziono, ale wiadomość nie została wysłana. Wróciła do pola wpisywania.',
   'chat.chatInput.toast.messageSendFailed': 'Nie udało się wysłać wiadomości. Załączniki zostały przywrócone.',
+  'chat.chatInput.toast.historyNotPortable': 'Historia tej sesji zawiera rekordy Tool Search z Claude Code, które punkt końcowy tego modelu odrzuca (HTTP 400), więc wysłanie się nie powiedzie. Kontynuuj sesję z pierwotnym logowaniem Anthropic albo rozpocznij nową sesję z tym modelem.',
   'chat.chatInput.toast.sendUnconfirmed': 'Nieznany status wysyłania — wiadomość mogła już zostać wysłana. Sprawdź rozmowę przed ponowną próbą.',
   'chat.chatInput.toast.sessionStatusUnavailable': 'Nie można potwierdzić, czy sesja jest bezczynna. Wiadomość nie została wysłana. Sprawdź połączenie i spróbuj ponownie.',
   'chat.chatInput.toast.noModelSelected': 'Wybierz dostawcę i model przed wysłaniem.',

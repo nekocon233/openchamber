@@ -69,6 +69,9 @@ export const claudeConnectionEnvironment = (connection, model) => ({
   CLAUDE_CODE_MAX_OUTPUT_TOKENS: model.outputLimit ? String(model.outputLimit) : '',
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: model.contextWindow ? String(model.contextWindow) : '',
   CLAUDE_CODE_EFFORT_LEVEL: '',
+  // Tool Search writes tool_reference blocks into history, which
+  // Anthropic-compatible third-party endpoints reject with HTTP 400.
+  ENABLE_TOOL_SEARCH: 'false',
 });
 
 /** Credentials belong to this server, never to the UI preference mirror. */

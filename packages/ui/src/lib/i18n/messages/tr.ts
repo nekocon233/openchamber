@@ -2589,6 +2589,7 @@ export const dict = {
   'chat.chatInput.toast.attachmentsTooLarge': 'Ekler gönderilemeyecek kadar büyük. Görsel sayısını veya boyutunu azaltmayı dene.',
   'chat.chatInput.toast.sendAttachmentsFailed': 'Ekler gönderilemedi. Daha az dosya veya daha küçük görseller deneyin.',
   'chat.chatInput.toast.messageSendFailed': 'Mesaj gönderilemedi. Ekler geri yüklendi.',
+  'chat.chatInput.toast.historyNotPortable': 'Bu oturumun geçmişi, bu modelin uç noktasının reddettiği Claude Code Tool Search kayıtları içeriyor (HTTP 400); bu yüzden gönderim başarılı olamaz. Oturuma özgün Anthropic oturumuyla devam edin veya bu modelle yeni bir oturum başlatın.',
   'chat.chatInput.toast.clipboardAttachFailed': 'Panodan görsel eklenemedi',
   'chat.chatInput.toast.clipboardTextAttachFailed': 'Yapıştırılan metin dosya olarak eklenemedi',
   'chat.chatInput.toast.largeTextPaste.title': 'Büyük metin algılandı',
