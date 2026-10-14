@@ -9,7 +9,7 @@ const events = [
   { type: 'response.completed', response: { id: 'r', status: 'completed', usage: { input_tokens: 2, output_tokens: 1 } } },
 ];
 const create = (fetchImpl) => {
-  const bridge = createChatgptBridge({ auth: { accessToken: async (id) => `test-token-${id}` }, fetchImpl });
+  const bridge = createChatgptBridge({ auth: { accessToken: async (id) => `test-token-${id}` }, fetchImpl, retryDelay: () => 1 });
   bridges.push(bridge); return bridge;
 };
 const send = (grant, patch = {}, headers = {}) => fetch(`${grant.baseURL}/v1/messages`, {
@@ -105,5 +105,40 @@ describe('ChatGPT loopback bridge', () => {
     const body = await result.text();
     expect(body).toContain('subscription_sharing_user_not_eligible');
     expect(body).not.toContain('test-token-account');
+  });
+
+  it('recovers from a transient rejection within the same send', async () => {
+    let calls = 0;
+    const bridge = create(async () => { calls += 1; return calls === 1 ? new Response('overloaded', { status: 507 }) : response(events); });
+    const grant = await bridge.acquire('account', 'gpt-fixture');
+    const result = await send(grant);
+    expect(result.status).toBe(200);
+    expect((await result.json()).content).toEqual([{ type: 'text', text: 'Hello' }]);
+    expect(calls).toBe(2);
+  });
+
+  it('retries a failed fetch, then gives up on the third transient failure with its status and request id', async () => {
+    let calls = 0;
+    const bridge = create(async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError('fetch failed');
+      return new Response('{}', { status: 503, headers: { 'x-request-id': 'req-fixture', 'retry-after': '30' } });
+    });
+    const grant = await bridge.acquire('account', 'gpt-fixture');
+    const result = await send(grant);
+    expect(result.status).toBe(503);
+    expect(await result.text()).toContain('CHATGPT_UPSTREAM_REJECTED');
+    expect(result.headers.get('x-request-id')).toBe('req-fixture');
+    expect(calls).toBe(3);
+  });
+
+  it('does not retry rejections retrying cannot fix', async () => {
+    let calls = 0;
+    const bridge = create(async () => { calls += 1; return new Response(JSON.stringify({ error: { code: 'context_length_exceeded' } }), { status: 400 }); });
+    const grant = await bridge.acquire('account', 'gpt-fixture');
+    const result = await send(grant);
+    expect(result.status).toBe(400);
+    expect(await result.text()).toContain('context_length_exceeded');
+    expect(calls).toBe(1);
   });
 });

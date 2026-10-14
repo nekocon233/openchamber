@@ -896,6 +896,16 @@ Both streaming and non-streaming Claude requests are accepted, while upstream
 Responses always streams. Existing Claude session persistence, plan mode,
 subagents and compaction remain owned by Claude Code.
 
+Transient upstream failures — 408, 429 and 5xx statuses, and network errors —
+are retried inside the bridge, up to three attempts total with a shared
+five-minute deadline, honoring a bounded `Retry-After`. Every recorded
+503/507 was followed by a successful manual retry, and Claude is told not to
+retry (`x-should-retry: false`), so without this each blip ended the turn.
+Each retried attempt logs the upstream status, code and request id, never the
+body. A network retry can replay an inference that already ran upstream;
+`store: false` keeps that to wasted tokens, not duplicated side effects.
+Non-transient rejections (auth, schema, context length) fail on first sight.
+
 ## Utility text generation
 
 The small-model service accepts an explicit `codex-native/<model>` or

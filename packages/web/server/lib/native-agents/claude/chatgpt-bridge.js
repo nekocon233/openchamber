@@ -9,8 +9,24 @@ const errorSchema = z.object({ error: z.object({ code: z.string().optional(), pa
 const maxBody = 32 * 1024 * 1024;
 const fail = (code, status = 502) => new NativeAgentError(code, { code, status });
 
+// Transient by observation: every recorded 503/507 was followed by a manual
+// retry that succeeded. Retried inside the bridge because Claude is told not
+// to (`x-should-retry: false`). A retry replays an inference that may have
+// run upstream when the failure is a network error rather than a rejection.
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504, 507]);
+const MAX_UPSTREAM_ATTEMPTS = 3;
+const UPSTREAM_TIMEOUT_MS = 300_000;
+
+/** Aborts with the signal so a waiting retry dies with its caller. */
+const wait = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal.aborted) { reject(signal.reason); return; }
+  const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+  const onAbort = () => { clearTimeout(timer); reject(signal.reason); };
+  signal.addEventListener('abort', onAbort, { once: true });
+});
+
 /** Loopback-only, authenticated Messages endpoint. OAuth tokens never leave this module's upstream call. */
-export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https://api.openai.com/v1' }) => {
+export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https://api.openai.com/v1', retryDelay = (attempt, retryAfter) => (Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 15) * 1000 : attempt * 1000) }) => {
   const grants = new Map();
   const requests = new Map();
   let starting;
@@ -47,18 +63,36 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
         const accessToken = await auth.accessToken(grant.accountId, controller.signal);
         controller.signal.throwIfAborted();
         if (!grants.has(token)) throw fail('CHATGPT_BRIDGE_UNAUTHORIZED', 401);
-        const upstream = await fetchImpl(`${apiBase}/responses`, {
-          method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(translated.body), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(300_000)]), redirect: 'error',
-        });
+        const deadline = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+        /** @type {Response} */
+        let upstream;
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            upstream = await fetchImpl(`${apiBase}/responses`, {
+              method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(translated.body), signal: AbortSignal.any([controller.signal, deadline]), redirect: 'error',
+            });
+          } catch (error) {
+            if (controller.signal.aborted || deadline.aborted || attempt >= MAX_UPSTREAM_ATTEMPTS) throw error;
+            console.warn(`[chatgpt-bridge] upstream attempt ${attempt} failed:`, error instanceof Error ? error.message : String(error));
+            await wait(retryDelay(attempt, null), controller.signal);
+            continue;
+          }
+          if (upstream.ok) break;
+          const requestId = upstream.headers.get('x-request-id');
+          const payload = errorSchema.safeParse(await upstream.json().catch(() => null));
+          const code = payload.data?.error?.code;
+          if (!RETRYABLE_STATUS.has(upstream.status) || attempt >= MAX_UPSTREAM_ATTEMPTS) {
+            if (requestId) res.setHeader('x-request-id', requestId);
+            // Only diagnostic identifiers cross the bridge; upstream messages can echo credentials.
+            throw fail(code ?? 'CHATGPT_UPSTREAM_REJECTED', upstream.status);
+          }
+          console.warn(`[chatgpt-bridge] upstream attempt ${attempt} rejected: ${upstream.status}${code ? ` ${code}` : ''}${requestId ? ` ${requestId}` : ''}`);
+          const retryAfter = Number(upstream.headers.get('retry-after'));
+          await wait(retryDelay(attempt, retryAfter), controller.signal);
+        }
         const requestId = upstream.headers.get('x-request-id');
         if (requestId) res.setHeader('x-request-id', requestId);
-        if (!upstream.ok) {
-          const payload = errorSchema.safeParse(await upstream.json().catch(() => null));
-          const failure = fail(payload.data?.error?.code ?? 'CHATGPT_UPSTREAM_REJECTED', upstream.status);
-          // Only diagnostic identifiers cross the bridge; upstream messages can echo credentials.
-          throw failure;
-        }
         if (!upstream.body) throw fail('CHATGPT_EMPTY_STREAM');
         const stream = createAnthropicStream({ model: grant.model, names: translated.names });
         if (translated.stream) {
