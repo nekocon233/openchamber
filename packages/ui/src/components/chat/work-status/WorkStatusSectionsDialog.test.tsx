@@ -82,7 +82,7 @@ describe('section arrangement dialog', () => {
     await render('chat.work-status.section.taskChecklist');
     const target = document.querySelector<HTMLElement>('[data-settings-item="chat.work-status.section.taskChecklist"]');
     expect(target?.getAttribute('data-settings-search-highlight')).toBe('true');
-    expect(target?.textContent).toContain('CLI checklist');
+    expect(target?.textContent).toContain('Checklist');
     await act(async () => target?.click());
     expect(useUIStore.getState().workStatusHiddenSections).toEqual(['taskChecklist']);
   });

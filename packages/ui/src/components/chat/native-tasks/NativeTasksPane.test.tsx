@@ -153,7 +153,7 @@ describe('native tasks context surface', () => {
     expect(useNativeTasksUIStore.getState().tab).toBe('background');
     expect(document.querySelector('[data-native-tasks-body]')?.textContent).toContain('Ambient task. Not counted');
     expect(useUIStore.getState().contextPanelByDirectory[directory]?.tabs.some((tab) => tab.mode === 'tasks')).toBe(true);
-    await click('Open CLI checklist');
+    await click('Open checklist');
     expect(useNativeTasksUIStore.getState().tab).toBe('checklist');
     expect(document.querySelector('[data-native-tasks-body]')?.textContent).toContain('Review changes');
   });
