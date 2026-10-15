@@ -115,6 +115,36 @@ describe('Claude history projection', () => {
   });
 });
 
+describe('Claude live usage projection', () => {
+  const liveProjection = () => createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true });
+  const start = (projection) => projection.applyStreamEvent({ type: 'stream_event', event: {
+    type: 'message_start',
+    message: {
+      id: 'msg_live_usage', model: 'gpt-6.1-sol', content: [],
+      usage: { input_tokens: 6, output_tokens: 0, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 },
+    },
+  } });
+
+  it('merges final input and cache usage from message_delta', () => {
+    const projection = liveProjection();
+    start(projection);
+    projection.applyStreamEvent({ type: 'stream_event', event: {
+      type: 'message_delta', delta: { stop_reason: 'end_turn' },
+      usage: { input_tokens: 4, output_tokens: 3, cache_read_input_tokens: 4, cache_creation_input_tokens: 2 },
+    } });
+    expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens).toEqual({ total: 13, input: 4, output: 3, reasoning: 0, cache: { read: 4, write: 2 } });
+  });
+
+  it('preserves earlier input and cache usage for an output-only delta', () => {
+    const projection = liveProjection();
+    start(projection);
+    projection.applyStreamEvent({ type: 'stream_event', event: {
+      type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 },
+    } });
+    expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens).toEqual({ total: 12, input: 6, output: 3, reasoning: 0, cache: { read: 2, write: 1 } });
+  });
+});
+
 describe('Claude compaction projection', () => {
   const at = (seconds) => new Date(Date.UTC(2026, 8, 16, 20, 0, seconds)).toISOString();
   // A system entry as the SDK's history read returns it: the type, nothing of its kind.

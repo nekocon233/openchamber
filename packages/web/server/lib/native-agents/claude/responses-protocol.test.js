@@ -12,7 +12,7 @@ const request = () => ({
   tools: [{ name: 'Read', description: 'Read a file', input_schema: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } }],
   max_tokens: 1000, temperature: 1, thinking: { type: 'adaptive' },
 });
-const done = (status = 'completed') => ({ type: `response.${status}`, response: { id: 'resp_1', status, usage: { input_tokens: 10, output_tokens: 4 } } });
+const done = (status = 'completed', usage = { input_tokens: 10, output_tokens: 4 }) => ({ type: `response.${status}`, response: { id: 'resp_1', status, usage } });
 
 describe('Responses translation', () => {
   it('preserves uploaded text and image order through native prompt conversion', () => {
@@ -123,6 +123,31 @@ describe('Responses translation', () => {
     expect(frames.filter((frame) => frame.delta?.type === 'input_json_delta')).toHaveLength(4);
     expect(stream.result()).toMatchObject({ stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 4 } });
     expect(stream.result().content[1]).toEqual({ type: 'tool_use', id: 'call_1', name: 'Read', input: { file_path: 'a' } });
+  });
+
+  it.each([
+    [{ input_tokens: 10, output_tokens: 3 }, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }],
+    [{ input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 4 } }, { input_tokens: 6, output_tokens: 3, cache_read_input_tokens: 4, cache_creation_input_tokens: 0 }],
+    [{ input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 4, cache_write_tokens: 2 } }, { input_tokens: 4, output_tokens: 3, cache_read_input_tokens: 4, cache_creation_input_tokens: 2 }],
+    [{ input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 10 } }, { input_tokens: 0, output_tokens: 3, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 }],
+  ])('normalizes Responses usage for streaming and final results %#', (usage, expected) => {
+    const stream = createAnthropicStream({ model: 'gpt-fixture', names: new Map() });
+    stream.push({ type: 'response.output_text.delta', item_id: 'msg_1', content_index: 0, delta: 'Done.' });
+    const frames = stream.push(done('completed', usage));
+    expect(frames.find((frame) => frame.type === 'message_delta').usage).toEqual(expected);
+    expect(stream.result().usage).toEqual(expected);
+  });
+
+  it.each([
+    { input_tokens: -1, output_tokens: 3 },
+    { input_tokens: 10, output_tokens: 1.5 },
+    { input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: -1 } },
+    { input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 1.5 } },
+    { input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 11 } },
+    { input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 6, cache_write_tokens: 5 } },
+  ])('rejects malformed Responses usage through the event parser %#', async (usage) => {
+    const chunks = async function* () { yield Buffer.from(`data: ${JSON.stringify(done('completed', usage))}\n\n`); };
+    await expect(async () => { for await (const event of readResponsesEvents(chunks())) void event; }).rejects.toThrow();
   });
 
   it('does not complete on interrupted streams, failed responses or unfinished tool arguments', () => {

@@ -92,7 +92,25 @@ export const toResponsesRequest = (raw, selectedModel, effort = null, supportsIm
 
 const functionCall = z.object({ type: z.literal('function_call'), id: z.string(), call_id: z.string(), name: z.string(), namespace: z.string().optional(), arguments: z.string().default('') });
 const messageItem = z.object({ type: z.literal('message'), id: z.string(), content: z.array(z.object({ type: z.string(), text: z.string().optional(), refusal: z.string().optional() })).default([]) });
-const usageSchema = z.object({ input_tokens: z.number(), output_tokens: z.number(), input_tokens_details: z.object({ cached_tokens: z.number().optional() }).optional() });
+const tokenCount = z.number().int().nonnegative();
+const usageSchema = z.object({
+  input_tokens: tokenCount, output_tokens: tokenCount,
+  input_tokens_details: z.object({ cached_tokens: tokenCount.optional(), cache_write_tokens: tokenCount.optional() }).optional(),
+}).superRefine((usage, context) => {
+  const cached = usage.input_tokens_details?.cached_tokens ?? 0;
+  const written = usage.input_tokens_details?.cache_write_tokens ?? 0;
+  if (cached + written > usage.input_tokens) context.addIssue({ code: 'custom', message: 'Cached tokens exceed input tokens' });
+});
+const anthropicUsage = (usage) => {
+  const cached = usage.input_tokens_details?.cached_tokens ?? 0;
+  const written = usage.input_tokens_details?.cache_write_tokens ?? 0;
+  return {
+    input_tokens: usage.input_tokens - cached - written,
+    output_tokens: usage.output_tokens,
+    cache_read_input_tokens: cached,
+    cache_creation_input_tokens: written,
+  };
+};
 const responseSchema = z.object({
   id: z.string(), status: z.string(), usage: usageSchema.nullish(),
   error: z.object({ code: z.string().optional(), message: z.string().optional() }).nullish(),
@@ -213,7 +231,7 @@ export const createAnthropicStream = ({ model, names }) => {
           if (item.block.type === 'tool_use' && !item.closed) throw new Error('CHATGPT_INCOMPLETE_TOOL_CALL');
           if (!item.closed) { item.closed = true; output.push({ type: 'content_block_stop', index: item.index }); }
         }
-        if (event.response.usage) usage = { input_tokens: event.response.usage.input_tokens, output_tokens: event.response.usage.output_tokens };
+        if (event.response.usage) usage = anthropicUsage(event.response.usage);
         output.push({ type: 'message_delta', delta: { stop_reason: hasTools ? 'tool_use' : 'end_turn', stop_sequence: null }, usage });
         output.push({ type: 'message_stop' });
         completed = true;

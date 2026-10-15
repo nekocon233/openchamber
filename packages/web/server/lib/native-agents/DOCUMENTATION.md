@@ -231,9 +231,11 @@ kept open between turns.
   change in place.
 - The projector's live mode opens the assistant message and its text and
   reasoning parts from stream events and completes the message on
-  `message_stop`, because tools start while later blocks still stream. Only
-  `assistant` and `user` frames and the `compact_boundary` system frame reach
-  `applyEntry`. A Task call announces the subagent session with
+  `message_stop`, because tools start while later blocks still stream. Usage
+  starts from `message_start`. Each `message_delta` replaces only the usage
+  fields it carries, so output-only deltas preserve previously reported input
+  and cache tokens. Only `assistant` and `user` frames and the
+  `compact_boundary` system frame reach `applyEntry`. A Task call announces the subagent session with
   `session.created`. `claude/subagents.js` routes child frames by
   `parent_tool_use_id` to an independent projection and publishes that child's
   messages, reasoning, tools and deltas through the same event hub. Full-frame
@@ -922,6 +924,15 @@ success, propagates cancellation and handles backpressure. Error responses
 retain status, code and request ID without forwarding credential-bearing error
 text. Claude receives `x-should-retry: false`; there is no alternate billing
 path or fallback model.
+
+Responses `input_tokens` includes `cached_tokens` and, when present,
+`cache_write_tokens`. The bridge subtracts both from Anthropic `input_tokens`
+and reports them as `cache_read_input_tokens` and
+`cache_creation_input_tokens`, so `input + cache.read + cache.write` equals the
+upstream input. Missing details mean no reported cache breakdown rather than a
+proven zero hit; a missing final usage is unmeasured. Negative, fractional, or
+over-total token counts fail as malformed upstream data. Streaming
+`message_delta` and non-streaming results carry the same normalized usage.
 
 PNG, JPEG, GIF and WebP base64 image blocks become Responses `input_image`
 content, both in user messages and function-tool results. Text/image ordering

@@ -149,7 +149,12 @@ const contentBlockDeltaSchema = z.object({
 }).passthrough();
 const messageDeltaSchema = z.object({
   delta: z.object({ stop_reason: z.string().nullish() }).passthrough(),
-  usage: z.object({ output_tokens: z.number() }).passthrough().nullish(),
+  usage: z.object({
+    input_tokens: z.number().optional(),
+    output_tokens: z.number(),
+    cache_read_input_tokens: z.number().optional(),
+    cache_creation_input_tokens: z.number().optional(),
+  }).passthrough().nullish(),
 }).passthrough();
 
 // Claude Code records a stop as a user entry holding one of these fixed texts.
@@ -540,6 +545,7 @@ export const createClaudeProjection = ({
       const message = assistantMessageSchema.safeParse(event.message);
       if (!message.success) return none;
       const { record } = ensureAssistant(message.data, time);
+      if (message.data.usage) record.info.tokens = tokensFromUsage(message.data.usage);
       return { changed: [record.info.id], delta: null };
     }
     if (!currentAssistant) return none;
@@ -575,9 +581,14 @@ export const createClaudeProjection = ({
       const stopReason = parsed.data.delta.stop_reason;
       if (stopReason) record.info.finish = FINISH_BY_STOP_REASON.get(stopReason) ?? 'other';
       if (parsed.data.usage) {
+        const usage = parsed.data.usage;
         const tokens = record.info.tokens;
-        const output = parsed.data.usage.output_tokens;
-        record.info.tokens = { ...tokens, output, total: tokens.total - tokens.output + output };
+        record.info.tokens = tokensFromUsage({
+          input_tokens: usage.input_tokens ?? tokens.input,
+          output_tokens: usage.output_tokens,
+          cache_read_input_tokens: usage.cache_read_input_tokens ?? tokens.cache.read,
+          cache_creation_input_tokens: usage.cache_creation_input_tokens ?? tokens.cache.write,
+        });
       }
       return { changed: [messageID], delta: null };
     }

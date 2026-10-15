@@ -62,6 +62,21 @@ describe('ChatGPT loopback bridge', () => {
     expect((await send(second)).status).toBe(200);
   });
 
+  it('normalizes cached usage for JSON and SSE callers', async () => {
+    const cachedEvents = [events[0], {
+      type: 'response.completed',
+      response: { id: 'r', status: 'completed', usage: { input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 4, cache_write_tokens: 2 } } },
+    }];
+    const bridge = create(async () => response(cachedEvents));
+    const grant = await bridge.acquire('account', 'gpt-fixture');
+    const expected = { input_tokens: 4, output_tokens: 3, cache_read_input_tokens: 4, cache_creation_input_tokens: 2 };
+    expect((await (await send(grant)).json()).usage).toEqual(expected);
+    const text = await (await send(grant, { stream: true })).text();
+    const frame = text.split(/\r?\n\r?\n/).find((entry) => entry.startsWith('event: message_delta'));
+    const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:')).slice(5).trimStart();
+    expect(JSON.parse(data).usage).toEqual(expected);
+  });
+
   it('rejects browser origins, model changes, missing grants and unsupported token counting', async () => {
     const bridge = create(async () => response(events));
     const grant = await bridge.acquire('account', 'gpt-fixture');
