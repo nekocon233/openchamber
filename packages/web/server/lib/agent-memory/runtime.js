@@ -56,6 +56,7 @@ const MEMORY_TYPES = new Set(['fact', 'preference', 'reference']);
 
 import { projectConfigFileStemOf } from '../projects/project-id.js';
 import { findThreatPattern } from './threat-patterns.js';
+import { withMemoryFileLock } from './file-lock.js';
 
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9._:-]+$/;
 
@@ -250,7 +251,8 @@ export const createAgentMemoryRuntime = (deps) => {
     }
   };
 
-  const withWriteLock = async (key, mutate) => {
+  const withWriteLock = async (resolved, mutate) => {
+    const key = resolved.key;
     const previous = writeLocks.get(key) || Promise.resolve();
     let release;
     const next = new Promise((resolve) => { release = resolve; });
@@ -259,7 +261,7 @@ export const createAgentMemoryRuntime = (deps) => {
 
     await previous;
     try {
-      return await mutate();
+      return await withMemoryFileLock(resolved.filePath, mutate, fsPromises);
     } finally {
       release();
       if (writeLocks.get(key) === chained) {
@@ -301,7 +303,7 @@ export const createAgentMemoryRuntime = (deps) => {
     if (!title) throw new Error('title is required');
     if (!body) throw new Error('body is required');
 
-    return withWriteLock(resolved.key, async () => {
+    return withWriteLock(resolved, async () => {
       const now = Date.now();
       const current = await read(target);
 
@@ -378,7 +380,7 @@ export const createAgentMemoryRuntime = (deps) => {
     if (hasTitle && !title) throw new Error('title is required');
     if (hasBody && !body) throw new Error('body is required');
 
-    return withWriteLock(resolved.key, async () => {
+    return withWriteLock(resolved, async () => {
       const current = await read(target);
       const existing = current.entries.find((entry) => entry.id === id);
       if (!existing) {
@@ -403,7 +405,7 @@ export const createAgentMemoryRuntime = (deps) => {
     const id = asNonEmptyString(memoryId);
     if (!id) throw new Error('memoryId is required');
 
-    return withWriteLock(resolved.key, async () => {
+    return withWriteLock(resolved, async () => {
       const current = await read(target);
       if (!current.entries.some((entry) => entry.id === id)) {
         return { deleted: false, entries: current.entries };

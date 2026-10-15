@@ -36,6 +36,11 @@ export const createNativeEventPublisher = ({ publishNativeEvent, now = Date.now 
   };
 
   return {
+    /** A targeted full-part update, without projecting unrelated turn items. */
+    part(directory, sessionID, value) {
+      const part = changedCopy(sessionID, `p:${value.id}`, value);
+      if (part) emit(directory, 'message.part.updated', { sessionID, part, time: now() });
+    },
     /** Publishes one event of any type, such as the question registry's. */
     emit(directory, type, properties) {
       emit(directory, type, structuredClone(properties));
@@ -90,8 +95,14 @@ export const createNativeEventPublisher = ({ publishNativeEvent, now = Date.now 
       published.delete(info.id);
     },
 
-    todos(directory, sessionID, todos) {
-      emit(directory, 'todo.updated', { sessionID, todos: structuredClone(todos) });
+    /**
+     * The steps a Codex turn last reported, as an observation of the current
+     * process. `session.todos.updated` carries a snapshot rather than a bare
+     * list because Codex keeps the underlying notification out of its store:
+     * a reader must be able to tell "not observed" from "no steps".
+     */
+    todos(directory, sessionID, snapshot) {
+      emit(directory, 'session.todos.updated', { sessionID, snapshot: structuredClone(snapshot) });
     },
 
     /**

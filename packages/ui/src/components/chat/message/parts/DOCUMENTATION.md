@@ -163,11 +163,35 @@ The `conciseTranscript` UI setting (Settings > Chat > Display, on by default, al
 
 ### Compaction
 
-A compaction shows as a divider in the conversation, the way the CLI marks it, never as a `/compact` message: OpenCode and both CLIs record it as a user message with a `compaction` part, and the CLIs usually compact on their own when the context fills.
+A compaction is a `compaction` message with an explicit running, completed or
+failed lifecycle. `TimelineNotice` renders it separately from conversational
+messages. Native IDs and legacy compaction parts remain available for existing
+consumers; the message role owns the current context-window boundary.
 
-- `getNormalizedMessageForDisplay` (`lib/messageDisplayNormalization.ts`) keeps the text `/compact` for the code that finds compactions by it, and sets `clientCompaction` from the part's `auto` flag; `ChatMessage` draws `CompactionMarker` ("compacted automatically" or "compacted") in place of the user bubble.
+- Finished native compactions make the window unknown until another response
+  reports usage. Running or failed compactions retain the previous reading.
+- Older user-message compaction markers keep their normalization path through
+  `getNormalizedMessageForDisplay` and `CompactionMarker`.
 - The summary the compaction left (`summary: true`) renders folded in `CompactionSummary`; the model reads it, the user opens it on demand.
 - Native sessions set `auto` from the CLI: for Claude Code the trigger a live boundary frame names (a compaction read back from history names none and shows as "compacted"), and for Codex whether the compaction follows the turn's prompt (a /compact is a turn of its own).
+
+### Native questions and skills
+
+- Question rows accept structured `questionAnswers` and `questionStatus`
+  metadata. They preserve multi-select and arbitrary custom text without
+  parsing presentation strings. Older CLI output retains its existing parser.
+- Native plan choices retain their wire values and localize labels in the
+  renderer. Answered historical rows never reopen the interactive form.
+- An answered plan exit renders once. The server keeps the selection in its own
+  store and, on a read, builds the question carrying the plan and that
+  selection beside the tool call it came from; `filterVisibleParts` drops the
+  tool call in that message, because the two are the same event and only the
+  question kept the answer. A plan exit nothing recorded an answer for has no
+  such question and keeps its own row. This is a rendering rule, not a data
+  one: the part stays in the record, so the model choice recovered from it on
+  a Claude turn still resolves.
+- Explicit native skill inputs and successful manifest reads use the existing
+  static skill row. Catalog availability or a textual mention is not usage.
 
 ### Message parts
 

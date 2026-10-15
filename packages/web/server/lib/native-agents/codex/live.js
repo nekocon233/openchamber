@@ -18,16 +18,18 @@ import { CODEX_FAST_SERVICE_TIER, CODEX_STANDARD_SERVICE_TIER } from '../catalog
 import { invalidRequestError, sessionBusyError } from '../errors.js';
 import { codexPartId, decodeNativeSessionId, encodeCodexSessionId, isNativeClientUserMessageId } from '../ids.js';
 import { buildSessionRecord, stoppedError, unknownError } from '../records.js';
-import { codexPlanItemSchema } from './items.js';
+import { codexPlanItemSchema, codexQuestionItem, codexSkillId, partsForCodexItem } from './items.js';
+import { createCodexPlanTodos } from './plan-todos.js';
 import { projectCodexTurns } from './projector.js';
 import { JsonRpcError } from './rpc.js';
+import { createCodexTurnDetails } from './history-details.js';
+import { codexUsageNotification, observeCodexUsage } from './usage.js';
 
 const APPROVAL_POLICY = 'never';
 const FULL_ACCESS_SANDBOX = 'danger-full-access';
 // The provider an unconfigured thread runs on: the ChatGPT login OpenChamber
 // starts the CLI with. A connection replaces it for the threads that name one.
 const DEFAULT_CODEX_PROVIDER = 'openai';
-const TODO_STATUS = { pending: 'pending', inProgress: 'in_progress', completed: 'completed' };
 const TURN_NOT_FOUND = /^turn not found/;
 
 const turnParams = z.object({
@@ -90,6 +92,7 @@ const userInputRequest = z.object({
     options: z.array(z.object({ label: z.string(), description: z.string() }).passthrough()).nullish(),
   }).passthrough()),
 }).passthrough();
+const skillInput = z.object({ type: z.literal('skill'), name: z.string(), path: z.string() });
 
 // Streamed fields of items the app-server sent earlier, before deltas extend them.
 const textField = z.string().catch('');
@@ -111,7 +114,7 @@ const appendAt = (list, index, delta) => {
  * @param {(method: string, params: object) => Promise<unknown>} options.request app-server JSON-RPC request
  * @param {ReturnType<typeof import('../publisher.js').createNativeEventPublisher>} options.publisher
  * @param {ReturnType<typeof import('../questions.js').createQuestionRegistry>} options.questions
- * @param {(sessionId: string, directory: string, turn: { id: string, status: string }) => void} [options.onTurnFinished] Codex finished a turn and recorded it
+ * @param {(sessionId: string, directory: string, turn: { id: string, summary: string, status: string }) => void} [options.onTurnFinished] Codex finished a turn and recorded it
  * @param {(sessionId: string, directory: string) => void} [options.onIdle] the thread stopped running a turn
  * @param {(plan: import('./plan-decisions.js').CodexPlan) => void} [options.onPlanReady] a completed planning turn proposed a plan
  * @param {(sessionId: string) => void} [options.onSessionClosed] the app-server closed a thread
@@ -131,6 +134,9 @@ export const createCodexLiveThreads = ({
 }) => {
   /** @type {Map<string, object>} thread id → live thread */
   const threads = new Map();
+  // Revisions order one process's observations for every reader; they restart
+  // with the process, and a reconnect resets the reader's authority with them.
+  let todoRevision = 0;
 
   const project = (live) => {
     if (!live.turn) return [];
@@ -149,6 +155,7 @@ export const createCodexLiveThreads = ({
       threadModel: live.config?.model ?? '',
       sendRecordFor: (messageId) => live.sends.get(messageId) ?? null,
       itemTimes: live.turn.itemTimes,
+      details: new Map([[live.turn.id, live.turn.detail]]),
     });
     live.messageOfPart = new Map(records.flatMap((record) => record.parts.map((part) => [part.id, record.info.id])));
     return records;
@@ -233,13 +240,22 @@ export const createCodexLiveThreads = ({
         sends: new Map(),
         messageOfPart: new Map(),
         idleWaiters: [],
+        todos: null,
+        pendingSkills: [],
       };
       threads.set(threadId, live);
+      live.todos = createCodexPlanTodos({
+        nextRevision: () => (todoRevision += 1),
+        publish: (snapshot) => publisher.todos(live.directory, live.sessionId, snapshot),
+      });
     }
     return live;
   };
 
   const settleTurn = (live, turn) => {
+    for (const entry of live.turn.detail.extraItems) {
+      if (entry.item.type === 'openchamberQuestion' && entry.item.resolution === 'pending') entry.item.resolution = 'interrupted';
+    }
     live.turn.status = turn.status;
     live.turn.error = turn.error ?? null;
     live.turn.completedAt = turn.completedAt ?? Math.floor(now() / 1000);
@@ -265,8 +281,10 @@ export const createCodexLiveThreads = ({
       startedAt: turn.startedAt ?? Math.floor(now() / 1000),
       completedAt: null,
       planningSend: live.pendingPlanningSend,
+      detail: createCodexTurnDetails(),
     };
     live.pendingPlanningSend = null;
+    live.turn.detail.segment = turn.id;
     setBusy(live, true);
   };
 
@@ -283,6 +301,23 @@ export const createCodexLiveThreads = ({
       end: completed ? (parsed.data.completedAtMs ?? receivedAt) : null,
     });
     upsertItem(live, parsed.data.item);
+    if (!previous) {
+      const detail = live.turn.detail;
+      if (parsed.data.item.type === 'userMessage') {
+        if (detail.hasAssistant) detail.segment = parsed.data.item.id;
+        detail.hasAssistant = false;
+        for (const skill of live.pendingSkills.splice(0)) detail.extraItems.push({
+          after: parsed.data.item.id,
+          item: { ...skill, type: 'openchamberSkill', id: codexSkillId(live.turn.id, parsed.data.item.id, skill.name), source: 'attached' },
+        });
+      } else if (parsed.data.item.type === 'contextCompaction') {
+        detail.segment = parsed.data.item.id;
+        detail.hasAssistant = false;
+        detail.usage.lastTotal = null;
+      } else {
+        detail.hasAssistant = true;
+      }
+    }
     publishTurn(live);
   };
 
@@ -307,6 +342,7 @@ export const createCodexLiveThreads = ({
     if (!live.childSession) return;
     if (live.turn) settleTurn(live, { status: 'interrupted' });
     else setBusy(live, false);
+    live.todos.close();
     threads.delete(live.threadId);
     publisher.forget(live.sessionId);
   };
@@ -339,6 +375,26 @@ export const createCodexLiveThreads = ({
     },
     'item/started': (params) => onItem(params, false),
     'item/completed': (params) => onItem(params, true),
+    'thread/tokenUsage/updated': (params) => {
+      const parsed = codexUsageNotification.safeParse(params);
+      const live = parsed.success ? threads.get(parsed.data.threadId) : null;
+      if (!live?.turn || live.turn.id !== parsed.data.turnId) return;
+      const detail = live.turn.detail;
+      if (observeCodexUsage(detail.usage, detail.segment, parsed.data.tokenUsage)) publishTurn(live);
+    },
+    'item/plan/delta': (params) => {
+      const target = deltaTarget(textDeltaParams, params);
+      if (!target || target.item.type !== 'plan') return;
+      target.item.text = textField.parse(target.item.text) + target.params.delta;
+      const partID = codexPartId(target.live.threadId, target.item.id);
+      const messageId = target.live.messageOfPart.get(partID);
+      if (!messageId) return;
+      const [part] = partsForCodexItem(target.item, {
+        sessionId: target.live.sessionId, threadId: target.live.threadId, messageId,
+        start: target.live.turn.itemTimes.get(target.item.id)?.start ?? now(), end: null,
+      });
+      if (part) publisher.part(target.live.directory, target.live.sessionId, part);
+    },
     'item/agentMessage/delta': (params) => {
       const target = deltaTarget(textDeltaParams, params);
       if (!target) return;
@@ -359,18 +415,15 @@ export const createCodexLiveThreads = ({
     'turn/plan/updated': (params) => {
       const parsed = planParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
-      if (!live) return;
-      publisher.todos(live.directory, live.sessionId, parsed.data.plan.map((entry, index) => ({
-        id: `${live.threadId}_plan_${index}`,
-        content: entry.step,
-        status: TODO_STATUS[entry.status] ?? 'pending',
-        priority: 'medium',
-      })));
+      // A child reports its own steps under its own session, like its items.
+      if (live) live.todos.observe(parsed.data.plan);
     },
     'turn/completed': (params) => {
       const parsed = turnParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
       if (!live?.turn || live.turn.id !== parsed.data.turn.id) return;
+      const lastText = live.turn.order.map((id) => live.turn.items.get(id)).findLast((item) => item.type === 'agentMessage' || item.type === 'plan');
+      const summary = lastText ? textField.parse(lastText.text) : '';
       let proposal = null;
       if (parsed.data.turn.status === 'completed' && live.turn.planningSend && !live.childSession) {
         for (let index = live.turn.order.length - 1; index >= 0; index -= 1) {
@@ -382,19 +435,26 @@ export const createCodexLiveThreads = ({
             sessionId: live.sessionId, directory: live.directory, turnId: live.turn.id,
             text: plan.data.text, send: live.turn.planningSend,
           };
+          const messageID = live.messageOfPart.get(codexPartId(live.threadId, itemId));
+          if (messageID) proposal.tool = { messageID, callID: itemId };
           break;
         }
       }
       settleTurn(live, parsed.data.turn);
       if (proposal) onPlanReady(proposal);
-      onTurnFinished(live.sessionId, live.directory, { id: parsed.data.turn.id, status: parsed.data.turn.status });
+      onTurnFinished(live.sessionId, live.directory, { id: parsed.data.turn.id, status: parsed.data.turn.status, summary });
     },
     'thread/status/changed': (params) => {
       const parsed = threadStatusParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
       if (!live) return;
       const status = parsed.data.status.type;
-      if (status === 'notLoaded') live.loaded = false;
+      if (status === 'notLoaded') {
+        live.loaded = false;
+        // The app-server dropped the thread from memory, and the steps it
+        // reported were never written anywhere Codex can read back.
+        live.todos.close();
+      }
       if (!live.childSession) return;
       if (status === 'active') setBusy(live, true);
       else if (status === 'idle') setBusy(live, false);
@@ -419,7 +479,14 @@ export const createCodexLiveThreads = ({
   const answerQuestions = async (params) => {
     const parsed = userInputRequest.safeParse(params);
     const live = parsed.success ? threads.get(parsed.data.threadId) : null;
-    if (!live) return { answers: {} };
+    if (!live?.turn) return { answers: {} };
+    const turn = live.turn;
+    const questionItem = codexQuestionItem.parse({
+      type: 'openchamberQuestion', id: parsed.data.itemId, questions: parsed.data.questions,
+    });
+    turn.detail.extraItems.push({ item: questionItem, after: turn.order.at(-1) ?? null });
+    turn.itemTimes.set(questionItem.id, { start: now(), end: null });
+    publishTurn(live);
     const partID = codexPartId(live.threadId, parsed.data.itemId);
     const messageID = live.messageOfPart.get(partID);
     const outcome = await questions.ask({
@@ -434,6 +501,12 @@ export const createCodexLiveThreads = ({
       tool: messageID ? { messageID, callID: parsed.data.itemId } : undefined,
     });
     const chosen = outcome.status === 'replied' ? outcome.answers : [];
+    questionItem.answers = chosen;
+    questionItem.resolution = outcome.status === 'replied' ? 'answered' : outcome.reason ?? 'dismissed';
+    if (live.turn === turn) {
+      turn.itemTimes.get(questionItem.id).end = now();
+      publishTurn(live);
+    }
     return {
       answers: Object.fromEntries(parsed.data.questions.map((question, index) => [question.id, { answers: chosen[index] ?? [] }])),
     };
@@ -474,6 +547,10 @@ export const createCodexLiveThreads = ({
       signal?.throwIfAborted();
       live.sends.set(messageId, send);
       live.config = config;
+      live.pendingSkills = input.flatMap((item) => {
+        const parsed = skillInput.safeParse(item);
+        return parsed.success ? [parsed.data] : [];
+      });
       if (live.busy && live.turn) {
         await request('turn/steer', { threadId: live.threadId, expectedTurnId: live.turn.id, input, clientUserMessageId: messageId });
         return;
@@ -576,6 +653,8 @@ export const createCodexLiveThreads = ({
 
     /** Drops what the live threads know of a deleted thread. */
     forget(sessionId) {
+      const live = threads.get(threadFor(sessionId));
+      live?.todos.close();
       threads.delete(threadFor(sessionId));
     },
 
@@ -624,11 +703,21 @@ export const createCodexLiveThreads = ({
     handleExit(reason) {
       for (const live of threads.values()) {
         live.loaded = false;
+        live.todos.close();
         const error = { message: `Codex app-server stopped: ${reason}` };
         if (live.turn) settleTurn(live, { status: 'failed', error });
         else setBusy(live, false, unknownError(error.message));
         if (live.childSession) closeChild(live);
       }
+    },
+
+    /**
+     * The steps this process observed for a thread. A thread it holds no live
+     * entry for is `unknown`, which is not a thread without steps.
+     */
+    todos(sessionId) {
+      const live = threads.get(threadFor(sessionId));
+      return live ? live.todos.snapshot() : { state: 'unknown', generation: null, revision: 0, todos: [] };
     },
 
     /** A spawned thread is navigable before its first turn is persisted. */

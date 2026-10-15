@@ -9,10 +9,11 @@ import { NativeTasksBody } from './NativeTasksBody';
 import { useNativeTasksUIStore } from './task-ui-store';
 
 /**
- * The context-panel surface for native Claude Code tasks. It follows the
+ * The context-panel surface for the native CLIs' task views. It follows the
  * currently selected session; the panel itself owns tab and visibility
- * lifecycle. On mobile the workspace drawer hosts the same body and passes
- * `onClose` so a child-session link can dismiss the drawer.
+ * lifecycle, and the body decides which views the session's backend has. On
+ * mobile the workspace drawer hosts the same body and passes `onClose` so a
+ * child-session link can dismiss the drawer.
  */
 export function NativeTasksPane({ onClose }: { onClose?: () => void }) {
   const { t } = useI18n();
@@ -27,7 +28,7 @@ export function NativeTasksPane({ onClose }: { onClose?: () => void }) {
   const tab = useNativeTasksUIStore((state) => state.tab);
 
   const eligible = Boolean(currentSessionId && directory
-    && nativeBackendOfSessionId(currentSessionId) === 'claude'
+    && nativeBackendOfSessionId(currentSessionId) !== null
     && nativeAgents.supported);
 
   if (!eligible || !currentSessionId || !directory) {

@@ -23,7 +23,8 @@ import {
 } from '../ids.js';
 import { buildSessionRecord, unconfirmedSessionRecord } from '../records.js';
 import { createClaudeProjection } from './projector.js';
-import { slimFileEditResult } from './tools.js';
+import { slimToolResult } from './tools.js';
+import { isResponsesReplayBlock } from './responses-replay.js';
 
 const MAX_TITLE_LENGTH = 100;
 const DEFAULT_HISTORY_CACHE_BYTES = 128 * 1024 * 1024;
@@ -55,9 +56,9 @@ const replayEntrySchema = z.object({
 }).passthrough();
 const contentBlockSchema = z.object({ type: z.string() }).passthrough();
 
-const FILE_EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write']);
+const SUPPLEMENTED_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'AskUserQuestion']);
 // A Bash result carries the file changes Claude Code recorded for the command.
-const DIFF_RESULT_TOOLS = new Set([...FILE_EDIT_TOOLS, 'Bash']);
+const STRUCTURED_RESULT_TOOLS = new Set([...SUPPLEMENTED_TOOLS, 'Bash']);
 
 const assistantToolUsesSchema = z.object({
   type: z.literal('assistant'),
@@ -99,8 +100,8 @@ const usesToolIn = (tools) => (entry) => {
     block.type === 'tool_use' && block.name !== undefined && tools.has(block.name)
   ));
 };
-const usesFileEditTool = usesToolIn(FILE_EDIT_TOOLS);
-const usesDiffResultTool = usesToolIn(DIFF_RESULT_TOOLS);
+const usesSupplementedTool = usesToolIn(SUPPLEMENTED_TOOLS);
+const usesStructuredResultTool = usesToolIn(STRUCTURED_RESULT_TOOLS);
 
 const toolMessageSchema = z.object({
   type: z.enum(['user', 'assistant']),
@@ -225,35 +226,36 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     return new Map(entries.filter(([toolUseId]) => toolUseId !== null));
   };
 
-  // History reads drop the structured tool results the diff renderers need.
+  // History reads drop structured file changes and question answers.
   // The raw transcript keeps them, and importing it into a throwaway store is
-  // the SDK's way to read it. Only transcripts that edit files or run commands
-  // pay for the second read, and a failure costs the diffs, never the history.
-  const fileEditResults = async (sdk, entries, sessionUuid, directory, includeSubagents) => {
+  // the SDK's way to read it. Only transcripts with relevant tool calls pay
+  // for the second read; a failure leaves the main conversation readable.
+  const structuredToolResults = async (sdk, entries, sessionUuid, directory, includeSubagents) => {
     const results = new Map();
-    if (!entries.some(usesDiffResultTool)) return results;
+    if (!entries.some(usesStructuredResultTool)) return { results, complete: true };
     try {
       await sdk.importSessionToStore(sessionUuid, {
         append: async (_key, rawEntries) => {
-          addEditResults(results, rawEntries);
+          addStructuredResults(results, rawEntries);
         },
         load: async () => null,
       }, { dir: directory, includeSubagents });
     } catch (error) {
-      console.warn('[native-agents] Claude edit diffs unavailable for session', sessionUuid, error);
+      console.warn('[native-agents] Claude supplemental tool results unavailable for session', sessionUuid, error);
+      return { results, complete: false };
     }
-    return results;
+    return { results, complete: true };
   };
 
-  // The diff fields of the raw entries that carry an edit result, by entry uuid.
+  // Required structured fields from raw result entries, keyed by entry uuid.
   // Most entries carry no structured result at all; they are skipped before
   // the result parsers, whose failures are the expensive part of this pass
   // (a 66 MB transcript has 19,151 entries, 2,698 of them with a result).
-  const addEditResults = (results, rawEntries) => {
+  const addStructuredResults = (results, rawEntries) => {
     for (const raw of rawEntries) {
       const entry = rawToolResultEntrySchema.safeParse(raw);
       if (!entry.success || entry.data.toolUseResult === undefined) continue;
-      const slim = slimFileEditResult(entry.data.toolUseResult);
+      const slim = slimToolResult(entry.data.toolUseResult);
       if (slim) results.set(entry.data.uuid, slim);
     }
     return results;
@@ -276,7 +278,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     }
   };
 
-  const withFileEditResults = (entries, results) => (results.size === 0 ? entries : entries.map((entry) => {
+  const withStructuredResults = (entries, results) => (results.size === 0 ? entries : entries.map((entry) => {
     const result = results.get(entry.uuid);
     return result && entry.tool_use_result === undefined ? { ...entry, tool_use_result: result } : entry;
   }));
@@ -307,14 +309,14 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     // cached, and nearly every subagent runs commands. Commands alone
     // therefore do not trigger it; the file changes recorded for them come
     // along when it runs anyway.
-    if (missing.size === 0 && !entries.some(usesFileEditTool)) return { edits, recoveredResults };
+    if (missing.size === 0 && !entries.some(usesSupplementedTool)) return { edits, recoveredResults, complete: true };
     let found = false;
     try {
       await sdk.importSessionToStore(sessionUuid, {
         append: async (key, rawEntries) => {
           if (key.subpath?.split('/').at(-1) !== `agent-${agentId}`) return;
           found = true;
-          addEditResults(edits, rawEntries);
+          addStructuredResults(edits, rawEntries);
           for (const entry of rawEntries) {
             const parsed = toolMessageSchema.safeParse(entry);
             if (parsed.success && parsed.data.type === 'user' && parsed.data.message.content.some((block) => (
@@ -324,14 +326,15 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
         },
         load: async () => null,
       }, { dir: directory, includeSubagents: true });
-      if (!found && missing.size > 0) throw new Error('Subagent transcript is unavailable');
+      if (!found) throw new Error('Subagent transcript is unavailable');
     } catch (error) {
       // Missing outcomes are required data; a failed read cannot turn a
       // successful tool into an authoritative interruption. Diffs are optional.
       if (missing.size > 0) throw error;
       console.warn('[native-agents] Claude subagent edit diffs unavailable');
+      return { edits, recoveredResults, complete: false };
     }
-    return { edits, recoveredResults };
+    return { edits, recoveredResults, complete: true };
   };
 
   const childSessionRecords = (parent, records, subagents, sessionUuid, directory) => {
@@ -413,7 +416,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
       const entries = await earlierEntries(sdk, sessionUuid, directory, raw, boundaryUuid);
       return {
         boundaryUuid,
-        records: project({ sessionId, directory, entries: withFileEditResults(entries, editResults), sendRecords, subagents }),
+        records: project({ sessionId, directory, entries: withStructuredResults(entries, editResults), sendRecords, subagents }),
         uuids: new Set(entries.map(entryUuidOf)),
       };
     } catch (error) {
@@ -460,20 +463,23 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
       const boundaryUuid = compactionBoundaryUuid(entries);
       const reusable = boundaryUuid !== null && cached?.value.earlier?.boundaryUuid === boundaryUuid ? cached.value.earlier : null;
       const raw = boundaryUuid !== null && reusable === null ? await readRawTranscript(sdk, decoded.sessionUuid, directory) : null;
-      const editResults = raw === null
-        ? await fileEditResults(sdk, entries, decoded.sessionUuid, directory, false)
-        : addEditResults(new Map(), raw);
+      const supplement = raw === null
+        ? await structuredToolResults(sdk, entries, decoded.sessionUuid, directory, false)
+        : { results: addStructuredResults(new Map(), raw), complete: true };
+      const editResults = supplement.results;
       const earlier = reusable ?? (raw === null ? null : await projectEarlier({
         sdk, sessionId, sessionUuid: decoded.sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents,
       }));
       const current = earlier === null ? entries : entries.filter((entry) => !earlier.uuids.has(entryUuidOf(entry)));
       const records = [
         ...(earlier?.records ?? []),
-        ...project({ sessionId, directory, entries: withFileEditResults(current, editResults), sendRecords, subagents }),
+        ...project({ sessionId, directory, entries: withStructuredResults(current, editResults), sendRecords, subagents }),
       ];
       const value = { records, childSessions: childSessionRecords(sessionId, records, subagents, decoded.sessionUuid, directory), earlier };
-      rememberHistory(cacheKey, { fingerprint, bytes: info.fileSize ?? 0, value });
-      return { records, childSessions: await withParentArchive(sessionId, value.childSessions) };
+      if (supplement.complete) rememberHistory(cacheKey, { fingerprint, bytes: info.fileSize ?? 0, value });
+      const result = { records, childSessions: await withParentArchive(sessionId, value.childSessions) };
+      if (!supplement.complete) result.metadataComplete = false;
+      return result;
     }
 
     // A subagent transcript is read fresh: it changes while the subagent runs
@@ -482,11 +488,13 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     const agentId = subagents.get(decoded.toolUseId);
     if (!agentId) return null;
     const entries = await sdk.getSubagentMessages(decoded.sessionUuid, agentId, { dir: directory });
-    const { edits, recoveredResults } = await subagentToolResults(sdk, decoded.sessionUuid, agentId, directory, entries);
-    return {
-      records: project({ sessionId, directory, entries: withFileEditResults(entries, edits), sendRecords: new Map(), subagents: new Map(), recoveredResults }),
+    const { edits, recoveredResults, complete } = await subagentToolResults(sdk, decoded.sessionUuid, agentId, directory, entries);
+    const result = {
+      records: project({ sessionId, directory, entries: withStructuredResults(entries, edits), sendRecords: new Map(), subagents: new Map(), recoveredResults }),
       childSessions: [],
     };
+    if (!complete) result.metadataComplete = false;
+    return result;
   };
 
   /**
@@ -546,19 +554,21 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
    * Tool Search writes tool_reference blocks into tool results. A resume
    * replays this chain to the configured endpoint, and Anthropic-compatible
    * third-party endpoints reject those blocks with HTTP 400 on every send.
-   * Block-level scan of the chain (never a substring match: the type string
-   * also appears inside ordinary text). @returns {Promise<string[]>} the
-   * referenced tool names
+   * GPT replay carriers also belong only to the ChatGPT bridge. Scan the
+   * active chain at block level; text mentions and sidechains are not replay.
+   * @returns {Promise<{ toolReferences: string[], hasGptReplayState: boolean }>}
    */
-  const nonPortableReplayBlocks = async (sessionUuid, directory) => {
+  const inspectReplayHistory = async (sessionUuid, directory) => {
     const sdk = await loadSdk();
     const entries = await sdk.getSessionMessages(sessionUuid, { dir: directory, includeSystemMessages: true });
     const names = new Set();
+    let hasGptReplayState = false;
     const visit = (content) => {
       if (!Array.isArray(content)) return;
       for (const block of content) {
         const parsed = contentBlockSchema.safeParse(block);
         if (!parsed.success) continue;
+        if (isResponsesReplayBlock(block)) hasGptReplayState = true;
         if (parsed.data.type === 'tool_reference') {
           const toolName = z.string().safeParse(parsed.data.tool_name);
           names.add(toolName.success ? toolName.data : 'unknown');
@@ -572,7 +582,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
       if (!parsed.success || parsed.data.isSidechain) continue;
       visit(parsed.data.message?.content);
     }
-    return [...names];
+    return { toolReferences: [...names], hasGptReplayState };
   };
 
   /**
@@ -642,7 +652,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     loadHistory,
     sessionExists,
     hasTranscript,
-    nonPortableReplayBlocks,
+    inspectReplayHistory,
     rewindTarget,
     chainHolds,
     fork,

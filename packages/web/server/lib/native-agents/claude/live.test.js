@@ -82,7 +82,7 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = 
   return { sdk, calls };
 };
 
-const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, nonPortableReplayBlocks = async () => [], idleTimeoutMs = 60_000, maxLiveSessions, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest, afterFrames } = {}) => {
+const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, inspectReplayHistory = async () => ({ toolReferences: [], hasGptReplayState: false }), idleTimeoutMs = 60_000, maxLiveSessions, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest, afterFrames } = {}) => {
   const events = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
   const questions = createQuestionRegistry({
@@ -94,7 +94,7 @@ const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = fals
     resolveExecutable: async () => executable,
     buildEnv: () => ({ PATH: '/usr/bin' }),
     hasTranscript: async () => hasTranscript,
-    nonPortableReplayBlocks,
+    inspectReplayHistory,
     publisher,
     questions,
     readGlobalInstructions: async () => instructions,
@@ -245,6 +245,16 @@ describe('Claude live sessions', () => {
       expect.objectContaining({ parentID: SESSION_ID, id: expect.stringMatching(new RegExp(`^${SESSION_ID}_t_toolu_`)) }),
     ]);
     expect(harness.live.busySessionIds(DIRECTORY)).toEqual([CHILD_ID]);
+  });
+
+  it('opts the query into the task-tracking tools a connected model would not get', async () => {
+    const harness = createHarness();
+    await sendPrompt(harness.live);
+
+    expect(harness.calls.queries[0].options.env).toMatchObject({
+      PATH: '/usr/bin',
+      CLAUDE_CODE_ENABLE_TODO_TOOLS: '1',
+    });
   });
 
   it('names every message and part the way a later history read does', async () => {
@@ -798,7 +808,8 @@ describe('Claude live task list', () => {
     expect(payloads(events, 'session.checklist.updated').map((payload) => payload.properties)).toEqual([
       { sessionID: SESSION_ID, snapshot: expect.objectContaining({ source: 'files', items: [{ id: '1', subject: 'alpha', status: 'pending', blocks: [], blockedBy: [] }] }) },
     ]);
-    expect(payloads(events, 'todo.updated')).toEqual([]);
+    // The step list is Codex's channel; a Claude session never publishes it.
+    expect(payloads(events, 'session.todos.updated')).toEqual([]);
     await live.shutdown();
   });
 });
@@ -879,7 +890,7 @@ describe('Claude connection switching', () => {
   });
 
   it('refuses to resume Tool Search history onto an endpoint that rejects it, before spawning', async () => {
-    const harness = createHarness({ hasTranscript: true, nonPortableReplayBlocks: async () => ['Monitor', 'ExitPlanMode'] });
+    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: ['Monitor', 'ExitPlanMode'], hasGptReplayState: false }) });
     await expect(sendPrompt(harness.live, { config: config('first') })).rejects.toMatchObject({
       code: 'NATIVE_HISTORY_NOT_PORTABLE', status: 400, message: expect.stringContaining('Monitor'),
     });
@@ -887,11 +898,29 @@ describe('Claude connection switching', () => {
     await harness.live.shutdown();
   });
 
-  it('does not scan history when the default Anthropic login resumes a session', async () => {
+  it('allows Tool Search history on the default Anthropic login after checking for GPT state', async () => {
     const scanned = [];
-    const harness = createHarness({ hasTranscript: true, nonPortableReplayBlocks: async (...args) => { scanned.push(args); return ['Monitor']; } });
+    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async (...args) => { scanned.push(args); return { toolReferences: ['Monitor'], hasGptReplayState: false }; } });
     await sendPrompt(harness.live);
-    expect(scanned).toHaveLength(0);
+    expect(scanned).toHaveLength(1);
+    expect(harness.calls.queries).toHaveLength(1);
+    await answerQuestion(harness);
+    await harness.live.whenIdle(SESSION_ID);
+    await harness.live.shutdown();
+  });
+
+  it.each(['default', 'connection'])('refuses GPT state on the %s provider before spawning', async (provider) => {
+    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: [], hasGptReplayState: true }) });
+    await expect(sendPrompt(harness.live, provider === 'connection' ? { config: config('other') } : {})).rejects.toMatchObject({ code: 'NATIVE_GPT_REPLAY_NOT_PORTABLE', status: 400 });
+    expect(harness.calls.queries).toHaveLength(0);
+    await harness.live.shutdown();
+  });
+
+  it('allows GPT replay state on a new ChatGPT query', async () => {
+    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: [], hasGptReplayState: true }) });
+    const selected = config('chatgpt');
+    selected.launch.descriptor = { name: 'GPT fixture', billing: 'chatgpt-plan' };
+    await sendPrompt(harness.live, { config: selected });
     expect(harness.calls.queries).toHaveLength(1);
     await answerQuestion(harness);
     await harness.live.whenIdle(SESSION_ID);

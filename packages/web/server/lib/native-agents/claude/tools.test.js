@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapClaudeToolResult, mapClaudeToolUse, slimFileEditResult } from './tools.js';
+import { mapClaudeToolResult, mapClaudeToolUse, slimToolResult } from './tools.js';
 import { recordedFileChanges } from '@openchamber/ui/lib/opencode/tools';
 
 describe('Claude tool source mapping', () => {
@@ -44,6 +44,20 @@ const oneLine = hunk(10, 1, 10, 1, ['-old', '+new']);
 // command's output plus the record of what it changed.
 const commandResult = (record) => ({ stdout: 'done', stderr: '', interrupted: false, isImage: false, noOutputExpected: false, bashEditDiff: record });
 const bashMetadata = (record) => mapClaudeToolResult('bash', 'done', commandResult(record)).metadata;
+
+describe('structured Claude terminal answers', () => {
+  it('preserves quoted, multiline and comma-separated native answers without presentation parsing', () => {
+    const result = {
+      questions: [{ question: 'Which "features"?', multiSelect: true }],
+      answers: { 'Which "features"?': 'A, B, "custom"\n第二行' }, response: 'Additional\nnotes',
+    };
+    const slim = slimToolResult(result);
+    expect(mapClaudeToolResult('question', 'Unparseable presentation', slim)).toEqual({
+      output: 'Unparseable presentation',
+      metadata: { questionAnswers: [['A, B, "custom"\n第二行']], questionStatus: 'answered', questionResponse: 'Additional\nnotes' },
+    });
+  });
+});
 
 describe('file changes Claude Code recorded for a Bash command', () => {
   it('shows the hunks it kept as the diffs the edit renderers read', () => {
@@ -127,7 +141,7 @@ describe('file changes Claude Code recorded for a Bash command', () => {
 
   it('keeps the record and drops the output when history slims the result, and projects it the same way', () => {
     const record = { files: [file('a.cs', [oneLine])], moreFiles: 1, changedFiles: [path('a.cs'), path('b.cs')] };
-    const slim = slimFileEditResult(commandResult(record));
+    const slim = slimToolResult(commandResult(record));
     expect(slim).toEqual({ bashEditDiff: record });
     expect(mapClaudeToolResult('bash', 'done', slim)).toEqual(mapClaudeToolResult('bash', 'done', commandResult(record)));
   });
@@ -140,7 +154,7 @@ describe('file changes Claude Code recorded for a Bash command', () => {
   });
 
   it('keeps nothing of a command that recorded no change', () => {
-    expect(slimFileEditResult(commandResult({ files: [], moreFiles: 0, skipped: true }))).toBeNull();
-    expect(slimFileEditResult({ stdout: 'done', stderr: '', interrupted: false, isImage: false })).toBeNull();
+    expect(slimToolResult(commandResult({ files: [], moreFiles: 0, skipped: true }))).toBeNull();
+    expect(slimToolResult({ stdout: 'done', stderr: '', interrupted: false, isImage: false })).toBeNull();
   });
 });

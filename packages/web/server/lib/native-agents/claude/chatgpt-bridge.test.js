@@ -16,8 +16,59 @@ const send = (grant, patch = {}, headers = {}) => fetch(`${grant.baseURL}/v1/mes
   method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': grant.token, ...headers },
   body: JSON.stringify({ model: 'gpt-fixture', messages: [{ role: 'user', content: 'Hello' }], ...patch }),
 });
+const replayEvents = (label) => {
+  const output = [
+    { type: 'reasoning', id: `rs-${label}`, encrypted_content: `encrypted-${label}`, summary: [] },
+    { type: 'message', id: `m-${label}`, phase: 'final_answer', content: [{ type: 'output_text', text: label }] },
+  ];
+  return [
+    ...output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })),
+    { type: 'response.completed', response: { id: `r-${label}`, status: 'completed', output, usage: { input_tokens: 10, output_tokens: 2 } } },
+  ];
+};
 
 describe('ChatGPT loopback bridge', () => {
+  it.each([false, true])('restores state on a new bridge and grant from a %s streaming reply', async (streaming) => {
+    const calls = [];
+    const fetchImpl = async (_url, options) => { calls.push(JSON.parse(options.body)); return response(replayEvents('Hello')); };
+    const first = create(fetchImpl);
+    const grant = await first.acquire('account', 'gpt-fixture');
+    const result = await send(grant, { stream: streaming });
+    let content;
+    if (streaming) {
+      const frames = (await result.text()).split(/\r?\n\r?\n/).filter(Boolean).map((frame) => JSON.parse(frame.split(/\r?\n/).find((line) => line.startsWith('data:')).slice(5)));
+      const carrier = frames.find((frame) => frame.content_block?.type === 'redacted_thinking').content_block;
+      content = [{ type: 'text', text: frames.filter((frame) => frame.delta?.type === 'text_delta').map((frame) => frame.delta.text).join('') }, carrier];
+    } else content = (await result.json()).content;
+    grant.dispose();
+    await first.shutdown();
+    const next = await create(fetchImpl).acquire('account', 'gpt-fixture');
+    expect((await send(next, { messages: [{ role: 'assistant', content }, { role: 'user', content: 'Continue.' }] })).status).toBe(200);
+    expect(calls[1].input.slice(0, 2)).toEqual([
+      replayEvents('Hello')[0].item,
+      { type: 'message', role: 'assistant', id: 'm-Hello', phase: 'final_answer', content: [{ type: 'output_text', text: 'Hello' }] },
+    ]);
+    expect(calls[1].include).toContain('reasoning.encrypted_content');
+  });
+
+  it('keeps simultaneous parent and child histories independent on the same grant', async () => {
+    const calls = [];
+    const bridge = create(async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      const prompt = body.input.find((item) => item.role === 'user');
+      return response(replayEvents(prompt.content));
+    });
+    const grant = await bridge.acquire('account', 'gpt-fixture');
+    const labels = ['parent', 'child'];
+    const replies = await Promise.all(labels.map(async (label) => (await (await send(grant, { messages: [{ role: 'user', content: label }] })).json()).content));
+    await Promise.all(labels.map((label, i) => send(grant, { messages: [{ role: 'user', content: label }, { role: 'assistant', content: replies[i] }] })));
+    for (const call of calls.slice(2)) {
+      const label = call.input[0].content;
+      expect(call.input.filter((item) => item.type === 'reasoning').map((item) => item.id)).toEqual([`rs-${label}`]);
+    }
+  });
+
   it('permits image input only when the grant carries the model capability', async () => {
     const requests = [];
     const bridge = create(async (_url, options) => { requests.push(JSON.parse(options.body)); return response(events); });

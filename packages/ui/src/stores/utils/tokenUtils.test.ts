@@ -230,6 +230,15 @@ describe("findLatestContextFill", () => {
 })
 
 describe("buildSessionContextUsage", () => {
+  test("uses the CLI's effective context window ahead of the model catalog", () => {
+    const message = { ...reply("r", 286_643), contextWindow: 828_400 }
+    const usage = buildSessionContextUsage([message], 1_000_000, 32_000)
+    expect(usage).toMatchObject({
+      state: "measured", contextLimit: 828_400, totalTokens: 286_643,
+    })
+    expect(usage?.state === "measured" && usage.percentage).toBe(35)
+  })
+
   test("measures the latest response against the limits", () => {
     expect(buildSessionContextUsage([reply("r", 50_000)], 200_000, 32_000)).toEqual({
       state: "measured",

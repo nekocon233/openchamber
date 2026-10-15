@@ -401,10 +401,12 @@ export const MobileSessionMetadataButton = React.memo(function MobileSessionMeta
   const provider = modelRef ? providers.find((entry) => entry.id === modelRef.providerID) : undefined;
   const liveModel = provider?.models.find((model) => model.id === modelRef?.modelID);
   const metadata = modelRef ? getModelMetadata(modelRef.providerID, modelRef.modelID) : undefined;
-  const contextLimit = getNumericLimit((liveModel as { limit?: unknown } | undefined)?.limit, 'context')
+  const catalogContextLimit = getNumericLimit(liveModel?.limit, 'context')
     ?? metadata?.limit?.context
     ?? 0;
   const contextFill = React.useMemo(() => findLatestContextFill(activeSessionMessages), [activeSessionMessages]);
+  const contextMessage = contextFill ? activeSessionMessages[contextFill.index] : undefined;
+  const contextLimit = (contextMessage?.role === 'assistant' ? contextMessage.contextWindow : undefined) ?? catalogContextLimit;
 
   const contextDisplay = React.useMemo<ContextDisplay>(() => {
     if (contextLimit <= 0) return null;

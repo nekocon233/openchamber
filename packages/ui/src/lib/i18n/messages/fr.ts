@@ -6,12 +6,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict = {
   "chat.nativeTasks.title": "Tâches",
   "chat.nativeTasks.open": "Ouvrir les tâches de la session",
-  "chat.nativeTasks.description": "Liste de tâches et tâches en arrière-plan de Claude Code pour cette session.",
+  "chat.nativeTasks.description": "Listes, tâches en arrière-plan et plans de cette session.",
   "chat.nativeTasks.checklist": "Liste de tâches",
   "chat.nativeTasks.cliChecklist": "Liste de tâches",
   "chat.nativeTasks.background": "Tâches en arrière-plan",
@@ -20,13 +21,22 @@ export const dict = {
   "chat.nativeTasks.readonly": "Liste Claude Code en lecture seule, distincte des tâches du projet.",
   "chat.nativeTasks.refresh": "Actualiser",
   "chat.nativeTasks.unsupported": "Ce serveur ou cette CLI ne prend pas en charge cette vue des tâches.",
-  "chat.nativeTasks.notNative": "Les tâches sont disponibles pour les sessions Claude Code.",
+  "chat.nativeTasks.notNative": "Les tâches sont disponibles pour les sessions Claude Code et Codex.",
   "chat.nativeTasks.checklistUnavailable": "Impossible de confirmer l'emplacement de la liste pour cette session.",
   "chat.nativeTasks.loadError": "Impossible de charger les tâches. Actualisez pour réessayer.",
   "chat.nativeTasks.stale": "Ces tâches sont peut-être obsolètes. Actualisez pour réessayer.",
   "chat.nativeTasks.partial": "Certaines entrées sont illisibles. Les entrées précédentes sont conservées et peuvent être obsolètes.",
   "chat.nativeTasks.history": "Restaurée depuis le dernier TodoWrite enregistré. Cela ne prouve aucune activité en cours.",
   "chat.nativeTasks.checklistEmpty": "Claude Code n'a pas encore enregistré d'entrées pour cette session.",
+  "chat.nativeTasks.plan": "Document de plan",
+  "chat.nativeTasks.planNotice": "Ce que cette session comptait faire avant de commencer. Le plan n'a pas d'avancement propre.",
+  "chat.nativeTasks.planEmpty": "Codex n'a pas écrit de plan pour cette session.",
+  "chat.nativeTasks.planTruncated": "Ce plan a été raccourci pour tenir. Ouvrez la conversation pour le lire en entier.",
+  "chat.nativeTasks.todos": "Liste de tâches",
+  "chat.nativeTasks.todosNotice": "Étapes signalées par le processus CLI. Elles ne sont stockées nulle part : un redémarrage les perd.",
+  "chat.nativeTasks.todosUnknown": "Ce processus n'a signalé aucune étape pour cette session.",
+  "chat.nativeTasks.todosInactive": "Ce processus CLI n'est plus observé. Voici les dernières étapes qu'il a signalées.",
+  "chat.nativeTasks.todosEmpty": "La CLI a signalé une liste d'étapes vide.",
   "chat.nativeTasks.owner": "Responsable : {owner}",
   "chat.nativeTasks.blockedBy": "En attente de : {ids}",
   "chat.nativeTasks.blocks": "Bloque : {ids}",
@@ -74,6 +84,7 @@ export const dict = {
   "chat.nativeTasks.summary.unavailable": "Indisponible",
   "chat.nativeTasks.summary.partial": "Incomplète ou obsolète",
   "chat.nativeTasks.summary.checklist": "Terminées : {completed} / {total}",
+  "chat.nativeTasks.summary.plan": "Plan disponible",
   "chat.nativeTasks.summary.background": "Actives : {active} / Enregistrées : {total}",
   "settings.chatgpt.limitReached": "La limite d’utilisation de l’abonnement ChatGPT est atteinte. Vérifiez les limites de l’application et de l’abonnement dans les paramètres de ChatGPT.",
   "settings.chatgpt.notEligible": "Ce compte ou cet espace de travail ChatGPT ne peut pas utiliser son abonnement pour cette requête.",
@@ -225,6 +236,7 @@ export const dict = {
   ...surfacePanelI18n.fr,
   ...fileArtifactsI18n.fr,
   ...usageStatsI18n.fr,
+  ...nativeMemoryI18n.fr,
   ...webSearchI18n.fr,
   'terminalView.actions.attachSelection': 'Joindre la sortie sélectionnée',
   'terminalView.actions.copySelection': 'Copier la sortie sélectionnée',
@@ -1315,7 +1327,7 @@ export const dict = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': 'Le petit modèle accepte environ {available} k caractères et ce diff en demande environ {required} k. Rien n’est tronqué : choisissez un modèle au contexte plus large.',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': 'Le petit modèle ne prend pas en charge les réponses structurées nécessaires à un parcours.',
   'contextRail.surface.plan.description': 'Voir le plan actuel',
-  'contextRail.surface.tasks.description': "Liste de contrôle et tâches d'arrière-plan de Claude Code",
+  'contextRail.surface.tasks.description': "Listes, tâches d'arrière-plan et plans des CLI natives",
   'contextRail.surface.pr.description': 'Créer, relire et fusionner la pull request de la branche actuelle',
   'contextRail.surface.notes.description': 'Notes, tâches, plans et mémoire de l’agent pour le projet',
   'contextRail.surface.context.description': 'Contexte de session et utilisation des tokens',

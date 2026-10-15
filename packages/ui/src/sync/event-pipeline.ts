@@ -265,6 +265,8 @@ function coalesceKey(event: SyncEvent): string | undefined {
       return `session.background.updated:${event.properties.sessionID}`
     case "session.tasks.updated":
       return `session.tasks.updated:${event.properties.sessionID}`
+    case "session.todos.updated":
+      return `session.todos.updated:${event.properties.sessionID}`
     case "session.patched":
       return `session.patched:${event.properties.sessionID}`
     case "message.patched":
@@ -281,6 +283,9 @@ function coalesceKey(event: SyncEvent): string | undefined {
 /** Merges a later event into the queued one it coalesces with. */
 function mergeCoalesced(previous: SyncEvent, next: SyncEvent): SyncEvent {
   if (previous.type === "session.tasks.updated" && next.type === "session.tasks.updated") {
+    return previous.properties.snapshot.revision > next.properties.snapshot.revision ? previous : next
+  }
+  if (previous.type === "session.todos.updated" && next.type === "session.todos.updated") {
     return previous.properties.snapshot.revision > next.properties.snapshot.revision ? previous : next
   }
   if (previous.type === "message.part.delta" && next.type === "message.part.delta") {

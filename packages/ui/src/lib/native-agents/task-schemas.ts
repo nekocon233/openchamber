@@ -85,6 +85,47 @@ export const nativeTaskSnapshotSchema = z.discriminatedUnion('state', [
   }),
 ]);
 
+const nativeTodoSchema = z.object({
+  id: identity,
+  content: z.string(),
+  status: z.enum(['pending', 'in_progress', 'completed']),
+});
+
+/**
+ * The steps a Codex turn reported through `update_plan`. Codex marks the
+ * notification carrying them transient and non-durable, so this is an
+ * observation of one process rather than a stored list: `unknown` means
+ * nothing was observed, and only its generation may be null — no observation
+ * has an owner. `inactive` ends observation and keeps what was last seen,
+ * because that is the only record that will exist.
+ */
+export const nativeTodosSnapshotSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('unknown'),
+    generation: identity.nullable(),
+    revision,
+    todos: z.array(nativeTodoSchema),
+  }),
+  z.object({
+    state: z.literal('active'),
+    generation: identity,
+    revision,
+    todos: z.array(nativeTodoSchema),
+  }),
+  z.object({
+    state: z.literal('inactive'),
+    generation: identity,
+    revision,
+    todos: z.array(nativeTodoSchema),
+  }),
+  z.object({
+    state: z.literal('unsupported'),
+    generation: z.null(),
+    revision,
+    todos: z.array(nativeTodoSchema).length(0),
+  }),
+]);
+
 export const nativeTaskOutputSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('ready'), text: z.string(), truncated: z.boolean() }),
   z.object({ state: z.literal('unavailable'), reason: z.enum(['not_recorded', 'query_closed', 'unreadable']) }),
@@ -92,8 +133,30 @@ export const nativeTaskOutputSchema = z.discriminatedUnion('state', [
 
 export const nativeTaskStopResultSchema = z.object({ accepted: z.literal(true) });
 
+/**
+ * The plan a Codex thread last wrote. Unlike the checklist it has no identity
+ * and no partial reads: a plan belongs to one thread and is read whole from
+ * the thread store or not at all. `empty` is an authoritative "this thread
+ * has no plan", which is why it is a state of its own rather than an empty
+ * `ready`.
+ */
+export const nativePlanSnapshotSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('ready'),
+    observedAt: z.number(),
+    text: z.string().min(1),
+    truncated: z.boolean(),
+    turnId: z.string().min(1),
+  }),
+  z.object({ state: z.literal('empty') }),
+  z.object({ state: z.literal('unavailable'), reason: z.literal('unsupported') }),
+]);
+
 export type NativeChecklistItem = z.infer<typeof nativeChecklistItemSchema>;
 export type NativeChecklistSnapshot = z.infer<typeof nativeChecklistSnapshotSchema>;
 export type NativeExecutionTask = z.infer<typeof nativeExecutionTaskSchema>;
 export type NativeTaskSnapshot = z.infer<typeof nativeTaskSnapshotSchema>;
 export type NativeTaskOutput = z.infer<typeof nativeTaskOutputSchema>;
+export type NativePlanSnapshot = z.infer<typeof nativePlanSnapshotSchema>;
+export type NativeTodoItem = z.infer<typeof nativeTodoSchema>;
+export type NativeTodosSnapshot = z.infer<typeof nativeTodosSnapshotSchema>;

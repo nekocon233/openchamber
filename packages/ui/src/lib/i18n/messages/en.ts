@@ -6,12 +6,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict = {
   'chat.nativeTasks.title': 'Tasks',
   'chat.nativeTasks.open': 'Open session tasks',
-  'chat.nativeTasks.description': 'Claude Code checklist and background tasks for this session.',
+  'chat.nativeTasks.description': 'Checklists, background tasks and plans for this session.',
   'chat.nativeTasks.checklist': 'Checklist',
   'chat.nativeTasks.cliChecklist': 'Checklist',
   'chat.nativeTasks.background': 'Background tasks',
@@ -20,13 +21,22 @@ export const dict = {
   'chat.nativeTasks.readonly': 'Read-only Claude Code checklist. These are separate from project Todos.',
   'chat.nativeTasks.refresh': 'Refresh',
   'chat.nativeTasks.unsupported': 'This server or CLI does not support this task view.',
-  'chat.nativeTasks.notNative': 'Tasks are available for Claude Code sessions.',
+  'chat.nativeTasks.notNative': 'Tasks are available for Claude Code and Codex sessions.',
   'chat.nativeTasks.checklistUnavailable': 'The checklist location could not be confirmed for this session.',
   'chat.nativeTasks.loadError': 'Could not load tasks. Refresh to try again.',
   'chat.nativeTasks.stale': 'These tasks may be out of date. Refresh to try again.',
   'chat.nativeTasks.partial': 'Some checklist entries could not be read. Previously known entries are kept and may be out of date.',
   'chat.nativeTasks.history': 'Recovered from the last recorded TodoWrite. This does not indicate live activity.',
   'chat.nativeTasks.checklistEmpty': 'Claude Code has not recorded any checklist items for this session.',
+  'chat.nativeTasks.plan': 'Plan document',
+  'chat.nativeTasks.planNotice': 'What this session set out to do before it started. It has no progress of its own.',
+  'chat.nativeTasks.planEmpty': 'Codex has not written a plan for this session.',
+  'chat.nativeTasks.planTruncated': 'This plan was shortened to fit. Open the conversation to read it in full.',
+  'chat.nativeTasks.todos': 'Checklist',
+  'chat.nativeTasks.todosNotice': 'Steps the CLI process reported. They are not stored anywhere, so a restart loses them.',
+  'chat.nativeTasks.todosUnknown': 'This process has not reported any steps for this session.',
+  'chat.nativeTasks.todosInactive': 'This CLI process is no longer observed. These are the steps it last reported.',
+  'chat.nativeTasks.todosEmpty': 'The CLI reported an empty step list.',
   'chat.nativeTasks.owner': 'Owner: {owner}',
   'chat.nativeTasks.blockedBy': 'Waiting on: {ids}',
   'chat.nativeTasks.blocks': 'Blocks: {ids}',
@@ -74,6 +84,7 @@ export const dict = {
   'chat.nativeTasks.summary.unavailable': 'Unavailable',
   'chat.nativeTasks.summary.partial': 'Incomplete or out of date',
   'chat.nativeTasks.summary.checklist': 'Completed: {completed} / {total}',
+  'chat.nativeTasks.summary.plan': 'Plan available',
   'chat.nativeTasks.summary.background': 'Active: {active} / Recorded: {total}',
   "settings.chatgpt.limitReached": "The ChatGPT plan usage limit was reached. Review the app and plan limits in ChatGPT settings.",
   "settings.chatgpt.notEligible": "This ChatGPT account or workspace cannot use its plan for this request.",
@@ -225,6 +236,7 @@ export const dict = {
   ...surfacePanelI18n.en,
   ...fileArtifactsI18n.en,
   ...usageStatsI18n.en,
+  ...nativeMemoryI18n.en,
   ...webSearchI18n.en,
   'terminalView.actions.attachSelection': 'Attach selected output',
   'terminalView.actions.copySelection': 'Copy selected output',
@@ -1506,7 +1518,7 @@ export const dict = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': 'The small model fits about {available}K characters and this diff needs about {required}K. Nothing gets truncated — pick a model with a larger context instead.',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': 'The small model does not support the structured responses a walkthrough needs.',
   'contextRail.surface.plan.description': 'View the current plan',
-  'contextRail.surface.tasks.description': 'Claude Code checklist and background tasks',
+  'contextRail.surface.tasks.description': 'Native CLI checklists, background tasks and plans',
   'contextRail.surface.pr.description': 'Create, review, and merge the pull request for the current branch',
   'contextRail.surface.notes.description': 'Notes, todos, plans, and agent memory for the project',
   'contextRail.surface.context.description': 'Session context and token usage',

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { createClaudeProjection } from './projector.js';
-import { slimFileEditResult } from './tools.js';
+import { slimToolResult } from './tools.js';
 import { compareMessagesChronologically } from '@openchamber/ui/sync/message-ordering';
 import { nativePartSchema } from '@openchamber/ui/lib/native-agents/schemas';
 import { showsWithFileChangesOnly } from '@openchamber/ui/components/chat/message/parts/toolRenderUtils';
@@ -170,7 +170,7 @@ describe('Claude compaction projection', () => {
 
   it('shows the boundary as a compaction turn answered by the summary', () => {
     const [boundary, summary, preserved] = records;
-    expect(boundary.info).toMatchObject({ id: 'ncl_k_boundary-1', role: 'user' });
+    expect(boundary.info).toMatchObject({ id: 'ncl_k_boundary-1', role: 'compaction', status: 'completed' });
     // The history read does not say what started it, so the marker makes no claim.
     expect(boundary.parts).toEqual([expect.objectContaining({ type: 'compaction', auto: false })]);
     expect(summary.info).toMatchObject({ role: 'assistant', summary: true, finish: 'stop', parentID: 'ncl_k_boundary-1' });
@@ -374,7 +374,7 @@ describe('Claude commands that changed files', () => {
     live.startUserPrompt(USER_ID, { kind: 'text', text: 'Rewrite the parser' });
     live.applyEntry(call);
     live.applyEntry(result(full));
-    const history = projectHistory([prompt, call, result(slimFileEditResult(full))]);
+    const history = projectHistory([prompt, call, result(slimToolResult(full))]);
 
     const [liveCommand] = toolParts(live.records());
     const [historyCommand] = toolParts(history);

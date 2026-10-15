@@ -127,6 +127,25 @@ describe('Codex history projection', () => {
   });
 });
 
+describe('Codex plan projection', () => {
+  const planTurn = (text) => project([{
+    id: 'turn-1',
+    status: 'completed',
+    startedAt: 1,
+    completedAt: 2,
+    items: [{ type: 'plan', id: 'plan-1', text }],
+  }]);
+
+  it('shows the plan the way Claude Code shows its exit, not as body text', () => {
+    const [assistant] = planTurn('# Ship it\n\n- step one').filter((record) => record.info.role === 'assistant');
+    expect(assistant.parts.map((part) => part.type)).toEqual(['tool']);
+    expect(assistant.parts[0]).toMatchObject({
+      tool: 'plan_exit',
+      state: { status: 'completed', title: 'Plan', input: { plan: '# Ship it\n\n- step one' } },
+    });
+  });
+});
+
 describe('Codex plan approval projection', () => {
   const approvalId = 'ncx_u_plan_5b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f';
   const turn = (clientId, status = 'completed') => ({
@@ -237,7 +256,8 @@ describe('Codex compaction projection', () => {
       { id: 'turn-2', status: 'completed', startedAt: 20, completedAt: 21, items: [{ type: 'contextCompaction', id: 'item-3' }] },
     ]);
     const compaction = records.at(-1);
-    expect(records.map((record) => record.info.role)).toEqual(['user', 'assistant', 'user']);
+    expect(records.map((record) => record.info.role)).toEqual(['user', 'assistant', 'compaction']);
+    expect(compaction.info).toMatchObject({ status: 'completed', reason: 'manual' });
     expect(compaction.info.id).toBe(`ncx_k_${THREAD_ID.replaceAll('-', '')}_item-3`);
     // A turn of its own is the /compact the user asked for.
     expect(compaction.parts).toEqual([expect.objectContaining({ type: 'compaction', messageID: compaction.info.id, auto: false })]);
@@ -266,6 +286,6 @@ describe('Codex feature instructions', () => {
         { type: 'text', text: 'what is this file?' },
         { type: 'text', text: '<openchamber-instructions>\nAnswer the side question only.\n</openchamber-instructions>' },
       ],
-    })).toEqual({ id: 'item-1', clientId: 'ncx_u_1', texts: ['what is this file?'], images: [] });
+    })).toEqual({ id: 'item-1', clientId: 'ncx_u_1', texts: ['what is this file?'], images: [], skills: [] });
   });
 });

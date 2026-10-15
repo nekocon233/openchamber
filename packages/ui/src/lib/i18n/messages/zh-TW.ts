@@ -7,12 +7,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.title": "任務",
   "chat.nativeTasks.open": "開啟對話任務",
-  "chat.nativeTasks.description": "此對話的 Claude Code 待辦清單和背景任務。",
+  "chat.nativeTasks.description": "此對話的待辦清單、背景任務和計畫書。",
   "chat.nativeTasks.checklist": "待辦清單",
   "chat.nativeTasks.cliChecklist": "待辦",
   "chat.nativeTasks.background": "背景任務",
@@ -21,13 +22,22 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.readonly": "Claude Code 的唯讀待辦清單，與專案待辦分開。",
   "chat.nativeTasks.refresh": "重新整理",
   "chat.nativeTasks.unsupported": "此伺服器或 CLI 不支援此任務檢視。",
-  "chat.nativeTasks.notNative": "任務檢視適用於 Claude Code 工作階段。",
+  "chat.nativeTasks.notNative": "任務檢視適用於 Claude Code 和 Codex 工作階段。",
   "chat.nativeTasks.checklistUnavailable": "無法確認此對話的待辦清單位置。",
   "chat.nativeTasks.loadError": "無法載入任務，請重新整理後再試。",
   "chat.nativeTasks.stale": "這些任務可能已過期，請重新整理後再試。",
   "chat.nativeTasks.partial": "部分待辦項目讀取失敗。已保留先前項目，但內容可能已過期。",
   "chat.nativeTasks.history": "從最近一次 TodoWrite 紀錄還原，不代表任務仍在執行。",
   "chat.nativeTasks.checklistEmpty": "Claude Code 尚未為此對話記錄待辦項目。",
+  "chat.nativeTasks.plan": "計畫書",
+  "chat.nativeTasks.planNotice": "此對話開始前打算做的事。計畫書本身沒有進度。",
+  "chat.nativeTasks.planEmpty": "Codex 尚未為此對話寫下計畫。",
+  "chat.nativeTasks.planTruncated": "此計畫書為符合長度已截斷。開啟對話可閱讀全文。",
+  "chat.nativeTasks.todos": "待辦",
+  "chat.nativeTasks.todosNotice": "CLI 程序回報的步驟。它們不會保存在任何地方，重新啟動就會遺失。",
+  "chat.nativeTasks.todosUnknown": "此程序尚未為此對話回報任何步驟。",
+  "chat.nativeTasks.todosInactive": "此 CLI 程序已不再被觀測。以下是它最後回報的步驟。",
+  "chat.nativeTasks.todosEmpty": "CLI 回報了空的步驟清單。",
   "chat.nativeTasks.owner": "負責人：{owner}",
   "chat.nativeTasks.blockedBy": "等待：{ids}",
   "chat.nativeTasks.blocks": "阻擋：{ids}",
@@ -75,6 +85,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.summary.unavailable": "暫時無法使用",
   "chat.nativeTasks.summary.partial": "不完整或已過期",
   "chat.nativeTasks.summary.checklist": "已完成：{completed} / {total}",
+  "chat.nativeTasks.summary.plan": "已有計畫書",
   "chat.nativeTasks.summary.background": "活動：{active} / 已記錄：{total}",
   "settings.chatgpt.limitReached": "已達到 ChatGPT 方案用量限制，請在 ChatGPT 設定中查看應用程式和方案的額度。",
   "settings.chatgpt.notEligible": "此 ChatGPT 帳號或工作區無法使用方案完成此請求。",
@@ -226,6 +237,7 @@ export const dict: Record<I18nKey, string> = {
   ...surfacePanelI18n['zh-TW'],
   ...fileArtifactsI18n['zh-TW'],
   ...usageStatsI18n['zh-TW'],
+  ...nativeMemoryI18n['zh-TW'],
   ...webSearchI18n['zh-TW'],
   'terminalView.actions.attachSelection': '附加所選輸出',
   'terminalView.actions.copySelection': '複製所選輸出',
@@ -1519,7 +1531,7 @@ export const dict: Record<I18nKey, string> = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': '小模型大約可容納 {available} 千字元，而這份差異約需 {required} 千字元。我們不會截斷內容，請改選上下文更大的模型。',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': '小模型不支援導讀所需的結構化回應。',
   'contextRail.surface.plan.description': '檢視目前計畫',
-  'contextRail.surface.tasks.description': 'Claude Code 待辦清單和背景任務',
+  'contextRail.surface.tasks.description': '原生 CLI 的待辦清單、背景任務和計畫書',
   'contextRail.surface.pr.description': '建立、審查並合併目前分支的提取請求',
   'contextRail.surface.notes.description': '專案的筆記、待辦、計畫與代理記憶',
   'contextRail.surface.context.description': '工作階段情境與權杖用量',

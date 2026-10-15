@@ -1420,6 +1420,9 @@ const spawnLocalServer = async () => {
   }
   process.env.OPENCHAMBER_DIST_DIR = resolveWebDistDir();
   process.env.OPENCHAMBER_RUNTIME = 'desktop';
+  if (app.isPackaged) {
+    process.env.OPENCHAMBER_NATIVE_MEMORY_HOOK_PATH = path.join(process.resourcesPath, 'native-memory-hook.mjs');
+  }
   // OpenCode uses process cwd as a fallback directory; app userData would make
   // packaged desktop look like a separate empty workspace.
   process.env.OPENCHAMBER_OPENCODE_CWD = resolveManagedOpenCodeCwd({

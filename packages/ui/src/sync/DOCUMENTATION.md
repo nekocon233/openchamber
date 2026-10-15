@@ -553,6 +553,23 @@ what the stores hold for native sessions and never blocks OpenCode's:
   items as unconfirmed. Only a complete read replaces the entire list.
   A new list identity starts a separate collection. Sessions with a confirmed
   shared list identity receive each other's updates and share overlapping reads.
+- Native plan. `session-native-plan.ts` owns the plan a Codex thread wrote,
+  read whole from `nativeAgents.plan`. It has no event channel and no polling
+  timer: a thread writes one plan per planning turn, so the owner reads on
+  open, when the session goes idle and on demand. It is a separate owner from
+  the checklist because the lifecycles differ — one is a document fetched over
+  HTTP, the other a list pushed as events. `empty` means the thread has no
+  plan and is not a failure; a failed read with a plan already held is `stale`,
+  and without one is `error`.
+- Native steps. `session-native-todos.ts` owns the `update_plan` steps a Codex
+  turn reported. Codex stores none of them, so the owner holds an observation
+  and says `unknown` rather than an empty list when it has none; `inactive`
+  keeps the last steps and ends the observation. Events carry a revision, and
+  an older one never overwrites a newer one — except across a generation
+  change, where the numbering starts over and the new observer replaces the
+  old snapshot outright. An event for a session nobody opened allocates
+  nothing: the observation lives on the server, and opening the panel reads it
+  there.
 - Forms. `lib/native-agents/forms.ts` projects native questions into the shared
   form contract. Bootstrap and reconnect preserve held native forms when their
   source fails; replies and cancellation still use the native question API.
@@ -604,8 +621,8 @@ with a native branch (`sync/native-send.ts`):
   reminder of an armed send) tags its part `feature-instructions`;
   `nativePromptRequest` sends it once as the prompt's `instructions`, which
   the conversation does not show. An armed goal starts on a native
-  session as on an OpenCode one, without a token budget on Codex, which
-  reports no token usage; the server's goal loop runs it
+  session as on an OpenCode one. Native Codex retains its existing unsupported
+  goal-token-budget policy independently of its reported usage; the server's goal loop runs it
   (`packages/web/server/lib/session-goal/DOCUMENTATION.md`).
 - A refusal a native route explains with its own code (`NATIVE_CLI_MISSING`,
   `NATIVE_SESSION_BUSY`, ...) fails the send at once, whatever its status. A
@@ -1036,6 +1053,7 @@ Keep this in sync with `handleDirectoryEvent` in `sync-context.tsx`:
 | `openchamber.notification`, `openchamber.permission-auto-accept` | (none — side effects only) |
 | `session.background.updated`, `session.tasks.updated` | None. `session-background-tasks.ts` owns active membership and detail records separately. |
 | `session.checklist.updated` | None. `session-native-checklist.ts` owns the CLI checklist. |
+| `session.todos.updated` | None. `session-native-todos.ts` owns the steps Codex observed. |
 
 These are `SyncEvent`s from `packages/ui/src/lib/opencode/events.ts`, not OpenCode wire events: the event pipeline translates every OpenCode 2.x wire event (`session.text.delta`, `session.tool.called`, `session.step.ended`, ...) into this vocabulary before coalescing. Wire-level knowledge lives only in that translator; the reducer applies patches and tool-state transitions against the store.
 

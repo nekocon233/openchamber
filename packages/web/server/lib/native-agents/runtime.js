@@ -54,6 +54,7 @@ import {
 import { claudePromptBlocks, withInstructions } from './prompt-parts.js';
 import { createNativeEventPublisher } from './publisher.js';
 import { createQuestionRegistry } from './questions.js';
+import { createNativeInteractions } from './interactions.js';
 import { unconfirmedSessionRecord, unknownError } from './records.js';
 import { createNativeRegistry } from './registry.js';
 import { createNativeReverts } from './revert.js';
@@ -146,14 +147,32 @@ export const createNativeAgentsRuntime = ({
   // Roots of OpenChamber's managed chats: each chat gets a directory of its
   // own below one of them, and no project names it.
   managedChatsRoots = [],
+  memory = null,
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
   const chatgpt = createChatgptConnections({ dataDir });
   const claudeConnections = createClaudeConnections({ dataDir, chatgpt });
   const reverts = createNativeReverts({ registry, snapshots });
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
+  const interactions = createNativeInteractions({ dataDir, now });
   const questions = createQuestionRegistry({
     publish: (directory, payload) => publisher.emit(directory, payload.type, payload.properties),
+    onSettled: async (request, outcome, directory) => {
+      await interactions.record(request, outcome);
+      if (!request.tool) return;
+      try {
+        const history = await storeFor(request.sessionID).loadHistory(request.sessionID, directory);
+        const records = await interactions.attach(request.sessionID, overlay(history?.records ?? [], liveFor(request.sessionID).liveRecords(request.sessionID)));
+        for (const record of records) for (const part of record.parts) {
+          if (part.type === 'tool' && part.tool === 'question' && (part.callID === request.tool.callID || part.callID === request.id)) {
+            publisher.part(directory, request.sessionID, part);
+          }
+        }
+      } catch {
+        // The answer is durable. A failed transcript refresh must not report
+        // the accepted answer as failed or cause another prompt.
+      }
+    },
   });
   const planDecisions = createCodexPlanDecisions({
     questions,
@@ -224,6 +243,17 @@ export const createNativeAgentsRuntime = ({
   // from before confirmation so only the first completion can request it.
   // A Claude title supplied at creation is written to the new transcript.
   const onTurnFinished = (sessionId, directory, turn) => {
+    const observedAt = now();
+    if (memory) {
+      void (async () => {
+        if (!await memory.enabled() || !turn) return memory.release(sessionId);
+        await memory.checkpoint({
+          backend: decode(sessionId).backend, sessionId, directory, delivery: 'managed',
+          turnId: turn.id, summary: turn.summary.slice(0, 12000),
+          status: turn.status === 'completed' ? 'completed' : 'interrupted', observedAt,
+        });
+      })().catch(() => memory.release(sessionId));
+    }
     const initialSession = (async () => {
       try {
         const entry = await registry.getSession(sessionId);
@@ -248,6 +278,7 @@ export const createNativeAgentsRuntime = ({
 
   // What the turns changed on disk, for reverting them.
   const onIdle = (sessionId) => {
+    memory?.release(sessionId);
     void reverts.afterTurn(sessionId);
     // A connection change waits for a moment when no thread is mid-turn.
     if (appServer.isStale() && codexLive.isIdle()) void appServer.restart();
@@ -286,7 +317,10 @@ export const createNativeAgentsRuntime = ({
     onTurnFinished,
     onIdle,
     onPlanReady: (plan) => planDecisions.propose(plan),
-    onSessionClosed: (sessionId) => planDecisions.cancel(sessionId),
+    onSessionClosed: (sessionId) => {
+      memory?.release(sessionId);
+      planDecisions.cancel(sessionId);
+    },
     now,
   });
   const claude = createClaudeSessionStore({ loadSdk, registry, isSessionRunning: (sessionId) => claudeLive.isSessionRunning(sessionId) });
@@ -304,7 +338,7 @@ export const createNativeAgentsRuntime = ({
     buildEnv: buildChildEnv,
     readGlobalInstructions,
     hasTranscript: claude.hasTranscript,
-    nonPortableReplayBlocks: claude.nonPortableReplayBlocks,
+    inspectReplayHistory: claude.inspectReplayHistory,
     publisher,
     questions,
     onTurnFinished,
@@ -447,7 +481,11 @@ export const createNativeAgentsRuntime = ({
     if (signal) signal.throwIfAborted();
     else planDecisions.cancel(sessionId);
     const send = sendRecordOf(request);
-    const parts = withInstructions(request.parts, request.instructions);
+    const knowledge = memory ? await memory.context({
+      backend, sessionId, directory: request.directory, delivery: 'managed',
+    }).catch(() => null) : null;
+    const parts = withInstructions(request.parts, [request.instructions, knowledge?.text].filter(Boolean).join('\n\n') || undefined);
+    try {
     if (backend === NATIVE_BACKEND_CLAUDE) {
       await sendToClaude(sessionId, { ...request, parts }, send, { visible: true });
     } else {
@@ -470,6 +508,10 @@ export const createNativeAgentsRuntime = ({
       });
     }
     await registry.recordSend(sessionId, { ...send, messageId: request.messageID, providerID: request.model.providerID, sentAt: now() });
+    } catch (error) {
+      memory?.release(sessionId);
+      throw error;
+    }
   };
 
   /**
@@ -518,6 +560,7 @@ export const createNativeAgentsRuntime = ({
   };
 
   return {
+    memorySharing: memory,
     claudeConnections,
     codexConnections,
     /** Applies a saved or removed connection to the CLI, or defers it to idle. */
@@ -544,7 +587,7 @@ export const createNativeAgentsRuntime = ({
         supported: true,
         backends: {
           [NATIVE_BACKEND_CLAUDE]: { cli: claudeCli !== null, tasks: { checklist: true, background: true, output: true, stop: true } },
-          [NATIVE_BACKEND_CODEX]: { cli: codexCli !== null },
+          [NATIVE_BACKEND_CODEX]: { cli: codexCli !== null, tasks: { plan: true, todos: true } },
         },
         registry: registry.status(),
       };
@@ -792,11 +835,17 @@ export const createNativeAgentsRuntime = ({
       }
       await registry.removeSession(sessionId);
       checklists.forget(sessionId);
+      const cleanup = await Promise.allSettled([sessionId, ...children.map((child) => child.id)].map((id) => interactions.forget(id)));
       for (const child of children) {
         checklists.forget(child.id);
         publisher.sessionDeleted(directory, child);
       }
       publisher.sessionDeleted(directory, session);
+      if (cleanup.some((result) => result.status === 'rejected')) {
+        throw new NativeAgentError('The native session was deleted, but its saved question choices could not be removed', {
+          status: 500, code: 'NATIVE_INTERACTION_CLEANUP_FAILED',
+        });
+      }
       return { deleted: true };
     },
 
@@ -848,6 +897,11 @@ export const createNativeAgentsRuntime = ({
      */
     async fork(sessionId, messageId, directory) {
       const { backend } = decode(sessionId);
+      const sourceHistory = await storeFor(sessionId).loadHistory(sessionId, directory);
+      const sourceRecords = sourceHistory?.records ?? [];
+      const boundary = messageId === null ? sourceRecords.length : sourceRecords.findIndex((record) => record.info.id === messageId);
+      if (boundary < 0) throw invalidRequestError(`Unknown fork message: ${messageId}`);
+      const retained = new Set(sourceRecords.slice(0, boundary).flatMap((record) => record.parts.filter((part) => part.type === 'tool').map((part) => part.callID)));
       let forkedId;
       if (backend === NATIVE_BACKEND_CLAUDE) {
         const target = messageId === null ? { resumeAt: undefined } : await claude.rewindTarget(sessionId, directory, messageId);
@@ -867,6 +921,13 @@ export const createNativeAgentsRuntime = ({
       }
       const session = await storeFor(forkedId).getSession(forkedId, directory);
       if (!session) throw sessionNotFoundError(forkedId);
+      try { await interactions.fork(sessionId, forkedId, retained); }
+      catch {
+        publisher.session(directory, session, { created: true });
+        throw new NativeAgentError(`Forked session ${forkedId} remains available, but its saved question choices could not be copied`, {
+          status: 500, code: 'NATIVE_INTERACTION_FORK_INCOMPLETE',
+        });
+      }
       publisher.session(directory, session, { created: true });
       return session;
     },
@@ -883,19 +944,23 @@ export const createNativeAgentsRuntime = ({
       const history = await storeFor(sessionId).loadHistory(sessionId, directory);
       if (!history && !liveFor(sessionId).childSession(sessionId)) throw sessionNotFoundError(sessionId);
       const pending = await reverts.pending(sessionId);
-      const records = overlay(untilRewound(history?.records ?? [], pending), liveFor(sessionId).liveRecords(sessionId));
+      const originalRecords = overlay(untilRewound(history?.records ?? [], pending), liveFor(sessionId).liveRecords(sessionId));
+      const decoratedRecords = await interactions.attach(sessionId, originalRecords).catch(() => null);
+      const records = decoratedRecords ?? originalRecords;
       let end = records.length;
       if (before !== undefined) {
         end = records.findIndex((record) => record.info.id === before);
         if (end === -1) throw invalidRequestError(`Unknown message cursor: ${before}`);
       }
       const start = Math.max(0, end - limit);
-      return {
+      const result = {
         records: records.slice(start, end),
         cursor: start > 0 ? records[start].info.id : null,
         complete: start === 0,
         childSessions: history?.childSessions ?? [],
       };
+      if (history?.metadataComplete === false || decoratedRecords === null) result.metadataComplete = false;
+      return result;
     },
 
     /** Throws when the backend cannot answer, so callers never treat failure as deletion. */
@@ -948,6 +1013,34 @@ export const createNativeAgentsRuntime = ({
       return checklists.read(sessionId, history);
     },
 
+    /**
+     * The plan a Codex thread last wrote. Claude Code's plans arrive as its
+     * own plan-exit question instead, so this is Codex-only.
+     */
+    async plan(sessionId, directory) {
+      const decoded = decode(sessionId);
+      if (decoded.backend !== NATIVE_BACKEND_CODEX) return { state: 'unavailable', reason: 'unsupported' };
+      const entry = await registry.getSession(encodeCodexSessionId(decoded.threadId));
+      if (entry && entry.directory !== directory) throw invalidRequestError('Plan directory does not match its session');
+      const plan = await codex.latestPlan(sessionId);
+      // A thread with no plan is a successful, authoritative empty read.
+      if (!plan) return { state: 'empty' };
+      return { state: 'ready', observedAt: now(), ...plan };
+    },
+
+    /**
+     * The steps a Codex turn reported, as this process observed them. Codex
+     * keeps them out of its own store, so a thread it has not heard from is
+     * `unknown` rather than a thread without steps.
+     */
+    async codexTodos(sessionId, directory) {
+      const decoded = decode(sessionId);
+      if (decoded.backend !== NATIVE_BACKEND_CODEX) return { state: 'unsupported', generation: null, revision: 0, todos: [] };
+      const entry = await registry.getSession(encodeCodexSessionId(decoded.threadId));
+      if (entry && entry.directory !== directory) throw invalidRequestError('Todo directory does not match its session');
+      return codexLive.todos(sessionId);
+    },
+
     async sessionTasks(sessionId, directory) {
       const decoded = decode(sessionId);
       if (decoded.backend !== NATIVE_BACKEND_CLAUDE || decoded.toolUseId) return { state: 'unsupported', generation: null, revision: 0, tasks: [], omitted: 0 };
@@ -981,11 +1074,11 @@ export const createNativeAgentsRuntime = ({
      * @param {string[][]} answers
      */
     replyQuestion(requestId, answers) {
-      questions.reply(requestId, answers);
+      return questions.reply(requestId, answers);
     },
 
     rejectQuestion(requestId) {
-      questions.reject(requestId);
+      return questions.reject(requestId);
     },
 
     /** The CLIs' small-model runtimes, by provider id. */

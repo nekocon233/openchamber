@@ -128,6 +128,7 @@ import { migrateLegacyUserDirs } from './lib/data-dir-migration.js';
 import { createProjectContextRuntime } from './lib/project-context/runtime.js';
 import { createAgentMemoryRuntime } from './lib/agent-memory/runtime.js';
 import { createAgentMemoryActions } from './lib/agent-memory/actions.js';
+import { createNativeMemorySharing } from './lib/agent-memory/native-sharing.js';
 import { createMemoryProjectResolver } from './lib/agent-memory/project-resolution.js';
 import { isAgentMemoryFeatureAvailable } from './lib/agent-memory/feature-flag.js';
 import { createSpacesHost } from './lib/spaces/host.js';
@@ -622,14 +623,22 @@ const agentMemoryRuntime = createAgentMemoryRuntime({
  * that still reads or writes the store.
  */
 const isAgentMemoryEnabled = async () => {
-  // The feature gate comes first: unreleased means absent, not merely switched
-  // off, so no stored setting can bring it back.
+  // Capability availability and the user's enablement remain separate.
   if (!isAgentMemoryFeatureAvailable()) {
     return false;
   }
   const settings = await readSettingsFromDiskMigrated().catch(() => null);
   return settings?.agentMemoryToolEnabled === true;
 };
+
+const nativeMemorySharing = createNativeMemorySharing({
+  dataDir: OPENCHAMBER_USER_CONFIG_ROOT, agentMemoryRuntime, isEnabled: isAgentMemoryEnabled,
+  resolveProjectId: (directory) => resolveMemoryProjectId(directory),
+  getPort: () => server?.address()?.port ?? null,
+  hookPath: process.env.OPENCHAMBER_NATIVE_MEMORY_HOOK_PATH,
+  getNodeExecutable: () => process.versions.electron ? searchPathFor('node') : process.execPath,
+  onMemoryChanged: (event) => emitAgentMemoryChangedEvent(event),
+});
 
 // HMR-persistent state via globalThis
 // These values survive Vite HMR reloads to prevent zombie OpenCode processes
@@ -1254,6 +1263,7 @@ const parseSseDataPayload = (...args) => serverUtilsRuntime.parseSseDataPayload(
 
 // Native Claude Code / Codex sessions: OpenChamber drives the CLIs directly.
 const nativeAgentsRuntime = createNativeAgentsRuntime({
+  memory: nativeMemorySharing,
   dataDir: OPENCHAMBER_DATA_DIR,
   resolveExecutable: createCliResolver({ searchPathFor, isExecutable, buildSearchPath: buildAugmentedPath }),
   buildChildEnv: () => buildCliChildEnv(process.env, buildAugmentedPath()),
@@ -1714,6 +1724,7 @@ const openChamberControlService = createOpenChamberControlService({
     onMemoryChanged: emitAgentMemoryChangedEvent,
     isAgentMemoryEnabled,
     resolveProjectId: resolveMemoryProjectId,
+    sharing: nativeMemorySharing,
   }),
 });
 

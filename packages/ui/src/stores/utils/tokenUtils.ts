@@ -56,6 +56,7 @@ export type ContextFillMessage = {
     id?: string;
     role?: string;
     tokens?: TokenBreakdown;
+    contextWindow?: number;
     /**
      * Compaction records carry OpenCode's lifecycle for the summarizing turn
      * here. Widened to `string` so a whole `Message` (a shell record reports its
@@ -113,10 +114,12 @@ export const buildSessionContextUsage = (
     const fill = findLatestContextFill(messages);
     if (!fill) return null;
 
+    const effectiveContextLimit = messages[fill.index]?.contextWindow ?? contextLimit;
+
     const limits = {
-        contextLimit: contextLimit > 0 ? contextLimit : 0,
+        contextLimit: effectiveContextLimit > 0 ? effectiveContextLimit : 0,
         outputLimit: outputLimit > 0 ? outputLimit : undefined,
-        thresholdLimit: contextLimit > 0 ? contextLimit : DEFAULT_THRESHOLD_LIMIT,
+        thresholdLimit: effectiveContextLimit > 0 ? effectiveContextLimit : DEFAULT_THRESHOLD_LIMIT,
         lastMessageId: messages[fill.index]?.id,
     };
 
@@ -129,7 +132,7 @@ export const buildSessionContextUsage = (
         state: 'measured',
         ...limits,
         totalTokens: fill.totalTokens,
-        percentage: contextLimit > 0 ? Math.round((fill.totalTokens / contextLimit) * 100) : 0,
+        percentage: effectiveContextLimit > 0 ? Math.round((fill.totalTokens / effectiveContextLimit) * 100) : 0,
         normalizedOutput: outputLimit > 0 ? Math.round((output / outputLimit) * 100) : undefined,
     };
 };

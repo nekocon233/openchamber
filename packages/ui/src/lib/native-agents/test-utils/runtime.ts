@@ -12,6 +12,10 @@ const unsupported = async (): Promise<never> => {
 /** A native agents API whose methods fail unless the test supplies them. */
 export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): NativeAgentsAPI => ({
   supported: true,
+  memoryStatus: unsupported,
+  connectMemory: unsupported,
+  disconnectMemory: unsupported,
+  importMemory: unsupported,
   capabilities: unsupported,
   catalog: unsupported,
   chatgptAccounts: unsupported,
@@ -35,6 +39,8 @@ export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): Na
   statuses: unsupported,
   backgroundTasks: unsupported,
   checklist: unsupported,
+  plan: unsupported,
+  codexTodos: unsupported,
   sessionTasks: unsupported,
   taskOutput: unsupported,
   stopTask: unsupported,

@@ -46,6 +46,20 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
   },
   {
+    id: 'chat.work-status.section.taskPlan',
+    page: 'chat',
+    titleKey: 'chat.nativeTasks.plan',
+    keywords: ['codex', 'plan', 'work status'],
+    isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
+  },
+  {
+    id: 'chat.work-status.section.taskTodos',
+    page: 'chat',
+    titleKey: 'chat.nativeTasks.todos',
+    keywords: ['codex', 'todo', 'checklist', 'work status'],
+    isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
+  },
+  {
     id: 'providers.chatgpt-plan',
     page: 'providers',
     titleKey: 'settings.chatgpt.title',
@@ -666,8 +680,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.tools.field.agentMemoryTool',
     descriptionKey: 'settings.openchamber.tools.field.agentMemoryToolInfo',
     keywords: ['agent', 'tool', 'memory', 'remember', 'recall', 'preferences', 'openchamber'],
-    // Unreleased: searching for a setting that is not rendered would take the
-    // user to an empty spot on the page.
+    isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().agentMemoryFeatureAvailable,
+  },
+  {
+    id: 'general.native-memory-sharing',
+    page: 'general',
+    titleKey: 'nativeMemory.title',
+    descriptionKey: 'nativeMemory.hint',
+    keywords: ['claude', 'codex', 'cli', 'memory', 'handoff', 'progress'],
     isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().agentMemoryFeatureAvailable,
   },
   {

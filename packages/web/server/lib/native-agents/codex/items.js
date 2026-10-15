@@ -3,13 +3,17 @@
 // this boundary; unknown item types are left out rather than guessed.
 
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 
 import { codexFileEntry, fileDiffMetadata } from '../file-diff.js';
 import { codexPartId, encodeCodexSessionId } from '../ids.js';
 import { isInstructionsBlock } from '../prompt-parts.js';
 import { buildReasoningPart, buildTextPart, buildToolPart } from '../records.js';
+import { buildSkillReadPart } from '../skill-records.js';
 
 const loose = (fields) => z.object(fields).passthrough();
+export const codexSkillId = (turnId, userId, name) => `skill_${createHash('sha256').update(`${turnId}:${userId}:${name}`).digest('hex').slice(0, 24)}`;
+export const codexSkillTextHash = (text) => createHash('sha256').update(text).digest('hex');
 
 const agentMessageItem = loose({ type: z.literal('agentMessage'), id: z.string(), text: z.string().catch('') });
 const reasoningItem = loose({
@@ -23,7 +27,7 @@ const commandItem = loose({
   type: z.literal('commandExecution'),
   id: z.string(),
   command: z.string(),
-  commandActions: z.array(loose({ command: z.string().optional() })).catch([]),
+  commandActions: z.array(loose({ command: z.string().optional(), type: z.string().optional(), path: z.string().optional() })).catch([]),
   cwd: z.string().nullish(),
   aggregatedOutput: z.string().nullish(),
   exitCode: z.number().nullish(),
@@ -60,6 +64,20 @@ const dynamicToolCallItem = loose({
 });
 const webSearchItem = loose({ type: z.literal('webSearch'), id: z.string(), query: z.string().catch('') });
 const imageViewItem = loose({ type: z.literal('imageView'), id: z.string(), path: z.string() });
+export const codexQuestionItem = z.object({
+  type: z.literal('openchamberQuestion'), id: z.string(),
+  questions: z.array(z.object({
+    id: z.string().optional(), question: z.string(), header: z.string().default(''),
+    options: z.array(z.object({ label: z.string(), description: z.string().default('') })).default([]),
+    multiple: z.boolean().default(false),
+  })),
+  answers: z.array(z.array(z.string())).optional(),
+  resolution: z.enum(['pending', 'answered', 'dismissed', 'interrupted']).default('pending'),
+});
+const skillItem = z.object({
+  type: z.literal('openchamberSkill'), id: z.string(), name: z.string(),
+  path: z.string().optional(), source: z.enum(['attached', 'read']),
+});
 const collabAgentItem = loose({
   type: z.literal('collabAgentToolCall'),
   id: z.string(),
@@ -110,6 +128,33 @@ const toolResult = (status, output, end) => {
 export const partsForCodexItem = (rawItem, { sessionId, threadId, messageId, start, end }) => {
   const base = { sessionID: sessionId, messageID: messageId };
 
+  const question = codexQuestionItem.safeParse(rawItem);
+  if (question.success) {
+    const item = question.data;
+    const answered = item.resolution === 'answered';
+    return [buildToolPart({
+      ...base, id: codexPartId(threadId, item.id), callID: item.id, tool: 'question',
+      input: { questions: item.questions }, title: 'Question', start,
+      metadata: { questionAnswers: item.answers ?? [], questionStatus: item.resolution },
+      result: answered ? { status: 'completed', output: '', end: end ?? start }
+        : item.resolution !== 'pending' || end !== null
+          ? { status: 'error', error: item.resolution === 'dismissed' ? 'Dismissed' : 'Interrupted', end: end ?? start }
+          : null,
+    })];
+  }
+  const skill = skillItem.safeParse(rawItem);
+  if (skill.success) {
+    const item = skill.data;
+    const metadata = { source: item.source };
+    if (item.path) metadata.dir = item.path.replace(/[\\/]SKILL\.md$/i, '');
+    return [buildToolPart({
+      ...base, id: codexPartId(threadId, item.id), callID: item.id, tool: 'skill',
+      input: { id: item.name, name: item.name }, title: item.name, start,
+      metadata,
+      result: { status: 'completed', output: '', end: end ?? start },
+    })];
+  }
+
   const agentMessage = agentMessageItem.safeParse(rawItem);
   if (agentMessage.success) {
     return [buildTextPart({ ...base, id: codexPartId(threadId, agentMessage.data.id), text: agentMessage.data.text, start, end })];
@@ -121,7 +166,20 @@ export const partsForCodexItem = (rawItem, { sessionId, threadId, messageId, sta
   }
   const plan = codexPlanItemSchema.safeParse(rawItem);
   if (plan.success) {
-    return [buildTextPart({ ...base, id: codexPartId(threadId, plan.data.id), text: plan.data.text, start, end })];
+    // Codex closes plan mode with an item rather than a tool call. It is shown
+    // the way Claude Code's ExitPlanMode is — a collapsed row the reader opens
+    // — so a session keeps one record of the plan it was asked to approve.
+    return [buildToolPart({
+      ...base,
+      id: codexPartId(threadId, plan.data.id),
+      callID: plan.data.id,
+      tool: 'plan_exit',
+      input: { plan: plan.data.text },
+      title: 'Plan',
+      start,
+      metadata: {},
+      result: toolResult('completed', '', end),
+    })];
   }
   const command = commandItem.safeParse(rawItem);
   if (command.success) {
@@ -130,7 +188,7 @@ export const partsForCodexItem = (rawItem, { sessionId, threadId, messageId, sta
     const metadata = { output };
     if (item.exitCode !== null && item.exitCode !== undefined) metadata.exit = item.exitCode;
     const input = item.cwd ? { command: displayCommand(item), workdir: item.cwd } : { command: displayCommand(item) };
-    return [buildToolPart({
+    const part = buildToolPart({
       ...base,
       id: codexPartId(threadId, item.id),
       callID: item.id,
@@ -140,7 +198,14 @@ export const partsForCodexItem = (rawItem, { sessionId, threadId, messageId, sta
       start,
       metadata,
       result: toolResult(item.status, output, end),
-    })];
+    });
+    const skills = item.status === 'completed' && item.exitCode === 0 && end !== null
+      ? item.commandActions.flatMap((action, index) => {
+        if (action.type !== 'read' || !action.path) return [];
+        const skill = buildSkillReadPart({ ...base, id: `${part.id}_s${index}`, filePath: action.path, cwd: item.cwd, start, end });
+        return skill ? [skill] : [];
+      }) : [];
+    return [part, ...skills];
   }
   const fileChange = fileChangeItem.safeParse(rawItem);
   if (fileChange.success) {
@@ -166,7 +231,7 @@ export const partsForCodexItem = (rawItem, { sessionId, threadId, messageId, sta
   const mcp = mcpToolCallItem.safeParse(rawItem);
   if (mcp.success) {
     const item = mcp.data;
-    const content = loose({ content: z.array(z.unknown()) }).safeParse(item.result);
+    const content = loose({ content: z.array(z.unknown()), isError: z.boolean().optional() }).safeParse(item.result);
     const output = item.error?.message ?? (content.success ? textOfContent.parse(content.data.content) : '');
     return [buildToolPart({
       ...base,
@@ -176,8 +241,8 @@ export const partsForCodexItem = (rawItem, { sessionId, threadId, messageId, sta
       input: item.arguments,
       title: item.tool,
       start,
-      metadata: {},
-      result: toolResult(item.error ? 'failed' : item.status, output, end),
+      metadata: { openchamberToolSource: 'mcp' },
+      result: toolResult(item.error || content.data?.isError ? 'failed' : item.status, output, end),
     })];
   }
   const dynamicTool = dynamicToolCallItem.safeParse(rawItem);
@@ -257,16 +322,20 @@ const userMessageItem = loose({
 });
 const textInput = loose({ type: z.literal('text'), text: z.string() });
 const imageInput = loose({ type: z.enum(['image', 'localImage']), url: z.string().optional(), path: z.string().optional() });
+const skillInput = z.object({ type: z.literal('skill'), name: z.string(), path: z.string() });
 
 /**
- * @returns {{ id: string, clientId: string | null, texts: string[], images: Array<{ url: string, filename: string }> } | null}
+ * @returns {{ id: string, clientId: string | null, texts: string[], images: Array<{ url: string, filename: string }>, skills: Array<{ type: 'skill', name: string, path: string }> } | null}
  */
 export const parseCodexUserMessageItem = (rawItem) => {
   const parsed = userMessageItem.safeParse(rawItem);
   if (!parsed.success) return null;
   const texts = [];
   const images = [];
+  const skills = [];
   for (const entry of parsed.data.content) {
+    const skill = skillInput.safeParse(entry);
+    if (skill.success) { skills.push(skill.data); continue; }
     const text = textInput.safeParse(entry);
     if (text.success) {
       // A feature's instructions reach the model, not the conversation.
@@ -282,5 +351,5 @@ export const parseCodexUserMessageItem = (rawItem) => {
       });
     }
   }
-  return { id: parsed.data.id, clientId: parsed.data.clientId ?? null, texts, images };
+  return { id: parsed.data.id, clientId: parsed.data.clientId ?? null, texts, images, skills };
 };

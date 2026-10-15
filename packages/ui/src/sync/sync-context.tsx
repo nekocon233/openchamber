@@ -76,7 +76,19 @@ import {
   markSessionNativeChecklistsStale,
   refreshSessionNativeChecklists,
 } from "./session-native-checklist"
-import { isNativeSessionId } from "@/lib/native-agents/ids"
+import {
+  clearSessionNativePlan,
+  markSessionNativePlansStale,
+  refreshSessionNativePlan,
+  refreshSessionNativePlans,
+} from "./session-native-plan"
+import {
+  applySessionNativeTodosEvent,
+  clearSessionNativeTodos,
+  markSessionNativeTodosStale,
+  refreshSessionNativeTodos,
+} from "./session-native-todos"
+import { isNativeSessionId, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
 import { normalizePath } from "@/lib/pathNormalization"
 import { messagesBefore } from "./message-ordering"
 import { opencodeClient } from "@/lib/opencode/client"
@@ -1864,12 +1876,14 @@ export function handleEvent(
 
   const directory = resolveDirectoryFromRoutingIndex(routingIndex, rawDirectory, payload, childStores, batch)
 
-  if (payload.type === "session.checklist.updated" || payload.type === "session.tasks.updated") {
+  if (payload.type === "session.checklist.updated" || payload.type === "session.tasks.updated" || payload.type === "session.todos.updated") {
     if (!directory || directory === "global") return
     if (payload.type === "session.checklist.updated") {
       applySessionNativeChecklistEvent(payload.properties.sessionID, directory, payload.properties.snapshot, expectedRuntimeKey)
-    } else {
+    } else if (payload.type === "session.tasks.updated") {
       applySessionNativeTaskDetailsEvent(payload.properties.sessionID, directory, payload.properties.snapshot, expectedRuntimeKey)
+    } else {
+      applySessionNativeTodosEvent(payload.properties.sessionID, directory, payload.properties.snapshot, expectedRuntimeKey)
     }
     return
   }
@@ -1930,6 +1944,8 @@ export function handleEvent(
       if (isNativeSessionId(sessionID)) {
         clearSessionNativeChecklist(sessionID, directory, expectedRuntimeKey)
         clearSessionNativeTaskDetails(sessionID, directory, expectedRuntimeKey)
+        clearSessionNativePlan(sessionID, directory, expectedRuntimeKey)
+        clearSessionNativeTodos(sessionID, directory, expectedRuntimeKey)
       }
       cleanupPersistedSessionState({ runtimeKey: expectedRuntimeKey, directory, sessionId: sessionID })
       useMessageQueueStore.getState().dropSession(sessionID)
@@ -1956,6 +1972,14 @@ export function handleEvent(
   // store, yet their collapsed sidebar rows still need the unread dot.
   if ((payload.type === "session.idle" || payload.type === "session.error") && directory && directory !== "global") {
     recordTurnOutcomeNotification(payload, directory, childStores, batch)
+    // A Codex planning turn writes its plan when the turn ends; the panel has
+    // no event for it, so a settled turn is when an open one re-reads.
+    if (payload.type === "session.idle") {
+      const idleSessionID = syncEventSessionID(payload)
+      if (idleSessionID && nativeBackendOfSessionId(idleSessionID) === "codex") {
+        refreshSessionNativePlan(idleSessionID, directory)
+      }
+    }
   }
 
   // Global events
@@ -2887,6 +2911,8 @@ export function SyncProvider(props: {
       onReconnect: ({ replayReset }) => {
         refreshSessionNativeChecklists()
         refreshSessionNativeTaskDetails()
+        refreshSessionNativePlans()
+        refreshSessionNativeTodos()
         notifySidebarStateTransportReady(sidebarRuntimeContext)
         notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         // Queue recovery is independent of the directory-bootstrap debounce.
@@ -2908,6 +2934,8 @@ export function SyncProvider(props: {
       onDisconnect: (reason) => {
         markSessionNativeChecklistsStale()
         markSessionNativeTaskDetailsStale()
+        markSessionNativePlansStale()
+        markSessionNativeTodosStale()
         if (!pipelineHasConnectedRef.current) {
           pipelineDisconnectedBeforeFirstConnectRef.current = true
         }
@@ -2921,6 +2949,8 @@ export function SyncProvider(props: {
       onTransportSwitch: () => {
         refreshSessionNativeChecklists()
         refreshSessionNativeTaskDetails()
+        refreshSessionNativePlans()
+        refreshSessionNativeTodos()
         notifySidebarStateTransportReady(sidebarRuntimeContext)
         notifyFollowUpQueueTransportReady(followUpQueueRuntimeContext)
         void useMessageQueueStore.getState().resync().catch(() => undefined)

@@ -34,7 +34,7 @@ const task = (id = 'task-1', overrides: Partial<NativeExecutionTask> = {}): Nati
 });
 const snapshot = (tasks = [task()], revision = 1): Extract<NativeTaskSnapshot, { state: 'active' }> => ({ state: 'active', generation: 'query-1', revision, tasks, omitted: 0 });
 const capabilities: NativeAgentsAPI['capabilities'] = async () => ({
-  supported: true, backends: { claude: { cli: true, tasks: { checklist: true, background: true, output: true, stop: true } }, codex: { cli: true } }, registry: { reset: false },
+  supported: true, backends: { claude: { cli: true, tasks: { checklist: true, background: true, output: true, stop: true } }, codex: { cli: true, tasks: { plan: true, todos: true } } }, registry: { reset: false },
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -55,7 +55,7 @@ const button = (text: string) => {
 };
 const click = async (text: string) => { await act(async () => button(text).click()); };
 const setup = (methods: Partial<NativeAgentsAPI> = {}) => {
-  api = createTestNativeAgentsAPI({ capabilities, checklist: async () => checklist(), sessionTasks: async () => snapshot(), taskOutput: async () => ({ state: 'ready', text: '', truncated: false }), ...methods });
+  api = createTestNativeAgentsAPI({ capabilities, checklist: async () => checklist(), plan: async () => ({ state: 'empty' }), codexTodos: async () => ({ state: 'unknown', generation: null, revision: 0, todos: [] }), sessionTasks: async () => snapshot(), taskOutput: async () => ({ state: 'ready', text: '', truncated: false }), ...methods });
   registerRuntimeAPIs(runtime(api));
 };
 const runtime = (nativeAgents: NativeAgentsAPI) => {
@@ -135,10 +135,50 @@ describe('native tasks context surface', () => {
     expect(document.querySelector('[data-native-tasks-body]')).not.toBeNull();
   });
 
-  test('non-Claude sessions and unsupported runtimes explain the empty surface instead of loading', async () => {
+  test('a Codex session shows its plan document and none of the Claude Code views', async () => {
+    setup({ plan: async () => ({ state: 'ready', observedAt: 1, text: '# Ship it\n\n- step one', truncated: false, turnId: 'turn-1' }) });
     await render({ session: 'ncx_fixture' });
-    expect(document.body.textContent).toContain('Tasks are available for Claude Code sessions');
+    expect(document.querySelector('[data-native-tasks-body]')).not.toBeNull();
+    expect(document.body.textContent).toContain('Plan document');
+    expect(document.body.textContent).toContain('Ship it');
+    expect(document.body.textContent).not.toContain('Background tasks');
+    // A plan states an intention; it carries no progress to check off.
+    expect(document.querySelector('[data-native-plan-document] input, [data-native-plan-document] [role="checkbox"]')).toBeNull();
+  });
+
+  test('a Codex session shows the steps its process reported', async () => {
+    setup({
+      plan: async () => ({ state: 'empty' }),
+      codexTodos: async () => ({ state: 'active', generation: 'query-1', revision: 2, todos: [{ id: '1', content: 'Read notes', status: 'in_progress' }] }),
+    });
+    await render({ session: 'ncx_fixture' });
+    await click('Checklist');
+    await act(async () => { await Promise.resolve(); });
+    expect(document.body.textContent).toContain('Read notes');
+    expect(document.querySelector('[data-native-todo-id]')).not.toBeNull();
+  });
+
+  test('a Codex session whose process reported no steps says it observed none', async () => {
+    await render({ session: 'ncx_fixture' });
+    await click('Checklist');
+    await act(async () => { await Promise.resolve(); });
+    // Not "no steps": Codex stores none, so this process simply has not seen any.
+    expect(document.querySelector('[data-native-todos-unknown]')).not.toBeNull();
+    expect(document.body.textContent).toContain('has not reported any steps');
+  });
+
+  test('a Codex session without a plan says so instead of reporting a failure', async () => {
+    await render({ session: 'ncx_fixture' });
+    expect(document.body.textContent).toContain('Codex has not written a plan for this session');
+  });
+
+  test('a session that is not a native CLI one explains the empty surface instead of loading', async () => {
+    await render({ session: 'ses_fixture' });
+    expect(document.body.textContent).toContain('Tasks are available for Claude Code and Codex sessions');
     expect(document.querySelector('[data-native-tasks-body]')).toBeNull();
+  });
+
+  test('an unsupported runtime explains the empty surface instead of loading', async () => {
     setup({ supported: false });
     await render();
     expect(document.body.textContent).toContain('does not support this task view');

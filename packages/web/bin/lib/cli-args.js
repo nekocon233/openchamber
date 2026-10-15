@@ -119,6 +119,10 @@ function parseArgs(argv = process.argv.slice(2)) {
     timeout: undefined,
     lastAssistant: false,
     withStatus: false,
+    scope: undefined,
+    bodyFile: undefined,
+    memoryId: undefined,
+    backend: undefined,
   };
 
   const removedFlagErrors = [];
@@ -147,6 +151,17 @@ function parseArgs(argv = process.argv.slice(2)) {
 
     const { name, inlineValue, long } = parsedToken;
     switch (name) {
+      case 'scope':
+      case 'body-file':
+      case 'memory-id':
+      case 'backend': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        const fields = { scope: 'scope', 'body-file': 'bodyFile', 'memory-id': 'memoryId', backend: 'backend' };
+        if (!value) removedFlagErrors.push(`--${name} requires a value.`);
+        else options[fields[name]] = value;
+        break;
+      }
       case 'port':
       case 'p': {
         const { value: consumedValue, nextIndex: consumedIndex } = consumeValue(i, inlineValue);
@@ -597,6 +612,7 @@ function parseArgs(argv = process.argv.slice(2)) {
   const startupAction = command === 'startup' ? (positional[1] || 'status') : null;
   const scheduleAction = command === 'schedule' ? (positional[1] || 'help') : null;
   const sessionAction = command === 'session' ? (positional[1] || 'help') : null;
+  const memoryAction = command === 'memory' ? (positional[1] || 'status') : null;
   const controlAction = command === 'control' ? (positional[1] || 'help') : null;
 
   if (options.lan && typeof options.host !== 'string') {
@@ -614,6 +630,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     startupAction,
     scheduleAction,
     sessionAction,
+    memoryAction,
     controlAction,
     options,
     removedFlagErrors,
@@ -636,6 +653,7 @@ COMMANDS:
   status         Show server status
   schedule       Manage scheduled tasks
   session        Create, inspect, and read OpenChamber sessions
+  memory         Read shared knowledge and connect native CLIs
   models         Show default and favorite models
   projects       Show configured projects and IDs
   control        Show OpenChamber control-plane commands
@@ -894,7 +912,7 @@ _openchamber_tunnel() {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="serve stop restart status schedule session models projects tunnel logs update"
+    commands="serve stop restart status schedule session memory models projects tunnel logs update"
   tunnel_commands="help providers ready doctor status start stop profile completion"
   profile_commands="list show add remove"
   common_flags="--port --foreground --no-daemon --json --all --force --help --version --plain --quiet"
@@ -906,6 +924,10 @@ _openchamber_tunnel() {
     return 0
   fi
 
+  if [[ "\${COMP_WORDS[1]}" == "memory" && \${COMP_CWORD} -eq 2 ]]; then
+    COMPREPLY=( $(compgen -W "status list read save delete connect disconnect" -- "\${cur}") )
+    return 0
+  fi
   if [[ "\${COMP_WORDS[1]}" == "tunnel" ]]; then
     if [[ \${COMP_CWORD} -eq 2 ]]; then
       COMPREPLY=( $(compgen -W "\${tunnel_commands}" -- "\${cur}") )
@@ -953,6 +975,7 @@ _openchamber() {
     'status:Show server status'
     'schedule:Manage scheduled tasks'
     'session:Create sessions'
+    'memory:Share knowledge and connect native CLIs'
     'models:Show default and favorite models'
     'projects:Show configured projects and IDs'
     'tunnel:Tunnel lifecycle commands'
@@ -992,6 +1015,9 @@ _openchamber() {
       ;;
     args)
       case \$words[1] in
+        memory)
+          _values 'memory command' status list read save delete connect disconnect
+          ;;
         tunnel)
           if (( CURRENT == 2 )); then
             _describe 'tunnel command' tunnel_commands
@@ -1021,6 +1047,8 @@ complete -c openchamber -n '__fish_use_subcommand' -a 'stop' -d 'Stop running in
 complete -c openchamber -n '__fish_use_subcommand' -a 'restart' -d 'Stop and start the server'
 complete -c openchamber -n '__fish_use_subcommand' -a 'status' -d 'Show server status'
 complete -c openchamber -n '__fish_use_subcommand' -a 'tunnel' -d 'Tunnel lifecycle commands'
+complete -c openchamber -n '__fish_use_subcommand' -a 'memory' -d 'Shared memory and native CLIs'
+complete -c openchamber -n '__fish_seen_subcommand_from memory' -a 'status list read save delete connect disconnect'
 complete -c openchamber -n '__fish_use_subcommand' -a 'logs' -d 'Tail logs'
 complete -c openchamber -n '__fish_use_subcommand' -a 'update' -d 'Check for updates'
 

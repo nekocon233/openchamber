@@ -82,13 +82,13 @@ the attempt from the only person able to judge it.
 Patterns, not a model — this runs on every index build. That buys the blunt
 cases only, which is the honest expectation.
 
-## Shipping dark
+## Enablement
 
-Agent memory is complete but unreleased. `OPENCHAMBER_MEMORY_ENABLE` decides
-whether it exists in a given process at all: unset, there is no tool, no routes,
-no session index, no settings row and no panel tab — absent rather than switched
-off, which would invite turning on something never announced. The setting itself
-also defaults to off, so setting the variable does not enable memory by itself.
+Memory is available as a product capability and remains off by default through
+`agentMemoryToolEnabled`. The retired `OPENCHAMBER_MEMORY_ENABLE` experiment
+flag no longer hides its Settings entry. The setting gates agent tools, routes
+and context delivery. Native Claude Code and Codex use the shared owner and
+terminal adapters described in `../agent-memory/DOCUMENTATION.md`.
 
 Pinned notes and plans are unaffected by the memory switch and remain scoped to
 the session that pinned them.

@@ -50,6 +50,30 @@ const createLoader = (loadNativeMessages: (request: NativeRequest) => Promise<Na
 }
 
 describe("SessionMessageLoader with native sessions", () => {
+  test("retains measured tokens when supplemental native metadata temporarily fails", async () => {
+    let available = true
+    const tokens = { total: 1000, input: 200, output: 50, reasoning: 0, cache: { read: 750, write: 0 } }
+    const { childStores, loader } = createLoader(async () => ({
+      records: [userRecord('ncl_u_prompt', 1), {
+        info: {
+          id: 'ncl_a_reply', sessionID: SESSION, role: 'assistant', time: { created: 2, completed: 3 },
+          parentID: 'ncl_u_prompt', modelID: available ? 'opus' : '', providerID: 'claude-native', agent: 'build', mode: 'build',
+          path: { cwd: DIRECTORY, root: DIRECTORY }, cost: 0,
+          tokens: available ? tokens : undefined, contextWindow: available ? 200000 : undefined,
+        },
+        parts: [{ id: 'ncl_p_reply', sessionID: SESSION, messageID: 'ncl_a_reply', type: 'text', text: available ? 'Before' : 'Fresh text' }],
+      }], cursor: null, complete: true, childSessions: [], metadataComplete: available,
+    }))
+    const target = { sessionID: SESSION, directory: DIRECTORY }
+    await loader.ensure(target)
+    available = false
+    await loader.refreshTail(target, 100)
+    const state = childStores.getChild(DIRECTORY)?.getState()
+    expect(state?.message[SESSION]?.find((message) => message.id === 'ncl_a_reply')).toMatchObject({ tokens, contextWindow: 200000, modelID: 'opus' })
+    expect(state?.part.ncl_a_reply?.[0]).toMatchObject({ text: 'Fresh text' })
+    loader.dispose()
+    childStores.disposeAll()
+  })
   test("reads history from the native API, pages older with its cursor and holds linked subagent sessions", async () => {
     const requests: NativeRequest[] = []
     const { childStores, loader, openCodeCalls } = createLoader(async (request) => {

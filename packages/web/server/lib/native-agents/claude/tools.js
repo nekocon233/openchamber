@@ -39,6 +39,9 @@ const questionInput = loose({
     options: z.array(loose({ label: z.string(), description: z.string().optional() })).optional(),
   })),
 });
+const questionResult = questionInput.extend({
+  answers: z.record(z.string(), z.string()), response: z.string().optional(),
+});
 const exitPlanInput = loose({ plan: z.string().optional() });
 const skillInput = loose({ skill: z.string().optional(), command: z.string().optional() });
 const anyInput = z.record(z.string(), z.unknown());
@@ -266,14 +269,15 @@ const bashFileChanges = (record) => {
 const ANSWERED_PREFIX = /^Your questions have been answered:/;
 
 /**
- * The part of a Claude tool result the diff needs, or null for any other
- * result: the diff fields of an Edit, MultiEdit or Write result, or the file
- * changes Claude Code recorded on a Bash result. The raw results also carry
+ * Structured fields omitted by SDK history: file changes and question answers.
+ * The raw results also carry
  * whole file contents (`originalFile`, and `content` after an overwrite) and a
  * command's output, which history does not keep.
  * @param {unknown} toolUseResult
  */
-export const slimFileEditResult = (toolUseResult) => {
+export const slimToolResult = (toolUseResult) => {
+  const question = questionResult.safeParse(toolUseResult);
+  if (question.success) return { questions: question.data.questions, answers: question.data.answers, response: question.data.response };
   const command = bashResult.safeParse(toolUseResult);
   if (command.success) return recordsAChange(command.data.bashEditDiff) ? { bashEditDiff: command.data.bashEditDiff } : null;
   const parsed = fileResult.safeParse(toolUseResult);
@@ -307,7 +311,18 @@ export const mapClaudeToolResult = (tool, content, toolUseResult) => {
     if (changes) metadata = changes;
   }
   if (tool === 'question') {
-    // The question renderer parses OpenCode's wording of the same answer.
+    const parsed = questionResult.safeParse(toolUseResult);
+    if (parsed.success) {
+      // The terminal CLI encodes multi-select as one comma-separated string.
+      // Preserve it verbatim; OpenChamber's own choices keep lossless arrays.
+      metadata.questionAnswers = parsed.data.questions.map((question) => {
+        const value = parsed.data.answers[question.question];
+        return value === undefined ? [] : [value];
+      });
+      metadata.questionStatus = Object.keys(parsed.data.answers).length > 0 || parsed.data.response ? 'answered' : 'dismissed';
+      if (parsed.data.response !== undefined) metadata.questionResponse = parsed.data.response;
+    }
+    // Legacy transcripts keep their existing presentation-string fallback.
     output = output.replace(ANSWERED_PREFIX, 'User has answered your questions:');
   }
   return { output, metadata };

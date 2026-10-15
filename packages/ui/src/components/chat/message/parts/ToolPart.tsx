@@ -42,6 +42,7 @@ import { MinDurationShineText } from './MinDurationShineText';
 import { ToolRevealOnMount } from './ToolRevealOnMount';
 import { getToolIcon } from './toolPresentation';
 import { GuestToolTable } from './GuestToolTable';
+import { readQuestionTranscript } from './questionTranscript';
 import type { JsonValue } from '@openchamber/sdk';
 import {
     guestToolTableRows,
@@ -1493,6 +1494,37 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
 
         // Question tool: show parsed Q&A summary or question content from input
         if (isQuestionTool(part.tool)) {
+            const transcript = readQuestionTranscript(input, metadata);
+            if (transcript) {
+                const isPlanChoice = metadata?.nativeQuestionKind === 'claude-plan-exit' || metadata?.nativeQuestionKind === 'codex-plan-exit';
+                const choiceLabel = (value: string) => isPlanChoice && value === 'build'
+                    ? t('chat.questionCard.planExitApprove')
+                    : isPlanChoice && value === 'plan' ? t('chat.questionCard.planExitKeepPlanning') : value;
+                return renderScrollableBlock(
+                    <div className="space-y-3">
+                        {transcript.questions.map((question, index) => (
+                            <div key={index} className="space-y-1">
+                                {question.header ? <div className="typography-micro text-muted-foreground">{question.header}</div> : null}
+                                <FormMarkdown content={question.question} size="meta" className="text-foreground" />
+                                <div className="flex flex-wrap gap-1">
+                                    {question.options.map((option) => (
+                                        <span key={option.label} className={cn('typography-micro rounded px-1.5 py-0.5 border',
+                                            question.answers.includes(option.label)
+                                                ? 'bg-interactive-selection text-foreground border-border'
+                                                : 'text-muted-foreground border-border/30')} title={option.description}>
+                                            {choiceLabel(option.label)}
+                                        </span>
+                                    ))}
+                                </div>
+                                {question.answers.length > 0 ? <div className="typography-meta whitespace-pre-wrap text-foreground">{question.answers.map(choiceLabel).join('\n')}</div> : null}
+                            </div>
+                        ))}
+                        {transcript.response ? <div className="typography-meta whitespace-pre-wrap text-foreground">{transcript.response}</div> : null}
+                        {state.status === 'error' ? <div className="typography-meta text-[var(--status-error)]">{state.error}</div> : null}
+                    </div>,
+                    { maxHeightClass: 'max-h-[40vh]' },
+                );
+            }
             if (state.status === 'completed' && hasStringOutput) {
                 const parsedQA = parseQuestionOutput(outputString);
                 if (parsedQA && parsedQA.length > 0) {

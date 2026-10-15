@@ -7,12 +7,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.title": "Завдання",
   "chat.nativeTasks.open": "Відкрити завдання сеансу",
-  "chat.nativeTasks.description": "Контрольний список і фонові завдання Claude Code для цього сеансу.",
+  "chat.nativeTasks.description": "Списки, фонові завдання та плани цього сеансу.",
   "chat.nativeTasks.checklist": "Контрольний список",
   "chat.nativeTasks.cliChecklist": "Контрольний список",
   "chat.nativeTasks.background": "Фонові завдання",
@@ -21,13 +22,22 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.readonly": "Контрольний список Claude Code лише для читання, окремий від завдань проєкту.",
   "chat.nativeTasks.refresh": "Оновити",
   "chat.nativeTasks.unsupported": "Цей сервер або CLI не підтримує цей перегляд завдань.",
-  "chat.nativeTasks.notNative": "Завдання доступні для сеансів Claude Code.",
+  "chat.nativeTasks.notNative": "Завдання доступні для сеансів Claude Code і Codex.",
   "chat.nativeTasks.checklistUnavailable": "Не вдалося підтвердити розташування списку для цього сеансу.",
   "chat.nativeTasks.loadError": "Не вдалося завантажити завдання. Оновіть, щоб спробувати ще раз.",
   "chat.nativeTasks.stale": "Ці завдання можуть бути застарілими. Оновіть, щоб спробувати ще раз.",
   "chat.nativeTasks.partial": "Деякі записи не вдалося прочитати. Попередні записи збережено, але вони можуть бути застарілими.",
   "chat.nativeTasks.history": "Відновлено з останнього записаного TodoWrite. Це не свідчить про поточну активність.",
   "chat.nativeTasks.checklistEmpty": "Claude Code ще не записав елементів списку для цього сеансу.",
+  "chat.nativeTasks.plan": "Документ плану",
+  "chat.nativeTasks.planNotice": "Те, що цей сеанс планував зробити до початку. Сам план не має поступу.",
+  "chat.nativeTasks.planEmpty": "Codex не записав плану для цього сеансу.",
+  "chat.nativeTasks.planTruncated": "Цей план скорочено, щоб він умістився. Відкрийте розмову, щоб прочитати його повністю.",
+  "chat.nativeTasks.todos": "Контрольний список",
+  "chat.nativeTasks.todosNotice": "Кроки, які повідомив процес CLI. Вони ніде не зберігаються, тож перезапуск їх втратить.",
+  "chat.nativeTasks.todosUnknown": "Цей процес не повідомив жодного кроку для цього сеансу.",
+  "chat.nativeTasks.todosInactive": "Цей процес CLI більше не спостерігається. Це останні повідомлені кроки.",
+  "chat.nativeTasks.todosEmpty": "CLI повідомив порожній список кроків.",
   "chat.nativeTasks.owner": "Відповідальний: {owner}",
   "chat.nativeTasks.blockedBy": "Очікує на: {ids}",
   "chat.nativeTasks.blocks": "Блокує: {ids}",
@@ -75,6 +85,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.summary.unavailable": "Недоступно",
   "chat.nativeTasks.summary.partial": "Неповні або застарілі дані",
   "chat.nativeTasks.summary.checklist": "Завершено: {completed} / {total}",
+  "chat.nativeTasks.summary.plan": "План доступний",
   "chat.nativeTasks.summary.background": "Активні: {active} / Записані: {total}",
   "settings.chatgpt.limitReached": "Досягнуто ліміту використання плану ChatGPT. Перевірте ліміти застосунку та плану в налаштуваннях ChatGPT.",
   "settings.chatgpt.notEligible": "Цей обліковий запис або робочий простір ChatGPT не може використати план для цього запиту.",
@@ -226,6 +237,7 @@ export const dict: Record<I18nKey, string> = {
   ...surfacePanelI18n.uk,
   ...fileArtifactsI18n.uk,
   ...usageStatsI18n.uk,
+  ...nativeMemoryI18n.uk,
   ...webSearchI18n.uk,
   'terminalView.actions.attachSelection': 'Прикріпити вибраний вивід',
   'terminalView.actions.copySelection': 'Скопіювати вибраний вивід',
@@ -1507,7 +1519,7 @@ export const dict: Record<I18nKey, string> = {
   "walkthrough.blocked.contextTooSmall.descriptionUnknownModel": "Small model вміщає близько {available} тис. символів, а цьому diff потрібно близько {required} тис. Нічого не обрізається — оберіть модель із більшим контекстом.",
   "walkthrough.blocked.structuredOutput.descriptionUnknownModel": "Small model не підтримує структуровані відповіді, потрібні для розбору.",
   "contextRail.surface.plan.description": "Перегляд поточного плану",
-  "contextRail.surface.tasks.description": "Список завдань Claude Code і фонові завдання",
+  "contextRail.surface.tasks.description": "Списки, фонові завдання та плани нативних CLI",
   "contextRail.surface.pr.description": "Створюйте, переглядайте та зливайте pull request поточної гілки",
   "contextRail.surface.notes.description": "Нотатки, завдання, плани та памʼять агента для проєкту",
   "contextRail.surface.context.description": "Контекст сесії та використання токенів",

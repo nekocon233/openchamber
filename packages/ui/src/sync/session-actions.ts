@@ -39,6 +39,8 @@ import { createOpenCodeIdentifier } from "@/lib/opencode/identifier"
 import { getImperativeSessionMessageLoader } from "./session-message-loader"
 import { cleanupPersistedSessionState } from "./session-deletion-cleanup"
 import { clearSessionNativeChecklist } from "./session-native-checklist"
+import { clearSessionNativePlan } from "./session-native-plan"
+import { clearSessionNativeTodos } from "./session-native-todos"
 import { clearSessionNativeTaskDetails } from "./session-background-tasks"
 import { requestSessionArchiveBatch, requestSessionMetadataUpdate, requestSessionUnarchiveBatch } from './session-archive-batch';
 import type { SessionArchiveStamp } from './session-archive-batch';
@@ -1440,6 +1442,8 @@ function finalizeConfirmedSessionDeletion(
     if (isNativeSessionId(sessionId)) {
       clearSessionNativeChecklist(sessionId, sessionDirectory, runtimeContext.runtimeKey)
       clearSessionNativeTaskDetails(sessionId, sessionDirectory, runtimeContext.runtimeKey)
+      clearSessionNativePlan(sessionId, sessionDirectory, runtimeContext.runtimeKey)
+      clearSessionNativeTodos(sessionId, sessionDirectory, runtimeContext.runtimeKey)
     }
     cleanupPersistedSessionState({
       runtimeKey: runtimeContext.runtimeKey,

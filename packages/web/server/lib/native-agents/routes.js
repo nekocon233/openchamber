@@ -108,6 +108,29 @@ const handle = (work) => async (req, res) => {
  */
 export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementRequest = () => false }) => {
   app.get('/api/native/capabilities', handle(() => runtime.capabilities()));
+  const memory = () => {
+    if (!runtime.memorySharing) throw new NativeAgentError('Native memory sharing is unavailable', { status: 503, code: 'NATIVE_MEMORY_UNSUPPORTED' });
+    return runtime.memorySharing;
+  };
+  const requireLocalMemoryManagement = (req) => {
+    if (!isLocalManagementRequest(req)) throw new NativeAgentError('Connect terminal CLIs on the server computer', { status: 403, code: 'NATIVE_MEMORY_LOCAL_REQUIRED' });
+  };
+  app.get('/api/native/memory', handle(async (req) => ({
+    ...await memory().status(z.object({ directory: z.string().optional() }).parse(req.query).directory),
+    canManage: isLocalManagementRequest(req),
+  })));
+  app.post('/api/native/memory/:backend/connect', handle((req) => {
+    requireLocalMemoryManagement(req);
+    return memory().connect(z.enum(['claude', 'codex']).parse(req.params.backend), req.socket.localPort);
+  }));
+  app.delete('/api/native/memory/:backend', handle((req) => {
+    requireLocalMemoryManagement(req);
+    return memory().disconnect(z.enum(['claude', 'codex']).parse(req.params.backend));
+  }));
+  app.post('/api/native/memory/import', handle((req) => {
+    const body = z.object({ directory: z.string().min(1), sourceId: z.string().min(1) }).parse(req.body);
+    return memory().importSource(body.sourceId, body.directory);
+  }));
 
   const connections = '/api/native/claude/connections';
   app.get(connections, handle(() => runtime.claudeConnections.list()));
@@ -167,6 +190,14 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   }));
 
   app.get('/api/native/sessions/:sessionId/checklist', handle((req) => runtime.checklist(
+    req.params.sessionId, directoryQuery.parse(req.query).directory,
+  )));
+
+  app.get('/api/native/sessions/:sessionId/plan', handle((req) => runtime.plan(
+    req.params.sessionId, directoryQuery.parse(req.query).directory,
+  )));
+
+  app.get('/api/native/sessions/:sessionId/todos', handle((req) => runtime.codexTodos(
     req.params.sessionId, directoryQuery.parse(req.query).directory,
   )));
 
@@ -242,13 +273,13 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
     return runtime.fork(req.params.sessionId, body.messageID ?? null, body.directory);
   }));
 
-  app.post('/api/native/questions/:requestId/reply', handle((req) => {
-    runtime.replyQuestion(req.params.requestId, questionReplyBody.parse(req.body).answers);
+  app.post('/api/native/questions/:requestId/reply', handle(async (req) => {
+    await runtime.replyQuestion(req.params.requestId, questionReplyBody.parse(req.body).answers);
     return { replied: true };
   }));
 
-  app.post('/api/native/questions/:requestId/reject', handle((req) => {
-    runtime.rejectQuestion(req.params.requestId);
+  app.post('/api/native/questions/:requestId/reject', handle(async (req) => {
+    await runtime.rejectQuestion(req.params.requestId);
     return { rejected: true };
   }));
 };

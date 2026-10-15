@@ -91,6 +91,7 @@ describe('Codex proposed plans', () => {
     expect(proposed).toEqual([{
       sessionId: SESSION_ID, directory: DIRECTORY, turnId: TURN_ID,
       text: 'Final plan', send: planning.send,
+      tool: { callID: 'latest', messageID: `ncx_a_${THREAD_ID.replaceAll('-', '')}_${TURN_ID}` },
     }]);
   });
 
@@ -313,7 +314,7 @@ describe('Codex live threads', () => {
     const completion = { threadId: THREAD_ID, turn: { id: TURN_ID, status } };
     live.handleNotification('turn/completed', completion);
     live.handleNotification('turn/completed', completion);
-    expect(finished).toEqual([[SESSION_ID, DIRECTORY, { id: TURN_ID, status }]]);
+    expect(finished).toEqual([[SESSION_ID, DIRECTORY, { id: TURN_ID, status, summary: '' }]]);
     expect(live.busySessionIds(DIRECTORY)).toEqual([]);
   });
 
@@ -555,11 +556,48 @@ describe('Codex live threads', () => {
     expect(asked.properties).toMatchObject({ sessionID: SESSION_ID, questions: [{ question: 'Which color?', header: 'Color', multiple: false }] });
     questions.reply(asked.properties.id, [['blue']]);
     expect(await answer).toEqual({ answers: { color: { answers: ['blue'] } } });
+    expect(live.liveRecords(SESSION_ID).flatMap((record) => record.parts).find((part) => part.type === 'tool' && part.tool === 'question')).toMatchObject({
+      state: { status: 'completed', metadata: { questionAnswers: [['blue']], questionStatus: 'answered' } },
+    });
 
     expect(await live.handleServerRequest('item/commandExecution/requestApproval', {})).toEqual({ decision: 'accept' });
     expect(await live.handleServerRequest('item/fileChange/requestApproval', {})).toEqual({ decision: 'accept' });
     await expect(live.handleServerRequest('item/tool/call', {})).rejects.toThrow('Unsupported app-server request');
     await expect(live.handleServerRequest('constructor', {})).rejects.toThrow('Unsupported app-server request');
+  });
+
+  it('updates measured live usage once and ignores other-turn or duplicate counters', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    live.handleNotification('item/started', { threadId: THREAD_ID, turnId: TURN_ID, item: { type: 'agentMessage', id: 'reply', text: '' } });
+    const total = { inputTokens: 400, cachedInputTokens: 250, outputTokens: 100, reasoningOutputTokens: 30, totalTokens: 500 };
+    const update = { threadId: THREAD_ID, turnId: TURN_ID, tokenUsage: { total, last: total, modelContextWindow: 828400 } };
+    live.handleNotification('thread/tokenUsage/updated', update);
+    const assistant = () => live.liveRecords(SESSION_ID).find((record) => record.info.role === 'assistant').info;
+    expect(assistant()).toMatchObject({
+      tokens: { total: 500, input: 150, output: 70, reasoning: 30, cache: { read: 250, write: 0 } }, contextWindow: 828400,
+    });
+    expect(assistant()).not.toHaveProperty('cost');
+    const published = events.length;
+    live.handleNotification('thread/tokenUsage/updated', update);
+    live.handleNotification('thread/tokenUsage/updated', { ...update, turnId: 'another-turn' });
+    expect(events).toHaveLength(published);
+    live.handleNotification('thread/tokenUsage/updated', { ...update, tokenUsage: {
+      total: { inputTokens: 700, cachedInputTokens: 450, outputTokens: 200, reasoningOutputTokens: 60, totalTokens: 900 },
+      last: { inputTokens: 300, cachedInputTokens: 200, outputTokens: 100, reasoningOutputTokens: 30, totalTokens: 400 },
+      modelContextWindow: 828400,
+    } });
+    expect(assistant().tokens).toEqual({ total: 400, input: 250, output: 140, reasoning: 60, cache: { read: 450, write: 0 } });
+  });
+
+  it('streams plan text through its part without republishing the turn', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    live.handleNotification('item/started', { threadId: THREAD_ID, turnId: TURN_ID, item: { type: 'plan', id: 'plan', text: '' } });
+    const before = events.length;
+    live.handleNotification('item/plan/delta', { threadId: THREAD_ID, turnId: TURN_ID, itemId: 'plan', delta: 'First step' });
+    expect(events.slice(before).map((event) => event.payload.type)).toEqual(['message.part.updated']);
+    expect(live.liveRecords(SESSION_ID).flatMap((record) => record.parts).find((part) => part.type === 'tool' && part.tool === 'plan_exit')).toMatchObject({ state: { input: { plan: 'First step' } } });
   });
 
   it('fails running turns when the app-server stops', async () => {
@@ -573,22 +611,42 @@ describe('Codex live threads', () => {
     expect(live.busySessionIds(DIRECTORY)).toEqual([]);
   });
 
-  it('turns the plan into todos and ignores notifications for threads it does not drive', async () => {
+  const steps = (live, plan) => live.handleNotification('turn/plan/updated', { threadId: THREAD_ID, turnId: TURN_ID, plan });
+  const todoSnapshots = (events) => payloads(events, 'session.todos.updated').map((payload) => payload.properties.snapshot);
+
+  it('reports the steps a turn published and ignores notifications for threads it does not drive', async () => {
     const { live, events } = createHarness({ replay: false });
     live.handleNotification('turn/plan/updated', { threadId: 'someone-else', plan: [] });
     live.handleNotification('toString', {});
     expect(events).toEqual([]);
 
     await sendPrompt(live);
-    live.handleNotification('turn/plan/updated', {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      plan: [{ step: 'Read notes', status: 'completed' }, { step: 'Write greeting', status: 'inProgress' }],
-    });
-    expect(payloads(events, 'todo.updated')[0].properties.todos).toEqual([
-      { id: `${THREAD_ID}_plan_0`, content: 'Read notes', status: 'completed', priority: 'medium' },
-      { id: `${THREAD_ID}_plan_1`, content: 'Write greeting', status: 'in_progress', priority: 'medium' },
-    ]);
+    steps(live, [{ step: 'Read notes', status: 'completed' }, { step: 'Write greeting', status: 'inProgress' }]);
+    expect(todoSnapshots(events)).toEqual([expect.objectContaining({
+      state: 'active',
+      todos: [
+        { id: '1', content: 'Read notes', status: 'completed' },
+        { id: '2', content: 'Write greeting', status: 'in_progress' },
+      ],
+    })]);
+  });
+
+  it('does not publish an identical list twice, and ends the observation when the thread unloads', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    steps(live, [{ step: 'Read notes', status: 'inProgress' }]);
+    steps(live, [{ step: 'Read notes', status: 'inProgress' }]);
+    expect(todoSnapshots(events)).toHaveLength(1);
+
+    live.handleNotification('thread/status/changed', { threadId: THREAD_ID, status: { type: 'notLoaded' } });
+    expect(todoSnapshots(events).at(-1)).toMatchObject({ state: 'inactive', todos: [{ content: 'Read notes' }] });
+  });
+
+  it('says nothing when a thread that never reported steps unloads', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    live.handleNotification('thread/status/changed', { threadId: THREAD_ID, status: { type: 'notLoaded' } });
+    expect(payloads(events, 'session.todos.updated')).toEqual([]);
   });
 
   it('reports when a thread goes idle', async () => {

@@ -165,6 +165,8 @@ export type AssistantMessage = MessageBase & {
   error?: StructuredError
   cost?: number
   tokens?: TokenUsageInfo
+  /** Effective window reported by the native CLI for this response. */
+  contextWindow?: number
   snapshot?: { start?: string; end?: string; files?: string[] }
   retry?: { attempt: number; at: number; error: StructuredError }
 }

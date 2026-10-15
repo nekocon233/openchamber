@@ -61,19 +61,27 @@ const assistantMessageSchema = z.object({
   agent: z.string(),
   path: z.object({ cwd: z.string(), root: z.string() }),
   summary: z.boolean().optional(),
-  cost: z.number(),
+  cost: z.number().optional(),
   tokens: z.object({
     total: z.number().optional(),
     input: z.number(),
     output: z.number(),
     reasoning: z.number(),
     cache: z.object({ read: z.number(), write: z.number() }),
-  }),
+  }).optional(),
+  contextWindow: z.number().int().positive().optional(),
   variant: z.string().optional(),
   finish: z.enum(['stop', 'length', 'tool-calls', 'content-filter', 'error', 'unknown']).catch('unknown').optional(),
 });
 
-export const nativeMessageSchema = z.discriminatedUnion('role', [userMessageSchema, assistantMessageSchema]) satisfies z.ZodType<Message>;
+const compactionMessageSchema = z.object({
+  id: z.string().min(1), sessionID: nativeSessionIdSchema, role: z.literal('compaction'),
+  time: z.object({ created: z.number() }),
+  status: z.enum(['running', 'completed', 'failed']), reason: z.enum(['auto', 'manual']),
+  summary: z.string(), error: nativeMessageErrorSchema.optional(),
+});
+
+export const nativeMessageSchema = z.discriminatedUnion('role', [userMessageSchema, assistantMessageSchema, compactionMessageSchema]) satisfies z.ZodType<Message>;
 
 const partBase = {
   id: z.string().min(1),
@@ -163,6 +171,7 @@ export const nativeMessagePageSchema = z.object({
   cursor: z.string().nullable(),
   complete: z.boolean(),
   childSessions: z.array(nativeSessionSchema),
+  metadataComplete: z.boolean().optional(),
 });
 
 const sessionPartitionSchema = z.discriminatedUnion('status', [
@@ -211,7 +220,13 @@ export const nativeCapabilitiesSchema = z.object({
         stop: z.boolean(),
       }).optional(),
     }),
-    codex: z.object({ cli: z.boolean() }),
+    codex: z.object({
+      cli: z.boolean(),
+      // Absent means an older server that has no Codex task views at all.
+      // `todos` arrived after `plan`, so a server that has the Codex task
+      // views at all may still predate it.
+      tasks: z.object({ plan: z.boolean(), todos: z.boolean().optional() }).optional(),
+    }),
   }),
   registry: z.object({ reset: z.boolean(), resetAt: z.number().optional() }),
 });

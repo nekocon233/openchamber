@@ -83,6 +83,7 @@ type FetchedPage = {
   partsByMessageID: Map<string, Part[]>
   cursor: string | undefined
   complete: boolean
+  metadataComplete?: boolean
 }
 
 type LoadPerformanceDetails = {
@@ -888,7 +889,7 @@ export class SessionMessageLoader {
       const partsByMessageID = new Map(page.records.map((record) => [record.info.id, filterIdentifiedParts(record.parts)] as const))
       recordCount = session.length
       finishPagePerformance("complete", { retryCount: Math.max(0, attempts - 1), recordCount })
-      return { session, partsByMessageID, cursor: page.cursor ?? undefined, complete: page.complete }
+      return { session, partsByMessageID, cursor: page.cursor ?? undefined, complete: page.complete, metadataComplete: page.metadataComplete }
     } catch (error) {
       finishPagePerformance("error", { retryCount: Math.max(0, attempts - 1), recordCount })
       throw error
@@ -937,15 +938,40 @@ export class SessionMessageLoader {
     }, [...entry.optimistic.values()])
     for (const messageID of merged.confirmed) entry.optimistic.delete(messageID)
     const mergedPartsByMessageID = new Map(merged.part.map((candidate) => [candidate.id, candidate.part] as const))
+    const currentState = store.getState()
+    const previousByID = page.metadataComplete === false
+      ? new Map((currentState.message[target.sessionID] ?? []).map((message) => [message.id, message])) : null
     const materialized = materializeSessionSnapshots(
-      store.getState(),
+      currentState,
       target.sessionID,
-      merged.session.map((info) => ({
-        info,
-        parts: page.partsByMessageID.get(info.id)
+      merged.session.map((incoming) => {
+        let info = incoming
+        const previous = previousByID?.get(info.id)
+        if (info.role === 'assistant' && previous?.role === 'assistant') {
+          info = { ...info, tokens: info.tokens ?? previous.tokens, contextWindow: info.contextWindow ?? previous.contextWindow }
+          if (!info.modelID) info = { ...info, modelID: previous.modelID, variant: info.variant ?? previous.variant, agent: previous.agent }
+        }
+        let parts = page.partsByMessageID.get(info.id)
           ?? mergedPartsByMessageID.get(info.id)
-          ?? [],
-      })),
+          ?? []
+        if (previousByID) {
+          const previousParts = new Map((currentState.part[info.id] ?? []).map((part) => [part.id, part]))
+          parts = parts.map((part) => {
+            const old = previousParts.get(part.id)
+            if (part.type !== 'tool' || old?.type !== 'tool' || part.state.status === 'pending' || old.state.status === 'pending') return part
+            const metadata = { ...part.state.metadata }
+            let changed = false
+            for (const key of ['questionAnswers', 'questionStatus', 'questionResponse', 'nativeQuestionKind']) {
+              if (metadata[key] === undefined && old.state.metadata?.[key] !== undefined) {
+                metadata[key] = old.state.metadata[key]
+                changed = true
+              }
+            }
+            return changed ? { ...part, state: { ...part.state, metadata } } : part
+          })
+        }
+        return { info, parts }
+      }),
       { mode },
     )
     if (!isCurrent()) return null

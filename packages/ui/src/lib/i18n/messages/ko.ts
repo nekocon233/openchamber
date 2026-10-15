@@ -7,12 +7,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.title": "작업",
   "chat.nativeTasks.open": "세션 작업 열기",
-  "chat.nativeTasks.description": "이 세션의 Claude Code 체크리스트와 백그라운드 작업입니다.",
+  "chat.nativeTasks.description": "이 세션의 체크리스트, 백그라운드 작업, 계획서입니다.",
   "chat.nativeTasks.checklist": "체크리스트",
   "chat.nativeTasks.cliChecklist": "체크리스트",
   "chat.nativeTasks.background": "백그라운드 작업",
@@ -21,13 +22,22 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.readonly": "Claude Code의 읽기 전용 체크리스트입니다. 프로젝트 할 일과는 별개입니다.",
   "chat.nativeTasks.refresh": "새로고침",
   "chat.nativeTasks.unsupported": "이 서버 또는 CLI는 이 작업 보기를 지원하지 않습니다.",
-  "chat.nativeTasks.notNative": "Claude Code 세션에서 작업을 사용할 수 있습니다.",
+  "chat.nativeTasks.notNative": "작업은 Claude Code 및 Codex 세션에서 사용할 수 있습니다.",
   "chat.nativeTasks.checklistUnavailable": "이 세션의 체크리스트 위치를 확인할 수 없습니다.",
   "chat.nativeTasks.loadError": "작업을 불러올 수 없습니다. 새로고침하여 다시 시도하세요.",
   "chat.nativeTasks.stale": "작업 정보가 오래되었을 수 있습니다. 새로고침하여 다시 시도하세요.",
   "chat.nativeTasks.partial": "일부 항목을 읽을 수 없습니다. 이전 항목은 유지되지만 오래된 정보일 수 있습니다.",
   "chat.nativeTasks.history": "마지막으로 기록된 TodoWrite에서 복원했습니다. 현재 실행 중임을 의미하지 않습니다.",
   "chat.nativeTasks.checklistEmpty": "Claude Code가 이 세션에 체크리스트 항목을 아직 기록하지 않았습니다.",
+  "chat.nativeTasks.plan": "계획서",
+  "chat.nativeTasks.planNotice": "이 세션이 시작하기 전에 세운 내용입니다. 계획서 자체에는 진행 상황이 없습니다.",
+  "chat.nativeTasks.planEmpty": "Codex가 이 세션에 계획서를 작성하지 않았습니다.",
+  "chat.nativeTasks.planTruncated": "이 계획서는 분량에 맞게 줄여졌습니다. 전체 내용은 대화를 열어 확인하세요.",
+  "chat.nativeTasks.todos": "체크리스트",
+  "chat.nativeTasks.todosNotice": "CLI 프로세스가 보고한 단계입니다. 어디에도 저장되지 않으므로 재시작하면 사라집니다.",
+  "chat.nativeTasks.todosUnknown": "이 프로세스는 이 세션의 단계를 보고하지 않았습니다.",
+  "chat.nativeTasks.todosInactive": "이 CLI 프로세스는 더 이상 관찰되지 않습니다. 마지막으로 보고된 단계입니다.",
+  "chat.nativeTasks.todosEmpty": "CLI가 빈 단계 목록을 보고했습니다.",
   "chat.nativeTasks.owner": "담당자: {owner}",
   "chat.nativeTasks.blockedBy": "대기 대상: {ids}",
   "chat.nativeTasks.blocks": "차단 대상: {ids}",
@@ -75,6 +85,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.summary.unavailable": "사용 불가",
   "chat.nativeTasks.summary.partial": "불완전하거나 오래됨",
   "chat.nativeTasks.summary.checklist": "완료: {completed} / {total}",
+  "chat.nativeTasks.summary.plan": "계획서 있음",
   "chat.nativeTasks.summary.background": "활성: {active} / 기록됨: {total}",
   "settings.chatgpt.limitReached": "ChatGPT 요금제 사용량 제한에 도달했습니다. ChatGPT 설정에서 앱과 요금제 제한을 확인하세요.",
   "settings.chatgpt.notEligible": "이 ChatGPT 계정 또는 워크스페이스는 이 요청에 요금제를 사용할 수 없습니다.",
@@ -226,6 +237,7 @@ export const dict: Record<I18nKey, string> = {
   ...surfacePanelI18n.ko,
   ...fileArtifactsI18n.ko,
   ...usageStatsI18n.ko,
+  ...nativeMemoryI18n.ko,
   ...webSearchI18n.ko,
   'terminalView.actions.attachSelection': '선택한 출력 첨부',
   'terminalView.actions.copySelection': '선택한 출력 복사',
@@ -1507,7 +1519,7 @@ export const dict: Record<I18nKey, string> = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': '스몰 모델은 약 {available}천 자를 담을 수 있는데 이 diff에는 약 {required}천 자가 필요합니다. 잘라내지 않으니 컨텍스트가 더 큰 모델을 선택하세요.',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': '스몰 모델은 워크스루에 필요한 구조화된 응답을 지원하지 않습니다.',
   'contextRail.surface.plan.description': '현재 계획 보기',
-  'contextRail.surface.tasks.description': 'Claude Code 체크리스트와 백그라운드 작업',
+  'contextRail.surface.tasks.description': '네이티브 CLI 체크리스트, 백그라운드 작업, 계획서',
   'contextRail.surface.pr.description': '현재 브랜치의 풀 리퀘스트를 생성, 검토, 병합',
   'contextRail.surface.notes.description': '프로젝트의 노트, 할 일, 계획, 에이전트 메모리',
   'contextRail.surface.context.description': '세션 컨텍스트 및 토큰 사용량',

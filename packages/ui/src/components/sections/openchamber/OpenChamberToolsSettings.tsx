@@ -22,6 +22,7 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import { useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useI18n } from '@/lib/i18n';
+import { NativeMemorySettings } from './NativeMemorySettings';
 
 /**
  * Which OpenChamber capabilities agents are given.
@@ -35,6 +36,7 @@ import { useI18n } from '@/lib/i18n';
  * the tool list is live without a restart.
  */
 export const OpenChamberToolsSettings: React.FC = () => {
+  const [memoryRefreshRevision, setMemoryRefreshRevision] = React.useState(0);
   const { t } = useI18n();
   const agentControlToolEnabled = useUIStore((state) => state.agentControlToolEnabled);
   const setAgentControlToolEnabled = useUIStore((state) => state.setAgentControlToolEnabled);
@@ -44,8 +46,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
   const setBrowserProvider = useUIStore((state) => state.setBrowserProvider);
   const guests = useGuestsStore((state) => state.guests);
   const agentMemoryToolEnabled = useUIStore((state) => state.agentMemoryToolEnabled);
-  // Absent, not merely off: the feature is finished but unreleased, and a
-  // visible switch invites turning on something that was never announced.
+  // Older runtimes can explicitly lack the memory capability.
   const agentMemoryAvailable = useUIStore((state) => state.agentMemoryFeatureAvailable);
   const setAgentMemoryToolEnabled = useUIStore((state) => state.setAgentMemoryToolEnabled);
   const agentNotifyToolEnabled = useUIStore((state) => state.agentNotifyToolEnabled);
@@ -84,9 +85,8 @@ export const OpenChamberToolsSettings: React.FC = () => {
     void updateDesktopSettings({ browserProvider: value });
   }, [setBrowserProvider]);
 
-  // Turning memory off removes the whole feature, not just the tool: the panel
-  // tab goes with it and sessions stop being given the index. Showing the user
-  // what is stored would be pointless once the agent can no longer manage it.
+  // Disabling stops agent access and hides the project memory view. Stored
+  // entries remain available when the user enables memory again.
   const handleAgentMemoryToolChange = React.useCallback((enabled: boolean) => {
     setAgentMemoryToolEnabled(enabled);
     // Re-read after the write lands, not before. The switch flips the client
@@ -95,6 +95,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
     // "disabled", which used to leave the tab hidden until a restart.
     void updateDesktopSettings({ agentMemoryToolEnabled: enabled })
       .finally(() => {
+        setMemoryRefreshRevision((revision) => revision + 1);
         if (enabled) {
           void useAgentMemoryStore.getState().refresh();
         }
@@ -176,6 +177,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
         />
         ) : null}
       </div>
+      {agentMemoryAvailable ? <NativeMemorySettings refreshRevision={memoryRefreshRevision} /> : null}
     </SettingsSection>
   );
 };

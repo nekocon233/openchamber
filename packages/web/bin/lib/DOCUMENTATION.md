@@ -35,6 +35,14 @@ Command modules implement user-facing commands and preserve output contracts acr
   - Implements scheduled task status/list/create/run/delete/enable/disable.
   - Maps options to control-service inputs and renders results; project resolution, validation, persistence, and execution remain server-owned.
 
+- `commands-memory.js`
+  - Implements shared memory list/read/save/delete, status and native CLI
+    connect/disconnect. All modes validate the same scope and required inputs.
+  - Writes delegate to the control service and memory owner. Native enrollment
+    uses authenticated host routes; the CLI never edits another client's
+    settings itself. `--json` remains one JSON document, and piped/quiet commands
+    never prompt.
+
 - `commands-models.js`
   - Prints OpenChamber default, favorite, and recent model settings.
 

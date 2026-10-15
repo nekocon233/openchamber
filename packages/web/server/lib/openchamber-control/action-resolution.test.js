@@ -30,6 +30,12 @@ describe('a namespace the tool name already implies', () => {
 });
 
 describe('an unidentified caller', () => {
+  test('cannot invoke CLI adapter actions by omitting its tool name', () => {
+    for (const tool of [null, 'openchamber', 'openchamber_memory', 'openchamber_future']) {
+      expect(resolveAgentToolAction('memory.context', tool).action).toBeUndefined();
+      expect(resolveAgentToolAction('memory.checkpoint', tool).action).toBeUndefined();
+    }
+  });
   test('still resolves a bare name that means one thing everywhere', () => {
     expect(resolveAgentToolAction('snapshot', null)).toEqual({ action: 'browser.snapshot' });
   });

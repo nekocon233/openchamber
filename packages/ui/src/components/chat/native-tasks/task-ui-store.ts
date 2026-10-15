@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
 
-export type NativeTasksTab = 'checklist' | 'background';
+export type NativeTasksTab = 'checklist' | 'background' | 'plan' | 'todos';
 
 export type TaskStopRequest = { status: 'submitting' | 'accepted' | 'error' };
 

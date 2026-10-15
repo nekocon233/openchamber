@@ -6,12 +6,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict = {
   "chat.nativeTasks.title": "Görevler",
   "chat.nativeTasks.open": "Oturum görevlerini aç",
-  "chat.nativeTasks.description": "Bu oturumun Claude Code kontrol listesi ve arka plan görevleri.",
+  "chat.nativeTasks.description": "Bu oturumun kontrol listeleri, arka plan görevleri ve planları.",
   "chat.nativeTasks.checklist": "Kontrol listesi",
   "chat.nativeTasks.cliChecklist": "Kontrol listesi",
   "chat.nativeTasks.background": "Arka plan görevleri",
@@ -20,13 +21,22 @@ export const dict = {
   "chat.nativeTasks.readonly": "Salt okunur Claude Code kontrol listesi. Proje yapılacaklarından ayrıdır.",
   "chat.nativeTasks.refresh": "Yenile",
   "chat.nativeTasks.unsupported": "Bu sunucu veya CLI bu görev görünümünü desteklemiyor.",
-  "chat.nativeTasks.notNative": "Görevler Claude Code oturumları için kullanılabilir.",
+  "chat.nativeTasks.notNative": "Görevler Claude Code ve Codex oturumları için kullanılabilir.",
   "chat.nativeTasks.checklistUnavailable": "Bu oturumun kontrol listesi konumu doğrulanamadı.",
   "chat.nativeTasks.loadError": "Görevler yüklenemedi. Yeniden denemek için yenileyin.",
   "chat.nativeTasks.stale": "Bu görevler güncel olmayabilir. Yeniden denemek için yenileyin.",
   "chat.nativeTasks.partial": "Bazı kayıtlar okunamadı. Önceki kayıtlar korunur ancak güncel olmayabilir.",
   "chat.nativeTasks.history": "Son kaydedilen TodoWrite üzerinden kurtarıldı. Bu, canlı etkinlik olduğunu göstermez.",
   "chat.nativeTasks.checklistEmpty": "Claude Code bu oturum için henüz kontrol listesi öğesi kaydetmedi.",
+  "chat.nativeTasks.plan": "Plan belgesi",
+  "chat.nativeTasks.planNotice": "Bu oturumun başlamadan önce yapmayı planladığı şey. Planın kendi ilerlemesi yoktur.",
+  "chat.nativeTasks.planEmpty": "Codex bu oturum için bir plan yazmadı.",
+  "chat.nativeTasks.planTruncated": "Bu plan sığması için kısaltıldı. Tamamını okumak için konuşmayı açın.",
+  "chat.nativeTasks.todos": "Kontrol listesi",
+  "chat.nativeTasks.todosNotice": "CLI sürecinin bildirdiği adımlar. Hiçbir yerde saklanmaz, yeniden başlatma bunları kaybeder.",
+  "chat.nativeTasks.todosUnknown": "Bu süreç bu oturum için hiçbir adım bildirmedi.",
+  "chat.nativeTasks.todosInactive": "Bu CLI süreci artık izlenmiyor. Bunlar en son bildirdiği adımlar.",
+  "chat.nativeTasks.todosEmpty": "CLI boş bir adım listesi bildirdi.",
   "chat.nativeTasks.owner": "Sorumlu: {owner}",
   "chat.nativeTasks.blockedBy": "Beklenen: {ids}",
   "chat.nativeTasks.blocks": "Engelledikleri: {ids}",
@@ -74,6 +84,7 @@ export const dict = {
   "chat.nativeTasks.summary.unavailable": "Kullanılamıyor",
   "chat.nativeTasks.summary.partial": "Eksik veya güncel değil",
   "chat.nativeTasks.summary.checklist": "Tamamlanan: {completed} / {total}",
+  "chat.nativeTasks.summary.plan": "Plan mevcut",
   "chat.nativeTasks.summary.background": "Etkin: {active} / Kaydedilen: {total}",
   "settings.chatgpt.limitReached": "ChatGPT planı kullanım sınırına ulaşıldı. ChatGPT ayarlarından uygulama ve plan sınırlarını kontrol edin.",
   "settings.chatgpt.notEligible": "Bu ChatGPT hesabı veya çalışma alanı bu istek için planını kullanamıyor.",
@@ -225,6 +236,7 @@ export const dict = {
   ...surfacePanelI18n.tr,
   ...fileArtifactsI18n.tr,
   ...usageStatsI18n.tr,
+  ...nativeMemoryI18n.tr,
   ...webSearchI18n.tr,
   'terminalView.actions.attachSelection': 'Seçili çıktıyı ekle',
   'terminalView.actions.copySelection': 'Seçili çıktıyı kopyala',
@@ -1476,7 +1488,7 @@ export const dict = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': 'Küçük model yaklaşık {available}K karakter alabiliyor; bu diff ise yaklaşık {required}K gerektiriyor. Hiçbir şey kırpılmaz — bunun yerine daha büyük bağlam alanı olan bir model seç.',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': 'Küçük model, bir inceleme turunun ihtiyaç duyduğu yapılandırılmış yanıtları desteklemiyor.',
   'contextRail.surface.plan.description': 'Geçerli planı görüntüle',
-  'contextRail.surface.tasks.description': 'Claude Code yapılacaklar listesi ve arka plan görevleri',
+  'contextRail.surface.tasks.description': 'Yerel CLI kontrol listeleri, arka plan görevleri ve planları',
   'contextRail.surface.pr.description': 'Geçerli branch\'in pull request\'ini oluştur, incele ve merge et',
   'contextRail.surface.notes.description': 'Proje için notlar, todo\'lar, planlar ve agent belleği',
   'contextRail.surface.context.description': 'Session bağlamı ve token kullanımı',

@@ -9,12 +9,18 @@ already renders, and never keeps a copy of the conversation. Native sessions
 sit next to OpenCode sessions in the same projects and sidebar, but OpenCode
 never sees them.
 
+OpenChamber retains lossless selections made through its own question UI as
+integration metadata. Question text, tools and replies still come from the CLI.
+Shared long-term memory and project handoffs are owned by
+`../agent-memory/DOCUMENTATION.md`, not by the native transcript stores.
+
 OpenChamber lists and reads both CLIs' sessions, creates sessions, and drives
 turns: prompts, steering, stops, model and effort changes, plan mode and the
 model's questions. Every tool runs without asking. Reverts, forks, rename,
 archive, delete and compaction work the way they do for OpenCode sessions.
-Claude checklists and background-task details have native snapshot APIs;
-Codex still publishes its plan updates as todos.
+Claude checklists and background-task details, and Codex plan documents, have
+native snapshot APIs, including the steps Codex reports through `update_plan`
+and the plan a Codex thread wrote.
 
 ## Wiring
 
@@ -132,9 +138,11 @@ Claude gotchas:
   fields per entry uuid (the raw result also holds whole file contents and a
   command's output). Entries without a structured result, most of them, skip
   the result parsers; failed parses were most of that pass's cost. A failed
-  second read costs the diffs, never the history.
-- A subagent's history does that read only when the subagent edited files
-  or lost tool results: it goes through the whole session, nothing caches
+  second read leaves the main history readable and marks supplemental metadata
+  incomplete. Question calls trigger the same read to recover their structured
+  answers; incomplete results are retried rather than cached as complete.
+- A subagent's history does that read only when the subagent edited files,
+  asked a question or lost tool results: it goes through the whole session, nothing caches
   it, and nearly every subagent runs commands. The file changes of a
   subagent's commands therefore show live, and after a reload only when that
   read runs anyway.
@@ -193,6 +201,18 @@ Codex gotchas:
   project's session into the currently selected project.
 - History comes from `thread/turns/list { itemsView: 'full' }`; reading it
   does not resume the thread.
+- That RPC omits usage and user-input calls. `codex/history-details.js` streams
+  supplemental metadata from the app-server supplied rollout, verifies the
+  thread identity and joins only retained turns. Modern `token_usage_record`
+  and legacy `token_count` records share one counter ledger, so a request
+  represented in both is counted once. Question calls and verified answers
+  restore the question tool row. Explicit skill attachments and successful
+  manifest reads retain skill activity; mentioning a skill is not usage.
+- `codex/usage.js` separates uncached input, cache reads/writes, output and
+  reasoning. Reply buckets accumulate within their assistant segment while
+  `tokens.total` is the final request window. `contextWindow` is the effective
+  limit the CLI reported. Missing usage or monetary cost is unknown, not zero.
+  Per-turn model/effort metadata fills gaps in the bounded send registry.
 - A steer starts a new user message segment inside the same turn. Failed and
   interrupted turns carry an error on their assistant message.
 - Only JSON-RPC `-32600` "thread not loaded" or "invalid thread id" means a
@@ -344,7 +364,17 @@ Codex (`codex/live.js`): turns on the shared app-server.
   turn, and deltas after item completion cannot reopen or overwrite it.
   These timestamps leave memory with the turn; persisted history falls back
   to turn times because its items carry no timing. `turn/plan/updated` becomes
-  `todo.updated`.
+  the `session.todos.updated` snapshot below.
+- A `plan` item is the plan a planning turn wrote. It projects as the
+  `plan_exit` tool part Claude Code's ExitPlanMode projects as — a collapsed
+  row the reader opens — so a session keeps one record of the plan it was
+  asked to approve, in the same shape either CLI produces.
+- Codex leaves its `update_plan` tool out of the model's declaration unless
+  `tools.update_plan.enabled` is set, and that tool is what makes the CLI send
+  `turn/plan/updated` at all. `codex/app-server.js` passes it as a fixed
+  argument, not through the connection overrides: those are empty until the
+  user configures a provider, which would leave the CLI's own login without
+  the tool.
 - A `thread/started` notification with a known `parentThreadId` registers a
   child before its first turn is persisted. Its reported directory and model
   belong to that child, including nested agents. Child turn/item events use
@@ -372,6 +402,14 @@ Codex (`codex/live.js`): turns on the shared app-server.
   not depend on the bounded send registry. Ordinary prompts with the same
   text, custom feedback and older unmarked approvals remain visible.
   Custom feedback starts a new planning turn; `plan`, cancellation or an invalid answer sends nothing.
+- `interactions.js` keeps the selection of a question OpenChamber asked, keyed
+  by the tool call it belongs to, and `attach` puts it back when the session is
+  read. A plan exit becomes a `question` part carrying the plan and the answer;
+  any other question keeps the part it already had and gains the answers.
+  Nothing is recorded for a question asked without a tool call, which is why
+  Codex's plan exit left no trace until its question named the plan item's own
+  part. That part is what `attach` matches, and an answer arrives after the
+  turn has settled, so the match happens on a history read rather than live.
   A failed start publishes a session error without retrying or recording a
   successful Build prompt.
 - Plan decisions remain cancellable through prompt preparation and thread
@@ -385,6 +423,20 @@ Codex (`codex/live.js`): turns on the shared app-server.
 the pending callback and publishes `question.replied` or `question.rejected`.
 Tool questions end with their turn; a completed Codex plan's decision has the
 separate lifetime described above.
+
+`interactions.js` retains call IDs, choices, outcomes and timestamps, without
+copying question bodies. It restores exact multi-select/custom answers and
+plan decisions after reload. Forks copy only retained calls; deletion removes
+the metadata. Reply acknowledgement awaits the metadata write. Native history
+remains readable if supplemental metadata fails: `metadataComplete: false`
+reports the partial read and the UI keeps previously measured token fields.
+
+Codex consumes `thread/tokenUsage/updated` for its matching active turn.
+Duplicate/stale counters do not publish again, and steering and compaction keep
+separate segment accounting. `item/plan/delta` updates only the target plan part;
+the completed item supplies the authoritative final text. Structured MCP calls
+carry MCP provenance so the concise transcript retains them, including tools
+whose names resemble built-ins. MCP `isError` remains a failed tool result.
 
 `loadMessages` lays a running turn's live records over the history it read,
 so a reload mid-turn shows the streaming reply and the next delta lands on a
@@ -533,8 +585,10 @@ composer picked. Claude Code gets `/compact` (with any summary instructions)
 as a prompt that shows no user message of its own; Codex runs
 `thread/compact/start`, which takes no instructions (`400`) and streams in as
 a turn of its own. A pending revert commits first, as for a prompt. Either
-way the conversation shows the compaction marker, a user message with a
-compaction part, and Claude's summary:
+way the conversation shows a `compaction` message with explicit lifecycle and
+Claude's summary. IDs and legacy compaction parts remain stable. A successful
+compaction clears the measured window until the next response; a running or
+failed compaction does not erase the prior reading:
 
 - Claude's live `compact_boundary` frame opens the marker, the synthetic user
   frame after it is the summary, and replayed local-command output is
@@ -594,6 +648,12 @@ forwarded as prompts. Commands without an OpenChamber handler, including
 approval policy documented above.
 
 ### Claude checklists
+
+Claude Code offers its task-tracking tools only to the models it recognizes,
+and a connection's model is a third-party id it does not, so every query opts
+in with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` (`claude/live.js`). Without it the
+model has no checklist tool at all and records nothing here. Those tools write
+each task as `<config dir>/tasks/<list id>/<task id>.json`.
 
 `claude/tasks.js` owns checklist reads and publications. The query captures
 `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_TASK_LIST_ID` from its actual connection
@@ -704,6 +764,37 @@ cases in `runtime.test.js`. The latter also contains revert fixtures that invoke
 git; a no-git validation run selects only the task-runtime and route groups.
 These fixtures do not launch a real Claude query or prove platform/relay behavior.
 
+### Codex plan documents and steps
+
+`codex/plan-todos.js` owns the steps a turn reports through `update_plan`.
+Codex marks the notification carrying them transient and non-durable — upstream
+`rollout/src/policy.rs` returns `None` for `EventMsg::PlanUpdate` under
+"Transient, non-durable events" — so they reach no rollout entry, no
+thread-history item and no RPC, and nothing can read them back. The owner
+therefore reports an observation of one process and never claims more. A thread
+it has not heard from is `unknown` with a null generation, which is not a
+thread without steps. `active` follows an observation, and `inactive` follows
+the thread being unloaded, closed, forgotten or losing its app-server, keeping
+the steps it last saw because they are the only record that will exist. Closing
+a thread that never reported steps publishes nothing. Equivalent observations
+do not publish again, and a revision a reader already holds is never reissued;
+revisions restart with the process, so a reconnect resets the reader's
+authority and a new generation replaces the old snapshot whatever its revision.
+Reads go through `GET /sessions/:id/todos`, which answers `unknown` for a
+thread this process holds no observation for and `unsupported` for another
+backend.
+
+`codex/store.js`'s `latestPlan` reads the newest nonempty `plan` item from the
+thread store, newest turn first, and `runtime.plan` wraps it. The thread store
+is the source rather than the live turn because Codex unloads a thread once its
+turn ends — the moment the plan is most worth reading. A thread with no plan is
+`{ state: 'empty' }`, which is a successful authoritative read; a failed read
+throws and becomes an HTTP error, so a caller never reports one as missing.
+`{ state: 'unavailable', reason: 'unsupported' }` answers any other backend.
+The snapshot carries `text`, `truncated` (past 200,000 characters) and the
+`turnId` that wrote it, with no shared-list identity: a plan belongs to one
+thread and is not reconciled across sessions.
+
 ## Registry
 
 `<data dir>/native-agents/registry.json` holds only what the CLIs cannot
@@ -784,8 +875,12 @@ transcript, `store.js` scans the chain the CLI would replay (entries after the
 last compaction, block-level, sidechains excluded) and the send fails with
 `NATIVE_HISTORY_NOT_PORTABLE` naming the referenced tools instead of spawning
 a query that must fail. The default Anthropic login resumes unchecked. The
-guard knows only the `tool_reference` block type; new non-portable blocks
-extend it as they are confirmed upstream.
+guard scans the active replay chain, excluding sidechains and text mentions.
+It also detects the ChatGPT bridge's GPT replay carriers. Those sessions may
+resume through ChatGPT; resuming them through an API-key connection or the
+default Anthropic login fails before spawning with
+`400 NATIVE_GPT_REPLAY_NOT_PORTABLE`, asking the user to continue with ChatGPT
+or start a new session. No transcript is rewritten during a provider switch.
 
 Web and Electron use the connected server's connections. Hosted mobile and
 Capacitor use that same server and CLI. VS Code's native adapter rejects these
@@ -943,10 +1038,41 @@ Tool search is disabled. Document blocks, hosted tools and exact
 token-count requests fail explicitly. The upstream request still omits
 `max_output_tokens`, which this ChatGPT plan route does not accept; the output
 limit configures Claude's budget and the upstream enforces its own limit.
-Provider thinking signatures are not transferable and are omitted from history.
+Foreign provider thinking signatures are omitted from Responses input.
 Both streaming and non-streaming Claude requests are accepted, while upstream
 Responses always streams. Existing Claude session persistence, plan mode,
 subagents and compaction remain owned by Claude Code.
+
+`responses-replay.js` owns version 1 of the GPT replay carrier. The bridge
+requests `reasoning.encrypted_content` and, only after a successful completed
+response, appends an opaque `redacted_thinking` block to the Claude reply.
+Its `data` starts with `openchamber-responses:` and contains base64-encoded
+metadata: account/model scope, content-block digests, complete encrypted reasoning
+items, assistant message IDs and phases, and their positions among the
+visible text and tool blocks. It does not duplicate text or tool results.
+The existing projector hides redacted blocks in live and historical UI records.
+The carrier is not a credential and its contents must never be logged.
+
+On the next request, the bridge validates the carrier and restores reasoning,
+assistant phases and output order from the matching response segment. The
+CLI can move thinking before tool blocks and group tools after text. Matching
+accepts those normalized blocks or the original block order, then restores
+the original Responses ordering. It uses a unique content segment rather
+than the carrier's position. Ambiguous matches keep visible history without
+attaching state to a guessed response. The
+completed response's output array is authoritative; item completion events
+and output indexes cover streams without that array. Missing phases stay
+missing. Invalid owned carriers and unsupported versions fail explicitly;
+oversized state fails rather than being truncated. An incomplete or failed
+response emits no carrier or successful completion.
+
+The CLI transcript remains the only replay authority. There is no bridge-side
+conversation cache, so grant disposal, server restart and parallel parent/child
+requests cannot mix state. A different account/model or edited/truncated
+response segment keeps its visible history without replaying that segment's
+stale GPT state. Revert, fork and compaction replay only the blocks the CLI
+actually retains. Older transcripts remain usable; state lost before this fix
+cannot be recovered, and new replies establish their own replay carriers.
 
 Transient upstream failures — 408, 429 and 5xx statuses, and network errors —
 are retried inside the bridge, up to three attempts total with a shared
@@ -1047,7 +1173,7 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 
 | Route | Answer |
 |---|---|
-| `GET /capabilities` | `{ supported: true, backends: { claude: { cli, tasks: { checklist, background, output, stop } }, codex: { cli } }, registry }`; task flags describe host implementation, query snapshots describe current observations |
+| `GET /capabilities` | `{ supported: true, backends: { claude: { cli, tasks: { checklist, background, output, stop } }, codex: { cli, tasks: { plan, todos } } }, registry }`; task flags describe host implementation, query snapshots describe current observations |
 | `GET /catalog` | Models per backend; Codex from `model/list`, reported per backend like listing |
 | `GET /sessions?directory=` | Root sessions per backend (see Listing) |
 | `GET /sessions/status?directory=` | Sessions with a running turn, as busy; every other session is idle |
@@ -1055,6 +1181,8 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 | `GET /sessions/:id?directory=` | One session record, `404 NATIVE_SESSION_NOT_FOUND` when missing |
 | `GET /sessions/:id/messages?directory=` | A history page (see History projection) |
 | `GET /sessions/:id/checklist?directory=` | Ready checklist snapshot or unavailable source, without opening a query |
+| `GET /sessions/:id/plan?directory=` | The plan a Codex thread last wrote: a ready snapshot, an authoritative empty, or unsupported for another backend |
+| `GET /sessions/:id/todos?directory=` | The steps Codex reported, as this process observed them: unknown, active or inactive, or unsupported for another backend |
 | `GET /sessions/:id/tasks?directory=` | Full query task snapshot, generation, revision and omitted count |
 | `GET /sessions/:id/tasks/:taskId/output?directory=&generation=` | Bounded task output or explicit unavailable reason; no path parameter |
 | `POST /sessions/:id/tasks/:taskId/stop` | `{ directory, generation }`: stops only the owned current task; `{ accepted: true }` |
@@ -1083,3 +1211,38 @@ The shared UI reads these routes through `RuntimeAPIs.nativeAgents`
 How the UI merges native sessions, history, statuses and questions into its
 stores is in `packages/ui/src/sync/DOCUMENTATION.md` under "Native CLI
 sessions".
+
+## Compatibility audit
+
+The native adapters support usage recovery, structured questions and answers,
+explicit skill loading, compaction boundaries, streamed plans and MCP tool
+results. Codex history supplements the app-server's retained turns from the
+same thread's rollout; missing supplemental data is marked incomplete instead
+of reporting authoritative zeros. Costs and account quotas remain unknown when
+the CLI supplies none. Native goal token budgets remain explicitly unsupported
+independently of usage reporting.
+
+Claude's SDK history omits structured tool results. The supplemental raw read
+recovers `AskUserQuestion` answers as well as file changes, including a separate
+freeform response. A failed read is incomplete and is retried on the next
+history request. Terminal multi-select strings stay verbatim because the CLI
+has already joined them; OpenChamber UI selections retain their exact arrays.
+
+Codex MCP elicitation is still declined by the existing request handler.
+New upstream item types such as image generation, subagent activity, hook
+prompts, function-call output and sleep have no dedicated transcript renderer.
+Unknown items are skipped without fabricating empty messages. These are
+remaining capabilities, not substitutes for the supported tool-call records.
+
+Shared global preferences, project knowledge and terminal handoffs are owned by
+`../agent-memory/DOCUMENTATION.md`. Enrollment is opt-in and local to the server
+computer. Codex's own hook trust review still applies. VS Code explicitly
+reports native agents as unsupported; mobile surfaces use their connected
+server's adapters.
+
+Saved question choices follow a fork's retained call IDs. Source history is
+read before creating the fork. If the supplemental copy fails after creation,
+the created session is published and the error names the surviving fork.
+Deletion publishes every deleted native session even when supplemental cleanup
+fails; `NATIVE_INTERACTION_CLEANUP_FAILED` explicitly reports the leftover
+choice metadata. Neither failure can undo a completed native operation.

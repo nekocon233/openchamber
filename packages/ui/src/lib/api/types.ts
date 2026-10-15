@@ -4,6 +4,7 @@ import type { WorktreeMetadata } from '@/types/worktree';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
 import type { DesktopSettings } from '@/lib/settings/registry';
 import type { Session } from '@/lib/opencode/model';
+import type { NativeMemoryStatus, NativeMemoryConnection } from '@/lib/native-agents/memory-schemas';
 import type { z } from 'zod';
 import type {
   nativeBackgroundTaskSnapshotSchema,
@@ -18,7 +19,7 @@ import type {
   nativeStatusSnapshotSchema,
 } from '@/lib/native-agents/schemas';
 import type { NativeBackend } from '@/lib/native-agents/ids';
-import type { NativeChecklistSnapshot, NativeTaskOutput, NativeTaskSnapshot } from '@/lib/native-agents/task-schemas';
+import type { NativeChecklistSnapshot, NativePlanSnapshot, NativeTaskOutput, NativeTaskSnapshot, NativeTodosSnapshot } from '@/lib/native-agents/task-schemas';
 
 type RuntimePlatform = 'web' | 'desktop' | 'vscode';
 
@@ -1703,6 +1704,10 @@ export type NativePromptRequest = {
  * server. Every method throws on failure; none reports a failure as empty.
  */
 export interface NativeAgentsAPI {
+  memoryStatus(directory?: string, options?: NativeReadOptions): Promise<NativeMemoryStatus>;
+  connectMemory(backend: NativeBackend): Promise<NativeMemoryConnection>;
+  disconnectMemory(backend: NativeBackend): Promise<NativeMemoryConnection>;
+  importMemory(sourceId: string, directory: string): Promise<void>;
   /** False for runtimes without an OpenChamber server, currently VS Code. */
   supported: boolean;
   capabilities(): Promise<NativeCapabilities>;
@@ -1734,6 +1739,10 @@ export interface NativeAgentsAPI {
   backgroundTasks(options?: NativeReadOptions): Promise<NativeBackgroundTaskSnapshot>;
   /** CLI-owned checklist; reading does not start a model turn. */
   checklist(sessionId: string, directory: string, options?: NativeReadOptions): Promise<NativeChecklistSnapshot>;
+  /** The plan a Codex thread last wrote; other backends report unsupported. */
+  plan(sessionId: string, directory: string, options?: NativeReadOptions): Promise<NativePlanSnapshot>;
+  /** The steps Codex reported for a thread, as the current process observed them. */
+  codexTodos(sessionId: string, directory: string, options?: NativeReadOptions): Promise<NativeTodosSnapshot>;
   /** Task details for the current CLI process, separate from the active set. */
   sessionTasks(sessionId: string, directory: string, options?: NativeReadOptions): Promise<NativeTaskSnapshot>;
   taskOutput(sessionId: string, taskId: string, directory: string, generation: string, options?: NativeReadOptions): Promise<NativeTaskOutput>;

@@ -3,7 +3,7 @@
 // history reads and live events, so the two paths cannot drift apart.
 //
 // Rendering contract the builders encode (see packages/ui sync and chat docs):
-// - an assistant message must carry parentID = its user message id;
+// - an assistant message names its prompt or compaction boundary as parentID;
 // - text and reasoning parts need time.end once finished;
 // - finished tool parts need state.time.end;
 // - every part carries sessionID (a part without one is an optimistic placeholder).
@@ -69,6 +69,12 @@ export const buildUserMessage = ({ id, sessionID, created, agent, model }) => ({
 
 export const EMPTY_TOKENS = Object.freeze({ total: 0, input: 0, output: 0, reasoning: 0, cache: Object.freeze({ read: 0, write: 0 }) });
 
+export const buildCompactionMessage = ({ id, sessionID, created, status, auto, error = null }) => {
+  const message = { id, sessionID, role: 'compaction', time: { created }, status, reason: auto ? 'auto' : 'manual', summary: '' };
+  if (error) message.error = error;
+  return message;
+};
+
 /**
  * @param {object} input
  * @param {string} input.id
@@ -80,7 +86,9 @@ export const EMPTY_TOKENS = Object.freeze({ total: 0, input: 0, output: 0, reaso
  * @param {string} input.modelID
  * @param {string} input.agent
  * @param {string} input.cwd
- * @param {{ total: number, input: number, output: number, reasoning: number, cache: { read: number, write: number } }} input.tokens
+ * @param {{ total: number, input: number, output: number, reasoning: number, cache: { read: number, write: number } }} [input.tokens]
+ * @param {number} [input.contextWindow]
+ * @param {number} [input.cost] Absent when the CLI reports no monetary cost.
  * @param {string | null} [input.finish]
  * @param {string | null} [input.variant]
  * @param {{ name: string, data: { message: string } } | null} [input.error]
@@ -97,6 +105,8 @@ export const buildAssistantMessage = ({
   agent,
   cwd,
   tokens,
+  contextWindow,
+  cost,
   finish = null,
   variant = null,
   error = null,
@@ -113,15 +123,16 @@ export const buildAssistantMessage = ({
     mode: agent,
     agent,
     path: { cwd, root: cwd },
-    cost: 0,
-    tokens: {
+  };
+  if (tokens) message.tokens = {
       total: tokens.total,
       input: tokens.input,
       output: tokens.output,
       reasoning: tokens.reasoning,
       cache: { read: tokens.cache.read, write: tokens.cache.write },
-    },
   };
+  if (contextWindow > 0) message.contextWindow = contextWindow;
+  if (cost !== undefined) message.cost = cost;
   if (finish !== null) message.finish = finish;
   if (variant !== null) message.variant = variant;
   if (error !== null) message.error = error;

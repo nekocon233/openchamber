@@ -7,12 +7,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.title": "Zadania",
   "chat.nativeTasks.open": "Otwórz zadania sesji",
-  "chat.nativeTasks.description": "Lista kontrolna i zadania Claude Code w tle dla tej sesji.",
+  "chat.nativeTasks.description": "Listy kontrolne, zadania w tle i plany tej sesji.",
   "chat.nativeTasks.checklist": "Lista kontrolna",
   "chat.nativeTasks.cliChecklist": "Lista kontrolna",
   "chat.nativeTasks.background": "Zadania w tle",
@@ -21,13 +22,22 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.readonly": "Lista Claude Code tylko do odczytu, niezależna od zadań projektu.",
   "chat.nativeTasks.refresh": "Odśwież",
   "chat.nativeTasks.unsupported": "Ten serwer lub CLI nie obsługuje tego widoku zadań.",
-  "chat.nativeTasks.notNative": "Zadania są dostępne dla sesji Claude Code.",
+  "chat.nativeTasks.notNative": "Zadania są dostępne dla sesji Claude Code i Codex.",
   "chat.nativeTasks.checklistUnavailable": "Nie można potwierdzić położenia listy dla tej sesji.",
   "chat.nativeTasks.loadError": "Nie można wczytać zadań. Odśwież, aby spróbować ponownie.",
   "chat.nativeTasks.stale": "Te zadania mogą być nieaktualne. Odśwież, aby spróbować ponownie.",
   "chat.nativeTasks.partial": "Nie można odczytać części wpisów. Poprzednie wpisy zostają zachowane, ale mogą być nieaktualne.",
   "chat.nativeTasks.history": "Przywrócono z ostatniego zapisanego TodoWrite. Nie oznacza to bieżącej aktywności.",
   "chat.nativeTasks.checklistEmpty": "Claude Code nie zapisał jeszcze wpisów listy dla tej sesji.",
+  "chat.nativeTasks.plan": "Dokument planu",
+  "chat.nativeTasks.planNotice": "To, co ta sesja zamierzała zrobić przed rozpoczęciem. Sam plan nie ma postępu.",
+  "chat.nativeTasks.planEmpty": "Codex nie zapisał planu dla tej sesji.",
+  "chat.nativeTasks.planTruncated": "Ten plan został skrócony, aby się zmieścił. Otwórz rozmowę, aby przeczytać go w całości.",
+  "chat.nativeTasks.todos": "Lista kontrolna",
+  "chat.nativeTasks.todosNotice": "Kroki zgłoszone przez proces CLI. Nie są nigdzie zapisywane, więc restart je utraci.",
+  "chat.nativeTasks.todosUnknown": "Ten proces nie zgłosił żadnych kroków dla tej sesji.",
+  "chat.nativeTasks.todosInactive": "Ten proces CLI nie jest już obserwowany. To ostatnio zgłoszone kroki.",
+  "chat.nativeTasks.todosEmpty": "CLI zgłosiło pustą listę kroków.",
   "chat.nativeTasks.owner": "Odpowiedzialny: {owner}",
   "chat.nativeTasks.blockedBy": "Oczekuje na: {ids}",
   "chat.nativeTasks.blocks": "Blokuje: {ids}",
@@ -75,6 +85,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.summary.unavailable": "Niedostępne",
   "chat.nativeTasks.summary.partial": "Niepełne lub nieaktualne",
   "chat.nativeTasks.summary.checklist": "Ukończone: {completed} / {total}",
+  "chat.nativeTasks.summary.plan": "Plan dostępny",
   "chat.nativeTasks.summary.background": "Aktywne: {active} / Zapisane: {total}",
   "settings.chatgpt.limitReached": "Osiągnięto limit użycia planu ChatGPT. Sprawdź limity aplikacji i planu w ustawieniach ChatGPT.",
   "settings.chatgpt.notEligible": "To konto lub obszar roboczy ChatGPT nie może użyć planu do tego żądania.",
@@ -226,6 +237,7 @@ export const dict: Record<I18nKey, string> = {
   ...surfacePanelI18n.pl,
   ...fileArtifactsI18n.pl,
   ...usageStatsI18n.pl,
+  ...nativeMemoryI18n.pl,
   ...webSearchI18n.pl,
   'terminalView.actions.attachSelection': 'Dołącz zaznaczone dane wyjściowe',
   'terminalView.actions.copySelection': 'Kopiuj zaznaczone dane wyjściowe',
@@ -1914,7 +1926,7 @@ export const dict: Record<I18nKey, string> = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': 'Mały model mieści około {available} tys. znaków, a te różnice potrzebują około {required} tys. Nic nie jest obcinane — wybierz model z większym kontekstem.',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': 'Mały model nie obsługuje ustrukturyzowanych odpowiedzi wymaganych przez przewodnik.',
   'contextRail.surface.plan.description': 'Zobacz bieżący plan',
-  'contextRail.surface.tasks.description': 'Lista kontrolna Claude Code i zadania w tle',
+  'contextRail.surface.tasks.description': 'Listy kontrolne, zadania w tle i plany natywnych CLI',
   'contextRail.surface.pr.description': 'Twórz, przeglądaj i scalaj pull request bieżącej gałęzi',
   'contextRail.surface.notes.description': 'Notatki, zadania, plany i pamięć agenta dla projektu',
   'contextRail.surface.context.description': 'Kontekst sesji i zużycie tokenów',

@@ -82,6 +82,9 @@ run(bunExe, ['run', 'build'], webDir);
 
 console.log('[electron] staging packaged resources...');
 await fs.mkdir(resourcesDir, { recursive: true });
+console.log('[electron] bundling the native memory hook...');
+run(bunExe, ['build', 'server/lib/agent-memory/native-hook.js', '--target=node', '--format=esm',
+  '--outfile', path.join(resourcesDir, 'native-memory-hook.mjs')], webDir);
 const stagedWebDistDir = await fs.mkdtemp(path.join(resourcesDir, 'web-dist-staging-'));
 await copyDir(webDistDir, stagedWebDistDir);
 await removeDir(resourcesWebDistDir);

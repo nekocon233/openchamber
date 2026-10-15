@@ -8,6 +8,8 @@
  * visible in a shared schema.
  */
 export const OPENCHAMBER_CONTROL_ACTION_DEFINITIONS = Object.freeze([
+  { action: 'memory.context', title: 'Read shared CLI context', description: 'Native CLI hook context', agentExposed: false },
+  { action: 'memory.checkpoint', title: 'Save a CLI handoff', description: 'Native CLI hook checkpoint', agentExposed: false },
   { action: 'projects.list', title: 'List configured projects', description: 'List configured projects; no parameters' },
   { action: 'models.list', title: 'Show model preferences', description: 'Show default, favorite, and recent model preferences; no parameters' },
   { action: 'session.list', title: 'List sessions', description: 'List sessions; optional directory, limit (default 10), all, or withStatus' },
@@ -104,6 +106,10 @@ const ACTIONS_BY_TOOL = Object.freeze({
   openchamber_memory: OPENCHAMBER_MEMORY_ACTIONS,
   openchamber_notify: OPENCHAMBER_NOTIFY_ACTIONS,
 });
+const AGENT_ACTIONS = Object.freeze([
+  ...OPENCHAMBER_AGENT_TOOL_ACTIONS, ...OPENCHAMBER_WEB_ACTIONS,
+  ...OPENCHAMBER_MEMORY_ACTIONS, ...OPENCHAMBER_NOTIFY_ACTIONS,
+]);
 
 const bareName = (action) => {
   const separator = action.indexOf('.');
@@ -124,7 +130,7 @@ const uniqueMatch = (candidates, requested) => {
 export const resolveAgentToolAction = (requested, toolName) => {
   const value = typeof requested === 'string' ? requested.trim() : '';
   const scoped = ACTIONS_BY_TOOL[toolName] ?? null;
-  const known = scoped ?? OPENCHAMBER_ALL_ACTIONS;
+  const known = scoped ?? AGENT_ACTIONS;
 
   if (value && known.includes(value)) {
     return { action: value };
@@ -133,7 +139,7 @@ export const resolveAgentToolAction = (requested, toolName) => {
     const resolved = uniqueMatch(known, value)
       // A tool that did not identify itself still gets the benefit when the
       // bare name means only one thing across every action.
-      ?? (scoped ? null : uniqueMatch(OPENCHAMBER_ALL_ACTIONS, value));
+      ?? (scoped ? null : uniqueMatch(AGENT_ACTIONS, value));
     if (resolved) {
       return { action: resolved };
     }

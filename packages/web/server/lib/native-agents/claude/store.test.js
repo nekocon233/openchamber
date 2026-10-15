@@ -21,6 +21,7 @@ const poisonedChain = [
   { type: 'user', uuid: 'p-2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: 'output mentioning {"type":"tool_reference"} as text' }] } },
   { type: 'assistant', uuid: 'p-3', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_result', tool_use_id: 'toolu_3', content: [{ type: 'tool_reference', tool_name: 'WebFetch' }] }] } },
   { type: 'assistant', uuid: 'p-4', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'reasoning', signature: 'sig' }, { type: 'tool_use', id: 'toolu_4', name: 'Bash', input: {} }] } },
+  { type: 'assistant', uuid: 'p-5', message: { role: 'assistant', content: [{ type: 'text', text: 'A text mention of openchamber-responses: is not a carrier.' }, { type: 'redacted_thinking', data: 'foreign-provider-state' }] } },
 ];
 const PROMPT_1 = '44444444-4444-4444-8444-444444444441';
 const PROMPT_2 = '44444444-4444-4444-8444-444444444442';
@@ -50,7 +51,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const createHarness = async ({ importFails = false } = {}) => {
+const createHarness = async ({ importFails = false, replayChain = poisonedChain } = {}) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-claude-store-'));
   directories.push(dir);
   const registry = createNativeRegistry({ filePath: path.join(dir, 'registry.json') });
@@ -76,7 +77,7 @@ const createHarness = async ({ importFails = false } = {}) => {
     getSessionMessages: async (sessionId) => {
       calls.getSessionMessages += 1;
       if (sessionId === REWIND_UUID) return rewindChain;
-      if (sessionId === POISON_UUID) return poisonedChain;
+      if (sessionId === POISON_UUID) return replayChain;
       return sessionId === OPENCHAMBER_UUID ? fixture('haiku-tools.session-messages.json') : [];
     },
     forkSession: async (sessionId, options) => {
@@ -92,10 +93,20 @@ const createHarness = async ({ importFails = false } = {}) => {
     },
   };
   const store = createClaudeSessionStore({ loadSdk: async () => sdk, registry });
-  return { store, infos, calls, registry };
+  return { store, infos, calls, registry, allowImports: () => { importFails = false; } };
 };
 
 describe('Claude session store', () => {
+  it('retries incomplete answer metadata without requiring the terminal transcript to change', async () => {
+    const { store, allowImports } = await createHarness({ importFails: true });
+    const partial = await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    expect(partial.metadataComplete).toBe(false);
+    allowImports();
+    const recovered = await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    const question = recovered.records.flatMap((record) => record.parts).find((part) => part.type === 'tool' && part.tool === 'question');
+    expect(question.state.metadata.questionAnswers).toEqual([['blue']]);
+    expect(recovered.metadataComplete).not.toBe(false);
+  });
   it('lists terminal sessions and the SDK sessions OpenChamber registered, titled by their transcripts', async () => {
     const { store } = await createHarness();
     const sessions = await store.listRootSessions(DIRECTORY);
@@ -110,6 +121,8 @@ describe('Claude session store', () => {
   it('returns a session history with the subagent sessions it links to', async () => {
     const { store } = await createHarness();
     const history = await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    const question = history.records.flatMap((record) => record.parts).find((part) => part.type === 'tool' && part.tool === 'question');
+    expect(question.state.metadata).toMatchObject({ questionAnswers: [['blue']], questionStatus: 'answered' });
     const task = history.records.flatMap((record) => record.parts).find((part) => part.type === 'tool' && part.tool === 'task');
     const childId = `ncl_${OPENCHAMBER_UUID}_t_${TASK_TOOL_USE}`;
     expect(task.state.metadata.sessionId).toBe(childId);
@@ -178,8 +191,17 @@ describe('Claude session store', () => {
 
   it('finds Tool Search references in the chain a resume replays, ignoring text mentions and sidechains', async () => {
     const { store } = await createHarness();
-    await expect(store.nonPortableReplayBlocks(POISON_UUID, DIRECTORY)).resolves.toEqual(['Monitor']);
-    await expect(store.nonPortableReplayBlocks(TERMINAL_UUID, DIRECTORY)).resolves.toEqual([]);
+    await expect(store.inspectReplayHistory(POISON_UUID, DIRECTORY)).resolves.toEqual({ toolReferences: ['Monitor'], hasGptReplayState: false });
+    await expect(store.inspectReplayHistory(TERMINAL_UUID, DIRECTORY)).resolves.toEqual({ toolReferences: [], hasGptReplayState: false });
+  });
+
+  it('detects GPT carriers by block type and ownership, excluding sidechains', async () => {
+    const marker = { type: 'redacted_thinking', data: 'openchamber-responses:fixture' };
+    const sidechain = { type: 'assistant', uuid: 'gpt-child', isSidechain: true, message: { role: 'assistant', content: [marker] } };
+    const childOnly = await createHarness({ replayChain: [...poisonedChain, sidechain] });
+    expect((await childOnly.store.inspectReplayHistory(POISON_UUID, DIRECTORY)).hasGptReplayState).toBe(false);
+    const root = await createHarness({ replayChain: [...poisonedChain, { ...sidechain, uuid: 'gpt-root', isSidechain: false }] });
+    expect((await root.store.inspectReplayHistory(POISON_UUID, DIRECTORY)).hasGptReplayState).toBe(true);
   });
 
   it('rewinds to the chain entry before a prompt and names the user entries it drops', async () => {

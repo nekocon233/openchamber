@@ -7,12 +7,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.title": "Tarefas",
   "chat.nativeTasks.open": "Abrir tarefas da sessão",
-  "chat.nativeTasks.description": "Lista de tarefas e tarefas em segundo plano do Claude Code para esta sessão.",
+  "chat.nativeTasks.description": "Listas, tarefas em segundo plano e planos desta sessão.",
   "chat.nativeTasks.checklist": "Lista de tarefas",
   "chat.nativeTasks.cliChecklist": "Lista de tarefas",
   "chat.nativeTasks.background": "Tarefas em segundo plano",
@@ -21,13 +22,22 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.readonly": "Lista do Claude Code somente para leitura, separada das tarefas do projeto.",
   "chat.nativeTasks.refresh": "Atualizar",
   "chat.nativeTasks.unsupported": "Este servidor ou CLI não oferece suporte a esta visualização de tarefas.",
-  "chat.nativeTasks.notNative": "As tarefas estão disponíveis para sessões do Claude Code.",
+  "chat.nativeTasks.notNative": "As tarefas estão disponíveis para sessões do Claude Code e do Codex.",
   "chat.nativeTasks.checklistUnavailable": "Não foi possível confirmar a localização da lista desta sessão.",
   "chat.nativeTasks.loadError": "Não foi possível carregar as tarefas. Atualize para tentar novamente.",
   "chat.nativeTasks.stale": "Estas tarefas podem estar desatualizadas. Atualize para tentar novamente.",
   "chat.nativeTasks.partial": "Não foi possível ler algumas entradas. As entradas anteriores são mantidas e podem estar desatualizadas.",
   "chat.nativeTasks.history": "Recuperada do último TodoWrite registrado. Isso não indica atividade em andamento.",
   "chat.nativeTasks.checklistEmpty": "O Claude Code ainda não registrou entradas na lista desta sessão.",
+  "chat.nativeTasks.plan": "Documento de plano",
+  "chat.nativeTasks.planNotice": "O que esta sessão pretendia fazer antes de começar. O plano em si não tem progresso.",
+  "chat.nativeTasks.planEmpty": "O Codex não escreveu um plano para esta sessão.",
+  "chat.nativeTasks.planTruncated": "Este plano foi encurtado para caber. Abra a conversa para lê-lo por completo.",
+  "chat.nativeTasks.todos": "Lista de tarefas",
+  "chat.nativeTasks.todosNotice": "Etapas informadas pelo processo da CLI. Não são guardadas em lado nenhum, por isso um reinício perde-as.",
+  "chat.nativeTasks.todosUnknown": "Este processo não informou nenhuma etapa para esta sessão.",
+  "chat.nativeTasks.todosInactive": "Este processo da CLI já não é observado. Estas são as últimas etapas informadas.",
+  "chat.nativeTasks.todosEmpty": "A CLI informou uma lista de etapas vazia.",
   "chat.nativeTasks.owner": "Responsável: {owner}",
   "chat.nativeTasks.blockedBy": "Aguardando: {ids}",
   "chat.nativeTasks.blocks": "Bloqueia: {ids}",
@@ -75,6 +85,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.summary.unavailable": "Indisponível",
   "chat.nativeTasks.summary.partial": "Incompleta ou desatualizada",
   "chat.nativeTasks.summary.checklist": "Concluídas: {completed} / {total}",
+  "chat.nativeTasks.summary.plan": "Plano disponível",
   "chat.nativeTasks.summary.background": "Ativas: {active} / Registradas: {total}",
   "settings.chatgpt.limitReached": "O limite de uso do plano do ChatGPT foi atingido. Confira os limites do aplicativo e do plano nas configurações do ChatGPT.",
   "settings.chatgpt.notEligible": "Esta conta ou espaço de trabalho do ChatGPT não pode usar o plano para esta solicitação.",
@@ -226,6 +237,7 @@ export const dict: Record<I18nKey, string> = {
   ...surfacePanelI18n['pt-BR'],
   ...fileArtifactsI18n['pt-BR'],
   ...usageStatsI18n['pt-BR'],
+  ...nativeMemoryI18n['pt-BR'],
   ...webSearchI18n['pt-BR'],
   'terminalView.actions.attachSelection': 'Anexar saída selecionada',
   'terminalView.actions.copySelection': 'Copiar saída selecionada',
@@ -1507,7 +1519,7 @@ export const dict: Record<I18nKey, string> = {
   "walkthrough.blocked.contextTooSmall.descriptionUnknownModel": "O modelo pequeno comporta cerca de {available} mil caracteres e este diff precisa de cerca de {required} mil. Nada é cortado — escolha um modelo com contexto maior.",
   "walkthrough.blocked.structuredOutput.descriptionUnknownModel": "O modelo pequeno não suporta as respostas estruturadas que um percurso exige.",
   "contextRail.surface.plan.description": "Ver o plano atual",
-  "contextRail.surface.tasks.description": "Lista de verificação do Claude Code e tarefas em segundo plano",
+  "contextRail.surface.tasks.description": "Listas, tarefas em segundo plano e planos das CLIs nativas",
   "contextRail.surface.pr.description": "Crie, revise e faça merge do pull request do branch atual",
   "contextRail.surface.notes.description": "Notas, tarefas, planos e memória do agente do projeto",
   "contextRail.surface.context.description": "Contexto da sessão e uso de tokens",

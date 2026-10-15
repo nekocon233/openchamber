@@ -45,7 +45,8 @@ export const computeContextUsage = (
   const fill = findLatestContextFill(messages);
   if (!fill) return null;
 
-  const limit = contextLimit > 0 ? contextLimit : DEFAULT_CONTEXT_LIMIT;
+  const reportedLimit = messages[fill.index]?.contextWindow ?? contextLimit;
+  const limit = reportedLimit > 0 ? reportedLimit : DEFAULT_CONTEXT_LIMIT;
   if (fill.state === 'compacted') return { state: 'compacted', limit };
 
   return { state: 'measured', totalTokens: fill.totalTokens, limit, percent: (fill.totalTokens / limit) * 100 };

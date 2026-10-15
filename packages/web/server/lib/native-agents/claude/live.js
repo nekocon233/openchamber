@@ -148,10 +148,10 @@ const turnErrorOf = (frame, launch) => {
  * @param {() => Promise<string | null>} options.resolveExecutable path of the user's `claude`
  * @param {() => Record<string, string>} options.buildEnv
  * @param {(sessionUuid: string, directory: string) => Promise<boolean>} options.hasTranscript
- * @param {(sessionUuid: string, directory: string) => Promise<string[]>} [options.nonPortableReplayBlocks] tool_reference tool names in the chain a resume replays
+ * @param {(sessionUuid: string, directory: string) => Promise<{ toolReferences: string[], hasGptReplayState: boolean }>} [options.inspectReplayHistory] provider-specific blocks in the active replay chain
  * @param {ReturnType<typeof import('../publisher.js').createNativeEventPublisher>} options.publisher
  * @param {ReturnType<typeof import('../questions.js').createQuestionRegistry>} options.questions
- * @param {(sessionId: string, directory: string) => void} [options.onTurnFinished] the CLI finished a turn and wrote it to the transcript
+ * @param {(sessionId: string, directory: string, turn: { id?: string, summary: string, status: string }) => void} [options.onTurnFinished] the CLI finished a turn and wrote it to the transcript
  * @param {(sessionId: string, directory: string) => void} [options.onIdle] the session stopped running turns
  * @param {ReturnType<typeof createClaudeChecklists>} [options.checklists] shared checklist owner
  * @param {() => number} [options.now]
@@ -164,7 +164,7 @@ export const createClaudeLiveSessions = ({
   resolveExecutable,
   buildEnv,
   hasTranscript,
-  nonPortableReplayBlocks = async () => [],
+  inspectReplayHistory = async () => ({ toolReferences: [], hasGptReplayState: false }),
   publisher,
   questions,
   // Appended to Claude Code's system prompt, which the CLI records with the
@@ -305,7 +305,11 @@ export const createClaudeLiveSessions = ({
     const error = turnErrorOf(frame, live.config.launch);
     publishRecords(live, live.projection.finishTurn({ error }));
     if (error?.name === 'MessageAbortedError') live.subagents.stop(error);
-    onTurnFinished(live.sessionId, live.directory);
+    const reply = live.projection.records().findLast((record) => record.info.role === 'assistant');
+    onTurnFinished(live.sessionId, live.directory, {
+      id: reply?.info.id, summary: reply?.parts.findLast((part) => part.type === 'text')?.text ?? '',
+      status: error ? 'interrupted' : 'completed',
+    });
     if ((frame.queued_turn_count ?? 0) > 0) return;
     settleIdle(live, error);
     scheduleIdleClose(live);
@@ -465,16 +469,20 @@ export const createClaudeLiveSessions = ({
       rewind === null ? hasTranscript(sessionUuid, directory) : true,
       readGlobalInstructions(),
     ]);
-    // A managed launch replays the chain to a third-party endpoint; Anthropic
-    // login accepts tool_reference blocks, those endpoints answer HTTP 400 on
-    // every send. Refuse before the CLI writes its own opaque error into the
-    // transcript.
-    if (resume && (config.launch?.env || config.launch?.acquire)) {
-      const blocks = await nonPortableReplayBlocks(sessionUuid, directory);
-      if (blocks.length > 0) {
+    // Refuse incompatible history before a CLI process writes an upstream
+    // rejection into the transcript. The CLI owns the active replay chain.
+    if (resume) {
+      const history = await inspectReplayHistory(sessionUuid, directory);
+      if (history.hasGptReplayState && config.launch?.descriptor?.billing !== 'chatgpt-plan') {
+        throw new NativeAgentError(
+          'This session contains GPT reasoning state that only its ChatGPT connection can replay. Continue with ChatGPT, or start a new session with this provider.',
+          { code: 'NATIVE_GPT_REPLAY_NOT_PORTABLE', status: 400 },
+        );
+      }
+      if ((config.launch?.env || config.launch?.acquire) && history.toolReferences.length > 0) {
         const target = config.launch.descriptor?.name ?? 'this connection';
         throw new NativeAgentError(
-          `This session's history contains Tool Search references (${blocks.join(', ')}) that only Anthropic's endpoint accepts; ${target} rejects them with HTTP 400 on every send. Continue the session with the original Anthropic login, or start a new session with this model.`,
+          `This session's history contains Tool Search references (${history.toolReferences.join(', ')}) that only Anthropic's endpoint accepts; ${target} rejects them with HTTP 400 on every send. Continue the session with the original Anthropic login, or start a new session with this model.`,
           { code: 'NATIVE_HISTORY_NOT_PORTABLE', status: 400 },
         );
       }
@@ -523,7 +531,10 @@ export const createClaudeLiveSessions = ({
     const options = {
       cwd: directory,
       pathToClaudeCodeExecutable: executable,
-      env: connection.env,
+      // The CLI offers the task-tracking tools only to the models it knows, and
+      // a connected third-party model is one it does not. Without this opt-in
+      // the model gets no checklist tool at all and records no checklist.
+      env: { ...connection.env, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' },
       systemPrompt: instructions === null
         ? { type: 'preset', preset: 'claude_code' }
         : { type: 'preset', preset: 'claude_code', append: instructions },

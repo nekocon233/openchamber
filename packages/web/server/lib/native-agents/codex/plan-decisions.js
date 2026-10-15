@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { NATIVE_PROVIDER_CODEX, newCodexPlanApprovalMessageId } from '../ids.js';
 
 /**
- * @typedef {{ sessionId: string, directory: string, turnId: string, text: string, send: { modelID: string, variant?: string, agent: string } }} CodexPlan
+ * @typedef {{ sessionId: string, directory: string, turnId: string, text: string, tool?: { messageID: string, callID: string }, send: { modelID: string, variant?: string, agent: string } }} CodexPlan
  */
 
 /**
@@ -33,6 +33,7 @@ export const createCodexPlanDecisions = ({ questions, prompt, failed }) => {
       directory: plan.directory,
       sessionID: plan.sessionId,
       kind: 'codex-plan-exit',
+      tool: plan.tool,
       questions: [{
         header: 'Plan',
         question: plan.text,

@@ -7,12 +7,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.title": "タスク",
   "chat.nativeTasks.open": "セッションのタスクを開く",
-  "chat.nativeTasks.description": "このセッションの Claude Code チェックリストとバックグラウンドタスク。",
+  "chat.nativeTasks.description": "このセッションのチェックリスト、バックグラウンドタスク、計画書。",
   "chat.nativeTasks.checklist": "チェックリスト",
   "chat.nativeTasks.cliChecklist": "チェックリスト",
   "chat.nativeTasks.background": "バックグラウンドタスク",
@@ -21,13 +22,22 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.readonly": "Claude Code の読み取り専用チェックリストです。プロジェクトの Todo とは別のものです。",
   "chat.nativeTasks.refresh": "更新",
   "chat.nativeTasks.unsupported": "このサーバーまたは CLI はこのタスク表示に対応していません。",
-  "chat.nativeTasks.notNative": "タスクは Claude Code セッションで利用できます。",
+  "chat.nativeTasks.notNative": "タスクは Claude Code と Codex のセッションで利用できます。",
   "chat.nativeTasks.checklistUnavailable": "このセッションのチェックリストの場所を確認できませんでした。",
   "chat.nativeTasks.loadError": "タスクを読み込めませんでした。更新して再試行してください。",
   "chat.nativeTasks.stale": "タスクの情報が古い可能性があります。更新して再試行してください。",
   "chat.nativeTasks.partial": "一部の項目を読み取れませんでした。以前の項目は保持されていますが、古い可能性があります。",
   "chat.nativeTasks.history": "最後に記録された TodoWrite から復元しました。実行中であることは示しません。",
   "chat.nativeTasks.checklistEmpty": "Claude Code はこのセッションにチェックリスト項目をまだ記録していません。",
+  "chat.nativeTasks.plan": "計画書",
+  "chat.nativeTasks.planNotice": "このセッションが着手前に立てた内容です。計画書自体に進捗はありません。",
+  "chat.nativeTasks.planEmpty": "Codex はこのセッションの計画書をまだ書いていません。",
+  "chat.nativeTasks.planTruncated": "この計画書は収まるよう短縮されています。全文は会話を開いて確認してください。",
+  "chat.nativeTasks.todos": "チェックリスト",
+  "chat.nativeTasks.todosNotice": "CLI プロセスが報告したステップです。どこにも保存されないため、再起動すると失われます。",
+  "chat.nativeTasks.todosUnknown": "このプロセスはこのセッションのステップをまだ報告していません。",
+  "chat.nativeTasks.todosInactive": "この CLI プロセスはもう監視されていません。最後に報告されたステップです。",
+  "chat.nativeTasks.todosEmpty": "CLI は空のステップ一覧を報告しました。",
   "chat.nativeTasks.owner": "担当：{owner}",
   "chat.nativeTasks.blockedBy": "待機先：{ids}",
   "chat.nativeTasks.blocks": "ブロック対象：{ids}",
@@ -75,6 +85,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.summary.unavailable": "利用不可",
   "chat.nativeTasks.summary.partial": "不完全または古い情報",
   "chat.nativeTasks.summary.checklist": "完了：{completed} / {total}",
+  "chat.nativeTasks.summary.plan": "計画書あり",
   "chat.nativeTasks.summary.background": "アクティブ：{active} / 記録済み：{total}",
   "settings.chatgpt.limitReached": "ChatGPT プランの使用量上限に達しました。ChatGPT の設定でアプリとプランの上限を確認してください。",
   "settings.chatgpt.notEligible": "この ChatGPT アカウントまたはワークスペースでは、このリクエストにプランを使用できません。",
@@ -226,6 +237,7 @@ export const dict: Record<I18nKey, string> = {
   ...surfacePanelI18n.ja,
   ...fileArtifactsI18n.ja,
   ...usageStatsI18n.ja,
+  ...nativeMemoryI18n.ja,
   ...webSearchI18n.ja,
   'terminalView.actions.attachSelection': '選択した出力を添付',
   'terminalView.actions.copySelection': '選択した出力をコピー',
@@ -1503,7 +1515,7 @@ export const dict: Record<I18nKey, string> = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': 'スモールモデルが扱えるのは約 {available} 千文字ですが、この差分には約 {required} 千文字が必要です。切り詰めは行いません。コンテキストの大きいモデルを選んでください。',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': 'スモールモデルはウォークスルーに必要な構造化応答をサポートしていません。',
   'contextRail.surface.plan.description': '現在のプランを表示',
-  'contextRail.surface.tasks.description': 'Claude Code のチェックリストとバックグラウンドタスク',
+  'contextRail.surface.tasks.description': 'ネイティブ CLI のチェックリスト、バックグラウンドタスク、計画書',
   'contextRail.surface.pr.description': '現在のブランチのプルリクエストを作成・確認・マージ',
   'contextRail.surface.notes.description': 'プロジェクトのメモ、ToDo、プラン、エージェントのメモリ',
   'contextRail.surface.context.description': 'セッションのコンテキストとトークン使用量',

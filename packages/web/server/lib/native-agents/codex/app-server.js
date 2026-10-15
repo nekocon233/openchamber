@@ -11,6 +11,14 @@ import { createJsonRpcConnection } from './rpc.js';
 const MAX_BACKOFF_MS = 30_000;
 const STDERR_TAIL_CHARS = 4000;
 
+// Codex leaves its `update_plan` tool out of the model's tool declaration
+// unless this setting asks for it, so a session records no task plan at all.
+// It is a config key rather than an environment variable, and it belongs here
+// rather than with the connection overrides: those are empty until the user
+// configures a custom provider, which would leave the CLI's own login without
+// the tool.
+const APP_SERVER_ARGUMENTS = ['-c', 'tools.update_plan.enabled=true'];
+
 const sleep = (ms) => new Promise((resolve) => {
   setTimeout(resolve, ms).unref?.();
 });
@@ -67,7 +75,7 @@ export const createCodexAppServer = ({
 
     const proc = spawnProcess(
       executable,
-      ['app-server', '--listen', 'stdio://', ...overrides.arguments],
+      ['app-server', '--listen', 'stdio://', ...APP_SERVER_ARGUMENTS, ...overrides.arguments],
       { cwd, env: { ...buildEnv(), ...overrides.environment } },
     );
     stderrTail = '';

@@ -316,8 +316,7 @@ export const ContextPanelContent: React.FC = () => {
     const assistantMessages = sessionMessages.filter((entry) => entry.info.role === 'assistant');
     const userMessages = sessionMessages.filter((entry) => entry.info.role === 'user');
 
-    // After a compaction the fill is unknown until a response reports tokens;
-    // the compaction record itself still supplies the last-turn breakdown.
+    // After compaction the fill is unknown until another response reports it.
     const contextFill = findLatestContextFill(sessionMessages.map((entry) => entry.info));
     const contextMessage = contextFill ? sessionMessages[contextFill.index] ?? null : null;
     const isCompacted = contextFill?.state === 'compacted';
@@ -337,14 +336,15 @@ export const ContextPanelContent: React.FC = () => {
       return sum + cost;
     }, 0);
 
-    const latestAssistantInfo = (contextMessage?.info ?? null) as (Message & { providerID?: string; modelID?: string }) | null;
+    const latestAssistant = contextMessage?.info.role === 'assistant' ? contextMessage.info : assistantMessages.at(-1)?.info;
+    const latestAssistantInfo = latestAssistant?.role === 'assistant' ? latestAssistant : null;
     const providerModel = resolveProviderAndModel(
       providers as ProviderLike[],
       latestAssistantInfo?.providerID || '',
       latestAssistantInfo?.modelID || '',
     );
 
-    const contextLimit = providerModel.contextLimit;
+    const contextLimit = latestAssistantInfo?.contextWindow ?? providerModel.contextLimit;
     const usagePercent = isCompacted
       ? null
       : contextLimit && contextLimit > 0
@@ -378,9 +378,11 @@ export const ContextPanelContent: React.FC = () => {
       lastActivityAt: (lastMessageTs ?? currentSession?.time?.created ?? null) as number | null,
       providerModel,
       tokenBreakdown,
+      hasTokenUsage: contextMessage?.info.role === 'assistant' && contextMessage.info.tokens !== undefined,
       usagePercent,
       cacheHitRate,
       totalAssistantCost,
+      hasReportedCost: assistantMessages.some((message) => message.info.role === 'assistant' && message.info.cost !== undefined),
       contextLimit,
       breakdown: {
         user: userTokens,
@@ -458,7 +460,7 @@ export const ContextPanelContent: React.FC = () => {
             { label: t('contextSidebar.stats.messages'), value: formatNumber(viewModel.messagesCount) },
             { label: t('contextSidebar.stats.user'), value: formatNumber(viewModel.userMessagesCount) },
             { label: t('contextSidebar.stats.assistant'), value: formatNumber(viewModel.assistantMessagesCount) },
-            { label: t('contextSidebar.stats.cost'), value: formatMoney(viewModel.totalAssistantCost) },
+            { label: t('contextSidebar.stats.cost'), value: viewModel.hasReportedCost ? formatMoney(viewModel.totalAssistantCost) : '—' },
           ] as const).map((item) => (
             <div key={item.label} className="rounded-lg bg-[var(--surface-elevated)]/70 px-3 py-2.5">
               <div className="typography-micro text-muted-foreground/70">{item.label}</div>
@@ -472,11 +474,11 @@ export const ContextPanelContent: React.FC = () => {
           <div className="typography-micro text-muted-foreground mb-2.5">{t('contextSidebar.section.lastAssistantMessage')}</div>
           <div className="grid grid-cols-3 gap-x-4 gap-y-2.5">
             {([
-              { label: t('contextSidebar.tokens.input'), value: viewModel.tokenBreakdown.input, format: 'count' },
-              { label: t('contextSidebar.tokens.output'), value: viewModel.tokenBreakdown.output, format: 'count' },
-              { label: t('contextSidebar.tokens.reasoning'), value: viewModel.tokenBreakdown.reasoning, format: 'count' },
-              { label: t('contextSidebar.tokens.cacheRead'), value: viewModel.tokenBreakdown.cacheRead, format: 'count' },
-              { label: t('contextSidebar.tokens.cacheWrite'), value: viewModel.tokenBreakdown.cacheWrite, format: 'count' },
+              { label: t('contextSidebar.tokens.input'), value: viewModel.hasTokenUsage ? viewModel.tokenBreakdown.input : null, format: 'count' },
+              { label: t('contextSidebar.tokens.output'), value: viewModel.hasTokenUsage ? viewModel.tokenBreakdown.output : null, format: 'count' },
+              { label: t('contextSidebar.tokens.reasoning'), value: viewModel.hasTokenUsage ? viewModel.tokenBreakdown.reasoning : null, format: 'count' },
+              { label: t('contextSidebar.tokens.cacheRead'), value: viewModel.hasTokenUsage ? viewModel.tokenBreakdown.cacheRead : null, format: 'count' },
+              { label: t('contextSidebar.tokens.cacheWrite'), value: viewModel.hasTokenUsage ? viewModel.tokenBreakdown.cacheWrite : null, format: 'count' },
               {
                 label: t('contextSidebar.tokens.cacheHit'),
                 value: viewModel.cacheHitRate.hasInput ? viewModel.cacheHitRate.percent : null,

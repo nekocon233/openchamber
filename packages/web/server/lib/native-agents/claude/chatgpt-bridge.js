@@ -54,7 +54,7 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
       let raw;
       try { raw = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw fail('CHATGPT_INVALID_JSON', 400); }
-      const translated = toResponsesRequest(raw, grant.model, grant.effort, grant.supportsImages);
+      const translated = toResponsesRequest(raw, grant.model, grant.effort, grant.supportsImages, grant.accountId);
       controller = new AbortController();
       requests.set(controller, { accountId: grant.accountId, token });
       const disconnected = () => { if (!res.writableEnded) controller.abort(); };
@@ -94,7 +94,7 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
         const requestId = upstream.headers.get('x-request-id');
         if (requestId) res.setHeader('x-request-id', requestId);
         if (!upstream.body) throw fail('CHATGPT_EMPTY_STREAM');
-        const stream = createAnthropicStream({ model: grant.model, names: translated.names });
+        const stream = createAnthropicStream({ model: grant.model, names: translated.names, accountId: grant.accountId });
         if (translated.stream) {
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Accel-Buffering': 'no' });
         }

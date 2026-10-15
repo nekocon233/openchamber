@@ -86,6 +86,18 @@ describe('web native agents API', () => {
     expect(requests[0]?.searchParams.get('directory')).toBe('/work/project');
   });
 
+  it('reads a Codex plan document whole, and an empty thread as its own state', async () => {
+    const snapshot = { state: 'ready', observedAt: 123, text: '# Ship it', truncated: true, turnId: 'turn-a' };
+    stubFetch(async () => Response.json(snapshot));
+
+    expect(await createWebNativeAgentsAPI().plan('ncx_a', '/work/project')).toEqual(snapshot);
+    expect(requests[0]?.pathname).toBe('/api/native/sessions/ncx_a/plan');
+    expect(requests[0]?.searchParams.get('directory')).toBe('/work/project');
+
+    stubFetch(async () => Response.json({ state: 'empty' }));
+    expect(await createWebNativeAgentsAPI().plan('ncx_a', '/work/project')).toEqual({ state: 'empty' });
+  });
+
   it('keeps task details separate from the global active-task snapshot', async () => {
     const snapshot = {
       state: 'active', generation: 'query-a', revision: 4, omitted: 0,

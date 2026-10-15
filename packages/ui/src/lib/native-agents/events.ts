@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { SyncEvent } from '@/lib/opencode/events';
 import { isNativeSessionId } from './ids';
 import { projectNativeQuestion } from './forms';
-import { nativeChecklistSnapshotSchema, nativeTaskSnapshotSchema } from './task-schemas';
+import { nativeChecklistSnapshotSchema, nativeTaskSnapshotSchema, nativeTodosSnapshotSchema } from './task-schemas';
 import {
   nativeBackgroundTaskSchema,
   nativeMessageErrorSchema,
@@ -28,6 +28,7 @@ const nativeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.background.updated'), properties: sessionIdentity.extend({ tasks: z.array(nativeBackgroundTaskSchema) }) }),
   z.object({ type: z.literal('session.checklist.updated'), properties: sessionIdentity.extend({ snapshot: nativeChecklistSnapshotSchema }) }),
   z.object({ type: z.literal('session.tasks.updated'), properties: sessionIdentity.extend({ snapshot: nativeTaskSnapshotSchema }) }),
+  z.object({ type: z.literal('session.todos.updated'), properties: sessionIdentity.extend({ snapshot: nativeTodosSnapshotSchema }) }),
   z.object({ type: z.literal('session.idle'), properties: sessionIdentity }),
   z.object({ type: z.literal('session.error'), properties: sessionIdentity.extend({ error: nativeMessageErrorSchema }) }),
   z.object({ type: z.literal('message.updated'), properties: z.object({ info: nativeMessageSchema }) }),

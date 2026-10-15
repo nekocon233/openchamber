@@ -110,19 +110,35 @@ native task summaries request their session snapshot once and follow live events
 | Pinned messages | `getContextObligatoryMessages` + `state.part` | see below |
 | CLI checklist | `sync/session-native-checklist.ts` | Native Claude Code only; read-only and separate from project Todos |
 | Background tasks | `useSessionNativeTaskDetails` in `sync/session-background-tasks.ts` | Current CLI process only; summary counts active non-ambient tasks |
+| Plan document | `sync/session-native-plan.ts` | Native Codex only; the document the thread last wrote |
+| CLI steps | `sync/session-native-todos.ts` | Native Codex only; steps Codex reported, which it never stores |
+
+The four native sections share one shape: the header carries the count (or the
+short state word), and the section's content is the records themselves — one
+row per item, or the plan document. Each also renders a single muted row when
+it has nothing to show, so a section that could not be read says why instead of
+disappearing. None of them opens itself when content arrives: unlike subagents,
+whose children are already in a store at mount, these load asynchronously, so
+that edge would fire on every open and override a reader who collapsed them.
+`defaultExpanded` decides the first view and the stored section state decides
+every one after it.
 
 ### Native task surface
 
 Native tasks live in the context panel's `tasks` rail surface
 (`lib/surfaces/registry.ts`, mode `tasks`), rendered by
 `components/chat/native-tasks/NativeTasksPane` inside `ContextPanel`.
-`WorkStatusChecklistSection` and `WorkStatusBackgroundTasksSection` open that
-surface on their matching tab via `openContextSurface` plus the shared tab
-selection in `native-tasks/task-ui-store`. Both remain discoverable when
-empty, failed or unsupported. Stable `taskChecklist` and `taskBackground` ids
-use the existing section visibility and order settings. Settings search opens
-`WorkStatusSectionsDialog` directly and highlights its mounted checkbox, even
-when the panel cannot fit.
+`WorkStatusChecklistSection`, `WorkStatusBackgroundTasksSection`,
+`WorkStatusPlanSection` and `WorkStatusTodosSection` open that surface on their
+matching tab via `openContextSurface` plus the shared tab selection in
+`native-tasks/task-ui-store`; a section's item rows are what carries that
+action, so the plan document, which is not a list, has none. All four remain
+discoverable when empty, failed or unsupported. Stable `taskChecklist`,
+`taskBackground`, `taskPlan` and `taskTodos` ids use the existing section
+visibility and order settings; the two Codex ids were appended, so a stored
+custom order keeps its arrangement and gains them at the end. Settings search
+opens `WorkStatusSectionsDialog` directly and highlights its mounted checkbox,
+even when the panel cannot fit.
 
 On phones and tablets the workspace drawer hosts the same pane as its `tasks`
 tab (`apps/MobileWorkspaceDrawer.tsx`), passing `onClose` so a child-session
@@ -234,6 +250,11 @@ whose input is the pre-compaction history. Until a later response reports
 tokens, the fill is `compacted` and every surface shows a dash, never the older
 pre-compaction number. A compaction still running, or one that failed, has not
 changed the window, so the previous reading stays.
+
+Native responses may report `contextWindow`, their effective configured limit.
+That value takes precedence over the current catalog in the shared header,
+sidebar, work-status and mobile readers. Missing usage is unmeasured; a failed
+supplemental read does not erase the previous reading for the same message.
 
 Two further rules on this readout:
 

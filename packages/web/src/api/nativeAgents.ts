@@ -24,12 +24,15 @@ import {
 } from '@openchamber/ui/lib/native-agents/schemas';
 import {
   nativeChecklistSnapshotSchema,
+  nativePlanSnapshotSchema,
   nativeTaskOutputSchema,
   nativeTaskSnapshotSchema,
   nativeTaskStopResultSchema,
+  nativeTodosSnapshotSchema,
 } from '@openchamber/ui/lib/native-agents/task-schemas';
 import { runtimeFetch } from '@openchamber/ui/lib/runtime-fetch';
 import { z } from 'zod';
+import { nativeMemoryStatusSchema, nativeMemoryConnectionSchema } from '@openchamber/ui/lib/native-agents/memory-schemas';
 
 // Matches the OpenCode read deadline: a half-open socket must not hold a
 // bootstrap or history read forever.
@@ -38,6 +41,7 @@ const NATIVE_READ_TIMEOUT_MS = 30_000;
 const errorBodySchema = z.object({ error: z.string().optional(), code: z.string().optional() }).passthrough();
 
 type NativeWriteBody =
+  | { sourceId: string; directory: string }
   | { accountId: string | null; completionMessage: string }
   | ClaudeConnectionWrite
   | CodexConnectionWrite
@@ -117,6 +121,10 @@ const questionPath = (requestId: string) => `/api/native/questions/${encodeURICo
 
 export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   supported: true,
+  memoryStatus: (directory, options) => readParsed('/api/native/memory', directory ? { directory } : {}, nativeMemoryStatusSchema, options?.signal),
+  connectMemory: (backend) => writeParsed(`/api/native/memory/${backend}/connect`, nativeMemoryConnectionSchema),
+  disconnectMemory: (backend) => sendParsed(`/api/native/memory/${backend}`, nativeMemoryConnectionSchema, { method: 'DELETE', query: {} }),
+  importMemory: async (sourceId, directory) => { await writeParsed('/api/native/memory/import', z.object({ imported: z.literal(true), memoryId: z.string() }), { sourceId, directory }); },
   capabilities: () => readParsed('/api/native/capabilities', {}, nativeCapabilitiesSchema),
   catalog: () => readParsed('/api/native/catalog', {}, nativeCatalogSchema),
   chatgptAccounts: () => readParsed('/api/native/claude/chatgpt/accounts', {}, chatgptAccountsSchema),
@@ -191,6 +199,18 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     `${sessionPath(sessionId)}/checklist`,
     { directory },
     nativeChecklistSnapshotSchema,
+    options?.signal,
+  ),
+  plan: (sessionId, directory, options) => readParsed(
+    `${sessionPath(sessionId)}/plan`,
+    { directory },
+    nativePlanSnapshotSchema,
+    options?.signal,
+  ),
+  codexTodos: (sessionId, directory, options) => readParsed(
+    `${sessionPath(sessionId)}/todos`,
+    { directory },
+    nativeTodosSnapshotSchema,
     options?.signal,
   ),
   sessionTasks: (sessionId, directory, options) => readParsed(

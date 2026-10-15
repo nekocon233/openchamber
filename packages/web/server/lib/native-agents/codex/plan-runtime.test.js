@@ -81,6 +81,14 @@ describe('Codex plan decisions through the native runtime', () => {
     expect(users[1].parts[0]).toMatchObject({
       text: 'Implement the plan.', metadata: { openchamberOrigin: 'codex-plan-approval' },
     });
+    // The approval leaves a record. Codex keeps none of its own, so the answer
+    // is re-attached from OpenChamber's interaction store onto the plan part
+    // the turn projected — history is where this has to survive, because the
+    // live turn is already settled by the time the question is answered.
+    const approval = records.flatMap(record => record.parts)
+      .find(part => part.type === 'tool' && part.tool === 'question' && part.state.metadata?.nativeQuestionKind === 'codex-plan-exit');
+    expect(approval?.state.metadata.questionAnswers).toEqual([['build']]);
+    expect(approval?.state.input.questions[0].question).toContain('Plan revision');
     const liveApproval = events.find(event => event.payload.type === 'message.part.updated'
       && event.payload.properties.part.messageID === users[1].info.id);
     expect(liveApproval.payload.properties.part).toMatchObject({

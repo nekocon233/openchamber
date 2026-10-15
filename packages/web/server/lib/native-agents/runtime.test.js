@@ -68,6 +68,11 @@ const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}) } 
     deleteSession: async (sessionId) => {
       transcripts.delete(sessionId);
     },
+    forkSession: async () => {
+      const sessionId = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1189';
+      transcripts.set(sessionId, { ...info, sessionId });
+      return { sessionId };
+    },
     getSessionMessages: async (sessionId) => (sessionId === SESSION_UUID && transcripts.has(SESSION_UUID) ? fixture('haiku-tools.session-messages.json') : []),
     listSubagents: async (sessionId) => (sessionId === SESSION_UUID ? ['agent-1'] : []),
     getSubagentMessages: async () => [{ type: 'user', uuid: 'sub-1', parent_tool_use_id: TASK_TOOL_USE, message: { role: 'user', content: 'Count lines' } }],
@@ -775,6 +780,19 @@ describe('native task runtime without process launches', () => {
     expect(await runtime.sessionTasks(codexId, DIRECTORY)).toMatchObject({ state: 'unsupported', generation: null });
     expect(runtime.queries).toHaveLength(0);
     expect((await runtime.capabilities()).backends.claude.tasks).toEqual({ checklist: true, background: true, output: true, stop: true });
+    expect((await runtime.capabilities()).backends.codex.tasks).toEqual({ plan: true, todos: true });
+    await runtime.shutdown();
+  });
+
+  it('reads a Codex plan and its observed steps, and neither from Claude', async () => {
+    const runtime = createRuntime({ snapshotGit: async () => '' });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    const codexId = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
+    expect(await runtime.plan(session.id, DIRECTORY)).toEqual({ state: 'unavailable', reason: 'unsupported' });
+    expect(await runtime.codexTodos(session.id, DIRECTORY)).toMatchObject({ state: 'unsupported', generation: null, todos: [] });
+    // A thread this process holds no notification for is not a thread without
+    // steps: Codex stores none, so nothing could read them back.
+    expect(await runtime.codexTodos(codexId, DIRECTORY)).toMatchObject({ state: 'unknown', generation: null, todos: [] });
     await runtime.shutdown();
   });
 
@@ -834,6 +852,28 @@ describe('native task runtime without process launches', () => {
   });
 });
 
+describe('native interaction cleanup without process launches', () => {
+  it('publishes native deletion even when saved question cleanup fails', async () => {
+    const runtime = createRuntime({ snapshotGit: async () => '' });
+    const file = path.join(runtime.dataDir, 'native-agents', 'interactions', `${SESSION_ID}.json`);
+    fs.mkdirSync(file, { recursive: true });
+    fs.writeFileSync(path.join(file, 'unreadable-entry'), 'fixture');
+    await expect(runtime.deleteSession(SESSION_ID, DIRECTORY)).rejects.toMatchObject({ code: 'NATIVE_INTERACTION_CLEANUP_FAILED' });
+    expect(runtime.events.some((event) => event.payload.type === 'session.deleted' && event.payload.properties.info.id === SESSION_ID)).toBe(true);
+    await runtime.shutdown();
+  });
+
+  it('publishes the surviving fork and names it if supplemental answers cannot be copied', async () => {
+    const runtime = createRuntime({ snapshotGit: async () => '' });
+    const file = path.join(runtime.dataDir, 'native-agents', 'interactions', `${SESSION_ID}.json`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{invalid');
+    await expect(runtime.fork(SESSION_ID, null, DIRECTORY)).rejects.toMatchObject({ code: 'NATIVE_INTERACTION_FORK_INCOMPLETE' });
+    expect(runtime.events.some((event) => event.payload.type === 'session.created' && event.payload.properties.info.id === 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1189')).toBe(true);
+    await runtime.shutdown();
+  });
+});
+
 describe('native agents routes', () => {
   const createApp = (runtime, isLocalManagementRequest = () => false) => {
     const app = express();
@@ -841,6 +881,32 @@ describe('native agents routes', () => {
     registerNativeAgentRoutes(app, { runtime, isLocalManagementRequest });
     return app;
   };
+
+  it('restricts hook enrollment to local management and takes the port from the receiving server', async () => {
+    const calls = [];
+    const memorySharing = {
+      status: async (directory) => { calls.push(['status', directory]); return { enabled: true, backends: [], progress: [], sources: [] }; },
+      connect: async (...args) => { calls.push(['connect', ...args]); return { installed: true }; },
+      disconnect: async (backend) => { calls.push(['disconnect', backend]); return { installed: false }; },
+      importSource: async (...args) => { calls.push(['import', ...args]); return { imported: true, memoryId: 'm' }; },
+    };
+    const remote = createApp({ memorySharing });
+    const local = createApp({ memorySharing }, () => true);
+    const base = '/api/native/memory';
+    const status = await request(remote).get(base).query({ directory: DIRECTORY }).expect(200);
+    expect(status.body.canManage).toBe(false);
+    await request(remote).post(`${base}/codex/connect`).send({ port: 1 }).expect(403);
+    await request(remote).delete(`${base}/codex`).expect(403);
+    await request(local).post(`${base}/codex/connect`).send({ port: 1 }).expect(200);
+    await request(local).delete(`${base}/codex`).expect(200);
+    await request(remote).post(`${base}/import`).send({ sourceId: 'known-source', directory: DIRECTORY }).expect(200);
+    await request(remote).post(`${base}/import`).send({ file: '/private/memory.md', directory: DIRECTORY }).expect(400);
+    expect(calls).toEqual([
+      ['status', DIRECTORY], ['connect', 'codex', expect.any(Number)], ['disconnect', 'codex'],
+      ['import', 'known-source', DIRECTORY],
+    ]);
+    expect(calls[1][2]).not.toBe(1);
+  });
 
   it('allows ChatGPT authorization only from the local management boundary', async () => {
     const runtime = createRuntime();
@@ -927,15 +993,22 @@ describe('native agents routes', () => {
   it('serves native task routes with identity only and validates generation before runtime calls', async () => {
     const calls = [];
     const inactive = { state: 'inactive', generation: null, revision: 3, tasks: [], omitted: 0 };
+    const inactiveTodos = { state: 'inactive', generation: 'query-1', revision: 2, todos: [] };
     const app = createApp({
       checklist: async (...args) => { calls.push(['checklist', ...args]); return { state: 'unavailable', reason: 'source_unknown' }; },
       sessionTasks: async (...args) => { calls.push(['tasks', ...args]); return inactive; },
+      plan: async (...args) => { calls.push(['plan', ...args]); return { state: 'empty' }; },
+      codexTodos: async (...args) => { calls.push(['todos', ...args]); return inactiveTodos; },
       taskOutput: async (...args) => { calls.push(['output', ...args]); return { state: 'ready', text: '', truncated: false }; },
       stopTask: async (...args) => { calls.push(['stop', ...args]); return { accepted: true }; },
     });
     const base = `/api/native/sessions/${SESSION_ID}`;
     await request(app).get(`${base}/checklist`).query({ directory: DIRECTORY }).expect(200);
     await request(app).get(`${base}/tasks`).query({ directory: DIRECTORY }).expect(200, inactive);
+    await request(app).get(`${base}/plan`).query({ directory: DIRECTORY }).expect(200, { state: 'empty' });
+    await request(app).get(`${base}/todos`).query({ directory: DIRECTORY }).expect(200, inactiveTodos);
+    await request(app).get(`${base}/plan`).expect(400);
+    await request(app).get(`${base}/todos`).expect(400);
     await request(app).get(`${base}/tasks/a/output`).query({ directory: DIRECTORY, generation: 'current' }).expect(200, { state: 'ready', text: '', truncated: false });
     await request(app).post(`${base}/tasks/a/stop`).send({ directory: DIRECTORY, generation: 'current' }).expect(200, { accepted: true });
     await request(app).get(`${base}/tasks/a/output`).query({ directory: DIRECTORY }).expect(400);
@@ -944,6 +1017,7 @@ describe('native agents routes', () => {
     await request(app).post(`${base}/tasks/a/stop`).send({ generation: 'current' }).expect(400);
     expect(calls).toEqual([
       ['checklist', SESSION_ID, DIRECTORY], ['tasks', SESSION_ID, DIRECTORY],
+      ['plan', SESSION_ID, DIRECTORY], ['todos', SESSION_ID, DIRECTORY],
       ['output', SESSION_ID, DIRECTORY, 'a', 'current'], ['stop', SESSION_ID, DIRECTORY, 'a', 'current'],
     ]);
   });

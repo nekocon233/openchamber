@@ -426,7 +426,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
   }, [getPageTitle, isDesktopLocalOrigin, isMac, isWindows, isLinux, runtimeCtx, settingsSearchQuery, t, visiblePageSlugs]);
 
   const prepareSettingsSearchTarget = React.useCallback((result: SettingsSearchResult): string => {
-    if (result.id === 'chat.work-status.section.taskChecklist' || result.id === 'chat.work-status.section.taskBackground') {
+    // Every work-status section opens the same dialog on its own row.
+    if (result.id.startsWith('chat.work-status.section.')) {
       setWorkStatusSearchItem(result.id);
       return result.id;
     }

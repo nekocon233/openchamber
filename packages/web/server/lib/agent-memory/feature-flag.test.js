@@ -9,30 +9,17 @@ afterEach(() => {
   else process.env.OPENCHAMBER_MEMORY_ENABLE = original;
 });
 
-describe('the unreleased feature gate', () => {
-  test('is closed when the variable is unset', () => {
+describe('the released memory capability', () => {
+  test('is available without enabling memory for the user', () => {
     delete process.env.OPENCHAMBER_MEMORY_ENABLE;
-    expect(isAgentMemoryFeatureAvailable()).toBe(false);
+    expect(isAgentMemoryFeatureAvailable()).toBe(true);
   });
 
-  test('opens for the usual truthy spellings', () => {
-    for (const value of ['1', 'true', 'TRUE', 'yes', 'on', ' true ']) {
+  test('does not depend on the retired experimental flag', () => {
+    for (const value of ['', '0', 'false', 'no', 'off', 'maybe', '1', 'true', 'on']) {
       process.env.OPENCHAMBER_MEMORY_ENABLE = value;
       expect(isAgentMemoryFeatureAvailable()).toBe(true);
     }
   });
 
-  test('stays closed for anything else, including "false"', () => {
-    for (const value of ['', '0', 'false', 'no', 'off', 'maybe']) {
-      process.env.OPENCHAMBER_MEMORY_ENABLE = value;
-      expect(isAgentMemoryFeatureAvailable()).toBe(false);
-    }
-  });
-
-  test('is read per call, so a process started with it set is what decides', () => {
-    delete process.env.OPENCHAMBER_MEMORY_ENABLE;
-    expect(isAgentMemoryFeatureAvailable()).toBe(false);
-    process.env.OPENCHAMBER_MEMORY_ENABLE = '1';
-    expect(isAgentMemoryFeatureAvailable()).toBe(true);
-  });
 });

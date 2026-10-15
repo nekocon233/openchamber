@@ -70,6 +70,10 @@
     ],
     "extraResources": [
       {
+        "from": "resources/native-memory-hook.mjs",
+        "to": "native-memory-hook.mjs"
+      },
+      {
         "from": "resources/web-dist",
         "to": "web-dist"
       },

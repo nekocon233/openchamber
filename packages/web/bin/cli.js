@@ -38,6 +38,7 @@ import { logsCommand } from './lib/commands-logs.js';
 import { statusCommand } from './lib/commands-status.js';
 import { scheduleCommand } from './lib/commands-schedule.js';
 import { sessionCommand } from './lib/commands-session.js';
+import { memoryCommand } from './lib/commands-memory.js';
 import { modelsCommand } from './lib/commands-models.js';
 import { projectsCommand } from './lib/commands-projects.js';
 import { createUpdateCommand } from './lib/commands-update.js';
@@ -201,6 +202,7 @@ const commands = {
   schedule: scheduleCommand,
 
   session: sessionCommand,
+  memory: memoryCommand,
 
   models: modelsCommand,
 
@@ -249,7 +251,7 @@ commands.update = createUpdateCommand({
 
 async function main() {
   const parsed = parseArgs();
-  const { command, subcommand, tunnelAction, startupAction, scheduleAction, sessionAction, controlAction, options, removedFlagErrors, helpRequested, versionRequested } = parsed;
+  const { command, subcommand, tunnelAction, startupAction, scheduleAction, sessionAction, memoryAction, controlAction, options, removedFlagErrors, helpRequested, versionRequested } = parsed;
   activeCommandOptions = options;
 
   if (versionRequested) {
@@ -289,6 +291,8 @@ async function main() {
       await commands.schedule(options, 'help');
     } else if (command === 'session') {
       await commands.session(options, 'help');
+    } else if (command === 'memory') {
+      await commands.memory(options, 'help');
     } else if (command === 'models') {
       await commands.models(options, 'help');
     } else if (command === 'projects') {
@@ -320,6 +324,10 @@ async function main() {
     await commands.session(options, sessionAction);
     return;
   }
+  if (command === 'memory') {
+    await commands.memory(options, memoryAction);
+    return;
+  }
 
   if (command === 'models') {
     await commands.models(options, 'show');
@@ -340,7 +348,7 @@ async function main() {
   }
 
   if (!commands[command]) {
-    const knownCommands = ['serve', 'stop', 'restart', 'status', 'schedule', 'session', 'models', 'projects', 'control', 'tunnel', 'startup', 'logs', 'update'];
+    const knownCommands = ['serve', 'stop', 'restart', 'status', 'schedule', 'session', 'memory', 'models', 'projects', 'control', 'tunnel', 'startup', 'logs', 'update'];
     const suggestion = findClosestMatch(command, knownCommands);
     const hint = suggestion ? ` Did you mean '${suggestion}'?` : '';
     if (isJsonMode(options)) {

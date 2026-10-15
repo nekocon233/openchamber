@@ -10,6 +10,10 @@ const unsupported = async (): Promise<never> => {
 
 export const createVSCodeNativeAgentsAPI = (): NativeAgentsAPI => ({
   supported: false,
+  memoryStatus: unsupported,
+  connectMemory: unsupported,
+  disconnectMemory: unsupported,
+  importMemory: unsupported,
   capabilities: unsupported,
   catalog: unsupported,
   chatgptAccounts: unsupported,
@@ -33,6 +37,8 @@ export const createVSCodeNativeAgentsAPI = (): NativeAgentsAPI => ({
   statuses: unsupported,
   backgroundTasks: unsupported,
   checklist: unsupported,
+  plan: unsupported,
+  codexTodos: unsupported,
   sessionTasks: unsupported,
   taskOutput: unsupported,
   stopTask: unsupported,

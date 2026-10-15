@@ -41,6 +41,7 @@ describe('scope', () => {
       title: 'Uses bun',
       body: 'Tests run with bun test.',
       projectId: 'path_somewhere_else',
+      directory: '/another-project',
     }, DIRECTORY);
 
     const stored = await runtime.read({

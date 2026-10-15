@@ -17,7 +17,7 @@
 // - assistant entries sharing an API message id become one assistant message
 //   whose parts follow content-block order (reasoning, text, tool);
 // - tool_result blocks finish the tool part of the matching tool_use;
-// - a compact boundary becomes a compaction user message, and the compact
+// - a compact boundary becomes a compaction message, and the compact
 //   summary an assistant `summary` message answering it;
 // - a slash command shows as typed; `/compact` shows as its compaction;
 // - the output of local commands and other meta entries is not shown.
@@ -39,6 +39,7 @@ import {
 } from '../ids.js';
 import {
   buildAssistantMessage,
+  buildCompactionMessage,
   buildCompactionPart,
   buildFilePart,
   buildReasoningPart,
@@ -51,6 +52,7 @@ import {
 } from '../records.js';
 import { mapClaudeToolResult, mapClaudeToolUse } from './tools.js';
 import { isInstructionsBlock } from '../prompt-parts.js';
+import { buildSkillReadPart } from '../skill-records.js';
 
 const DEFAULT_AGENT = 'build';
 // Inline image data beyond this is replaced by a note; the transcript keeps it.
@@ -362,6 +364,13 @@ export const createClaudeProjection = ({
         : { status: 'completed', output, end: time },
     });
     toolParts.delete(block.tool_use_id);
+    if (part.tool === 'read' && block.is_error !== true && state.input.filePath) {
+      const skill = buildSkillReadPart({
+        id: `${part.id}_skill`, sessionID: sessionId, messageID: record.info.id,
+        filePath: state.input.filePath, cwd, start: state.time.start, end: time,
+      });
+      if (skill) upsertPart(record, skill);
+    }
     return { record, part: upsertPart(record, finished) };
   };
 
@@ -601,6 +610,10 @@ export const createClaudeProjection = ({
 
   const openCompaction = ({ uuid, timestamp, trigger }, changed) => {
     const record = startUserMessage(`ncl_k_${uuid}`, monotonicTime(timestamp));
+    record.info = buildCompactionMessage({
+      id: record.info.id, sessionID: sessionId, created: record.info.time.created,
+      status: 'completed', auto: trigger === 'auto',
+    });
     upsertPart(record, buildCompactionPart({
       id: userTextPartId(record.info.id, 0),
       sessionID: sessionId,

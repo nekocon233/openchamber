@@ -228,6 +228,15 @@ Use an explicit override when testing a different OpenCode CLI build or when a u
 
 ## Native CLI Sessions
 
+The shared memory terminal hook is bundled by `build:web-assets` into
+`resources/native-memory-hook.mjs` and included as an extra resource outside
+ASAR. Packaged startup supplies its physical path to the backend. Enrollment
+uses the system Node executable from the login-shell environment; it never
+runs the Electron executable as a Node helper. A missing Node/helper fails
+enrollment before any CLI configuration is changed. In-app native memory
+continues to use the in-process backend. See the agent-memory module docs for
+hook trust, enablement and runtime boundaries.
+
 The Claude Agent SDK ships in the app as JavaScript only. `build.files` excludes its per-platform Claude Code binaries (`@anthropic-ai/claude-agent-sdk-*`, 211 MB on macOS arm64): native sessions always start the user's own `claude` through `pathToClaudeCodeExecutable`, and the SDK looks for its bundled binary only when that option is absent. Keep the pattern while the backend passes the user's CLI. `packages/web/server/lib/native-agents/DOCUMENTATION.md` owns how the CLIs are found and started.
 
 ## Common Env Vars

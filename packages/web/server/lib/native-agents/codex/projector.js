@@ -25,18 +25,19 @@ import {
 } from '../ids.js';
 import {
   buildAssistantMessage,
+  buildCompactionMessage,
   buildCompactionPart,
   buildFilePart,
   buildTextPart,
   buildUserMessage,
-  EMPTY_TOKENS,
   stoppedError,
   unknownError,
 } from '../records.js';
-import { codexCompactionItemId, parseCodexUserMessageItem, partsForCodexItem } from './items.js';
+import { codexCompactionItemId, parseCodexUserMessageItem, partsForCodexItem, codexSkillId, codexSkillTextHash } from './items.js';
 
 const DEFAULT_AGENT = 'build';
 const itemIdentitySchema = z.object({ id: z.string() });
+const skillIdentitySchema = z.object({ type: z.literal('openchamberSkill'), id: z.string() });
 
 const turnSchema = z.object({
   id: z.string(),
@@ -96,7 +97,7 @@ export const codexUserMessages = ({ threadId, turns }) => {
  * @param {(userMessageId: string) => ({ modelID: string, variant?: string, agent: string } | null)} [input.sendRecordFor]
  * @param {Map<string, { start: number, end: number | null }>} [input.itemTimes] live item lifecycle timestamps in milliseconds
  */
-export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel, sendRecordFor = () => null, itemTimes }) => {
+export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel, sendRecordFor = () => null, itemTimes, details = new Map() }) => {
   const records = [];
   let lastCreated = 0;
   const createdAfterPrevious = (time) => {
@@ -108,6 +109,9 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
     const parsedTurn = turnSchema.safeParse(rawTurn);
     if (!parsedTurn.success) continue;
     const turn = parsedTurn.data;
+    const detail = details?.get(turn.id);
+    const modelID = detail?.model ?? threadModel;
+    const agent = detail?.agent ?? DEFAULT_AGENT;
     const start = (turn.startedAt ?? 0) * 1000 || lastCreated;
     const end = turn.completedAt ? turn.completedAt * 1000 : null;
     const outcome = outcomeOf(turn);
@@ -116,15 +120,47 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
     let segmentKey = turn.id;
     let sent = null;
 
-    for (const rawItem of turn.items) {
+    const userTextHashes = new Set(turn.items.flatMap((item) => parseCodexUserMessageItem(item)?.texts ?? []).map(codexSkillTextHash));
+    const extraItems = (detail?.extraItems ?? []).filter((entry) => !entry.sourceTextHash || !userTextHashes.has(entry.sourceTextHash));
+    const firstUser = turn.items.find((item) => parseCodexUserMessageItem(item) !== null);
+    const firstUserId = itemIdentitySchema.safeParse(firstUser).data?.id ?? null;
+    const extrasByAfter = new Map();
+    for (const entry of extraItems) {
+      const after = entry.after ?? firstUserId;
+      const values = extrasByAfter.get(after) ?? [];
+      if (!values.some((item) => item.id === entry.item.id)) values.push(entry.item);
+      extrasByAfter.set(after, values);
+    }
+    const projectedItems = [
+      ...(extrasByAfter.get(null) ?? []),
+      ...turn.items.flatMap((item) => {
+        const identity = itemIdentitySchema.safeParse(item);
+        const user = parseCodexUserMessageItem(item);
+        const skills = user?.skills.map((skill) => ({ ...skill, type: 'openchamberSkill', id: codexSkillId(turn.id, user.id, skill.name), source: 'attached' })) ?? [];
+        return [item, ...skills, ...(identity.success ? extrasByAfter.get(identity.data.id) ?? [] : [])];
+      }),
+    ];
+    const seenSkills = new Set();
+    for (const rawItem of projectedItems) {
+      const skillIdentity = skillIdentitySchema.safeParse(rawItem);
+      if (skillIdentity.success) {
+        if (seenSkills.has(skillIdentity.data.id)) continue;
+        seenSkills.add(skillIdentity.data.id);
+      }
       const compactionItemId = codexCompactionItemId(rawItem);
       if (compactionItemId !== null) {
         const id = codexCompactionMessageId(threadId, compactionItemId);
         // A compaction asked for with /compact is a turn of its own; one that
         // follows the turn's prompt is Codex making room.
         const auto = currentUser !== null;
+        const completed = itemTimes?.get(compactionItemId)?.end != null
+          || detail?.completedCompactions.has(compactionItemId) || turn.status === 'completed';
         currentUser = {
-          info: buildUserMessage({ id, sessionID: sessionId, created: createdAfterPrevious(start), agent: DEFAULT_AGENT, model: { providerID: NATIVE_PROVIDER_CODEX, modelID: threadModel } }),
+          info: buildCompactionMessage({
+            id, sessionID: sessionId, created: createdAfterPrevious(start), auto,
+            status: completed ? 'completed' : outcome?.error ? 'failed' : 'running',
+            error: completed ? null : outcome?.error ?? null,
+          }),
           parts: [buildCompactionPart({ id: userTextPartId(id, 0), sessionID: sessionId, messageID: id, auto })],
         };
         records.push(currentUser);
@@ -137,9 +173,9 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
         const id = codexUserMessageId(threadId, userItem);
         sent = sendRecordFor(id);
         const model = sent?.variant === undefined
-          ? { providerID: NATIVE_PROVIDER_CODEX, modelID: sent?.modelID ?? threadModel }
+          ? { providerID: NATIVE_PROVIDER_CODEX, modelID: sent?.modelID ?? modelID }
           : { providerID: NATIVE_PROVIDER_CODEX, modelID: sent.modelID, variant: sent.variant };
-        currentUser = { info: buildUserMessage({ id, sessionID: sessionId, created: createdAfterPrevious(start), agent: sent?.agent ?? DEFAULT_AGENT, model }), parts: [] };
+        currentUser = { info: buildUserMessage({ id, sessionID: sessionId, created: createdAfterPrevious(start), agent: sent?.agent ?? agent, model: detail?.effort && model.variant === undefined ? { ...model, variant: detail.effort } : model }), parts: [] };
         userItem.texts.forEach((text, index) => {
           const part = buildTextPart({ id: userTextPartId(id, index), sessionID: sessionId, messageID: id, text, start, end: start });
           if (userItem.clientId !== null && isCodexPlanApprovalMessageId(userItem.clientId)) {
@@ -156,6 +192,16 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
         continue;
       }
 
+      const itemIdentity = itemTimes ? itemIdentitySchema.safeParse(rawItem) : null;
+      const itemTime = itemIdentity?.success ? itemTimes.get(itemIdentity.data.id) : null;
+      const partStart = itemTime?.start ?? start;
+      const parts = partsForCodexItem(rawItem, {
+        sessionId, threadId,
+        messageId: currentAssistant?.info.id ?? codexAssistantMessageId(threadId, segmentKey),
+        start: partStart,
+        end: itemTime?.end ?? (outcome === null ? null : Math.max(end ?? start, partStart)),
+      });
+      if (parts.length === 0) continue;
       if (!currentAssistant) {
         if (!currentUser) {
           // A turn without a user item (for example a review) still needs a
@@ -175,12 +221,13 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
             created: createdAfterPrevious(start),
             completed: outcome === null ? null : (end ?? start),
             providerID: NATIVE_PROVIDER_CODEX,
-            modelID: sent?.modelID ?? threadModel,
-            agent: sent?.agent ?? DEFAULT_AGENT,
+            modelID: sent?.modelID ?? modelID,
+            agent: sent?.agent ?? agent,
             cwd,
-            tokens: EMPTY_TOKENS,
+            tokens: detail?.usage.segments.get(segmentKey)?.tokens,
+            contextWindow: detail?.usage.segments.get(segmentKey)?.contextWindow ?? detail?.contextWindow,
             finish: outcome?.finish ?? null,
-            variant: sent?.variant ?? null,
+            variant: sent?.variant ?? detail?.effort ?? null,
             error: outcome?.error ?? null,
           }),
           parts: [],
@@ -188,16 +235,6 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
         records.push(currentAssistant);
       }
 
-      const itemIdentity = itemTimes ? itemIdentitySchema.safeParse(rawItem) : null;
-      const itemTime = itemIdentity?.success ? itemTimes.get(itemIdentity.data.id) : null;
-      const partStart = itemTime?.start ?? start;
-      const parts = partsForCodexItem(rawItem, {
-        sessionId,
-        threadId,
-        messageId: currentAssistant.info.id,
-        start: partStart,
-        end: itemTime?.end ?? (outcome === null ? null : Math.max(end ?? start, partStart)),
-      });
       currentAssistant.parts.push(...parts);
     }
   }

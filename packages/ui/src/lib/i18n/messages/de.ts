@@ -6,12 +6,13 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
+import { nativeMemoryI18n } from './native-memory.i18n';
 import { webSearchI18n } from './websearch.i18n';
 
 export const dict = {
   "chat.nativeTasks.title": "Aufgaben",
   "chat.nativeTasks.open": "Sitzungsaufgaben öffnen",
-  "chat.nativeTasks.description": "Checkliste und Hintergrundaufgaben von Claude Code für diese Sitzung.",
+  "chat.nativeTasks.description": "Checklisten, Hintergrundaufgaben und Pläne für diese Sitzung.",
   "chat.nativeTasks.checklist": "Checkliste",
   "chat.nativeTasks.cliChecklist": "Checkliste",
   "chat.nativeTasks.background": "Hintergrundaufgaben",
@@ -20,13 +21,22 @@ export const dict = {
   "chat.nativeTasks.readonly": "Schreibgeschützte Checkliste von Claude Code. Sie ist von den Projektaufgaben getrennt.",
   "chat.nativeTasks.refresh": "Aktualisieren",
   "chat.nativeTasks.unsupported": "Dieser Server oder diese CLI unterstützt diese Aufgabenansicht nicht.",
-  "chat.nativeTasks.notNative": "Aufgaben sind für Claude Code-Sitzungen verfügbar.",
+  "chat.nativeTasks.notNative": "Aufgaben sind für Claude Code- und Codex-Sitzungen verfügbar.",
   "chat.nativeTasks.checklistUnavailable": "Der Speicherort der Checkliste für diese Sitzung konnte nicht bestätigt werden.",
   "chat.nativeTasks.loadError": "Aufgaben konnten nicht geladen werden. Zum erneuten Versuch aktualisieren.",
   "chat.nativeTasks.stale": "Diese Aufgaben sind möglicherweise veraltet. Zum erneuten Versuch aktualisieren.",
   "chat.nativeTasks.partial": "Einige Einträge konnten nicht gelesen werden. Bekannte Einträge bleiben erhalten und sind möglicherweise veraltet.",
   "chat.nativeTasks.history": "Aus dem letzten aufgezeichneten TodoWrite wiederhergestellt. Dies belegt keine laufende Aktivität.",
   "chat.nativeTasks.checklistEmpty": "Claude Code hat für diese Sitzung noch keine Checklisteneinträge aufgezeichnet.",
+  "chat.nativeTasks.plan": "Plandokument",
+  "chat.nativeTasks.planNotice": "Was diese Sitzung vorhatte, bevor sie begann. Der Plan selbst hat keinen Fortschritt.",
+  "chat.nativeTasks.planEmpty": "Codex hat für diese Sitzung keinen Plan geschrieben.",
+  "chat.nativeTasks.planTruncated": "Dieser Plan wurde gekürzt. Öffne die Unterhaltung, um ihn vollständig zu lesen.",
+  "chat.nativeTasks.todos": "Checkliste",
+  "chat.nativeTasks.todosNotice": "Schritte, die der CLI-Prozess gemeldet hat. Sie werden nirgends gespeichert, ein Neustart verliert sie.",
+  "chat.nativeTasks.todosUnknown": "Dieser Prozess hat für diese Sitzung keine Schritte gemeldet.",
+  "chat.nativeTasks.todosInactive": "Dieser CLI-Prozess wird nicht mehr beobachtet. Dies sind die zuletzt gemeldeten Schritte.",
+  "chat.nativeTasks.todosEmpty": "Die CLI hat eine leere Schrittliste gemeldet.",
   "chat.nativeTasks.owner": "Verantwortlich: {owner}",
   "chat.nativeTasks.blockedBy": "Wartet auf: {ids}",
   "chat.nativeTasks.blocks": "Blockiert: {ids}",
@@ -74,6 +84,7 @@ export const dict = {
   "chat.nativeTasks.summary.unavailable": "Nicht verfügbar",
   "chat.nativeTasks.summary.partial": "Unvollständig oder veraltet",
   "chat.nativeTasks.summary.checklist": "Abgeschlossen: {completed} / {total}",
+  "chat.nativeTasks.summary.plan": "Plan verfügbar",
   "chat.nativeTasks.summary.background": "Aktiv: {active} / Aufgezeichnet: {total}",
   "settings.chatgpt.limitReached": "Das Nutzungslimit des ChatGPT-Tarifs wurde erreicht. Prüfe die App- und Tariflimits in den ChatGPT-Einstellungen.",
   "settings.chatgpt.notEligible": "Dieses ChatGPT-Konto oder dieser Arbeitsbereich kann den Tarif für diese Anfrage nicht verwenden.",
@@ -225,6 +236,7 @@ export const dict = {
   ...surfacePanelI18n.de,
   ...fileArtifactsI18n.de,
   ...usageStatsI18n.de,
+  ...nativeMemoryI18n.de,
   ...webSearchI18n.de,
   'common.language.german': 'Deutsch',
   'common.loading': 'Wird geladen...',
@@ -3528,7 +3540,7 @@ export const dict = {
   'walkthrough.blocked.contextTooSmall.descriptionUnknownModel': 'Das kleine Modell passt in etwa {available}K Zeichen, und dieser Diff braucht etwa {required}K. Nichts wird abgeschnitten — wähle stattdessen ein Modell mit größerem Kontext.',
   'walkthrough.blocked.structuredOutput.descriptionUnknownModel': 'Das kleine Modell unterstützt die strukturierten Antworten nicht, die ein Walkthrough benötigt.',
   'contextRail.surface.plan.description': 'Plankontext',
-  'contextRail.surface.tasks.description': 'Claude Code-Checkliste und Hintergrundaufgaben',
+  'contextRail.surface.tasks.description': 'Native CLI-Checklisten, Hintergrundaufgaben und Pläne',
   'contextRail.surface.pr.description': 'PR-Kontext',
   'contextRail.surface.notes.description': 'Notizen, To-dos, Pläne und Agenten-Gedächtnis für das Projekt',
   'contextRail.surface.context.description': 'Allgemeiner Kontext',

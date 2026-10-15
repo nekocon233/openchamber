@@ -10,7 +10,7 @@ import { NativeAgentError } from './errors.js';
 
 /** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean }} QuestionInfo */
 /** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
-/** @typedef {{ status: 'replied', answers: string[][] } | { status: 'rejected' }} QuestionOutcome */
+/** @typedef {{ status: 'replied', answers: string[][] } | { status: 'rejected', reason?: 'interrupted' }} QuestionOutcome */
 
 const questionNotFoundError = (requestId) => new NativeAgentError(
   `No pending native question ${requestId}`,
@@ -21,7 +21,7 @@ const questionNotFoundError = (requestId) => new NativeAgentError(
  * @param {object} options
  * @param {(directory: string, payload: { type: string, properties: object }) => void} options.publish
  */
-export const createQuestionRegistry = ({ publish }) => {
+export const createQuestionRegistry = ({ publish, onSettled = () => undefined }) => {
   /** @type {Map<string, { request: QuestionRequest, directory: string, settle: (outcome: QuestionOutcome) => void }>} */
   const pending = new Map();
 
@@ -36,6 +36,7 @@ export const createQuestionRegistry = ({ publish }) => {
         : { sessionID: entry.request.sessionID, requestID: requestId },
     });
     entry.settle(outcome);
+    return onSettled(entry.request, outcome, entry.directory);
   };
 
   return {
@@ -54,7 +55,7 @@ export const createQuestionRegistry = ({ publish }) => {
       if (tool !== undefined) request.tool = tool;
       return new Promise((resolve) => {
         const onAbort = () => {
-          if (pending.has(request.id)) settle(request.id, { status: 'rejected' });
+          if (pending.has(request.id)) void Promise.resolve(settle(request.id, { status: 'rejected', reason: 'interrupted' })).catch(() => {});
         };
         pending.set(request.id, {
           request,
@@ -87,18 +88,18 @@ export const createQuestionRegistry = ({ publish }) => {
      * @param {string[][]} answers one list of chosen labels per question
      */
     reply(requestId, answers) {
-      settle(requestId, { status: 'replied', answers });
+      return settle(requestId, { status: 'replied', answers });
     },
 
     /** @param {string} requestId */
     reject(requestId) {
-      settle(requestId, { status: 'rejected' });
+      return settle(requestId, { status: 'rejected' });
     },
 
     /** Rejects every question a session is waiting on, when its turn ends. */
     rejectSession(sessionID) {
       for (const [requestId, entry] of pending) {
-        if (entry.request.sessionID === sessionID) settle(requestId, { status: 'rejected' });
+        if (entry.request.sessionID === sessionID) void Promise.resolve(settle(requestId, { status: 'rejected', reason: 'interrupted' })).catch(() => {});
       }
     },
   };

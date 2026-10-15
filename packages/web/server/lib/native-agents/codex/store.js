@@ -17,8 +17,10 @@ import { z } from 'zod';
 import { deleteForkSourceError, invalidRequestError, messageNotFoundError, revertMidTurnError } from '../errors.js';
 import { decodeNativeSessionId, encodeCodexSessionId } from '../ids.js';
 import { buildSessionRecord, unconfirmedSessionRecord } from '../records.js';
+import { codexPlanItemSchema } from './items.js';
 import { codexUserMessages, projectCodexTurns } from './projector.js';
 import { JsonRpcError } from './rpc.js';
+import { readCodexHistoryDetails } from './history-details.js';
 
 const LISTED_SOURCES = ['cli', 'vscode'];
 const HIDDEN_ORIGINATORS = new Set(['openchamber_codex']);
@@ -70,6 +72,12 @@ const turnsPageSchema = z.object({
   nextCursor: z.string().nullish(),
 }).passthrough();
 const titleTurnSchema = z.object({ id: z.string(), status: z.string(), items: z.array(z.unknown()) });
+// A turn read for its items alone: the plan reader accepts any turn, where the
+// title reader needs a completed one.
+const turnItemsSchema = z.object({ id: z.string(), items: z.array(z.unknown()) });
+// A plan is a document the user reads, not a stream to buffer: past this the
+// panel says it was shortened rather than holding a runaway one.
+const MAX_PLAN_CHARS = 200_000;
 
 const fitTitle = (title, length) => (title.length > length ? `${title.slice(0, length - 1)}…` : title);
 const fullTitleOf = (thread) => thread.name || thread.preview.split('\n')[0] || 'Codex session';
@@ -187,6 +195,33 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
   };
 
   /**
+   * The plan a thread last wrote, newest turn first. The thread store is the
+   * source rather than the live turn, because Codex unloads a thread once its
+   * turn ends — the moment the plan is most worth reading. Null means the
+   * thread has no plan; a failed read throws, so a caller never reports one as
+   * missing.
+   * @param {string} sessionId
+   * @returns {Promise<{ text: string, truncated: boolean, turnId: string } | null>}
+   */
+  const latestPlan = async (sessionId) => {
+    const decoded = decodeNativeSessionId(sessionId);
+    if (!decoded || decoded.backend !== 'codex') return null;
+    const turns = await readAllTurns(decoded.threadId);
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turn = turnItemsSchema.safeParse(turns[index]);
+      if (!turn.success) continue;
+      for (let item = turn.data.items.length - 1; item >= 0; item -= 1) {
+        const plan = codexPlanItemSchema.safeParse(turn.data.items[item]);
+        if (!plan.success || plan.data.text.trim() === '') continue;
+        return plan.data.text.length > MAX_PLAN_CHARS
+          ? { text: plan.data.text.slice(0, MAX_PLAN_CHARS), truncated: true, turnId: turn.data.id }
+          : { text: plan.data.text, truncated: false, turnId: turn.data.id };
+      }
+    }
+    return null;
+  };
+
+  /**
    * The projected thread, plus the subagent threads its collab calls name.
    * @param {string} sessionId
    * @param {string} directory
@@ -197,14 +232,18 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     if (!decoded || decoded.backend !== 'codex') return null;
     const thread = await readThread(decoded.threadId);
     if (!thread) return (await unconfirmedEntry(sessionId)) ? { records: [], childSessions: [] } : null;
-    const [turns, sendRecords] = await Promise.all([readAllTurns(decoded.threadId), registry.sendRecords(sessionId)]);
+    const [turns, sendRecords, details] = await Promise.all([
+      readAllTurns(decoded.threadId), registry.sendRecords(sessionId),
+      readCodexHistoryDetails(thread.path, decoded.threadId).catch(() => null),
+    ]);
     const records = projectCodexTurns({
       sessionId,
       threadId: decoded.threadId,
       cwd: directory,
       turns,
-      threadModel: thread.model ?? '',
+      threadModel: '',
       sendRecordFor: (messageId) => sendRecords.get(messageId) ?? null,
+      details,
     });
     const childIds = new Set();
     for (const record of records) {
@@ -218,7 +257,7 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
       const childThread = child?.backend === 'codex' ? await readThread(child.threadId) : null;
       return childThread ? sessionRecord(childThread, directory, { archived: false, parentID: sessionId }) : null;
     }));
-    return { records, childSessions: children.filter((child) => child !== null) };
+    return { records, childSessions: children.filter((child) => child !== null), metadataComplete: details !== null };
   };
 
   /** One thread as a session record, or null when it does not exist. */
@@ -339,5 +378,5 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     }
   };
 
-  return { listRootSessions, getSession, loadHistory, sessionExists, rewindTarget, fork, rename, initialTitleTurn, renameInitialTurn, setArchived, deleteThread };
+  return { listRootSessions, getSession, loadHistory, latestPlan, sessionExists, rewindTarget, fork, rename, initialTitleTurn, renameInitialTurn, setArchived, deleteThread };
 };

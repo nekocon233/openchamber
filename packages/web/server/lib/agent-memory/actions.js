@@ -42,6 +42,7 @@ export const createAgentMemoryActions = (dependencies) => {
     onMemoryChanged,
     resolveProjectId: resolveProjectIdForDirectory,
     isAgentMemoryEnabled,
+    sharing,
   } = dependencies;
 
   /**
@@ -210,6 +211,10 @@ export const createAgentMemoryActions = (dependencies) => {
   };
 
   const execute = async (action, input = {}, contextDirectory) => {
+    if (action === 'memory.context' || action === 'memory.checkpoint') {
+      if (!sharing) return fail('Native memory sharing is unavailable', 503);
+      return sharing.execute(action, input);
+    }
     /**
      * The tool lives in the managed OpenCode child and only disappears when
      * that child restarts, so between switching memory off and restarting it
@@ -231,10 +236,10 @@ export const createAgentMemoryActions = (dependencies) => {
     }
 
     switch (action) {
-      case 'memory.list': return list(input, contextDirectory);
-      case 'memory.read': return read(input, contextDirectory);
-      case 'memory.save': return save(input, contextDirectory);
-      case 'memory.delete': return remove(input, contextDirectory);
+      case 'memory.list': return list(input, contextDirectory ?? input.directory);
+      case 'memory.read': return read(input, contextDirectory ?? input.directory);
+      case 'memory.save': return save(input, contextDirectory ?? input.directory);
+      case 'memory.delete': return remove(input, contextDirectory ?? input.directory);
       default: return fail(`Unsupported memory action: ${action || 'missing'}`, 400);
     }
   };

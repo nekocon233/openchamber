@@ -83,11 +83,12 @@ describe('Codex JSON-RPC connection', () => {
 });
 
 describe('Codex app-server lifecycle', () => {
-  const createServer = ({ executable = '/usr/bin/codex', children = [], onExit = () => {}, clock = { now: 0 } } = {}) => {
+  const createServer = ({ executable = '/usr/bin/codex', children = [], onExit = () => {}, clock = { now: 0 }, buildConnectionOverrides } = {}) => {
     const terminated = [];
     const server = createCodexAppServer({
       resolveExecutable: async () => executable,
       buildEnv: () => ({ PATH: '/usr/bin' }),
+      buildConnectionOverrides,
       onNotification: () => {},
       onServerRequest: async () => ({}),
       onExit,
@@ -116,7 +117,7 @@ describe('Codex app-server lifecycle', () => {
     expect(server.isRunning()).toBe(false);
     await expect(server.request('thread/list')).resolves.toEqual({ data: [] });
     expect(children).toHaveLength(1);
-    expect(children[0].args).toEqual(['app-server', '--listen', 'stdio://']);
+    expect(children[0].args).toEqual(['app-server', '--listen', 'stdio://', '-c', 'tools.update_plan.enabled=true']);
     expect(children[0].received[0]).toMatchObject({
       method: 'initialize',
       params: { clientInfo: { name: 'openchamber', version: '1.0.0' }, capabilities: { experimentalApi: true } },
@@ -124,6 +125,18 @@ describe('Codex app-server lifecycle', () => {
     expect(children[0].received[1]).toEqual({ method: 'initialized' });
     await server.request('thread/list');
     expect(children).toHaveLength(1);
+  });
+
+  it('keeps its own arguments ahead of the configured connections', async () => {
+    const { server, children } = createServer({
+      buildConnectionOverrides: async () => ({ arguments: ['-c', 'model_providers.codexconn-a.name="a"'], environment: {} }),
+    });
+    await server.request('thread/list');
+    expect(children[0].args).toEqual([
+      'app-server', '--listen', 'stdio://',
+      '-c', 'tools.update_plan.enabled=true',
+      '-c', 'model_providers.codexconn-a.name="a"',
+    ]);
   });
 
   it('reports a missing CLI with a stable error code', async () => {

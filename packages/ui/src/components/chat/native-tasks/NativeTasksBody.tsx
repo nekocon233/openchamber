@@ -1,13 +1,30 @@
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
-import { useI18n } from '@/lib/i18n';
+import { useI18n, type I18nKey } from '@/lib/i18n';
+import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import { loadSessionNativeChecklist, useSessionNativeChecklist } from '@/sync/session-native-checklist';
 import { loadSessionNativeTaskDetails, useSessionNativeTaskDetails } from '@/sync/session-background-tasks';
+import { NativeCodexTodos } from './NativeCodexTodos';
+import { NativePlanDocument } from './NativePlanDocument';
 import { NativeTaskRow } from './NativeTaskDetails';
 import { selectNativeTasksTab, selectTaskStopScope, type NativeTasksTab } from './task-ui-store';
 
 type Scope = { sessionId: string; directory: string; runtimeGeneration: number; tab: NativeTasksTab };
+
+// Each CLI's own views: a checklist and background tasks belong to Claude Code,
+// a plan document and its step list to Codex. A backend that grows a view adds
+// it here and a label below.
+const TABS: Record<string, readonly NativeTasksTab[]> = {
+  claude: ['checklist', 'background'],
+  codex: ['plan', 'todos'],
+};
+const TAB_LABELS: Record<NativeTasksTab, I18nKey> = {
+  checklist: 'chat.nativeTasks.checklist',
+  background: 'chat.nativeTasks.background',
+  plan: 'chat.nativeTasks.plan',
+  todos: 'chat.nativeTasks.todos',
+};
 
 function Checklist({ scope }: { scope: Scope }) {
   const { t } = useI18n();
@@ -106,14 +123,24 @@ function BackgroundTasks({ scope, onClose }: { scope: Scope; onClose?: () => voi
 
 export function NativeTasksBody({ scope, onClose }: { scope: Scope; onClose?: () => void }) {
   const { t } = useI18n();
+  // The store records the reader's choice, not the backend: a tab the current
+  // backend has no view for falls back to that backend's first one.
+  const tabs = TABS[nativeBackendOfSessionId(scope.sessionId) ?? ''] ?? [];
+  const tab = tabs.includes(scope.tab) ? scope.tab : tabs[0];
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col" data-native-tasks-body>
       <div className="flex shrink-0 flex-wrap gap-2 border-b border-border p-3" role="group" aria-label={t('chat.nativeTasks.title')}>
-        <Button variant="chip" size="sm" aria-pressed={scope.tab === 'checklist'} onClick={() => selectNativeTasksTab('checklist')}>{t('chat.nativeTasks.checklist')}</Button>
-        <Button variant="chip" size="sm" aria-pressed={scope.tab === 'background'} onClick={() => selectNativeTasksTab('background')}>{t('chat.nativeTasks.background')}</Button>
+        {tabs.map((id) => (
+          <Button key={id} variant="chip" size="sm" aria-pressed={tab === id} onClick={() => selectNativeTasksTab(id)}>
+            {t(TAB_LABELS[id])}
+          </Button>
+        ))}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {scope.tab === 'checklist' ? <Checklist scope={scope} /> : <BackgroundTasks scope={scope} onClose={onClose} />}
+        {tab === 'checklist' ? <Checklist scope={scope} /> : null}
+        {tab === 'background' ? <BackgroundTasks scope={scope} onClose={onClose} /> : null}
+        {tab === 'plan' ? <NativePlanDocument scope={scope} /> : null}
+        {tab === 'todos' ? <NativeCodexTodos scope={scope} /> : null}
       </div>
     </div>
   );
