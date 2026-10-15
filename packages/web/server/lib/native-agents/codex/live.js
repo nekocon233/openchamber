@@ -24,6 +24,9 @@ import { JsonRpcError } from './rpc.js';
 
 const APPROVAL_POLICY = 'never';
 const FULL_ACCESS_SANDBOX = 'danger-full-access';
+// The provider an unconfigured thread runs on: the ChatGPT login OpenChamber
+// starts the CLI with. A connection replaces it for the threads that name one.
+const DEFAULT_CODEX_PROVIDER = 'openai';
 const TODO_STATUS = { pending: 'pending', inProgress: 'in_progress', completed: 'completed' };
 const TURN_NOT_FOUND = /^turn not found/;
 
@@ -187,7 +190,25 @@ export const createCodexLiveThreads = ({
       developerInstructions: (await readGlobalInstructions()) ?? undefined,
     }));
     live.serviceTier = resumed.success ? resumed.data.serviceTier ?? null : null;
+    live.modelProvider = resumed.success ? resumed.data.modelProvider ?? null : null;
     live.loaded = true;
+  };
+
+  // A turn cannot choose its provider; only the thread's settings can. Codex
+  // records the provider on the thread, so a session that moves to another
+  // connection switches before its next turn and stays there.
+  const applyProvider = async (live, config) => {
+    const target = config.providerId ?? DEFAULT_CODEX_PROVIDER;
+    if (live.modelProvider === null || live.modelProvider === target) return;
+    await request('thread/settings/update', {
+      threadId: live.threadId,
+      cwd: live.directory,
+      model: config.model,
+      modelProvider: target,
+      approvalPolicy: APPROVAL_POLICY,
+      sandboxPolicy: { type: 'dangerFullAccess' },
+    });
+    live.modelProvider = target;
   };
 
   const liveThread = (sessionId, directory) => {
@@ -202,6 +223,8 @@ export const createCodexLiveThreads = ({
         // The tier the loaded thread runs on as Codex last reported or a turn
         // set it; null for the standard tier.
         serviceTier: null,
+        // The provider the loaded thread runs on; null until the thread loads.
+        modelProvider: null,
         busy: false,
         turn: null,
         config: null,
@@ -447,6 +470,7 @@ export const createCodexLiveThreads = ({
       }
       const live = liveThread(sessionId, directory);
       await ensureLoaded(live);
+      await applyProvider(live, config);
       signal?.throwIfAborted();
       live.sends.set(messageId, send);
       live.config = config;
@@ -562,6 +586,12 @@ export const createCodexLiveThreads = ({
       return new Promise((resolve) => {
         live.idleWaiters.push(resolve);
       });
+    },
+
+    /** Whether every thread is between turns, so the shared process can restart. */
+    isIdle() {
+      for (const live of threads.values()) if (live.busy) return false;
+      return true;
     },
 
     /**

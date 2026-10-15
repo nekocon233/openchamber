@@ -495,6 +495,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       useConfigStore.getState().setSelectedProvider('claude-native');
     }
 
+    if (result.id === 'providers.codex-connections') {
+      useConfigStore.getState().setSelectedProvider('codex-native');
+    }
+
     if (result.id === 'providers.connect') {
       useConfigStore.getState().setSelectedProvider(ADD_PROVIDER_SETTINGS_ID);
     }

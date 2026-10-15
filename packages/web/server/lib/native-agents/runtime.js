@@ -27,6 +27,7 @@ import { createCodexAppServer } from './codex/app-server.js';
 import { createCodexAutoTitles } from './codex/auto-title.js';
 import { createCodexCatalog } from './codex/catalog.js';
 import { createCodexCommands } from './codex/commands.js';
+import { createCodexConnections } from './codex/connections.js';
 import { createCodexLiveThreads } from './codex/live.js';
 import { createCodexPlanDecisions } from './codex/plan-decisions.js';
 import { createCodexSessionStore } from './codex/store.js';
@@ -248,17 +249,21 @@ export const createNativeAgentsRuntime = ({
   // What the turns changed on disk, for reverting them.
   const onIdle = (sessionId) => {
     void reverts.afterTurn(sessionId);
+    // A connection change waits for a moment when no thread is mid-turn.
+    if (appServer.isStale() && codexLive.isIdle()) void appServer.restart();
   };
 
   // The app-server and the live threads call each other; the live threads
   // exist before the app-server can deliver anything.
   let codexLive = null;
+  const codexConnections = createCodexConnections({ dataDir });
   const codexCatalog = createCodexCatalog({ request: (method, params) => appServer.request(method, params), buildEnv: buildChildEnv });
   const codexCommands = createCodexCommands({ request: (method, params) => appServer.request(method, params) });
   const codexUtility = createCodexUtility({ request: (method, params) => appServer.request(method, params), catalog: codexCatalog });
   const appServer = createCodexAppServer({
     resolveExecutable: () => resolveExecutable('codex'),
     buildEnv: buildChildEnv,
+    buildConnectionOverrides: () => codexConnections.launch(),
     onNotification: (method, params) => {
       if (!codexUtility.handleNotification(method, params)) codexLive.handleNotification(method, params);
     },
@@ -452,12 +457,14 @@ export const createNativeAgentsRuntime = ({
       signal?.throwIfAborted();
       await reverts.beforePrompt(sessionId, request.directory, request.messageID);
       signal?.throwIfAborted();
+      const launch = await codexConnections.resolve(request.model.modelID);
+      signal?.throwIfAborted();
       await codexLive.prompt({
         sessionId,
         directory: request.directory,
         messageId: request.messageID,
         input,
-        config: { model: request.model.modelID, ...codexVariantSettings(request.variant), mode: request.agent === 'plan' ? 'plan' : 'default' },
+        config: { model: launch.model, providerId: launch.providerId, ...codexVariantSettings(request.variant), mode: request.agent === 'plan' ? 'plan' : 'default' },
         send,
         signal,
       });
@@ -502,8 +509,28 @@ export const createNativeAgentsRuntime = ({
   };
 
 
+  // A connection only reaches the CLI through process arguments, so the shared
+  // app-server restarts to pick one up. It never restarts mid-turn: while a
+  // thread is running, the change waits for the next idle moment.
+  const applyCodexConnectionChange = async () => {
+    if (codexLive.isIdle()) await appServer.restart();
+    else appServer.markStale();
+  };
+
   return {
     claudeConnections,
+    codexConnections,
+    /** Applies a saved or removed connection to the CLI, or defers it to idle. */
+    async saveCodexConnection(id, input) {
+      const saved = await codexConnections.save(id, input);
+      await applyCodexConnectionChange();
+      return saved;
+    },
+    async removeCodexConnection(id) {
+      const result = await codexConnections.remove(id);
+      await applyCodexConnectionChange();
+      return result;
+    },
     chatgpt,
     async signOutChatgpt(id) {
       const signingOut = chatgpt.signOut(id);
@@ -525,7 +552,10 @@ export const createNativeAgentsRuntime = ({
 
     /** Models per backend; a backend whose catalog cannot be read says why. */
     async catalog() {
-      const [codexList, claudeList] = await Promise.all([settled(codexCatalog()), settled(claudeConnections.catalog())]);
+      const [codexList, claudeList] = await Promise.all([
+        settled((async () => [...await codexCatalog(), ...await codexConnections.catalog()])()),
+        settled(claudeConnections.catalog()),
+      ]);
       return {
         backends: {
           [NATIVE_BACKEND_CLAUDE]: claudeList.status === 'ok' ? { status: 'ok', models: claudeList.value } : claudeList,

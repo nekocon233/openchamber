@@ -152,6 +152,11 @@ export const ProvidersSidebar: React.FC<ProvidersSidebarProps> = ({ onItemSelect
             {t('settings.claudeConnections.title')}
           </Button>
         ) : null}
+        {nativeAgents.supported && !providers.some((provider) => provider.id === 'codex-native') ? (
+          <Button variant="ghost" onClick={() => { setSelectedProvider('codex-native'); onItemSelect?.(); }}>
+            {t('settings.codexConnections.title')}
+          </Button>
+        ) : null}
         {providers.length === 0 ? (
           <div className="py-12 px-4 text-center text-muted-foreground">
             <Icon name="stack" className="mx-auto mb-3 h-10 w-10 opacity-50" />

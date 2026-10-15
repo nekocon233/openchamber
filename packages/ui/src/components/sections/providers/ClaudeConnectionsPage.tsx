@@ -22,15 +22,12 @@ const newModel = (): ClaudeConnectionModel => ({
   id: crypto.randomUUID(), name: '', modelID: '', contextWindow: 200_000, outputLimit: 32_000,
   input: { image: false, pdf: false }, efforts: [],
 });
-const newConnection = (kimi: boolean): ClaudeConnectionWrite => ({
+const newConnection = (): ClaudeConnectionWrite => ({
   kind: 'anthropic',
-  name: kimi ? 'Kimi Coding Plan' : '',
-  baseURL: kimi ? 'https://api.kimi.ai/coding/' : '',
+  name: '',
+  baseURL: '',
   auth: 'api-key',
-  models: [kimi ? {
-    ...newModel(), name: 'Kimi', modelID: 'kimi-for-coding', contextWindow: 1_048_576,
-    efforts: ['low', 'high', 'max'],
-  } : newModel()],
+  models: [newModel()],
 });
 
 export const ClaudeConnectionsPage: React.FC = () => {
@@ -118,8 +115,8 @@ export const ClaudeConnectionsPage: React.FC = () => {
   const updateModel = (id: string, patch: Partial<ClaudeConnectionModel>) => {
     setDraft((value) => value && ({ ...value, models: value.models.map((model) => model.id === id ? { ...model, ...patch } : model) }));
   };
-  const begin = (kimi: boolean) => {
-    setDraft(newConnection(kimi)); setEditing(null); setInvalid(false); setDeleting(null);
+  const begin = () => {
+    setDraft(newConnection()); setEditing(null); setInvalid(false); setDeleting(null);
   };
   return (
     <SettingsPageLayout title={t('settings.claudeConnections.title')} description={t('settings.claudeConnections.description')}>
@@ -147,10 +144,7 @@ export const ClaudeConnectionsPage: React.FC = () => {
             </>}
           </SettingsStackedField>
         ))}
-        {!draft ? <div className="flex flex-wrap gap-2">
-          <Button disabled={busy || loading} onClick={() => begin(true)}>{t('settings.claudeConnections.addKimi')}</Button>
-          <Button variant="outline" disabled={busy || loading} onClick={() => begin(false)}>{t('settings.claudeConnections.addCustom')}</Button>
-        </div> : null}
+        {!draft ? <Button disabled={busy || loading} onClick={begin}>{t('settings.claudeConnections.addCustom')}</Button> : null}
       </SettingsSection>
       <ChatgptConnectionsSection />
       {draft ? <form onSubmit={(event) => { event.preventDefault(); void save(); }}>

@@ -56,7 +56,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'providers.claude-connections',
     page: 'providers',
     titleKey: 'settings.claudeConnections.title',
-    keywords: ['claude code', 'kimi', 'coding plan', 'anthropic', 'api key'],
+    keywords: ['claude code', 'anthropic', 'api key'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
+    id: 'providers.codex-connections',
+    page: 'providers',
+    titleKey: 'settings.codexConnections.title',
+    keywords: ['codex', 'openai', 'custom endpoint', 'responses', 'api key'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {

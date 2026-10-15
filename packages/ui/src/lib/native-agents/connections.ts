@@ -32,6 +32,37 @@ export type ClaudeConnection = z.infer<typeof claudeConnectionSchema>;
 export type ClaudeConnectionWrite = z.infer<typeof claudeConnectionWriteSchema>;
 export type ClaudeConnectionModel = z.infer<typeof claudeConnectionModelSchema>;
 
+// Codex advertises one more effort than Claude Code does.
+const codexConnectionModelSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(120),
+  modelID: z.string().trim().min(1).max(200),
+  contextWindow: z.number().int().min(1024).max(10_000_000),
+  outputLimit: z.number().int().min(1).max(1_000_000),
+  input: z.object({ image: z.boolean(), pdf: z.boolean() }),
+  efforts: z.array(z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).max(6),
+});
+export const codexConnectionWriteSchema = z.object({
+  kind: z.literal('openai-responses').default('openai-responses'),
+  name: z.string().trim().min(1).max(120),
+  baseURL: z.string().url().max(2048).refine((value) => {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+  }),
+  apiKey: z.string().trim().min(1).max(8192).optional(),
+  models: z.array(codexConnectionModelSchema).min(1).max(50)
+    .refine((models) => new Set(models.map((model) => model.id)).size === models.length),
+});
+export const codexConnectionSchema = codexConnectionWriteSchema.omit({ apiKey: true }).extend({
+  id: z.string().uuid(),
+  revision: z.number().int().positive(),
+  hasKey: z.boolean(),
+});
+export const codexConnectionListSchema = z.array(codexConnectionSchema);
+export type CodexConnection = z.infer<typeof codexConnectionSchema>;
+export type CodexConnectionWrite = z.infer<typeof codexConnectionWriteSchema>;
+export type CodexConnectionModel = z.infer<typeof codexConnectionModelSchema>;
+
 
 const chatgptAccountSchema = z.object({
   id: z.string().uuid(), kind: z.literal('chatgpt-plan'), label: z.string(),

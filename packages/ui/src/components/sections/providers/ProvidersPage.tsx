@@ -1,4 +1,5 @@
 import { ClaudeConnectionsPage } from './ClaudeConnectionsPage';
+import { CodexConnectionsPage } from './CodexConnectionsPage';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { matchesRankQuery, rankByQuery } from '@/lib/search/fuzzySearch';
 import React from 'react';
@@ -1141,7 +1142,8 @@ const OpenCodeProvidersPage: React.FC = () => {
 export const ProvidersPage: React.FC = () => {
   const { nativeAgents } = useRuntimeAPIs();
   const selectedProviderId = useConfigStore((state) => state.selectedProviderId);
-  return selectedProviderId === 'claude-native' && nativeAgents.supported
-    ? <ClaudeConnectionsPage />
-    : <OpenCodeProvidersPage />;
+  if (!nativeAgents.supported) return <OpenCodeProvidersPage />;
+  if (selectedProviderId === 'claude-native') return <ClaudeConnectionsPage />;
+  if (selectedProviderId === 'codex-native') return <CodexConnectionsPage />;
+  return <OpenCodeProvidersPage />;
 };

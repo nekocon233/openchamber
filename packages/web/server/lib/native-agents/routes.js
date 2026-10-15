@@ -5,6 +5,7 @@
 import { z } from 'zod';
 
 import { connectionWriteSchema } from './claude/connections.js';
+import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
 
@@ -113,6 +114,12 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.post(connections, handle((req) => runtime.claudeConnections.save(null, connectionWriteSchema.parse(req.body))));
   app.patch(`${connections}/:id`, handle((req) => runtime.claudeConnections.save(z.string().uuid().parse(req.params.id), connectionWriteSchema.parse(req.body))));
   app.delete(`${connections}/:id`, handle((req) => runtime.claudeConnections.remove(z.string().uuid().parse(req.params.id))));
+
+  const codexConnections = '/api/native/codex/connections';
+  app.get(codexConnections, handle(() => runtime.codexConnections.list()));
+  app.post(codexConnections, handle((req) => runtime.saveCodexConnection(null, codexConnectionWriteSchema.parse(req.body))));
+  app.patch(`${codexConnections}/:id`, handle((req) => runtime.saveCodexConnection(z.string().uuid().parse(req.params.id), codexConnectionWriteSchema.parse(req.body))));
+  app.delete(`${codexConnections}/:id`, handle((req) => runtime.removeCodexConnection(z.string().uuid().parse(req.params.id))));
 
   const chatgpt = '/api/native/claude/chatgpt';
   const requireLocalLogin = (req) => {

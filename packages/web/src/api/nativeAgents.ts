@@ -1,5 +1,5 @@
 import { chatgptAccountsSchema, chatgptAuthorizationSchema, chatgptAuthorizationStatusSchema, chatgptSignOutSchema, chatgptCancelledSchema, chatgptWelcomeSchema } from '@openchamber/ui/lib/native-agents/connections';
-import { claudeConnectionListSchema, claudeConnectionSchema, type ClaudeConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
+import { claudeConnectionListSchema, claudeConnectionSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
 import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
 import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
@@ -40,6 +40,7 @@ const errorBodySchema = z.object({ error: z.string().optional(), code: z.string(
 type NativeWriteBody =
   | { accountId: string | null; completionMessage: string }
   | ClaudeConnectionWrite
+  | CodexConnectionWrite
   | { backend: NativeBackend; directory: string; title?: string }
   | NativePromptRequest
   | NativeCompactRequest
@@ -132,6 +133,15 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   ),
   deleteClaudeConnection: async (id) => {
     await sendParsed(`/api/native/claude/connections/${encodeURIComponent(id)}`, nativeDeleteResultSchema, { method: 'DELETE', query: {} });
+  },
+  listCodexConnections: () => readParsed('/api/native/codex/connections', {}, codexConnectionListSchema),
+  saveCodexConnection: (id, body) => sendParsed(
+    id ? `/api/native/codex/connections/${encodeURIComponent(id)}` : '/api/native/codex/connections',
+    codexConnectionSchema,
+    { method: id ? 'PATCH' : 'POST', body },
+  ),
+  deleteCodexConnection: async (id) => {
+    await sendParsed(`/api/native/codex/connections/${encodeURIComponent(id)}`, nativeDeleteResultSchema, { method: 'DELETE', query: {} });
   },
   codexCommand: (request) => writeParsed('/api/native/codex/command', nativeCodexCommandResultSchema, request),
   commands: (backend, directory, options) => readParsed(

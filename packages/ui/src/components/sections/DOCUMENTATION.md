@@ -110,6 +110,22 @@ Connected account rows show status and sign-out; sign-in remains available on
 signed-out accounts and accounts needing plan permission. When saved accounts
 exist, the separate sign-in entry is labeled as adding a ChatGPT account.
 
+### Codex connections
+
+Selecting `codex-native` opens `providers/CodexConnectionsPage.tsx`, the Codex
+counterpart of the page above. It manages OpenAI-compatible connections through
+the same `RuntimeAPIs.nativeAgents` methods and the same write-only key handling,
+but carries no authentication selector (Codex authenticates a provider with one
+bearer key) and no ChatGPT section. The endpoint field is explained behind its
+info icon: the URL is the provider's base and the endpoint must implement the
+OpenAI Responses API.
+
+Saving or deleting restarts the app-server on the server side once no Codex turn
+is running, then refreshes the native catalog so the picker shows the connection's
+models without changing the chosen chat model. The form and search entry are
+absent in VS Code. `providers.codex-connections` prepares the native provider
+selection before highlighting the section.
+
 ### MCP OAuth
 
 A remote MCP server with OAuth enabled is registered by OpenCode as an

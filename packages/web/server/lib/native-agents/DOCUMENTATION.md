@@ -769,8 +769,8 @@ owned by the CLI and can refuse an otherwise valid connection.
 Utility generation resolves the same connection and does not require an
 Anthropic account login for a configured key. Third-party models retain their
 own thinking default. Image/PDF support and effort levels are configured per
-model; custom models do not inherit Claude capabilities. The Kimi Coding Plan
-preset is separate from Moonshot's pay-as-you-go API.
+model; custom models do not inherit Claude capabilities. A connection aimed at
+the Kimi Coding endpoint reports its own usage quota.
 
 Connection launches set `ENABLE_TOOL_SEARCH=false`: Tool Search writes
 `tool_reference` blocks into tool results, and Anthropic-compatible
@@ -788,6 +788,47 @@ extend it as they are confirmed upstream.
 Web and Electron use the connected server's connections. Hosted mobile and
 Capacitor use that same server and CLI. VS Code's native adapter rejects these
 operations as unsupported.
+
+## Codex connections
+
+`codex/connections.js` owns named OpenAI-compatible connections in
+`<data dir>/native-agents/codex-connections.json`. Storage, permissions,
+serialized atomic writes, read-failure semantics and the `hasKey` projection
+match the Claude Code connections above; the schema differs because Codex
+authenticates a provider with one bearer key.
+
+A connection reaches the CLI as process arguments, because Codex reads its
+provider table from configuration rather than from the environment:
+`-c model_providers.codexconn-<connection UUID>.{name,base_url,env_key,wire_api,requires_openai_auth}`.
+The key itself is never an argument: `env_key` names a variable that the
+app-server child receives in its environment as `CODEX_CONN_<UUID with
+underscores>`. `buildCliChildEnv` strips `OPENCHAMBER_*`, so the prefix must
+stay outside that namespace. Because `-c` is a start argument, the whole
+provider table is written at spawn; a saved, edited or removed connection
+restarts the shared app-server through `runtime.saveCodexConnection` /
+`removeCodexConnection`. That restart never interrupts a turn: while any thread
+is busy the server marks the process stale, and the next idle moment restarts
+it. Until then a changed connection is simply not in effect yet.
+
+Codex records a provider on the thread, so a session moves to a connection
+through `thread/settings/update` with `modelProvider` before its next turn;
+`turn/start` has no provider parameter. A thread on no connection runs the
+CLI's own login under provider `openai`, which is what a session switches back
+to. The native catalog names connection models
+`codex-connection:<connection UUID>:<model UUID>` and `resolve` returns the
+upstream model together with the provider id, keeping the catalog identity
+separate from the upstream name.
+
+Model metadata is hand-entered per model (id, context window, output limit,
+image input, reasoning efforts) rather than read from the provider: Codex does
+not fetch a catalog for a provider authenticated by `env_key`. `wire_api` is
+fixed to `responses`, the only value the CLI still speaks; an endpoint that
+only implements Chat Completions cannot be used. Connection models therefore
+report no usage quota, unlike a Kimi Claude Code connection.
+
+Routes: `GET/POST /api/native/codex/connections` and
+`PATCH/DELETE /api/native/codex/connections/:id`. Responses never carry the key.
+VS Code's native adapter rejects these operations as unsupported.
 
 ## ChatGPT plan connections for Claude Code
 
@@ -974,6 +1015,9 @@ the CLIs installed on their connected server. VS Code retains the explicit
   `CLAUDE_CODE_SSE_PORT`, which would make a child believe it runs nested
   inside another Claude session.
 - One `codex app-server --listen stdio://` process serves every Codex thread.
+  It carries the configured connections as `-c` overrides and starts those
+  connections' keys in its environment; a connection change restarts it once no
+  thread is mid-turn (see Codex connections).
   It starts on first use and restarts on the next request after it exits,
   with start failures backing off up to 30 s. It never restarts in a loop of
   its own. A missing binary is `503 NATIVE_CLI_MISSING`.

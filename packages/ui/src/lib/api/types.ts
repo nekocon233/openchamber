@@ -1,4 +1,4 @@
-import type { ClaudeConnection, ClaudeConnectionWrite, ChatgptAccounts, ChatgptAuthorization, ChatgptAuthorizationStatus, ChatgptSignOut } from '@/lib/native-agents/connections';
+import type { ClaudeConnection, ClaudeConnectionWrite, CodexConnection, CodexConnectionWrite, ChatgptAccounts, ChatgptAuthorization, ChatgptAuthorizationStatus, ChatgptSignOut } from '@/lib/native-agents/connections';
 import type { SessionMetadataRecord } from '@/lib/sessionReviewMetadata';
 import type { WorktreeMetadata } from '@/types/worktree';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
@@ -1716,6 +1716,9 @@ export interface NativeAgentsAPI {
   listClaudeConnections(): Promise<ClaudeConnection[]>;
   saveClaudeConnection(id: string | null, connection: ClaudeConnectionWrite): Promise<ClaudeConnection>;
   deleteClaudeConnection(id: string): Promise<void>;
+  listCodexConnections(): Promise<CodexConnection[]>;
+  saveCodexConnection(id: string | null, connection: CodexConnectionWrite): Promise<CodexConnection>;
+  deleteCodexConnection(id: string): Promise<void>;
   /** Claude's slash commands or Codex's enabled skills in a directory. */
   commands(backend: NativeBackend, directory: string, options?: NativeReadOptions): Promise<NativeCommandList>;
   codexCommand(request: NativeCodexCommandRequest): Promise<NativeCodexCommandResult>;
