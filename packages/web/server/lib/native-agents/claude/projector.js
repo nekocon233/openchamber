@@ -190,8 +190,8 @@ const FINISH_BY_STOP_REASON = new Map([
   ['refusal', 'content-filter'],
 ]);
 
-/** API model ids carry a release date suffix the catalog does not. */
-const normalizeClaudeModelId = (model) => model.replace(/-\d{8}$/, '');
+/** CLI notices have no model; API model ids may carry a release date suffix. */
+const normalizeClaudeModelId = (model) => model === '<synthetic>' ? '' : model.replace(/-\d{8}$/, '');
 
 const tokensFromUsage = (usage) => {
   if (!usage) return EMPTY_TOKENS;
@@ -454,6 +454,8 @@ export const createClaudeProjection = ({
     const messageId = claudeAssistantMessageId(sessionId, message.id);
     const parent = ensureUserParent(time, messageId);
     const sent = sendRecordFor(parent.info.id);
+    const previousModelID = currentAssistant?.record.info.parentID === parent.info.id
+      ? currentAssistant.record.info.modelID : '';
     const record = recordById.get(messageId) ?? addRecord(buildAssistantMessage({
       id: messageId,
       sessionID: sessionId,
@@ -461,7 +463,8 @@ export const createClaudeProjection = ({
       created: createdAfterPrevious(time),
       completed: null,
       providerID: NATIVE_PROVIDER_CLAUDE,
-      modelID: (sent?.modelID?.startsWith('connection:') || sent?.modelID?.startsWith('chatgpt:')) ? sent.modelID : normalizeClaudeModelId(message.model),
+      modelID: (sent?.modelID?.startsWith('connection:') || sent?.modelID?.startsWith('chatgpt:'))
+        ? sent.modelID : normalizeClaudeModelId(message.model) || previousModelID || sent?.modelID || '',
       agent: sent?.agent ?? DEFAULT_AGENT,
       cwd,
       tokens: EMPTY_TOKENS,
@@ -535,7 +538,8 @@ export const createClaudeProjection = ({
 
     const info = record.info;
     info.tokens = tokensFromUsage(message.usage);
-    if (message.model) info.modelID = normalizeClaudeModelId(message.model);
+    const modelID = normalizeClaudeModelId(message.model);
+    if (modelID) info.modelID = modelID;
     if (!live) {
       info.time = { created: info.time.created, completed: Math.max(info.time.created, time) };
       const finish = message.stop_reason ? FINISH_BY_STOP_REASON.get(message.stop_reason) ?? 'other' : null;

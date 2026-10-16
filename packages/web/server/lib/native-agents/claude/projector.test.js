@@ -115,6 +115,85 @@ describe('Claude history projection', () => {
   });
 });
 
+describe('Claude placeholder model projection', () => {
+  const prompt = {
+    type: 'user', uuid: USER_ID.slice('ncl_u_'.length),
+    message: { role: 'user', content: 'Check the parser.' },
+  };
+  const answer = {
+    type: 'assistant', uuid: 'answer', message: {
+      id: 'msg_answer', model: 'claude-opus-5-5', stop_reason: 'tool_use',
+      content: [{ type: 'text', text: 'Checking the parser.' }],
+    },
+  };
+  const notice = {
+    type: 'assistant', uuid: 'notice', isApiErrorMessage: true, error: 'rate_limit',
+    message: {
+      id: 'msg_notice', model: '<synthetic>', stop_reason: 'stop_sequence',
+      content: [{ type: 'text', text: "You've hit your session limit." }],
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  };
+
+  it.each(["You've hit your session limit.", 'No response requested.'])('keeps the turn model for the placeholder %s', (text) => {
+    const records = projectHistory([prompt, answer, {
+      ...notice, message: { ...notice.message, content: [{ type: 'text', text }] },
+    }], {
+      sendRecordFor: () => ({ modelID: 'opus', agent: 'plan' }),
+    });
+    expect(records.at(-1).info).toMatchObject({ modelID: 'claude-opus-5-5', agent: 'plan', finish: 'stop' });
+    expect(records.at(-1).parts).toMatchObject([{ type: 'text', text }]);
+    expect(records.at(-1).info.tokens.total).toBe(0);
+  });
+
+  it.each(['opus', 'connection:provider:model', 'chatgpt:account:model'])('uses the captured selection %s when the turn has no model response', (modelID) => {
+    const records = projectHistory([prompt, notice], {
+      sendRecordFor: () => ({ modelID, variant: 'max', agent: 'plan' }),
+    });
+    expect(records.at(-1).info).toMatchObject({ modelID, variant: 'max', agent: 'plan' });
+  });
+
+  it('leaves the model unknown when there is no response or captured selection', () => {
+    expect(projectHistory([prompt, notice]).at(-1).info.modelID).toBe('');
+  });
+
+  it.each([null, { modelID: 'haiku', agent: 'build' }])('does not borrow a preceding turn model when the new selection is %j', (selection) => {
+    const nextPrompt = { ...prompt, uuid: 'next-user' };
+    const records = projectHistory([prompt, answer, nextPrompt, notice], {
+      sendRecordFor: (id) => id === 'ncl_u_next-user' ? selection : null,
+    });
+    expect(records.at(-1).info.modelID).toBe(selection?.modelID ?? '');
+  });
+
+  it('uses the real model once a reply follows a placeholder', () => {
+    const records = projectHistory([prompt, notice, answer], {
+      sendRecordFor: () => ({ modelID: 'opus', agent: 'build' }),
+    });
+    expect(records.at(-1).info.modelID).toBe('claude-opus-5-5');
+  });
+
+  it.each(['msg_answer', 'msg_notice'])('preserves a streamed model when a placeholder arrives as %s', (id) => {
+    const projection = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true });
+    projection.startUserPrompt(USER_ID, { kind: 'text', text: 'Check the parser.' });
+    projection.applyStreamEvent({ type: 'stream_event', event: { type: 'message_start', message: answer.message } });
+    projection.applyEntry({ ...notice, message: { ...notice.message, id } });
+    expect(projection.records().at(-1).info.modelID).toBe('claude-opus-5-5');
+    expect(projection.records().at(-1).parts.at(-1)).toMatchObject({ type: 'text', text: "You've hit your session limit." });
+  });
+
+  it('uses a steered prompt selection while the preceding reply still streams', () => {
+    const projection = createClaudeProjection({
+      sessionId: SESSION_ID, cwd: '/work/project', live: true,
+      sendRecordFor: (id) => ({ modelID: id === USER_ID ? 'opus' : 'haiku', agent: 'build' }),
+    });
+    projection.startUserPrompt(USER_ID, { kind: 'text', text: 'Check the parser.' });
+    projection.applyStreamEvent({ type: 'stream_event', event: { type: 'message_start', message: answer.message } });
+    projection.startUserPrompt('ncl_u_next-user', { kind: 'text', text: 'Check another file.' });
+    projection.applyEntry(notice);
+    expect(projection.records().at(-1).info).toMatchObject({ parentID: 'ncl_u_next-user', modelID: 'haiku' });
+  });
+});
+
 describe('Claude live usage projection', () => {
   const liveProjection = () => createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true });
   const start = (projection) => projection.applyStreamEvent({ type: 'stream_event', event: {

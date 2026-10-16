@@ -130,6 +130,13 @@ depends on:
 
 Claude gotchas:
 
+- The CLI uses `model: "<synthetic>"` for its own notices, including quota
+  errors and `No response requested.`. The projector uses the latest
+  assistant model for the same parent prompt, then that prompt's captured
+  send selection. Without either, the model stays empty. A placeholder never
+  replaces a real model already observed in the stream; a later real model
+  replaces the fallback. History and live frames use the same rule and keep
+  the notice's text and usage.
 - `getSessionMessages` drops `toolUseResult`, which holds the
   `structuredPatch` the edit diffs are built from and a command's
   `bashEditDiff`. When a conversation used Edit, MultiEdit, Write or Bash,
