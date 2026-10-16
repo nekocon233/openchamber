@@ -67,8 +67,12 @@ export type TimelineRowHandlers = {
   descendantIdsOf: (sessionId: string) => readonly string[];
 };
 
-/** Left padding of timeline rows and of the Show more / Show fewer rows under them. */
-export const TIMELINE_ROW_INDENT = 12;
+/**
+ * Left padding of timeline rows and of the Show more / Show fewer rows under
+ * them, for a surface that does not place them in a wider column itself. The
+ * sessions sheet passes its shared text column instead.
+ */
+const TIMELINE_ROW_INDENT = 12;
 
 // Timeline rows are two lines inside a button; this padding, not a min-h-*
 // utility, sets their height, because mobile.css gives every button a 36px
@@ -100,7 +104,8 @@ const MobileTimelineRunRow: React.FC<{
   entry: Extract<TimelineEntry, { kind: 'run' }>;
   showProject: boolean;
   compact: boolean;
-}> = ({ entry, showProject, compact }) => {
+  indent: number;
+}> = ({ entry, showProject, compact, indent }) => {
   const { t } = useI18n();
   const { run, project } = entry;
   const active = useUIStore((state) => state.runOverviewKey === run.key);
@@ -115,7 +120,7 @@ const MobileTimelineRunRow: React.FC<{
       <button
         type="button"
         className={cn(compact ? COMPACT_ROW_LAYOUT_CLASS : TIMELINE_ROW_LAYOUT_CLASS, 'w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring')}
-        style={{ paddingInlineStart: TIMELINE_ROW_INDENT, touchAction: 'manipulation' }}
+        style={{ paddingInlineStart: indent, touchAction: 'manipulation' }}
         onClick={() => useUIStore.getState().setRunOverviewKey(run.key)}
         aria-label={t('sessions.sidebar.run.openOverviewAria', { title: run.title })}
       >
@@ -150,8 +155,9 @@ const MobileTimelineRow: React.FC<{
   revealed: boolean;
   confirmingDelete: boolean;
   renaming: boolean;
+  indent: number;
   handlers: TimelineRowHandlers;
-}> = ({ entry, showProject, compact, pinMarker, active, revealed, confirmingDelete, renaming, handlers }) => {
+}> = ({ entry, showProject, compact, pinMarker, active, revealed, confirmingDelete, renaming, indent, handlers }) => {
   const { t } = useI18n();
   const { session, project, branch, inSpace } = entry;
   const title = session.title?.trim() || t('mobile.sessions.untitled');
@@ -272,13 +278,13 @@ const MobileTimelineRow: React.FC<{
         );
         const layoutClassName = compact ? COMPACT_ROW_LAYOUT_CLASS : TIMELINE_ROW_LAYOUT_CLASS;
         if (renaming) {
-          return <div className={layoutClassName} style={{ paddingInlineStart: TIMELINE_ROW_INDENT }}>{lines}</div>;
+          return <div className={layoutClassName} style={{ paddingInlineStart: indent }}>{lines}</div>;
         }
         return (
           <button
             type="button"
             className={cn(layoutClassName, 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring')}
-            style={{ paddingInlineStart: TIMELINE_ROW_INDENT, touchAction: 'manipulation' }}
+            style={{ paddingInlineStart: indent, touchAction: 'manipulation' }}
             onClick={() => {
               // A tap while the actions are out just closes them.
               if (revealed) {
@@ -306,11 +312,13 @@ export const MobileTimelineRows: React.FC<{
   showProject: boolean;
   compact?: boolean;
   pinMarker?: boolean;
+  /** Left inset of the rows; the sessions sheet passes its shared text column. */
+  indent?: number;
   handlers: TimelineRowHandlers;
-}> = ({ entries, showProject, compact = false, pinMarker = true, handlers }) => (
+}> = ({ entries, showProject, compact = false, pinMarker = true, indent = TIMELINE_ROW_INDENT, handlers }) => (
   <>
     {entries.map((entry) => (entry.kind === 'run' ? (
-      <MobileTimelineRunRow key={`run:${entry.run.key}`} entry={entry} showProject={showProject} compact={compact} />
+      <MobileTimelineRunRow key={`run:${entry.run.key}`} entry={entry} showProject={showProject} compact={compact} indent={indent} />
     ) : (
       <MobileTimelineRow
         key={entry.session.id}
@@ -318,6 +326,7 @@ export const MobileTimelineRows: React.FC<{
         showProject={showProject}
         compact={compact}
         pinMarker={pinMarker}
+        indent={indent}
         active={handlers.currentSessionId === entry.session.id}
         revealed={handlers.revealedSessionId === entry.session.id}
         confirmingDelete={handlers.confirmingDeleteSessionId === entry.session.id}

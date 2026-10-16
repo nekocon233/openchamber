@@ -46,13 +46,13 @@ export const MobileProjectIcon: React.FC<{
   const imageBackground = project.iconBackground ? { backgroundColor: project.iconBackground } : undefined;
 
   if (size === 'md') {
-    // A header's 32px slot, which the rows under it align to. No tile: a
-    // glyph sits bare at 20px, and an image takes 24px with its own corners,
-    // so both read at about the same weight next to the label.
+    // A header's 20px slot, which the rows under it align to. No tile: the
+    // glyph and an image with its own corners both take the slot's size, so
+    // both read at about the same weight next to the label.
     return (
-      <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+      <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
         {image ? (
-          <span className="flex size-6 items-center justify-center overflow-hidden rounded-md" style={imageBackground}>{image}</span>
+          <span className="flex size-5 items-center justify-center overflow-hidden rounded-md" style={imageBackground}>{image}</span>
         ) : fallbackIcon}
       </span>
     );

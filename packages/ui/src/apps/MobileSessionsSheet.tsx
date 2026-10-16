@@ -109,7 +109,6 @@ import { useUIStore } from '@/stores/useUIStore';
 import { FileTreeChevron } from '@/components/views/files/FileTreeRowParts';
 import {
   MobileTimelineRows,
-  TIMELINE_ROW_INDENT,
   type TimelineEntry,
   type TimelineRowHandlers,
 } from './MobileTimelineList';
@@ -223,16 +222,21 @@ const CHAT_PAGE_SIZE = 3;
 
 // The Tree view is the desktop's file tree geometry: 12px per level, a 14px
 // chevron slot and a 6px gap before the text, without level guides. Its base
-// sits under the project tile, so a root session's title starts where the
-// project label does (12px header padding + 32px tile + 8px gap = 52px).
-const MOBILE_TREE_BASE_PADDING_PX = 32;
+// sits under the section tile, so a root session's title starts where the
+// section label does (12px header padding + 20px tile + 8px gap = 40px), and
+// the chevron lands on the header's own 12px inset.
+const MOBILE_TREE_BASE_PADDING_PX = 20;
 const treeRowLeft = (depth: number): number => MOBILE_TREE_BASE_PADDING_PX + depth * 12;
 const treeTextLeft = (depth: number): number => treeRowLeft(depth) + 20;
 /** Expansion keys of the "Pinned" and "In work" sections, alongside project ids. */
 const PINNED_SECTION_ID = 'openchamber:pinned';
 const WORK_SECTION_ID = 'openchamber:work';
-// Chats are flat rows in both views, aligned with the timeline rows' text.
-const TIMELINE_CHAT_INDENT = 12;
+/**
+ * Chats are flat rows in both views, and the Pinned and In work sections are
+ * timeline rows, but all of them read as one list: the same column the tree
+ * rows' titles and every section label start in.
+ */
+const MOBILE_ROW_TEXT_INSET = treeTextLeft(0);
 
 const fetchSessionStatusSnapshot = async (
   directory: string,
@@ -885,6 +889,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
   const setShowPinnedSection = useSessionDisplayStore((state) => state.setShowPinnedSection);
   const showChatsSection = useSessionDisplayStore((state) => state.showChatsSection);
+  const setShowChatsSection = useSessionDisplayStore((state) => state.setShowChatsSection);
   const detailedZoneRows = useSessionDisplayStore((state) => state.detailedZoneRows);
   const setDetailedZoneRows = useSessionDisplayStore((state) => state.setDetailedZoneRows);
   // Branch per directory, for the second line of timeline-style rows (In
@@ -1487,7 +1492,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     },
   ) => {
     const pageSize = options?.pageSize ?? SESSIONS_PER_BUCKET;
-    const controlIndent = depth === null ? TIMELINE_CHAT_INDENT : treeTextLeft(depth);
+    const controlIndent = depth === null ? MOBILE_ROW_TEXT_INSET : treeTextLeft(depth);
     const alwaysVisibleIds = options?.alwaysVisibleIds;
 
     // Group children by parent within this bucket, and treat sessions whose parent
@@ -1539,7 +1544,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           <SessionRow
             session={session}
             active={currentSessionId === session.id}
-            indent={TIMELINE_CHAT_INDENT}
+            indent={MOBILE_ROW_TEXT_INSET}
             treeDepth={rowDepth ?? undefined}
             statusOnRight={rowDepth === null}
             activityTimestamp={getSessionTimestamp(session)}
@@ -1736,6 +1741,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     const next = !showWorkSection;
     setShowWorkSection(next);
     void updateDesktopSettings({ sidebarShowWorkSection: next });
+  };
+
+  const handleToggleChatsSection = () => {
+    const next = !showChatsSection;
+    setShowChatsSection(next);
+    void updateDesktopSettings({ sidebarShowChatsSection: next });
   };
 
   const handleTogglePinnedSection = () => {
@@ -2060,11 +2071,11 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     const remaining = entries.length - visibleEntries.length;
     return (
       <>
-        <MobileTimelineRows entries={visibleEntries} showProject={showProject} handlers={timelineHandlers} />
+        <MobileTimelineRows entries={visibleEntries} showProject={showProject} indent={MOBILE_ROW_TEXT_INSET} handlers={timelineHandlers} />
         {remaining > 0 ? (
-          <ShowMoreRow indent={TIMELINE_ROW_INDENT} onClick={() => showMoreBucketSessions(listKey, visibleEntries.length, SESSIONS_PER_BUCKET)} />
+          <ShowMoreRow indent={MOBILE_ROW_TEXT_INSET} onClick={() => showMoreBucketSessions(listKey, visibleEntries.length, SESSIONS_PER_BUCKET)} />
         ) : entries.length > SESSIONS_PER_BUCKET ? (
-          <ShowFewerRow indent={TIMELINE_ROW_INDENT} onClick={() => resetBucketVisibleCount(listKey)} />
+          <ShowFewerRow indent={MOBILE_ROW_TEXT_INSET} onClick={() => resetBucketVisibleCount(listKey)} />
         ) : null}
       </>
     );
@@ -2101,7 +2112,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           }
           style={{ touchAction: 'manipulation' }}
         >
-          <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+          <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
             <Icon name={icon} className="size-5" />
           </span>
           <span className="block min-w-0 flex-1 truncate typography-ui-header font-semibold text-foreground">
@@ -2113,7 +2124,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
         </button>
         <MobileDisclosure open={expanded}>{() => (
           <div className="pb-2">
-            <MobileTimelineRows entries={entries} showProject compact={compactZoneRows} pinMarker={sectionId !== PINNED_SECTION_ID} handlers={timelineHandlers} />
+            <MobileTimelineRows entries={entries} showProject compact={compactZoneRows} pinMarker={sectionId !== PINNED_SECTION_ID} indent={MOBILE_ROW_TEXT_INSET} handlers={timelineHandlers} />
           </div>
         )}</MobileDisclosure>
       </section>
@@ -2186,6 +2197,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           </>
         )}
         <DropdownMenuSeparator />
+        {renderMenuChoice('chats', 'sessions.sidebar.header.displayMode.showChats', showChatsSection, handleToggleChatsSection)}
         {renderMenuChoice('pinned', 'sessions.sidebar.header.displayMode.showPinned', showPinnedSection, handleTogglePinnedSection)}
         {sessionWorkEnabled ? renderMenuChoice('work', 'sessions.sidebar.header.displayMode.showWork', showWorkSection, handleToggleWorkSection) : null}
         {/* List rows always carry two lines; Tree keeps Pinned and In work on one unless asked. */}
@@ -2412,6 +2424,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           ) : (
             <div className="flex flex-col">
               {(() => {
+                // Hiding the section is a preference, not a filter: the search
+                // range and the empty-state check already exclude it.
+                if (!showChatsSection) return null;
                 const chatsExpanded = projectExpandedMap[CHAT_DRAFT_PROJECT_ID] ?? true;
                 const chatsLabel = t('mobile.sessions.section.chats');
                 return (
@@ -2435,7 +2450,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                         }
                         style={{ touchAction: 'manipulation' }}
                       >
-                        <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+                        <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
                           <Icon name="chat-4" className="size-5" />
                         </span>
                         <span className="block min-w-0 flex-1 truncate typography-ui-header font-semibold text-foreground">
@@ -2457,7 +2472,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                             { pageSize: CHAT_PAGE_SIZE, alwaysVisibleIds: pinnedChatIds },
                           )
                         ) : (
-                          <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingInlineStart: TIMELINE_CHAT_INDENT }}>
+                          <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingInlineStart: MOBILE_ROW_TEXT_INSET }}>
                             {t('sessions.sidebar.activity.chatsEmpty')}
                           </p>
                         )}

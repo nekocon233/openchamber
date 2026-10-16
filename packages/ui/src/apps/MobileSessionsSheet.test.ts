@@ -40,9 +40,24 @@ describe('MobileSessionsSheet session structure', () => {
     expect(source).toContain('const showPinnedSection = useSessionDisplayStore');
     expect(source).toContain('const showChatsSection = useSessionDisplayStore');
     expect(source).toContain('const showWorkSection = useSessionDisplayStore');
+    expect(source).toContain("renderMenuChoice('chats', 'sessions.sidebar.header.displayMode.showChats', showChatsSection, handleToggleChatsSection)");
     expect(source).toContain("renderMenuChoice('pinned', 'sessions.sidebar.header.displayMode.showPinned', showPinnedSection, handleTogglePinnedSection)");
     expect(source).toContain("renderMenuChoice('work', 'sessions.sidebar.header.displayMode.showWork', showWorkSection, handleToggleWorkSection)");
+    // The menu entry is worthless without the guard: the section has to obey it.
+    expect(source).toContain('if (!showChatsSection) return null;');
+    expect(source).toContain('void updateDesktopSettings({ sidebarShowChatsSection: next });');
     expect(source).toContain('visibleSessions.filter((session) =>');
+  });
+
+  test('starts every row and section label in one text column', () => {
+    expect(source).toContain('const MOBILE_ROW_TEXT_INSET = treeTextLeft(0)');
+    // Chats rows, their Show more rows and the empty note all land in it.
+    expect(source).toContain('indent={MOBILE_ROW_TEXT_INSET}');
+    expect(source).toContain('const controlIndent = depth === null ? MOBILE_ROW_TEXT_INSET : treeTextLeft(depth)');
+    expect(source).toContain('style={{ paddingInlineStart: MOBILE_ROW_TEXT_INSET }}');
+    // The Pinned and In work timeline rows take the same column from the sheet.
+    expect(source).toContain('indent={MOBILE_ROW_TEXT_INSET} handlers={timelineHandlers}');
+    expect(source).not.toContain('TIMELINE_CHAT_INDENT');
   });
 
   test('uses authoritative activity, exposes pin actions, and keeps mobile sheets mounted', () => {
