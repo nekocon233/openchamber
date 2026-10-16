@@ -893,6 +893,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.unpin': '取消釘選會話',
   'sessions.sidebar.session.menu.pin': '釘選會話',
   'sessions.sidebar.work.title': '進行中',
+  'sessions.sidebar.work.empty': '暫無進行中的工作階段。',
   'sessions.sidebar.session.work.track': '作為進行中追蹤',
   'sessions.sidebar.session.work.markDone': '標記為完成',
   'sessions.sidebar.session.work.doneSuggested': '看起來已完成',

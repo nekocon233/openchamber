@@ -660,6 +660,7 @@ export const dict = {
   'sessions.sidebar.session.menu.unpin': 'إلغاء تثبيت الجلسة',
   'sessions.sidebar.session.menu.pin': 'تثبيت الجلسة',
   'sessions.sidebar.work.title': 'قيد العمل',
+  'sessions.sidebar.work.empty': 'No sessions in work yet.',
   'sessions.sidebar.session.work.track': 'تتبّع كعمل جارٍ',
   'sessions.sidebar.session.work.markDone': 'تعليم كمنجزة',
   'sessions.sidebar.session.work.doneSuggested': 'تبدو منجزة',

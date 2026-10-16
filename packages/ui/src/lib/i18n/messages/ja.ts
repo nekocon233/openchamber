@@ -874,6 +874,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.unpin': 'セッションのピン留めを解除',
   'sessions.sidebar.session.menu.pin': 'セッションをピン留め',
   'sessions.sidebar.work.title': '作業中',
+  'sessions.sidebar.work.empty': '進行中のセッションはまだありません。',
   'sessions.sidebar.session.work.track': '作業中として追跡',
   'sessions.sidebar.session.work.markDone': '完了にする',
   'sessions.sidebar.session.work.doneSuggested': '完了したようです',

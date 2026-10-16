@@ -820,6 +820,26 @@ export const createNativeAgentsRuntime = ({
     },
 
     /**
+     * Stores the session's "In work" state beside the rest of its metadata and
+     * announces the session. A native session has no OpenCode record, so the
+     * marker the sidebar's In work block reads lives here instead; the shape is
+     * `session-work/state.js`'s, the same one OpenCode sessions carry.
+     * @param {string} sessionId
+     * @param {string} directory
+     * @param {{ state: 'open' | 'done', openedAt?: number, openedBy?: 'auto' | 'jev' | 'user', doneAt?: number, suggestDoneAt?: number }} work
+     */
+    async setSessionWork(sessionId, directory, work) {
+      await adoptSession(sessionId, directory);
+      const stored = (await registry.getSession(sessionId))?.metadata ?? {};
+      await registry.updateSession(sessionId, {
+        metadata: { ...stored, openchamber: { ...storedOpenChamber(stored), work } },
+      });
+      const session = await publishSession(sessionId, directory);
+      if (!session) throw sessionNotFoundError(sessionId);
+      return session;
+    },
+
+    /**
      * Deletes a session from its CLI's store, as the CLI's own delete does,
      * and everything OpenChamber kept about it. A running turn is stopped and
      * a Claude process exits first, so nothing writes the session afterwards.

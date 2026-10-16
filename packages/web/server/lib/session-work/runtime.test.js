@@ -31,7 +31,7 @@ const stubOpenCode = ({ session = {}, records = answeredTurn } = {}) => {
   return fetchMock;
 };
 
-const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = {}, endpoint = ENDPOINT, lineage = null } = {}) => {
+const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = {}, endpoint = ENDPOINT, lineage = null, nativeSessions = null } = {}) => {
   const records = new Map([['ses_1', metadata]]);
   const updateMetadata = vi.fn(async (id, decide) => {
     const current = records.get(id) ?? {};
@@ -53,6 +53,7 @@ const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = 
     updateMetadata,
     chatRoots: ['/home/me/.config/openchamber/chats'],
     lineage,
+    nativeSessions,
     now: () => time++,
   });
   return { runtime, jev, updateMetadata, records };
@@ -176,6 +177,67 @@ describe('session work runtime: a message was sent', () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(updateMetadata).not.toHaveBeenCalled();
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('session work runtime: a native CLI session', () => {
+  const nativeStub = ({ session = {}, metadata = {} } = {}) => {
+    const setSessionWork = vi.fn(async () => undefined);
+    const getSession = vi.fn(async () => ({ id: 'ncl_1', directory: '/repo', time: {}, ...session, metadata: { ...metadata, ...(session.metadata ?? {}) } }));
+    return {
+      setSessionWork,
+      getSession,
+      handle: {
+        isNativeSessionId: (id) => String(id).startsWith('ncl_'),
+        getSession,
+        setSessionWork,
+      },
+    };
+  };
+  const sentToNative = (id = 'msg_native', created = 50) => ({
+    type: 'message.updated',
+    properties: { sessionID: 'ncl_1', directory: '/repo', info: { id, role: 'user', text: 'Keep going', time: { created } } },
+  });
+
+  it('opens the session in its own registry, not through OpenCode', async () => {
+    const stub = nativeStub();
+    const { runtime, updateMetadata } = makeRuntime({ nativeSessions: stub.handle });
+
+    runtime.processPayload(sentToNative());
+    await settle(() => stub.setSessionWork.mock.calls.length > 0);
+
+    expect(stub.setSessionWork).toHaveBeenCalledTimes(1);
+    expect(stub.setSessionWork).toHaveBeenCalledWith('ncl_1', '/repo', expect.objectContaining({ state: 'open', openedBy: 'auto' }));
+    expect(updateMetadata).not.toHaveBeenCalled();
+  });
+
+  it('leaves a session already in work alone, and one the user closed after the message', async () => {
+    const open = nativeStub({ metadata: { openchamber: { work: { state: 'open', openedAt: 1 } } } });
+    const openRuntime = makeRuntime({ nativeSessions: open.handle });
+    openRuntime.runtime.processPayload(sentToNative());
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(open.setSessionWork).not.toHaveBeenCalled();
+
+    const closed = nativeStub({ metadata: { openchamber: { work: { state: 'done', doneAt: 100 } } } });
+    const closedRuntime = makeRuntime({ nativeSessions: closed.handle });
+    closedRuntime.runtime.processPayload(sentToNative('msg_late', 50));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(closed.setSessionWork).not.toHaveBeenCalled();
+  });
+
+  it('opens nothing for a child, a chat, a review, or an archived session', async () => {
+    for (const session of [
+      { parentID: 'ncl_parent' },
+      { directory: '/home/me/.config/openchamber/chats/2026-09-27/hello' },
+      { metadata: { openchamber: { kind: 'review', originalSessionID: 'ncl_0' } } },
+      { time: { archived: 10 } },
+    ]) {
+      const stub = nativeStub({ session });
+      const { runtime } = makeRuntime({ nativeSessions: stub.handle });
+      runtime.processPayload(sentToNative(`msg_${JSON.stringify(session).length}`));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(stub.setSessionWork).not.toHaveBeenCalled();
     }
   });
 });

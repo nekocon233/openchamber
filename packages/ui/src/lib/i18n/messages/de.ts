@@ -795,6 +795,7 @@ export const dict = {
   'sessions.sidebar.session.menu.unpin': 'Sitzung lösen',
   'sessions.sidebar.session.menu.pin': 'Sitzung anheften',
   'sessions.sidebar.work.title': 'In Arbeit',
+  'sessions.sidebar.work.empty': 'Noch keine Sitzungen in Arbeit.',
   'sessions.sidebar.session.work.track': 'Als in Arbeit verfolgen',
   'sessions.sidebar.session.work.markDone': 'Als erledigt markieren',
   'sessions.sidebar.session.work.doneSuggested': 'Sieht erledigt aus',

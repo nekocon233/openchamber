@@ -660,6 +660,7 @@ export const dict = {
   'sessions.sidebar.session.menu.unpin': 'בטל הצמדת הפעלה',
   'sessions.sidebar.session.menu.pin': 'הצמד הפעלה',
   'sessions.sidebar.work.title': 'בעבודה',
+  'sessions.sidebar.work.empty': 'No sessions in work yet.',
   'sessions.sidebar.session.work.track': 'עקוב כבעבודה',
   'sessions.sidebar.session.work.markDone': 'סמן כהושלם',
   'sessions.sidebar.session.work.doneSuggested': 'נראה שהושלם',

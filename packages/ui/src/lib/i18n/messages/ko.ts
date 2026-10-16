@@ -874,6 +874,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.unpin': '세션 고정 해제',
   'sessions.sidebar.session.menu.pin': '세션 고정',
   'sessions.sidebar.work.title': '작업 중',
+  'sessions.sidebar.work.empty': '진행 중인 세션이 없습니다.',
   'sessions.sidebar.session.work.track': '작업 중으로 추적',
   'sessions.sidebar.session.work.markDone': '완료로 표시',
   'sessions.sidebar.session.work.doneSuggested': '완료된 것 같습니다',

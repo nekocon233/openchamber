@@ -49,6 +49,16 @@ describe('MobileSessionsSheet session structure', () => {
     expect(source).toContain('visibleSessions.filter((session) =>');
   });
 
+  test('lets the In work section be switched off, and says so when it is empty', () => {
+    expect(source).toContain("renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries, { emptyLabel: t('sessions.sidebar.work.empty') })");
+    // The zone may not render without its label, or the toggle would have
+    // nothing to show whenever no session is in work.
+    expect(source).toContain('if (entries.length === 0 && !emptyLabel) return null;');
+    // A row's Track/Done reads the session, not the zone: hiding the zone
+    // must not change what the row offers.
+    expect(source).toContain('const inWork = isSessionInWork(session);');
+  });
+
   test('starts every row and section label in one text column', () => {
     expect(source).toContain('const MOBILE_ROW_TEXT_INSET = treeTextLeft(0)');
     // Chats rows, their Show more rows and the empty note all land in it.

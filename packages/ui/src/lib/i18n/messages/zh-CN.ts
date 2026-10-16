@@ -873,6 +873,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.unpin': '取消置顶会话',
   'sessions.sidebar.session.menu.pin': '置顶会话',
   'sessions.sidebar.work.title': '进行中',
+  'sessions.sidebar.work.empty': '暂无进行中的会话。',
   'sessions.sidebar.session.work.track': '作为进行中跟踪',
   'sessions.sidebar.session.work.markDone': '标记为完成',
   'sessions.sidebar.session.work.doneSuggested': '看起来已完成',

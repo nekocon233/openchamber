@@ -873,6 +873,7 @@ export const dict = {
   'sessions.sidebar.session.menu.unpin': 'Unpin session',
   'sessions.sidebar.session.menu.pin': 'Pin session',
   'sessions.sidebar.work.title': 'In work',
+  'sessions.sidebar.work.empty': 'No sessions in work yet.',
   'sessions.sidebar.session.work.track': 'Track as in work',
   'sessions.sidebar.session.work.markDone': 'Mark done',
   'sessions.sidebar.session.work.doneSuggested': 'Looks done',

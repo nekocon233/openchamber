@@ -23,7 +23,7 @@ import { readMergedSettingsSync } from '../opencode/settings-files.js';
 import { loadAssistContext } from '../session-assist/context.js';
 import { turnsToHistory, excerptHead, excerptHeadTail } from '../routing/history.js';
 import { buildTurnEndRequest, decideAssist, decideReviewReady, decideWrapUp } from './questions.js';
-import { clearSuggestionPatch, offerReviewPatch, openPatch, readWork, suggestDonePatch } from './state.js';
+import { clearSuggestionPatch, offerReviewPatch, openPatch, openWork, readWork, suggestDonePatch } from './state.js';
 
 const OPENCHAMBER_SETTINGS_FILE = path.join(
   process.env.OPENCHAMBER_DATA_DIR
@@ -94,6 +94,12 @@ export function createSessionWorkRuntime({
   isSessionArchived = async () => false,
   /** Roots of managed Chats: plain conversations, never work. */
   chatRoots = [],
+  /**
+   * `native-agents/runtime.js`: native CLI sessions read and write their work
+   * state and metadata through it. Absent, those sessions are served by the
+   * OpenCode path like any other.
+   */
+  nativeSessions = null,
   /** `../session-lineage.js`: known subsessions are skipped without reading them. */
   lineage = null,
   now = Date.now,
@@ -154,6 +160,28 @@ export function createSessionWorkRuntime({
     return session;
   };
 
+  /**
+   * A native CLI session is read through the native runtime, which has no
+   * OpenCode record: its metadata, its archive mark and its writes all live in
+   * that runtime's registry. The eligibility rules are the same as above.
+   */
+  const isNativeSession = (sessionId) => nativeSessions?.isNativeSessionId?.(sessionId) === true;
+
+  const readSessionMetadata = async (sessionId, directory) => {
+    if (!isNativeSession(sessionId)) return readMetadata(sessionId, directory);
+    return (await nativeSessions.getSession(sessionId, directory))?.metadata ?? null;
+  };
+
+  const readEligibleNativeSession = async (sessionId, directory) => {
+    const session = await nativeSessions.getSession(sessionId, directory);
+    if (session?.id === sessionId) lineage?.remember(sessionId, session.parentID ?? null);
+    if (session?.id !== sessionId || session.parentID) return null;
+    if (isChatDirectory(session.directory)) return null;
+    if (notWorkSessionSchema.safeParse(session.metadata).success) return null;
+    if (session.time?.archived) return null;
+    return session;
+  };
+
   const markSuggested = (sessionId, directory) => {
     suggested.delete(sessionId);
     suggested.set(sessionId, directory);
@@ -169,7 +197,16 @@ export function createSessionWorkRuntime({
     while (seenMessages.size > SEEN_MESSAGES_LIMIT) seenMessages.delete(seenMessages.values().next().value);
 
     // A session already in work costs no read of OpenCode.
-    if (readWork(await readMetadata(sessionId, directory))?.state === 'open') return;
+    const current = await readSessionMetadata(sessionId, directory);
+    if (readWork(current)?.state === 'open') return;
+    if (isNativeSession(sessionId)) {
+      const session = await readEligibleNativeSession(sessionId, directory);
+      if (!session || stopped) return;
+      const work = openWork(session.metadata, { requestAt: createdAt, now: now() });
+      if (!work) return;
+      await nativeSessions.setSessionWork(sessionId, directory, work);
+      return;
+    }
     const session = await eligibleSession(openCodeClient(directory), sessionId, AbortSignal.timeout(READ_TIMEOUT_MS));
     if (!session || stopped) return;
     await updateMetadata(sessionId, (metadata) => openPatch(metadata, { requestAt: createdAt, now: now() }), { directory });

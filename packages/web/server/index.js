@@ -1136,6 +1136,14 @@ const sessionWorkRuntime = createSessionWorkRuntime({
   updateMetadata: updateSessionMetadataWith,
   isSessionArchived: (sessionID) => openChamberSessionService.archiveStore.isArchived(sessionID),
   chatRoots: [path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR],
+  // A native CLI session keeps its work state in the native registry; that
+  // runtime is declared further down, and is only ever reached by an event,
+  // after startup.
+  nativeSessions: {
+    isNativeSessionId,
+    getSession: (sessionId, directory) => nativeAgentsRuntime.getSession(sessionId, directory),
+    setSessionWork: (sessionId, directory, work) => nativeAgentsRuntime.setSessionWork(sessionId, directory, work),
+  },
   lineage: sessionLineage,
 });
 
@@ -1254,6 +1262,7 @@ globalMessageStreamHub.subscribeEvent((event) => {
   for (const payload of event.translated()) {
     sessionAssistRuntime.processPayload(payload, event.directory);
     sessionGoalRuntime.processPayload(payload, event.directory);
+    sessionWorkRuntime.processPayload(payload, event.directory);
   }
 }, { sources: [GLOBAL_EVENT_SOURCE_NATIVE] });
 

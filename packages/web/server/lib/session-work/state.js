@@ -29,13 +29,23 @@ export const readWork = (metadata) => metadataSchema.safeParse(metadata).data?.o
 
 const patchOf = (work) => ({ openchamber: { work } });
 
-/** The user sent a message at `requestAt`. */
-export const openPatch = (metadata, { requestAt, now }) => {
+/**
+ * The record a sent message at `requestAt` opens, or null when the user's own
+ * decision stands. The shape lives here alone: OpenCode sessions carry it in
+ * their record's metadata, a native session in its registry entry.
+ */
+export const openWork = (metadata, { requestAt, now }) => {
   const work = readWork(metadata);
   if (work?.state === 'open') return null;
   // Closed after this message was sent: the user's decision stands.
   if (work?.state === 'done' && Number.isFinite(requestAt) && (work.doneAt ?? 0) >= requestAt) return null;
-  return patchOf({ state: 'open', openedAt: now, openedBy: 'auto', doneAt: null, suggestDoneAt: null });
+  return { state: 'open', openedAt: now, openedBy: 'auto', doneAt: null, suggestDoneAt: null };
+};
+
+/** The user sent a message at `requestAt`. */
+export const openPatch = (metadata, options) => {
+  const work = openWork(metadata, options);
+  return work === null ? null : patchOf(work);
 };
 
 /** The turn that just ended looks like the end of the work. */

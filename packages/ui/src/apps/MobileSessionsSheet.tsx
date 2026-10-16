@@ -1668,7 +1668,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   /** Track / Done for a top-level row while the feature is on. */
   const workActionFor = (session: Session): MobileSessionWorkAction | undefined => {
     if (!sessionWorkEnabled || getParentId(session) || isChatDirectoryPath(getSessionDirectory(session))) return undefined;
-    const inWork = workSessionIds.has(session.id);
+    // The session's own state, not the zone's: hiding the zone must not
+    // change what its row offers next to Track and Done.
+    const inWork = isSessionInWork(session);
     return { inWork, onToggle: () => { void handleToggleWork(session, inWork); } };
   };
 
@@ -2087,10 +2089,14 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     icon: IconName,
     label: string,
     entries: readonly TimelineEntry[],
+    /** With a label, an empty section keeps its header and says so; without
+        one it is left out entirely, as Pinned has always been. */
+    options?: { emptyLabel?: string },
   ): React.ReactNode => {
+    const emptyLabel = options?.emptyLabel;
     // The count is the rows: a run's lanes share one, and a session whose
     // project is unresolved has none.
-    if (entries.length === 0) return null;
+    if (entries.length === 0 && !emptyLabel) return null;
     const expanded = projectExpandedMap[sectionId] ?? true;
     return (
       <section>
@@ -2124,7 +2130,13 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
         </button>
         <MobileDisclosure open={expanded}>{() => (
           <div className="pb-2">
-            <MobileTimelineRows entries={entries} showProject compact={compactZoneRows} pinMarker={sectionId !== PINNED_SECTION_ID} indent={MOBILE_ROW_TEXT_INSET} handlers={timelineHandlers} />
+            {entries.length > 0 ? (
+              <MobileTimelineRows entries={entries} showProject compact={compactZoneRows} pinMarker={sectionId !== PINNED_SECTION_ID} indent={MOBILE_ROW_TEXT_INSET} handlers={timelineHandlers} />
+            ) : (
+              <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingInlineStart: MOBILE_ROW_TEXT_INSET }}>
+                {emptyLabel}
+              </p>
+            )}
           </div>
         )}</MobileDisclosure>
       </section>
@@ -2482,7 +2494,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                 );
               })()}
               {renderZoneSection(PINNED_SECTION_ID, 'pushpin', t('sessions.sidebar.activity.pinnedTitle'), pinnedTimelineEntries)}
-              {renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries)}
+              {showWorkSection ? renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries, { emptyLabel: t('sessions.sidebar.work.empty') }) : null}
               {orderedNodes.map((node) => {
                 const projectExpanded = isProjectExpanded(node);
                 const buckets = normalizedQuery
