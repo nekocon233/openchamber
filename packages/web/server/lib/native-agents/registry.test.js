@@ -133,6 +133,36 @@ describe('native session registry', () => {
     expect(registry.status()).toEqual({ reset: false });
   });
 
+  it('round-trips a checklist projection across instances and drops a malformed one', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const identity = 'a'.repeat(64);
+    const first = createNativeRegistry({ filePath });
+    expect(await first.checklistProjection(identity)).toBeNull();
+    await first.setChecklistProjection(identity, { baseline: ['1', '2'], hidden: ['1'], pendingCreated: ['3'] });
+
+    const second = createNativeRegistry({ filePath });
+    expect(await second.checklistProjection(identity)).toEqual({ baseline: ['1', '2'], hidden: ['1'], pendingCreated: ['3'] });
+    await second.setChecklistProjection(identity, null);
+    expect(await createNativeRegistry({ filePath }).checklistProjection(identity)).toBeNull();
+
+    const document = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    document.checklists = { [identity]: { baseline: [1], hidden: 'all', pendingCreated: [] }, '../escape': { baseline: null, hidden: [], pendingCreated: [] } };
+    fs.writeFileSync(filePath, JSON.stringify(document));
+    // A malformed record grants no authority at all; it is not an empty
+    // projection that would show every retired task again.
+    expect(await createNativeRegistry({ filePath }).checklistProjection(identity)).toBeNull();
+  });
+
+  it('leaves a checklist projection unchanged when its write fails', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const identity = 'b'.repeat(64);
+    const registry = createNativeRegistry({ filePath });
+    await registry.setChecklistProjection(identity, { baseline: ['1'], hidden: [], pendingCreated: [] });
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(new Error('disk full'));
+    await expect(registry.setChecklistProjection(identity, { baseline: ['1', '2'], hidden: ['1'], pendingCreated: [] })).rejects.toThrow('disk full');
+    expect(await registry.checklistProjection(identity)).toEqual({ baseline: ['1'], hidden: [], pendingCreated: [] });
+  });
+
   it('keeps the first registration of a session', async () => {
     const registry = createNativeRegistry({ filePath: path.join(makeDir(), 'registry.json') });
     await registry.registerSession(SESSION, entry);

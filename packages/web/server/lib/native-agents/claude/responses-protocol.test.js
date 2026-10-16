@@ -86,8 +86,46 @@ describe('Responses translation', () => {
       { type: 'function_call', call_id: 'call_1', namespace: 'claude', name, arguments: '{"file_path":"/tmp/example"}' },
       { type: 'function_call_output', call_id: 'call_1', output: 'file text' },
     ]);
-    for (const field of ['max_tokens', 'max_output_tokens', 'temperature', 'previous_response_id', 'thinking']) expect(body).not.toHaveProperty(field);
+    for (const field of ['max_tokens', 'max_output_tokens', 'temperature', 'previous_response_id', 'thinking', 'prompt_cache_key', 'prompt_cache_options']) expect(body).not.toHaveProperty(field);
     expect(JSON.stringify(body)).not.toContain('Private reasoning');
+  });
+
+  it('sends one prompt cache key per shared head, stable across history changes, and none unless enabled', () => {
+    const keyOf = (input, model = 'gpt-fixture') => toResponsesRequest(input, model, null, false, null, { promptCacheKey: true }).body.prompt_cache_key;
+    const grown = { ...request(), messages: [...request().messages, { role: 'user', content: 'One more tool result.' }] };
+    expect(keyOf(request())).toMatch(/^[a-f0-9]{32}$/);
+    // Growing, compacting or forking history keeps the head it still shares.
+    expect(keyOf(grown)).toBe(keyOf(request()));
+    expect(keyOf({ ...request(), messages: [{ role: 'user', content: 'Summary of earlier work.' }] })).toBe(keyOf(request()));
+    expect(keyOf({ ...request(), model: 'gpt-other' }, 'gpt-other')).not.toBe(keyOf(request()));
+    expect(keyOf({ ...request(), system: [{ type: 'text', text: 'Different project rules.' }] })).not.toBe(keyOf(request()));
+    expect(toResponsesRequest(request(), 'gpt-fixture').body).not.toHaveProperty('prompt_cache_key');
+  });
+
+  it('reports cache diagnostics to its caller only when upstream sends them', () => {
+    const reported = [];
+    const diagnostic = (items) => createAnthropicStream({ model: 'gpt-fixture', names: new Map(), onDiagnostic: (item) => items.push(item) });
+    const stream = diagnostic(reported);
+    stream.push({ type: 'response.output_text.delta', item_id: 'msg_1', content_index: 0, delta: 'Done.' });
+    stream.push({
+      type: 'response.completed',
+      response: {
+        id: 'resp_1', status: 'completed', usage: { input_tokens: 10, output_tokens: 3, input_tokens_details: { cached_tokens: 4 } },
+        prompt_cache_diagnostics: { type: 'cache_miss', reason: 'input_changed', cache_missed_tokens: 120, comparison_reusable_tokens: 130 },
+      },
+    });
+    expect(reported).toEqual([{
+      type: 'cache_miss', reason: 'input_changed', missedTokens: 120, reusableTokens: 130,
+      usage: { input_tokens: 6, output_tokens: 3, cache_read_input_tokens: 4, cache_creation_input_tokens: 0 },
+    }]);
+    const sparse = diagnostic(reported);
+    sparse.push({ type: 'response.output_text.delta', item_id: 'msg_2', content_index: 0, delta: 'Done.' });
+    sparse.push({ type: 'response.completed', response: { id: 'resp_2', status: 'completed', usage: { input_tokens: 10, output_tokens: 3 }, prompt_cache_diagnostics: { type: 'cache_hit' } } });
+    expect(reported[1]).toMatchObject({ type: 'cache_hit', reason: null, missedTokens: null, reusableTokens: null });
+    const silent = diagnostic(reported);
+    silent.push({ type: 'response.output_text.delta', item_id: 'msg_3', content_index: 0, delta: 'Done.' });
+    silent.push(done());
+    expect(reported).toHaveLength(2);
   });
 
   it('maps inline Claude system messages to developer messages', () => {

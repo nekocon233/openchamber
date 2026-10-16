@@ -22,6 +22,8 @@ import { z } from 'zod';
 
 const MAX_SENDS_PER_SESSION = 200;
 const MAX_TURNS_PER_SESSION = 200;
+// One checklist read holds at most this many tasks (claude/tasks.js MAX_ITEMS).
+const MAX_CHECKLIST_IDS = 2000;
 
 // OpenChamber's own session metadata (btw and review links, goals, the
 // assist, pins): what OpenCode keeps in its session metadata, which a native
@@ -31,6 +33,23 @@ const metadataSchema = z.record(z.string(), z.unknown());
 const checklistSourceSchema = z.object({
   configDir: z.string().min(1).max(4096).refine((value) => path.isAbsolute(value) && !value.includes('\0')),
   listId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
+});
+
+// Only captured config/list sources are projected; a TodoWrite-only list has
+// no file identity and keeps its own per-conversation list.
+const checklistIdentitySchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
+const checklistIdListSchema = z.array(z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/)).max(MAX_CHECKLIST_IDS);
+
+// Which tasks of one shared Claude task list the current plan still shows.
+// `baseline` is the raw ID set of the last complete read and is null until one
+// happened; `hidden` holds finished tasks an arrival of new ones retired;
+// `pendingCreated` holds IDs a TaskCreate result named that no complete read
+// has consumed yet. A malformed record grants no authority at all, so the
+// entry is dropped rather than read as an empty projection.
+const checklistProjectionSchema = z.object({
+  baseline: checklistIdListSchema.nullable(),
+  hidden: checklistIdListSchema,
+  pendingCreated: checklistIdListSchema,
 });
 
 const sessionEntrySchema = z.object({
@@ -87,15 +106,17 @@ const registryFileSchema = z.object({
   sends: z.record(z.string(), z.array(z.unknown())).catch({}),
   turns: z.record(z.string(), z.array(z.unknown())).catch({}),
   reverts: z.record(z.string(), z.unknown()).catch({}),
+  checklists: z.record(z.string(), z.unknown()).catch({}),
 });
 
-const emptyState = () => ({ sessions: new Map(), sends: new Map(), turns: new Map(), reverts: new Map() });
+const emptyState = () => ({ sessions: new Map(), sends: new Map(), turns: new Map(), reverts: new Map(), checklists: new Map() });
 
 const cloneState = (state) => ({
   sessions: new Map(state.sessions),
   sends: new Map(Array.from(state.sends, ([sessionId, records]) => [sessionId, [...records]])),
   turns: new Map(Array.from(state.turns, ([sessionId, records]) => [sessionId, [...records]])),
   reverts: new Map(state.reverts),
+  checklists: new Map(state.checklists),
 });
 
 const serialize = (state) => JSON.stringify({
@@ -104,6 +125,7 @@ const serialize = (state) => JSON.stringify({
   sends: Object.fromEntries(state.sends),
   turns: Object.fromEntries(state.turns),
   reverts: Object.fromEntries(state.reverts),
+  checklists: Object.fromEntries(state.checklists),
 }, null, 2);
 
 const validEntries = (values, schema) => values
@@ -158,6 +180,10 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
     for (const [sessionId, value] of Object.entries(parsed.reverts)) {
       const revert = pendingRevertSchema.safeParse(value);
       if (revert.success) next.reverts.set(sessionId, revert.data);
+    }
+    for (const [identity, value] of Object.entries(parsed.checklists)) {
+      const projection = checklistProjectionSchema.safeParse(value);
+      if (identity.length > 0 && projection.success) next.checklists.set(identity, projection.data);
     }
     return next;
   };
@@ -324,6 +350,28 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
       return mutate((next) => {
         if (parsed === null) next.reverts.delete(sessionId);
         else next.reverts.set(sessionId, parsed);
+      });
+    },
+
+    /**
+     * What one shared Claude task list shows, keyed by the list's identity
+     * rather than a session: every session bound to the list reads one
+     * projection, and deleting a session does not retire it.
+     * @param {string} identity
+     * @returns {Promise<{ baseline: string[] | null, hidden: string[], pendingCreated: string[] } | null>}
+     */
+    async checklistProjection(identity) {
+      await load();
+      return state.checklists.get(identity) ?? null;
+    },
+
+    /** @param {{ baseline: string[] | null, hidden: string[], pendingCreated: string[] } | null} projection */
+    setChecklistProjection(identity, projection) {
+      const key = checklistIdentitySchema.parse(identity);
+      const parsed = projection === null ? null : checklistProjectionSchema.parse(projection);
+      return mutate((next) => {
+        if (parsed === null) next.checklists.delete(key);
+        else next.checklists.set(key, parsed);
       });
     },
 

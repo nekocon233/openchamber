@@ -692,6 +692,37 @@ a file source. File authority wins over TodoWrite. Child TodoWrite has a child
 identity and cannot replace the parent's list. Token deltas do no checklist
 work. Idle keeps the checklist; session deletion releases its binding.
 
+#### The plan a list still shows
+
+A task list keeps every task its conversation ever created, and a model starts
+a new plan by creating new ones. So a task the last complete read did not hold
+means the finished tasks before it belong to a plan the user has left, and they
+stop being published. Unfinished tasks always stay, and so does a task created
+in that very batch, whatever status it already reports. A task that runs again
+is shown again, and one whose file is gone cannot stay retired. A status change
+on its own, a repeated read and a read that states nothing new retire nothing,
+so a task that just finished stays until the next addition.
+
+Only the published list narrows. The task files, the history and the
+conversation are untouched, and another client of the same list is unaffected.
+
+The projection lives in the registry under the list's identity, so every
+session bound to a list shows the same plan and a restart does not show retired
+tasks again. Only a complete read moves the baseline or retires a task; a
+partial read and a failed one change neither, though a task such a read shows
+running again is released. A projection that could not be saved keeps the list
+as it was and is retried by the next read. A list nothing references anymore
+never writes over the state its rebound list reads. A first read without a
+baseline only establishes one; a successful `TaskCreate` result, whose
+`task.id` comes from the tool's own structured output, names what arrived even
+then. A structured result that does not parse still refreshes, and the next
+complete read decides.
+
+One thing no file read can answer is the order of two events between reads. A
+task created and another finished while nothing was reading arrive as one batch,
+and the created one is what stays. Reads happen when the checklist is read, when
+a task tool succeeds and on the visible refresh; nothing polls the files.
+
 ### Claude background-task details
 
 `claude/background-tasks.js` owns one query generation, its task records and
@@ -784,6 +815,23 @@ Reads go through `GET /sessions/:id/todos`, which answers `unknown` for a
 thread this process holds no observation for and `unsupported` for another
 backend.
 
+A turn ends by unloading its thread and the next turn resumes the same one, so
+an observation outlives the turn that began it: a thread that reports steps
+again is `active` again in the same generation, and a list that returns
+publishes even when its steps did not change. A report names the turn that made
+it, and one whose turn already ended, whose thread is not loaded or whose
+thread this connection does not drive is dropped, so a late report cannot
+present an old plan as the current one.
+
+Every report is the whole list, and a step the previous report did not have
+means the finished steps before it belong to work the user has moved past, so
+they stop being published. Unfinished steps always stay, and so does a step the
+report adds whatever it already says. A step is named by its text and, for a
+text the list repeats, by which occurrence it is, so reordering the same steps
+retires nothing and a report that drops one states nothing about the others. A
+retired step that runs again is shown again. The statuses, order and text of
+every step still come from Codex; only what the list publishes is narrowed.
+
 `codex/store.js`'s `latestPlan` reads the newest nonempty `plan` item from the
 thread store, newest turn first, and `runtime.plan` wraps it. The thread store
 is the source rather than the live turn because Codex unloads a thread once its
@@ -811,6 +859,15 @@ cannot overwrite it. The PATCH route replaces it whole (at most 64 KiB), and
 `setSessionAssist` writes the assist into it. Writing metadata adopts a
 session the CLI created. A malformed snapshot, revert or metadata entry is
 dropped on load; its session keeps its entry.
+
+The `checklists` map holds what each Claude task list still shows: the raw ID
+baseline of its last complete read, the IDs of finished tasks a later plan
+retired, and the IDs a `TaskCreate` result named that no complete read has
+consumed yet. At most 2,000 IDs per field. It is keyed by the list's identity
+rather than a session, because several conversations can share one list and
+deleting a session must not retire the projection they read. A malformed
+projection is dropped whole: a partially read record would show retired tasks
+again, and no record at all is the honest answer.
 
 A session OpenChamber creates has no transcript until the CLI finishes a turn
 in it. Until then `confirmedAt` is unset and the stores list and read it from
@@ -1029,6 +1086,20 @@ proven zero hit; a missing final usage is unmeasured. Negative, fractional, or
 over-total token counts fail as malformed upstream data. Streaming
 `message_delta` and non-streaming results carry the same normalized usage.
 
+Two cache aids are opt-in and off by default. With
+`OPENCHAMBER_CHATGPT_CACHE_KEY`, the request carries a `prompt_cache_key`
+derived from the model and the system prompt, so every request that shares that
+reusable head sends one key and keeps landing on the same upstream cache shard
+as the conversation grows, compacts or forks. The bridge holds no conversation
+state and Claude sends no session identifier, so the prompt head is what it can
+key on. With `OPENCHAMBER_CHATGPT_CACHE_DIAGNOSTICS`, the request names the
+newest replayable response as `prompt_cache_options.comparison_response_id`, and
+the completed response's `prompt_cache_diagnostics` is logged as a type, reason
+and token counts. Prompt text and response IDs stay out of the log. Both
+parameters change the upstream request body, so a 4xx rejection drops them for
+that bridge's lifetime after one retry without them; this plan route accepts
+fewer parameters than the public API.
+
 PNG, JPEG, GIF and WebP base64 image blocks become Responses `input_image`
 content, both in user messages and function-tool results. Text/image ordering
 and tool call IDs are preserved. The grant rejects images for models without
@@ -1052,6 +1123,9 @@ items, assistant message IDs and phases, and their positions among the
 visible text and tool blocks. It does not duplicate text or tool results.
 The existing projector hides redacted blocks in live and historical UI records.
 The carrier is not a credential and its contents must never be logged.
+It also names the upstream response it came from, which the next request can
+offer as a cache-diagnostic baseline. Carriers written before that field existed
+still replay, and a build that predates it ignores it.
 
 On the next request, the bridge validates the carrier and restores reasoning,
 assistant phases and output order from the matching response segment. The

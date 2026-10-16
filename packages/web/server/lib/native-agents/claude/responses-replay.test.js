@@ -13,16 +13,16 @@ const output = () => [
   { type: 'function_call', id: 'fc-1', call_id: 'call-1', name: 'Read', namespace: 'claude', arguments: '{"file_path":"/tmp/fixture"}' },
   message('m-2', 'Summary.', 'final_answer'),
 ];
-const eventsFor = (outputs) => [
-  { type: 'response.created', response: { id: 'r', status: 'in_progress', usage: null } },
+const eventsFor = (outputs, responseId = 'r') => [
+  { type: 'response.created', response: { id: responseId, status: 'in_progress', usage: null } },
   ...outputs.flatMap((item, output_index) => [
     { type: 'response.output_item.added', output_index, item },
     { type: 'response.output_item.done', output_index, item },
   ]),
-  { type: 'response.completed', response: { id: 'r', status: 'completed', output: outputs, usage: { input_tokens: 100, output_tokens: 10 } } },
+  { type: 'response.completed', response: { id: responseId, status: 'completed', output: outputs, usage: { input_tokens: 100, output_tokens: 10 } } },
 ];
-const record = async (outputs = output()) => {
-  const chunks = async function* () { yield Buffer.from(eventsFor(outputs).map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')); };
+const record = async (outputs = output(), responseId = 'r') => {
+  const chunks = async function* () { yield Buffer.from(eventsFor(outputs, responseId).map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')); };
   const stream = createAnthropicStream({ model: MODEL, accountId: ACCOUNT, names: new Map([['Read', 'Read']]) });
   const frames = [];
   for await (const event of readResponsesEvents(chunks())) frames.push(...stream.push(event));
@@ -60,6 +60,26 @@ describe('GPT replay in Claude transcripts', () => {
     const state = JSON.parse(Buffer.from(content.at(-1).data.split(':')[1], 'base64').toString('utf8'));
     expect(JSON.stringify(state)).not.toContain('Checking.');
     expect(JSON.stringify(state)).not.toContain('/tmp/fixture');
+  });
+
+  it('names the upstream response in its carrier, and still replays carriers written without one', async () => {
+    const { content } = await record(undefined, 'resp-fixture');
+    const state = JSON.parse(Buffer.from(content.at(-1).data.split(':')[1], 'base64').toString('utf8'));
+    expect(state.responseId).toBe('resp-fixture');
+    const legacy = alterState(content, (value) => { delete value.responseId; });
+    expect(replay(legacy)).toEqual(replay(content));
+  });
+
+  it('offers the newest replayable response as the cache diagnostic baseline only when asked', async () => {
+    const first = await record(undefined, 'resp-first');
+    const second = await record([reason('second'), message('m-second', 'Second.', 'final_answer')], 'resp-second');
+    const bodyOf = (content, options) => toResponsesRequest({
+      model: MODEL, messages: [{ role: 'assistant', content }], tools: [{ name: 'Read', input_schema: { type: 'object' } }],
+    }, MODEL, 'max', false, ACCOUNT, options).body;
+    const combined = [...first.content, ...second.content];
+    expect(bodyOf(combined, { cacheDiagnostics: true }).prompt_cache_options).toEqual({ comparison_response_id: 'resp-second' });
+    expect(bodyOf(combined, {})).not.toHaveProperty('prompt_cache_options');
+    expect(bodyOf([{ type: 'text', text: 'Compacted history.' }], { cacheDiagnostics: true })).not.toHaveProperty('prompt_cache_options');
   });
 
   it('preserves phase without reasoning, and does not invent phase when upstream omitted it', async () => {

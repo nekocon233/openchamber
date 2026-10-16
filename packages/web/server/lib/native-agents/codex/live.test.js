@@ -649,6 +649,100 @@ describe('Codex live threads', () => {
     expect(payloads(events, 'session.todos.updated')).toEqual([]);
   });
 
+  it('keeps steps that finish and retires them when the plan adds one', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    steps(live, [{ step: 'Read notes', status: 'inProgress' }, { step: 'Write greeting', status: 'pending' }]);
+    steps(live, [{ step: 'Read notes', status: 'completed' }, { step: 'Write greeting', status: 'inProgress' }]);
+    expect(todoSnapshots(events).at(-1)).toMatchObject({
+      todos: [{ content: 'Read notes', status: 'completed' }, { content: 'Write greeting', status: 'in_progress' }],
+    });
+
+    steps(live, [{ step: 'Read notes', status: 'completed' }, { step: 'Write greeting', status: 'completed' }, { step: 'Ship notes', status: 'pending' }]);
+    expect(todoSnapshots(events).at(-1)).toMatchObject({
+      todos: [{ id: '3', content: 'Ship notes', status: 'pending' }],
+    });
+  });
+
+  it('treats a reordered or shorter report as the same steps', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    steps(live, [{ step: 'Read notes', status: 'completed' }, { step: 'Write greeting', status: 'completed' }]);
+    steps(live, [{ step: 'Write greeting', status: 'completed' }, { step: 'Read notes', status: 'completed' }]);
+    expect(todoSnapshots(events).at(-1)).toMatchObject({
+      todos: [{ content: 'Write greeting' }, { content: 'Read notes' }],
+    });
+
+    // Dropping a step states nothing about the others, so none is retired.
+    steps(live, [{ step: 'Read notes', status: 'completed' }]);
+    expect(todoSnapshots(events).at(-1)).toMatchObject({
+      state: 'active', todos: [{ id: '1', content: 'Read notes' }],
+    });
+  });
+
+  it('shows a retired step again when the plan runs it once more', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    steps(live, [{ step: 'Read notes', status: 'completed' }, { step: 'Write greeting', status: 'completed' }]);
+    steps(live, [
+      { step: 'Read notes', status: 'completed' },
+      { step: 'Write greeting', status: 'completed' },
+      { step: 'Ship notes', status: 'pending' },
+    ]);
+    expect(todoSnapshots(events).at(-1)).toMatchObject({ todos: [{ id: '3', content: 'Ship notes', status: 'pending' }] });
+
+    steps(live, [
+      { step: 'Read notes', status: 'inProgress' },
+      { step: 'Write greeting', status: 'completed' },
+      { step: 'Ship notes', status: 'pending' },
+    ]);
+    expect(todoSnapshots(events).at(-1)).toMatchObject({
+      todos: [
+        { id: '1', content: 'Read notes', status: 'in_progress' },
+        { id: '3', content: 'Ship notes', status: 'pending' },
+      ],
+    });
+  });
+
+  it('reports a new plan after the thread unloads and resumes', async () => {
+    const { live, events, requests } = createHarness({ replay: false });
+    await sendPrompt(live);
+    steps(live, [{ step: 'Read notes', status: 'completed' }, { step: 'Write greeting', status: 'completed' }]);
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', startedAt: 1, completedAt: 2 } });
+    live.handleNotification('thread/status/changed', { threadId: THREAD_ID, status: { type: 'notLoaded' } });
+    expect(todoSnapshots(events).at(-1)).toMatchObject({
+      state: 'inactive', todos: [{ content: 'Read notes' }, { content: 'Write greeting' }],
+    });
+
+    await sendPrompt(live);
+    expect(requests.filter((entry) => entry.method === 'thread/resume')).toHaveLength(2);
+    steps(live, [
+      { step: 'Read notes', status: 'completed' },
+      { step: 'Write greeting', status: 'completed' },
+      { step: 'Ship notes', status: 'pending' },
+    ]);
+    expect(todoSnapshots(events).at(-1)).toMatchObject({
+      state: 'active', todos: [{ id: '3', content: 'Ship notes', status: 'pending' }],
+    });
+  });
+
+  it('ignores a plan report whose turn has ended', async () => {
+    const { live, events } = createHarness({ replay: false });
+    await sendPrompt(live);
+    steps(live, [{ step: 'Read notes', status: 'inProgress' }]);
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', startedAt: 1, completedAt: 2 } });
+    const published = todoSnapshots(events).length;
+    live.handleNotification('turn/plan/updated', { threadId: THREAD_ID, turnId: TURN_ID, plan: [{ step: 'Leftover', status: 'pending' }] });
+    live.handleNotification('thread/status/changed', { threadId: THREAD_ID, status: { type: 'notLoaded' } });
+    live.handleNotification('turn/plan/updated', { threadId: THREAD_ID, turnId: TURN_ID, plan: [{ step: 'Leftover', status: 'pending' }] });
+    expect(todoSnapshots(events).slice(published)).toEqual([
+      expect.objectContaining({
+        state: 'inactive',
+        todos: [expect.objectContaining({ content: 'Read notes' })],
+      }),
+    ]);
+  });
+
   it('reports when a thread goes idle', async () => {
     const idle = [];
     const { live } = createHarness({ replay: false, onIdle: (sessionId, directory) => idle.push([sessionId, directory]) });

@@ -77,6 +77,7 @@ const childThreadStartedParams = z.object({
 const threadClosedParams = z.object({ threadId: z.string() });
 const planParams = z.object({
   threadId: z.string(),
+  turnId: z.string().optional(),
   plan: z.array(z.object({ step: z.string(), status: z.string() }).passthrough()),
 }).passthrough();
 const startedTurn = z.object({ turn: z.object({ id: z.string() }).passthrough() }).passthrough();
@@ -415,8 +416,13 @@ export const createCodexLiveThreads = ({
     'turn/plan/updated': (params) => {
       const parsed = planParams.safeParse(params);
       const live = parsed.success ? threads.get(parsed.data.threadId) : null;
+      // Steps belong to the turn that reported them, like its items: the
+      // app-server unloads a thread between turns, and a report that arrives
+      // after its turn ended must not present an old plan as the current one.
+      if (!live?.loaded || !live.turn) return;
+      if (parsed.data.turnId !== undefined && live.turn.id !== parsed.data.turnId) return;
       // A child reports its own steps under its own session, like its items.
-      if (live) live.todos.observe(parsed.data.plan);
+      live.todos.observe(parsed.data.plan);
     },
     'turn/completed': (params) => {
       const parsed = turnParams.safeParse(params);

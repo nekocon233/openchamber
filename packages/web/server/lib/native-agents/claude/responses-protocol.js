@@ -40,8 +40,15 @@ const imageInput = (block, supportsImages) => {
   return { type: 'input_image', image_url: `data:${block.source.media_type};base64,${block.source.data}`, detail: 'auto' };
 };
 
+// One key for every request that shares the same reusable head: the model and
+// the system prompt. It stays the same as a conversation grows, compacts or
+// forks, which keeps that conversation's requests eligible for one upstream
+// cache shard. The bridge holds no conversation state and the CLI sends no
+// session identifier, so the prompt head is all it can key on.
+const promptCacheKeyFor = (model, instructions) => createHash('sha256').update(`${model}\n${instructions ?? ''}`).digest('hex').slice(0, 32);
+
 /** Translate the caller's full history; the bridge neither executes tools nor stores conversations. */
-export const toResponsesRequest = (raw, selectedModel, effort = null, supportsImages = false, accountId = null) => {
+export const toResponsesRequest = (raw, selectedModel, effort = null, supportsImages = false, accountId = null, { promptCacheKey = false, cacheDiagnostics = false } = {}) => {
   const parsed = messagesSchema.safeParse(raw);
   if (!parsed.success) throw new NativeAgentError(`CHATGPT_UNSUPPORTED_REQUEST: ${parsed.error.issues.map((issue) => issue.path.join('.')).join(', ')}`, { status: 400, code: 'CHATGPT_UNSUPPORTED_REQUEST' });
   const request = parsed.data;
@@ -74,6 +81,9 @@ export const toResponsesRequest = (raw, selectedModel, effort = null, supportsIm
       // Foreign provider thinking/signatures are not portable model history.
     }
   };
+  // The newest response this history can name is the baseline for cache
+  // diagnostics; an unreadable carrier simply means no baseline.
+  let baselineResponseId = null;
   for (const message of request.messages) {
     if (message.role !== 'assistant') { appendBlocks(message.role, message.content); continue; }
     const carriers = message.content.filter(isResponsesReplayBlock);
@@ -82,6 +92,7 @@ export const toResponsesRequest = (raw, selectedModel, effort = null, supportsIm
     for (const block of carriers) {
       const replay = readResponsesReplay({ block, blocks: blocks.slice(cursor), accountId, model: selectedModel });
       if (replay === null) continue;
+      if (replay.responseId !== null) baselineResponseId = replay.responseId;
       appendBlocks('assistant', blocks.slice(cursor, cursor + replay.offset));
       const segment = replay.blocks;
       for (const item of replay.entries) {
@@ -112,6 +123,8 @@ export const toResponsesRequest = (raw, selectedModel, effort = null, supportsIm
   // The grant captures the user's selection. Claude's effort can be clamped
   // for an unfamiliar model, so its output_config.effort is not authoritative.
   if (effort !== null) body.reasoning = { effort };
+  if (promptCacheKey) body.prompt_cache_key = promptCacheKeyFor(selectedModel, body.instructions);
+  if (cacheDiagnostics && baselineResponseId !== null) body.prompt_cache_options = { comparison_response_id: baselineResponseId };
   return { body, names, stream: request.stream };
 };
 
@@ -137,10 +150,16 @@ const anthropicUsage = (usage) => {
     cache_creation_input_tokens: written,
   };
 };
+// Diagnostics are advisory: an unfamiliar type or count is reported, never fatal.
+const cacheDiagnosticsSchema = z.object({
+  type: z.string(), reason: z.string().nullish(),
+  cache_missed_tokens: z.number().nullish(), comparison_reusable_tokens: z.number().nullish(),
+});
 const responseSchema = z.object({
   id: z.string(), status: z.string(), usage: usageSchema.nullish(),
   output: z.array(outputItem).optional(),
   error: z.object({ code: z.string().optional(), message: z.string().optional() }).nullish(),
+  prompt_cache_diagnostics: cacheDiagnosticsSchema.nullish(),
 });
 const eventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('response.created'), response: responseSchema }),
@@ -179,7 +198,7 @@ export async function* readResponsesEvents(body) {
 }
 
 /** Emit Claude-compatible blocks once each; an unfinished stream never emits success. */
-export const createAnthropicStream = ({ model, names, accountId = null }) => {
+export const createAnthropicStream = ({ model, names, accountId = null, onDiagnostic = null }) => {
   const id = `msg_${randomUUID().replaceAll('-', '')}`;
   const blocks = [];
   const items = new Map();
@@ -286,13 +305,21 @@ export const createAnthropicStream = ({ model, names, accountId = null }) => {
           if (!block || block.block.type !== 'tool_use') throw new Error('CHATGPT_REPLAY_CONTENT_MISSING');
           return { type: 'function_call', blockIndex: block.index };
         });
-        const replayBlock = createResponsesReplayBlock({ accountId, model, blocks, entries });
+        const replayBlock = createResponsesReplayBlock({ accountId, model, blocks, entries, responseId: event.response.id });
         if (replayBlock !== null) {
           const index = blocks.length;
           blocks.push(replayBlock);
           output.push({ type: 'content_block_start', index, content_block: replayBlock }, { type: 'content_block_stop', index });
         }
         if (event.response.usage) usage = anthropicUsage(event.response.usage);
+        if (onDiagnostic !== null && event.response.prompt_cache_diagnostics != null) {
+          const diagnostics = event.response.prompt_cache_diagnostics;
+          onDiagnostic({
+            type: diagnostics.type, reason: diagnostics.reason ?? null,
+            missedTokens: diagnostics.cache_missed_tokens ?? null,
+            reusableTokens: diagnostics.comparison_reusable_tokens ?? null, usage,
+          });
+        }
         output.push({ type: 'message_delta', delta: { stop_reason: hasTools ? 'tool_use' : 'end_turn', stop_sequence: null }, usage });
         output.push({ type: 'message_stop' });
         completed = true;

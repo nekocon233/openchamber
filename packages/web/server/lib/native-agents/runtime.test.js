@@ -850,6 +850,40 @@ describe('native task runtime without process launches', () => {
     expect(await restarted.sessionTasks(session.id, DIRECTORY)).toMatchObject({ state: 'inactive', generation: null });
     await restarted.shutdown();
   });
+
+  it('keeps the retired tasks of a list hidden after a restart', async () => {
+    const configDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oc-runtime-plan-')));
+    directories.push(configDir);
+    const listDirectory = path.join(configDir, 'tasks', 'shared');
+    fs.mkdirSync(listDirectory, { recursive: true });
+    const task = (id, status) => JSON.stringify({ id, subject: `Task ${id}`, status });
+    fs.writeFileSync(path.join(listDirectory, '1.json'), task('1', 'completed'));
+    fs.writeFileSync(path.join(listDirectory, '2.json'), task('2', 'pending'));
+
+    const runtime = createRuntime({ snapshotGit: async () => '', childEnv: () => ({ CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_TASK_LIST_ID: 'shared' }) });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    await runtime.prompt(session.id, promptRequest('ncl_u_a22f0a7a-a88c-4093-a5e3-6653ff44f6d3'));
+    expect((await runtime.checklist(session.id, DIRECTORY)).items.map((entry) => entry.id)).toEqual(['1', '2']);
+
+    // The plan adds a task, so the one finished before it leaves the list.
+    fs.writeFileSync(path.join(listDirectory, '3.json'), task('3', 'pending'));
+    expect((await runtime.checklist(session.id, DIRECTORY)).items.map((entry) => entry.id)).toEqual(['2', '3']);
+    runtime.turns.finish.resolve();
+    await runtime.shutdown();
+
+    const restarted = createNativeAgentsRuntime({
+      dataDir: runtime.dataDir,
+      resolveExecutable: async () => null,
+      buildChildEnv: () => ({ CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_TASK_LIST_ID: 'shared' }),
+      clientVersion: 'test', publishNativeEvent: () => {},
+      loadSdk: async () => { throw new Error('Checklist reads must not start or read a query'); },
+      snapshots: createSnapshotStore({ dataDir: runtime.dataDir, git: async () => '' }),
+    });
+    expect((await restarted.checklist(session.id, DIRECTORY)).items.map((entry) => entry.id)).toEqual(['2', '3']);
+    fs.writeFileSync(path.join(listDirectory, '4.json'), task('4', 'pending'));
+    expect((await restarted.checklist(session.id, DIRECTORY)).items.map((entry) => entry.id)).toEqual(['2', '3', '4']);
+    await restarted.shutdown();
+  });
 });
 
 describe('native interaction cleanup without process launches', () => {

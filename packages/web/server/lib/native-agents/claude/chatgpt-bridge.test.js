@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createChatgptBridge } from './chatgpt-bridge.js';
 
 const bridges = [];
@@ -8,8 +8,8 @@ const events = [
   { type: 'response.output_text.delta', item_id: 'm', content_index: 0, delta: 'Hello' },
   { type: 'response.completed', response: { id: 'r', status: 'completed', usage: { input_tokens: 2, output_tokens: 1 } } },
 ];
-const create = (fetchImpl) => {
-  const bridge = createChatgptBridge({ auth: { accessToken: async (id) => `test-token-${id}` }, fetchImpl, retryDelay: () => 1 });
+const create = (fetchImpl, options = {}) => {
+  const bridge = createChatgptBridge({ auth: { accessToken: async (id) => `test-token-${id}` }, fetchImpl, retryDelay: () => 1, ...options });
   bridges.push(bridge); return bridge;
 };
 const send = (grant, patch = {}, headers = {}) => fetch(`${grant.baseURL}/v1/messages`, {
@@ -196,6 +196,58 @@ describe('ChatGPT loopback bridge', () => {
     expect(await result.text()).toContain('CHATGPT_UPSTREAM_REJECTED');
     expect(result.headers.get('x-request-id')).toBe('req-fixture');
     expect(calls).toBe(3);
+  });
+
+  it('sends cache experiments only when enabled, with a stable key and the newest response as baseline', async () => {
+    const calls = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const diagnosed = replayEvents('Hello').map((event) => event.type === 'response.completed'
+        ? { ...event, response: { ...event.response, prompt_cache_diagnostics: { type: 'cache_miss', reason: 'input_changed', cache_missed_tokens: 4, comparison_reusable_tokens: 9 } } }
+        : event);
+      const bridge = create(async (_url, options) => { calls.push(JSON.parse(options.body)); return response(diagnosed); }, { promptCacheKey: true, cacheDiagnostics: true });
+      const grant = await bridge.acquire('account', 'gpt-fixture');
+      const reply = await (await send(grant)).json();
+      expect(calls[0].prompt_cache_key).toMatch(/^[a-f0-9]{32}$/);
+      expect(calls[0]).not.toHaveProperty('prompt_cache_options');
+      await send(grant, { messages: [{ role: 'assistant', content: reply.content }, { role: 'user', content: 'Continue.' }] });
+      expect(calls[1].prompt_cache_options).toEqual({ comparison_response_id: 'r-Hello' });
+      expect(calls[1].prompt_cache_key).toBe(calls[0].prompt_cache_key);
+      const logged = warn.mock.calls.flat().join(' ');
+      expect(logged).toContain('cache diagnostic');
+      expect(logged).toContain('"reason":"input_changed"');
+      expect(logged).not.toContain('Hello');
+
+      const plain = [];
+      const disabled = create(async (_url, options) => { plain.push(JSON.parse(options.body)); return response(events); });
+      await send(await disabled.acquire('account', 'gpt-fixture'));
+      expect(plain[0]).not.toHaveProperty('prompt_cache_key');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('drops the cache experiment parameters once upstream rejects them', async () => {
+    const calls = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = create(async (_url, options) => {
+        const body = JSON.parse(options.body);
+        calls.push(body);
+        return body.prompt_cache_key === undefined
+          ? response(events)
+          : new Response(JSON.stringify({ error: { code: 'unsupported_parameter' } }), { status: 400 });
+      }, { promptCacheKey: true, cacheDiagnostics: true });
+      const grant = await bridge.acquire('account', 'gpt-fixture');
+      expect((await send(grant)).status).toBe(200);
+      expect(calls[0]).toHaveProperty('prompt_cache_key');
+      expect(calls[1]).not.toHaveProperty('prompt_cache_key');
+      expect((await send(grant)).status).toBe(200);
+      expect(calls).toHaveLength(3);
+      expect(calls[2]).not.toHaveProperty('prompt_cache_key');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('does not retry rejections retrying cannot fix', async () => {

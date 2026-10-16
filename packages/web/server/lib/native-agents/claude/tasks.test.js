@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { claudeChecklistSource, claudeConfigDir, createClaudeChecklists, readClaudeTaskList, todosFromTodoWrite } from './tasks.js';
 
 const UUID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
@@ -26,6 +26,17 @@ const bind = (owner, input, sessionId = 'one') => {
   const source = claudeChecklistSource({ env: { CLAUDE_CONFIG_DIR: input.configDir, CLAUDE_CODE_TASK_LIST_ID: input.listId }, sessionUuid: UUID, directory: '/work' });
   owner.bind(sessionId, '/work', source);
   return source;
+};
+const item = (id, status = 'pending') => ({ id, subject: `Task ${id}`, status, blocks: [], blockedBy: [] });
+const readOf = (items, extra = {}) => async () => ({ exists: true, complete: true, unreadable: 0, items, ...extra });
+const idsOf = (snapshot) => snapshot.items.map((entry) => `${entry.id}:${entry.status}`);
+const projections = (initial = {}) => {
+  const stored = new Map(Object.entries(initial));
+  return {
+    stored,
+    readProjection: async (identity) => stored.get(identity) ?? null,
+    writeProjection: async (identity, projection) => { stored.set(identity, projection); },
+  };
 };
 
 describe('Claude checklist reader', () => {
@@ -166,5 +177,187 @@ describe('Claude checklist publication', () => {
     await first;
     expect(await changed).toMatchObject({ items: [{ id: 'new' }] });
     expect(reads).toBe(2);
+  });
+});
+
+describe('Claude checklist current plan', () => {
+  // The list is what the CLI wrote; the projection only decides what a plan
+  // the user has left still shows.
+  const makeList = (items) => {
+    let current = items;
+    const { owner } = makeOwner({ ...projections(), readFiles: async () => ({
+      exists: true, complete: true, unreadable: 0, items: current,
+    }) });
+    return { owner, set: (next) => { current = next; } };
+  };
+
+  it('retires finished tasks when the list gains one, and keeps the unfinished ones', async () => {
+    const { owner, set } = makeList([item('1', 'completed'), item('2', 'pending')]);
+    bind(owner, setup());
+    expect(idsOf(await owner.read('one'))).toEqual(['1:completed', '2:pending']);
+
+    set([item('1', 'completed'), item('2', 'pending'), item('3', 'pending')]);
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+  });
+
+  it('keeps a task that finished, and one that arrived already finished with it', async () => {
+    const { owner, set } = makeList([item('1', 'pending')]);
+    bind(owner, setup());
+    await owner.read('one');
+
+    set([item('1', 'completed')]);
+    expect(idsOf(await owner.read('one'))).toEqual(['1:completed']);
+
+    // Task 2 is what this batch added, so the task that finished before it
+    // retires and the new one stays whatever it already reports.
+    set([item('1', 'completed'), item('2', 'completed')]);
+    expect(idsOf(await owner.read('one'))).toEqual(['2:completed']);
+    expect(idsOf(await owner.read('one'))).toEqual(['2:completed']);
+  });
+
+  it('retires again only when the plan after that gains another task', async () => {
+    const { owner, set } = makeList([item('1', 'completed'), item('2', 'pending')]);
+    bind(owner, setup());
+    await owner.read('one');
+
+    set([item('1', 'completed'), item('2', 'completed'), item('3', 'pending')]);
+    expect(idsOf(await owner.read('one'))).toEqual(['3:pending']);
+
+    set([item('1', 'completed'), item('2', 'completed'), item('3', 'completed'), item('4', 'pending')]);
+    expect(idsOf(await owner.read('one'))).toEqual(['4:pending']);
+  });
+
+  it('shows a retired task again when it runs once more', async () => {
+    const { owner, set } = makeList([item('1', 'completed'), item('2', 'pending')]);
+    bind(owner, setup());
+    await owner.read('one');
+    set([item('1', 'completed'), item('2', 'pending'), item('3', 'pending')]);
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+
+    set([item('1', 'in_progress'), item('2', 'pending'), item('3', 'pending')]);
+    expect(idsOf(await owner.read('one'))).toEqual(['1:in_progress', '2:pending', '3:pending']);
+  });
+
+  it('reads a list with no baseline as one, retiring nothing it did not see arrive', async () => {
+    const { owner } = makeList([item('1', 'completed'), item('2', 'completed')]);
+    bind(owner, setup());
+    expect(idsOf(await owner.read('one'))).toEqual(['1:completed', '2:completed']);
+  });
+
+  it('retires on the first read when the tool named the task it created', async () => {
+    const { owner } = makeList([item('1', 'completed'), item('2', 'completed'), item('3', 'pending')]);
+    bind(owner, setup());
+    await owner.created('one', '3');
+    expect(idsOf(await owner.read('one'))).toEqual(['3:pending']);
+  });
+
+  it('keeps a partial read from retiring or moving the baseline', async () => {
+    let complete = true;
+    let current = [item('1', 'completed')];
+    const { owner } = makeOwner({
+      ...projections(),
+      readFiles: async () => ({ exists: true, complete, unreadable: complete ? 0 : 1, items: current }),
+    });
+    bind(owner, setup());
+    await owner.read('one');
+
+    // A partial read shows a task the baseline does not hold yet, and retires
+    // nothing: it cannot say what else the list contains.
+    complete = false;
+    current = [item('1', 'completed'), item('2', 'pending')];
+    expect(idsOf(await owner.read('one'))).toEqual(['1:completed', '2:pending']);
+
+    // The complete read that follows reads the same list as a new one, so the
+    // baseline stayed where the partial read left it.
+    complete = true;
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending']);
+
+    current = [item('1', 'completed'), item('2', 'pending'), item('3', 'pending')];
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+  });
+
+  it('reopens a retired task a partial read shows running again', async () => {
+    let complete = true;
+    let current = [item('1', 'completed'), item('2', 'pending')];
+    const { owner } = makeOwner({
+      ...projections(),
+      readFiles: async () => ({ exists: true, complete, unreadable: 0, items: current }),
+    });
+    bind(owner, setup());
+    await owner.read('one');
+    current = [item('1', 'completed'), item('2', 'pending'), item('3', 'pending')];
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+
+    complete = false;
+    current = [item('1', 'in_progress'), item('2', 'pending')];
+    expect(idsOf(await owner.read('one'))).toEqual(['1:in_progress', '2:pending']);
+  });
+
+  it('keeps the previous list when the projection cannot be saved', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stored = new Map();
+    let failing = false;
+    let current = [item('1', 'completed'), item('2', 'pending')];
+    const { owner } = makeOwner({
+      readFiles: async () => ({ exists: true, complete: true, unreadable: 0, items: current }),
+      readProjection: async (identity) => stored.get(identity) ?? null,
+      writeProjection: async (identity, projection) => {
+        if (failing) throw new Error('disk full');
+        stored.set(identity, projection);
+      },
+    });
+    bind(owner, setup());
+    await owner.read('one');
+
+    failing = true;
+    current = [item('1', 'completed'), item('2', 'pending'), item('3', 'pending')];
+    expect(idsOf(await owner.read('one'))).toEqual(['1:completed', '2:pending', '3:pending']);
+
+    failing = false;
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+  });
+
+  it('keeps the projection when the task directory is missing', async () => {
+    let current = [item('1', 'completed'), item('2', 'pending')];
+    let exists = true;
+    const { owner } = makeOwner({
+      ...projections(),
+      readFiles: async () => (exists
+        ? { exists: true, complete: true, unreadable: 0, items: current }
+        : { exists: false, complete: true, unreadable: 0, items: [] }),
+    });
+    bind(owner, setup());
+    await owner.read('one');
+    current = [item('1', 'completed'), item('2', 'pending'), item('3', 'pending')];
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+
+    exists = false;
+    expect(idsOf(await owner.read('one'))).toEqual([]);
+    exists = true;
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+  });
+
+  it('shares one projection between the sessions bound to a list, and keeps it across a rebind', async () => {
+    const input = setup();
+    const { owner, set } = makeList([item('1', 'completed'), item('2', 'pending')]);
+    bind(owner, input, 'one');
+    bind(owner, input, 'two');
+    await owner.read('one');
+    set([item('1', 'completed'), item('2', 'pending'), item('3', 'pending')]);
+    await owner.read('two');
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+
+    owner.forget('one');
+    owner.forget('two');
+    bind(owner, input, 'one');
+    expect(idsOf(await owner.read('one'))).toEqual(['2:pending', '3:pending']);
+  });
+
+  it('does not project a TodoWrite-only list', async () => {
+    const { owner } = makeOwner({ readFiles: async () => ({ exists: false, complete: true, unreadable: 0, items: [] }) });
+    owner.bind('child', '/work', { identity: 'todo:child', todoOnly: true });
+    owner.todoWrite('child', todosFromTodoWrite({ todos: [{ content: 'Legacy', status: 'completed' }] }));
+    expect(idsOf(await owner.read('child'))).toEqual(['todo-1:completed']);
+    await expect(owner.created('child', 'todo-2')).resolves.toMatchObject({ state: 'unavailable' });
   });
 });

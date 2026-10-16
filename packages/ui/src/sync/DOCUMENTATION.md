@@ -701,6 +701,9 @@ what the stores hold for native sessions and never blocks OpenCode's:
   items as unconfirmed. Only a complete read replaces the entire list.
   A new list identity starts a separate collection. Sessions with a confirmed
   shared list identity receive each other's updates and share overlapping reads.
+  The server sends the plan the list still shows, so a list that gained a task
+  arrives without the finished tasks before it, and the UI never filters
+  completed items itself.
 - Native plan. `session-native-plan.ts` owns the plan a Codex thread wrote,
   read whole from `nativeAgents.plan`. It has no event channel and no polling
   timer: a thread writes one plan per planning turn, so the owner reads on
@@ -712,12 +715,14 @@ what the stores hold for native sessions and never blocks OpenCode's:
 - Native steps. `session-native-todos.ts` owns the `update_plan` steps a Codex
   turn reported. Codex stores none of them, so the owner holds an observation
   and says `unknown` rather than an empty list when it has none; `inactive`
-  keeps the last steps and ends the observation. Events carry a revision, and
-  an older one never overwrites a newer one — except across a generation
-  change, where the numbering starts over and the new observer replaces the
-  old snapshot outright. An event for a session nobody opened allocates
-  nothing: the observation lives on the server, and opening the panel reads it
-  there.
+  keeps the last steps and ends the observation, and a later turn that reports
+  steps again returns the same observation to `active`. Events carry a
+  revision, and an older one never overwrites a newer one — except across a
+  generation change, where the numbering starts over and the new observer
+  replaces the old snapshot outright. An event for a session nobody opened
+  allocates nothing: the observation lives on the server, and opening the panel
+  reads it there. As for the checklist, the server retires the finished steps
+  of a plan the user has left, and the UI renders the list it receives.
 - Forms. `lib/native-agents/forms.ts` projects native questions into the shared
   form contract. Bootstrap and reconnect preserve held native forms when their
   source fails; replies and cancellation still use the native question API.

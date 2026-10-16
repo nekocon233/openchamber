@@ -32,10 +32,18 @@ const descriptor = (account, model, includeAccount) => {
   };
 };
 
+// Cache experiments stay opt-in: they change the upstream request body, and this
+// route may reject parameters the public API accepts.
+const enabled = (name) => process.env[name] === '1';
+
 /** The account model catalog and the per-query grants share one lifetime with native sessions. */
 export const createChatgptConnections = ({ dataDir, fetchImpl = fetch }) => {
   const auth = createChatgptAuth({ dataDir, fetchImpl });
-  const bridge = createChatgptBridge({ auth, fetchImpl });
+  const bridge = createChatgptBridge({
+    auth, fetchImpl,
+    promptCacheKey: enabled('OPENCHAMBER_CHATGPT_CACHE_KEY'),
+    cacheDiagnostics: enabled('OPENCHAMBER_CHATGPT_CACHE_DIAGNOSTICS'),
+  });
   const catalogFailures = new Set();
   return {
     auth,

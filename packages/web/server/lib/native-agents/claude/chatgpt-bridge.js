@@ -25,14 +25,26 @@ const wait = (ms, signal) => new Promise((resolve, reject) => {
   signal.addEventListener('abort', onAbort, { once: true });
 });
 
+/** Cache diagnostics carry a reason and counts; identifiers and prompt text stay out. */
+const logCacheDiagnostic = ({ type, reason, missedTokens, reusableTokens, usage }) => {
+  const fields = {
+    type, reason, missedTokens, reusableTokens,
+    inputTokens: usage.input_tokens, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens,
+  };
+  console.warn(`[chatgpt-bridge] cache diagnostic: ${JSON.stringify(fields)}`);
+};
+
 /** Loopback-only, authenticated Messages endpoint. OAuth tokens never leave this module's upstream call. */
-export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https://api.openai.com/v1', retryDelay = (attempt, retryAfter) => (Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 15) * 1000 : attempt * 1000) }) => {
+export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https://api.openai.com/v1', retryDelay = (attempt, retryAfter) => (Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 15) * 1000 : attempt * 1000), promptCacheKey = false, cacheDiagnostics = false }) => {
   const grants = new Map();
   const requests = new Map();
   let starting;
   let server;
   let origin;
   let closed = false;
+  // Set when upstream refuses the cache experiment parameters. This route
+  // accepts fewer parameters than the public API, so one rejection is enough.
+  let cacheParamsRejected = false;
   const handle = async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('x-should-retry', 'false');
@@ -54,7 +66,10 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
       let raw;
       try { raw = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw fail('CHATGPT_INVALID_JSON', 400); }
-      const translated = toResponsesRequest(raw, grant.model, grant.effort, grant.supportsImages, grant.accountId);
+      let translated = toResponsesRequest(raw, grant.model, grant.effort, grant.supportsImages, grant.accountId, {
+        promptCacheKey: promptCacheKey && !cacheParamsRejected,
+        cacheDiagnostics: cacheDiagnostics && !cacheParamsRejected,
+      });
       controller = new AbortController();
       requests.set(controller, { accountId: grant.accountId, token });
       const disconnected = () => { if (!res.writableEnded) controller.abort(); };
@@ -82,6 +97,14 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
           const requestId = upstream.headers.get('x-request-id');
           const payload = errorSchema.safeParse(await upstream.json().catch(() => null));
           const code = payload.data?.error?.code;
+          // Retried once without the experiments, so a parameter this route does
+          // not accept cannot fail a whole turn; later requests skip them too.
+          if ((promptCacheKey || cacheDiagnostics) && !cacheParamsRejected && upstream.status >= 400 && upstream.status < 500) {
+            cacheParamsRejected = true;
+            console.warn(`[chatgpt-bridge] upstream rejected cache experiment parameters: ${upstream.status}${code ? ` ${code}` : ''}; retrying without them`);
+            translated = toResponsesRequest(raw, grant.model, grant.effort, grant.supportsImages, grant.accountId);
+            continue;
+          }
           if (!RETRYABLE_STATUS.has(upstream.status) || attempt >= MAX_UPSTREAM_ATTEMPTS) {
             if (requestId) res.setHeader('x-request-id', requestId);
             // Only diagnostic identifiers cross the bridge; upstream messages can echo credentials.
@@ -94,7 +117,10 @@ export const createChatgptBridge = ({ auth, fetchImpl = fetch, apiBase = 'https:
         const requestId = upstream.headers.get('x-request-id');
         if (requestId) res.setHeader('x-request-id', requestId);
         if (!upstream.body) throw fail('CHATGPT_EMPTY_STREAM');
-        const stream = createAnthropicStream({ model: grant.model, names: translated.names, accountId: grant.accountId });
+        const stream = createAnthropicStream({
+          model: grant.model, names: translated.names, accountId: grant.accountId,
+          onDiagnostic: cacheDiagnostics && !cacheParamsRejected ? logCacheDiagnostic : null,
+        });
         if (translated.stream) {
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Accel-Buffering': 'no' });
         }

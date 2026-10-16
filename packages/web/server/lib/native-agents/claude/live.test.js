@@ -812,6 +812,55 @@ describe('Claude live task list', () => {
     expect(payloads(events, 'session.todos.updated')).toEqual([]);
     await live.shutdown();
   });
+
+  const runTaskFrames = async (frames, items) => {
+    const events = [];
+    const sdk = {
+      query: ({ prompt }) => {
+        const input = prompt[Symbol.asyncIterator]();
+        async function* run() {
+          await input.next();
+          for (const frame of frames) yield frame;
+          await input.next();
+        }
+        return Object.assign(run(), { interrupt: async () => {}, setModel: async () => {}, applyFlagSettings: async () => {}, setPermissionMode: async () => {} });
+      },
+    };
+    const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
+    const live = createClaudeLiveSessions({
+      loadSdk: async () => sdk,
+      resolveExecutable: async () => '/usr/local/bin/claude',
+      buildEnv: () => ({ CLAUDE_CONFIG_DIR: '/captured/config', CLAUDE_CODE_TASK_LIST_ID: 'shared' }),
+      hasTranscript: async () => true,
+      publisher,
+      questions: createQuestionRegistry({ publish: () => {} }),
+      checklists: createClaudeChecklists({ publisher, readFiles: async () => ({ exists: true, complete: true, unreadable: 0, items }) }),
+    });
+    await sendPrompt(live);
+    await waitFor(() => payloads(events, 'session.checklist.updated').length > 0);
+    const published = payloads(events, 'session.checklist.updated').at(-1).properties.snapshot;
+    await live.shutdown();
+    return published;
+  };
+  const task = (id, status) => ({ id, subject: `Task ${id}`, status, blocks: [], blockedBy: [] });
+
+  it('retires the tasks before the one a successful creation named', async () => {
+    const published = await runTaskFrames([
+      assistant('msg_1', [{ type: 'tool_use', id: 'toolu_create', name: 'TaskCreate', input: { subject: 'beta' } }]),
+      { ...toolResult('toolu_create'), tool_use_result: { task: { id: '7', subject: 'beta' } } },
+      { type: 'result', subtype: 'success', is_error: false, queued_turn_count: 0 },
+    ], [task('1', 'completed'), task('7', 'pending')]);
+    expect(published.items).toEqual([task('7', 'pending')]);
+  });
+
+  it('only refreshes after a result that created nothing', async () => {
+    const published = await runTaskFrames([
+      assistant('msg_1', [{ type: 'tool_use', id: 'toolu_update', name: 'TaskUpdate', input: { taskId: '1', status: 'completed' } }]),
+      { ...toolResult('toolu_update'), tool_use_result: { success: true, taskId: '1', updatedFields: ['status'] } },
+      { type: 'result', subtype: 'success', is_error: false, queued_turn_count: 0 },
+    ], [task('1', 'completed'), task('2', 'completed')]);
+    expect(published.items).toEqual([task('1', 'completed'), task('2', 'completed')]);
+  });
 });
 
 describe('Claude child checklist routing', () => {

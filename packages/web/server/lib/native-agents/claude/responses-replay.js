@@ -25,7 +25,10 @@ const entry = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('function_call'), blockIndex: index }),
 ]);
-const envelope = z.object({ version: z.literal(1), scope, digests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1), entries: z.array(entry) });
+// `responseId` names the upstream response this state came from, so the next
+// request can offer it to the provider's cache diagnostics. Carriers written
+// before it existed simply lack it, and builds that predate it ignore it.
+const envelope = z.object({ version: z.literal(1), scope, digests: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1), entries: z.array(entry), responseId: z.string().min(1).optional() });
 const header = z.object({ version: z.number() });
 const opaqueBlock = z.object({ type: z.literal('redacted_thinking'), data: z.string() });
 const visibleBlock = z.discriminatedUnion('type', [
@@ -63,10 +66,12 @@ export const isResponsesReplayBlock = (block) => {
 };
 
 /** Only metadata and opaque reasoning are stored; visible content stays with the CLI. */
-export const createResponsesReplayBlock = ({ accountId, model, blocks, entries }) => {
+export const createResponsesReplayBlock = ({ accountId, model, blocks, entries, responseId = null }) => {
   if (!entries.some((item) => item.type === 'reasoning' || (item.type === 'message' && item.phase != null))) return null;
   const visible = z.array(visibleBlock).parse(blocks);
-  const state = envelope.parse({ version: 1, scope: { accountId, model }, digests: digests(visible), entries });
+  const draft = { version: 1, scope: { accountId, model }, digests: digests(visible), entries };
+  if (responseId !== null) draft.responseId = responseId;
+  const state = envelope.parse(draft);
   checkLayout(state.entries, visible);
   const block = { type: 'redacted_thinking', data: PREFIX + Buffer.from(JSON.stringify(state)).toString('base64') };
   const frame = { type: 'content_block_start', index: visible.length, content_block: block };
@@ -114,5 +119,5 @@ export const readResponsesReplay = ({ block, blocks, accountId, model }) => {
   const segment = [];
   for (const [position, i] of order.entries()) segment[i] = visible.data[offset + position];
   checkLayout(state.entries, segment);
-  return { entries: state.entries, blocks: segment, offset };
+  return { entries: state.entries, blocks: segment, offset, responseId: state.responseId ?? null };
 };

@@ -133,18 +133,136 @@ const checklistFromHistory = (records) => {
   return items;
 };
 
-/** One publication owner for GETs, tool mutations, and shared-list consumers. */
-export const createClaudeChecklists = ({ publisher, readFiles = readClaudeTaskList, now = Date.now }) => {
+const sameIds = (left, right) => {
+  if (left === null || right === null) return left === right;
+  return left.size === right.size && [...left].every((id) => right.has(id));
+};
+
+const sameProjection = (left, right) => sameIds(left.baseline, right.baseline) && sameIds(left.hidden, right.hidden);
+
+/** The tasks one read still shows, minus the finished ones a later plan retired. */
+const filterHidden = (projection, result) => {
+  if (projection === null || projection.hidden.size === 0) return result;
+  const items = result.items.filter((item) => !projection.hidden.has(item.id));
+  return items.length === result.items.length ? result : { ...result, items };
+};
+
+/**
+ * One publication owner for GETs, tool mutations, and shared-list consumers.
+ * @param {object} options
+ * @param {(identity: string) => Promise<{ baseline: string[] | null, hidden: string[], pendingCreated: string[] } | null>} [options.readProjection]
+ * @param {(identity: string, projection: { baseline: string[] | null, hidden: string[], pendingCreated: string[] }) => Promise<unknown>} [options.writeProjection]
+ */
+export const createClaudeChecklists = ({
+  publisher,
+  readFiles = readClaudeTaskList,
+  readProjection = async () => null,
+  writeProjection = async () => {},
+  now = Date.now,
+}) => {
   const bindings = new Map();
   const lists = new Map();
   let revision = 0;
   const listFor = (source) => {
     let list = lists.get(source.identity);
     if (!list) {
-      list = { source, snapshot: null, fileObserved: false, fileToolsObserved: false, inFlight: null, mutation: 0 };
+      list = {
+        source, snapshot: null, fileObserved: false, fileToolsObserved: false, inFlight: null, mutation: 0,
+        projection: null, projectionLoading: null, created: new Set(),
+      };
       lists.set(source.identity, list);
     }
     return list;
+  };
+
+  // A TodoWrite-only list has no file identity and keeps its own conversation's
+  // list, so only captured file sources carry a projection. A failed load is
+  // not an empty projection: it rejects, and the next read tries again.
+  const projectionReady = (list) => {
+    if (list.source.todoOnly) return Promise.resolve();
+    if (!list.projectionLoading) {
+      const loading = (async () => {
+        const stored = await readProjection(list.source.identity);
+        if (stored === null) list.projection = { baseline: null, hidden: new Set() };
+        else {
+          list.projection = { baseline: stored.baseline === null ? null : new Set(stored.baseline), hidden: new Set(stored.hidden) };
+          for (const id of stored.pendingCreated) list.created.add(id);
+        }
+      })();
+      list.projectionLoading = loading;
+      loading.catch(() => { if (list.projectionLoading === loading) list.projectionLoading = null; });
+    }
+    return list.projectionLoading;
+  };
+
+  /**
+   * Saves the projection the read produced, then shows the tasks the current
+   * plan still holds. A failed save keeps the previous projection in effect
+   * and lets the next read try again; it never empties or re-expands the list.
+   */
+  const commitProjection = async (list, next, consumed, result) => {
+    const held = list.projection;
+    const unchanged = consumed === null && held !== null && sameProjection(held, next);
+    // A list nobody references anymore must not write over the state a rebound
+    // list of the same identity is about to read.
+    if (unchanged || lists.get(list.source.identity) !== list) return filterHidden(held, result);
+    try {
+      await writeProjection(list.source.identity, {
+        baseline: next.baseline === null ? null : [...next.baseline],
+        hidden: [...next.hidden],
+        pendingCreated: [...list.created],
+      });
+    } catch {
+      console.warn('[native-agents] Claude checklist projection could not be saved; the previous list stays in effect');
+      return filterHidden(held, result);
+    }
+    for (const id of consumed ?? []) list.created.delete(id);
+    list.projection = next;
+    return filterHidden(next, result);
+  };
+
+  /**
+   * A task list holds every task its conversation ever created, and the model
+   * starts a new plan by creating new ones. So an arrival of tasks that were
+   * not in the last complete read means the finished tasks before it belong to
+   * a plan the user has left, and they stop being published. Unfinished tasks
+   * always stay, and so does a task created in this very batch.
+   */
+  const project = async (list, result) => {
+    // A missing directory is not a read that could confirm a new plan.
+    if (list.source.todoOnly || !result.exists) return result;
+    await projectionReady(list);
+    const held = list.projection;
+    if (held === null) return result;
+    const ids = new Set(result.items.map((item) => item.id));
+    const hidden = new Set(held.hidden);
+    let reopened = false;
+    // A task that runs again is part of the current plan whatever it did
+    // before. A partial read states this too: reopening is a fact a listed
+    // task carries, unlike a missing file, which states nothing.
+    for (const item of result.items) {
+      if (item.status !== 'completed' && hidden.delete(item.id)) reopened = true;
+    }
+    // A partial read cannot prove what the list holds, so it retires no
+    // finished task and does not move the baseline.
+    if (!result.complete) {
+      if (!reopened) return result;
+      return commitProjection(list, { ...held, hidden }, null, result);
+    }
+    const consumed = new Set([...list.created].filter((id) => ids.has(id)));
+    const added = new Set(consumed);
+    if (held.baseline !== null) for (const id of ids) if (!held.baseline.has(id)) added.add(id);
+    // Everything the batch did not create was already there, whether the
+    // baseline names it or the creation signal is the first evidence of the
+    // list at all.
+    if (added.size > 0) {
+      for (const item of result.items) {
+        if (item.status === 'completed' && !added.has(item.id)) hidden.add(item.id);
+      }
+    }
+    // A task the files no longer hold cannot stay hidden.
+    for (const id of hidden) if (!ids.has(id)) hidden.delete(id);
+    return commitProjection(list, { baseline: ids, hidden }, consumed.size > 0 ? consumed : null, result);
   };
   const publish = (list, value) => {
     const previous = list.snapshot;
@@ -160,14 +278,18 @@ export const createClaudeChecklists = ({ publisher, readFiles = readClaudeTaskLi
   const loadFiles = (list) => {
     if (list.inFlight) return list.inFlight;
     const pending = (async () => {
-      // A tool mutation during an open read requires one fresh trailing read.
+      // A tool mutation during an open read requires one fresh trailing read,
+      // and one that arrives while the projection is saved does too: a task
+      // created meanwhile must not be consumed as this pass's own addition.
       // Repeated mutations coalesce; no stale snapshot is granted authority.
       while (true) {
         const mutation = list.mutation;
         const result = await readFiles(list.source);
         if (mutation !== list.mutation) continue;
         if (result.exists) list.fileObserved = true;
-        return result;
+        const projected = await project(list, result);
+        if (mutation !== list.mutation) continue;
+        return projected;
       }
     })();
     list.inFlight = pending;
@@ -217,6 +339,22 @@ export const createClaudeChecklists = ({ publisher, readFiles = readClaudeTaskLi
       if (!binding) return Promise.resolve(unavailable());
       binding.files.mutation += 1;
       binding.files.fileToolsObserved = true;
+      return read(sessionId);
+    },
+    /**
+     * A TaskCreate result named a task the list holds. The ID stays pending
+     * until the complete read that shows it consumes the signal, so a read
+     * that ran before the task's own file existed still counts it as this
+     * batch's creation instead of retiring it with the tasks before it.
+     */
+    created(sessionId, taskId) {
+      const binding = bindings.get(sessionId);
+      if (!binding || binding.files.source.todoOnly || !safeId.safeParse(taskId).success) {
+        return Promise.resolve(unavailable());
+      }
+      binding.files.mutation += 1;
+      binding.files.fileToolsObserved = true;
+      binding.files.created.add(taskId);
       return read(sessionId);
     },
     todoWrite(sessionId, items) {

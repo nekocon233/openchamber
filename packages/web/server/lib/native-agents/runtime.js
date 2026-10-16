@@ -331,7 +331,14 @@ export const createNativeAgentsRuntime = ({
     generateText: async (input) => (await getSmallModelService()).generateSmallModelText(input),
     publishSession,
   });
-  const checklists = createClaudeChecklists({ publisher, now });
+  const checklists = createClaudeChecklists({
+    publisher,
+    now,
+    // The projection outlives a session: every conversation bound to one CLI
+    // task list shows the same one, and deleting a session does not retire it.
+    readProjection: (identity) => registry.checklistProjection(identity),
+    writeProjection: (identity, projection) => registry.setChecklistProjection(identity, projection),
+  });
   const claudeLive = createClaudeLiveSessions({
     loadSdk,
     resolveExecutable: () => resolveExecutable('claude'),

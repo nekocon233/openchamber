@@ -99,6 +99,12 @@ const structuredTaskOutput = z.object({
   output_file: z.string().optional(), outputFile: z.string().optional(),
 });
 
+// The ID Claude Code's own TaskCreate result names, which is the only account
+// of a task created before anyone read the list.
+const createdTaskOutput = z.object({
+  task: z.object({ id: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/) }).passthrough(),
+}).passthrough();
+
 const createInputQueue = () => {
   const items = [];
   let wake = null;
@@ -224,7 +230,14 @@ export const createClaudeLiveSessions = ({
         if (block.is_error === true) continue;
         if (TASK_LIST_TOOLS.has(call.name)) {
           // Task tools in children share the query's explicit file-list source.
-          void checklists.changed(live.sessionId).catch(() => {});
+          // A creation names the task it added, so a list nobody has read yet
+          // still knows which entry is this plan's; without that account the
+          // read only refreshes, and the next complete one decides.
+          const created = call.name === 'TaskCreate' ? createdTaskOutput.safeParse(frame.tool_use_result) : null;
+          const refresh = created?.success
+            ? checklists.created(live.sessionId, created.data.task.id)
+            : checklists.changed(live.sessionId);
+          void refresh.catch(() => {});
         } else if (call.name === 'TodoWrite' && call.todos) {
           if (call.owner !== live.sessionId && !checklists.source(call.owner)) {
             checklists.bind(call.owner, live.directory, { identity: `todo:${call.owner}`, todoOnly: true });
