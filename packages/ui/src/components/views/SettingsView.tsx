@@ -473,7 +473,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       return result.id === 'skills.create' ? 'skills.basic-information' : result.id;
     }
 
-    if (result.id === 'providers.claude-connections' || result.id === 'providers.chatgpt-plan') {
+    if (result.id === 'providers.claude-connections' || result.id === 'providers.cliproxyapi') {
       useUIStore.getState().setSettingsProvidersOpenRequested(NATIVE_PROVIDER_CLAUDE);
     }
 

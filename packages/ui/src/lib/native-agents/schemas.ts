@@ -187,7 +187,6 @@ export const nativeSessionListSchema = z.object({
 const nativeModelSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
-  billing: z.literal('chatgpt-plan').optional(),
   contextWindow: z.number().nullable(),
   outputLimit: z.number().nullable(),
   efforts: z.array(z.string()),

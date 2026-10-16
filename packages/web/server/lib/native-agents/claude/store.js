@@ -24,10 +24,17 @@ import {
 import { buildSessionRecord, unconfirmedSessionRecord } from '../records.js';
 import { createClaudeProjection } from './projector.js';
 import { slimToolResult } from './tools.js';
-import { isResponsesReplayBlock } from './responses-replay.js';
 
 const MAX_TITLE_LENGTH = 100;
 const DEFAULT_HISTORY_CACHE_BYTES = 128 * 1024 * 1024;
+
+// Blocks the deleted ChatGPT bridge wrote into transcripts. Nothing can replay
+// them any more, so a resume that would send them is refused before a spawn.
+const REMOVED_PLAN_REPLAY_PREFIX = 'openchamber-responses:';
+const removedPlanReplayBlock = z.object({
+  type: z.literal('redacted_thinking'),
+  data: z.string().startsWith(REMOVED_PLAN_REPLAY_PREFIX),
+});
 
 const sessionInfoSchema = z.object({
   sessionId: z.string(),
@@ -554,21 +561,22 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
    * Tool Search writes tool_reference blocks into tool results. A resume
    * replays this chain to the configured endpoint, and Anthropic-compatible
    * third-party endpoints reject those blocks with HTTP 400 on every send.
-   * GPT replay carriers also belong only to the ChatGPT bridge. Scan the
-   * active chain at block level; text mentions and sidechains are not replay.
-   * @returns {Promise<{ toolReferences: string[], hasGptReplayState: boolean }>}
+   * Removed-plan replay carriers came from the deleted ChatGPT bridge, which
+   * nothing can replay. Scan the active chain at block level; text mentions
+   * and sidechains are not replay.
+   * @returns {Promise<{ toolReferences: string[], hasRemovedPlanReplayState: boolean }>}
    */
   const inspectReplayHistory = async (sessionUuid, directory) => {
     const sdk = await loadSdk();
     const entries = await sdk.getSessionMessages(sessionUuid, { dir: directory, includeSystemMessages: true });
     const names = new Set();
-    let hasGptReplayState = false;
+    let hasRemovedPlanReplayState = false;
     const visit = (content) => {
       if (!Array.isArray(content)) return;
       for (const block of content) {
         const parsed = contentBlockSchema.safeParse(block);
         if (!parsed.success) continue;
-        if (isResponsesReplayBlock(block)) hasGptReplayState = true;
+        if (removedPlanReplayBlock.safeParse(block).success) hasRemovedPlanReplayState = true;
         if (parsed.data.type === 'tool_reference') {
           const toolName = z.string().safeParse(parsed.data.tool_name);
           names.add(toolName.success ? toolName.data : 'unknown');
@@ -582,7 +590,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
       if (!parsed.success || parsed.data.isSidechain) continue;
       visit(parsed.data.message?.content);
     }
-    return { toolReferences: [...names], hasGptReplayState };
+    return { toolReferences: [...names], hasRemovedPlanReplayState };
   };
 
   /**

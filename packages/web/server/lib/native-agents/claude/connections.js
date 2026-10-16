@@ -18,14 +18,16 @@ const connectionModelSchema = z.object({
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
   efforts: z.array(effort).max(5),
 });
-const baseURL = z.string().url().max(2048).refine((value) => {
+export { connectionModelSchema };
+/** Shared by every Anthropic-compatible endpoint this server stores, including the gateway. */
+export const endpointURLSchema = z.string().url().max(2048).refine((value) => {
   const url = new URL(value);
   return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
 }, 'Use an HTTP(S) endpoint without credentials, query or fragment');
 export const connectionWriteSchema = z.object({
   kind: z.literal('anthropic').default('anthropic'),
   name: z.string().trim().min(1).max(120),
-  baseURL,
+  baseURL: endpointURLSchema,
   auth: z.enum(['api-key', 'bearer']),
   apiKey: z.string().trim().min(1).max(8192).optional(),
   models: z.array(connectionModelSchema).min(1).max(50).refine((models) => new Set(models.map((model) => model.id)).size === models.length),
@@ -50,7 +52,7 @@ const catalogModels = (connection) => connection.models.map((model) => ({
   fast: false,
 }));
 
-export const claudeConnectionEnvironment = (connection, model) => ({
+const claudeConnectionEnvironment = (connection, model) => ({
   ANTHROPIC_BASE_URL: connection.baseURL,
   ANTHROPIC_API_KEY: connection.auth === 'api-key' ? connection.apiKey : '',
   ANTHROPIC_AUTH_TOKEN: connection.auth === 'bearer' ? connection.apiKey : '',
@@ -75,7 +77,7 @@ export const claudeConnectionEnvironment = (connection, model) => ({
 });
 
 /** Credentials belong to this server, never to the UI preference mirror. */
-export const createClaudeConnections = ({ dataDir, chatgpt, fetchKimiUsage = fetchKimiQuota }) => {
+export const createClaudeConnections = ({ dataDir, fetchKimiUsage = fetchKimiQuota }) => {
   const directory = path.join(dataDir, 'native-agents');
   const file = path.join(directory, 'claude-connections.json');
   let writes = Promise.resolve();
@@ -113,8 +115,7 @@ export const createClaudeConnections = ({ dataDir, chatgpt, fetchKimiUsage = fet
       return { ...result, providerId, providerName: `${connection.name} / Claude Code` };
     },
     async hasCredentials() {
-      if ((await read()).length > 0) return true;
-      return chatgpt ? (await chatgpt.accounts()).some((account) => account.status === 'connected') : false;
+      return (await read()).length > 0;
     },
     async list() {
       await writes;
@@ -144,13 +145,9 @@ export const createClaudeConnections = ({ dataDir, chatgpt, fetchKimiUsage = fet
     },
     async catalog() {
       await writes;
-      return [...claudeModels(), ...(await read()).flatMap(catalogModels), ...(chatgpt ? await chatgpt.catalog() : [])];
+      return [...claudeModels(), ...(await read()).flatMap(catalogModels)];
     },
     async resolve(modelID, effort = null) {
-      if (modelID.startsWith('chatgpt:')) {
-        if (!chatgpt) throw unavailable();
-        return chatgpt.resolve(modelID, effort);
-      }
       if (!modelID.startsWith('connection:')) return { key: 'default', model: claudeLaunchModel(modelID), env: null };
       await writes;
       const connections = await read();

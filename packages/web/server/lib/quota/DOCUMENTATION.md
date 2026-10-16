@@ -197,7 +197,7 @@ default visibility includes discovered native sources. Discovery shares the
 existing three-minute timer. A failed discovery retains the preceding metadata;
 a successful connection revision change aborts its older requests and removes
 its stale usage. Runtime switches discard old results. VS Code has no native
-sources. ChatGPT-plan Claude sessions never use the Claude subscription headline.
+sources.
 
 ## Kimi for Coding field semantics
 

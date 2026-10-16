@@ -28,6 +28,21 @@ describe('settings search', () => {
       }
     }
   });
+  test('finds the CLIProxyAPI gateway on providers, never in VS Code', () => {
+    for (const query of ['cliproxyapi', 'chatgpt']) {
+      for (const isVSCode of [false, true]) {
+        const results = buildSettingsSearchResults({
+          query,
+          runtimeCtx: { ...runtimeCtx, isVSCode },
+          t,
+          getPageTitle: (page) => page,
+        });
+
+        expect(results.some((result) => result.id === 'providers.cliproxyapi')).toBe(!isVSCode);
+      }
+    }
+  });
+
   test('finds the Claude Code integration by name and package, never in VS Code', () => {
     for (const query of ['claude', '@openchamber/opencode-claude']) {
       for (const isVSCode of [false, true]) {

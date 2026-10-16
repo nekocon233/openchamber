@@ -104,7 +104,6 @@ describe('pickUsageHeadline', () => {
 
 test('managed connections never show the default Claude or Codex account quota', () => {
   expect(resolveQuotaProviderId('claude-native', 'connection:account:model')).toBe('kimi-claude:account');
-  expect(resolveQuotaProviderId('claude-native', 'chatgpt:account:model')).toBeNull();
   expect(pickUsageHeadline([], 'claude-native', 'connection:account:model')).toBeNull();
 });
 

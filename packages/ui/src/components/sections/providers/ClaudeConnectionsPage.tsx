@@ -1,5 +1,5 @@
 import { useQuotaStore } from '@/stores/useQuotaStore';
-import { ChatgptConnectionsSection } from './ChatgptConnectionsSection';
+import { CliProxyApiSection } from './CliProxyApiSection';
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -146,7 +146,7 @@ export const ClaudeConnectionsPage: React.FC = () => {
         ))}
         {!draft ? <Button disabled={busy || loading} onClick={begin}>{t('settings.claudeConnections.addCustom')}</Button> : null}
       </SettingsSection>
-      <ChatgptConnectionsSection />
+      <CliProxyApiSection onConnectionSaved={(connection) => { void refreshModels(connection.quotaProviderId); }} />
       {draft ? <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <fieldset disabled={busy}>
           <SettingsSection title={t('settings.claudeConnections.connection')} contentClassName="space-y-4">

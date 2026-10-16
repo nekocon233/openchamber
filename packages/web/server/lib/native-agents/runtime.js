@@ -16,8 +16,8 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { codexVariantSettings } from './catalog.js';
-import { createChatgptConnections } from './claude/chatgpt.js';
 import { createClaudeConnections } from './claude/connections.js';
+import { createCliproxyapiService } from './cliproxyapi/service.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
@@ -119,6 +119,7 @@ const untilRewound = (records, pending) => {
  * @param {() => Promise<typeof import('../small-model/index.js')>} [options.getSmallModelService]
  * @param {ReturnType<typeof createSnapshotStore>} [options.snapshots]
  * @param {() => number} [options.now]
+ * @param {typeof fetch} [options.fetchImpl] transport for the local gateway integration
  */
 const openChamberNamespace = z.record(z.string(), z.unknown()).catch({});
 
@@ -148,10 +149,11 @@ export const createNativeAgentsRuntime = ({
   // own below one of them, and no project names it.
   managedChatsRoots = [],
   memory = null,
+  fetchImpl = fetch,
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
-  const chatgpt = createChatgptConnections({ dataDir });
-  const claudeConnections = createClaudeConnections({ dataDir, chatgpt });
+  const claudeConnections = createClaudeConnections({ dataDir });
+  const cliproxyapi = createCliproxyapiService({ dataDir, connections: claudeConnections, fetchImpl });
   const reverts = createNativeReverts({ registry, snapshots });
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
   const interactions = createNativeInteractions({ dataDir, now });
@@ -438,7 +440,7 @@ export const createNativeAgentsRuntime = ({
         config: {
           model: launch.model,
           launch,
-          effort: launch.descriptor?.billing !== 'chatgpt-plan' && request.variant !== undefined && CLAUDE_EFFORTS.has(request.variant) ? request.variant : null,
+          effort: request.variant !== undefined && CLAUDE_EFFORTS.has(request.variant) ? request.variant : null,
           permissionMode: request.agent === 'plan' ? 'plan' : 'bypassPermissions',
         },
         send,
@@ -581,12 +583,8 @@ export const createNativeAgentsRuntime = ({
       await applyCodexConnectionChange();
       return result;
     },
-    chatgpt,
-    async signOutChatgpt(id) {
-      const signingOut = chatgpt.signOut(id);
-      const [, result] = await Promise.all([claudeLive.closeConnection(`chatgpt:${id}:`), signingOut]);
-      return result;
-    },
+
+    cliproxyapi,
 
     async capabilities() {
       const [claudeCli, codexCli] = await Promise.all([resolveExecutable('claude'), resolveExecutable('codex')]);
@@ -1130,7 +1128,6 @@ export const createNativeAgentsRuntime = ({
       codexUtility.handleExit(new Error('Codex runtime is shutting down'));
       claudeUtility.shutdown();
       await claudeLive.shutdown();
-      await chatgpt.shutdown();
       await appServer.stop();
     },
   };

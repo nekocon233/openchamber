@@ -934,17 +934,16 @@ Connection launches set `ENABLE_TOOL_SEARCH=false`: Tool Search writes
 third-party endpoints reject that block type with HTTP 400 on every send that
 replays it. Blocks already in a transcript — produced under the Anthropic
 login, where Tool Search stays on — poison a resume onto a connection the
-same way. Before a managed launch (connection or ChatGPT grant) resumes a
-transcript, `store.js` scans the chain the CLI would replay (entries after the
+same way. Before a managed launch resumes a transcript, `store.js` scans the
+chain the CLI would replay (entries after the
 last compaction, block-level, sidechains excluded) and the send fails with
 `NATIVE_HISTORY_NOT_PORTABLE` naming the referenced tools instead of spawning
 a query that must fail. The default Anthropic login resumes unchecked. The
 guard scans the active replay chain, excluding sidechains and text mentions.
-It also detects the ChatGPT bridge's GPT replay carriers. Those sessions may
-resume through ChatGPT; resuming them through an API-key connection or the
-default Anthropic login fails before spawning with
-`400 NATIVE_GPT_REPLAY_NOT_PORTABLE`, asking the user to continue with ChatGPT
-or start a new session. No transcript is rewritten during a provider switch.
+It also detects replay carriers written by the removed ChatGPT plan bridge.
+Nothing can replay them any more, so any resume of such a session fails before
+spawning with `400 NATIVE_GPT_REPLAY_UNRESUMABLE`, and only a new session can
+continue that work. No transcript is rewritten during a provider switch.
 
 Web and Electron use the connected server's connections. Hosted mobile and
 Capacitor use that same server and CLI. VS Code's native adapter rejects these
@@ -991,187 +990,60 @@ Routes: `GET/POST /api/native/codex/connections` and
 `PATCH/DELETE /api/native/codex/connections/:id`. Responses never carry the key.
 VS Code's native adapter rejects these operations as unsupported.
 
-## ChatGPT plan connections for Claude Code
+## Local CLIProxyAPI gateway
 
-The Claude Code connection page also offers Sign in with ChatGPT. This uses
-OpenAI's SIWC public-client flow and Responses endpoint, not Codex credentials
-or ChatGPT backend endpoints. Account eligibility is decided upstream; a model
-catalog entry is not proof of inference entitlement. Protocol details come from
-https://developers.openai.com/siwc/token-sharing-open-source/sign-in and
-https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations.
+The Claude Code connection page can also manage a local CLIProxyAPI gateway: an
+Anthropic-compatible endpoint that itself holds the ChatGPT/Codex OAuth accounts.
+OpenChamber talks to that gateway, never to OpenAI, using the gateway's own
+management API and a management key the user pastes once.
 
-`claude/chatgpt-auth.js` owns authorization, validated account identity, model
-listing, token refresh and logout. Each attempt gets a loopback callback at
-`/auth/callback`, fresh state, nonce and PKCE. ID tokens are verified using the
-issuer's JWKS, audience, expiry and nonce. Reauthorization cannot replace the
-selected account with a different subject or client ID. Only callbacks with
-plan permission enable inference. A cancelled, failed or expired attempt does
-not replace saved credentials.
+`cliproxyapi/client.js` owns the integration. Every call carries
+`Authorization: Bearer <management key>`, `redirect: 'error'` and a ten-second
+deadline. Version 8.0.30 answers the sign-in URL as `{ status, url, state }`
+while the published documentation describes `auth_url`; the client accepts
+either spelling. Reads are `GET /v0/management/auth-files` and
+`GET /v0/management/api-keys`. There is no per-key write route in 8.0.30, so
+adding or removing a client key goes through `PATCH /v8/management/config` with
+`{ access: { api-keys: [...] } }`, which replaces that whole list and rewrites
+the gateway's own config file; callers read the list first and write back the
+edited one. Sign-in starts at `GET /v0/management/codex-auth-url?is_webui=true`,
+where the gateway also opens its OAuth callback on port 1455 of the machine that
+runs it, polls through `GET /v0/management/get-auth-status?state=`, and is
+cancelled through `DELETE /v8/management/oauth/session?state=` on builds that
+have that route; a 404 there means the attempt can only be left to expire.
+`GET /v1/models` answers without a client key and is what separates a running
+gateway from an absent one; a 404 on a management call means the management API
+is disabled (`management.secret-key` empty) and a 401 means the stored key was
+refused.
 
-The authenticated `/api/native/claude/chatgpt` routes are:
+`cliproxyapi/service.js` owns the secret and the flows. `{ version, baseURL,
+managementKey, managedClientKey }` lives in
+`<data dir>/native-agents/cliproxyapi.json`, owner-only and replaced atomically,
+never in the UI preference mirror; responses carry a client key's length and
+last four characters, never a secret. A candidate management key is validated
+against the gateway before it replaces a stored one, and a rejected candidate
+leaves the working key in place. `forgetKey` takes back a client key this server
+added before forgetting the management key that can do it, and keeps the store
+when that fails so the removal can be retried. An account can be removed only
+under a file name the gateway just listed. The connection this section writes is
+an ordinary `connection:` entry: `saveConnection` composes it server-side and
+hands it to `claude/connections.js`, so no client key passes through a browser;
+the key comes from a listed key chosen by position, a generated key added to the
+gateway and remembered for removal, or one the user types.
 
-- `GET /accounts`: public account labels/status and `localLogin`.
-- `POST /authorize`: optional account ID and localized callback completion text;
-  returns an attempt ID and authorization URL, with no ID-token hint.
-- `GET /authorize/:id`, `DELETE /authorize/:id`: status and pending cancellation.
-- `POST /accounts/:id/welcome`: acknowledges the first plan-use notice.
-- `DELETE /accounts/:id`: closes owned Claude queries, aborts inference, attempts
-  refresh-token revocation and clears local tokens. Unconfirmed revocation is
-  reported, not treated as confirmed remote logout.
-
-Authorization start and cancellation use the existing local-management guard.
-A relay, tunnel or remote request cannot start a listener on the wrong computer.
-Web and Electron authorize on the server computer. Hosted mobile, Capacitor and
-remote browsers use accounts already authorized there. VS Code rejects these
-native operations. This release has no remote credential-transfer assistant.
-
-`chatgpt-store.js` keeps `native-agents/chatgpt-accounts.json` separate from API
-key connections and UI preferences. It retains the stable host ID and each
-validated subject/client registration. Tokens and catalog snapshots are written
-atomically with owner-only POSIX permissions. A file lock serializes writes and
-rotating refreshes across server processes; live lock contention is bounded and
-unreadable storage fails instead of resetting. Refresh failure clears tokens
-only for an unusable grant; temporary failures retain them. Logout retains the
-registration and host identity for another sign-in. A storage failure after
-upstream token rotation can require reauthorization; it is never reported as a
-successful refresh. Old API-key connections
-remain version 1 and default to `kind: anthropic` when the field is absent.
-
-`chatgpt.js` exposes models as `chatgpt:<account UUID>:<base64url slug>` inside
-`claude-native`. Account labels use the email, adding a short account ID only
-for duplicate or missing emails. Model names use the upstream display name,
-followed by the account label when multiple accounts are connected. Catalog
-and resolved descriptors use the same naming rule; display changes retain
-account and model IDs. Catalog order follows upstream. A failed account
-catalog retains its last verified models and reports `catalogUnavailable` in
-settings; other accounts continue loading. Signed-out accounts offer no models.
-The context window uses the account catalog's `max_context_window`, falling
-back to `context_window`. Claude receives that same window for token budgeting
-and auto-compaction. Output limits use verified OpenAI model specifications for
-the exact model slugs listed in `chatgpt.js`, since SIWC omits that field. Unknown
-limits stay null on the wire and use the UI's zero-as-unknown convention.
-Image support comes from `input_modalities`. These optional catalog fields are
-retained in storage; older records stay readable and gain capabilities on the
-next successful refresh. Plan models have no invented API price. Effort choices
-and defaults come from the account catalog's `supported_reasoning_levels` and
-`default_reasoning_level`, retained in the cached model records. Only Responses
-efforts are exposed; agent modes such as `ultra` are excluded. Older cached
-records without these fields keep the default-only behavior until refreshed.
-Utility descriptions read the selected saved descriptor instead of fetching
-every account's catalog for each background generation.
-
-`chatgpt-bridge.js` starts a separate loopback listener on demand. Each Claude
-query gets a random grant bound to its account, upstream model, selected effort
-and image capability. Efforts are validated against that model's catalog before
-launch. Changing effort or model capabilities replaces an idle query and resumes
-its transcript, using the same busy/background-task guard as connection changes. Grants are
-removed on query disposal; logout revokes that account's grants and requests.
-OAuth tokens stay in the bridge, never in Claude's environment, settings file,
-command arguments, browser storage or logs. The listener refuses browser
-Origins, invalid grants, model mismatches and endpoints other than
-`POST /v1/messages`. Request bodies and unfinished SSE frames are bounded.
-
-`responses-protocol.js` sends the grant's effort as `reasoning.effort`; Default
-omits it and leaves the upstream default intact. Claude's own effort settings
-do not override this selection. Utility queries use the same captured setting.
-It sends `store: false`, `stream: true` and full text/tool
-history. Inline Claude system messages become developer messages. Functions are
-placed in the `claude` namespace with stable names and call IDs; Claude executes
-them and sends results back. The bridge never executes a tool. It translates
-text and tool-argument deltas, requires completed Responses before declaring
-success, propagates cancellation and handles backpressure. Error responses
-retain status, code and request ID without forwarding credential-bearing error
-text. Claude receives `x-should-retry: false`; there is no alternate billing
-path or fallback model.
-
-Responses `input_tokens` includes `cached_tokens` and, when present,
-`cache_write_tokens`. The bridge subtracts both from Anthropic `input_tokens`
-and reports them as `cache_read_input_tokens` and
-`cache_creation_input_tokens`, so `input + cache.read + cache.write` equals the
-upstream input. Missing details mean no reported cache breakdown rather than a
-proven zero hit; a missing final usage is unmeasured. Negative, fractional, or
-over-total token counts fail as malformed upstream data. Streaming
-`message_delta` and non-streaming results carry the same normalized usage.
-
-Two cache aids are opt-in and off by default. With
-`OPENCHAMBER_CHATGPT_CACHE_KEY`, the request carries a `prompt_cache_key`
-derived from the model and the system prompt, so every request that shares that
-reusable head sends one key and keeps landing on the same upstream cache shard
-as the conversation grows, compacts or forks. The bridge holds no conversation
-state and Claude sends no session identifier, so the prompt head is what it can
-key on. With `OPENCHAMBER_CHATGPT_CACHE_DIAGNOSTICS`, the request names the
-newest replayable response as `prompt_cache_options.comparison_response_id`, and
-the completed response's `prompt_cache_diagnostics` is logged as a type, reason
-and token counts. Prompt text and response IDs stay out of the log. Both
-parameters change the upstream request body, so a 4xx rejection drops them for
-that bridge's lifetime after one retry without them; this plan route accepts
-fewer parameters than the public API.
-
-PNG, JPEG, GIF and WebP base64 image blocks become Responses `input_image`
-content, both in user messages and function-tool results. Text/image ordering
-and tool call IDs are preserved. The grant rejects images for models without
-advertised image support. Image data is forwarded directly; the bridge never
-fetches an image URL or reads a file. Existing request-body limits still apply.
-Tool search is disabled. Document blocks, hosted tools and exact
-token-count requests fail explicitly. The upstream request still omits
-`max_output_tokens`, which this ChatGPT plan route does not accept; the output
-limit configures Claude's budget and the upstream enforces its own limit.
-Foreign provider thinking signatures are omitted from Responses input.
-Both streaming and non-streaming Claude requests are accepted, while upstream
-Responses always streams. Existing Claude session persistence, plan mode,
-subagents and compaction remain owned by Claude Code.
-
-`responses-replay.js` owns version 1 of the GPT replay carrier. The bridge
-requests `reasoning.encrypted_content` and, only after a successful completed
-response, appends an opaque `redacted_thinking` block to the Claude reply.
-Its `data` starts with `openchamber-responses:` and contains base64-encoded
-metadata: account/model scope, content-block digests, complete encrypted reasoning
-items, assistant message IDs and phases, and their positions among the
-visible text and tool blocks. It does not duplicate text or tool results.
-The existing projector hides redacted blocks in live and historical UI records.
-The carrier is not a credential and its contents must never be logged.
-It also names the upstream response it came from, which the next request can
-offer as a cache-diagnostic baseline. Carriers written before that field existed
-still replay, and a build that predates it ignores it.
-
-On the next request, the bridge validates the carrier and restores reasoning,
-assistant phases and output order from the matching response segment. The
-CLI can move thinking before tool blocks and group tools after text. Matching
-accepts those normalized blocks or the original block order, then restores
-the original Responses ordering. It uses a unique content segment rather
-than the carrier's position. Ambiguous matches keep visible history without
-attaching state to a guessed response. The
-completed response's output array is authoritative; item completion events
-and output indexes cover streams without that array. Missing phases stay
-missing. Invalid owned carriers and unsupported versions fail explicitly;
-oversized state fails rather than being truncated. An incomplete or failed
-response emits no carrier or successful completion.
-
-The CLI transcript remains the only replay authority. There is no bridge-side
-conversation cache, so grant disposal, server restart and parallel parent/child
-requests cannot mix state. A different account/model or edited/truncated
-response segment keeps its visible history without replaying that segment's
-stale GPT state. Revert, fork and compaction replay only the blocks the CLI
-actually retains. Older transcripts remain usable; state lost before this fix
-cannot be recovered, and new replies establish their own replay carriers.
-
-Transient upstream failures — 408, 429 and 5xx statuses, and network errors —
-are retried inside the bridge, up to three attempts total with a shared
-five-minute deadline, honoring a bounded `Retry-After`. Every recorded
-503/507 was followed by a successful manual retry, and Claude is told not to
-retry (`x-should-retry: false`), so without this each blip ended the turn.
-Each retried attempt logs the upstream status, code and request id, never the
-body. A network retry can replay an inference that already ran upstream;
-`store: false` keeps that to wasted tokens, not duplicated side effects.
-Non-transient rejections (auth, schema, context length) fail on first sight.
+Routes are `GET /api/native/claude/cliproxyapi` (status, accounts, key hints and
+`localLogin`), `POST|DELETE /key`, `POST /login`, `GET|DELETE /login/:state`,
+`DELETE /accounts/:name` and `POST /connection`. Every mutating route requires the
+local-management boundary and answers `403 CLIPROXYAPI_LOCAL_LOGIN_REQUIRED`
+otherwise, while the remote status stays readable. Errors carry `CLIPROXYAPI_*`
+codes.
 
 ## Utility text generation
 
 The small-model service accepts an explicit `codex-native/<model>` or
 `claude-native/<model>` setting and reaches the CLIs through the runtime's
 `smallModels`, keyed by provider id. Inherited CLI models use the CLI's login and catalog. Configured Claude
-connections use their owning credential store; ChatGPT plan connections own
-OAuth refresh in the native runtime. An unavailable selected model fails
+connections use their owning credential store. An unavailable selected model fails
 instead of silently choosing another one. Failed or empty output rejects.
 
 `codex/utility.js` runs these calls on the shared app-server. They are

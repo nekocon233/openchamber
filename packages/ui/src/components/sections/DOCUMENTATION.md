@@ -156,18 +156,15 @@ connections never fall back to a different service. Failed reads retain the
 previous list, and stale reads cannot replace a newer mutation or another
 runtime's state.
 
-`ChatgptConnectionsSection` manages separate ChatGPT registrations below the
-API-key connection editor. It starts OAuth only when the server's local-management
-capability permits it, polls only during the bounded authorization attempt and
-cancels pending attempts when leaving the page. Terminal status and a fresh
-account list own the UI state. The first successful plan authorization requires
-acknowledging the plan-use notice once. Logout reports unconfirmed remote
-revocation separately. ChatGPT usage management is available in provider
-settings and relevant error notices. Explicit bridge error codes receive
-localized recovery text.
-Connected account rows show status and sign-out; sign-in remains available on
-signed-out accounts and accounts needing plan permission. When saved accounts
-exist, the separate sign-in entry is labeled as adding a ChatGPT account.
+`CliProxyApiSection` manages a local CLIProxyAPI gateway below the connection
+list: its address and management key, the ChatGPT accounts it holds, and the
+connection that points Claude Code at it. It asks the server for the gateway's
+state on every visit, starts a sign-in only where the server's local-management
+capability permits it, polls one bounded attempt and cancels a pending attempt
+when the page is left. The management key is write-only; existing client keys
+appear only as a length and their last four characters, and a connection the
+section creates never carries its key back to the browser. `providers.cliproxyapi`
+prepares the same page and highlights the section.
 
 ### Codex connections
 
@@ -175,7 +172,7 @@ Selecting `codex-native` opens `providers/CodexConnectionsPage.tsx`, the Codex
 counterpart of the page above. It manages OpenAI-compatible connections through
 the same `RuntimeAPIs.nativeAgents` methods and the same write-only key handling,
 but carries no authentication selector (Codex authenticates a provider with one
-bearer key) and no ChatGPT section. The endpoint field is explained behind its
+bearer key). The endpoint field is explained behind its
 info icon: the URL is the provider's base and the endpoint must implement the
 OpenAI Responses API.
 

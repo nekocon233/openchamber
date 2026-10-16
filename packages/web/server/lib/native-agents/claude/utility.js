@@ -114,7 +114,7 @@ export const createClaudeUtility = ({ loadSdk, launchableExecutable, buildEnv, r
     };
     if (connection.settings) options.settings = connection.settings;
     if (!launch?.env && !launch?.acquire) options.thinking = { type: 'disabled' };
-    if (effort && launch?.descriptor?.billing !== 'chatgpt-plan') options.effort = effort;
+    if (effort) options.effort = effort;
     // Claude Code answers a schema with a tool call of its own, one extra
     // turn, so the query sets no turn limit.
     if (responseSchema) options.outputFormat = { type: 'json_schema', schema: responseSchema };

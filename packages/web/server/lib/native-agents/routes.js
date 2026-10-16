@@ -5,6 +5,7 @@
 import { z } from 'zod';
 
 import { connectionWriteSchema } from './claude/connections.js';
+import { cliproxyapiConnectionSchema, cliproxyapiKeySchema } from './cliproxyapi/service.js';
 import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
@@ -144,20 +145,31 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.patch(`${codexConnections}/:id`, handle((req) => runtime.saveCodexConnection(z.string().uuid().parse(req.params.id), codexConnectionWriteSchema.parse(req.body))));
   app.delete(`${codexConnections}/:id`, handle((req) => runtime.removeCodexConnection(z.string().uuid().parse(req.params.id))));
 
-  const chatgpt = '/api/native/claude/chatgpt';
-  const requireLocalLogin = (req) => {
-    if (!isLocalManagementRequest(req)) throw new NativeAgentError('Complete ChatGPT sign-in on the server computer', { status: 403, code: 'CHATGPT_LOCAL_LOGIN_REQUIRED' });
+  // The gateway runs on the server computer, so its sign-in and account
+  // management belong to that same local boundary as the memory tools.
+  const cliproxyapi = '/api/native/claude/cliproxyapi';
+  const requireLocalGateway = (req) => {
+    if (!isLocalManagementRequest(req)) throw new NativeAgentError('Manage the CLIProxyAPI gateway on the server computer', { status: 403, code: 'CLIPROXYAPI_LOCAL_LOGIN_REQUIRED' });
   };
-  app.get(`${chatgpt}/accounts`, handle(async (req) => ({ accounts: await runtime.chatgpt.accounts(), localLogin: isLocalManagementRequest(req) })));
-  app.post(`${chatgpt}/authorize`, handle((req) => {
-    requireLocalLogin(req);
-    const input = z.object({ accountId: z.string().uuid().nullable().default(null), completionMessage: z.string().min(1).max(300) }).parse(req.body);
-    return runtime.chatgpt.auth.begin(input);
+  const loginStateParam = z.string().regex(/^[A-Za-z0-9._-]{1,128}$/);
+  // Credential file names as the gateway reports them; membership in that list
+  // is what actually authorizes a removal.
+  const accountNameParam = z.string().min(1).max(200).regex(/^[A-Za-z0-9._@+-]+\.json$/);
+  app.get(cliproxyapi, handle(async (req) => ({ ...await runtime.cliproxyapi.status(), localLogin: isLocalManagementRequest(req) })));
+  app.post(`${cliproxyapi}/key`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.saveKey(cliproxyapiKeySchema.parse(req.body)); }));
+  app.delete(`${cliproxyapi}/key`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.forgetKey(); }));
+  app.post(`${cliproxyapi}/login`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.beginLogin(); }));
+  app.get(`${cliproxyapi}/login/:state`, handle((req) => runtime.cliproxyapi.loginStatus(loginStateParam.parse(req.params.state))));
+  app.delete(`${cliproxyapi}/login/:state`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.cancelLogin(loginStateParam.parse(req.params.state)); }));
+  app.delete(`${cliproxyapi}/accounts/:name`, handle(async (req) => {
+    requireLocalGateway(req);
+    await runtime.cliproxyapi.removeAccount(accountNameParam.parse(req.params.name));
+    return { removed: true };
   }));
-  app.get(`${chatgpt}/authorize/:id`, handle((req) => runtime.chatgpt.auth.status(z.string().uuid().parse(req.params.id))));
-  app.delete(`${chatgpt}/authorize/:id`, handle((req) => { requireLocalLogin(req); return runtime.chatgpt.auth.cancel(z.string().uuid().parse(req.params.id)); }));
-  app.post(`${chatgpt}/accounts/:id/welcome`, handle((req) => runtime.chatgpt.auth.welcome(z.string().uuid().parse(req.params.id))));
-  app.delete(`${chatgpt}/accounts/:id`, handle((req) => runtime.signOutChatgpt(z.string().uuid().parse(req.params.id))));
+  app.post(`${cliproxyapi}/connection`, handle((req) => {
+    requireLocalGateway(req);
+    return runtime.cliproxyapi.saveConnection(cliproxyapiConnectionSchema.parse(req.body));
+  }));
 
   app.get('/api/native/catalog', handle(() => runtime.catalog()));
 

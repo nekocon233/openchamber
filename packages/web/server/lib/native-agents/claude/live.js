@@ -154,7 +154,7 @@ const turnErrorOf = (frame, launch) => {
  * @param {() => Promise<string | null>} options.resolveExecutable path of the user's `claude`
  * @param {() => Record<string, string>} options.buildEnv
  * @param {(sessionUuid: string, directory: string) => Promise<boolean>} options.hasTranscript
- * @param {(sessionUuid: string, directory: string) => Promise<{ toolReferences: string[], hasGptReplayState: boolean }>} [options.inspectReplayHistory] provider-specific blocks in the active replay chain
+ * @param {(sessionUuid: string, directory: string) => Promise<{ toolReferences: string[], hasRemovedPlanReplayState: boolean }>} [options.inspectReplayHistory] provider-specific blocks in the active replay chain
  * @param {ReturnType<typeof import('../publisher.js').createNativeEventPublisher>} options.publisher
  * @param {ReturnType<typeof import('../questions.js').createQuestionRegistry>} options.questions
  * @param {(sessionId: string, directory: string, turn: { id?: string, summary: string, status: string }) => void} [options.onTurnFinished] the CLI finished a turn and wrote it to the transcript
@@ -170,7 +170,7 @@ export const createClaudeLiveSessions = ({
   resolveExecutable,
   buildEnv,
   hasTranscript,
-  inspectReplayHistory = async () => ({ toolReferences: [], hasGptReplayState: false }),
+  inspectReplayHistory = async () => ({ toolReferences: [], hasRemovedPlanReplayState: false }),
   publisher,
   questions,
   // Appended to Claude Code's system prompt, which the CLI records with the
@@ -486,10 +486,10 @@ export const createClaudeLiveSessions = ({
     // rejection into the transcript. The CLI owns the active replay chain.
     if (resume) {
       const history = await inspectReplayHistory(sessionUuid, directory);
-      if (history.hasGptReplayState && config.launch?.descriptor?.billing !== 'chatgpt-plan') {
+      if (history.hasRemovedPlanReplayState) {
         throw new NativeAgentError(
-          'This session contains GPT reasoning state that only its ChatGPT connection can replay. Continue with ChatGPT, or start a new session with this provider.',
-          { code: 'NATIVE_GPT_REPLAY_NOT_PORTABLE', status: 400 },
+          'This session was created with the ChatGPT plan connection, which this version no longer supports. Its history stays readable, but it cannot be continued; start a new session to keep working.',
+          { code: 'NATIVE_GPT_REPLAY_UNRESUMABLE', status: 400 },
         );
       }
       if ((config.launch?.env || config.launch?.acquire) && history.toolReferences.length > 0) {
@@ -562,7 +562,6 @@ export const createClaudeLiveSessions = ({
       },
     };
     if (connection.settings) options.settings = connection.settings;
-    if (config.launch?.descriptor?.billing === 'chatgpt-plan') options.disallowedTools = ['WebSearch', 'ToolSearch'];
     if (config.model !== null) options.model = config.model;
     if (config.effort !== null) options.effort = config.effort;
     if (resume) options.resume = sessionUuid;

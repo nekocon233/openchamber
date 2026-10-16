@@ -63,26 +63,51 @@ export type CodexConnection = z.infer<typeof codexConnectionSchema>;
 export type CodexConnectionWrite = z.infer<typeof codexConnectionWriteSchema>;
 export type CodexConnectionModel = z.infer<typeof codexConnectionModelSchema>;
 
+// The local CLIProxyAPI gateway. OpenChamber manages its ChatGPT/Codex accounts
+// through the gateway's own management API and writes an ordinary Claude Code
+// connection that points at it.
+const cliproxyapiAccountSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().nullable(),
+  planType: z.string().nullable(),
+  activeUntil: z.string().nullable(),
+  status: z.string().nullable(),
+  disabled: z.boolean(),
+});
+export const cliproxyapiStatusSchema = z.object({
+  configured: z.boolean(),
+  baseURL: z.string(),
+  reachable: z.boolean(),
+  managementEnabled: z.boolean(),
+  keyRejected: z.boolean(),
+  accounts: z.array(cliproxyapiAccountSchema),
+  /** Existing gateway keys as their length and last four characters, never their value. */
+  clientKeys: z.array(z.object({ hint: z.string(), length: z.number().int().nonnegative() })),
+  localLogin: z.boolean(),
+});
+export const cliproxyapiLoginSchema = z.object({ state: z.string().min(1), url: z.string().url(), expiresAt: z.number() });
+export const cliproxyapiLoginStatusSchema = z.object({
+  status: z.enum(['pending', 'connected', 'failed']),
+  message: z.string().nullable(),
+});
+export const cliproxyapiKeyResultSchema = z.object({ baseURL: z.string(), managedClientKey: z.boolean() });
+export const cliproxyapiForgetResultSchema = z.object({ forgotten: z.boolean(), clientKeyRemoved: z.boolean() });
+export const cliproxyapiCancelResultSchema = z.object({ cancelled: z.boolean() });
+export const cliproxyapiRemovedSchema = z.object({ removed: z.literal(true) });
+const cliproxyapiConnectionSchema = z.object({
+  connectionId: z.string().uuid().nullable().default(null),
+  name: z.string().trim().min(1).max(120),
+  models: z.array(claudeConnectionModelSchema).min(1).max(50),
+  clientKey: z.discriminatedUnion('source', [
+    z.object({ source: z.literal('existing'), index: z.number().int().nonnegative() }),
+    z.object({ source: z.literal('added') }),
+    z.object({ source: z.literal('typed'), value: z.string().trim().min(1).max(8192) }),
+  ]),
+});
+export type CliproxyapiStatus = z.infer<typeof cliproxyapiStatusSchema>;
+export type CliproxyapiLogin = z.infer<typeof cliproxyapiLoginSchema>;
+export type CliproxyapiLoginStatus = z.infer<typeof cliproxyapiLoginStatusSchema>;
+export type CliproxyapiKeyResult = z.infer<typeof cliproxyapiKeyResultSchema>;
+export type CliproxyapiForgetResult = z.infer<typeof cliproxyapiForgetResultSchema>;
+export type CliproxyapiConnectionWrite = z.infer<typeof cliproxyapiConnectionSchema>;
 
-const chatgptAccountSchema = z.object({
-  id: z.string().uuid(), kind: z.literal('chatgpt-plan'), label: z.string(),
-  status: z.enum(['connected', 'signed-out', 'permission-required']),
-  welcomed: z.boolean(), catalogUnavailable: z.boolean(),
-});
-export const chatgptAccountsSchema = z.object({ accounts: z.array(chatgptAccountSchema), localLogin: z.boolean() });
-export const chatgptAuthorizationSchema = z.object({ attemptId: z.string().uuid(), url: z.string().url().refine((url) => {
-  const parsed = new URL(url);
-  return !parsed.username && !parsed.password && parsed.origin === 'https://auth.openai.com' && parsed.pathname === '/api/accounts/authorize';
-}) });
-export const chatgptAuthorizationStatusSchema = z.object({
-  status: z.enum(['pending', 'exchanging', 'connected', 'permission-required', 'cancelled', 'expired', 'failed']),
-  accountId: z.string().uuid().nullable(),
-});
-export const chatgptSignOutSchema = z.object({ signedOut: z.literal(true), revoked: z.boolean() });
-export const chatgptCancelledSchema = z.object({ cancelled: z.boolean() });
-export const chatgptWelcomeSchema = z.object({ acknowledged: z.literal(true) });
-export type ChatgptAccount = z.infer<typeof chatgptAccountSchema>;
-export type ChatgptAccounts = z.infer<typeof chatgptAccountsSchema>;
-export type ChatgptAuthorization = z.infer<typeof chatgptAuthorizationSchema>;
-export type ChatgptAuthorizationStatus = z.infer<typeof chatgptAuthorizationStatusSchema>;
-export type ChatgptSignOut = z.infer<typeof chatgptSignOutSchema>;

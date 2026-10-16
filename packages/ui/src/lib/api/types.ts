@@ -1,4 +1,7 @@
-import type { ClaudeConnection, ClaudeConnectionWrite, CodexConnection, CodexConnectionWrite, ChatgptAccounts, ChatgptAuthorization, ChatgptAuthorizationStatus, ChatgptSignOut } from '@/lib/native-agents/connections';
+import type {
+  ClaudeConnection, ClaudeConnectionWrite, CodexConnection, CodexConnectionWrite,
+  CliproxyapiConnectionWrite, CliproxyapiForgetResult, CliproxyapiKeyResult, CliproxyapiLogin, CliproxyapiLoginStatus, CliproxyapiStatus,
+} from '@/lib/native-agents/connections';
 import type { SessionMetadataRecord } from '@/lib/sessionReviewMetadata';
 import type { WorktreeMetadata } from '@/types/worktree';
 import type { ContextPartMetadata } from '@/lib/messages/contextParts';
@@ -2271,12 +2274,15 @@ export interface NativeAgentsAPI {
   supported: boolean;
   capabilities(): Promise<NativeCapabilities>;
   catalog(): Promise<NativeCatalog>;
-  chatgptAccounts(): Promise<ChatgptAccounts>;
-  beginChatgptAuthorization(input: { accountId: string | null; completionMessage: string }): Promise<ChatgptAuthorization>;
-  chatgptAuthorizationStatus(id: string): Promise<ChatgptAuthorizationStatus>;
-  cancelChatgptAuthorization(id: string): Promise<boolean>;
-  acknowledgeChatgptPlan(id: string): Promise<void>;
-  signOutChatgpt(id: string): Promise<ChatgptSignOut>;
+  /** The local CLIProxyAPI gateway: status, accounts and one-click connection. */
+  cliproxyapiStatus(): Promise<CliproxyapiStatus>;
+  saveCliproxyapiKey(input: { baseURL: string; managementKey: string }): Promise<CliproxyapiKeyResult>;
+  forgetCliproxyapiKey(): Promise<CliproxyapiForgetResult>;
+  beginCliproxyapiLogin(): Promise<CliproxyapiLogin>;
+  cliproxyapiLoginStatus(state: string): Promise<CliproxyapiLoginStatus>;
+  cancelCliproxyapiLogin(state: string): Promise<boolean>;
+  removeCliproxyapiAccount(name: string): Promise<void>;
+  saveCliproxyapiConnection(input: CliproxyapiConnectionWrite): Promise<ClaudeConnection>;
   listClaudeConnections(): Promise<ClaudeConnection[]>;
   saveClaudeConnection(id: string | null, connection: ClaudeConnectionWrite): Promise<ClaudeConnection>;
   deleteClaudeConnection(id: string): Promise<void>;

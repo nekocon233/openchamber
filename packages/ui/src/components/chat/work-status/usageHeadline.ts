@@ -41,7 +41,6 @@ export const resolveQuotaProviderId = (modelProviderId: string | null | undefine
     const connectionId = modelId.split(':')[1];
     return connectionId ? `kimi-claude:${connectionId}` : null;
   }
-  if (normalized === 'claude-native' && modelId?.startsWith('chatgpt:')) return null;
   return QUOTA_PROVIDER_ALIASES.get(normalized) ?? normalized;
 };
 

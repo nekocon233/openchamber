@@ -12,7 +12,6 @@ import { sessionNotFoundError } from './errors.js';
 import { registerNativeAgentRoutes } from './routes.js';
 import { createNativeAgentsRuntime } from './runtime.js';
 import { createSnapshotStore } from './snapshots.js';
-import { createChatgptStore } from './claude/chatgpt-store.js';
 
 const fixture = (name) => JSON.parse(fs.readFileSync(new URL(`./claude/fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -116,6 +115,8 @@ const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}) } 
     clientVersion: 'test',
     publishNativeEvent: (event) => events.push(event),
     loadSdk: async () => sdk,
+    // No gateway in tests: the local integration reports it as unreachable.
+    fetchImpl: async () => { throw new Error('no gateway in tests'); },
   });
   return Object.assign(runtime, { dataDir, events, turns, queries });
 };
@@ -137,31 +138,22 @@ const promptRequest = (messageID) => ({
 });
 
 describe('native agents runtime', () => {
-  it('captures ChatGPT effort for each resumed query and rejects changing it during a turn', async () => {
+  it('passes a connection model\'s effort through and rejects one the model does not offer', async () => {
     const runtime = createRuntime({ snapshotGit: async () => '' });
-    const store = createChatgptStore({ dataDir: runtime.dataDir });
-    await store.transaction((document) => { document.accounts = [{
-      id: SESSION_UUID, clientId: 'test-client', subject: 'test-user', email: '', revision: 1, welcomed: true,
-      credentials: { accessToken: 'fake-access', refreshToken: 'fake-refresh', idToken: 'fake-id', expiresAt: Date.now() + 3600000, scopes: ['chatgpt.tokens.use.direct'] },
-      models: [{ slug: 'gpt-fixture', display_name: 'GPT', visibility: 'list', supported_reasoning_levels: [{ effort: 'max' }, { effort: 'none' }] }],
-    }]; });
+    const modelUUID = '9c1e4f27-3a4b-4d5e-8f60-1b2c3d4e5f60';
+    const connection = await runtime.claudeConnections.save(null, {
+      kind: 'anthropic', name: 'Gateway', baseURL: 'http://127.0.0.1:8317', auth: 'api-key', apiKey: 'test-only-key',
+      models: [{ id: modelUUID, name: 'GPT', modelID: 'gpt-fixture', contextWindow: 200000, outputLimit: 128000, input: { image: true, pdf: false }, efforts: ['low', 'max'] }],
+    });
     const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
-    const model = { providerID: 'claude-native', modelID: `chatgpt:${SESSION_UUID}:${Buffer.from('gpt-fixture').toString('base64url')}` };
+    const model = { providerID: 'claude-native', modelID: `connection:${connection.id}:${modelUUID}` };
     const prompt = { ...promptRequest('ncl_u_4b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f'), model };
     try {
       await runtime.prompt(session.id, { ...prompt, variant: 'max' });
       await waitFor(() => runtime.turns.started === 1);
-      expect(runtime.queries[0]).not.toHaveProperty('effort');
-      await expect(runtime.prompt(session.id, { ...prompt, variant: 'none' })).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_BUSY' });
-      runtime.turns.finish.resolve();
-      await waitFor(async () => Object.keys(await runtime.statuses(DIRECTORY)).length === 0);
-      await runtime.prompt(session.id, { ...prompt, messageID: 'ncl_u_83d065d3-e4a6-4ccc-a739-45b0c75254e1', variant: 'none' });
-      await waitFor(async () => runtime.queries.length === 2 && Object.keys(await runtime.statuses(DIRECTORY)).length === 0);
-      await runtime.prompt(session.id, { ...prompt, messageID: 'ncl_u_2b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f' });
-      await waitFor(() => runtime.queries.length === 3);
-      expect(runtime.queries.every((options) => options.effort === undefined)).toBe(true);
-      expect(runtime.queries.slice(1).map((options) => options.resume)).toEqual([session.id.slice(4), session.id.slice(4)]);
-      await expect(runtime.prompt(session.id, { ...prompt, variant: 'ultra' })).rejects.toMatchObject({ code: 'CHATGPT_UNSUPPORTED_EFFORT' });
+      expect(runtime.queries[0]).toMatchObject({ model: 'gpt-fixture', effort: 'max' });
+      await expect(runtime.prompt(session.id, { ...prompt, variant: 'ultra' })).rejects.toThrow('does not support the selected reasoning effort');
+      expect(runtime.queries).toHaveLength(1);
     } finally { runtime.turns.finish.resolve(); await runtime.shutdown(); }
   });
 
@@ -942,18 +934,22 @@ describe('native agents routes', () => {
     expect(calls[1][2]).not.toBe(1);
   });
 
-  it('allows ChatGPT authorization only from the local management boundary', async () => {
+  it('keeps CLIProxyAPI gateway work on the local management boundary', async () => {
     const runtime = createRuntime();
     const remote = createApp(runtime);
     const local = createApp(runtime, () => true);
-    const base = '/api/native/claude/chatgpt';
-    await request(remote).get(`${base}/accounts`).expect(200, { accounts: [], localLogin: false });
-    await request(remote).post(`${base}/authorize`).send({ completionMessage: 'Return to the app.' }).expect(403);
-    const started = await request(local).post(`${base}/authorize`).send({ completionMessage: 'Return to the app.' }).expect(200);
-    expect(started.body.url).toMatch(/^https:\/\/auth.openai.com\/api\/accounts\/authorize/);
-    await request(remote).delete(`${base}/authorize/${started.body.attemptId}`).expect(403);
-    await request(local).delete(`${base}/authorize/${started.body.attemptId}`).expect(200, { cancelled: true });
-    await request(local).get(`${base}/authorize/${started.body.attemptId}`).expect(200, { status: 'cancelled', accountId: null });
+    const base = '/api/native/claude/cliproxyapi';
+    expect((await request(remote).get(base).expect(200)).body).toMatchObject({ configured: false, localLogin: false, reachable: false });
+    expect((await request(local).get(base).expect(200)).body).toMatchObject({ localLogin: true });
+    const denied = await request(remote).post(`${base}/login`).expect(403);
+    expect(denied.body).toMatchObject({ code: 'CLIPROXYAPI_LOCAL_LOGIN_REQUIRED' });
+    await request(remote).post(`${base}/key`).send({ baseURL: 'http://127.0.0.1:8317', managementKey: 'management-test-key' }).expect(403);
+    await request(remote).delete(`${base}/key`).expect(403);
+    await request(remote).delete(`${base}/login/abc123`).expect(403);
+    await request(remote).delete(`${base}/accounts/user.json`).expect(403);
+    await request(remote).post(`${base}/connection`).send({ name: 'CLIProxyAPI', models: [], clientKey: { source: 'added' } }).expect(403);
+    // The local request passes the guard and reaches the service, which has no gateway yet.
+    expect((await request(local).delete(`${base}/accounts/user.json`).expect(409)).body).toMatchObject({ code: 'CLIPROXYAPI_NOT_CONFIGURED' });
     await runtime.shutdown();
   });
 

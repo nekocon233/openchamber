@@ -1,5 +1,3 @@
-import { chatgptErrorLabel } from '@/lib/native-agents/chatgpt-error';
-import { openExternalUrl } from '@/lib/url';
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
@@ -222,8 +220,6 @@ export const SessionErrorNotice: React.FC<SessionErrorNoticeProps> = ({ sessionI
     detail = t('chat.sessionError.noDetails');
   }
 
-  const chatgptError = sessionId.startsWith('ncl_') ? chatgptErrorLabel(detail) : null;
-
   return (
     <div className="chat-message-column">
       <div
@@ -234,12 +230,11 @@ export const SessionErrorNotice: React.FC<SessionErrorNoticeProps> = ({ sessionI
           <Icon name="error-warning" className="size-3.5 shrink-0 text-[var(--status-error)]" />
           <span className="typography-meta font-medium text-foreground">{title}</span>
         </div>
-        <LongErrorText text={chatgptError ? t(chatgptError) : detail} buttonClassName="ms-[0.875rem]">
+        <LongErrorText text={detail} buttonClassName="ms-[0.875rem]">
           {(visibleText) => (
             <div className="mt-1 ps-[1.375rem] typography-meta text-muted-foreground break-words">{visibleText}</div>
           )}
         </LongErrorText>
-        {chatgptError ? <Button type="button" variant="link" size="sm" onClick={() => void openExternalUrl('https://chatgpt.com/settings/usage')}>{t('settings.chatgpt.manageUsage')}</Button> : null}
         {!hasDetails ? (
           <div className="ps-[1.375rem]">
             <Button

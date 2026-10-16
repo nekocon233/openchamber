@@ -1,5 +1,4 @@
-import { chatgptAccountsSchema, chatgptAuthorizationSchema, chatgptAuthorizationStatusSchema, chatgptSignOutSchema, chatgptCancelledSchema, chatgptWelcomeSchema } from '@openchamber/ui/lib/native-agents/connections';
-import { claudeConnectionListSchema, claudeConnectionSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
+import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCancelResultSchema, cliproxyapiForgetResultSchema, cliproxyapiKeyResultSchema, cliproxyapiLoginSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
 import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
 import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
@@ -42,7 +41,8 @@ const errorBodySchema = z.object({ error: z.string().optional(), code: z.string(
 
 type NativeWriteBody =
   | { sourceId: string; directory: string }
-  | { accountId: string | null; completionMessage: string }
+  | { baseURL: string; managementKey: string }
+  | CliproxyapiConnectionWrite
   | ClaudeConnectionWrite
   | CodexConnectionWrite
   | { backend: NativeBackend; directory: string; title?: string }
@@ -127,12 +127,14 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   importMemory: async (sourceId, directory) => { await writeParsed('/api/native/memory/import', z.object({ imported: z.literal(true), memoryId: z.string() }), { sourceId, directory }); },
   capabilities: () => readParsed('/api/native/capabilities', {}, nativeCapabilitiesSchema),
   catalog: () => readParsed('/api/native/catalog', {}, nativeCatalogSchema),
-  chatgptAccounts: () => readParsed('/api/native/claude/chatgpt/accounts', {}, chatgptAccountsSchema),
-  beginChatgptAuthorization: (input) => writeParsed('/api/native/claude/chatgpt/authorize', chatgptAuthorizationSchema, input),
-  chatgptAuthorizationStatus: (id) => readParsed(`/api/native/claude/chatgpt/authorize/${encodeURIComponent(id)}`, {}, chatgptAuthorizationStatusSchema),
-  cancelChatgptAuthorization: async (id) => (await sendParsed(`/api/native/claude/chatgpt/authorize/${encodeURIComponent(id)}`, chatgptCancelledSchema, { method: 'DELETE', query: {} })).cancelled,
-  acknowledgeChatgptPlan: async (id) => { await writeParsed(`/api/native/claude/chatgpt/accounts/${encodeURIComponent(id)}/welcome`, chatgptWelcomeSchema); },
-  signOutChatgpt: (id) => sendParsed(`/api/native/claude/chatgpt/accounts/${encodeURIComponent(id)}`, chatgptSignOutSchema, { method: 'DELETE', query: {} }),
+  cliproxyapiStatus: () => readParsed('/api/native/claude/cliproxyapi', {}, cliproxyapiStatusSchema),
+  saveCliproxyapiKey: (input) => sendParsed('/api/native/claude/cliproxyapi/key', cliproxyapiKeyResultSchema, { method: 'POST', body: input }),
+  forgetCliproxyapiKey: () => sendParsed('/api/native/claude/cliproxyapi/key', cliproxyapiForgetResultSchema, { method: 'DELETE', query: {} }),
+  beginCliproxyapiLogin: () => sendParsed('/api/native/claude/cliproxyapi/login', cliproxyapiLoginSchema, { method: 'POST' }),
+  cliproxyapiLoginStatus: (state) => readParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, {}, cliproxyapiLoginStatusSchema),
+  cancelCliproxyapiLogin: async (state) => (await sendParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, cliproxyapiCancelResultSchema, { method: 'DELETE', query: {} })).cancelled,
+  removeCliproxyapiAccount: async (name) => { await sendParsed(`/api/native/claude/cliproxyapi/accounts/${encodeURIComponent(name)}`, cliproxyapiRemovedSchema, { method: 'DELETE', query: {} }); },
+  saveCliproxyapiConnection: (input) => sendParsed('/api/native/claude/cliproxyapi/connection', claudeConnectionSchema, { method: 'POST', body: input }),
   listClaudeConnections: () => readParsed('/api/native/claude/connections', {}, claudeConnectionListSchema),
   saveClaudeConnection: (id, body) => sendParsed(
     id ? `/api/native/claude/connections/${encodeURIComponent(id)}` : '/api/native/claude/connections',

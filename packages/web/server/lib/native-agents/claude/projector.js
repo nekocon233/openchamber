@@ -463,8 +463,9 @@ export const createClaudeProjection = ({
       created: createdAfterPrevious(time),
       completed: null,
       providerID: NATIVE_PROVIDER_CLAUDE,
-      modelID: (sent?.modelID?.startsWith('connection:') || sent?.modelID?.startsWith('chatgpt:'))
-        ? sent.modelID : normalizeClaudeModelId(message.model) || previousModelID || sent?.modelID || '',
+      modelID: sent?.modelID?.startsWith('connection:')
+        ? sent.modelID
+        : normalizeClaudeModelId(message.model) || previousModelID || sent?.modelID || '',
       agent: sent?.agent ?? DEFAULT_AGENT,
       cwd,
       tokens: EMPTY_TOKENS,

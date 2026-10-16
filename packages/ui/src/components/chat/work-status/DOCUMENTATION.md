@@ -688,6 +688,5 @@ animation frame.
 Managed Claude connections have a separate quota identity from the CLI. The
 Usage headline uses the selected model's connection UUID to match its native
 Kimi quota card; it never substitutes the default Claude account when that card
-is absent. ChatGPT-plan models have no quota headline and use the plan usage
-link beside the composer. Provider-level quota cards remain independently
+is absent. Provider-level quota cards remain independently
 selectable in Settings.

@@ -60,10 +60,10 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
   },
   {
-    id: 'providers.chatgpt-plan',
+    id: 'providers.cliproxyapi',
     page: 'providers',
-    titleKey: 'settings.chatgpt.title',
-    keywords: ['chatgpt', 'gpt', 'claude code', 'oauth', 'plan'],
+    titleKey: 'settings.cliproxyapi.title',
+    keywords: ['cliproxyapi', 'chatgpt', 'gpt', 'codex', 'claude code', 'gateway', 'oauth'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {

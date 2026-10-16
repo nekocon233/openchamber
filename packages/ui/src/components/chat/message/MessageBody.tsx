@@ -1,5 +1,3 @@
-import { chatgptErrorLabel } from '@/lib/native-agents/chatgpt-error';
-import { openExternalUrl } from '@/lib/url';
 import React from 'react';
 import type { Part } from '@/lib/opencode/model';
 
@@ -1607,7 +1605,6 @@ const AssistantMessageBody = React.memo(({
         [assistantTextParts, earlierAssistantText, shareMessageAsImage, t]
     );
 
-    const chatgptError = sessionId?.startsWith('ncl_') && errorMessage ? chatgptErrorLabel(errorMessage) : null;
     const showErrorMessage = Boolean(errorMessage);
     const isPeekSurface = chatSurfaceMode === 'peek';
     const shouldShowMessageActions = hasCopyableText && !isPeekSurface;
@@ -2193,7 +2190,7 @@ const AssistantMessageBody = React.memo(({
                                 <div className="flex items-center gap-3">
                                     <Icon name="information" className="size-4 shrink-0 text-[var(--status-info)]" />
                                     <div className="min-w-0 flex-1 break-words">
-                                        <LongErrorText text={chatgptError ? t(chatgptError) : errorMessage ?? ''}>
+                                        <LongErrorText text={errorMessage ?? ''}>
                                             {(visibleText) => (
                                                 <SimpleMarkdownRenderer
                                                     content={visibleText}
@@ -2203,9 +2200,6 @@ const AssistantMessageBody = React.memo(({
                                                 />
                                             )}
                                         </LongErrorText>
-                                        {chatgptError ? <Button type="button" variant="link" size="sm" onClick={() => void openExternalUrl('https://chatgpt.com/settings/usage')}>
-                                            {t('settings.chatgpt.manageUsage')}
-                                        </Button> : null}
                                     </div>
                                 </div>
                                 {errorResponseBody ? <ErrorResponseDetails body={errorResponseBody} className="mt-1 ps-7" /> : null}

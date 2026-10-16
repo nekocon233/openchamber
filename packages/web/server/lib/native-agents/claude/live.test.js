@@ -82,7 +82,7 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = 
   return { sdk, calls };
 };
 
-const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, inspectReplayHistory = async () => ({ toolReferences: [], hasGptReplayState: false }), idleTimeoutMs = 60_000, maxLiveSessions, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest, afterFrames } = {}) => {
+const createHarness = ({ failAfter = null, exitDelayMs = 0, hasTranscript = false, inspectReplayHistory = async () => ({ toolReferences: [], hasRemovedPlanReplayState: false }), idleTimeoutMs = 60_000, maxLiveSessions, onIdle, executable = '/usr/local/bin/claude', platform = 'darwin', instructions = null, permissionRequest, afterFrames } = {}) => {
   const events = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
   const questions = createQuestionRegistry({
@@ -939,7 +939,7 @@ describe('Claude connection switching', () => {
   });
 
   it('refuses to resume Tool Search history onto an endpoint that rejects it, before spawning', async () => {
-    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: ['Monitor', 'ExitPlanMode'], hasGptReplayState: false }) });
+    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: ['Monitor', 'ExitPlanMode'], hasRemovedPlanReplayState: false }) });
     await expect(sendPrompt(harness.live, { config: config('first') })).rejects.toMatchObject({
       code: 'NATIVE_HISTORY_NOT_PORTABLE', status: 400, message: expect.stringContaining('Monitor'),
     });
@@ -947,9 +947,9 @@ describe('Claude connection switching', () => {
     await harness.live.shutdown();
   });
 
-  it('allows Tool Search history on the default Anthropic login after checking for GPT state', async () => {
+  it('allows Tool Search history on the default Anthropic login after checking for removed-plan state', async () => {
     const scanned = [];
-    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async (...args) => { scanned.push(args); return { toolReferences: ['Monitor'], hasGptReplayState: false }; } });
+    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async (...args) => { scanned.push(args); return { toolReferences: ['Monitor'], hasRemovedPlanReplayState: false }; } });
     await sendPrompt(harness.live);
     expect(scanned).toHaveLength(1);
     expect(harness.calls.queries).toHaveLength(1);
@@ -958,21 +958,12 @@ describe('Claude connection switching', () => {
     await harness.live.shutdown();
   });
 
-  it.each(['default', 'connection'])('refuses GPT state on the %s provider before spawning', async (provider) => {
-    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: [], hasGptReplayState: true }) });
-    await expect(sendPrompt(harness.live, provider === 'connection' ? { config: config('other') } : {})).rejects.toMatchObject({ code: 'NATIVE_GPT_REPLAY_NOT_PORTABLE', status: 400 });
+  it.each(['default', 'connection'])('refuses removed-plan replay state on the %s provider before spawning', async (provider) => {
+    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: [], hasRemovedPlanReplayState: true }) });
+    await expect(sendPrompt(harness.live, provider === 'connection' ? { config: config('other') } : {})).rejects.toMatchObject({
+      code: 'NATIVE_GPT_REPLAY_UNRESUMABLE', status: 400, message: expect.stringContaining('no longer supports'),
+    });
     expect(harness.calls.queries).toHaveLength(0);
-    await harness.live.shutdown();
-  });
-
-  it('allows GPT replay state on a new ChatGPT query', async () => {
-    const harness = createHarness({ hasTranscript: true, inspectReplayHistory: async () => ({ toolReferences: [], hasGptReplayState: true }) });
-    const selected = config('chatgpt');
-    selected.launch.descriptor = { name: 'GPT fixture', billing: 'chatgpt-plan' };
-    await sendPrompt(harness.live, { config: selected });
-    expect(harness.calls.queries).toHaveLength(1);
-    await answerQuestion(harness);
-    await harness.live.whenIdle(SESSION_ID);
     await harness.live.shutdown();
   });
 

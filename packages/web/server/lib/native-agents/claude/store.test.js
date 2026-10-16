@@ -191,17 +191,17 @@ describe('Claude session store', () => {
 
   it('finds Tool Search references in the chain a resume replays, ignoring text mentions and sidechains', async () => {
     const { store } = await createHarness();
-    await expect(store.inspectReplayHistory(POISON_UUID, DIRECTORY)).resolves.toEqual({ toolReferences: ['Monitor'], hasGptReplayState: false });
-    await expect(store.inspectReplayHistory(TERMINAL_UUID, DIRECTORY)).resolves.toEqual({ toolReferences: [], hasGptReplayState: false });
+    await expect(store.inspectReplayHistory(POISON_UUID, DIRECTORY)).resolves.toEqual({ toolReferences: ['Monitor'], hasRemovedPlanReplayState: false });
+    await expect(store.inspectReplayHistory(TERMINAL_UUID, DIRECTORY)).resolves.toEqual({ toolReferences: [], hasRemovedPlanReplayState: false });
   });
 
-  it('detects GPT carriers by block type and ownership, excluding sidechains', async () => {
+  it('detects removed-plan replay carriers by block type and ownership, excluding sidechains', async () => {
     const marker = { type: 'redacted_thinking', data: 'openchamber-responses:fixture' };
     const sidechain = { type: 'assistant', uuid: 'gpt-child', isSidechain: true, message: { role: 'assistant', content: [marker] } };
     const childOnly = await createHarness({ replayChain: [...poisonedChain, sidechain] });
-    expect((await childOnly.store.inspectReplayHistory(POISON_UUID, DIRECTORY)).hasGptReplayState).toBe(false);
+    expect((await childOnly.store.inspectReplayHistory(POISON_UUID, DIRECTORY)).hasRemovedPlanReplayState).toBe(false);
     const root = await createHarness({ replayChain: [...poisonedChain, { ...sidechain, uuid: 'gpt-root', isSidechain: false }] });
-    expect((await root.store.inspectReplayHistory(POISON_UUID, DIRECTORY)).hasGptReplayState).toBe(true);
+    expect((await root.store.inspectReplayHistory(POISON_UUID, DIRECTORY)).hasRemovedPlanReplayState).toBe(true);
   });
 
   it('rewinds to the chain entry before a prompt and names the user entries it drops', async () => {
