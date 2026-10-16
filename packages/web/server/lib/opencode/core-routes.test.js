@@ -1283,7 +1283,7 @@ describe('client auth routes', () => {
     })).toBe(false);
   });
 
-  it('rejects remote tunnel settings writes without blocking unrelated settings', async () => {
+  it('accepts tunnel settings writes without a host-local header', async () => {
     const app = express();
     app.use(express.json());
     const persistSettings = vi.fn(async (changes) => changes);
@@ -1291,19 +1291,10 @@ describe('client auth routes', () => {
     registerOpenCodeRoutes(app, {
       persistSettings,
       sidebarStateRuntime: { assertSettingsWriteAllowed },
-      isTunnelManagementAllowed: (req) => req.headers['x-host-local'] === '1',
     });
 
     await request(app)
       .put('/api/config/settings')
-      .send({ frpcServerAddress: 'frps.example.com' })
-      .expect(403, {
-        error: 'Tunnel management is only available from the host machine',
-        code: 'host_only',
-      });
-    await request(app)
-      .put('/api/config/settings')
-      .set('x-host-local', '1')
       .send({ frpcServerAddress: 'frps.example.com' })
       .expect(200, { frpcServerAddress: 'frps.example.com' });
     await request(app)

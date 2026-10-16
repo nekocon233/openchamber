@@ -899,6 +899,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
           <div className="oc-surface-elevated flex h-10 items-center gap-1.5 rounded-md border border-border bg-surface-elevated/70 px-2 text-muted-foreground focus-within:ring-2 focus-within:ring-ring sm:h-8">
             <Icon name="search" className="h-4 w-4 shrink-0" />
             <input
+              type="search"
+              name="settings-search"
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-bwignore="true"
               value={settingsSearchQuery}
               onChange={(event) => setSettingsSearchQuery(event.target.value)}
               onKeyDown={handleSettingsSearchKeyDown}

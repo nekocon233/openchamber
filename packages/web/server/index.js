@@ -2849,7 +2849,8 @@ async function main(options = {}) {
     sidebarStateRuntime,
     followUpQueueRuntime,
     isExternalOpenCode: () => ENV_SKIP_OPENCODE_START || openCodeLifecycleState.isExternalOpenCode === true,
-    isTunnelManagementAllowed: (req) => tunnelAuthController.isLocalManagementRequest(req),
+    // The memory tools still require a request from the server machine itself.
+    isLocalManagementRequest: (req) => tunnelAuthController.isLocalManagementRequest(req),
     worktreeBootstrapStore,
     messageQueueRuntime,
     routingRuntime,

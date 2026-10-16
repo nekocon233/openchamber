@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "閘道的管理介面沒有開啟。在它的設定裡設定 management.secret-key 並重新啟動。",
   "settings.cliproxyapi.keyRejected": "閘道拒絕了這個已儲存的管理金鑰，請重新儲存。",
   "settings.cliproxyapi.failed": "閘道請求失敗。",
-  "settings.cliproxyapi.localOnly": "請在這台執行 OpenChamber 伺服器的電腦上管理閘道。",
 
 
 

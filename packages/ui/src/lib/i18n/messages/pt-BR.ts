@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "A API de gerenciamento do gateway está desligada. Defina management.secret-key na configuração e reinicie.",
   "settings.cliproxyapi.keyRejected": "O gateway recusou a chave de gerenciamento salva. Salve novamente.",
   "settings.cliproxyapi.failed": "A requisição ao gateway falhou.",
-  "settings.cliproxyapi.localOnly": "Gerencie o gateway no computador que executa este servidor OpenChamber.",
 
 
 

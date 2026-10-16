@@ -17,6 +17,7 @@ import { z } from 'zod';
 
 import { codexVariantSettings } from './catalog.js';
 import { createClaudeConnections } from './claude/connections.js';
+import { createCliproxyapiBinaryManager } from './cliproxyapi/binary-manager.js';
 import { createCliproxyapiService } from './cliproxyapi/service.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
@@ -120,6 +121,7 @@ const untilRewound = (records, pending) => {
  * @param {ReturnType<typeof createSnapshotStore>} [options.snapshots]
  * @param {() => number} [options.now]
  * @param {typeof fetch} [options.fetchImpl] transport for the local gateway integration
+ * @param {ReturnType<typeof import('./cliproxyapi/binary-manager.js').createCliproxyapiBinaryManager>} [options.cliproxyapiBinaryManager]
  */
 const openChamberNamespace = z.record(z.string(), z.unknown()).catch({});
 
@@ -150,10 +152,11 @@ export const createNativeAgentsRuntime = ({
   managedChatsRoots = [],
   memory = null,
   fetchImpl = fetch,
+  cliproxyapiBinaryManager = createCliproxyapiBinaryManager({ dataDir }),
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
   const claudeConnections = createClaudeConnections({ dataDir });
-  const cliproxyapi = createCliproxyapiService({ dataDir, connections: claudeConnections, fetchImpl, buildEnv: buildChildEnv, now });
+  const cliproxyapi = createCliproxyapiService({ dataDir, connections: claudeConnections, fetchImpl, binaryManager: cliproxyapiBinaryManager, buildEnv: buildChildEnv, now });
   const reverts = createNativeReverts({ registry, snapshots });
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
   const interactions = createNativeInteractions({ dataDir, now });

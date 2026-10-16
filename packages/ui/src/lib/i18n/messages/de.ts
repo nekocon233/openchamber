@@ -135,7 +135,6 @@ export const dict = {
   "settings.cliproxyapi.managementDisabled": "Die Verwaltungs-API des Gateways ist aus. Setze management.secret-key in seiner Konfiguration und starte es neu.",
   "settings.cliproxyapi.keyRejected": "Das Gateway hat den gespeicherten Verwaltungsschlüssel abgelehnt. Speichere ihn erneut.",
   "settings.cliproxyapi.failed": "Die Anfrage an das Gateway ist fehlgeschlagen.",
-  "settings.cliproxyapi.localOnly": "Verwalte das Gateway auf dem Computer, auf dem dieser OpenChamber-Server läuft.",
 
 
 

@@ -262,7 +262,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       sidebarStateRuntime,
       followUpQueueRuntime,
       isExternalOpenCode,
-      isTunnelManagementAllowed,
+      isLocalManagementRequest,
       worktreeBootstrapStore,
       messageQueueRuntime,
       routingRuntime,
@@ -271,7 +271,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       nativeAgentsRuntime,
     } = routeDependencies;
 
-    registerNativeAgentRoutes(app, { runtime: nativeAgentsRuntime, isLocalManagementRequest: isTunnelManagementAllowed });
+    registerNativeAgentRoutes(app, { runtime: nativeAgentsRuntime, isLocalManagementRequest });
     registerSidebarStateRoutes(app, sidebarStateRuntime);
     registerFollowUpQueueRoutes(app, followUpQueueRuntime);
 
@@ -310,7 +310,6 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       buildOpenCodeUrl,
       getOpenCodeAuthHeaders,
       isExternalOpenCode,
-      isTunnelManagementAllowed,
     });
 
     registerProjectIconRoutes(app, {

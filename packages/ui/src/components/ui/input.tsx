@@ -12,6 +12,12 @@ type InputProps = React.ComponentProps<"input"> & {
 }
 
 function Input({ className, type, inputSize = "default", ...props }: InputProps) {
+  // A password field asks for a *new* secret, not a stored one: `new-password`
+  // keeps Browser password managers from filling a saved login, and the
+  // manager opt-outs keep extensions (1Password, Bitwarden, LastPass) off it.
+  // Callers that really are a login form pass `autoComplete="current-password"`
+  // and override all three, because `{...props}` spreads last.
+  const password = type === "password";
   return (
     <input
       type={type}
@@ -28,9 +34,10 @@ function Input({ className, type, inputSize = "default", ...props }: InputProps)
         className
       )}
       spellCheck={false}
-      autoComplete="off"
+      autoComplete={password ? "new-password" : "off"}
       autoCorrect="off"
       autoCapitalize="off"
+      {...(password ? { "data-lpignore": "true", "data-1p-ignore": "true", "data-bwignore": "true" } : null)}
       {...props}
     />
   )

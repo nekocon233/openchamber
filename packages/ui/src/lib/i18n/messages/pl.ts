@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "API zarządzania bramki jest wyłączone. Ustaw management.secret-key w jej konfiguracji i uruchom ją ponownie.",
   "settings.cliproxyapi.keyRejected": "Bramka odrzuciła zapisany klucz zarządzania. Zapisz go ponownie.",
   "settings.cliproxyapi.failed": "Żądanie do bramki nie powiodło się.",
-  "settings.cliproxyapi.localOnly": "Zarządzaj bramką na komputerze, na którym działa ten serwer OpenChamber.",
 
 
 

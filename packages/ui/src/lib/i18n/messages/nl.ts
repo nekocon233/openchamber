@@ -4046,7 +4046,6 @@ export const dict = {
   'settings.cliproxyapi.managementDisabled': 'De beheer-API van de gateway staat uit. Stel management.secret-key in de configuratie in en herstart hem.',
   'settings.cliproxyapi.keyRejected': 'De gateway weigerde de opgeslagen beheersleutel. Sla hem opnieuw op.',
   'settings.cliproxyapi.failed': 'Het verzoek aan de gateway is mislukt.',
-  'settings.cliproxyapi.localOnly': 'Beheer de gateway op de computer waarop deze OpenChamber-server draait.',
 
   'settings.claudeConnections.title': 'Claude Code connections',
   'settings.claudeConnections.url': 'API endpoint',

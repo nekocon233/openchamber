@@ -18,7 +18,6 @@ const DEFAULT_MODEL = { modelID: 'gpt-6.1-sol', name: 'GPT-6.1-Sol', contextWind
 
 const failureKey = (error: NativeAgentsRequestError): I18nKey => {
   switch (error.code) {
-    case 'CLIPROXYAPI_LOCAL_LOGIN_REQUIRED': return 'settings.cliproxyapi.localOnly';
     case 'CLIPROXYAPI_NOT_REACHABLE': return 'settings.cliproxyapi.notReachable';
     case 'CLIPROXYAPI_MANAGEMENT_DISABLED': return 'settings.cliproxyapi.managementDisabled';
     case 'CLIPROXYAPI_KEY_REJECTED': return 'settings.cliproxyapi.keyRejected';
@@ -108,7 +107,6 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [attempt, pollTick, nativeAgents, load, runtimeKey]);
 
-  const local = status?.localLogin === true;
   const apply = (value: Awaited<ReturnType<typeof nativeAgents.cliproxyapiStatus>> | null) => {
     if (value !== null) setStatus(value);
   };
@@ -192,7 +190,6 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
       {status?.lastError ? <p role="status" className="text-[var(--status-warning-text)]">{status.lastError}</p> : null}
       {status?.ready === true && status.managementEnabled === false ? <p role="status" className="text-[var(--status-warning-text)]">{t('settings.cliproxyapi.managementDisabled')}</p> : null}
       {status?.keyRejected === true ? <p role="status" className="text-[var(--status-warning-text)]">{t('settings.cliproxyapi.keyRejected')}</p> : null}
-      {!local && status !== null ? <p role="status" className="text-muted-foreground">{t('settings.cliproxyapi.localOnly')}</p> : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <span className="flex items-center gap-2">
@@ -205,9 +202,9 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
       </div>
       <div className="flex flex-wrap gap-2">
         {status?.running === true || status?.enabled === true ? (
-          <Button type="button" disabled={!local || busy || status?.restarting === true} onClick={() => void stopGateway()}>{busy ? t('settings.cliproxyapi.statusStopping') : t('settings.cliproxyapi.stop')}</Button>
+          <Button type="button" disabled={busy || status?.restarting === true} onClick={() => void stopGateway()}>{busy ? t('settings.cliproxyapi.statusStopping') : t('settings.cliproxyapi.stop')}</Button>
         ) : (
-          <Button type="button" disabled={!local || busy || install?.supported === false} onClick={() => void startGateway()}>
+          <Button type="button" disabled={busy || install?.supported === false} onClick={() => void startGateway()}>
             {busy
               ? t('settings.cliproxyapi.statusStarting')
               : install?.supported !== false && (outdated || install?.prepared === false)
@@ -219,8 +216,8 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
 
       <SettingsStackedField label={t('settings.cliproxyapi.upstreamProxy')} info={t('settings.cliproxyapi.upstreamProxyHint')}>
         <div className="flex flex-wrap items-center gap-2">
-          <Input className="h-8" type="url" aria-label={t('settings.cliproxyapi.upstreamProxy')} value={proxy} disabled={!local || busy || status?.restarting === true} onChange={(event) => setProxy(event.target.value)} />
-          <Button type="button" variant="outline" disabled={!local || busy || status?.restarting === true} onClick={() => void saveProxy()}>{t('settings.claudeConnections.save')}</Button>
+          <Input className="h-8" type="url" aria-label={t('settings.cliproxyapi.upstreamProxy')} value={proxy} disabled={busy || status?.restarting === true} onChange={(event) => setProxy(event.target.value)} />
+          <Button type="button" variant="outline" disabled={busy || status?.restarting === true} onClick={() => void saveProxy()}>{t('settings.claudeConnections.save')}</Button>
         </div>
       </SettingsStackedField>
 
@@ -239,7 +236,7 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
                 <Button variant="ghost" disabled={busy} onClick={() => setRemoving(null)}>{t('settings.claudeConnections.cancel')}</Button>
               </div>
             ) : (
-              <Button variant="ghost" disabled={!local || busy} onClick={() => setRemoving(account.name)}>{t('settings.cliproxyapi.remove')}</Button>
+              <Button variant="ghost" disabled={busy} onClick={() => setRemoving(account.name)}>{t('settings.cliproxyapi.remove')}</Button>
             )}
           </SettingsStackedField>
         ))}
@@ -247,7 +244,7 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
 
       <SettingsSection title={t('settings.cliproxyapi.signIn')} contentClassName="space-y-2">
         {attempt === null ? (
-          <Button type="button" disabled={!local || busy || status?.managementEnabled !== true} onClick={() => void signIn()}>{t('settings.cliproxyapi.signIn')}</Button>
+          <Button type="button" disabled={busy || status?.managementEnabled !== true} onClick={() => void signIn()}>{t('settings.cliproxyapi.signIn')}</Button>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
             <span role="status">{t('settings.cliproxyapi.pending')}</span>
@@ -259,7 +256,7 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
       <SettingsSection title={t('settings.claudeConnections.connection')} contentClassName="space-y-4">
         <p className="typography-ui-label text-muted-foreground">{t('settings.cliproxyapi.connectionHint')}</p>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" disabled={!local || busy || status?.ready !== true} onClick={() => void importModels()}>{t('settings.cliproxyapi.importModels')}</Button>
+          <Button type="button" disabled={busy || status?.ready !== true} onClick={() => void importModels()}>{t('settings.cliproxyapi.importModels')}</Button>
           {imported === null ? null : (
             <span role="status" className="text-muted-foreground">
               {t('settings.cliproxyapi.imported', { count: imported.count })}
@@ -270,13 +267,13 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
         <p className="typography-ui-label text-muted-foreground">{t('settings.cliproxyapi.importHint')}</p>
         <SettingsTwoColumn>
           <SettingsStackedField label={t('settings.claudeConnections.name')}>
-            <Input className="h-8" aria-label={t('settings.claudeConnections.name')} value={connectionName} disabled={!local || busy} onChange={(event) => setConnectionName(event.target.value)} />
+            <Input className="h-8" aria-label={t('settings.claudeConnections.name')} value={connectionName} disabled={busy} onChange={(event) => setConnectionName(event.target.value)} />
           </SettingsStackedField>
           <SettingsStackedField label={t('settings.claudeConnections.modelID')}>
-            <Input className="h-8" aria-label={t('settings.claudeConnections.modelID')} value={model.modelID} disabled={!local || busy} onChange={(event) => setModel({ ...model, modelID: event.target.value })} />
+            <Input className="h-8" aria-label={t('settings.claudeConnections.modelID')} value={model.modelID} disabled={busy} onChange={(event) => setModel({ ...model, modelID: event.target.value })} />
           </SettingsStackedField>
           <SettingsStackedField label={t('settings.claudeConnections.name')}>
-            <Input className="h-8" aria-label={t('settings.claudeConnections.name')} value={model.name} disabled={!local || busy} onChange={(event) => setModel({ ...model, name: event.target.value })} />
+            <Input className="h-8" aria-label={t('settings.claudeConnections.name')} value={model.name} disabled={busy} onChange={(event) => setModel({ ...model, name: event.target.value })} />
           </SettingsStackedField>
           <SettingsStackedField label={t('settings.claudeConnections.context')}>
             <div className={SETTINGS_NUMBER_STEPPER_ROW_CLASS}><NumberInput min={1024} max={10_000_000} aria-label={t('settings.claudeConnections.context')} value={model.contextWindow} onValueChange={(contextWindow) => setModel({ ...model, contextWindow })} /></div>
@@ -286,7 +283,7 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
           </SettingsStackedField>
         </SettingsTwoColumn>
         <SettingsCheckboxRow checked={model.image} onChange={(image) => setModel({ ...model, image })} label={t('settings.claudeConnections.image')} />
-        <Button type="button" disabled={!local || busy || status?.ready !== true || connectionName.trim() === '' || model.modelID.trim() === ''} onClick={() => void saveConnection()}>{status?.connection == null ? t('settings.cliproxyapi.createConnection') : t('settings.cliproxyapi.updateConnection')}</Button>
+        <Button type="button" disabled={busy || status?.ready !== true || connectionName.trim() === '' || model.modelID.trim() === ''} onClick={() => void saveConnection()}>{status?.connection == null ? t('settings.cliproxyapi.createConnection') : t('settings.cliproxyapi.updateConnection')}</Button>
       </SettingsSection>
     </SettingsSection>
   );

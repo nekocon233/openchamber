@@ -135,7 +135,6 @@ export const dict = {
   "settings.cliproxyapi.managementDisabled": "Ağ geçidinin yönetim API’si kapalı. Yapılandırmasında management.secret-key ayarla ve yeniden başlat.",
   "settings.cliproxyapi.keyRejected": "Ağ geçidi kayıtlı yönetim anahtarını reddetti. Yeniden kaydet.",
   "settings.cliproxyapi.failed": "Ağ geçidi isteği başarısız oldu.",
-  "settings.cliproxyapi.localOnly": "Ağ geçidini bu OpenChamber sunucusunu çalıştıran bilgisayarda yönet.",
 
 
 

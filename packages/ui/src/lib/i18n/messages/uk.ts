@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "API керування шлюзу вимкнено. Установіть management.secret-key у його конфігурації та перезапустіть.",
   "settings.cliproxyapi.keyRejected": "Шлюз відхилив збережений ключ керування. Збережіть його знову.",
   "settings.cliproxyapi.failed": "Запит до шлюзу не вдався.",
-  "settings.cliproxyapi.localOnly": "Керуйте шлюзом на комп’ютері, де запущено цей сервер OpenChamber.",
 
 
 

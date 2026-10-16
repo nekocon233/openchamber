@@ -22,28 +22,6 @@ import { discoverProviderModels } from './model-discovery.js';
 import { readDisabledProviders, setProviderDisabled } from './providers.js';
 import { vcsInitRefusal, vcsInitRefusalBody } from '../git/repository-root.js';
 
-const TUNNEL_SETTINGS_KEYS = new Set([
-  'tunnelBootstrapTtlMs',
-  'tunnelSessionTtlMs',
-  'tunnelProvider',
-  'tunnelMode',
-  'managedLocalTunnelConfigPath',
-  'managedRemoteTunnelHostname',
-  'managedRemoteTunnelToken',
-  'managedRemoteTunnelPresets',
-  'managedRemoteTunnelPresetTokens',
-  'managedRemoteTunnelSelectedPresetId',
-  'frpcProxyType',
-  'frpcServerAddress',
-  'frpcServerPort',
-  'frpcRemotePort',
-  'frpcPublicUrl',
-  'frpcCustomDomain',
-  'frpcPublicHostname',
-]);
-
-const includesTunnelSettings = (changes) => Object.keys(changes || {}).some((key) => TUNNEL_SETTINGS_KEYS.has(key));
-
 export const registerOpenCodeRoutes = (app, dependencies) => {
   const {
     crypto,
@@ -64,7 +42,6 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     getOpenCodeAuthHeaders,
     sidebarStateRuntime,
     isExternalOpenCode = () => false,
-    isTunnelManagementAllowed = () => false,
   } = dependencies;
 
   let authLibrary = null;
@@ -308,12 +285,6 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
 
   app.put('/api/config/settings', async (req, res) => {
     try {
-      if (includesTunnelSettings(req.body) && !isTunnelManagementAllowed(req)) {
-        return res.status(403).json({
-          error: 'Tunnel management is only available from the host machine',
-          code: 'host_only',
-        });
-      }
       sidebarStateRuntime.assertSettingsWriteAllowed(req.body ?? {});
       const updated = await persistSettings(req.body ?? {}, { surface: settingsSurfaceOf(req) });
       res.json(updated);

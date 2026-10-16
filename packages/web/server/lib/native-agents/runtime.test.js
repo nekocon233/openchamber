@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { registerCommonRequestMiddleware } from '../opencode/core-routes.js';
 import { JsonRpcError } from './codex/rpc.js';
-import { sessionNotFoundError } from './errors.js';
+import { NativeAgentError, sessionNotFoundError } from './errors.js';
 import { registerNativeAgentRoutes } from './routes.js';
 import { createNativeAgentsRuntime } from './runtime.js';
 import { createSnapshotStore } from './snapshots.js';
@@ -49,7 +49,7 @@ const scriptedTurnEnd = (apiMessageId) => [
   { type: 'result', subtype: 'success', is_error: false, result: 'Done.', terminal_reason: 'completed', queued_turn_count: 0 },
 ];
 
-const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}) } = {}) => {
+const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}), cliproxyapiBinaryManager = undefined } = {}) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-native-runtime-'));
   directories.push(dataDir);
   const info = { sessionId: SESSION_UUID, summary: 'Terminal work', lastModified: 2000, fileSize: 10, createdAt: 1000 };
@@ -117,6 +117,7 @@ const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}) } 
     loadSdk: async () => sdk,
     // No gateway in tests: the local integration reports it as unreachable.
     fetchImpl: async () => { throw new Error('no gateway in tests'); },
+    cliproxyapiBinaryManager,
   });
   return Object.assign(runtime, { dataDir, events, turns, queries });
 };
@@ -934,27 +935,35 @@ describe('native agents routes', () => {
     expect(calls[1][2]).not.toBe(1);
   });
 
-  it('keeps CLIProxyAPI gateway work on the local management boundary', async () => {
-    const runtime = createRuntime();
-    const remote = createApp(runtime);
-    const local = createApp(runtime, () => true);
+  it('lets any authenticated client manage the CLIProxyAPI gateway', async () => {
+    const runtime = createRuntime({
+      // No gateway binary in tests: starting one fails in the service, which is
+      // exactly what proves the request reached it.
+      cliproxyapiBinaryManager: {
+        version: '8.0.31',
+        getPaths: () => ({ binaryPath: '/nonexistent/cli-proxy-api', target: 'darwin-arm64' }),
+        inspect: async () => ({ supported: true, prepared: false, path: null, version: '8.0.31', target: 'darwin-arm64', error: 'not installed' }),
+        prepare: async () => { throw new NativeAgentError('The gateway is not installed in tests', { code: 'CLIPROXYAPI_START_FAILED', status: 502 }); },
+      },
+    });
+    const app = createApp(runtime);
     const base = '/api/native/claude/cliproxyapi';
-    expect((await request(remote).get(base).expect(200)).body).toMatchObject({ localLogin: false, running: false, enabled: false });
-    expect((await request(local).get(base).expect(200)).body).toMatchObject({ localLogin: true });
-    const denied = await request(remote).post(`${base}/login`).expect(403);
-    expect(denied.body).toMatchObject({ code: 'CLIPROXYAPI_LOCAL_LOGIN_REQUIRED' });
-    await request(remote).post(`${base}/start`).expect(403);
-    await request(remote).post(`${base}/stop`).expect(403);
-    await request(remote).post(`${base}/proxy`).send({ upstreamProxy: null }).expect(403);
-    await request(remote).delete(`${base}/login/abc123`).expect(403);
-    await request(remote).delete(`${base}/accounts/user.json`).expect(403);
-    await request(remote).post(`${base}/connection`).send({ name: 'CLIProxyAPI', models: [] }).expect(403);
-    await request(remote).post(`${base}/import`).send({}).expect(403);
-    // Reading is not gated; this fixture has no gateway to ask.
-    expect((await request(remote).get(`${base}/models`).expect(503)).body).toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
-    // The local request passes the guard and reaches the service, which has no
-    // gateway to talk to in this fixture.
-    expect((await request(local).delete(`${base}/accounts/user.json`).expect(503)).body).toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
+    expect((await request(app).get(base).expect(200)).body).toMatchObject({ running: false, enabled: false });
+    expect((await request(app).post(`${base}/stop`).expect(200)).body).toMatchObject({ running: false });
+    expect((await request(app).post(`${base}/proxy`).send({ upstreamProxy: null }).expect(200)).body).toMatchObject({ upstreamProxy: null });
+    expect((await request(app).post(`${base}/start`).expect(502)).body).toMatchObject({ code: 'CLIPROXYAPI_START_FAILED' });
+    // The remaining routes need a gateway to answer; they fail in the service,
+    // never at a route guard.
+    for (const call of [
+      () => request(app).post(`${base}/login`),
+      () => request(app).delete(`${base}/login/abc123`),
+      () => request(app).delete(`${base}/accounts/user.json`),
+      () => request(app).get(`${base}/models`),
+      () => request(app).post(`${base}/import`).send({}),
+      () => request(app).post(`${base}/connection`).send({ name: 'CLIProxyAPI', models: [] }),
+    ]) {
+      expect((await call()).status).not.toBe(403);
+    }
     await runtime.shutdown();
   });
 

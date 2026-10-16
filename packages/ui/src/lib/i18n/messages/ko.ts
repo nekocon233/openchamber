@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "게이트웨이 관리 API가 꺼져 있습니다. 설정에서 management.secret-key를 지정하고 다시 시작하세요.",
   "settings.cliproxyapi.keyRejected": "저장된 관리 키를 게이트웨이가 거부했습니다. 다시 저장하세요.",
   "settings.cliproxyapi.failed": "게이트웨이 요청이 실패했습니다.",
-  "settings.cliproxyapi.localOnly": "OpenChamber 서버가 실행되는 컴퓨터에서 게이트웨이를 관리하세요.",
 
 
 

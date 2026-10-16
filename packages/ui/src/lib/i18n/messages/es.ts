@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "La API de administración de la pasarela está desactivada. Define management.secret-key en su configuración y reiníciala.",
   "settings.cliproxyapi.keyRejected": "La pasarela rechazó la clave de administración guardada. Vuelve a guardarla.",
   "settings.cliproxyapi.failed": "La petición a la pasarela falló.",
-  "settings.cliproxyapi.localOnly": "Administra la pasarela en el ordenador que ejecuta este servidor de OpenChamber.",
 
 
 

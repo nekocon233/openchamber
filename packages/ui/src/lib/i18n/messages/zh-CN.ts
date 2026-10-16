@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "网关的管理接口没有开启。在它的配置里设置 management.secret-key 并重启。",
   "settings.cliproxyapi.keyRejected": "网关拒绝了这个已保存的管理密钥，请重新保存。",
   "settings.cliproxyapi.failed": "网关请求失败。",
-  "settings.cliproxyapi.localOnly": "请在这台运行 OpenChamber 服务器的电脑上管理网关。",
 
 
 

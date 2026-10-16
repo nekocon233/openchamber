@@ -135,7 +135,6 @@ export const dict = {
   "settings.cliproxyapi.managementDisabled": "The gateway's management API is off. Set management.secret-key in its config and restart it.",
   "settings.cliproxyapi.keyRejected": "The gateway rejected the saved management key. Save it again.",
   "settings.cliproxyapi.failed": "The gateway request failed.",
-  "settings.cliproxyapi.localOnly": "Manage the gateway on the computer that runs this OpenChamber server.",
 
 
 

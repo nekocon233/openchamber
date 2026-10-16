@@ -59,7 +59,7 @@ const status = (patch: Partial<CliproxyapiStatus> = {}): CliproxyapiStatus => ({
   installedVersion: '8.0.31', runningVersion: null,
   install: { supported: true, prepared: true, target: 'darwin-arm64', version: '8.0.31', path: '/managed/cli-proxy-api', error: null },
   managementEnabled: false, keyRejected: false, accounts: [], clientKeys: [],
-  lastError: null, restarting: false, connection: null, localLogin: true,
+  lastError: null, restarting: false, connection: null,
   ...patch,
 });
 const account = { name: 'codex-a.json', email: 'a@example.com', planType: 'pro', activeUntil: null, status: 'active', disabled: false };
@@ -125,14 +125,6 @@ describe('CLIProxyAPI section', () => {
     await render(api, <CliProxyApiSection />);
     expect(text()).toContain('not a supported target');
     expect(button('Start gateway')?.disabled).toBe(true);
-  });
-
-  test('keeps a remote client read-only and says where the gateway runs', async () => {
-    const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status({ localLogin: false, ready: true, running: true }) });
-    await render(api, <CliProxyApiSection />);
-    expect(text()).toContain('Manage the gateway on the computer');
-    expect(button('Stop gateway')?.disabled).toBe(true);
-    expect(button('Sign in a ChatGPT account')?.disabled).toBe(true);
   });
 
   test('saves the upstream proxy', async () => {

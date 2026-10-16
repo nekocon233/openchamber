@@ -44,12 +44,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
   } = dependencies;
 
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
-  const isTunnelManagementAllowed = (req) => tunnelAuthController?.isLocalManagementRequest?.(req) === true;
-  const sendHostOnlyResponse = (res) => res.status(403).json({
-    ok: false,
-    error: 'Tunnel management is only available from the host machine',
-    code: 'host_only',
-  });
   const normalizeRequestedProvider = (value) => normalizeTunnelProvider(value, { strict: true });
   const normalizeRequestedMode = (value) => normalizeTunnelMode(value, { strict: true });
   const parsePort = (value) => {
@@ -518,20 +512,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
 
   const registerRoutes = (app) => {
     app.get('/api/openchamber/tunnel/check', async (req, res) => {
-      const managementAllowed = isTunnelManagementAllowed(req);
-      if (!managementAllowed) {
-        return res.json({
-          available: false,
-          provider: null,
-          version: null,
-          dependency: null,
-          installCommand: null,
-          installUrl: null,
-          platform: process.platform,
-          message: null,
-          managementAllowed,
-        });
-      }
       try {
         const requestedProvider = hasOwn(req?.query, 'provider')
           ? normalizeRequestedProvider(req.query.provider)
@@ -546,7 +526,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           installUrl: result.installUrl || null,
           platform: result.platform || process.platform,
           message: result.message || null,
-          managementAllowed,
         });
       } catch (error) {
         console.warn('Tunnel dependency check failed:', error);
@@ -563,9 +542,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
     });
 
     const handleTunnelDoctor = async (req, res) => {
-      if (!isTunnelManagementAllowed(req)) {
-        return sendHostOnlyResponse(res);
-      }
       try {
         const params = req.query || {};
         const body = req.body || {};
@@ -707,30 +683,12 @@ export const createTunnelRoutesRuntime = (dependencies) => {
     app.post('/api/openchamber/tunnel/doctor', handleTunnelDoctor);
     app.get('/api/openchamber/tunnel/doctor', handleTunnelDoctor);
 
-    app.get('/api/openchamber/tunnel/providers', (req, res) => {
-      const managementAllowed = isTunnelManagementAllowed(req);
-      const providers = managementAllowed ? tunnelProviderRegistry.listCapabilities() : [];
-      return res.json({ providers, managementAllowed });
+    app.get('/api/openchamber/tunnel/providers', (_req, res) => {
+      return res.json({ providers: tunnelProviderRegistry.listCapabilities() });
     });
 
     app.get('/api/openchamber/tunnel/status', async (req, res) => {
       try {
-        const managementAllowed = isTunnelManagementAllowed(req);
-        if (!managementAllowed) {
-          const activeProvider = tunnelService.resolveActiveProvider();
-          const publicUrl = tunnelService.getPublicUrl();
-          const activeTunnelMode = publicUrl ? resolveActiveNormalizedTunnelMode() : null;
-          return res.json({
-            active: Boolean(publicUrl),
-            url: publicUrl || null,
-            mode: activeTunnelMode,
-            provider: activeProvider || null,
-            managementAllowed,
-            policy: 'host-only-management',
-            activeTunnelMode,
-            activeSessions: [],
-          });
-        }
         const settings = await readSettingsFromDiskMigrated();
         const normalizedMode = normalizeTunnelMode(settings?.tunnelMode);
         const managedRemoteHostname = normalizeManagedRemoteTunnelHostname(settings?.managedRemoteTunnelHostname);
@@ -798,7 +756,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
         if (!publicUrl) {
           return res.json({
             active: false,
-            managementAllowed,
             enterpriseMode: isEnterpriseMode(),
             url: null,
             mode: normalizedMode,
@@ -820,8 +777,7 @@ export const createTunnelRoutesRuntime = (dependencies) => {
             frpcConfigError,
             hasBootstrapToken: false,
             bootstrapExpiresAt: null,
-            policy: 'tunnel-gated',
-            activeTunnelMode: tunnelAuthController.getActiveTunnelMode() || null,
+              activeTunnelMode: tunnelAuthController.getActiveTunnelMode() || null,
             activeSessions,
             localPort: getActivePort(),
             ttlConfig: {
@@ -854,7 +810,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
 
         return res.json({
           active: true,
-          managementAllowed,
           url: publicUrl,
           mode: activeNormalizedMode,
           provider,
@@ -875,7 +830,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           frpcConfigError,
           hasBootstrapToken: bootstrapStatus.hasBootstrapToken,
           bootstrapExpiresAt: bootstrapStatus.bootstrapExpiresAt,
-          policy: 'tunnel-gated',
           activeTunnelMode: activeNormalizedMode,
           activeSessions: tunnelAuthController.listTunnelSessions(),
           localPort: getActivePort(),
@@ -890,9 +844,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
     });
 
     app.put('/api/openchamber/tunnel/managed-remote-token', async (req, res) => {
-      if (!isTunnelManagementAllowed(req)) {
-        return sendHostOnlyResponse(res);
-      }
       try {
         const presetId = typeof req?.body?.presetId === 'string' ? req.body.presetId.trim() : '';
         const presetName = typeof req?.body?.presetName === 'string' ? req.body.presetName.trim() : '';
@@ -920,9 +871,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
     app.post('/api/openchamber/tunnel/start', async (_req, res) => {
       if (isEnterpriseMode()) {
         return res.status(403).json({ ok: false, code: 'enterprise_mode', error: TUNNEL_BLOCKED_ERROR });
-      }
-      if (!isTunnelManagementAllowed(_req)) {
-        return sendHostOnlyResponse(res);
       }
       if (!hasUiPassword) {
         return res.status(403).json({ ok: false, code: 'ui_password_required', error: 'A UI password is required before starting a public tunnel. Restart OpenChamber with --ui-password.' });
@@ -1134,7 +1082,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
             : null,
           revokedBootstrapCount,
           invalidatedSessionCount,
-          policy: 'tunnel-gated',
           activeTunnelMode: mode,
           activeSessions: tunnelAuthController.listTunnelSessions(),
           localPort: getActivePort(),
@@ -1164,9 +1111,6 @@ export const createTunnelRoutesRuntime = (dependencies) => {
     });
 
     app.post('/api/openchamber/tunnel/stop', async (_req, res) => {
-      if (!isTunnelManagementAllowed(_req)) {
-        return sendHostOnlyResponse(res);
-      }
       try {
         if (getActiveTunnelController()) {
           console.log('Stopping active tunnel (user requested)...');

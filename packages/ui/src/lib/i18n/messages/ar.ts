@@ -4068,7 +4068,6 @@ export const dict = {
   'settings.cliproxyapi.managementDisabled': 'واجهة إدارة البوابة معطّلة. عيّن management.secret-key في إعدادها ثم أعد تشغيلها.',
   'settings.cliproxyapi.keyRejected': 'رفضت البوابة مفتاح الإدارة المحفوظ. احفظه مرة أخرى.',
   'settings.cliproxyapi.failed': 'فشل الطلب إلى البوابة.',
-  'settings.cliproxyapi.localOnly': 'أدر البوابة على الحاسوب الذي يشغّل خادم OpenChamber هذا.',
 
   'settings.claudeConnections.title': 'Claude Code connections',
   'settings.claudeConnections.url': 'API endpoint',

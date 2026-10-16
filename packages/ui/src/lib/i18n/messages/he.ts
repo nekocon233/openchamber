@@ -4068,7 +4068,6 @@ export const dict = {
   'settings.cliproxyapi.managementDisabled': 'ממשק הניהול של השער כבוי. הגדר management.secret-key בהגדרות שלו והפעל מחדש.',
   'settings.cliproxyapi.keyRejected': 'השער דחה את מפתח הניהול השמור. שמור אותו שוב.',
   'settings.cliproxyapi.failed': 'הבקשה לשער נכשלה.',
-  'settings.cliproxyapi.localOnly': 'נהל את השער במחשב שמריץ את שרת OpenChamber הזה.',
 
   'settings.claudeConnections.title': 'Claude Code connections',
   'settings.claudeConnections.url': 'API endpoint',

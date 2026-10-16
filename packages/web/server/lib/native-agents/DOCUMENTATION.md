@@ -1053,14 +1053,16 @@ looks like.
 A model catalog name is the model's own name; the connection it belongs to is
 identified by its id, not by a prefix on every model.
 
-Routes are `GET /api/native/claude/cliproxyapi` (status plus `localLogin`),
+Routes are `GET /api/native/claude/cliproxyapi` (status),
 `GET /models`, `POST /import`,
 `POST /start`, `POST /stop`, `POST /proxy`, `POST /login`,
 `GET|DELETE /login/:state`, `DELETE /accounts/:name` and `POST /connection`.
-Every mutating route requires the local-management boundary and answers
-`403 CLIPROXYAPI_LOCAL_LOGIN_REQUIRED` otherwise, while the remote status stays
-readable. Errors carry `CLIPROXYAPI_*` codes; `GET /v1/models` is the gateway's
-own authenticated surface and is never proxied by this server.
+Any authenticated client may call them, including one reaching the server
+through a tunnel or the mobile app: authentication is the boundary, not where
+the request came from. The memory routes keep their own local-management
+requirement, because enrolling a CLI installs an executable hook on the host.
+Errors carry `CLIPROXYAPI_*` codes; `GET /v1/models` is the gateway's own
+authenticated surface and is never proxied by this server.
 
 Downloading needs egress to `github.com` and
 `release-assets.githubusercontent.com` from the server process itself, which

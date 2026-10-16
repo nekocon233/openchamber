@@ -136,7 +136,6 @@ export const dict: Record<I18nKey, string> = {
   "settings.cliproxyapi.managementDisabled": "ゲートウェイの管理 API が無効です。設定で management.secret-key を指定して再起動してください。",
   "settings.cliproxyapi.keyRejected": "保存済みの管理キーがゲートウェイに拒否されました。もう一度保存してください。",
   "settings.cliproxyapi.failed": "ゲートウェイへのリクエストに失敗しました。",
-  "settings.cliproxyapi.localOnly": "ゲートウェイは OpenChamber サーバーを実行しているコンピューターで管理してください。",
 
 
 

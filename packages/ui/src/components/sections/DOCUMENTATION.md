@@ -161,7 +161,7 @@ status line for the supervised process, Start, Stop, the optional upstream proxy
 (which restarts the gateway, because it reads its config at startup), the
 gateway's ChatGPT accounts with sign-out, the sign-in flow, and the Claude Code
 connection that points at it. It reads the server's status on every visit, starts
-and stops only where the server's local-management capability permits it, polls
+and stops for any authenticated client, polls
 one bounded sign-in attempt and cancels a pending attempt when the page is left.
 Its connection block imports the gateway's models in one action (the server
 pairs the gateway's list with this computer's metadata) and otherwise keeps one

@@ -103,7 +103,6 @@ export const cliproxyapiStatusSchema = z.object({
   restarting: z.boolean(),
   /** The Claude Code connection that points at this gateway, when one exists. */
   connection: z.object({ id: z.string().uuid(), name: z.string() }).nullable(),
-  localLogin: z.boolean(),
 });
 const cliproxyapiModelSchema = z.object({
   id: z.string().min(1),

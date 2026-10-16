@@ -135,7 +135,6 @@ export const dict = {
   "settings.cliproxyapi.managementDisabled": "L’API d’administration de la passerelle est désactivée. Définissez management.secret-key dans sa configuration et redémarrez-la.",
   "settings.cliproxyapi.keyRejected": "La passerelle a refusé la clé d’administration enregistrée. Enregistrez-la à nouveau.",
   "settings.cliproxyapi.failed": "La requête vers la passerelle a échoué.",
-  "settings.cliproxyapi.localOnly": "Administrez la passerelle sur l’ordinateur qui exécute ce serveur OpenChamber.",
 
 
 
