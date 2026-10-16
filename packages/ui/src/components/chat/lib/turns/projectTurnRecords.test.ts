@@ -82,6 +82,48 @@ describe('projectTurnRecords', () => {
         expect(projection.indexes.messageToTurnId.has('a1')).toBe(false);
     });
 
+    test('opens a turn at a subagent run report so the parent reply renders under it', () => {
+        const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
+        const assistant = createMessageEntry({ id: 'a1', role: 'assistant', createdAt: 2 });
+        const report: ChatMessageEntry = {
+            info: {
+                id: 's1',
+                sessionID: 'ses_1',
+                role: 'synthetic',
+                time: { created: 3 },
+                text: '<subagent sessionID="ses_child" state="completed" description="review">\nok\n</subagent>',
+                metadata: { source: 'subagent', childID: 'ses_child', state: 'completed' },
+            },
+            parts: [],
+        };
+        const reaction = createMessageEntry({ id: 'a2', role: 'assistant', createdAt: 4 });
+
+        const projection = projectTurnRecords([user, assistant, report, reaction]);
+
+        expect(projection.turns.map((turn) => turn.turnId)).toEqual(['u1', 's1']);
+        expect(projection.turns[1]?.assistantMessageIds).toEqual(['a2']);
+        expect(projection.ungroupedMessageIds.has('s1')).toBe(false);
+    });
+
+    test('opens a turn at a compaction so the steps after it render under it', () => {
+        // OpenCode compacts mid-run and the agent carries on; those steps must
+        // not rejoin the prompt's turn and push the compaction above the prompt.
+        const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
+        const before = createMessageEntry({ id: 'a1', role: 'assistant', createdAt: 2 });
+        const compaction: ChatMessageEntry = {
+            info: { id: 'c1', sessionID: 'ses_1', role: 'compaction', time: { created: 3 }, status: 'completed', reason: 'auto', summary: 'Objective' },
+            parts: [],
+        };
+        const after = createMessageEntry({ id: 'a2', role: 'assistant', createdAt: 4 });
+
+        const projection = projectTurnRecords([user, before, compaction, after]);
+
+        expect(projection.turns.map((turn) => turn.turnId)).toEqual(['u1', 'c1']);
+        expect(projection.turns[0]?.assistantMessageIds).toEqual(['a1']);
+        expect(projection.turns[1]?.assistantMessageIds).toEqual(['a2']);
+        expect(projection.ungroupedMessageIds.has('c1')).toBe(false);
+    });
+
     test('keeps non-assistant orphan messages available as ungrouped entries', () => {
         const system = createMessageEntry({ id: 's1', role: 'system', createdAt: 1 });
 
@@ -260,30 +302,7 @@ describe('projectTurnRecords', () => {
         expect(projection.turns[0]?.assistantMessageIds).toEqual(['a1', 'a2', 'a3']);
     });
 
-    test('treats compaction summary text as justification activity in sorted mode', () => {
-        const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
-        user.parts = [{ id: 'p1', type: 'text', text: 'prompt' } as Part];
-        const compaction = createMessageEntry({ id: 'a1', role: 'assistant', createdAt: 2 });
-        (compaction.info as { summary?: boolean; finish?: string }).summary = true;
-        (compaction.info as { summary?: boolean; finish?: string }).finish = 'stop';
-        compaction.parts = [{ id: 'cp1', type: 'text', text: 'compacted context summary' } as Part];
-        const assistant = createMessageEntry({ id: 'a2', role: 'assistant', createdAt: 3 });
-        (assistant.info as { finish?: string }).finish = 'stop';
-        assistant.parts = [{ id: 'ap1', type: 'text', text: 'final answer' } as Part];
-
-        const projection = projectTurnRecords([user, compaction, assistant], {
-            showTextJustificationActivity: true,
-        });
-
-        const turn = projection.turns[0];
-        expect(turn?.summaryText).toBe('final answer');
-        const compactionActivity = turn?.activityParts.find((activity) => activity.messageId === 'a1');
-        expect(compactionActivity?.kind).toBe('justification');
-        const finalActivity = turn?.activityParts.find((activity) => activity.messageId === 'a2');
-        expect(finalActivity).toBe(undefined);
-    });
-
-    test('keeps text inline (not justification) when a message is blocked on a pending question', () => {
+    test('keeps assistant text out of the activity, around a pending question too', () => {
         const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
         user.parts = [{ id: 'p1', type: 'text', text: 'prompt' } as Part];
         const assistant = createMessageEntry({ id: 'a1', role: 'assistant', createdAt: 2 });
@@ -300,16 +319,9 @@ describe('projectTurnRecords', () => {
             } as Part,
         ];
 
-        const projection = projectTurnRecords([user, assistant], {
-            showTextJustificationActivity: true,
-        });
+        const projection = projectTurnRecords([user, assistant]);
 
         const turn = projection.turns[0];
-        expect(turn).toBeDefined();
-        const textActivity = turn?.activityParts.find((activity) => activity.partIndex === 0);
-        expect(textActivity?.kind).not.toBe('justification');
-        // The question tool itself still participates in the activity group.
-        const questionActivity = turn?.activityParts.find((activity) => activity.partIndex === 1);
-        expect(questionActivity?.kind).toBe('tool');
+        expect(turn?.activityParts.map((activity) => [activity.partIndex, activity.kind])).toEqual([[1, 'tool']]);
     });
 });

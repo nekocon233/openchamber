@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { guestSessionWorktreeSchema, guestStorageRequestSchema, guestStorageResultSchema, guestWorkspaceQuerySchema, guestWorkspaceSnapshotSchema } from './workspace-schemas.ts';
+import { guestStatusControlEventSchema, guestStatusControlsSchema } from './status-control-schemas.ts';
+import { guestPopoverClosedEventSchema, guestPopoverDataSchema, guestPopoverRequestSchema } from './popover-schemas.ts';
+import { GUEST_SHELL_END_STATUSES, GUEST_SHELL_ID_MAX, GUEST_SHELLS_MAX, GUEST_SHELL_OUTPUT_TAIL_MAX } from './shells.ts';
 
 import { OPENCHAMBER_SDK_API_VERSION, OPENCHAMBER_SDK_CHANNEL } from './api-version.ts';
 import {
@@ -46,6 +49,12 @@ import {
   type GuestMessage,
   type HostMessage,
 } from './contract.ts';
+import { GUEST_FILE_EDITOR_CONTENT_MAX, GUEST_FILE_EDITOR_VERSION_MAX } from './file-editor.ts';
+
+// Structured clone recreates a frame's Uint8Array in the receiving realm, so
+// `instanceof` holds for bytes that crossed postMessage.
+const fileBytesSchema = z.instanceof(Uint8Array).refine((bytes) => bytes.byteLength <= GUEST_FILE_EDITOR_CONTENT_MAX);
+const fileTextSchema = z.string().max(GUEST_FILE_EDITOR_CONTENT_MAX);
 
 const envelope = {
   channel: z.literal(OPENCHAMBER_SDK_CHANNEL),
@@ -80,6 +89,14 @@ const themeTokensSchema = z.object({
   font: z.string().min(1),
   mono: z.string().min(1),
   radius: z.string().min(1),
+  syntaxKeyword: z.string().min(1).optional(),
+  syntaxString: z.string().min(1).optional(),
+  syntaxNumber: z.string().min(1).optional(),
+  syntaxFunction: z.string().min(1).optional(),
+  syntaxType: z.string().min(1).optional(),
+  syntaxComment: z.string().min(1).optional(),
+  syntaxVariable: z.string().min(1).optional(),
+  syntaxOperator: z.string().min(1).optional(),
 });
 
 const sessionSnapshotSchema = z.object({
@@ -145,9 +162,21 @@ const generateResultPayloadSchema = z.object({
   text: z.string().max(GUEST_GENERATE_TEXT_MAX),
 });
 
+const shellOutputResultPayloadSchema = z.object({
+  output: z.string(),
+  cursor: z.number(),
+  skipped: z.boolean(),
+});
+
+const shellStopResultPayloadSchema = z.object({
+  stopped: z.literal(true),
+});
+
 const hostResultPayloadSchema = z.union([
   guestStorageResultSchema,
   guestWorkspaceSnapshotSchema,
+  shellOutputResultPayloadSchema,
+  shellStopResultPayloadSchema,
   startSessionResultPayloadSchema,
   requestResultPayloadSchema,
   promptResultPayloadSchema,
@@ -214,10 +243,16 @@ const readyPayloadSchema = z.object({
   locale: z.string().min(1),
   directory: z.string().nullable(),
   session: sessionSnapshotSchema,
-  surface: z.enum(['panel', 'dialog', 'page', 'background', 'status']),
+  surface: z.enum(['panel', 'dialog', 'page', 'background', 'status', 'file', 'popover']),
   connection: guestConnectionSchema,
   settings: guestSettingsSchema,
   item: guestItemSchema,
+  popover: z.object({ id: z.string().min(1).max(80), data: guestPopoverDataSchema }).strict().optional(),
+  features: z.object({
+    deviceStorage: z.literal(true).optional(),
+    statusControls: z.literal(true).optional(),
+    popovers: z.literal(true).optional(),
+  }).optional(),
 });
 
 const hostResultSchema = z.object({
@@ -263,8 +298,37 @@ const hostResultSchema = z.object({
   };
 });
 
+const guestRunningShellSchema = z.object({
+  id: z.string().min(1).max(GUEST_SHELL_ID_MAX),
+  sessionID: z.string().min(1).max(1024),
+  command: z.string(),
+  startedAt: z.number().nonnegative(),
+  background: z.boolean(),
+}).strict();
+const guestEndedShellSchema = guestRunningShellSchema.extend({
+  status: z.enum(GUEST_SHELL_END_STATUSES),
+  exit: z.number().int().optional(),
+  endedAt: z.number().nonnegative(),
+}).strict();
+const guestShellsScopeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('session'), sessionId: z.string().min(1).max(1024) }).strict(),
+  z.object({ kind: z.literal('project'), projectId: z.string().min(1).max(1024) }).strict(),
+  z.object({ kind: z.literal('global') }).strict(),
+]);
+const guestRunningShellsSnapshotSchema = z.object({
+  kind: z.literal('shells'),
+  scope: guestShellsScopeSchema,
+  shells: z.array(guestRunningShellSchema).max(GUEST_SHELLS_MAX),
+  ended: z.array(guestEndedShellSchema).max(GUEST_SHELLS_MAX),
+}).strict();
+
 export const hostMessageSchema = z.union([
   z.object({ ...envelope, type: z.literal('workspace'), payload: z.object({ subscriptionId: z.string().min(1).max(128), snapshot: guestWorkspaceSnapshotSchema }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('shells'),
+    payload: z.object({ subscriptionId: z.string().min(1).max(128), snapshot: guestRunningShellsSnapshotSchema }),
+  }),
   z.object({
     ...envelope,
     type: z.literal('ready'),
@@ -315,6 +379,12 @@ export const hostMessageSchema = z.union([
   }),
   z.object({
     ...envelope,
+    type: z.literal('status-control-event'),
+    payload: guestStatusControlEventSchema,
+  }),
+  z.object({ ...envelope, type: z.literal('popover-closed'), payload: guestPopoverClosedEventSchema }),
+  z.object({
+    ...envelope,
     type: z.literal('resolve'),
     id: z.string().min(1),
     payload: z.object({
@@ -328,6 +398,37 @@ export const hostMessageSchema = z.union([
     type: z.literal('action'),
     id: z.string().min(1),
     payload: z.union([messageItemSchema, sessionItemSchema]),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('file-open'),
+    payload: z.union([
+      z.object({
+        path: z.string().min(1).max(4096),
+        name: z.string().min(1).max(1024),
+        readOnly: z.boolean(),
+        encoding: z.literal('text'),
+        content: fileTextSchema,
+      }),
+      z.object({
+        path: z.string().min(1).max(4096),
+        name: z.string().min(1).max(1024),
+        readOnly: z.boolean(),
+        encoding: z.literal('binary'),
+        bytes: fileBytesSchema,
+      }),
+    ]),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('file-snapshot'),
+    id: z.string().min(1),
+    payload: z.object({ purpose: z.enum(['save', 'handoff']) }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('file-saved'),
+    payload: z.object({ version: z.string().max(GUEST_FILE_EDITOR_VERSION_MAX) }),
   }),
 ]);
 
@@ -346,7 +447,20 @@ export const guestMessageSchema = z.discriminatedUnion('type', [
   z.object({ ...envelope, type: z.literal('workspace-read'), id: z.string().min(1), payload: guestWorkspaceQuerySchema }),
   z.object({ ...envelope, type: z.literal('workspace-subscribe'), id: z.string().min(1), payload: z.object({ subscriptionId: z.string().min(1).max(128), query: guestWorkspaceQuerySchema }) }),
   z.object({ ...envelope, type: z.literal('workspace-unsubscribe'), id: z.string().min(1), payload: z.object({ subscriptionId: z.string().min(1).max(128) }) }),
+  z.object({ ...envelope, type: z.literal('shells-subscribe'), id: z.string().min(1), payload: z.object({ subscriptionId: z.string().min(1).max(128), scope: guestShellsScopeSchema }).strict() }),
+  z.object({ ...envelope, type: z.literal('shells-unsubscribe'), id: z.string().min(1), payload: z.object({ subscriptionId: z.string().min(1).max(128) }).strict() }),
+  z.object({ ...envelope, type: z.literal('shell-output'), id: z.string().min(1), payload: z.object({ shellId: z.string().min(1).max(GUEST_SHELL_ID_MAX), cursor: z.number().int().nonnegative().optional(), tailBytes: z.number().int().positive().max(GUEST_SHELL_OUTPUT_TAIL_MAX).optional() }).strict() }),
+  z.object({ ...envelope, type: z.literal('shell-stop'), id: z.string().min(1), payload: z.object({ shellId: z.string().min(1).max(GUEST_SHELL_ID_MAX) }).strict() }),
   z.object({ ...envelope, type: z.literal('storage'), id: z.string().min(1), payload: guestStorageRequestSchema }),
+  z.object({
+    ...envelope,
+    type: z.literal('status-controls'),
+    id: z.string().min(1),
+    payload: z.object({ controls: guestStatusControlsSchema }).strict(),
+  }),
+  z.object({ ...envelope, type: z.literal('popover-open'), id: z.string().min(1), payload: guestPopoverRequestSchema }),
+  z.object({ ...envelope, type: z.literal('popover-close'), id: z.string().min(1), payload: z.object({ id: z.string().min(1).max(80), reason: z.enum(['closed', 'escape']).optional() }).strict() }),
+  z.object({ ...envelope, type: z.literal('popover-anchor'), id: z.string().min(1), payload: z.object({ id: z.string().min(1).max(80), active: z.boolean() }).strict() }),
   z.object({ ...envelope, type: z.literal('open-session'), id: z.string().min(1), payload: z.object({ sessionId: z.string().min(1).max(1024) }) }),
   z.object({
     ...envelope,
@@ -540,6 +654,27 @@ export const guestMessageSchema = z.discriminatedUnion('type', [
       z.object({ error: z.string().trim().min(1).max(GUEST_RESOLVE_ERROR_MAX) }),
     ]),
   }),
+  z.object({
+    ...envelope,
+    type: z.literal('file-snapshot-result'),
+    id: z.string().min(1),
+    payload: z.union([
+      z.object({
+        snapshot: z.union([
+          z.object({ content: fileTextSchema, version: z.string().max(GUEST_FILE_EDITOR_VERSION_MAX) }),
+          z.object({ bytes: fileBytesSchema, version: z.string().max(GUEST_FILE_EDITOR_VERSION_MAX) }),
+        ]),
+      }),
+      z.object({ error: z.string().trim().min(1).max(GUEST_RESOLVE_ERROR_MAX) }),
+    ]),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('file-change'),
+    payload: z.object({ dirty: z.boolean(), edited: z.boolean() }),
+  }),
+  z.object({ ...envelope, type: z.literal('file-save') }),
+  z.object({ ...envelope, type: z.literal('file-unsupported') }),
 ]);
 
 type ParsedHostMessage = z.infer<typeof hostMessageSchema>;

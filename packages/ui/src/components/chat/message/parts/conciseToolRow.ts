@@ -35,9 +35,6 @@ const CONCISE_TOOL_NAMES = new Map<string, string>([
 // without diff numbers they show no result line rather than "1 line".
 const FILE_CHANGE_TOOLS = new Set(['write', 'edit', 'multiedit', 'apply_patch', 'patch']);
 
-/** Whether a call changes files, so the concise transcript shows its diff. @param normalizedTool lowercase name without a namespace */
-export const isFileChangeTool = (normalizedTool: string): boolean => FILE_CHANGE_TOOLS.has(normalizedTool);
-
 // Tools whose own row or body already says what happened.
 const TOOLS_WITHOUT_RESULT_LINE = new Set(['question', 'todowrite', 'todoread', 'plan_enter', 'plan_exit', 'skill']);
 

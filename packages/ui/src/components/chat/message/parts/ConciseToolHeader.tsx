@@ -96,7 +96,7 @@ export const ConciseToolHeader: React.FC<ConciseToolHeaderProps> = ({
 
     return (
         <div
-            className={cn('group/tool flex min-w-0 flex-col pr-2 pl-px py-0.5 rounded-xl', expansion && 'cursor-pointer')}
+            className={cn('group/tool flex min-w-0 flex-col pe-2 ps-px py-0.5 rounded-xl', expansion && 'cursor-pointer')}
             role={expansion ? 'button' : undefined}
             tabIndex={expansion ? 0 : undefined}
             aria-expanded={expansion ? isExpanded : undefined}
@@ -151,10 +151,10 @@ export const ConciseToolHeader: React.FC<ConciseToolHeaderProps> = ({
                 {actions}
             </div>
             {result ? (
-                <div className={cn('flex min-w-0 items-center gap-1.5 pl-5', RESULT_CLASS)} style={{ color: 'var(--tools-description)' }}>
+                <div className={cn('flex min-w-0 items-center gap-1.5 ps-5', RESULT_CLASS)} style={{ color: 'var(--tools-description)' }}>
                     <span
                         aria-hidden="true"
-                        className="h-2 w-2 flex-shrink-0 -translate-y-[3px] border-b border-l opacity-60"
+                        className="h-2 w-2 flex-shrink-0 -translate-y-[3px] border-b border-s opacity-60"
                         style={{ borderColor: 'var(--tools-description)' }}
                     />
                     <span className="min-w-0 truncate">

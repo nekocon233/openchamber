@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test"
-import { togglePermissionAutoAccept } from "../../components/chat/permissionAutoAccept"
+import { cyclePermissionMode } from "../../components/chat/permissionAutoAccept"
 
 const storage = new Map<string, string>()
 const createSessionCalls: Array<{ title?: string; directory: string | null; metadata?: unknown }> = []
-const permissionAutoAcceptCalls: Array<[string, boolean]> = []
+const permissionAutoAcceptCalls: Array<[string, string]> = []
 const optimisticSendCalls: unknown[] = []
 let permissionAutoAcceptShouldFail = false
 const savedVariantCalls: Array<string | undefined> = []
@@ -127,8 +127,8 @@ mock.module("@/lib/runtime-fetch", () => ({
 mock.module("@/stores/permissionStore", () => ({
   usePermissionStore: {
     getState: () => ({
-      setSessionAutoAccept: mock(async (sessionId: string, enabled: boolean) => {
-        permissionAutoAcceptCalls.push([sessionId, enabled])
+      setSessionMode: mock(async (sessionId: string, mode: string) => {
+        permissionAutoAcceptCalls.push([sessionId, mode])
         if (permissionAutoAcceptShouldFail) throw new Error("policy unavailable")
       }),
     }),
@@ -138,6 +138,10 @@ mock.module("@/stores/permissionStore", () => ({
 mock.module("@/stores/useConfigStore", () => ({
   useConfigStore: {
     getState: () => ({
+      // A connected app: sendMessage waits for OpenCode's first connection
+      // otherwise, which this suite never simulates.
+      isConnected: true,
+      hasEverConnected: true,
       currentAgentName: "agent-default",
       currentProviderId: "provider",
       currentModelId: "model",
@@ -167,6 +171,7 @@ mock.module("@/stores/useProjectsStore", () => ({
 }))
 
 mock.module("@/stores/useDirectoryStore", () => ({
+  isDirectoryUnknown: () => false,
   useDirectoryStore: {
     getState: () => ({
       currentDirectory: null,
@@ -420,51 +425,52 @@ const {
   supersedePendingDraftPermissionPolicy,
   useSessionUIStore,
 } = await import("../session-ui-store")
+const { useSessionDisplayStore } = await import("@/stores/useSessionDisplayStore")
 
 describe("issue 2039 draft auto-accept", () => {
-  test("toggles draft state before a session exists", () => {
-    const setDraftPermissionAutoAcceptEnabled = mock(() => undefined)
-    const setSessionAutoAccept = mock(async () => undefined)
+  test("cycles the draft mode before a session exists", () => {
+    const setDraftPermissionMode = mock(() => undefined)
+    const setSessionMode = mock(async () => undefined)
     const onOpenSessionFirst = mock(() => undefined)
     const onToggleFailed = mock(() => undefined)
 
-    togglePermissionAutoAccept({
+    cyclePermissionMode({
       permissionScopeSessionId: null,
       newSessionDraftOpen: true,
-      draftPermissionAutoAcceptEnabled: false,
-      permissionAutoAcceptEnabled: false,
-      setDraftPermissionAutoAcceptEnabled,
-      setSessionAutoAccept,
+      currentMode: "ask",
+      safetyAvailable: true,
+      setDraftPermissionMode,
+      setSessionMode,
       onOpenSessionFirst,
       onToggleFailed,
     })
 
-    expect(getMockCalls(setDraftPermissionAutoAcceptEnabled).length).toBe(1)
-    expect(getMockCalls(setDraftPermissionAutoAcceptEnabled)[0]).toEqual([true])
-    expect(getMockCalls(setSessionAutoAccept).length).toBe(0)
+    expect(getMockCalls(setDraftPermissionMode).length).toBe(1)
+    expect(getMockCalls(setDraftPermissionMode)[0]).toEqual(["safety"])
+    expect(getMockCalls(setSessionMode).length).toBe(0)
     expect(getMockCalls(onOpenSessionFirst).length).toBe(0)
     expect(getMockCalls(onToggleFailed).length).toBe(0)
   })
 
   test("guards the toggle when no draft is open", () => {
-    const setDraftPermissionAutoAcceptEnabled = mock(() => undefined)
-    const setSessionAutoAccept = mock(async () => undefined)
+    const setDraftPermissionMode = mock(() => undefined)
+    const setSessionMode = mock(async () => undefined)
     const onOpenSessionFirst = mock(() => undefined)
     const onToggleFailed = mock(() => undefined)
 
-    togglePermissionAutoAccept({
+    cyclePermissionMode({
       permissionScopeSessionId: null,
       newSessionDraftOpen: false,
-      draftPermissionAutoAcceptEnabled: false,
-      permissionAutoAcceptEnabled: false,
-      setDraftPermissionAutoAcceptEnabled,
-      setSessionAutoAccept,
+      currentMode: "ask",
+      safetyAvailable: true,
+      setDraftPermissionMode,
+      setSessionMode,
       onOpenSessionFirst,
       onToggleFailed,
     })
 
-    expect(getMockCalls(setDraftPermissionAutoAcceptEnabled).length).toBe(0)
-    expect(getMockCalls(setSessionAutoAccept).length).toBe(0)
+    expect(getMockCalls(setDraftPermissionMode).length).toBe(0)
+    expect(getMockCalls(setSessionMode).length).toBe(0)
     expect(getMockCalls(onOpenSessionFirst).length).toBe(1)
     expect(getMockCalls(onToggleFailed).length).toBe(0)
   })
@@ -507,7 +513,12 @@ describe("issue 2039 draft auto-accept", () => {
   test("defaults auto-accept on and applies it when the session materializes", async () => {
     useSessionUIStore.getState().openNewSessionDraft()
 
-    expect(useSessionUIStore.getState().newSessionDraft.permissionAutoAcceptEnabled).toBe(true)
+    // No choice yet: the server writes the default from Settings.
+    expect(useSessionUIStore.getState().newSessionDraft.permissionMode).toBeUndefined()
+
+    useSessionUIStore.getState().setDraftPermissionMode("safety")
+
+    expect(useSessionUIStore.getState().newSessionDraft.permissionMode).toBe("safety")
 
     const result = await materializeOpenDraftSession({
       providerID: "provider",
@@ -517,14 +528,15 @@ describe("issue 2039 draft auto-accept", () => {
 
     expect(result?.sessionId).toBe("ses_issue_2039")
     expect(createSessionCalls).toHaveLength(1)
-    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", true]])
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", "safety"]])
     expect(useSessionUIStore.getState().currentSessionId).toBe("ses_issue_2039")
   })
 
-  test("persists an explicit auto-accept disable when the session materializes", async () => {
-    useSessionUIStore.getState().openNewSessionDraft({ permissionAutoAcceptEnabled: false })
+  test("persists an explicit ask choice when the session materializes", async () => {
+    useSessionUIStore.getState().openNewSessionDraft()
+    useSessionUIStore.getState().setDraftPermissionMode("ask")
 
-    expect(useSessionUIStore.getState().newSessionDraft.permissionAutoAcceptEnabled).toBe(false)
+    expect(useSessionUIStore.getState().newSessionDraft.permissionMode).toBe("ask")
 
     const result = await materializeOpenDraftSession({
       providerID: "provider",
@@ -534,25 +546,27 @@ describe("issue 2039 draft auto-accept", () => {
 
     expect(result?.sessionId).toBe("ses_issue_2039")
     expect(createSessionCalls).toHaveLength(1)
-    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", false]])
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", "ask"]])
   })
 
   test("shares one session creation when the same open draft materializes concurrently", async () => {
     useSessionUIStore.getState().openNewSessionDraft()
+    useSessionUIStore.getState().setDraftPermissionMode("auto")
 
     const first = materializeOpenDraftSession({ providerID: "provider", modelID: "model" })
-    useSessionUIStore.getState().setDraftPermissionAutoAcceptEnabled(false)
+    useSessionUIStore.getState().setDraftPermissionMode("ask")
     const second = materializeOpenDraftSession({ providerID: "provider", modelID: "model" })
     const [firstResult, secondResult] = await Promise.all([first, second])
 
     expect(firstResult?.sessionId).toBe("ses_issue_2039")
     expect(secondResult?.sessionId).toBe("ses_issue_2039")
     expect(createSessionCalls).toHaveLength(1)
-    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", true]])
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", "auto"]])
   })
 
-  test("retries a failed disabled policy before dispatching to the materialized session", async () => {
-    useSessionUIStore.getState().openNewSessionDraft({ permissionAutoAcceptEnabled: false })
+  test("retries a failed ask policy before dispatching to the materialized session", async () => {
+    useSessionUIStore.getState().openNewSessionDraft()
+    useSessionUIStore.getState().setDraftPermissionMode("ask")
     permissionAutoAcceptShouldFail = true
 
     await expect(materializeOpenDraftSession({
@@ -561,7 +575,7 @@ describe("issue 2039 draft auto-accept", () => {
     })).rejects.toThrow("policy unavailable")
 
     expect(createSessionCalls).toHaveLength(1)
-    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", false]])
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", "ask"]])
     expect(useSessionUIStore.getState().currentSessionId).toBe("ses_issue_2039")
 
     await expect(useSessionUIStore.getState().sendMessage(
@@ -572,8 +586,8 @@ describe("issue 2039 draft auto-accept", () => {
 
     expect(createSessionCalls).toHaveLength(1)
     expect(permissionAutoAcceptCalls).toEqual([
-      ["ses_issue_2039", false],
-      ["ses_issue_2039", false],
+      ["ses_issue_2039", "ask"],
+      ["ses_issue_2039", "ask"],
     ])
     expect(optimisticSendCalls).toHaveLength(0)
 
@@ -582,15 +596,16 @@ describe("issue 2039 draft auto-accept", () => {
 
     expect(createSessionCalls).toHaveLength(1)
     expect(permissionAutoAcceptCalls).toEqual([
-      ["ses_issue_2039", false],
-      ["ses_issue_2039", false],
-      ["ses_issue_2039", false],
+      ["ses_issue_2039", "ask"],
+      ["ses_issue_2039", "ask"],
+      ["ses_issue_2039", "ask"],
     ])
     expect(optimisticSendCalls).toHaveLength(1)
   })
 
-  test("does not replay a failed disabled policy after a later explicit override", async () => {
-    useSessionUIStore.getState().openNewSessionDraft({ permissionAutoAcceptEnabled: false })
+  test("does not replay a failed ask policy after a later explicit override", async () => {
+    useSessionUIStore.getState().openNewSessionDraft()
+    useSessionUIStore.getState().setDraftPermissionMode("ask")
     permissionAutoAcceptShouldFail = true
 
     await expect(materializeOpenDraftSession({
@@ -601,7 +616,7 @@ describe("issue 2039 draft auto-accept", () => {
     supersedePendingDraftPermissionPolicy("ses_issue_2039", "test-runtime")
     await useSessionUIStore.getState().sendMessage("send after override", "provider", "model")
 
-    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", false]])
+    expect(permissionAutoAcceptCalls).toEqual([["ses_issue_2039", "ask"]])
     expect(optimisticSendCalls).toHaveLength(1)
   })
 
@@ -810,13 +825,24 @@ describe("issue 2039 draft auto-accept", () => {
     })
   })
 
+  test("starting a chat brings back a hidden Chats section; a project session leaves it hidden", async () => {
+    useSessionDisplayStore.getState().setShowChatsSection(false)
+    useSessionUIStore.getState().openNewSessionDraft({ target: "project", directoryOverride: "/repo" })
+    await materializeOpenDraftSession({ providerID: "provider", modelID: "model" })
+    expect(useSessionDisplayStore.getState().showChatsSection).toBe(false)
+
+    useSessionUIStore.getState().openNewSessionDraft()
+    await materializeOpenDraftSession({ providerID: "provider", modelID: "model" })
+    expect(useSessionDisplayStore.getState().showChatsSection).toBe(true)
+  })
+
   test("does not apply draft auto-accept after the draft is closed", async () => {
     useSessionUIStore.getState().openNewSessionDraft()
-    useSessionUIStore.getState().setDraftPermissionAutoAcceptEnabled(true)
+    useSessionUIStore.getState().setDraftPermissionMode("auto")
     useSessionUIStore.getState().closeNewSessionDraft()
 
     expect(useSessionUIStore.getState().newSessionDraft.open).toBe(false)
-    expect(useSessionUIStore.getState().newSessionDraft.permissionAutoAcceptEnabled === undefined).toBe(true)
+    expect(useSessionUIStore.getState().newSessionDraft.permissionMode === undefined).toBe(true)
 
     const result = await materializeOpenDraftSession({
       providerID: "provider",

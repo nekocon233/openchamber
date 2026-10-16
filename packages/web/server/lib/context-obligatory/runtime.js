@@ -1,8 +1,8 @@
+import { isRecord } from '../shared/guards.js';
+import { assertPromptResponse } from '../opencode/prompt-response.js';
 import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 const FETCH_TIMEOUT_MS = 15_000;
 const MESSAGE_FETCH_LIMIT = 20;
-
-const isRecord = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
 const readContextState = (session) => {
   const metadata = isRecord(session?.metadata) ? session.metadata : {};
@@ -63,7 +63,11 @@ export const createContextObligatoryRuntime = ({
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`OpenCode ${method} ${fetchPath} failed with ${response.status}`);
+    if (method === 'POST' && fetchPath.endsWith('/synthetic')) {
+      await assertPromptResponse(response, 'session.synthetic');
+    } else if (!response.ok) {
+      throw new Error(`OpenCode ${method} ${fetchPath} failed with ${response.status}`);
+    }
     return unwrapOpenCodeResponse(await response.json().catch(() => null));
   };
 
@@ -104,7 +108,8 @@ export const createContextObligatoryRuntime = ({
     const recentMessages = Array.isArray(recent?.data) ? recent.data : [];
     if (recentMessages.length === 0) return;
     const summary = recentMessages.find((message) => message?.type === 'compaction' && message?.status === 'completed');
-    if (!summary?.id || !summary?.time?.completed) return;
+    // A v2 compaction message has only `time.created`; `status` says it finished.
+    if (!summary?.id) return;
     if (state.openchamber.context_obligatory_last_compaction_message_id === summary.id) return;
 
     const fetched = await Promise.allSettled(state.messages.map(async (pinned) => {

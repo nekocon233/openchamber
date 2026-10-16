@@ -63,8 +63,11 @@ describe("translateWireEvent", () => {
     expect(metadata).toEqual([{ type: "session.patched", properties: { sessionID: "ses_1", patch: { metadata: { openchamber: { goal: { id: "g1" } } } } } }])
 
     const agent = translateWireEvent({ ...base, type: "session.agent.selected", durable, data: { sessionID: "ses_1", agent: "plan", previous: "build" } })
-    expect(agent[0]).toEqual({ type: "session.patched", properties: { sessionID: "ses_1", patch: { agent: "plan" } } })
+    expect(agent[0]).toEqual({ type: "session.patched", properties: { sessionID: "ses_1", patch: { agent: "plan", time: { updated: 1000 } } } })
     expect(agent[1]).toMatchObject({ type: "message.updated", properties: { info: { id: "msg_1", role: "agent-switched", agent: "plan", previous: "build" } } })
+
+    const model = translateWireEvent({ ...base, type: "session.model.selected", durable, data: { sessionID: "ses_1", model: { providerID: "p", id: "m" } } })
+    expect(model[0]).toEqual({ type: "session.patched", properties: { sessionID: "ses_1", patch: { model: { providerID: "p", id: "m" }, time: { updated: 1000 } } } })
 
     const cleared = translateWireEvent({ ...base, type: "session.revert.cleared", durable, data: { sessionID: "ses_1" } })
     expect(cleared).toEqual([{ type: "session.patched", properties: { sessionID: "ses_1", patch: { revert: null } } }])
@@ -384,5 +387,56 @@ describe("routing helpers", () => {
     expect(syncEventSessionID(created)).toBe("ses_1")
     expect(syncEventMessageID(created)).toBe("msg_a")
     expect(messageIdFromEvent("evt_abc")).toBe("msg_abc")
+  })
+})
+
+describe("shell commands", () => {
+  const info = {
+    id: "sh_1",
+    status: "running" as const,
+    command: "sleep 300",
+    cwd: "/repo",
+    shell: "/bin/zsh",
+    file: "/tmp/sh_1.out",
+    metadata: { sessionID: "ses_1" },
+    time: { started: 1000 },
+  }
+
+  test("a command started for a session is reported with its session", () => {
+    expect(translateWireEvent({ ...base, type: "shell.created", data: { info } })).toEqual([
+      {
+        type: "shell.started",
+        properties: { shell: { id: "sh_1", sessionID: "ses_1", command: "sleep 300", file: "/tmp/sh_1.out", startedAt: 1000 } },
+      },
+    ])
+  })
+
+  test("a command that belongs to no session is not reported", () => {
+    expect(translateWireEvent({ ...base, type: "shell.created", data: { info: { ...info, metadata: {} } } })).toEqual([])
+  })
+
+  test("exit and removal both end the command, saying how and when", () => {
+    expect(translateWireEvent({ ...base, type: "shell.exited", data: { id: "sh_1", exit: 0, status: "exited" } })).toEqual([
+      { type: "shell.ended", properties: { shellID: "sh_1", end: { kind: "exited", status: "exited", exit: 0 }, endedAt: 1000 } },
+    ])
+    expect(translateWireEvent({ ...base, type: "shell.exited", data: { id: "sh_1", status: "timeout" } })).toEqual([
+      { type: "shell.ended", properties: { shellID: "sh_1", end: { kind: "exited", status: "timeout" }, endedAt: 1000 } },
+    ])
+    expect(translateWireEvent({ ...base, type: "shell.deleted", data: { id: "sh_1" } })).toEqual([
+      { type: "shell.ended", properties: { shellID: "sh_1", end: { kind: "removed" }, endedAt: 1000 } },
+    ])
+  })
+
+  test("a live synthetic message keeps its metadata, like the persisted one", () => {
+    const [event] = translateWireEvent({
+      ...base,
+      type: "session.synthetic",
+      durable,
+      data: { sessionID: "ses_1", text: "Continue", description: "Continuing after restart", metadata: { notice: "restart" } },
+    })
+    expect(event.type === "message.updated" ? event.properties.info : undefined).toMatchObject({
+      role: "synthetic",
+      metadata: { notice: "restart" },
+    })
   })
 })

@@ -1,6 +1,20 @@
 import { OPENCHAMBER_SDK_API_VERSION, OPENCHAMBER_SDK_CHANNEL } from './api-version.ts';
-import { GUEST_STORAGE_KEY_MAX, GUEST_STORAGE_VALUE_BYTES, type GuestProjectsSnapshot, type GuestWorktreesSnapshot, type GuestSessionsSnapshot, type GuestWorkspaceQuery, type GuestWorkspaceSnapshot, type GuestStorageRequest, type GuestStorageResult } from './workspace.ts';
+import { GUEST_STORAGE_KEY_MAX, GUEST_STORAGE_VALUE_BYTES, type GuestProjectsSnapshot, type GuestWorktreesSnapshot, type GuestSessionsSnapshot, type GuestWorkspaceQuery, type GuestWorkspaceSnapshot, type GuestStorageOptions, type GuestStorageRequest, type GuestStorageResult } from './workspace.ts';
+import type { GuestStatusControl, GuestStatusControlEvent } from './status-controls.ts';
+import { isGuestStatusControls } from './status-controls.ts';
 import type { JsonValue } from './contract.ts';
+import { isGuestPopoverRequest, type GuestPopoverClosedEvent, type GuestPopoverRequest } from './popover.ts';
+import {
+  GUEST_FILE_EDITOR_CONTENT_MAX,
+  GUEST_FILE_EDITOR_VERSION_MAX,
+  type FileEditorChange,
+  type FileEditorDocument,
+  type FileEditorSnapshot,
+  type FileSnapshotPurpose,
+  type FileSnapshotResultPayload,
+  fileEditorPayloadSize,
+  sameFileEditorDocument,
+} from './file-editor.ts';
 import {
   GUEST_FILE_CONTENT_MAX,
   GUEST_CLIPBOARD_TEXT_MAX,
@@ -61,6 +75,7 @@ import {
   isPromptResult,
   isStartSessionResult,
 } from './contract.ts';
+import { GUEST_SHELL_ID_MAX, GUEST_SHELL_OUTPUT_TAIL_MAX, type GuestRunningShellsSnapshot, type GuestShellOutputResult, type GuestShellStopResult, type GuestShellsScope } from './shells.ts';
 
 export type HostFrame = {
   addEventListener: Window['addEventListener'];
@@ -86,12 +101,15 @@ export type HostClient = {
   onProjects: (listener: (snapshot: GuestProjectsSnapshot) => void) => Promise<() => void>;
   onWorktrees: (projectId: string, listener: (snapshot: GuestWorktreesSnapshot) => void) => Promise<() => void>;
   onSessions: (projectId: string, listener: (snapshot: GuestSessionsSnapshot) => void) => Promise<() => void>;
+  onRunningShells: (scope: GuestShellsScope, listener: (snapshot: GuestRunningShellsSnapshot) => void) => Promise<() => void>;
+  readShellOutput: (shellId: string, options?: { cursor?: number; tailBytes?: number }) => Promise<GuestShellOutputResult>;
+  stopShell: (shellId: string) => Promise<GuestShellStopResult>;
   openSession: (sessionId: string) => Promise<void>;
   storage: {
-    get: (key: string) => Promise<JsonValue | undefined>;
-    set: (key: string, value: JsonValue) => Promise<void>;
-    delete: (key: string) => Promise<void>;
-    keys: () => Promise<string[]>;
+    get: (key: string, options?: GuestStorageOptions) => Promise<JsonValue | undefined>;
+    set: (key: string, value: JsonValue, options?: GuestStorageOptions) => Promise<void>;
+    delete: (key: string, options?: GuestStorageOptions) => Promise<void>;
+    keys: (options?: GuestStorageOptions) => Promise<string[]>;
   };
   onReady: (listener: (context: HostReadyContext) => void) => () => void;
   onDirectory: (listener: (directory: string | null) => void) => () => void;
@@ -105,6 +123,14 @@ export type HostClient = {
    * the last value; `null` when there is none.
    */
   onItem: (listener: (item: GuestItem | null) => void) => () => void;
+  /** Receive activation of a host-rendered Work Status control. */
+  onStatusControl: (listener: (event: GuestStatusControlEvent) => void) => () => void;
+  onPopoverClosed: (listener: (event: GuestPopoverClosedEvent) => void) => () => void;
+  /** Replace this status frame's host-rendered controls. Pass [] to clear them. */
+  setStatusControls: (controls: GuestStatusControl[]) => Promise<void>;
+  openPopover: (request: GuestPopoverRequest) => Promise<void>;
+  closePopover: (id: string, reason?: 'closed' | 'escape') => Promise<void>;
+  setPopoverAnchorActive: (id: string, active: boolean) => Promise<void>;
   /**
    * Answer the host when the user submits one of this package's
    * `contributes.commands`. Return the chip to attach, or `null` for nothing
@@ -176,8 +202,37 @@ export type HostClient = {
    * chrome and ignore it.
    */
   setHeight: (height: number) => Promise<void>;
+  /**
+   * The file a `file` surface edits (`contributes.fileEditors`). Replays the
+   * last file; called again when the host reconnects the frame. Registering
+   * also routes Cmd/Ctrl+S inside the frame to the host's save.
+   */
+  onFileOpen: (listener: (file: FileEditorDocument) => void) => () => void;
+  /**
+   * Answer the host when it needs the edited text: to save it (`save`) or to
+   * move it into its source view (`handoff`). Return the whole file and a
+   * version of the state it came from; a thrown error fails the save. One
+   * handler at a time.
+   */
+  onFileSnapshot: (handler: (purpose: FileSnapshotPurpose) => Promise<FileEditorSnapshot> | FileEditorSnapshot) => () => void;
+  /** The snapshot with this version is on disk; edits made since keep the file dirty. */
+  onFileSaved: (listener: (version: string) => void) => () => void;
+  /** Report the editor's state after a change. `edited` delays autosave until edits stop. */
+  reportFileChange: (change: FileEditorChange) => void;
+  /** Ask the host to save now, as Cmd/Ctrl+S does. */
+  requestFileSave: () => void;
+  /** This file cannot be opened here; the host shows its source instead. */
+  reportFileUnsupported: () => void;
   dispose: () => void;
 };
+
+// Structural, not `instanceof KeyboardEvent`: the frame's own realm owns that
+// constructor, and non-browser runtimes have none.
+const isKeyEvent = (event: Event): event is KeyboardEvent => 'key' in event && 'metaKey' in event && 'ctrlKey' in event;
+
+const isSaveShortcut = (event: KeyboardEvent): boolean => (
+  (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 's'
+);
 
 export class HostRequestError extends Error {
   readonly code: HostRequestErrorCode;
@@ -205,6 +260,16 @@ const rejectBadFilePath = (): Promise<never> => Promise.reject(
   new HostRequestError('BAD_PATH', `File path must be 1 to ${GUEST_FILE_PATH_MAX} characters without NUL or backslash.`),
 );
 
+const deviceStorageScope = (options: GuestStorageOptions | undefined): 'device' | undefined => {
+  // Typed callers supply GuestStorageOptions, but extensions may call this JavaScript API without TypeScript.
+  if (options === undefined) return undefined;
+  if (Object(options) !== options || Array.isArray(options)
+    || (options.scope !== undefined && options.scope !== 'instance' && options.scope !== 'device')) {
+    throw new HostRequestError('HOST_REJECTED', 'Storage scope must be "instance" or "device".');
+  }
+  return options.scope === 'device' ? 'device' : undefined;
+};
+
 const nextId = (n: { value: number }): string => {
   n.value += 1;
   return `oc-${n.value}`;
@@ -225,14 +290,25 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
   const connectionListeners = new Set<(connection: GuestConnection) => void>();
   const settingsListeners = new Set<(settings: GuestSettings) => void>();
   const itemListeners = new Set<(item: GuestItem | null) => void>();
+  const statusControlListeners = new Set<(event: GuestStatusControlEvent) => void>();
+  const popoverClosedListeners = new Set<(event: GuestPopoverClosedEvent) => void>();
   let resolveHandler: ((request: ResolveRequest) => Promise<AttachIssueRequest | null> | AttachIssueRequest | null) | null = null;
   let actionHandler: ((item: GuestActionItem) => void | Promise<void>) | null = null;
+  const fileOpenListeners = new Set<(file: FileEditorDocument) => void>();
+  const fileSavedListeners = new Set<(version: string) => void>();
+  let fileSnapshotHandler: ((purpose: FileSnapshotPurpose) => Promise<FileEditorSnapshot> | FileEditorSnapshot) | null = null;
+  let lastFile: FileEditorDocument | null = null;
+  let saveShortcutInstalled = false;
   const pending = new Map<string, Pending>();
   const workspaceListeners = new Map<string, (snapshot: GuestWorkspaceSnapshot) => void>();
+  const shellsListeners = new Map<string, (snapshot: GuestRunningShellsSnapshot) => void>();
   let disposed = false;
   const ids = { value: 0 };
   let lastReady: HostReadyContext | null = null;
   let lastLifecycle: SessionLifecycleEvent | null = null;
+  let popoverPointerActive = false;
+  let popoverFocusActive = false;
+  let popoverActivityReported: boolean | null = null;
 
   const lifecycleFromSession = (session: SessionSnapshot | null): SessionLifecycleEvent | null => {
     if (!session) return null;
@@ -265,6 +341,12 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
     if (!message) return;
     if (message.type === 'workspace') {
       const listener = workspaceListeners.get(message.payload.subscriptionId);
+      if (listener) emit([listener], message.payload.snapshot);
+      return;
+    }
+
+    if (message.type === 'shells') {
+      const listener = shellsListeners.get(message.payload.subscriptionId);
       if (listener) emit([listener], message.payload.snapshot);
       return;
     }
@@ -335,6 +417,16 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       return;
     }
 
+    if (message.type === 'status-control-event') {
+      emit(statusControlListeners, message.payload);
+      return;
+    }
+
+    if (message.type === 'popover-closed') {
+      emit(popoverClosedListeners, message.payload);
+      return;
+    }
+
     if (message.type === 'action') {
       const answer = (payload: ActionResultPayload): void => {
         if (!disposed) post({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION,
@@ -351,6 +443,51 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
           const text = (error instanceof Error ? error.message : String(error)).trim();
           answer({ ok: false, error: (text || 'Action failed.').slice(0, GUEST_RESOLVE_ERROR_MAX) });
         },
+      );
+      return;
+    }
+
+    if (message.type === 'file-open') {
+      // The host pushes on both `hello` and iframe load; the same file twice
+      // must not make the editor reload what the user may already be editing.
+      const next = message.payload;
+      if (lastFile && sameFileEditorDocument(lastFile, next)) return;
+      lastFile = next;
+      emit(fileOpenListeners, message.payload);
+      return;
+    }
+
+    if (message.type === 'file-saved') {
+      emit(fileSavedListeners, message.payload.version);
+      return;
+    }
+
+    if (message.type === 'file-snapshot') {
+      const answer = (payload: FileSnapshotResultPayload): void => {
+        if (!disposed) post({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION,
+          type: 'file-snapshot-result', id: message.id, payload });
+      };
+      const fail = (text: string): void => answer({ error: (text.trim() || 'Could not read the edited file.').slice(0, GUEST_RESOLVE_ERROR_MAX) });
+      const handler = fileSnapshotHandler;
+      if (!handler) {
+        fail('This extension does not edit files.');
+        return;
+      }
+      Promise.resolve().then(() => handler(message.payload.purpose)).then(
+        (snapshot) => {
+          if (fileEditorPayloadSize(snapshot) > GUEST_FILE_EDITOR_CONTENT_MAX) {
+            fail(`The file is over ${GUEST_FILE_EDITOR_CONTENT_MAX} ${'bytes' in snapshot ? 'bytes' : 'characters'}.`);
+            return;
+          }
+          if (snapshot.version.length > GUEST_FILE_EDITOR_VERSION_MAX) {
+            fail(`The snapshot version is over ${GUEST_FILE_EDITOR_VERSION_MAX} characters.`);
+            return;
+          }
+          answer({ snapshot: 'bytes' in snapshot
+            ? { bytes: snapshot.bytes, version: snapshot.version }
+            : { content: snapshot.content, version: snapshot.version } });
+        },
+        (error) => fail(error instanceof Error ? error.message : String(error)),
       );
       return;
     }
@@ -400,8 +537,10 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
     type: 'hello',
   });
 
+  type GuestCallMessage = Extract<GuestMessage, { id: string }>;
+
   const send = (
-    message: Exclude<GuestMessage, { type: 'hello' }>,
+    message: GuestCallMessage,
     timeoutMs: number = requestTimeoutMs,
   ): Promise<HostResultPayload | undefined> => {
     if (disposed || target.parent === target) {
@@ -417,11 +556,57 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
     });
   };
 
-  const request = (message: Exclude<GuestMessage, { type: 'hello' }>): Promise<void> => (
+  const request = (message: GuestCallMessage): Promise<void> => (
     send(message).then(() => undefined)
   );
 
   const envelope: Pick<GuestMessage, 'channel' | 'v'> = { channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION };
+  // Fire-and-forget notices: nothing to wait for, and nothing to post to
+  // without a host frame.
+  const notify = (message: Extract<GuestMessage, { type: 'file-change' | 'file-save' | 'file-unsupported' }>): void => {
+    if (!disposed && target.parent !== target) post(message);
+  };
+  const requestFileSave = (): void => notify({ ...envelope, type: 'file-save' });
+  // Capture phase, so an editor library that binds Cmd/Ctrl+S itself does not
+  // swallow the host's save.
+  const onSaveShortcut = (event: Event): void => {
+    if (!isKeyEvent(event) || !isSaveShortcut(event)) return;
+    event.preventDefault();
+    requestFileSave();
+  };
+  const onPopoverEscape = (event: Event): void => {
+    if (!isKeyEvent(event) || event.key !== 'Escape' || lastReady?.surface !== 'popover' || !lastReady.popover) return;
+    event.preventDefault();
+    void closePopover(lastReady.popover.id, 'escape').catch(() => undefined);
+  };
+  const reportPopoverActivity = (): void => {
+    const popover = lastReady?.surface === 'popover' ? lastReady.popover : undefined;
+    if (!popover) return;
+    const active = popoverPointerActive || popoverFocusActive;
+    if (popoverActivityReported === active) return;
+    popoverActivityReported = active;
+    void setPopoverAnchorActive(popover.id, active).catch(() => undefined);
+  };
+  const onPopoverPointerOver = (): void => {
+    if (lastReady?.surface !== 'popover' || popoverPointerActive) return;
+    popoverPointerActive = true;
+    reportPopoverActivity();
+  };
+  const onPopoverPointerOut = (event: PointerEvent): void => {
+    if (lastReady?.surface !== 'popover' || event.relatedTarget !== null || !popoverPointerActive) return;
+    popoverPointerActive = false;
+    reportPopoverActivity();
+  };
+  const onPopoverFocus = (): void => {
+    if (lastReady?.surface !== 'popover' || popoverFocusActive) return;
+    popoverFocusActive = true;
+    reportPopoverActivity();
+  };
+  const onPopoverBlur = (): void => {
+    if (lastReady?.surface !== 'popover' || !popoverFocusActive) return;
+    popoverFocusActive = false;
+    reportPopoverActivity();
+  };
   const requireIdentity = (value: string, maximum = 1024): void => {
     if (!value.trim() || value.length > maximum) throw new HostRequestError('HOST_REJECTED', `Identity must contain 1 to ${maximum} characters.`);
   };
@@ -449,6 +634,23 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       post({ ...envelope, type: 'workspace-unsubscribe', id: nextId(ids), payload: { subscriptionId } });
     };
   };
+  const subscribeShells = async (scope: GuestShellsScope, listener: (snapshot: GuestRunningShellsSnapshot) => void): Promise<() => void> => {
+    if (scope.kind === 'session') requireIdentity(scope.sessionId);
+    if (scope.kind === 'project') requireIdentity(scope.projectId);
+    const subscriptionId = nextId(ids);
+    shellsListeners.set(subscriptionId, listener);
+    try {
+      await request({ ...envelope, type: 'shells-subscribe', id: nextId(ids), payload: { subscriptionId, scope } });
+    } catch (error) {
+      shellsListeners.delete(subscriptionId);
+      if (!disposed) post({ ...envelope, type: 'shells-unsubscribe', id: nextId(ids), payload: { subscriptionId } });
+      throw error;
+    }
+    return () => {
+      if (!shellsListeners.delete(subscriptionId) || disposed) return;
+      post({ ...envelope, type: 'shells-unsubscribe', id: nextId(ids), payload: { subscriptionId } });
+    };
+  };
   const storage = async (payload: GuestStorageRequest): Promise<GuestStorageResult> => {
     if ('key' in payload && (payload.key.length === 0 || payload.key.length > GUEST_STORAGE_KEY_MAX)) {
       throw new HostRequestError('HOST_REJECTED', 'Storage key must contain 1 to 128 characters.');
@@ -459,10 +661,29 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
     if (payload.op === 'set' && new TextEncoder().encode(JSON.stringify(payload.value)).length > GUEST_STORAGE_VALUE_BYTES) {
       throw new HostRequestError('HOST_REJECTED', 'Storage value exceeds 64 KiB.');
     }
+    if (payload.scope === 'device' && lastReady?.features?.deviceStorage !== true) {
+      throw new HostRequestError('UNSUPPORTED', 'This host does not support device storage.');
+    }
     const result = await send({ ...envelope, type: 'storage', id: nextId(ids), payload });
     if (!result || !('storage' in result) || result.op !== payload.op) throw new HostRequestError('HOST_REJECTED', 'Host did not return storage data.');
     return result;
   };
+  const closePopover = (id: string, reason?: 'closed' | 'escape'): Promise<void> => (
+    lastReady?.features?.popovers !== true && !(lastReady?.surface === 'popover' && lastReady.popover?.id === id)
+      ? Promise.reject(new HostRequestError('UNSUPPORTED', 'This host does not support popovers.'))
+      : request({ ...envelope, type: 'popover-close', id: nextId(ids), payload: reason ? { id, reason } : { id } })
+  );
+  const setPopoverAnchorActive = (id: string, active: boolean): Promise<void> => (
+    lastReady?.features?.popovers !== true && !(lastReady?.surface === 'popover' && lastReady.popover?.id === id)
+      ? Promise.reject(new HostRequestError('UNSUPPORTED', 'This host does not support popovers.'))
+      : request({ ...envelope, type: 'popover-anchor', id: nextId(ids), payload: { id, active } })
+  );
+  target.addEventListener('keydown', onPopoverEscape, true);
+  target.addEventListener('pointerover', onPopoverPointerOver);
+  target.addEventListener('pointermove', onPopoverPointerOver);
+  target.addEventListener('pointerout', onPopoverPointerOut);
+  target.addEventListener('focus', onPopoverFocus);
+  target.addEventListener('blur', onPopoverBlur);
 
   return {
     onAction: (handler) => {
@@ -487,19 +708,59 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
     onProjects: (listener) => subscribeWorkspace({ kind: 'projects' }, (snapshot) => { if (snapshot.kind === 'projects') listener(snapshot); }),
     onWorktrees: (projectId, listener) => subscribeWorkspace({ kind: 'worktrees', projectId }, (snapshot) => { if (snapshot.kind === 'worktrees') listener(snapshot); }),
     onSessions: (projectId, listener) => subscribeWorkspace({ kind: 'sessions', projectId }, (snapshot) => { if (snapshot.kind === 'sessions') listener(snapshot); }),
+    onRunningShells: (scope, listener) => subscribeShells(scope, listener),
+    readShellOutput: async (shellId, options) => {
+      requireIdentity(shellId, GUEST_SHELL_ID_MAX);
+      const cursor = options?.cursor;
+      if (cursor !== undefined && (!Number.isInteger(cursor) || cursor < 0)) {
+        throw new HostRequestError('HOST_REJECTED', 'Shell output cursor must be a non-negative integer.');
+      }
+      const tailBytes = options?.tailBytes;
+      if (tailBytes !== undefined && (!Number.isInteger(tailBytes) || tailBytes < 1 || tailBytes > GUEST_SHELL_OUTPUT_TAIL_MAX)) {
+        throw new HostRequestError('HOST_REJECTED', `Shell output tailBytes must be an integer between 1 and ${GUEST_SHELL_OUTPUT_TAIL_MAX}.`);
+      }
+      const result = await send({ ...envelope, type: 'shell-output', id: nextId(ids), payload: { shellId, cursor, tailBytes } });
+      const output = result as GuestShellOutputResult | undefined;
+      if (!output || typeof output.output !== 'string' || !Number.isFinite(output.cursor)) {
+        throw new HostRequestError('HOST_REJECTED', 'Host did not return shell output.');
+      }
+      return output;
+    },
+    stopShell: async (shellId) => {
+      requireIdentity(shellId, GUEST_SHELL_ID_MAX);
+      const result = (await send({ ...envelope, type: 'shell-stop', id: nextId(ids), payload: { shellId } })) as GuestShellStopResult | undefined;
+      if (result?.stopped !== true) throw new HostRequestError('HOST_REJECTED', 'Host did not stop the shell.');
+      return { stopped: true as const };
+    },
     openSession: async (sessionId) => {
       requireIdentity(sessionId);
       await request({ ...envelope, type: 'open-session', id: nextId(ids), payload: { sessionId } });
     },
     storage: {
-      get: async (key) => {
-        const result = await storage({ op: 'get', key });
+      get: async (key, options) => {
+        const scope = deviceStorageScope(options);
+        const payload: GuestStorageRequest = { op: 'get', key };
+        if (scope) payload.scope = scope;
+        const result = await storage(payload);
         return result.op === 'get' && result.found ? result.value : undefined;
       },
-      set: async (key, value) => { await storage({ op: 'set', key, value }); },
-      delete: async (key) => { await storage({ op: 'delete', key }); },
-      keys: async () => {
-        const result = await storage({ op: 'keys' });
+      set: async (key, value, options) => {
+        const scope = deviceStorageScope(options);
+        const payload: GuestStorageRequest = { op: 'set', key, value };
+        if (scope) payload.scope = scope;
+        await storage(payload);
+      },
+      delete: async (key, options) => {
+        const scope = deviceStorageScope(options);
+        const payload: GuestStorageRequest = { op: 'delete', key };
+        if (scope) payload.scope = scope;
+        await storage(payload);
+      },
+      keys: async (options) => {
+        const scope = deviceStorageScope(options);
+        const payload: GuestStorageRequest = { op: 'keys' };
+        if (scope) payload.scope = scope;
+        const result = await storage(payload);
         if (result.op !== 'keys') throw new HostRequestError('HOST_REJECTED', 'Expected storage keys.');
         return result.keys;
       },
@@ -553,6 +814,36 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
         itemListeners.delete(listener);
       };
     },
+    onStatusControl: (listener) => {
+      statusControlListeners.add(listener);
+      return () => {
+        statusControlListeners.delete(listener);
+      };
+    },
+    onPopoverClosed: (listener) => {
+      popoverClosedListeners.add(listener);
+      return () => { popoverClosedListeners.delete(listener); };
+    },
+    setStatusControls: (controls) => {
+      if (lastReady?.features?.statusControls !== true) {
+        return Promise.reject(new HostRequestError('UNSUPPORTED', 'This host does not support status controls.'));
+      }
+      if (!isGuestStatusControls(controls)) {
+        return Promise.reject(new HostRequestError('HOST_REJECTED', 'Status controls must have unique bounded ids and valid selected options.'));
+      }
+      return request({ ...envelope, type: 'status-controls', id: nextId(ids), payload: { controls } });
+    },
+    openPopover: (payload) => {
+      if (lastReady?.features?.popovers !== true) {
+        return Promise.reject(new HostRequestError('UNSUPPORTED', 'This host does not support popovers.'));
+      }
+      if (!isGuestPopoverRequest(payload)) {
+        return Promise.reject(new HostRequestError('HOST_REJECTED', 'Popover requests need bounded geometry and JSON data.'));
+      }
+      return request({ ...envelope, type: 'popover-open', id: nextId(ids), payload });
+    },
+    closePopover,
+    setPopoverAnchorActive,
     onResolve: (handler) => {
       resolveHandler = handler;
       return () => {
@@ -813,15 +1104,55 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       id: nextId(ids),
       payload: { height: clampFrameHeight(height) },
     }),
+    onFileOpen: (listener) => {
+      fileOpenListeners.add(listener);
+      if (!saveShortcutInstalled) {
+        saveShortcutInstalled = true;
+        target.addEventListener('keydown', onSaveShortcut, true);
+      }
+      if (lastFile) listener(lastFile);
+      return () => {
+        fileOpenListeners.delete(listener);
+      };
+    },
+    onFileSnapshot: (handler) => {
+      fileSnapshotHandler = handler;
+      return () => {
+        if (fileSnapshotHandler === handler) fileSnapshotHandler = null;
+      };
+    },
+    onFileSaved: (listener) => {
+      fileSavedListeners.add(listener);
+      return () => {
+        fileSavedListeners.delete(listener);
+      };
+    },
+    reportFileChange: (change) => notify({ ...envelope, type: 'file-change', payload: { dirty: change.dirty, edited: change.edited } }),
+    requestFileSave,
+    reportFileUnsupported: () => notify({ ...envelope, type: 'file-unsupported' }),
     dispose: () => {
       for (const subscriptionId of workspaceListeners.keys()) {
         post({ ...envelope, type: 'workspace-unsubscribe', id: nextId(ids), payload: { subscriptionId } });
       }
       workspaceListeners.clear();
+      for (const subscriptionId of shellsListeners.keys()) {
+        post({ ...envelope, type: 'shells-unsubscribe', id: nextId(ids), payload: { subscriptionId } });
+      }
+      shellsListeners.clear();
       disposed = true;
       resolveHandler = null;
       actionHandler = null;
+      fileSnapshotHandler = null;
+      fileOpenListeners.clear();
+      fileSavedListeners.clear();
+      if (saveShortcutInstalled) target.removeEventListener('keydown', onSaveShortcut, true);
       target.removeEventListener('message', onMessage);
+      target.removeEventListener('keydown', onPopoverEscape, true);
+      target.removeEventListener('pointerover', onPopoverPointerOver);
+      target.removeEventListener('pointermove', onPopoverPointerOver);
+      target.removeEventListener('pointerout', onPopoverPointerOut);
+      target.removeEventListener('focus', onPopoverFocus);
+      target.removeEventListener('blur', onPopoverBlur);
       for (const waiter of pending.values()) {
         clearTimeout(waiter.timer);
         waiter.reject(new HostRequestError('HOST_UNAVAILABLE', 'Host client was disposed.'));
@@ -834,6 +1165,8 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       connectionListeners.clear();
       settingsListeners.clear();
       itemListeners.clear();
+      statusControlListeners.clear();
+      popoverClosedListeners.clear();
     },
   };
 };

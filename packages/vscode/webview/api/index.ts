@@ -5,7 +5,7 @@ import { createVSCodePermissionsAPI } from './permissions';
 import { createVSCodeEditorAPI } from './editor';
 import { createVSCodeGitAPI } from './git';
 import { createVSCodeActionsAPI } from './vscode';
-import { createVSCodeGitHubAPI } from './github';
+import { createVSCodeSourceControlAPI } from './source-control';
 import { createVSCodeNotificationsAPI } from './notifications';
 import { createVSCodeSidebarStateAPI } from './sidebarState';
 import { createVSCodeFollowUpQueueAPI } from './followUpQueue';
@@ -38,7 +38,7 @@ export const createVSCodeAPIs = (): RuntimeAPIs => ({
   nativeAgents: createVSCodeNativeAgentsAPI(),
   permissions: createVSCodePermissionsAPI(),
   notifications: createVSCodeNotificationsAPI(),
-  github: createVSCodeGitHubAPI(),
+  sourceControl: createVSCodeSourceControlAPI(),
   editor: createVSCodeEditorAPI(),
   vscode: createVSCodeActionsAPI(),
 });

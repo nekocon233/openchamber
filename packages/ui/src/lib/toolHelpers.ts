@@ -219,8 +219,22 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
       inputFields: []
     },
 
+    openchamber_knowledge: {
+      displayName: 'OpenChamber Knowledge',
+      category: 'system',
+      outputLanguage: 'json',
+      inputFields: []
+    },
+
     openchamber_notify: {
       displayName: 'OpenChamber Notify',
+      category: 'system',
+      outputLanguage: 'json',
+      inputFields: []
+    },
+
+    openchamber_render: {
+      displayName: 'OpenChamber Render',
       category: 'system',
       outputLanguage: 'json',
       inputFields: []
@@ -387,10 +401,18 @@ export function getLanguageFromExtension(filePath: string): string | null {
     'svelte': 'html',
     'astro': 'html',
     'ejs': 'html',
+    'cshtml': 'html',
+    'razor': 'html',
+    'jsp': 'html',
+    'gohtml': 'html',
+    'tmpl': 'html',
     'hbs': 'handlebars',
     'handlebars': 'handlebars',
     'mustache': 'handlebars',
     'njk': 'twig',
+    'jinja': 'twig',
+    'jinja2': 'twig',
+    'j2': 'twig',
     'nunjucks': 'twig',
     'twig': 'twig',
     'liquid': 'liquid',
@@ -410,6 +432,13 @@ export function getLanguageFromExtension(filePath: string): string | null {
     'jsonl': 'json',
     'ndjson': 'json',
     'geojson': 'json',
+    'webmanifest': 'json',
+    'code-workspace': 'json',
+    'har': 'json',
+    'ipynb': 'json',
+    'gltf': 'json',
+    'tfstate': 'json',
+    'tsbuildinfo': 'json',
     'yaml': 'yaml',
     'yml': 'yaml',
     'toml': 'toml',
@@ -430,11 +459,16 @@ export function getLanguageFromExtension(filePath: string): string | null {
     'targets': 'xml',
     'nuspec': 'xml',
     'resx': 'xml',
+    'wxs': 'xml',
+    'storyboard': 'xml',
+    'xib': 'xml',
     'ini': 'ini',
     'cfg': 'ini',
     'conf': 'ini',
     'config': 'ini',
     'properties': 'properties',
+    'service': 'ini',
+    'desktop': 'ini',
     'env': 'bash',
     'csv': 'text',
     'tsv': 'text',
@@ -470,6 +504,10 @@ export function getLanguageFromExtension(filePath: string): string | null {
     'php5': 'php',
     'php7': 'php',
     'phps': 'php',
+    // PHP templates (Smarty-style .tpl, CakePHP .ctp) and PHP test files.
+    'tpl': 'php',
+    'ctp': 'php',
+    'phpt': 'php',
     'inc': 'php',
     'blade.php': 'php',
 
@@ -724,6 +762,11 @@ const DIAGRAM_EXTENSIONS = ['drawio', 'dio'];
 export function isDrawioFile(filePath: string): boolean {
   const ext = filePath.split('.').pop()?.toLowerCase();
   return DIAGRAM_EXTENSIONS.includes(ext || '');
+}
+
+export function isExcalidrawFile(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return lower.endsWith('.excalidraw') || lower.endsWith('.excalidraw.md');
 }
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp', 'avif'];

@@ -26,13 +26,15 @@ const DiffRow: React.FC<{ row: ConciseDiffRow }> = ({ row }) => {
     if (row.kind === 'gap') {
         return <div aria-hidden="true" className="px-2 leading-5" style={{ color: 'var(--tools-edit-line-number)' }}>⋯</div>;
     }
+    // A diff reads left to right in every locale, so the row carries `dir="ltr"`
+    // and its logical sides resolve as physical inside it.
     return (
-        <div className="flex min-w-0 leading-5" style={{ backgroundColor: ROW_BACKGROUND[row.kind] }}>
-            <span className="w-10 shrink-0 select-none pr-2 text-right tabular-nums" style={{ color: 'var(--tools-edit-line-number)' }}>
+        <div dir="ltr" className="flex min-w-0 leading-5" style={{ backgroundColor: ROW_BACKGROUND[row.kind] }}>
+            <span className="w-10 shrink-0 select-none pe-2 text-end tabular-nums" style={{ color: 'var(--tools-edit-line-number)' }}>
                 {row.line}
             </span>
             <span className="w-3 shrink-0 select-none" style={{ color: SIGN_COLOR[row.kind] }}>{SIGN[row.kind]}</span>
-            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words pr-2">{row.text}</span>
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words pe-2">{row.text}</span>
         </div>
     );
 };
@@ -63,7 +65,7 @@ export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?:
 
     return (
         <div
-            className="mt-0.5 mb-1 ml-5 overflow-hidden rounded-md typography-code !text-[length:var(--text-meta)]"
+            className="mt-0.5 mb-1 ms-5 overflow-hidden rounded-md typography-code !text-[length:var(--text-meta)]"
             style={{ backgroundColor: 'var(--syntax-background)', color: 'var(--syntax-foreground)' }}
         >
             {shown.map((file) => (
@@ -77,7 +79,7 @@ export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?:
             {hiddenRows > 0 || unfolded ? (
                 <button
                     type="button"
-                    className="w-full px-2 py-0.5 text-left typography-meta hover:bg-interactive-hover"
+                    className="w-full px-2 py-0.5 text-start typography-meta hover:bg-interactive-hover"
                     style={{ color: 'var(--tools-description)' }}
                     onClick={(event) => {
                         event.stopPropagation();

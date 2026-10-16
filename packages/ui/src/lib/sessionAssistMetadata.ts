@@ -14,7 +14,7 @@ export interface SessionAssistPayload {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-export function getSessionAssist(session: Session | null | undefined): SessionAssistPayload | null {
+function getSessionAssist(session: Session | null | undefined): SessionAssistPayload | null {
   const metadata = (session as { metadata?: unknown } | null | undefined)?.metadata;
   if (!isRecord(metadata)) return null;
   const namespace = metadata.openchamber;
@@ -36,8 +36,9 @@ export function getSessionAssist(session: Session | null | undefined): SessionAs
 }
 
 /**
- * The one freshness rule for a stored assist, shared by the sidebar row (which
- * has only the session record) and the chat (which must agree with it).
+ * The one freshness rule for a stored assist, shared by the sidebar row's
+ * recap tooltip (which has only the session record) and the chat (which must
+ * agree with it).
  * OpenCode stamps `time.idle` whenever a turn ends, succeeded or not, and the
  * assist is generated after that quiet turn end. A later turn moves `idle`
  * past `generatedAt`, so the payload describes an older turn and is retired.
@@ -52,9 +53,4 @@ export function getCurrentSessionAssist(session: Session | null | undefined): Se
   if (session.revert?.messageID) return null;
   const idleAt = session.time?.idle ?? 0;
   return assist.generatedAt >= idleAt ? assist : null;
-}
-
-/** The suggested next message, under the shared freshness rule. */
-export function getOpenSessionSuggestion(session: Session | null | undefined): string | null {
-  return getCurrentSessionAssist(session)?.suggestion || null;
 }

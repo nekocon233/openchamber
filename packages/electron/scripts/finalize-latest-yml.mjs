@@ -74,21 +74,35 @@ const read = async (subdir, filename) => {
 
 const output = {};
 
-const winX64 = await read('latest-yml-x86_64-pc-windows-msvc', 'latest.yml');
-const winArm64 = await read('latest-yml-aarch64-pc-windows-msvc', 'latest.yml');
-if (!winX64 || !winArm64) {
-  throw new Error('Both x64 and arm64 Windows update manifests are required');
-}
-output['latest.yml'] = serialize(winX64);
-output['latest-arm64.yml'] = serialize(winArm64);
+// Finishing a published release rebuilds macOS only; its Windows manifests
+// are already on the release and stay untouched.
+const macOnly = process.env.MAC_ONLY === '1';
 
+let winX64 = null;
+let winArm64 = null;
+if (!macOnly) {
+  winX64 = await read('latest-yml-x86_64-pc-windows-msvc', 'latest.yml');
+  winArm64 = await read('latest-yml-aarch64-pc-windows-msvc', 'latest.yml');
+  if (!winX64 || !winArm64) {
+    throw new Error('Both x64 and arm64 Windows update manifests are required');
+  }
+  output['latest.yml'] = serialize(winX64);
+  output['latest-arm64.yml'] = serialize(winArm64);
+}
+
+// One manifest serves both Mac architectures. The updater falls back to x64
+// files when it lists no arm64 ones, so a manifest missing an architecture
+// moves Apple Silicon users onto the Intel build under Rosetta.
 const macX64 = await read('latest-yml-x86_64-apple-darwin', 'latest-mac.yml');
 const macArm64 = await read('latest-yml-aarch64-apple-darwin', 'latest-mac.yml');
 if (!macX64 || !macArm64) {
   throw new Error('Both x64 and arm64 macOS update manifests are required');
 }
+// A manifest from another tag would point the updater at a different version's
+// files. A macOS-only run leaves the Windows manifests unset, and those stay
+// on the release as they are.
 for (const [name, manifest] of Object.entries({ winX64, winArm64, macX64, macArm64 })) {
-  if (manifest.version !== version) {
+  if (manifest && manifest.version !== version) {
     throw new Error(`${name} update manifest version ${manifest.version || '<missing>'} does not match ${version}`);
   }
 }

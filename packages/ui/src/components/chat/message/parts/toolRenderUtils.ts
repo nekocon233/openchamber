@@ -1,10 +1,5 @@
-import type { JsonValue, Metadata, ToolInput, ToolPart } from '@/lib/opencode/model';
-import { OPENCODE_TOOLS, normalizeToolName, recordedFileChanges, type ToolName } from '@/lib/opencode/tools';
-
-// Keep only tools with a direct in-app navigation destination compact. Every
-// other tool uses ToolPart so custom, plugin, and MCP calls expose their input
-// and output through the common expandable renderer.
-const STATIC_TOOL_NAMES = new Set<string>([OPENCODE_TOOLS.read, OPENCODE_TOOLS.skill]);
+import type { Metadata, ToolPart } from '@/lib/opencode/model';
+import { OPENCODE_TOOLS, isNavigationTool, normalizeToolName, recordedFileChanges, type ToolName } from '@/lib/opencode/tools';
 
 const STANDALONE_TOOL_NAMES = new Set<string>([OPENCODE_TOOLS.subagent]);
 
@@ -24,8 +19,11 @@ export const isStandaloneTool = (toolName: ToolName, metadata?: Metadata): boole
     return metadata?.openchamberToolSource !== 'mcp' && STANDALONE_TOOL_NAMES.has(normalizeToolName(toolName));
 };
 
+// Keep only tools with a direct in-app navigation destination compact. Every
+// other tool uses ToolPart so custom, plugin, and MCP calls expose their input
+// and output through the common expandable renderer.
 export const isStaticTool = (toolName: ToolName, metadata?: Metadata): boolean => {
-    return metadata?.openchamberToolSource !== 'mcp' && STATIC_TOOL_NAMES.has(normalizeToolName(toolName));
+    return metadata?.openchamberToolSource !== 'mcp' && isNavigationTool(toolName);
 };
 
 /** Whether a tool call survives the simplified transcript's routine-tool filter. */
@@ -34,17 +32,4 @@ export const showsWithFileChangesOnly = (part: Pick<ToolPart, 'tool' | 'state'>)
     if (metadata?.openchamberToolSource === 'mcp') return true;
     if (FILE_CHANGES_ONLY_TOOL_NAMES.has(normalizeToolName(part.tool))) return true;
     return part.state.status !== 'pending' && recordedFileChanges(part.tool, metadata) !== null;
-};
-
-export const getToolDescriptionFallback = (
-    toolName: ToolName,
-    description: JsonValue | undefined,
-    input: ToolInput | undefined,
-): string => {
-    if (typeof description === 'string' && description.trim().length > 0) {
-        return description;
-    }
-
-    const globPattern = normalizeToolName(toolName) === 'glob' ? input?.pattern : undefined;
-    return typeof globPattern === 'string' ? globPattern : '';
 };

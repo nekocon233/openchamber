@@ -1,6 +1,7 @@
 import React from 'react';
 import { UsageCard } from './UsageCard';
 import { QuotaCredentials } from './QuotaCredentials';
+import { ClaudeCodeSignIn } from './ClaudeCodeSignIn';
 import { QUOTA_PROVIDERS, getQuotaProviderList } from '@/lib/quota';
 import { useQuotaAutoRefresh, useQuotaStore } from '@/stores/useQuotaStore';
 import { updateDesktopSettings } from '@/lib/persistence';
@@ -45,6 +46,7 @@ export const UsagePage: React.FC = () => {
   const setSelectedProvider = useQuotaStore((state) => state.setSelectedProvider);
   const loadSettings = useQuotaStore((state) => state.loadSettings);
   const fetchAllQuotas = useQuotaStore((state) => state.fetchAllQuotas);
+  const fetchProviderQuota = useQuotaStore((state) => state.fetchProviderQuota);
   const isLoading = useQuotaStore((state) => state.isLoading);
   const lastUpdated = useQuotaStore((state) => state.lastUpdated);
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
@@ -86,7 +88,12 @@ export const UsagePage: React.FC = () => {
       ? selectedResult.error
       : null;
   const showInDropdown = selectedProviderId ? dropdownProviderIds.includes(selectedProviderId) : false;
-  const hasCredentialsForm = selectedProviderId === 'exe-dev' || selectedProviderId === 'ollama-cloud' || selectedProviderId === 'cursor';
+  const credentialProviderId = selectedProviderId === 'exe-dev'
+    || selectedProviderId === 'cursor'
+    || selectedProviderId === 'zenmux'
+    ? selectedProviderId
+    : null;
+  const hasCredentialsForm = credentialProviderId !== null;
   const handleDropdownToggle = React.useCallback((enabled: boolean) => {
     if (!selectedProviderId) {
       return;
@@ -207,22 +214,32 @@ export const UsagePage: React.FC = () => {
       {/* Providers with an inline credentials form don't need the "go to Providers" banner — the form IS the fix. */}
       {selectedResult && !selectedResult.configured && !hasCredentialsForm && (
         <div className="mb-8 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-background)] px-4 py-3">
-          <p className="typography-ui-label font-medium text-[var(--status-warning)]">{t('settings.usage.page.state.providerNotConfiguredTitle')}</p>
-          <p className="typography-meta text-[var(--status-warning)]/80 mt-1">
-            {t('settings.usage.page.state.providerNotConfiguredDescription')}
-          </p>
+          {/* Claude usage comes from Claude Code's own login, which Providers cannot add. */}
+          {selectedProviderId === 'claude' ? (
+            <>
+              <p className="typography-ui-label font-medium text-[var(--status-warning)]">{t('settings.usage.page.state.claudeSignedOutTitle')}</p>
+              <ClaudeCodeSignIn onSignedIn={() => void fetchProviderQuota('claude')} />
+            </>
+          ) : (
+            <>
+              <p className="typography-ui-label font-medium text-[var(--status-warning)]">{t('settings.usage.page.state.providerNotConfiguredTitle')}</p>
+              <p className="typography-meta text-[var(--status-warning)]/80 mt-1">
+                {t('settings.usage.page.state.providerNotConfiguredDescription')}
+              </p>
+            </>
+          )}
         </div>
       )}
 
-      {(selectedProviderId === 'exe-dev' || selectedProviderId === 'ollama-cloud' || selectedProviderId === 'cursor') && (
-        <QuotaCredentials providerId={selectedProviderId} providerName={providerName} />
+      {credentialProviderId && (
+        <QuotaCredentials providerId={credentialProviderId} providerName={providerName} />
       )}
 
       {usage?.windows && Object.keys(usage.windows).length > 0 && (
         <SettingsSection settingsItem="usage.model-quotas">
           <div className="divide-y divide-[var(--surface-subtle)]">
             {Object.entries(usage.windows).map(([label, window]) => (
-              <UsageCard key={label} title={label} window={window} />
+              <UsageCard key={label} title={label} window={window} providerId={selectedProviderId} />
             ))}
           </div>
         </SettingsSection>
@@ -246,7 +263,7 @@ export const UsagePage: React.FC = () => {
                   onOpenChange={() => toggleFamilyCollapsed(family.id)}
                 >
                   <CollapsibleTrigger className="flex w-full items-center justify-between py-0.5 group">
-                    <div className="flex items-center gap-1.5 text-left">
+                    <div className="flex items-center gap-1.5 text-start">
                       <span className="typography-ui-label font-normal text-foreground">{family.label}</span>
                       <span className="typography-micro text-muted-foreground">
                         ({familyModels.length})
@@ -298,7 +315,7 @@ export const UsagePage: React.FC = () => {
                   onOpenChange={() => toggleFamilyCollapsed('other')}
                 >
                   <CollapsibleTrigger className="flex w-full items-center justify-between py-0.5 group">
-                    <div className="flex items-center gap-1.5 text-left">
+                    <div className="flex items-center gap-1.5 text-start">
                       <span className="typography-ui-label font-normal text-foreground">{t('settings.usage.page.section.otherModels')}</span>
                       <span className="typography-micro text-muted-foreground">
                         ({otherModels.length})

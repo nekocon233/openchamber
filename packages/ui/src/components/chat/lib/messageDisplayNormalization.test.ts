@@ -100,7 +100,7 @@ describe('user display parts', () => {
     test('still converts an empty-text issue context to a link attachment', () => {
         const context: TextPart = {
             ...textPart(''),
-            ...createContextPart({ kind: 'github-issue', number: 7, title: 'Fixture', url: 'https://example.com/issues/7' }, ''),
+            ...createContextPart({ kind: 'repository-issue', number: 7, title: 'Fixture', url: 'https://example.com/issues/7' }, ''),
         };
         const message = userMessage([context]);
 

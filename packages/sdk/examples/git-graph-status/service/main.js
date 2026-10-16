@@ -1,4 +1,4 @@
-// packages/sdk/examples/git-graph-status/service/main.ts
+// examples/git-graph-status/service/main.ts
 import { execFile } from "node:child_process";
 import http from "node:http";
 import path from "node:path";

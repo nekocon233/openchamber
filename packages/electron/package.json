@@ -1,13 +1,14 @@
 {
   "name": "@openchamber/electron",
-  "version": "2.0.2",
+  "version": "2.3.3",
   "private": true,
   "description": "Electron desktop runtime for OpenChamber",
   "author": "OpenChamber",
+  "homepage": "https://openchamber.dev",
   "type": "module",
   "main": "./dist-bundle/entry.mjs",
   "opencodeCli": {
-    "version": "2.0.16"
+    "version": "2.0.29"
   },
   "dependencies": {
     "@openchamber/web": "workspace:*",
@@ -45,9 +46,9 @@
     "generate:macos-icon": "node ./scripts/generate-macos-icon-assets.cjs",
     "rebuild:native": "node ./scripts/rebuild-native.mjs",
     "test": "node ../../scripts/run-isolated-tests.mjs .",
-    "test:architecture": "node --test ./startup-url-selection.test.mjs ./scripts/target-architecture.test.mjs ./scripts/verify-linux-appimage.test.mjs ./scripts/verify-update-manifest.test.mjs ./scripts/ensure-electron.test.mjs",
+    "test:architecture": "node --test ./startup-url-selection.test.mjs ./menu-locales.test.mjs ./scripts/target-architecture.test.mjs ./scripts/verify-linux-appimage.test.mjs ./scripts/verify-update-manifest.test.mjs ./scripts/ensure-electron.test.mjs",
     "test:updater": "node --test ./updater-capability.test.mjs ./updater-channel.test.mjs ./updater-check.test.mjs ./updater-feed.test.mjs ./scripts/finalize-latest-yml.test.mjs ./scripts/updater-e2e-fixture.test.mjs",
-    "test:linux-desktop": "node --test ./linux-autostart.test.mjs && node ./scripts/smoke-linux-app-discovery.mjs && node ./scripts/smoke-path-open-utils.mjs",
+    "test:linux-desktop": "node --test ./linux-autostart.test.mjs ./linux-desktop-entry.test.mjs && node ./scripts/smoke-linux-app-discovery.mjs && node ./scripts/smoke-path-open-utils.mjs",
     "updater:e2e:fixture": "node ./scripts/updater-e2e-fixture.mjs",
     "verify:update-manifest": "node ./scripts/verify-update-manifest.mjs",
     "package": "bun run build:web-assets && bun run prepare:opencode-cli && bun run bundle:main && bun run rebuild:native && node ./scripts/package.mjs",
@@ -59,13 +60,25 @@
     "appId": "dev.openchamber.desktop",
     "productName": "OpenChamber",
     "asarUnpack": [
-      "node_modules/@openchamber/web/server/built-in-extensions/**/*"
+      "node_modules/@openchamber/web/server/built-in-extensions/**/*",
+      "node_modules/@openchamber/web/server/lib/git/credential-helper.js",
+      "node_modules/@openchamber/web/server/lib/git/ssh-wrapper.js",
+      "node_modules/@openchamber/web/server/lib/git/repository-credential-helper.js"
     ],
     "files": [
       "dist-bundle/entry.mjs",
       "dist-bundle/main.mjs",
       "dist-bundle/early-startup.mjs",
       "preload.mjs",
+      "!**/node_modules/**/*.{ts,mts,cts,tsx,map}",
+      "!**/node_modules/**/!(LICENSE*|LICENCE*|license*|licence*|License*).md",
+      "!**/node_modules/bun-pty{,/**}",
+      "!**/node_modules/luxon/{src,build/amd,build/global,build/cjs-browser}{,/**}",
+      "!node_modules/@openchamber/web/{dist,src,public,scripts,test}{,/**}",
+      "!node_modules/@openchamber/web/*.{html,tgz}",
+      "!node_modules/@openchamber/web/{tsconfig.json,tsconfig.tsbuildinfo}",
+      "!node_modules/@openchamber/web/server/**/*.test.js",
+      "!node_modules/node-pty/prebuilds/!(${platform}-${arch}){,/**}",
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
     ],
     "extraResources": [
@@ -106,7 +119,8 @@
       "icon": "resources/icons/icon.icns",
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "extendInfo": {
-        "CFBundleIconName": "AppIcon"
+        "CFBundleIconName": "AppIcon",
+        "NSLocalNetworkUsageDescription": "OpenChamber needs access to devices and services on your local network."
       },
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -128,10 +142,15 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb",
+        "rpm"
       ],
       "category": "Development",
-      "icon": "resources/icons/app-icon.svg",
+      "maintainer": "OpenChamber <security@openchamber.dev>",
+      "vendor": "OpenChamber",
+      "synopsis": "Desktop runtime for OpenChamber",
+      "icon": "resources/icons/app-icon.png",
       "executableName": "openchamber",
       "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
       "desktop": {
@@ -142,6 +161,14 @@
           "StartupWMClass": "openchamber"
         }
       }
+    },
+    "deb": {
+      "afterInstall": "resources/linux/after-install.tpl",
+      "afterRemove": "resources/linux/after-remove.tpl"
+    },
+    "rpm": {
+      "afterInstall": "resources/linux/after-install.tpl",
+      "afterRemove": "resources/linux/after-remove.tpl"
     },
     "nsis": {
       "oneClick": true,

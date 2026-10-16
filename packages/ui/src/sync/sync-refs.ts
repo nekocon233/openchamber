@@ -51,6 +51,15 @@ export function getSyncChildStores(): ChildStoreManager {
   return _childStores
 }
 
+/**
+ * The child-store manager when a SyncProvider has installed one. Modules that
+ * only read directory state as it appears use this instead of the throwing
+ * getter, so they stay inert before mount and after a runtime switch.
+ */
+export function getSyncChildStoresIfMounted(): ChildStoreManager | undefined {
+  return _childStores ?? undefined
+}
+
 /** Read current directory's child store state. Returns undefined if not bootstrapped. */
 export function getDirectoryState(directory?: string): State | undefined {
   const stores = _childStores

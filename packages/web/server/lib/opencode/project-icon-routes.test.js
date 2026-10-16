@@ -110,5 +110,189 @@ describe('project icon routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.getHeader('Content-Type')).toBe('image/jpeg');
     expect(res.body).toBe(jpgBytes);
+    // A repository icon opened as a page must stay inert.
+    expect(res.getHeader('Content-Security-Policy')).toContain('sandbox');
+    expect(res.getHeader('X-Content-Type-Options')).toBe('nosniff');
+  });
+
+  it('discovers a favicon at a Windows project root', async () => {
+    const { app, getRoute } = createRouteRegistry();
+    const svgBytes = Buffer.from('svg-bytes');
+    const fsPromises = {
+      readFile: vi.fn(async () => svgBytes),
+      mkdir: vi.fn(async () => {}),
+      writeFile: vi.fn(async () => {}),
+      unlink: vi.fn(async () => {}),
+    };
+
+    registerProjectIconRoutes(app, {
+      fsPromises,
+      path,
+      crypto,
+      openchamberDataDir: '/tmp/openchamber-test',
+      readSettingsFromDiskMigrated: async () => ({
+        projects: [{ id: 'proj-1', path: 'C:\\repo' }],
+      }),
+      sidebarStateRuntime: {
+        readSnapshot: async () => ({
+          projects: [{ id: 'proj-1', path: 'C:\\repo' }],
+        }),
+        applyOperation: async () => ({
+          applied: true,
+          snapshot: { revision: 1, projects: [{ id: 'proj-1', path: 'C:\\repo' }] },
+        }),
+      },
+      createFsSearchRuntime: () => ({
+        searchFilesystemFiles: async () => [
+          {
+            name: 'favicon.svg',
+            path: 'C:\\repo\\favicon.svg',
+            relativePath: 'favicon.svg',
+            extension: 'svg',
+          },
+        ],
+      }),
+      spawn: vi.fn(),
+      resolveGitBinaryForSpawn: vi.fn(),
+    });
+
+    const res = createMockResponse();
+    await getRoute('POST', '/api/projects/:projectId/icon/discover')({
+      params: { projectId: 'proj-1' },
+      body: {},
+    }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.discoveredPath).toBe('C:\\repo\\favicon.svg');
+  });
+
+  it('filters out hidden or test directories and prioritizes public/ assets', async () => {
+    const { app, getRoute } = createRouteRegistry();
+    const icoBytes = Buffer.from('ico-bytes');
+    const fsPromises = {
+      readFile: vi.fn(async () => icoBytes),
+      mkdir: vi.fn(async () => {}),
+      writeFile: vi.fn(async () => {}),
+      unlink: vi.fn(async () => {}),
+    };
+    let capturedSearchOptions = null;
+
+    registerProjectIconRoutes(app, {
+      fsPromises,
+      path,
+      crypto,
+      openchamberDataDir: '/tmp/openchamber-test',
+      readSettingsFromDiskMigrated: async () => ({
+        projects: [{ id: 'proj-1', path: '/repo' }],
+      }),
+      sidebarStateRuntime: {
+        readSnapshot: async () => ({
+          projects: [{ id: 'proj-1', path: '/repo' }],
+        }),
+        applyOperation: async () => ({
+          applied: true,
+          snapshot: { revision: 1, projects: [{ id: 'proj-1', path: '/repo' }] },
+        }),
+      },
+      createFsSearchRuntime: () => ({
+        searchFilesystemFiles: async (_root, options) => {
+          capturedSearchOptions = options;
+          return [
+            {
+              name: 'favicon.ico',
+              path: '/repo/.local/dep/favicon.ico',
+              relativePath: '.local/dep/favicon.ico',
+              extension: 'ico',
+            },
+            {
+              name: 'favicon.ico',
+              path: '/repo/tests/fixtures/favicon.ico',
+              relativePath: 'tests/fixtures/favicon.ico',
+              extension: 'ico',
+            },
+            {
+              name: 'favicon.ico',
+              path: '/repo/web/public/icons/favicon.ico',
+              relativePath: 'web/public/icons/favicon.ico',
+              extension: 'ico',
+            },
+          ];
+        },
+      }),
+      spawn: vi.fn(),
+      resolveGitBinaryForSpawn: vi.fn(),
+    });
+
+    const res = createMockResponse();
+    await getRoute('POST', '/api/projects/:projectId/icon/discover')({
+      params: { projectId: 'proj-1' },
+      body: {},
+    }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(capturedSearchOptions).toEqual({
+      limit: 200,
+      query: 'favicon',
+      includeHidden: false,
+      respectGitignore: true,
+    });
+    expect(res.body.discoveredPath).toBe('/repo/web/public/icons/favicon.ico');
+  });
+
+  it('prefers svg over ico format in the same directory', async () => {
+    const { app, getRoute } = createRouteRegistry();
+    const svgBytes = Buffer.from('svg-bytes');
+    const fsPromises = {
+      readFile: vi.fn(async () => svgBytes),
+      mkdir: vi.fn(async () => {}),
+      writeFile: vi.fn(async () => {}),
+      unlink: vi.fn(async () => {}),
+    };
+
+    registerProjectIconRoutes(app, {
+      fsPromises,
+      path,
+      crypto,
+      openchamberDataDir: '/tmp/openchamber-test',
+      readSettingsFromDiskMigrated: async () => ({
+        projects: [{ id: 'proj-1', path: '/repo' }],
+      }),
+      sidebarStateRuntime: {
+        readSnapshot: async () => ({
+          projects: [{ id: 'proj-1', path: '/repo' }],
+        }),
+        applyOperation: async () => ({
+          applied: true,
+          snapshot: { revision: 1, projects: [{ id: 'proj-1', path: '/repo' }] },
+        }),
+      },
+      createFsSearchRuntime: () => ({
+        searchFilesystemFiles: async () => [
+          {
+            name: 'favicon.ico',
+            path: '/repo/public/favicon.ico',
+            relativePath: 'public/favicon.ico',
+            extension: 'ico',
+          },
+          {
+            name: 'favicon.svg',
+            path: '/repo/public/favicon.svg',
+            relativePath: 'public/favicon.svg',
+            extension: 'svg',
+          },
+        ],
+      }),
+      spawn: vi.fn(),
+      resolveGitBinaryForSpawn: vi.fn(),
+    });
+
+    const res = createMockResponse();
+    await getRoute('POST', '/api/projects/:projectId/icon/discover')({
+      params: { projectId: 'proj-1' },
+      body: {},
+    }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.discoveredPath).toBe('/repo/public/favicon.svg');
   });
 });

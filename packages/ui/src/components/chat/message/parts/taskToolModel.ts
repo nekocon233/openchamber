@@ -1,20 +1,9 @@
-import type { MessageRecord } from '@/lib/messageCompletion';
 import type { Part, Session, ToolInput } from '@/lib/opencode/model';
 
 import { isSubagentTool, normalizeToolName } from '@/lib/opencode/tools';
 
 import { capToolOutputText } from '../toolRenderers';
 import { readTaskTagSessionIdFromOutput } from './taskSessionIdParser';
-
-export type TaskToolSummaryEntry = {
-    id?: string;
-    tool?: string;
-    state?: {
-        status?: string;
-        title?: string;
-        input?: ToolInput;
-    };
-};
 
 const normalizeSessionIdCandidate = (value: unknown): string | undefined => {
     if (typeof value !== 'string') return undefined;
@@ -40,7 +29,9 @@ export const readTaskSessionIdFromRecord = (value: unknown): string | undefined 
  * the subagent runs therefore has no join. This recovers it from the child
  * session record: a child of the parent session, created after the call
  * started, running the requested agent, and not already joined to another
- * Task call of the same message. Anything but exactly one candidate yields
+ * Task call of the same message. Parallel calls of one agent leave several
+ * such children; OpenCode titles each child with its call's `description`,
+ * which narrows them to one. Anything but exactly one candidate yields
  * `undefined`; the caller drops this fallback once the real id arrives.
  */
 export const resolveRunningTaskChildSessionId = (options: {
@@ -49,10 +40,12 @@ export const resolveRunningTaskChildSessionId = (options: {
     startedAt: number;
     /** The Task's `input.agent`; OpenCode stores this id on the child session. */
     agent: ToolInput[string] | undefined;
+    /** The Task's `input.description`; OpenCode uses it as the child title. */
+    description: ToolInput[string] | undefined;
     siblingParts: readonly Part[] | undefined;
     partID: string;
 }): string | undefined => {
-    const { sessions, parentSessionID, startedAt, agent, siblingParts, partID } = options;
+    const { sessions, parentSessionID, startedAt, agent, description, siblingParts, partID } = options;
     let claimed: Set<string> | undefined;
     for (const sibling of siblingParts ?? []) {
         if (sibling.id === partID || sibling.type !== 'tool' || !isSubagentTool(normalizeToolName(sibling.tool))) continue;
@@ -64,18 +57,28 @@ export const resolveRunningTaskChildSessionId = (options: {
         claimed.add(siblingSessionID);
     }
 
-    let match: string | undefined;
-    for (const session of sessions) {
-        if (session.parentID !== parentSessionID) continue;
-        if (session.time.created < startedAt) continue;
-        if (agent !== undefined && session.agent !== undefined && session.agent !== agent) continue;
-        if (claimed?.has(session.id)) continue;
-        if (match !== undefined) return undefined;
-        match = session.id;
-    }
-    return match;
+    const candidates = sessions.filter((session) => session.parentID === parentSessionID
+        && session.time.created >= startedAt
+        && (agent === undefined || session.agent === undefined || session.agent === agent)
+        && !claimed?.has(session.id));
+    if (candidates.length === 1) return candidates[0].id;
+    if (description === undefined) return undefined;
+    const titled = candidates.filter((session) => session.title === description);
+    return titled.length === 1 ? titled[0].id : undefined;
 };
 
+/** A tool call the task's own summary reported, for the row's own list. */
+export type TaskToolSummaryEntry = {
+    id?: string;
+    tool?: string;
+    state?: {
+        status?: string;
+        title?: string;
+        input?: ToolInput;
+    };
+};
+
+/** The same summary as it arrives: a legacy entry list, or a JSON value. */
 export const normalizeTaskSummaryEntries = (value: unknown): TaskToolSummaryEntry[] => {
     if (!Array.isArray(value)) return [];
 
@@ -115,6 +118,7 @@ export const normalizeTaskSummaryEntries = (value: unknown): TaskToolSummaryEntr
     return normalized;
 };
 
+/** The id and tool-call summary a legacy `<task_metadata>` block carries. */
 export const parseTaskMetadataBlock = (output: string | undefined): {
     sessionId?: string;
     summaryEntries: TaskToolSummaryEntry[];
@@ -134,10 +138,15 @@ export const parseTaskMetadataBlock = (output: string | undefined): {
     }
 };
 
+/** The child session named by a legacy `<task_metadata>` block. */
+const readTaskMetadataSessionId = (output: string): string | undefined => {
+    return parseTaskMetadataBlock(output).sessionId;
+};
+
 export const readTaskSessionIdFromOutput = (output: string | undefined): string | undefined => {
     if (typeof output !== 'string' || output.trim().length === 0) return undefined;
-    const parsedMetadata = parseTaskMetadataBlock(output);
-    if (parsedMetadata.sessionId) return parsedMetadata.sessionId;
+    const metadataSessionId = readTaskMetadataSessionId(output);
+    if (metadataSessionId) return metadataSessionId;
 
     const taskMatch = output.match(/task_id\s*:\s*([^\s<"']+)/i);
     const sessionMatch = output.match(/session[_\s-]?id\s*:\s*([^\s<"']+)/i);
@@ -146,40 +155,7 @@ export const readTaskSessionIdFromOutput = (output: string | undefined): string 
     return normalizeSessionIdCandidate(readTaskTagSessionIdFromOutput(output));
 };
 
-const messageSummaryCache = new WeakMap<MessageRecord, TaskToolSummaryEntry[]>();
-
-const projectMessageSummaryEntries = (message: MessageRecord): TaskToolSummaryEntry[] => {
-    const cached = messageSummaryCache.get(message);
-    if (cached) return cached;
-
-    const entries: TaskToolSummaryEntry[] = [];
-    if (message.info.role === 'assistant') {
-        for (const part of message.parts) {
-            if (part.type !== 'tool') continue;
-            const toolName = normalizeToolName(part.tool);
-            if (!toolName || isSubagentTool(toolName)) continue;
-            const state = part.state as { status?: string; input?: ToolInput } | undefined;
-            entries.push({
-                id: part.id,
-                tool: part.tool,
-                state: {
-                    status: state?.status,
-                    input: state?.input,
-                },
-            });
-        }
-    }
-    messageSummaryCache.set(message, entries);
-    return entries;
-};
-
-export const buildTaskSummaryEntriesFromSession = (messages: MessageRecord[]): TaskToolSummaryEntry[] => {
-    const entries: TaskToolSummaryEntry[] = [];
-    for (const message of messages) entries.push(...projectMessageSummaryEntries(message));
-    return entries;
-};
-
-export const stripTaskMetadataFromOutput = (output: string): string => {
+const stripTaskMetadataFromOutput = (output: string): string => {
     return output.replace(/\n*<task_metadata>[\s\S]*?<\/task_metadata>\s*$/i, '').trimEnd();
 };
 
@@ -201,11 +177,23 @@ const unwrapTaskResultEnvelope = (output: string): string => {
     return resultBlock[1];
 };
 
+// OpenCode 2's subagent tool wraps a completed result the same way, without
+// an inner result block (issue #4066):
+//   <subagent sessionID="ses_…" state="completed">
+//   …result Markdown…
+//   </subagent>
+// Only an output that is exactly one such envelope is unwrapped.
+const SUBAGENT_ENVELOPE_PATTERN = /^\s*<subagent(?:\s[^>]*)?>\r?\n([\s\S]*?)\r?\n<\/subagent>\s*$/i;
+
+const unwrapSubagentEnvelope = (output: string): string => {
+    return output.match(SUBAGENT_ENVELOPE_PATTERN)?.[1] ?? output;
+};
+
 // The task tool renders its output through the markdown parser instead of the
 // shared tool-output path, so it needs the same size guard as
 // `getToolOutputText` (issue #2265): an unbounded single string reaching the
 // parser can exhaust V8's Zone allocator and crash the renderer.
 export const prepareTaskToolOutput = (output: string | undefined): string => {
     if (!output) return '';
-    return capToolOutputText(stripTaskMetadataFromOutput(unwrapTaskResultEnvelope(output)));
+    return capToolOutputText(stripTaskMetadataFromOutput(unwrapSubagentEnvelope(unwrapTaskResultEnvelope(output))));
 };

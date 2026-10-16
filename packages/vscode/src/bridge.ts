@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { type OpenCodeManager } from './opencode';
 import { handleStandardGitBridgeMessage } from './bridge-git-runtime';
 import { handleSpecialGitBridgeMessage } from './bridge-git-special-runtime';
+import { handleSmallModelBridgeMessage, readOpenCodeSmallModelCatalog } from './bridge-small-model-runtime';
 import { handleFsBridgeMessage } from './bridge-fs-runtime';
 import { handleConfigBridgeMessage } from './bridge-config-runtime';
 import { handleSystemBridgeMessage } from './bridge-system-runtime';
@@ -61,7 +62,6 @@ const projectSetupStore = createProjectSetupStore();
 const sessionStateStore = createSessionStateStore({ dataDir: getOpenChamberDataDir() });
 
 const UPDATE_CHECK_URL = process.env.OPENCHAMBER_UPDATE_API_URL || 'https://api.openchamber.dev/v1/update/check';
-const GITHUB_BACKEND_DISABLED_ERROR = 'OpenChamber VS Code backend GitHub integration is disabled. Use native VS Code GitHub integrations.';
 
 
 export async function handleBridgeMessage(message: BridgeRequest, ctx?: BridgeContext): Promise<BridgeResponse> {
@@ -80,17 +80,24 @@ export async function handleBridgeMessage(message: BridgeRequest, ctx?: BridgeCo
     );
     if (permissionAutoAcceptResponse) return permissionAutoAcceptResponse;
 
-    const standardGitResponse = await handleStandardGitBridgeMessage({ id, type, payload });
+    const standardGitResponse = await handleStandardGitBridgeMessage({ id, type, payload }, ctx);
     if (standardGitResponse) {
       return standardGitResponse;
     }
     const specialGitResponse = await handleSpecialGitBridgeMessage(
       { id, type, payload },
       ctx,
-      { readSettings, execGit }
+      { readSettings, execGit, readPromptOverrides: () => readMagicPromptOverrides().overrides }
     );
     if (specialGitResponse) {
       return specialGitResponse;
+    }
+    const smallModelResponse = await handleSmallModelBridgeMessage(
+      { id, type, payload },
+      (directory) => readOpenCodeSmallModelCatalog(ctx?.manager, directory),
+    );
+    if (smallModelResponse) {
+      return smallModelResponse;
     }
     const projectSetupResponse = await handleProjectSetupBridgeMessage({ id, type, payload }, projectSetupStore);
     if (projectSetupResponse) {
@@ -160,27 +167,6 @@ export async function handleBridgeMessage(message: BridgeRequest, ctx?: BridgeCo
     }
 
     switch (type) {
-      case 'api:github/auth:status':
-      case 'api:github/auth:start':
-      case 'api:github/auth:complete':
-      case 'api:github/auth:disconnect':
-      case 'api:github/auth:activate':
-      case 'api:github/me':
-      case 'api:github/pr:status':
-      case 'api:github/pr:create':
-      case 'api:github/pr:update':
-      case 'api:github/pr:merge':
-      case 'api:github/pr:ready':
-      case 'api:github/issues:list':
-      case 'api:github/issues:get':
-      case 'api:github/issues:comments':
-      case 'api:github/pulls:list':
-      case 'api:github/pulls:context':
-      case 'api:github/repo:upstream':
-      case 'api:github/repo:branches': {
-        return { id, type, success: false, error: GITHUB_BACKEND_DISABLED_ERROR };
-      }
-
       default:
         return { id, type, success: false, error: `Unknown message type: ${type}` };
     }

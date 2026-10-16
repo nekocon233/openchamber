@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { ModelSelector } from '@/components/sections/agents/ModelSelector';
 import { Button } from '@/components/ui/button';
+import { useCallableModelProviders } from '@/hooks/useCallableModelProviders';
 import { useI18n } from '@/lib/i18n';
 import { useConfigStore } from '@/stores/useConfigStore';
-import { runtimeFetch } from '@/lib/runtime-fetch';
 import { updateDesktopSettings } from '@/lib/persistence';
 import type { WalkthroughBlockedState, WalkthroughModel } from '@/lib/walkthrough/types';
 
@@ -26,7 +26,9 @@ const modelLabel = (model?: WalkthroughModel) =>
  * in place rather than sending the user to Settings to guess.
  */
 export const WalkthroughBlocker = ({
-  directory,
+  // Part of the blocker's props but not read: the remedy needs the reason and
+  // the model choice, not the directory the run came from.
+  directory: _directory,
   reason,
   model,
   requiredChars,
@@ -35,7 +37,6 @@ export const WalkthroughBlocker = ({
 }: WalkthroughBlockerProps) => {
   const { t } = useI18n();
   const modelsMetadata = useConfigStore((state) => state.modelsMetadata);
-  const [providers, setProviders] = useState<string[] | undefined>(undefined);
   const [saving, setSaving] = useState(false);
 
   // Every one of these means "this small model cannot do this job", so the
@@ -44,33 +45,7 @@ export const WalkthroughBlocker = ({
   const canChooseModel = reason === 'context-too-small'
     || reason === 'structured-output-unsupported'
     || reason === 'output-exhausted';
-
-  useEffect(() => {
-    if (!canChooseModel) return;
-    let cancelled = false;
-    setProviders(undefined);
-    (async () => {
-      try {
-        const response = await runtimeFetch('/api/small-model', {
-          method: 'GET',
-          headers: { Accept: 'application/json' },
-          query: { directory },
-        });
-        if (!response.ok) return;
-        const payload = (await response.json().catch(() => null)) as
-          | { authenticatedProviders?: unknown }
-          | null;
-        if (!cancelled && Array.isArray(payload?.authenticatedProviders)) {
-          setProviders(payload.authenticatedProviders.filter((id): id is string => typeof id === 'string'));
-        }
-      } catch {
-        // Leave undefined so a failed directory-scoped lookup offers nothing.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [canChooseModel, directory]);
+  const providers = useCallableModelProviders(canChooseModel);
 
   const handleModelChange = useCallback(
     async (providerId: string, modelId: string) => {

@@ -1,7 +1,7 @@
-import type { Message, Part } from '@/lib/opencode/model';
+import type { Message, Part, Session } from '@/lib/opencode/model'
 import { NATIVE_PROVIDER_CLAUDE, isNativeProviderId } from '@/lib/native-agents/ids';
 
-type UserModelChoice = {
+export type UserModelChoice = {
   id: string
   agent?: string
   providerID?: string
@@ -35,7 +35,7 @@ export const extractAssistantModelChoice = (message: Message): UserModelChoice |
  * Messages whose parts have not been loaded yet are skipped so an incomplete
  * snapshot cannot be treated as authoritative.
  */
-export const extractUserModelChoice = (message: Message): UserModelChoice | null => {
+const extractUserModelChoice = (message: Message): UserModelChoice | null => {
   if (message.role !== 'user' || !message.model) return null
   return { id: message.id, agent: message.agent, providerID: message.model.providerID, modelID: message.model.modelID, variant: message.model.variant }
 }
@@ -63,6 +63,34 @@ export const findLatestUserModelChoice = (
       : choice
   }
   return null
+}
+
+/**
+ * The selection OpenCode 2 keeps on the session record itself (`model` with
+ * its variant). The record's agent is followed separately, so the choice
+ * carries none.
+ */
+export const extractSessionRecordModelChoice = (session: Session | undefined): UserModelChoice | null => {
+  const model = session?.model
+  if (!session || !model?.providerID || !model.id) return null
+  return {
+    id: `session:${session.id}`,
+    agent: undefined,
+    providerID: model.providerID,
+    modelID: model.id,
+    variant: model.variant?.trim() || undefined,
+  }
+}
+
+/** Field equality, so a re-derived choice keeps its previous reference. */
+export const areModelChoicesEqual = (left: UserModelChoice | null, right: UserModelChoice | null): boolean => {
+  if (left === right) return true
+  if (!left || !right) return false
+  return left.id === right.id
+    && left.agent === right.agent
+    && left.providerID === right.providerID
+    && left.modelID === right.modelID
+    && left.variant === right.variant
 }
 
 /**

@@ -8,49 +8,46 @@ const source = readFileSync(join(__dirname, 'MobileSessionsSheet.tsx'), 'utf8');
 const mobileAppSource = readFileSync(join(__dirname, 'MobileApp.tsx'), 'utf8');
 
 describe('MobileSessionsSheet session structure', () => {
-  test('partitions managed chats and derives Pinned and Recent activity sessions', () => {
+  test('partitions managed chats and derives the Pinned and In work zones', () => {
     expect(source).toContain('partitionSidebarSessions(sessions, false)');
-    expect(source).toContain('sessions: orderSessionsByLifecycleScopes(chatSessions');
-    expect(source).toContain('derivePinnedSessions(sessions, pinnedSessionIds)');
-    expect(source).toContain('deriveRecentSessions(sessions, globalActiveSessionIds)');
-    expect(source).toContain('includeSessionDescendants(roots, sessions)');
-    expect(source).toContain("const activitySectionsEnabled = open || variant === 'sidebar'");
+    expect(source).toContain('sessions: orderSessionsByLifecycleScopes(sectionChatSessions, pinnedSessionIds, sessionOrderRanks)');
+    expect(source).toContain('const pinnedZoneSessionIds = React.useMemo');
+    expect(source).toContain('isSessionPinned(pinnedSessionIds, directory || null, session.id)');
+    expect(source).toContain('const workSessionIds = React.useMemo');
+    expect(source).toContain('isSessionInWork(session)');
+    expect(source).toContain('getDescendantIds(childrenBySessionId, session.id)');
+    expect(source).toContain("const presented = open || variant === 'sidebar'");
     expect(source).toContain('for (const session of projectSessions)');
   });
 
-  test('renders Pinned, Chats, Recent, then the project tree with stable bucket identity', () => {
-    const pinnedSectionIndex = source.indexOf('showPinnedSection ? renderActivitySection');
-    const chatsSectionIndex = source.indexOf('showChatsSection ? renderActivitySection');
-    const recentSectionIndex = source.indexOf('showRecentSection ? renderActivitySection');
+  test('renders Chats, Pinned and In work, then the project tree with stable bucket identity', () => {
+    const chatsSectionIndex = source.indexOf("const chatsLabel = t('mobile.sessions.section.chats')");
+    const pinnedSectionIndex = source.indexOf('renderZoneSection(PINNED_SECTION_ID');
+    const workSectionIndex = source.indexOf('renderZoneSection(WORK_SECTION_ID');
     const projectTreeIndex = source.indexOf('orderedNodes.map');
 
-    expect(pinnedSectionIndex).toBeGreaterThan(-1);
-    expect(chatsSectionIndex).toBeGreaterThan(pinnedSectionIndex);
-    expect(recentSectionIndex).toBeGreaterThan(chatsSectionIndex);
-    expect(projectTreeIndex).toBeGreaterThan(recentSectionIndex);
-    expect(source).toContain('bucketKey: `${PINNED_SECTION_KEY}::${PINNED_SECTION_KEY}`');
-    expect(source).toContain('bucketKey: chatsBucketKey');
-    expect(source).toContain('renderBucketSessions(bucketKey, bucket, PROJECT_SESSION_INDENT)');
-    expect(source).toContain('bucketKey: `${RECENT_SECTION_KEY}::${RECENT_SECTION_KEY}`');
-    expect(source).toContain('renderBucketSessions(`${node.project.id}::${bucket.key}`, bucket, PROJECT_SESSION_INDENT)');
+    expect(chatsSectionIndex).toBeGreaterThan(-1);
+    expect(pinnedSectionIndex).toBeGreaterThan(chatsSectionIndex);
+    expect(workSectionIndex).toBeGreaterThan(pinnedSectionIndex);
+    expect(projectTreeIndex).toBeGreaterThan(workSectionIndex);
+    expect(source).toContain('const chatsBucketKey = `${CHAT_DRAFT_PROJECT_ID}::${CHAT_DRAFT_PROJECT_ID}`');
+    expect(source).toContain('alwaysVisibleIds: pinnedChatIds');
+    expect(source).toContain('renderBucketSessions(`${node.project.id}::${rootBucket.key}`, rootBucket, 0)');
+    expect(source).toContain('renderBucketSessions(`${node.project.id}::${bucket.key}`, bucket, 1)');
   });
 
   test('uses the persisted display preferences in a mobile header menu', () => {
     expect(source).toContain('const showPinnedSection = useSessionDisplayStore');
     expect(source).toContain('const showChatsSection = useSessionDisplayStore');
-    expect(source).toContain('const showRecentSection = useSessionDisplayStore');
-    expect(source).toContain('onClick={togglePinnedSection}');
-    expect(source).toContain('onClick={toggleChatsSection}');
-    expect(source).toContain('onClick={toggleRecentSection}');
-    expect(source).toContain("t('sessions.sidebar.header.displayMode.showPinned')");
-    expect(source).toContain("t('sessions.sidebar.header.displayMode.showChats')");
-    expect(source).toContain("t('sessions.sidebar.header.displayMode.showRecent')");
+    expect(source).toContain('const showWorkSection = useSessionDisplayStore');
+    expect(source).toContain("renderMenuChoice('pinned', 'sessions.sidebar.header.displayMode.showPinned', showPinnedSection, handleTogglePinnedSection)");
+    expect(source).toContain("renderMenuChoice('work', 'sessions.sidebar.header.displayMode.showWork', showWorkSection, handleToggleWorkSection)");
     expect(source).toContain('visibleSessions.filter((session) =>');
   });
 
   test('uses authoritative activity, exposes pin actions, and keeps mobile sheets mounted', () => {
     expect(source).toContain('useAllSessionStatuses()');
-    expect(source).toContain('useSessionTurnActive(session.id)');
+    expect(source).toContain('useSessionTurnActivity(session.id)');
     expect(source).toContain('useHasSessionActivityDuration(session.id, isStreaming)');
     expect(source).toContain('<SessionActivityDuration');
     expect(source).toContain('running={isStreaming}');

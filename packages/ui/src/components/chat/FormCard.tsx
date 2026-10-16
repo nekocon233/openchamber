@@ -8,7 +8,7 @@ import { toast } from '@/components/ui';
 import type { FormRequest } from '@/lib/opencode/model';
 import { readWebSearchConsent } from '@/lib/opencode/websearch';
 import { useUIStore } from '@/stores/useUIStore';
-import { useSessionUIStore } from '@/sync/session-ui-store';
+import { useChatSessionSelection } from './chatColumnSession';
 import { useSessions } from '@/sync/sync-context';
 import * as sessionActions from '@/sync/session-actions';
 import { useI18n } from '@/lib/i18n';
@@ -50,8 +50,8 @@ export const FormCard: React.FC<FormCardProps> = ({ form }) => {
 const GenericFormCard: React.FC<FormCardProps> = ({ form }) => {
     const { t } = useI18n();
     const isMobile = useUIStore((state) => state.isMobile);
-    const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
-    const sessions = useSessions();
+    const { sessionId: currentSessionId, directory: currentSessionDirectory } = useChatSessionSelection();
+    const sessions = useSessions(currentSessionDirectory ?? undefined);
 
     const isFromSubagent = React.useMemo(() => {
         if (!currentSessionId || form.sessionID === currentSessionId) return false;
@@ -77,7 +77,7 @@ const GenericFormCard: React.FC<FormCardProps> = ({ form }) => {
         setValues(initialFormValues(fields, { acknowledgeExternal: true }));
         setHasResponded(false);
         setShowErrors(false);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // oxlint-disable-next-line react-hooks/exhaustive-deps
     }, [fieldsSignature, form.id]);
 
     const shown = React.useMemo(() => visibleFields(fields, values), [fields, values]);
@@ -169,7 +169,7 @@ const GenericFormCard: React.FC<FormCardProps> = ({ form }) => {
                                     {t('chat.formCard.fromSubagent')}
                                 </span>
                             ) : null}
-                            <div className="ml-auto flex items-center gap-0.5">
+                            <div className="ms-auto flex items-center gap-0.5">
                                 <button
                                     type="button"
                                     onClick={() => void handleCopy('markdown')}
@@ -230,7 +230,7 @@ const GenericFormCard: React.FC<FormCardProps> = ({ form }) => {
                         ) : null}
 
                         {isResponding ? (
-                            <div className="ml-auto">
+                            <div className="ms-auto">
                                 <div className="animate-spin h-3 w-3 border border-primary border-t-transparent rounded-full" />
                             </div>
                         ) : null}

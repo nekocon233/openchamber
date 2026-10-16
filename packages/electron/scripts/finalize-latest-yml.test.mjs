@@ -8,31 +8,30 @@ import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('./finalize-latest-yml.mjs', import.meta.url));
 
-const manifest = (platform, architecture) => `version: 1.2.3
+const manifest = (platform, architecture, extension) => `version: 1.2.3
 files:
-  - url: OpenChamber-1.2.3-${platform}-${architecture}.${platform === 'win' ? 'exe' : 'zip'}
-    sha512: ${platform}-${architecture}-checksum
+  - url: OpenChamber-1.2.3-${platform}-${architecture}.${extension}
+    sha512: ${architecture}-checksum
     size: 123
 releaseDate: '2026-07-30T00:00:00.000Z'
 `;
 
-const createFixture = ({ includeArm64 = true, includeMacX64 = true, includeMacArm64 = true } = {}) => {
+const writeManifest = (artifacts, target, filename, content) => {
+  fs.mkdirSync(path.join(artifacts, `latest-yml-${target}`), { recursive: true });
+  fs.writeFileSync(path.join(artifacts, `latest-yml-${target}`, filename), content);
+};
+
+const createFixture = ({ includeWindowsArm64 = true, includeMacArm64 = true } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-latest-yml-'));
   const artifacts = path.join(root, 'artifacts');
   const output = path.join(root, 'output');
-  fs.mkdirSync(path.join(artifacts, 'latest-yml-x86_64-pc-windows-msvc'), { recursive: true });
-  fs.writeFileSync(path.join(artifacts, 'latest-yml-x86_64-pc-windows-msvc', 'latest.yml'), manifest('win', 'x64'));
-  if (includeArm64) {
-    fs.mkdirSync(path.join(artifacts, 'latest-yml-aarch64-pc-windows-msvc'), { recursive: true });
-    fs.writeFileSync(path.join(artifacts, 'latest-yml-aarch64-pc-windows-msvc', 'latest.yml'), manifest('win', 'arm64'));
+  writeManifest(artifacts, 'x86_64-pc-windows-msvc', 'latest.yml', manifest('win', 'x64', 'exe'));
+  if (includeWindowsArm64) {
+    writeManifest(artifacts, 'aarch64-pc-windows-msvc', 'latest.yml', manifest('win', 'arm64', 'exe'));
   }
-  if (includeMacX64) {
-    fs.mkdirSync(path.join(artifacts, 'latest-yml-x86_64-apple-darwin'), { recursive: true });
-    fs.writeFileSync(path.join(artifacts, 'latest-yml-x86_64-apple-darwin', 'latest-mac.yml'), manifest('mac', 'x64'));
-  }
+  writeManifest(artifacts, 'x86_64-apple-darwin', 'latest-mac.yml', manifest('mac', 'x64', 'zip'));
   if (includeMacArm64) {
-    fs.mkdirSync(path.join(artifacts, 'latest-yml-aarch64-apple-darwin'), { recursive: true });
-    fs.writeFileSync(path.join(artifacts, 'latest-yml-aarch64-apple-darwin', 'latest-mac.yml'), manifest('mac', 'arm64'));
+    writeManifest(artifacts, 'aarch64-apple-darwin', 'latest-mac.yml', manifest('mac', 'arm64', 'zip'));
   }
   fs.mkdirSync(output);
   return { root, artifacts, output };
@@ -61,7 +60,7 @@ test('writes separate x64 and ARM64 Windows update channels', (context) => {
 });
 
 test('fails instead of publishing an incomplete Windows channel set', (context) => {
-  const fixture = createFixture({ includeArm64: false });
+  const fixture = createFixture({ includeWindowsArm64: false });
   context.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
 
   const result = spawnSync(process.execPath, [script], { env: environment(fixture), encoding: 'utf8' });
@@ -70,7 +69,7 @@ test('fails instead of publishing an incomplete Windows channel set', (context) 
   assert.match(result.stderr, /Both x64 and arm64 Windows update manifests are required/);
 });
 
-test('writes one macOS channel containing both architectures', (context) => {
+test('lists both Mac architectures in one manifest', (context) => {
   const fixture = createFixture();
   context.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
 
@@ -81,7 +80,7 @@ test('writes one macOS channel containing both architectures', (context) => {
   assert.match(mac, /mac-x64\.zip/);
 });
 
-test('fails instead of publishing an incomplete macOS channel set', (context) => {
+test('fails instead of publishing a Mac manifest without the arm64 build', (context) => {
   const fixture = createFixture({ includeMacArm64: false });
   context.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
 
@@ -89,4 +88,34 @@ test('fails instead of publishing an incomplete macOS channel set', (context) =>
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Both x64 and arm64 macOS update manifests are required/);
+  assert.equal(fs.existsSync(path.join(fixture.output, 'latest-mac.yml')), false);
+});
+
+test('fails instead of merging a manifest from another version', (context) => {
+  const fixture = createFixture();
+  writeManifest(
+    fixture.artifacts,
+    'aarch64-apple-darwin',
+    'latest-mac.yml',
+    manifest('mac', 'arm64', 'zip').replace('version: 1.2.3', 'version: 1.2.2'),
+  );
+  context.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+
+  const result = spawnSync(process.execPath, [script], { env: environment(fixture), encoding: 'utf8' });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /macArm64 update manifest version 1\.2\.2 does not match 1\.2\.3/);
+});
+
+test('a macOS-only run rewrites the Mac manifest and leaves Windows alone', (context) => {
+  const fixture = createFixture();
+  context.after(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+
+  execFileSync(process.execPath, [script], { env: { ...environment(fixture), MAC_ONLY: '1' } });
+
+  assert.equal(fs.existsSync(path.join(fixture.output, 'latest.yml')), false);
+  assert.equal(fs.existsSync(path.join(fixture.output, 'latest-arm64.yml')), false);
+  const mac = fs.readFileSync(path.join(fixture.output, 'latest-mac.yml'), 'utf8');
+  assert.match(mac, /mac-arm64\.zip/);
+  assert.match(mac, /mac-x64\.zip/);
 });

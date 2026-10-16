@@ -3,8 +3,20 @@ import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode, type OpenCodeClient } from '@opencode/client';
 import * as gitService from './gitService';
-import { chooseBridgeGitGenerationModel, type BridgeGitGenerationPayloadModel } from './bridge-git-generation-model';
+import { chooseBridgeGitGenerationModel, type BridgeGitGenerationPayloadModel, type BridgeGitGenerationModelChoice } from './bridge-git-generation-model';
 import type { BridgeContext, BridgeResponse } from './bridge';
+import {
+  COMMIT_DIFF_FILE_LIMIT,
+  COMMIT_DIFF_TOTAL_CHAR_LIMIT,
+  COMMIT_STYLE_SAMPLE_COUNT,
+  buildCommitGenerationPrompt,
+  formatRecentCommitSubjects,
+  parseGeneratedCommitMessage,
+  commitPathUsesStagedDiff,
+  selectCommitFilePaths,
+  type GeneratedCommitMessage,
+  type GitStatusFileLike,
+} from './git-commit-message';
 
 type BridgeMessageInput = {
   id: string;
@@ -17,6 +29,8 @@ type ExecGitResult = { stdout: string; stderr: string; exitCode: number };
 type SpecialGitDeps = {
   readSettings: (ctx?: BridgeContext) => Record<string, unknown>;
   execGit: (args: string[], cwd: string) => Promise<ExecGitResult>;
+  /** Magic prompt overrides keyed by prompt id; read through the host so this module stays free of `vscode`. */
+  readPromptOverrides: () => Record<string, string>;
 };
 
 const BRIDGE_GIT_GENERATION_TIMEOUT_MS = 2 * 60 * 1000;
@@ -34,60 +48,106 @@ export const setUnavailableRetryDelaysForTest = (delays: number[] = UNAVAILABLE_
 };
 const BRIDGE_GIT_MODEL_CATALOG_CACHE_TTL_MS = 30 * 1000;
 
-let bridgeGitModelCatalogCache: Set<string> | null = null;
-let bridgeGitModelCatalogCacheAt = 0;
+// Model lists are directory-scoped, so the cached catalog belongs to the
+// directory it was read for; a flow in another repository must not inherit it.
+// `disabled` holds the refs OpenCode lists with `enabled: false`.
+type BridgeGitModelCatalog = { refs: Set<string>; disabled: Set<string> };
+let bridgeGitModelCatalogCache: { directory: string; catalog: BridgeGitModelCatalog; at: number } | null = null;
 
-const createBridgeGitClient = (apiUrl: string, authHeaders?: Record<string, string>): OpenCodeClient => OpenCode.make({
-  baseUrl: apiUrl.replace(/\/+$/, ''),
-  headers: authHeaders || {},
-});
+/** Test hook: forget the cached model catalog. */
+export const resetBridgeGitModelCatalogForTest = (): void => {
+  bridgeGitModelCatalogCache = null;
+};
+
+// Every OpenCode read here names the flow's directory: model lists, agent
+// reads and generation resolve against a location, and without one OpenCode
+// answers for its own working directory (with its MCP servers started there).
+const createBridgeGitClient = (apiUrl: string, authHeaders?: Record<string, string>, directory?: string): OpenCodeClient => {
+  const headers = Object.assign({}, authHeaders || {});
+  if (directory) headers['x-opencode-directory'] = encodeURIComponent(directory);
+  return OpenCode.make({
+    baseUrl: apiUrl.replace(/\/+$/, ''),
+    headers,
+  });
+};
 
 const fetchBridgeGitModelCatalog = async (
   apiUrl: string,
-  authHeaders?: Record<string, string>
-): Promise<Set<string>> => {
+  authHeaders?: Record<string, string>,
+  directory = '',
+): Promise<BridgeGitModelCatalog> => {
   const now = Date.now();
-  if (bridgeGitModelCatalogCache && now - bridgeGitModelCatalogCacheAt < BRIDGE_GIT_MODEL_CATALOG_CACHE_TTL_MS) {
-    return bridgeGitModelCatalogCache;
+  if (
+    bridgeGitModelCatalogCache
+    && bridgeGitModelCatalogCache.directory === directory
+    && now - bridgeGitModelCatalogCache.at < BRIDGE_GIT_MODEL_CATALOG_CACHE_TTL_MS
+  ) {
+    return bridgeGitModelCatalogCache.catalog;
   }
 
-  const client = createBridgeGitClient(apiUrl, authHeaders);
+  const client = createBridgeGitClient(apiUrl, authHeaders, directory);
   const payload = await client.model.list(undefined, { signal: AbortSignal.timeout(8_000) });
-  const refs = new Set<string>();
+  const catalog: BridgeGitModelCatalog = { refs: new Set(), disabled: new Set() };
   for (const model of payload.data) {
     const providerID = model.providerID.trim();
     const modelID = model.id.trim();
     if (providerID && modelID) {
-      refs.add(`${providerID}/${modelID}`);
+      catalog.refs.add(`${providerID}/${modelID}`);
+      if (model.enabled === false) catalog.disabled.add(`${providerID}/${modelID}`);
     }
   }
 
-  bridgeGitModelCatalogCache = refs;
-  bridgeGitModelCatalogCacheAt = now;
-  return refs;
+  bridgeGitModelCatalogCache = { directory, catalog, at: now };
+  return catalog;
+};
+
+/**
+ * The model OpenCode's hidden `title` agent is configured with
+ * (`agents.title.model`, or the migrated v1 `small_model`), or null. The
+ * server-side small-model resolver reads the same agent; the bridge must
+ * agree with it. A cold location answers 404 while its agents load, which
+ * reads as "nothing configured" here, the same as on the server.
+ */
+const fetchBridgeGitTitleModelRef = async (client: OpenCodeClient): Promise<BridgeGitGenerationModelChoice | null> => {
+  try {
+    const payload = await client.agent.get({ agentID: 'title' });
+    const model = payload.data.model;
+    return model ? { providerID: model.providerID, modelID: model.id } : null;
+  } catch {
+    // No `title` agent (removed in config, or a cold location still loading
+    // its agents) or OpenCode unreachable: nothing configured to honor.
+    return null;
+  }
 };
 
 const resolveBridgeGitGenerationModel = async (
   payloadModel: BridgeGitGenerationPayloadModel,
   settings: Record<string, unknown>,
   apiUrl: string,
-  authHeaders?: Record<string, string>
+  authHeaders?: Record<string, string>,
+  directory = '',
 ): Promise<{ providerID: string; modelID: string }> => {
-  let catalog: Set<string> | null = null;
+  let catalog: BridgeGitModelCatalog | null = null;
   try {
-    catalog = await fetchBridgeGitModelCatalog(apiUrl, authHeaders);
+    catalog = await fetchBridgeGitModelCatalog(apiUrl, authHeaders, directory);
   } catch {
     catalog = null;
   }
+  const titleModel = await fetchBridgeGitTitleModelRef(createBridgeGitClient(apiUrl, authHeaders, directory));
+  // Like the server's small-model resolver, a title model OpenCode lists as
+  // disabled is skipped rather than retried until it fails.
+  const configuredModel = titleModel && !catalog?.disabled.has(`${titleModel.providerID}/${titleModel.modelID}`)
+    ? titleModel
+    : null;
 
   const hasModel = (providerID: string, modelID: string): boolean => {
     if (!catalog) {
       return false;
     }
-    return catalog.has(`${providerID}/${modelID}`);
+    return catalog.refs.has(`${providerID}/${modelID}`);
   };
 
-  return chooseBridgeGitGenerationModel(payloadModel, settings, hasModel);
+  return chooseBridgeGitGenerationModel(payloadModel, settings, hasModel, configuredModel);
 };
 
 /**
@@ -101,14 +161,16 @@ const generateBridgeGitText = async ({
   providerID,
   modelID,
   authHeaders,
+  directory,
 }: {
   apiUrl: string;
   prompt: string;
   providerID: string;
   modelID: string;
   authHeaders?: Record<string, string>;
+  directory?: string;
 }): Promise<string> => {
-  const client = createBridgeGitClient(apiUrl, authHeaders);
+  const client = createBridgeGitClient(apiUrl, authHeaders, directory);
   const signal = AbortSignal.timeout(BRIDGE_GIT_GENERATION_TIMEOUT_MS);
   const unavailableMessage = `Model unavailable: ${providerID}/${modelID}`;
   for (let attempt = 0; ; attempt += 1) {
@@ -125,6 +187,132 @@ const generateBridgeGitText = async ({
       await delay(unavailableRetryDelaysMs[attempt], undefined, { signal });
     }
   }
+};
+
+const nullDevicePath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+const collectRecentCommitSubjects = async (directory: string): Promise<string> => {
+  try {
+    const log = await gitService.getGitLog(directory, { maxCount: COMMIT_STYLE_SAMPLE_COUNT });
+    const messages = (Array.isArray(log?.all) ? log.all : [])
+      .map((entry) => (typeof entry?.message === 'string' ? entry.message : ''));
+    return formatRecentCommitSubjects(messages);
+  } catch {
+    return '(recent commits unavailable)';
+  }
+};
+
+const collectSelectedFileDiffs = async (
+  directory: string,
+  files: string[],
+  statusFiles: GitStatusFileLike[],
+  execGit: SpecialGitDeps['execGit'],
+): Promise<string> => {
+  const statusByPath = new Map(statusFiles.map((file) => [file.path, file]));
+  const limited = files.slice(0, COMMIT_DIFF_FILE_LIMIT);
+  const chunks = await Promise.all(limited.map(async (filePath) => {
+    try {
+      if (commitPathUsesStagedDiff(statusByPath.get(filePath))) {
+        const staged = await gitService.getGitDiff(directory, filePath, true).catch(() => null);
+        if (staged?.kind === 'diff' && staged.diff.trim()) return staged.diff;
+        return `--- ${filePath} (no textual diff available)`;
+      }
+
+      const unstaged = await gitService.getGitDiff(directory, filePath, false).catch(() => null);
+      if (unstaged?.kind === 'diff' && unstaged.diff.trim()) return unstaged.diff;
+
+      const noIndex = await execGit(
+        ['diff', '--no-color', '--no-index', '--', nullDevicePath, filePath],
+        directory,
+      );
+      if (noIndex.stdout.trim()) return noIndex.stdout;
+      return `--- ${filePath} (no textual diff available)`;
+    } catch {
+      return `--- ${filePath} (diff unavailable)`;
+    }
+  }));
+
+  let total = '';
+  for (const chunk of chunks) {
+    if (total.length + chunk.length > COMMIT_DIFF_TOTAL_CHAR_LIMIT) {
+      total += '\n[remaining diffs truncated]';
+      break;
+    }
+    total += (total ? '\n\n' : '') + chunk;
+  }
+  if (files.length > limited.length) {
+    total += `\n[${files.length - limited.length} more selected files omitted]`;
+  }
+  return total;
+};
+
+export const generateBridgeCommitMessage = async ({
+  directory,
+  files,
+  apiUrl,
+  authHeaders,
+  settings,
+  visiblePromptOverride,
+  instructionsPromptOverride,
+  payloadModel,
+  execGit,
+}: {
+  directory: string;
+  files?: string[];
+  apiUrl: string;
+  authHeaders?: Record<string, string>;
+  settings: Record<string, unknown>;
+  visiblePromptOverride?: string;
+  instructionsPromptOverride?: string;
+  payloadModel?: BridgeGitGenerationPayloadModel;
+  execGit: SpecialGitDeps['execGit'];
+}): Promise<GeneratedCommitMessage> => {
+  let selectedFiles = Array.isArray(files)
+    ? files.map((file) => file.trim()).filter(Boolean)
+    : [];
+  const status = await gitService.getGitStatus(directory, { mode: 'light' });
+  if (selectedFiles.length === 0) {
+    selectedFiles = selectCommitFilePaths(status.files);
+  }
+  if (selectedFiles.length === 0) {
+    throw new Error('No files provided to generate commit message');
+  }
+
+  const [recentCommits, diffs] = await Promise.all([
+    collectRecentCommitSubjects(directory),
+    collectSelectedFileDiffs(directory, selectedFiles, status.files, execGit),
+  ]);
+  if (!diffs.trim()) {
+    throw new Error('No diffs available for selected files');
+  }
+
+  const { system, prompt } = buildCommitGenerationPrompt(
+    selectedFiles,
+    recentCommits,
+    diffs,
+    visiblePromptOverride ?? '',
+    instructionsPromptOverride ?? '',
+  );
+  const { providerID, modelID } = await resolveBridgeGitGenerationModel(
+    payloadModel ?? {},
+    settings,
+    apiUrl,
+    authHeaders,
+    directory,
+  );
+  const raw = await generateBridgeGitText({
+    apiUrl,
+    prompt: `${system}\n\n${prompt}`,
+    providerID,
+    modelID,
+    authHeaders,
+    directory,
+  });
+  const parsed = parseGeneratedCommitMessage(raw);
+  if (!parsed) {
+    throw new Error('No commit message returned by generator');
+  }
+  return parsed;
 };
 
 const parseJsonObjectSafe = (value: string): Record<string, unknown> | null => {
@@ -145,6 +333,47 @@ export async function handleSpecialGitBridgeMessage(
   const { id, type, payload } = message;
 
   switch (type) {
+    case 'api:git/commit-message': {
+      const { directory, files, providerId, modelId, zenModel: payloadZenModel } = (payload || {}) as {
+        directory?: string;
+        files?: unknown;
+        providerId?: string;
+        modelId?: string;
+        zenModel?: string;
+      };
+      if (!directory) {
+        return { id, type, success: false, error: 'Directory is required' };
+      }
+
+      const selectedFiles = Array.isArray(files)
+        ? files.filter((file): file is string => typeof file === 'string' && file.trim().length > 0)
+        : undefined;
+
+      try {
+        const apiUrl = ctx?.manager?.getApiUrl();
+        if (!apiUrl) {
+          return { id, type, success: false, error: 'OpenCode API unavailable' };
+        }
+
+        const promptOverrides = deps.readPromptOverrides();
+        const generated = await generateBridgeCommitMessage({
+          directory,
+          files: selectedFiles,
+          apiUrl,
+          authHeaders: ctx?.manager?.getOpenCodeAuthHeaders(),
+          settings: deps.readSettings(ctx),
+          visiblePromptOverride: promptOverrides['git.commit.generate.visible'],
+          instructionsPromptOverride: promptOverrides['git.commit.generate.instructions'],
+          payloadModel: { providerId, modelId, zenModel: payloadZenModel },
+          execGit: deps.execGit,
+        });
+        return { id, type, success: true, data: { message: generated } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { id, type, success: false, error: message };
+      }
+    }
+
     case 'api:git/pr-description': {
       const { directory, base, head, context, providerId, modelId, zenModel: payloadZenModel } = (payload || {}) as {
         directory?: string;
@@ -203,7 +432,8 @@ export async function handleSpecialGitBridgeMessage(
           { providerId, modelId, zenModel: payloadZenModel },
           settings,
           apiUrl,
-          ctx?.manager?.getOpenCodeAuthHeaders()
+          ctx?.manager?.getOpenCodeAuthHeaders(),
+          directory,
         );
         const raw = await generateBridgeGitText({
           apiUrl,
@@ -211,6 +441,7 @@ export async function handleSpecialGitBridgeMessage(
           providerID,
           modelID,
           authHeaders: ctx?.manager?.getOpenCodeAuthHeaders(),
+          directory,
         });
         if (!raw) {
           return { id, type, success: false, error: 'No PR description returned by generator' };

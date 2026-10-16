@@ -115,7 +115,7 @@ describe('VS Code API proxy aborts', () => {
 
       const response = await pending;
       assert.equal(response?.success, true);
-      assert.equal((response?.data as { status?: number }).status, 502);
+      assert.equal((response?.data as { status?: number } | undefined)?.status, 502);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -163,7 +163,9 @@ describe('VS Code API proxy aborts', () => {
 
       const response = await pending;
       assert.equal(fetchCount, 0);
-      assert.equal((response?.data as { status?: number }).status, 502);
+      const payload = response?.data as { status?: number } | undefined;
+      assert.ok(payload);
+      assert.equal(payload.status, 502);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -223,7 +225,9 @@ describe('VS Code official durable prompt proxy', () => {
       assert.equal(Buffer.from(capturedInit?.body as Buffer).toString('utf8'), body);
       assert.equal(requestHeaders.get('authorization'), 'Basic host-credential');
       assert.equal(requestHeaders.get('x-opencode-directory'), '%2Fworkspace%2Frepo');
-      assert.equal((response?.data as { status?: number }).status, 200);
+      const payload = response?.data as { status?: number } | undefined;
+      assert.ok(payload);
+      assert.equal(payload.status, 200);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -259,9 +263,9 @@ describe('VS Code API proxy read coalescing', () => {
 
       const [a, b] = await Promise.all([first, second]);
       assert.equal(fetchCount, 1);
-      assert.equal((a?.data as { bodyText?: string }).bodyText, '{"ok":true}');
-      assert.equal((b?.data as { bodyText?: string }).bodyText, '{"ok":true}');
-      assert.notStrictEqual((a?.data as { headers: unknown }).headers, (b?.data as { headers: unknown }).headers);
+      assert.equal((a?.data as { bodyText?: string } | undefined)?.bodyText, '{"ok":true}');
+      assert.equal((b?.data as { bodyText?: string } | undefined)?.bodyText, '{"ok":true}');
+      assert.notStrictEqual((a?.data as { headers: unknown } | undefined)?.headers, (b?.data as { headers: unknown } | undefined)?.headers);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -298,9 +302,9 @@ describe('VS Code API proxy read coalescing', () => {
 
       const [a, b] = await Promise.all([forA, forB]);
       // SAFETY: api:proxy always answers with an ApiProxyResponsePayload; only bodyText is read.
-      assert.equal((a?.data as { bodyText?: string }).bodyText, JSON.stringify({ directory: '/project-a' }));
+      assert.equal((a?.data as { bodyText?: string } | undefined)?.bodyText, JSON.stringify({ directory: '/project-a' }));
       // SAFETY: same payload contract as the line above.
-      assert.equal((b?.data as { bodyText?: string }).bodyText, JSON.stringify({ directory: '/project-b' }));
+      assert.equal((b?.data as { bodyText?: string } | undefined)?.bodyText, JSON.stringify({ directory: '/project-b' }));
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -358,6 +362,51 @@ describe('VS Code API proxy read coalescing', () => {
         handleProxyBridgeMessage({ id: 's2', type: 'api:proxy', payload: { method: 'GET', path: '/api/session?directory=/x' } }, ctx, deps),
       ]);
       assert.equal(fetchCount, 2); // /api/session is not in the read allowlist
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('VS Code API proxy Git initialization', () => {
+  test('refuses to initialize Git in the home directory without reaching OpenCode', async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCount = 0;
+    try {
+      globalThis.fetch = (async () => {
+        fetchCount += 1;
+        return new Response(null, { status: 204 });
+      }) as typeof fetch;
+      const home = (await import('node:os')).homedir();
+      const response = await handleProxyBridgeMessage(
+        { id: 'init_home', type: 'api:proxy', payload: { method: 'POST', path: '/api/vcs/init', headers: { 'X-OpenCode-Directory': encodeURIComponent(home) } } },
+        ctx,
+        deps,
+      );
+      const data = response?.data as { status?: number; bodyText?: string };
+      assert.equal(data.status, 400);
+      assert.equal(JSON.parse(data.bodyText ?? '{}')._tag, 'InvalidRequestError');
+      assert.equal(fetchCount, 0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('forwards Git initialization for a project directory', async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCount = 0;
+    try {
+      globalThis.fetch = (async () => {
+        fetchCount += 1;
+        return new Response(null, { status: 204 });
+      }) as typeof fetch;
+      const response = await handleProxyBridgeMessage(
+        { id: 'init_project', type: 'api:proxy', payload: { method: 'POST', path: '/api/vcs/init', headers: { 'x-opencode-directory': encodeURIComponent('/tmp/some-project') } } },
+        ctx,
+        deps,
+      );
+      assert.equal((response?.data as { status?: number } | undefined)?.status, 204);
+      assert.equal(fetchCount, 1);
     } finally {
       globalThis.fetch = originalFetch;
     }

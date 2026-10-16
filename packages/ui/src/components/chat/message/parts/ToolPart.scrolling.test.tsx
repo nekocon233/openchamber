@@ -89,7 +89,7 @@ test('expanded shell output follows growth until the reader scrolls up', async (
     };
     await act(async () => {
       root.render(
-        <SyncProvider sdk={sdk} directory="">
+        <SyncProvider sdk={sdk} directory="/workspace">
           <I18nProvider>
             <ThemeSystemContext.Provider value={themeContext}>
               <ToolPart part={part} isExpanded isMobile={false} onToggle={() => {}} />

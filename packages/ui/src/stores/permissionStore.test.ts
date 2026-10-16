@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { Session } from '@/lib/opencode/model';
 
 let fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
-const sessionById = new Map<string, Session>();
 const clearedPendingPolicies: Array<[string, string]> = [];
 const restoredPendingPolicies: Array<[string, boolean, string]> = [];
 const supersededPendingPolicies: Array<[string, string]> = [];
@@ -10,7 +8,7 @@ let supersededPendingPolicyResult: Promise<void> | null = null;
 mock.module('@/lib/runtime-fetch', () => ({
   runtimeFetch: (input: string, init?: RequestInit) => fetchImpl(input, init),
 }));
-mock.module('@/sync/sync-refs', () => ({ getAllSyncSessionMap: () => sessionById }));
+mock.module('@/sync/sync-refs', () => ({ getAllSyncSessionMap: () => new Map() }));
 mock.module('@/sync/session-ui-store', () => ({
   clearPendingDraftPermissionPolicy: (sessionId: string, runtimeKey: string) => {
     clearedPendingPolicies.push([sessionId, runtimeKey]);
@@ -35,7 +33,6 @@ describe('permission store server policy', () => {
   beforeEach(() => {
     usePermissionStore.getState().reset();
     usePermissionStore.setState({ legacyCandidate: null, legacyRuntimeKey: null });
-    sessionById.clear();
     clearedPendingPolicies.length = 0;
     restoredPendingPolicies.length = 0;
     supersededPendingPolicies.length = 0;
@@ -44,54 +41,80 @@ describe('permission store server policy', () => {
   });
 
   test('hydrates the authoritative server snapshot', async () => {
-    fetchImpl = async () => json({ sessions: { root: true }, defaultEnabled: true });
+    fetchImpl = async () => json({ sessions: { root: true } });
     await usePermissionStore.getState().hydrate();
-    expect(usePermissionStore.getState().autoAccept).toEqual({ root: true });
-    expect(usePermissionStore.getState().defaultEnabled).toBe(true);
+    expect(usePermissionStore.getState().modes).toEqual({ root: 'auto' });
   });
 
-  test('uses the authoritative default for a known unconfigured session', async () => {
-    sessionById.set('root', { id: 'root' } as Session);
-    fetchImpl = async () => json({ sessions: {}, defaultEnabled: true });
-
+  test('reads modes when the server has them and on/off as auto/ask when it does not', async () => {
+    fetchImpl = async () => json({ sessions: { root: true, off: false }, modes: { root: 'safety', off: 'ask' }, revision: 1 });
     await usePermissionStore.getState().hydrate();
+    expect(usePermissionStore.getState().modes).toEqual({ root: 'safety', off: 'ask' });
+    expect(usePermissionStore.getState().getSessionMode('root')).toBe('safety');
 
-    expect(usePermissionStore.getState().isSessionAutoAccepting('root')).toBe(true);
+    usePermissionStore.getState().reset();
+    fetchImpl = async () => json({ sessions: { root: true, off: false } });
+    await usePermissionStore.getState().hydrate();
+    expect(usePermissionStore.getState().modes).toEqual({ root: 'auto', off: 'ask' });
   });
 
-  test('keeps unconfigured sessions disabled when an older owner omits the default', async () => {
-    sessionById.set('root', { id: 'root' } as Session);
-    fetchImpl = async () => json({ sessions: {} });
-
+  test('answers the authoritative default for a session outside the policy', async () => {
+    fetchImpl = async () => json({ sessions: {}, defaultEnabled: true, revision: 1 });
     await usePermissionStore.getState().hydrate();
+    expect(usePermissionStore.getState().getSessionMode('unlisted')).toBe('auto');
 
-    expect(usePermissionStore.getState().defaultEnabled).toBe(false);
-    expect(usePermissionStore.getState().isSessionAutoAccepting('root')).toBe(false);
+    usePermissionStore.getState().reset();
+    fetchImpl = async () => json({ sessions: {}, defaultEnabled: false, revision: 1 });
+    await usePermissionStore.getState().hydrate();
+    expect(usePermissionStore.getState().getSessionMode('unlisted')).toBe('ask');
   });
 
   test('preserves previous state when hydration fails', async () => {
-    usePermissionStore.setState({ autoAccept: { root: true }, loaded: true });
+    usePermissionStore.setState({ modes: { root: 'auto' }, loaded: true });
     fetchImpl = async () => json({}, 503);
     await expect(usePermissionStore.getState().hydrate()).rejects.toThrow();
-    expect(usePermissionStore.getState().autoAccept).toEqual({ root: true });
+    expect(usePermissionStore.getState().modes).toEqual({ root: 'auto' });
   });
 
   test('updates local state only after server persistence succeeds', async () => {
     fetchImpl = async () => json({}, 500);
-    await expect(usePermissionStore.getState().setSessionAutoAccept('root', true)).rejects.toThrow();
-    expect(usePermissionStore.getState().autoAccept).toEqual({});
+    await expect(usePermissionStore.getState().setSessionMode('root', 'auto')).rejects.toThrow();
+    expect(usePermissionStore.getState().modes).toEqual({});
   });
 
-  test('restores a failed explicit disable as a send-blocking retry intent', async () => {
-    fetchImpl = async () => json({}, 500);
+  test('sends the session directory for immediate pending reconciliation', async () => {
+    let body: unknown;
+    fetchImpl = async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return json({ sessions: { root: true } });
+    };
+    await usePermissionStore.getState().setSessionMode('root', 'auto');
+    expect(body).toEqual({ mode: 'auto', enabled: true, directory: '/project' });
+    expect(clearedPendingPolicies).toHaveLength(1);
+    expect(clearedPendingPolicies[0]?.[0]).toBe('root');
+  });
 
-    await expect(usePermissionStore.getState().setSessionAutoAccept('root', false)).rejects.toThrow();
+  test('holds an opt-out as a pending draft policy until its own write succeeds', async () => {
+    fetchImpl = async () => json({ sessions: { root: false } });
+    await usePermissionStore.getState().setSessionMode('root', 'ask');
 
     expect(restoredPendingPolicies).toHaveLength(1);
-    expect(restoredPendingPolicies[0]?.slice(0, 2)).toEqual(['root', false]);
+    expect(restoredPendingPolicies[0]?.[0]).toBe('root');
+    expect(restoredPendingPolicies[0]?.[1]).toBe(false);
+    expect(clearedPendingPolicies).toHaveLength(1);
+    expect(usePermissionStore.getState().modes).toEqual({ root: 'ask' });
   });
 
-  test('waits for an older draft-policy retry before sending an explicit override', async () => {
+  test('a draft write keeps its own intent instead of superseding or clearing it', async () => {
+    fetchImpl = async () => json({ sessions: { root: true } });
+    await usePermissionStore.getState().setSessionMode('root', 'auto', { preservePendingDraftIntent: true });
+
+    expect(supersededPendingPolicies).toHaveLength(0);
+    expect(restoredPendingPolicies).toHaveLength(0);
+    expect(clearedPendingPolicies).toHaveLength(0);
+  });
+
+  test('waits for the superseded pending draft write before issuing its own request', async () => {
     let resolveSuperseded!: () => void;
     supersededPendingPolicyResult = new Promise<void>((resolve) => {
       resolveSuperseded = resolve;
@@ -102,26 +125,47 @@ describe('permission store server policy', () => {
       return json({ sessions: { root: true } });
     };
 
-    const mutation = usePermissionStore.getState().setSessionAutoAccept('root', true);
+    const mutation = usePermissionStore.getState().setSessionMode('root', 'auto');
     await Promise.resolve();
     expect(requests).toBe(0);
+    expect(supersededPendingPolicies).toHaveLength(1);
 
     resolveSuperseded();
     await mutation;
     expect(requests).toBe(1);
-    expect(supersededPendingPolicies).toHaveLength(1);
   });
 
-  test('sends the session directory for immediate pending reconciliation', async () => {
-    let body: unknown;
+  test('serializes conflicting explicit writes for the same session in user intent order', async () => {
+    let resolveSuperseded!: () => void;
+    supersededPendingPolicyResult = new Promise<void>((resolve) => {
+      resolveSuperseded = resolve;
+    });
+    const resolvers: Array<(response: Response) => void> = [];
+    const requestedModes: string[] = [];
     fetchImpl = async (_input, init) => {
-      body = JSON.parse(String(init?.body));
-      return json({ sessions: { root: true } });
+      requestedModes.push((JSON.parse(String(init?.body)) as { mode: string }).mode);
+      return new Promise<Response>((resolve) => { resolvers.push(resolve); });
     };
-    await usePermissionStore.getState().setSessionAutoAccept('root', true);
-    expect(body).toEqual({ enabled: true, directory: '/project' });
-    expect(clearedPendingPolicies).toHaveLength(1);
-    expect(clearedPendingPolicies[0]?.[0]).toBe('root');
+
+    const enable = usePermissionStore.getState().setSessionMode('root', 'auto');
+    const disable = usePermissionStore.getState().setSessionMode('root', 'ask');
+    await Promise.resolve();
+    expect(requestedModes).toEqual([]);
+
+    resolveSuperseded();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requestedModes).toEqual(['auto']);
+
+    resolvers[0](json({ sessions: { root: true }, revision: 1 }));
+    await enable;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requestedModes).toEqual(['auto', 'ask']);
+
+    resolvers[1](json({ sessions: { root: false }, revision: 2 }));
+    await disable;
+
+    expect(usePermissionStore.getState().modes).toEqual({ root: 'ask' });
+    expect(usePermissionStore.getState().saving).toBe(false);
   });
 
   test('migrates a legacy local policy when the server has no policy yet', async () => {
@@ -135,7 +179,7 @@ describe('permission store server policy', () => {
     };
     await usePermissionStore.getState().hydrate();
     expect(requests).toEqual(['/api/permission-auto-accept', '/api/permission-auto-accept/sessions/root']);
-    expect(usePermissionStore.getState().autoAccept).toEqual({ root: true });
+    expect(usePermissionStore.getState().modes).toEqual({ root: 'auto' });
     expect(usePermissionStore.getState().legacyCandidate).toBe(null);
   });
 
@@ -151,74 +195,41 @@ describe('permission store server policy', () => {
     resolveOld(json({ sessions: { stale: true }, revision: 1 }));
     await oldHydration;
 
-    expect(usePermissionStore.getState().autoAccept).toEqual({ current: true });
+    expect(usePermissionStore.getState().modes).toEqual({ current: 'auto' });
   });
 
   test('rejects a mutation response from before reset', async () => {
     let resolveOld!: (response: Response) => void;
     fetchImpl = async () => new Promise<Response>((resolve) => { resolveOld = resolve; });
-    const mutation = usePermissionStore.getState().setSessionAutoAccept('stale', true);
+    const mutation = usePermissionStore.getState().setSessionMode('stale', 'auto');
 
     usePermissionStore.getState().reset();
     resolveOld(json({ sessions: { stale: true }, revision: 1 }));
     await mutation;
 
-    expect(usePermissionStore.getState().autoAccept).toEqual({});
+    expect(usePermissionStore.getState().modes).toEqual({});
     expect(usePermissionStore.getState().saving).toBe(false);
   });
 
   test('keeps the highest authoritative revision when mutations resolve out of order', async () => {
     const resolvers: Array<(response: Response) => void> = [];
     fetchImpl = async () => new Promise<Response>((resolve) => { resolvers.push(resolve); });
-    const first = usePermissionStore.getState().setSessionAutoAccept('first', true);
-    const second = usePermissionStore.getState().setSessionAutoAccept('second', true);
+    const first = usePermissionStore.getState().setSessionMode('first', 'auto');
+    const second = usePermissionStore.getState().setSessionMode('second', 'auto');
 
     resolvers[1](json({ sessions: { first: true, second: true }, revision: 2 }));
     await second;
     resolvers[0](json({ sessions: { first: true }, revision: 1 }));
     await first;
 
-    expect(usePermissionStore.getState().autoAccept).toEqual({ first: true, second: true });
-    expect(usePermissionStore.getState().saving).toBe(false);
-  });
-
-  test('serializes conflicting explicit writes for the same session in user intent order', async () => {
-    let resolveSuperseded!: () => void;
-    supersededPendingPolicyResult = new Promise<void>((resolve) => {
-      resolveSuperseded = resolve;
-    });
-    const resolvers: Array<(response: Response) => void> = [];
-    const enabledRequests: boolean[] = [];
-    fetchImpl = async (_input, init) => {
-      enabledRequests.push((JSON.parse(String(init?.body)) as { enabled: boolean }).enabled);
-      return new Promise<Response>((resolve) => { resolvers.push(resolve); });
-    };
-
-    const enable = usePermissionStore.getState().setSessionAutoAccept('root', true);
-    const disable = usePermissionStore.getState().setSessionAutoAccept('root', false);
-    await Promise.resolve();
-    expect(enabledRequests).toEqual([]);
-
-    resolveSuperseded();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(enabledRequests).toEqual([true]);
-
-    resolvers[0](json({ sessions: { root: true }, revision: 1 }));
-    await enable;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(enabledRequests).toEqual([true, false]);
-
-    resolvers[1](json({ sessions: { root: false }, revision: 2 }));
-    await disable;
-
-    expect(usePermissionStore.getState().autoAccept).toEqual({ root: false });
+    expect(usePermissionStore.getState().modes).toEqual({ first: 'auto', second: 'auto' });
     expect(usePermissionStore.getState().saving).toBe(false);
   });
 
   test('ignores an older broadcast revision', () => {
-    usePermissionStore.getState().applySnapshot({ sessions: { current: true }, defaultEnabled: true, revision: 4 });
-    usePermissionStore.getState().applySnapshot({ sessions: { stale: true }, defaultEnabled: true, revision: 3 });
+    usePermissionStore.getState().applySnapshot({ modes: { current: 'auto' }, defaultEnabled: true, revision: 4 });
+    usePermissionStore.getState().applySnapshot({ modes: { stale: 'auto' }, defaultEnabled: true, revision: 3 });
 
-    expect(usePermissionStore.getState().autoAccept).toEqual({ current: true });
+    expect(usePermissionStore.getState().modes).toEqual({ current: 'auto' });
   });
 });

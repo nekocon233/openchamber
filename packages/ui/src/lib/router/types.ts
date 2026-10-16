@@ -9,6 +9,8 @@ export interface RouteState {
   sessionId: string | null;
   /** Optional owning directory for cold session deep links */
   sessionDirectory: string | null;
+  /** Message to show in that session (a message link); only with a session */
+  messageId: string | null;
   /** View selected through the legacy `tab` URL parameter. */
   tab: RouteTab | null;
   /** Settings section - when non-null, settings dialog should be open */
@@ -43,6 +45,7 @@ export const VALID_SETTINGS_SECTIONS: readonly SidebarSection[] = [
 export const ROUTE_PARAMS = {
   SESSION: 'session',
   DIRECTORY: 'directory',
+  MESSAGE: 'message',
   TAB: 'tab',
   SETTINGS: 'settings',
   FILE: 'file',

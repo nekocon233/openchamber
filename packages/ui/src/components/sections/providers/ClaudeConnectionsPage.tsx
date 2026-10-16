@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
 import {
   SettingsSection, SettingsStackedField, SettingsCheckboxRow, SettingsTwoColumn,
-  SETTINGS_SELECT_SIZE, SETTINGS_SELECT_TRIGGER_CLASS, SETTINGS_NUMBER_STEPPER_ROW_CLASS,
+  SETTINGS_SELECT_TRIGGER_CLASS, SETTINGS_NUMBER_STEPPER_ROW_CLASS,
 } from '@/components/sections/shared/SettingsSection';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n } from '@/lib/i18n';
@@ -155,7 +155,7 @@ export const ClaudeConnectionsPage: React.FC = () => {
               <SettingsStackedField label={t('settings.claudeConnections.url')}><Input className="h-8" required type="url" aria-label={t('settings.claudeConnections.url')} value={draft.baseURL} onChange={(event) => setDraft({ ...draft, baseURL: event.target.value })} /></SettingsStackedField>
               <SettingsStackedField label={t('settings.claudeConnections.auth')}>
                 <Select value={draft.auth} onValueChange={(value) => { if (value === 'api-key' || value === 'bearer') setDraft({ ...draft, auth: value }); }}>
-                  <SelectTrigger size={SETTINGS_SELECT_SIZE} className={SETTINGS_SELECT_TRIGGER_CLASS} aria-label={t('settings.claudeConnections.auth')}><SelectValue>{draft.auth === 'api-key' ? 'x-api-key' : 'Bearer'}</SelectValue></SelectTrigger>
+                  <SelectTrigger className={SETTINGS_SELECT_TRIGGER_CLASS} aria-label={t('settings.claudeConnections.auth')}><SelectValue>{draft.auth === 'api-key' ? 'x-api-key' : 'Bearer'}</SelectValue></SelectTrigger>
                   <SelectContent><SelectItem value="api-key">x-api-key</SelectItem><SelectItem value="bearer">Bearer</SelectItem></SelectContent>
                 </Select>
               </SettingsStackedField>

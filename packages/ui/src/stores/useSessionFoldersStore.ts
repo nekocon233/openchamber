@@ -1,8 +1,11 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
+import { z } from 'zod';
 
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { SidebarStateOperation } from '@/lib/api/types';
+import { isVSCodeRuntime } from '@/lib/desktop';
+import { runtimeFetch } from '@/lib/runtime-fetch';
 import { normalizeSidebarFolderScope } from '@/lib/sidebarState';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { useSidebarStateStore } from './useSidebarStateStore';
@@ -44,16 +47,25 @@ type SessionFoldersStore = SessionFoldersState & SessionFoldersActions;
 const FOLDERS_STORAGE_KEY = 'oc.sessions.folders';
 const COLLAPSED_STORAGE_KEY = 'oc.sessions.folderCollapse';
 const STORAGE_INDEX_KEY = 'oc.sessions.folders.v2.index';
+const DELETED_STORAGE_KEY = 'oc.sessions.folderDeletions';
+const SESSION_FOLDERS_API_PATH = '/api/session-folders';
 const LOCAL_PERSIST_DEBOUNCE_MS = 300;
+const DISK_WRITE_DEBOUNCE_MS = 250;
 
 const safeStorage = getDeferredSafeStorage();
 const immediateSafeStorage = getSafeStorage();
 let activeFolderRuntimeKey = getRuntimeKey();
+let diskWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let diskHydrated = false;
+let diskHydrationInFlight = false;
 let persistFoldersTimer: ReturnType<typeof setTimeout> | undefined;
 let persistCollapsedTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingFoldersMap: SessionFoldersMap | null = null;
 let pendingCollapsedIds: Set<string> | null = null;
 let pendingBrowserRuntimeKey: string | null = null;
+let folderRuntimeGeneration = 0;
+let folderMutationRevision = 0;
+const lastDiskUpdatedAtByRuntime = new Map<string, number>();
 
 type FolderStorageIndex = {
   version: 2;
@@ -113,6 +125,128 @@ const claimLegacyStorage = (runtimeKey: string): void => {
 const usesAuthoritativeSidebarState = (): boolean => (
   getRegisteredRuntimeAPIs()?.sidebarState?.supported === true
 );
+
+// Runtimes that serve authoritative sidebar state receive folders through it,
+// and a whole-file snapshot would race that revision queue. Everywhere else
+// (an older server, or a runtime that never gained the capability) the disk
+// snapshot below stays the transport.
+const usesDiskSnapshot = (): boolean => !usesAuthoritativeSidebarState();
+
+const isVSCodeWebview = (): boolean => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  if (isVSCodeRuntime()) {
+    return true;
+  }
+
+  return (window as { __VSCODE_CONFIG__?: unknown }).__VSCODE_CONFIG__ !== undefined;
+};
+
+// Folder deletions this device has not yet handed to the server, as
+// folderId -> deletedAt. The server merges snapshots instead of replacing them,
+// so a folder that is simply absent from a write would survive there and come
+// back on the next hydration; a deletion has to travel as a tombstone. Kept in
+// storage so a reload before the debounced write does not lose it.
+const folderTombstonesSchema = z.record(z.string(), z.number().finite());
+type FolderTombstones = z.infer<typeof folderTombstonesSchema>;
+
+// Malformed tombstones are treated as none: they can only ever remove folders.
+const readPendingDeletions = (runtimeKey: string): FolderTombstones => {
+  try {
+    const result = folderTombstonesSchema.safeParse(
+      JSON.parse(immediateSafeStorage.getItem(runtimeStorageKey(DELETED_STORAGE_KEY, runtimeKey)) ?? '{}'),
+    );
+    return result.success ? result.data : {};
+  } catch {
+    return {};
+  }
+};
+
+const writePendingDeletions = (runtimeKey: string, tombstones: FolderTombstones): void => {
+  const key = runtimeStorageKey(DELETED_STORAGE_KEY, runtimeKey);
+  if (Object.keys(tombstones).length === 0) {
+    immediateSafeStorage.removeItem(key);
+    return;
+  }
+  immediateSafeStorage.setItem(key, JSON.stringify(tombstones));
+};
+
+const recordFolderDeletions = (folderIds: Iterable<string>): void => {
+  const runtimeKey = activeFolderRuntimeKey;
+  const deletedAt = Date.now();
+  const pending = readPendingDeletions(runtimeKey);
+  for (const folderId of folderIds) pending[folderId] = deletedAt;
+  writePendingDeletions(runtimeKey, pending);
+};
+
+/** Drop the deletions the server has stored; newer ones recorded meanwhile stay pending. */
+const acknowledgeDeletions = (runtimeKey: string, sent: FolderTombstones): void => {
+  const pending = readPendingDeletions(runtimeKey);
+  let changed = false;
+  for (const [folderId, deletedAt] of Object.entries(sent)) {
+    if (pending[folderId] === deletedAt) {
+      delete pending[folderId];
+      changed = true;
+    }
+  }
+  if (changed) writePendingDeletions(runtimeKey, pending);
+};
+
+const withoutDeletedFolders = (foldersMap: SessionFoldersMap, deleted: FolderTombstones): SessionFoldersMap | null => {
+  let next: SessionFoldersMap | null = null;
+  for (const [scopeKey, folders] of Object.entries(foldersMap)) {
+    const kept = folders.filter((folder) => deleted[folder.id] === undefined);
+    if (kept.length === folders.length) continue;
+    next ??= { ...foldersMap };
+    next[scopeKey] = kept;
+  }
+  return next;
+};
+
+const schedulePersistToDisk = (foldersMap: SessionFoldersMap, collapsedFolderIds: Set<string>): void => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (isVSCodeWebview()) {
+    return;
+  }
+
+  if (!usesDiskSnapshot()) {
+    return;
+  }
+
+  const foldersSnapshot = JSON.parse(JSON.stringify(foldersMap)) as SessionFoldersMap;
+  const collapsedSnapshot = Array.from(collapsedFolderIds);
+  const runtimeKey = activeFolderRuntimeKey;
+  const generation = folderRuntimeGeneration;
+
+  if (diskWriteTimer) clearTimeout(diskWriteTimer);
+  diskWriteTimer = setTimeout(() => {
+    diskWriteTimer = null;
+    if (runtimeKey !== getRuntimeKey() || generation !== folderRuntimeGeneration) return;
+    const updatedAt = Math.max(Date.now(), (lastDiskUpdatedAtByRuntime.get(runtimeKey) ?? 0) + 1);
+    lastDiskUpdatedAtByRuntime.set(runtimeKey, updatedAt);
+    const deletedFolderIds = readPendingDeletions(runtimeKey);
+    const payload = {
+      version: 1,
+      foldersMap: foldersSnapshot,
+      collapsedFolderIds: collapsedSnapshot,
+      deletedFolderIds,
+      updatedAt,
+    };
+    void runtimeFetch(SESSION_FOLDERS_API_PATH, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then((response) => {
+      // A failed write keeps the deletions pending for the next one.
+      if (response.ok) acknowledgeDeletions(runtimeKey, deletedFolderIds);
+    }).catch(() => { /* best-effort */ });
+  }, DISK_WRITE_DEBOUNCE_MS);
+};
 
 const normalizeScopeKey = (scopeKey: string): string | null => {
   try {
@@ -214,8 +348,10 @@ const persistCollapsed = (collapsedFolderIds: Set<string>): void => {
 };
 
 const persistLocalState = (foldersMap: SessionFoldersMap, collapsedFolderIds: Set<string>): void => {
+  folderMutationRevision += 1;
   if (!usesAuthoritativeSidebarState()) persistFolders(foldersMap);
   persistCollapsed(collapsedFolderIds);
+  schedulePersistToDisk(foldersMap, collapsedFolderIds);
 };
 
 const flushPendingBrowserPersistence = (): void => {
@@ -302,10 +438,17 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
         // Deferred storage retains failed writes.
       }
       activeFolderRuntimeKey = runtimeKey;
+      folderRuntimeGeneration += 1;
+      folderMutationRevision = 0;
+      diskHydrated = false;
+      diskHydrationInFlight = false;
+      if (diskWriteTimer) clearTimeout(diskWriteTimer);
+      diskWriteTimer = null;
       set({
         foldersMap: usesAuthoritativeSidebarState() ? {} : readPersistedFolders(runtimeKey),
         collapsedFolderIds: readPersistedCollapsed(runtimeKey),
       });
+      queueMicrotask(() => void hydrateSessionFoldersFromDisk());
     },
 
     getFoldersForScope: (rawScopeKey) => {
@@ -375,6 +518,7 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
         }
       }
       const remaining = folders.filter((folder) => !removedFolderIds.has(folder.id));
+      if (usesDiskSnapshot() && !isVSCodeWebview()) recordFolderDeletions(removedFolderIds);
       const nextMap = { ...current };
       if (remaining.length > 0) nextMap[scopeKey] = remaining;
       else delete nextMap[scopeKey];
@@ -469,7 +613,7 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
 
       if (!nextMap) return;
       set({ foldersMap: nextMap });
-      if (!usesAuthoritativeSidebarState()) persistFolders(nextMap);
+      persistLocalState(nextMap, get().collapsedFolderIds);
       for (const scopeKey of changedScopes) {
         submitSidebarOperation({ type: 'folder.unassign', scopeKey, sessionIds: [sessionId] });
       }
@@ -480,7 +624,7 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
       if (next.has(folderId)) next.delete(folderId);
       else next.add(folderId);
       set({ collapsedFolderIds: next });
-      persistCollapsed(next);
+      persistLocalState(get().foldersMap, next);
     },
 
     getSessionFolderId: (rawScopeKey, sessionId) => {
@@ -534,15 +678,92 @@ useSidebarStateStore.subscribe((state, previousState) => {
     return;
   }
   if (state.runtimeKey !== previousState.runtimeKey) {
-    try {
-      flushPendingBrowserPersistence();
-    } catch {
-      // Deferred storage retains failed writes.
-    }
-    activeFolderRuntimeKey = state.runtimeKey;
-    useSessionFoldersStore.setState({
-      foldersMap: usesAuthoritativeSidebarState() ? {} : readPersistedFolders(state.runtimeKey),
-      collapsedFolderIds: readPersistedCollapsed(state.runtimeKey),
-    });
+    useSessionFoldersStore.getState().resetForRuntimeSwitch(state.runtimeKey);
   }
 });
+
+const hydrateSessionFoldersFromDisk = async (): Promise<void> => {
+  if (diskHydrated || diskHydrationInFlight || typeof window === 'undefined') {
+    return;
+  }
+
+  if (isVSCodeWebview() || !usesDiskSnapshot()) {
+    diskHydrated = true;
+    return;
+  }
+
+  diskHydrationInFlight = true;
+  const runtimeKey = activeFolderRuntimeKey;
+  const generation = folderRuntimeGeneration;
+  const baselineMutationRevision = folderMutationRevision;
+  let completed = false;
+
+  try {
+    const response = await runtimeFetch(SESSION_FOLDERS_API_PATH).catch(() => null);
+    if (!response || !response.ok) {
+      return;
+    }
+
+    const parsed = await response.json().catch(() => null) as {
+      exists?: boolean;
+      foldersMap?: SessionFoldersMap;
+      collapsedFolderIds?: string[];
+      deletedFolderIds?: unknown;
+      updatedAt?: number;
+    } | null;
+
+    if (!parsed) {
+      return;
+    }
+
+    if (parsed.exists === false) {
+      completed = true;
+      return;
+    }
+
+    const diskFolders = parsed.foldersMap && typeof parsed.foldersMap === 'object'
+      ? parsed.foldersMap
+      : {};
+    const diskCollapsed = Array.isArray(parsed.collapsedFolderIds)
+      ? new Set(parsed.collapsedFolderIds.filter((value): value is string => typeof value === 'string'))
+      : new Set<string>();
+
+    if (generation !== folderRuntimeGeneration || runtimeKey !== getRuntimeKey()) return;
+    const browserUpdatedAt = readStorageIndex().runtimes.find((entry) => entry.runtimeKey === runtimeKey)?.updatedAt ?? 0;
+    const diskUpdatedAt = typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0;
+    if (diskUpdatedAt > 0) {
+      lastDiskUpdatedAtByRuntime.set(runtimeKey, Math.max(lastDiskUpdatedAtByRuntime.get(runtimeKey) ?? 0, diskUpdatedAt));
+    }
+    const hasDiskAuthority = parsed.exists === true || diskUpdatedAt > 0;
+    // Deletions from other devices (the server's tombstones) and this device's
+    // own not-yet-stored ones both win over any copy that still holds the folder.
+    const remoteDeletions = folderTombstonesSchema.safeParse(parsed.deletedFolderIds ?? {});
+    const deleted = readPendingDeletions(runtimeKey);
+    if (remoteDeletions.success) Object.assign(deleted, remoteDeletions.data);
+    if (hasDiskAuthority && folderMutationRevision === baselineMutationRevision && diskUpdatedAt >= browserUpdatedAt) {
+      const nextFolders = withoutDeletedFolders(diskFolders, deleted) ?? diskFolders;
+      useSessionFoldersStore.setState({ foldersMap: nextFolders, collapsedFolderIds: diskCollapsed });
+      persistFolders(nextFolders);
+      persistCollapsed(diskCollapsed);
+    } else {
+      const localFolders = useSessionFoldersStore.getState().foldersMap;
+      const pruned = withoutDeletedFolders(localFolders, deleted);
+      if (pruned) {
+        useSessionFoldersStore.setState({ foldersMap: pruned });
+        persistFolders(pruned);
+      }
+    }
+    completed = true;
+  } catch {
+    // ignored
+  } finally {
+    if (generation === folderRuntimeGeneration && runtimeKey === getRuntimeKey()) {
+      diskHydrationInFlight = false;
+      if (completed) diskHydrated = true;
+    }
+  }
+};
+
+if (typeof window !== 'undefined') {
+  void hydrateSessionFoldersFromDisk();
+}

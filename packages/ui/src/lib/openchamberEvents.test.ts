@@ -75,6 +75,7 @@ describe('openchamber events', () => {
       openWebSocket() { throw new Error('SSE must not open a socket'); },
       getStatus: () => ({ state: 'connected' }),
       subscribeStatus: () => () => undefined,
+      retry: () => undefined,
       close: () => undefined,
     };
     adoptRelayTunnel({ relayUrl: 'wss://relay.test', serverId: 'fixture', hostEncPubJwk: {} }, tunnel);
@@ -108,6 +109,27 @@ describe('openchamber events', () => {
     expect(requests[0].signal?.aborted).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(events).toEqual(['event-stream-ready', 'browser-control-request']);
+  });
+
+  test('declares browser control on the stream only from a driving host', async () => {
+    const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
+
+    const webUnsubscribe = subscribeOpenchamberEvents(() => undefined);
+    try {
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(MockEventSource.instances[0].url).not.toContain('browser=1');
+    } finally {
+      webUnsubscribe();
+    }
+
+    Object.assign(window, { __OPENCHAMBER_ELECTRON__: true });
+    const drivingUnsubscribe = subscribeOpenchamberEvents(() => undefined);
+    try {
+      expect(MockEventSource.instances).toHaveLength(2);
+      expect(MockEventSource.instances[1].url).toContain('browser=1');
+    } finally {
+      drivingUnsubscribe();
+    }
   });
 
   test('dispatches externally created session events', async () => {
@@ -144,6 +166,44 @@ describe('openchamber events', () => {
     unsubscribe();
   });
 
+  test('an expired session stops the stream from reconnecting until the user logs in', async () => {
+    const { useAuthSessionStore } = await import('./runtime-auth-expiry');
+    const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
+    const unsubscribe = subscribeOpenchamberEvents(() => undefined);
+    try {
+      expect(MockEventSource.instances).toHaveLength(1);
+      useAuthSessionStore.getState().markExpired();
+      MockEventSource.instances[0].onerror?.();
+      // The first reconnect would come after one second.
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect(MockEventSource.instances).toHaveLength(1);
+
+      useAuthSessionStore.getState().markAuthenticated();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(MockEventSource.instances).toHaveLength(2);
+    } finally {
+      unsubscribe();
+      useAuthSessionStore.getState().markAuthenticated();
+    }
+  });
+
+  test('a stream left while waiting for the login does not reconnect after it', async () => {
+    const { useAuthSessionStore } = await import('./runtime-auth-expiry');
+    const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
+    const unsubscribe = subscribeOpenchamberEvents(() => undefined);
+    try {
+      useAuthSessionStore.getState().markExpired();
+      MockEventSource.instances[0].onerror?.();
+      unsubscribe();
+      useAuthSessionStore.getState().markAuthenticated();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(MockEventSource.instances).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      useAuthSessionStore.getState().markAuthenticated();
+    }
+  });
+
   test('dispatches worktree topology changes', async () => {
     const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
     const events: unknown[] = [];
@@ -169,6 +229,24 @@ describe('openchamber events', () => {
     unsubscribe();
   });
 
+  test('dispatches a project-context invalidation only with a valid owner id', async () => {
+    const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
+    const owners: string[] = [];
+    const unsubscribe = subscribeOpenchamberEvents((event) => {
+      if (event.type === 'project-context-changed') owners.push(event.projectId);
+    });
+    try {
+      for (const properties of [{ projectId: 'path_chats' }, {}, { projectId: '' }, { projectId: 42 }]) {
+        MockEventSource.instances[0].onmessage?.({
+          data: JSON.stringify({ type: 'openchamber:project-context-changed', properties }),
+        });
+      }
+      expect(owners).toEqual(['path_chats']);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test('dispatches an agent file-open request and drops one without a path', async () => {
     const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
     const events: unknown[] = [];
@@ -190,6 +268,31 @@ describe('openchamber events', () => {
 
     expect(events).toEqual([
       { type: 'file-open-request', path: '/repo/out/report.csv', directory: '/repo', sessionId: null },
+    ]);
+    unsubscribe();
+  });
+
+  test('dispatches an agent plan-open request and drops one without a plan id', async () => {
+    const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
+    const events: unknown[] = [];
+    const unsubscribe = subscribeOpenchamberEvents((event) => events.push(event));
+    const source = MockEventSource.instances[0];
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'openchamber:plan-open-request',
+        properties: { projectId: 'path_repo', planId: 'p1', title: 'Plan', directory: '/repo', sessionId: 'ses_1' },
+      }),
+    });
+    source.onmessage?.({
+      data: JSON.stringify({
+        type: 'openchamber:plan-open-request',
+        properties: { projectId: 'path_repo', title: 'Plan', directory: '/repo', sessionId: null },
+      }),
+    });
+
+    expect(events).toEqual([
+      { type: 'plan-open-request', projectId: 'path_repo', planId: 'p1', title: 'Plan', directory: '/repo', sessionId: 'ses_1' },
     ]);
     unsubscribe();
   });

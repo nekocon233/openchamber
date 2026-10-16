@@ -234,7 +234,7 @@ describe('host-authoritative follow-up queue client', () => {
                     synthetic: true,
                     metadata: {
                         openchamberContext: {
-                            kind: 'github-issue',
+                            kind: 'repository-issue',
                             number: 42,
                             title: 'Queue context',
                             url: 'https://example.com/issues/42',
@@ -271,7 +271,7 @@ describe('host-authoritative follow-up queue client', () => {
         expect(contextPart?.attachments?.[0].file).toBeInstanceOf(File);
         expect(contextPart?.metadata).toEqual({
             openchamberContext: {
-                kind: 'github-issue',
+                kind: 'repository-issue',
                 number: 42,
                 title: 'Queue context',
                 url: 'https://example.com/issues/42',

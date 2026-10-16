@@ -23,7 +23,8 @@ Browsers key a cookie jar on the host only, never the port (RFC 6265). Two OpenC
 Compatibility: upgrading renames the cookie for any explicit-port host, so already-signed-in browser sessions must log in once again. No on-disk format changes.
 
 ## Public exports (ui-auth.js)
-- `createUiAuth({ password, cookieName, sessionTtlMs, readSettingsFromDiskMigrated })`: creates UI auth controller with methods:
+- `readSessionTtlMs(raw, unitMs, fallbackMs)`: parses a positive session lifetime from an environment value, else the fallback. Defaults come from `OPENCHAMBER_UI_SESSION_TTL_HOURS` (12) and `OPENCHAMBER_UI_TRUSTED_SESSION_TTL_DAYS` (180, used when the user ticks "trust this device").
+- `createUiAuth({ password, cookieName, sessionTtlMs, trustedSessionTtlMs, readSettingsFromDiskMigrated })`: creates UI auth controller with methods:
   - Standard sessions expire 12 hours after issuance. Sessions requested with `trustDevice: true`, and client tokens issued from those sessions, expire 180 days after issuance. These are fixed, non-sliding expirations.
   - `enabled`
   - `requireAuth(req, res, next)`

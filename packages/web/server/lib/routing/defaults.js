@@ -41,6 +41,33 @@ export const ZEN_JEV_API_URL = 'https://opencode.ai/zen/v1/systemone';
 export const ZEN_JEV_MODEL = 'jev-1.13-free';
 export const ZEN_CLIENT_ID = 'openchamber';
 
+/**
+ * Whether the free promotion is still on. When OpenCode ends it, flip this and
+ * the promotion stops being offered; users keep Jev through a Zen or TypeSafe
+ * key, or lose the safety net and Auto until they add one.
+ */
+export const ZEN_JEV_PROMOTION_ACTIVE = true;
+
+/**
+ * The paid model behind a Zen API key, same endpoint. Not verified live: an
+ * OpenCode account sign-in (OAuth) is rejected there as "Invalid API key", so
+ * only a Zen API key saved in OpenCode is offered.
+ */
+export const ZEN_JEV_PAID_MODEL = 'jev-1.13';
+
+/**
+ * OpenRouter and Vercel AI Gateway serve TypeSafe's System One API under their
+ * own base URLs and bill the call to the account behind the key the user saved
+ * for that provider in OpenCode. OpenRouter maps the bare `jev-latest` onto its
+ * `~typesafe/jev-latest` alias; AI Gateway knows Jev only as `typesafe-ai/jev`.
+ * Both answer 401 without a key (checked 2026-09-27); a paid call is not
+ * verified live yet.
+ */
+export const OPENROUTER_JEV_API_URL = 'https://openrouter.ai/api/v1/systemone';
+export const OPENROUTER_JEV_MODEL = 'jev-latest';
+export const VERCEL_JEV_API_URL = 'https://ai-gateway.vercel.sh/typesafe/v1/systemone';
+export const VERCEL_JEV_MODEL = 'typesafe-ai/jev';
+
 /** Per-attempt timeout; the lab measured 250–700 ms warm, ~1 s on a cold TLS handshake. */
 export const JEV_TIMEOUT_MS = 4000;
 
@@ -52,11 +79,20 @@ export const JEV_TIMEOUT_MS = 4000;
  * request refers to, and that finished work carries no weight, put them at
  * 97% and ~75% trivial while "ok, do it" after a plan stayed implement and a
  * regression report stayed hard (jev-router lab, test/follow-up-instructions.js).
+ *
+ * The fourth line covers a bare approval, which the third would otherwise
+ * read as trivial: "go" after a plan carries no work of its own, so it takes
+ * the category of the work it approves (the #4374 author measured this on
+ * their own prompts; not yet replayed in the jev-router lab).
+ * It does not let finished work raise a follow-up; a follow-up that only
+ * looks cheap because it reuses a warm context is the router's concern, not
+ * the classifier's.
  */
 export const ROUTING_INSTRUCTIONS = [
   'Pick the task category that best describes this coding request, judging the reasoning it demands rather than the length of the reply it asks for.',
   'A request that wants a one-line answer to a hard debugging or design question is still hard; a long but mechanical edit is still trivial.',
   'The thing to classify is `request`, the latest user message. Read `history` (earlier conversation, oldest first) only to understand what `request` refers to, then judge the reasoning `request` itself demands. Do not let the difficulty of work already done in `history` raise or lower the category.',
+  'A bare approval such as "go", "yes", "approve", or "do it" authorises the work just described in history: classify it as the category that work demands, not as trivial.',
 ];
 
 /**
@@ -112,4 +148,6 @@ export const BUILTIN_CATEGORIES = [
 ];
 
 export const DEFAULT_MIN_CONFIDENCE = 0.6;
+/** "Try to preserve cache usage" (`cache.js`) is on unless the user turned it off. */
+export const DEFAULT_PRESERVE_CACHE = true;
 export const DEFAULT_SAFETY_THRESHOLD = 0.6;

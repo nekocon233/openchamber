@@ -13,6 +13,34 @@ afterEach(() => {
 })
 
 describe("v2 status and cancellation HTTP boundary", () => {
+  // The tray gates "Allow always" on these patterns, and the host seed is the
+  // only source that reaches the index pre-parsed, so a strip here silently
+  // turns a savable request into an unsavable one (#4698).
+  test("the host status snapshot keeps the save patterns a pending permission carries", async () => {
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({
+      serverTime: 1_700_000_000_000,
+      sessions: { s1: { status: "busy", lastUpdateAt: 1_700_000_000_000 } },
+      pending: {
+        s1: {
+          permissions: [
+            { id: "p-save", sessionID: "s1", action: "bash", resources: ["git status"], save: ["git *"] },
+            { id: "p-once", sessionID: "s1", action: "bash", resources: ["rm -rf tmp"] },
+          ],
+          forms: [],
+        },
+      },
+    }))
+    try {
+      const snapshot = await opencodeClient.getHostSessionStatusSnapshot()
+      const permissions = snapshot?.pending?.s1?.permissions ?? []
+      expect(permissions.map((p) => p.id)).toEqual(["p-save", "p-once"])
+      expect(permissions[0]?.save).toEqual(["git *"])
+      expect(permissions[1]?.save).toBeUndefined()
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
   test("directory bootstrap blocking reads each spend one HTTP request", async () => {
     const requests: Array<{ path: string; directory: string | null }> = []
     const fetch = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -22,18 +50,15 @@ describe("v2 status and cancellation HTTP boundary", () => {
       return Response.json({ data: [] })
     })
     try {
-      const options = { directories: ["C:/Tree with spaces"], includeGlobal: false }
+      const options = { directories: ["C:/Tree with spaces"] }
       expect(await opencodeClient.listPendingForms(options)).toEqual([])
       expect(await opencodeClient.listPendingPermissions(options)).toEqual([])
+      // Never a list without a directory: v2 answers it for its own working
+      // directory and starts that location, MCP servers included.
       expect(requests).toEqual([
         { path: "/api/form", directory: encodeURIComponent("C:/Tree with spaces") },
         { path: "/api/permission/request", directory: encodeURIComponent("C:/Tree with spaces") },
       ])
-      requests.length = 0
-      await opencodeClient.listPendingForms({ directories: options.directories })
-      expect(requests).toHaveLength(2)
-      expect(requests[0].directory).toBeNull()
-      expect(requests[1].directory).toBe(encodeURIComponent("C:/Tree with spaces"))
     } finally {
       fetch.mockRestore()
     }

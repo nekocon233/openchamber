@@ -1,4 +1,4 @@
-import type { Message, SessionStatus } from '@/lib/opencode/model';
+import type { SessionStatus } from '@/lib/opencode/model';
 
 export type SessionActivityPhase = 'idle' | 'busy' | 'retry';
 
@@ -20,7 +20,12 @@ export function deriveSessionActivity(input: {
   childStatus?: SessionStatus;
   globalResolvedStatus?: SessionActivityPhase;
   hasAuthoritativeStatusSnapshot: boolean;
-  messages: readonly Message[];
+  /**
+   * Whether the trailing turn is still incomplete. The caller reads it
+   * through the leaf message selector, so this owner never holds the message
+   * list and never re-renders on an unrelated streamed update.
+   */
+  hasPendingAssistant: boolean;
   pendingPermissions: number;
   pendingQuestions: number;
 }): SessionActivityResult {
@@ -30,14 +35,8 @@ export function deriveSessionActivity(input: {
   const hasAuthoritativeStatus = input.childStatus !== undefined
     || input.globalResolvedStatus !== undefined
     || input.hasAuthoritativeStatusSnapshot;
-  const lastMessage = input.messages[input.messages.length - 1];
-  const hasPendingAssistant = Boolean(
-    lastMessage
-    && lastMessage.role === 'assistant'
-    && typeof (lastMessage as { time?: { completed?: number } }).time?.completed !== 'number',
-  );
   const statusWorking = hasAuthoritativeStatus && phase !== 'idle';
-  const isWorking = statusWorking || (hasPendingAssistant && !hasAuthoritativeStatus);
+  const isWorking = statusWorking || (input.hasPendingAssistant && !hasAuthoritativeStatus);
 
   if (hasAuthoritativeStatus && !statusWorking) return IDLE_SESSION_ACTIVITY;
   if (!isWorking) return IDLE_SESSION_ACTIVITY;
@@ -45,7 +44,7 @@ export function deriveSessionActivity(input: {
   return {
     phase: statusWorking ? phase as SessionActivityPhase : 'busy',
     isWorking: true,
-    isBusy: phase === 'busy' || (!statusWorking && hasPendingAssistant),
+    isBusy: phase === 'busy' || (!statusWorking && input.hasPendingAssistant),
     isCooldown: false,
   };
 }

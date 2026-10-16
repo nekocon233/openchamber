@@ -34,10 +34,10 @@ export const ChangedFilesWithoutDiff: React.FC<{
                 <>
                     <div>{heading}</div>
                     {shown.map((path) => (
-                        <div key={path} className="truncate pl-3" title={path}>{path}</div>
+                        <div key={path} className="truncate ps-3" title={path}>{path}</div>
                     ))}
                     {counted > 0 ? (
-                        <div className="pl-3">
+                        <div className="ps-3">
                             {counted === 1
                                 ? t('chat.toolPart.recordedChanges.moreFilesOne')
                                 : t('chat.toolPart.recordedChanges.moreFilesMany', { count: counted })}

@@ -50,6 +50,24 @@ describe('parseManifest', () => {
     });
   });
 
+  test('preserves optional Work Status visibility and expansion settings', () => {
+    const result = parseManifest({
+      ...validBlock,
+      contributes: {
+        ...validBlock.contributes,
+        statusSection: {
+          entry: 'status/index.html',
+          defaultExpanded: false,
+          requiresProject: true,
+        },
+      },
+    });
+    expect(result).toMatchObject({ ok: true, manifest: { contributes: { statusSection: {
+      entry: 'status/index.html', defaultExpanded: false, requiresProject: true,
+    } } } });
+    expect(parseManifest({ ...validBlock, contributes: { ...validBlock.contributes, statusSection: { entry: 'status/index.html', defaultExpanded: 'no' } } })).toMatchObject({ ok: false, code: 'invalid-status-section' });
+  });
+
   test('reads package.json openchamber', () => {
     const result = parseManifest({
       openchamber: validBlock,
@@ -215,6 +233,27 @@ describe('parseManifest', () => {
       if (!result.ok) {
         expect(result.code).toBe('invalid-filesystem');
       }
+    }
+  });
+
+  test('accepts declared https origins and derives the origins grant', () => {
+    const result = parseManifest({
+      apiVersion: 1,
+      contributes: { panel: validBlock.contributes.panel, origins: ['https://fonts.example.com', 'https://api.example.com:8443'] },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.contributes.origins).toEqual(['https://fonts.example.com', 'https://api.example.com:8443']);
+      expect(requestedGuestCapabilities(result.manifest.contributes)).toEqual(['origins']);
+    }
+  });
+
+  test('rejects origins that are not plain unique https origins', () => {
+    for (const bad of [['http://fonts.example.com'], ['https://fonts.example.com/path'], ['https://*.example.com'], ['https://a.test', 'https://a.test'], [], ['https://u:p@a.test'], new Array(9).fill(0).map((_, i) => `https://a${i}.test`)]) {
+      // Junk on purpose: this is what an untrusted package.json may carry.
+      const result = parseManifest({ apiVersion: 1, contributes: { panel: validBlock.contributes.panel, origins: bad as string[] } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.code).toBe('invalid-origins');
     }
   });
 

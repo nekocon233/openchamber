@@ -1285,4 +1285,44 @@ describe('FRPC tunnel routes', () => {
     await expect(starting).rejects.toMatchObject({ code: 'config_persistence_failed' });
     expect(stopped).toBe(true);
   });
+
+  it('refuses every tunnel in enterprise mode, password or not', async () => {
+    process.env.OPENCHAMBER_ENTERPRISE_MODE = '1';
+    try {
+      let startCalls = 0;
+      const tunnelService = {
+        start: async () => {
+          startCalls += 1;
+          return {};
+        },
+        stop: () => false,
+        resolveActiveMode: () => null,
+        resolveActiveProvider: () => null,
+        getPublicUrl: () => null,
+        getProviderMetadata: () => null,
+        checkAvailability: async () => ({ available: true }),
+      };
+      const runtime = createRuntime({ tunnelService, upsertFrpcTunnelConfig: async () => undefined });
+
+      // Both entry points refuse: the runtime API the Settings button and
+      // `--tunnel` share, and the HTTP route.
+      await expect(runtime.startTunnelWithNormalizedRequest({
+        provider: TUNNEL_PROVIDER_FRPC,
+        mode: TUNNEL_MODE_MANAGED_REMOTE,
+        serverAddress: '203.0.113.10',
+        serverPort: 7000,
+        token: 'frpc-token',
+      })).rejects.toThrow('enterprise mode');
+
+      const app = createApp();
+      runtime.registerRoutes(app);
+      const response = await invoke(app.handlers.post.get('/api/openchamber/tunnel/start'), { body: {} });
+
+      expect(response.status).toBe(403);
+      expect(response.body.code).toBe('enterprise_mode');
+      expect(startCalls).toBe(0);
+    } finally {
+      delete process.env.OPENCHAMBER_ENTERPRISE_MODE;
+    }
+  });
 });

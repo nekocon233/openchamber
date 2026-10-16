@@ -5,7 +5,10 @@
  * Works across web, desktop, and VS Code (state-only mode).
  *
  * URL Schema:
+ * - `?session=<id>` - Navigate to specific session
  * - `?session=<id>&directory=<path>` - Navigate to a session, with an optional cold-start directory hint
+ * - `?session=<id>&message=<id>` - Open the session on one message (a message
+ *   link; see `messageFocus.ts` and `lib/sessionLinks.ts`)
  * - `?tab=<chat|git|diff|terminal|files>` - Legacy URL name for the active workspace surface
  * - `?settings=<section>` - Open settings to specific section
  * - `?file=<path>` - Diff view with file selected

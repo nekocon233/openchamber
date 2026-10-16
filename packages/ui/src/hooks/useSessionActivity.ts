@@ -1,10 +1,19 @@
 import React from 'react';
+import { getLastConversationMessage, isIncompleteAssistantTurn, type Message } from '@/lib/opencode/model';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useSessionStatus, useSessionMessages, useSessionPermissions, useSessionForms } from '@/sync/sync-context';
+import { useSessionStatus, useSessionMessagesSelector, useSessionPermissions, useSessionForms } from '@/sync/sync-context';
 import { useGlobalSessionStatusStore } from '@/sync/global-session-status';
 import { normalizeProjectPath } from '@/lib/projectResolution';
 import { deriveSessionActivity, IDLE_SESSION_ACTIVITY } from './sessionActivity';
 import type { SessionActivityResult } from './sessionActivity';
+
+// Only the trailing turn matters, so the subscription re-renders the caller
+// when that flag flips rather than on every streamed message update.
+// Plumbing roles are transparent here: a synthetic or switch message landing
+// after the streaming assistant must not read as the turn ending.
+const selectHasPendingAssistant = (messages: Message[]): boolean => (
+  isIncompleteAssistantTurn(getLastConversationMessage(messages))
+);
 
 const IDLE_RESULT: SessionActivityResult = IDLE_SESSION_ACTIVITY;
 
@@ -27,7 +36,7 @@ export function useSessionActivity(sessionId: string | null | undefined, directo
       return state.statusSnapshotAtByDirectory.has(normalizeProjectPath(directory) ?? directory);
     }, [directory]),
   );
-  const messages = useSessionMessages(sessionId ?? '', directory);
+  const hasPendingAssistant = useSessionMessagesSelector(sessionId ?? '', directory, selectHasPendingAssistant);
   const permissions = useSessionPermissions(sessionId ?? '', directory);
   const forms = useSessionForms(sessionId ?? '', directory);
 
@@ -35,13 +44,13 @@ export function useSessionActivity(sessionId: string | null | undefined, directo
     if (!sessionId) return IDLE_RESULT;
     return deriveSessionActivity({
       childStatus: status,
-      globalResolvedStatus: globalResolvedStatus,
+      globalResolvedStatus,
       hasAuthoritativeStatusSnapshot,
-      messages,
+      hasPendingAssistant,
       pendingPermissions: permissions.length,
       pendingQuestions: forms.length,
     });
-  }, [sessionId, status, globalResolvedStatus, hasAuthoritativeStatusSnapshot, messages, permissions, forms]);
+  }, [sessionId, status, globalResolvedStatus, hasAuthoritativeStatusSnapshot, hasPendingAssistant, permissions, forms]);
 }
 
 export function useCurrentSessionActivity(): SessionActivityResult {

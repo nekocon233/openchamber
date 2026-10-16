@@ -36,7 +36,7 @@ export const CompactionSummary: React.FC<{ children: React.ReactNode }> = ({ chi
         <div>
             <button
                 type="button"
-                className="flex items-center gap-1 rounded-md py-0.5 pr-1.5 typography-meta text-muted-foreground hover:text-foreground"
+                className="flex items-center gap-1 rounded-md py-0.5 pe-1.5 typography-meta text-muted-foreground hover:text-foreground"
                 aria-expanded={open}
                 aria-controls={contentId}
                 onClick={() => setOpen((value) => !value)}

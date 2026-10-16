@@ -2,6 +2,7 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Radio } from '@/components/ui/radio';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { cn } from '@/lib/utils';
 import { SettingsInfoHint } from './SettingsInfoHint';
@@ -25,7 +26,6 @@ const SETTINGS_TRIGGER_WIDTH_CLASS = 'w-full min-w-[16ch] max-w-[28ch]';
 
 /** Settings select trigger: full column width in stacked cells; capped in field rows via parent. */
 export const SETTINGS_SELECT_TRIGGER_CLASS = SETTINGS_TRIGGER_WIDTH_CLASS;
-export const SETTINGS_SELECT_SIZE = 'settings' as const;
 
 /** Fixed-width select used inside full-width SettingsFieldRow control columns. */
 export const SETTINGS_SELECT_ROW_TRIGGER_CLASS = SETTINGS_TRIGGER_WIDTH_CLASS;
@@ -44,7 +44,7 @@ export const SETTINGS_ICON_BUTTON_CLASS =
   'h-8 w-8 px-0 text-muted-foreground hover:text-foreground';
 
 /** Custom dropdown triggers (ModelSelector / AgentSelector) in settings field rows. */
-// eslint-disable-next-line react-refresh/only-export-components
+// oxlint-disable-next-line react/only-export-components
 export const SETTINGS_CUSTOM_TRIGGER_CLASS = cn(
   dropdownTriggerVariants(),
   SETTINGS_TRIGGER_WIDTH_CLASS,
@@ -82,8 +82,6 @@ export const SETTINGS_PAGE_TITLE_CLASS =
 /** L2 — section title inside a settings page. */
 export const SETTINGS_SECTION_TITLE_CLASS =
   'typography-settings-section-title text-foreground';
-/** Split-pane sidebar panel title — same level as section titles. */
-export const SETTINGS_PANEL_TITLE_CLASS = SETTINGS_SECTION_TITLE_CLASS;
 /** L3 — control-group heading inside a section. */
 const SETTINGS_GROUP_TITLE_CLASS =
   'typography-settings-group-title text-foreground';
@@ -539,6 +537,12 @@ interface SettingsChipOption<T extends string> {
   value: T;
   label: React.ReactNode;
   disabled?: boolean;
+  /**
+   * Shown on hover (long-press on touch). The popup stays open while the
+   * pointer is on it, so it may carry a link. Keep what the user must read
+   * visible elsewhere: touch users rarely long-press.
+   */
+  tooltip?: React.ReactNode;
 }
 
 interface SettingsChipGroupProps<T extends string> {
@@ -563,20 +567,35 @@ export function SettingsChipGroup<T extends string>({
       aria-label={ariaLabel}
       className={cn('flex flex-wrap items-center gap-1', className)}
     >
-      {options.map((option) => (
-        <Button
-          key={option.value}
-          type="button"
-          variant="chip"
-          size="xs"
-          disabled={option.disabled}
-          aria-pressed={value === option.value}
-          className="!font-normal"
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </Button>
-      ))}
+      {options.map((option) => {
+        const chip = (
+          <Button
+            key={option.value}
+            type="button"
+            variant="chip"
+            size="xs"
+            disabled={option.disabled}
+            aria-pressed={value === option.value}
+            className="!font-normal"
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </Button>
+        );
+        if (!option.tooltip) return chip;
+        return (
+          <Tooltip key={option.value}>
+            {/* A disabled button gets no hover events, so its tooltip (usually
+                the reason it is disabled) hangs on a wrapper instead. */}
+            <TooltipTrigger asChild>
+              {option.disabled ? <span className="inline-flex" tabIndex={0}>{chip}</span> : chip}
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6} className="max-w-xs">
+              {option.tooltip}
+            </TooltipContent>
+          </Tooltip>
+        );
+      })}
     </div>
   );
 }

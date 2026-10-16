@@ -23,8 +23,22 @@ import {
 import { sessionCookieNameForRequest } from './session-cookie.js';
 
 const SESSION_COOKIE_NAME = 'oc_ui_session';
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-const TRUSTED_DEVICE_SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+
+// A positive number of hours or days from the environment, else the default.
+export const readSessionTtlMs = (raw, unitMs, fallbackMs) => {
+  const value = Number(String(raw ?? '').trim());
+  return Number.isFinite(value) && value > 0 ? Math.round(value * unitMs) : fallbackMs;
+};
+
+const SESSION_TTL_MS = readSessionTtlMs(process.env.OPENCHAMBER_UI_SESSION_TTL_HOURS, HOUR_MS, 12 * HOUR_MS);
+// This distribution keeps a trusted device signed in for 180 days, not the
+// week of a plain session; the environment can still shorten or lengthen it.
+const TRUSTED_DEVICE_SESSION_TTL_MS = readSessionTtlMs(
+  process.env.OPENCHAMBER_UI_TRUSTED_SESSION_TTL_DAYS,
+  24 * HOUR_MS,
+  180 * 24 * HOUR_MS,
+);
 const URL_AUTH_TOKEN_TTL_MS = 60 * 1000;
 const URL_AUTH_TOKEN_PREFIX = 'oc_url_';
 const RESOLVED_CLIENT_AUTH = Symbol('openchamberResolvedClientAuth');
@@ -41,16 +55,10 @@ let rateLimitCleanupTimer = null;
 const rateLimitLocks = new Map();
 
 const getClientIp = (req) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string') {
-    const ip = forwarded.split(',')[0].trim();
-    if (ip.startsWith('::ffff:')) {
-      return ip.substring(7);
-    }
-    return ip;
-  }
-
-  const ip = req.ip || req.connection?.remoteAddress;
+  // req.ip follows X-Forwarded-For only through proxies the server trusts
+  // ('trust proxy' in server/index.js); reading the header directly would let
+  // every login attempt pick a fresh rate-limit bucket.
+  const ip = req.ip || req.socket?.remoteAddress;
   if (ip) {
     if (ip.startsWith('::ffff:')) {
       return ip.substring(7);
@@ -285,33 +293,7 @@ const getUrlAuthTokenFromRequest = (req) => {
     }
   }
   if (typeof token === 'string' && token.trim()) return token.trim();
-  return getServedPageSubresourceToken(req);
-};
-
-/**
- * An HTML file shown through `/api/fs/serve/` loads its own images, styles
- * and scripts with plain relative URLs, which carry no token: only the page's
- * URL has one. The browser sends that page URL as the Referer of every
- * same-origin subresource request, so the page's token is taken from there,
- * and only when both the page and the subresource live under `/api/fs/serve/`.
- * Nothing else about the token changes: it is still checked for validity,
- * expiry and scope like a query token.
- */
-const SERVED_PAGE_PREFIX = '/api/fs/serve/';
-
-const getServedPageSubresourceToken = (req) => {
-  if (!getRequestPathname(req).startsWith(SERVED_PAGE_PREFIX)) return null;
-  const referer = req?.headers?.referer;
-  const value = Array.isArray(referer) ? referer[0] : referer;
-  if (typeof value !== 'string' || !value) return null;
-  try {
-    const url = new URL(value);
-    if (!url.pathname.startsWith(SERVED_PAGE_PREFIX)) return null;
-    const token = url.searchParams.get('oc_url_token');
-    return token && token.trim() ? token.trim() : null;
-  } catch {
-    return null;
-  }
+  return null;
 };
 
 const getRequestPathname = (req) => {
@@ -366,8 +348,8 @@ const isUrlAuthReadableHttpPath = (pathname) => {
     || pathname === '/api/openchamber/realtime-proxy/sse'
     || pathname === '/api/notifications/stream'
     || pathname === '/api/fs/raw'
-    || pathname === '/api/fs/serve'
-    || pathname.startsWith('/api/fs/serve/')
+    // GitLab pictures and clips in an issue or merge request, loaded by `img` and `video`.
+    || pathname.startsWith('/api/source-control/gitlab/uploads/')
     || pathname.startsWith('/api/preview/proxy/')
     || /^\/api\/projects\/[^/]+\/icon$/.test(pathname)
     || pathname === '/api/guests'
@@ -491,6 +473,7 @@ export const createUiAuth = ({
   password,
   cookieName = SESSION_COOKIE_NAME,
   sessionTtlMs = SESSION_TTL_MS,
+  trustedSessionTtlMs = TRUSTED_DEVICE_SESSION_TTL_MS,
   readSettingsFromDiskMigrated,
   clientAuthController = null,
   requireClientAuth = false,
@@ -835,7 +818,7 @@ export const createUiAuth = ({
   let jwtSecret = getOrCreateJwtSecret();
   let passwordBinding = crypto.createHmac('sha256', jwtSecret).update(normalizedPassword).digest('hex');
   notificationAuthGeneration = derivePasswordNotificationAuthGeneration(jwtSecret, passwordBinding);
-  const resolveSessionTtlMs = (trustDevice) => (trustDevice ? TRUSTED_DEVICE_SESSION_TTL_MS : sessionTtlMs);
+  const resolveSessionTtlMs = (trustDevice) => (trustDevice ? trustedSessionTtlMs : sessionTtlMs);
   let passkeyController = createUiPasskeys({
     passwordBinding,
     readSettingsFromDiskMigrated,
@@ -1100,7 +1083,8 @@ export const createUiAuth = ({
     return res.json(issueUrlAuthTokenForSession(sessionToken, notificationAuth, scope));
   };
 
-  const handleSessionCreate = async (req, res) => {
+  // Password and passkey sign-in share one attempt budget per client.
+  const admitLoginAttempt = async (req, res) => {
     const rateLimitResult = await checkRateLimit(req);
 
     res.setHeader('X-RateLimit-Limit', rateLimitResult.limit);
@@ -1109,10 +1093,17 @@ export const createUiAuth = ({
 
     if (!rateLimitResult.allowed) {
       res.setHeader('Retry-After', rateLimitResult.retryAfter);
-      res.status(429).json({ 
+      res.status(429).json({
         error: 'Too many login attempts, please try again later',
-        retryAfter: rateLimitResult.retryAfter 
+        retryAfter: rateLimitResult.retryAfter,
       });
+      return false;
+    }
+    return true;
+  };
+
+  const handleSessionCreate = async (req, res) => {
+    if (!(await admitLoginAttempt(req, res))) {
       return;
     }
 
@@ -1192,8 +1183,22 @@ export const createUiAuth = ({
   };
 
   const handlePasskeyAuthenticationVerify = async (req, res) => {
+    if (!(await admitLoginAttempt(req, res))) {
+      return;
+    }
+
+    // Only a rejected assertion counts against the attempt budget, not a
+    // failure after the passkey was accepted.
     try {
       await passkeyController.finishAuthentication(req.body);
+    } catch (error) {
+      await recordFailedAttempt(req);
+      respondPasskeyError(res, error);
+      return;
+    }
+    await clearRateLimit(req);
+
+    try {
       const trustDevice = isTrustedDeviceRequest(req.body?.trustDevice);
       const ttlMs = resolveSessionTtlMs(trustDevice);
       await issueSession(req, res, { trustDevice });
@@ -1211,6 +1216,7 @@ export const createUiAuth = ({
           appVersion: req.body?.appVersion,
         });
       }
+      res.setHeader('Cache-Control', 'no-store');
       res.json({
         authenticated: true,
         ...(clientTokenResult?.token ? { clientToken: clientTokenResult.token, client: clientTokenResult.client } : {}),

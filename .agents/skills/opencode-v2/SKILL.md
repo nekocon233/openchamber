@@ -33,6 +33,36 @@ the 2.x code, not from memory of 1.x.
   `<dataDir>/opencode.managed.json` (`OPENCODE_CONFIG`), so a settings change
   applies without a restart. Only the binary, port and external toggle restart.
 
+## Every directory-scoped read starts a location
+
+On 2.x a read through the location middleware builds that directory's
+location, and the build starts every configured local MCP server for it. The
+location then lives until an hour without session events. So each read names
+a directory, and only one the user is working in:
+
+- **Which routes:** agent, plugin, model, provider, integration, mcp, project,
+  form, permission request list, fs, command, skill, rpc, pty, shell,
+  reference, vcs, websearch, config, location (`protocol/src/api.ts` lists the
+  groups with `locationMiddleware`). Session routes resolve the session's own
+  location; `GET /api/session`, `/api/session/active` and `/api/credential`
+  are global and start nothing.
+- **How the directory travels:** the `x-opencode-directory` header,
+  percent-encoded, or a `location[directory]` query. A `?directory=` query is
+  ignored.
+- **A read without one** answers for OpenCode's own working directory, the
+  user's home for a managed OpenCode, and starts a fleet there. The UI reads
+  through `opencodeClient` with the current directory; server code with no
+  directory of its own uses the lifecycle's `getDefaultOpenCodeDirectory()`,
+  the last-used directory it warmed at startup.
+- **Fan-out is the failure:** a loop over every project, worktree or store
+  directory starts one fleet each. A refresh after a catalog event re-reads
+  only the directories the events named; they are already running.
+
+A report of processes multiplying, memory climbing with MCP servers enabled,
+or MCP servers starting in projects nobody opened: reproduce it with
+[references/mcp-spawn-probe.md](references/mcp-spawn-probe.md) before reading
+code.
+
 ## Workarounds for what 2.x cannot do
 
 Each exists because 2.x has no route for it. When a tag adds the route,
@@ -42,10 +72,8 @@ the workaround goes and the record comes from OpenCode.
   keeps it per data dir and the proxy folds it into session reads.
   Session metadata is not a workaround since 2.0.15: it lives on the OpenCode
   record, written by merge-then-PATCH in `session-metadata-store.js`, which
-  also migrates the old `sessions-metadata.json`.
-- **Provider credentials**: not readable over HTTP. `credential-db.js` reads
-  OpenCode's own SQLite `credential` table read-only, `auth.json` as legacy
-  fallback. Private schema: re-verify on every bump.
+  also migrates the old `sessions-metadata.json`. Provider credentials are
+  not one either since 2.0.20: `opencode/auth.js` reads `GET /api/credential`.
 - **1.x sessions created after the one-shot migration**:
   `v1-migration-topup.js` rewinds the migration cursor before a managed start,
   only when no revisited session has 2.x activity.
@@ -53,14 +81,54 @@ the workaround goes and the record comes from OpenCode.
   route does not declare, so session update/delete/archive report the status
   without OpenCode's message or log `ref`.
 
-Open asks upstream (OpenCode Slack): credential read over HTTP, declaring 500
-bodies on session mutations. Dropped: an import route for missing 1.x
+Open asks upstream (OpenCode Slack): declaring 500 bodies on session
+mutations; `provider.list` and `agent.list` waiting for plugin activation the
+way `model.list` does since 2.0.27, which would retire the cold-catalog
+recovery in `useConfigStore`. Dropped: an import route for missing 1.x
 sessions (the top-up workaround is enough). Check the newest tag before re-asking.
+
+## Behaviour to expect
+
+Verified against live 2.x servers; re-check on a newer tag before relying on a
+gap.
+
+- **A cold location's catalog is not authoritative.** The first provider/model
+  read for a directory not started yet answers an empty list, then a partial
+  one without plugin providers, and the full list about two seconds later,
+  announced by `provider.updated` / `model.updated` with that
+  `location.directory`. Recovery rides on those events (`markConfigCatalogStale`).
+  Since 2.0.27 `model.list` and `model.default` wait up to 5 seconds for the
+  location's plugins; `provider.list` and `agent.list` still answer early, so
+  the recovery stays.
+- **Plugin providers exist only in the running OpenCode.** Nothing about them
+  reaches `opencode.json` or `auth.json`; `/api/provider` is the only view, and
+  it strips `options.fetch`, so nothing tells a directly callable provider from
+  one that only works through OpenCode. Without a zen login OpenCode sets
+  `options.apiKey = "public"` on zen and trims it to free models: those run on
+  OpenCode's infrastructure and are called only through OpenCode.
+- **A session whose directory was deleted** still reads, but location-scoped
+  requests answer 404 `LocationNotFoundError`. `STATUS_BY_TAG` does not map it
+  to 404 on purpose: `fetchPermission` reads 404 as "settled", which would let
+  auto-accept fail open. `POST /api/session/:id/move` works on such a session.
+- **A background shell or a subagent has no clean cancel.** `shell.remove`
+  kills the process but hands the agent a `Shell.NotFoundError`; interrupting a
+  subagent's child session (no job-cancel route) reports "Subagent cancelled".
+  Agents relaunch either, so `stopBackgroundShell` and `stopSubagent` post a
+  cancellation note to the agent first.
+- **`opencode run --agent X` uses the default model**, not the agent's: pass
+  `-m provider/model#variant` in batch runs.
+- **A scratch `opencode serve` started from the app's shell answers 401**:
+  the shell inherits the desktop's `OPENCODE_PASSWORD`, which wins over
+  `OPENCODE_SERVER_PASSWORD`. Start it with `env -u OPENCODE_PASSWORD` (Basic
+  auth user `opencode`).
 
 ## Sources of truth
 
 - Reference checkout `~/projects/opencode`, branch `origin/v2` and its
-  `v2.x.y` tags (`git fetch origin --tags` there; never edit it). Server
+  `v2.x.y` tags (`git fetch origin --tags` there; never edit it). Maintainer
+  machine only: where the path is absent — CI, a fresh sandbox — report the
+  reference checkout as unavailable and answer what you can from the pins
+  below. Server
   behaviour: `packages/core/src`, HTTP surface: `packages/server/src/handlers/*`,
   wire types: `packages/schema/src`, `packages/protocol/src/groups`.
 - Minimum supported version: `MINIMUM_OPENCODE_VERSION` in

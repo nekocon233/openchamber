@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useUIStore } from '@/stores/useUIStore';
+import { useEnterpriseMode, useJevBlockedByEnterprise } from '@/stores/useEnterprisePolicyStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useGlobalSessionsStore, resolveGlobalSessionDirectory } from '@/stores/useGlobalSessionsStore';
 import { isBtwSession } from '@/lib/sessionBtwMetadata';
@@ -40,7 +41,7 @@ import { createWorktreeSession } from '@/lib/worktreeSessionCreator';
 import { formatShortcutForDisplay, getEffectiveShortcutCombo, shortcutRegistry } from '@/lib/shortcuts';
 import { showOpenCodeStatus } from '@/lib/openCodeStatus';
 import { restartOpenCodeWithFeedback } from '@/lib/restartOpenCode';
-import { canUseElectronDesktopIPC, invokeDesktop, isDesktopShell, isVSCodeRuntime, isWebRuntime, isHostLocalOriginActive } from '@/lib/desktop';
+import { canUseElectronDesktopIPC, getMiniChatRuntimeArgs, invokeDesktop, isDesktopShell, isVSCodeRuntime, isWebRuntime, isHostLocalOriginActive } from '@/lib/desktop';
 import { SETTINGS_PAGE_METADATA, type SettingsRuntimeContext } from '@/lib/settings/metadata';
 
 const EMPTY_PINNED_SESSION_IDS = new Set<string>();
@@ -48,14 +49,23 @@ import { getSettingsNavIcon } from '@/lib/settings/metadata';
 import { Icon } from "@/components/icon/Icon";
 import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { McpIcon } from '@/components/icons/McpIcon';
+import { ArrowsMerge } from '@/components/icons/ArrowsMerge';
 import { scoreByFuzzyQuery } from '@/lib/search/fuzzySearch';
-import { truncatePathMiddle } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
+import { cn } from '@/lib/utils';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { buildCommandPaletteFileSearchKey, scoreCommandPaletteFiles } from './commandPaletteFilesState';
 import { useResolvedSessionStatusType } from '@/sync/sync-context';
+import { openParallelComposer } from '@/lib/multirun/openParallelComposer';
+import { openSessionLink } from '@/lib/router/openSessionFromRoute';
+import { useMessageSearch } from '@/hooks/useMessageSearch';
+import type { MessageSearchHit } from '@/lib/messageSearch';
+import { MessageHitItem, MessageSearchFilters, type MessageAuthor, type MessageScope } from './commandPaletteMessages';
+import { requestReasoningReveal } from '@/components/chat/search/reasoningReveal';
+import { useObserveProjectActionRuns, useProjectActions } from '@/components/layout/projectActionsRunnerContext';
+import { resolveProjectActionIconName } from '@/lib/projectActions';
 
 type CommandEntry = {
   id: string;
@@ -71,15 +81,51 @@ type CommandEntry = {
 
 type FileHit = { path: string; name: string; relativePath: string };
 const EMPTY_SESSIONS: Session[] = [];
+// Message hits shown among everything else; "Show all" opens the full list.
+const MESSAGE_PREVIEW_LIMIT = 3;
+const MESSAGE_PAGE_SIZE = 30;
+
+/**
+ * Commands, Settings pages and projects match a query only at word starts, so a short
+ * query like "ts" finds "TypeScript" but not the tail of "Agents".
+ */
+const matchesWordStarts = (text: string, query: string): boolean => {
+  const words = text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return query.toLowerCase().split(/\s+/).filter(Boolean)
+    .every((token) => words.some((word) => word.startsWith(token)));
+};
+
+const splitRelativePath = (relativePath: string): { name: string; directory: string } => {
+  const slash = relativePath.lastIndexOf('/');
+  return slash === -1
+    ? { name: relativePath, directory: '' }
+    : { name: relativePath.slice(slash + 1), directory: relativePath.slice(0, slash) };
+};
+
+// Left-to-right marks keep a path's leading "." or trailing "/" in place
+// inside the right-to-left box that moves the ellipsis to the start.
+const LRM = '\u200E';
+
+/** Secondary text that loses its start, not its end, when it does not fit. */
+const LeadingTruncated: React.FC<{ text: string; className?: string }> = ({ text, className }) => (
+  <span
+    className={cn('oc-ui-start-align min-w-0 truncate text-muted-foreground', className)}
+    style={{ direction: 'rtl' }}
+    title={text}
+  >
+    {`${LRM}${text}${LRM}`}
+  </span>
+);
 
 type SessionResultItemProps = {
   session: Session;
   title: string;
   branch: string | null;
+  projectLabel: string | null;
   onSelect: (session: Session) => void;
 };
 
-const SessionResultItem: React.FC<SessionResultItemProps> = ({ session, title, branch, onSelect }) => {
+const SessionResultItem: React.FC<SessionResultItemProps> = ({ session, title, branch, projectLabel, onSelect }) => {
   const { t } = useI18n();
   const statusType = useResolvedSessionStatusType(session.id);
   const isRunning = statusType === 'busy' || statusType === 'retry';
@@ -92,16 +138,19 @@ const SessionResultItem: React.FC<SessionResultItemProps> = ({ session, title, b
       {isRunning ? (
         <SessionRunningIndicator
           label={t('sessions.sidebar.session.status.active')}
-          className="mr-2 size-4"
+          className="me-2 size-4"
         />
       ) : (
-        <Icon name="chat-ai-3" className="mr-2 h-4 w-4" />
+        <Icon name="chat-ai-3" className="me-2 h-4 w-4" />
       )}
-      <span className="truncate">{title}</span>
+      <span dir="auto" className="min-w-0 flex-1 truncate oc-ui-start-align">{title}</span>
+      {projectLabel ? (
+        <span className="max-w-[180px] shrink-0 truncate text-muted-foreground typography-meta">{projectLabel}</span>
+      ) : null}
       {branch ? (
-        <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground typography-meta">
+        <span className="inline-flex max-w-[160px] shrink-0 items-center gap-1 text-muted-foreground typography-meta">
           <Icon name="git-branch" className="h-3 w-3" />
-          <span className="truncate max-w-[160px]">{branch}</span>
+          <span className="truncate">{branch}</span>
         </span>
       ) : null}
     </CommandItem>
@@ -133,7 +182,6 @@ export const CommandPalette: React.FC = () => {
   const openContextSurface = useUIStore((s) => s.openContextSurface);
   const openContextFile = useUIStore((s) => s.openContextFile);
   const shortcutOverrides = useUIStore((s) => s.shortcutOverrides);
-  const openMultiRunLauncher = useUIStore((s) => s.openMultiRunLauncher);
   const setArchivePageOpen = useUIStore((s) => s.setArchivePageOpen);
   const setProjectContextTab = useUIStore((s) => s.setProjectContextTab);
 
@@ -162,6 +210,9 @@ export const CommandPalette: React.FC = () => {
   const { files: filesApi, git: gitApi } = useRuntimeAPIs();
   const ensureGitStatus = useGitStore((s) => s.ensureStatus);
   const { isMobile } = useDeviceInfo();
+  const projectActions = useProjectActions();
+  // Run or Stop must match what the action is doing now.
+  useObserveProjectActionRuns(isCommandPaletteOpen);
 
   const currentRoot = React.useMemo(
     () => (effectiveDirectory ? normalizePath(effectiveDirectory) : null),
@@ -172,11 +223,18 @@ export const CommandPalette: React.FC = () => {
   const debouncedQuery = useDebouncedValue(query, 200);
   const trimmedQuery = debouncedQuery.trim();
   const liveTrimmed = query.trim();
+  // Messages mode: the palette lists only message hits, with filters.
+  const [messagesMode, setMessagesMode] = React.useState(false);
+  const [messageScope, setMessageScope] = React.useState<MessageScope>('all');
+  const [messageAuthor, setMessageAuthor] = React.useState<MessageAuthor>('any');
 
   // Clear query on open (not close) so content stays visible through the
   // close animation instead of emptying mid-flight.
   React.useEffect(() => {
-    if (isCommandPaletteOpen) setQuery('');
+    if (isCommandPaletteOpen) {
+      setQuery('');
+      setMessagesMode(false);
+    }
   }, [isCommandPaletteOpen]);
 
   // Lazy-load git status for every session directory we plan to display so that
@@ -214,7 +272,7 @@ export const CommandPalette: React.FC = () => {
       {
         id: 'new-session',
         title: t('commandPalette.item.newSession'),
-        icon: <Icon name="add" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="add" className="me-2 h-4 w-4" />,
         shortcutId: 'new_chat',
         searchText: t('commandPalette.item.newSession'),
         onSelect: run(() => {
@@ -224,18 +282,27 @@ export const CommandPalette: React.FC = () => {
       },
       {
         id: 'new-worktree',
-        title: t('commandPalette.item.newWorktreeDraft'),
-        icon: <Icon name="git-branch" className="mr-2 h-4 w-4" />,
+        title: t('commandPalette.item.quickWorktree'),
+        icon: <Icon name="flashlight" className="me-2 h-4 w-4" />,
         shortcutId: 'new_chat_worktree',
-        searchText: t('commandPalette.item.newWorktreeDraft'),
+        searchText: t('commandPalette.item.quickWorktree'),
         onSelect: run(() => {
           void createWorktreeSession();
         }),
       },
       {
+        id: 'new-worktree-dialog',
+        title: t('commandPalette.item.newWorktreeDialog'),
+        icon: <Icon name="git-branch" className="me-2 h-4 w-4" />,
+        searchText: t('commandPalette.item.newWorktreeDialog'),
+        onSelect: run(() => {
+          useUIStore.getState().setNewWorktreeDialogOpen(true);
+        }),
+      },
+      {
         id: 'add-project',
         title: t('commandPalette.item.addProject'),
-        icon: <Icon name="folder-add" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="folder-add" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.addProject'),
         onSelect: run(() => {
           sessionEvents.requestDirectoryDialog();
@@ -246,7 +313,7 @@ export const CommandPalette: React.FC = () => {
         title: isMobile
           ? t('commandPalette.item.showSessionSwitcher')
           : t('commandPalette.item.toggleSidebar'),
-        icon: <Icon name="layout-left" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="layout-left" className="me-2 h-4 w-4" />,
         shortcutId: 'toggle_sidebar',
         searchText: isMobile
           ? t('commandPalette.item.showSessionSwitcher')
@@ -263,7 +330,7 @@ export const CommandPalette: React.FC = () => {
       {
         id: 'toggle-terminal',
         title: t('commandPalette.item.toggleTerminal'),
-        icon: <Icon name="terminal-box" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="terminal-box" className="me-2 h-4 w-4" />,
         shortcutId: 'toggle_terminal',
         searchText: t('commandPalette.item.toggleTerminal'),
         onSelect: run(() => {
@@ -273,7 +340,7 @@ export const CommandPalette: React.FC = () => {
       {
         id: 'context-usage',
         title: t('commandPalette.item.showContextUsage'),
-        icon: <Icon name="pie-chart" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="pie-chart" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.showContextUsage'),
         onSelect: run(() => {
           if (currentDirectory) openContextOverview(currentDirectory);
@@ -283,7 +350,7 @@ export const CommandPalette: React.FC = () => {
         id: 'cycle-theme',
         secondary: true,
         title: t('commandPalette.item.cycleTheme'),
-        icon: <Icon name="palette" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="palette" className="me-2 h-4 w-4" />,
         shortcutId: 'cycle_theme',
         searchText: t('commandPalette.item.cycleTheme'),
         onSelect: run(() => {
@@ -294,7 +361,7 @@ export const CommandPalette: React.FC = () => {
         id: 'open-status',
         secondary: true,
         title: t('commandPalette.item.showOpenCodeStatus'),
-        icon: <Icon name="pulse" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="pulse" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.showOpenCodeStatus'),
         onSelect: run(() => {
           void showOpenCodeStatus();
@@ -303,18 +370,39 @@ export const CommandPalette: React.FC = () => {
       {
         id: 'open-settings',
         title: t('commandPalette.item.openSettings'),
-        icon: <Icon name="settings-3" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="settings-3" className="me-2 h-4 w-4" />,
         shortcutId: 'open_settings',
         searchText: t('commandPalette.item.openSettings'),
         onSelect: run(() => setSettingsDialogOpen(true)),
       },
     ];
+    // Reloading the window restarts only the interface: sessions and the
+    // agents running in them live in the server and continue.
+    if (!isVSCodeRuntime()) {
+      list.push({
+        id: 'open-source-board',
+        secondary: true,
+        title: t('sourceBoard.title'),
+        icon: <Icon name="todo" className="me-2 h-4 w-4" />,
+        shortcutId: 'toggle_source_board',
+        searchText: t('sourceBoard.title'),
+        onSelect: run(() => useUIStore.getState().setSourceBoardOpen(true)),
+      });
+      list.push({
+        id: 'reload-ui',
+        secondary: true,
+        title: t('commandPalette.item.reloadUi'),
+        icon: <Icon name="refresh" className="me-2 h-4 w-4" />,
+        searchText: t('commandPalette.item.reloadUi'),
+        onSelect: run(() => window.location.reload()),
+      });
+    }
     list.push(
       {
         id: 'pin-session',
         secondary: true,
         title: t('commandPalette.item.pinSession'),
-        icon: <Icon name="pushpin" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="pushpin" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.pinSession'),
         onSelect: run(() => {
           if (currentSessionId && currentDirectory) {
@@ -326,7 +414,7 @@ export const CommandPalette: React.FC = () => {
         id: 'copy-session-id',
         secondary: true,
         title: t('commandPalette.item.copySessionId'),
-        icon: <Icon name="file-copy" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="file-copy" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.copySessionId'),
         onSelect: run(() => {
           if (!currentSessionId) return;
@@ -345,18 +433,18 @@ export const CommandPalette: React.FC = () => {
         id: 'open-multi-run',
         secondary: true,
         title: t('commandPalette.item.openMultiRun'),
-        icon: <Icon name="checkbox-multiple" className="mr-2 h-4 w-4" />,
+        icon: <ArrowsMerge className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.openMultiRun'),
         onSelect: run(() => {
           setSessionSwitcherOpen(false);
-          openMultiRunLauncher();
+          openParallelComposer();
         }),
       },
       {
         id: 'open-archive',
         secondary: true,
         title: t('commandPalette.item.openArchive'),
-        icon: <Icon name="archive" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="archive" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.openArchive'),
         onSelect: run(() => {
           setSessionSwitcherOpen(false);
@@ -367,7 +455,7 @@ export const CommandPalette: React.FC = () => {
         id: 'open-notes',
         secondary: true,
         title: t('commandPalette.item.openNotes'),
-        icon: <Icon name="sticky-note" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="sticky-note" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.openNotes'),
         onSelect: run(() => {
           if (currentDirectory) {
@@ -380,7 +468,7 @@ export const CommandPalette: React.FC = () => {
         id: 'open-todos',
         secondary: true,
         title: t('commandPalette.item.openTodos'),
-        icon: <Icon name="checkbox-circle" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="checkbox-circle" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.openTodos'),
         onSelect: run(() => {
           if (currentDirectory) {
@@ -395,7 +483,7 @@ export const CommandPalette: React.FC = () => {
         id: 'restart-opencode',
         secondary: true,
         title: t('commandPalette.item.restartOpenCode'),
-        icon: <Icon name="restart" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="restart" className="me-2 h-4 w-4" />,
         searchText: t('commandPalette.item.restartOpenCode'),
         onSelect: run(() => {
           void restartOpenCodeWithFeedback(t);
@@ -406,23 +494,58 @@ export const CommandPalette: React.FC = () => {
       id: 'toggle-memory-debug',
       secondary: true,
       title: t('commandPalette.item.toggleMemoryDebug'),
-      icon: <Icon name="bug" className="mr-2 h-4 w-4" />,
+      icon: <Icon name="bug" className="me-2 h-4 w-4" />,
       searchText: t('commandPalette.item.toggleMemoryDebug'),
       onSelect: run(() => {
         window.dispatchEvent(new CustomEvent('openchamber:memory-debug-toggle'));
       }),
     });
+    // Search-only: typing "run", "stop" or an action's name finds them.
+    if (projectActions?.available) {
+      list.push({
+        id: 'open-project-actions',
+        secondary: true,
+        title: t('commandPalette.item.openProjectActions'),
+        icon: <Icon name="play" className="me-2 h-4 w-4" />,
+        shortcutId: 'open_project_actions',
+        searchText: t('commandPalette.item.openProjectActions'),
+        onSelect: run(() => useUIStore.getState().setProjectActionsDialogOpen(true)),
+      });
+      for (const action of projectActions.actions) {
+        const actionRun = projectActions.runOf(action);
+        if (actionRun?.status === 'stopping') continue;
+        const title = actionRun
+          ? t('commandPalette.item.stopProjectAction', { name: action.name })
+          : t('commandPalette.item.runProjectAction', { name: action.name });
+        list.push({
+          id: `project-action:${action.id}`,
+          secondary: true,
+          title,
+          icon: <Icon name={actionRun ? 'stop' : resolveProjectActionIconName(action)} className="me-2 h-4 w-4" />,
+          searchText: title,
+          onSelect: run(() => {
+            if (actionRun) {
+              projectActions.stop(action);
+              return;
+            }
+            projectActions.select(action);
+            projectActions.run(action);
+          }),
+        });
+      }
+    }
     if (canUseElectronDesktopIPC()) {
       list.splice(1, 0, {
         id: 'new-mini-chat',
         title: t('commandPalette.item.newMiniChat'),
-        icon: <Icon name="window" className="mr-2 h-4 w-4" />,
+        icon: <Icon name="window" className="me-2 h-4 w-4" />,
         shortcutId: 'new_mini_chat',
         searchText: t('commandPalette.item.newMiniChat'),
         onSelect: run(() => {
           void invokeDesktop('desktop_open_draft_mini_chat_window', {
             directory: normalizePath(currentDirectory || activeProject?.path || ''),
             projectId: activeProject?.id ?? null,
+            ...getMiniChatRuntimeArgs(),
           }).catch((error) => {
             console.warn('[command-palette] failed to open draft mini chat window', error);
           });
@@ -445,19 +568,21 @@ export const CommandPalette: React.FC = () => {
     activeProject?.path,
     currentSessionId,
     togglePinnedSession,
-    openMultiRunLauncher,
     setArchivePageOpen,
     setProjectContextTab,
+    projectActions,
   ]);
 
   // ---------------------------------------------------------------------------
   // Settings sub-pages (only show when there's a query)
   // ---------------------------------------------------------------------------
   const routingAvailable = useUIStore((state) => state.routingFeatureAvailable);
+  const enterpriseMode = useEnterpriseMode();
+  const jevBlockedByEnterprise = useJevBlockedByEnterprise();
   const settingsRuntimeCtx = React.useMemo<SettingsRuntimeContext>(() => {
     const isDesktop = isDesktopShell();
-    return { isVSCode: isVSCodeRuntime(), isWeb: !isDesktop && isWebRuntime(), isDesktop, isMobile, isHostLocalOrigin: isHostLocalOriginActive(), routingAvailable };
-  }, [isMobile, routingAvailable]);
+    return { isVSCode: isVSCodeRuntime(), isWeb: !isDesktop && isWebRuntime(), isDesktop, isMobile, isHostLocalOrigin: isHostLocalOriginActive(), routingAvailable, enterpriseMode, jevBlockedByEnterprise };
+  }, [isMobile, routingAvailable, enterpriseMode, jevBlockedByEnterprise]);
 
   const settingsEntries = React.useMemo<CommandEntry[]>(() => {
     return SETTINGS_PAGE_METADATA
@@ -470,8 +595,8 @@ export const CommandPalette: React.FC = () => {
           id: `settings:${page.slug}`,
           title: page.title,
           icon: page.slug === 'mcp'
-            ? <McpIcon className="mr-2 h-4 w-4" />
-            : <Icon name={iconName} className="mr-2 h-4 w-4" />,
+            ? <McpIcon className="me-2 h-4 w-4" />
+            : <Icon name={iconName} className="me-2 h-4 w-4" />,
           searchText: `${page.title} ${page.group} ${keywords}`,
           onSelect: run(() => {
             setSettingsPage(page.slug);
@@ -485,8 +610,9 @@ export const CommandPalette: React.FC = () => {
   // Sessions
   // ---------------------------------------------------------------------------
   const orderedActiveSessions = React.useMemo(() => {
-    // btw forks stay hidden until promoted to a full session
-    const visibleSessions = activeSessions.filter((session) => !isBtwSession(session));
+    // btw forks stay hidden until promoted to a full session; subagent
+    // sessions are reached through their parent, not listed on their own.
+    const visibleSessions = activeSessions.filter((session) => !isBtwSession(session) && !session.parentID);
     return orderSessionsByLifecycleScopes(visibleSessions, pinnedSessionIds, sessionOrderRanks);
   }, [activeSessions, pinnedSessionIds, sessionOrderRanks]);
 
@@ -511,6 +637,48 @@ export const CommandPalette: React.FC = () => {
 
   const fileSearchKey = buildCommandPaletteFileSearchKey(currentRoot, trimmedQuery);
 
+  // Other worktrees of the repository that live inside the project folder
+  // (for example agent worktrees under .claude/worktrees) hold copies of the
+  // same files. Opening one of those copies from here is almost always a
+  // miss, so their files are left out.
+  const availableWorktrees = useSessionUIStore((s) => s.availableWorktrees);
+  const nestedWorktreePrefixes = React.useMemo(() => {
+    if (!currentRoot) return [];
+    return availableWorktrees
+      .map((worktree) => normalizePath(worktree.path))
+      .filter((path) => path.startsWith(`${currentRoot}/`))
+      .map((path) => `${path}/`);
+  }, [availableWorktrees, currentRoot]);
+  const nestedWorktreePrefixesRef = React.useRef(nestedWorktreePrefixes);
+  nestedWorktreePrefixesRef.current = nestedWorktreePrefixes;
+
+  // ---------------------------------------------------------------------------
+  // Message search (server index, opt-in; VS Code has no OpenChamber server)
+  // ---------------------------------------------------------------------------
+  const messageSearchEnabled = useUIStore((state) => state.messageSearchEnabled);
+  const messageSearchSupported = messageSearchEnabled && !isVSCodeRuntime();
+  // Reasoning hits only while it is indexed and shown in the chat: a hit in
+  // hidden reasoning would lead nowhere visible.
+  const reasoningIndexed = useUIStore((state) => state.messageSearchReasoningEnabled);
+  const showReasoningTraces = useUIStore((state) => state.showReasoningTraces);
+  const reasoningSearchable = reasoningIndexed && showReasoningTraces;
+  const effectiveAuthor: MessageAuthor = messageAuthor === 'reasoning' && !reasoningSearchable ? 'any' : messageAuthor;
+  // "This project" covers the project folder and its worktrees, wherever they live.
+  const projectDirectories = React.useMemo(() => {
+    if (!activeProject?.path) return [];
+    return [...new Set([normalizePath(activeProject.path), ...availableWorktrees.map((worktree) => normalizePath(worktree.path))])];
+  }, [activeProject?.path, availableWorktrees]);
+  const projectScoped = messagesMode && messageScope === 'project' && projectDirectories.length > 0;
+  const { state: messageSearch, loadMore: loadMoreMessages } = useMessageSearch({
+    query: trimmedQuery,
+    enabled: isCommandPaletteOpen && messageSearchSupported,
+    limit: messagesMode ? MESSAGE_PAGE_SIZE : MESSAGE_PREVIEW_LIMIT,
+    directories: projectScoped ? projectDirectories : undefined,
+    role: messagesMode && effectiveAuthor !== 'any' ? effectiveAuthor : null,
+    includeReasoning: showReasoningTraces,
+  });
+  const messageHits = 'hits' in messageSearch ? messageSearch.hits : [];
+
   React.useEffect(() => {
     if (!isCommandPaletteOpen) {
       setFileResults([]);
@@ -528,15 +696,21 @@ export const CommandPalette: React.FC = () => {
       return;
     }
     let cancelled = false;
-    void searchFiles(currentRoot, trimmedQuery, 40, { type: 'file' })
+    const excludedPrefixes = nestedWorktreePrefixesRef.current;
+    // Worktree copies take result slots before they are dropped, so ask for
+    // more when there are any.
+    const limit = excludedPrefixes.length > 0 ? 100 : 40;
+    void searchFiles(currentRoot, trimmedQuery, limit, { type: 'file' })
       .then((results) => {
         if (cancelled) return;
         setFileResults(
-          results.map((file) => ({
-            path: normalizePath(file.path),
-            name: file.name,
-            relativePath: file.relativePath,
-          })),
+          results
+            .map((file) => ({
+              path: normalizePath(file.path),
+              name: file.name,
+              relativePath: file.relativePath,
+            }))
+            .filter((file) => !excludedPrefixes.some((prefix) => file.path.startsWith(prefix))),
         );
         setFileResultsKey(fileSearchKey);
       })
@@ -560,7 +734,8 @@ export const CommandPalette: React.FC = () => {
     if (!hasQuery) {
       return commands.filter((item) => !item.secondary).map((item) => ({ item, score: 0 }));
     }
-    return scoreByFuzzyQuery(commands, liveTrimmed, (c) => c.searchText, {
+    const candidates = commands.filter((item) => matchesWordStarts(item.searchText, liveTrimmed));
+    return scoreByFuzzyQuery(candidates, liveTrimmed, (c) => c.searchText, {
       limit: 7,
       noFuzzy: true,
     });
@@ -568,7 +743,8 @@ export const CommandPalette: React.FC = () => {
 
   const scoredSettings = React.useMemo(() => {
     if (!hasQuery) return [];
-    return scoreByFuzzyQuery(settingsEntries, liveTrimmed, (c) => c.searchText, {
+    const candidates = settingsEntries.filter((item) => matchesWordStarts(item.searchText, liveTrimmed));
+    return scoreByFuzzyQuery(candidates, liveTrimmed, (c) => c.searchText, {
       limit: 7,
       noFuzzy: true,
     });
@@ -599,11 +775,42 @@ export const CommandPalette: React.FC = () => {
       displayName: project.label || project.path.split('/').pop() || project.path,
       searchText: `${project.label || ''} ${project.path}`,
     }));
-    return scoreByFuzzyQuery(projectEntries, liveTrimmed, (p) => p.searchText, {
+    const candidates = projectEntries.filter((project) => matchesWordStarts(project.searchText, liveTrimmed));
+    return scoreByFuzzyQuery(candidates, liveTrimmed, (p) => p.searchText, {
       limit: 7,
       threshold: 0.4,
     });
   }, [projects, liveTrimmed, hasQuery]);
+
+  // With an empty query the files already open in the editor come first:
+  // switching between them is the most common reason to open the palette.
+  const contextTabs = useUIStore((s) => (isCommandPaletteOpen && currentRoot ? s.contextPanelByDirectory[currentRoot]?.tabs : undefined));
+  const openFiles = React.useMemo<FileHit[]>(() => {
+    if (!currentRoot || !contextTabs) return [];
+    return contextTabs
+      .filter((tab) => tab.mode === 'file' && tab.targetPath)
+      .sort((a, b) => b.touchedAt - a.touchedAt)
+      .slice(0, 5)
+      .flatMap((tab) => {
+        const path = normalizePath(tab.targetPath ?? '');
+        if (!path) return [];
+        const relativePath = path.startsWith(`${currentRoot}/`) ? path.slice(currentRoot.length + 1) : path;
+        return [{ path, name: splitRelativePath(relativePath).name, relativePath }];
+      });
+  }, [contextTabs, currentRoot]);
+
+  const projectLabelForDirectory = React.useCallback((directory: string | null): string | null => {
+    if (!directory) return null;
+    const normalized = normalizePath(directory);
+    let best: { label: string; length: number } | null = null;
+    for (const project of projects) {
+      const root = normalizePath(project.path);
+      if (normalized !== root && !normalized.startsWith(`${root}/`)) continue;
+      if (best && best.length >= root.length) continue;
+      best = { label: project.label || root.split('/').pop() || root, length: root.length };
+    }
+    return best?.label ?? null;
+  }, [projects]);
 
   const visibleCommands = scoredCommands.map((x) => x.item);
   const visibleSettings = scoredSettings.map((x) => x.item);
@@ -611,8 +818,10 @@ export const CommandPalette: React.FC = () => {
   const visibleFiles = hasQuery ? scoredFiles.map((x) => x.item) : [];
   const visibleProjects = hasQuery ? scoredProjects.map((x) => x.item) : [];
 
-  const groupOrder = React.useMemo<('commands' | 'settings' | 'sessions' | 'files' | 'projects')[]>(() => {
-    if (!hasQuery) return ['commands', 'sessions'];
+  const visibleOpenFiles = hasQuery ? [] : openFiles;
+
+  const groupOrder = React.useMemo<('openFiles' | 'commands' | 'settings' | 'sessions' | 'files' | 'projects' | 'messages')[]>(() => {
+    if (!hasQuery) return ['openFiles', 'sessions', 'commands'];
     const best = (arr: { score: number }[]): number => (arr.length ? arr[0].score : Infinity);
     const groups: { key: 'commands' | 'settings' | 'sessions' | 'files' | 'projects'; score: number }[] = [
       { key: 'commands', score: best(scoredCommands) },
@@ -622,8 +831,19 @@ export const CommandPalette: React.FC = () => {
       { key: 'projects', score: best(scoredProjects) },
     ];
     groups.sort((a, b) => a.score - b.score);
-    return groups.map((g) => g.key);
+    // Text inside conversations answers after names do: a session or file
+    // called what you typed is the likelier target.
+    return [...groups.map((g) => g.key), 'messages'];
   }, [hasQuery, scoredCommands, scoredSettings, scoredSessions, scoredFiles, scoredProjects]);
+
+  const handleOpenMessage = React.useCallback(
+    (hit: MessageSearchHit) => {
+      close();
+      requestReasoningReveal(hit.role === 'reasoning' ? hit.id : null);
+      void openSessionLink(hit.sessionId, hit.id);
+    },
+    [close],
+  );
 
   const handleOpenSession = React.useCallback(
     (session: Session) => {
@@ -661,33 +881,136 @@ export const CommandPalette: React.FC = () => {
     [shortcutOverrides],
   );
 
+  const renderFileItem = (file: FileHit, keyPrefix: string) => {
+    const { name, directory } = splitRelativePath(file.relativePath || file.name);
+    return (
+      <CommandItem
+        key={`${keyPrefix}:${file.path}`}
+        value={`${keyPrefix}:${file.path}`}
+        onSelect={() => {
+          void handleOpenFile(file.path);
+        }}
+      >
+        <FileTypeIcon filePath={file.path} className="me-2 size-4 shrink-0" />
+        <span className="shrink-0 truncate" aria-label={file.relativePath}>{name}</span>
+        {directory ? <LeadingTruncated text={directory} className="flex-1" /> : null}
+      </CommandItem>
+    );
+  };
+
   return (
-    <Dialog open={isCommandPaletteOpen} onOpenChange={setCommandPaletteOpen}>
+    <Dialog
+      open={isCommandPaletteOpen}
+      onOpenChange={(nextOpen, details) => {
+        // Esc leaves messages mode first; a second Esc closes the palette.
+        if (!nextOpen && messagesMode && details.reason === 'escape-key') {
+          details.cancel();
+          setMessagesMode(false);
+          return;
+        }
+        setCommandPaletteOpen(nextOpen);
+      }}
+    >
       <DialogHeader className="sr-only">
         <DialogTitle>{t('commandPalette.title')}</DialogTitle>
         <DialogDescription>{t('commandPalette.description')}</DialogDescription>
       </DialogHeader>
-      <DialogContent className="overflow-hidden p-0" showCloseButton>
+      {/* Anchored near the top with a fixed height, so typing never moves the
+          input: only the list below it changes. */}
+      <DialogContent
+        className="gap-0 overflow-hidden p-0 max-w-[min(720px,calc(100vw-2rem))]"
+        layerClassName="items-start pt-[12vh]"
+        showCloseButton={false}
+      >
         <Command
           shouldFilter={false}
-          className="[&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:h-4 [&_[cmdk-input-wrapper]_svg]:w-4 [&_[cmdk-input]]:h-8 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-1.5 [&_[cmdk-item]_svg]:h-4 [&_[cmdk-item]_svg]:w-4 [&_[cmdk-item]]:typography-meta"
+          className="[&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:!text-[11px] [&_[cmdk-group-heading]]:!leading-4 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-4 [&_[cmdk-input-wrapper]_svg]:w-4 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-1.5 [&_[cmdk-item]_svg]:h-4 [&_[cmdk-item]_svg]:w-4 [&_[cmdk-item]]:typography-meta"
         >
           <CommandInput
             value={query}
             onValueChange={setQuery}
-            placeholder={t('commandPalette.input.placeholder')}
+            placeholder={messagesMode ? t('commandPalette.messages.placeholder') : t('commandPalette.input.placeholder')}
+            onKeyDown={(event) => {
+              if (messagesMode && event.key === 'Backspace' && query.length === 0) {
+                event.preventDefault();
+                setMessagesMode(false);
+              }
+            }}
           />
+          {messagesMode ? (
+            <MessageSearchFilters
+              scope={messageScope}
+              onScopeChange={setMessageScope}
+              projectScopeAvailable={projectDirectories.length > 0}
+              author={effectiveAuthor}
+              onAuthorChange={setMessageAuthor}
+              reasoningAvailable={reasoningSearchable}
+              onBack={() => setMessagesMode(false)}
+            />
+          ) : null}
+          <div className={cn('min-h-0', messagesMode ? 'h-[min(403px,calc(60vh-37px))]' : 'h-[min(440px,60vh)]')}>
           <CommandList>
+            {messagesMode ? (
+              <>
+                {messageHits.map((hit) => (
+                  <MessageHitItem key={`${hit.role}:${hit.id}`} hit={hit} projectLabel={projectLabelForDirectory(hit.directory)} onSelect={handleOpenMessage} />
+                ))}
+                {messageSearch.status === 'ready' && messageSearch.next ? (
+                  <CommandItem value="message:load-more" onSelect={loadMoreMessages} disabled={messageSearch.loadingMore}>
+                    <Icon name="more" className="me-2 h-4 w-4" />
+                    <span className="truncate text-muted-foreground">{t('commandPalette.messages.loadMore')}</span>
+                  </CommandItem>
+                ) : null}
+                <div className="px-4 py-2 typography-meta text-muted-foreground" role="status">
+                  {messageSearch.status === 'idle' || messageSearch.status === 'too-short'
+                    ? t('commandPalette.messages.tooShort')
+                    : messageSearch.status === 'loading' && messageHits.length === 0
+                      ? t('commandPalette.messages.searching')
+                      : messageSearch.status === 'error'
+                        ? t('commandPalette.messages.error')
+                        : messageSearch.status === 'unavailable'
+                          ? t('commandPalette.messages.unavailable')
+                          : messageSearch.status === 'ready' && messageHits.length === 0
+                            ? t('commandPalette.messages.empty')
+                            : null}
+                  {messageSearch.status === 'ready' && messageSearch.index?.backfill.state === 'running'
+                    ? ` ${t('commandPalette.messages.indexing', { done: messageSearch.index.backfill.done, total: messageSearch.index.backfill.total })}`
+                    : null}
+                </div>
+              </>
+            ) : (
+            <>
             <CommandEmpty>{t('commandPalette.empty.noResults')}</CommandEmpty>
 
             {groupOrder.map((groupKey) => {
+              if (groupKey === 'messages') {
+                if (!hasQuery || messageHits.length === 0) return null;
+                return (
+                  <CommandGroup key="messages" heading={t('commandPalette.group.messages')}>
+                    {messageHits.map((hit) => (
+                      <MessageHitItem key={`${hit.role}:${hit.id}`} hit={hit} projectLabel={projectLabelForDirectory(hit.directory)} onSelect={handleOpenMessage} />
+                    ))}
+                    <CommandItem value="message:show-all" onSelect={() => setMessagesMode(true)}>
+                      <Icon name="search" className="me-2 h-4 w-4" />
+                      <span className="truncate text-muted-foreground">{t('commandPalette.messages.showAll')}</span>
+                    </CommandItem>
+                  </CommandGroup>
+                );
+              }
+              if (groupKey === 'openFiles' && visibleOpenFiles.length > 0) {
+                return (
+                  <CommandGroup key="openFiles" heading={t('commandPalette.group.openFiles')}>
+                    {visibleOpenFiles.map((file) => renderFileItem(file, 'open-file'))}
+                  </CommandGroup>
+                );
+              }
               if (groupKey === 'commands' && visibleCommands.length > 0) {
                 return (
-                  <CommandGroup key="commands">
+                  <CommandGroup key="commands" heading={t('commandPalette.group.commands')}>
                     {visibleCommands.map((cmd) => (
                       <CommandItem key={cmd.id} value={cmd.id} onSelect={cmd.onSelect}>
                         {cmd.icon}
-                        <span>{cmd.title}</span>
+                        <span className="truncate">{cmd.title}</span>
                         {cmd.shortcutId ? (
                           <CommandShortcut>{shortcut(cmd.shortcutId)}</CommandShortcut>
                         ) : null}
@@ -698,11 +1021,11 @@ export const CommandPalette: React.FC = () => {
               }
               if (groupKey === 'settings' && visibleSettings.length > 0) {
                 return (
-                  <CommandGroup key="settings">
+                  <CommandGroup key="settings" heading={t('commandPalette.group.settings')}>
                     {visibleSettings.map((cmd) => (
                       <CommandItem key={cmd.id} value={cmd.id} onSelect={cmd.onSelect}>
                         {cmd.icon}
-                        <span>{cmd.title}</span>
+                        <span className="truncate">{cmd.title}</span>
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -710,17 +1033,19 @@ export const CommandPalette: React.FC = () => {
               }
               if (groupKey === 'sessions' && visibleSessions.length > 0) {
                 return (
-                  <CommandGroup key="sessions">
+                  <CommandGroup key="sessions" heading={t('commandPalette.group.sessions')}>
                     {visibleSessions.map((session) => {
                       const title = session.title || t('commandPalette.session.untitled');
                       const dir = resolveGlobalSessionDirectory(session);
                       const branch = branchForSession(session.id, dir);
+                      const projectLabel = projectLabelForDirectory(dir);
                       return (
                         <SessionResultItem
                           key={session.id}
                           session={session}
                           title={title}
                           branch={branch}
+                          projectLabel={projectLabel}
                           onSelect={handleOpenSession}
                         />
                       );
@@ -730,48 +1055,25 @@ export const CommandPalette: React.FC = () => {
               }
               if (groupKey === 'files' && visibleFiles.length > 0) {
                 return (
-                  <CommandGroup key="files">
-                    {visibleFiles.map((file) => {
-                      const display = truncatePathMiddle(file.relativePath || file.name, {
-                        maxLength: 80,
-                      });
-                      return (
-                        <CommandItem
-                          key={`file:${file.path}`}
-                          value={`file:${file.path}`}
-                          onSelect={() => {
-                            void handleOpenFile(file.path);
-                          }}
-                        >
-                          <FileTypeIcon filePath={file.path} className="mr-2 size-4 shrink-0" />
-                          <span className="truncate" aria-label={file.relativePath}>
-                            {display}
-                          </span>
-                        </CommandItem>
-                      );
-                    })}
+                  <CommandGroup key="files" heading={t('commandPalette.group.files')}>
+                    {visibleFiles.map((file) => renderFileItem(file, 'file'))}
                   </CommandGroup>
                 );
               }
               if (groupKey === 'projects' && visibleProjects.length > 0) {
                 return (
-                  <CommandGroup key="projects">
-                    {visibleProjects.map((project) => {
-                      const displayName = project.displayName;
-                      return (
-                        <CommandItem
-                          key={`project:${project.id}`}
-                          value={`project:${project.id}`}
-                          onSelect={() => handleOpenProject(project.id, project.path)}
-                        >
-                          <Icon name="folder" className="mr-2 h-4 w-4" />
-                          <span className="truncate">{displayName}</span>
-                          <span className="ml-auto inline-flex items-center text-muted-foreground typography-meta truncate max-w-[160px]">
-                            {project.path}
-                          </span>
-                        </CommandItem>
-                      );
-                    })}
+                  <CommandGroup key="projects" heading={t('commandPalette.group.projects')}>
+                    {visibleProjects.map((project) => (
+                      <CommandItem
+                        key={`project:${project.id}`}
+                        value={`project:${project.id}`}
+                        onSelect={() => handleOpenProject(project.id, project.path)}
+                      >
+                        <Icon name="folder" className="me-2 h-4 w-4" />
+                        <span className="shrink-0 truncate">{project.displayName}</span>
+                        <LeadingTruncated text={project.path} className="flex-1" />
+                      </CommandItem>
+                    ))}
                   </CommandGroup>
                 );
               }
@@ -779,11 +1081,21 @@ export const CommandPalette: React.FC = () => {
             })}
 
             {isFileSearchStale ? (
-              <div className="px-3 py-2 typography-meta text-muted-foreground">
+              <div className="px-4 py-2 typography-meta text-muted-foreground">
                 {t('commandPalette.empty.searchingFiles')}
               </div>
             ) : null}
+            </>
+            )}
           </CommandList>
+          </div>
+          {isMobile ? null : (
+          <div className="flex items-center gap-4 border-t border-border px-3 py-1.5 typography-micro text-muted-foreground" aria-hidden="true">
+            <span><kbd className="font-sans">↑↓</kbd> {t('commandPalette.footer.navigate')}</span>
+            <span><kbd className="font-sans">↵</kbd> {t('commandPalette.footer.open')}</span>
+            <span><kbd className="font-sans">esc</kbd> {t('commandPalette.footer.close')}</span>
+          </div>
+          )}
         </Command>
       </DialogContent>
     </Dialog>

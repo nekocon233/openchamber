@@ -23,6 +23,11 @@ import { Icon } from "@/components/icon/Icon";
 import { useI18n } from '@/lib/i18n';
 import { toast } from 'sonner';
 
+// Matches the work-status MCP section: a status read boots the directory's
+// whole stdio fleet, so gated surfaces reuse a fresh one inside this window
+// instead of issuing their own.
+const MCP_STATUS_MAX_AGE_MS = 60_000;
+
 const statusTooltip = (
   server: McpServerStatus | undefined,
   t: (key: 'mcpDropdown.status.unknown' | 'mcpDropdown.status.connected' | 'mcpDropdown.status.failed' | 'mcpDropdown.status.unknownError' | 'mcpDropdown.status.needsAuth', params?: { error?: string }) => string
@@ -73,6 +78,7 @@ export const McpDropdownContent: React.FC<McpDropdownContentProps> = ({ active, 
   const directory = currentDirectory ?? null;
   const status = useMcpStore((state) => state.getStatusForDirectory(directory));
   const refresh = useMcpStore((state) => state.refresh);
+  const ensureFresh = useMcpStore((state) => state.ensureFresh);
   const connect = useMcpStore((state) => state.connect);
   const disconnect = useMcpStore((state) => state.disconnect);
   const mcpServers = useMcpConfigStore((state) => state.mcpServers);
@@ -81,20 +87,16 @@ export const McpDropdownContent: React.FC<McpDropdownContentProps> = ({ active, 
   const [busyName, setBusyName] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    void refresh({ directory, silent: true });
-  }, [refresh, directory]);
-
-  React.useEffect(() => {
     void loadMcpConfigs({ force: true });
   }, [loadMcpConfigs]);
 
   React.useEffect(() => {
     if (!active) return;
     void Promise.all([
-      refresh({ directory, silent: true }),
+      ensureFresh({ directory, silent: true, maxAgeMs: MCP_STATUS_MAX_AGE_MS }),
       loadMcpConfigs({ force: true }),
     ]);
-  }, [active, refresh, directory, loadMcpConfigs]);
+  }, [active, ensureFresh, directory, loadMcpConfigs]);
 
   const sortedNames = React.useMemo(() => {
     const names = new Set<string>(Object.keys(status));
@@ -143,10 +145,9 @@ export const McpDropdownContent: React.FC<McpDropdownContentProps> = ({ active, 
         </div>
       </div> : null}
 
-      {/* Desktop dropdown: servers grouped in one mobile-style card; the mobile
-          sheet variant keeps its own density and chrome. */}
+      {/* Desktop and mobile share the list, with different row density. */}
       <div className={cn('max-h-64 overflow-y-auto', mobileListDensity ? 'space-y-1 py-3' : 'px-3 py-2.5', listClassName)}>
-        <div className={cn(!mobileListDensity && sortedNames.length > 0 && 'rounded-xl bg-[var(--surface-muted)] p-1.5')}>
+        <div className={cn(!mobileListDensity && sortedNames.length > 0 && 'p-1.5')}>
         {sortedNames.map((serverName) => {
           const serverStatus = status[serverName];
           const tone = statusTone(serverStatus);
@@ -158,7 +159,7 @@ export const McpDropdownContent: React.FC<McpDropdownContentProps> = ({ active, 
             <div
               key={serverName}
               className={cn(
-                'flex items-center justify-between rounded-lg hover:bg-interactive-hover/50',
+                'flex items-center justify-between rounded-lg hover:bg-interactive-hover',
                 mobileListDensity ? 'gap-3 px-4 py-3' : 'gap-2 px-2.5 py-2',
               )}
             >
@@ -233,6 +234,7 @@ export const McpDropdown: React.FC<McpDropdownProps> = ({ headerIconButtonClass 
 
   const status = useMcpStore((state) => state.getStatusForDirectory(directory));
   const refresh = useMcpStore((state) => state.refresh);
+  const ensureFresh = useMcpStore((state) => state.ensureFresh);
   const connect = useMcpStore((state) => state.connect);
   const disconnect = useMcpStore((state) => state.disconnect);
   const mcpServers = useMcpConfigStore((state) => state.mcpServers);
@@ -258,20 +260,17 @@ export const McpDropdown: React.FC<McpDropdownProps> = ({ headerIconButtonClass 
 
   const [busyName, setBusyName] = React.useState<string | null>(null);
 
-  // Fetch on mount and when directory changes
-  React.useEffect(() => {
-    void refresh({ directory, silent: true });
-    void loadMcpConfigs({ force: true });
-  }, [refresh, directory, loadMcpConfigs]);
-
-  // Refresh when dropdown opens
+  // No mount-level status read: reading MCP status boots the directory's
+  // whole stdio server fleet as an OpenCode side effect, and this component
+  // can stay mounted (the VS Code header mounts it at startup). The read
+  // waits for the dropdown to open.
   React.useEffect(() => {
     if (!open) return;
     void Promise.all([
-      refresh({ directory, silent: true }),
+      ensureFresh({ directory, silent: true, maxAgeMs: MCP_STATUS_MAX_AGE_MS }),
       loadMcpConfigs({ force: true }),
     ]);
-  }, [open, refresh, directory, loadMcpConfigs]);
+  }, [open, ensureFresh, directory, loadMcpConfigs]);
 
   const health = React.useMemo(() => computeMcpHealth(status), [status]);
 
@@ -385,7 +384,7 @@ export const McpDropdown: React.FC<McpDropdownProps> = ({ headerIconButtonClass 
       {health.total > 0 && (
         <span
           className={cn(
-            'absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full',
+            'absolute top-1.5 inset-e-1.5 h-1.5 w-1.5 rounded-full',
             health.hasFailed
               ? 'bg-status-error'
               : health.hasAuthRequired

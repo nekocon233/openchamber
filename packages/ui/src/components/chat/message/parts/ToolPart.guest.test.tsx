@@ -117,7 +117,7 @@ test('a declared tool rule sets the header, icon, and table body of a matching t
   const render = async () => {
     await act(async () => {
       root.render(
-        <SyncProvider sdk={sdk} directory="">
+        <SyncProvider sdk={sdk} directory="/workspace">
           <I18nProvider>
             <ThemeSystemContext.Provider value={themeContext}>
               <ToolPart part={part} isExpanded isMobile={false} onToggle={() => {}} />

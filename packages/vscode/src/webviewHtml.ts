@@ -4,8 +4,6 @@ import { getThemeKindName } from './theme';
 import type { ConnectionStatus } from './opencode';
 import type { WorkspaceFolderCandidate } from './workspaceResolver';
 
-type PanelType = 'chat' | 'agentManager';
-
 export interface WebviewHtmlOptions {
   webview: vscode.Webview;
   extensionUri: vscode.Uri;
@@ -13,8 +11,9 @@ export interface WebviewHtmlOptions {
   workspaceFolders?: WorkspaceFolderCandidate[];
   initialStatus: ConnectionStatus;
   cliAvailable: boolean;
-  panelType?: PanelType;
   initialSessionId?: string;
+  /** A new-session editor tab that opens its draft in "Run on several models" mode. */
+  initialComposer?: 'parallel';
   viewMode?: 'sidebar' | 'editor';
   devServerUrl?: string | null;
   extensionVersion?: string;
@@ -43,6 +42,15 @@ const uniqueTokens = (values: Array<string | null | undefined>): string => {
   return Array.from(new Set(values.map(asCspToken).filter((value): value is string => Boolean(value)))).join(' ');
 };
 
+export const getCspBootstrapHtml = (): string => `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none';">
+</head>
+<body></body>
+</html>`;
+
 export function getWebviewHtml(options: WebviewHtmlOptions): string {
   const {
     webview,
@@ -51,8 +59,8 @@ export function getWebviewHtml(options: WebviewHtmlOptions): string {
     workspaceFolders = [],
     initialStatus,
     cliAvailable,
-    panelType = 'chat',
     initialSessionId,
+    initialComposer,
     viewMode = 'sidebar',
     devServerUrl,
     extensionVersion = '',
@@ -87,7 +95,7 @@ export function getWebviewHtml(options: WebviewHtmlOptions): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${styleSrc}; script-src ${scriptSrc}; connect-src ${connectSrc}; img-src ${imgSrc}; font-src ${fontSrc}; worker-src ${workerSrc};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${styleSrc}; script-src ${scriptSrc}; connect-src ${connectSrc}; img-src ${imgSrc}; media-src ${imgSrc}; font-src ${fontSrc}; worker-src ${workerSrc};">
   <style>
     html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; }
     body { 
@@ -190,9 +198,9 @@ export function getWebviewHtml(options: WebviewHtmlOptions): string {
       extensionVersion: "${extensionVersion.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}",
       platform: "${os.platform()}",
       arch: "${os.arch()}",
-      panelType: "${panelType}",
       viewMode: "${viewMode}",
       initialSessionId: ${initialSessionId ? `"${initialSessionId.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : 'null'},
+      initialComposer: ${initialComposer ? `"${initialComposer}"` : 'null'},
     };
     window.__OPENCHAMBER_HOME__ = "${workspaceFolder.replace(/\\/g, '\\\\')}";
     // VS Code's display language. The UI bundle uses it as the default locale

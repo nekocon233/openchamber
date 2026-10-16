@@ -18,14 +18,6 @@ export const recordSessionRemoval = (sessionId: string): void => {
   }
 }
 
-export const getSessionIdsRemovedSince = (baselineRevision: number): Set<string> => {
-  const removed = new Set<string>()
-  for (const [sessionId, revision] of removalRevisionBySessionId) {
-    if (revision > baselineRevision) removed.add(sessionId)
-  }
-  return removed
-}
-
 export const wasSessionRemovedSince = (sessionId: string, baselineRevision: number): boolean => (
   (removalRevisionBySessionId.get(sessionId) ?? 0) > baselineRevision
 )

@@ -1,14 +1,15 @@
 /**
  * OpenChamber deep-link vocabulary — the single source of truth for the `openchamber://`
  * URL scheme used across every native entry point: notification taps, home-screen / lock-
- * screen widgets, and (later) Live Activities. Anything that wants to drive navigation
- * builds a URL with {@link buildDeepLink} and anything that receives one parses it with
+ * screen widgets, and (later) Live Activities. Anything that receives a link parses it with
  * {@link parseDeepLink} into a typed {@link DeepLinkIntent}; the navigation layer
  * (deepLinkNavigation) is the only place that knows how to *apply* an intent.
  *
  * Keep this file pure (no React, no stores, no Capacitor) so it can be imported from any
- * context — including, eventually, a tiny encoder shared with the native widget/extension.
+ * context — including, eventually, a tiny parser shared with the native widget/extension.
  */
+
+import { isLinkIdentifier } from '@/lib/router/messageFocus';
 
 const DEEP_LINK_SCHEME = 'openchamber';
 
@@ -21,7 +22,7 @@ export type ViewTarget = 'files' | 'mcp' | 'instances' | 'update';
  * that keeps the "blocks" composable without leaking ad-hoc URL parsing into features.
  */
 export type DeepLinkIntent =
-  | { type: 'session'; sessionId: string; directory?: string }
+  | { type: 'session'; sessionId: string; directory?: string; messageId?: string }
   | { type: 'new-session'; directory?: string; projectId?: string; agent?: string; model?: string }
   | { type: 'sessions'; filter?: SessionsFilter }
   | { type: 'status' }
@@ -74,7 +75,14 @@ export function parseDeepLink(raw: string | null | undefined): DeepLinkIntent | 
       if (!sessionId) {
         return null;
       }
-      return { type: 'session', sessionId, directory: query.get('dir') ?? undefined };
+      // A message link (`?message=<id>`) also names the message to show.
+      const messageId = query.get('message')?.trim() ?? '';
+      return {
+        type: 'session',
+        sessionId,
+        directory: query.get('dir') ?? undefined,
+        ...(isLinkIdentifier(messageId) ? { messageId } : {}),
+      };
     }
 
     case 'new':
@@ -156,47 +164,4 @@ export function parseServiceWorkerNotificationClick(
   return sessionId
     ? { type: 'session', sessionId, directory: directory || undefined }
     : null;
-}
-
-/**
- * Build a canonical `openchamber://…` URL for an intent. Used by anything that needs to hand
- * a deep link to iOS — notification payloads, `widgetURL(...)`, Live Activity tap targets —
- * so every producer emits the exact shape {@link parseDeepLink} understands.
- */
-export function buildDeepLink(intent: DeepLinkIntent): string {
-  const base = `${DEEP_LINK_SCHEME}://`;
-  const withQuery = (path: string, params: Record<string, string | undefined>): string => {
-    const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      if (typeof value === 'string' && value.length > 0) {
-        search.set(key, value);
-      }
-    }
-    const query = search.toString();
-    return query ? `${base}${path}?${query}` : `${base}${path}`;
-  };
-
-  switch (intent.type) {
-    case 'session':
-      return withQuery(`session/${encodeURIComponent(intent.sessionId)}`, { dir: intent.directory });
-    case 'new-session':
-      return withQuery('new', {
-        dir: intent.directory,
-        project: intent.projectId,
-        agent: intent.agent,
-        model: intent.model,
-      });
-    case 'sessions':
-      return withQuery('sessions', { filter: intent.filter });
-    case 'status':
-      return `${base}status`;
-    case 'settings':
-      return intent.section ? `${base}settings/${encodeURIComponent(intent.section)}` : `${base}settings`;
-    case 'changes':
-      return withQuery(intent.path ? `changes/${intent.path}` : 'changes', {
-        staged: intent.staged ? 'true' : undefined,
-      });
-    case 'view':
-      return `${base}view/${intent.target}`;
-  }
 }

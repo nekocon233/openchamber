@@ -28,7 +28,6 @@ import {
   SETTINGS_PAGE_TITLE_CLASS,
   SETTINGS_SECTION_TITLE_CLASS,
   SETTINGS_FIELD_LABEL_CLASS,
-  SETTINGS_SELECT_SIZE,
   SETTINGS_NUMBER_INPUT_CLASS,
 } from '@/components/sections/shared/SettingsSection';
 import { SettingsInfoHint } from '@/components/sections/shared/SettingsInfoHint';
@@ -71,8 +70,10 @@ import {
 } from '@/lib/desktopHosts';
 import { createRelayTunnelClient } from '@/lib/relay/tunnel-client';
 import { getDesktopLanAddress, isDesktopLocalOriginActive, isDesktopShell } from '@/lib/desktop';
+import { useEnterprisePolicyStore } from '@/stores/useEnterprisePolicyStore';
 import { loadDesktopSettings } from '@/lib/persistence';
 import { getRuntimeApiBaseUrl, switchRuntimeEndpoint } from '@/lib/runtime-switch';
+import { runtimeKeyForDesktopHost } from '@/lib/desktopCurrentHost';
 import { useSshConfirmation } from './useSshConfirmation';
 
 const randomPort = (): number => {
@@ -448,6 +449,7 @@ export const RemoteInstancesPage: React.FC = () => {
 
   const selectedId = useUIStore((state) => state.settingsRemoteInstancesSelectedId);
   const setSelectedId = useUIStore((state) => state.setSettingsRemoteInstancesSelectedId);
+  const setSettingsDialogOpen = useUIStore((state) => state.setSettingsDialogOpen);
   const { confirm: confirmSsh, dialog: sshConfirmationDialog } = useSshConfirmation(selectedId);
 
   const selectedInstance = React.useMemo(() => {
@@ -507,6 +509,27 @@ export const RemoteInstancesPage: React.FC = () => {
   const [addDeviceTransport, setAddDeviceTransport] = React.useState<'local' | 'lan' | 'relay'>('relay');
   const [addDeviceFallback, setAddDeviceFallback] = React.useState(true);
   const [transportOptions, setTransportOptions] = React.useState<{ localUrl: string | null; lanUrl: string | null; relayAvailable: boolean } | null>(null);
+  const lanBlockedByEnterprise = useEnterprisePolicyStore((state) => state.networkAccessBlocked);
+  // Why "Home network only" is unavailable depends on who owns the listening
+  // address: a local desktop can open it in Desktop Network Access (unless
+  // enterprise mode keeps it closed), a plain web server needs a restart with a
+  // LAN bind address, and a desktop connected to another server can change
+  // neither from here.
+  const lanTransportHint = (() => {
+    if (!transportOptions || transportOptions.lanUrl) {
+      return t('settings.remoteInstances.clientAuth.addDevice.transport.lanHint');
+    }
+    if (!isDesktopShell()) {
+      return t('settings.remoteInstances.clientAuth.addDevice.transport.lanUnavailableServerHint');
+    }
+    if (!isDesktopLocalOriginActive()) {
+      return t('settings.remoteInstances.clientAuth.addDevice.transport.lanHint');
+    }
+    if (lanBlockedByEnterprise) {
+      return t('settings.openchamber.desktopNetwork.field.enterpriseBlocked');
+    }
+    return t('settings.remoteInstances.clientAuth.addDevice.transport.lanUnavailableDesktopHint');
+  })();
   const revokedClientCount = React.useMemo(() => remoteClients.filter((client) => Boolean(client.revokedAt)).length, [remoteClients]);
   const [sshAddDialogOpen, setSshAddDialogOpen] = React.useState(false);
   const [sshAddMode, setSshAddMode] = React.useState<'saved' | 'manual'>('saved');
@@ -836,7 +859,7 @@ export const RemoteInstancesPage: React.FC = () => {
         .catch((): HostProbeResult => ({ status: 'unreachable', latencyMs: 0 }));
       if (direct.status === 'unreachable' && host.relay) {
         const relayResult = await relayProbe();
-        if (relayResult.status === 'ok') return [host.id, relayResult] as const;
+        if (relayResult.status === 'ok' || relayResult.status === 'relay-limit') return [host.id, relayResult] as const;
       }
       return [host.id, direct] as const;
     })).then((entries) => {
@@ -1268,16 +1291,28 @@ export const RemoteInstancesPage: React.FC = () => {
     [importCandidates, sshHostSearch],
   );
 
-  // Opening a ready instance means pointing this window at the forwarded local
-  // URL — the same navigation the host switcher performs after its own connect.
-  const openInstanceUrl = React.useCallback((localUrl?: string) => {
-    const target = (localUrl || '').trim();
-    if (!target) {
+  // Opening a ready instance switches this window's runtime to the forwarded
+  // local URL, the way the host switcher does, instead of navigating to it.
+  // Navigating would load the remote server's own UI on the tunnel origin,
+  // where the desktop shell refuses SSH commands: once the tunnel dropped, the
+  // window could no longer reconnect it.
+  const openInstance = React.useCallback(async (instanceId: string) => {
+    const config = await desktopHostsGet().catch(() => null);
+    const host = config?.hosts.find((entry) => entry.id === instanceId);
+    const apiBaseUrl = host ? normalizeHostUrl(getDesktopHostApiUrl(host)) : null;
+    if (!host || !apiBaseUrl) {
       toast.error(t('settings.remoteInstances.page.toast.instanceUrlUnavailable'));
       return;
     }
-    navigateToUrl(target);
-  }, [t]);
+    switchRuntimeEndpoint({
+      apiBaseUrl,
+      clientToken: host.clientToken || null,
+      requestHeaders: host.requestHeaders || null,
+      runtimeKey: runtimeKeyForDesktopHost(host),
+      sshForwarded: host.sshForwarded === true,
+    });
+    setSettingsDialogOpen(false);
+  }, [setSettingsDialogOpen, t]);
 
   const handlePatternCreate = React.useCallback(async () => {
     const host = patternHost;
@@ -1456,21 +1491,6 @@ export const RemoteInstancesPage: React.FC = () => {
       });
     }
   }, [draft, t]);
-
-  const handleOpenCurrentInstance = React.useCallback(async () => {
-    if (!status?.localUrl) {
-      toast.error(t('settings.remoteInstances.page.toast.instanceUrlUnavailable'));
-      return;
-    }
-
-    const target = status.localUrl.trim();
-    if (!target) {
-      toast.error(t('settings.remoteInstances.page.toast.instanceUrlUnavailable'));
-      return;
-    }
-
-    navigateToUrl(target);
-  }, [status?.localUrl, t]);
 
   const handlePrimaryConnectionAction = React.useCallback(() => {
     if (!draft) {
@@ -1705,7 +1725,9 @@ export const RemoteInstancesPage: React.FC = () => {
                           ? 'desktopHostSwitcher.status.incompatible'
                           : probe.status === 'wrong-service'
                             ? 'desktopHostSwitcher.status.wrongService'
-                            : 'desktopHostSwitcher.status.unreachable';
+                            : probe.status === 'relay-limit'
+                              ? 'desktopHostSwitcher.status.relayLimit'
+                              : 'desktopHostSwitcher.status.unreachable';
                 const isOnline = probe?.status === 'ok';
                 return (
                 <div key={host.id} className="py-1.5">
@@ -1889,7 +1911,7 @@ export const RemoteInstancesPage: React.FC = () => {
                   <div role="radiogroup" aria-label={t('settings.remoteInstances.clientAuth.addDevice.transportLabel')} className="space-y-1.5">
                     {([
                       { key: 'relay' as const, label: t('settings.remoteInstances.clientAuth.addDevice.transport.relay'), hint: t('settings.remoteInstances.clientAuth.addDevice.transport.relayHint'), available: Boolean(transportOptions?.relayAvailable) },
-                      { key: 'lan' as const, label: t('settings.remoteInstances.clientAuth.addDevice.transport.lan'), hint: t('settings.remoteInstances.clientAuth.addDevice.transport.lanHint'), available: Boolean(transportOptions?.lanUrl) },
+                      { key: 'lan' as const, label: t('settings.remoteInstances.clientAuth.addDevice.transport.lan'), hint: lanTransportHint, available: Boolean(transportOptions?.lanUrl) },
                       { key: 'local' as const, label: t('settings.remoteInstances.clientAuth.addDevice.transport.local'), hint: t('settings.remoteInstances.clientAuth.addDevice.transport.localHint'), available: Boolean(transportOptions?.localUrl) },
                     ]).map((option) => {
                       const selected = addDeviceTransport === option.key;
@@ -2002,7 +2024,7 @@ export const RemoteInstancesPage: React.FC = () => {
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
                       {ready ? (
-                        <Button type="button" variant="ghost" size="xs" className="!font-normal" onClick={() => openInstanceUrl(instanceStatus?.localUrl)}>
+                        <Button type="button" variant="ghost" size="xs" className="!font-normal" onClick={() => void openInstance(instance.id)}>
                           <Icon name="external-link" className="h-3.5 w-3.5" />
                           {t('settings.remoteInstances.page.actions.open')}
                         </Button>
@@ -2320,7 +2342,7 @@ export const RemoteInstancesPage: React.FC = () => {
                 }))
               }
             >
-              <SelectTrigger size={SETTINGS_SELECT_SIZE} className="w-fit min-w-[140px]">
+              <SelectTrigger className="w-fit min-w-[140px]">
                 <SelectValue placeholder={t('settings.remoteInstances.page.field.modePlaceholder')} />
               </SelectTrigger>
               <SelectContent>
@@ -2418,7 +2440,7 @@ export const RemoteInstancesPage: React.FC = () => {
                   }))
                 }
               >
-                <SelectTrigger size={SETTINGS_SELECT_SIZE} className="w-fit min-w-[140px]">
+                <SelectTrigger className="w-fit min-w-[140px]">
                   <SelectValue placeholder={t('settings.remoteInstances.page.field.selectInstallMethodPlaceholder')} />
                 </SelectTrigger>
                 <SelectContent>
@@ -2454,7 +2476,7 @@ export const RemoteInstancesPage: React.FC = () => {
                 />
               </div>
               {remoteLanExposed ? (
-                <p className="mt-2 typography-micro text-[var(--status-warning)] md:pl-[16rem]">
+                <p className="mt-2 typography-micro text-[var(--status-warning)] md:ps-[16rem]">
                   {t('settings.remoteInstances.page.field.remoteLanAccessWarning')}
                 </p>
               ) : null}
@@ -2517,7 +2539,7 @@ export const RemoteInstancesPage: React.FC = () => {
                 }));
               }}
             >
-              <SelectTrigger size={SETTINGS_SELECT_SIZE} className="w-fit min-w-[240px]">
+              <SelectTrigger className="w-fit min-w-[240px]">
                 <SelectValue placeholder={t('settings.remoteInstances.page.field.selectBindHostPlaceholder')} />
               </SelectTrigger>
               <SelectContent>
@@ -2659,7 +2681,7 @@ export const RemoteInstancesPage: React.FC = () => {
             />
           </div>
           {uiPasswordMissing ? (
-            <p className="typography-micro text-[var(--status-error)] md:pl-[16rem]">
+            <p className="typography-micro text-[var(--status-error)] md:ps-[16rem]">
               {t('settings.remoteInstances.page.field.uiPasswordMissingForLan')}
             </p>
           ) : null}
@@ -2766,7 +2788,7 @@ export const RemoteInstancesPage: React.FC = () => {
                           }))
                         }
                       >
-                        <SelectTrigger size={SETTINGS_SELECT_SIZE} className="w-fit min-w-[140px]">
+                        <SelectTrigger className="w-fit min-w-[140px]">
                           <SelectValue placeholder={t('settings.remoteInstances.page.field.typePlaceholder')} />
                         </SelectTrigger>
                         <SelectContent>
@@ -2971,7 +2993,7 @@ export const RemoteInstancesPage: React.FC = () => {
                 size="xs"
                 className="!font-normal"
                 onClick={() => {
-                  void handleOpenCurrentInstance();
+                  if (draft) void openInstance(draft.id);
                 }}
               >
                 <Icon name="external-link" className="h-3.5 w-3.5" />
@@ -2979,7 +3001,7 @@ export const RemoteInstancesPage: React.FC = () => {
               </Button>
             </>
           ) : null}
-          {error ? <div className="ml-auto typography-meta text-[var(--status-error)]">{error}</div> : null}
+          {error ? <div className="ms-auto typography-meta text-[var(--status-error)]">{error}</div> : null}
         </div>
       </div>
 

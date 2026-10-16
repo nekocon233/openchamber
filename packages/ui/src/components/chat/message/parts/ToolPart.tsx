@@ -4,6 +4,8 @@ import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { cn } from '@/lib/utils';
 import { SimpleMarkdownRenderer } from '../../MarkdownRenderer';
+import { BlockLine } from './BlockLine';
+import { ToolRevealOnMount } from './ToolRevealOnMount';
 import { FormMarkdown } from '../../FormMarkdown';
 import { MessageFilesDisplay } from '../../FileAttachment';
 import { getToolMetadata } from '@/lib/toolHelpers';
@@ -12,7 +14,10 @@ import { toolDisplayStyles } from '@/lib/typography';
 import { WorkerHighlightedCode } from '@/components/code/WorkerHighlightedCode';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useDirectorySync, useSessionMessageRecords, useEnsureSessionMessages } from '@/sync/sync-context';
+import { useDirectorySync, useSessionMessages } from '@/sync/sync-context';
+import { useRunningShell } from '@/sync/background-shells';
+import { findShellCancellation, findShellCompletion, readBackgroundShellID } from '@/lib/opencode/background-shell';
+import { opencodeClient } from '@/lib/opencode/client';
 import type { State } from '@/sync/types';
 import { useUIStore } from '@/stores/useUIStore';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
@@ -38,21 +43,21 @@ import { JsonTreeViewer } from '@/components/ui/JsonTreeViewer';
 import { JsonSummaryView } from './JsonSummaryView';
 import { Icon } from "@/components/icon/Icon";
 import { DiffViewToggle, type DiffViewMode } from '../DiffViewToggle';
+import { useDefaultDiffViewMode } from '../useDefaultDiffViewMode';
 import { MinDurationShineText } from './MinDurationShineText';
-import { ToolRevealOnMount } from './ToolRevealOnMount';
 import { getToolIcon } from './toolPresentation';
 import { GuestToolTable } from './GuestToolTable';
 import { readQuestionTranscript } from './questionTranscript';
 import type { JsonValue } from '@openchamber/sdk';
 import {
     guestToolTableRows,
+    guestToolHeaderReadsOutput,
     renderGuestToolHeader,
     useGuestToolPresentation,
     type GuestToolRule,
 } from '@/lib/guests/tool-presentation';
 import { useDurationTickerNow } from '@/hooks/useDurationTicker';
 import {
-    buildTaskSummaryEntriesFromSession,
     normalizeTaskSummaryEntries,
     parseTaskMetadataBlock,
     prepareTaskToolOutput,
@@ -75,7 +80,7 @@ import {
     resolveToolQuickOpenTarget,
     type DiffPatchEntry,
 } from './toolDiffUtils';
-import { isEmbeddedSessionChat } from '@/components/layout/contextPanelEmbeddedChat';
+import { useChatColumnActions } from '@/components/chat/chatColumnSession';
 import { useStreamingTextThrottle } from '../../hooks/useStreamingTextThrottle';
 import { getStreamingOutputAppend, getToolOutput } from './toolOutput';
 import { toAbsoluteFilePath } from '@/lib/path-utils';
@@ -85,13 +90,15 @@ import {
     executeToolCalls,
     isEditTool,
     isExecuteTool,
-    isReadTool,
     isFileChangeTool,
+    isNavigationTool,
     isPatchTool,
     isQuestionTool,
     isShellTool,
     isSubagentTool,
     isWebSearchTool,
+    subagentAgent,
+    subagentDescription,
     isWriteTool,
     normalizeToolName,
     recordedFileChanges,
@@ -110,6 +117,12 @@ import { addedFilePatch, writeInputOf } from './conciseDiffRows';
 import { ConciseDiff } from './ConciseDiff';
 import type { ConciseDiffFile } from './ConciseDiff';
 import { ChangedFilesWithoutDiff } from './ChangedFilesWithoutDiff';
+import { toBackgroundShellPart, type BackgroundShellPhase } from './backgroundShellPart';
+import { toBackgroundSubagentPart, toStoppedSubagentPart, type BackgroundSubagentPhase } from './backgroundSubagentPart';
+import { findSubagentCancellation, findSubagentRun, readBackgroundSubagentChildID } from '@/lib/opencode/subagent-run';
+import { useGlobalSessionStatusStore } from '@/sync/global-session-status';
+import { useBackgroundShellOutput } from './useBackgroundShellOutput';
+import { useToolContentCompletion } from './useToolContentCompletion';
 
 // Names of files a command changed without a diff, shown in its collapsed row.
 const COLLAPSED_CHANGED_FILE_NAMES = 5;
@@ -516,6 +529,9 @@ const ToolScrollableSection: React.FC<ToolScrollableSectionProps> = ({
         <div className={cn('w-full min-w-0 flex-none overflow-hidden', outerClassName)}>
             <ScrollShadow
                 ref={scrollRef}
+                // Tool output boxes are short (often 240px), so the 48px default
+                // fade would hide a couple of lines at each edge.
+                size={24}
                 data-scrollable="true"
                 onWheelCapture={(event) => {
                     if (followKey !== undefined && event.deltaY < 0) {
@@ -621,6 +637,43 @@ const StreamingPlainTextOutput: React.FC<{ output: string }> = ({ output }) => {
     );
 };
 
+/** Copies a tool's whole output as plain text; shown on JSON and shell output. */
+const CopyToolOutputButton: React.FC<{ output: string }> = ({ output }) => {
+    const { t } = useI18n();
+    const [copied, setCopied] = React.useState(false);
+
+    React.useEffect(() => {
+        setCopied(false);
+    }, [output]);
+
+    const handleCopy = React.useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        const result = await copyTextToClipboard(output);
+        if (!result.ok) {
+            toast.error(t('chat.toolPart.copyOutputFailed'));
+            return;
+        }
+        setCopied(true);
+        if (typeof window !== 'undefined') {
+            window.setTimeout(() => setCopied(false), 1200);
+        }
+    }, [output, t]);
+
+    return (
+        <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 rounded-md bg-[var(--surface-elevated)]/80 text-muted-foreground hover:text-foreground"
+            onClick={handleCopy}
+            onPointerDown={(event) => event.stopPropagation()}
+            aria-label={copied ? t('chat.toolPart.copiedOutput') : t('chat.toolPart.copyOutput')}
+            title={copied ? t('chat.toolPart.copiedOutput') : t('chat.toolPart.copyOutput')}
+        >
+            <Icon name={copied ? 'check' : 'file-copy'} className="h-3.5 w-3.5" />
+        </Button>
+    );
+};
+
 type JsonOutputResult = ReturnType<typeof tryParseJsonOutput>;
 
 const JsonToolOutput: React.FC<{
@@ -629,33 +682,15 @@ const JsonToolOutput: React.FC<{
 }> = ({ jsonResult, renderedOutput }) => {
     const { t } = useI18n();
     const jsonViewMode = useUIStore((state) => state.toolJsonViewMode);
-    const [copiedJson, setCopiedJson] = React.useState(false);
-
-    React.useEffect(() => {
-        setCopiedJson(false);
-    }, [renderedOutput]);
 
     const handleJsonViewChange = React.useCallback((view: ToolJsonViewMode, event: React.MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         useUIStore.getState().setToolJsonViewMode(view);
     }, []);
 
-    const handleCopyOutput = React.useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
-        event.stopPropagation();
-        const result = await copyTextToClipboard(renderedOutput);
-        if (!result.ok) {
-            toast.error(t('chat.toolPart.copyOutputFailed'));
-            return;
-        }
-        setCopiedJson(true);
-        if (typeof window !== 'undefined') {
-            window.setTimeout(() => setCopiedJson(false), 1200);
-        }
-    }, [renderedOutput, t]);
-
     return (
         <div className="tool-output-surface relative p-2 rounded-xl w-full min-w-0">
-            <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+            <div className="absolute inset-e-2 top-2 z-10 flex items-center gap-1">
                 <Button
                     variant="ghost"
                     size="icon"
@@ -689,17 +724,7 @@ const JsonToolOutput: React.FC<{
                 >
                     <Icon name="code-box" className="h-3.5 w-3.5" />
                 </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 rounded-md bg-[var(--surface-elevated)]/80 text-muted-foreground hover:text-foreground"
-                    onClick={handleCopyOutput}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    aria-label={copiedJson ? t('chat.toolPart.copiedOutput') : t('chat.toolPart.copyOutput')}
-                    title={copiedJson ? t('chat.toolPart.copiedOutput') : t('chat.toolPart.copyOutput')}
-                >
-                    <Icon name={copiedJson ? 'check' : 'file-copy'} className="h-3.5 w-3.5" />
-                </Button>
+                <CopyToolOutputButton output={renderedOutput} />
             </div>
             {jsonViewMode === 'summary' ? (
                 <JsonSummaryView data={jsonResult.data} />
@@ -710,7 +735,7 @@ const JsonToolOutput: React.FC<{
                     maxHeight="400px"
                 />
             ) : (
-                <div className="typography-code pr-12 text-muted-foreground/90">
+                <div className="typography-code pe-12 text-muted-foreground/90">
                     <WorkerHighlightedCode
                         language="json"
                         code={renderedOutput}
@@ -782,8 +807,27 @@ const ToolScrollableTextOutput: React.FC<{
         return <JsonToolOutput jsonResult={jsonResult} renderedOutput={renderedOutput} />;
     }
 
+    if (isShellTool(part.tool)) {
+        return (
+            <div className="relative typography-code text-muted-foreground/90">
+                <div className="absolute inset-e-1 top-1 z-10">
+                    <CopyToolOutputButton output={renderedOutput} />
+                </div>
+                <div className="pe-8">
+                    <WorkerHighlightedCode
+                        language={outputLanguage}
+                        code={renderedOutput}
+                        style={TOOL_COLLAPSED_CUSTOM_STYLE}
+                        codeStyle={CODE_TAG_PROPS.style}
+                        wrap
+                    />
+                </div>
+            </div>
+        );
+    }
+
     return (
-        <div className={isShellTool(part.tool) ? 'typography-code text-muted-foreground/90' : undefined}>
+        <div>
             <WorkerHighlightedCode
                 language={outputLanguage}
                 code={renderedOutput}
@@ -815,7 +859,7 @@ const getTaskSummaryLabel = (entry: TaskToolSummaryEntry): string => {
 };
 
 const shouldRenderGitPathLabel = (toolName: string, label: string): boolean => {
-    if (!isReadTool(toolName) && !isFileChangeTool(toolName)) {
+    if (!isNavigationTool(toolName) && !isFileChangeTool(toolName)) {
         return false;
     }
 
@@ -978,6 +1022,7 @@ TaskSummaryEntriesList.displayName = 'TaskSummaryEntriesList';
 const useRunningTaskChildSessionId = (part: ToolPartType | undefined, directory: string): string | undefined => {
     const startedAt = part?.state.status === 'running' ? part.state.time.start : undefined;
     const agent = part?.state.input.agent;
+    const description = part?.state.input.description;
     const parentSessionID = part?.sessionID;
     const messageID = part?.messageID;
     const partID = part?.id;
@@ -998,13 +1043,91 @@ const useRunningTaskChildSessionId = (part: ToolPartType | undefined, directory:
                 parentSessionID,
                 startedAt,
                 agent,
+                description,
                 siblingParts: siblings,
                 partID,
             });
             return lastResult;
         };
-    }, [agent, messageID, parentSessionID, partID, startedAt]);
+    }, [agent, description, messageID, parentSessionID, partID, startedAt]);
     return useDirectorySync(selector, directory || undefined);
+};
+
+/**
+ * The child session a subagent call runs in. Progress/result metadata is the
+ * canonical join. Older parts keep their output IDs, and a resumed
+ * call can name its child in input.sessionID. A parent message loaded over
+ * REST mid-run lacks the progress-only join (see
+ * resolveRunningTaskChildSessionId); the child is then recovered from the
+ * session records until the authoritative id arrives.
+ */
+const useSubagentChildSessionId = (part: ToolPartType, directory: string): string | undefined => {
+    const state = part.state;
+    const authoritative = React.useMemo(() => {
+        if (state.status === 'pending') return readTaskSessionIdFromRecord({ sessionID: state.input.sessionID });
+        return readTaskSessionIdFromRecord(state.metadata)
+            ?? readTaskSessionIdFromOutput(state.status === 'running' ? undefined : state.output)
+            ?? readTaskSessionIdFromRecord({ sessionID: state.input.sessionID });
+    }, [state]);
+    const inferred = useRunningTaskChildSessionId(!authoritative && state.status === 'running' ? part : undefined, directory);
+    return authoritative ?? inferred;
+};
+
+/** Header action of a subagent row: opens the child session, whose own chat shows its work. */
+const OpenSubtaskButton: React.FC<{
+    sessionId: string;
+    agent: string | undefined;
+    isMobile: boolean;
+}> = ({ sessionId, agent, isMobile }) => {
+    const { t } = useI18n();
+    const currentDirectory = useEffectiveDirectory();
+    const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
+    const column = useChatColumnActions();
+    const openContextPanelTab = useUIStore((state) => state.openContextPanelTab);
+    const runtime = React.useContext(RuntimeAPIContext);
+
+    const agentType = agent ?? 'subagent';
+    const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
+    const label = t('chat.toolPart.openSubtask', { type: agentLabel });
+
+    const handleOpen = (event: React.MouseEvent) => {
+        event.stopPropagation();
+        if (!currentDirectory) return;
+        // A chat already in the side panel opens the subtask in place.
+        if (column.pinned) {
+            column.openSession(sessionId, currentDirectory);
+            return;
+        }
+        // Single-surface layouts (mobile, VS Code) navigate in place.
+        // Otherwise open a new side-panel tab.
+        if (isMobile || runtime?.runtime.isVSCode) {
+            setCurrentSession(sessionId, currentDirectory);
+            return;
+        }
+        openContextPanelTab(currentDirectory, {
+            mode: 'chat',
+            dedupeKey: `session:${sessionId}`,
+            label: agentLabel,
+            readOnly: true,
+        });
+    };
+
+    return (
+        <button
+            type="button"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={handleOpen}
+            className={cn(
+                'flex-shrink-0 inline-flex h-4 w-4 items-center justify-center rounded transition-opacity hover:bg-interactive-hover',
+                'opacity-60 hover:opacity-100 focus-visible:opacity-100',
+            )}
+            style={{ color: 'var(--tools-icon)' }}
+            title={label}
+            aria-label={label}
+        >
+            <Icon name="external-link" className="h-3 w-3" />
+        </button>
+    );
 };
 
 const TaskToolSummary: React.FC<{
@@ -1029,13 +1152,17 @@ const TaskToolSummary: React.FC<{
     const hasOutput = trimmedOutput.length > 0;
     const [isOutputExpanded, setIsOutputExpanded] = React.useState(false);
 
+    // v2 names the subagent to run in `input.agent`.
+    const agentType = typeof input?.agent === 'string'
+        ? input.agent
+        : 'subagent';
+
     const handleOpenSession = (event: React.MouseEvent) => {
         event.stopPropagation();
         if (sessionId && currentDirectory) {
-            // In contexts with no ContextPanel (embedded session-chat iframe)
-            // or single-surface layouts (mobile, VS Code), navigate in place.
-            // Otherwise open a new side-panel tab.
-            if (isEmbeddedSessionChat() || isMobile || runtime?.runtime.isVSCode) {
+            // In single-surface layouts (mobile, VS Code) navigate in place;
+            // otherwise open a new side-panel tab.
+            if (isMobile || runtime?.runtime.isVSCode) {
                 setCurrentSession(sessionId, currentDirectory);
                 return;
             }
@@ -1049,14 +1176,9 @@ const TaskToolSummary: React.FC<{
         }
     };
 
-    // v2 names the subagent to run in `input.agent`.
-    const agentType = typeof input?.agent === 'string'
-        ? input.agent
-        : 'subagent';
-
     if (entries.length === 0 && !hasOutput && !sessionId) {
         return (
-            <div className="relative pr-2 pb-2 pt-2 space-y-2 pl-[1.4375rem]">
+            <div className="relative pe-2 pb-2 pt-2 space-y-2 ps-[1.4375rem]">
                 <div className="typography-meta text-muted-foreground/70">
                     {isActive ? 'Waiting for subagent activity...' : 'No subagent session id on task metadata.'}
                 </div>
@@ -1067,8 +1189,8 @@ const TaskToolSummary: React.FC<{
     return (
         <div
             className={cn(
-                'relative pr-2 pb-2 pt-2 space-y-2 pl-[1.4375rem]',
-                'before:absolute before:left-[0.4375rem] before:w-px before:bg-border/80 before:content-[""]',
+                'relative pe-2 pb-2 pt-2 space-y-2 ps-[1.4375rem]',
+                'before:absolute before:start-[0.4375rem] before:w-px before:bg-border/80 before:content-[""]',
                 'before:top-[-0.25rem] before:bottom-0'
             )}
         >
@@ -1144,8 +1266,8 @@ const renderPathLikeGitChanges = (path: string, grow = true) => {
     if (lastSlash === -1) {
         return (
             <span
-                className={cn('min-w-0 truncate typography-ui-label text-foreground', grow && 'flex-1')}
-                style={{ direction: 'rtl', textAlign: 'left', unicodeBidi: 'plaintext' }}
+                className={cn('oc-ui-start-align min-w-0 truncate typography-ui-label text-foreground', grow && 'flex-1')}
+                style={{ direction: 'rtl', unicodeBidi: 'plaintext' }}
                 title={path}
             >
                 {path}
@@ -1159,9 +1281,9 @@ const renderPathLikeGitChanges = (path: string, grow = true) => {
     const displayDir = hasAbsoluteRoot ? dir.slice(1) : dir;
 
     return (
-        <span className={cn('min-w-0 flex items-baseline overflow-hidden typography-ui-label', grow && 'flex-1')} title={path}>
+        <span dir="ltr" className={cn('min-w-0 flex items-baseline overflow-hidden typography-ui-label', grow && 'flex-1')} title={path}>
             {hasAbsoluteRoot ? <span className="flex-shrink-0 text-muted-foreground">/</span> : null}
-            <span className="min-w-0 truncate text-muted-foreground" style={{ direction: 'rtl', textAlign: 'left', unicodeBidi: 'plaintext' }}>
+            <span className="oc-ui-start-align min-w-0 truncate text-muted-foreground" style={{ direction: 'rtl', unicodeBidi: 'plaintext' }}>
                 {displayDir}
             </span>
             <span className="flex-shrink-0">
@@ -1198,14 +1320,13 @@ const renderAnimatedPathWithIcon = (path: string, animate = true, grow = true, s
     return (
         <span className={cn('min-w-0 inline-flex items-center gap-1 overflow-hidden', grow && 'flex-1')} title={path}>
             {showFileIcons ? <FileTypeIcon filePath={path} className="h-3.5 w-3.5 flex-shrink-0" /> : null}
-            <span className={cn('min-w-0 inline-flex max-w-full items-baseline overflow-hidden', textClassName, grow && 'flex-1')}>
+            <span dir="ltr" className={cn('min-w-0 inline-flex max-w-full items-baseline overflow-hidden', textClassName, grow && 'flex-1')}>
                 {hasAbsoluteRoot ? <span className="flex-shrink-0" style={{ color: 'var(--tools-description)' }}>/</span> : null}
                 <span
-                    className="min-w-0 shrink truncate whitespace-nowrap"
+                    className="oc-ui-start-align min-w-0 shrink truncate whitespace-nowrap"
                     style={{
                         color: 'var(--tools-description)',
                         direction: 'rtl',
-                        textAlign: 'left',
                         unicodeBidi: 'plaintext',
                     }}
                 >
@@ -1260,7 +1381,8 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     const { t } = useI18n();
     const runtime = React.useContext(RuntimeAPIContext);
     const mobileActions = useMobileAppActions();
-    const [diffViewMode, setDiffViewMode] = React.useState<DiffViewMode>('unified');
+    const defaultDiffViewMode = useDefaultDiffViewMode();
+    const [diffViewMode, setDiffViewMode] = React.useState<DiffViewMode>(defaultDiffViewMode);
     const stateWithData = state as ToolStateWithMetadata;
     const metadata = stateWithData.metadata;
     const input = stateWithData.input;
@@ -1292,7 +1414,9 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     const hideToolInputPreview = part.tool === 'openchamber'
         || part.tool === 'openchamber_web'
         || part.tool === 'openchamber_memory'
+        || part.tool === 'openchamber_knowledge'
         || part.tool === 'openchamber_notify'
+        || part.tool === 'openchamber_render'
         || isPatchTool(part.tool)
         || isEditTool(part.tool)
         || isExecuteTool(part.tool);
@@ -1345,8 +1469,8 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     }, [hasInputText, input?.filePath, input?.file_path, input?.path, inputTextContent, isWriteLikeTool]);
 
     React.useEffect(() => {
-        setDiffViewMode('unified');
-    }, [part.id]);
+        setDiffViewMode(defaultDiffViewMode);
+    }, [defaultDiffViewMode, part.id]);
 
     const renderScrollableBlock = (
         content: React.ReactNode,
@@ -1592,7 +1716,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         if (isSubagentTool(part.tool) && hasStringOutput) {
             return renderScrollableBlock(
                 <div className="w-full min-w-0">
-                    <SimpleMarkdownRenderer content={coerceToText(outputString)} variant="tool" onShowPopup={onShowPopup} />
+                    <SimpleMarkdownRenderer content={prepareTaskToolOutput(outputString)} variant="tool" onShowPopup={onShowPopup} />
                 </div>
             );
         }
@@ -1661,7 +1785,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     return (
         <div
             className={cn(
-                'relative pr-2 pb-2 pt-2 space-y-2 pl-4'
+                'relative pe-2 pb-2 pt-2 space-y-2 ps-4'
             )}
         >
             {isQuestionTool(part.tool) ? (
@@ -1807,13 +1931,23 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
 
 ToolExpandedContent.displayName = 'ToolExpandedContent';
 
-const ToolPartContent: React.FC<ToolPartProps> = ({
+/** Header extras of a row whose state comes from outside its own part: a label, and a stop action while it runs. */
+type ToolRowHeader = {
+    label?: 'background' | 'stopped';
+    /** The end of the call is not known yet, so the row shows no duration. */
+    durationUnknown?: boolean;
+    stop?: { onStop: () => void; ariaLabel: string };
+};
+
+const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subagentSessionId?: string }> = ({
     part,
     isExpanded,
     onToggle,
     isMobile,
     onShowPopup,
     animateTailText = true,
+    header,
+    subagentSessionId,
 }) => {
     const { t } = useI18n();
     const state = part.state;
@@ -1855,10 +1989,6 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
     const expandedContentRef = React.useRef<HTMLDivElement>(null);
 
     React.useLayoutEffect(() => {
-        if (isTaskTool) {
-            return;
-        }
-
         const element = expandedContentRef.current;
         if (!element) {
             return;
@@ -1866,9 +1996,8 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
 
         element.style.height = isExpanded ? 'auto' : '0px';
         element.style.overflow = isExpanded ? 'visible' : 'hidden';
-    }, [isExpanded, isTaskTool]);
+    }, [isExpanded]);
 
-    const partMetadata = (part as unknown as { metadata?: unknown }).metadata;
     const time = stateWithData.time;
 
     const [pinnedTime, setPinnedTime] = React.useState<{ start?: number; end?: number }>(() => ({
@@ -1928,6 +2057,34 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         return Math.min(...candidates);
     }, [localStartAt, pinnedTime.start, time?.start]);
 
+    React.useEffect(() => {
+        if (typeof time?.end === 'number' || typeof pinnedTime.end === 'number') {
+            setLocalFinalizedAt(undefined);
+            return;
+        }
+
+        if (typeof effectiveTimeStart !== 'number') {
+            return;
+        }
+
+        if (!isFinalized) {
+            return;
+        }
+
+        setLocalFinalizedAt((prev) => prev ?? Date.now());
+    }, [
+        effectiveTimeStart,
+        isFinalized,
+        pinnedTime.end,
+        time?.end,
+    ]);
+
+    const effectiveTimeEnd = isFinalized ? (pinnedTime.end ?? time?.end ?? localFinalizedAt) : undefined;
+    const isActive = !isFinalized && activeLatched;
+    const shouldTreatAsFinalized = isFinalized;
+
+    const partMetadata = (part as unknown as { metadata?: unknown }).metadata;
+
     const taskOutputString = React.useMemo(() => {
         return typeof stateWithData.output === 'string' ? stateWithData.output : undefined;
     }, [stateWithData.output]);
@@ -1951,8 +2108,6 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
 
         return parsedTaskMetadata.summaryEntries;
     }, [isTaskTool, metadata, parsedTaskMetadata.summaryEntries]);
-
-    const hasFinalMetadataTaskSummary = isFinalized && metadataTaskSummaryEntries.length > 0;
 
     const authoritativeTaskSessionId = React.useMemo<string | undefined>(() => {
         if (!isTaskTool) {
@@ -1984,55 +2139,8 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         isTaskTool && !authoritativeTaskSessionId && state.status === 'running' ? part : undefined,
         currentDirectory,
     );
-    const taskSessionId = authoritativeTaskSessionId ?? inferredTaskSessionId;
+    const taskSessionId = authoritativeTaskSessionId ?? inferredTaskSessionId ?? subagentSessionId;
 
-    const childSessionLookupId = hasFinalMetadataTaskSummary ? '' : (taskSessionId ?? '');
-
-    const childSessionMessages = useSessionMessageRecords(childSessionLookupId, currentDirectory);
-    useEnsureSessionMessages(childSessionLookupId, currentDirectory);
-
-    const childSessionTaskSummaryEntries = React.useMemo<TaskToolSummaryEntry[]>(() => {
-        if (!isTaskTool || !taskSessionId) {
-            return [];
-        }
-        if (!Array.isArray(childSessionMessages) || childSessionMessages.length === 0) {
-            return [];
-        }
-        return buildTaskSummaryEntriesFromSession(childSessionMessages);
-    }, [childSessionMessages, isTaskTool, taskSessionId]);
-
-    React.useEffect(() => {
-        if (typeof time?.end === 'number' || typeof pinnedTime.end === 'number') {
-            setLocalFinalizedAt(undefined);
-            return;
-        }
-
-        if (typeof effectiveTimeStart !== 'number') {
-            return;
-        }
-
-        if (!isFinalized) {
-            return;
-        }
-
-        setLocalFinalizedAt((prev) => prev ?? Date.now());
-    }, [
-        effectiveTimeStart,
-        isFinalized,
-        pinnedTime.end,
-        time?.end,
-    ]);
-
-    const effectiveTimeEnd = isFinalized ? (pinnedTime.end ?? time?.end ?? localFinalizedAt) : undefined;
-    const isActive = !isFinalized && activeLatched;
-    const shouldTreatAsFinalized = isFinalized;
-
-    const taskSummaryEntries = React.useMemo<TaskToolSummaryEntry[]>(() => {
-        if (childSessionTaskSummaryEntries.length > 0) {
-            return childSessionTaskSummaryEntries;
-        }
-        return metadataTaskSummaryEntries;
-    }, [childSessionTaskSummaryEntries, metadataTaskSummaryEntries]);
     // The file changes a command's CLI recorded; null for every other call.
     const recordedChanges = React.useMemo(() => recordedFileChanges(part.tool, metadata), [metadata, part.tool]);
     const recordedPaths = React.useMemo(
@@ -2060,7 +2168,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         const written = normalizedPartTool === 'write' ? writeInputOf(input) : null;
         return written ? [{ id: 'write', title: written.filePath ?? '', patch: addedFilePatch(written.content) }] : [];
     }, [conciseTranscript, currentDirectory, input, metadata, normalizedPartTool, recordedChanges, status]);
-    const isMultiFileApplyPatch = isPatchTool(normalizedPartTool) && Array.isArray(metadata?.files) && (metadata?.files as []).length > 1;
+    const isMultiFileApplyPatch = isPatchTool(normalizedPartTool) && Array.isArray(metadata?.files) && metadata.files.length > 1;
     const normalizedPart = normalizedPartTool !== part.tool ? ({ ...part, tool: normalizedPartTool } as ToolPartType) : part;
     const descriptionPath = getToolDescriptionPath(normalizedPart, state, currentDirectory);
     const builtInDescription = getToolDescription(normalizedPart, state, currentDirectory, t);
@@ -2218,8 +2326,14 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
     // The concise transcript folds a subagent's calls away like any tool's details.
     const shouldRenderTaskSummary = useDeferredExpandedContent(isTaskTool && (conciseTranscript
         ? isExpanded
-        : (taskSummaryEntries.length > 0 || isActive || shouldTreatAsFinalized || !!taskSessionId)));
+        : (metadataTaskSummaryEntries.length > 0 || isActive || shouldTreatAsFinalized || !!taskSessionId)));
     const shouldRenderExpandedContent = useDeferredExpandedContent(!isTaskTool && isExpanded);
+    const contentCompletion = useToolContentCompletion(
+        part,
+        shouldRenderExpandedContent || (presentation !== null && guestToolHeaderReadsOutput(presentation)),
+    );
+    // Shell and subagent rows carry their duration: live while they run, final once settled.
+    const showsDuration = isShellTool(normalizedPartTool) || isTaskTool;
 
     if (!shouldTreatAsFinalized && !isActive && !isTaskTool) {
         return null;
@@ -2243,7 +2357,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
 
     const taskDetails = shouldRenderTaskSummary ? (
         <TaskToolSummary
-            entries={taskSummaryEntries}
+            entries={metadataTaskSummaryEntries}
             isExpanded={isExpanded}
             isMobile={isMobile}
             output={taskOutputString}
@@ -2267,21 +2381,32 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         >
             {shouldRenderExpandedContent ? (
                 <div
-                    className="relative ml-2 pl-3"
+                    className="relative ms-2 ps-3"
                 >
-                    <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute left-0 top-px bottom-0 w-px"
-                        style={{ backgroundColor: 'var(--tools-border)' }}
-                    />
-                    <ToolExpandedContent
-                        part={part}
-                        state={state}
-                        currentDirectory={currentDirectory}
-                        isExpanded={isExpanded}
-                        onShowPopup={onShowPopup}
-                        presentation={presentation}
-                    />
+                    <BlockLine onToggle={() => onToggle(part.id)} topOffset={1} />
+                    {contentCompletion.status === 'whole' ? (
+                        <ToolExpandedContent
+                            part={part}
+                            state={state}
+                            currentDirectory={currentDirectory}
+                            isExpanded={isExpanded}
+                            onShowPopup={onShowPopup}
+                            presentation={presentation}
+                        />
+                    ) : contentCompletion.status === 'loading' ? (
+                        contentCompletion.showProgress ? (
+                            <div className="typography-meta py-1 text-muted-foreground">
+                                {t('chat.toolPart.content.loading')}
+                            </div>
+                        ) : null
+                    ) : (
+                        <div className="typography-meta flex items-center gap-2 py-1 text-muted-foreground">
+                            <span>{t('chat.toolPart.content.loadFailed')}</span>
+                            <Button variant="ghost" size="xs" onClick={contentCompletion.retry}>
+                                {t('chat.toolPart.content.retry')}
+                            </Button>
+                        </div>
+                    )}
                 </div>
             ) : null}
         </div>
@@ -2307,7 +2432,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                         diffStats,
                         recordsFileChanges: recordedChanges !== null,
                         writeLines: writeLineCount,
-                        subagentToolCalls: taskSummaryEntries.length,
+                        subagentToolCalls: metadataTaskSummaryEntries.length,
                     })}
                     timer={effectiveTimeStart !== undefined ? (
                         <LiveDuration start={effectiveTimeStart} end={effectiveTimeEnd} active={isActive} />
@@ -2325,7 +2450,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                         changes={recordedChanges}
                         paths={recordedPaths}
                         limit={COLLAPSED_CHANGED_FILE_NAMES}
-                        className="mt-0.5 mb-1 ml-5"
+                        className="mt-0.5 mb-1 ms-5"
                     />
                 ) : null}
                 {taskDetails}
@@ -2339,7 +2464,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
             {}
             <div
                 className={cn(
-                    'group/tool flex gap-1.5 pr-2 pl-px py-1.5 rounded-xl',
+                    'group/tool flex gap-1.5 pe-2 ps-px py-1.5 rounded-xl',
                     isMultiFileApplyPatch ? 'flex-wrap items-start cursor-pointer' : 'items-center cursor-pointer',
                 )}
                 onClick={isMultiFileApplyPatch ? () => onToggle(part.id) : handleMainClick}
@@ -2419,7 +2544,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                                     {isExpanded ? <Icon name="arrow-down-s" className="h-3.5 w-3.5" /> : <Icon name="arrow-right-s" className="h-3.5 w-3.5" />}
                                 </div>
                             </div>
-                            <div className={cn('flex items-center min-w-0 flex-1', quickOpenTarget ? 'gap-1' : 'gap-2')}>
+                            <div className={cn('flex items-center min-w-0 flex-1', quickOpenTarget || taskSessionId ? 'gap-1' : 'gap-2')}>
                                 <MinDurationShineText
                                     active={Boolean(isActive && !isError)}
                                     minDurationMs={300}
@@ -2430,14 +2555,24 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                                     {displayName}
                                 </MinDurationShineText>
                                 {quickOpenButton}
+                                {taskSessionId ? (
+                                    <OpenSubtaskButton sessionId={taskSessionId} agent={subagentAgent(input)} isMobile={isMobile} />
+                                ) : null}
                             </div>
-                            {isShellTool(normalizedPartTool) && typeof effectiveTimeStart === 'number' ? (
+                            {showsDuration && typeof effectiveTimeStart === 'number' && !header?.durationUnknown ? (
                                 <span className={cn('flex-shrink-0 tabular-nums text-muted-foreground/80', TOOL_ROW_DESCRIPTION_CLASS)}>
                                     <LiveDuration
                                         start={effectiveTimeStart}
                                         end={typeof effectiveTimeEnd === 'number' ? effectiveTimeEnd : undefined}
                                         active={Boolean(isActive && typeof effectiveTimeEnd !== 'number')}
                                     />
+                                </span>
+                            ) : null}
+                            {header?.label ? (
+                                <span className={cn('flex-shrink-0 text-muted-foreground/80', TOOL_ROW_DESCRIPTION_CLASS)}>
+                                    {header.label === 'stopped'
+                                        ? t('chat.toolPart.background.stoppedLabel')
+                                        : t('chat.toolPart.background.label')}
                                 </span>
                             ) : null}
                         </>
@@ -2483,6 +2618,22 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                                 </span>
                             )}
                         </div>
+                        {header?.stop ? (
+                            // A labelled red action, the same one the composer's
+                            // background commands strip offers. The negative
+                            // margin keeps the header row at its text height.
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                onClick={(event) => { event.stopPropagation(); header.stop?.onStop(); }}
+                                className="-my-0.5 flex-shrink-0 text-[var(--status-error)] hover:text-[var(--status-error)]"
+                                aria-label={header.stop.ariaLabel}
+                            >
+                                <Icon name="stop" className="size-3" />
+                                {t('chat.toolPart.background.stopLabel')}
+                            </Button>
+                        ) : null}
                     </div>
                 )}
             </div>
@@ -2527,7 +2678,7 @@ class ToolPartErrorBoundary extends React.Component<{
 
         const message = this.state.error?.message;
         return (
-            <div className="flex items-center gap-1.5 pr-2 pl-px py-1.5 rounded-xl min-w-0">
+            <div className="flex items-center gap-1.5 pe-2 ps-px py-1.5 rounded-xl min-w-0">
                 <div className="h-3.5 w-3.5 flex-shrink-0" style={TOOL_ERROR_ICON_STYLE}>
                     {getToolIcon(this.props.toolName)}
                 </div>
@@ -2544,10 +2695,129 @@ class ToolPartErrorBoundary extends React.Component<{
     }
 }
 
+/** A shell call OpenCode moved to the background, rendered from the command's own state (see `backgroundShellPart.ts`). */
+const BackgroundShellToolPartContent: React.FC<ToolPartProps & { shellID: string }> = ({ shellID, ...props }) => {
+    const { t } = useI18n();
+    const directory = useEffectiveDirectory();
+    const running = useRunningShell(shellID);
+    const messages = useSessionMessages(props.part.sessionID, directory);
+    const completion = React.useMemo(() => findShellCompletion(messages, shellID), [messages, shellID]);
+    const cancellation = React.useMemo(() => findShellCancellation(messages, shellID), [messages, shellID]);
+    const isRunning = !completion && running !== undefined;
+    const liveOutput = useBackgroundShellOutput(shellID, running?.directory, isRunning && props.isExpanded);
+    const [stopping, setStopping] = React.useState(false);
+
+    // A stop the user asked for wins over the error OpenCode reports for it,
+    // but not over a command that is somehow still running.
+    const phase = React.useMemo((): BackgroundShellPhase => {
+        if (isRunning) return { kind: 'running', output: liveOutput };
+        if (cancellation) {
+            return { kind: 'stopped', endedAt: completion?.endedAt ?? cancellation.stoppedAt, notice: t('chat.toolPart.background.stoppedNotice') };
+        }
+        return completion ? { kind: 'finished', completion } : { kind: 'unknown' };
+    }, [cancellation, completion, isRunning, liveOutput, t]);
+    const part = React.useMemo(() => toBackgroundShellPart(props.part, phase), [phase, props.part]);
+
+    const stop = React.useCallback(() => {
+        if (!running) return;
+        setStopping(true);
+        opencodeClient.stopBackgroundShells({
+            sessionID: props.part.sessionID,
+            sessionDirectory: directory,
+            shells: [{ shellID, shellDirectory: running.directory, command: running.command }],
+        }).catch(() => {
+            setStopping(false);
+            toast.error(t('chat.toolPart.background.stopFailed'));
+        });
+    }, [directory, props.part.sessionID, running, shellID, t]);
+
+    return (
+        <ToolPartContent
+            {...props}
+            part={part}
+            header={{
+                label: phase.kind === 'stopped' ? 'stopped' : 'background',
+                durationUnknown: phase.kind === 'unknown',
+                stop: isRunning && !stopping ? { onStop: stop, ariaLabel: t('chat.toolPart.background.stop') } : undefined,
+            }}
+        />
+    );
+};
+
+/**
+ * A subagent call. The row follows the child: a background call is rebuilt
+ * from the child's status and report (see `backgroundSubagentPart.ts`), and a
+ * call the user stopped reads as stopped instead of failed. While the child
+ * runs the row offers the same stop the background shell rows do.
+ */
+const SubagentToolPartContent: React.FC<ToolPartProps> = (props) => {
+    const { t } = useI18n();
+    const directory = useEffectiveDirectory();
+    const childSessionID = useSubagentChildSessionId(props.part, directory ?? '');
+    const backgroundChildID = readBackgroundSubagentChildID(props.part);
+    const status = props.part.state.status;
+    // The parent's messages carry the background report and the stop note;
+    // a foreground call that runs or succeeded needs neither.
+    const needsMessages = backgroundChildID !== undefined || status === 'error';
+    const messages = useSessionMessages(needsMessages ? props.part.sessionID : '', directory);
+    const run = React.useMemo(
+        () => (backgroundChildID ? findSubagentRun(messages, backgroundChildID) : undefined),
+        [backgroundChildID, messages],
+    );
+    const stoppedByUser = React.useMemo(
+        () => childSessionID !== undefined && findSubagentCancellation(messages, childSessionID),
+        [childSessionID, messages],
+    );
+    const backgroundRunning = useGlobalSessionStatusStore((state) => backgroundChildID !== undefined && state.activeSessionIds.has(backgroundChildID));
+    const [stopping, setStopping] = React.useState(false);
+
+    const backgroundPhase = React.useMemo((): BackgroundSubagentPhase | undefined => {
+        if (!backgroundChildID) return undefined;
+        if (run) return { kind: 'finished', run };
+        return backgroundRunning ? { kind: 'running' } : { kind: 'unknown' };
+    }, [backgroundChildID, backgroundRunning, run]);
+
+    const part = React.useMemo(() => {
+        if (backgroundPhase) return toBackgroundSubagentPart(props.part, backgroundPhase);
+        return stoppedByUser ? toStoppedSubagentPart(props.part, t('chat.toolPart.background.stoppedNotice')) : props.part;
+    }, [backgroundPhase, props.part, stoppedByUser, t]);
+
+    const isRunning = backgroundPhase ? backgroundPhase.kind === 'running' : status === 'running';
+    const description = subagentDescription(props.part.state.input);
+    const stop = React.useCallback(() => {
+        if (!childSessionID) return;
+        setStopping(true);
+        opencodeClient.stopSubagent({
+            sessionID: props.part.sessionID,
+            directory,
+            childSessionID,
+            description,
+        }).catch(() => {
+            setStopping(false);
+            toast.error(t('chat.toolPart.subagent.stopFailed'));
+        });
+    }, [childSessionID, description, directory, props.part.sessionID, t]);
+
+    const stopped = backgroundPhase
+        ? backgroundPhase.kind === 'finished' && backgroundPhase.run.state === 'cancelled'
+        : stoppedByUser;
+    const header: ToolRowHeader = {
+        // "in background" describes a call still running; a finished one is just finished.
+        label: stopped ? 'stopped' : backgroundPhase?.kind === 'running' ? 'background' : undefined,
+        durationUnknown: backgroundPhase?.kind === 'unknown',
+        stop: isRunning && childSessionID && !stopping
+            ? { onStop: stop, ariaLabel: t('chat.toolPart.subagent.stop') }
+            : undefined,
+    };
+
+    return <ToolPartContent {...props} part={part} header={header} subagentSessionId={childSessionID} />;
+};
+
 const ToolPart: React.FC<ToolPartProps> = (props) => {
     const { t } = useI18n();
     const toolName = normalizeToolName(props.part.tool) || 'tool';
     const displayName = getToolMetadata(toolName).displayName;
+    const backgroundShellID = isShellTool(toolName) ? readBackgroundShellID(props.part) : undefined;
 
     return (
         <ToolPartErrorBoundary
@@ -2556,7 +2826,11 @@ const ToolPart: React.FC<ToolPartProps> = (props) => {
             resetKey={props.part}
             toolName={toolName}
         >
-            <ToolPartContent {...props} />
+            {backgroundShellID
+                ? <BackgroundShellToolPartContent {...props} shellID={backgroundShellID} />
+                : isSubagentTool(toolName)
+                    ? <SubagentToolPartContent {...props} />
+                    : <ToolPartContent {...props} />}
         </ToolPartErrorBoundary>
     );
 };

@@ -1,12 +1,14 @@
 import { describe, expect, mock, test } from "bun:test"
+import { strToU8, zipSync } from "fflate"
 import {
   ACCEPTED_ATTACHMENT_EXTENSIONS,
   ATTACHMENT_ACCEPT,
   getAttachmentInputModality,
   getUnsupportedAttachmentInputs,
-  isDocumentAttachmentFilename,
   isZipAttachmentFile,
+  isReadOnSendMentionFilename,
   prepareAttachmentFile,
+  prepareAttachmentFiles,
 } from "./attachment-files"
 
 mock.module("heic2any", () => ({
@@ -40,7 +42,7 @@ describe("attachment file preparation", () => {
 
   test("exposes the expanded code and structured-text formats to pickers", () => {
     for (const extension of [
-      "diff", "patch", "ipynb", "jsonl", "ndjson", "har", "svg", "drawio",
+      "diff", "patch", "ipynb", "jsonl", "ndjson", "har", "svg", "drawio", "excalidraw",
       "vue", "svelte", "php", "cs", "kt", "swift", "lua", "dart", "tf", "hcl", "proto",
       "docx", "pptx", "xlsx", "odt", "odp", "ods", "zip",
     ]) {
@@ -75,9 +77,35 @@ describe("attachment file preparation", () => {
     expect(untyped).toBe(undefined)
   })
 
-  test("identifies Office and OpenDocument filenames for shared mention preparation", () => {
-    expect(isDocumentAttachmentFilename("reports/BUDGET.XLSX")).toBe(true)
-    expect(isDocumentAttachmentFilename("notes.txt")).toBe(false)
+  test("reads Office and OpenDocument files as text for shared mention preparation", async () => {
+    // A zip is never an inline attachment, so a recognized document has to come
+    // out of the shared preparation path already read.
+    const entries = {
+      "xl/workbook.xml": `<workbook xmlns:r="r"><sheets><sheet name="Summary" r:id="rIdSheet"/></sheets></workbook>`,
+      "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rIdSheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+      "xl/worksheets/sheet1.xml": `<worksheet><sheetData>
+        <row r="1"><c r="A1" t="inlineStr"><is><t>Revenue</t></is></c></row>
+      </sheetData></worksheet>`,
+    }
+    const workbook = new File(
+      [zipSync(Object.fromEntries(Object.entries(entries).map(([path, xml]) => [path, strToU8(xml)])))],
+      "reports/BUDGET.XLSX",
+    )
+
+    const prepared = await prepareAttachmentFiles(workbook)
+
+    expect(prepared?.map((entry) => entry.mimeType)).toEqual(["text/plain"])
+    expect(prepared?.[0]?.file.name).toBe("reports/BUDGET.XLSX")
+    expect((await prepared?.[0]?.file.text())?.includes("Revenue")).toBe(true)
+  })
+
+  test("reads documents and images named by a mention on send", () => {
+    for (const filename of ["reports/BUDGET.XLSX", "shot.png", "photo.JPG", "anim.gif", "pic.webp", "IMG_1.heic"]) {
+      expect(isReadOnSendMentionFilename(filename)).toBe(true)
+    }
+    for (const filename of ["notes.txt", "icon.svg", "scan.pdf"]) {
+      expect(isReadOnSendMentionFilename(filename)).toBe(false)
+    }
   })
 
   test("renders notebooks as readable markdown without binary outputs", async () => {

@@ -3,7 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { findNodeAtLocation, parseTree, type Node, type ParseError } from 'jsonc-parser';
-import { getProviderAuth, type AuthEntry } from './opencodeAuth';
+import { getProviderAuth } from './opencodeAuth';
+
+/** A stored provider credential as `auth.json` keeps it: opaque object or raw string. */
+type AuthEntry = Record<string, unknown> | string;
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const OPENCODE_AUTH_ALIASES = ['anthropic', 'claude'] as const;
@@ -24,7 +27,8 @@ type ClaudeCredentialReadOptions = {
   homeDirectory?: string;
   readTextFile?: (filePath: string) => string | null;
   readKeychain?: () => KeychainReadResult;
-  readProviderAuth?: (providerId: string) => AuthEntry | string | null;
+  /** The reader is async because the web server serves credentials over HTTP. */
+  readProviderAuth?: (providerId: string) => AuthEntry | string | null | Promise<AuthEntry | string | null>;
 };
 
 type KeychainReadResult =
@@ -123,7 +127,7 @@ const normalizeOpenCodeCredential = (entry: AuthEntry | string | null): ClaudeCr
   };
 };
 
-export const loadClaudeCredential = (options: ClaudeCredentialReadOptions = {}): ClaudeCredential | null => {
+export const loadClaudeCredential = async (options: ClaudeCredentialReadOptions = {}): Promise<ClaudeCredential | null> => {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const readFile = options.readTextFile ?? readTextFile;
@@ -149,7 +153,7 @@ export const loadClaudeCredential = (options: ClaudeCredentialReadOptions = {}):
   }
 
   for (const providerId of OPENCODE_AUTH_ALIASES) {
-    const openCodeCredential = normalizeOpenCodeCredential(readAuth(providerId));
+    const openCodeCredential = normalizeOpenCodeCredential(await readAuth(providerId));
     if (openCodeCredential) return openCodeCredential;
   }
 

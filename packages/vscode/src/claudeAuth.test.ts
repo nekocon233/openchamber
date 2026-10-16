@@ -22,12 +22,12 @@ const claudeCodeBlob = (accessToken: string, subscriptionType = 'max'): string =
 });
 
 describe('VS Code Claude credential discovery', () => {
-  test('prefers the macOS Keychain and returns the Claude plan label', () => {
+  test('prefers the macOS Keychain and returns the Claude plan label', async () => {
     const configDirectory = path.join(fixtureRoot, 'keychain-priority');
     fs.mkdirSync(configDirectory, { recursive: true });
     fs.writeFileSync(path.join(configDirectory, '.credentials.json'), claudeCodeBlob('file-token'));
 
-    const credential = loadClaudeCredential({
+    const credential = await loadClaudeCredential({
       platform: 'darwin',
       env: { CLAUDE_CONFIG_DIR: configDirectory, CLAUDE_CODE_OAUTH_TOKEN: 'env-token' },
       readKeychain: () => ({ status: 'found', value: claudeCodeBlob('keychain-token') }),
@@ -40,13 +40,13 @@ describe('VS Code Claude credential discovery', () => {
     assert.equal(credential?.planLabel, 'max');
   });
 
-  test('reads only the fixture credentials file outside macOS', () => {
+  test('reads only the fixture credentials file outside macOS', async () => {
     const configDirectory = path.join(fixtureRoot, 'credentials-file');
     fs.mkdirSync(configDirectory, { recursive: true });
     fs.writeFileSync(path.join(configDirectory, '.credentials.json'), claudeCodeBlob('file-token', 'pro'));
     let keychainReads = 0;
 
-    const credential = loadClaudeCredential({
+    const credential = await loadClaudeCredential({
       platform: 'linux',
       env: { CLAUDE_CONFIG_DIR: configDirectory },
       readKeychain: () => {
@@ -62,19 +62,19 @@ describe('VS Code Claude credential discovery', () => {
     assert.equal(credential?.planLabel, 'pro');
   });
 
-  test('uses OpenCode auth before CLAUDE_CODE_OAUTH_TOKEN', () => {
+  test('uses OpenCode auth before CLAUDE_CODE_OAUTH_TOKEN', async () => {
     const emptyConfigDirectory = path.join(fixtureRoot, 'fallback-order');
     fs.mkdirSync(emptyConfigDirectory, { recursive: true });
     const env = { CLAUDE_CONFIG_DIR: emptyConfigDirectory, CLAUDE_CODE_OAUTH_TOKEN: 'env-token' };
 
-    const openCodeCredential = loadClaudeCredential({
+    const openCodeCredential = await loadClaudeCredential({
       platform: 'linux',
       env,
       readProviderAuth: (providerId) => providerId === 'anthropic'
         ? { access: 'opencode-token', refresh: 'opencode-refresh' }
         : null,
     });
-    const envCredential = loadClaudeCredential({
+    const envCredential = await loadClaudeCredential({
       platform: 'linux',
       env,
       readProviderAuth: () => null,
@@ -87,10 +87,10 @@ describe('VS Code Claude credential discovery', () => {
     assert.equal(envCredential?.refreshToken, null);
   });
 
-  test('ignores unrelated MCP credentials', () => {
+  test('ignores unrelated MCP credentials', async () => {
     const emptyConfigDirectory = path.join(fixtureRoot, 'mcp-only');
     fs.mkdirSync(emptyConfigDirectory, { recursive: true });
-    const credential = loadClaudeCredential({
+    const credential = await loadClaudeCredential({
       platform: 'darwin',
       env: { CLAUDE_CONFIG_DIR: emptyConfigDirectory },
       readKeychain: () => ({ status: 'found', value: JSON.stringify({ mcpOAuth: { service: { accessToken: 'mcp-token' } } }) }),
@@ -100,18 +100,18 @@ describe('VS Code Claude credential discovery', () => {
     assert.equal(credential, null);
   });
 
-  test('falls back to the credentials file only when the Keychain item is missing', () => {
+  test('falls back to the credentials file only when the Keychain item is missing', async () => {
     const configDirectory = path.join(fixtureRoot, 'keychain-unavailable');
     fs.mkdirSync(configDirectory, { recursive: true });
     fs.writeFileSync(path.join(configDirectory, '.credentials.json'), claudeCodeBlob('stale-file-token'));
 
-    const missing = loadClaudeCredential({
+    const missing = await loadClaudeCredential({
       platform: 'darwin',
       env: { CLAUDE_CONFIG_DIR: configDirectory },
       readKeychain: () => ({ status: 'missing' }),
       readProviderAuth: () => null,
     });
-    const unavailable = loadClaudeCredential({
+    const unavailable = await loadClaudeCredential({
       platform: 'darwin',
       env: { CLAUDE_CONFIG_DIR: configDirectory },
       readKeychain: () => ({ status: 'unavailable' }),

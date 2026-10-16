@@ -5,12 +5,14 @@ import { getSyncSessions } from '@/sync/sync-refs';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
+import { getZoneView, resolveZoneActiveTabId, shownContextModes, zoneOfMode } from '@/lib/workspace/zones';
 import { useUpdateStore } from '@/stores/useUpdateStore';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { createWorktreeSession } from '@/lib/worktreeSessionCreator';
 import { showOpenCodeStatus } from '@/lib/openCodeStatus';
 import { addSelectionToChat } from '@/lib/addSelectionToChat';
+import { navigateSessionHistory } from '@/lib/sessionNavigationHistory';
 
 const getActiveElementSelectedText = (): string => {
   if (typeof document === 'undefined') {
@@ -215,11 +217,15 @@ export const useMenuActions = (
           if (!directory) break;
           const uiState = useUIStore.getState();
           const directoryKey = normalizeContextPanelDirectoryKey(directory);
+          // The right zone only: it is the panel this menu item always meant.
           const panelState = uiState.contextPanelByDirectory[directoryKey];
+          const rightTabId = panelState
+            ? resolveZoneActiveTabId(panelState.tabs, uiState.contextSurfaceZones, 'right', getZoneView(panelState, 'right').activeTabId)
+            : null;
           if (panelState?.isOpen) {
             uiState.closeContextPanel(directoryKey);
-          } else if (panelState?.activeTabId) {
-            uiState.setActiveContextPanelTab(directoryKey, panelState.activeTabId);
+          } else if (rightTabId) {
+            uiState.setActiveContextPanelTab(directoryKey, rightTabId);
           } else {
             uiState.openContextSurface(directoryKey, 'git');
           }
@@ -253,11 +259,10 @@ export const useMenuActions = (
           const key = normalizeContextPanelDirectoryKey(directory);
           const uiState = useUIStore.getState();
           const panel = uiState.contextPanelByDirectory[key];
-          const activeMode = panel?.isOpen ? panel.tabs.find((tab) => tab.id === panel.activeTabId)?.mode : null;
-          if (activeMode !== 'terminal') {
+          if (!shownContextModes(panel, uiState.contextSurfaceZones).has('terminal')) {
             uiState.openContextSurface(key, 'terminal');
           }
-          uiState.toggleContextPanelExpanded(key);
+          uiState.toggleContextPanelExpanded(key, zoneOfMode(uiState.contextSurfaceZones, 'terminal'));
           break;
         }
 
@@ -294,12 +299,14 @@ export const useMenuActions = (
           onToggleMemoryDebug?.();
           break;
 
+        // Same history as the Back/Forward shortcuts, which this menu's
+        // accelerators shadow on Windows and Linux.
         case 'go-back':
-          useDirectoryStore.getState().goBack();
+          navigateSessionHistory(-1);
           break;
 
         case 'go-forward':
-          useDirectoryStore.getState().goForward();
+          navigateSessionHistory(1);
           break;
 
         case 'previous-session':

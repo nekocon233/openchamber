@@ -4,7 +4,7 @@ import { handleBridgeMessage, type BridgeRequest, type BridgeResponse } from './
 import { getThemeKindName } from './theme';
 import type { OpenCodeManager, ConnectionStatus } from './opencode';
 import { getWebviewShikiThemes } from './shikiThemes';
-import { getWebviewHtml } from './webviewHtml';
+import { getCspBootstrapHtml, getWebviewHtml } from './webviewHtml';
 import { openSseProxy } from './sseProxy';
 import { resolveWebviewDevServerUrl } from './webviewDevServer';
 import { normalizeWindowsDriveLetter } from './pathUtils';
@@ -106,6 +106,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const distUri = vscode.Uri.joinPath(this._extensionUri, 'dist');
 
+    webviewView.webview.html = getCspBootstrapHtml();
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this._extensionUri, distUri],
@@ -374,6 +375,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: 'command',
       command: 'workspaceFoldersChanged',
       payload: { workspaceFolders },
+    });
+  }
+
+  public openSession(sessionId: string) {
+    this._view?.webview.postMessage({
+      type: 'command',
+      command: 'openSession',
+      payload: { sessionId },
     });
   }
 

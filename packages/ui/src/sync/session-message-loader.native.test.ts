@@ -44,6 +44,7 @@ const createLoader = (loadNativeMessages: (request: NativeRequest) => Promise<Na
   const loader = new SessionMessageLoader(
     childStores,
     { sdk, runtimeKey: "runtime-a" },
+    undefined,
     (params) => loadNativeMessages(params),
   )
   return { childStores, loader, openCodeCalls }

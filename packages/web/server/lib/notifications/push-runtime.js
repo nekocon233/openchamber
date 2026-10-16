@@ -91,7 +91,7 @@ export const createPushRuntime = (deps) => {
 
   const writePushSubscriptionsToDisk = async (data) => {
     await fsPromises.mkdir(path.dirname(PUSH_SUBSCRIPTIONS_FILE_PATH), { recursive: true });
-    await fsPromises.writeFile(PUSH_SUBSCRIPTIONS_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
+    await fsPromises.writeFile(PUSH_SUBSCRIPTIONS_FILE_PATH, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
   };
 
   const persistPushSubscriptionUpdate = async (mutate) => {

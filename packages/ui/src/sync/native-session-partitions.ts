@@ -15,7 +15,7 @@ const BACKENDS: NativeBackend[] = ['claude', 'codex'];
 const NATIVE_LIST_CONCURRENCY = 4;
 
 /** Fresh root sessions per backend; null marks a backend that could not be read. */
-export type NativePartitionSnapshot = { claude: Session[] | null; codex: Session[] | null };
+type NativePartitionSnapshot = { claude: Session[] | null; codex: Session[] | null };
 
 const snapshotOf = (list: NativeSessionList): NativePartitionSnapshot => ({
   claude: list.backends.claude.status === 'ok' ? list.backends.claude.sessions : null,

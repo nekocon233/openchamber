@@ -19,7 +19,10 @@ type SessionNavigationSurface = {
 }
 
 const getCurrentSessionNavigationSurface = (): SessionNavigationSurface => {
-  if (typeof window === 'undefined') {
+  // Without a location the surface reads as empty: only URL-carried session and
+  // directory hints are unavailable, and the persistence helpers below have to
+  // keep working (they run at app start and on every endpoint switch).
+  if (typeof window === 'undefined' || typeof window.location === 'undefined') {
     return { search: '', pathname: '' }
   }
   return {

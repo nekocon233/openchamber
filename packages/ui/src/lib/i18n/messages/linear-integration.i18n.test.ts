@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { linearIntegrationI18n } from './linear-integration.i18n';
 
-const locales = ['en', 'de', 'fr', 'es', 'ja', 'pt-BR', 'uk', 'ko', 'pl', 'zh-CN', 'zh-TW', 'tr'] as const;
+const locales = ['en', 'de', 'fr', 'nl', 'es', 'ja', 'pt-BR', 'uk', 'ko', 'pl', 'zh-CN', 'zh-TW', 'tr'] as const;
 
 const requiredKeys = [
   'settings.integrations.firstParty.title',
@@ -45,10 +45,6 @@ const requiredKeys = [
   'settings.integrations.linear.sessionComments.info',
   'settings.integrations.linear.sessionComments.aria',
   'settings.integrations.linear.sessionComments.loadFailed',
-  'settings.magicPrompts.sidebar.group.linear',
-  'settings.magicPrompts.sidebar.item.linearIssueReview',
-  'settings.magicPrompts.page.group.linearIssueReview.title',
-  'settings.magicPrompts.page.group.linearIssueReview.description',
 ] as const;
 
 describe('linear integration translations', () => {
@@ -61,7 +57,6 @@ describe('linear integration translations', () => {
         if (
           locale !== 'en'
           && key !== 'settings.integrations.linear.title'
-          && key !== 'settings.magicPrompts.sidebar.group.linear'
         ) {
           expect(value).not.toBe(english[key]);
         }

@@ -14,15 +14,22 @@ import type { UsageProviderGroup, UsageLimitRow } from '@/components/usage/usage
  * Quota provider ids mostly match OpenCode provider ids; these are the ones
  * that do not. Unmatched providers simply produce no headline.
  *
- * Managed Claude connections carry a different billing identity from the CLI.
+ * `claude-code` is the provider the opencode-claude integration registers, and
+ * it bills against the same Claude subscription the `claude` quota reports.
+ * The native CLI providers bill against their CLI's subscription the same way,
+ * unless a managed connection gives them their own billing identity.
+ * `kilocode` / `kilo-code` are the same Kilo Gateway account as `kilo`.
  */
 const QUOTA_PROVIDER_ALIASES = new Map<string, string>([
   ['openai', 'codex'],
   ['chatgpt', 'codex'],
   ['anthropic', 'claude'],
+  ['claude-code', 'claude'],
   ['claude-native', 'claude'],
   ['codex-native', 'codex'],
   ['gemini', 'google'],
+  ['kilocode', 'kilo'],
+  ['kilo-code', 'kilo'],
 ]);
 
 const normalize = (value: string | null | undefined): string => (value ?? '').trim().toLowerCase();

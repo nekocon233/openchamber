@@ -5,15 +5,17 @@ import {
   getEffectiveShortcutCombo,
 } from '@/lib/shortcuts';
 import { useUIStore } from '@/stores/useUIStore';
+import { useEnterpriseMode, useJevBlockedByEnterprise } from '@/stores/useEnterprisePolicyStore';
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useAgentsStore } from '@/stores/useAgentsStore';
 import { useCommandsStore } from '@/stores/useCommandsStore';
 import { useMcpConfigStore } from '@/stores/useMcpConfigStore';
 import { useSnippetsStore } from '@/stores/useSnippetsStore';
+import { projectSettingsTabForSearchTarget, useProjectSettingsTabStore } from '@/components/sections/projects/projectSettingsTabs';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useSkillsCatalogStore } from '@/stores/useSkillsCatalogStore';
-import { useConfigStore } from '@/stores/useConfigStore';
+import { NATIVE_PROVIDER_CLAUDE, NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
 import { Tooltip, TooltipTrigger } from '@/components/ui/tooltip';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
@@ -22,6 +24,7 @@ import { usePluginsStore } from '@/stores/usePluginsStore';
 import type { OpenChamberSection } from '@/components/sections/openchamber/types';
 import { OpenChamberPage } from '@/components/sections/openchamber/OpenChamberPage';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
+import { SettingsScrollbarTopClearanceContext } from '@/components/sections/shared/settingsScrollbarClearance';
 import {
   SETTINGS_SECTION_TITLE_CLASS,
 } from '@/components/sections/shared/SettingsSection';
@@ -48,16 +51,13 @@ const AgentsPage = lazyWithChunkRecovery(() => import('@/components/sections/age
 const BehaviorPage = lazyWithChunkRecovery(() => import('@/components/sections/behavior/BehaviorPage').then((m) => ({ default: m.BehaviorPage })));
 const CommandsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/commands/CommandsSidebar').then((m) => ({ default: m.CommandsSidebar })));
 const CommandsPage = lazyWithChunkRecovery(() => import('@/components/sections/commands/CommandsPage').then((m) => ({ default: m.CommandsPage })));
-const McpSidebar = lazyWithChunkRecovery(() => import('@/components/sections/mcp/McpSidebar').then((m) => ({ default: m.McpSidebar })));
 const McpPage = lazyWithChunkRecovery(() => import('@/components/sections/mcp/McpPage').then((m) => ({ default: m.McpPage })));
-const PluginsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/plugins').then((m) => ({ default: m.PluginsSidebar })));
 const PluginsPage = lazyWithChunkRecovery(() => import('@/components/sections/plugins').then((m) => ({ default: m.PluginsPage })));
 const SkillsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/skills/SkillsSidebar').then((m) => ({ default: m.SkillsSidebar })));
 const SkillsPage = lazyWithChunkRecovery(() => import('@/components/sections/skills/SkillsPage').then((m) => ({ default: m.SkillsPage })));
 const ProjectsSidebar = lazyWithChunkRecovery(() => import('@/components/sections/projects/ProjectsSidebar').then((m) => ({ default: m.ProjectsSidebar })));
 const ProjectsPage = lazyWithChunkRecovery(() => import('@/components/sections/projects/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 const RemoteInstancesPage = lazyWithChunkRecovery(() => import('@/components/sections/remote-instances/RemoteInstancesPage').then((m) => ({ default: m.RemoteInstancesPage })));
-const ProvidersSidebar = lazyWithChunkRecovery(() => import('@/components/sections/providers/ProvidersSidebar').then((m) => ({ default: m.ProvidersSidebar })));
 const ProvidersPage = lazyWithChunkRecovery(() => import('@/components/sections/providers/ProvidersPage').then((m) => ({ default: m.ProvidersPage })));
 const UsageSidebar = lazyWithChunkRecovery(() => import('@/components/sections/usage/UsageSidebar').then((m) => ({ default: m.UsageSidebar })));
 const UsagePage = lazyWithChunkRecovery(() => import('@/components/sections/usage/UsagePage').then((m) => ({ default: m.UsagePage })));
@@ -71,16 +71,28 @@ const RoutingPage = lazyWithChunkRecovery(() => import('@/components/sections/ro
 const ExtensionsPage = lazyWithChunkRecovery(() => import('@/components/sections/extensions/ExtensionsPage').then((m) => ({ default: m.ExtensionsPage })));
 const AboutSettings = lazyWithChunkRecovery(() => import('@/components/sections/openchamber/AboutSettings').then((m) => ({ default: m.AboutSettings })));
 
-// UI Kit: fixed settings navigation width
-const SETTINGS_NAV_WIDTH = 256;
+// UI Kit: fixed split-page sidebar width
 const SETTINGS_SPLIT_SIDEBAR_WIDTH = 280;
+// The desktop close button: top-1 offset plus its h-7 height.
+const SETTINGS_CLOSE_BUTTON_CLEARANCE = 32;
 const SETTINGS_DETAIL_HISTORY_KEY = '__openchamberSettingsDetail';
+/** How long (in frames, ~0.5 s) a search result or a link waits for its item to render. */
+const PENDING_ITEM_MAX_FRAMES = 30;
 
 type MobileStage = 'nav' | 'page-sidebar' | 'page-content';
 type SettingsDetailHistoryEntry = {
   page: SettingsPageSlug;
   stage: 'page-content';
 };
+
+interface SettingsDetailHistoryCandidate {
+  page?: string | null;
+  stage?: 'page-content' | null;
+}
+
+interface SettingsHistoryState {
+  [SETTINGS_DETAIL_HISTORY_KEY]?: SettingsDetailHistoryCandidate | null;
+}
 
 interface SettingsViewProps {
   onClose?: () => void;
@@ -115,6 +127,7 @@ const pageOrder: SettingsPageSlug[] = [
   'remote-instances',
   'tunnel',
   'git',
+  'isolated-spaces',
   // 'opencode' group — OpenCode
   'providers',
   'web-search',
@@ -132,12 +145,10 @@ const pageOrder: SettingsPageSlug[] = [
 
 const NAV_GROUP_ORDER = ['general', 'projects', 'opencode', 'content'] as const;
 
-const ADD_PROVIDER_SETTINGS_ID = '__add_provider__';
-
-function buildRuntimeContext(isDesktop: boolean, isMobile: boolean, routingAvailable: boolean): SettingsRuntimeContext {
+function buildRuntimeContext(isDesktop: boolean, isMobile: boolean, routingAvailable: boolean, enterpriseMode: boolean, jevBlockedByEnterprise: boolean): SettingsRuntimeContext {
   const isVSCode = isVSCodeRuntime();
   const isWeb = !isDesktop && isWebRuntime();
-  return { isVSCode, isWeb, isDesktop, isMobile, isHostLocalOrigin: isHostLocalOriginActive(), routingAvailable };
+  return { isVSCode, isWeb, isDesktop, isMobile, isHostLocalOrigin: isHostLocalOriginActive(), routingAvailable, enterpriseMode, jevBlockedByEnterprise };
 }
 
 function isPageAvailable(page: SettingsPageMeta, ctx: SettingsRuntimeContext): boolean {
@@ -145,10 +156,6 @@ function isPageAvailable(page: SettingsPageMeta, ctx: SettingsRuntimeContext): b
     return true;
   }
   return page.isAvailable(ctx);
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function nextUniqueName(baseName: string, existingNames: Iterable<string>): string {
@@ -162,31 +169,18 @@ function nextUniqueName(baseName: string, existingNames: Iterable<string>): stri
   return name;
 }
 
-function getSettingsDetailHistoryEntry(state: unknown): SettingsDetailHistoryEntry | null {
-  if (!isObjectRecord(state)) {
+function getSettingsDetailHistoryEntry(state: SettingsHistoryState | null): SettingsDetailHistoryEntry | null {
+  const detail = state?.[SETTINGS_DETAIL_HISTORY_KEY];
+  if (detail?.page == null || detail.stage !== 'page-content') {
     return null;
   }
 
-  const detail = state[SETTINGS_DETAIL_HISTORY_KEY];
-  if (!isObjectRecord(detail)) {
-    return null;
-  }
-
-  const page = detail.page;
-  const stage = detail.stage;
-  if (typeof page !== 'string' || stage !== 'page-content') {
-    return null;
-  }
-
-  const resolvedPage = resolveSettingsSlug(page);
-  return { page: resolvedPage, stage };
+  return { page: resolveSettingsSlug(detail.page), stage: detail.stage };
 }
 
-function getCurrentHistoryState(): Record<string, unknown> {
-  if (typeof window === 'undefined' || !isObjectRecord(window.history.state)) {
-    return {};
-  }
-  return window.history.state;
+function getCurrentHistoryState(): SettingsHistoryState {
+  const state: SettingsHistoryState | null = window.history.state;
+  return state ?? {};
 }
 
 
@@ -234,22 +228,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     return isDesktopShell() && isDesktopLocalOriginActive();
   }, []);
   const isMac = React.useMemo(() => {
-    return isDesktopShell() && typeof window !== 'undefined'
-      && (window as unknown as { __OPENCHAMBER_PLATFORM__?: string }).__OPENCHAMBER_PLATFORM__ === 'darwin';
+    return isDesktopShell() && window.__OPENCHAMBER_PLATFORM__ === 'darwin';
   }, []);
   const isWindows = React.useMemo(() => {
-    return isDesktopShell() && typeof window !== 'undefined'
-      && (window as unknown as { __OPENCHAMBER_PLATFORM__?: string }).__OPENCHAMBER_PLATFORM__ === 'win32';
+    return isDesktopShell() && window.__OPENCHAMBER_PLATFORM__ === 'win32';
   }, []);
   const isLinux = React.useMemo(() => {
-    return isDesktopShell() && typeof window !== 'undefined'
-      && (window as unknown as { __OPENCHAMBER_PLATFORM__?: string }).__OPENCHAMBER_PLATFORM__ === 'linux';
+    return isDesktopShell() && window.__OPENCHAMBER_PLATFORM__ === 'linux';
   }, []);
 
   // keep platform check available for future window chrome tweaks
 
   const routingAvailable = useUIStore((state) => state.routingFeatureAvailable);
-  const runtimeCtx = React.useMemo(() => buildRuntimeContext(isDesktopApp, isMobile, routingAvailable), [isDesktopApp, isMobile, routingAvailable]);
+  const enterpriseMode = useEnterpriseMode();
+  const jevBlockedByEnterprise = useJevBlockedByEnterprise();
+  const runtimeCtx = React.useMemo(
+    () => buildRuntimeContext(isDesktopApp, isMobile, routingAvailable, enterpriseMode, jevBlockedByEnterprise),
+    [isDesktopApp, isMobile, routingAvailable, enterpriseMode, jevBlockedByEnterprise],
+  );
 
   const visiblePages = React.useMemo(() => {
     const allowedPages = visiblePageSlugs ? new Set<SettingsPageSlug>(visiblePageSlugs) : null;
@@ -318,24 +314,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     setMobileStage(def.kind === 'split' ? 'page-sidebar' : 'page-content');
   }, [isMobile, setSettingsPage]);
 
-  const openThirdPartyProviderSetup = React.useCallback(async (providerId: string): Promise<boolean> => {
-    const configStore = useConfigStore.getState();
-    await configStore.loadProviders({ source: 'settings:third-party-provider-setup' });
-    const providerAvailable = useConfigStore.getState().providers.some(
-      (provider) => provider.id === providerId,
-    );
-    if (!providerAvailable) {
-      return false;
-    }
-
-    configStore.setSelectedProvider(providerId);
-    openPage('providers');
-    if (isMobile) {
-      setMobileStage('page-content');
-    }
-    return true;
-  }, [isMobile, openPage]);
-
   const activePageMeta = React.useMemo(() => {
     return getSettingsPageMeta(settingsSlug);
   }, [settingsSlug]);
@@ -351,6 +329,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     notifications: 'notifications',
     voice: 'voice',
     tunnel: 'tunnel',
+    'isolated-spaces': 'spaces',
   }), []);
 
   const getPageTitle = React.useCallback((slug: SettingsPageSlug): string => {
@@ -407,6 +386,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
         return t('settings.page.voice.title');
       case 'tunnel':
         return t('settings.page.tunnel.title');
+      case 'isolated-spaces':
+        return t('settings.openchamber.spaces.title');
       case 'about':
         return t('settings.page.about.title');
       case 'home':
@@ -493,19 +474,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     }
 
     if (result.id === 'providers.claude-connections' || result.id === 'providers.chatgpt-plan') {
-      useConfigStore.getState().setSelectedProvider('claude-native');
+      useUIStore.getState().setSettingsProvidersOpenRequested(NATIVE_PROVIDER_CLAUDE);
     }
 
     if (result.id === 'providers.codex-connections') {
-      useConfigStore.getState().setSelectedProvider('codex-native');
+      useUIStore.getState().setSettingsProvidersOpenRequested(NATIVE_PROVIDER_CODEX);
     }
 
     if (result.id === 'providers.connect') {
-      useConfigStore.getState().setSelectedProvider(ADD_PROVIDER_SETTINGS_ID);
+      useUIStore.getState().setSettingsProvidersConnectRequested(true);
+    }
+
+    if (result.id === 'providers.classification') {
+      useUIStore.getState().setSettingsProvidersClassificationRequested(true);
     }
 
     if (result.id === 'plugins.create') {
       return 'plugins.spec';
+    }
+
+    const projectTab = projectSettingsTabForSearchTarget(result.id);
+    if (projectTab) {
+      useProjectSettingsTabStore.getState().setTab(projectTab);
     }
 
     return result.id;
@@ -554,7 +544,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     if (isMobile) {
       setMobileStage('page-content');
     }
-    if (result.id === 'plugins.create' && typeof window !== 'undefined') {
+    if (result.id === 'plugins.create') {
       window.setTimeout(() => {
         window.dispatchEvent(new CustomEvent('openchamber:settings-open-plugin-add'));
       }, 50);
@@ -600,22 +590,43 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     }
   }, [openSearchResult, settingsSearchQuery, settingsSearchResults]);
 
+  // Links inside Settings (e.g. from a setting's explanation) travel the same
+  // road as a search result: open the page, then reveal the item.
+  const settingsJumpRequest = useUIStore((state) => state.settingsJumpRequest);
+  React.useEffect(() => {
+    if (!settingsJumpRequest) {
+      return;
+    }
+    useUIStore.getState().clearSettingsJumpRequest();
+    setPendingSearchItemId(settingsJumpRequest.itemId);
+    openPage(resolveSettingsSlug(settingsJumpRequest.page));
+    if (isMobile) {
+      setMobileStage('page-content');
+    }
+  }, [isMobile, openPage, settingsJumpRequest]);
+
   React.useEffect(() => {
     const targetId = pendingSearchItemId;
     if (!targetId) {
       return;
     }
 
+    // A page that loads its content (an agent's details, a provider's page)
+    // renders the item a few frames late, so look for it for a short while.
     let cancelled = false;
-    const frame = window.requestAnimationFrame(() => {
+    let attempts = 0;
+    let frame = 0;
+    const reveal = () => {
       if (cancelled) {
         return;
       }
-      const escapedId = typeof CSS !== 'undefined' && CSS.escape
-        ? CSS.escape(targetId)
+      const escapedId = globalThis.CSS?.escape
+        ? globalThis.CSS.escape(targetId)
         : targetId.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
       const target = containerRef.current?.querySelector<HTMLElement>(`[data-settings-item="${escapedId}"]`);
       if (!target) {
+        attempts += 1;
+        if (attempts < PENDING_ITEM_MAX_FRAMES) frame = window.requestAnimationFrame(reveal);
         return;
       }
       setPendingSearchItemId(null);
@@ -624,7 +635,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       window.setTimeout(() => {
         target.removeAttribute('data-settings-search-highlight');
       }, 1600);
-    });
+    };
+    frame = window.requestAnimationFrame(reveal);
 
     return () => {
       cancelled = true;
@@ -655,14 +667,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
         return wrapLazyPage(<AgentsSidebar onItemSelect={opts.onItemSelect} />);
       case 'commands':
         return wrapLazyPage(<CommandsSidebar onItemSelect={opts.onItemSelect} />);
-      case 'mcp':
-        return wrapLazyPage(<McpSidebar onItemSelect={opts.onItemSelect} />);
-      case 'plugins':
-        return wrapLazyPage(<PluginsSidebar onItemSelect={opts.onItemSelect} />);
       case 'skills.installed':
         return wrapLazyPage(<SkillsSidebar onItemSelect={opts.onItemSelect} />);
-      case 'providers':
-        return wrapLazyPage(<ProvidersSidebar onItemSelect={opts.onItemSelect} />);
       case 'usage':
         return wrapLazyPage(<UsageSidebar onItemSelect={opts.onItemSelect} />);
       case 'magic-prompts':
@@ -718,12 +724,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       case 'git':
         return wrapLazyPage(<GitPage />);
       case 'integrations':
-        return wrapLazyPage(
-          <IntegrationsPage
-            onOpenProviderSetup={openThirdPartyProviderSetup}
-            onOpenPluginManager={() => openPage('plugins')}
-          />
-        );
+        return wrapLazyPage(<IntegrationsPage />);
       case 'routing':
         return wrapLazyPage(<RoutingPage />);
       case 'extensions':
@@ -735,7 +736,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       case 'sessions':
       case 'notifications':
       case 'voice':
-      case 'tunnel': {
+      case 'tunnel':
+      case 'isolated-spaces': {
         const section = openChamberSectionBySlug[slug] ?? 'visual';
         return <OpenChamberPage section={section} />;
       }
@@ -743,7 +745,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       default:
         return null;
     }
-  }, [openChamberSectionBySlug, openPage, openThirdPartyProviderSetup, renderUnavailable, runtimeCtx, t, wrapLazyPage]);
+  }, [openChamberSectionBySlug, openPage, renderUnavailable, runtimeCtx, t, wrapLazyPage]);
 
   // Mobile: if opened via deep-link / palette to a non-home page, jump into it once.
   React.useEffect(() => {
@@ -790,7 +792,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     : t('settings.view.actions.closeSettings');
 
   const pushMobileSplitDetailHistory = React.useCallback((slug: SettingsPageSlug) => {
-    if (typeof window === 'undefined' || runtimeCtx.isVSCode) {
+    if (runtimeCtx.isVSCode) {
       return;
     }
 
@@ -834,9 +836,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
 
   const handleBack = React.useCallback(() => {
     if (backButtonTargetsPageSidebar) {
-      const currentDetail = typeof window !== 'undefined'
-        ? getSettingsDetailHistoryEntry(window.history.state)
-        : null;
+      const currentDetail = getSettingsDetailHistoryEntry(window.history.state);
       if (currentDetail?.page === settingsSlug && !runtimeCtx.isVSCode) {
         window.history.back();
         return;
@@ -948,7 +948,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
                           }}
                           onClick={() => openSearchResult(result)}
                           className={cn(
-                            'flex w-full flex-col rounded-md px-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            'flex w-full flex-col rounded-md px-2 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                             hasDescription ? 'min-h-11 py-1.5' : 'py-2',
                             active ? 'bg-interactive-selection' : 'hover:bg-interactive-hover'
                           )}
@@ -1089,22 +1089,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       return null;
     }
 
+    // The floating close button sits over the content's top-right corner, so
+    // the content scrollbar starts below it.
+    const scrollbarTopClearance = onClose ? SETTINGS_CLOSE_BUTTON_CLEARANCE : 0;
+    const content = (
+      <SettingsScrollbarTopClearanceContext.Provider value={scrollbarTopClearance}>
+        <ErrorBoundary>{renderPageContent(settingsSlug)}</ErrorBoundary>
+      </SettingsScrollbarTopClearanceContext.Provider>
+    );
+
     if (activePageMeta.kind === 'split') {
       return (
         <div className="flex h-full min-h-0 overflow-hidden">
-          <div className={cn('border-r', runtimeCtx.isVSCode ? 'bg-background' : 'bg-sidebar')} style={{ width: SETTINGS_SPLIT_SIDEBAR_WIDTH, minWidth: SETTINGS_SPLIT_SIDEBAR_WIDTH, borderColor: 'var(--interactive-border)' }}>
+          <div className={cn('border-e', runtimeCtx.isVSCode ? 'bg-background' : 'bg-sidebar')} style={{ width: SETTINGS_SPLIT_SIDEBAR_WIDTH, minWidth: SETTINGS_SPLIT_SIDEBAR_WIDTH, borderColor: 'var(--interactive-border)' }}>
             <ErrorBoundary>{renderPageSidebar(settingsSlug, {})}</ErrorBoundary>
           </div>
-          <ScrollableOverlay outerClassName="flex-1 min-h-0" className="bg-background" disableHorizontal>
-            <ErrorBoundary>{renderPageContent(settingsSlug)}</ErrorBoundary>
+          <ScrollableOverlay outerClassName="flex-1 min-h-0" className="bg-background" disableHorizontal verticalTrackStart={scrollbarTopClearance}>
+            {content}
           </ScrollableOverlay>
         </div>
       );
     }
 
     return (
-      <ScrollableOverlay outerClassName="h-full min-h-0" className="bg-background" disableHorizontal>
-        <ErrorBoundary>{renderPageContent(settingsSlug)}</ErrorBoundary>
+      <ScrollableOverlay outerClassName="h-full min-h-0" className="bg-background" disableHorizontal verticalTrackStart={scrollbarTopClearance}>
+        {content}
       </ScrollableOverlay>
     );
   };
@@ -1160,7 +1169,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
       ) : (
         <>
           {showBackButton && (
-            <div className={cn('absolute left-3 z-50', isWindowed ? 'top-2' : 'top-3')}>
+            <div className={cn('absolute inset-s-3 z-50', isWindowed ? 'top-2' : 'top-3')}>
               <button
                 type="button"
                 onClick={handleBack}
@@ -1173,7 +1182,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
           )}
 
       {onClose && (
-        <div className={cn('absolute right-0.5 z-50', isWindowed ? 'top-0.5' : 'top-1')}>
+        <div className={cn('absolute inset-e-0.5 z-50', isWindowed ? 'top-0.5' : 'top-1')}>
           <button
             type="button"
             onClick={onClose}
@@ -1195,7 +1204,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
           <>
             <div
               className={cn(
-                'relative flex h-full min-h-0 flex-col overflow-hidden border-r',
+                'relative flex h-full min-h-0 w-36 min-w-36 flex-col overflow-hidden border-e sm:w-64 sm:min-w-64',
                 isDesktopApp
                   ? 'bg-sidebar'
                   : runtimeCtx.isVSCode
@@ -1203,8 +1212,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
                     : 'bg-sidebar',
               )}
               style={{
-                width: `${SETTINGS_NAV_WIDTH}px`,
-                minWidth: `${SETTINGS_NAV_WIDTH}px`,
                 borderColor: 'var(--interactive-border)',
               }}
             >

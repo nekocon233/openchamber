@@ -1,7 +1,27 @@
 export { OPENCHAMBER_SDK_API_VERSION, OPENCHAMBER_SDK_CHANNEL, OPENCHAMBER_SDK_MANIFEST_API_VERSIONS } from './api-version.ts';
 export { GUEST_SCROLLBAR_CSS, GUEST_SCROLLBAR_SCRIPT } from './scrollbar-style.ts';
-export type { GuestLoadState, GuestProject, GuestWorktree, GuestSessionActivity, GuestSessionRecord, GuestDirectoryCoverage, GuestProjectsSnapshot, GuestWorktreesSnapshot, GuestSessionsSnapshot, GuestWorkspaceSnapshot, GuestWorkspaceQuery, GuestWorkspaceSubscription, GuestWorkspaceUpdate, GuestStorageRequest, GuestStorageResult, GuestSessionWorktree } from './workspace.ts';
-export { GUEST_STORAGE_KEY_MAX, GUEST_STORAGE_KEYS_MAX, GUEST_STORAGE_VALUE_BYTES, GUEST_STORAGE_TOTAL_BYTES } from './workspace.ts';
+export { guestFramePolicy } from './frame-policy.ts';
+export type { GuestLoadState, GuestProject, GuestWorktree, GuestSessionActivity, GuestSessionRecord, GuestDirectoryCoverage, GuestProjectsSnapshot, GuestWorktreesSnapshot, GuestSessionsSnapshot, GuestWorkspaceSnapshot, GuestWorkspaceQuery, GuestWorkspaceSubscription, GuestWorkspaceUpdate, GuestStorageRequest, GuestStorageResult, GuestStorageOptions, GuestStorageScope, GuestSessionWorktree } from './workspace.ts';
+export { GUEST_STORAGE_KEY_MAX, GUEST_STORAGE_KEYS_MAX, GUEST_STORAGE_VALUE_BYTES, GUEST_STORAGE_TOTAL_BYTES, GUEST_DEVICE_STORAGE_TOTAL_BYTES } from './workspace.ts';
+export type {
+  GuestRunningShell,
+  GuestEndedShell,
+  GuestShellEndStatus,
+  GuestRunningShellsSnapshot,
+  GuestShellsScope,
+  GuestShellsSubscription,
+  GuestShellOutputRequest,
+  GuestShellOutputResult,
+  GuestShellStopResult,
+} from './shells.ts';
+export {
+  GUEST_SHELL_END_STATUSES,
+  GUEST_SHELL_ID_MAX,
+  GUEST_SHELLS_MAX,
+  GUEST_SHELL_OUTPUT_TAIL_MAX,
+} from './shells.ts';
+export { GUEST_STATUS_CONTROLS_MAX, GUEST_STATUS_CONTROL_ID, GUEST_STATUS_CONTROL_LABEL_MAX, GUEST_STATUS_CONTROL_OPTIONS_MAX, GUEST_STATUS_CONTROL_VALUE_MAX } from './status-controls.ts';
+export type { GuestStatusControl, GuestStatusControlEvent, GuestStatusControlOption } from './status-controls.ts';
 export type { OpenChamberManifestApiVersion } from './api-version.ts';
 export {
   compareOpenChamberVersions,
@@ -31,6 +51,7 @@ export {
   guestActionsNeedConversation,
   GUEST_FILESYSTEM_PATTERN_MAX,
   GUEST_FILESYSTEM_PATTERNS_MAX,
+  GUEST_ORIGINS_MAX,
   GUEST_SERVICE_PROVIDES,
   GUEST_SURFACE_DOCKS,
   GUEST_SURFACE_DOCK_DEFAULT,
@@ -107,8 +128,44 @@ export type {
   SocketBinding,
   SocketPlatform,
 } from './manifest.ts';
+export {
+  GUEST_FILE_EDITORS_MAX,
+  GUEST_FILE_EDITOR_CONTENT_MAX,
+  GUEST_FILE_EDITOR_PATTERNS_MAX,
+  GUEST_FILE_EDITOR_PATTERN_MAX,
+  GUEST_FILE_EDITOR_TITLE_MAX,
+  GUEST_FILE_EDITOR_VERSION_MAX,
+  createFileSaveTracker,
+  fileEditorPayloadSize,
+  isFileEditorPattern,
+  matchesFileEditorPattern,
+} from './file-editor.ts';
+export type {
+  FileEditorChange,
+  FileEditorContentKind,
+  FileEditorContribution,
+  FileEditorDocument,
+  FileEditorSnapshot,
+  FileSnapshotPurpose,
+  FileSnapshotRequest,
+  FileSnapshotResultPayload,
+} from './file-editor.ts';
 export { connectHost, HostRequestError } from './host.ts';
 export type { HostClient, HostClientOptions, HostFrame } from './host.ts';
+export {
+  GUEST_POPOVER_COORDINATE_MAX,
+  GUEST_POPOVER_DATA_DEPTH_MAX,
+  GUEST_POPOVER_DATA_MAX,
+  GUEST_POPOVER_HEIGHT_MAX,
+  GUEST_POPOVER_HEIGHT_MIN,
+  GUEST_POPOVER_ID,
+  GUEST_POPOVER_SIDES,
+  GUEST_POPOVER_WIDTH_MAX,
+  GUEST_POPOVER_WIDTH_MIN,
+  GUEST_POPOVER_CLOSE_REASONS,
+  isGuestPopoverRequest,
+} from './popover.ts';
+export type { GuestPopoverAnchor, GuestPopoverClosedEvent, GuestPopoverContext, GuestPopoverRequest, GuestPopoverSide } from './popover.ts';
 export {
   clampAttachRequest,
   clampBadgeCount,
@@ -144,9 +201,20 @@ export type {
   GuestActionItem,
   GuestActionResultMessage,
   HostActionMessage,
+  HostFileOpenMessage,
+  HostFileSnapshotMessage,
+  HostFileSavedMessage,
+  GuestFileSnapshotResultMessage,
+  GuestFileChangeMessage,
+  GuestFileSaveMessage,
+  GuestFileUnsupportedMessage,
   GuestBadgeMessage,
   GuestResizeMessage,
   GuestOpenCommitMessage,
+  GuestStatusControlsMessage,
+  GuestPopoverAnchorMessage,
+  GuestPopoverCloseMessage,
+  GuestPopoverOpenMessage,
   OpenCommitRequest,
   ResizeRequest,
   GuestItem,
@@ -195,6 +263,10 @@ export type {
   ComposeRequest,
   GuestServiceRequestMessage,
   GuestServiceStatusMessage,
+  GuestShellOutputMessage,
+  GuestShellsSubscribeMessage,
+  GuestShellsUnsubscribeMessage,
+  GuestShellStopMessage,
   GuestAttachMessage,
   GuestClipboardWriteMessage,
   GuestCloseMessage,
@@ -219,6 +291,8 @@ export type {
   HostConnectionMessage,
   HostDirectoryMessage,
   HostItemMessage,
+  HostStatusControlEventMessage,
+  HostPopoverClosedMessage,
   HostMessage,
   HostReadyContext,
   HostReadyMessage,
@@ -226,6 +300,7 @@ export type {
   HostSessionLifecycleMessage,
   HostSessionMessage,
   HostSettingsMessage,
+  HostShellsMessage,
   HostTheme,
   HostThemeMode,
   HostThemeTokens,

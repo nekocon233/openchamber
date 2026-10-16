@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const indicatorSource = readFileSync(join(currentDirectory, 'SessionRunningIndicator.tsx'), 'utf8');
+const activityIndicatorSource = readFileSync(join(currentDirectory, 'SessionActivityIndicator.tsx'), 'utf8');
 const nodeSource = readFileSync(join(currentDirectory, 'sidebar/sessions/SessionNodeItem.tsx'), 'utf8');
 const switcherSource = readFileSync(join(currentDirectory, 'SessionSwitcherDropdown.tsx'), 'utf8');
 const mobileSessionsSource = readFileSync(join(currentDirectory, '../../apps/MobileSessionsSheet.tsx'), 'utf8');
@@ -23,21 +24,20 @@ describe('shared running session indicator', () => {
   test('uses the shared spinner in every individual session list', () => {
     expect(indicatorSource).toContain('name="loader-4"');
     expect(indicatorSource).toContain('text-[var(--status-info)]');
-    expect(nodeSource).toContain('<SessionRunningIndicator');
-    expect(nodeSource).toContain('const statusMarkerContent = isStreaming ? (');
-    expect(nodeSource).toContain('useSessionTurnActive(session.id)');
-    expect(switcherSource).toContain('<SessionRunningIndicator');
+    expect(nodeSource).toContain('<SessionActivityIndicator');
+    expect(nodeSource).toContain("const statusMarkerContent = <SessionActivityIndicator state={turnActivity ?? 'unread'} tooltip />;");
+    expect(nodeSource).toContain('useSessionTurnActivity(session.id)');
+    expect(switcherSource).toContain('<SessionActivityIndicator');
     expect(mobileSessionsSource).toContain('<SessionActivityIndicator');
-    expect(mobileSwitcherSource).toContain('<SessionRunningIndicator');
+    expect(mobileSwitcherSource).toContain('<SessionActivityIndicator');
     expect(commandPaletteSource).toContain('<SessionRunningIndicator');
   });
 
   test('keeps unread and collapsed aggregate markers as static dots', () => {
-    expect(nodeSource).toContain('className="h-1.5 w-1.5 rounded-full bg-[var(--status-info)]"');
-    expect(mobileSwitcherSource).toContain('className="size-1.5 rounded-full bg-[var(--status-info)]"');
-    expect(nodeSource).toContain('role="img"');
-    expect(mobileSwitcherSource).toContain('role="img"');
-    expect(mobileSwitcherSource).toContain('aria-label={unreadStatusLabel}');
+    expect(activityIndicatorSource).toContain('{running && animated ? (');
+    expect(activityIndicatorSource).toContain("unread: { icon: 'checkbox-circle'");
+    expect(nodeSource).toContain("state={turnActivity ?? 'unread'}");
+    expect(mobileSwitcherSource).toContain('<SessionActivityIndicator');
     expect(collapsedIndicatorSource).not.toContain('SessionRunningIndicator');
     expect(collapsedIndicatorSource).not.toContain('animate-spin');
     expect(projectAggregateSource).not.toContain('SessionRunningIndicator');

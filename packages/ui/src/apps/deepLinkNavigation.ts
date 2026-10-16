@@ -1,6 +1,9 @@
 import React from 'react';
 
 import { isCapacitorApp } from '@/lib/platform';
+import { subscribeToNativeShortcutRequests } from '@/lib/nativeShortcutRequests';
+import { useProjectsStore } from '@/stores/useProjectsStore';
+import { useInputStore } from '@/sync/input-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useUIStore } from '@/stores/useUIStore';
 import {
@@ -12,6 +15,8 @@ import {
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { getPWADisplayMode } from '@/lib/pwa';
 import { persistSessionNavigation } from '@/sync/session-navigation';
+import { requestMessageFocus } from '@/lib/router/messageFocus';
+import { openSessionLink } from '@/lib/router/openSessionFromRoute';
 
 import {
   parseDeepLink,
@@ -34,7 +39,7 @@ import {
  * readiness. Only the most recent intent is kept (newest wins) — a burst of taps shouldn't queue.
  */
 
-export interface DeepLinkHandlers {
+interface DeepLinkHandlers {
   /** Close shell-local surfaces that would obscure a newly selected session. */
   prepareForSession?: () => void;
   /** Open the sessions sheet, optionally pre-filtered (filter support is best-effort for now). */
@@ -47,10 +52,19 @@ export interface DeepLinkHandlers {
   openSettings?: (section?: string) => void;
 }
 
+/**
+ * A new session asked for by the iOS Shortcuts app or Siri (see nativeShortcutRequests).
+ * Unlike a deep link it may carry a first message to send, which is why it never comes
+ * from a URL.
+ */
+type ShortcutNewSessionIntent = { type: 'shortcut-new-session'; projectId?: string; text?: string };
+
+type NavigationIntent = DeepLinkIntent | ShortcutNewSessionIntent;
+
 let handlers: DeepLinkHandlers = {};
 let ready = false;
 type PendingDeepLink = {
-  intent: DeepLinkIntent;
+  intent: NavigationIntent;
   prepareSession: boolean;
 };
 
@@ -98,9 +112,39 @@ const watchForPendingSession = (
   });
 };
 
+/**
+ * Opens a draft in the requested project, or where the user last was when none is named,
+ * and leaves the message for the draft's composer to send. A project the app no longer
+ * knows (the Shortcuts picker lists the projects of the last time the app was open) opens
+ * the default draft with the message added to its composer, unsent: the user picks the place.
+ */
+const openShortcutSession = (intent: ShortcutNewSessionIntent): void => {
+  const store = useSessionUIStore.getState();
+  const project = intent.projectId
+    ? useProjectsStore.getState().projects.find((entry) => entry.id === intent.projectId) ?? null
+    : null;
+  store.openNewSessionDraft(project ? { selectedProjectId: project.id } : undefined);
+  const text = intent.text?.trim();
+  if (!text) return;
+  if (intent.projectId && !project) {
+    useInputStore.getState().setPendingInputText(text, 'append');
+    return;
+  }
+  useInputStore.getState().requestDraftSubmit(useSessionUIStore.getState().newSessionDraft.draftId, text);
+};
+
 const execute = ({ intent, prepareSession }: PendingDeepLink): boolean => {
   switch (intent.type) {
+    case 'shortcut-new-session':
+      openShortcutSession(intent);
+      return true;
+
     case 'session':
+      // A message link carries no directory; the route opener resolves it.
+      if (intent.messageId && !intent.directory) {
+        void openSessionLink(intent.sessionId, intent.messageId);
+        return true;
+      }
       {
         const revision = intentRevision;
         const runtimeKey = getRuntimeKey();
@@ -114,6 +158,7 @@ const execute = ({ intent, prepareSession }: PendingDeepLink): boolean => {
             handlers.prepareForSession?.();
             useUIStore.getState().setSettingsDialogOpen(false);
           }
+          if (intent.messageId) requestMessageFocus(intent.sessionId, intent.messageId);
           void store.setCurrentSession(intent.sessionId, knownDirectory);
           return true;
         }
@@ -219,7 +264,7 @@ const flush = (): void => {
 
 /** Apply an intent now if possible, otherwise stash it until the app is ready / a handler appears. */
 export const applyDeepLinkIntent = (
-  intent: DeepLinkIntent,
+  intent: NavigationIntent,
   options: { prepareSession?: boolean } = {},
 ): void => {
   intentRevision += 1;
@@ -259,12 +304,11 @@ export const useDeepLinkHandlers = (next: DeepLinkHandlers): void => {
 };
 
 /**
- * Single native entry point for deep links. Subscribes to both the custom URL scheme
- * (`App.appUrlOpen` — widgets, Live Activities, external links) and notification taps
- * (`pushNotificationActionPerformed`), normalising each into a {@link DeepLinkIntent}.
- * Both listeners are registered UNCONDITIONALLY so a cold-launch tap/open isn't lost while
- * the app is still connecting. Intents that cannot be applied directly stash until `ready`
- * (connected + initialized).
+ * Single native entry point for deep links. Subscribes to the custom URL scheme
+ * (`App.appUrlOpen` — widgets, Live Activities, external links), notification taps
+ * (`pushNotificationActionPerformed`) and iOS Shortcuts requests, normalising each into an
+ * intent. The listeners are registered UNCONDITIONALLY so a cold-launch tap/open isn't lost
+ * while the app is still connecting; intents stash until `ready` (connected + initialized).
  */
 export const useDeepLinkSource = (options: { ready: boolean }): void => {
   const { ready: isReady } = options;
@@ -323,6 +367,10 @@ export const useDeepLinkSource = (options: { ready: boolean }): void => {
         cleanup.push(() => void handle.remove());
       })
       .catch(() => undefined);
+
+    cleanup.push(subscribeToNativeShortcutRequests((request) => {
+      applyDeepLinkIntent({ type: 'shortcut-new-session', projectId: request.projectId, text: request.text });
+    }));
 
     void import('@capacitor/push-notifications')
       .then(async ({ PushNotifications }) => {

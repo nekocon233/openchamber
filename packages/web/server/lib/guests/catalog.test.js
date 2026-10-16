@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { guestAssetContentType, inspectGuestPackage, listInstalledGuests, resolveGuestAssetPath, resolveGuestServedFile, toPublicGuest } from './catalog.js';
+import { guestAssetContentType, hasGuestFrame, inspectGuestPackage, listInstalledGuests, resolveGuestAssetPath, resolveGuestServedFile, toPublicGuest } from './catalog.js';
 import { setCapabilityGrants, writeExtensionPaths } from './persist.js';
 
 const writeBuiltGuest = async (root) => {
@@ -80,6 +80,7 @@ describe('listInstalledGuests', () => {
       path: hello.path,
       attach: 'dialog',
       enabled: true,
+      storageId: expect.any(String),
       capabilities: { requested: [], granted: [] },
     });
     expect(toPublicGuest({
@@ -263,7 +264,7 @@ describe('page-less packages', () => {
       await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ version: '1.0.0', openchamber: {
         apiVersion: 1, contributes: {
           panel: { id: 'git-graph', name: 'Git graph', icon: 'git-commit' },
-          statusSection: { entry: 'status/index.html', title: 'Recent commits', height: 160 },
+          statusSection: { entry: 'status/index.html', title: 'Recent commits', height: 160, defaultExpanded: false, requiresProject: true },
         },
       } }));
       expect(await inspectGuestPackage(dir)).toMatchObject({ ok: false, code: 'invalid-manifest' });
@@ -274,8 +275,31 @@ describe('page-less packages', () => {
       const inspected = await inspectGuestPackage(dir);
       expect(inspected.ok).toBe(true);
       const row = toPublicGuest(inspected.guest);
-      expect(row).toMatchObject({ statusEntry: 'status/index.html', statusTitle: 'Recent commits', statusHeight: 160 });
+       expect(row).toMatchObject({ statusEntry: 'status/index.html', statusTitle: 'Recent commits', statusHeight: 160, statusDefaultExpanded: false, statusRequiresProject: true });
       expect(row).not.toHaveProperty('entry');
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  test('a file-editor-only package validates each editor page, publishes the editors, and counts as a frame', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-file-editor-'));
+    try {
+      const editor = { id: 'canvas', title: 'Excalidraw', match: ['*.excalidraw'], entry: 'editor/index.html' };
+      const sheets = { id: 'sheets', title: 'Sheets', match: ['*.xlsx'], entry: 'editor/index.html', content: 'binary' };
+      await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ version: '1.0.0', openchamber: {
+        apiVersion: 1, contributes: { panel: { id: 'excalidraw', name: 'Excalidraw', icon: 'pencil-ruler-2' }, fileEditors: [editor, sheets] },
+      } }));
+      expect(await inspectGuestPackage(dir)).toMatchObject({ ok: false, code: 'invalid-manifest' });
+      await fs.mkdir(path.join(dir, 'editor'));
+      await fs.writeFile(path.join(dir, 'editor/index.html'), '<script src="main.js"></script>');
+      expect(await inspectGuestPackage(dir)).toMatchObject({ ok: false, code: 'missing-build' });
+      await fs.writeFile(path.join(dir, 'editor/main.js'), 'console.log("editor")');
+      const inspected = await inspectGuestPackage(dir);
+      expect(inspected.ok).toBe(true);
+      expect(hasGuestFrame(inspected.guest)).toBe(true);
+      const row = toPublicGuest(inspected.guest);
+      expect(row.fileEditors).toEqual([editor, sheets]);
+      expect(row).not.toHaveProperty('entry');
+      expect(await resolveGuestServedFile(dir, 'editor/main.js', { hasRuntime: hasGuestFrame(inspected.guest) })).not.toBeNull();
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 

@@ -1,6 +1,68 @@
+import { z } from "zod";
 import type { Session } from "@/lib/opencode/model";
 
-export type PermissionAutoAcceptMap = Record<string, boolean>;
+/**
+ * How a session answers tool permissions. The server owns the policy
+ * (`packages/web/server/lib/permission-auto-accept`):
+ *
+ * - `ask`: every request waits for the user.
+ * - `safety`: accepted unless the safety net (Jev) says the user should decide.
+ * - `auto`: every request is accepted.
+ */
+const permissionModeSchema = z.enum(["ask", "safety", "auto"]);
+
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
+
+export type PermissionModeMap = Record<string, PermissionMode>;
+
+/**
+ * The mode the user sees. Without a classification provider there is no safety
+ * net, and a `safety` session waits for the user exactly as an `ask` one does.
+ */
+export const displayedPermissionMode = (mode: PermissionMode, safetyAvailable: boolean): PermissionMode =>
+  mode === "safety" && !safetyAvailable ? "ask" : mode;
+
+/** The composer button's cycle: ask → safety → auto → ask, skipping safety while it is unavailable. */
+export const nextPermissionMode = (mode: PermissionMode, safetyAvailable: boolean): PermissionMode => {
+  const shown = displayedPermissionMode(mode, safetyAvailable);
+  if (shown === "ask") return safetyAvailable ? "safety" : "auto";
+  if (shown === "safety") return "auto";
+  return "ask";
+};
+
+export type PermissionPolicySnapshot = {
+  modes: PermissionModeMap;
+  /**
+   * What a session whose lineage names no mode answers, as the authority
+   * reports it. `false` means the policy is still the answer for everything
+   * outside it, so the client must fail closed until a snapshot arrives.
+   */
+  defaultEnabled: boolean;
+  revision?: number;
+};
+
+/**
+ * A policy as the server or VS Code's bridge sends it, over HTTP or as a
+ * broadcast. `modes` is the policy; servers from before the modes and VS Code
+ * send only `sessions` as on/off, where on means `auto`, plus `defaultEnabled`
+ * for a session outside the policy.
+ */
+export const permissionPolicyWireSchema = z.object({
+  sessions: z.record(z.string().min(1), z.boolean()),
+  modes: z.record(z.string().min(1), permissionModeSchema).optional(),
+  defaultEnabled: z.boolean().optional(),
+  revision: z.number().int().nonnegative().optional(),
+});
+
+type PermissionPolicyWire = z.infer<typeof permissionPolicyWireSchema>;
+
+export const policySnapshotFromWire = (wire: PermissionPolicyWire): PermissionPolicySnapshot => ({
+  modes: wire.modes ?? Object.fromEntries(
+    Object.entries(wire.sessions).map(([sessionId, enabled]) => [sessionId, enabled ? "auto" : "ask"] as const),
+  ),
+  defaultEnabled: wire.defaultEnabled === true,
+  revision: wire.revision,
+});
 
 const buildSessionMap = (sessions: Session[]): Map<string, Session> => {
   const map = new Map<string, Session>();
@@ -10,29 +72,43 @@ const buildSessionMap = (sessions: Session[]): Map<string, Session> => {
   return map;
 };
 
-export const autoRespondsPermission = (input: {
-  autoAccept: PermissionAutoAcceptMap;
-  defaultEnabled: boolean;
-  sessions: Session[];
-  sessionById?: ReadonlyMap<string, Session>;
-  sessionID: string;
-}): boolean => {
-  const { autoAccept, defaultEnabled, sessions, sessionById, sessionID } = input;
-  if (!sessionID) return false;
+const resolveLineage = (
+  sessionID: string,
+  sessions: Session[],
+  sessionById?: ReadonlyMap<string, Session>,
+): string[] => {
   const map = sessionById ?? buildSessionMap(sessions);
+  const result: string[] = [];
   const seen = new Set<string>();
   let current: string | undefined = sessionID;
 
-  while (current) {
-    if (seen.has(current)) return false;
+  while (current && !seen.has(current)) {
     seen.add(current);
-    if (Object.prototype.hasOwnProperty.call(autoAccept, current)) {
-      return autoAccept[current] === true;
-    }
-    const session = map.get(current);
-    if (!session) return false;
-    current = session.parentID;
+    result.push(current);
+    current = map.get(current)?.parentID;
   }
 
-  return defaultEnabled;
+  return result;
+};
+
+/**
+ * The mode the nearest explicit entry up the session's lineage names.
+ * `fallback` is what a session outside the policy answers: the authority's
+ * `defaultEnabled` decides, and without one the answer is `ask`.
+ */
+export const resolvePermissionMode = (input: {
+  modes: PermissionModeMap;
+  sessions: Session[];
+  sessionById?: ReadonlyMap<string, Session>;
+  sessionID: string;
+  fallback?: PermissionMode;
+}): PermissionMode => {
+  const { modes, sessions, sessionById, sessionID, fallback = "ask" } = input;
+
+  for (const id of resolveLineage(sessionID, sessions, sessionById)) {
+    const mode = modes[id];
+    if (mode) return mode;
+  }
+
+  return fallback;
 };

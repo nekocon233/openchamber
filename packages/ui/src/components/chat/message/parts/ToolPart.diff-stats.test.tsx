@@ -92,7 +92,7 @@ test('edit and patch headers render v2 file diff counts as results arrive', asyn
         state: { status: 'completed', input, metadata, output: '', time: { start: 1, end: 2 } },
       };
       await act(async () => root.render(
-        <SyncProvider sdk={sdk} directory="">
+        <SyncProvider sdk={sdk} directory="/workspace">
           <I18nProvider>
             <ThemeSystemContext.Provider value={themeContext}>
               <ToolPart part={part} isExpanded={false} isMobile={false} onToggle={() => {}} />

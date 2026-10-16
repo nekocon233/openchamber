@@ -43,8 +43,12 @@ export function getSmallModelClient(directory) {
     return null;
   }
   const headers = { ...connection.getOpenCodeAuthHeaders() };
-  if (typeof directory === 'string' && directory.trim()) {
-    headers['x-opencode-directory'] = encodeURIComponent(directory.trim());
+  // Model and provider lists are read through a location; without a directory
+  // OpenCode would start its own working directory, MCP servers included.
+  const requested = typeof directory === 'string' ? directory.trim() : '';
+  const scope = requested || connection.getDefaultDirectory?.() || null;
+  if (scope) {
+    headers['x-opencode-directory'] = encodeURIComponent(scope);
   }
   return OpenCode.make({ baseUrl, headers });
 }
@@ -63,6 +67,10 @@ const unwrap = (payload) => (Array.isArray(payload?.data) ? payload.data : []);
  * and paying a round trip for them on every title or summary would be the
  * wrong trade. An empty array means "asked and got nothing", so callers fall
  * back to conservative defaults rather than refusing.
+ *
+ * An empty answer is not cached: OpenCode 2 answers with an empty catalog
+ * while it is still starting, and keeping that would hide every provider from
+ * the pickers until the cache expired.
  */
 export async function listModelInfos(client, directory) {
   const key = typeof directory === 'string' ? directory : '';
@@ -71,6 +79,7 @@ export async function listModelInfos(client, directory) {
   }
   try {
     const models = unwrap(await client.model.list());
+    if (models.length === 0) return models;
     modelCache = models;
     modelCacheKey = key;
     modelCacheAt = Date.now();
@@ -104,10 +113,30 @@ export async function getDefaultModelInfo(client) {
 }
 
 /**
- * The model entry for a `provider/model` reference. `modelID` and `id` are
- * both accepted because OpenCode reports the same model under both.
+ * The model the user configured for OpenCode's hidden `title` agent, or `null`
+ * when there is none. OpenCode 2 merges `agents.title.model` and the v1
+ * `small_model` (migrated onto that agent) across every config layer, and its
+ * own session titles run on this model before any family scan.
+ */
+export async function getConfiguredSmallModelRef(client) {
+  try {
+    const { model } = (await client.agent.get({ agentID: 'title' })).data;
+    return model ? { providerID: model.providerID, modelID: model.id } : null;
+  } catch {
+    // No `title` agent (removed in config, or a cold location still loading
+    // its agents) or OpenCode unreachable: nothing configured to honor.
+    return null;
+  }
+}
+
+/**
+ * The model entry for a `provider/model` reference. `id` is the catalog key a
+ * reference holds; `modelID` is the provider API name, shared by derived
+ * entries (`gpt-6-luna` and `gpt-6-luna-fast`), so an exact `id` match wins.
  */
 export function findModelInfo(models, providerID, modelID) {
-  return models.find((model) => model?.providerID === providerID
-    && (model.id === modelID || model.modelID === modelID)) ?? null;
+  const ofProvider = models.filter((model) => model?.providerID === providerID);
+  return ofProvider.find((model) => model.id === modelID)
+    ?? ofProvider.find((model) => model.modelID === modelID)
+    ?? null;
 }

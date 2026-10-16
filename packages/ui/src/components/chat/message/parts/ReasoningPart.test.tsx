@@ -37,6 +37,7 @@ const runtimeApis: RuntimeAPIs = {
   get settings() { return unavailable(); },
   get permissions() { return unavailable(); },
   get notifications() { return unavailable(); },
+  get sourceControl() { return unavailable(); },
   get sidebarState() { return unavailable(); },
   get followUpQueue() { return unavailable(); },
   get nativeAgents() { return unavailable(); },
@@ -150,21 +151,13 @@ const LONG_REASONING =
   'This second line goes into much deeper detail about the internal reasoning ' +
   'process that should remain hidden in the collapsed header view.';
 
-// A long text that should render the collapsible header with a label
-const LONG_JUSTIFICATION =
-  'Sorting by activity first because the active session needs immediate attention.\n' +
-  'Secondary sort by last updated timestamp ensures a stable deterministic ordering ' +
-  'when multiple sessions have the same activity state.';
-
 describe('ReasoningTimelineBlock', () => {
   test('renders reasoning traces behind an accessible collapsed disclosure by default', () => {
     const markup = renderToStaticMarkup(
       <TestProviders>
         <ReasoningTimelineBlock
           text={LONG_REASONING}
-          variant="thinking"
           blockId="reasoning-test"
-          showDuration={false}
         />
       </TestProviders>,
     );
@@ -182,32 +175,29 @@ describe('ReasoningTimelineBlock', () => {
     expect(markup).not.toContain('data-message-text-export-source');
   });
 
-  test('renders "Justification" label for justification variant when pre-expanded and not streaming', () => {
-    const markup = renderToStaticMarkup(
-      <TestProviders>
-        <ReasoningTimelineBlock
-          text={LONG_JUSTIFICATION}
-          variant="justification"
-          blockId="justification-test"
-          showDuration={false}
-          defaultExpanded={true}
-        />
-      </TestProviders>,
-    );
-
-    // Label shown in expanded header should be "Justification" not "Thinking"
-    expect(markup).toContain('Justification');
-    expect(markup).not.toContain('Thinking');
-  });
-
-  test('renders "Thinking" label for thinking variant when pre-expanded and not streaming', () => {
+  test('opens a collapsed block with its body in the first render when search asks for it', () => {
     const markup = renderToStaticMarkup(
       <TestProviders>
         <ReasoningTimelineBlock
           text={LONG_REASONING}
-          variant="thinking"
+          blockId="reasoning-reveal"
+          revealRequest={1}
+          reasoningMessageId="msg_reveal"
+        />
+      </TestProviders>,
+    );
+
+    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain('data-message-text-export-source');
+    expect(markup).toContain('data-reasoning-message-id="msg_reveal"');
+  });
+
+  test('renders "Thinking" label when pre-expanded and not streaming', () => {
+    const markup = renderToStaticMarkup(
+      <TestProviders>
+        <ReasoningTimelineBlock
+          text={LONG_REASONING}
           blockId="thinking-test"
-          showDuration={false}
           defaultExpanded={true}
         />
       </TestProviders>,
@@ -222,9 +212,7 @@ describe('ReasoningTimelineBlock', () => {
       <TestProviders>
         <ReasoningTimelineBlock
           text={LONG_REASONING}
-          variant="thinking"
           blockId="reasoning-test"
-          showDuration={false}
         />
       </TestProviders>,
     );
@@ -240,9 +228,7 @@ describe('ReasoningTimelineBlock', () => {
       <TestProviders>
         <ReasoningTimelineBlock
           text={'Planning accessible icon labels with translations <!-- -->'}
-          variant="thinking"
           blockId="reasoning-comment-test"
-          showDuration={false}
         />
       </TestProviders>,
     );
@@ -274,9 +260,6 @@ describe('ReasoningPart streaming gating (issue #2020)', () => {
     time,
   });
 
-  // Server rendering reads the UI store's initial state, which is
-  // chatRenderMode 'live' — the mode in which the streaming presentation is
-  // reachable and the issue reproduces.
   const renderPart = (part: ReasoningPartFixture, streamPhase?: StreamPhase): string =>
     renderToStaticMarkup(
       <TestProviders>
@@ -311,10 +294,32 @@ describe('ReasoningPart streaming gating (issue #2020)', () => {
     expect(markup).toContain(SHORT_REASONING);
   });
 
-  test('live in-progress reasoning still renders as streaming', () => {
+  // The setting reaches the block as `expandWhileStreaming`; server rendering
+  // reads the store's initial state, so the opted-in path renders the block.
+  const renderExpandingWhileStreaming = (): string => renderToStaticMarkup(
+    <TestProviders>
+      <ReasoningTimelineBlock
+        text={SHORT_REASONING}
+        blockId="prt_reasoning_2020"
+        time={{ start: 1_000 }}
+        isStreaming
+        expandWhileStreaming
+      />
+    </TestProviders>,
+  );
+
+  test('live in-progress reasoning renders as streaming, folded to its header by default', () => {
     // Genuinely live: the message-level stream phase reports streaming and the
-    // part has not ended. The block auto-expands and shows the busy indicator.
+    // part has not ended. The header shows the busy indicator; the body stays
+    // folded so its closing at the end does not move the chat.
     const markup = renderPart(makeReasoningPart({ start: 1_000 }), 'streaming');
+
+    expect(markup).toContain(BUSY_INDICATOR);
+    expect(markup).toContain('aria-expanded="false"');
+  });
+
+  test('live in-progress reasoning opens while it streams when the setting asks for it', () => {
+    const markup = renderExpandingWhileStreaming();
 
     expect(markup).toContain(BUSY_INDICATOR);
     expect(markup).toContain('aria-expanded="true"');
@@ -324,7 +329,7 @@ describe('ReasoningPart streaming gating (issue #2020)', () => {
     // The box is capped while streaming too, so a long thought scrolls inside
     // its own box instead of growing the timeline; it is marked as a nested
     // scroller so an upward wheel over it scrolls the box before the chat.
-    const markup = renderPart(makeReasoningPart({ start: 1_000 }), 'streaming');
+    const markup = renderExpandingWhileStreaming();
 
     expect(markup).toContain('max-h-80');
     expect(markup).toContain('data-scrollable="true"');
@@ -396,11 +401,9 @@ describe('ReasoningTimelineBlock live follow', () => {
       <TestProviders>
         <ReasoningTimelineBlock
           text="Working through the task step by step."
-          variant="thinking"
           blockId="reasoning-follow"
           defaultExpanded
           isStreaming={isStreaming}
-          showDuration={false}
         />
       </TestProviders>
     );

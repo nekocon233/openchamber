@@ -1,17 +1,19 @@
 import { describe, expect, test } from 'bun:test';
 import type { ConnectionInfo, IntegrationInfo } from '@opencode/client';
-import { requiresProviderAuth, shouldLoadAvailableProviders } from './providerAvailability';
+import { requiresProviderAuth } from './providerAvailability';
 import {
   findIntegrationForProvider,
   getCredentialConnections,
   getKeyMethod,
-  getOAuthMethods,
   getProviderConnections,
+  getProviderCardStatus,
   getSignInIntegrationId,
+  getSignInMethods,
   providerHasCredentials,
   shouldAutoOpenAuthPanel,
   shouldShowApiKeyAuth,
   shouldShowModelsSection,
+  usesMachineCredentials,
 } from './providerAuth';
 
 const integration = (overrides: Partial<IntegrationInfo> = {}): IntegrationInfo => ({
@@ -24,13 +26,6 @@ const integration = (overrides: Partial<IntegrationInfo> = {}): IntegrationInfo 
 
 const credential: ConnectionInfo = { type: 'credential', id: 'cred_1', label: 'API key', method: 'key' };
 const envConnection: ConnectionInfo = { type: 'env', name: 'ANTHROPIC_API_KEY' };
-
-describe('ProvidersPage available provider loading', () => {
-  test('loads available providers only in add-provider mode', () => {
-    expect(shouldLoadAvailableProviders(false)).toBe(false);
-    expect(shouldLoadAvailableProviders(true)).toBe(true);
-  });
-});
 
 describe('ProvidersPage provider authentication', () => {
   test('does not require credentials for a custom provider defined in config', () => {
@@ -58,15 +53,16 @@ describe('integration method helpers', () => {
     expect(shouldShowApiKeyAuth(undefined)).toBe(true);
   });
 
-  test('getOAuthMethods keeps only oauth methods, in declared order', () => {
+  test('getSignInMethods keeps oauth and external methods, in declared order', () => {
     const methods: IntegrationInfo['methods'] = [
       { type: 'key', label: 'API Key' },
       { type: 'oauth', id: 'browser', label: 'OAuth' },
       { type: 'env', names: ['OPENAI_API_KEY'] },
+      { type: 'external', id: 'aws-profile', label: 'AWS profile' },
       { type: 'oauth', id: 'device', label: 'Device' },
     ];
-    expect(getOAuthMethods(integration({ methods })).map((method) => method.id)).toEqual(['browser', 'device']);
-    expect(getOAuthMethods(undefined)).toEqual([]);
+    expect(getSignInMethods(integration({ methods })).map((method) => method.id)).toEqual(['browser', 'aws-profile', 'device']);
+    expect(getSignInMethods(undefined)).toEqual([]);
   });
 
   test('getKeyMethod returns the key method when the integration accepts one', () => {
@@ -212,5 +208,80 @@ describe('provider credential state helpers', () => {
       integrationsLoaded: false,
       hasCredentials: false,
     })).toBe(true);
+  });
+});
+
+describe('getProviderCardStatus', () => {
+  const second: ConnectionInfo = { type: 'credential', id: 'cred_2', label: 'Work', method: 'oauth' };
+  const status = (integrations: IntegrationInfo[] | null, optionsApiKey?: string | null) =>
+    getProviderCardStatus({ integrations, providerId: 'anthropic', optionsApiKey });
+
+  test('shows nothing until integrations load', () => {
+    expect(status(null)).toBe(null);
+  });
+
+  test('counts accounts only when there is more than one to switch between', () => {
+    expect(status([integration({ connections: [credential, second, envConnection] })])).toEqual({ kind: 'accounts', count: 2 });
+    expect(status([integration({ connections: [credential, envConnection] })])).toEqual({ kind: 'connected' });
+  });
+
+  test('an inline config key counts as connected', () => {
+    expect(status([integration()], 'sk-inline')).toEqual({ kind: 'connected' });
+  });
+
+  test('separates environment-only connections from missing sign-in', () => {
+    expect(status([integration({ connections: [envConnection] })])).toEqual({ kind: 'environment' });
+    expect(status([integration()])).toEqual({ kind: 'signInNeeded' });
+  });
+
+  test('a connection OpenCode flagged for a new sign-in outranks every other status', () => {
+    const expired: ConnectionInfo = { ...second, status: { status: 'needs_auth', message: 'Signed out of OpenCode Console.' } };
+    expect(status([integration({ connections: [credential, expired] })])).toEqual({ kind: 'reauthNeeded' });
+  });
+
+  test('a provider with no integration gets no status instead of a false warning', () => {
+    expect(status([integration({ id: 'openai' })])).toBe(null);
+  });
+});
+
+describe('Vertex with Application Default Credentials', () => {
+  // What OpenCode serves for Vertex signed in with
+  // `gcloud auth application-default login` and a project in config.
+  const vertexIntegration = integration({
+    id: 'google-vertex',
+    name: 'Vertex',
+    methods: [{ type: 'key' }, { type: 'env', names: ['GOOGLE_VERTEX_API_KEY'] }],
+  });
+  const vertexPackage = '@opencode/ai/providers/google-vertex';
+  const vertex = { id: 'google-vertex', package: vertexPackage, settings: { project: 'my-project', location: 'global' } };
+
+  test('a project OpenCode resolved means credentials on the machine', () => {
+    expect(usesMachineCredentials(vertex)).toBe(true);
+    expect(usesMachineCredentials({ ...vertex, settings: { location: 'global' } })).toBe(false);
+    expect(usesMachineCredentials({ ...vertex, settings: { project: '' } })).toBe(false);
+    expect(usesMachineCredentials({ id: 'anthropic', package: '@opencode/ai/providers/anthropic', settings: { project: 'my-project' } })).toBe(false);
+    expect(usesMachineCredentials(undefined)).toBe(false);
+  });
+
+  test('a config alias on the Vertex package counts like Vertex itself', () => {
+    expect(usesMachineCredentials({ ...vertex, id: 'vertex-eu' })).toBe(true);
+    expect(usesMachineCredentials({ ...vertex, package: '@opencode/ai/providers/openai-compatible' })).toBe(true);
+    expect(usesMachineCredentials({ ...vertex, id: 'other', package: '@opencode/ai/providers/openai-compatible' })).toBe(false);
+  });
+
+  test('shows From environment and the models section instead of a sign-in prompt', () => {
+    const machineCredentials = usesMachineCredentials(vertex);
+    expect(getProviderCardStatus({ integrations: [vertexIntegration], providerId: 'google-vertex', machineCredentials }))
+      .toEqual({ kind: 'environment' });
+    const hasCredentials = providerHasCredentials({ connections: [], machineCredentials });
+    expect(hasCredentials).toBe(true);
+    expect(shouldShowModelsSection({ modelCount: 2, integrationsLoaded: true, hasCredentials })).toBe(true);
+    expect(shouldAutoOpenAuthPanel({ integrationsLoaded: true, hasCredentials, userDismissed: false })).toBe(false);
+  });
+
+  test('a stored key still counts as a connected account', () => {
+    const keyed = integration({ ...vertexIntegration, connections: [credential] });
+    expect(getProviderCardStatus({ integrations: [keyed], providerId: 'google-vertex', machineCredentials: true }))
+      .toEqual({ kind: 'connected' });
   });
 });

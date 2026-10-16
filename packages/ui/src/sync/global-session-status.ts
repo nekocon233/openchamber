@@ -13,6 +13,7 @@ import {
   type SessionActivityTimingMutation,
 } from './session-activity-timing';
 import { countSyncPerformance } from './performance-diagnostics';
+import { hasRunningShell, useBackgroundShellsStore } from './background-shells';
 import { useSessionBackgroundTasksStore, useSessionHasBackgroundTasks } from './session-background-tasks';
 
 // Shared live busy/retry index for every directory. Events update it
@@ -82,37 +83,40 @@ export const setSessionParentResolver = (resolver: SessionParentResolver): void 
 /** Subagents nest; a deeper chain than this is treated as unrelated. */
 const MAX_SUBAGENT_DEPTH = 8;
 
-const forEachAncestorId = (sessionId: string, visit: (ancestorId: string) => void): void => {
-  let current = resolveSessionParentId(sessionId);
+const forEachAncestorId = (sessionId: string, visit: (ancestorId: string) => void, resolveParentId: SessionParentResolver = resolveSessionParentId): void => {
+  let current = resolveParentId(sessionId);
   for (let depth = 0; current && depth < MAX_SUBAGENT_DEPTH; depth += 1) {
     visit(current);
-    current = resolveSessionParentId(current);
+    current = resolveParentId(current);
   }
 };
 
 /** True when a subagent anywhere below the session is running. */
-export const hasActiveSubagent = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => {
+export const hasActiveSubagent = (sessionId: string, activeSessionIds: ReadonlySet<string>, resolveParentId: SessionParentResolver = resolveSessionParentId): boolean => {
   for (const activeId of activeSessionIds) {
     if (activeId === sessionId) continue;
     let found = false;
     forEachAncestorId(activeId, (ancestorId) => {
       if (ancestorId === sessionId) found = true;
-    });
+    }, resolveParentId);
     if (found) return true;
   }
   return false;
 };
 
-/** Active sessions plus every ancestor whose turn they keep open. */
-const withSubagentAncestors = (activeSessionIds: ReadonlySet<string>): ReadonlySet<string> => {
+/**
+ * Active sessions plus every session whose turn they keep open: ancestors of
+ * running subagents, and sessions waiting on a background command.
+ */
+const withBackgroundWork = (activeSessionIds: ReadonlySet<string>): ReadonlySet<string> => {
   let extended: Set<string> | null = null;
-  for (const activeId of activeSessionIds) {
-    forEachAncestorId(activeId, (ancestorId) => {
-      if (activeSessionIds.has(ancestorId)) return;
-      extended ??= new Set(activeSessionIds);
-      extended.add(ancestorId);
-    });
-  }
+  const add = (sessionId: string): void => {
+    if (activeSessionIds.has(sessionId)) return;
+    extended ??= new Set(activeSessionIds);
+    extended.add(sessionId);
+  };
+  for (const activeId of activeSessionIds) forEachAncestorId(activeId, add);
+  for (const sessionId of useBackgroundShellsStore.getState().sessionIds) add(sessionId);
   return extended ?? activeSessionIds;
 };
 
@@ -123,9 +127,27 @@ const hasBackgroundTasks = (sessionId: string): boolean => (
   useSessionBackgroundTasksStore.getState().tasksBySession.has(sessionId)
 );
 
-/** Sessions whose turn is open: active ones, their ancestors, and those waiting on background tasks. */
+/**
+ * True when the session idles only while its background work runs: a subagent
+ * below it, a command it started, or tasks a native CLI keeps running.
+ */
+const hasBackgroundWork = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => (
+  hasActiveSubagent(sessionId, activeSessionIds)
+  || hasRunningShell(sessionId)
+  || hasBackgroundTasks(sessionId)
+);
+
+/**
+ * Whether one kind of background work ending leaves the turn open: the session
+ * runs again, or another subagent, command, or task still holds it.
+ */
+const turnStaysOpen = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => (
+  activeSessionIds.has(sessionId) || hasBackgroundWork(sessionId, activeSessionIds)
+);
+
+/** Sessions whose turn is open: active ones, their ancestors, and those waiting on background work. */
 const withOpenTurns = (activeSessionIds: ReadonlySet<string>): ReadonlySet<string> => {
-  const open = withSubagentAncestors(activeSessionIds);
+  const open = withBackgroundWork(activeSessionIds);
   const { tasksBySession } = useSessionBackgroundTasksStore.getState();
   if (tasksBySession.size === 0) return open;
   const extended = new Set(open);
@@ -134,16 +156,37 @@ const withOpenTurns = (activeSessionIds: ReadonlySet<string>): ReadonlySet<strin
 };
 
 /**
- * The session's turn is still open: it runs itself, one of its subagents
- * does, or background tasks it started will wake it.
+ * What keeps the session's turn open, or null when nothing does: the session
+ * runs itself, or it idles while a subagent below it runs, while a command it
+ * started in the background runs, or while tasks a native CLI keeps running
+ * will wake it. The session's own run wins; a pause with both kinds of
+ * background work reports the subagent.
  */
-export const useSessionTurnActive = (sessionId: string): boolean => {
-  const running = useGlobalSessionStatusStore(
-    (state) => state.activeSessionIds.has(sessionId) || hasActiveSubagent(sessionId, state.activeSessionIds),
-  );
-  const waiting = useSessionHasBackgroundTasks(sessionId);
-  return running || waiting;
+type SessionTurnActivity = 'running' | 'subagent' | 'shell' | 'tasks';
+
+export const useSessionTurnActivity = (sessionId: string): SessionTurnActivity | null => {
+  const status = useGlobalSessionStatusStore((state): SessionTurnActivity | null => {
+    if (state.activeSessionIds.has(sessionId)) return 'running';
+    return hasActiveSubagent(sessionId, state.activeSessionIds) ? 'subagent' : null;
+  });
+  const waitingOnShell = useBackgroundShellsStore((state) => state.sessionIds.has(sessionId));
+  const waitingOnTasks = useSessionHasBackgroundTasks(sessionId);
+  return status ?? (waitingOnShell ? 'shell' : waitingOnTasks ? 'tasks' : null);
 };
+
+// The last background command of an idle session ending closes its turn,
+// the way the last subagent finishing does below.
+useBackgroundShellsStore.subscribe((state, previous) => {
+  if (state.sessionIds === previous.sessionIds) return;
+  const { activeSessionIds } = useGlobalSessionStatusStore.getState();
+  const timingMutations: SessionActivityTimingMutation[] = [];
+  for (const sessionId of previous.sessionIds) {
+    if (state.sessionIds.has(sessionId)) continue;
+    if (turnStaysOpen(sessionId, activeSessionIds)) continue;
+    timingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
+  }
+  applySessionActivityTimingMutations(timingMutations);
+});
 
 // The end of a session's background tasks settles the timer they held open,
 // unless the session runs again or a subagent still holds it. A turn the CLI
@@ -154,7 +197,7 @@ useSessionBackgroundTasksStore.subscribe((state, previous) => {
   const settled: SessionActivityTimingMutation[] = [];
   for (const sessionId of previous.tasksBySession.keys()) {
     if (state.tasksBySession.has(sessionId)) continue;
-    if (activeSessionIds.has(sessionId) || hasActiveSubagent(sessionId, activeSessionIds)) continue;
+    if (turnStaysOpen(sessionId, activeSessionIds)) continue;
     settled.push({ type: 'observe', sessionId, phase: 'settled' });
   }
   applySessionActivityTimingMutations(settled);
@@ -432,7 +475,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
       setResolvedStatus(sessionId, 'idle');
       orderingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
       settledIds.push(sessionId);
-      if (!hasActiveSubagent(sessionId, activeSessionIds) && !hasBackgroundTasks(sessionId)) {
+      if (!hasBackgroundWork(sessionId, activeSessionIds)) {
         timingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
       }
     };
@@ -499,7 +542,7 @@ export const applyGlobalSessionStatusEvents = (directory: string, payloads: read
 
     for (const settledId of settledIds) {
       forEachAncestorId(settledId, (ancestorId) => {
-        if (activeSessionIds.has(ancestorId) || hasActiveSubagent(ancestorId, activeSessionIds) || hasBackgroundTasks(ancestorId)) return;
+        if (activeSessionIds.has(ancestorId) || hasBackgroundWork(ancestorId, activeSessionIds)) return;
         timingMutations.push({ type: 'observe', sessionId: ancestorId, phase: 'settled' });
       });
     }

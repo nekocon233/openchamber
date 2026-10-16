@@ -49,6 +49,9 @@ mock.module("../session-ui-store", () => ({
 
 mock.module("../sync-refs", () => ({
   getSyncSessionDirectory: () => null,
+  // The turn-timing watcher reads this on import; a test without sync stores
+  // has none to hand it, which is the state it already handles.
+  getSyncChildStoresIfMounted: () => undefined,
   registerSessionDirectory: (sessionID: string, directory: string) => {
     registerSessionDirectoryCalls.push({ sessionID, directory })
   },
@@ -63,7 +66,6 @@ mock.module("@/stores/useGlobalSessionsStore", () => ({
     }),
   },
   mergeSessionDirectoryMetadata: (incoming: Session) => incoming,
-  mergeLiveSessionWithGlobalSession: (incoming: Session) => incoming,
   resolveGlobalSessionDirectory: () => null,
 }))
 

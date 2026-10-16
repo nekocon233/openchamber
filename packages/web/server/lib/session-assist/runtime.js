@@ -119,8 +119,17 @@ export const createSessionAssistRuntime = ({
   // Archive state is OpenChamber's own in v2 (no OpenCode route sets it), so
   // the runtime asks rather than reading `time.archived` off the record.
   isSessionArchived = async () => false,
+  // Asked once when a turn ends, before the quiet window is armed: which of
+  // the enabled fields are worth the Small Model (`{ recap, suggestion }`), or
+  // null for "unknown", which keeps every enabled field. See session-work.
+  evaluateTurn = null,
+  // `../session-lineage.js`: a known subsession never gets an assist, so its
+  // turn end arms nothing and reads nothing.
+  lineage = null,
 }) => {
   const timers = new Map();
+  // Turn ends waiting for `evaluateTurn`; a newer event replaces or drops the entry.
+  const gates = new Map();
   const inflight = new Map();
   const ready = new Map();
   // Sessions holding an assist this process wrote, keyed to their directory.
@@ -137,6 +146,7 @@ export const createSessionAssistRuntime = ({
 
   const invalidate = (sessionId) => {
     clearTimer(sessionId);
+    gates.delete(sessionId);
     ready.delete(sessionId);
     inflight.get(sessionId)?.controller.abort();
   };
@@ -198,8 +208,12 @@ export const createSessionAssistRuntime = ({
     writeAssist: (assist) => nativeSessions.setSessionAssist(sessionId, directory, assist),
   });
 
-  const generateAssist = async (sessionId, directory, signal) => {
-    const targets = getTargets();
+  const generateAssist = async (sessionId, directory, signal, allowed) => {
+    const enabledTargets = getTargets();
+    const targets = {
+      recap: enabledTargets.recap && allowed.recap,
+      suggestion: enabledTargets.suggestion && allowed.suggestion,
+    };
     if (!targets.recap && !targets.suggestion) return;
     const source = nativeSessions?.isNativeSessionId(sessionId)
       ? nativeSource(sessionId, directory, signal)
@@ -208,6 +222,7 @@ export const createSessionAssistRuntime = ({
     source.checkCurrent();
     // Reverted history is not the active conversation. A new prompt clears
     // the revert boundary before its next idle event.
+    if (session?.id === sessionId) lineage?.remember(sessionId, session.parentID ?? null);
     if (session?.id !== sessionId || session.parentID || session.revert?.messageID || session.time?.archived) return;
     if (await source.isArchived(session)) return;
     const context = await loadAssistContext({ signal, readPage: source.readPage, native: source.native });
@@ -220,14 +235,21 @@ export const createSessionAssistRuntime = ({
     const described = await describeSmallModel({ directory, preferredProviderID, preferredModelID });
     source.checkCurrent();
     if (!described) return;
+    // A local server keeps one prompt cache per slot: a side request on the
+    // session's own model evicts it, and the next turn reprocesses the whole
+    // history. There only a different model may write the assist, however the
+    // session's model was picked (fallback or an explicit Small Model).
+    if (described.localEndpoint
+      && described.providerID === preferredProviderID
+      && described.modelID === preferredModelID) return;
     const system = buildAssistSystemPrompt(targets);
     const prompt = buildAssistPrompt(turns, targets, described.inputCharBudget - system.length - 512);
     if (!prompt) return;
     let generated;
     try {
       generated = await generateSmallModelText({
-        prompt: prompt.text, system, directory, sessionID: sessionId,
-        preferredProviderID, preferredModelID, restrictToPreferredProvider: true,
+        prompt: prompt.text, system, directory,
+        preferredProviderID, preferredModelID,
         onOverflow: 'error', timeoutMs: GENERATION_TIMEOUT_MS, signal,
       });
     } catch (error) {
@@ -259,23 +281,26 @@ export const createSessionAssistRuntime = ({
     source.checkCurrent();
     if (freshSession?.id !== sessionId || freshSession.revert?.messageID || freshSession.time?.archived || source.sessionDirectory(freshSession) !== source.sessionDirectory(session)) return;
     if (await source.isArchived(freshSession)) return;
+    // The archive check is a wait of its own: a turn that started meanwhile
+    // has aborted this run, and the write below must not land.
+    source.checkCurrent();
     const enabled = getTargets();
-    if (!enabled.recap) recap = '';
-    if (!enabled.suggestion) suggestion = '';
+    if (!enabled.recap || !allowed.recap) recap = '';
+    if (!enabled.suggestion || !allowed.suggestion) suggestion = '';
     if (!recap && !suggestion) return;
     await source.writeAssist({ recap, suggestion, forMessageID: last.id, generatedAt: Date.now() }, freshSession);
     persisted.set(sessionId, directory);
   };
 
-  const startGeneration = (sessionId, directory, armedAt) => {
+  const startGeneration = (sessionId, directory, armedAt, allowed) => {
     if (stopped) return;
     if (inflight.has(sessionId)) {
-      ready.set(sessionId, { directory, armedAt });
+      ready.set(sessionId, { directory, armedAt, allowed });
       return;
     }
     const controller = new AbortController();
     inflight.set(sessionId, { controller, armedAt });
-    generateAssist(sessionId, directory, controller.signal)
+    generateAssist(sessionId, directory, controller.signal, allowed)
       .catch(() => {
         if (!controller.signal.aborted) console.warn('[session-assist] failed to read or save assistance');
       })
@@ -284,20 +309,44 @@ export const createSessionAssistRuntime = ({
         if (ready.has(sessionId)) {
           const next = ready.get(sessionId);
           ready.delete(sessionId);
-          startGeneration(sessionId, next.directory, next.armedAt);
+          startGeneration(sessionId, next.directory, next.armedAt, next.allowed);
         }
       });
   };
 
-  const armTimer = (sessionId, directory) => {
+  const armTimer = (sessionId, directory, armedAt, allowed) => {
     clearTimer(sessionId);
-    const armedAt = Date.now();
     const timer = setTimeout(() => {
       timers.delete(sessionId);
-      startGeneration(sessionId, directory, armedAt);
+      startGeneration(sessionId, directory, armedAt, allowed);
     }, quietMs);
     timer.unref?.();
     timers.set(sessionId, { timer, armedAt });
+  };
+
+  const ALL_FIELDS = { recap: true, suggestion: true };
+
+  // The quiet window is armed only for fields Jev did not rule out; with
+  // nothing left there is no timer and no Small Model call at all.
+  const onTurnEnd = (sessionId, directory) => {
+    clearTimer(sessionId);
+    const armedAt = Date.now();
+    if (typeof evaluateTurn !== 'function') {
+      armTimer(sessionId, directory, armedAt, ALL_FIELDS);
+      return;
+    }
+    const gate = { armedAt };
+    gates.set(sessionId, gate);
+    Promise.resolve()
+      .then(() => evaluateTurn({ sessionId, directory, assist: getTargets() }))
+      .catch(() => null)
+      .then((allowed) => {
+        if (stopped || gates.get(sessionId) !== gate) return;
+        gates.delete(sessionId);
+        const fields = allowed ?? ALL_FIELDS;
+        if (!fields.recap && !fields.suggestion) return;
+        armTimer(sessionId, directory, armedAt, fields);
+      });
   };
 
   let parkedNoticeLogged = false;
@@ -315,7 +364,9 @@ export const createSessionAssistRuntime = ({
       return;
     }
     if (status) {
-      if (status.type === 'idle') armTimer(status.sessionId, status.directory || directoryHint);
+      if (status.type === 'idle') {
+        if (lineage?.isChild(status.sessionId) !== true) onTurnEnd(status.sessionId, status.directory || directoryHint);
+      }
       else {
         invalidate(status.sessionId);
         retireStored(status.sessionId, status.directory || directoryHint);
@@ -324,7 +375,9 @@ export const createSessionAssistRuntime = ({
     }
     if (userMessage) {
       // Ignore old message.updated events re-emitted after completion.
-      const since = timers.get(userMessage.sessionId)?.armedAt ?? inflight.get(userMessage.sessionId)?.armedAt;
+      const since = timers.get(userMessage.sessionId)?.armedAt
+        ?? gates.get(userMessage.sessionId)?.armedAt
+        ?? inflight.get(userMessage.sessionId)?.armedAt;
       if (since !== undefined && userMessage.createdAt >= since) invalidate(userMessage.sessionId);
     }
   };
@@ -332,6 +385,7 @@ export const createSessionAssistRuntime = ({
   const stop = () => {
     stopped = true;
     for (const sessionId of timers.keys()) clearTimer(sessionId);
+    gates.clear();
     ready.clear();
     for (const { controller } of inflight.values()) controller.abort();
   };

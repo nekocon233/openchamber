@@ -122,7 +122,7 @@ describe('session assist runtime', () => {
     await vi.waitFor(() => expect(state.patches).toHaveLength(1));
     expect(state.requests.every((r) => r.directory === '/project' && r.auth === 'fixture')).toBe(true);
     expect(state.requests.filter((r) => r.limit).map((r) => r.limit)).toEqual(['50', '8']);
-    expect(state.calls[0]).toMatchObject({ restrictToPreferredProvider: true, onOverflow: 'error', preferredProviderID: 'test-provider', preferredModelID: 'test-model', sessionID: 'session' });
+    expect(state.calls[0]).toMatchObject({ onOverflow: 'error', preferredProviderID: 'test-provider', preferredModelID: 'test-model' });
     expect(state.patches[0].metadata).toMatchObject({ external: 'keep', openchamber: {
       note: 'keep', concurrent: 'new', assist: { recap: 'Зміни готові', suggestion: '', forMessageID: 'answer' },
     } });
@@ -314,7 +314,6 @@ describe('session assist generation', () => {
     await vi.waitFor(() => expect(state.patches).toHaveLength(1));
     expect(state.calls).toHaveLength(1);
     expect(state.calls[0]).toMatchObject({
-      restrictToPreferredProvider: true,
       preferredProviderID: 'test-provider',
       preferredModelID: 'test-model',
     });

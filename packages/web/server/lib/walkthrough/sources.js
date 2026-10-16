@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 const WORKING_TREE_SCOPES = new Set(['all', 'staged', 'working']);
 
-export class WalkthroughSourceError extends Error {
+class WalkthroughSourceError extends Error {
   constructor(message, statusCode = 400, code = undefined) {
     super(message);
     this.statusCode = statusCode;
@@ -49,7 +49,12 @@ export function parseSource(raw) {
     if (raw.sourceRepo !== undefined) {
       const { owner, repo } = raw.sourceRepo ?? {};
       try {
-        assert.match(owner, /^[a-zA-Z0-9-]+$/);
+        // Owners are a single segment on GitHub and a namespace path on GitLab
+        // (subgroups included). Each segment allows the same characters as a
+        // repo name with dots kept internal, so "." and ".." can never be a
+        // segment. Downstream the owner is only compared against the bound
+        // repository's network, never turned into a filesystem path.
+        assert.match(owner, /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*(?:\/[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)*$/);
         assert.match(repo, /^[a-zA-Z0-9_.-]+$/);
       } catch {
         throw new WalkthroughSourceError('pr sources require a valid repository');
@@ -101,7 +106,7 @@ const untrackedSections = async (directory) => {
  *
  * @returns {Promise<{sections: Array<{scope: string, patch: string}>, meta: object}>}
  */
-export async function loadSourceSections(directory, source, { getPullRequestDiff } = {}) {
+export async function loadSourceSections(directory, source, { getPullRequestDiff, readContext } = {}) {
   if (source.kind === 'working-tree') {
     const sections = [];
 
@@ -140,7 +145,9 @@ export async function loadSourceSections(directory, source, { getPullRequestDiff
     throw new WalkthroughSourceError('Pull request diffs are unavailable', 500);
   }
 
-  const { patch, meta } = await getPullRequestDiff(directory, source.number, source.sourceRepo);
+  const { patch, meta } = await getPullRequestDiff(directory, source.number, readContext, {
+    sourceRepo: source.sourceRepo ?? null,
+  });
   return {
     sections: patch && patch.trim() ? [{ scope: `pr:${source.number}`, patch }] : [],
     meta: meta || {},

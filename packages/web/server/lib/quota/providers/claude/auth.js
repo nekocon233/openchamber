@@ -18,7 +18,7 @@ import { spawnSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 
-import { readAuthFile } from '../../../opencode/auth.js';
+import { readOpenCodeCredentials } from '../../../opencode/auth.js';
 import { asObject, asNonEmptyString, normalizeTimestamp, getAuthEntry, normalizeAuthEntry, readJsonFile } from '../../utils/index.js';
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
@@ -76,8 +76,8 @@ const readKeychainCredential = () => {
 const readCredentialsFile = () =>
   parseClaudeCodeBlob(readJsonFile(path.join(claudeConfigDirectory(), '.credentials.json')), 'credentials-file');
 
-const readOpenCodeCredential = () => {
-  const entry = normalizeAuthEntry(getAuthEntry(readAuthFile(), OPENCODE_AUTH_ALIASES));
+const readOpenCodeCredential = (auth) => {
+  const entry = normalizeAuthEntry(getAuthEntry(auth, OPENCODE_AUTH_ALIASES));
   const accessToken = asNonEmptyString(entry?.access) ?? asNonEmptyString(entry?.token);
   if (!accessToken) return null;
   return {
@@ -96,18 +96,41 @@ const readEnvCredential = () => {
 };
 
 /**
- * First credential a source can produce, in priority order.
+ * Credential Claude Code itself stores: the Keychain first, then the
+ * credentials file.
  *
- * The Keychain wins over the credentials file because on macOS the file is a
- * leftover that Claude Code no longer updates.
+ * The Keychain wins because on macOS the file is a leftover that Claude Code
+ * no longer updates, so the file is only consulted when the Keychain item is
+ * genuinely absent. An unreadable Keychain (access denied, invalid JSON) is
+ * not absence: falling back there would serve a stale token.
  *
  * @returns {ClaudeCredential|null}
  */
-export const loadClaudeCredential = () => {
+const readLocalCredential = () => {
   const keychain = readKeychainCredential();
   if (keychain.status === 'found') return keychain.credential;
-  const fileCredential = process.platform !== 'darwin' || keychain.status === 'missing'
-    ? readCredentialsFile()
-    : null;
-  return fileCredential ?? readOpenCodeCredential() ?? readEnvCredential();
+  if (process.platform === 'darwin' && keychain.status !== 'missing') return null;
+  return readCredentialsFile();
 };
+
+/**
+ * First credential a source can produce, in priority order, given the
+ * credentials OpenCode stores (`auth`).
+ *
+ * @returns {ClaudeCredential|null}
+ */
+export const findClaudeCredential = (auth) =>
+  readLocalCredential()
+  ?? readOpenCodeCredential(auth)
+  ?? readEnvCredential();
+
+/**
+ * Same order as `findClaudeCredential`; OpenCode is asked only when the
+ * local Claude Code sources have nothing.
+ *
+ * @returns {Promise<ClaudeCredential|null>}
+ */
+export const loadClaudeCredential = async () =>
+  readLocalCredential()
+  ?? readOpenCodeCredential(await readOpenCodeCredentials())
+  ?? readEnvCredential();

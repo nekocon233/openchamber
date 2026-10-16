@@ -45,7 +45,11 @@ const MANAGED_PLUGIN_SETTINGS_KEYS = new Set([
   'agentControlToolEnabled',
   'agentWebToolEnabled',
   'agentMemoryToolEnabled',
+  'agentKnowledgeToolEnabled',
   'agentNotifyToolEnabled',
+  'agentRenderToolEnabled',
+  'agentToolsCodeMode',
+  'agentWorktreeMoveWithoutAsking',
 ]);
 
 export const createSettingsRuntime = (deps) => {
@@ -66,7 +70,10 @@ export const createSettingsRuntime = (deps) => {
     normalizeManagedRemoteTunnelPresetTokens,
     syncManagedRemoteTunnelConfigWithPresets,
     upsertManagedRemoteTunnelToken,
+    chatRoots = [],
     onManagedPluginSettingsChanged = async () => {},
+    onMessageSearchEnabledChanged = () => {},
+    onMessageSearchReasoningChanged = () => {},
   } = deps;
 
   let persistSettingsLock = Promise.resolve();
@@ -686,8 +693,10 @@ export const createSettingsRuntime = (deps) => {
 
   const writeJsonFileAtomic = async (filePath, text) => {
     const directory = path.dirname(filePath);
-    await fsPromises.mkdir(directory, { recursive: true, mode: 0o700 });
-    if (process.platform !== 'win32') await fsPromises.chmod(directory, 0o700);
+    // Tighten only a directory this write created (mkdir's mode is umasked):
+    // an existing one keeps the permissions and ACLs an administrator gave it.
+    const created = await fsPromises.mkdir(directory, { recursive: true, mode: 0o700 });
+    if (created && process.platform !== 'win32') await fsPromises.chmod(directory, 0o700);
     // Atomic write: Electron main and ssh-manager read these files via plain
     // readFile + JSON.parse and silently coerce parse errors to {}. A
     // partial read during a non-atomic writeFile would make their next
@@ -763,6 +772,23 @@ export const createSettingsRuntime = (deps) => {
     return (await Promise.all(validations)).filter((p) => p !== null);
   };
 
+  const isWithinRoot = (candidate, root) => {
+    const relative = path.relative(root, candidate);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  };
+
+  // A chat's folder belongs to no project. With no project open, the folder
+  // the UI last browsed is often a chat's, and it must not become one.
+  const isChatDirectory = async (candidate) => {
+    const roots = chatRoots.filter(Boolean).map((root) => path.resolve(root));
+    if (roots.some((root) => isWithinRoot(candidate, root))) {
+      return true;
+    }
+    const realCandidate = await fsPromises.realpath(candidate);
+    const realRoots = await Promise.all(roots.map((root) => fsPromises.realpath(root).catch(() => null)));
+    return realRoots.some((root) => root && isWithinRoot(realCandidate, root));
+  };
+
   const migrateSettingsFromLegacyLastDirectory = async (current) => {
     const settings = current && typeof current === 'object' ? current : {};
     const now = Date.now();
@@ -781,7 +807,7 @@ export const createSettingsRuntime = (deps) => {
       if (candidate) {
         try {
           const stats = await fsPromises.stat(candidate);
-          if (stats.isDirectory()) {
+          if (stats.isDirectory() && !(await isChatDirectory(candidate))) {
             const id = createProjectIdFromPath(candidate);
             nextProjects = [
               {
@@ -1144,6 +1170,13 @@ export const createSettingsRuntime = (deps) => {
         await Promise.resolve(onManagedPluginSettingsChanged(next)).catch((error) => {
           console.warn('Failed to refresh the managed OpenCode config:', error?.message ?? error);
         });
+      }
+      // The search index starts or stops in the background; the save does not wait for it.
+      if (changedKeys.includes('messageSearchEnabled')) {
+        onMessageSearchEnabledChanged(next.messageSearchEnabled === true);
+      }
+      if (changedKeys.includes('messageSearchReasoningEnabled')) {
+        onMessageSearchReasoningChanged(next.messageSearchReasoningEnabled === true);
       }
       return formatSettingsResponse(next);
     });

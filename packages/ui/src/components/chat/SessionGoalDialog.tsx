@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { NumberInput } from '@/components/ui/number-input';
 import { toast } from '@/components/ui';
 import { Checkbox } from '@/components/ui/checkbox';
-import { useGoalObjectiveContent, useSessionGoal } from '@/hooks/useSessionGoal';
+import { useGoalCheckAvailable, useGoalObjectiveContent, useSessionGoal } from '@/hooks/useSessionGoal';
 import {
   formatGoalTokens,
   SESSION_GOAL_OBJECTIVE_CHAR_LIMIT,
@@ -20,7 +20,6 @@ import { clearSessionGoal, setSessionGoal } from '@/lib/sessionGoalActions';
 import { useI18n } from '@/lib/i18n';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { useUIStore } from '@/stores/useUIStore';
-import { useSmallModelAvailability } from '@/hooks/useSmallModelAvailability';
 import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 
 interface SessionGoalDialogProps {
@@ -31,38 +30,59 @@ interface SessionGoalDialogProps {
 }
 
 // Create/manage dialog for the session goal: objective + optional token
-// budget on creation; status, usage, latest audit note and lifecycle actions
+// budget on creation; status, usage, the checking model and lifecycle actions
 // (pause/resume/complete/clear) once a goal exists.
+//
+// The shell stays mounted with the composer and the work status panel, while
+// the session record it would read is replaced on every streamed step. Every
+// goal read lives in `SessionGoalDialogBody`, which mounts only while the
+// dialog is open (or animating closed), so a closed dialog does no work.
 export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: SessionGoalDialogProps) {
-  const { t } = useI18n();
   const isMobile = useUIStore((state) => state.isMobile);
+
+  // Mobile renders the shared bottom-sheet overlay instead of a centered
+  // dialog — same pattern as model controls and the session status panel.
+  // The overlay renders nothing while closed, so the body mounts with it.
+  if (isMobile) {
+    return open ? <SessionGoalDialogBody mobile onOpenChange={onOpenChange} sessionId={sessionId} directory={directory} /> : null;
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <SessionGoalDialogBody mobile={false} onOpenChange={onOpenChange} sessionId={sessionId} directory={directory} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface SessionGoalDialogBodyProps extends Omit<SessionGoalDialogProps, 'open'> {
+  mobile: boolean;
+}
+
+function SessionGoalDialogBody({ mobile, onOpenChange, sessionId, directory }: SessionGoalDialogBodyProps) {
+  const { t } = useI18n();
   const { goal } = useSessionGoal(sessionId, directory);
   const objectiveContent = useGoalObjectiveContent(sessionId, goal);
-  // Creating a goal needs the small model for its audits; managing an existing one does not.
-  const noSmallModel = useSmallModelAvailability(directory, open) === 'unavailable' && !goal;
+  // Creating a goal needs something to check its progress; managing an existing one does not.
+  const cannotCheck = !useGoalCheckAvailable(directory, true) && !goal;
 
-  const [objective, setObjective] = React.useState('');
-  const [budgetEnabled, setBudgetEnabled] = React.useState(false);
-  const [tokenBudget, setTokenBudget] = React.useState<number>(200_000);
+  // The body mounts on open, so the form seeds from the goal once; live goal
+  // updates while it is open must not clobber the user's edits.
+  const [objective, setObjective] = React.useState(() => (
+    goal?.objectiveFile ? (objectiveContent ?? '') : (goal?.objective ?? '')
+  ));
+  const [budgetEnabled, setBudgetEnabled] = React.useState(() => Boolean(goal?.tokenBudget));
+  const [tokenBudget, setTokenBudget] = React.useState<number>(() => goal?.tokenBudget ?? 200_000);
   const [busy, setBusy] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!open) return;
-    setObjective(goal?.objectiveFile ? (objectiveContent ?? '') : (goal?.objective ?? ''));
-    setBudgetEnabled(Boolean(goal?.tokenBudget));
-    setTokenBudget(goal?.tokenBudget ?? 200_000);
-    // Seed the form only when the dialog opens; live goal updates while it is
-    // open must not clobber the user's edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 
   // File-backed objectives fetch async — the content usually lands right
   // after the dialog opens. Late-seed the textarea only while it is still
   // untouched so a slow fetch never clobbers the user's typing.
   React.useEffect(() => {
-    if (!open || !goal?.objectiveFile || objectiveContent === null) return;
+    if (!goal?.objectiveFile || objectiveContent === null) return;
     setObjective((current) => (current === '' ? objectiveContent : current));
-  }, [open, goal?.objectiveFile, objectiveContent]);
+  }, [goal?.objectiveFile, objectiveContent]);
 
   const run = React.useCallback(async (action: () => Promise<void>, closeAfter: boolean) => {
     setBusy(true);
@@ -88,7 +108,7 @@ export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: 
   // "saving" over the outcome (re-saving used to spawn a fresh active goal
   // that the auditor instantly re-completed — a confusing status flash).
   const isCompleted = goal?.status === 'complete';
-  const canSave = !isCompleted && !noSmallModel && trimmedObjective.length > 0 && (!goal || objectiveChanged || budgetChanged);
+  const canSave = !isCompleted && !cannotCheck && trimmedObjective.length > 0 && (!goal || objectiveChanged || budgetChanged);
 
   const handleSave = () => run(
     () => setSessionGoal(sessionId, directory, { objective: trimmedObjective, tokenBudget: budgetValue }, goal),
@@ -119,9 +139,6 @@ export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: 
                   {t('chat.goal.usage.turns', { turns: goal.turnsUsed })}
                 </span>
               </div>
-              {goal.note ? (
-                <p className="typography-meta text-muted-foreground">{goal.note}</p>
-              ) : null}
               {/* Only failure states carry a reason worth reading; outcomes
                   like "verified by audit" are noise next to the status dot. */}
               {goal.statusReason && (goal.status === 'blocked' || goal.status === 'budgetLimited') ? (
@@ -196,7 +213,7 @@ export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: 
             </>
           )}
 
-          {noSmallModel && (
+          {cannotCheck && (
             <p className="typography-meta text-muted-foreground">{t('chat.goal.dialog.noSmallModel')}</p>
           )}
 
@@ -220,24 +237,20 @@ export function SessionGoalDialog({ open, onOpenChange, sessionId, directory }: 
         </div>
   );
 
-  // Mobile renders the shared bottom-sheet overlay instead of a centered
-  // dialog — same pattern as model controls and the session status panel.
-  if (isMobile) {
+  if (mobile) {
     return (
-      <MobileOverlayPanel open={open} title={title} onClose={() => onOpenChange(false)}>
+      <MobileOverlayPanel open title={title} onClose={() => onOpenChange(false)}>
         {body}
       </MobileOverlayPanel>
     );
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
-        {body}
-      </DialogContent>
-    </Dialog>
+    <>
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+      </DialogHeader>
+      {body}
+    </>
   );
 }

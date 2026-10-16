@@ -31,7 +31,7 @@ const TelemetryRow: React.FC<{ label: string; description: string; value: React.
         <WorkStatusRow label={label} value={value} />
       </div>
     </TooltipTrigger>
-    <TooltipContent side="left" sideOffset={8} className="max-w-[min(320px,calc(100vw-24px))] whitespace-normal break-words text-left">
+    <TooltipContent side="left" sideOffset={8} className="max-w-[min(320px,calc(100vw-24px))] whitespace-normal break-words text-start">
       <p className="font-medium">{label}</p>
       <p>{description}</p>
     </TooltipContent>
@@ -105,6 +105,13 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
               label={t('chat.workStatus.telemetry.speed')}
               description={t('chat.workStatus.telemetry.speedDescription')}
               value={<WorkStatusValue>{formatThroughputRate(stats.tokensPerSecond)}</WorkStatusValue>}
+            />
+          ) : null}
+          {stats.elapsedDurationMs !== null ? (
+            <TelemetryRow
+              label={t('chat.workStatus.telemetry.elapsed')}
+              description={t('chat.workStatus.telemetry.elapsedDescription')}
+              value={<WorkStatusValue>{formatTelemetryDuration(stats.elapsedDurationMs)}</WorkStatusValue>}
             />
           ) : null}
 

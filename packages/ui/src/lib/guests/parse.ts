@@ -3,6 +3,9 @@ import {
   GUEST_CAPABILITIES,
   GUEST_COMMANDS_MAX,
   GUEST_COMMAND_NAME,
+  GUEST_FILE_EDITORS_MAX,
+  GUEST_FILE_EDITOR_PATTERNS_MAX,
+  GUEST_FILE_EDITOR_TITLE_MAX,
   GUEST_SERVICE_PROVIDES,
   GUEST_STATUS_SECTION_HEIGHT_MAX,
   GUEST_STATUS_SECTION_HEIGHT_MIN,
@@ -11,12 +14,14 @@ import {
   GUEST_TOOLS_MAX,
   GUEST_TOOL_MATCH,
   GUEST_TOOL_OUTPUTS,
+  isFileEditorPattern,
 } from '@openchamber/sdk';
 import { z } from 'zod';
 
-import type { InstalledGuest } from './types.ts';
+import type { GuestCatalog, InstalledGuest } from './types.ts';
 
 const PANEL_ID = /^[a-z][a-z0-9-]*$/;
+const STORAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const publicIntegrationSchema = z.object({
   name: z.string().trim().min(1),
@@ -80,12 +85,21 @@ const guestToolSchema = z.object({
   columns: z.array(z.string().trim().min(1)).optional(),
 });
 
+const guestFileEditorSchema = z.object({
+  id: z.string().regex(PANEL_ID),
+  title: z.string().trim().min(1).max(GUEST_FILE_EDITOR_TITLE_MAX),
+  match: z.array(z.string().refine(isFileEditorPattern)).min(1).max(GUEST_FILE_EDITOR_PATTERNS_MAX),
+  entry: z.string().trim().min(1),
+  content: z.enum(['text', 'binary']).optional(),
+});
+
 export const guestUpdateSchema = z.object({
   version: z.string().trim().min(1).max(64),
 });
 
 const installedGuestSchema = z.object({
   id: z.string().regex(PANEL_ID),
+  storageId: z.string().min(1).max(128).regex(STORAGE_ID).optional(),
   name: z.string().trim().min(1),
   icon: z.string().trim().min(1),
   entry: z.string().trim().min(1).optional(),
@@ -101,16 +115,21 @@ const installedGuestSchema = z.object({
   statusEntry: z.string().trim().min(1).optional(),
   statusTitle: z.string().trim().min(1).max(GUEST_STATUS_SECTION_TITLE_MAX).optional(),
   statusHeight: z.number().int().min(GUEST_STATUS_SECTION_HEIGHT_MIN).max(GUEST_STATUS_SECTION_HEIGHT_MAX).optional(),
+  statusDefaultExpanded: z.boolean().optional(),
+  statusRequiresProject: z.boolean().optional(),
   integration: publicIntegrationSchema.optional(),
   filesystem: z.array(z.string().trim().min(1)).optional(),
+  origins: z.array(z.string().trim().min(1)).optional(),
   service: publicServiceSchema.optional(),
   actions: z.array(guestActionSchema).max(GUEST_ACTIONS_MAX).optional(),
   commands: z.array(guestCommandSchema).max(GUEST_COMMANDS_MAX).optional(),
   tools: z.array(guestToolSchema).max(GUEST_TOOLS_MAX).optional(),
+  fileEditors: z.array(guestFileEditorSchema).max(GUEST_FILE_EDITORS_MAX).optional(),
   capabilities: z.object({
     requested: z.array(z.enum(GUEST_CAPABILITIES)),
     granted: z.array(z.enum(GUEST_CAPABILITIES)),
   }),
+  enterpriseBlocked: z.array(z.enum(GUEST_CAPABILITIES)).optional(),
   source: z.enum(['bundled', 'path', 'zip', 'git']).optional(),
   path: z.string().nullable().optional(),
   enabled: z.boolean().optional(),
@@ -122,13 +141,53 @@ const installedGuestSchema = z.object({
 });
 
 const catalogSchema = z.object({
-  guests: z.array(installedGuestSchema),
+  guests: z.array(z.unknown()),
 });
 
-export const parseGuestCatalogJson = (json: string): InstalledGuest[] | null => {
+// What Settings can still show of a row it cannot read, so the user can
+// remove it. Each field falls back on its own.
+const unreadableGuestSchema = z.object({
+  id: z.string().regex(PANEL_ID).nullable().catch(null),
+  name: z.string().trim().min(1).nullable().catch(null),
+  source: z.string().nullable().catch(null),
+}).catch({ id: null, name: null, source: null });
+
+/**
+ * Rows are read one by one: a row this build cannot read (a newer server, a
+ * broken package) is listed in `unreadable` and every other row still loads.
+ * Only a response without a guest list is a failure.
+ */
+export const parseGuestCatalogJson = (json: string): GuestCatalog | null => {
   try {
     const parsed = catalogSchema.safeParse(JSON.parse(json));
-    return parsed.success ? parsed.data.guests : null;
+    if (!parsed.success) return null;
+    const catalog: GuestCatalog = { guests: [], unreadable: [] };
+    for (const row of parsed.data.guests) {
+      const guest = installedGuestSchema.safeParse(row);
+      if (guest.success) {
+        catalog.guests.push(guest.data);
+        continue;
+      }
+      const { id, name, source } = unreadableGuestSchema.parse(row);
+      catalog.unreadable.push({ id, name, builtIn: source === 'bundled' });
+    }
+    return catalog;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The answer to an install: the row, `'unreadable'` when the server installed
+ * a package and answered with a row this build cannot read, or null when the
+ * answer is not an install row at all.
+ */
+export const parseInstallAnswerJson = (json: string): InstalledGuest | 'unreadable' | null => {
+  try {
+    const raw: unknown = JSON.parse(json);
+    const guest = z.object({ guest: installedGuestSchema }).safeParse(raw);
+    if (guest.success) return guest.data.guest;
+    return z.object({ guest: z.object({ id: z.string() }) }).safeParse(raw).success ? 'unreadable' : null;
   } catch {
     return null;
   }

@@ -4,6 +4,7 @@ import {
   areFilesEqual,
   areOptionsEqual,
   FileDiff as PierreFileDiff,
+  parseDiffFromFile,
   VirtualizedFileDiff,
   Virtualizer,
   type FileContents,
@@ -31,25 +32,33 @@ import { ensurePierreThemeRegistered, getResolvedShikiTheme } from '@/lib/shiki/
 import { getDefaultTheme } from '@/lib/theme/themes';
 
 import { useDeviceInfo } from '@/lib/device';
+import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { hideWhitespaceChanges } from '@/lib/diff/hideWhitespaceChanges';
 import type { PatchHunkAnchor } from '@/lib/diff/patchFileDiff';
+import { getDiffLinesText } from '@/lib/diff/selectedDiffLines';
+import { PIERRE_DIFF_TINT_CSS } from '@/lib/shiki/pierreDiffTint';
 
 /**
- * A click on a collapsed-context separator of a partial (patch-only) diff.
- * The separator sits above the hunk that starts at `additionStart` in the
- * new file; the owner loads the full file and replays the expansion.
+ * A click on a collapsed-context expander of a partial (patch-only) diff.
+ * `before-hunk` comes from the separator above the hunk that starts at
+ * `additionStart` in the new file; `after-last-hunk` from the row below the
+ * last hunk. The owner loads the full file and the viewer replays the
+ * expansion.
  */
-export interface ContextExpansionRequest {
-  additionStart: number;
-  direction: ExpansionDirections;
-}
+export type ContextExpansionRequest =
+  | { gap: 'before-hunk'; additionStart: number; direction: ExpansionDirections }
+  | { gap: 'after-last-hunk' };
 
 export interface DiffHunkActions {
   anchors: readonly PatchHunkAnchor[];
   render: (index: number) => React.ReactNode;
 }
 
-type DiffAnnotation = PierreAnnotationData | { type: 'hunk-action'; index: number };
+type DiffAnnotation =
+  | PierreAnnotationData
+  | { type: 'hunk-action'; index: number }
+  | { type: 'trailing-expand' };
 const EMPTY_HUNK_ANCHORS: readonly PatchHunkAnchor[] = [];
 
 const HUNK_ACTION_OVERLAY_CSS = `
@@ -71,6 +80,11 @@ interface PierreDiffViewerProps {
   wrapLines?: boolean;
   layout?: 'fill' | 'inline';
   enableComments?: boolean;
+  /**
+   * Shows lines that changed only by whitespace as unchanged. Hunk actions are
+   * dropped meanwhile: they act on the whole hunk, whitespace included.
+   */
+  hideWhitespace?: boolean;
   hunkActions?: DiffHunkActions;
   /**
    * Present when the owner can replace a partial diff with full file contents.
@@ -119,6 +133,7 @@ const PIERRE_RUNTIME_BASE_CSS = `
 // as they break resize behavior.
 const WEBKIT_SCROLL_FIX_CSS = `
   ${PIERRE_RUNTIME_BASE_CSS}
+  ${PIERRE_DIFF_TINT_CSS}
 
   /* While a multi-line content drag is being mapped to a line selection the
      row highlight is the feedback; the native blue text selection on top of
@@ -145,6 +160,23 @@ const WEBKIT_SCROLL_FIX_CSS = `
     --diffs-bg-separator-override: var(--surface-elevated);
   }
 
+  /* Selected rows: Pierre mixes the selection colour in at 18-25%, and the
+     theme's selection is a soft neutral, so the selection barely showed on
+     dark themes. Half the selection colour stays readable while added and
+     deleted rows keep their tint. */
+  [data-line][data-selected-line],
+  [data-line-annotation][data-selected-line],
+  [data-no-newline][data-selected-line] {
+    --mix-selection-light: 62%;
+    --mix-selection-dark: 50%;
+  }
+
+  [data-gutter-buffer][data-selected-line],
+  [data-column-number][data-selected-line] {
+    --mix-selection-light: 55%;
+    --mix-selection-dark: 40%;
+  }
+
   [data-diff-header],
   [data-diff] {
     [data-separator] {
@@ -152,10 +184,25 @@ const WEBKIT_SCROLL_FIX_CSS = `
     }
   }
 
+  /* A faint tint and hairlines above and below, across every column of both
+     sides, so two hunks read as two even where the label shows on one side
+     only. Inset shadows, not borders: the row keeps the height Pierre lays
+     out with. */
   [data-separator="line-info-basic"] {
     height: 24px !important;
-    background: var(--diffs-bg) !important;
+    background: color-mix(in srgb, var(--diffs-fg) 2%, var(--diffs-bg)) !important;
     position: relative;
+    box-shadow:
+      inset 0 1px 0 var(--interactive-border),
+      inset 0 -1px 0 var(--interactive-border);
+  }
+
+  [data-separator="line-info-basic"][data-separator-first] {
+    box-shadow: inset 0 -1px 0 var(--interactive-border);
+  }
+
+  [data-separator="line-info-basic"][data-separator-last] {
+    box-shadow: inset 0 1px 0 var(--interactive-border);
   }
 
   [data-diff-type="single"] [data-gutter],
@@ -356,11 +403,17 @@ const useDiffSwapAfterHighlight = (
       incoming.newObjectId ?? makeContentCacheKey(incoming.additionLines.join('\n')),
     ].join(':');
 
+    // subscribeToStatChanges invokes the listener synchronously, so swap can
+    // run before the subscription and timer handles exist. The initializers
+    // keep prefer-const from demanding const: settle reads both handles while
+    // subscribeToStatChanges is still running, and const would throw there.
     let settled = false;
+    let unsubscribe: (() => void) | undefined = undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
     const settle = () => {
       if (settled) return;
       settled = true;
-      unsubscribe();
+      unsubscribe?.();
       clearTimeout(timer);
     };
     const swap = () => {
@@ -371,8 +424,12 @@ const useDiffSwapAfterHighlight = (
     const swapWhenHighlighted = () => {
       if (workerPool.getDiffResultCache(incoming)) swap();
     };
-    const unsubscribe = workerPool.subscribeToStatChanges(swapWhenHighlighted);
-    const timer = setTimeout(swap, FULL_DIFF_SWAP_TIMEOUT_MS);
+    unsubscribe = workerPool.subscribeToStatChanges(swapWhenHighlighted);
+    if (settled) {
+      unsubscribe();
+      return;
+    }
+    timer = setTimeout(swap, FULL_DIFF_SWAP_TIMEOUT_MS);
     workerPool.primeDiffHighlightCache(incoming);
     swapWhenHighlighted();
     return settle;
@@ -389,19 +446,14 @@ const extractSelectedCode = (
 ): string => {
   // Default to modified if side is ambiguous, as users mostly comment on new code
   const isOriginal = range.side === 'deletions';
-  const content = fileDiff
-    ? (isOriginal ? fileDiff.deletionLines : fileDiff.additionLines).join('')
-    : (isOriginal ? original : modified);
-  const lines = content.split('\n');
-
-  // Ensure bounds
   const from = Math.min(range.start, range.end);
   const to = Math.max(range.start, range.end);
+  if (fileDiff) return getDiffLinesText(fileDiff, isOriginal ? 'deletions' : 'additions', from, to);
+
+  const lines = (isOriginal ? original : modified).split('\n');
   const startLine = Math.max(1, from);
   const endLine = Math.min(lines.length, to);
-
   if (startLine > endLine) return '';
-
   return lines.slice(startLine - 1, endLine).join('\n');
 };
 
@@ -482,9 +534,31 @@ const resolveContextExpansionRequest = (
   if (!hunk) return null;
 
   return {
+    gap: 'before-hunk',
     additionStart: hunk.additionStart,
     direction: separator.hasAttribute('data-separator-first') ? 'down' : 'both',
   };
+};
+
+// Context lines git and GitHub put around each change unless asked otherwise.
+const PATCH_CONTEXT_LINES = 3;
+
+/**
+ * Pierre cannot size the gap after the last hunk of a patch-only diff, so it
+ * draws no separator there. Git emits up to the requested context after the
+ * last change; fewer context lines, or a no-newline marker, mean the hunk
+ * reaches the end of the file. Otherwise more lines may follow, and the row
+ * anchored to the hunk's last line offers to load them.
+ */
+const getTrailingExpandAnnotation = (fileDiff: FileDiffMetadata): DiffLineAnnotation<DiffAnnotation> | null => {
+  if (fileDiff.type === 'new' || fileDiff.type === 'deleted') return null;
+  const hunk = fileDiff.hunks.at(-1);
+  const lastContent = hunk?.hunkContent.at(-1);
+  if (!hunk || lastContent?.type !== 'context' || lastContent.lines < PATCH_CONTEXT_LINES) return null;
+  if (hunk.noEOFCRAdditions || hunk.noEOFCRDeletions) return null;
+  // The last row is context, so it exists on both sides. Deletions places the
+  // row in the left column of a split diff, where Pierre's separators sit.
+  return { side: 'deletions', lineNumber: hunk.deletionStart + hunk.deletionCount - 1, metadata: { type: 'trailing-expand' } };
 };
 
 const waitForDiffReady = (
@@ -665,7 +739,36 @@ const wakeVirtualizer = (
   };
 };
 
-export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
+export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({ hideWhitespace = false, ...props }) => {
+  const { t } = useI18n();
+  const { original, modified, fileDiff, fileName } = props;
+  const sourceDiff = useMemo(() => {
+    if (!hideWhitespace || fileDiff) return fileDiff;
+    return parseDiffFromFile({ name: fileName ?? '', contents: original }, { name: fileName ?? '', contents: modified });
+  }, [fileDiff, fileName, hideWhitespace, modified, original]);
+  const visibleDiff = useMemo(
+    () => (hideWhitespace && sourceDiff ? hideWhitespaceChanges(sourceDiff) : fileDiff),
+    [fileDiff, hideWhitespace, sourceDiff],
+  );
+
+  if (hideWhitespace && sourceDiff && sourceDiff.hunks.length > 0 && visibleDiff?.hunks.length === 0) {
+    return (
+      <div className="px-3 py-2 typography-meta text-muted-foreground">
+        {t('diffView.state.whitespaceOnly')}
+      </div>
+    );
+  }
+
+  return (
+    <PierreDiffViewerBody
+      {...props}
+      fileDiff={visibleDiff}
+      hunkActions={hideWhitespace ? undefined : props.hunkActions}
+    />
+  );
+};
+
+const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace'>> = ({
   original,
   modified,
   fileDiff: incomingFileDiff,
@@ -681,6 +784,9 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
   contextLoading = false,
 }) => {
   const themeContext = useOptionalThemeSystem();
+  const { t } = useI18n();
+  const showLinesBelowLabel = t('diffView.actions.showLinesBelow');
+  const requestTrailingExpansionRef = useRef<() => void>(() => {});
 
   const isDark = themeContext?.currentTheme.metadata.variant === 'dark';
   const lightTheme = themeContext?.availableThemes.find(t => t.metadata.id === themeContext.lightThemeId) ?? getDefaultTheme(false);
@@ -791,15 +897,29 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
       return div;
     }
 
+    if (annotation.metadata.type === 'trailing-expand') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.ocTrailingExpand = '';
+      button.textContent = showLinesBelowLabel;
+      button.addEventListener('click', (event) => {
+        // Keep the click away from Pierre's line selection.
+        event.stopPropagation();
+        requestTrailingExpansionRef.current();
+      });
+      div.append(button);
+      return div;
+    }
+
     const id = toPierreAnnotationId(annotation.metadata);
 
     div.dataset.annotationId = id;
     div.dataset.annotationSide = annotation.side;
     div.dataset.annotationLine = String(annotation.lineNumber);
     return div;
-  }, []);
+  }, [showLinesBelowLabel]);
 
-  const captureHunkTargets = useCallback<NonNullable<FileDiffOptions<DiffAnnotation>['onPostRender']>>((node, instance, phase) => {
+  const captureHunkTargets = useCallback<NonNullable<FileDiffOptions<DiffAnnotation, undefined>['onPostRender']>>((node, instance, phase) => {
     const targets = new Map<number, HTMLElement>();
     if (phase !== 'unmount') {
       const capsuleHeight = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 2;
@@ -818,6 +938,9 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
           let bounds = columns.get(column);
           if (!bounds) {
             bounds = column.getBoundingClientRect();
+            // Wrapped split view lays the column out as `display: contents`,
+            // which has no box. Its content grid spans the same rows.
+            if (bounds.height === 0) bounds = slot.closest('[data-content]')?.getBoundingClientRect() ?? bounds;
             columns.set(column, bounds);
           }
           const markerTop = target.getBoundingClientRect().top;
@@ -1101,13 +1224,18 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
   const sharedVirtualizerRef = useRef<SharedVirtualizer | null>(null);
   const instanceVirtualizerRef = useRef<Virtualizer | null>(null);
   const instanceWorkerPoolRef = useRef<unknown>(null);
-  const instanceVirtualHunkSeparatorsRef = useRef<FileDiffOptions<DiffAnnotation>['hunkSeparators'] | undefined>(undefined);
+  const instanceVirtualHunkSeparatorsRef = useRef<FileDiffOptions<DiffAnnotation, undefined>['hunkSeparators'] | undefined>(undefined);
   const instanceFileDiffRef = useRef<FileDiffMetadata | undefined>(undefined);
   const instanceOldFileRef = useRef<FileContents | undefined>(undefined);
   const instanceNewFileRef = useRef<FileContents | undefined>(undefined);
   const [, forceUpdate] = React.useReducer((x) => x + 1, 0);
   const workerPool = useWorkerPool(isLargeContent ? 'unified' : (renderSideBySide ? 'split' : 'unified'));
   const fileDiff = useDiffSwapAfterHighlight(incomingFileDiff, workerPool);
+  // Partial diff + an owner that can load the file: the separators become
+  // expand buttons (see the on-demand CSS) and report the gap on click.
+  const expandOnDemand = Boolean(onExpandContextRequest) && fileDiff?.isPartial === true;
+  // Loading covers the owner's fetch and the highlight-first swap above.
+  const expandLoading = expandOnDemand && (contextLoading || incomingFileDiff !== fileDiff);
 
   const lightResolvedTheme = useMemo(() => getResolvedShikiTheme(lightTheme), [lightTheme]);
   const darkResolvedTheme = useMemo(() => getResolvedShikiTheme(darkTheme), [darkTheme]);
@@ -1187,7 +1315,7 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
   }, [darkResolvedTheme, diffThemeKey, isDark, lightResolvedTheme]);
 
 
-  const options = useMemo<FileDiffOptions<DiffAnnotation>>(() => ({
+  const options = useMemo<FileDiffOptions<DiffAnnotation, undefined>>(() => ({
     theme: {
       dark: darkTheme.metadata.id,
       light: lightTheme.metadata.id,
@@ -1212,9 +1340,9 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
     onLineClick: enableComments ? handleLineClick : undefined,
     onLineSelected: enableComments ? handleSelectionChange : undefined,
     unsafeCSS: hunkAnchors.length > 0 ? `${WEBKIT_SCROLL_FIX_CSS}\n${HUNK_ACTION_OVERLAY_CSS}` : WEBKIT_SCROLL_FIX_CSS,
-    renderAnnotation: enableComments || hunkAnchors.length > 0 ? renderAnnotation : undefined,
+    renderAnnotation: enableComments || hunkAnchors.length > 0 || expandOnDemand ? renderAnnotation : undefined,
     onPostRender: hunkAnchors.length > 0 ? captureHunkTargets : undefined,
-  }), [captureHunkTargets, hunkAnchors.length, darkTheme.metadata.id, enableComments, isDark, isLargeContent, lightTheme.metadata.id, renderSideBySide, wrapLines, handleSelectionChange, handleGutterUtilityClick, handleLineClick, renderAnnotation]);
+  }), [captureHunkTargets, hunkAnchors.length, darkTheme.metadata.id, enableComments, expandOnDemand, isDark, isLargeContent, lightTheme.metadata.id, renderSideBySide, wrapLines, handleSelectionChange, handleGutterUtilityClick, handleLineClick, renderAnnotation]);
 
 
   const lineAnnotations = useMemo<DiffLineAnnotation<DiffAnnotation>[]>(() => {
@@ -1226,8 +1354,10 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
     for (const anchor of hunkAnchors) {
       annotations.push({ side: anchor.side, lineNumber: anchor.lineNumber, metadata: { type: 'hunk-action', index: anchor.index } });
     }
+    const trailingExpand = expandOnDemand && fileDiff ? getTrailingExpandAnnotation(fileDiff) : null;
+    if (trailingExpand) annotations.push(trailingExpand);
     return annotations;
-  }, [editingDraftId, enableComments, fileDrafts, hunkAnchors, selection]);
+  }, [editingDraftId, enableComments, expandOnDemand, fileDiff, fileDrafts, hunkAnchors, selection]);
 
   const lineAnnotationsRef = useRef(lineAnnotations);
 
@@ -1512,11 +1642,13 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
     };
   }, [diffThemeKey, fileName]);
 
-  // Partial diff + an owner that can load the file: the separators become
-  // expand buttons (see the on-demand CSS) and report the gap on click.
-  const expandOnDemand = Boolean(onExpandContextRequest) && fileDiff?.isPartial === true;
-  // Loading covers the owner's fetch and the highlight-first swap above.
-  const expandLoading = expandOnDemand && (contextLoading || incomingFileDiff !== fileDiff);
+  useEffect(() => {
+    requestTrailingExpansionRef.current = () => {
+      if (expandLoading) return;
+      onExpandContextRequest?.({ gap: 'after-last-hunk' });
+    };
+  }, [expandLoading, onExpandContextRequest]);
+
   useEffect(() => {
     const container = diffContainerRef.current;
     if (!container) return;
@@ -1560,6 +1692,12 @@ export const PierreDiffViewer: React.FC<PierreDiffViewerProps> = ({
       if (!instance || instance.fileDiff !== fileDiff) return;
       if (appliedContextExpansionRef.current === pendingContextExpansion) return;
       appliedContextExpansionRef.current = pendingContextExpansion;
+      if (pendingContextExpansion.gap === 'after-last-hunk') {
+        // Pierre keys the region after the last hunk by the hunk count and
+        // grows it from its start, which is the 'up' direction.
+        instance.expandHunk(fileDiff.hunks.length, 'up');
+        return;
+      }
       const hunkIndex = fileDiff.hunks.findIndex((hunk) =>
         hunk.additionStart <= pendingContextExpansion.additionStart
         && pendingContextExpansion.additionStart < hunk.additionStart + Math.max(hunk.additionCount, 1));

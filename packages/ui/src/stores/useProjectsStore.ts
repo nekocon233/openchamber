@@ -16,7 +16,7 @@ import { parseNonEmptyTrimmedString } from '@/lib/settings/parsers';
 import { getDeferredSafeStorage } from './utils/safeStorage';
 import { useDirectoryStore } from './useDirectoryStore';
 import { streamDebugEnabled } from '@/stores/utils/streamDebug';
-import { PROJECT_COLORS } from '@/lib/projectMeta';
+import { COLOR_PRESETS } from '@/lib/colorPresets';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { getRuntimeKey } from '@/lib/runtime-switch';
@@ -28,9 +28,9 @@ import {
 import { getVSCodeBootstrapConfig } from '@/lib/vscodeBootstrap';
 import { isVSCodeRuntime } from './utils/vscodeRuntime';
 
-/** Pick a color key that's least used among existing projects */
+/** Pick the preset colour least used among existing projects */
 const pickAutoColor = (projects: ProjectEntry[]): string => {
-  const colorKeys = PROJECT_COLORS.map((c) => c.key);
+  const colorKeys: string[] = [...COLOR_PRESETS];
   const usageCounts = new Map<string, number>();
   for (const key of colorKeys) {
     usageCounts.set(key, 0);
@@ -784,6 +784,10 @@ export const useProjectsStore = create<ProjectsStore>()(
           next.delete(normalizedPath);
           return { availableWorktreesByProject: next };
         });
+        // Its running isolated spaces stop, but not one whose agent is working. Loaded on demand,
+        // so the feature stays out of this store's module graph.
+        const label = project.label?.trim() || project.path.split('/').pop() || project.path;
+        void import('@/lib/spaces/space-close').then(({ stopSpacesOfClosedProject }) => stopSpacesOfClosedProject(project.path, label));
       }
 
       if (nextActiveId) {
@@ -793,7 +797,7 @@ export const useProjectsStore = create<ProjectsStore>()(
           useDirectoryStore.getState().setDirectory(nextActive.path, { showOverlay: false });
         }
       } else {
-        void useDirectoryStore.getState().goHome();
+        void useDirectoryStore.getState().goToNoProjectDirectory();
       }
     },
 
@@ -1244,7 +1248,7 @@ const synchronizeProjectsFromSidebarState = (): void => {
       opencodeClient.setDirectory(activeProject.path);
       useDirectoryStore.getState().setDirectory(activeProject.path, { showOverlay: false });
     } else {
-      void useDirectoryStore.getState().goHome();
+      void useDirectoryStore.getState().goToNoProjectDirectory();
     }
   }
 };

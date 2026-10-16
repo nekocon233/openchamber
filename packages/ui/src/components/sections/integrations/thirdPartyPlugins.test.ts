@@ -1,42 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import type { PluginEntry, RegistryResult } from '@/stores/usePluginsStore';
-import * as thirdPartyCatalog from './thirdPartyPlugins';
 import {
+  getCatalogPluginPresentation,
   getCatalogPluginState,
   getCatalogPluginPrimaryAction,
   getLatestNpmSpec,
   specMatchesLocalPackage,
   specMatchesPackage,
+  THIRD_PARTY_PLUGINS,
 } from './thirdPartyPlugins';
-
-type CatalogPresentationStatus =
-  | 'not-installed'
-  | 'installed'
-  | 'installed-version'
-  | 'update-available'
-  | 'unpinned'
-  | 'ambiguous'
-  | 'restart-required'
-  | 'registry-unavailable'
-  | 'provider-unavailable';
-
-type GetCatalogPluginPresentation = (
-  state: ReturnType<typeof getCatalogPluginState>,
-  options?: {
-    registryUnavailable?: boolean;
-    restartRequired?: boolean;
-    providerUnavailable?: boolean;
-  },
-) => {
-  status: CatalogPresentationStatus;
-  latestVersion: string | null;
-};
-
-const getCatalogPluginPresentation = (
-  thirdPartyCatalog as unknown as {
-    getCatalogPluginPresentation?: GetCatalogPluginPresentation;
-  }
-).getCatalogPluginPresentation;
 
 const claudePackage = '@openchamber/opencode-claude';
 
@@ -60,9 +32,6 @@ const registry = (spec: string, currentVersion: string | null, latestVersion = '
 
 describe('third-party plugin catalog helpers', () => {
   test('derives compact-card status with explicit transient-state priority', () => {
-    expect(typeof getCatalogPluginPresentation).toBe('function');
-    if (!getCatalogPluginPresentation) return;
-
     const notInstalled = getCatalogPluginState([], claudePackage, {});
     expect(getCatalogPluginPresentation(notInstalled)).toEqual({
       status: 'not-installed',
@@ -145,7 +114,7 @@ describe('third-party plugin catalog helpers', () => {
 
     expect(state.userEntry).not.toBeNull();
     expect(state.userEntryIsLocal).toBe(true);
-    expect(getCatalogPluginPresentation?.(state)).toEqual({ status: 'installed', latestVersion: null });
+    expect(getCatalogPluginPresentation(state)).toEqual({ status: 'installed', latestVersion: null });
   });
 
   test('offers setup for a local checkout instead of an npm update', () => {
@@ -165,7 +134,7 @@ describe('third-party plugin catalog helpers', () => {
       {},
     );
 
-    expect(getCatalogPluginPresentation?.(state, { registryUnavailable: true })).toEqual({
+    expect(getCatalogPluginPresentation(state, { registryUnavailable: true })).toEqual({
       status: 'installed',
       latestVersion: null,
     });
@@ -178,9 +147,9 @@ describe('third-party plugin catalog helpers', () => {
       {},
     );
 
-    expect(getCatalogPluginPresentation?.(state, { restartRequired: true })?.status)
+    expect(getCatalogPluginPresentation(state, { restartRequired: true })?.status)
       .toBe('restart-required');
-    expect(getCatalogPluginPresentation?.(state, { providerUnavailable: true })?.status)
+    expect(getCatalogPluginPresentation(state, { providerUnavailable: true })?.status)
       .toBe('provider-unavailable');
   });
 
@@ -196,11 +165,16 @@ describe('third-party plugin catalog helpers', () => {
   });
 
   test('points catalog plugins at the OpenChamber GitHub and npm packages', () => {
-    expect(thirdPartyCatalog.THIRD_PARTY_PLUGINS.map((plugin) => ({
+    expect(THIRD_PARTY_PLUGINS.map((plugin) => ({
       id: plugin.id,
       packageName: plugin.packageName,
       homepage: plugin.homepage,
     }))).toEqual([
+      {
+        id: 'opencode-claude',
+        packageName: '@openchamber/opencode-claude',
+        homepage: 'https://github.com/openchamber/opencode-claude',
+      },
       {
         id: 'opencode-cursor-oauth',
         packageName: '@openchamber/opencode-cursor',

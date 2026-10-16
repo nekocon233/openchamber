@@ -1,6 +1,10 @@
 import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 import { createSessionActivityProbe } from '../opencode/session-activity.js';
+import { isEnterpriseMode } from '../enterprise-mode.js';
+import { truncateNotificationText } from './message.js';
 
+/** The session id OpenCode gives an MCP elicitation form, which no session owns. */
+const LOCATION_SCOPED_FORM_SESSION_ID = 'global';
 
 export const createNotificationTriggerRuntime = (deps) => {
   const {
@@ -68,7 +72,8 @@ export const createNotificationTriggerRuntime = (deps) => {
   };
 
   // Generic notification for native push (per the mobile design): a fixed, scenario-based
-  // title + the session name as the body. No model/project/message content crosses the relay.
+  // title + the session name as the body. No model/project/message content crosses the relay
+  // in the clear; a phone with a push key gets what happened sealed (`sealed` below).
   const APNS_TITLE_BY_TYPE = {
     ready: 'Agent response is ready',
     error: 'Agent hit an error',
@@ -79,14 +84,23 @@ export const createNotificationTriggerRuntime = (deps) => {
     goal_budget: 'Goal reached its token budget',
   };
 
+  const genericTitleOf = (payload) => APNS_TITLE_BY_TYPE[payload?.data?.type] || 'Agent update';
+
   const toApnsGenericPayload = (payload) => {
     const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
-    const sessionName = typeof data.sessionName === 'string' && data.sessionName.trim().length > 0
-      ? data.sessionName.trim()
-      : 'Session';
+    const knownSessionName = typeof data.sessionName === 'string' ? data.sessionName.trim() : '';
+    const sessionName = knownSessionName || 'Session';
+    const phoneBody = payload?.phoneBody ?? '';
     return {
-      title: APNS_TITLE_BY_TYPE[data.type] || 'Agent update',
-      body: sessionName,
+      title: genericTitleOf(payload),
+      // A session name is derived from the conversation.
+      body: isEnterpriseMode() ? '' : sessionName,
+      // A phone with a push key opens this on the device; the relay and the
+      // push service see only the title above. Enterprise mode keeps the
+      // generic text even sealed: the push service is outside its boundary.
+      sealed: phoneBody && !isEnterpriseMode()
+        ? { title: knownSessionName || genericTitleOf(payload), body: phoneBody }
+        : undefined,
       badge: trackPushAndCountBadge(typeof payload?.tag === 'string' ? payload.tag : undefined),
       tag: payload?.tag,
       // sessionId is forwarded so a tapped push can deep-link; it is an opaque id, not content.
@@ -94,22 +108,46 @@ export const createNotificationTriggerRuntime = (deps) => {
     };
   };
 
+  // The body a phone shows: what happened, after a word that says which kind
+  // of event it is. A finished turn needs no word, its reply says it.
+  const phoneBodyOf = (prefix, text) => {
+    const detail = truncateNotificationText((text ?? '').trim());
+    if (!detail) return '';
+    return prefix ? `${prefix}: ${detail}` : detail;
+  };
+
+  const PERMISSION_PREFIX_BY_ACTION = {
+    bash: 'Wants to run',
+    edit: 'Wants to edit',
+    read: 'Wants to read',
+  };
+
   // Fan a notification out to every delivery channel: browser web-push (full templated
   // payload) and native iOS APNs (generic model-based text). Both share the dedup tag and
   // `requireNoSse` focus gate; a failure in one channel must not block the other.
-  const fanoutPush = (payload, options) => {
+  // Web push leaves through the browser vendor's push service. It is
+  // encrypted, but enterprise mode keeps conversation content off every
+  // channel it does not control: the scenario title and the deep link only.
+  const toWebPushPayload = (payload) => {
+    if (!isEnterpriseMode()) return payload;
+    // Every payload built in this file carries a `data` object.
+    const { sessionName: _sessionName, ...rest } = payload.data ?? {};
+    return { ...payload, title: genericTitleOf(payload), body: '', data: rest };
+  };
+
+  const fanoutPush = ({ phoneBody, ...payload }, options) => {
     // Presence-aware routing: if any interactive (non-mobile) client — desktop/web/vscode — is
     // currently visible, it already shows the in-app notification, so skip the native push to the
     // phone. Gated on the desktop's visibility (reliable), never the phone's own. When we skip we
     // also skip toApnsGenericPayload, so the badge isn't incremented for an undelivered push.
     const interactiveVisible = isAnyInteractiveClientVisible?.() === true;
     return Promise.all([
-      Promise.resolve(sendPushToAllUiSessions?.(payload, options)).catch((error) => {
+      Promise.resolve(sendPushToAllUiSessions?.(toWebPushPayload(payload), options)).catch((error) => {
         console.warn('[Push] web-push fanout failed:', error?.message ?? error);
       }),
       interactiveVisible
         ? Promise.resolve()
-        : Promise.resolve(sendApnsToAllUiSessions?.(toApnsGenericPayload(payload), options)).catch((error) => {
+        : Promise.resolve(sendApnsToAllUiSessions?.(toApnsGenericPayload({ ...payload, phoneBody }), options)).catch((error) => {
             console.warn('[APNs] fanout failed:', error?.message ?? error);
           }),
     ]);
@@ -467,6 +505,7 @@ export const createNotificationTriggerRuntime = (deps) => {
         let title = `${formatMode(info?.mode)} agent is ready`;
         let body = `${formatModelId(info?.modelID)} completed the task`;
         let sessionName = '';
+        let reply = '';
 
         try {
           const templates = settings.notificationTemplates || {};
@@ -488,6 +527,7 @@ export const createNotificationTriggerRuntime = (deps) => {
             message: lastMessage,
             settings,
           });
+          reply = variables.last_message;
 
           const resolvedTitle = resolveNotificationTemplate(completionTemplate.title, variables);
           const resolvedBody = resolveNotificationTemplate(completionTemplate.message, variables);
@@ -515,6 +555,7 @@ export const createNotificationTriggerRuntime = (deps) => {
           {
             title,
             body,
+            phoneBody: phoneBodyOf('', reply),
             tag: `ready-${sessionId}`,
             data: {
               url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
@@ -544,6 +585,7 @@ export const createNotificationTriggerRuntime = (deps) => {
         let title = 'Tool error';
         let body = 'An error occurred';
         let sessionName = '';
+        let errorText = '';
 
         try {
           const variables = await buildTemplateVariables(payload, sessionId, notificationDirectory);
@@ -558,6 +600,7 @@ export const createNotificationTriggerRuntime = (deps) => {
             message: lastMessage,
             settings,
           });
+          errorText = variables.last_message;
 
           const errorTemplate = (settings.notificationTemplates || {}).error || { title: 'Tool error', message: '{last_message}' };
           const resolvedTitle = resolveNotificationTemplate(errorTemplate.title, variables);
@@ -586,6 +629,7 @@ export const createNotificationTriggerRuntime = (deps) => {
           {
             title,
             body,
+            phoneBody: phoneBodyOf('Error', errorText),
             tag: `error-${sessionId}`,
             data: {
               url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
@@ -628,6 +672,10 @@ export const createNotificationTriggerRuntime = (deps) => {
         const fieldTitle = typeof firstField?.title === 'string' ? firstField.title.trim() : '';
         const fieldDescription = typeof firstField?.description === 'string' ? firstField.description.trim() : '';
         const questionText = fieldDescription || fieldTitle;
+        // An MCP elicitation belongs to the whole directory: OpenCode files it
+        // under the `global` sentinel, which no session record carries, so the
+        // notification opens the app instead of a session that cannot load.
+        const formSessionId = sessionId === LOCATION_SCOPED_FORM_SESSION_ID ? undefined : sessionId;
 
         let title = /plan\s*mode/i.test(header)
           ? 'Switch to plan mode'
@@ -638,7 +686,7 @@ export const createNotificationTriggerRuntime = (deps) => {
         let sessionName = '';
 
         try {
-          const variables = await buildTemplateVariables(payload, sessionId, notificationDirectory);
+          const variables = await buildTemplateVariables(payload, formSessionId, notificationDirectory);
           sessionName = typeof variables.session_name === 'string' ? variables.session_name : sessionName;
           variables.last_message = questionText || header || '';
 
@@ -659,7 +707,7 @@ export const createNotificationTriggerRuntime = (deps) => {
             title,
             body,
             tag: `question-${sessionId}`,
-            sessionId,
+            sessionId: formSessionId,
             directory: notificationDirectory,
             requireHidden: settings.notificationMode !== 'always',
           };
@@ -671,10 +719,11 @@ export const createNotificationTriggerRuntime = (deps) => {
           {
             title,
             body,
+            phoneBody: phoneBodyOf('Question', questionText || header),
             tag: `question-${sessionId}`,
             data: {
-              url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
-              sessionId,
+              url: buildSessionDeepLinkUrl(formSessionId, notificationDirectory),
+              sessionId: formSessionId,
               directory: notificationDirectory,
               sessionName,
               type: 'question',
@@ -717,15 +766,18 @@ export const createNotificationTriggerRuntime = (deps) => {
       const permissionMessage = typeof payload.properties?.message === 'string' ? payload.properties.message.trim() : '';
       const permission = permissionMessage
         || (permissionAction && permissionResource ? `${permissionAction}: ${permissionResource}` : permissionAction);
+      const permissionPhoneBody = PERMISSION_PREFIX_BY_ACTION[permissionAction] && permissionResource
+        ? phoneBodyOf(PERMISSION_PREFIX_BY_ACTION[permissionAction], permissionResource)
+        : phoneBodyOf('Wants permission', permission);
       const requestKey = typeof requestId === 'string' ? `${sessionId}:${requestId}` : null;
       if (requestKey && notifiedPermissionRequests.has(requestKey)) {
         return;
       }
 
-      // Client may be in Permission Auto-Accept for this session (or any
-      // ancestor). Skip the whole notification path — the client responds
-      // directly and the user has opted out of approval prompts.
-      if (await (getIsSessionAutoAccepting?.(sessionId, notificationDirectory)
+      // The session (or an ancestor) answers permissions by itself. Skip the
+      // notification when this request was answered automatically; one the
+      // safety net held for the user still notifies.
+      if (await (getIsSessionAutoAccepting?.(sessionId, notificationDirectory, requestId)
         ?? isSessionAutoAccepting(sessionId, notificationDirectory))) {
         if (requestKey) notifiedPermissionRequests.add(requestKey);
         return;
@@ -739,7 +791,7 @@ export const createNotificationTriggerRuntime = (deps) => {
       const timer = setTimeout(async () => {
         pushPermissionDebounceTimers.delete(sessionId);
 
-        if (await (getIsSessionAutoAccepting?.(sessionId, notificationDirectory)
+        if (await (getIsSessionAutoAccepting?.(sessionId, notificationDirectory, requestId)
           ?? isSessionAutoAccepting(sessionId, notificationDirectory))) {
           if (requestKey) notifiedPermissionRequests.add(requestKey);
           return;
@@ -757,9 +809,10 @@ export const createNotificationTriggerRuntime = (deps) => {
 
         const sessionTitle = payload.properties?.sessionTitle;
         const permissionText = typeof permission === 'string' && permission.length > 0 ? permission : '';
-        const fallbackMessage = typeof sessionTitle === 'string' && sessionTitle.trim().length > 0
-          ? sessionTitle.trim()
-          : permissionText || 'Agent is waiting for your approval';
+        // What the agent wants to do decides the answer, so it comes before the session name.
+        const fallbackMessage = permissionText
+          || (typeof sessionTitle === 'string' && sessionTitle.trim().length > 0 ? sessionTitle.trim() : '')
+          || 'Agent is waiting for your approval';
 
         let title = 'Permission required';
         let body = fallbackMessage;
@@ -803,6 +856,7 @@ export const createNotificationTriggerRuntime = (deps) => {
           {
             title,
             body,
+            phoneBody: permissionPhoneBody,
             tag: `permission-${sessionId}`,
             data: {
               url: buildSessionDeepLinkUrl(sessionId, notificationDirectory),
@@ -836,6 +890,7 @@ export const createNotificationTriggerRuntime = (deps) => {
       {
         title,
         body,
+        phoneBody: phoneBodyOf(title, body) || title,
         tag: `goal-${sessionId}`,
         data: {
           url: buildSessionDeepLinkUrl(sessionId, directory),

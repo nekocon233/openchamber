@@ -24,7 +24,7 @@ type Args = {
   setSessionSwitcherOpen: (open: boolean) => void;
 };
 
-export type MissingProjectSessionSelection =
+type MissingProjectSessionSelection =
   | { kind: 'preserve-current' }
   | { kind: 'open-draft' }
   | { kind: 'select-session'; sessionId: string }
@@ -79,7 +79,7 @@ export function resolveMissingProjectSessionSelection<T>({
   return { kind: 'select-session', sessionId: targetSessionId };
 }
 
-export const useProjectSessionSelection = (args: Args): void => {
+const useProjectSessionSelection = (args: Args): void => {
   const {
     projectSections,
     activeProjectId,
@@ -157,6 +157,17 @@ export const useProjectSessionSelection = (args: Args): void => {
     if (!section) {
       return;
     }
+
+    // The project active when the list mounts (app start, the sidebar
+    // reopening or switching modes) is not a project the user just switched
+    // to. What opens then belongs to the launch (the last session, a link, or
+    // the draft); picking this project's remembered or first session here
+    // replaced it with a session the user never chose.
+    if (previousActiveProjectRef.current === null) {
+      previousActiveProjectRef.current = activeProjectId;
+      return;
+    }
+
     const projectMap = projectSessionMeta.metaByProject.get(activeProjectId);
 
     if (currentSessionId && projectMap && projectMap.has(currentSessionId)) {

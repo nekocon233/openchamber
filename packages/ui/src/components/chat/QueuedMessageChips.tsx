@@ -78,13 +78,13 @@ const QueuedMessageChip = memo(({ message, target, sendingMessageId, onEdit, onQ
                     <Icon name="draggable" className="h-4 w-4" aria-hidden="true" />
                 </button>
                 <div className={cn(
-                    'flex min-h-11 min-w-0 flex-1 flex-col justify-center md:contents md:min-h-0 md:pr-0',
-                    isQueued ? 'min-[360px]:pr-[9.5rem]' : 'min-[360px]:pr-[6.25rem]',
+                    'flex min-h-11 min-w-0 flex-1 flex-col justify-center md:contents md:min-h-0 md:pe-0',
+                    isQueued ? 'min-[360px]:pe-[9.5rem]' : 'min-[360px]:pe-[6.25rem]',
                 )}>
                     <span className="line-clamp-2 min-w-0 [overflow-wrap:anywhere] typography-ui-label text-foreground md:line-clamp-1 md:flex-1">
                         {firstLine || t('chat.queuedMessage.empty')}
                         {attachmentCount > 0 && (
-                            <span className="ml-1 text-muted-foreground">{t('chat.queuedMessage.attachments', { count: attachmentCount })}</span>
+                            <span className="ms-1 text-muted-foreground">{t('chat.queuedMessage.attachments', { count: attachmentCount })}</span>
                         )}
                     </span>
                     {isQueued && (
@@ -109,7 +109,7 @@ const QueuedMessageChip = memo(({ message, target, sendingMessageId, onEdit, onQ
                 </button>
             </div>
             <div className={cn(
-                'flex min-w-0 justify-end gap-1.5 px-[3.25rem] min-[360px]:absolute min-[360px]:right-[3.25rem] min-[360px]:top-1/2 min-[360px]:-translate-y-1/2 min-[360px]:px-0 md:static md:ml-auto md:translate-y-0 md:flex-nowrap md:px-0',
+                'flex min-w-0 justify-end gap-1.5 px-[3.25rem] min-[360px]:absolute min-[360px]:inset-e-[3.25rem] min-[360px]:top-1/2 min-[360px]:-translate-y-1/2 min-[360px]:px-0 md:static md:ms-auto md:translate-y-0 md:flex-nowrap md:px-0',
             )}>
                 <Button
                     type="button"

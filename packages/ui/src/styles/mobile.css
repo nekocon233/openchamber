@@ -152,20 +152,18 @@
     min-height: 0;
   }
 
-  /* -webkit-fill-available above is a pre-dvh iOS Safari fix. On Android
-     Chrome it freezes the root at the pre-keyboard height: when
-     interactive-widget=resizes-content shrinks the viewport, the document
-     stays taller than the screen and (with overflow hidden) the composer's
-     bottom is clipped behind the keyboard with no way to scroll to it.
-     Every dvh-capable browser gets the dynamic height instead; the legacy
-     fallback above keeps serving browsers without dvh. */
+  /* -webkit-fill-available above is required by iOS Safari. On Android Chrome
+     it freezes the root at the pre-keyboard height, so dvh-capable non-WebKit
+     browsers take the dynamic height instead. */
   @supports (height: 100dvh) {
-    :root.mobile-pointer:not(.desktop-runtime) {
-      height: 100dvh;
-    }
+    @supports not (-webkit-touch-callout: none) {
+      :root.mobile-pointer:not(.desktop-runtime) {
+        height: 100dvh;
+      }
 
-    :root.mobile-pointer:not(.desktop-runtime) .flex.flex-col.h-screen {
-      height: 100dvh;
+      :root.mobile-pointer:not(.desktop-runtime) .flex.flex-col.h-screen {
+        height: 100dvh;
+      }
     }
   }
 
@@ -241,22 +239,25 @@
       padding-bottom: var(--oc-interactive-bottom-safe) !important;
     }
 
+    /* An installed iOS PWA reports a dynamic viewport shorter than the screen,
+       which left a dead band under the composer. 100vh is the full screen
+       there. Scoped to standalone so Safari tabs and Android keep their own
+       viewport rules; the Capacitor app manages its own height. */
+    :root.device-mobile:not(.desktop-runtime):not(.oc-capacitor-app),
+    :root.device-tablet:not(.desktop-runtime):not(.oc-capacitor-app),
+    :root.mobile-pointer:not(.desktop-runtime):not(.oc-capacitor-app),
+    :root.device-mobile:not(.desktop-runtime):not(.oc-capacitor-app) body,
+    :root.device-tablet:not(.desktop-runtime):not(.oc-capacitor-app) body,
+    :root.mobile-pointer:not(.desktop-runtime):not(.oc-capacitor-app) body {
+      height: 100vh;
+    }
+
     /* Fix iOS viewport issues */
     :root.device-mobile:not(.desktop-runtime) .flex.flex-col.h-screen,
     :root.device-tablet:not(.desktop-runtime) .flex.flex-col.h-screen,
     :root.mobile-pointer:not(.desktop-runtime) .flex.flex-col.h-screen {
       min-height: 100vh;
       min-height: -webkit-fill-available;
-    }
-
-    /* Same Android-keyboard clipping fix as above: dvh-capable browsers
-       must not keep a frozen -webkit-fill-available minimum. */
-    @supports (min-height: 100dvh) {
-      :root.device-mobile:not(.desktop-runtime) .flex.flex-col.h-screen,
-      :root.device-tablet:not(.desktop-runtime) .flex.flex-col.h-screen,
-      :root.mobile-pointer:not(.desktop-runtime) .flex.flex-col.h-screen {
-        min-height: 100dvh;
-      }
     }
 
     /* Prevent content overlap in iOS */
@@ -367,7 +368,7 @@
 
   .pwa-dialog-content [data-slot="dialog-close"] {
     top: calc(0.25rem + (var(--oc-safe-area-top, 0px) * 0.35));
-    right: var(--pwa-dialog-padding);
+    inset-inline-end: var(--pwa-dialog-padding);
   }
 
   .pwa-dialog-content.pwa-compact [data-slot="dialog-close"] {
@@ -584,6 +585,12 @@
   padding-bottom: var(--oc-kb-scroll-inset, var(--oc-kb-layout, 0px));
 }
 
+/* The transcript's end fade band (index.css `.chat-scroll-fade--end`) is
+   measured from the scroller's bottom edge, so it extends with it. */
+:root.oc-capacitor-app .oc-mobile-app-shell .chat-scroll-fade--end {
+  bottom: calc(-1 * max(var(--oc-kb-layout, 0px) - var(--oc-app-bottom-safe, 0px), 0px));
+}
+
 /* WKWebView draws the text caret as a native layer that ignores CSS transforms:
    after the keyboard rise it visibly flies from the pre-keyboard position to
    the final one. Hide it during the transition (+ UIKit's reposition lag,
@@ -755,6 +762,7 @@
    the morphing shape), but its content stays hidden until the shape has mostly
    finished growing, then fades in — no clipped controls mid-morph. Timings
    follow the 340ms wrapper morph in ChatInput. */
-.oc-composer-morph-content-fade > * {
+/* The glass layer is the background, so it is exempt from the fade. */
+.oc-composer-morph-content-fade > :not([data-dictation-glass]) {
   animation: oc-composer-morph-fade 0.18s ease-out 0.26s both;
 }

@@ -26,6 +26,8 @@ type ComposerActionButtonsProps = {
     onPrimaryAction: () => void;
     onQueueMessage: () => void;
     onAbort: () => void;
+    /** Replaces "Send message" as the accessible name and tooltip (parallel mode says how many runs start). */
+    sendLabel?: string;
 };
 
 export const ComposerActionButtons = React.memo(function ComposerActionButtons(props: ComposerActionButtonsProps) {
@@ -42,6 +44,7 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
         onPrimaryAction,
         onQueueMessage,
         onAbort,
+        sendLabel,
     } = props;
     const { t } = useI18n();
     const canSendToCurrentTarget = canSend && Boolean(currentSessionId || newSessionDraftOpen);
@@ -65,7 +68,8 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
                     ? 'text-primary hover:text-primary'
                     : 'opacity-30'
             )}
-            aria-label={t('chat.chatInput.actions.sendMessageAria')}
+            aria-label={sendLabel ?? t('chat.chatInput.actions.sendMessageAria')}
+            title={sendLabel}
         >
             <Icon name="send-plane-2" className={cn(sendIconSizeClass)} />
         </button>
@@ -94,7 +98,7 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
                     )}
                     aria-label={t('chat.chatInput.actions.queueMessageAria')}
                 >
-                    <Icon name="send-plane-2" className={cn(sendIconSizeClass, '-rotate-90')} />
+                    <Icon name="send-plane-2" className={cn(sendIconSizeClass, '-rotate-90 rtl:rotate-90')} />
                 </button>
             ) : null}
             <button
@@ -123,4 +127,5 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
     && prev.onPrimaryAction === next.onPrimaryAction
     && prev.onQueueMessage === next.onQueueMessage
     && prev.onAbort === next.onAbort
+    && prev.sendLabel === next.sendLabel
 ));

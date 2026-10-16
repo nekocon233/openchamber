@@ -1,7 +1,6 @@
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
-import { isEmbeddedSessionChat } from '@/components/layout/contextPanelEmbeddedChat';
 import { useI18n } from '@/lib/i18n';
 import type { I18nKey } from '@/lib/i18n/messages/en';
 import type { NativeExecutionTask } from '@/lib/native-agents/task-schemas';
@@ -58,7 +57,7 @@ export function NativeTaskRow({ task, scope, onClose }: { task: NativeExecutionT
     // The desktop panel switches to the chat surface in place; on mobile the
     // workspace drawer must close so the session it opens is visible.
     onClose?.();
-    if (isMobile || isEmbeddedSessionChat()) {
+    if (isMobile) {
       useSessionUIStore.getState().setCurrentSession(task.childSessionId, scope.directory);
     } else {
       useUIStore.getState().openContextPanelTab(scope.directory, {
@@ -75,7 +74,7 @@ export function NativeTaskRow({ task, scope, onClose }: { task: NativeExecutionT
   const stopping = stop.status === 'submitting' || stop.status === 'accepted';
   return (
     <li className="border-b border-border py-3 last:border-0" data-native-task-id={task.id}>
-      <Button variant="ghost" size="sm" className="w-full justify-start whitespace-normal text-left" aria-expanded={expanded} aria-controls={detailId} onClick={() => setExpanded(!expanded)}>
+      <Button variant="ghost" size="sm" className="w-full justify-start whitespace-normal text-start" aria-expanded={expanded} aria-controls={detailId} onClick={() => setExpanded(!expanded)}>
         <Icon name={expanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 break-words">{task.description || task.id}</span>
         <span className="shrink-0 text-xs text-muted-foreground">{t(TASK_STATUS_KEYS[task.status])}</span>

@@ -243,7 +243,10 @@ export const createNotificationTemplateRuntime = (deps) => {
         : baseUrl;
       const response = await fetch(url, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...getOpenCodeAuthHeaders(),
+        },
         signal: AbortSignal.timeout(2000),
       });
       if (!response.ok) {

@@ -50,6 +50,12 @@ describe('translateWireEvent', () => {
     });
   });
 
+  test('a finished compaction reads as session.compacted', () => {
+    expect(translateWireEvent(wire('session.compaction.ended', { sessionID: 's1', reason: 'auto', text: 'summary', recent: '' })))
+      .toEqual([expect.objectContaining({ type: 'session.compacted', properties: { sessionID: 's1', directory: '/repo' } })]);
+    expect(translateWireEvent(wire('session.compaction.started', { sessionID: 's1', reason: 'auto' }))).toEqual([]);
+  });
+
   test('rename, move and usage all read as session.updated', () => {
     expect(translateWireEvent(wire('session.renamed', { sessionID: 's1', title: 'New' }))[0])
       .toMatchObject({ type: 'session.updated', properties: { info: { id: 's1', title: 'New' } } });
@@ -71,6 +77,34 @@ describe('translateWireEvent', () => {
     const succeeded = translateWireEvent(wire('session.execution.succeeded', { sessionID: 's1' }));
     expect(succeeded.map((entry) => entry.type)).toEqual(['session.status', 'session.idle']);
     expect(succeeded[0].properties.status).toEqual({ type: 'idle' });
+  });
+
+  test('retry.scheduled synthesizes the v1 retry status with attempt and next-at', () => {
+    const [event] = translateWireEvent(wire('session.retry.scheduled', {
+      sessionID: 's1',
+      attempt: 3,
+      at: 1790870409003,
+      error: { type: 'provider.quota', message: 'You have exceeded the monthly usage quota.' },
+    }));
+    expect(event).toMatchObject({
+      type: 'session.status',
+      properties: {
+        sessionID: 's1',
+        status: {
+          type: 'retry',
+          attempt: 3,
+          message: 'You have exceeded the monthly usage quota.',
+          next: 1790870409003,
+        },
+      },
+    });
+  });
+
+  test('retry.scheduled with no sessionID or partial fields still yields a usable status', () => {
+    expect(translateWireEvent(wire('session.retry.scheduled', {}))).toEqual([]);
+    const [event] = translateWireEvent(wire('session.retry.scheduled', { sessionID: 's2' }));
+    expect(event).toMatchObject({ type: 'session.status', properties: { sessionID: 's2', status: { type: 'retry' } } });
+    expect(event.properties.status.attempt).toBeUndefined();
   });
 
   test('an interruption ends the turn without reporting a failure', () => {
@@ -117,6 +151,11 @@ describe('translateWireEvent', () => {
     expect(event.properties.info.parts).toEqual([{ type: 'text', text: 'hello' }]);
   });
 
+  test('a shell command the user ran passes under its own name', () => {
+    const [event] = translateWireEvent(wire('session.shell.started', { sessionID: 's1', shell: { id: 'sh_1', command: 'ls' } }));
+    expect(event).toMatchObject({ type: 'session.shell.started', id: 'evt_1', created: 1000, properties: { sessionID: 's1', directory: '/repo' } });
+  });
+
   test('non-user inbox items are not messages', () => {
     expect(translateWireEvent(wire('session.inbox.enqueued', {
       sessionID: 's1',
@@ -125,16 +164,18 @@ describe('translateWireEvent', () => {
     }))).toEqual([]);
   });
 
-  test('steps become assistant message updates', () => {
-    const [started] = translateWireEvent(wire('session.step.started', {
+  test('steps become assistant message updates; a step start clears a pending retry', () => {
+    const startedEvents = translateWireEvent(wire('session.step.started', {
       sessionID: 's1',
       assistantMessageID: 'msg_2',
       agent: 'build',
       model: { id: 'gpt-5.6-luna', providerID: 'openai' },
     }));
-    expect(started.properties.info).toMatchObject({
+    expect(startedEvents.map((entry) => entry.type)).toEqual(['message.updated', 'session.status']);
+    expect(startedEvents[0].properties.info).toMatchObject({
       id: 'msg_2', role: 'assistant', agent: 'build', providerID: 'openai', modelID: 'gpt-5.6-luna',
     });
+    expect(startedEvents[1].properties.status).toEqual({ type: 'busy' });
 
     const [ended] = translateWireEvent(wire('session.step.ended', {
       sessionID: 's1', assistantMessageID: 'msg_2', finish: 'stop', cost: 1, tokens: { input: 2 },
@@ -147,6 +188,28 @@ describe('translateWireEvent', () => {
     }));
     expect(failed.properties.info).toMatchObject({ finish: 'error' });
     expect(failed.properties.info.error.name).toBe('Overloaded');
+  });
+
+  test('a retried turn reads retry -> busy -> retry -> idle as attempts restart', () => {
+    const statuses = [
+      wire('session.execution.started', { sessionID: 's1' }),
+      wire('session.retry.scheduled', {
+        sessionID: 's1', assistantMessageID: 'msg_2', attempt: 1, at: 5000,
+        error: { type: 'RateLimit', message: 'busy' },
+      }),
+      wire('session.step.started', { sessionID: 's1', assistantMessageID: 'msg_2' }),
+      wire('session.retry.scheduled', {
+        sessionID: 's1', assistantMessageID: 'msg_2', attempt: 2, at: 9000,
+        error: { type: 'RateLimit', message: 'busy' },
+      }),
+      wire('session.step.started', { sessionID: 's1', assistantMessageID: 'msg_2' }),
+      wire('session.execution.succeeded', { sessionID: 's1' }),
+    ]
+      .flatMap((payload) => translateWireEvent(payload))
+      .filter((entry) => entry.type === 'session.status')
+      .map((entry) => entry.properties.status.type);
+
+    expect(statuses).toEqual(['busy', 'retry', 'busy', 'retry', 'busy', 'idle']);
   });
 
   test('permission requests keep the v2 action and resources', () => {

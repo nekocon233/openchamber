@@ -7,12 +7,20 @@ import { OpenCode } from '@opencode/client';
 import { SyncProvider } from '@/sync/sync-context';
 import { ThemeSystemProvider } from '@/contexts/ThemeSystemContext';
 import { I18nProvider } from '@/lib/i18n';
+import { useConfigStore } from '@/stores/useConfigStore';
 
 import { MobilePillComposer } from './MobilePillComposer';
 import { PromptSuggestion } from './PromptSuggestion';
 
-const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; suggestion?: string }) => {
+const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; dictationEnabled?: boolean; suggestion?: string }) => {
     const win = new Window({ url: 'http://localhost' });
+    Object.defineProperty(win.navigator, 'mediaDevices', {
+        value: { getUserMedia: () => Promise.resolve() },
+        configurable: true,
+    });
+    // @ts-expect-error test mock
+    win.AudioContext = class {} as unknown as typeof AudioContext;
+    useConfigStore.setState({ dictationEnabled: options.dictationEnabled ?? true });
     const values = {
         window: win, document: win.document, navigator: win.navigator, localStorage: win.localStorage,
         Element: win.Element, HTMLElement: win.HTMLElement, Node: win.Node,
@@ -32,7 +40,6 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
         <ThemeSystemProvider>
         <I18nProvider>
             <MobilePillComposer
-                directory="/fixture"
                 message={options.hasContent ? 'Draft message' : ''}
                 sessionId={options.newSessionDraftOpen ? null : 'session-1'}
                 newSessionDraftOpen={options.newSessionDraftOpen}
@@ -53,8 +60,7 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
                 onPrimaryAction={() => { primaryActions += 1; }}
                 onQueueMessage={() => { queued += 1; }}
                 onPickLocalFiles={() => {}}
-                onOpenIssuePicker={() => {}}
-                onOpenPrPicker={() => {}}
+                onOpenGitHubPicker={() => {}}
                 onOpenAttachSheet={() => {}}
                 onStartDictation={() => {}}
                 onAbort={() => {}}
@@ -121,10 +127,10 @@ describe('MobilePillComposer', () => {
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false });
 
         expect(markup).toContain('aria-label="Send message"');
-        expect(markup).toContain('w-0 opacity-0 overflow-hidden');
+        expect(markup).not.toContain('aria-label="Queue message"');
     });
 
-    test('uses the trailing action to queue content while the session is running', async () => {
+    test('queues content from inside the pill, between mic and stop, while the session is running', async () => {
         // The expanded composer shows a rotated send icon labelled "Stage
         // message" in this state; the collapsed pill must read the same.
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, canAbort: true });
@@ -133,28 +139,31 @@ describe('MobilePillComposer', () => {
         expect(markup).toContain('aria-label="Stage message"');
         expect(markup).toContain('-rotate-90');
         expect(markup).not.toContain('aria-label="Send message"');
-        expect(markup).not.toContain('w-0 opacity-0 overflow-hidden');
-        expect(markup.indexOf('aria-label="Stop generating"')).toBeLessThan(markup.indexOf('aria-label="Stage message"'));
+        const mic = markup.indexOf('aria-label="Start dictation"');
+        const queue = markup.indexOf('aria-label="Stage message"');
+        const stop = markup.indexOf('aria-label="Stop generating"');
+        expect(mic).toBeLessThan(queue);
+        expect(queue).toBeLessThan(stop);
     });
 
     test('uses the inline send action for content in a new-session draft', async () => {
         const markup = await renderPill({ hasContent: true, newSessionDraftOpen: true });
 
         expect(markup).toContain('aria-label="Send message"');
-        expect(markup).toContain('w-0 opacity-0 overflow-hidden');
+        expect(markup).not.toContain('aria-label="Queue message"');
     });
 
-    test('keeps the trailing slot collapsed for an empty existing session', async () => {
+    test('shows neither send nor queue for an empty existing session', async () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false });
 
-        expect(markup).toContain('w-0 opacity-0 overflow-hidden');
+        expect(markup).not.toContain('aria-label="Queue message"');
         expect(markup).not.toContain('aria-label="Send message"');
     });
 
-    test('keeps the trailing action collapsed for an empty new-session draft', async () => {
+    test('shows neither send nor queue for an empty new-session draft', async () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: true });
 
-        expect(markup).toContain('w-0 opacity-0 overflow-hidden');
+        expect(markup).not.toContain('aria-label="Queue message"');
         expect(markup).not.toContain('aria-label="Send message"');
     });
 
@@ -162,7 +171,19 @@ describe('MobilePillComposer', () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, canAbort: true });
 
         expect(markup).toContain('aria-label="Stop generating"');
-        expect(markup).toContain('w-0 opacity-0 overflow-hidden');
+        expect(markup).not.toContain('aria-label="Queue message"');
         expect(markup).not.toContain('aria-label="Send message"');
+    });
+
+    test('renders the mic button when dictation is enabled and supported', async () => {
+        const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, dictationEnabled: true });
+
+        expect(markup).toContain('aria-label="Start dictation"');
+    });
+
+    test('hides the mic button when dictation is disabled', async () => {
+        const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, dictationEnabled: false });
+
+        expect(markup).not.toContain('aria-label="Start dictation"');
     });
 });

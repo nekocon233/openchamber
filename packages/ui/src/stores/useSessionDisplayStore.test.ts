@@ -4,7 +4,7 @@ import { Window } from 'happy-dom';
 const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'window');
 const testWindow = new Window();
 Object.defineProperty(globalThis, 'window', { configurable: true, value: testWindow });
-const { defaultSidebarViewMode, migrateSessionDisplayState, useSessionDisplayStore } = await import('./useSessionDisplayStore');
+const { migrateSessionDisplayState, useSessionDisplayStore } = await import('./useSessionDisplayStore');
 afterAll(() => {
   testWindow.close();
   if (previousStorage) Object.defineProperty(globalThis, 'window', previousStorage);
@@ -22,40 +22,32 @@ describe('useSessionDisplayStore worktree sorting', () => {
 });
 
 describe('session display store', () => {
-  test('preserves the downstream layout preferences during the v6 migration', () => {
-    const original = { showPinnedSection: true, showChatsSection: false, showRecentSection: true, sessionGroupingMode: 'flat' };
-    expect(migrateSessionDisplayState(original, 6)).toMatchObject({
-      showPinnedSection: true, showChatsSection: false, showRecentSection: true, animatedActivityIndicators: true,
-    });
-    expect('sessionGroupingMode' in migrateSessionDisplayState(original, 6)).toBe(false);
+  test('migration returns a new payload and leaves the persisted one untouched', () => {
+    const original = { showPinnedSection: true, sessionGroupingMode: 'flat' };
+    const migrated = migrateSessionDisplayState(original, 6);
+    expect(migrated).toMatchObject({ showPinnedSection: true, showChatsSection: true });
+    expect('sessionGroupingMode' in migrated).toBe(false);
     expect(original.sessionGroupingMode).toBe('flat');
   });
-  test('toggles pinned, chats, and recent sections independently', () => {
+
+  test('a payload predating the appearance control keeps its animated rows', () => {
+    expect(migrateSessionDisplayState({ showPinnedSection: true }, 9).animatedActivityIndicators).toBe(true);
+    expect(migrateSessionDisplayState({ showPinnedSection: true, animatedActivityIndicators: false }, 9).animatedActivityIndicators).toBe(false);
+  });
+
+  test('the independent sections keep their own visibility', () => {
     const previous = useSessionDisplayStore.getState();
     try {
-      useSessionDisplayStore.setState({ showPinnedSection: true, showChatsSection: true, showRecentSection: true });
-      previous.togglePinnedSection();
-      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: false, showChatsSection: true, showRecentSection: true });
-      previous.toggleChatsSection();
-      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: false, showChatsSection: false, showRecentSection: true });
-      previous.toggleRecentSection();
-      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: false, showChatsSection: false, showRecentSection: false });
+      useSessionDisplayStore.setState({ showPinnedSection: false, showChatsSection: true, showWorkSection: true });
+      previous.setShowPinnedSection(true);
+      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: true, showChatsSection: true });
+      previous.setShowChatsSection(false);
+      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: true, showChatsSection: false, showWorkSection: true });
+      previous.setShowWorkSection(false);
+      expect(useSessionDisplayStore.getState()).toMatchObject({ showPinnedSection: true, showWorkSection: false });
     } finally {
       useSessionDisplayStore.setState(previous, true);
     }
-  });
-
-  test('enables the pinned section when migrating version 2 preferences', () => {
-    const migrated = migrateSessionDisplayState({ showRecentSection: false }, 2);
-    expect(migrated.showPinnedSection).toBe(true);
-    expect(migrated.showRecentSection).toBe(false);
-  });
-
-  test('enables Chats when migrating version 5 preferences', () => {
-    const migrated = migrateSessionDisplayState({ showPinnedSection: false, showRecentSection: false }, 5);
-    expect(migrated.showPinnedSection).toBe(false);
-    expect(migrated.showChatsSection).toBe(true);
-    expect(migrated.showRecentSection).toBe(false);
   });
 
   test('defaults to manual ordering', () => {
@@ -80,13 +72,12 @@ describe('session display store', () => {
 
   test('v3→v4 drops the removed displayMode key and keeps the rest', () => {
     const migrated = migrateSessionDisplayState(
-      { displayMode: 'default', projectSortOrder: 'a-z', showRecentSection: false, showArchivedSessions: true },
+      { displayMode: 'default', projectSortOrder: 'a-z', showArchivedSessions: true },
       3,
     );
 
     expect('displayMode' in migrated).toBe(false);
     expect(migrated.projectSortOrder).toBe('a-z');
-    expect(migrated.showRecentSection).toBe(false);
     expect(migrated.showArchivedSessions).toBe(true);
   });
 });
@@ -100,41 +91,40 @@ describe('useSessionDisplayStore project display', () => {
   test('stores the single-project mode independently from the view mode', () => {
     useSessionDisplayStore.getState().setProjectDisplayMode('single');
     useSessionDisplayStore.getState().setSingleProjectId('project-alpha');
-    useSessionDisplayStore.getState().setSidebarViewMode('timeline');
+    useSessionDisplayStore.getState().setSidebarViewMode('projects');
 
     expect(useSessionDisplayStore.getState().projectDisplayMode).toBe('single');
     expect(useSessionDisplayStore.getState().singleProjectId).toBe('project-alpha');
-    expect(useSessionDisplayStore.getState().sidebarViewMode).toBe('timeline');
+    expect(useSessionDisplayStore.getState().sidebarViewMode).toBe('projects');
 
     useSessionDisplayStore.setState({
       projectDisplayMode: 'all',
       singleProjectId: null,
-      sidebarViewMode: 'projects',
+      sidebarViewMode: 'timeline',
     });
   });
 });
 
 describe('useSessionDisplayStore view mode', () => {
-  test('defaults to the grouped projects view outside the phone surface', () => {
-    expect(defaultSidebarViewMode()).toBe('projects');
+  test('starts new installs on the timeline view', () => {
+    expect(useSessionDisplayStore.getState().sidebarViewMode).toBe('timeline');
   });
 
-  test('v7→v8 turns the recent section off', () => {
-    const migrated = migrateSessionDisplayState({ showRecentSection: true, projectSortOrder: 'a-z' }, 7);
+  test('v9→v10 drops the removed Recent toggle and keeps the rest', () => {
+    const migrated = migrateSessionDisplayState({ showRecentSection: true, projectSortOrder: 'a-z' }, 9);
 
-    expect(migrated.showRecentSection).toBe(false);
+    expect('showRecentSection' in migrated).toBe(false);
     expect(migrated.projectSortOrder).toBe('a-z');
   });
 
   test('v5→v6 drops the removed grouping key and keeps the rest', () => {
     const migrated = migrateSessionDisplayState(
-      { sessionGroupingMode: 'flat', projectSortOrder: 'a-z', showRecentSection: false },
+      { sessionGroupingMode: 'flat', projectSortOrder: 'a-z' },
       5,
     );
 
     expect('sessionGroupingMode' in migrated).toBe(false);
     expect(migrated.projectSortOrder).toBe('a-z');
-    expect(migrated.showRecentSection).toBe(false);
   });
 });
 
@@ -154,14 +144,14 @@ describe('useSessionDisplayStore animated activity', () => {
       await useSessionDisplayStore.persist.rehydrate();
       expect(useSessionDisplayStore.getState().animatedActivityIndicators).toBe(false);
       expect(useSessionDisplayStore.getState().sidebarViewMode).toBe('timeline');
-      expect(useSessionDisplayStore.persist.getOptions().version).toBe(9);
+      expect(useSessionDisplayStore.persist.getOptions().version).toBe(10);
       useSessionDisplayStore.getState().setAnimatedActivityIndicators(true);
       const enabledSnapshot = stored;
       useSessionDisplayStore.setState({ animatedActivityIndicators: false });
       stored = enabledSnapshot;
       await useSessionDisplayStore.persist.rehydrate();
       expect(useSessionDisplayStore.getState().animatedActivityIndicators).toBe(true);
-      expect(useSessionDisplayStore.getState().showRecentSection).toBe(false);
+      expect('showRecentSection' in useSessionDisplayStore.getState()).toBe(false);
     } finally {
       useSessionDisplayStore.persist.setOptions({ storage: originalStorage });
       useSessionDisplayStore.setState(initialState);

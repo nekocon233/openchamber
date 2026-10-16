@@ -6,6 +6,7 @@ import { useI18n, type I18nKey, type I18nParams } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
 import { cn } from '@/lib/utils';
 import { getMessagePreview } from '../lib/messagePreview';
+import { useChatColumnActions } from '../chatColumnSession';
 
 type PromptEntry = {
     turnId: string;
@@ -96,7 +97,10 @@ export function PromptNavigatorRail({
     onLoadEarlier,
 }: PromptNavigatorRailProps) {
     const { t } = useI18n();
-    const isKeyboardNavOpen = useUIStore((state) => state.isPromptNavigatorPanelOpen);
+    // The keyboard shortcut drives the main chat's rail; a pinned column's
+    // rail neither opens on it nor closes it.
+    const { pinned } = useChatColumnActions();
+    const isKeyboardNavOpen = useUIStore((state) => (pinned ? false : state.isPromptNavigatorPanelOpen));
     const setPromptNavigatorPanelOpen = useUIStore((state) => state.setPromptNavigatorPanelOpen);
     const gutterRef = React.useRef<HTMLDivElement | null>(null);
     const navRef = React.useRef<HTMLElement | null>(null);
@@ -325,8 +329,8 @@ export function PromptNavigatorRail({
     }, [scheduleHide, stopCarousel]);
 
     const closeKeyboardNav = React.useCallback(() => {
-        setPromptNavigatorPanelOpen(false);
-    }, [setPromptNavigatorPanelOpen]);
+        if (!pinned) setPromptNavigatorPanelOpen(false);
+    }, [pinned, setPromptNavigatorPanelOpen]);
 
     const handleSelect = React.useCallback((index: number | null) => {
         if (index === null) {
@@ -373,8 +377,8 @@ export function PromptNavigatorRail({
     }, [activeIndex, ensureWindowContains, isKeyboardNavOpen, prompts.length]);
 
     React.useEffect(() => () => {
-        setPromptNavigatorPanelOpen(false);
-    }, [setPromptNavigatorPanelOpen]);
+        if (!pinned) setPromptNavigatorPanelOpen(false);
+    }, [pinned, setPromptNavigatorPanelOpen]);
 
     const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
         if (prompts.length === 0) {
@@ -518,7 +522,7 @@ export function PromptNavigatorRail({
         <nav
             ref={navRef}
             aria-label={t('chat.promptNavigator.aria')}
-            className="pointer-events-none absolute right-1.5 top-1/2 z-20 -translate-y-1/2"
+            className="pointer-events-none absolute inset-e-1.5 top-1/2 z-20 -translate-y-1/2"
         >
             <div className="pointer-events-auto flex flex-col items-end">
                 {canLoadEarlier ? (
@@ -527,8 +531,8 @@ export function PromptNavigatorRail({
                         tabIndex={-1}
                         className={cn(
                             // Nudge so the icon centers over the tick column
-                            // (ticks sit at right-1 with a 10px base width).
-                            '-mr-px mb-1.5 flex size-5 shrink-0 items-center justify-center rounded-full',
+                            // (ticks sit at inset-e-1 with a 10px base width).
+                            '-me-px mb-1.5 flex size-5 shrink-0 items-center justify-center rounded-full',
                             'text-muted-foreground transition-colors',
                             'hover:bg-interactive-hover/60 hover:text-foreground',
                             isLoadingOlder ? 'cursor-wait opacity-70' : undefined,
@@ -595,7 +599,7 @@ export function PromptNavigatorRail({
                                         aria-selected={isHighlighted}
                                         aria-current={isActive ? 'true' : undefined}
                                         aria-label={prompt.preview.trim() || emptyPreviewLabel}
-                                        className="pointer-events-none absolute right-1 flex items-center justify-end"
+                                        className="pointer-events-none absolute inset-e-1 flex items-center justify-end"
                                         style={{ top: `${index * TICK_PITCH_PX}px`, height: `${TICK_PITCH_PX}px` }}
                                     >
                                         <span
@@ -619,7 +623,7 @@ export function PromptNavigatorRail({
                         <div
                             ref={panelRef}
                             className={cn(
-                                'pointer-events-auto absolute right-full top-1/2 z-30 mr-3 -translate-y-1/2',
+                                'pointer-events-auto absolute inset-e-full top-1/2 z-30 me-3 -translate-y-1/2',
                                 'w-[min(20rem,calc(100vw-6rem))] overflow-hidden rounded-xl',
                                 'border border-[var(--interactive-border)]/60 bg-[var(--surface-elevated)] py-1 shadow-md',
                             )}

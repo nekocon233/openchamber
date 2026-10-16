@@ -12,6 +12,72 @@ const isClientFocused = (): boolean => {
   return document.hasFocus();
 };
 
+const buildSessionTargetUrl = (sessionId?: string, directory?: string): string | null => {
+  if (typeof sessionId !== 'string') return null;
+  const trimmed = sessionId.trim();
+  if (!trimmed) return null;
+  const search = new URLSearchParams({ session: trimmed });
+  const trimmedDirectory = typeof directory === 'string' ? directory.trim() : '';
+  if (trimmedDirectory) search.set('directory', trimmedDirectory);
+  return `/?${search.toString()}`;
+};
+
+type NotificationTarget = {
+  url: string;
+  sessionId: string;
+  directory?: string;
+  type?: string;
+};
+
+const getNotificationTarget = (payload?: NotificationPayload): NotificationTarget | undefined => {
+  const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : '';
+  if (!sessionId) return undefined;
+  const directory = typeof payload?.directory === 'string' ? payload.directory.trim() : '';
+  const url = buildSessionTargetUrl(sessionId, directory);
+  if (!url) return undefined;
+  // The owning directory rides along so the in-app deep-link handler can
+  // resolve the session without guessing the active directory.
+  return {
+    url,
+    sessionId,
+    ...(directory ? { directory } : {}),
+    ...(payload?.kind ? { type: payload.kind } : {}),
+  };
+};
+
+type NotificationOptionsWithTarget = NotificationOptions & {
+  data?: NotificationTarget;
+};
+
+const withNotificationTarget = (
+  payload: NotificationPayload | undefined,
+  target: NotificationTarget | undefined,
+): NotificationOptionsWithTarget => {
+  const options: NotificationOptionsWithTarget = {
+    body: payload?.body,
+    tag: payload?.tag,
+  };
+  if (target) {
+    options.data = target;
+  }
+  return options;
+};
+
+const focusOrOpenNotificationTarget = (target?: NotificationTarget): void => {
+  try {
+    if (typeof window === 'undefined') return;
+    if (typeof window.focus === 'function') {
+      window.focus();
+    }
+    if (!target) return;
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current === target.url) return;
+    window.location.assign(target.url);
+  } catch {
+    // Navigation is best-effort; the notification was already shown.
+  }
+};
+
 const getNotificationClaimKey = (payload?: NotificationPayload): string => {
   const tag = typeof payload?.tag === 'string' ? payload.tag.trim() : '';
   if (tag) return tag;
@@ -97,21 +163,6 @@ const getNotificationRegistration = async (): Promise<ServiceWorkerRegistration 
   }
 };
 
-const getNotificationData = (payload?: NotificationPayload): Record<string, string> | undefined => {
-  const sessionId = payload?.sessionId?.trim();
-  if (!sessionId) return undefined;
-  const directory = payload?.directory?.trim();
-  const search = new URLSearchParams({ session: sessionId });
-  if (directory) search.set('directory', directory);
-
-  return {
-    url: `/?${search.toString()}`,
-    sessionId,
-    ...(directory ? { directory } : {}),
-    ...(payload?.kind ? { type: payload.kind } : {}),
-  };
-};
-
 const notifyWithServiceWorker = async (payload?: NotificationPayload): Promise<boolean> => {
   const registration = await getNotificationRegistration();
   if (!registration || typeof registration.showNotification !== 'function') {
@@ -119,11 +170,11 @@ const notifyWithServiceWorker = async (payload?: NotificationPayload): Promise<b
   }
 
   try {
-    await registration.showNotification(payload?.title ?? 'OpenChamber', {
-      body: payload?.body,
-      tag: payload?.tag,
-      data: getNotificationData(payload),
-    });
+    const target = getNotificationTarget(payload);
+    await registration.showNotification(
+      payload?.title ?? 'OpenChamber',
+      withNotificationTarget(payload, target),
+    );
     return true;
   } catch (error) {
     console.warn('Failed to send notification via service worker', error);
@@ -186,26 +237,15 @@ const notifyWithWebAPI = async (payload?: NotificationPayload): Promise<boolean>
       return true;
     }
 
-    const notification = new Notification(payload?.title ?? 'OpenChamber', {
-      body: payload?.body,
-      tag: payload?.tag,
-    });
-    const targetUrl = getNotificationData(payload)?.url;
-    notification.onclick = () => {
+    const target = getNotificationTarget(payload);
+    const notification = new Notification(
+      payload?.title ?? 'OpenChamber',
+      withNotificationTarget(payload, target),
+    );
+    notification.onclick = (event) => {
+      event.preventDefault();
+      focusOrOpenNotificationTarget(target);
       notification.close();
-      if (typeof window === 'undefined') return;
-      try {
-        window.focus();
-      } catch {
-        // Focus is best-effort; navigation can still recover the target.
-      }
-      if (targetUrl) {
-        try {
-          window.location.assign(targetUrl);
-        } catch {
-          // The notification remains informational if the page can no longer navigate.
-        }
-      }
     };
     return true;
   } catch (error) {
@@ -233,7 +273,12 @@ const notifyWithDesktop = async (payload?: NotificationPayload): Promise<boolean
         kind: payload?.kind,
         sessionId: payload?.sessionId,
         directory: payload?.directory,
+        // Forward the owning runtime only when the caller named one: the main
+        // process owns the final identity, and a payload without a key must not
+        // grow an undefined one on the way through the bridge.
+        ...(payload?.runtimeKey ? { runtimeKey: payload.runtimeKey } : {}),
         requireHidden: payload?.requireHidden,
+        showWhenFocused: payload?.showWhenFocused,
       },
     });
     return true;

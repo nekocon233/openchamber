@@ -75,6 +75,7 @@ test('web route preserves a cold-start session directory hint', () => {
   expect(parseRoute(new URLSearchParams('session=ses_cold&directory=%2Fworkspace'))).toEqual({
     sessionId: 'ses_cold',
     sessionDirectory: '/workspace',
+    messageId: null,
     tab: null,
     settingsPath: null,
     diffFile: null,

@@ -20,6 +20,7 @@ describe('section registry', () => {
           isVSCode: platform === 'vscode', isWeb: platform === 'web', isDesktop: platform === 'desktop',
           isMobile: platform === 'mobile', isHostLocalOrigin: true, isDesktopLocalOrigin: false,
           isMac: false, isWindows: false, isLinux: false, routingAvailable: false,
+          enterpriseMode: false, jevBlockedByEnterprise: false,
         },
         t: (key) => key, getPageTitle: (page) => page,
       });

@@ -631,7 +631,6 @@ function resolveProfileByName(profiles, profileName, provider) {
 
 export {
   normalizeProfileProvider,
-  normalizeProfileMode,
   normalizeProfileName,
   normalizeProfileHostname,
   normalizeProfileCustomDomain,
@@ -651,7 +650,6 @@ export {
   getCliManagedRemoteCredentialId,
   warnIfUnsafeFilePermissions,
   writeTunnelProfilesToDisk,
-  writeManagedRemotePairsToDiskFromProfiles,
   persistTunnelProfilesToDisk,
   ensureTunnelProfilesMigrated,
   resolveProfileByName,

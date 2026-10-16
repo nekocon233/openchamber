@@ -10,6 +10,7 @@
 // Wired into the same trigger fanout as web push (see runtime.js); the relay carries only
 // generic, model-based text (no session content) — see APNS.md.
 
+import { parsePushKey, sealPushContent } from './push-seal.js';
 import {
   getOrCreateRelaySigningKeypair,
   signRelayMessage as signRelayMessageShared,
@@ -49,9 +50,8 @@ export const createApnsRuntime = (deps) => {
     http2,
     APNS_TOKENS_FILE_PATH,
     readSettingsFromDiskMigrated,
-    writeSettingsToDisk,
-    // Strict settings reader gating identity regeneration (see signing-key.js).
-    readSettingsStrict,
+    // Host relay identity keys, shared with the private relay (relay/key-store.js).
+    relayKeyStore,
   } = deps;
 
   let persistLock = Promise.resolve();
@@ -61,8 +61,8 @@ export const createApnsRuntime = (deps) => {
   let warnedUnconfigured = false;
 
   // ---------------------------------------------------------------------------
-  // Per-server relay signing identity (ECDSA P-256). Auto-generated + persisted in settings
-  // (mirrors getOrCreateVapidKeys). The relay derives serverId = SHA-256(publicKey), verifies
+  // Per-server relay signing identity (ECDSA P-256). Auto-generated + persisted by
+  // relay/key-store.js. The relay derives serverId = SHA-256(publicKey), verifies
   // each request's signature, and only delivers to tokens this server registered — so a leaked
   // device token alone can't be used to push. Zero-config: the keypair generates on first use.
   // ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ export const createApnsRuntime = (deps) => {
   // relay identity — same keypair, same storage, same serverId derivation).
   const getOrCreateRelayKeypair = async () => {
     if (cachedRelayKey) return cachedRelayKey;
-    cachedRelayKey = await getOrCreateRelaySigningKeypair({ crypto, readSettingsFromDiskMigrated, writeSettingsToDisk, readSettingsStrict });
+    cachedRelayKey = await getOrCreateRelaySigningKeypair({ crypto, relayKeyStore });
     return cachedRelayKey;
   };
 
@@ -152,7 +152,7 @@ export const createApnsRuntime = (deps) => {
 
   const writeTokensToDisk = async (data) => {
     await fsPromises.mkdir(path.dirname(APNS_TOKENS_FILE_PATH), { recursive: true });
-    await fsPromises.writeFile(APNS_TOKENS_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
+    await fsPromises.writeFile(APNS_TOKENS_FILE_PATH, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
   };
 
   const persistTokenUpdate = async (mutate) => {
@@ -188,6 +188,9 @@ export const createApnsRuntime = (deps) => {
           // which at registration. Older entries without one default to production (matches
           // released builds).
           environment: entry.environment === 'sandbox' ? 'sandbox' : 'production',
+          // The device's key for end-to-end sealed text (push-seal.js); absent for
+          // apps from before it, which keep getting plain text.
+          pushKey: parsePushKey(entry.pushKey) ?? undefined,
         };
       })
       .filter(Boolean);
@@ -209,7 +212,7 @@ export const createApnsRuntime = (deps) => {
 
   const normalizeEnvironment = (environment) => (environment === 'sandbox' ? 'sandbox' : 'production');
 
-  const addOrUpdateApnsToken = async (authValue, deviceToken, userAgent, platform, environment) => {
+  const addOrUpdateApnsToken = async (authValue, deviceToken, userAgent, platform, environment, pushKey) => {
     // Older internal callers supplied a raw UI session token. Convert it to an
     // opaque identity; delivery still requires authoritative auth validation.
     const auth = normalizeNotificationAuth(authValue)
@@ -232,6 +235,7 @@ export const createApnsRuntime = (deps) => {
         userAgent: typeof userAgent === 'string' && userAgent.length > 0 ? userAgent : undefined,
         platform: tokenPlatform,
         environment: tokenEnvironment,
+        pushKey: parsePushKey(pushKey) ?? undefined,
       });
       registrationsByIdentity[auth.identity] = {
         auth,
@@ -553,12 +557,18 @@ export const createApnsRuntime = (deps) => {
   // background push for short responses. Instead we always send, and rely on iOS to NOT
   // display the alert while the app is foreground (presentationOptions: [] in
   // capacitor.config) — so there is no notification when the app is active, with no race.
-  const sendApnsToAllUiSessions = async (payload, _options = {}) => {
+  // `sealed` is the `{ title, body }` a phone with a key shows; without it the
+  // phone opens the same text an app without a key gets in the clear.
+  const sendApnsToAllUiSessions = async ({ sealed, ...payload } = {}, _options = {}) => {
+    const sealedContent = sealed ?? { title: payload.title, body: payload.body };
     const store = await readTokensFromDisk();
     // Tokens are grouped by their registered APNs environment so each batch goes to the
     // endpoint that actually knows the token (Xcode builds → sandbox, TestFlight/App Store
     // → production). Mixing them gets BadDeviceToken and the token wrongly dropped as dead.
     const tokensByEnvironment = new Map();
+    // Devices that gave a push key get their text sealed for them alone, so
+    // each is its own send; the rest share one batch per environment.
+    const sealedDevices = [];
     const seen = new Set();
     const inactiveAuth = [];
     await Promise.all(Object.values(store.registrationsByIdentity || {}).map(async (rawRegistration) => {
@@ -573,6 +583,10 @@ export const createApnsRuntime = (deps) => {
       for (const entry of registration.tokens) {
         if (seen.has(entry.deviceToken)) continue;
         seen.add(entry.deviceToken);
+        if (entry.pushKey) {
+          sealedDevices.push(entry);
+          continue;
+        }
         const group = tokensByEnvironment.get(entry.environment) || [];
         group.push(entry.deviceToken);
         tokensByEnvironment.set(entry.environment, group);
@@ -586,10 +600,28 @@ export const createApnsRuntime = (deps) => {
       for (const [environment, deviceTokens] of tokensByEnvironment) {
         await sendViaRelay(deviceTokens, payload, relay, relay.environment ?? environment);
       }
+      for (const entry of sealedDevices) {
+        await sendViaRelay([entry.deviceToken], sealedPayloadFor(payload, sealedContent, entry.pushKey), relay, relay.environment ?? entry.environment);
+      }
       return;
     }
     await sendViaDirectApns(tokensByEnvironment, payload);
+    for (const entry of sealedDevices) {
+      await sendViaDirectApns(new Map([[entry.environment, [entry.deviceToken]]]), sealedPayloadFor(payload, sealedContent, entry.pushKey));
+    }
   };
+
+  // What the relay and the push service see for a device with a key: the
+  // generic scenario title and an empty body, with the real title and body
+  // sealed in `data.enc` for the phone to open.
+  const sealedPayloadFor = (payload, content, pushKey) => ({
+    ...payload,
+    body: '',
+    data: {
+      ...(payload?.data && typeof payload.data === 'object' ? payload.data : {}),
+      enc: sealPushContent(pushKey, { title: content.title, body: content.body }),
+    },
+  });
 
   return {
     addOrUpdateApnsToken,

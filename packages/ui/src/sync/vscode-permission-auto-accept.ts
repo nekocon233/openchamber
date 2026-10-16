@@ -7,6 +7,11 @@ import * as sessionActions from "./session-actions"
 const RETRY_DELAYS_MS = [0, 250, 1000]
 
 type Dependencies = {
+  /**
+   * The authoritative policy, or null while none has arrived. An answer
+   * outside the policy comes from `defaultEnabled`, so a missing policy must
+   * stay distinguishable from a policy that answers nothing.
+   */
   getPolicy: () => { sessions: Record<string, boolean>; defaultEnabled: boolean } | null
   getSessions: () => ReadonlyMap<string, Session>
   getSession: (sessionId: string, directory?: string) => Promise<Session>
@@ -44,6 +49,7 @@ export function createVSCodePermissionAutoAcceptRuntime(dependencies: Dependenci
           return false
         }
       }
+      // A read that answered for another session cannot extend this lineage.
       if (!session || session.id !== current) return false
       current = session.parentID
       currentDirectory = session.directory || currentDirectory
@@ -130,12 +136,18 @@ export function createVSCodePermissionAutoAcceptRuntime(dependencies: Dependenci
   return { processPermission, reconcilePending }
 }
 
+// VS Code has no safety net (no OpenChamber server), so a session either
+// answers by itself or it does not.
 const runtime = createVSCodePermissionAutoAcceptRuntime({
   getPolicy: () => {
     const state = usePermissionStore.getState()
-    return state.loaded
-      ? { sessions: state.autoAccept, defaultEnabled: state.defaultEnabled }
-      : null
+    if (!state.loaded) return null
+    return {
+      sessions: Object.fromEntries(
+        Object.entries(state.modes).map(([sessionId, mode]) => [sessionId, mode !== "ask"]),
+      ),
+      defaultEnabled: state.defaultEnabled,
+    }
   },
   getSessions: getAllSyncSessionMap,
   getSession: (sessionId, directory) => opencodeClient.getSession(sessionId, directory),

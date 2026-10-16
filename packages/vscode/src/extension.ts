@@ -1,14 +1,17 @@
 import * as vscode from 'vscode';
 import { ChatViewProvider } from './ChatViewProvider';
-import { AgentManagerPanelProvider } from './AgentManagerPanelProvider';
 import { SessionEditorPanelProvider } from './SessionEditorPanelProvider';
 import { createOpenCodeManager, type OpenCodeManager } from './opencode';
+import { configureOpenCodeCredentials, openCodeCredentialSource } from './opencodeAuth';
+import { configureProjectStartCommandSource, openCodeProjectStartCommandSource } from '../../web/server/lib/opencode/project-start-command.js';
 import { startGlobalEventWatcher, stopGlobalEventWatcher, setChatViewProvider } from './sessionActivityWatcher';
 import { pathsEqualWithNormalizedDriveLetter } from './pathUtils';
 import { resolveWorkspaceFolders } from './workspaceResolver';
 import { InlineCommentThreads, SIDEBAR_SURFACE_ID } from './InlineCommentThreads';
 import { applyConnectAttemptTimeout } from './networkDefaults';
 import { stopGitProcesses } from './bridge-git-process-runtime';
+import { registerGenerateCommitMessageCommand } from './scmCommitMessage';
+import { createSessionNotifier } from './sessionNotifications';
 
 let chatViewProvider: ChatViewProvider | undefined;
 
@@ -23,7 +26,6 @@ function readDraftSnapshot(snapshot: unknown): Array<{ id: string; text: string 
   }
   return drafts;
 }
-let agentManagerProvider: AgentManagerPanelProvider | undefined;
 let sessionEditorProvider: SessionEditorPanelProvider | undefined;
 let openCodeManager: OpenCodeManager | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
@@ -140,6 +142,18 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Create OpenCode manager first
   openCodeManager = createOpenCodeManager(context);
+  // Quota lookups read provider credentials from the running OpenCode.
+  configureOpenCodeCredentials(openCodeCredentialSource(openCodeManager));
+  // A new worktree runs the start command OpenCode keeps on the project record.
+  const manager = openCodeManager;
+  configureProjectStartCommandSource(openCodeProjectStartCommandSource({
+    buildOpenCodeUrl: () => {
+      const apiUrl = manager.getApiUrl();
+      if (!apiUrl) throw new Error('OpenCode API URL is not available');
+      return apiUrl;
+    },
+    getOpenCodeAuthHeaders: () => manager.getOpenCodeAuthHeaders(),
+  }));
 
   // Create chat view provider with manager reference
   // The webview will show a loading state until OpenCode is ready
@@ -197,6 +211,48 @@ export async function activate(context: vscode.ExtensionContext) {
     return true;
   };
 
+  const selectNewSessionWorkspace = async (directory?: string) => {
+    const candidates = resolveWorkspaceFolders(vscode.workspace.workspaceFolders ?? []);
+    let folderPath = directory;
+
+    if (!folderPath && candidates.length === 0) {
+      vscode.window.showInformationMessage('OpenChamber: No folder is open. Open a folder to start a new session.');
+      return;
+    }
+
+    if (!folderPath) {
+      folderPath = candidates.length === 1
+        ? candidates[0].path
+        : (await vscode.window.showQuickPick(
+            candidates.map((folder) => ({ label: folder.name, description: folder.path, path: folder.path })),
+            { placeHolder: 'Select a workspace folder for this session', matchOnDescription: true }
+          ))?.path;
+    }
+
+    if (!folderPath) {
+      return;
+    }
+
+    if (openCodeManager) {
+      const result = await openCodeManager.setWorkingDirectory(folderPath);
+      if (!result.success) {
+        vscode.window.showErrorMessage(`OpenChamber: ${result.error}`);
+        return;
+      }
+    }
+
+    const workspaceFolders = candidates.some((folder) => folder.path === folderPath)
+      ? candidates
+      : [
+          ...candidates,
+          {
+            name: folderPath.split(/[\\/]/).filter(Boolean).pop() ?? folderPath,
+            path: folderPath,
+          },
+        ];
+    return { directory: folderPath, workspaceFolders };
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand('openchamber.focusChat', async () => {
       if (!(await revealChatViewForPayload())) {
@@ -208,15 +264,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
   void maybeMoveChatToRightSidebarOnStartup();
 
-  // Create Agent Manager panel provider
-  agentManagerProvider = new AgentManagerPanelProvider(context, context.extensionUri, openCodeManager);
   sessionEditorProvider = new SessionEditorPanelProvider(context, context.extensionUri, openCodeManager);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('openchamber.internal.settingsSynced', (settings: unknown) => {
       chatViewProvider?.notifySettingsSynced(settings);
       sessionEditorProvider?.notifySettingsSynced(settings);
-      agentManagerProvider?.notifySettingsSynced(settings);
     })
   );
 
@@ -224,21 +277,41 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('openchamber.internal.permissionAutoAcceptSynced', (snapshot: unknown) => {
       chatViewProvider?.notifyPermissionAutoAcceptSynced(snapshot);
       sessionEditorProvider?.notifyPermissionAutoAcceptSynced(snapshot);
-      agentManagerProvider?.notifyPermissionAutoAcceptSynced(snapshot);
     })
+  );
+
+  const showSessionNotification = createSessionNotifier({
+    isChatAttended: () => vscode.window.state.focused
+      && Boolean(chatViewProvider?.isVisible() || sessionEditorProvider?.hasVisiblePanel()),
+    show: (message, ...actions) => vscode.window.showInformationMessage(message, ...actions),
+    openSession: async (sessionId) => {
+      if (await revealChatViewForPayload()) {
+        chatViewProvider?.openSession(sessionId);
+      }
+    },
+    openSessionLabel: t('Open Session'),
+  });
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('openchamber.internal.showNotification', showSessionNotification)
   );
 
   context.subscriptions.push(
     vscode.window.onDidChangeWindowState(() => {
       chatViewProvider?.notifyViewerStateChanged();
       sessionEditorProvider?.notifyViewerStateChanged();
-      agentManagerProvider?.notifyViewerStateChanged();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('openchamber.openAgentManager', () => {
-      agentManagerProvider?.createOrShow();
+    // The command id predates multi-run (it opened the removed Agent Manager
+    // panel); it stays so existing keybindings keep working.
+    vscode.commands.registerCommand('openchamber.openAgentManager', async () => {
+      const workspace = await selectNewSessionWorkspace();
+      if (!workspace) {
+        return;
+      }
+      sessionEditorProvider?.createOrShowParallelDraft(workspace.directory);
     })
   );
 
@@ -275,18 +348,26 @@ export async function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('openchamber.openNewSessionInEditor', () => {
-      sessionEditorProvider?.createOrShowNewSession();
+    vscode.commands.registerCommand('openchamber.openNewSessionInEditor', async () => {
+      const workspace = await selectNewSessionWorkspace();
+      if (!workspace) {
+        return;
+      }
+      sessionEditorProvider?.createOrShowNewSession(workspace.directory);
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('openchamber.openCurrentOrNewSessionInEditor', () => {
+    vscode.commands.registerCommand('openchamber.openCurrentOrNewSessionInEditor', async () => {
       if (activeSessionId) {
         sessionEditorProvider?.createOrShow(activeSessionId, activeSessionTitle ?? undefined);
-      } else {
-        sessionEditorProvider?.createOrShowNewSession();
+        return;
       }
+      const workspace = await selectNewSessionWorkspace();
+      if (!workspace) {
+        return;
+      }
+      sessionEditorProvider?.createOrShowNewSession(workspace.directory);
     })
   );
 
@@ -579,44 +660,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('openchamber.newSession', async (directory?: unknown) => {
-      const candidates = resolveWorkspaceFolders(vscode.workspace.workspaceFolders ?? []);
-      let folderPath: string | undefined = typeof directory === 'string' ? directory : undefined;
-
-      if (!folderPath && candidates.length === 0) {
-        vscode.window.showInformationMessage('OpenChamber: No folder is open. Open a folder to start a new session.');
+      const workspace = await selectNewSessionWorkspace(typeof directory === 'string' ? directory : undefined);
+      if (!workspace) {
         return;
       }
-
-      if (!folderPath) {
-        folderPath = candidates.length === 1
-          ? candidates[0].path
-          : (await vscode.window.showQuickPick(
-              candidates.map((folder) => ({ label: folder.name, description: folder.path, path: folder.path })),
-              { placeHolder: 'Select a workspace folder for this session', matchOnDescription: true }
-            ))?.path;
-      }
-
-      if (!folderPath) {
-        return;
-      }
-
-      if (openCodeManager) {
-        const result = await openCodeManager.setWorkingDirectory(folderPath);
-        if (!result.success) {
-          vscode.window.showErrorMessage(`OpenChamber: ${result.error}`);
-          return;
-        }
-      }
-      const workspaceFolders = candidates.some((folder) => folder.path === folderPath)
-        ? candidates
-        : [
-            ...candidates,
-            {
-              name: folderPath.split(/[\\/]/).filter(Boolean).pop() ?? folderPath,
-              path: folderPath,
-            },
-          ];
-      chatViewProvider?.createNewSession({ directory: folderPath, workspaceFolders });
+      chatViewProvider?.createNewSession(workspace);
     })
   );
 
@@ -823,7 +871,6 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.onDidChangeActiveColorTheme((theme) => {
       chatViewProvider?.updateTheme(theme.kind);
-      agentManagerProvider?.updateTheme(theme.kind);
       sessionEditorProvider?.updateTheme(theme.kind);
     })
   );
@@ -839,7 +886,6 @@ export async function activate(context: vscode.ExtensionContext) {
         event.affectsConfiguration('workbench.preferredDarkColorTheme')
       ) {
         chatViewProvider?.updateTheme(vscode.window.activeColorTheme.kind);
-        agentManagerProvider?.updateTheme(vscode.window.activeColorTheme.kind);
         sessionEditorProvider?.updateTheme(vscode.window.activeColorTheme.kind);
       }
     })
@@ -849,7 +895,6 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     openCodeManager.onStatusChange((status, error) => {
       chatViewProvider?.updateConnectionStatus(status, error);
-      agentManagerProvider?.updateConnectionStatus(status, error);
       sessionEditorProvider?.updateConnectionStatus(status, error);
 
       // Start/stop global event watcher based on connection status
@@ -863,6 +908,8 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  registerGenerateCommitMessageCommand(context, openCodeManager);
+
   // Start OpenCode API without blocking activation.
   // Blocking here delays webview resolution and causes a blank panel until startup completes.
   void openCodeManager.start();
@@ -873,7 +920,6 @@ export async function deactivate() {
   await Promise.all([openCodeManager?.stop(), stopGitProcesses()]);
   openCodeManager = undefined;
   chatViewProvider = undefined;
-  agentManagerProvider = undefined;
   sessionEditorProvider = undefined;
   outputChannel?.dispose();
   outputChannel = undefined;

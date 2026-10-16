@@ -30,6 +30,37 @@ describe('settings registry', () => {
     })).toEqual({ fontSize: 15 });
   });
 
+  test('round-trips all large text paste modes through settings and local persistence', async () => {
+    const options = useUIStore.persist.getOptions();
+    const original = useUIStore.getState();
+    let saved: Parameters<NonNullable<typeof options.storage>['setItem']>[1] = { state: original, version: options.version };
+    try {
+      useUIStore.persist.setOptions({ storage: { getItem: () => saved, setItem: (_name, value) => { saved = value; }, removeItem: () => undefined } });
+      for (const mode of ['ask', 'attach', 'inline', 'inline-double-paste']) {
+        const parsed = parseSettingsDocument(JSON.parse(JSON.stringify({ largeTextPasteBehavior: mode })));
+        expect(parsed).toEqual({ largeTextPasteBehavior: mode });
+        if (!parsed) throw new Error('Expected valid mode');
+        applySettingsToStores(parsed);
+        expect(useUIStore.getState().largeTextPasteBehavior).toBe(mode);
+        expect(readAutoSaveSnapshot().largeTextPasteBehavior).toBe(mode);
+        const persisted = saved;
+        useUIStore.persist.setOptions({ storage: { getItem: () => persisted, setItem: () => undefined, removeItem: () => undefined } });
+        useUIStore.getState().setLargeTextPasteBehavior('ask');
+        await useUIStore.persist.rehydrate();
+        expect(useUIStore.getState().largeTextPasteBehavior).toBe(mode);
+        useUIStore.persist.setOptions({ storage: { getItem: () => saved, setItem: (_name, value) => { saved = value; }, removeItem: () => undefined } });
+      }
+      expect(parseSettingsDocument({ largeTextPasteBehavior: 'invalid' })).toEqual({});
+    } finally {
+      useUIStore.persist.setOptions(options);
+      useUIStore.setState(original, true);
+    }
+  });
+  test('accepts only interface languages the UI ships', () => {
+    expect(parseSettingsDocument({ locale: 'zh-CN' })).toEqual({ locale: 'zh-CN' });
+    expect(parseSettingsDocument({ locale: 'xx' })).toEqual({});
+    expect(parseSettingsDocument({ locale: 3 })).toEqual({});
+  });
   test('project paths retain absolute Windows roots across parsing and serialization', () => {
     const parsed = parseSettingsDocument({ projects: [
       { path: 'c:\\', label: 'Drive' },
@@ -143,6 +174,17 @@ describe('settings registry', () => {
     });
     expect(parseSettingsDocument(null)).toBeNull();
     expect(parseSettingsDocument([])).toBeNull();
+  });
+
+  test('reads the removed Sorted chat mode as collapsed activity until the user picks a mode', () => {
+    expect(parseSettingsDocument({ chatRenderMode: 'sorted', activityRenderMode: 'summary' }))
+      .toEqual({ chatRenderMode: 'sorted', activityRenderMode: 'collapsed' });
+    expect(parseSettingsDocument({ chatRenderMode: 'sorted' }))
+      .toEqual({ chatRenderMode: 'sorted', activityRenderMode: 'collapsed' });
+    // Picking a mode in Settings writes chatRenderMode 'live' along with it.
+    expect(parseSettingsDocument({ chatRenderMode: 'live', activityRenderMode: 'summary' }))
+      .toEqual({ chatRenderMode: 'live', activityRenderMode: 'summary' });
+    expect(parseSettingsDocument({ activityRenderMode: 'summary' })).toEqual({ activityRenderMode: 'summary' });
   });
 
   test('applies only the fields a snapshot carries and leaves the rest alone', () => {

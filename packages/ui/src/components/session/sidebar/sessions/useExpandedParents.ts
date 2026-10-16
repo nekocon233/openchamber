@@ -23,10 +23,12 @@ export const useExpandedParents = () => {
   const expandedParentsRef = React.useRef(expandedParents);
   expandedParentsRef.current = expandedParents;
 
-  const toggleParent = React.useCallback((key: string, node: SessionNode) => {
+  // `node` is the row's subtree; without it (a run row, which owns no session
+  // node of its own) collapsing only drops the key itself.
+  const toggleParent = React.useCallback((key: string, node?: SessionNode) => {
     const current = expandedParentsRef.current;
     const descendantKeys: string[] = [];
-    if (current.has(key)) {
+    if (node && current.has(key)) {
       const contextPrefix = key.slice(0, key.length - node.session.id.length);
       const collectExpandedDescendants = (children: SessionNode[]): void => {
         for (const child of children) {

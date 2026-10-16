@@ -1,7 +1,8 @@
 import React from 'react';
-import { useSessionTurnActive } from '@/sync/global-session-status';
+import { useSessionTurnActivity } from '@/sync/global-session-status';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import { createPortal } from 'react-dom';
+import { isIMECompositionEvent } from '@/lib/ime';
 import {
   RiAddLine,
   RiArrowDownSLine,
@@ -32,6 +33,7 @@ import { CSS } from '@dnd-kit/utilities';
 
 import { DirectoryExplorerDialog } from '@/components/session/DirectoryExplorerDialog';
 import { Icon } from '@/components/icon/Icon';
+import type { IconName } from '@/components/icon/icons';
 import { NewWorktreeDialog } from '@/components/session/NewWorktreeDialog';
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
 import { Button } from '@/components/ui/button';
@@ -39,23 +41,24 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
 import { toast } from '@/components/ui';
 import { getProjectLabel, normalizePath } from './mobilePaths';
 import { SessionSearchInput } from '@/components/session/SessionSearchInput';
 import { CHAT_DRAFT_PROJECT_ID, isChatDirectoryPath } from '@/lib/chatDirectories';
 import { getDescendantIds, partitionSidebarSessions } from '@/components/session/sidebar/list/sessionCollection';
-import { derivePinnedSessions, deriveRecentSessions } from '@/components/session/sidebar/recent/activitySections';
-import { sortProjectsByOrder } from '@/components/session/sidebar/list/projectSort';
+import { rankByLatestActivity, sortProjectsByOrder } from '@/components/session/sidebar/list/projectSort';
 import { collectSessionSubtreeIds, runSessionSubtreeAction, type SessionSubtreeAction } from '@/components/session/sidebar/sessions/sessionSubtreeActions';
 import { createSessionOwnershipIndex } from '@/components/session/sidebar/sessions/sessionOwnership';
-import { useSpacesStore, type SpaceMark } from '@/lib/spaces/spaces-store';
+import { useSidebarSpaces, useSpacesStore, type SpaceMark } from '@/lib/spaces/spaces-store';
+import { SpaceGroupStatus } from '@/components/session/spaces/SpaceGroupStatus';
 import { resolveSidebarSessionLocations } from '@/components/session/sidebar/recent/sessionLocation';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import { useI18n } from '@/lib/i18n';
+import { useI18n, type I18nKey } from '@/lib/i18n';
 import { matchesRankQuery, rankByQuery } from '@/lib/search/fuzzySearch';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { cn } from '@/lib/utils';
@@ -63,6 +66,7 @@ import {
   listProjectWorktrees,
   partitionWorktreesByRegisteredProject,
 } from '@/lib/worktrees/worktreeManager';
+import { useWorktreeRemoving } from '@/lib/worktrees/worktreeRemovalState';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useGitAllBranches, useGitStore } from '@/stores/useGitStore';
 import { runBackgroundNetworkTask } from '@/lib/background-network';
@@ -91,13 +95,24 @@ import type { WorktreeMetadata } from '@/types/worktree';
 import { MobileDeleteWorktreeDialog } from './MobileDeleteWorktreeDialog';
 import { MobileProjectIcon } from './MobileProjectIcon';
 import { MobileSessionRenameForm } from './MobileSessionRenameForm';
-import { MobileSessionRowActions, MobileSwipeActionsRow, ROW_ACTIONS_WIDTH } from './MobileSessionSwipe';
 import {
-  MobileTimelineList,
+  MobileSessionRowActions,
+  MobileSwipeActionsRow,
+  ROW_ACTION_SLOT_WIDTH,
+  ROW_ACTIONS_WIDTH,
+  type MobileSessionPinAction,
+  type MobileSessionWorkAction,
+} from './MobileSessionSwipe';
+import { isDoneSuggested, isSessionInWork } from '@/lib/sessionWorkMetadata';
+import { setSessionWorkState } from '@/sync/session-actions';
+import { useUIStore } from '@/stores/useUIStore';
+import { FileTreeChevron } from '@/components/views/files/FileTreeRowParts';
+import {
+  MobileTimelineRows,
+  TIMELINE_ROW_INDENT,
   type TimelineEntry,
   type TimelineRowHandlers,
 } from './MobileTimelineList';
-import { revealNextTimelinePage, TIMELINE_PAGE_SIZE } from './mobileTimelinePaging';
 import {
   formatRelativeShort,
   getParentId,
@@ -106,6 +121,15 @@ import {
 } from './mobileSessionFields';
 import { MobileProjectEditSurface } from './MobileProjectEditSurface';
 import { useEdgeSwipe } from './useEdgeSwipe';
+import { ArrowsMerge } from '@/components/icons/ArrowsMerge';
+import { CollapsedActivityIndicator } from '@/components/session/sidebar/sessions/collapsedActivityIndicator';
+import { useCollapsedSessionActivityState } from '@/components/session/sidebar/sessions/collapsedActivityState';
+import type { SessionNode } from '@/components/session/sidebar/types';
+import { buildMultiRunIndex, type MultiRunSummary } from '@/lib/multirun/runs';
+import { MobileRunProviderLogos } from './MobileRunProviderLogos';
+import { MobileDisclosure } from './MobileDisclosure';
+import { MobileSessionGoalGlyph, MobileSessionPendingBadges } from './MobileSessionStateBadges';
+import { usePendingRequests } from './usePendingRequests';
 
 type MobileSessionsSheetProps = {
   open: boolean;
@@ -120,16 +144,17 @@ type MobileSessionsSheetProps = {
     instanceLabel: string | null;
     onOpenInstances?: () => void;
     onOpenSettings: () => void;
+    onOpenScheduled: () => void;
+    onOpenArchive: () => void;
     onOpenUsage: () => void;
+    /** The issues and PRs board. */
+    onOpenSourceBoard: () => void;
     /** Present only while a server update is available (hosted web). */
     onOpenUpdate?: () => void;
   };
 };
 
 const EMPTY_PINNED_SESSION_IDS = new Set<string>();
-const EMPTY_ACTIVE_SESSION_IDS = new Set<string>();
-const PINNED_SECTION_KEY = 'openchamber:mobile:pinned';
-const RECENT_SECTION_KEY = 'openchamber:mobile:recent';
 
 // Same orders, same labels as the desktop sidebar's sort menu — the setting
 // itself is shared, so the two surfaces must offer the same choices.
@@ -148,7 +173,8 @@ const VIEW_MODE_OPTIONS = [
 
 type SidebarViewMode = (typeof VIEW_MODE_OPTIONS)[number][0];
 
-// Pseudo-project key for the collapsible "recent" group's persisted expansion.
+/** Menu rows tall enough for a thumb. */
+const MOBILE_MENU_ITEM_CLASS = 'min-h-10 items-center justify-between';
 
 type ProjectMeta = {
   id: string;
@@ -183,7 +209,6 @@ type WorktreeBucket = {
 type ProjectNode = {
   project: ProjectMeta;
   buckets: WorktreeBucket[];
-  totalSessions: number;
   isActive: boolean;
 };
 
@@ -192,39 +217,22 @@ const STATUS_POLL_DIRECTORY_LIMIT = 12;
 const STATUS_POLL_INTERVAL_MS = 5_000;
 const STATUS_POLL_REQUEST_TIMEOUT_MS = 4_000;
 
-// The timeline opens with the project list, so chats show a short page above it.
+// Chats show a short page above the projects in both views; pinned chats ride
+// along outside it.
+const CHAT_PAGE_SIZE = 3;
 
-// Left padding for session rows so the title's first letter aligns with its
-// parent label. Root/project-level sessions align with the project label;
-// worktree sessions sit one level deeper. SessionRow adds 16px (dot + gap) on top.
-const PROJECT_SESSION_INDENT = 40;
-// Timeline chats align with the timeline rows' text, which has no gutter.
-// Extra left padding applied to each nested subsession level.
-const CHILD_INDENT_STEP = 16;
-
-const includeSessionDescendants = (roots: Session[], sessions: Session[]): Session[] => {
-  if (roots.length === 0) return [];
-  const childrenByParent = new Map<string, Session[]>();
-  for (const session of sessions) {
-    const parentId = getParentId(session);
-    if (!parentId) continue;
-    const children = childrenByParent.get(parentId) ?? [];
-    children.push(session);
-    childrenByParent.set(parentId, children);
-  }
-  const included = new Set(roots.map((session) => session.id));
-  const pending = [...included];
-  while (pending.length > 0) {
-    const parentId = pending.pop();
-    if (!parentId) continue;
-    for (const child of childrenByParent.get(parentId) ?? []) {
-      if (included.has(child.id)) continue;
-      included.add(child.id);
-      pending.push(child.id);
-    }
-  }
-  return sessions.filter((session) => included.has(session.id));
-};
+// The Tree view is the desktop's file tree geometry: 12px per level, a 14px
+// chevron slot and a 6px gap before the text, without level guides. Its base
+// sits under the project tile, so a root session's title starts where the
+// project label does (12px header padding + 32px tile + 8px gap = 52px).
+const MOBILE_TREE_BASE_PADDING_PX = 32;
+const treeRowLeft = (depth: number): number => MOBILE_TREE_BASE_PADDING_PX + depth * 12;
+const treeTextLeft = (depth: number): number => treeRowLeft(depth) + 20;
+/** Expansion keys of the "Pinned" and "In work" sections, alongside project ids. */
+const PINNED_SECTION_ID = 'openchamber:pinned';
+const WORK_SECTION_ID = 'openchamber:work';
+// Chats are flat rows in both views, aligned with the timeline rows' text.
+const TIMELINE_CHAT_INDENT = 12;
 
 const fetchSessionStatusSnapshot = async (
   directory: string,
@@ -261,6 +269,12 @@ const findExactWorktreeMatch = (project: ProjectMeta, normalizedDirectory: strin
 const sessionMatchesQuery = (session: Session, projectLabel: string, query: string): boolean =>
   matchesRankQuery([session.title, session.id, getSessionDirectory(session), projectLabel], query);
 
+// Worktree buckets render inside a map, so the removal subscription lives here.
+const WorktreeRemovalScope: React.FC<{
+  path: string | null;
+  children: (removing: boolean) => React.ReactNode;
+}> = ({ path, children }) => children(useWorktreeRemoving(path));
+
 const ActiveDot: React.FC<{ ariaLabel?: string }> = ({ ariaLabel }) => (
   <span
     className="inline-block size-1.5 shrink-0 rounded-full bg-primary"
@@ -290,7 +304,7 @@ const NewWorktreeIconButton: React.FC<{
       }}
       style={{ touchAction: 'manipulation' }}
     >
-      <Icon name="node-tree" className="size-4" />
+      <Icon name="node-tree" className="size-3.5" />
     </button>
   );
 };
@@ -348,6 +362,16 @@ const SessionRow: React.FC<{
   onCancelRename?: () => void;
   /** Timeline chats: no left gutter; the status dot sits before the time instead. */
   statusOnRight?: boolean;
+  /** Tree rows: the level sets the indent, the slot holds the
+      subsession chevron, and the live state sits on the right. Replaces `indent`. */
+  treeDepth?: number;
+  /** Track / Done in the swipe actions; top-level rows while the feature is on. */
+  work?: MobileSessionWorkAction;
+  /** Pin / Unpin in the swipe actions, and the pin marker; top-level rows. */
+  pin?: MobileSessionPinAction;
+  /** Subsessions of the row; while they are hidden, their waiting requests
+      count on this row. Absent: only the row's own requests count. */
+  descendantIdsOf?: (sessionId: string) => readonly string[];
 }> = ({
   session,
   active,
@@ -355,7 +379,8 @@ const SessionRow: React.FC<{
   activityTimestamp,
   pinned = false,
   contextLabel,
-  statusOnRight = false,
+  statusOnRight: flatStatusOnRight = false,
+  treeDepth,
   hasChildren = false,
   expanded = false,
   onToggleChildren,
@@ -371,22 +396,56 @@ const SessionRow: React.FC<{
   onRequestRename,
   onSubmitRename,
   onCancelRename,
+  work,
+  pin,
+  descendantIdsOf,
 }) => {
   const { t } = useI18n();
   const time = formatRelativeShort(activityTimestamp ?? getSessionTimestamp(session));
   const title = session.title?.trim() || t('mobile.sessions.untitled');
   const swipeEnabled = Boolean(onRevealedChange && onArchive);
-  const aiRename = useSessionAiRenameAction(session.id, session.directory, swipeEnabled && revealed);
-  // Live indicators use the parent-provided resolved status so explicit global
-  // idle wins over stale child activity, matching the desktop sidebar: busy/retry →
+  const isTreeRow = treeDepth !== undefined;
+  const statusOnRight = flatStatusOnRight || isTreeRow;
+  const textIndent = isTreeRow ? treeTextLeft(treeDepth) : indent;
+  const aiRename = useSessionAiRenameAction(session.id, session.directory, swipeEnabled && (revealed || renaming));
+  // Live indicators, same conventions as the desktop sidebar: busy/retry →
   // spinner; unseen activity on a non-active row → attention dot.
   const unseenCount = useSessionUnseenCount(session.id);
-  const isStreaming = useSessionTurnActive(session.id);
+  const turnActivity = useSessionTurnActivity(session.id);
+  const isStreaming = turnActivity !== null;
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
   const showActivityDuration = (isStreaming || showUnreadDot) && hasActivityDuration;
+  // Jev thinks this work looks finished: the same quiet check the sidebar shows.
+  const showDoneHint = Boolean(work?.inWork) && !isStreaming && isDoneSuggested(session);
+  // A collapsed row stands for its hidden subsessions too; an expanded one
+  // leaves their requests to their own rows.
+  const familyIds = React.useMemo(
+    () => (descendantIdsOf && !(hasChildren && expanded) ? [session.id, ...descendantIdsOf(session.id)] : [session.id]),
+    [descendantIdsOf, expanded, hasChildren, session.id],
+  );
+  const pendingRequests = usePendingRequests(familyIds);
+
   const rowContent = (
     <>
+      {isTreeRow && hasChildren && onToggleChildren ? (
+        // A thumb-sized target around the 14px chevron slot.
+        <button
+          type="button"
+          className="absolute z-10 flex w-[30px] items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          style={{ insetInlineStart: treeRowLeft(treeDepth) - 8, top: 0, bottom: 0, touchAction: 'manipulation' }}
+          aria-label={expanded
+            ? t('sessions.sidebar.session.subsessions.collapse')
+            : t('sessions.sidebar.session.subsessions.expand')}
+          aria-expanded={expanded}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleChildren();
+          }}
+        >
+          <FileTreeChevron expanded={expanded} />
+        </button>
+      ) : null}
       {/* Left gutter slot: live activity indicator takes priority over the
           subsession chevron — same position, so rows never shift. When the
           row has children the slot still toggles them either way. */}
@@ -394,7 +453,7 @@ const SessionRow: React.FC<{
         <button
           type="button"
           className="absolute z-10 flex w-6 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          style={{ left: Math.max(indent - 32, 2), top: 0, bottom: 0, touchAction: 'manipulation' }}
+          style={{ insetInlineStart: Math.max(indent - 32, 2), top: 0, bottom: 0, touchAction: 'manipulation' }}
           aria-label={aiRename.pending
             ? t('sessions.aiRename.generating')
             : expanded
@@ -410,18 +469,18 @@ const SessionRow: React.FC<{
             <Icon name="loader-4" className="size-3 animate-spin text-primary" aria-label={t('sessions.aiRename.generating')} />
           ) : isStreaming || showUnreadDot ? (
             <SessionActivityIndicator
-              state={isStreaming ? 'running' : 'unread'}
-              label={isStreaming ? t('sessions.sidebar.session.status.active') : t('sessions.sidebar.session.status.unread')}
+              state={turnActivity ?? 'unread'}
             />
           ) : (
-            <RiArrowDownSLine className={cn('size-[18px] transition-transform duration-150', expanded ? 'rotate-0' : '-rotate-90')} />
+            <RiArrowDownSLine className={cn('size-[18px] transition-transform duration-150', expanded ? 'rotate-0' : '-rotate-90 rtl:rotate-90')} />
           )}
         </button>
       ) : null}
       {renaming && onSubmitRename && onCancelRename ? (
         <MobileSessionRenameForm
           initialTitle={title}
-          indent={indent}
+          indent={textIndent}
+          aiRename={aiRename}
           onSubmit={onSubmitRename}
           onCancel={onCancelRename}
         />
@@ -434,10 +493,10 @@ const SessionRow: React.FC<{
         // height explicit. Two-line rows (search results with a context
         // subtitle) keep flexible height.
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-2.5 pr-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+          'flex min-w-0 flex-1 items-center gap-2.5 pe-3.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
           contextLabel ? 'min-h-10 py-1' : 'h-9',
         )}
-        style={{ paddingLeft: indent, touchAction: 'manipulation' }}
+        style={{ paddingInlineStart: textIndent, touchAction: 'manipulation' }}
         onClick={() => {
           // A tap while the actions are out just closes them.
           if (revealed) {
@@ -450,21 +509,31 @@ const SessionRow: React.FC<{
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-2.5">
             <span
+              dir="auto"
               className={cn(
-                'block min-w-0 flex-1 truncate typography-ui-label',
+                'block min-w-0 flex-1 truncate oc-ui-start-align typography-ui-label',
                 active ? 'text-primary' : 'text-foreground',
               )}
             >
               {title}
             </span>
+            {pin?.pinned ? (
+              <Icon name="pushpin" className="size-3 shrink-0 text-muted-foreground" aria-label={t('sessions.sidebar.session.status.pinned')} />
+            ) : null}
             {statusOnRight && (aiRename.pending || isStreaming || showUnreadDot) ? (
               aiRename.pending
                 ? <Icon name="loader-4" className="size-3 shrink-0 animate-spin text-primary" aria-label={t('sessions.aiRename.generating')} />
                 : <SessionActivityIndicator
-                    state={isStreaming ? 'running' : 'unread'}
-                    label={isStreaming ? t('sessions.sidebar.session.status.active') : t('sessions.sidebar.session.status.unread')}
+                    state={turnActivity ?? 'unread'}
                   />
             ) : null}
+            {showDoneHint ? (
+              <Icon name="check" className="size-3.5 shrink-0 text-muted-foreground" aria-label={t('sessions.sidebar.session.work.doneSuggested')} />
+            ) : null}
+            {/* Goal and waiting requests sit before the time, so the time
+                column stays aligned from row to row. */}
+            <MobileSessionGoalGlyph session={session} />
+            <MobileSessionPendingBadges {...pendingRequests} />
             {/* The elapsed turn takes the time slot while it matters, then
                 hands it back to the relative timestamp. */}
             {showActivityDuration ? (
@@ -489,7 +558,7 @@ const SessionRow: React.FC<{
             variant="ghost"
             size="icon"
             className={cn(
-              'mr-1',
+              'me-1',
               pinned ? 'text-primary' : 'text-muted-foreground/70',
             )}
             aria-label={t(
@@ -535,7 +604,7 @@ const SessionRow: React.FC<{
 
   return (
     <MobileSwipeActionsRow
-      actionsWidth={ROW_ACTIONS_WIDTH}
+      actionsWidth={ROW_ACTIONS_WIDTH + (work ? ROW_ACTION_SLOT_WIDTH : 0) + (pin ? ROW_ACTION_SLOT_WIDTH : 0)}
       revealed={revealed}
       onRevealedChange={(next) => onRevealedChange?.(next)}
       dataActiveSession={active}
@@ -545,20 +614,61 @@ const SessionRow: React.FC<{
       )}
       actions={(
         <MobileSessionRowActions
+          sessionId={session.id}
           title={title}
           revealed={revealed}
           confirmingDelete={confirmingDelete}
-          aiRename={aiRename}
           onArchive={onArchive}
           onRequestDelete={onRequestDelete}
           onConfirmDelete={onConfirmDelete}
           onRequestRename={onRequestRename}
           onRevealedChange={onRevealedChange}
+          work={work}
+          pin={pin}
         />
       )}
     >
       {rowContent}
     </MobileSwipeActionsRow>
+  );
+};
+
+const EMPTY_SESSION_NODES: readonly SessionNode[] = [];
+
+/**
+ * One row for a whole multi-run, laid out like the tree rows around it: the
+ * run mark and title, then provider logos, the lanes' combined activity and
+ * the time. Tapping opens the run overview, where each lane opens its chat.
+ * Mobile shows runs but never launches them.
+ */
+const MobileRunRow: React.FC<{ run: MultiRunSummary; laneNodes: readonly SessionNode[]; depth: number }> = ({ run, laneNodes, depth }) => {
+  const { t } = useI18n();
+  const active = useUIStore((state) => state.runOverviewKey === run.key);
+  const activity = useCollapsedSessionActivityState({ nodes: laneNodes, includeUnreadSubtasks: false });
+  const time = formatRelativeShort(run.lastActivity);
+  return (
+    <div
+      data-active-session={active || undefined}
+      className={cn('relative flex items-center overflow-hidden transition-colors', active && 'bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]')}
+    >
+      <button
+        type="button"
+        className="flex h-9 w-full min-w-0 items-center gap-2.5 pe-3.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        style={{ paddingInlineStart: treeTextLeft(depth), touchAction: 'manipulation' }}
+        onClick={() => useUIStore.getState().setRunOverviewKey(run.key)}
+        aria-label={t('sessions.sidebar.run.openOverviewAria', { title: run.title })}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <ArrowsMerge className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span dir="auto" className={cn('block min-w-0 flex-1 truncate oc-ui-start-align typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
+            {run.title}
+          </span>
+        </span>
+        <MobileRunProviderLogos providerIDs={run.providerIDs} />
+        {activity ? <CollapsedActivityIndicator state={activity} /> : null}
+        {time ? <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{time}</span> : null}
+      </button>
+    </div>
   );
 };
 
@@ -570,8 +680,8 @@ const ShowMoreRow: React.FC<{
   return (
     <button
       type="button"
-      className="flex min-h-9 w-full items-center gap-2 py-1 pr-3 text-left text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-      style={{ paddingLeft: indent, touchAction: 'manipulation' }}
+      className="flex min-h-9 w-full items-center gap-2 py-1 pe-3 text-start text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      style={{ paddingInlineStart: indent, touchAction: 'manipulation' }}
       onClick={onClick}
     >
       <RiArrowDownSLine className="size-4" />
@@ -588,8 +698,8 @@ const ShowFewerRow: React.FC<{
   return (
     <button
       type="button"
-      className="flex min-h-9 w-full items-center gap-2 py-1 pr-3 text-left text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-      style={{ paddingLeft: indent, touchAction: 'manipulation' }}
+      className="flex min-h-9 w-full items-center gap-2 py-1 pe-3 text-start text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      style={{ paddingInlineStart: indent, touchAction: 'manipulation' }}
       onClick={onClick}
     >
       <RiArrowUpSLine className="size-4" />
@@ -633,11 +743,10 @@ const SortableWorktreeReorderRow: React.FC<{ worktree: WorktreeMetadata }> = ({ 
     the project through their own nested DndContext. */
 const SortableProjectRow: React.FC<{
   project: ProjectMeta;
-  totalSessions: number;
   expanded: boolean;
   onToggleExpanded: () => void;
   onMoveWorktree: (path: string, toIndex: number, orderedPaths: string[]) => void;
-}> = ({ project, totalSessions, expanded, onToggleExpanded, onMoveWorktree }) => {
+}> = ({ project, expanded, onToggleExpanded, onMoveWorktree }) => {
   const { t } = useI18n();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: project.id });
   const worktreeSensors = useSensors(
@@ -677,7 +786,7 @@ const SortableProjectRow: React.FC<{
         </button>
         <button
           type="button"
-          className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-xl px-1 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-xl px-1 text-start transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           onClick={onToggleExpanded}
           aria-expanded={expanded}
           aria-label={expanded
@@ -688,7 +797,6 @@ const SortableProjectRow: React.FC<{
         >
           <MobileProjectIcon project={project} />
           <span className="block min-w-0 flex-1 truncate typography-ui-label text-foreground">{project.label}</span>
-          <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">{totalSessions}</span>
           {hasWorktrees ? (
             <RiArrowDownSLine
               className={cn('size-4 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')}
@@ -702,7 +810,7 @@ const SortableProjectRow: React.FC<{
             items={project.worktrees.map((worktree) => normalizePath(worktree.path))}
             strategy={verticalListSortingStrategy}
           >
-            <div className="mt-1 flex flex-col gap-0.5 pl-3">
+            <div className="mt-1 flex flex-col gap-0.5 ps-3">
               {project.worktrees.map((worktree) => (
                 <SortableWorktreeReorderRow key={normalizePath(worktree.path)} worktree={worktree} />
               ))}
@@ -717,20 +825,16 @@ const SortableProjectRow: React.FC<{
 export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, onOpenChange, variant = 'drawer', footer }) => {
   const { t } = useI18n();
   const { git } = useRuntimeAPIs();
-  const activitySectionsEnabled = open || variant === 'sidebar';
   const ensureGitStatus = useGitStore((state) => state.ensureStatus);
   const liveSessions = useAllLiveSessions();
   const authoritativeLiveSessionIds = useAllAuthoritativeLiveSessionIds();
   const sessionStatuses = useAllSessionStatuses();
   const globalResolvedStatusById = useGlobalSessionStatusStore((state) => state.resolvedStatusById);
-  const globalActiveSessionIds = useGlobalSessionStatusStore(React.useCallback(
-    (state) => open || variant === 'sidebar' ? state.activeSessionIds : EMPTY_ACTIVE_SESSION_IDS,
-    [open, variant],
-  ));
   const globalActiveSessions = useGlobalSessionsStore((state) => state.activeSessions);
   const globalArchivedSessions = useGlobalSessionsStore((state) => state.archivedSessions);
   const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.status === 'ready');
   const togglePinnedSession = useSessionPinnedStore((state) => state.toggle);
+  const hasLoadedGlobalSessions = useGlobalSessionsStore((state) => state.hasLoaded);
   // Store reads the closed drawer does not need. They hold the last value seen
   // while presented rather than dropping to empty: the drawer stays mounted
   // through its exit slide, and swapping pins, order or branches to empty at
@@ -745,12 +849,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     },
     [presented],
   ));
-  const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
-  const showChatsSection = useSessionDisplayStore((state) => state.showChatsSection);
-  const showRecentSection = useSessionDisplayStore((state) => state.showRecentSection);
-  const togglePinnedSection = useSessionDisplayStore((state) => state.togglePinnedSection);
-  const toggleChatsSection = useSessionDisplayStore((state) => state.toggleChatsSection);
-  const toggleRecentSection = useSessionDisplayStore((state) => state.toggleRecentSection);
   const heldOrderRanksRef = React.useRef(EMPTY_SESSION_ORDER_RANKS);
   const sessionOrderRanks = useSessionOrderingStore(React.useCallback(
     (state) => {
@@ -775,14 +873,25 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   const setActiveProjectIdOnly = useProjectsStore((state) => state.setActiveProjectIdOnly);
   const reorderProjects = useProjectsStore((state) => state.reorderProjects);
   const manualProjectOrder = useProjectsStore((state) => state.manualProjectOrder);
-  const projectSortOrder = useSessionDisplayStore((state) => state.projectSortOrder);
+  const storedProjectSortOrder = useSessionDisplayStore((state) => state.projectSortOrder);
   const setProjectSortOrder = useSessionDisplayStore((state) => state.setProjectSortOrder);
   const sidebarViewMode = useSessionDisplayStore((state) => state.sidebarViewMode);
+  // The timeline keeps projects in the user's own order, as on desktop;
+  // reordering is its only sort.
+  const projectSortOrder = sidebarViewMode === 'timeline' ? 'manual' : storedProjectSortOrder;
   const setSidebarViewMode = useSessionDisplayStore((state) => state.setSidebarViewMode);
-  // Branch per directory, for the timeline row's third line: worktree sessions
-  // read their worktree's branch, root sessions the project root's checked-out
-  // branch, which only the git store knows. The grouped view never asks.
-  const gitBranchesByDirectory = useGitAllBranches(presented && sidebarViewMode === 'timeline');
+  const showWorkSection = useSessionDisplayStore((state) => state.showWorkSection);
+  const setShowWorkSection = useSessionDisplayStore((state) => state.setShowWorkSection);
+  const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
+  const setShowPinnedSection = useSessionDisplayStore((state) => state.setShowPinnedSection);
+  const showChatsSection = useSessionDisplayStore((state) => state.showChatsSection);
+  const detailedZoneRows = useSessionDisplayStore((state) => state.detailedZoneRows);
+  const setDetailedZoneRows = useSessionDisplayStore((state) => state.setDetailedZoneRows);
+  // Branch per directory, for the second line of timeline-style rows (In
+  // work, the List view): worktree sessions read their worktree's
+  // branch, root sessions the project root's checked-out branch, which only
+  // the git store knows. Read while the sheet is shown.
+  const gitBranchesByDirectory = useGitAllBranches(presented);
   const removeProject = useProjectsStore((state) => state.removeProject);
   const projectExpandedMap = useMobileSessionTreeStore((state) => state.projectExpanded);
   const worktreeExpandedMap = useMobileSessionTreeStore((state) => state.worktreeExpanded);
@@ -809,7 +918,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   } | null>(null);
   // Bumped to force a re-list of worktrees (e.g. after one is deleted in the editor).
   const [worktreeRefreshKey, setWorktreeRefreshKey] = React.useState(0);
-  const [sortPanelOpen, setSortPanelOpen] = React.useState(false);
   const [directoryDialogOpen, setDirectoryDialogOpen] = React.useState(false);
   const [newWorktreeDialogOpen, setNewWorktreeDialogOpen] = React.useState(false);
   const [worktreeDialogProjectId, setWorktreeDialogProjectId] = React.useState<string | null>(null);
@@ -838,10 +946,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   // state itself lives in useMobileSessionTreeStore (persisted).
   // Key: `${projectId}::${bucketKey}`.
   const [visibleCountByBucket, setVisibleCountByBucket] = React.useState<Map<string, number>>(new Map());
-  // Timeline mode renders one flat list of every project session. The sheet is
-  // a plain scroller, so rows are revealed a page at a time as the end comes
-  // into view; the count resets with the sheet and with the view mode.
-  const [timelineVisibleCount, setTimelineVisibleCount] = React.useState(TIMELINE_PAGE_SIZE);
   const scrollerRef = React.useRef<HTMLElement>(null);
 
   React.useEffect(() => {
@@ -850,7 +954,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       setEditingOrder(false);
       setReorderExpandedProjects(new Set());
       setVisibleCountByBucket(new Map());
-      setTimelineVisibleCount(TIMELINE_PAGE_SIZE);
       setEditingProjectId(null);
       setRevealedSessionId(null);
       setConfirmingDeleteSessionId(null);
@@ -860,8 +963,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       return;
     }
     void refreshGlobalSessions(liveSessions);
-    // intentionally only on open transition — live overlay handles updates after that
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // intentionally only on open transition — session events keep the list current after that
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   React.useEffect(() => {
@@ -869,7 +972,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   }, [editingOrder]);
 
   React.useEffect(() => {
-    setTimelineVisibleCount(TIMELINE_PAGE_SIZE);
+    setVisibleCountByBucket(new Map());
   }, [sidebarViewMode]);
 
   React.useEffect(() => {
@@ -880,24 +983,36 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
         projects.map(async (project) => {
           const path = normalizePath(project.path);
           if (!path) return null;
-          const isGitRepo = await git.checkIsGitRepository(path).catch(() => false);
+          // null = the lookup failed, not "no worktrees": that project keeps
+          // what it showed, so a flaky request on open cannot fold its
+          // worktree groups into the root or drop their branch labels.
+          const isGitRepo = await git.checkIsGitRepository(path).catch(() => null);
           const worktrees = isGitRepo
-            ? await listProjectWorktrees({ id: project.id, path }).catch(() => [])
+            ? await listProjectWorktrees({ id: project.id, path }).catch(() => null)
             : [];
           return [path, worktrees, isGitRepo] as const;
         }),
       );
       if (cancelled) return;
-      const discoveredWorktreesByProject = new Map<string, WorktreeMetadata[]>();
-      const nextGitProjectPaths = new Set<string>();
-      for (const entry of entries) {
-        if (entry) {
-          discoveredWorktreesByProject.set(entry[0], entry[1]);
-          if (entry[2]) nextGitProjectPaths.add(entry[0]);
+      setWorktreesByProject((previous) => {
+        const discoveredWorktreesByProject = new Map<string, WorktreeMetadata[]>();
+        for (const entry of entries) {
+          if (!entry) continue;
+          const [path, worktrees, isGitRepo] = entry;
+          const failed = isGitRepo === null || worktrees === null;
+          discoveredWorktreesByProject.set(path, failed ? previous.get(path) ?? [] : worktrees);
         }
-      }
-      setWorktreesByProject(partitionWorktreesByRegisteredProject(projects, discoveredWorktreesByProject));
-      setGitProjectPaths(nextGitProjectPaths);
+        return partitionWorktreesByRegisteredProject(projects, discoveredWorktreesByProject);
+      });
+      setGitProjectPaths((previous) => {
+        const next = new Set<string>();
+        for (const entry of entries) {
+          if (!entry) continue;
+          const [path, , isGitRepo] = entry;
+          if (isGitRepo === null ? previous.has(path) : isGitRepo) next.add(path);
+        }
+        return next;
+      });
     };
     void run();
     return () => {
@@ -933,7 +1048,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   /**
    * Global sessions cover all directories — even unbootstrapped ones — so the tree shows
    * accurate counts even when a worktree's live store hasn't been hydrated yet. Live
-   * sessions overlay for fresher data on the active directory.
+   * sessions only fill gaps, as in the desktop sidebar: the global record hears every
+   * session event itself, and a directory store can keep an old copy of a session it
+   * does not own.
    */
   const sessions = React.useMemo(() => {
     const liveById = new Map(liveSessions.map((session) => [session.id, session]));
@@ -977,6 +1094,10 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     }
     return children;
   }, [sessions]);
+  const descendantIdsOf = React.useCallback(
+    (sessionId: string) => getDescendantIds(childrenBySessionId, sessionId),
+    [childrenBySessionId],
+  );
 
   // Managed Chats (sessions under ~/.config/openchamber/chats) are not owned
   // by any registered project; they get their own section above the project
@@ -986,8 +1107,43 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     () => partitionSidebarSessions(sessions, false),
     [sessions],
   );
-  const spaces = useSpacesStore((state) => state.spaces);
-  const spaceList = React.useMemo(() => Array.from(spaces.values()), [spaces]);
+
+  // Sessions in work, with their subsessions, get their own section under
+  // Chats and stay in their projects too, like the desktop sidebar. With the
+  // section hidden from the display panel they show in their projects only.
+  // Chats are plain conversations and never in work. Ownership and search
+  // still see every session.
+  const sessionWorkEnabled = useUIStore((state) => state.sessionWorkEnabled);
+  const workSessionIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if (!sessionWorkEnabled || !showWorkSection) return ids;
+    for (const session of sessions) {
+      if (getParentId(session) || isChatDirectoryPath(getSessionDirectory(session)) || !isSessionInWork(session)) continue;
+      ids.add(session.id);
+      for (const id of getDescendantIds(childrenBySessionId, session.id)) ids.add(id);
+    }
+    return ids;
+  }, [childrenBySessionId, sessionWorkEnabled, sessions, showWorkSection]);
+  // Pinned project sessions, with their subsessions, get their own section
+  // above In work while the display panel shows it; a pinned session in work
+  // is listed there only. Pinned chats stay at the top of Chats.
+  const pinnedZoneSessionIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if (!showPinnedSection) return ids;
+    for (const session of sessions) {
+      const directory = getSessionDirectory(session);
+      if (getParentId(session) || isChatDirectoryPath(directory) || !isSessionPinned(pinnedSessionIds, directory || null, session.id)) continue;
+      ids.add(session.id);
+      for (const id of getDescendantIds(childrenBySessionId, session.id)) ids.add(id);
+    }
+    return ids;
+  }, [childrenBySessionId, pinnedSessionIds, sessions, showPinnedSection]);
+  const sectionChatSessions = React.useMemo(
+    () => (workSessionIds.size > 0 ? chatSessions.filter((session) => !workSessionIds.has(session.id)) : chatSessions),
+    [chatSessions, workSessionIds],
+  );
+  const spaceList = useSidebarSpaces();
+  const spaces = React.useMemo(() => new Map(spaceList.map((space) => [space.id, space])), [spaceList]);
   const spaceLabelById = React.useMemo(
     () => new Map(spaceList.map((space) => [space.id, space.name || t('sessions.sidebar.grouping.spaceUnnamed')])),
     [spaceList, t],
@@ -1001,58 +1157,83 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     authoritativeProjects,
     spaceList,
   ), [authoritativeProjects, projectSessions, projectsMeta, spaceList]);
+  // Multi-runs render as one row that opens their overview; their lanes list
+  // under the project root instead of each lane's worktree, like the sidebar.
+  const runIndex = React.useMemo(() => buildMultiRunIndex(projectSessions, (session) => {
+    const owner = sessionOwnership.bySessionId.get(session.id);
+    const project = owner ? projectsMeta.find((entry) => entry.id === owner.projectId) : undefined;
+    return project?.path || normalizePath(getSessionDirectory(session)) || null;
+  }), [projectSessions, projectsMeta, sessionOwnership]);
+  // Each run's members with their subsessions: a run row's activity dot is
+  // the combined state of everything the run holds, as on the sidebar.
+  const runLaneNodesByKey = React.useMemo(() => {
+    const sessionById = new Map(sessions.map((session) => [session.id, session]));
+    const toNode = (session: Session): SessionNode => ({
+      session,
+      children: (childrenBySessionId.get(session.id) ?? []).map(toNode),
+      worktree: null,
+    });
+    const nodes = new Map<string, SessionNode[]>();
+    for (const run of runIndex.runs.values()) {
+      nodes.set(run.key, run.memberIds.flatMap((id) => {
+        const session = sessionById.get(id);
+        return session ? [toNode(session)] : [];
+      }));
+    }
+    return nodes;
+  }, [childrenBySessionId, runIndex, sessions]);
   const chatsBucket = React.useMemo<WorktreeBucket>(() => ({
     key: CHAT_DRAFT_PROJECT_ID,
     label: '',
     path: '',
     worktree: null,
     space: null,
-    sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks),
-  }), [chatSessions, pinnedSessionIds, sessionOrderRanks]);
+    sessions: orderSessionsByLifecycleScopes(sectionChatSessions, pinnedSessionIds, sessionOrderRanks),
+  }), [pinnedSessionIds, sectionChatSessions, sessionOrderRanks]);
+  // Pins are keyed by runtime, directory and id, so the timeline's
+  // "pinned chats always show" rule needs the plain ids of the pinned ones.
+  const pinnedChatIds = React.useMemo(() => new Set(
+    chatsBucket.sessions
+      .filter((session) => isSessionPinned(pinnedSessionIds, getSessionDirectory(session) || null, session.id))
+      .map((session) => session.id),
+  ), [chatsBucket, pinnedSessionIds]);
+  const pinnedBucket = React.useMemo<WorktreeBucket>(() => ({
+    key: PINNED_SECTION_ID,
+    label: '',
+    path: '',
+    worktree: null,
+    space: null,
+    sessions: pinnedZoneSessionIds.size > 0
+      ? orderSessionsByLifecycleScopes(sessions.filter((session) => pinnedZoneSessionIds.has(session.id)), pinnedSessionIds, sessionOrderRanks)
+      : [],
+  }), [pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions]);
+  const workBucket = React.useMemo<WorktreeBucket>(() => ({
+    key: WORK_SECTION_ID,
+    label: '',
+    path: '',
+    worktree: null,
+    space: null,
+    sessions: workSessionIds.size > 0
+      ? orderSessionsByLifecycleScopes(sessions.filter((session) => workSessionIds.has(session.id) && !pinnedZoneSessionIds.has(session.id)), pinnedSessionIds, sessionOrderRanks)
+      : [],
+  }), [pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions, workSessionIds]);
   const chatsBucketKey = `${CHAT_DRAFT_PROJECT_ID}::${CHAT_DRAFT_PROJECT_ID}`;
-  const pinnedBucket = React.useMemo<WorktreeBucket>(() => {
-    const roots = activitySectionsEnabled && showPinnedSection
-      ? derivePinnedSessions(sessions, pinnedSessionIds)
-      : [];
-    return {
-      key: PINNED_SECTION_KEY,
-      label: '',
-      path: '',
-      worktree: null,
-      space: null,
-      sessions: orderSessionsByLifecycleScopes(
-        includeSessionDescendants(roots, sessions),
-        pinnedSessionIds,
-        sessionOrderRanks,
-      ),
-    };
-  }, [activitySectionsEnabled, pinnedSessionIds, sessionOrderRanks, sessions, showPinnedSection]);
-  const recentBucket = React.useMemo<WorktreeBucket>(() => {
-    const roots = activitySectionsEnabled && showRecentSection
-      ? deriveRecentSessions(sessions, globalActiveSessionIds)
-      : [];
-    return {
-      key: RECENT_SECTION_KEY,
-      label: '',
-      path: '',
-      worktree: null,
-      space: null,
-      sessions: orderSessionsByLifecycleScopes(
-        includeSessionDescendants(roots, sessions),
-        pinnedSessionIds,
-        sessionOrderRanks,
-      ),
-    };
-  }, [activitySectionsEnabled, globalActiveSessionIds, pinnedSessionIds, sessionOrderRanks, sessions, showRecentSection]);
+  // The sessions the sheet can show: the project buckets, the chats when
+  // shown, and the Pinned and In work zones (whose sessions stay in
+  // their project too).
   const visibleSessions = React.useMemo(() => {
     const visibleIds = new Set(projectSessions.map((session) => session.id));
     if (showChatsSection) {
       for (const session of chatSessions) visibleIds.add(session.id);
     }
     for (const session of pinnedBucket.sessions) visibleIds.add(session.id);
-    for (const session of recentBucket.sessions) visibleIds.add(session.id);
+    for (const session of workBucket.sessions) visibleIds.add(session.id);
     return sessions.filter((session) => visibleIds.has(session.id));
-  }, [chatSessions, pinnedBucket.sessions, projectSessions, recentBucket.sessions, sessions, showChatsSection]);
+  }, [chatSessions, pinnedBucket.sessions, projectSessions, sessions, showChatsSection, workBucket.sessions]);
+  const chatRootCount = React.useMemo(
+    () => sectionChatSessions.filter((session) => !getParentId(session)).length,
+    [sectionChatSessions],
+  );
 
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -1167,10 +1348,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   }, [open]);
 
   const projectNodes = React.useMemo<ProjectNode[]>(() => {
-    const nodes: ProjectNode[] = projectsMeta.map((project) => ({
+    const nodes: ProjectNode[] = rankByLatestActivity(projectsMeta, projectSortOrder, (project) => project.id, sessionOwnership.sessionsByProject).map((project) => ({
       project,
       buckets: [] as WorktreeBucket[],
-      totalSessions: 0,
       isActive: project.id === activeProjectId,
     }));
 
@@ -1195,6 +1375,10 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     for (const node of nodes) {
       ensureBucket(node, node.project.path, null);
       for (const worktree of node.project.worktrees) ensureBucket(node, worktree.path, worktree);
+      // A space is a bucket before it has a session, as on desktop, so a new one shows at once.
+      for (const space of spaceList) {
+        if (space.directory && normalizePath(space.projectDirectory) === normalizePath(node.project.path)) ensureBucket(node, space.directory, null, space);
+      }
     }
 
     for (const session of projectSessions) {
@@ -1207,7 +1391,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       const space = owner.kind === 'space' && owner.spaceId ? spaces.get(owner.spaceId) ?? null : null;
       const bucket = space
         ? ensureBucket(node, owner.scopeDirectory, null, space)
-        : matchedWorktree
+        : matchedWorktree && !runIndex.runKeyBySessionId.has(session.id)
           ? ensureBucket(node, matchedWorktree.path, matchedWorktree)
           : ensureBucket(node, node.project.path, null);
       bucket.sessions.push(session);
@@ -1216,14 +1400,11 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     for (const node of nodes) {
       for (const bucket of node.buckets) {
         bucket.sessions = orderSessionsByLifecycleScopes(bucket.sessions, pinnedSessionIds, sessionOrderRanks);
-        for (const session of bucket.sessions) {
-          if (!getParentId(session)) node.totalSessions += 1;
-        }
       }
     }
 
     return nodes;
-  }, [activeProjectId, pinnedSessionIds, projectSessions, projectsMeta, sessionOrderRanks, sessionOwnership, spaces, t]);
+  }, [activeProjectId, pinnedSessionIds, projectSortOrder, projectsMeta, runIndex, projectSessions, sessionOrderRanks, sessionOwnership, spaceList, spaces, t]);
 
   const normalizedDirectory = normalizePath(currentDirectory);
 
@@ -1241,8 +1422,22 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
   // Worktrees default to EXPANDED (desktop parity): their sessions ARE the
   // content; the header still toggles for users who want them tucked away.
+  // An empty worktree is always open, so its first session shows at once.
   const isWorktreeExpanded = (node: ProjectNode, bucket: WorktreeBucket): boolean =>
-    worktreeExpandedMap[`${node.project.id}::${bucket.key}`] ?? true;
+    bucket.sessions.length === 0 || (worktreeExpandedMap[`${node.project.id}::${bucket.key}`] ?? true);
+
+  // A collapse saved while a worktree had sessions is dropped once it is
+  // empty, so the next session there is not hidden. Before the session list
+  // has loaded, every worktree only looks empty.
+  React.useEffect(() => {
+    if (!presented || !hasLoadedGlobalSessions) return;
+    for (const node of projectNodes) {
+      for (const bucket of node.buckets) {
+        const key = `${node.project.id}::${bucket.key}`;
+        if (bucket.sessions.length === 0 && worktreeExpandedMap[key] === false) setWorktreeExpanded(key, true);
+      }
+    }
+  }, [hasLoadedGlobalSessions, presented, projectNodes, setWorktreeExpanded, worktreeExpandedMap]);
 
   const resetBucketVisibleCount = (bucketKey: string) => {
     setVisibleCountByBucket((previous) => {
@@ -1278,21 +1473,21 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
   // Paginated, tree-aware list of a bucket's sessions: top-level sessions paginate,
   // and a parent with subsessions can be expanded to reveal its children (nested,
-  // recursively). Pagination counts only top-level sessions.
+  // recursively). Pagination counts only top-level sessions. `depth` is the tree
+  // level of the top-level rows; null renders the flat Chats rows instead.
   const renderBucketSessions = (
     bucketKey: string,
     bucket: WorktreeBucket,
-    indent: number,
+    depth: number | null,
     options?: {
       /** Roots revealed before the first "Show more". Defaults to SESSIONS_PER_BUCKET. */
       pageSize?: number;
       /** Roots that always render and never count against the page (pinned). */
       alwaysVisibleIds?: Set<string>;
-      /** Timeline chats: flush-left rows with the status dot on the right. */
-      statusOnRight?: boolean;
     },
   ) => {
     const pageSize = options?.pageSize ?? SESSIONS_PER_BUCKET;
+    const controlIndent = depth === null ? TIMELINE_CHAT_INDENT : treeTextLeft(depth);
     const alwaysVisibleIds = options?.alwaysVisibleIds;
 
     // Group children by parent within this bucket, and treat sessions whose parent
@@ -1312,30 +1507,41 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       return !parentId || !idsInBucket.has(parentId);
     });
 
+    // The lanes of a run become one entry at the first lane's position.
+    type RootEntry = { kind: 'session'; session: Session } | { kind: 'run'; run: MultiRunSummary };
+    const listedRuns = new Set<string>();
+    const rootEntries = roots.flatMap((entry): RootEntry[] => {
+      const runKey = runIndex.runKeyBySessionId.get(entry.id);
+      const run = runKey ? runIndex.runs.get(runKey) : undefined;
+      if (!run) return [{ kind: 'session', session: entry }];
+      if (listedRuns.has(run.key)) return [];
+      listedRuns.add(run.key);
+      return [{ kind: 'run', run }];
+    });
     // Pinned roots stay on screen whatever the page is, and do not consume it.
-    const alwaysVisibleRoots = alwaysVisibleIds
-      ? roots.filter((entry) => alwaysVisibleIds.has(entry.id))
-      : [];
-    const pagedRoots = alwaysVisibleIds
-      ? roots.filter((entry) => !alwaysVisibleIds.has(entry.id))
-      : roots;
+    const isAlwaysVisible = (entry: RootEntry): boolean => entry.kind === 'session' && Boolean(alwaysVisibleIds?.has(entry.session.id));
+    const alwaysVisibleRoots = alwaysVisibleIds ? rootEntries.filter(isAlwaysVisible) : [];
+    const pagedRoots = alwaysVisibleIds ? rootEntries.filter((entry) => !isAlwaysVisible(entry)) : rootEntries;
     const visibleCount = visibleCountByBucket.get(bucketKey) ?? pageSize;
     const visiblePagedRoots = pagedRoots.slice(0, visibleCount);
     const visibleRoots = [...alwaysVisibleRoots, ...visiblePagedRoots];
     const remaining = pagedRoots.length - visiblePagedRoots.length;
     const canShowFewer = pagedRoots.length > pageSize && remaining === 0;
 
-    const renderNode = (session: Session, rowIndent: number): React.ReactNode => {
+    // Flat Chats rows have no chevron, so their subsessions never expand.
+    const renderNode = (session: Session, rowDepth: number | null): React.ReactNode => {
       const children = childrenByParent.get(session.id) ?? [];
       const hasChildren = children.length > 0;
-      const expanded = Boolean(expandedParents[session.id]);
+      const expanded = rowDepth !== null && Boolean(expandedParents[session.id]);
       const sessionDirectory = getSessionDirectory(session);
       return (
         <React.Fragment key={session.id}>
           <SessionRow
             session={session}
             active={currentSessionId === session.id}
-            indent={rowIndent}
+            indent={TIMELINE_CHAT_INDENT}
+            treeDepth={rowDepth ?? undefined}
+            statusOnRight={rowDepth === null}
             activityTimestamp={getSessionTimestamp(session)}
             statusType={getSessionStatusType(session.id)}
             pinned={isSessionPinned(pinnedSessionIds, sessionDirectory, session.id)}
@@ -1347,7 +1553,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
               directory: sessionDirectory,
               sessionId: session.id,
             }) : undefined}
-            statusOnRight={options?.statusOnRight}
             revealed={revealedSessionId === session.id}
             onRevealedChange={(nextRevealed) => handleRowRevealedChange(session.id, nextRevealed)}
             confirmingDelete={confirmingDeleteSessionId === session.id}
@@ -1358,9 +1563,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             onRequestRename={() => handleRequestRename(session.id)}
             onSubmitRename={(nextTitle) => void handleSubmitRename(session.id, nextTitle)}
             onCancelRename={() => setRenamingSessionId(null)}
+            work={workActionFor(session)}
+            pin={pinActionFor(session)}
+            descendantIdsOf={descendantIdsOf}
           />
-          {hasChildren && expanded
-            ? children.map((child) => renderNode(child, rowIndent + CHILD_INDENT_STEP))
+          {hasChildren && expanded && rowDepth !== null
+            ? children.map((child) => renderNode(child, rowDepth + 1))
             : null}
         </React.Fragment>
       );
@@ -1368,12 +1576,14 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
     return (
       <div>
-        {visibleRoots.map((session) => renderNode(session, indent))}
+        {visibleRoots.map((entry) => (entry.kind === 'run'
+          ? <MobileRunRow key={`run:${entry.run.key}`} run={entry.run} laneNodes={runLaneNodesByKey.get(entry.run.key) ?? EMPTY_SESSION_NODES} depth={depth ?? 0} />
+          : renderNode(entry.session, depth)))}
         {remaining > 0 ? (
-          <ShowMoreRow indent={indent} onClick={() => showMoreBucketSessions(bucketKey, visiblePagedRoots.length, pageSize)} />
+          <ShowMoreRow indent={controlIndent} onClick={() => showMoreBucketSessions(bucketKey, visiblePagedRoots.length, SESSIONS_PER_BUCKET)} />
         ) : null}
         {canShowFewer ? (
-          <ShowFewerRow indent={indent} onClick={() => resetBucketVisibleCount(bucketKey)} />
+          <ShowFewerRow indent={controlIndent} onClick={() => resetBucketVisibleCount(bucketKey)} />
         ) : null}
       </div>
     );
@@ -1442,6 +1652,36 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
   const handleArchive = (session: Session) => runSubtreeAction('archive', session);
 
+  const handleToggleWork = async (session: Session, inWork: boolean) => {
+    try {
+      await setSessionWorkState(session.id, getSessionDirectory(session) || null, inWork ? 'done' : 'open');
+    } catch {
+      toast.error(t('sessions.sidebar.session.work.updateFailed'));
+    }
+  };
+
+  /** Track / Done for a top-level row while the feature is on. */
+  const workActionFor = (session: Session): MobileSessionWorkAction | undefined => {
+    if (!sessionWorkEnabled || getParentId(session) || isChatDirectoryPath(getSessionDirectory(session))) return undefined;
+    const inWork = workSessionIds.has(session.id);
+    return { inWork, onToggle: () => { void handleToggleWork(session, inWork); } };
+  };
+
+  const isPinned = (session: Session): boolean => (
+    isSessionPinned(pinnedSessionIds, getSessionDirectory(session) || null, session.id)
+  );
+
+  const handleTogglePin = (session: Session) => {
+    const directory = getSessionDirectory(session);
+    if (directory) togglePinnedSession({ directory, sessionId: session.id });
+  };
+
+  /** Pin / Unpin for a top-level row, the same local pin the desktop menu sets. */
+  const pinActionFor = (session: Session): MobileSessionPinAction | undefined => {
+    if (getParentId(session) || !getSessionDirectory(session)) return undefined;
+    return { pinned: isPinned(session), onToggle: () => handleTogglePin(session) };
+  };
+
   const handleConfirmDelete = (session: Session) => runSubtreeAction('delete', session);
 
   const handleRequestRename = (sessionId: string) => {
@@ -1491,6 +1731,32 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     void updateDesktopSettings({ sidebarViewMode: mode });
     if (mode === 'timeline') setEditingOrder(false);
   };
+
+  const handleToggleWorkSection = () => {
+    const next = !showWorkSection;
+    setShowWorkSection(next);
+    void updateDesktopSettings({ sidebarShowWorkSection: next });
+  };
+
+  const handleTogglePinnedSection = () => {
+    const next = !showPinnedSection;
+    setShowPinnedSection(next);
+    void updateDesktopSettings({ sidebarShowPinnedSection: next });
+  };
+
+  const handleToggleDetailedZoneRows = () => {
+    const next = !detailedZoneRows;
+    setDetailedZoneRows(next);
+    void updateDesktopSettings({ sidebarDetailedZoneRows: next });
+  };
+
+  /** One choice or switch in the display menu, checked when it is in effect. */
+  const renderMenuChoice = (key: string, labelKey: I18nKey, checked: boolean, onSelect: () => void): React.ReactNode => (
+    <DropdownMenuItem key={key} onClick={onSelect} className={MOBILE_MENU_ITEM_CLASS}>
+      <span>{t(labelKey)}</span>
+      {checked ? <Icon name="check" className="size-4 text-primary" /> : null}
+    </DropdownMenuItem>
+  );
 
   const handleReorderDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -1577,26 +1843,37 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     return rankByQuery(projectsMeta, normalizedQuery, (project) => [project.label, project.path]);
   }, [normalizedQuery, projectsMeta]);
 
-  // Timeline mode: one flat, lifecycle-ordered list of every root project
-  // session, with no project or worktree grouping. Search keeps the grouped
-  // behaviour, and reorder mode has nothing to reorder here.
+  // Timeline mode: each project's root sessions from every worktree and
+  // space in one lifecycle-ordered list under the project header, two-line
+  // rows, no worktree groups. Search keeps the grouped behaviour, and reorder
+  // mode shows the project list to drag.
   const timelineActive = sidebarViewMode === 'timeline' && !normalizedQuery && !editingOrder;
 
+  // Pinned and In work use the timeline's rows (two lines with the project's
+  // icon in List, one line in Tree unless detailed rows are on), so their
+  // branch and project context resolve whenever the list (not search or
+  // reorder) is on screen.
+  const listActive = !normalizedQuery && !editingOrder;
+  const compactZoneRows = sidebarViewMode !== 'timeline' && !detailedZoneRows;
+  const needsTimelineContext = timelineActive || (listActive && (workBucket.sessions.length > 0 || pinnedBucket.sessions.length > 0));
+
   // The git store only knows directories something asked about. The grouped
-  // view never needs project root branches, so the timeline requests them
-  // itself, the way the desktop sidebar's project headers do.
+  // project tree never needs project root branches, so the timeline-style
+  // rows request them themselves, the way the desktop sidebar's project
+  // headers do.
+  const needsRootBranches = needsTimelineContext;
   React.useEffect(() => {
-    if (!timelineActive || !git) return;
+    if (!needsRootBranches || !git) return;
     for (const project of projectsMeta) {
       const root = normalizePath(project.path);
       if (root) void runBackgroundNetworkTask(() => ensureGitStatus(root, git));
     }
-  }, [ensureGitStatus, git, projectsMeta, timelineActive]);
+  }, [ensureGitStatus, git, needsRootBranches, projectsMeta]);
 
   // Project, worktree and branch resolved once per session rather than per row.
   const timelineContextById = React.useMemo(() => {
-    const contexts = new Map<string, { project: ProjectMeta; branch: string | null }>();
-    if (!timelineActive) return contexts;
+    const contexts = new Map<string, { project: ProjectMeta; branch: string | null; inSpace: boolean }>();
+    if (!needsTimelineContext) return contexts;
     const locations = resolveSidebarSessionLocations({
       sessions: projectSessions,
       projects: projectsMeta.map((project) => ({ id: project.id, normalizedPath: project.path, label: project.label })),
@@ -1612,25 +1889,236 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       const location = locations.get(session.id);
       const project = location ? projectsMeta.find((candidate) => candidate.id === location.projectId) : null;
       if (!project || !location) continue;
-      contexts.set(session.id, { project, branch: location.branchLabel });
+      contexts.set(session.id, { project, branch: location.branchLabel, inSpace: location.inSpace });
     }
     return contexts;
-  }, [gitBranchesByDirectory, projectSessions, projectsMeta, sessionOwnership, spaceLabelById, timelineActive]);
+  }, [gitBranchesByDirectory, needsTimelineContext, projectSessions, projectsMeta, sessionOwnership, spaceLabelById]);
 
-  const timelineEntries = React.useMemo<TimelineEntry[]>(() => {
-    if (!timelineActive) return [];
-    const roots = projectSessions.filter(
-      (session) => !getParentId(session) && timelineContextById.has(session.id),
-    );
-    return orderSessionsByLifecycleScopes(roots, pinnedSessionIds, sessionOrderRanks).flatMap((session) => {
+  // Timeline rows for ordered root sessions. The lanes of a run become one
+  // run row at the first lane's position, the same collapse the grouped tree
+  // and the desktop timeline make.
+  const toTimelineEntries = React.useCallback((roots: readonly Session[]): TimelineEntry[] => {
+    const listedRuns = new Set<string>();
+    return roots.flatMap((session): TimelineEntry[] => {
       const context = timelineContextById.get(session.id);
-      return context ? [{ session, project: context.project, branch: context.branch }] : [];
+      if (!context) return [];
+      const runKey = runIndex.runKeyBySessionId.get(session.id);
+      const run = runKey ? runIndex.runs.get(runKey) : undefined;
+      if (!run) return [{ kind: 'session', session, project: context.project, branch: context.branch, inSpace: context.inSpace }];
+      if (listedRuns.has(run.key)) return [];
+      listedRuns.add(run.key);
+      return [{ kind: 'run', run, laneNodes: runLaneNodesByKey.get(run.key) ?? EMPTY_SESSION_NODES, project: context.project }];
     });
-  }, [pinnedSessionIds, projectSessions, sessionOrderRanks, timelineActive, timelineContextById]);
+  }, [runIndex, runLaneNodesByKey, timelineContextById]);
 
-  const revealMoreTimelineSessions = React.useCallback(() => {
-    setTimelineVisibleCount((current) => revealNextTimelinePage(current, timelineEntries.length));
-  }, [timelineEntries.length]);
+  const timelineEntriesByProject = React.useMemo(() => {
+    const byProject = new Map<string, TimelineEntry[]>();
+    if (!timelineActive) return byProject;
+    const roots = orderSessionsByLifecycleScopes(
+      projectSessions.filter((session) => !getParentId(session) && timelineContextById.has(session.id)),
+      pinnedSessionIds,
+      sessionOrderRanks,
+    );
+    for (const entry of toTimelineEntries(roots)) {
+      const list = byProject.get(entry.project.id);
+      if (list) list.push(entry);
+      else byProject.set(entry.project.id, [entry]);
+    }
+    return byProject;
+  }, [pinnedSessionIds, projectSessions, sessionOrderRanks, timelineActive, timelineContextById, toTimelineEntries]);
+  const workTimelineEntries = React.useMemo(
+    () => (listActive ? toTimelineEntries(workBucket.sessions.filter((session) => !getParentId(session))) : []),
+    [listActive, toTimelineEntries, workBucket],
+  );
+  const pinnedTimelineEntries = React.useMemo(
+    () => (listActive ? toTimelineEntries(pinnedBucket.sessions.filter((session) => !getParentId(session))) : []),
+    [listActive, toTimelineEntries, pinnedBucket],
+  );
+
+  /**
+   * A worktree's or a space's header: the swipe row with its chevron, icon
+   * and label, and for a space its state line. The tree puts its sessions
+   * under it; the timeline shows it only for a space without chats.
+   */
+  const renderBucketHeader = (node: ProjectNode, bucket: WorktreeBucket, removing: boolean, activeWorktreePath: string | null): React.ReactNode => {
+    const worktreeExpanded = isWorktreeExpanded(node, bucket);
+    const bucketEmpty = bucket.sessions.length === 0;
+    const isActiveWt = activeWorktreePath === bucket.path;
+    return (
+      <>
+        <MobileSwipeActionsRow
+          // A space's swipe actions are its grant dialog and its actions sheet, where a worktree's is its deletion.
+          actionsWidth={bucket.space ? 96 : 48}
+          revealed={revealedRowId === `wt:${bucket.key}`}
+          onRevealedChange={(nextRevealed) => handleRowKeyRevealedChange(`wt:${bucket.key}`, nextRevealed)}
+          actions={bucket.space ? (
+            <>
+            <button
+              type="button"
+              tabIndex={revealedRowId === `wt:${bucket.key}` ? 0 : -1}
+              className="flex flex-1 items-center justify-center text-foreground transition-colors active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              aria-label={t('spaces.group.access.giveAria', { label: bucket.label })}
+              onClick={() => {
+                setRevealedRowId(null);
+                if (bucket.space) useSpacesStore.getState().openAccessDialog(bucket.space.id);
+              }}
+              style={{ touchAction: 'manipulation' }}
+            >
+              <Icon name="key" className="size-[18px]" />
+            </button>
+            <button
+              type="button"
+              tabIndex={revealedRowId === `wt:${bucket.key}` ? 0 : -1}
+              className="flex flex-1 items-center justify-center text-foreground transition-colors active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              aria-label={t('spaces.actions.menuAria', { label: bucket.label })}
+              onClick={() => {
+                setRevealedRowId(null);
+                if (bucket.space) useSpacesStore.getState().openActionsSheet(bucket.space.id);
+              }}
+              style={{ touchAction: 'manipulation' }}
+            >
+              <Icon name="more-2" className="size-[18px]" />
+            </button>
+            </>
+          ) : bucket.worktree && !removing ? (
+            <button
+              type="button"
+              tabIndex={revealedRowId === `wt:${bucket.key}` ? 0 : -1}
+              className="flex flex-1 items-center justify-center text-[var(--status-error)] transition-colors active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive"
+              aria-label={t('mobile.projectEdit.deleteWorktreeAria', { label: bucket.label })}
+              onClick={() => {
+                setRevealedRowId(null);
+                if (bucket.worktree) {
+                  setWorktreeToDelete({ project: node.project, worktree: bucket.worktree });
+                }
+              }}
+              style={{ touchAction: 'manipulation' }}
+            >
+              <RiDeleteBinLine className="size-[18px]" />
+            </button>
+          ) : null}
+        >
+        <button
+          type="button"
+          className="flex min-h-10 w-full items-center gap-0.5 py-1 pe-3 text-start transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          onClick={() => {
+            if (revealedRowId) {
+              handleRowKeyRevealedChange(revealedRowId, false);
+              return;
+            }
+            // An empty worktree has nothing to show or hide.
+            if (bucketEmpty) return;
+            toggleWorktree(node.project.id, bucket.key, worktreeExpanded);
+          }}
+          aria-expanded={bucketEmpty ? undefined : worktreeExpanded}
+          aria-label={
+            bucketEmpty
+              ? bucket.label
+              : worktreeExpanded
+                ? t('sessions.sidebar.group.collapseAria', { label: bucket.label })
+                : t('sessions.sidebar.group.expandAria', { label: bucket.label })
+          }
+          style={{ paddingInlineStart: treeRowLeft(0), touchAction: 'manipulation' }}
+        >
+          {/* The desktop tree's folder row: chevron, then a
+              12px icon in the 14px slot with 2px gaps, so the
+              medium-weight label starts where the titles of
+              its sessions, one level deeper, start. */}
+          {bucketEmpty
+            ? <span aria-hidden className="size-3.5 shrink-0" />
+            : <FileTreeChevron expanded={worktreeExpanded} />}
+          {removing ? (
+            <span className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground" role="status" aria-label={t('sessions.sidebar.group.worktreeRemoving')}>
+              <Icon name="loader-4" className="size-3.5 animate-spin" />
+            </span>
+          ) : (
+            <Icon
+              name={bucket.space ? 'box-3' : 'git-branch'}
+              className={cn(
+                'mx-px size-3 shrink-0',
+                isActiveWt ? 'text-primary' : 'text-muted-foreground',
+              )}
+            />
+          )}
+          <span className="block min-w-0 flex-1 truncate typography-ui-label font-medium text-foreground">
+            {bucket.label}
+          </span>
+          {isActiveWt ? (
+            <ActiveDot ariaLabel={t('mobile.sessions.activeWorktreeAria')} />
+          ) : null}
+        </button>
+        </MobileSwipeActionsRow>
+        {bucket.space ? <div className="pb-1 pe-3" style={{ paddingInlineStart: treeTextLeft(1) }}><SpaceGroupStatus spaceId={bucket.space.id} /></div> : null}
+      </>
+    );
+  };
+
+  /** Timeline rows of one list, seven at a time, with Show more / Show fewer. */
+  const renderTimelineRows = (listKey: string, entries: readonly TimelineEntry[], showProject: boolean) => {
+    const visibleCount = visibleCountByBucket.get(listKey) ?? SESSIONS_PER_BUCKET;
+    const visibleEntries = entries.slice(0, visibleCount);
+    const remaining = entries.length - visibleEntries.length;
+    return (
+      <>
+        <MobileTimelineRows entries={visibleEntries} showProject={showProject} handlers={timelineHandlers} />
+        {remaining > 0 ? (
+          <ShowMoreRow indent={TIMELINE_ROW_INDENT} onClick={() => showMoreBucketSessions(listKey, visibleEntries.length, SESSIONS_PER_BUCKET)} />
+        ) : entries.length > SESSIONS_PER_BUCKET ? (
+          <ShowFewerRow indent={TIMELINE_ROW_INDENT} onClick={() => resetBucketVisibleCount(listKey)} />
+        ) : null}
+      </>
+    );
+  };
+
+  /** Pinned or In work: a collapsible section over its timeline rows; nothing when empty. */
+  const renderZoneSection = (
+    sectionId: string,
+    icon: IconName,
+    label: string,
+    entries: readonly TimelineEntry[],
+  ): React.ReactNode => {
+    // The count is the rows: a run's lanes share one, and a session whose
+    // project is unresolved has none.
+    if (entries.length === 0) return null;
+    const expanded = projectExpandedMap[sectionId] ?? true;
+    return (
+      <section>
+        <button
+          type="button"
+          className="flex min-h-12 w-full min-w-0 items-center gap-2 px-3 py-1.5 text-start transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          onClick={() => {
+            if (revealedRowId) {
+              handleRowKeyRevealedChange(revealedRowId, false);
+              return;
+            }
+            toggleProject(sectionId, expanded);
+          }}
+          aria-expanded={expanded}
+          aria-label={
+            expanded
+              ? t('sessions.sidebar.group.collapseAria', { label })
+              : t('sessions.sidebar.group.expandAria', { label })
+          }
+          style={{ touchAction: 'manipulation' }}
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+            <Icon name={icon} className="size-5" />
+          </span>
+          <span className="block min-w-0 flex-1 truncate typography-ui-header font-semibold text-foreground">
+            {label}
+          </span>
+          <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
+            {entries.length}
+          </span>
+        </button>
+        <MobileDisclosure open={expanded}>{() => (
+          <div className="pb-2">
+            <MobileTimelineRows entries={entries} showProject compact={compactZoneRows} pinMarker={sectionId !== PINNED_SECTION_ID} handlers={timelineHandlers} />
+          </div>
+        )}</MobileDisclosure>
+      </section>
+    );
+  };
 
   const timelineHandlers: TimelineRowHandlers = {
     currentSessionId,
@@ -1645,6 +2133,10 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     onRequestRename: handleRequestRename,
     onSubmitRename: (sessionId, title) => void handleSubmitRename(sessionId, title),
     onCancelRename: () => setRenamingSessionId(null),
+    onToggleWork: sessionWorkEnabled ? (session, inWork) => { void handleToggleWork(session, inWork); } : undefined,
+    isPinned,
+    onTogglePin: handleTogglePin,
+    descendantIdsOf,
   };
 
   const hasNoMatches =
@@ -1653,14 +2145,11 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     showPinnedSection && pinnedBucket.sessions.length > 0
   ) || (
     showChatsSection && chatSessions.length > 0
-  ) || (
-    showRecentSection && recentBucket.sessions.length > 0
   );
   // Drag order IS the manual order: offering it under another sort would let
-  // the user rearrange a list that is about to be re-sorted anyway.
-  // The timeline has no project list to reorder, so the toggle goes with it.
+  // the user rearrange a list that is about to be re-sorted anyway. The
+  // timeline always shows the manual order, so it can always be dragged.
   const canEditOrder = !normalizedQuery
-    && !timelineActive
     && projectsMeta.length > 1
     && projectSortOrder === 'manual';
 
@@ -1669,31 +2158,64 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   // a project row for a setting touched once a month.
   // Reachable with a single project too: the panel also holds the view switch,
   // which matters long before a second project exists.
+  // The menu also starts reordering; while it runs, the menu's button gives
+  // way to Done.
   const sortToggle = !editingOrder && !normalizedQuery && projectsMeta.length > 0 ? (
-    <Button
-      type="button"
-      variant="chip"
-      size="sm"
-      aria-label={t('sessions.sidebar.header.displayMode.label')}
-      title={t('sessions.sidebar.header.displayMode.label')}
-      onClick={() => setSortPanelOpen(true)}
-      style={{ touchAction: 'manipulation' }}
-    >
-      <Icon name="equalizer-2" className="size-4" />
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="chip"
+          size="sm"
+          aria-label={t('sessions.sidebar.header.displayMode.label')}
+          title={t('sessions.sidebar.header.displayMode.label')}
+          style={{ touchAction: 'manipulation' }}
+        >
+          <Icon name="equalizer-2" className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel>{t('mobile.sessions.viewMode.label')}</DropdownMenuLabel>
+        {VIEW_MODE_OPTIONS.map(([mode, labelKey]) => renderMenuChoice(mode, labelKey, sidebarViewMode === mode, () => handleViewModeChange(mode)))}
+        {/* Project order only means something while projects are groups. */}
+        {sidebarViewMode === 'timeline' ? null : (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>{t('sessions.sidebar.header.actions.sortProjects')}</DropdownMenuLabel>
+            {PROJECT_SORT_OPTIONS.map(([order, labelKey]) => renderMenuChoice(order, labelKey, projectSortOrder === order, () => handleProjectSortChange(order)))}
+          </>
+        )}
+        <DropdownMenuSeparator />
+        {renderMenuChoice('pinned', 'sessions.sidebar.header.displayMode.showPinned', showPinnedSection, handleTogglePinnedSection)}
+        {sessionWorkEnabled ? renderMenuChoice('work', 'sessions.sidebar.header.displayMode.showWork', showWorkSection, handleToggleWorkSection) : null}
+        {/* List rows always carry two lines; Tree keeps Pinned and In work on one unless asked. */}
+        {sidebarViewMode === 'timeline' ? null : renderMenuChoice('detailed', 'sessions.sidebar.header.displayMode.detailedZoneRows', detailedZoneRows, handleToggleDetailedZoneRows)}
+        {canEditOrder ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => setEditingOrder(true)} className={MOBILE_MENU_ITEM_CLASS}>
+              <span className="flex items-center gap-2">
+                <Icon name="drag-move-2" className="size-4" />
+                {t('mobile.sessions.editOrder')}
+              </span>
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   ) : null;
 
-  const editToggle = canEditOrder ? (
+  const doneEditingButton = editingOrder ? (
     <Button
       type="button"
       variant="chip"
       size="sm"
-      aria-label={editingOrder ? t('mobile.sessions.doneEditing') : t('mobile.sessions.editOrder')}
-      aria-pressed={editingOrder}
-      onClick={() => setEditingOrder((value) => !value)}
+      aria-label={t('mobile.sessions.doneEditing')}
+      aria-pressed
+      onClick={() => setEditingOrder(false)}
       style={{ touchAction: 'manipulation' }}
     >
-      {editingOrder ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
+      <RiCheckLine className="size-4" />
     </Button>
   ) : null;
 
@@ -1726,113 +2248,20 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     </Button>
   ) : null;
 
-  const displayMenu = !editingOrder ? (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="chip"
-          size="sm"
-          className="w-9 px-0"
-          aria-label={t('sessions.sidebar.header.displayMode.label')}
-          title={t('sessions.sidebar.header.displayMode.label')}
-        >
-          <Icon name="equalizer-2" className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-48">
-        <DropdownMenuItem onClick={togglePinnedSection} className="flex items-center justify-between">
-          <span>{t('sessions.sidebar.header.displayMode.showPinned')}</span>
-          {showPinnedSection ? <Icon name="check" className="size-4 text-primary" /> : null}
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={toggleChatsSection} className="flex items-center justify-between">
-          <span>{t('sessions.sidebar.header.displayMode.showChats')}</span>
-          {showChatsSection ? <Icon name="check" className="size-4 text-primary" /> : null}
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={toggleRecentSection} className="flex items-center justify-between">
-          <span>{t('sessions.sidebar.header.displayMode.showRecent')}</span>
-          {showRecentSection ? <Icon name="check" className="size-4 text-primary" /> : null}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  ) : null;
 
   // The new-session button keeps the outer right edge whatever else is showing:
   // it is the one action people reach for without looking, so it must not slide
   // around as the icons beside it come and go.
   const trailingActions =
-    newChatButton || addProjectButton || displayMenu || sortToggle || editToggle ? (
+    newChatButton || addProjectButton || sortToggle || doneEditingButton ? (
       <>
         {addProjectButton}
-        {displayMenu}
         {sortToggle}
-        {editToggle}
+        {doneEditingButton}
         {newChatButton}
       </>
     ) : null;
 
-  const renderActivitySection = ({
-    sectionKey,
-    bucketKey,
-    label,
-    icon,
-    bucket,
-    showWhenEmpty = false,
-  }: {
-    sectionKey: string;
-    bucketKey: string;
-    label: string;
-    icon: 'pushpin' | 'chat-4' | 'history';
-    bucket: WorktreeBucket;
-    showWhenEmpty?: boolean;
-  }): React.ReactNode => {
-    const rootCount = bucket.sessions.filter((session) => !getParentId(session)).length;
-    if (!showWhenEmpty && rootCount === 0) return null;
-    const expanded = projectExpandedMap[sectionKey] ?? true;
-    return (
-      <section className="border-t border-border/70 first:border-t-0">
-        <div className="flex min-h-12 w-full items-center">
-          <button
-            type="button"
-            className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
-            onClick={() => {
-              if (revealedRowId) {
-                handleRowKeyRevealedChange(revealedRowId, false);
-                return;
-              }
-              toggleProject(sectionKey, expanded);
-            }}
-            aria-expanded={expanded}
-            aria-label={expanded
-              ? t('sessions.sidebar.group.collapseAria', { label })
-              : t('sessions.sidebar.group.expandAria', { label })}
-            style={{ touchAction: 'manipulation' }}
-          >
-            <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-muted)] text-muted-foreground">
-              <Icon name={icon} className="size-4" />
-            </span>
-            <span className="block min-w-0 flex-1 truncate typography-ui-label font-semibold text-foreground">
-              {label}
-            </span>
-            <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
-              {rootCount}
-            </span>
-          </button>
-        </div>
-        {expanded ? (
-          <div className="pb-2">
-            {bucket.sessions.length > 0 ? (
-              renderBucketSessions(bucketKey, bucket, PROJECT_SESSION_INDENT)
-            ) : (
-              <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingLeft: PROJECT_SESSION_INDENT }}>
-                {t('sessions.sidebar.activity.chatsEmpty')}
-              </p>
-            )}
-          </div>
-        ) : null}
-      </section>
-    );
-  };
 
   // flex-1 + min-h-0 rather than h-full: both hosts put a fixed-height header
   // above this, so a 100% height overflows by exactly that header — and the
@@ -1929,7 +2358,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                       >
                         <button
                           type="button"
-                          className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-3 py-1.5 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                          className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-3 py-1.5 text-start transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                           onClick={() => handleSelectProject(project)}
                           style={{ touchAction: 'manipulation' }}
                         >
@@ -1942,7 +2371,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                           <NewWorktreeIconButton onClick={() => handleNewWorktree(project.id)} />
                         ) : null}
                         <NewSessionIconButton
-                          className="mr-2"
+                          className="me-2"
                           label={t('mobile.sessions.newSessionInProjectAria', { label: project.label })}
                           onClick={() => handleNewSessionInProject(project)}
                         />
@@ -1964,12 +2393,10 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                 >
                   <div className="flex flex-col gap-1.5">
                     {projectsMeta.map((project) => {
-                      const node = projectNodes.find((n) => n.project.id === project.id);
                       return (
                         <SortableProjectRow
                           key={project.id}
                           project={project}
-                          totalSessions={node?.totalSessions ?? 0}
                           expanded={reorderExpandedProjects.has(project.id)}
                           onToggleExpanded={() => toggleReorderProjectExpanded(project.id)}
                           onMoveWorktree={(path, toIndex, orderedPaths) => (
@@ -1984,38 +2411,64 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             </div>
           ) : (
             <div className="flex flex-col">
-              {showPinnedSection ? renderActivitySection({
-                sectionKey: PINNED_SECTION_KEY,
-                bucketKey: `${PINNED_SECTION_KEY}::${PINNED_SECTION_KEY}`,
-                label: t('mobile.sessions.section.pinned'),
-                icon: 'pushpin',
-                bucket: pinnedBucket,
-              }) : null}
-              {showChatsSection ? renderActivitySection({
-                sectionKey: CHAT_DRAFT_PROJECT_ID,
-                bucketKey: chatsBucketKey,
-                label: t('mobile.sessions.section.chats'),
-                icon: 'chat-4',
-                bucket: chatsBucket,
-                showWhenEmpty: true,
-              }) : null}
-              {showRecentSection ? renderActivitySection({
-                sectionKey: RECENT_SECTION_KEY,
-                bucketKey: `${RECENT_SECTION_KEY}::${RECENT_SECTION_KEY}`,
-                label: t('sessions.sidebar.activity.recentTitle'),
-                icon: 'history',
-                bucket: recentBucket,
-              }) : null}
-              {timelineActive ? (
-                <MobileTimelineList
-                  entries={timelineEntries}
-                  visibleCount={timelineVisibleCount}
-                  onRevealMore={revealMoreTimelineSessions}
-                  scrollRootRef={scrollerRef}
-                  handlers={timelineHandlers}
-                />
-              ) : null}
-              {timelineActive ? null : orderedNodes.map((node) => {
+              {(() => {
+                const chatsExpanded = projectExpandedMap[CHAT_DRAFT_PROJECT_ID] ?? true;
+                const chatsLabel = t('mobile.sessions.section.chats');
+                return (
+                  <section>
+                    <div className="flex min-h-12 w-full items-center">
+                      <button
+                        type="button"
+                        className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-start transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                        onClick={() => {
+                          if (revealedRowId) {
+                            handleRowKeyRevealedChange(revealedRowId, false);
+                            return;
+                          }
+                          toggleProject(CHAT_DRAFT_PROJECT_ID, chatsExpanded);
+                        }}
+                        aria-expanded={chatsExpanded}
+                        aria-label={
+                          chatsExpanded
+                            ? t('sessions.sidebar.group.collapseAria', { label: chatsLabel })
+                            : t('sessions.sidebar.group.expandAria', { label: chatsLabel })
+                        }
+                        style={{ touchAction: 'manipulation' }}
+                      >
+                        <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+                          <Icon name="chat-4" className="size-5" />
+                        </span>
+                        <span className="block min-w-0 flex-1 truncate typography-ui-header font-semibold text-foreground">
+                          {chatsLabel}
+                        </span>
+                        <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
+                          {chatRootCount}
+                        </span>
+                      </button>
+                      {/* No "+" here: the header's New chat starts the same chat. */}
+                    </div>
+                    <MobileDisclosure open={chatsExpanded}>{() => (
+                      <div className="pb-2">
+                        {chatsBucket.sessions.length > 0 ? (
+                          renderBucketSessions(
+                            chatsBucketKey,
+                            chatsBucket,
+                            null,
+                            { pageSize: CHAT_PAGE_SIZE, alwaysVisibleIds: pinnedChatIds },
+                          )
+                        ) : (
+                          <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingInlineStart: TIMELINE_CHAT_INDENT }}>
+                            {t('sessions.sidebar.activity.chatsEmpty')}
+                          </p>
+                        )}
+                      </div>
+                    )}</MobileDisclosure>
+                  </section>
+                );
+              })()}
+              {renderZoneSection(PINNED_SECTION_ID, 'pushpin', t('sessions.sidebar.activity.pinnedTitle'), pinnedTimelineEntries)}
+              {renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries)}
+              {orderedNodes.map((node) => {
                 const projectExpanded = isProjectExpanded(node);
                 const buckets = normalizedQuery
                   ? node.buckets.filter((bucket) =>
@@ -2026,10 +2479,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                   : node.buckets;
                 const activeWorktreePath = findActiveWorktreePath(node);
                 return (
-                  <section
-                    key={node.project.id}
-                    className="border-t border-border/70"
-                  >
+                  // Zones and projects are sections of equal weight, as on
+                  // desktop: same header size, no rule between them.
+                  <section key={node.project.id}>
                     <MobileSwipeActionsRow
                       actionsWidth={96}
                       revealed={revealedRowId === `project:${node.project.id}`}
@@ -2081,7 +2533,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                       <div data-active-project={node.isActive || undefined} className="flex min-h-12 w-full items-center">
                         <button
                           type="button"
-                          className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                          className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-start transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                           onClick={() => {
                             if (revealedRowId) {
                               handleRowKeyRevealedChange(revealedRowId, false);
@@ -2098,7 +2550,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                           style={{ touchAction: 'manipulation' }}
                         >
                           <MobileProjectIcon project={node.project} />
-                          <span className="block min-w-0 flex-1 truncate typography-ui-label font-semibold text-foreground">
+                          <span className="block min-w-0 flex-1 truncate typography-ui-header font-semibold text-foreground">
                             {node.project.label}
                           </span>
                         </button>
@@ -2106,14 +2558,24 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                           <NewWorktreeIconButton onClick={() => handleNewWorktree(node.project.id)} />
                         ) : null}
                         <NewSessionIconButton
-                          className="mr-2"
+                          className="me-2"
                           label={t('mobile.sessions.newSessionInProjectAria', { label: node.project.label })}
                           onClick={() => handleNewSessionInProject(node.project)}
                         />
                       </div>
                     </MobileSwipeActionsRow>
 
-                    {projectExpanded ? (
+                    <MobileDisclosure open={projectExpanded}>{() => timelineActive ? (
+                      <div className="pb-2">
+                        {/* A space without chats has no timeline row, so its header
+                            stands in for it, with its state, until its first chat;
+                            not before the sessions loaded, when every space looks empty. */}
+                        {(hasLoadedGlobalSessions ? buckets : []).filter((bucket) => bucket.space && bucket.sessions.length === 0).map((bucket) => (
+                          <div key={bucket.key} className="mt-1.5">{renderBucketHeader(node, bucket, false, activeWorktreePath)}</div>
+                        ))}
+                        {renderTimelineRows(`${node.project.id}::timeline`, timelineEntriesByProject.get(node.project.id) ?? [], false)}
+                      </div>
+                    ) : (
                       <div className="pb-2">
                         {(() => {
                           // Root (project-level) sessions always render as a flat list
@@ -2124,92 +2586,30 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                           return (
                             <>
                               {rootBucket && rootBucket.sessions.length > 0
-                                ? renderBucketSessions(`${node.project.id}::${rootBucket.key}`, rootBucket, PROJECT_SESSION_INDENT)
+                                ? renderBucketSessions(`${node.project.id}::${rootBucket.key}`, rootBucket, 0)
                                 : null}
                               {worktreeBuckets.map((bucket) => {
                                 const worktreeExpanded = isWorktreeExpanded(node, bucket);
-                                const isActiveWt = activeWorktreePath === bucket.path;
                                 return (
-                                  <div key={bucket.key}>
-                                    <MobileSwipeActionsRow
-                                      // A space has no delete-worktree action; its actions are a later stage.
-                                      actionsWidth={bucket.space ? 0 : 48}
-                                      revealed={revealedRowId === `wt:${bucket.key}`}
-                                      onRevealedChange={(nextRevealed) => handleRowKeyRevealedChange(`wt:${bucket.key}`, nextRevealed)}
-                                      actions={bucket.worktree ? (
-                                        <button
-                                          type="button"
-                                          tabIndex={revealedRowId === `wt:${bucket.key}` ? 0 : -1}
-                                          className="flex flex-1 items-center justify-center text-[var(--status-error)] transition-colors active:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-destructive"
-                                          aria-label={t('mobile.projectEdit.deleteWorktreeAria', { label: bucket.label })}
-                                          onClick={() => {
-                                            setRevealedRowId(null);
-                                            if (bucket.worktree) {
-                                              setWorktreeToDelete({ project: node.project, worktree: bucket.worktree });
-                                            }
-                                          }}
-                                          style={{ touchAction: 'manipulation' }}
-                                        >
-                                          <RiDeleteBinLine className="size-[18px]" />
-                                        </button>
-                                      ) : null}
-                                    >
-                                    <button
-                                      type="button"
-                                      className="flex min-h-10 w-full items-center gap-2 px-3 py-1 text-left transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                                      onClick={() => {
-                                        if (revealedRowId) {
-                                          handleRowKeyRevealedChange(revealedRowId, false);
-                                          return;
-                                        }
-                                        toggleWorktree(node.project.id, bucket.key, worktreeExpanded);
-                                      }}
-                                      aria-expanded={worktreeExpanded}
-                                      aria-label={
-                                        worktreeExpanded
-                                          ? t('sessions.sidebar.group.collapseAria', { label: bucket.label })
-                                          : t('sessions.sidebar.group.expandAria', { label: bucket.label })
-                                      }
-                                      style={{ touchAction: 'manipulation' }}
-                                    >
-                                      {/* Desktop visual language: muted semibold
-                                          branch label + git-branch icon, so
-                                          worktree headers recede while plain-
-                                          foreground session titles stand out. */}
-                                      <Icon
-                                        name={bucket.space ? 'box-3' : 'git-branch'}
-                                        className={cn(
-                                          'size-4 shrink-0',
-                                          isActiveWt ? 'text-primary' : 'text-muted-foreground',
-                                        )}
-                                      />
-                                      <span
-                                        className={cn(
-                                          'block min-w-0 flex-1 truncate typography-ui-label font-bold',
-                                          isActiveWt ? 'text-foreground' : 'text-muted-foreground',
-                                        )}
-                                      >
-                                        {bucket.label}
-                                      </span>
-                                      {isActiveWt ? (
-                                        <ActiveDot ariaLabel={t('mobile.sessions.activeWorktreeAria')} />
-                                      ) : null}
-                                      <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
-                                        {bucket.sessions.length}
-                                      </span>
-                                    </button>
-                                    </MobileSwipeActionsRow>
-                                    {worktreeExpanded
-                                      ? renderBucketSessions(`${node.project.id}::${bucket.key}`, bucket, PROJECT_SESSION_INDENT)
-                                      : null}
+                                  <WorktreeRemovalScope key={bucket.key} path={bucket.worktree?.path ?? null}>
+                                  {(removing) => (
+                                  // A small gap opens each worktree, as on desktop, so its
+                                  // sessions read as a group of their own.
+                                  <div className={cn('mt-1.5', removing && 'opacity-60')} aria-busy={removing || undefined}>
+                                    {renderBucketHeader(node, bucket, removing, activeWorktreePath)}
+                                    <MobileDisclosure open={worktreeExpanded}>
+                                      {() => renderBucketSessions(`${node.project.id}::${bucket.key}`, bucket, 1)}
+                                    </MobileDisclosure>
                                   </div>
+                                  )}
+                                  </WorktreeRemovalScope>
                                 );
                               })}
                             </>
                           );
                         })()}
                       </div>
-                    ) : null}
+                    )}</MobileDisclosure>
                   </section>
                 );
               })}
@@ -2254,7 +2654,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                   style={{ touchAction: 'manipulation' }}
                 >
                   <Icon name="download" className="size-5" />
-                  <span className="absolute right-2 top-2 inline-flex size-2 rounded-full bg-primary" aria-hidden />
+                  <span className="absolute inset-e-2 top-2 inline-flex size-2 rounded-full bg-primary" aria-hidden />
                 </Button>
               ) : null}
               <Button
@@ -2262,12 +2662,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                 variant="default"
                 size="lg"
                 className="w-10 px-0"
-                onClick={footer.onOpenUsage}
-                aria-label={t('usageStats.openAction')}
-                title={t('usageStats.openAction')}
+                onClick={footer.onOpenSourceBoard}
+                aria-label={t('sourceBoard.title')}
+                title={t('sourceBoard.title')}
                 style={{ touchAction: 'manipulation' }}
               >
-                <Icon name="bar-chart" className="size-5" />
+                <Icon name="todo" className="size-5" />
               </Button>
               <Button
                 type="button"
@@ -2281,6 +2681,43 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
               >
                 <Icon name="settings-3" className="size-5" />
               </Button>
+              {/* The pages opened less often share one menu, so the instance
+                  name keeps the width. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="lg"
+                    className="w-10 px-0"
+                    aria-label={t('mobile.sessions.footer.more')}
+                    title={t('mobile.sessions.footer.more')}
+                    style={{ touchAction: 'manipulation' }}
+                  >
+                    <Icon name="more" className="size-5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" align="end" className="w-56">
+                  <DropdownMenuItem onClick={footer.onOpenScheduled} className={MOBILE_MENU_ITEM_CLASS}>
+                    <span className="flex items-center gap-2">
+                      <Icon name="calendar-schedule" className="size-4" />
+                      {t('sessions.sidebar.header.actions.scheduledTasks')}
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={footer.onOpenArchive} className={MOBILE_MENU_ITEM_CLASS}>
+                    <span className="flex items-center gap-2">
+                      <Icon name="archive" className="size-4" />
+                      {t('sessions.sidebar.nav.archive')}
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={footer.onOpenUsage} className={MOBILE_MENU_ITEM_CLASS}>
+                    <span className="flex items-center gap-2">
+                      <Icon name="bar-chart" className="size-4" />
+                      {t('usageStats.openAction')}
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         ) : null}
@@ -2292,14 +2729,16 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
             setNewWorktreeDialogOpen(value);
             if (!value) setWorktreeDialogProjectId(null);
           }}
-          onWorktreeCreated={(worktreePath, options) => {
-            if (options?.sessionId) void setCurrentSession(options.sessionId, worktreePath);
-            else
-              openNewSessionDraft({
-                selectedProjectId: worktreeDialogProjectId,
-                directoryOverride: worktreePath,
-                preserveDirectoryOverride: true,
-              });
+          project={(() => {
+            const project = projectsMeta.find((entry) => entry.id === worktreeDialogProjectId);
+            return project ? { id: project.id, path: project.path } : undefined;
+          })()}
+          onWorktreeCreated={(worktreePath) => {
+            openNewSessionDraft({
+              selectedProjectId: worktreeDialogProjectId,
+              directoryOverride: worktreePath,
+              preserveDirectoryOverride: true,
+            });
             onOpenChange(false);
           }}
         />
@@ -2309,59 +2748,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           onClose={() => setEditingProjectId(null)}
           onWorktreesChanged={() => setWorktreeRefreshKey((value) => value + 1)}
         />
-        <MobileOverlayPanel
-          open={sortPanelOpen}
-          onClose={() => setSortPanelOpen(false)}
-          title={t('sessions.sidebar.header.displayMode.label')}
-        >
-          <div className="flex flex-col">
-            <span className="px-3 pb-1 pt-1 typography-micro font-semibold uppercase tracking-wider text-muted-foreground">
-              {t('mobile.sessions.viewMode.label')}
-            </span>
-            {VIEW_MODE_OPTIONS.map(([mode, labelKey]) => (
-              <button
-                key={mode}
-                type="button"
-                className={cn(
-                  'flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left transition-colors active:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                  sidebarViewMode === mode ? 'text-primary' : 'text-foreground',
-                )}
-                onClick={() => {
-                  handleViewModeChange(mode);
-                  setSortPanelOpen(false);
-                }}
-                style={{ touchAction: 'manipulation' }}
-              >
-                <span className="typography-ui-label">{t(labelKey)}</span>
-                {sidebarViewMode === mode ? <Icon name="check" className="size-4" /> : null}
-              </button>
-            ))}
-            {/* Project order only means something while projects are groups. */}
-            {sidebarViewMode === 'timeline' ? null : (
-              <span className="px-3 pb-1 pt-3 typography-micro font-semibold uppercase tracking-wider text-muted-foreground">
-                {t('sessions.sidebar.header.actions.sortProjects')}
-              </span>
-            )}
-            {sidebarViewMode === 'timeline' ? null : PROJECT_SORT_OPTIONS.map(([order, labelKey]) => (
-              <button
-                key={order}
-                type="button"
-                className={cn(
-                  'flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left transition-colors active:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                  projectSortOrder === order ? 'text-primary' : 'text-foreground',
-                )}
-                onClick={() => {
-                  handleProjectSortChange(order);
-                  setSortPanelOpen(false);
-                }}
-                style={{ touchAction: 'manipulation' }}
-              >
-                <span className="typography-ui-label">{t(labelKey)}</span>
-                {projectSortOrder === order ? <Icon name="check" className="size-4" /> : null}
-              </button>
-            ))}
-          </div>
-        </MobileOverlayPanel>
 
         {worktreeToDelete ? (
           <MobileDeleteWorktreeDialog
@@ -2379,10 +2765,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     if (!open) return null;
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-[var(--oc-header-height,56px)] shrink-0 items-center justify-between gap-2 border-b border-border/70 px-4">
-          <h2 className="truncate typography-ui-label font-semibold text-foreground">
-            {t('mobile.sessions.sheet.title')}
-          </h2>
+        {/* No title: the list below says what this is, and the actions need the width. */}
+        <div className="flex h-[var(--oc-header-height,56px)] shrink-0 items-center justify-end gap-2 border-b border-border/70 px-4">
           {trailingActions ? (
             <div className="flex shrink-0 items-center gap-2">{trailingActions}</div>
           ) : null}
@@ -2414,18 +2798,15 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       <div className="flex h-[var(--oc-header-height,56px)] shrink-0 items-center gap-2 px-3">
         <button
           type="button"
-          className="-ml-1 flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="-ms-1 flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t('mobile.surface.closeAria')}
           onClick={() => onOpenChange(false)}
           style={{ touchAction: 'manipulation' }}
         >
           <Icon name="close" className="size-5" />
         </button>
-        <h2 className="min-w-0 flex-1 truncate px-1 typography-ui-label font-semibold text-foreground">
-          {t('mobile.sessions.sheet.title')}
-        </h2>
         {trailingActions ? (
-          <div className="flex shrink-0 items-center gap-2">{trailingActions}</div>
+          <div className="ms-auto flex shrink-0 items-center gap-2">{trailingActions}</div>
         ) : null}
       </div>
       {surfaceContent}
@@ -2458,6 +2839,7 @@ const MobileSessionsDrawerContainer: React.FC<{
   ariaLabel: string;
   children: React.ReactNode;
 }> = ({ open, onClose, onSwipeClose, ariaLabel, children }) => {
+  const { direction } = useI18n();
   const rootRef = React.useRef<HTMLElement | null>(null);
   const drawerRef = React.useRef<HTMLElement>(null);
   const [entered, setEntered] = React.useState(false);
@@ -2472,12 +2854,13 @@ const MobileSessionsDrawerContainer: React.FC<{
     onSwipeCloseRef.current = onSwipeClose;
   }, [onSwipeClose]);
 
-  // Swipe from the drawer's right edge back toward the left = close, the
-  // reverse of the left-edge swipe that opened it from the chat. Rows inside
+  // Swipe from the drawer's end edge back toward its start = close, the
+  // reverse of the start-edge swipe that opened it from the chat. Rows inside
   // reveal their actions in the opposite direction, so the two never fight.
+  const closeFromEdge = () => (onSwipeCloseRef.current ?? onCloseRef.current)();
   useEdgeSwipe(drawerRef, {
     enabled: open,
-    onRightEdgeSwipe: () => (onSwipeCloseRef.current ?? onCloseRef.current)(),
+    ...(direction === 'rtl' ? { onLeftEdgeSwipe: closeFromEdge } : { onRightEdgeSwipe: closeFromEdge }),
   });
 
   if (typeof document !== 'undefined' && !rootRef.current) {
@@ -2506,7 +2889,7 @@ const MobileSessionsDrawerContainer: React.FC<{
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCloseRef.current();
+      if (event.key === 'Escape' && !isIMECompositionEvent(event)) onCloseRef.current();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
@@ -2529,7 +2912,7 @@ const MobileSessionsDrawerContainer: React.FC<{
         paddingTop: 'var(--oc-safe-area-top, 0px)',
         // Settled state drops the transform entirely so the drawer isn't kept
         // on a compositing layer (iOS clips those to the safe-area viewport).
-        transform: entered ? 'none' : 'translateX(-100%)',
+        transform: entered ? 'none' : direction === 'rtl' ? 'translateX(100%)' : 'translateX(-100%)',
         transition: `transform ${DRAWER_ENTER_DURATION_MS}ms ${DRAWER_EASING}`,
         visibility: visible ? 'visible' : 'hidden',
         pointerEvents: open ? 'auto' : 'none',

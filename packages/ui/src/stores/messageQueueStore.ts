@@ -15,13 +15,13 @@ import type { ContextPartMetadata } from '@/lib/messages/contextParts';
 
 export type FollowUpBehavior = 'steer' | 'queue';
 
-export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = 'queue';
+const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = 'queue';
 
-export const isFollowUpBehavior = (value: unknown): value is FollowUpBehavior => (
+const isFollowUpBehavior = (value: unknown): value is FollowUpBehavior => (
     value === 'steer' || value === 'queue'
 );
 
-export const normalizeFollowUpBehavior = (
+const normalizeFollowUpBehavior = (
     value: unknown,
     legacyQueueModeEnabled?: boolean | null,
 ): FollowUpBehavior => {
@@ -45,6 +45,13 @@ export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | '
     context?: QueuedContextPart[];
     /** Bounded display-only context summary retained in server projections. */
     contextPreview?: string;
+    /**
+     * The scheduled task whose run queued this item. The server delivers it, so
+     * the row offers no edit or delete and the composer leaves it out of an
+     * outgoing batch. `FollowUpQueueItem` and its parser must carry the field
+     * for the host projection to reach the UI.
+     */
+    scheduledTask?: { projectId: string; taskId: string };
 }
 
 /**
@@ -65,7 +72,11 @@ export type QueuedContextPart =
         kind: 'context';
         text: string;
         metadata: ContextPartMetadata;
-        /** Delivered as its own synthetic part right before this one (a linked PR's reading instructions). */
+        /**
+         * Delivered as its own synthetic part right before this one. Nothing writes it any
+         * more (attached PRs no longer carry review instructions); messages queued before
+         * that still do, and are delivered as they were captured.
+         */
         instructions?: string;
     }
     | {

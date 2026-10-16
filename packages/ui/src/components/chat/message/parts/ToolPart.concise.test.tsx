@@ -141,7 +141,7 @@ test('the concise transcript shows a call as Name(argument) over one result line
   const render = async (part: ToolPartData, isExpanded = false) => {
     await act(async () => {
       root.render(
-        <SyncProvider sdk={sdk} directory="">
+        <SyncProvider sdk={sdk} directory="/workspace">
           <I18nProvider>
             <ThemeSystemContext.Provider value={themeContext}>
               <ToolPart part={part} isExpanded={isExpanded} isMobile={false} onToggle={(id) => { toggled.push(id); }} />

@@ -158,5 +158,4 @@ export type NativeExecutionTask = z.infer<typeof nativeExecutionTaskSchema>;
 export type NativeTaskSnapshot = z.infer<typeof nativeTaskSnapshotSchema>;
 export type NativeTaskOutput = z.infer<typeof nativeTaskOutputSchema>;
 export type NativePlanSnapshot = z.infer<typeof nativePlanSnapshotSchema>;
-export type NativeTodoItem = z.infer<typeof nativeTodoSchema>;
 export type NativeTodosSnapshot = z.infer<typeof nativeTodosSnapshotSchema>;

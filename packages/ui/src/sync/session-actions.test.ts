@@ -19,6 +19,9 @@ let sessionDeleteResult: Promise<boolean> = Promise.resolve(true)
 let sessionGetResult: Promise<Session> | null = null
 const sessionDeleteCalls: Array<{ sessionId: string; directory?: string | null }> = []
 const sessionMessageRecords = new Map<string, Array<{ info: Message; parts: Part[] }>>()
+// Optional cursor pages for getSessionMessages: the request's cursor selects
+// the page by index, so a paged lookup can be pinned without the flat records.
+let cursorMessagePages: Array<{ items: Array<{ info: Message; parts: Part[] }>; cursor: { next?: string } }> | null = null
 const sessionRecords = new Map<string, Session>()
 const failingRevertSessionIds = new Set<string>()
 let sessionDeleteError: unknown | null = null
@@ -27,6 +30,8 @@ let sessionForkError: Error | null = null
 let beforeSessionForkResolve: (() => void) | null = null
 const selectedSessions: Array<{ sessionId: string | null; directoryHint?: string | null }> = []
 let beforeSessionDeleteResolve: ((sessionId: string) => void) | null = null
+// Lets a test switch runtime while a session read is in flight.
+let beforeSessionGetResolve: (() => void) | null = null
 const sessionMoveErrorsById = new Map<string, Error>()
 let globalHasLoaded = true
 const deletedChatDirectories: string[] = []
@@ -49,7 +54,7 @@ let unarchiveBatchResponse: MockRouteResponse = {
   body: { error: 'not found' },
 }
 let activeStatusSnapshot: Record<string, SessionStatus> | null = {}
-let readActiveStatusSnapshot = async () => activeStatusSnapshot
+let readActiveStatusSnapshot: (directory?: string | null) => Promise<Record<string, SessionStatus> | null> = async () => activeStatusSnapshot
 const deletedCleanupIdentities: Array<{ runtimeKey: string; directory: string; sessionId: string }> = []
 const movedSessionDirectories: Array<{ sessionID: string; directory: string }> = []
 const globalArchivedSessions: Session[] = []
@@ -76,10 +81,11 @@ mock.module("@/lib/opencode/client", () => ({
   opencodeClient: {
     getDirectory: () => "/test/project",
     getSdkClient: () => actionClient,
-    getActiveSessionStatuses: mock(() => readActiveStatusSnapshot()),
+    getActiveSessionStatuses: mock((directory?: string | null) => readActiveStatusSnapshot(directory)),
     getSession: mock(async (sessionId: string, directory?: string | null): Promise<Session> => {
       replyCalls.push({ method: "session.get", params: { sessionID: sessionId, directory } })
       if (sessionGetResult) return sessionGetResult
+      beforeSessionGetResolve?.()
       const record = sessionRecords.get(sessionId)
       if (!record) throw notFound("Session")
       return record
@@ -89,8 +95,10 @@ mock.module("@/lib/opencode/client", () => ({
       options?: { limit?: number; cursor?: string },
       directory?: string | null,
     ) => {
-      replyCalls.push({ method: "session.messages", params: { sessionID: sessionId, directory, limit: options?.limit } })
+      replyCalls.push({ method: "session.messages", params: { sessionID: sessionId, directory, limit: options?.limit, cursor: options?.cursor } })
       if (sessionMessagesResult.outcome === "failure") throw sessionMessagesResult.error
+      const page = cursorMessagePages ? cursorMessagePages[Number(options?.cursor ?? "0")] : undefined
+      if (page) return page
       return { items: sessionMessageRecords.get(sessionId) ?? sessionMessagesResult.records, cursor: {} }
     }),
     createSession: mock(async (params: Record<string, unknown>, directory?: string | null): Promise<Session> => {
@@ -131,9 +139,6 @@ mock.module("@/lib/opencode/client", () => ({
       const record = sessionRecords.get(sessionId)
       sessionRecords.set(sessionId, { ...(record ?? sessionFixture(sessionId)), revert: { messageID: messageId } })
       return { messageID: messageId }
-    }),
-    commitRevert: mock(async (sessionId: string, directory?: string | null) => {
-      replyCalls.push({ method: "session.revert.commit", params: { sessionID: sessionId, directory } })
     }),
     forkSession: mock(async (
       sessionId: string,
@@ -280,6 +285,7 @@ mock.module("@/stores/useGlobalSessionsStore", () => ({
     getState: () => ({
       activeSessions: globalActiveSessions,
       archivedSessions: globalArchivedSessions,
+      entityById: new Map([...globalActiveSessions, ...globalArchivedSessions].map((session) => [session.id, session])),
       hasLoaded: globalHasLoaded,
       upsertSession: (session: unknown) => {
         globalUpsertedSessions.push(session)
@@ -499,6 +505,30 @@ describe("moveSessionToDirectory", () => {
     expect(destination.getState().session).toHaveLength(0)
     expect(destination.getState().message["session-a"]).toBe(undefined)
     expect(destination.getState().part["message-a"]).toBe(undefined)
+  })
+
+  test("keeps the move the session.moved event already applied", async () => {
+    const message = { id: "message-a", sessionID: "session-a", role: "user", time: { created: 1 } } as Message
+    const requested = { id: "session-a", title: "Before", directory: "/source" } as Session
+    const source = createStore({}, {
+      session: [{ ...requested, title: "Renamed", directory: "/destination" } as Session],
+      sessionTotal: 1,
+      message: { "session-a": [message] },
+    })
+    const destination = createStore({})
+    const childStores = createChildStores([["/source", source], ["/destination", destination]])
+    const { adoptSessionMove, moveSessionToDirectory, setActionRefs } = await import("./session-actions")
+    setActionRefs(childStores, () => "/source")
+
+    adoptSessionMove("session-a", "/source", "/destination")
+    await moveSessionToDirectory(requested, "/source", "/destination")
+
+    expect(source.getState().session).toHaveLength(0)
+    expect(destination.getState().session).toHaveLength(1)
+    expect(destination.getState().session[0]?.title).toBe("Renamed")
+    expect(destination.getState().sessionTotal).toBe(1)
+    expect(destination.getState().message["session-a"]?.[0]?.id).toBe("message-a")
+    expect((globalUpsertedSessions.at(-1) as Session).title).toBe("Renamed")
   })
 })
 
@@ -1074,6 +1104,43 @@ describe("session restore (unarchive)", () => {
     expect(rank ?? 0).toBeGreaterThan(0)
   })
 
+  test("restores a parent together with its archived subsessions", async () => {
+    const parent = restored("parent", "/test/project")
+    globalArchivedSessions.push(
+      { ...sessionFixture("child"), directory: "/test/project", parentID: "parent", time: { created: 1, updated: 1, archived: 5 } } as unknown as Session,
+      { ...sessionFixture("grandchild"), directory: "/test/project", parentID: "child", time: { created: 1, updated: 1, archived: 5 } } as unknown as Session,
+    )
+    beforeArchiveRouteResolve = (path) => {
+      if (!path.endsWith("/unarchive")) return
+      const ids = openchamberRouteRequests.at(-1)?.body.ids
+      const id = Array.isArray(ids) ? String(ids[0]) : ""
+      unarchiveBatchResponse = { status: 200, body: { restored: [id === "parent" ? parent : { id, archivedAt: null }], failedIds: [] } }
+    }
+    const source = createStore({}, { session: [] })
+    const { unarchiveSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
+
+    expect(await unarchiveSession("parent")).toBe(true)
+    expect(openchamberRouteRequests.map((request) => request.body.ids)).toEqual([["parent"], ["child"], ["grandchild"]])
+  })
+
+  test("never restores a subsession on its own", async () => {
+    globalArchivedSessions.push(
+      { ...sessionFixture("child"), directory: "/test/project", parentID: "parent", time: { created: 1, updated: 1, archived: 5 } } as unknown as Session,
+    )
+    unarchiveBatchResponse = { status: 200, body: { restored: [{ id: "child", archivedAt: null }], failedIds: [] } }
+    const source = createStore({}, { session: [] })
+    const { unarchiveSession, unarchiveSessions, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
+
+    expect(await unarchiveSession("child")).toBe(false)
+    expect(await unarchiveSessions(["child"])).toEqual({ restoredIds: [], failedIds: ["child"] })
+    expect(openchamberRouteRequests).toEqual([])
+
+    // Undo puts back exactly what an archive just moved, subsessions included.
+    expect(await unarchiveSessions(["child"], { undo: true })).toEqual({ restoredIds: ["child"], failedIds: [] })
+  })
+
   test("archive then immediately restore recovers the running status instead of treating an old snapshot as idle", async () => {
     archiveBatchResponse = { status: 200, body: { archived: [{ id: "session-a", archivedAt: 2 }], failedIds: [] } }
     unarchiveBatchResponse = { status: 200, body: { restored: [restored("session-a", "/test/project")], failedIds: [] } }
@@ -1090,6 +1157,26 @@ describe("session restore (unarchive)", () => {
     expect(source.getState().session_status["session-a"]).toBeUndefined()
     expect(source.getState().sessionStatusInvalidated?.["session-a"]).toBe(true)
     expect(await unarchiveSession("session-a")).toBe(true)
+    expect(source.getState().session_status["session-a"]).toEqual({ type: "busy" })
+    expect(source.getState().sessionStatusInvalidated?.["session-a"]).toBeUndefined()
+  })
+
+  test("reads the owning space's status before settling a restored session", async () => {
+    const spaceDirectory = "/spaces/a1b2c3d4e5f6/app"
+    unarchiveBatchResponse = { status: 200, body: { restored: [restored("session-a", spaceDirectory)], failedIds: [] } }
+    const source = createStore({}, { sessionStatusReady: true, sessionStatusInvalidated: { "session-a": true } })
+    const statusReadDirectories: Array<string | null | undefined> = []
+    readActiveStatusSnapshot = async (directory): Promise<Record<string, SessionStatus>> => {
+      expect(source.getState().sessionStatusInvalidated?.["session-a"]).toBe(true)
+      expect(source.getState().session_status["session-a"]).toBeUndefined()
+      statusReadDirectories.push(directory)
+      return directory === spaceDirectory ? { "session-a": { type: "busy" } } : {}
+    }
+    const { unarchiveSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([[spaceDirectory, source]]), () => "/test/project")
+
+    expect(await unarchiveSession("session-a")).toBe(true)
+    expect(statusReadDirectories).toEqual([spaceDirectory])
     expect(source.getState().session_status["session-a"]).toEqual({ type: "busy" })
     expect(source.getState().sessionStatusInvalidated?.["session-a"]).toBeUndefined()
   })
@@ -1793,6 +1880,123 @@ describe("optimisticSend target directory", () => {
     })).rejects.toThrow("rejected")
 
     expect(appendCalls).toBe(1)
+  })
+
+  test("shows context before the prompt at once and hands the same ids to the send", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+    const added: Message[] = []
+    const removed: string[] = []
+    let sent: { messageID: string; contextIDs: Array<string | undefined> } | null = null
+
+    const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
+    setActionRefs(childStores, () => "/target/project")
+    setOptimisticRefs(
+      (input) => {
+        added.push(input.message)
+      },
+      (input) => {
+        removed.push(input.messageID)
+      },
+    )
+
+    const metadata = { openchamberContext: { kind: "chat-quote" as const, quote: "q", text: "t", messageId: "m" } }
+    await expect(optimisticSend({
+      sessionId: "session-context",
+      directory: "/target/project",
+      content: "",
+      context: [{ text: "first", metadata }, { text: "  " }, { text: "second" }],
+      send: async (messageID, context) => {
+        sent = { messageID, contextIDs: context.map((item) => item.id) }
+        throw new Error("rejected")
+      },
+    })).rejects.toThrow("rejected")
+
+    // The blank item gets no record, the others come first with the prompt's time.
+    expect(added.map((message) => message.role)).toEqual(["synthetic", "synthetic", "user"])
+    expect(new Set(added.map((message) => message.time.created)).size).toBe(1)
+    expect(added[0]?.metadata).toEqual(metadata)
+    const ids = added.map((message) => message.id)
+    expect([...ids].sort()).toEqual(ids)
+    expect(sent).toEqual({ messageID: ids[2], contextIDs: [ids[0], ids[1]] })
+    // A rejected send takes the context records down with the prompt.
+    expect(removed).toEqual(ids)
+  })
+
+  test("shows the prompt before late leading context resolves and admits that context first", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+    const added: Message[] = []
+    const removed: string[] = []
+    let sent: { messageID: string; contextIDs: Array<string | undefined>; texts: string[] } | null = null
+    let resolveLeading: (value: { text: string } | null) => void = () => {}
+    const leadingContext = new Promise<{ text: string } | null>((resolve) => { resolveLeading = resolve })
+
+    const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
+    setActionRefs(childStores, () => "/target/project")
+    setOptimisticRefs(
+      (input) => {
+        added.push(input.message)
+      },
+      (input) => {
+        removed.push(input.messageID)
+      },
+    )
+
+    const sending = optimisticSend({
+      sessionId: "session-leading",
+      directory: "/target/project",
+      content: "hello",
+      context: [{ text: "quoted" }],
+      leadingContext,
+      send: async (messageID, context) => {
+        sent = { messageID, contextIDs: context.map((item) => item.id), texts: context.map((item) => item.text) }
+        throw new Error("rejected")
+      },
+    })
+    for (let tick = 0; tick < 50 && !added.some((message) => message.role === "user"); tick += 1) {
+      await Promise.resolve()
+    }
+
+    // The bubble is on screen while the knowledge is still on its way, and
+    // nothing has been sent without it.
+    expect(added.map((message) => message.role)).toEqual(["synthetic", "user"])
+    expect(sent).toBe(null)
+
+    resolveLeading({ text: "pinned knowledge" })
+    await expect(sending).rejects.toThrow("rejected")
+
+    expect(added.map((message) => message.role)).toEqual(["synthetic", "user", "synthetic"])
+    const [quoted, prompt, leading] = added.map((message) => message.id)
+    // Reserved before the other ids, so it still sorts first.
+    expect(leading < quoted && quoted < prompt).toBe(true)
+    expect(sent).toEqual({ messageID: prompt, contextIDs: [leading, quoted], texts: ["pinned knowledge", "quoted"] })
+    // A rejected send leaves no optimistic record behind, the late one included.
+    expect([...removed].sort()).toEqual([leading, quoted, prompt])
+  })
+
+  test("sends without a leading record when the late context is empty", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+    const added: Message[] = []
+    let sentContext: string[] | null = null
+
+    const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
+    setActionRefs(childStores, () => "/target/project")
+    setOptimisticRefs((input) => { added.push(input.message) }, () => {})
+
+    await optimisticSend({
+      sessionId: "session-leading-empty",
+      directory: "/target/project",
+      content: "hello",
+      leadingContext: Promise.resolve(null),
+      send: async (_messageID, context) => {
+        sentContext = context.map((item) => item.text)
+      },
+    })
+
+    expect(added.map((message) => message.role)).toEqual(["user"])
+    expect(sentContext).toEqual([])
   })
 
   test("runs appendSubmissions once for an ambiguous confirmation", async () => {
@@ -2518,7 +2722,7 @@ describe("forkAfterMessage", () => {
   }
   const forkedSession: Session = { ...sourceSession, id: "session-fork", title: "Forked session" }
   // SAFETY: forkAfterMessage reads only id and role; the rest of the message shape is irrelevant here.
-  const message = (id: string, role: "user" | "assistant") => ({ id, role, sessionID: sourceSession.id, time: { created: 1 } }) as Message
+  const message = (id: string, role: "user" | "assistant" | "compaction") => ({ id, role, sessionID: sourceSession.id, time: { created: 1 } }) as Message
   const transcript = [
     message("msg-user-1", "user"),
     message("msg-answer-1", "assistant"),
@@ -2550,6 +2754,20 @@ describe("forkAfterMessage", () => {
     expect(selectedSessions).toEqual([{ sessionId: forkedSession.id, directoryHint: sourceSession.directory }])
     expect(source.getState().session).toEqual([sourceSession, forkedSession])
     expect(inputState.pendingComposerRestore).toBeNull()
+  })
+
+  test("leaves a compaction that followed the answer out of the fork", async () => {
+    const compacted = [...transcript.slice(0, 2), message("msg-compaction", "compaction"), ...transcript.slice(2)]
+    const source = createStore({}, { session: [sourceSession], message: { [sourceSession.id]: compacted } })
+    const { forkAfterMessage, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)
+
+    await forkAfterMessage(sourceSession.id, "msg-answer-1")
+
+    expect(replyCalls).toEqual([{
+      method: "session.fork",
+      params: { sessionID: sourceSession.id, messageID: "msg-compaction", directory: sourceSession.directory },
+    }])
   })
 
   test("copies the whole transcript when the answer is the last message", async () => {
@@ -2586,9 +2804,9 @@ describe("forkFromLastCompletedTurn", () => {
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1, updated: 1 },
   }
-  // SAFETY: the turn lookup reads only id, role, and time.completed.
-  const message = (id: string, role: "user" | "assistant", completed?: number) =>
-    ({ id, role, sessionID: sourceSession.id, time: completed === undefined ? { created: 1 } : { created: 1, completed } }) as Message
+  // SAFETY: the turn lookup reads only id, role, time.completed, and finish.
+  const message = (id: string, role: "user" | "assistant", completed?: number, finish?: "stop" | "tool-calls") =>
+    ({ id, role, sessionID: sourceSession.id, finish, time: completed === undefined ? { created: 1 } : { created: 1, completed } }) as Message
 
   beforeEach(() => {
     replyCalls.length = 0
@@ -2641,6 +2859,114 @@ describe("forkFromLastCompletedTurn", () => {
     await expect(forkFromLastCompletedTurn(sourceSession.id)).rejects.toThrow(NothingToForkError)
     expect(replyCalls).toEqual([])
     expect(selectedSessions).toEqual([])
+  })
+
+  // OpenCode 2 opens turns without a user prompt too; the lookup must not
+  // treat those openers as part of the finished turn before them.
+  // SAFETY: the boundary lookup reads only role, time, and metadata; this
+  // fixture carries exactly the synthetic report fields readSubagentRun parses.
+  const subagentReport = {
+    id: "msg-subagent-report",
+    role: "synthetic",
+    sessionID: sourceSession.id,
+    time: { created: 1 },
+    metadata: { source: "subagent", childID: "child-1", state: "completed" },
+    text: "<subagent>\nchild done\n</subagent>",
+  } as Message
+  // SAFETY: the boundary lookup reads only role and time; compaction is a
+  // TURN_BOUNDARY_ROLES member, so no other Message field is dereferenced.
+  const compactionOpener = {
+    id: "msg-compaction-opener",
+    role: "compaction",
+    sessionID: sourceSession.id,
+    time: { created: 1 },
+  } as Message
+  // SAFETY: the boundary lookup reads only role and time; shell is a
+  // TURN_BOUNDARY_ROLES member, so no other Message field is dereferenced.
+  const shellOpener = {
+    id: "msg-shell-opener",
+    role: "shell",
+    sessionID: sourceSession.id,
+    time: { created: 1 },
+  } as Message
+
+  test("finds the finished reply when the running turn resumed from a background subagent", async () => {
+    const { findLastCompletedTurnMessageId } = await import("./session-actions")
+    const transcript = [message("u1", "user"), message("a1", "assistant", 2), subagentReport, message("a-live", "assistant")]
+    expect(findLastCompletedTurnMessageId(transcript, true)).toBe("a1")
+  })
+
+  test("finds the finished reply when the running turn was opened by a compaction", async () => {
+    const { findLastCompletedTurnMessageId } = await import("./session-actions")
+    const transcript = [message("u1", "user"), message("a1", "assistant", 2), compactionOpener, message("a-live", "assistant")]
+    expect(findLastCompletedTurnMessageId(transcript, true)).toBe("a1")
+  })
+
+  test("finds the finished reply when the running turn was opened by a shell run", async () => {
+    const { findLastCompletedTurnMessageId } = await import("./session-actions")
+    const transcript = [message("u1", "user"), message("a1", "assistant", 2), shellOpener, message("a-live", "assistant")]
+    expect(findLastCompletedTurnMessageId(transcript, true)).toBe("a1")
+  })
+
+  // OpenCode steers these into a turn that is still running: they arrive right
+  // after a step that ended on tool calls, so they do not open a new turn.
+  test("does not treat a report steered into the running turn as its opener", async () => {
+    const { findLastCompletedTurnMessageId } = await import("./session-actions")
+    const transcript = [
+      message("u1", "user"),
+      message("a1", "assistant", 2, "stop"),
+      message("u2", "user"),
+      message("a2", "assistant", 3, "tool-calls"),
+      subagentReport,
+      message("a-live", "assistant"),
+    ]
+    expect(findLastCompletedTurnMessageId(transcript, true)).toBe("a1")
+  })
+
+  test("does not treat a compaction inside the running turn as its opener", async () => {
+    const { findLastCompletedTurnMessageId } = await import("./session-actions")
+    const transcript = [
+      message("u1", "user"),
+      message("a1", "assistant", 2, "stop"),
+      message("u2", "user"),
+      message("a2", "assistant", 3, "tool-calls"),
+      compactionOpener,
+      message("a-live", "assistant"),
+    ]
+    expect(findLastCompletedTurnMessageId(transcript, true)).toBe("a1")
+  })
+
+  test("does not treat a prompt typed during the running turn as its opener", async () => {
+    const { findLastCompletedTurnMessageId } = await import("./session-actions")
+    const transcript = [
+      message("u1", "user"),
+      message("a1", "assistant", 2, "stop"),
+      message("u2", "user"),
+      message("a2", "assistant", 3, "tool-calls"),
+      message("u3", "user"),
+      message("a-live", "assistant"),
+    ]
+    expect(findLastCompletedTurnMessageId(transcript, true)).toBe("a1")
+  })
+
+  test("forks from the finished reply while a subagent-resumed turn streams", async () => {
+    const transcript = [message("u1", "user"), message("a1", "assistant", 2), subagentReport, message("a-live", "assistant")]
+    const source = createStore({}, {
+      session: [sourceSession],
+      message: { [sourceSession.id]: transcript },
+      session_status: { [sourceSession.id]: { type: "busy" } },
+    })
+    const { forkFromLastCompletedTurn, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)
+
+    await forkFromLastCompletedTurn(sourceSession.id)
+
+    // Cut at the subagent report: the finished reply is kept, the in-flight
+    // turn after it is not copied into the fork.
+    expect(replyCalls).toEqual([{
+      method: "session.fork",
+      params: { sessionID: sourceSession.id, messageID: "msg-subagent-report", directory: sourceSession.directory },
+    }])
   })
 })
 
@@ -2771,6 +3097,41 @@ describe("revertToMessage passes session directory", () => {
     ])
   })
 
+  test("reverting a subagent run report reverts its child from the start and leaves the composer alone", async () => {
+    const earlier = { id: "root-context", sessionID: "root", role: "synthetic", time: { created: 5 }, text: "ctx" } as Message
+    const report = {
+      id: "root-report",
+      sessionID: "root",
+      role: "synthetic",
+      time: { created: 40 },
+      text: "done",
+      metadata: { source: "subagent", childID: "child", state: "completed" },
+    } as Message
+    const sessions = [
+      { ...sessionFixture("root"), directory: "/tree", time: { created: 1, updated: 1 } },
+      { ...sessionFixture("child"), parentID: "root", directory: "/tree", time: { created: 10, updated: 10 } },
+    ] as Session[]
+    const store = createStore({}, { session: sessions, message: { root: [earlier, report] } })
+    sessionMessageRecords.set("child", [
+      { info: { id: "child-prompt", sessionID: "child", role: "user", time: { created: 11 } } as Message, parts: [] },
+    ])
+    inputState.pendingInputText = "still typing"
+
+    const { setActionRefs, revertToMessage } = await import("./session-actions")
+    setActionRefs(createChildStores([["/tree", store]]), () => "/tree")
+
+    await revertToMessage("root", "root-report")
+
+    expect(replyCalls.filter((call) => call.method === "session.revert.stage").map((call) => [
+      call.params.sessionID,
+      call.params.messageID,
+    ])).toEqual([
+      ["child", "child-prompt"],
+      ["root", "root-report"],
+    ])
+    expect(inputState.pendingInputText).toBe("still typing")
+  })
+
   test("continues reverting other descendants and the parent when one child fails", async () => {
     const rootMessage = { id: "root-cutoff", sessionID: "root", role: "user", time: { created: 20 } } as Message
     const sessions = [
@@ -2835,6 +3196,51 @@ describe("revertToMessage passes session directory", () => {
       "idle-child",
       "root",
     ])
+  })
+})
+
+describe("revertToMessage paged message lookup", () => {
+  beforeEach(() => {
+    replyCalls.length = 0
+    sessionMessageRecords.clear()
+    sessionRecords.clear()
+    failingRevertSessionIds.clear()
+    cursorMessagePages = null
+    Object.assign(inputState, {
+      pendingInputText: "",
+      pendingInputMode: "replace",
+      attachedFiles: [],
+    })
+  })
+
+  test("stages the revert when the target message is only on a later page", async () => {
+    const session = sessionFixture("session-a")
+    sessionRecords.set(session.id, session)
+    const newer: Message = { id: "msg_newer", sessionID: "session-a", role: "user", time: { created: 3 } }
+    const older: Message = { id: "msg_old", sessionID: "session-a", role: "user", time: { created: 1 } }
+    const sessionStore = createStore({}, {
+      session: [session],
+      message: { "session-a": [newer] },
+      part: {},
+    })
+    const currentStore = createStore({})
+    const childStores = createChildStores([
+      ["/test/project", sessionStore],
+      ["/current/project", currentStore],
+    ])
+    // The local store holds only the newest page; the target sits behind a cursor.
+    cursorMessagePages = [
+      { items: [{ info: newer, parts: [] }], cursor: { next: "1" } },
+      { items: [{ info: older, parts: [] }], cursor: {} },
+    ]
+    const { setActionRefs, revertToMessage } = await import("./session-actions")
+    setActionRefs(childStores, () => "/current/project")
+
+    await revertToMessage("session-a", "msg_old")
+
+    expect(replyCalls.find((call) => call.method === "session.revert.stage")?.params.messageID).toBe("msg_old")
+    expect(sessionStore.getState().session[0]?.revert?.messageID).toBe("msg_old")
+    expect(replyCalls.filter((call) => call.method === "session.messages")).toHaveLength(2)
   })
 })
 
@@ -3203,6 +3609,7 @@ describe("dismissOpenFormsForSession", () => {
   beforeEach(() => {
     replyCalls.length = 0
     formReplyError = null
+    formCancelError = null
   })
 
   test("returns false and rejects nothing when no forms are pending", async () => {
@@ -3270,6 +3677,34 @@ describe("dismissOpenFormsForSession", () => {
     // The stale entry is cleared from the store even though the server reported not-found.
     expect(store.getState().form["session-a"]).toBe(undefined)
   })
+
+  test("puts the forms back when the cancel fails for another reason (#2448)", async () => {
+    const rootForm = buildForm("q-root", "session-a")
+    const childForm = buildForm("q-child", "session-child")
+    const store = createStore({}, {
+      session: [sessionFixture("session-a")],
+      form: { "session-a": [rootForm] },
+    })
+    // The subagent's session lives in its own worktree store.
+    const worktreeStore = createStore({}, {
+      session: [{ ...sessionFixture("session-child"), parentID: "session-a" }],
+      form: { "session-child": [childForm] },
+    })
+    const childStores = createChildStores([["/test/project", store], ["/test/project/wt", worktreeStore]])
+    formCancelError = Object.assign(new Error("session.form.cancel failed (500): unexpected status"), { status: 500 })
+
+    const { setActionRefs, dismissOpenFormsForSession } = await import("./session-actions")
+    setActionRefs(childStores, () => "/test/project")
+
+    const dismissed = await dismissOpenFormsForSession("session-a")
+
+    expect(dismissed).toBe(true)
+    // The agent is still waiting on both forms, so each goes back to the store it came from.
+    expect(store.getState().form["session-a"]).toEqual([rootForm])
+    expect(store.getState().form["session-child"]).toBe(undefined)
+    expect(worktreeStore.getState().form["session-child"]).toEqual([childForm])
+    expect(worktreeStore.getState().form["session-a"]).toBe(undefined)
+  })
 })
 
 describe("dismissPermission not-found handling", () => {
@@ -3304,6 +3739,32 @@ describe("dismissPermission not-found handling", () => {
 
     await expect(dismissPermission("session-a", "perm-500")).rejects.toThrow()
     // A non-not-found failure leaves store reconciliation to the next server event.
+    expect(store.getState().permission["session-a"]).toHaveLength(1)
+  })
+
+  test("an allow on a permission the server no longer has clears the card", async () => {
+    const permission = buildPermission("perm-stale", "session-a")
+    const store = createStore({ "session-a": [permission] })
+    const childStores = createChildStores([["/test/project", store]])
+    permissionReplyError = Object.assign(new Error("permission.reply failed (404): PermissionNotFoundError"), { status: 404 })
+
+    const { setActionRefs, respondToPermission } = await import("./session-actions")
+    setActionRefs(childStores, () => "/test/project")
+
+    await expect(respondToPermission("session-a", "perm-stale", "once")).rejects.toThrow()
+    expect(store.getState().permission["session-a"]).toBe(undefined)
+  })
+
+  test("an allow that fails for another reason keeps the card", async () => {
+    const permission = buildPermission("perm-500", "session-a")
+    const store = createStore({ "session-a": [permission] })
+    const childStores = createChildStores([["/test/project", store]])
+    permissionReplyError = Object.assign(new Error("permission.reply failed (500)"), { status: 500 })
+
+    const { setActionRefs, respondToPermission } = await import("./session-actions")
+    setActionRefs(childStores, () => "/test/project")
+
+    await expect(respondToPermission("session-a", "perm-500", "once")).rejects.toThrow()
     expect(store.getState().permission["session-a"]).toHaveLength(1)
   })
 })
@@ -3406,4 +3867,90 @@ describe("dismissOpenPermissionsForSession", () => {
       console.error = originalError
     }
   })
+
+  test("puts the permissions back when the reject fails for another reason", async () => {
+    const rootPermission = buildPermission("perm-root", "session-a")
+    const childPermission = buildPermission("perm-child", "session-child")
+    const store = createStore({ "session-a": [rootPermission] }, {
+      session: [sessionFixture("session-a")],
+    })
+    // The subagent's session lives in its own worktree store.
+    const worktreeStore = createStore({ "session-child": [childPermission] }, {
+      session: [{ ...sessionFixture("session-child"), parentID: "session-a" }],
+    })
+    const childStores = createChildStores([["/test/project", store], ["/test/project/wt", worktreeStore]])
+    permissionReplyError = Object.assign(new Error("permission.reply failed (500): unexpected status"), { status: 500 })
+
+    const { setActionRefs, dismissOpenPermissionsForSession } = await import("./session-actions")
+    setActionRefs(childStores, () => "/test/project")
+
+    const originalError = console.error
+    console.error = () => {}
+    let dismissed: boolean
+    try {
+      dismissed = await dismissOpenPermissionsForSession("session-a")
+    } finally {
+      console.error = originalError
+    }
+
+    expect(dismissed).toBe(true)
+    // The agent is still waiting on both permissions, so each goes back to the store it came from.
+    expect(store.getState().permission["session-a"]).toEqual([rootPermission])
+    expect(store.getState().permission["session-child"]).toBe(undefined)
+    expect(worktreeStore.getState().permission["session-child"]).toEqual([childPermission])
+    expect(worktreeStore.getState().permission["session-a"]).toBe(undefined)
+  })
 })
+
+describe("setSessionWorkState", () => {
+  const savedArchiveResponse = archiveBatchResponse
+
+  beforeEach(() => {
+    runtimeKey = "runtime-a"
+    openchamberRouteRequests.length = 0
+    globalUpsertedSessions.length = 0
+    beforeSessionGetResolve = null
+    beforeArchiveRouteResolve = null
+    sessionRecords.set("ses-work", { ...sessionFixture("ses-work"), metadata: {} })
+    archiveBatchResponse = { status: 200, body: { metadata: { openchamber: { work: { state: "open" } } } } }
+  })
+
+  afterEach(() => {
+    archiveBatchResponse = savedArchiveResponse
+    beforeSessionGetResolve = null
+    beforeArchiveRouteResolve = null
+  })
+
+  test("tracks the session through the metadata route", async () => {
+    const { setSessionWorkState } = await import("./session-actions")
+
+    const updated = await setSessionWorkState("ses-work", "/test/project", "open")
+
+    expect(updated?.metadata).toEqual({ openchamber: { work: { state: "open" } } })
+    const request = openchamberRouteRequests.find((entry) => entry.path.endsWith("/ses-work/metadata"))
+    expect(request?.body).toMatchObject({ patch: { openchamber: { work: { state: "open", openedBy: "user" } } } })
+  })
+
+  test("writes nothing to the new server when the runtime switches during the read", async () => {
+    const { setSessionWorkState } = await import("./session-actions")
+    beforeSessionGetResolve = () => {
+      runtimeKey = "runtime-b"
+    }
+
+    expect(await setSessionWorkState("ses-work", "/test/project", "done")).toBeNull()
+
+    expect(openchamberRouteRequests).toHaveLength(0)
+    expect(globalUpsertedSessions).toHaveLength(0)
+  })
+
+  test("keeps the old server's answer out of the new server's cache when the runtime switches during the write", async () => {
+    const { setSessionWorkState } = await import("./session-actions")
+    beforeArchiveRouteResolve = () => {
+      runtimeKey = "runtime-b"
+    }
+
+    expect(await setSessionWorkState("ses-work", "/test/project", "done")).toBeNull()
+
+    expect(globalUpsertedSessions).toHaveLength(0)
+  })
+});

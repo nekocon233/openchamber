@@ -27,22 +27,33 @@ import {
   requireSpaceId,
   spaceResourceName,
 } from '../labels.js';
-import { SPACE_CONNECT_COMMAND, SPACE_USER, TOOLS_MOUNT_PATH } from '../layout.js';
+import { SPACE_CONNECT_COMMAND, SPACE_IDLE_EXIT_CODE, SPACE_USER, TOOLS_MOUNT_PATH } from '../layout.js';
 import { openCommandStream as openCommandStreamProcess } from '../run-command.js';
 import { createSpaceServerChannel, createSpaceToken } from '../space-server.js';
 import { CHANGE_TIMEOUT_MS, ROLLBACK_SETTLE_MS, createDockerEngine, entryLabels, entryName, isInterrupted, pause } from './docker-engine.js';
+import { createDockerDisk } from './docker-disk.js';
 import { createDockerTools } from './docker-tools.js';
 
 const DOCKER_PLACE_ID = 'docker';
+/** The place that runs the same Docker commands on another machine's daemon, over SSH. */
+export const DOCKER_SSH_PLACE_ID = 'docker-ssh';
 
-// node:22-bookworm as a multi-arch index digest. DOCUMENTATION.md says how it was verified.
-export const SPACE_BASE_IMAGE = 'node@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844';
+// node:24-bookworm as a multi-arch index digest. DOCUMENTATION.md says how it was verified.
+export const SPACE_BASE_IMAGE = 'node@sha256:3d27e5c11e5786e309ec3e03f93ae536eb36e6e5eb3714d5eb3300a36157add0';
+// Base images spaces used before, which the clean-up removes like the current one. A bump adds
+// the digest it replaces here. node:22-bookworm, replaced on 2026-10-08.
+export const RETIRED_SPACE_BASE_IMAGES = ['node@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844'];
 
 const CHECK_TIMEOUT_MS = 10_000;
 const PULL_TIMEOUT_MS = 20 * 60_000;
 const EXEC_TIMEOUT_MS = 60_000;
 // The bridge option that keeps the space away from services on the Docker host.
 const HOST_ISOLATION_MIN_ENGINE = 28;
+// What the CLI prints when SSH reached the machine but found no running daemon there, or no docker.
+const REMOTE_DAEMON_DOWN = /Cannot connect to the Docker daemon|Is the docker daemon running/i;
+const REMOTE_DOCKER_MISSING = /docker: (?:command )?not found|No such file or directory/i;
+/** The machine a `docker --host` value names, for a message: `ssh://me@box:22` is `me@box:22`. */
+const machineOf = (dockerHost) => String(dockerHost).replace(/^[a-z]+:\/\//i, '');
 // While a space moves to a new tools volume, its old container waits under this suffix.
 const ASIDE_SUFFIX = 'old';
 
@@ -60,12 +71,25 @@ function execRole(target) {
   throw new SpaceError('invalid_exec_target', `A command runs in the space or in its gatekeeper, not in '${target}'`);
 }
 
-export function createDockerPlace({ runCommand, openCommandStream = openCommandStreamProcess, dockerPath, owner, toolsSource, wait = pause, now = () => new Date() }) {
+/**
+ * `dockerHost` is null for the daemon the CLI finds by itself, the local Docker place, or a
+ * `docker --host` value, `ssh://<machine>` for the Docker over SSH place: the same CLI, the same
+ * containers and checks, every command run on that machine's daemon. `id` names the place the
+ * registry and the records know it by.
+ */
+export function createDockerPlace({ runCommand, openCommandStream = openCommandStreamProcess, dockerPath, dockerHost = null, id = DOCKER_PLACE_ID, colimaPath = null, owner, toolsSource, wait = pause, now = () => new Date() }) {
   requireOwner(owner);
 
-  const engine = createDockerEngine({ runCommand, dockerPath });
+  const engine = createDockerEngine({ runCommand, dockerPath, dockerHost });
+  const machine = dockerHost === null ? null : machineOf(dockerHost);
   const { run, docker, inspect, removeOne, removeStoppedContainer } = engine;
   const tools = createDockerTools({ engine, owner, toolsSource, image: SPACE_BASE_IMAGE, now, wait });
+  // The one download of the image under way, shared by a creation that needs it and the places
+  // page's button, and how the last one ended, so the page can say why the image is still absent.
+  let imagePull = null;
+  let imagePullFailure = null;
+  const imagePullState = () => ({ pulling: imagePull !== null, failure: imagePullFailure });
+  const disk = createDockerDisk({ engine, runCommand, colimaPath, owner, image: SPACE_BASE_IMAGE, retiredImages: RETIRED_SPACE_BASE_IMAGES, tools, imagePullState });
 
   /** Every resource that carries our marker and this owner, optionally for one space. Found by label only. */
   const findResources = async (spaceId) => {
@@ -127,7 +151,9 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
         return unavailable('docker_cli_unusable', `The docker command could not be started (${error.details?.errno ?? 'unknown error'}). Check that ${dockerPath} is a program this user may run.`);
       }
       if (error.code === 'command_timeout') {
-        return unavailable('docker_daemon_unreachable', 'Docker did not answer in time. Restart Docker Desktop or Colima, then try again.');
+        return machine === null
+          ? unavailable('docker_daemon_unreachable', 'Docker did not answer in time. Restart Docker Desktop or Colima, then try again.')
+          : unavailable('place_unreachable', `${machine} did not answer. Check that it is on and reachable over SSH.`);
       }
       throw error;
     }
@@ -140,7 +166,14 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
       server = null;
     }
     if (version.code !== 0 || info.code !== 0 || !server) {
-      return unavailable('docker_daemon_unreachable', 'Docker is installed but not running. Start Docker Desktop or Colima, then try again.');
+      if (machine === null) {
+        return unavailable('docker_daemon_unreachable', 'Docker is installed but not running. Start Docker Desktop or Colima, then try again.');
+      }
+      // Over SSH the CLI's own words say where it stopped: at the machine, at docker, or at the daemon.
+      const said = `${version.stderr}\n${info.stderr}`;
+      if (REMOTE_DAEMON_DOWN.test(said)) return unavailable('docker_daemon_unreachable', `Docker is not running on ${machine}. Start it there, then try again.`);
+      if (REMOTE_DOCKER_MISSING.test(said)) return unavailable('docker_cli_missing', `Docker is not installed on ${machine}. Install Docker Engine there, then try again.`);
+      return unavailable('place_unreachable', `Could not reach ${machine} over SSH. Check the connection, then try again.`);
     }
     // Older engines call the builtin profile `default`.
     if (!securityOptions.some((option) => /^name=seccomp,profile=(builtin|default)$/.test(option))) {
@@ -157,18 +190,34 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
     };
   };
 
+  /** Downloads the image once; a second call while one runs waits on the same pull. */
+  const pullImage = () => {
+    if (imagePull === null) {
+      imagePull = run(['pull', SPACE_BASE_IMAGE], PULL_TIMEOUT_MS)
+        .then((result) => {
+          if (result.code !== 0) {
+            throw new SpaceError(
+              'image_pull_failed',
+              `Could not download the base image: ${result.stderr.trim() || `exit code ${result.code}`}. Common causes: no internet access on the Docker machine, or Docker's credential helper cannot run in this session.`,
+            );
+          }
+          imagePullFailure = null;
+        })
+        .catch((error) => {
+          imagePullFailure = { code: error.code ?? 'image_pull_failed', message: error.message };
+          throw error;
+        })
+        .finally(() => { imagePull = null; });
+    }
+    return imagePull;
+  };
+
   const ensureImage = async () => {
     const present = await inspect('image', SPACE_BASE_IMAGE);
     if (present) {
       return;
     }
-    const result = await run(['pull', SPACE_BASE_IMAGE], PULL_TIMEOUT_MS);
-    if (result.code !== 0) {
-      throw new SpaceError(
-        'image_pull_failed',
-        `Could not download the base image: ${result.stderr.trim() || `exit code ${result.code}`}. Common causes: no internet access on the Docker machine, or Docker's credential helper cannot run in this session.`,
-      );
-    }
+    await pullImage();
   };
 
   const verifyContainer = async (spaceId, container) => {
@@ -236,11 +285,18 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
   /**
    * Runs argv as the space user in the space or, with `target: 'gatekeeper'`, in its gatekeeper.
    * It does not look at the container first, so it also serves containers this place just made.
+   * `maxOutputBytes`, `keepTail` and `killTree` go to `runCommand` as they are; the setup
+   * commands use them for a long command whose output is shown and whose exit code is the answer.
    */
   const execInContainer = (spaceId, argv, options = {}) => run(
     ['exec', '--interactive', '--user', SPACE_USER, spaceResourceName(spaceId, execRole(options.target)), ...argv],
     options.timeoutMs ?? EXEC_TIMEOUT_MS,
-    { stdin: options.stdin ?? '' },
+    {
+      stdin: options.stdin ?? '',
+      ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
+      ...(options.keepTail === true ? { keepTail: true } : {}),
+      ...(options.killTree === true ? { killTree: true } : {}),
+    },
   );
 
   const server = createSpaceServerChannel({ exec: execInContainer, wait, now: () => now().getTime() });
@@ -384,7 +440,11 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
       if (space && (!guard || (state === 'running' && guard.entry.State?.Running !== true))) {
         missing.push(spaceResourceName(id, ROLE_GATEKEEPER));
       }
-      return { id, name, project, created, state, orphans, damaged: missing.length > 0, missing };
+      // Since 5d-3: a space that stopped itself for the idle stop, told by its exit code, and whether
+      // its gatekeeper still runs, which the host stops when it finds one beside a stopped space.
+      const stoppedIdle = state === 'exited' && space.entry.State?.ExitCode === SPACE_IDLE_EXIT_CODE;
+      const gatekeeperRunning = guard?.entry.State?.Running === true;
+      return { id, name, project, created, state, stoppedIdle, gatekeeperRunning, orphans, damaged: missing.length > 0, missing };
     });
   };
 
@@ -400,7 +460,7 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
     const entry = await inspectOwnContainer(spaceId, spaceResourceName(spaceId, ROLE_GATEKEEPER));
     const address = String(entry?.NetworkSettings?.Networks?.[spaceResourceName(spaceId, ROLE_NETWORK)]?.IPAddress ?? '');
     if (net.isIP(address) === 0) {
-      throw new SpaceError('gatekeeper_address_unknown', `The runtime reports no address for the gatekeeper of space ${spaceId} on the space's network, so its listeners cannot be bound.`);
+      throw new SpaceError('gatekeeper_address_unknown', `The runtime reports no address for the network filter of space ${spaceId} on the space's network, so its listeners cannot be bound.`);
     }
     return address;
   };
@@ -439,7 +499,7 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
     if (entry.State?.Running !== true) {
       throw new SpaceError('space_not_running', `Space ${spaceId} is stopped. Start it, then try again.`);
     }
-    return [dockerPath, 'exec', '--interactive', '--user', SPACE_USER, spaceResourceName(spaceId, ROLE_SPACE)];
+    return [dockerPath, ...engine.argsFor(['exec', '--interactive', '--user', SPACE_USER, spaceResourceName(spaceId, ROLE_SPACE)])];
   };
 
   /**
@@ -611,5 +671,6 @@ export function createDockerPlace({ runCommand, openCommandStream = openCommandS
     return starting.get(spaceId);
   };
 
-  return { id: DOCKER_PLACE_ID, check, create, list, exec, execArgv, connect, stop, start, remove, verify };
+  // `machine` names the machine of a Docker over SSH place as the user wrote it, for the screens; null locally.
+  return { id, machine, check, create, list, exec, execArgv, connect, stop, start, remove, verify, readDisk: disk.read, cleanUpDisk: disk.cleanUp, pullImage, imagePulling: () => imagePull !== null };
 }

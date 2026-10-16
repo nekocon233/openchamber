@@ -44,6 +44,7 @@ export async function summarizeSelectionForNotes(text: string, sessionId?: strin
         system: NOTES_SYSTEM_PROMPT,
         directory,
         sessionID: sessionId || undefined,
+        // Read by servers before 2026-10; newer ones stay on the named provider anyway.
         restrictToPreferredProvider: true,
         ...(preferredProviderID ? { preferredProviderID } : {}),
         ...(preferredModelID ? { preferredModelID } : {}),
@@ -89,6 +90,7 @@ export async function distillGoalObjective(planContent: string, directory?: stri
         prompt: planContent,
         system: GOAL_OBJECTIVE_SYSTEM_PROMPT,
         directory,
+        // Read by servers before 2026-10; newer ones stay on the named provider anyway.
         restrictToPreferredProvider: true,
         ...(currentProviderId ? { preferredProviderID: currentProviderId } : {}),
         ...(currentModelId ? { preferredModelID: currentModelId } : {}),

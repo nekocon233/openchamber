@@ -7,7 +7,7 @@
  */
 
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
-import { isAmbiguousTransportFailure } from "@/lib/relay/transport-error"
+import { isAmbiguousTransportFailure, isDefiniteTransportFailure } from "@/lib/relay/transport-error"
 
 export function getErrorStatus(error: unknown): number | null {
   if (!error || typeof error !== "object") return null
@@ -21,6 +21,7 @@ export function getErrorStatus(error: unknown): number | null {
 }
 
 export function isAmbiguousSendFailure(error: unknown): boolean {
+  if (error instanceof Error && isDefiniteTransportFailure(error)) return false
   // OpenChamber's native routes answer a refusal with their own error code
   // (CLI missing, session busy, ...). That answer says the prompt was not
   // taken, whatever the status; a coded 503 is not a lost request.

@@ -87,25 +87,41 @@ model context is small. Page/count bounds are not a network-byte quota.
 
 ## Generation and lifecycle
 
-1. The server's existing global event fan-out calls `processPayload`
-   (`index.js` → `onPayload`), riding the same upstream connection as
-   notifications. An idle event schedules generation for the next event-loop
-   turn, with no quiet window. Repeated idle events in that turn coalesce before
-   any reads. No history scan or startup backfill runs.
+1. The server's existing global event fan-out calls `processPayload`. At an
+   idle event the runtime first asks the injected `evaluateTurn` (the
+   session-work runtime, `../session-work/DOCUMENTATION.md`): one Jev call says
+   which enabled fields are worth the Small Model. It then arms the quiet window
+   for those fields only, and arms nothing when Jev ruled both out.
+   An unknown answer (no Jev, a failure) keeps every enabled field, so without
+   Jev nothing changes. A newer event drops a pending answer. A session that
+   `../session-lineage.js` knows to be a subsession arms nothing at all: no
+   gate, no timer, no read. This distribution runs the quiet window at zero
+   (`IDLE_QUIET_MS`), so it only defers one event-loop turn: repeated idle
+   events in that turn still coalesce before any reads, without a 60-second
+   wait. No history scan or
+   startup backfill runs.
 2. Busy/retry events and newly created user messages clear pending work and
    abort in-flight reads/generation. Re-emitted old user updates do not cancel it.
 3. One generation runs per session. If a newer generation is due while an
    old canceled request is still settling, retain that pending run and start it
    after the old one finishes. Later activity cancels the pending run as well.
 4. Resolve the small model using the last answer's provider/model and the
-   existing explicit settings/config overrides. `restrictToPreferredProvider`
-   prevents an implicit cross-provider fallback: conversation content never
-   goes to a provider the user didn't pick for the session. Runtime-only CLI
+   existing explicit settings/config overrides. Naming that provider keeps the
+   request on it: the resolution chain never picks a small model from another
+   provider, so conversation content only goes where the user sent their own
+   work or configured on purpose. Runtime-only CLI
    providers (`claude-code`, `codex`) are never selected from the session
    model, so default Claude Code sessions skip the assist; an explicit
    settings/config override may still use them. A resolver 404 is silently
    skipped. Production does not pin the
    experimental model. Generation accepts an abort signal and a 120-second limit.
+   When that resolves to the session's own model on a local endpoint
+   (`localEndpoint`), skip generation, whether it came from the fallback or
+   from an explicit Small Model naming the same model: llama.cpp-style
+   servers keep one prompt cache per slot, so a side request evicts the
+   session's cache and the next turn reprocesses the whole history (#3871).
+   A different model on the same machine, configured or found by the family
+   scan, is still used.
 5. Recap describes the substantive work and its current result, including the
    work behind a closing commit or acknowledgment. Suggestion follows Claude
    Code's next-input design: predict what the user is likely to type from their
@@ -135,7 +151,9 @@ No failed session blocks another session.
 ## Settings and consumers
 
 `sessionRecapEnabled` and `sessionSuggestionEnabled` default on and are checked
-before work and before writing. With both off there are no reads, model calls,
+before work and before writing. The Jev gate is a cost filter under these same
+switches, not a setting of its own: it reads the same three turns as the recap,
+so a recap still follows a closing "thanks" after real work. With both off there are no reads, model calls,
 or writes. With one on, the shared recent context is still available, but only
 that field is requested. An empty suggestion does not erase a valid recap.
 
@@ -150,14 +168,17 @@ When a session turns busy, the runtime also deletes the assist it wrote
 (`persistSessionAssist(id, dir, null)`), so stored state goes stale only for
 payloads written by an earlier process; the `time.idle` rule retires those.
 
-- `packages/ui/src/lib/sessionAssistMetadata.ts` parses the payload.
-- `packages/ui/src/hooks/useSessionAssist.ts` owns freshness/settings gating.
+- `packages/ui/src/lib/sessionAssistMetadata.ts` parses the payload and owns freshness.
+- `packages/ui/src/hooks/useSessionAssist.ts` owns freshness/settings gating and
+  adds live-status gating.
 - `SessionRecapSpacer` shows the reminder in the reserved gap under the reply
   after 60 seconds of inactivity. This display delay does not delay generation.
 - The composer's `PromptSuggestion` can show proposed input as soon as
   generation finishes, in a row above the editor on desktop and mobile.
   Clicking it fills the composer; a separate submit sends it. Typing hides the
   row while the draft has content and clearing the draft reveals it again.
+  `SessionSuggestionChip` is the same idea in chip form; it never sends
+  automatically.
 
 Native CLI sessions (`ncl_`, `ncx_`) get assists too. A separate hub
 subscription on the native event source feeds only this runtime; goals use their own native subscription, while
@@ -167,10 +188,13 @@ stored with the session's metadata in its registry rather than in OpenCode's;
 the UI's metadata patch reaches it through the native session PATCH. Under the session-provider rule a
 native session's small model must be set explicitly, so without one these
 sessions skip generation as Claude Code plugin sessions do.
-- Sidebar rows (`SessionNodeItem`, both Projects and Timeline) mark a session
+- Sidebar rows (`SessionNodeItem`, both Projects and Timeline) show the current
+  recap in the whole-row tooltip under the same freshness rule, hidden while a
+  turn runs and when `sessionRecapEnabled` is off, and mark a session
   whose suggestion is still open with a small icon and the suggestion as its
   title, using the same freshness rule (`getOpenSessionSuggestion`). The marker hides while a turn runs, on the open session, and
-  when `sessionSuggestionEnabled` is off.
+  when `sessionSuggestionEnabled` is off. The "In work" block is the sidebar's
+  attention signal.
 
 Web, Electron, hosted mobile, and Capacitor use the server watcher. VS Code's
 extension-only runtime does not generate assists; shared UI can render payloads

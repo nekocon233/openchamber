@@ -402,7 +402,7 @@ describe('startBtwSession', () => {
     };
 
     // A native CLI approves everything itself: the permission store is never asked.
-    await startBtwSession({ ...startInput, parentSessionId: NATIVE_PARENT, providerID: 'claude-native', modelID: 'opus', permissionAutoAccept: true });
+    await startBtwSession({ ...startInput, parentSessionId: NATIVE_PARENT, providerID: 'claude-native', modelID: 'opus', permissionMode: 'auto' });
 
     expect(forks).toEqual([[NATIVE_PARENT, 'u2', '/project']]);
     expect(sessionMessageReads).toEqual([]);

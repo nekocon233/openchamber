@@ -39,7 +39,7 @@ const snapshot = (): FollowUpQueueSnapshot => ({
         synthetic: true,
         metadata: {
           openchamberContext: {
-            kind: 'github-issue',
+            kind: 'repository-issue',
             number: 42,
             title: 'Queue context',
             url: 'https://example.com/issues/42',
@@ -53,6 +53,17 @@ const snapshot = (): FollowUpQueueSnapshot => ({
     status: 'queued',
   }],
 });
+
+/**
+ * A record from `snapshot()` as a mutable bag of fields. The rejection cases
+ * below exist to prove the parser refuses fields the contract does not allow,
+ * so they have to write those fields onto a record that the fixture promises
+ * is there.
+ */
+const mutableRecord = (value: object | undefined): Record<string, unknown> => {
+  if (!value) throw new Error('fixture snapshot has no record to modify');
+  return value as unknown as Record<string, unknown>;
+};
 
 describe('follow-up queue protocol parsing', () => {
   test('preserves retired executor metadata only for legacy snapshot and outbox replay', () => {
@@ -107,28 +118,28 @@ describe('follow-up queue protocol parsing', () => {
 
   test('rejects browser File fields, unknown fields, and duplicate identities', () => {
     const withFile = snapshot();
-    (withFile.items[0].attachments?.[0] as unknown as Record<string, unknown>).file = {};
+    mutableRecord(withFile.items[0].attachments?.[0]).file = {};
     expect(() => parseFollowUpQueueSnapshot(withFile)).toThrow();
 
     const withUnknown = { ...snapshot(), unexpected: true };
     expect(() => parseFollowUpQueueSnapshot(withUnknown)).toThrow();
 
     const withUnknownPartField = snapshot();
-    (withUnknownPartField.items[0].additionalParts?.[0] as unknown as Record<string, unknown>).unexpected = true;
+    mutableRecord(withUnknownPartField.items[0].additionalParts?.[0]).unexpected = true;
     expect(() => parseFollowUpQueueSnapshot(withUnknownPartField)).toThrow();
 
     const withInvalidSynthetic = snapshot();
-    (withInvalidSynthetic.items[0].additionalParts?.[0] as unknown as Record<string, unknown>).synthetic = 'yes';
+    mutableRecord(withInvalidSynthetic.items[0].additionalParts?.[0]).synthetic = 'yes';
     expect(() => parseFollowUpQueueSnapshot(withInvalidSynthetic)).toThrow();
 
     const withInvalidMetadata = snapshot();
-    (withInvalidMetadata.items[0].additionalParts?.[0] as { metadata?: unknown }).metadata = {
+    mutableRecord(withInvalidMetadata.items[0].additionalParts?.[0]).metadata = {
       openchamberContext: { kind: 'unsupported' },
     };
     expect(() => parseFollowUpQueueSnapshot(withInvalidMetadata)).toThrow();
 
     const withNestedFile = snapshot();
-    (withNestedFile.items[0].additionalParts?.[0].attachments?.[0] as unknown as Record<string, unknown>).file = {};
+    mutableRecord(withNestedFile.items[0].additionalParts?.[0].attachments?.[0]).file = {};
     expect(() => parseFollowUpQueueSnapshot(withNestedFile)).toThrow();
 
     const duplicate = snapshot();

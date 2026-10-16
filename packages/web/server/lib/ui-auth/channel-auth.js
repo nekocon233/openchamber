@@ -1,3 +1,5 @@
+import { isOpaqueOriginRequest, isPasswordlessSocketOriginAllowed } from '../security/request-security.js';
+
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 const hasPrivateRelayMarker = (req) => {
@@ -34,7 +36,16 @@ export const authorizeWebSocketUpgrade = async ({
     return { ok: true, auth };
   }
 
-  if (!uiAuthController?.enabled) return { ok: true, auth: null };
+  // A sandboxed page (`Origin: null`) is no OpenChamber client, on any socket.
+  if (isOpaqueOriginRequest(req)) return { ok: false, statusCode: 403, reason: 'Invalid origin' };
+
+  if (!uiAuthController?.enabled) {
+    // With no UI password the Origin is the only thing between a page open in
+    // the user's browser and this socket, so it must name a trusted one; a
+    // client that sends none is not a page.
+    const allowed = await isPasswordlessSocketOriginAllowed(req, isRequestOriginAllowed);
+    return allowed ? { ok: true, auth: null } : { ok: false, statusCode: 403, reason: 'Invalid origin' };
+  }
 
   const sessionToken = await uiAuthController.ensureSessionToken?.(req, null);
   if (!sessionToken) return { ok: false, statusCode: 401, reason: 'UI authentication required' };

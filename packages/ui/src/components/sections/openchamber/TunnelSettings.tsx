@@ -22,7 +22,7 @@ import {
   normalizeFrpcPublicUrl,
   type FrpcStartEndpointPayload,
 } from './frpcTunnelSettings';
-import { SettingsSection, SettingsGroupTitle, SETTINGS_SELECT_SIZE, SETTINGS_FIELD_LABEL_CLASS, SETTINGS_CALLOUT_TITLE_CLASS } from '@/components/sections/shared/SettingsSection';
+import { SettingsSection, SettingsGroupTitle, SETTINGS_FIELD_LABEL_CLASS, SETTINGS_CALLOUT_TITLE_CLASS, SETTINGS_DESCRIPTION_CLASS } from '@/components/sections/shared/SettingsSection';
 import { SettingsInfoHint } from '@/components/sections/shared/SettingsInfoHint';
 
 type TunnelState =
@@ -110,6 +110,8 @@ interface TunnelSessionRecord {
 
 interface TunnelStatusResponse {
   active: boolean;
+  /** The server refuses every tunnel; sent only while none is active. */
+  enterpriseMode?: boolean;
   url: string | null;
   provider?: string;
   mode?: ApiTunnelMode;
@@ -400,6 +402,7 @@ export const TunnelSettings: React.FC = () => {
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const tUnsafe = React.useCallback((key: string) => t(key as Parameters<typeof t>[0]), [t]);
   const [state, setState] = React.useState<TunnelState>('checking');
+  const [enterpriseLocked, setEnterpriseLocked] = React.useState(false);
   const [tunnelInfo, setTunnelInfo] = React.useState<TunnelInfo | null>(null);
   const [activeTunnelMode, setActiveTunnelMode] = React.useState<TunnelMode | null>(null);
   const [activeTunnelProvider, setActiveTunnelProvider] = React.useState<string | null>(null);
@@ -645,6 +648,7 @@ export const TunnelSettings: React.FC = () => {
 
       const selectedId = presets[0]?.id || '';
 
+      setEnterpriseLocked(statusData.enterpriseMode === true);
       setBootstrapTtlMs(loadedBootstrapTtl);
       setSessionTtlMs(loadedSessionTtl);
       setTunnelProvider(loadedProvider);
@@ -1540,6 +1544,14 @@ export const TunnelSettings: React.FC = () => {
     );
   }
 
+  if (enterpriseLocked) {
+    return (
+      <SettingsSection title={t('settings.openchamber.tunnel.title')} divider={false}>
+        <p className={SETTINGS_DESCRIPTION_CLASS}>{t('settings.openchamber.tunnel.enterpriseMode')}</p>
+      </SettingsSection>
+    );
+  }
+
   return (
     <SettingsSection
       title={t('settings.openchamber.tunnel.title')}
@@ -1636,7 +1648,7 @@ export const TunnelSettings: React.FC = () => {
                 }}
                 disabled={isSavingMode || state === 'starting' || state === 'stopping'}
               >
-                <SelectTrigger size={SETTINGS_SELECT_SIZE} className="max-w-[16rem]">
+                <SelectTrigger className="max-w-[16rem]">
                   <SelectValue placeholder={t('settings.openchamber.tunnel.field.providerPlaceholder')}>
                     {getProviderLabel(tunnelProvider)}
                   </SelectValue>
@@ -1696,7 +1708,7 @@ export const TunnelSettings: React.FC = () => {
                 }}
                 disabled={isSavingTtl || isSavingMode || state === 'starting' || state === 'stopping'}
               >
-                <SelectTrigger size={SETTINGS_SELECT_SIZE} className="max-w-[11rem] min-w-0">
+                <SelectTrigger className="max-w-[11rem] min-w-0">
                   <SelectValue className="truncate">
                     {ttlOptionLabel(BOOTSTRAP_TTL_OPTIONS, bootstrapTtlMs, '1800000')}
                   </SelectValue>
@@ -1718,7 +1730,7 @@ export const TunnelSettings: React.FC = () => {
                 }}
                 disabled={isSavingTtl || isSavingMode || state === 'starting' || state === 'stopping'}
               >
-                <SelectTrigger size={SETTINGS_SELECT_SIZE} className="max-w-[11rem] min-w-0">
+                <SelectTrigger className="max-w-[11rem] min-w-0">
                   <SelectValue className="truncate">
                     {ttlOptionLabel(SESSION_TTL_OPTIONS, sessionTtlMs, '28800000')}
                   </SelectValue>
@@ -1799,7 +1811,7 @@ export const TunnelSettings: React.FC = () => {
                           <div className="flex items-start gap-2 px-3">
                             <CollapsibleTrigger
                               type="button"
-                              className="group flex-1 justify-start gap-2 rounded-md px-0 py-1 pr-1 text-left hover:bg-[var(--interactive-hover)]"
+                              className="group flex-1 justify-start gap-2 rounded-md px-0 py-1 pe-1 text-start hover:bg-[var(--interactive-hover)]"
                               disabled={state === 'starting' || state === 'stopping' || isSavingMode}
                             >
                               {isOpen
@@ -2248,7 +2260,7 @@ export const TunnelSettings: React.FC = () => {
                       || managedRemoteTunnelPresets.length <= 1
                     }
                   >
-                    <SelectTrigger size={SETTINGS_SELECT_SIZE}>
+                    <SelectTrigger>
                       <SelectValue placeholder={t('settings.openchamber.tunnel.field.selectSavedTunnelPlaceholder')}>
                         {selectedPreset?.name}
                       </SelectValue>

@@ -3,19 +3,23 @@ import type { Part } from '@/lib/opencode/model';
 import { MarkdownRenderer } from '../../MarkdownRenderer';
 import type { StreamPhase, ToolPopupContent } from '../types';
 import { useStreamingTextThrottle } from '../../hooks/useStreamingTextThrottle';
-import { resolveAssistantDisplayText, shouldRenderAssistantText } from './assistantTextVisibility';
+import { resolveAssistantDisplayText, resolveAssistantTextStreaming, shouldRenderAssistantText } from './assistantTextVisibility';
 import { streamPerfCount, streamPerfObserve } from '@/stores/utils/streamDebug';
 import { GeneratedJsonResultCard } from './GeneratedJsonResultCard';
 import { parseGeneratedJsonResult } from './generatedJsonResult';
 
 type PartWithText = Part & { text?: string; content?: string; value?: string; time?: { start?: number; end?: number } };
 
+// A streaming reply is read a block at a time (see streamTextCommit.ts); taking
+// new text at most this often lets the blocks finished in between land, and
+// move the chat, together.
+const REPLY_REVEAL_INTERVAL_MS = 400;
+
 interface AssistantTextPartProps {
     part: Part;
     sessionId?: string;
     messageId: string;
     streamPhase: StreamPhase;
-    chatRenderMode?: 'sorted' | 'live';
     onShowPopup?: (content: ToolPopupContent) => void;
 }
 
@@ -23,7 +27,6 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
     part,
     messageId,
     streamPhase,
-    chatRenderMode = 'live',
     onShowPopup,
 }) => {
     // Use part directly from props — parent provides the latest version from the store.
@@ -35,9 +38,12 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
     const textContent = [rawText, contentText, valueText].reduce((best, candidate) => {
         return candidate.length > best.length ? candidate : best;
     }, '');
-    const isStreamingPhase = streamPhase === 'streaming';
-    const isCooldownPhase = streamPhase === 'cooldown';
-    const isStreaming = chatRenderMode === 'live' && (isStreamingPhase || isCooldownPhase);
+    const time = partWithText.time;
+    const isFinalized = Boolean(time && typeof time.end !== 'undefined');
+    const isStreaming = resolveAssistantTextStreaming({
+        streamPhase,
+        isFinalized,
+    });
 
     streamPerfCount('ui.assistant_text_part.render');
     if (isStreaming) {
@@ -47,6 +53,7 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
     const throttledTextContent = useStreamingTextThrottle({
         text: textContent,
         isStreaming,
+        throttleMs: REPLY_REVEAL_INTERVAL_MS,
         identityKey: `${messageId}:${part.id ?? 'text'}`,
     });
 
@@ -57,9 +64,6 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
     });
 
     streamPerfObserve('ui.assistant_text_part.display_len', displayTextContent.length);
-
-    const time = partWithText.time;
-    const isFinalized = Boolean(time && typeof time.end !== 'undefined');
 
     const isRenderableTextPart = part.type === 'text' || part.type === 'reasoning';
     if (!isRenderableTextPart) {
@@ -77,7 +81,7 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
     if (generatedResult) {
         return (
             <div
-                className={`group/assistant-text relative break-words ${chatRenderMode === 'live' ? 'my-1' : ''}`}
+                className="group/assistant-text relative my-1 break-words"
                 key={part.id || `${messageId}-text`}
             >
                 <GeneratedJsonResultCard result={generatedResult} />
@@ -87,8 +91,11 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
 
     return (
         <div
-            className={`group/assistant-text relative break-words ${chatRenderMode === 'live' ? 'my-1' : ''}`}
+            className="group/assistant-text relative my-1 break-words"
             key={part.id || `${messageId}-text`}
+            // The chat scroll stops following once the start of the reply
+            // being written would leave the screen (useChatTimelineScroll).
+            data-streaming-reply={isStreaming && part.type === 'text' ? '' : undefined}
         >
             <MarkdownRenderer
                 content={displayTextContent}
@@ -96,7 +103,6 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
                 messageId={messageId}
                 isAnimated={false}
                 isStreaming={isStreaming}
-                disableStreamAnimation={chatRenderMode === 'sorted'}
                 variant={part.type === 'reasoning' ? 'reasoning' : 'assistant'}
                 enableFileReferences={isFinalized}
                 onShowPopup={onShowPopup}

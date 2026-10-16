@@ -1,9 +1,10 @@
 import React from 'react';
-import { useSessionTurnActive } from '@/sync/global-session-status';
+import { useSessionTurnActivity } from '@/sync/global-session-status';
+import { getSessionActivityTime } from '@/sync/session-ordering';
+import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import type { Session } from '@/lib/opencode/model';
 
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
-import { SessionRunningIndicator } from '@/components/session/SessionRunningIndicator';
 import { formatSessionCompactDateLabel } from '@/components/session/sidebar/utils';
 import { useSwitcherItems } from '@/components/session/sidebar/shell/useSwitcherItems';
 import { useTabletLayout } from '@/lib/device';
@@ -33,25 +34,25 @@ const SwitcherRow: React.FC<{
 }> = ({ session, meta, active, onSelect }) => {
   const { t } = useI18n();
   const unseenCount = useSessionUnseenCount(session.id);
-  const isStreaming = useSessionTurnActive(session.id);
+  const turnActivity = useSessionTurnActivity(session.id);
+  const isStreaming = turnActivity !== null;
   const showUnreadDot = !isStreaming && unseenCount > 0 && !active;
-  const unreadStatusLabel = t('sessions.sidebar.session.status.unread');
   const hasActivityDuration = useHasSessionActivityDuration(session.id, isStreaming);
   const showActivityDuration = (isStreaming || showUnreadDot) && hasActivityDuration;
-  const timeLabel = formatSessionCompactDateLabel(session.time?.updated ?? session.time?.created ?? 0);
+  const timeLabel = formatSessionCompactDateLabel(getSessionActivityTime(session));
 
   return (
     <button
       type="button"
       className={cn(
-        'flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors active:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-start transition-colors active:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
         active && 'bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]',
       )}
       onClick={onSelect}
       style={{ touchAction: 'manipulation' }}
     >
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className={cn('block truncate typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
+        <span dir="auto" className={cn('block truncate oc-ui-start-align typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
           {getSessionTitle(session, t('sessions.sidebar.session.untitled'))}
         </span>
         {meta ? (
@@ -60,18 +61,9 @@ const SwitcherRow: React.FC<{
       </span>
       {/* Activity sits on the right, before the time — no reserved left gutter. */}
       {isStreaming || showUnreadDot ? (
-        <span className="flex size-3.5 shrink-0 items-center justify-center">
-          {isStreaming ? (
-            <SessionRunningIndicator label={t('sessions.sidebar.session.status.active')} />
-          ) : (
-            <span
-              role="img"
-              className="size-1.5 rounded-full bg-[var(--status-info)]"
-              aria-label={unreadStatusLabel}
-              title={unreadStatusLabel}
-            />
-          )}
-        </span>
+        <SessionActivityIndicator
+          state={turnActivity ?? 'unread'}
+        />
       ) : null}
       {/* The elapsed turn takes the time slot while it matters, then hands it
           back to the relative timestamp. */}

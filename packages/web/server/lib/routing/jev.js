@@ -4,25 +4,11 @@
  */
 import { z } from 'zod';
 import {
-  JEV_API_URL,
-  JEV_MODEL,
   JEV_TIMEOUT_MS,
   ROUTING_INSTRUCTIONS,
   SAFETY_INSTRUCTIONS,
   SAFETY_KINDS,
-  ZEN_CLIENT_ID,
-  ZEN_JEV_API_URL,
-  ZEN_JEV_MODEL,
 } from './defaults.js';
-
-/**
- * Where one request goes. A saved TypeSafe key wins: the user chose it and it
- * carries their own quota. Without one, the same questions go to the free Jev
- * model OpenCode Zen serves without a credential, identified as OpenChamber.
- */
-export const jevEndpoint = (token) => (token
-  ? { url: JEV_API_URL, model: JEV_MODEL, headers: { authorization: `Bearer ${token}` }, source: 'typesafe' }
-  : { url: ZEN_JEV_API_URL, model: ZEN_JEV_MODEL, headers: { 'x-opencode-client': ZEN_CLIENT_ID }, source: 'zen-free' });
 
 export const buildRoutingRequest = ({ categories, history, request }) => {
   const criteria = {};
@@ -33,12 +19,15 @@ export const buildRoutingRequest = ({ categories, history, request }) => {
   };
 };
 
-/** `permission` is what OpenCode reported: the tool kind, its patterns and its metadata. */
+/**
+ * `permission` is the v2 request OpenCode reported: the action (tool kind), the
+ * resources it touches and its metadata. Jev's contract keeps its own names.
+ */
 export const buildPermissionRequest = (permission) => ({
   state: {
     permission: {
-      type: permission.permission,
-      patterns: permission.patterns,
+      type: permission.action,
+      patterns: permission.resources,
       metadata: permission.metadata,
     },
   },
@@ -48,7 +37,25 @@ export const buildPermissionRequest = (permission) => ({
   },
 });
 
+/**
+ * The Settings "Test" request: one tiny choice with an obvious answer, so any
+ * working provider answers it and the reply proves the whole round trip.
+ */
+export const buildProbeRequest = () => ({
+  state: { request: 'Which of these is a colour: blue or table?' },
+  questions: {
+    probe: {
+      type: 'choice',
+      instructions: 'Pick the word that names a colour.',
+      criteria: { blue: 'A colour.', table: 'A piece of furniture.' },
+    },
+  },
+});
+
 const choiceAnswerSchema = z.object({ choice: z.string(), confidence: z.number() });
+
+/** True when the probe came back as a choice answer, whichever choice it made. */
+export const isProbeAnswer = (answer) => choiceAnswerSchema.safeParse(answer).success;
 const noulAnswerSchema = z.object({ noul: z.number() });
 const permissionAnswersSchema = z.object({
   ask: noulAnswerSchema,
@@ -78,13 +85,15 @@ export const decidePermission = (answers, { threshold }) => {
 const responseSchema = z.object({ answers: z.record(z.string(), z.unknown()) });
 
 export const createJevClient = ({ fetchImpl = fetch, timeoutMs = JEV_TIMEOUT_MS } = {}) => ({
-  /** Resolves to the parsed answers; throws with `status` on an HTTP error and `code: 'timeout'` on abort. */
-  ask: async (request, token) => {
+  /**
+   * `endpoint` comes from `classifierEndpoint`. Resolves to the parsed answers;
+   * throws with `status` on an HTTP error and `code: 'timeout'` on abort.
+   */
+  ask: async (request, endpoint) => {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     const started = Date.now();
     try {
-      const endpoint = jevEndpoint(token);
       const response = await fetchImpl(endpoint.url, {
         method: 'POST',
         headers: { ...endpoint.headers, 'content-type': 'application/json' },

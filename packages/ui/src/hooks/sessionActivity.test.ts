@@ -1,16 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import type { Message } from '@/lib/opencode/model';
 import { deriveSessionActivity } from './sessionActivity';
-
-const pendingAssistant = {
-  id: 'assistant-1',
-  role: 'assistant',
-  time: { created: 1 },
-} as Message;
 
 const baseInput = {
   hasAuthoritativeStatusSnapshot: false,
-  messages: [pendingAssistant],
+  hasPendingAssistant: true,
   pendingPermissions: 0,
   pendingQuestions: 0,
 };

@@ -116,7 +116,7 @@ export const RevertedMessageDock: React.FC<RevertedMessageDockProps> = React.mem
                 <div className="flex w-full items-center gap-2 px-3 py-2">
                     <button
                         type="button"
-                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        className="flex min-w-0 flex-1 items-center gap-2 text-start"
                         onClick={() => setCollapsed((value) => !value)}
                         aria-expanded={!collapsed}
                     >
@@ -125,7 +125,7 @@ export const RevertedMessageDock: React.FC<RevertedMessageDockProps> = React.mem
                     </span>
                         <Icon
                             name="arrow-down-s"
-                            className={cn("ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-180")}
+                            className={cn("ms-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-180")}
                             aria-hidden="true"
                         />
                     </button>

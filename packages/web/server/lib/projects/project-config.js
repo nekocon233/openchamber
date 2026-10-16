@@ -38,7 +38,7 @@ const clampLength = (value, maxLength) => {
 };
 
 const normalizeStatus = (value) => {
-  if (value === 'running' || value === 'success' || value === 'error' || value === 'idle') {
+  if (value === 'running' || value === 'success' || value === 'error' || value === 'idle' || value === 'queued' || value === 'sent' || value === 'skipped' || value === 'failed' || value === 'cancelled') {
     return value;
   }
   return 'idle';
@@ -218,7 +218,7 @@ const normalizeSchedule = (value, existingSchedule) => {
   return { kind, cron, timezone };
 };
 
-const normalizeExecution = (value) => {
+const normalizeExecution = (value, targetSessionId) => {
   if (!value || typeof value !== 'object') {
     throw new Error('execution is required');
   }
@@ -230,6 +230,9 @@ const normalizeExecution = (value) => {
   const agent = asNonEmptyString(value.agent);
   const goalEnabled = value.goalEnabled === true;
   const permissionAutoAccept = value.permissionAutoAccept === true;
+  // Model, thinking level and agent come from the session defaults at run
+  // time; the stored ones are kept only for when this is turned off.
+  const useDefaults = value.useDefaults === true;
   const goalTokenBudget = typeof value.goalTokenBudget === 'number'
     && Number.isFinite(value.goalTokenBudget)
     && value.goalTokenBudget > 0
@@ -239,17 +242,18 @@ const normalizeExecution = (value) => {
   if (!prompt) {
     throw new Error('execution.prompt is required');
   }
-  if (!providerID) {
+  if (!useDefaults && !targetSessionId && !providerID) {
     throw new Error('execution.providerID is required');
   }
-  if (!modelID) {
+  if (!useDefaults && !targetSessionId && !modelID) {
     throw new Error('execution.modelID is required');
   }
+  if (targetSessionId && Boolean(providerID) !== Boolean(modelID)) throw new Error('execution providerID and modelID are required together');
 
   return {
     prompt,
-    providerID,
-    modelID,
+    ...(providerID && modelID ? { providerID, modelID } : {}),
+    ...(useDefaults ? { useDefaults: true } : {}),
     ...(variant ? { variant } : {}),
     ...(agent ? { agent } : {}),
     ...(goalEnabled ? { goalEnabled: true } : {}),
@@ -333,7 +337,10 @@ const normalizeTaskForStorage = (value, options) => {
     : (existingTask?.enabled ?? true);
 
   const schedule = normalizeSchedule(value.schedule, existingTask?.schedule);
-  const execution = normalizeExecution(value.execution);
+  const targetSessionId = asNonEmptyString(value.targetSessionId);
+  if (value.targetSessionId != null && value.targetSessionId !== '' && !targetSessionId) throw new Error('targetSessionId is invalid');
+  if (targetSessionId && !/^[A-Za-z0-9_-]{4,128}$/.test(targetSessionId)) throw new Error('targetSessionId is invalid');
+  const execution = normalizeExecution(value.execution, targetSessionId);
 
   // Loop provenance: absolute path of the `.agents/loops/*.md` file driving
   // this task, when any. Preserved on every write so the scheduler can detect
@@ -348,7 +355,7 @@ const normalizeTaskForStorage = (value, options) => {
     updatedAt: refreshUpdatedAt ? nowMs : baseState.updatedAt ?? nowMs,
   };
 
-  return {
+  const storedTask = {
     id,
     name,
     enabled,
@@ -357,7 +364,17 @@ const normalizeTaskForStorage = (value, options) => {
     state,
     ...(loopFile ? { loopFile } : {}),
   };
+  if (targetSessionId) storedTask.targetSessionId = targetSessionId;
+  return storedTask;
 };
+
+// `loopApprovals`: loop file path -> fingerprint of the version the user
+// enabled on this machine. Anything else reads as no approvals.
+const readLoopApprovals = (raw) => (
+  raw.loopApprovals && typeof raw.loopApprovals === 'object' && !Array.isArray(raw.loopApprovals)
+    ? raw.loopApprovals
+    : {}
+);
 
 const createEmptyProjectConfig = () => ({
   version: PROJECT_CONFIG_VERSION,
@@ -853,6 +870,20 @@ export const createProjectConfigRuntime = (deps) => {
       const now = Date.now();
       const current = await readProjectConfigFromDisk(projectID);
       const tasks = current.scheduledTasks;
+      const approvals = readLoopApprovals(await readRawProjectConfigFromDisk(projectID));
+      // A project loop comes with the repository: `enabled: true` in its file
+      // is the author's suggestion. It runs here only once the user enabled
+      // this version of it on this machine (see setLoopApproval); a change to
+      // what it runs or when needs a new approval. The returned task says
+      // which of the two held it back (`loopApproval`); it is never stored.
+      const heldBack = new Map();
+      loops = loops.map((loop) => {
+        if (loop?.scope !== 'project' || loop.definition?.enabled !== true || approvals[loop.filePath] === loop.fingerprint) {
+          return loop;
+        }
+        heldBack.set(loop.filePath, approvals[loop.filePath] ? 'outdated' : 'required');
+        return { ...loop, definition: { ...loop.definition, enabled: false } };
+      });
 
       const activeLoopFilePaths = new Set();
       const pendingLoops = new Map();
@@ -949,9 +980,27 @@ export const createProjectConfigRuntime = (deps) => {
         scheduledTasks: toStoredTasks(current, nextTasks, { replacedIDs }),
       });
 
-      return nextTasks;
+      return nextTasks.map((task) => (
+        task.loopFile && heldBack.has(task.loopFile) ? { ...task, loopApproval: heldBack.get(task.loopFile) } : task
+      ));
     });
   };
+
+  /**
+   * Record (or, with a null fingerprint, withdraw) this machine's approval of
+   * one project loop file. Kept in the per-machine project config, never in
+   * the repository.
+   */
+  const setLoopApproval = async (projectID, filePath, fingerprint) => withProjectWriteLock(projectID, async () => {
+    const existing = await readRawProjectConfigFromDisk(projectID);
+    const loopApprovals = { ...readLoopApprovals(existing) };
+    if (fingerprint) {
+      loopApprovals[filePath] = fingerprint;
+    } else {
+      delete loopApprovals[filePath];
+    }
+    await writeRawProjectConfigToDisk(projectID, { ...existing, version: PROJECT_CONFIG_VERSION, loopApprovals });
+  });
 
   // The client-owned part of the file (worktree setup, project actions, draft
   // starters); see `project-setup.js`. Reads are lock-free like task lists;
@@ -1074,6 +1123,7 @@ export const createProjectConfigRuntime = (deps) => {
     updateScheduledTaskState,
     updateScheduledTaskStateIf,
     reconcileLoopTasks,
+    setLoopApproval,
     resolveProjectConfigPath,
   };
 };

@@ -56,20 +56,7 @@ describe('small-model routes', () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it('preserves an omitted restriction so the core default remains active', async () => {
-    const res = response();
-
-    await handlers['POST /api/small-model/generate']({
-      body: { prompt: 'summarize', preferredProviderID: 'anthropic' },
-    }, res);
-
-    expect(service.generateSmallModelText).toHaveBeenCalledWith(expect.objectContaining({
-      preferredProviderID: 'anthropic',
-      restrictToPreferredProvider: undefined,
-    }));
-  });
-
-  it('preserves an explicit cross-provider opt-out', async () => {
+  it('forwards the caller\'s provider without a restriction flag', async () => {
     const res = response();
 
     await handlers['POST /api/small-model/generate']({
@@ -80,9 +67,13 @@ describe('small-model routes', () => {
       },
     }, res);
 
+    // The resolution chain never leaves the caller's provider, so a body flag
+    // from an older client cannot widen it.
     expect(service.generateSmallModelText).toHaveBeenCalledWith(expect.objectContaining({
-      restrictToPreferredProvider: false,
+      prompt: 'summarize',
+      preferredProviderID: 'anthropic',
     }));
+    expect(service.generateSmallModelText.mock.calls[0][0]).not.toHaveProperty('restrictToPreferredProvider');
   });
 
   it('keeps no-model failures as HTTP 404', async () => {

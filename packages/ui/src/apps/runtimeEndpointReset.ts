@@ -1,8 +1,11 @@
 import { useSpacesStore } from '@/lib/spaces/spaces-store';
+import { useSpaceArchivesStore } from '@/lib/spaces/space-archives';
+import { resetSpaceModelAccess } from '@/lib/spaces/space-model-access';
+import { resetSpaceCreationRequests } from '@/lib/spaces/space-creation';
 import { useGuestsStore } from '@/lib/guests/store';
 import { useGuestOauthStore } from '@/lib/guests/oauth-store';
 import { opencodeClient } from '@/lib/opencode/client';
-import { getRuntimeKey, type RuntimeEndpointChangedDetail } from '@/lib/runtime-switch';
+import { getRuntimeKey, subscribeRuntimeEndpointChanged, type RuntimeEndpointChangedDetail } from '@/lib/runtime-switch';
 import { disposeTerminalInputTransport } from '@/lib/terminalApi';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
@@ -13,28 +16,34 @@ import { usePermissionStore } from '@/stores/permissionStore';
 import { useMessageQueueStore } from '@/stores/messageQueueStore';
 import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useGitStore } from '@/stores/useGitStore';
+import { useGitIdentitiesStore } from '@/stores/useGitIdentitiesStore';
 import { useGitHubPrStatusStore } from '@/stores/useGitHubPrStatusStore';
+import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
+import { repositoryBindingOwner } from '@/lib/source-control/repository-binding';
+import { useChangeRequestContextStore } from '@/stores/useChangeRequestContextStore';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
+import { sessionEvents } from '@/lib/sessionEvents';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
-import { useGitHubAuthStore } from '@/stores/useGitHubAuthStore';
 import { useQuotaStore } from '@/stores/useQuotaStore';
 import { useMcpStore } from '@/stores/useMcpStore';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useCommandsStore } from '@/stores/useCommandsStore';
+import { useAgentsStore } from '@/stores/useAgentsStore';
 import { useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
+import { useWalkthroughStore } from '@/stores/useWalkthroughStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { resetStreamingState } from '@/sync/streaming';
 import { replaceGlobalSessionStatusById } from '@/sync/global-session-status';
 import { resetSessionRemovalHistory } from '@/sync/session-event-freshness';
+import { resetBackgroundShells } from '@/sync/background-shells';
 import { resetSessionOrdering } from '@/sync/session-ordering';
 import { resetSessionActivityTiming } from '@/sync/session-activity-timing';
 import { syncDesktopSettings } from '@/lib/persistence';
 import { useSidebarStateStore } from '@/stores/useSidebarStateStore';
 import { resetGlobalBlockingRequests } from '@/sync/global-blocking-requests';
-import { useAgentGroupsStore } from '@/stores/useAgentGroupsStore';
 import { useMultiRunStore } from '@/stores/useMultiRunStore';
 import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore';
 
@@ -79,12 +88,16 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   // previous instance — drop it so stale sessions can't linger after a switch.
   useGlobalSessionsStore.getState().resetForRuntimeSwitch();
   useSpacesStore.getState().resetForRuntimeSwitch();
-  useAgentGroupsStore.getState().resetForRuntimeSwitch();
+  useSpaceArchivesStore.getState().resetForRuntimeSwitch();
+  resetSpaceModelAccess();
+  resetSpaceCreationRequests();
   useMultiRunStore.getState().resetForRuntimeSwitch();
   useSessionMultiSelectStore.getState().disable();
   useCommandsStore.getState().resetForRuntimeSwitch();
+  useAgentsStore.getState().resetForRuntimeSwitch();
   replaceGlobalSessionStatusById(new Map());
   resetGlobalBlockingRequests();
+  resetBackgroundShells();
   resetSessionOrdering();
   // Turn timings belong to the previous instance's sessions, and the reset also
   // restarts the resume window so the switch is treated as a fresh load.
@@ -94,7 +107,13 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   useMessageQueueStore.getState().resetForRuntimeSwitch(detail.previousRuntimeKey);
   useFileSearchStore.getState().resetForRuntimeSwitch();
   useGitStore.getState().resetForRuntimeSwitch(detail.runtimeKey);
+  sessionEvents.cancelPendingGitRefreshes();
+  useGitIdentitiesStore.getState().resetForRuntimeSwitch(detail.runtimeKey);
+  useSourceControlAuthStore.getState().resetForRuntimeSwitch();
+  repositoryBindingOwner.reset();
+  useChangeRequestContextStore.getState().resetForRuntimeSwitch();
   useGitHubPrStatusStore.getState().resetForRuntimeSwitch();
+  useWalkthroughStore.getState().reset();
   useSessionFoldersStore.getState().resetForRuntimeSwitch(detail.runtimeKey);
   useFilesViewTabsStore.getState().resetForRuntimeSwitch(detail.runtimeKey);
   // Guest rail icons are instance-owned. Keep the previous catalog and the
@@ -108,7 +127,7 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   // its rail tab, its issue pickers, its work-status rows — against a runtime
   // that has no such integration. `App` re-asks once the new instance answers.
   useLinearAuthStore.getState().resetForRuntimeSwitch();
-  useGitHubAuthStore.getState().resetForRuntimeSwitch();
+  useSourceControlAuthStore.getState().resetForRuntimeSwitch();
   // Work-status readouts served from the instance: quotas, MCP servers, skills
   // and agent memory. All were cached globally or by directory alone, so they
   // reported the previous instance until something happened to refetch.
@@ -116,12 +135,34 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   useMcpStore.getState().resetForRuntimeSwitch();
   useSkillsStore.getState().resetForRuntimeSwitch();
   useAgentMemoryStore.getState().reset();
-  // The Linear team filter names a team in one workspace. Carried across, it
-  // filters the new instance's issue list down to nothing.
-  useUIStore.getState().applyLinearIssueListFiltersForRuntime();
-  useSessionUIStore.getState().restoreForRuntimeSwitch(detail.runtimeKey);
+  useSessionUIStore.getState().restoreForRuntimeSwitch(detail.runtimeKey, detail.previousRuntimeKey);
   useSessionUIStore.setState({ worktreeDiscoveryByProject: new Map() });
   useUIStore.getState().setOpenGuestPage(null);
   resetStreamingState();
   queueMicrotask(() => void syncDesktopSettings());
 };
+
+/**
+ * True when the endpoint event only replaced credentials for the runtime that
+ * was already active, as the login gate does after a successful sign-in.
+ */
+export const isSameRuntimeEndpoint = (detail: RuntimeEndpointChangedDetail): boolean => (
+  detail.runtimeKey === detail.previousRuntimeKey && detail.apiBaseUrl === detail.previousApiBaseUrl
+);
+
+// Web and desktop reset for a change of runtime from the entry point, not from
+// App: the auth and compatibility gates unmount App while they show the login,
+// error, or version screen, and a host switch made from their switcher would
+// otherwise leave the SDK client and stores on the previous runtime. App then
+// mounts against the new runtime with an SDK that still calls the old one, so
+// initialization never completes and the startup overlay never lifts.
+// A same-runtime credential change stays with App, which resets only while
+// mounted: a sign-in on the login screen must keep the terminal tabs and
+// auto-review runs of the host being unlocked. Mobile keeps its own subscriber
+// because it tells transport switches apart from runtime switches.
+export const installRuntimeEndpointReset = (): (() => void) => (
+  subscribeRuntimeEndpointChanged((detail) => {
+    if (isSameRuntimeEndpoint(detail)) return;
+    resetAppForRuntimeEndpointChange(detail);
+  })
+);
