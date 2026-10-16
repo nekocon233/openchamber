@@ -1132,7 +1132,8 @@ export const createNativeAgentsRuntime = ({
       claudeUtility.shutdown();
       await claudeLive.shutdown();
       // The gateway gets its own terminate window before the app-server's.
-      await cliproxyapi.stop().catch(() => undefined);
+      // Shutdown, not stop: a restart must not read as a user stopping it.
+      await cliproxyapi.shutdown().catch(() => undefined);
       await appServer.stop();
     },
   };

@@ -261,9 +261,13 @@ export const ClassificationProvidersPage: React.FC<ClassificationProvidersPagePr
                 info={t('settings.routing.token.info')}
               >
                 <div className="flex w-full min-w-0 items-center gap-2">
+                  {/* new-password plus the manager markers keep saved credentials out of a settings field. */}
                   <Input
                     type="password"
-                    autoComplete="off"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-bwignore="true"
                     value={tokenInput}
                     onChange={(event) => setTokenInput(event.target.value)}
                     onKeyDown={(event) => { if (event.key === 'Enter') void handleSaveToken(); }}

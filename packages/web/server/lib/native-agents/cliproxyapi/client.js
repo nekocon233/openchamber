@@ -25,6 +25,9 @@ const unexpected = () => new NativeAgentError(
   'CLIProxyAPI answered a management call with an unexpected body',
   { status: 502, code: 'CLIPROXYAPI_UNEXPECTED_RESPONSE' },
 );
+const callbackRejected = (message) => new NativeAgentError(message, {
+  status: 409, code: 'CLIPROXYAPI_LOGIN_CALLBACK_REJECTED',
+});
 
 const authFileSchema = z.object({
   name: z.string().min(1).nullish(),
@@ -50,6 +53,8 @@ const authUrlSchema = z.object({
   state: z.string().min(1),
 });
 const loginStatusSchema = z.object({ status: z.string(), error: z.string().nullish() });
+// A refused callback comes back with the gateway's own explanation in `error`.
+const callbackRefusalSchema = z.object({ error: z.string().min(1) });
 
 /** One credential file, in the terms the settings page shows. */
 const account = (file) => ({
@@ -159,6 +164,29 @@ export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fe
       if (parsed.data.status === 'ok') return { status: 'connected', message: null };
       if (parsed.data.status === 'error') return { status: 'failed', message: parsed.data.error ?? null };
       return { status: 'pending', message: null };
+    },
+    /**
+     * Hands a pasted browser callback to the gateway, which exchanges the code
+     * in the background. `managed()` is not used here: it would read the 404 the
+     * gateway sends for an expired state as a missing management surface, and
+     * that body is exactly the explanation the caller wants to show.
+     */
+    async submitLoginCallback(state, code) {
+      let response;
+      try {
+        response = await send('/v0/management/oauth-callback', {
+          method: 'POST',
+          body: { provider: 'codex', state, code },
+        });
+      } catch {
+        throw notReachable();
+      }
+      if (response.ok) return;
+      if (response.status === 401 || response.status === 403) throw keyRejected();
+      const refusal = callbackRefusalSchema.safeParse(await response.json().catch(() => null));
+      if (refusal.success) throw callbackRejected(refusal.data.error);
+      if (response.status === 404) throw managementDisabled();
+      throw new NativeAgentError(`CLIProxyAPI answered ${response.status}`, { status: 502, code: 'CLIPROXYAPI_REQUEST_FAILED' });
     },
     /** False when this build has no cancel route; the state expires on its own. */
     async cancelLogin(state) {

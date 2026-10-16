@@ -105,4 +105,26 @@ describe('CLIProxyAPI client', () => {
     expect(calls[0].url).toBe('http://127.0.0.1:8317/v0/management/auth-files?name=codex-d016f257-user%40example.com-pro.json');
     expect(calls[0].options.method).toBe('DELETE');
   });
+
+  it('posts a pasted callback to the gateway under the management key', async () => {
+    const { calls, client } = gateway(() => json({ status: 'ok' }));
+    await expect(client.submitLoginCallback('abc123', 'the-code')).resolves.toBeUndefined();
+    expect(calls[0].url).toBe('http://127.0.0.1:8317/v0/management/oauth-callback');
+    expect(calls[0].options.method).toBe('POST');
+    expect(calls[0].options.headers.Authorization).toBe('Bearer management-test-key');
+    expect(JSON.parse(calls[0].options.body)).toEqual({ provider: 'codex', state: 'abc123', code: 'the-code' });
+  });
+
+  it('classifies a refused callback by its body, not by its status code', async () => {
+    const expired = gateway(() => json({ status: 'error', error: 'unknown or expired state' }, 404));
+    await expect(expired.client.submitLoginCallback('abc123', 'x')).rejects.toMatchObject({
+      code: 'CLIPROXYAPI_LOGIN_CALLBACK_REJECTED', status: 409, message: 'unknown or expired state',
+    });
+    const disabled = gateway(() => new Response(null, { status: 404 }));
+    await expect(disabled.client.submitLoginCallback('abc123', 'x')).rejects.toMatchObject({ code: 'CLIPROXYAPI_MANAGEMENT_DISABLED' });
+    const rejected = gateway(() => json({ error: 'invalid api key' }, 401));
+    await expect(rejected.client.submitLoginCallback('abc123', 'x')).rejects.toMatchObject({ code: 'CLIPROXYAPI_KEY_REJECTED' });
+    const down = gateway(() => { throw new Error('connect ECONNREFUSED 127.0.0.1:8317'); });
+    await expect(down.client.submitLoginCallback('abc123', 'x')).rejects.toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
+  });
 });

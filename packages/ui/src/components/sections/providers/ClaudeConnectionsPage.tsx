@@ -7,7 +7,7 @@ import { NumberInput } from '@/components/ui/number-input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
 import {
-  SettingsSection, SettingsStackedField, SettingsCheckboxRow, SettingsTwoColumn,
+  SettingsSection, SettingsStackedField, SettingsFieldRow, SettingsCheckboxRow, SettingsTwoColumn,
   SETTINGS_SELECT_TRIGGER_CLASS, SETTINGS_NUMBER_STEPPER_ROW_CLASS,
 } from '@/components/sections/shared/SettingsSection';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
@@ -30,10 +30,11 @@ const newConnection = (): ClaudeConnectionWrite => ({
   models: [newModel()],
 });
 
-export const ClaudeConnectionsPage: React.FC = () => {
+export const ClaudeConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }> = ({ titleLeading }) => {
   const { nativeAgents } = useRuntimeAPIs();
   const { t } = useI18n();
   const [connections, setConnections] = React.useState<ClaudeConnection[]>([]);
+  const [gatewayConnectionId, setGatewayConnectionId] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(false);
@@ -54,8 +55,16 @@ export const ClaudeConnectionsPage: React.FC = () => {
     setLoading(true);
     setError(false);
     try {
-      const values = await nativeAgents.listClaudeConnections();
-      if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) setConnections(values);
+      // The gateway's own connection is shown as the sign-in row, not as an
+      // ordinary editable connection, so its id names the row to leave out.
+      const [values, gateway] = await Promise.all([
+        nativeAgents.listClaudeConnections(),
+        nativeAgents.cliproxyapiStatus().catch(() => null),
+      ]);
+      if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) {
+        setConnections(values);
+        setGatewayConnectionId(gateway?.connection?.id ?? null);
+      }
     } catch {
       if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) setError(true);
     } finally {
@@ -63,6 +72,15 @@ export const ClaudeConnectionsPage: React.FC = () => {
     }
   }, [nativeAgents, runtimeKey]);
   React.useEffect(() => { void load(); }, [load]);
+  /** Reloads just the gateway's connection id, after a sign-in wrote one. */
+  const refreshGatewayConnection = React.useCallback(async () => {
+    try {
+      const gateway = await nativeAgents.cliproxyapiStatus();
+      if (mounted.current && getRuntimeKey() === runtimeKey) setGatewayConnectionId(gateway.connection?.id ?? null);
+    } catch {
+      // Keep the previous id; the next full load reconciles it.
+    }
+  }, [nativeAgents, runtimeKey]);
 
   const refreshModels = async (quotaProviderId: ClaudeConnection['quotaProviderId'] = null) => {
     if (getRuntimeKey() !== runtimeKey) return;
@@ -119,13 +137,13 @@ export const ClaudeConnectionsPage: React.FC = () => {
     setDraft(newConnection()); setEditing(null); setInvalid(false); setDeleting(null);
   };
   return (
-    <SettingsPageLayout title={t('settings.claudeConnections.title')} description={t('settings.claudeConnections.description')}>
+    <SettingsPageLayout title={t('settings.claudeConnections.title')} titleLeading={titleLeading} description={t('settings.claudeConnections.description')}>
       <SettingsSection title={t('settings.claudeConnections.connections')} divider={false} settingsItem="providers.claude-connections" contentClassName="space-y-4">
         {loading ? <p role="status">{t('common.loading')}</p> : null}
         {error ? <p role="alert" className="text-[var(--status-error-text)]">{t('settings.claudeConnections.failed')} <Button variant="link" disabled={busy} onClick={() => void load()}>{t('settings.claudeConnections.retry')}</Button></p> : null}
-        {connections.map((connection) => (
-          <SettingsStackedField key={connection.id} label={connection.name} info={connection.baseURL}>
-            {deleting === connection.id ? (
+        {connections.filter((connection) => connection.id !== gatewayConnectionId).map((connection) => (
+          deleting === connection.id ? (
+            <SettingsStackedField key={connection.id} label={connection.name} info={connection.baseURL}>
               <div className="space-y-2">
                 <p>{t('settings.claudeConnections.deleteHint')}</p>
                 <div className="flex gap-2">
@@ -133,7 +151,9 @@ export const ClaudeConnectionsPage: React.FC = () => {
                   <Button variant="ghost" disabled={busy} onClick={() => setDeleting(null)}>{t('settings.claudeConnections.cancel')}</Button>
                 </div>
               </div>
-            ) : <>
+            </SettingsStackedField>
+          ) : (
+            <SettingsFieldRow key={connection.id} label={connection.name} info={connection.baseURL}>
               <Button variant="outline" disabled={busy || draft !== null} onClick={() => {
                 setDeleting(null);
                 setEditing(connection.id);
@@ -141,12 +161,15 @@ export const ClaudeConnectionsPage: React.FC = () => {
                 setInvalid(false);
               }}>{t('settings.claudeConnections.edit')}</Button>
               <Button variant="ghost" disabled={busy || draft !== null} onClick={() => setDeleting(connection.id)}>{t('settings.claudeConnections.delete')}</Button>
-            </>}
-          </SettingsStackedField>
+            </SettingsFieldRow>
+          )
         ))}
+        <CliProxyApiSection onConnectionSaved={(connection) => {
+          void refreshModels(connection.quotaProviderId);
+          void refreshGatewayConnection();
+        }} />
         {!draft ? <Button disabled={busy || loading} onClick={begin}>{t('settings.claudeConnections.addCustom')}</Button> : null}
       </SettingsSection>
-      <CliProxyApiSection onConnectionSaved={(connection) => { void refreshModels(connection.quotaProviderId); }} />
       {draft ? <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <fieldset disabled={busy}>
           <SettingsSection title={t('settings.claudeConnections.connection')} contentClassName="space-y-4">

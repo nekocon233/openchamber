@@ -956,6 +956,7 @@ describe('native agents routes', () => {
     // never at a route guard.
     for (const call of [
       () => request(app).post(`${base}/login`),
+      () => request(app).post(`${base}/login/abc123/callback`).send({ url: 'http://localhost:1455/auth/callback?code=x&state=abc123' }),
       () => request(app).delete(`${base}/login/abc123`),
       () => request(app).delete(`${base}/accounts/user.json`),
       () => request(app).get(`${base}/models`),
@@ -964,6 +965,8 @@ describe('native agents routes', () => {
     ]) {
       expect((await call()).status).not.toBe(403);
     }
+    // The callback route validates its body before it reaches the service.
+    expect((await request(app).post(`${base}/login/abc123/callback`).send({})).status).toBe(400);
     await runtime.shutdown();
   });
 

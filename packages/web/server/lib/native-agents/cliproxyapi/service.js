@@ -10,6 +10,7 @@ import { createCliproxyapiStore, upstreamProxySchema } from './store.js';
 import { readCodexModelMetadata } from './models.js';
 
 export const cliproxyapiProxySchema = z.object({ upstreamProxy: upstreamProxySchema.nullable() });
+export const cliproxyapiCallbackSchema = z.object({ url: z.string().trim().min(1).max(8192) });
 export const cliproxyapiConnectionSchema = z.object({
   connectionId: z.string().uuid().nullable().default(null),
   name: z.string().trim().min(1).max(120),
@@ -23,6 +24,38 @@ const notRunning = () => new NativeAgentError(
   'Start the CLIProxyAPI gateway on the server computer first',
   { status: 409, code: 'CLIPROXYAPI_NOT_INSTALLED' },
 );
+
+const callbackInvalid = (message) => new NativeAgentError(message, {
+  status: 400, code: 'CLIPROXYAPI_LOGIN_CALLBACK_INVALID',
+});
+const callbackMismatch = () => new NativeAgentError(
+  'The pasted address belongs to a different sign-in attempt',
+  { status: 400, code: 'CLIPROXYAPI_LOGIN_CALLBACK_MISMATCH' },
+);
+
+/**
+ * The authorization code inside the browser's callback address. The address is
+ * read for its query and never fetched: a browser running on another computer
+ * cannot reach the gateway's loopback listener, so the code travels to the
+ * gateway through its management API instead.
+ */
+const readCallbackCode = (url, state) => {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw callbackInvalid('The pasted text is not a callback address');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw callbackInvalid('The pasted text is not a callback address');
+  }
+  if (parsed.searchParams.get('state') !== state) throw callbackMismatch();
+  const denial = parsed.searchParams.get('error') ?? parsed.searchParams.get('error_description');
+  if (denial !== null && denial !== '') throw callbackInvalid(`The sign-in was denied: ${denial}`);
+  const code = parsed.searchParams.get('code');
+  if (code === null || code === '') throw callbackInvalid('The pasted address carries no authorization code');
+  return code;
+};
 
 const keyHints = (keys) => keys.map((key) => ({ hint: key.slice(-4), length: key.length }));
 
@@ -105,6 +138,13 @@ export const createCliproxyapiService = ({
       await gateway.stop();
       return this.status();
     },
+    /**
+     * Terminal stop for a host shutdown: the process goes, the switch stays
+     * on, so the next boot resumes it instead of pretending a person stopped it.
+     */
+    async shutdown() {
+      await gateway.stop({ persist: false });
+    },
     async setUpstreamProxy(input) {
       const parsed = cliproxyapiProxySchema.parse(input);
       await store.update((current) => ({ ...current, upstreamProxy: parsed.upstreamProxy }));
@@ -165,6 +205,13 @@ export const createCliproxyapiService = ({
     },
     async cancelLogin(state) {
       return { cancelled: await clientFor(await store.read()).cancelLogin(state) };
+    },
+    /** Hands a pasted browser callback to the running gateway; no reachability pre-check, so a stopped gateway reads as unreachable rather than uninstalled. */
+    async submitLoginCallback(state, input) {
+      const { url } = cliproxyapiCallbackSchema.parse(input);
+      const code = readCallbackCode(url, state);
+      await clientFor(await store.read()).submitLoginCallback(state, code);
+      return { accepted: true };
     },
     async removeAccount(name) {
       const gatewayClient = clientFor(await store.read());

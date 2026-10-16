@@ -1,4 +1,4 @@
-import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCancelResultSchema, cliproxyapiImportResultSchema, cliproxyapiLoginSchema, cliproxyapiModelsSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
+import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCallbackResultSchema, cliproxyapiCancelResultSchema, cliproxyapiImportResultSchema, cliproxyapiLoginSchema, cliproxyapiModelsSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
 import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
 import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
@@ -42,6 +42,7 @@ const errorBodySchema = z.object({ error: z.string().optional(), code: z.string(
 type NativeWriteBody =
   | { sourceId: string; directory: string }
   | { upstreamProxy: string | null }
+  | { url: string }
   | CliproxyapiConnectionWrite
   | ClaudeConnectionWrite
   | CodexConnectionWrite
@@ -134,6 +135,9 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   beginCliproxyapiLogin: () => sendParsed('/api/native/claude/cliproxyapi/login', cliproxyapiLoginSchema, { method: 'POST' }),
   cliproxyapiLoginStatus: (state) => readParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, {}, cliproxyapiLoginStatusSchema),
   cancelCliproxyapiLogin: async (state) => (await sendParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, cliproxyapiCancelResultSchema, { method: 'DELETE', query: {} })).cancelled,
+  submitCliproxyapiLoginCallback: async (state, url) => {
+    await sendParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}/callback`, cliproxyapiCallbackResultSchema, { method: 'POST', body: { url } });
+  },
   removeCliproxyapiAccount: async (name) => { await sendParsed(`/api/native/claude/cliproxyapi/accounts/${encodeURIComponent(name)}`, cliproxyapiRemovedSchema, { method: 'DELETE', query: {} }); },
   saveCliproxyapiConnection: (input) => sendParsed('/api/native/claude/cliproxyapi/connection', claudeConnectionSchema, { method: 'POST', body: input }),
   cliproxyapiModels: () => readParsed('/api/native/claude/cliproxyapi/models', {}, cliproxyapiModelsSchema),

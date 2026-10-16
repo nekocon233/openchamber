@@ -23,6 +23,7 @@ export const createVSCodeNativeAgentsAPI = (): NativeAgentsAPI => ({
   beginCliproxyapiLogin: unsupported,
   cliproxyapiLoginStatus: unsupported,
   cancelCliproxyapiLogin: unsupported,
+  submitCliproxyapiLoginCallback: unsupported,
   removeCliproxyapiAccount: unsupported,
   saveCliproxyapiConnection: unsupported,
   cliproxyapiModels: unsupported,

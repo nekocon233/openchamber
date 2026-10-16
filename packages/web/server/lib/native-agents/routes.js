@@ -5,7 +5,7 @@
 import { z } from 'zod';
 
 import { connectionWriteSchema } from './claude/connections.js';
-import { cliproxyapiConnectionSchema, cliproxyapiImportSchema, cliproxyapiProxySchema } from './cliproxyapi/service.js';
+import { cliproxyapiCallbackSchema, cliproxyapiConnectionSchema, cliproxyapiImportSchema, cliproxyapiProxySchema } from './cliproxyapi/service.js';
 import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
@@ -158,6 +158,10 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.post(`${cliproxyapi}/proxy`, handle((req) => runtime.cliproxyapi.setUpstreamProxy(cliproxyapiProxySchema.parse(req.body))));
   app.post(`${cliproxyapi}/login`, handle(() => runtime.cliproxyapi.beginLogin()));
   app.get(`${cliproxyapi}/login/:state`, handle((req) => runtime.cliproxyapi.loginStatus(loginStateParam.parse(req.params.state))));
+  app.post(`${cliproxyapi}/login/:state/callback`, handle((req) => runtime.cliproxyapi.submitLoginCallback(
+    loginStateParam.parse(req.params.state),
+    cliproxyapiCallbackSchema.parse(req.body),
+  )));
   app.delete(`${cliproxyapi}/login/:state`, handle((req) => runtime.cliproxyapi.cancelLogin(loginStateParam.parse(req.params.state))));
   app.delete(`${cliproxyapi}/accounts/:name`, handle(async (req) => {
     await runtime.cliproxyapi.removeAccount(accountNameParam.parse(req.params.name));

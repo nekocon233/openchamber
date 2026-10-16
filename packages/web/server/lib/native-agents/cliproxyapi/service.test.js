@@ -18,10 +18,14 @@ const credential = { name: 'codex-user@example.com-pro.json', email: 'user@examp
 const fixture = async ({ adoptableKey = 'adopted-client-key', seedKeys = null, enabled = false, listening = false } = {}) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cliproxyapi-service-'));
   directories.push(dataDir);
-  const state = { listening, spawned: [], terminated: [], clientKeys: ['gateway-key'], configWrites: [], accounts: [credential], existingConnection: null };
+  const state = { listening, spawned: [], terminated: [], clientKeys: ['gateway-key'], configWrites: [], accounts: [credential], existingConnection: null, callbackBodies: [] };
   const fetchImpl = async (url, options = {}) => {
     const target = String(url);
     if (!state.listening) throw new Error('connect ECONNREFUSED 127.0.0.1');
+    if (target.includes('/v0/management/oauth-callback')) {
+      state.callbackBodies.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+    }
     if (target.includes(MANAGEMENT)) {
       if (options.method === 'DELETE') return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
       return new Response(JSON.stringify({ files: state.accounts }), { status: 200, headers: { 'content-type': 'application/json', 'x-cpa-version': '8.0.31' } });
@@ -127,6 +131,15 @@ describe('CLIProxyAPI managed gateway service', () => {
     expect(await service.resume()).toMatchObject({ running: false });
   });
 
+  it('keeps the gateway enabled for the next boot when the host shuts down', async () => {
+    const { state, service } = await fixture({ seedKeys: ['gateway-key'] });
+    await service.start();
+    await service.shutdown();
+    expect(state.terminated).toHaveLength(1);
+    expect(await service.resume()).toMatchObject({ running: true });
+    expect(state.spawned).toHaveLength(2);
+  });
+
   it('restarts a running gateway when the upstream proxy changes', async () => {
     const { dataDir, state, service } = await fixture();
     await service.start();
@@ -198,5 +211,35 @@ describe('CLIProxyAPI managed gateway service', () => {
   it('refuses to start a login while the gateway is not running', async () => {
     const { service } = await fixture();
     await expect(service.beginLogin()).rejects.toMatchObject({ code: 'CLIPROXYAPI_NOT_INSTALLED' });
+  });
+
+  it('hands the code inside a pasted callback address to the gateway', async () => {
+    const { state, service } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    await expect(service.submitLoginCallback('abc123', { url: 'http://localhost:1455/auth/callback?code=a%2Fb%2Bc&state=abc123' }))
+      .resolves.toEqual({ accepted: true });
+    expect(state.callbackBodies).toEqual([{ provider: 'codex', state: 'abc123', code: 'a/b+c' }]);
+  });
+
+  it('refuses a pasted address that is not this attempt\'s callback, without reaching the gateway', async () => {
+    const { state, service } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    await expect(service.submitLoginCallback('abc123', { url: 'http://localhost:1455/auth/callback?code=x&state=other' }))
+      .rejects.toMatchObject({ code: 'CLIPROXYAPI_LOGIN_CALLBACK_MISMATCH' });
+    for (const url of [
+      'http://localhost:1455/auth/callback?state=abc123',
+      'http://localhost:1455/auth/callback?error=access_denied&state=abc123',
+      'http://localhost:1455/auth/callback?code=&state=abc123',
+      'not a url',
+      'localhost:1455/auth/callback?code=x&state=abc123',
+    ]) {
+      await expect(service.submitLoginCallback('abc123', { url }))
+        .rejects.toMatchObject({ code: 'CLIPROXYAPI_LOGIN_CALLBACK_INVALID' });
+    }
+    expect(state.callbackBodies).toEqual([]);
+  });
+
+  it('reads a stopped gateway as unreachable when a callback is submitted', async () => {
+    const { service } = await fixture();
+    await expect(service.submitLoginCallback('abc123', { url: 'http://localhost:1455/auth/callback?code=x&state=abc123' }))
+      .rejects.toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
   });
 });

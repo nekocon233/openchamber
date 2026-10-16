@@ -1023,20 +1023,36 @@ truth (Go ignores the macOS system proxy).
 single-flight `start()`, readiness defined as the port answering rather than a
 log pattern, a pre-spawn probe that refuses a port someone else owns with
 `CLIPROXYAPI_PORT_IN_USE`, crash backoff capped at 30 s, `stop()` that persists
-`enabled: false`, and a kill-on-parent-exit handler. `start()` regenerates the
+`enabled: false` (a person asked for that), and a kill-on-parent-exit handler.
+A stop that is not a person's decision, like a host shutdown or a restart, goes
+through `stop({ persist: false })` and leaves the switch on. `start()`
+regenerates the
 config, prepares the binary, spawns it, waits for the port, and reads the
 running version from the `X-Cpa-Version` header. The server resumes a gateway
 whose store says `enabled` at boot; nothing else starts one.
 
 `cliproxyapi/service.js` composes the store, the gateway and the management
 client into what the provider section drives: `status()`, `start()`, `stop()`,
-`setUpstreamProxy()` (which restarts a running gateway, because the config is
+`shutdown()` (the host-shutdown stop that keeps the gateway enabled for the
+next boot), `setUpstreamProxy()` (which restarts a running gateway, because the
+config is
 read at startup), `beginLogin()`, `loginStatus(state)`, `cancelLogin(state)`,
-`removeAccount(name)` and `saveConnection(input)`. `status()` reports
+`submitLoginCallback(state, url)`, `removeAccount(name)` and
+`saveConnection(input)`. `status()` reports
 `{ configured, enabled, running, ready, port, authDir, upstreamProxy,
 installedVersion, runningVersion, install, managementEnabled, keyRejected,
 accounts, clientKeys, lastError, restarting }`; `install` is a stat, never a
 subprocess, so polling stays cheap.
+
+`submitLoginCallback(state, url)` serves a browser that cannot reach the
+gateway's loopback listener: the authorization page ends on
+`http://localhost:1455/auth/callback`, which only resolves on the computer
+running the browser, so the user pastes that address back. The URL is parsed for
+its code and never fetched, its `state` must equal the attempt's, and the code
+goes to the gateway's `POST /v0/management/oauth-callback`, which exchanges it in
+the background while `loginStatus` keeps polling. A gateway that explains a
+refusal in its response body reaches the caller as
+`CLIPROXYAPI_LOGIN_CALLBACK_REJECTED` with that text as the message.
 
 `cliproxyapi/models.js` reads the Codex CLI's own model cache
 (`$CODEX_HOME/models_cache.json`, `~/.codex` otherwise) for the metadata a
@@ -1056,7 +1072,8 @@ identified by its id, not by a prefix on every model.
 Routes are `GET /api/native/claude/cliproxyapi` (status),
 `GET /models`, `POST /import`,
 `POST /start`, `POST /stop`, `POST /proxy`, `POST /login`,
-`GET|DELETE /login/:state`, `DELETE /accounts/:name` and `POST /connection`.
+`GET|DELETE /login/:state`, `POST /login/:state/callback`,
+`DELETE /accounts/:name` and `POST /connection`.
 Any authenticated client may call them, including one reaching the server
 through a tunnel or the mobile app: authentication is the boundary, not where
 the request came from. The memory routes keep their own local-management

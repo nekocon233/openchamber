@@ -607,7 +607,7 @@ export const ProvidersPage: React.FC = () => {
   // so nothing below can render it. Where the runtime cannot reach the CLIs the
   // entry never appears, and the id stays an ordinary (unknown) provider.
   if (nativeAgents.supported && isNativeAgentPageId(selectedProviderId)) {
-    return selectedProviderId === CLAUDE_NATIVE_ID ? <ClaudeConnectionsPage /> : <CodexConnectionsPage />;
+    return selectedProviderId === CLAUDE_NATIVE_ID ? <ClaudeConnectionsPage titleLeading={backButton} /> : <CodexConnectionsPage titleLeading={backButton} />;
   }
 
   if (selectedProviderId === CLASSIFICATION_PAGE_ID) {

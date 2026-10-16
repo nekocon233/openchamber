@@ -1,4 +1,4 @@
-import type { NativeAgentsAPI, RuntimeAPIs } from '@/lib/api/types';
+import type { FollowUpQueueAPI, NativeAgentsAPI, RuntimeAPIs, SidebarStateAPI } from '@/lib/api/types';
 import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
 
 const untouchable = (): never => {
@@ -7,6 +7,19 @@ const untouchable = (): never => {
 
 const unsupported = async (): Promise<never> => {
   throw new NativeAgentsUnsupportedError();
+};
+
+// Background stores read `supported` while their modules initialize, so these
+// answer with a disabled capability instead of throwing at import time.
+const disabledFollowUpQueue: FollowUpQueueAPI = {
+  supported: false,
+  load: async () => null,
+  mutate: async () => null,
+};
+const disabledSidebarState: SidebarStateAPI = {
+  supported: false,
+  load: async () => null,
+  mutate: async () => null,
 };
 
 /** A native agents API whose methods fail unless the test supplies them. */
@@ -25,6 +38,7 @@ export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): Na
   beginCliproxyapiLogin: unsupported,
   cliproxyapiLoginStatus: unsupported,
   cancelCliproxyapiLogin: unsupported,
+  submitCliproxyapiLoginCallback: unsupported,
   removeCliproxyapiAccount: unsupported,
   saveCliproxyapiConnection: unsupported,
   cliproxyapiModels: unsupported,
@@ -70,7 +84,7 @@ export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): Na
  */
 export const createTestRuntimeAPIs = (
   nativeAgents: NativeAgentsAPI,
-  others: Partial<Pick<RuntimeAPIs, 'sidebarState'>> = {},
+  others: Partial<Pick<RuntimeAPIs, 'sidebarState' | 'followUpQueue'>> = {},
 ): RuntimeAPIs => ({
   runtime: { platform: 'web', isDesktop: false, isVSCode: false },
   get terminal() { return untouchable(); },
@@ -80,7 +94,7 @@ export const createTestRuntimeAPIs = (
   get permissions() { return untouchable(); },
   get notifications() { return untouchable(); },
   get sourceControl() { return untouchable(); },
-  get sidebarState() { return others.sidebarState ?? untouchable(); },
-  get followUpQueue() { return untouchable(); },
+  get sidebarState() { return others.sidebarState ?? disabledSidebarState; },
+  get followUpQueue() { return others.followUpQueue ?? disabledFollowUpQueue; },
   nativeAgents,
 });

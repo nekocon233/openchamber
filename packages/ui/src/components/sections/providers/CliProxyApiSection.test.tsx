@@ -4,6 +4,7 @@ import { Window } from 'happy-dom';
 
 import type { NativeAgentsAPI } from '@/lib/api/types';
 import type { CliproxyapiConnectionWrite, CliproxyapiStatus } from '@/lib/native-agents/connections';
+import { NativeAgentsRequestError } from '@/lib/native-agents/errors';
 
 const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
@@ -77,6 +78,15 @@ const render = async (api: NativeAgentsAPI, children: React.ReactNode) => {
 };
 const text = () => container?.textContent ?? '';
 const button = (label: string) => [...(container?.querySelectorAll('button') ?? [])].find((node) => node.textContent === label);
+const setInput = async (field: HTMLInputElement | null | undefined, value: string) => {
+  await act(async () => {
+    if (!field) return;
+    // React tracks the value through its own setter, so set it the DOM way.
+    const setter = Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(field, value);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+};
 
 beforeEach(() => {
   // Sign-in opens the browser; the test only cares that the attempt started.
@@ -90,32 +100,47 @@ afterEach(async () => {
 });
 
 describe('CLIProxyAPI section', () => {
-  test('offers to start a gateway that is not running', async () => {
+  test('keeps the gateway controls hidden while nothing is wrong', async () => {
     const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status() });
     await render(api, <CliProxyApiSection />);
-    expect(text()).toContain('Stopped');
-    expect(text()).toContain('CLIProxyAPI 8.0.31');
-    expect(button('Start gateway')).toBeDefined();
-    expect(button('Stop gateway')).toBeUndefined();
+    expect(button('Advanced')).toBeUndefined();
+    expect(button('Start gateway')).toBeUndefined();
+    expect(button('Sign in a ChatGPT account')?.disabled).toBe(false);
   });
 
-  test('asks to download first when nothing is installed yet', async () => {
+  test('reveals the gateway controls when the gateway reports a failure', async () => {
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status({ installedVersion: null, install: { ...status().install, prepared: false, path: null } }),
+      cliproxyapiStatus: async () => status({ installedVersion: null, lastError: 'The gateway stopped on its own', install: { ...status().install, prepared: false, path: null } }),
     });
     await render(api, <CliProxyApiSection />);
+    expect(text()).toContain('The gateway stopped on its own');
+    await act(async () => { button('Advanced')?.click(); });
     expect(button('Download and start')).toBeDefined();
   });
 
-  test('reports a running gateway, its version and its accounts', async () => {
+  test('shows the signed-in account on the row instead of the sign-in button', async () => {
     const api = createTestNativeAgentsAPI({
       cliproxyapiStatus: async () => status({ enabled: true, running: true, ready: true, runningVersion: '8.0.31', managementEnabled: true, accounts: [account] }),
     });
     await render(api, <CliProxyApiSection />);
-    expect(text()).toContain('Running');
     expect(text()).toContain('a@example.com');
-    expect(button('Stop gateway')).toBeDefined();
-    expect(button('Sign in a ChatGPT account')?.disabled).toBe(false);
+    expect(button('Sign in a ChatGPT account')).toBeUndefined();
+    expect(button('Sign out')).toBeDefined();
+    expect(button('Advanced')).toBeUndefined();
+  });
+
+  test('brings the sign-in button back after signing out', async () => {
+    let accounts = [account];
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ accounts }),
+      removeCliproxyapiAccount: async () => { accounts = []; },
+    });
+    await render(api, <CliProxyApiSection />);
+    expect(button('Sign in a ChatGPT account')).toBeUndefined();
+    await act(async () => { button('Sign out')?.click(); });
+    await act(async () => { button('Sign out')?.click(); });
+    expect(button('Sign in a ChatGPT account')).toBeDefined();
+    expect(text()).not.toContain('a@example.com');
   });
 
   test('names a target this computer cannot run', async () => {
@@ -124,28 +149,25 @@ describe('CLIProxyAPI section', () => {
     });
     await render(api, <CliProxyApiSection />);
     expect(text()).toContain('not a supported target');
+    expect(button('Sign in a ChatGPT account')?.disabled).toBe(true);
+    await act(async () => { button('Advanced')?.click(); });
     expect(button('Start gateway')?.disabled).toBe(true);
   });
 
   test('saves the upstream proxy', async () => {
     const saved: Array<string | null> = [];
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status(),
+      cliproxyapiStatus: async () => status({ lastError: 'The gateway stopped on its own' }),
       setCliproxyapiProxy: async ({ upstreamProxy }) => {
         saved.push(upstreamProxy);
         return status({ upstreamProxy });
       },
     });
     await render(api, <CliProxyApiSection />);
+    await act(async () => { button('Advanced')?.click(); });
     const field = container?.querySelector<HTMLInputElement>('input[type="url"]');
     expect(field).not.toBeNull();
-    await act(async () => {
-      if (!field) return;
-      // React tracks the value through its own setter, so set it the DOM way.
-      const setter = Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, 'value')?.set;
-      setter?.call(field, 'http://127.0.0.1:7890');
-      field.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await setInput(field, 'http://127.0.0.1:7890');
     await act(async () => { button('Save')?.click(); });
     expect(saved).toEqual(['http://127.0.0.1:7890']);
   });
@@ -154,8 +176,17 @@ describe('CLIProxyAPI section', () => {
     let polls = 0;
     const api = createTestNativeAgentsAPI({
       cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true, accounts: polls === 0 ? [] : [account] }),
+      startCliproxyapiGateway: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
       beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device' }),
       cliproxyapiLoginStatus: async () => (polls++ === 0 ? { status: 'pending', message: null } : { status: 'connected', message: null }),
+      importCliproxyapiModels: async () => ({
+        connection: {
+          id: 'connection-1', revision: 1, hasKey: true, kind: 'anthropic', name: 'CLIProxyAPI',
+          baseURL: 'http://127.0.0.1:8317', auth: 'api-key', models: [], quotaProviderId: null,
+        },
+        imported: 0,
+        skipped: 0,
+      }),
     });
     await render(api, <CliProxyApiSection />);
     await act(async () => { button('Sign in a ChatGPT account')?.click(); });
@@ -170,7 +201,7 @@ describe('CLIProxyAPI section', () => {
     let imports = 0;
     const reported: string[] = [];
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: false }),
       importCliproxyapiModels: async () => {
         imports += 1;
         return {
@@ -187,6 +218,7 @@ describe('CLIProxyAPI section', () => {
       },
     });
     await render(api, <CliProxyApiSection onConnectionSaved={(connection) => reported.push(connection.id)} />);
+    await act(async () => { button('Advanced')?.click(); });
     await act(async () => { button('Import gateway models')?.click(); });
     expect(imports).toBe(1);
     expect(text()).toContain('Imported 9 models');
@@ -198,6 +230,7 @@ describe('CLIProxyAPI section', () => {
     const cancelled: string[] = [];
     const api = createTestNativeAgentsAPI({
       cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      startCliproxyapiGateway: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
       beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device' }),
       cliproxyapiLoginStatus: async () => ({ status: 'pending', message: null }),
       cancelCliproxyapiLogin: async (state) => { cancelled.push(state); return true; },
@@ -212,7 +245,7 @@ describe('CLIProxyAPI section', () => {
     const drafts: CliproxyapiConnectionWrite[] = [];
     const reported: string[] = [];
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: false }),
       saveCliproxyapiConnection: async (input) => {
         drafts.push(input);
         return {
@@ -222,11 +255,119 @@ describe('CLIProxyAPI section', () => {
       },
     });
     await render(api, <CliProxyApiSection onConnectionSaved={(connection) => reported.push(connection.id)} />);
+    await act(async () => { button('Advanced')?.click(); });
     await act(async () => { button('Create connection')?.click(); });
     expect(drafts[0]).toMatchObject({ connectionId: null, name: 'CLIProxyAPI' });
     expect(drafts[0].models[0]).toMatchObject({
       modelID: 'gpt-6.1-sol', contextWindow: 872000, outputLimit: 128000, input: { image: true, pdf: false },
     });
     expect(reported).toEqual(['connection-1']);
+  });
+
+  test('submits a pasted callback address and finishes the sign-in', async () => {
+    const submitted: Array<[string, string]> = [];
+    let polls = 0;
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true, accounts: polls === 0 ? [] : [account] }),
+      startCliproxyapiGateway: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device' }),
+      submitCliproxyapiLoginCallback: async (state, url) => { submitted.push([state, url]); },
+      cliproxyapiLoginStatus: async () => (polls++ === 0 ? { status: 'pending', message: null } : { status: 'connected', message: null }),
+      importCliproxyapiModels: async () => ({
+        connection: {
+          id: 'connection-1', revision: 1, hasKey: true, kind: 'anthropic', name: 'CLIProxyAPI',
+          baseURL: 'http://127.0.0.1:8317', auth: 'api-key', models: [], quotaProviderId: null,
+        },
+        imported: 0,
+        skipped: 0,
+      }),
+    });
+    await render(api, <CliProxyApiSection />);
+    await act(async () => { button('Sign in a ChatGPT account')?.click(); });
+    await setInput(container?.querySelector<HTMLInputElement>('input[aria-label="Callback address"]'), 'http://localhost:1455/auth/callback?code=xyz&state=abc123');
+    await act(async () => { button('Use this address')?.click(); });
+    expect(submitted).toEqual([['abc123', 'http://localhost:1455/auth/callback?code=xyz&state=abc123']]);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
+    expect(text()).toContain('a@example.com');
+  }, 15_000);
+
+  test('ends the attempt when the gateway refuses the pasted link', async () => {
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      startCliproxyapiGateway: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device' }),
+      submitCliproxyapiLoginCallback: async () => { throw new NativeAgentsRequestError('unknown or expired state', 409, 'CLIPROXYAPI_LOGIN_CALLBACK_REJECTED'); },
+    });
+    await render(api, <CliProxyApiSection />);
+    await act(async () => { button('Sign in a ChatGPT account')?.click(); });
+    await setInput(container?.querySelector<HTMLInputElement>('input[aria-label="Callback address"]'), 'http://localhost:1455/auth/callback?code=xyz&state=abc123');
+    await act(async () => { button('Use this address')?.click(); });
+    expect(text()).toContain('The gateway did not accept that link.');
+    expect(text()).toContain('unknown or expired state');
+    expect(button('Sign in a ChatGPT account')).toBeDefined();
+    expect(button('Use this address')).toBeUndefined();
+  });
+
+  test('shows the gateway reason under the failure line when the sign-in fails', async () => {
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      startCliproxyapiGateway: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device' }),
+      cliproxyapiLoginStatus: async () => ({ status: 'failed', message: 'Failed to exchange authorization code for tokens' }),
+    });
+    await render(api, <CliProxyApiSection />);
+    await act(async () => { button('Sign in a ChatGPT account')?.click(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
+    expect(text()).toContain('The sign-in did not complete. Try again.');
+    expect(text()).toContain('Failed to exchange authorization code for tokens');
+  }, 15_000);
+
+  test('brings the gateway up and writes the connection on a one-click sign-in', async () => {
+    const calls: string[] = [];
+    let polls = 0;
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ accounts: polls === 0 ? [] : [account] }),
+      startCliproxyapiGateway: async () => { calls.push('start'); return status({ ready: true, running: true, enabled: true, managementEnabled: true }); },
+      beginCliproxyapiLogin: async () => { calls.push('login'); return { state: 'abc123', url: 'https://auth.openai.com/codex/device' }; },
+      cliproxyapiLoginStatus: async () => (polls++ === 0 ? { status: 'pending', message: null } : { status: 'connected', message: null }),
+      importCliproxyapiModels: async () => {
+        calls.push('import');
+        return {
+          connection: {
+            id: 'connection-1', revision: 1, hasKey: true, kind: 'anthropic', name: 'CLIProxyAPI',
+            baseURL: 'http://127.0.0.1:8317', auth: 'api-key', models: [], quotaProviderId: null,
+          },
+          imported: 9,
+          skipped: 5,
+        };
+      },
+    });
+    await render(api, <CliProxyApiSection onConnectionSaved={(connection) => calls.push(`saved:${connection.id}`)} />);
+    await act(async () => { button('Sign in a ChatGPT account')?.click(); });
+    expect(calls).toEqual(['start', 'login']);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
+    expect(calls).toEqual(['start', 'login', 'import', 'saved:connection-1']);
+    expect(text()).toContain('Imported 9 models');
+    expect(text()).toContain('a@example.com');
+  }, 15_000);
+
+  test('renders as the sign-in row named after the gateway connection', async () => {
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ connection: { id: 'connection-1', name: 'CLIProxyAPI / ChatGPT' } }),
+    });
+    await render(api, <CliProxyApiSection />);
+    expect(text()).toContain('CLIProxyAPI / ChatGPT');
+    expect(button('Sign in a ChatGPT account')).toBeDefined();
+    expect(button('Edit')).toBeUndefined();
+    expect(button('Delete')).toBeUndefined();
+  });
+
+  test('names the row CLIProxyAPI before any connection exists', async () => {
+    const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status() });
+    await render(api, <CliProxyApiSection />);
+    expect(text()).toContain('CLIProxyAPI');
+    expect(button('Sign in a ChatGPT account')).toBeDefined();
   });
 });

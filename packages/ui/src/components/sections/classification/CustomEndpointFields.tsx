@@ -125,9 +125,13 @@ export const CustomEndpointFields: React.FC = () => {
         </SettingsFieldRow>
         <SettingsFieldRow label={t('settings.classification.custom.key.label')} info={t('settings.classification.custom.key.info')}>
           <div className={ROW_CLASS}>
+            {/* new-password plus the manager markers keep saved credentials out of a settings field. */}
             <Input
               type="password"
-              autoComplete="off"
+              autoComplete="new-password"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-bwignore="true"
               value={key}
               onChange={(event) => setKey(event.target.value)}
               onKeyDown={saveOnEnter}

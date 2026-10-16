@@ -147,7 +147,9 @@ of the OpenCode provider editor. It uses `RuntimeAPIs.nativeAgents` to manage
 server-local connections with explicit Save and Delete actions. API keys are
 write-only and empty edit fields preserve the saved key. The form and search
 entry are absent in VS Code. `providers.claude-connections` prepares the native
-provider selection before highlighting the connection section.
+provider selection before highlighting the connection section. Both native
+pages render the Providers page's back control through their `titleLeading`
+prop, so a card opened from the grid always has a way back.
 
 Saving or deleting refreshes the native catalog and replaces native providers
 in every loaded directory snapshot without changing the chosen chat model.
@@ -156,18 +158,26 @@ connections never fall back to a different service. Failed reads retain the
 previous list, and stale reads cannot replace a newer mutation or another
 runtime's state.
 
-`CliProxyApiSection` owns the CLIProxyAPI gateway OpenChamber runs itself: a
-status line for the supervised process, Start, Stop, the optional upstream proxy
-(which restarts the gateway, because it reads its config at startup), the
-gateway's ChatGPT accounts with sign-out, the sign-in flow, and the Claude Code
-connection that points at it. It reads the server's status on every visit, starts
-and stops for any authenticated client, polls
-one bounded sign-in attempt and cancels a pending attempt when the page is left.
-Its connection block imports the gateway's models in one action (the server
-pairs the gateway's list with this computer's metadata) and otherwise keeps one
-manual model row; the button says whether it would create or update the gateway
-connection. The address and management key are the server's business and never appear here;
-a connection the section creates reports back so the model picker refreshes.
+`CliProxyApiSection` is the ChatGPT sign-in row inside the Claude Code
+connection list, named after the gateway connection it writes; the page hides
+that connection from the ordinary list and keeps the row in place even before
+the connection exists. The CLIProxyAPI gateway behind it is a service
+OpenChamber runs itself, and the row keeps that out of the way: the sign-in
+button brings the gateway up (downloading the pinned build on first use),
+starts the browser sign-in through the gateway's management API, accepts a
+pasted callback address for browsers that cannot reach the gateway's localhost
+listener, and on success writes the Claude Code connection so the models appear
+in the picker; a failure after the account is stored stays a notice rather than
+a failed sign-in. The first signed-in account shares the row: its email and a
+sign-out button replace the sign-in button until that account is signed out,
+which brings the button back. Further accounts sit under the row with their own
+sign-out, the row itself offers no edit or delete, and a failed attempt shows
+the gateway's own reason under the translated failure line. The gateway's own
+controls stay out of sight until something is wrong (an unsupported target, a
+crash, a rejected management key, a disabled management API): only then does an
+Advanced disclosure appear with the supervised process and Start and Stop, the
+upstream proxy (changing it restarts the gateway), and the connection block
+that imports the gateway's models or edits a single model row by hand.
 `providers.cliproxyapi` prepares the same page and highlights the section.
 
 ### Codex connections

@@ -275,6 +275,23 @@ describe('web native agents API', () => {
     await expect(createWebNativeAgentsAPI().abort('ncl_x')).rejects.toMatchObject({ status: 409, code: 'NATIVE_BACKEND_MISMATCH' });
   });
 
+  it('posts a pasted callback address to the sign-in attempt route', async () => {
+    const bodies: string[] = [];
+    let method = '';
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
+      bodies.push(String(init?.body));
+      method = String(init?.method);
+      return Response.json({ accepted: true });
+    });
+
+    await createWebNativeAgentsAPI().submitCliproxyapiLoginCallback('abc123', 'http://localhost:1455/auth/callback?code=x&state=abc123');
+
+    expect(requests[0]?.pathname).toBe('/api/native/claude/cliproxyapi/login/abc123/callback');
+    expect(method).toBe('POST');
+    expect(JSON.parse(bodies[0] ?? '')).toEqual({ url: 'http://localhost:1455/auth/callback?code=x&state=abc123' });
+  });
+
   it("ends a read when the caller's signal aborts", async () => {
     stubFetch(stalled);
     const controller = new AbortController();

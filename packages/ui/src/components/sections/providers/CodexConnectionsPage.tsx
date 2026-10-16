@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
 import {
-  SettingsSection, SettingsStackedField, SettingsCheckboxRow, SettingsTwoColumn,
+  SettingsSection, SettingsStackedField, SettingsFieldRow, SettingsCheckboxRow, SettingsTwoColumn,
   SETTINGS_NUMBER_STEPPER_ROW_CLASS,
 } from '@/components/sections/shared/SettingsSection';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
@@ -25,7 +25,7 @@ const newConnection = (): CodexConnectionWrite => ({
   kind: 'openai-responses', name: '', baseURL: '', models: [newModel()],
 });
 
-export const CodexConnectionsPage: React.FC = () => {
+export const CodexConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }> = ({ titleLeading }) => {
   const { nativeAgents } = useRuntimeAPIs();
   const { t } = useI18n();
   const [connections, setConnections] = React.useState<CodexConnection[]>([]);
@@ -111,13 +111,14 @@ export const CodexConnectionsPage: React.FC = () => {
     setDraft(newConnection()); setEditing(null); setInvalid(false); setDeleting(null);
   };
   return (
-    <SettingsPageLayout title={t('settings.codexConnections.title')} description={t('settings.codexConnections.description')}>
+    <SettingsPageLayout title={t('settings.codexConnections.title')} titleLeading={titleLeading} description={t('settings.codexConnections.description')}>
       <SettingsSection title={t('settings.codexConnections.connections')} divider={false} settingsItem="providers.codex-connections" contentClassName="space-y-4">
         {loading ? <p role="status">{t('common.loading')}</p> : null}
         {error ? <p role="alert" className="text-[var(--status-error-text)]">{t('settings.codexConnections.failed')} <Button variant="link" disabled={busy} onClick={() => void load()}>{t('settings.codexConnections.retry')}</Button></p> : null}
+        {!loading && !error && connections.length === 0 ? <p className="text-muted-foreground">{t('settings.codexConnections.empty')}</p> : null}
         {connections.map((connection) => (
-          <SettingsStackedField key={connection.id} label={connection.name} info={connection.baseURL}>
-            {deleting === connection.id ? (
+          deleting === connection.id ? (
+            <SettingsStackedField key={connection.id} label={connection.name} info={connection.baseURL}>
               <div className="space-y-2">
                 <p>{t('settings.codexConnections.deleteHint')}</p>
                 <div className="flex gap-2">
@@ -125,7 +126,9 @@ export const CodexConnectionsPage: React.FC = () => {
                   <Button variant="ghost" disabled={busy} onClick={() => setDeleting(null)}>{t('settings.codexConnections.cancel')}</Button>
                 </div>
               </div>
-            ) : <>
+            </SettingsStackedField>
+          ) : (
+            <SettingsFieldRow key={connection.id} label={connection.name} info={connection.baseURL}>
               <Button variant="outline" disabled={busy || draft !== null} onClick={() => {
                 setDeleting(null);
                 setEditing(connection.id);
@@ -133,8 +136,8 @@ export const CodexConnectionsPage: React.FC = () => {
                 setInvalid(false);
               }}>{t('settings.codexConnections.edit')}</Button>
               <Button variant="ghost" disabled={busy || draft !== null} onClick={() => setDeleting(connection.id)}>{t('settings.codexConnections.delete')}</Button>
-            </>}
-          </SettingsStackedField>
+            </SettingsFieldRow>
+          )
         ))}
         {!draft ? <Button disabled={busy || loading} onClick={begin}>{t('settings.codexConnections.addCustom')}</Button> : null}
       </SettingsSection>

@@ -2282,6 +2282,8 @@ export interface NativeAgentsAPI {
   beginCliproxyapiLogin(): Promise<CliproxyapiLogin>;
   cliproxyapiLoginStatus(state: string): Promise<CliproxyapiLoginStatus>;
   cancelCliproxyapiLogin(state: string): Promise<boolean>;
+  /** Hands the browser callback the user pasted back to the gateway, which finishes the sign-in in the background. */
+  submitCliproxyapiLoginCallback(state: string, url: string): Promise<void>;
   removeCliproxyapiAccount(name: string): Promise<void>;
   saveCliproxyapiConnection(input: CliproxyapiConnectionWrite): Promise<ClaudeConnection>;
   /** The gateway's models paired with this computer's metadata for them. */

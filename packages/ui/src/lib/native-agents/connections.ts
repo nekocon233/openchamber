@@ -128,6 +128,7 @@ export const cliproxyapiLoginStatusSchema = z.object({
   message: z.string().nullable(),
 });
 export const cliproxyapiCancelResultSchema = z.object({ cancelled: z.boolean() });
+export const cliproxyapiCallbackResultSchema = z.object({ accepted: z.literal(true) });
 export const cliproxyapiRemovedSchema = z.object({ removed: z.literal(true) });
 const cliproxyapiConnectionSchema = z.object({
   connectionId: z.string().uuid().nullable().default(null),
