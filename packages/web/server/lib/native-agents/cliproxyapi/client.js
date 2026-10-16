@@ -4,8 +4,6 @@ import { NativeAgentError } from '../errors.js';
 /** CLIProxyAPI's documented default; a stored key may point elsewhere. */
 export const DEFAULT_CLIPROXYAPI_BASE_URL = 'http://127.0.0.1:8317';
 
-/** The gateway expires a sign-in state after ten minutes; callers poll inside it. */
-export const LOGIN_WINDOW_MS = 9 * 60 * 1000;
 
 // A management call must not hang a settings page behind a gateway that took
 // the connection and never answered.
@@ -41,6 +39,7 @@ const authFileSchema = z.object({
   }).nullish(),
 });
 const accountsSchema = z.object({ files: z.array(authFileSchema) });
+const modelsSchema = z.object({ data: z.array(z.object({ id: z.string().min(1) }).passthrough()) });
 const clientKeysSchema = z.object({ 'api-keys': z.array(z.string().min(1)) });
 // 8.0.30 answers `{ status, url, state }`; the published docs describe
 // `auth_url` and `expires_at`. Accept either spelling of the URL.
@@ -65,9 +64,10 @@ const account = (file) => ({
 export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fetch }) => {
   const origin = baseURL.replace(/\/+$/, '');
 
-  const send = (path, { method = 'GET', body, auth = true } = {}) => {
+  const send = (path, { method = 'GET', body, auth = true, apiKey = null } = {}) => {
     const headers = {};
-    if (auth) headers.Authorization = `Bearer ${managementKey}`;
+    const token = apiKey ?? (auth ? managementKey : null);
+    if (token !== null) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     return fetchImpl(`${origin}${path}`, {
       method,
@@ -107,6 +107,25 @@ export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fe
       const parsed = accountsSchema.safeParse(await response.json().catch(() => null));
       if (!parsed.success) throw unexpected();
       return parsed.data.files.map(account).filter((entry) => entry.name !== '');
+    },
+    /** The model ids this gateway serves; `/v1/models` takes a client key, not the management one. */
+    async models(clientKey) {
+      let response;
+      try {
+        response = await send('/v1/models', { auth: false, apiKey: clientKey });
+      } catch {
+        throw notReachable();
+      }
+      if (response.status === 401 || response.status === 403) throw keyRejected();
+      if (!response.ok) throw new NativeAgentError(`CLIProxyAPI answered ${response.status}`, { status: 502, code: 'CLIPROXYAPI_REQUEST_FAILED' });
+      const parsed = modelsSchema.safeParse(await response.json().catch(() => null));
+      if (!parsed.success) throw unexpected();
+      return parsed.data.data.map((entry) => entry.id);
+    },
+    /** What the running build calls itself; null when it does not say. */
+    async serverVersion() {
+      const response = await managed('/v0/management/auth-files');
+      return response.headers?.get?.('x-cpa-version') ?? null;
     },
     async removeAccount(name) {
       await managed(`/v0/management/auth-files?name=${encodeURIComponent(name)}`, { method: 'DELETE' });

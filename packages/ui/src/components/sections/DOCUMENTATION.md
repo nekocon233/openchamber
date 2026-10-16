@@ -156,15 +156,19 @@ connections never fall back to a different service. Failed reads retain the
 previous list, and stale reads cannot replace a newer mutation or another
 runtime's state.
 
-`CliProxyApiSection` manages a local CLIProxyAPI gateway below the connection
-list: its address and management key, the ChatGPT accounts it holds, and the
-connection that points Claude Code at it. It asks the server for the gateway's
-state on every visit, starts a sign-in only where the server's local-management
-capability permits it, polls one bounded attempt and cancels a pending attempt
-when the page is left. The management key is write-only; existing client keys
-appear only as a length and their last four characters, and a connection the
-section creates never carries its key back to the browser. `providers.cliproxyapi`
-prepares the same page and highlights the section.
+`CliProxyApiSection` owns the CLIProxyAPI gateway OpenChamber runs itself: a
+status line for the supervised process, Start, Stop, the optional upstream proxy
+(which restarts the gateway, because it reads its config at startup), the
+gateway's ChatGPT accounts with sign-out, the sign-in flow, and the Claude Code
+connection that points at it. It reads the server's status on every visit, starts
+and stops only where the server's local-management capability permits it, polls
+one bounded sign-in attempt and cancels a pending attempt when the page is left.
+Its connection block imports the gateway's models in one action (the server
+pairs the gateway's list with this computer's metadata) and otherwise keeps one
+manual model row; the button says whether it would create or update the gateway
+connection. The address and management key are the server's business and never appear here;
+a connection the section creates reports back so the model picker refreshes.
+`providers.cliproxyapi` prepares the same page and highlights the section.
 
 ### Codex connections
 

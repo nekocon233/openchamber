@@ -77,7 +77,7 @@ export const FRPC_ASSETS = Object.freeze({
   }),
 });
 
-export class UnsupportedFrpcTargetError extends Error {
+class UnsupportedFrpcTargetError extends Error {
   constructor(platform, arch) {
     super(`FRPC ${FRPC_VERSION} is not available for ${platform}/${arch}`);
     this.name = 'UnsupportedFrpcTargetError';

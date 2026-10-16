@@ -1,5 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import React, { act } from 'react';
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
 import type { NativeAgentsAPI } from '@/lib/api/types';
@@ -19,6 +19,7 @@ for (const [name, value] of Object.entries({
   navigator: browser.navigator,
   HTMLElement: browser.HTMLElement,
   Element: browser.Element,
+  Event: browser.Event,
   Node: browser.Node,
   Text: browser.Text,
   NodeList: browser.NodeList,
@@ -53,8 +54,13 @@ const { createTestNativeAgentsAPI, createTestRuntimeAPIs } = await import('@/lib
 const { CliProxyApiSection } = await import('./CliProxyApiSection');
 
 const status = (patch: Partial<CliproxyapiStatus> = {}): CliproxyapiStatus => ({
-  configured: true, baseURL: 'http://127.0.0.1:8317', reachable: true, managementEnabled: true,
-  keyRejected: false, accounts: [], clientKeys: [], localLogin: true, ...patch,
+  configured: true, enabled: false, running: false, ready: false,
+  baseURL: 'http://127.0.0.1:8317', port: 8317, authDir: '/auth', upstreamProxy: null,
+  installedVersion: '8.0.31', runningVersion: null,
+  install: { supported: true, prepared: true, target: 'darwin-arm64', version: '8.0.31', path: '/managed/cli-proxy-api', error: null },
+  managementEnabled: false, keyRejected: false, accounts: [], clientKeys: [],
+  lastError: null, restarting: false, connection: null, localLogin: true,
+  ...patch,
 });
 const account = { name: 'codex-a.json', email: 'a@example.com', planType: 'pro', activeUntil: null, status: 'active', disabled: false };
 
@@ -84,52 +90,123 @@ afterEach(async () => {
 });
 
 describe('CLIProxyAPI section', () => {
-  test('keeps a remote client read-only and says where the gateway is managed', async () => {
-    const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status({ localLogin: false }) });
+  test('offers to start a gateway that is not running', async () => {
+    const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status() });
+    await render(api, <CliProxyApiSection />);
+    expect(text()).toContain('Stopped');
+    expect(text()).toContain('CLIProxyAPI 8.0.31');
+    expect(button('Start gateway')).toBeDefined();
+    expect(button('Stop gateway')).toBeUndefined();
+  });
+
+  test('asks to download first when nothing is installed yet', async () => {
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ installedVersion: null, install: { ...status().install, prepared: false, path: null } }),
+    });
+    await render(api, <CliProxyApiSection />);
+    expect(button('Download and start')).toBeDefined();
+  });
+
+  test('reports a running gateway, its version and its accounts', async () => {
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ enabled: true, running: true, ready: true, runningVersion: '8.0.31', managementEnabled: true, accounts: [account] }),
+    });
+    await render(api, <CliProxyApiSection />);
+    expect(text()).toContain('Running');
+    expect(text()).toContain('a@example.com');
+    expect(button('Stop gateway')).toBeDefined();
+    expect(button('Sign in a ChatGPT account')?.disabled).toBe(false);
+  });
+
+  test('names a target this computer cannot run', async () => {
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ install: { supported: false, prepared: false, target: null, version: '8.0.31', path: null, error: 'unsupported' } }),
+    });
+    await render(api, <CliProxyApiSection />);
+    expect(text()).toContain('not a supported target');
+    expect(button('Start gateway')?.disabled).toBe(true);
+  });
+
+  test('keeps a remote client read-only and says where the gateway runs', async () => {
+    const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status({ localLogin: false, ready: true, running: true }) });
     await render(api, <CliProxyApiSection />);
     expect(text()).toContain('Manage the gateway on the computer');
-    expect(button('Save')?.disabled).toBe(true);
+    expect(button('Stop gateway')?.disabled).toBe(true);
     expect(button('Sign in a ChatGPT account')?.disabled).toBe(true);
   });
 
-  test('names a gateway whose management API is off', async () => {
-    const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status({ configured: false, managementEnabled: false }) });
+  test('saves the upstream proxy', async () => {
+    const saved: Array<string | null> = [];
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status(),
+      setCliproxyapiProxy: async ({ upstreamProxy }) => {
+        saved.push(upstreamProxy);
+        return status({ upstreamProxy });
+      },
+    });
     await render(api, <CliProxyApiSection />);
-    expect(text()).toContain('management API is off');
-    expect(button('Sign in a ChatGPT account')?.disabled).toBe(true);
-  });
-
-  test('names a saved management key the gateway rejects', async () => {
-    const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status({ keyRejected: true }) });
-    await render(api, <CliProxyApiSection />);
-    expect(text()).toContain('rejected the saved management key');
+    const field = container?.querySelector<HTMLInputElement>('input[type="url"]');
+    expect(field).not.toBeNull();
+    await act(async () => {
+      if (!field) return;
+      // React tracks the value through its own setter, so set it the DOM way.
+      const setter = Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(field, 'http://127.0.0.1:7890');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { button('Save')?.click(); });
+    expect(saved).toEqual(['http://127.0.0.1:7890']);
   });
 
   test('polls a sign-in attempt and reloads the accounts it added', async () => {
     let polls = 0;
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status({ accounts: polls === 0 ? [] : [account] }),
-      beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device', expiresAt: Date.now() + 60_000 }),
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true, accounts: polls === 0 ? [] : [account] }),
+      beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device' }),
       cliproxyapiLoginStatus: async () => (polls++ === 0 ? { status: 'pending', message: null } : { status: 'connected', message: null }),
     });
     await render(api, <CliProxyApiSection />);
     await act(async () => { button('Sign in a ChatGPT account')?.click(); });
     expect(text()).toContain('Finish the sign-in in your browser.');
-    expect(polls).toBe(0);
-    // Each act boundary applies the state a poll produced, which re-arms the
-    // next poll; the second one reports the finished sign-in.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
     expect(polls).toBeGreaterThan(1);
     expect(text()).toContain('a@example.com');
-    expect(text()).not.toContain('Finish the sign-in in your browser.');
   }, 15_000);
+
+  test('imports the gateway models and reports what it skipped', async () => {
+    let imports = 0;
+    const reported: string[] = [];
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      importCliproxyapiModels: async () => {
+        imports += 1;
+        return {
+          connection: {
+            id: 'connection-1', revision: 1, hasKey: true, kind: 'anthropic', name: 'CLIProxyAPI',
+            baseURL: 'http://127.0.0.1:8317', auth: 'api-key', models: [{
+              id: '5b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e3f', name: 'GPT-6.1-Sol', modelID: 'gpt-6.1-sol',
+              contextWindow: 872000, outputLimit: 128000, input: { image: true, pdf: false }, efforts: ['low', 'max'],
+            }], quotaProviderId: null,
+          },
+          imported: 9,
+          skipped: 5,
+        };
+      },
+    });
+    await render(api, <CliProxyApiSection onConnectionSaved={(connection) => reported.push(connection.id)} />);
+    await act(async () => { button('Import gateway models')?.click(); });
+    expect(imports).toBe(1);
+    expect(text()).toContain('Imported 9 models');
+    expect(text()).toContain('skipped 5');
+    expect(reported).toEqual(['connection-1']);
+  });
 
   test('cancels a pending attempt when the page is left', async () => {
     const cancelled: string[] = [];
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status(),
-      beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device', expiresAt: Date.now() + 60_000 }),
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
+      beginCliproxyapiLogin: async () => ({ state: 'abc123', url: 'https://auth.openai.com/codex/device' }),
       cliproxyapiLoginStatus: async () => ({ status: 'pending', message: null }),
       cancelCliproxyapiLogin: async (state) => { cancelled.push(state); return true; },
     });
@@ -143,7 +220,7 @@ describe('CLIProxyAPI section', () => {
     const drafts: CliproxyapiConnectionWrite[] = [];
     const reported: string[] = [];
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status(),
+      cliproxyapiStatus: async () => status({ ready: true, running: true, enabled: true, managementEnabled: true }),
       saveCliproxyapiConnection: async (input) => {
         drafts.push(input);
         return {
@@ -154,7 +231,7 @@ describe('CLIProxyAPI section', () => {
     });
     await render(api, <CliProxyApiSection onConnectionSaved={(connection) => reported.push(connection.id)} />);
     await act(async () => { button('Create connection')?.click(); });
-    expect(drafts[0]).toMatchObject({ connectionId: null, name: 'CLIProxyAPI', clientKey: { source: 'added' } });
+    expect(drafts[0]).toMatchObject({ connectionId: null, name: 'CLIProxyAPI' });
     expect(drafts[0].models[0]).toMatchObject({
       modelID: 'gpt-6.1-sol', contextWindow: 872000, outputLimit: 128000, input: { image: true, pdf: false },
     });

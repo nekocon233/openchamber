@@ -19,7 +19,8 @@ const CLAUDE_MODELS = [
 
 // Older CLIs without model metadata retain the legacy working-window estimate.
 const CODEX_CONTEXT_WINDOW = 272_000;
-const CODEX_OUTPUT_LIMIT = 128_000;
+/** Codex models cap output at 128k; connections to a gateway that serves them use the same value. */
+export const CODEX_OUTPUT_LIMIT = 128_000;
 
 // The service tier Codex calls Fast. On a model that offers it, each effort
 // has a `<effort>-fast` variant that runs the turn on this tier.

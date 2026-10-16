@@ -1,6 +1,6 @@
 import type {
   ClaudeConnection, ClaudeConnectionWrite, CodexConnection, CodexConnectionWrite,
-  CliproxyapiConnectionWrite, CliproxyapiForgetResult, CliproxyapiKeyResult, CliproxyapiLogin, CliproxyapiLoginStatus, CliproxyapiStatus,
+  CliproxyapiConnectionWrite, CliproxyapiImportResult, CliproxyapiLogin, CliproxyapiLoginStatus, CliproxyapiModels, CliproxyapiStatus,
 } from '@/lib/native-agents/connections';
 import type { SessionMetadataRecord } from '@/lib/sessionReviewMetadata';
 import type { WorktreeMetadata } from '@/types/worktree';
@@ -2274,15 +2274,20 @@ export interface NativeAgentsAPI {
   supported: boolean;
   capabilities(): Promise<NativeCapabilities>;
   catalog(): Promise<NativeCatalog>;
-  /** The local CLIProxyAPI gateway: status, accounts and one-click connection. */
+  /** The local CLIProxyAPI gateway OpenChamber runs itself: status, start, stop and accounts. */
   cliproxyapiStatus(): Promise<CliproxyapiStatus>;
-  saveCliproxyapiKey(input: { baseURL: string; managementKey: string }): Promise<CliproxyapiKeyResult>;
-  forgetCliproxyapiKey(): Promise<CliproxyapiForgetResult>;
+  startCliproxyapiGateway(): Promise<CliproxyapiStatus>;
+  stopCliproxyapiGateway(): Promise<CliproxyapiStatus>;
+  setCliproxyapiProxy(input: { upstreamProxy: string | null }): Promise<CliproxyapiStatus>;
   beginCliproxyapiLogin(): Promise<CliproxyapiLogin>;
   cliproxyapiLoginStatus(state: string): Promise<CliproxyapiLoginStatus>;
   cancelCliproxyapiLogin(state: string): Promise<boolean>;
   removeCliproxyapiAccount(name: string): Promise<void>;
   saveCliproxyapiConnection(input: CliproxyapiConnectionWrite): Promise<ClaudeConnection>;
+  /** The gateway's models paired with this computer's metadata for them. */
+  cliproxyapiModels(): Promise<CliproxyapiModels>;
+  /** Writes every known gateway model into the gateway's connection. */
+  importCliproxyapiModels(): Promise<CliproxyapiImportResult>;
   listClaudeConnections(): Promise<ClaudeConnection[]>;
   saveClaudeConnection(id: string | null, connection: ClaudeConnectionWrite): Promise<ClaudeConnection>;
   deleteClaudeConnection(id: string): Promise<void>;

@@ -153,7 +153,7 @@ export const createNativeAgentsRuntime = ({
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
   const claudeConnections = createClaudeConnections({ dataDir });
-  const cliproxyapi = createCliproxyapiService({ dataDir, connections: claudeConnections, fetchImpl });
+  const cliproxyapi = createCliproxyapiService({ dataDir, connections: claudeConnections, fetchImpl, buildEnv: buildChildEnv, now });
   const reverts = createNativeReverts({ registry, snapshots });
   const publisher = createNativeEventPublisher({ publishNativeEvent, now });
   const interactions = createNativeInteractions({ dataDir, now });
@@ -1128,6 +1128,8 @@ export const createNativeAgentsRuntime = ({
       codexUtility.handleExit(new Error('Codex runtime is shutting down'));
       claudeUtility.shutdown();
       await claudeLive.shutdown();
+      // The gateway gets its own terminate window before the app-server's.
+      await cliproxyapi.stop().catch(() => undefined);
       await appServer.stop();
     },
   };

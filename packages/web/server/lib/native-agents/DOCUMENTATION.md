@@ -989,54 +989,86 @@ report no usage quota, unlike a Kimi Claude Code connection.
 Routes: `GET/POST /api/native/codex/connections` and
 `PATCH/DELETE /api/native/codex/connections/:id`. Responses never carry the key.
 VS Code's native adapter rejects these operations as unsupported.
+## Managed CLIProxyAPI gateway
 
-## Local CLIProxyAPI gateway
+Claude Code reaches GPT models through a CLIProxyAPI gateway that OpenChamber
+runs itself. The gateway is a pinned third-party binary (MIT, router-for-me),
+downloaded, verified and published by `pinned-binary/manager.js` through the
+descriptor in `cliproxyapi/binary-manager.js`; nothing here installs or expects
+a system copy. An endpoint run elsewhere is still usable, but only as an
+ordinary custom connection on the same settings page.
 
-The Claude Code connection page can also manage a local CLIProxyAPI gateway: an
-Anthropic-compatible endpoint that itself holds the ChatGPT/Codex OAuth accounts.
-OpenChamber talks to that gateway, never to OpenAI, using the gateway's own
-management API and a management key the user pastes once.
+`cliproxyapi/store.js` is the only source of truth: `enabled`, `port`,
+`authDir`, `upstreamProxy`, `managementKey`, `clientKeys`, `installedVersion`
+in `<data dir>/native-agents/cliproxyapi.json` (owner-only, atomic rename). A
+v1 document, which described a pasted endpoint and key, migrates when it points
+at this machine and is dropped otherwise; either way the connection that used it
+keeps working. The default `authDir` is the upstream default `~/.cli-proxy-api`
+when that directory already holds credentials, so an existing login carries
+over, and otherwise a directory under the data dir. OpenChamber generates the
+management key, so no route carries one, and `clientKeys[0]` is what the
+connection it writes authenticates with; an empty list adopts the key of a
+connection already pointing at the gateway.
 
-`cliproxyapi/client.js` owns the integration. Every call carries
-`Authorization: Bearer <management key>`, `redirect: 'error'` and a ten-second
-deadline. Version 8.0.30 answers the sign-in URL as `{ status, url, state }`
-while the published documentation describes `auth_url`; the client accepts
-either spelling. Reads are `GET /v0/management/auth-files` and
-`GET /v0/management/api-keys`. There is no per-key write route in 8.0.30, so
-adding or removing a client key goes through `PATCH /v8/management/config` with
-`{ access: { api-keys: [...] } }`, which replaces that whole list and rewrites
-the gateway's own config file; callers read the list first and write back the
-edited one. Sign-in starts at `GET /v0/management/codex-auth-url?is_webui=true`,
-where the gateway also opens its OAuth callback on port 1455 of the machine that
-runs it, polls through `GET /v0/management/get-auth-status?state=`, and is
-cancelled through `DELETE /v8/management/oauth/session?state=` on builds that
-have that route; a 404 there means the attempt can only be left to expire.
-`GET /v1/models` answers without a client key and is what separates a running
-gateway from an absent one; a 404 on a management call means the management API
-is disabled (`management.secret-key` empty) and a 401 means the stored key was
-refused.
+`cliproxyapi/config.js` renders the YAML the process reads, and only that:
+`allow-remote: false`, `disable-control-panel: true`, `session-affinity: true`,
+`requests.proxy-url` when a proxy is set, and `oauth.auth-dir`. It is a derived
+artifact, rewritten before every spawn and never read back, because the gateway
+hashes a plaintext `secret-key` at startup and its management API normalizes the
+whole file on write. The child environment drops every proxy variable and sets
+`NO_PROXY` for loopback, so the config file is the only visible source of proxy
+truth (Go ignores the macOS system proxy).
 
-`cliproxyapi/service.js` owns the secret and the flows. `{ version, baseURL,
-managementKey, managedClientKey }` lives in
-`<data dir>/native-agents/cliproxyapi.json`, owner-only and replaced atomically,
-never in the UI preference mirror; responses carry a client key's length and
-last four characters, never a secret. A candidate management key is validated
-against the gateway before it replaces a stored one, and a rejected candidate
-leaves the working key in place. `forgetKey` takes back a client key this server
-added before forgetting the management key that can do it, and keeps the store
-when that fails so the removal can be retried. An account can be removed only
-under a file name the gateway just listed. The connection this section writes is
-an ordinary `connection:` entry: `saveConnection` composes it server-side and
-hands it to `claude/connections.js`, so no client key passes through a browser;
-the key comes from a listed key chosen by position, a generated key added to the
-gateway and remembered for removal, or one the user types.
+`cliproxyapi/gateway.js` owns the process, shaped like the Codex app-server: one
+single-flight `start()`, readiness defined as the port answering rather than a
+log pattern, a pre-spawn probe that refuses a port someone else owns with
+`CLIPROXYAPI_PORT_IN_USE`, crash backoff capped at 30 s, `stop()` that persists
+`enabled: false`, and a kill-on-parent-exit handler. `start()` regenerates the
+config, prepares the binary, spawns it, waits for the port, and reads the
+running version from the `X-Cpa-Version` header. The server resumes a gateway
+whose store says `enabled` at boot; nothing else starts one.
 
-Routes are `GET /api/native/claude/cliproxyapi` (status, accounts, key hints and
-`localLogin`), `POST|DELETE /key`, `POST /login`, `GET|DELETE /login/:state`,
-`DELETE /accounts/:name` and `POST /connection`. Every mutating route requires the
-local-management boundary and answers `403 CLIPROXYAPI_LOCAL_LOGIN_REQUIRED`
-otherwise, while the remote status stays readable. Errors carry `CLIPROXYAPI_*`
-codes.
+`cliproxyapi/service.js` composes the store, the gateway and the management
+client into what the provider section drives: `status()`, `start()`, `stop()`,
+`setUpstreamProxy()` (which restarts a running gateway, because the config is
+read at startup), `beginLogin()`, `loginStatus(state)`, `cancelLogin(state)`,
+`removeAccount(name)` and `saveConnection(input)`. `status()` reports
+`{ configured, enabled, running, ready, port, authDir, upstreamProxy,
+installedVersion, runningVersion, install, managementEnabled, keyRejected,
+accounts, clientKeys, lastError, restarting }`; `install` is a stat, never a
+subprocess, so polling stays cheap.
+
+`cliproxyapi/models.js` reads the Codex CLI's own model cache
+(`$CODEX_HOME/models_cache.json`, `~/.codex` otherwise) for the metadata a
+connection row needs: display name, context window, image input and effort
+levels. `listModels()` intersects it with what the gateway serves through
+`GET /v1/models` (which takes a client key, not the management one) and reports
+the rest as `unknown`. `importModels()` writes every known model into the
+gateway's connection, replacing its list and updating the connection that
+already points at this gateway instead of adding a twin. The output limit is
+`CODEX_OUTPUT_LIMIT`, the same 128k the Codex path uses, and the context window
+is the model's maximum, so an imported row matches what a working connection
+looks like.
+
+A model catalog name is the model's own name; the connection it belongs to is
+identified by its id, not by a prefix on every model.
+
+Routes are `GET /api/native/claude/cliproxyapi` (status plus `localLogin`),
+`GET /models`, `POST /import`,
+`POST /start`, `POST /stop`, `POST /proxy`, `POST /login`,
+`GET|DELETE /login/:state`, `DELETE /accounts/:name` and `POST /connection`.
+Every mutating route requires the local-management boundary and answers
+`403 CLIPROXYAPI_LOCAL_LOGIN_REQUIRED` otherwise, while the remote status stays
+readable. Errors carry `CLIPROXYAPI_*` codes; `GET /v1/models` is the gateway's
+own authenticated surface and is never proxied by this server.
+
+Downloading needs egress to `github.com` and
+`release-assets.githubusercontent.com` from the server process itself, which
+does not use a proxy. A machine that reaches GitHub only through one can place
+the verified release in
+`<data dir>/native-agents/cliproxyapi/v<version>/<platform>-<arch>/`
+(binary named `cli-proxy-api`, archive next to it) and the manager will verify
+and use it as `source: 'installed'` without any download.
 
 ## Utility text generation
 

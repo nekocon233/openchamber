@@ -939,17 +939,22 @@ describe('native agents routes', () => {
     const remote = createApp(runtime);
     const local = createApp(runtime, () => true);
     const base = '/api/native/claude/cliproxyapi';
-    expect((await request(remote).get(base).expect(200)).body).toMatchObject({ configured: false, localLogin: false, reachable: false });
+    expect((await request(remote).get(base).expect(200)).body).toMatchObject({ localLogin: false, running: false, enabled: false });
     expect((await request(local).get(base).expect(200)).body).toMatchObject({ localLogin: true });
     const denied = await request(remote).post(`${base}/login`).expect(403);
     expect(denied.body).toMatchObject({ code: 'CLIPROXYAPI_LOCAL_LOGIN_REQUIRED' });
-    await request(remote).post(`${base}/key`).send({ baseURL: 'http://127.0.0.1:8317', managementKey: 'management-test-key' }).expect(403);
-    await request(remote).delete(`${base}/key`).expect(403);
+    await request(remote).post(`${base}/start`).expect(403);
+    await request(remote).post(`${base}/stop`).expect(403);
+    await request(remote).post(`${base}/proxy`).send({ upstreamProxy: null }).expect(403);
     await request(remote).delete(`${base}/login/abc123`).expect(403);
     await request(remote).delete(`${base}/accounts/user.json`).expect(403);
-    await request(remote).post(`${base}/connection`).send({ name: 'CLIProxyAPI', models: [], clientKey: { source: 'added' } }).expect(403);
-    // The local request passes the guard and reaches the service, which has no gateway yet.
-    expect((await request(local).delete(`${base}/accounts/user.json`).expect(409)).body).toMatchObject({ code: 'CLIPROXYAPI_NOT_CONFIGURED' });
+    await request(remote).post(`${base}/connection`).send({ name: 'CLIProxyAPI', models: [] }).expect(403);
+    await request(remote).post(`${base}/import`).send({}).expect(403);
+    // Reading is not gated; this fixture has no gateway to ask.
+    expect((await request(remote).get(`${base}/models`).expect(503)).body).toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
+    // The local request passes the guard and reaches the service, which has no
+    // gateway to talk to in this fixture.
+    expect((await request(local).delete(`${base}/accounts/user.json`).expect(503)).body).toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
     await runtime.shutdown();
   });
 
@@ -969,7 +974,7 @@ describe('native agents routes', () => {
     const updated = await request(app).patch(`${endpoint}/${created.body.id}`).send({ ...draft, name: 'Changed', apiKey: undefined }).expect(200);
     expect(updated.body.revision).toBe(2);
     const catalog = await request(app).get('/api/native/catalog').expect(200);
-    const model = catalog.body.backends.claude.models.find((entry) => entry.name === 'Changed / Kimi');
+    const model = catalog.body.backends.claude.models.find((entry) => entry.name === 'Kimi');
     expect((await runtime.claudeConnections.resolve(model.id)).env.ANTHROPIC_API_KEY).toBe('test-only-key');
     await request(app).delete(`${endpoint}/${created.body.id}`).expect(200, { deleted: true });
     await expect(runtime.claudeConnections.resolve(model.id)).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_UNAVAILABLE' });

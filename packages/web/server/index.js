@@ -1437,6 +1437,10 @@ const nativeAgentsRuntime = createNativeAgentsRuntime({
   managedChatsRoots: [...new Set([path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR])],
 });
 configureNativeSmallModels(nativeAgentsRuntime.smallModels);
+// A gateway the user left running recovers with the server, like a persisted tunnel.
+void nativeAgentsRuntime.cliproxyapi.resume().catch((error) => {
+  console.warn('[native-agents] could not resume the CLIProxyAPI gateway:', error instanceof Error ? error.message : String(error));
+});
 const staticRoutesRuntime = createStaticRoutesRuntime({
   fs,
   path,

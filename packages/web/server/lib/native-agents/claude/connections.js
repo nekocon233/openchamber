@@ -19,8 +19,7 @@ const connectionModelSchema = z.object({
   efforts: z.array(effort).max(5),
 });
 export { connectionModelSchema };
-/** Shared by every Anthropic-compatible endpoint this server stores, including the gateway. */
-export const endpointURLSchema = z.string().url().max(2048).refine((value) => {
+const endpointURLSchema = z.string().url().max(2048).refine((value) => {
   const url = new URL(value);
   return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
 }, 'Use an HTTP(S) endpoint without credentials, query or fragment');
@@ -47,7 +46,7 @@ const publicConnection = ({ apiKey, ...connection }) => ({ ...connection, hasKey
 const catalogModels = (connection) => connection.models.map((model) => ({
   ...model,
   id: `connection:${connection.id}:${model.id}`,
-  name: `${connection.name} / ${model.name}`,
+  name: model.name,
   defaultEffort: null,
   fast: false,
 }));
@@ -120,6 +119,17 @@ export const createClaudeConnections = ({ dataDir, fetchKimiUsage = fetchKimiQuo
     async list() {
       await writes;
       return (await read()).map(publicConnection);
+    },
+    /** The stored key of the connection that points at this endpoint, for server-side callers. */
+    async credentialKeyFor(baseURL) {
+      await writes;
+      return (await read()).find((connection) => connection.baseURL === baseURL)?.apiKey ?? null;
+    },
+    /** The connection that points at this endpoint, so callers update it instead of adding a twin. */
+    async connectionFor(baseURL) {
+      await writes;
+      const match = (await read()).find((connection) => connection.baseURL === baseURL);
+      return match ? { id: match.id, name: match.name } : null;
     },
     save(id, input) {
       const body = connectionWriteSchema.parse(input);

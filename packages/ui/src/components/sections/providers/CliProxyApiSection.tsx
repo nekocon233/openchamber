@@ -2,10 +2,9 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   SettingsSection, SettingsStackedField, SettingsCheckboxRow, SettingsTwoColumn,
-  SETTINGS_SELECT_TRIGGER_CLASS, SETTINGS_NUMBER_STEPPER_ROW_CLASS,
+  SETTINGS_NUMBER_STEPPER_ROW_CLASS,
 } from '@/components/sections/shared/SettingsSection';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n, type I18nKey } from '@/lib/i18n';
@@ -20,19 +19,23 @@ const DEFAULT_MODEL = { modelID: 'gpt-6.1-sol', name: 'GPT-6.1-Sol', contextWind
 const failureKey = (error: NativeAgentsRequestError): I18nKey => {
   switch (error.code) {
     case 'CLIPROXYAPI_LOCAL_LOGIN_REQUIRED': return 'settings.cliproxyapi.localOnly';
-    case 'CLIPROXYAPI_NOT_CONFIGURED':
-    case 'CLIPROXYAPI_MANAGEMENT_DISABLED': return 'settings.cliproxyapi.managementDisabled';
     case 'CLIPROXYAPI_NOT_REACHABLE': return 'settings.cliproxyapi.notReachable';
+    case 'CLIPROXYAPI_MANAGEMENT_DISABLED': return 'settings.cliproxyapi.managementDisabled';
     case 'CLIPROXYAPI_KEY_REJECTED': return 'settings.cliproxyapi.keyRejected';
-    case 'CLIPROXYAPI_CLIENT_KEY_UNKNOWN': return 'settings.cliproxyapi.clientKeyUnknown';
+    case 'CLIPROXYAPI_UNSUPPORTED_TARGET': return 'settings.cliproxyapi.unsupportedTarget';
+    case 'CLIPROXYAPI_PORT_IN_USE': return 'settings.cliproxyapi.portInUse';
+    case 'CLIPROXYAPI_NOT_INSTALLED': return 'settings.cliproxyapi.notInstalled';
+    case 'CLIPROXYAPI_DOWNLOAD_FAILED':
+    case 'CLIPROXYAPI_START_FAILED': return 'settings.cliproxyapi.installFailed';
     default: return 'settings.cliproxyapi.failed';
   }
 };
 
 /**
- * The local CLIProxyAPI gateway manages its own ChatGPT/Codex accounts. This
- * section signs one in through the gateway's management API and writes the
- * Claude Code connection that points at it, so nobody has to copy a key by hand.
+ * The CLIProxyAPI gateway is a service OpenChamber runs itself: it downloads
+ * the pinned build, generates its config and management key, and starts and
+ * stops it here. This section signs a ChatGPT account in through the gateway's
+ * own management API and writes the Claude Code connection that points at it.
  */
 export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: ClaudeConnection) => void }> = ({ onConnectionSaved }) => {
   const { nativeAgents } = useRuntimeAPIs();
@@ -41,16 +44,13 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<I18nKey | null>(null);
-  const [baseURL, setBaseURL] = React.useState('');
-  const [managementKey, setManagementKey] = React.useState('');
+  const [proxy, setProxy] = React.useState('');
   const [attempt, setAttempt] = React.useState<{ state: string; expiresAt: number } | null>(null);
   const [pollTick, setPollTick] = React.useState(0);
   const [removing, setRemoving] = React.useState<string | null>(null);
   const [connectionName, setConnectionName] = React.useState('CLIProxyAPI');
+  const [imported, setImported] = React.useState<{ count: number; skipped: number } | null>(null);
   const [model, setModel] = React.useState({ ...DEFAULT_MODEL, image: true });
-  const [keySource, setKeySource] = React.useState<'added' | 'existing' | 'typed'>('added');
-  const [keyIndex, setKeyIndex] = React.useState(0);
-  const [typedKey, setTypedKey] = React.useState('');
   const mounted = React.useRef(true);
   const revision = React.useRef(0);
   const runtimeKey = getRuntimeKey();
@@ -63,10 +63,13 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
       const value = await nativeAgents.cliproxyapiStatus();
       if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) {
         setStatus(value);
-        setBaseURL((previous) => (previous === '' ? value.baseURL : previous));
+        setProxy((previous) => (previous === '' ? value.upstreamProxy ?? '' : previous));
       }
     } catch (error) {
-      if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) { setNotice(error instanceof NativeAgentsRequestError ? failureKey(error) : 'settings.cliproxyapi.failed'); setStatus(null); }
+      if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) {
+        setNotice(error instanceof NativeAgentsRequestError ? failureKey(error) : 'settings.cliproxyapi.failed');
+        setStatus(null);
+      }
     } finally {
       if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) setLoading(false);
     }
@@ -89,13 +92,16 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
       void (async () => {
         try {
           const result = await nativeAgents.cliproxyapiLoginStatus(attempt.state);
-          if (cancelled || !(mounted.current && getRuntimeKey() === runtimeKey)) return;
+          if (cancelled || !mounted.current || getRuntimeKey() !== runtimeKey) return;
           if (result.status === 'pending') { setPollTick((value) => value + 1); return; }
           setAttempt(null);
           if (result.status === 'connected') await load();
           else setNotice('settings.cliproxyapi.authFailed');
         } catch (error) {
-          if (!cancelled && mounted.current && getRuntimeKey() === runtimeKey) { setAttempt(null); setNotice(error instanceof NativeAgentsRequestError ? failureKey(error) : 'settings.cliproxyapi.failed'); }
+          if (!cancelled && mounted.current && getRuntimeKey() === runtimeKey) {
+            setAttempt(null);
+            setNotice(error instanceof NativeAgentsRequestError ? failureKey(error) : 'settings.cliproxyapi.failed');
+          }
         }
       })();
     }, POLL_INTERVAL_MS);
@@ -103,39 +109,39 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
   }, [attempt, pollTick, nativeAgents, load, runtimeKey]);
 
   const local = status?.localLogin === true;
+  const apply = (value: Awaited<ReturnType<typeof nativeAgents.cliproxyapiStatus>> | null) => {
+    if (value !== null) setStatus(value);
+  };
   const act = async (action: () => Promise<void>) => {
     setBusy(true);
     setNotice(null);
     try {
       await action();
     } catch (error) {
-      if (mounted.current && getRuntimeKey() === runtimeKey) setNotice(error instanceof NativeAgentsRequestError ? failureKey(error) : 'settings.cliproxyapi.failed');
+      if (mounted.current && getRuntimeKey() === runtimeKey) {
+        setNotice(error instanceof NativeAgentsRequestError ? failureKey(error) : 'settings.cliproxyapi.failed');
+      }
     } finally {
       if (mounted.current && getRuntimeKey() === runtimeKey) setBusy(false);
     }
   };
-  const saveGateway = () => act(async () => {
-    if (baseURL.trim() === '' || managementKey.trim() === '') { setNotice('settings.claudeConnections.invalid'); return; }
-    await nativeAgents.saveCliproxyapiKey({ baseURL: baseURL.trim(), managementKey: managementKey.trim() });
-    setManagementKey('');
-    await load();
-  });
-  const forgetGateway = () => act(async () => {
-    await nativeAgents.forgetCliproxyapiKey();
-    setManagementKey('');
-    await load();
+  const startGateway = () => act(async () => { apply(await nativeAgents.startCliproxyapiGateway()); });
+  const stopGateway = () => act(async () => { apply(await nativeAgents.stopCliproxyapiGateway()); });
+  const saveProxy = () => act(async () => {
+    const value = proxy.trim();
+    apply(await nativeAgents.setCliproxyapiProxy({ upstreamProxy: value === '' ? null : value }));
   });
   const signIn = () => act(async () => {
     const started = await nativeAgents.beginCliproxyapiLogin();
-    if (!(mounted.current && getRuntimeKey() === runtimeKey)) return;
-    setAttempt({ state: started.state, expiresAt: started.expiresAt });
+    if (!mounted.current || getRuntimeKey() !== runtimeKey) return;
+    setAttempt({ state: started.state, expiresAt: Date.now() + 9 * 60 * 1000 });
     setPollTick(0);
     await openExternalUrl(started.url);
   });
   const cancelSignIn = () => act(async () => {
     if (attempt === null) return;
     const cancelled = await nativeAgents.cancelCliproxyapiLogin(attempt.state);
-    if (!(mounted.current && getRuntimeKey() === runtimeKey)) return;
+    if (!mounted.current || getRuntimeKey() !== runtimeKey) return;
     setAttempt(null);
     setNotice(cancelled ? null : 'settings.cliproxyapi.cancelUnavailable');
   });
@@ -143,6 +149,13 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
     await nativeAgents.removeCliproxyapiAccount(name);
     if (mounted.current && getRuntimeKey() === runtimeKey) setRemoving(null);
     await load();
+  });
+  const importModels = () => act(async () => {
+    setImported(null);
+    const result = await nativeAgents.importCliproxyapiModels();
+    if (!mounted.current || getRuntimeKey() !== runtimeKey) return;
+    setImported({ count: result.imported, skipped: result.skipped });
+    onConnectionSaved?.(result.connection);
   });
   const saveConnection = () => act(async () => {
     const saved = await nativeAgents.saveCliproxyapiConnection({
@@ -153,43 +166,63 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
         contextWindow: model.contextWindow, outputLimit: model.outputLimit,
         input: { image: model.image, pdf: false }, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       }],
-      clientKey: keySource === 'typed'
-        ? { source: 'typed', value: typedKey }
-        : keySource === 'existing' ? { source: 'existing', index: keyIndex } : { source: 'added' },
     });
-    if (!(mounted.current && getRuntimeKey() === runtimeKey)) return;
+    if (!mounted.current || getRuntimeKey() !== runtimeKey) return;
     onConnectionSaved?.(saved);
     await load();
   });
 
-  const gatewayStatus = !status || !status.reachable
-    ? t('settings.cliproxyapi.notReachable')
-    : !status.managementEnabled
-      ? t('settings.cliproxyapi.managementDisabled')
-      : status.keyRejected
-        ? t('settings.cliproxyapi.keyRejected')
-        : null;
+  const install = status?.install ?? null;
+  const outdated = install !== null && install.prepared && status?.installedVersion !== null && status?.installedVersion !== install.version;
+  const gatewayState = install?.supported === false
+    ? t('settings.cliproxyapi.unsupportedTarget')
+    : status?.restarting
+      ? t('settings.cliproxyapi.statusRestarting')
+      : status?.ready
+        ? t('settings.cliproxyapi.statusRunning')
+        : status?.running
+          ? t('settings.cliproxyapi.statusStarting')
+          : t('settings.cliproxyapi.statusStopped');
 
   return (
     <SettingsSection title={t('settings.cliproxyapi.title')} settingsItem="providers.cliproxyapi" contentClassName="space-y-4">
       <p className="typography-ui-label text-muted-foreground">{t('settings.cliproxyapi.description')}</p>
       {loading ? <p role="status">{t('common.loading')}</p> : null}
       {notice ? <p role="alert" className="text-[var(--status-error-text)]">{t(notice)}</p> : null}
-      {gatewayStatus ? <p role="status" className="text-[var(--status-warning-text)]">{gatewayStatus}</p> : null}
+      {status?.lastError ? <p role="status" className="text-[var(--status-warning-text)]">{status.lastError}</p> : null}
+      {status?.ready === true && status.managementEnabled === false ? <p role="status" className="text-[var(--status-warning-text)]">{t('settings.cliproxyapi.managementDisabled')}</p> : null}
+      {status?.keyRejected === true ? <p role="status" className="text-[var(--status-warning-text)]">{t('settings.cliproxyapi.keyRejected')}</p> : null}
       {!local && status !== null ? <p role="status" className="text-muted-foreground">{t('settings.cliproxyapi.localOnly')}</p> : null}
 
-      <SettingsTwoColumn>
-        <SettingsStackedField label={t('settings.cliproxyapi.baseURL')}>
-          <Input className="h-8" type="url" aria-label={t('settings.cliproxyapi.baseURL')} value={baseURL} disabled={!local || busy} onChange={(event) => setBaseURL(event.target.value)} />
-        </SettingsStackedField>
-        <SettingsStackedField label={t('settings.cliproxyapi.managementKey')} info={t('settings.cliproxyapi.managementKeyHint')}>
-          <Input className="h-8" type="password" autoComplete="new-password" aria-label={t('settings.cliproxyapi.managementKey')} value={managementKey} disabled={!local || busy} onChange={(event) => setManagementKey(event.target.value)} />
-        </SettingsStackedField>
-      </SettingsTwoColumn>
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" disabled={!local || busy} onClick={() => void saveGateway()}>{t('settings.claudeConnections.save')}</Button>
-        <Button type="button" variant="ghost" disabled={!local || busy || status?.configured !== true} onClick={() => void forgetGateway()}>{t('settings.cliproxyapi.forget')}</Button>
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="flex items-center gap-2">
+          <span className={`size-2 shrink-0 rounded-full ${status?.ready ? 'bg-[var(--status-success)]' : 'bg-[var(--status-warning)]'}`} />
+          <span role="status">{gatewayState}</span>
+        </span>
+        <span className="text-muted-foreground">
+          {install === null ? '' : t('settings.cliproxyapi.installedVersion', { version: install.prepared ? status?.installedVersion ?? install.version : install.version })}
+        </span>
       </div>
+      <div className="flex flex-wrap gap-2">
+        {status?.running === true || status?.enabled === true ? (
+          <Button type="button" disabled={!local || busy || status?.restarting === true} onClick={() => void stopGateway()}>{busy ? t('settings.cliproxyapi.statusStopping') : t('settings.cliproxyapi.stop')}</Button>
+        ) : (
+          <Button type="button" disabled={!local || busy || install?.supported === false} onClick={() => void startGateway()}>
+            {busy
+              ? t('settings.cliproxyapi.statusStarting')
+              : install?.supported !== false && (outdated || install?.prepared === false)
+                ? t('settings.cliproxyapi.downloadAndStart')
+                : t('settings.cliproxyapi.start')}
+          </Button>
+        )}
+      </div>
+
+      <SettingsStackedField label={t('settings.cliproxyapi.upstreamProxy')} info={t('settings.cliproxyapi.upstreamProxyHint')}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input className="h-8" type="url" aria-label={t('settings.cliproxyapi.upstreamProxy')} value={proxy} disabled={!local || busy || status?.restarting === true} onChange={(event) => setProxy(event.target.value)} />
+          <Button type="button" variant="outline" disabled={!local || busy || status?.restarting === true} onClick={() => void saveProxy()}>{t('settings.claudeConnections.save')}</Button>
+        </div>
+      </SettingsStackedField>
 
       <SettingsSection title={t('settings.cliproxyapi.accounts')} contentClassName="space-y-2">
         {status?.accounts.length === 0 ? <p className="text-muted-foreground">{t('settings.cliproxyapi.noAccounts')}</p> : null}
@@ -225,6 +258,16 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
 
       <SettingsSection title={t('settings.claudeConnections.connection')} contentClassName="space-y-4">
         <p className="typography-ui-label text-muted-foreground">{t('settings.cliproxyapi.connectionHint')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" disabled={!local || busy || status?.ready !== true} onClick={() => void importModels()}>{t('settings.cliproxyapi.importModels')}</Button>
+          {imported === null ? null : (
+            <span role="status" className="text-muted-foreground">
+              {t('settings.cliproxyapi.imported', { count: imported.count })}
+              {imported.skipped === 0 ? null : <span> · {t('settings.cliproxyapi.importSkipped', { count: imported.skipped })}</span>}
+            </span>
+          )}
+        </div>
+        <p className="typography-ui-label text-muted-foreground">{t('settings.cliproxyapi.importHint')}</p>
         <SettingsTwoColumn>
           <SettingsStackedField label={t('settings.claudeConnections.name')}>
             <Input className="h-8" aria-label={t('settings.claudeConnections.name')} value={connectionName} disabled={!local || busy} onChange={(event) => setConnectionName(event.target.value)} />
@@ -241,38 +284,9 @@ export const CliProxyApiSection: React.FC<{ onConnectionSaved?: (connection: Cla
           <SettingsStackedField label={t('settings.claudeConnections.output')}>
             <div className={SETTINGS_NUMBER_STEPPER_ROW_CLASS}><NumberInput min={1} max={1_000_000} aria-label={t('settings.claudeConnections.output')} value={model.outputLimit} onValueChange={(outputLimit) => setModel({ ...model, outputLimit })} /></div>
           </SettingsStackedField>
-          <SettingsStackedField label={t('settings.cliproxyapi.clientKey')}>
-            <Select value={keySource} onValueChange={(value) => { if (value === 'added' || value === 'existing' || value === 'typed') setKeySource(value); }}>
-              <SelectTrigger className={SETTINGS_SELECT_TRIGGER_CLASS} aria-label={t('settings.cliproxyapi.clientKey')}>
-                <SelectValue>{t(keySource === 'added' ? 'settings.cliproxyapi.clientKeyAdded' : keySource === 'existing' ? 'settings.cliproxyapi.clientKeyExisting' : 'settings.cliproxyapi.clientKeyTyped')}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="added">{t('settings.cliproxyapi.clientKeyAdded')}</SelectItem>
-                <SelectItem value="existing">{t('settings.cliproxyapi.clientKeyExisting')}</SelectItem>
-                <SelectItem value="typed">{t('settings.cliproxyapi.clientKeyTyped')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingsStackedField>
         </SettingsTwoColumn>
-        {keySource === 'existing' ? (
-          <SettingsStackedField label={t('settings.cliproxyapi.clientKeyExisting')}>
-            <Select value={String(Math.min(keyIndex, Math.max(0, (status?.clientKeys.length ?? 1) - 1)))} onValueChange={(value) => setKeyIndex(Number(value))}>
-              <SelectTrigger className={SETTINGS_SELECT_TRIGGER_CLASS} aria-label={t('settings.cliproxyapi.clientKeyExisting')}>
-                <SelectValue>{status?.clientKeys[Math.min(keyIndex, Math.max(0, status.clientKeys.length - 1))]?.hint ?? ''}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {(status?.clientKeys ?? []).map((key, index) => <SelectItem key={`${key.hint}-${index}`} value={String(index)}>{`…${key.hint}`}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </SettingsStackedField>
-        ) : null}
-        {keySource === 'typed' ? (
-          <SettingsStackedField label={t('settings.cliproxyapi.clientKeyTyped')}>
-            <Input className="h-8" type="password" autoComplete="new-password" aria-label={t('settings.cliproxyapi.clientKeyTyped')} value={typedKey} disabled={!local || busy} onChange={(event) => setTypedKey(event.target.value)} />
-          </SettingsStackedField>
-        ) : null}
         <SettingsCheckboxRow checked={model.image} onChange={(image) => setModel({ ...model, image })} label={t('settings.claudeConnections.image')} />
-        <Button type="button" disabled={!local || busy || status?.managementEnabled !== true || connectionName.trim() === '' || model.modelID.trim() === ''} onClick={() => void saveConnection()}>{t('settings.cliproxyapi.createConnection')}</Button>
+        <Button type="button" disabled={!local || busy || status?.ready !== true || connectionName.trim() === '' || model.modelID.trim() === ''} onClick={() => void saveConnection()}>{status?.connection == null ? t('settings.cliproxyapi.createConnection') : t('settings.cliproxyapi.updateConnection')}</Button>
       </SettingsSection>
     </SettingsSection>
   );

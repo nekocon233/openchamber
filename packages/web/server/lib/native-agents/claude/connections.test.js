@@ -30,7 +30,7 @@ describe('Claude connections', () => {
     expect(apiKey).toBe('test-only-key');
     const edited = await store.save(saved.id, { ...update, name: 'Updated' });
     expect(edited.revision).toBe(2);
-    const model = (await store.catalog()).find((entry) => entry.name === 'Updated / Kimi');
+    const model = (await store.catalog()).find((entry) => entry.name === 'Kimi');
     const launch = await store.resolve(model.id);
     expect(launch.env.ANTHROPIC_API_KEY).toBe('test-only-key');
     expect(launch.model).toBe('kimi-for-coding');

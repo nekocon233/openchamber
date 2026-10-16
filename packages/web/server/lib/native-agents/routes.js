@@ -5,7 +5,7 @@
 import { z } from 'zod';
 
 import { connectionWriteSchema } from './claude/connections.js';
-import { cliproxyapiConnectionSchema, cliproxyapiKeySchema } from './cliproxyapi/service.js';
+import { cliproxyapiConnectionSchema, cliproxyapiImportSchema, cliproxyapiProxySchema } from './cliproxyapi/service.js';
 import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
@@ -156,8 +156,9 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   // is what actually authorizes a removal.
   const accountNameParam = z.string().min(1).max(200).regex(/^[A-Za-z0-9._@+-]+\.json$/);
   app.get(cliproxyapi, handle(async (req) => ({ ...await runtime.cliproxyapi.status(), localLogin: isLocalManagementRequest(req) })));
-  app.post(`${cliproxyapi}/key`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.saveKey(cliproxyapiKeySchema.parse(req.body)); }));
-  app.delete(`${cliproxyapi}/key`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.forgetKey(); }));
+  app.post(`${cliproxyapi}/start`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.start(); }));
+  app.post(`${cliproxyapi}/stop`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.stop(); }));
+  app.post(`${cliproxyapi}/proxy`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.setUpstreamProxy(cliproxyapiProxySchema.parse(req.body)); }));
   app.post(`${cliproxyapi}/login`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.beginLogin(); }));
   app.get(`${cliproxyapi}/login/:state`, handle((req) => runtime.cliproxyapi.loginStatus(loginStateParam.parse(req.params.state))));
   app.delete(`${cliproxyapi}/login/:state`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.cancelLogin(loginStateParam.parse(req.params.state)); }));
@@ -166,6 +167,8 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
     await runtime.cliproxyapi.removeAccount(accountNameParam.parse(req.params.name));
     return { removed: true };
   }));
+  app.get(`${cliproxyapi}/models`, handle(() => runtime.cliproxyapi.listModels()));
+  app.post(`${cliproxyapi}/import`, handle((req) => { requireLocalGateway(req); return runtime.cliproxyapi.importModels(cliproxyapiImportSchema.parse(req.body ?? {})); }));
   app.post(`${cliproxyapi}/connection`, handle((req) => {
     requireLocalGateway(req);
     return runtime.cliproxyapi.saveConnection(cliproxyapiConnectionSchema.parse(req.body));

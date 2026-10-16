@@ -1,4 +1,4 @@
-import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCancelResultSchema, cliproxyapiForgetResultSchema, cliproxyapiKeyResultSchema, cliproxyapiLoginSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
+import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCancelResultSchema, cliproxyapiImportResultSchema, cliproxyapiLoginSchema, cliproxyapiModelsSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
 import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
 import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
@@ -41,7 +41,7 @@ const errorBodySchema = z.object({ error: z.string().optional(), code: z.string(
 
 type NativeWriteBody =
   | { sourceId: string; directory: string }
-  | { baseURL: string; managementKey: string }
+  | { upstreamProxy: string | null }
   | CliproxyapiConnectionWrite
   | ClaudeConnectionWrite
   | CodexConnectionWrite
@@ -128,13 +128,16 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   capabilities: () => readParsed('/api/native/capabilities', {}, nativeCapabilitiesSchema),
   catalog: () => readParsed('/api/native/catalog', {}, nativeCatalogSchema),
   cliproxyapiStatus: () => readParsed('/api/native/claude/cliproxyapi', {}, cliproxyapiStatusSchema),
-  saveCliproxyapiKey: (input) => sendParsed('/api/native/claude/cliproxyapi/key', cliproxyapiKeyResultSchema, { method: 'POST', body: input }),
-  forgetCliproxyapiKey: () => sendParsed('/api/native/claude/cliproxyapi/key', cliproxyapiForgetResultSchema, { method: 'DELETE', query: {} }),
+  startCliproxyapiGateway: () => sendParsed('/api/native/claude/cliproxyapi/start', cliproxyapiStatusSchema, { method: 'POST' }),
+  stopCliproxyapiGateway: () => sendParsed('/api/native/claude/cliproxyapi/stop', cliproxyapiStatusSchema, { method: 'POST' }),
+  setCliproxyapiProxy: (input) => sendParsed('/api/native/claude/cliproxyapi/proxy', cliproxyapiStatusSchema, { method: 'POST', body: input }),
   beginCliproxyapiLogin: () => sendParsed('/api/native/claude/cliproxyapi/login', cliproxyapiLoginSchema, { method: 'POST' }),
   cliproxyapiLoginStatus: (state) => readParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, {}, cliproxyapiLoginStatusSchema),
   cancelCliproxyapiLogin: async (state) => (await sendParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, cliproxyapiCancelResultSchema, { method: 'DELETE', query: {} })).cancelled,
   removeCliproxyapiAccount: async (name) => { await sendParsed(`/api/native/claude/cliproxyapi/accounts/${encodeURIComponent(name)}`, cliproxyapiRemovedSchema, { method: 'DELETE', query: {} }); },
   saveCliproxyapiConnection: (input) => sendParsed('/api/native/claude/cliproxyapi/connection', claudeConnectionSchema, { method: 'POST', body: input }),
+  cliproxyapiModels: () => readParsed('/api/native/claude/cliproxyapi/models', {}, cliproxyapiModelsSchema),
+  importCliproxyapiModels: () => sendParsed('/api/native/claude/cliproxyapi/import', cliproxyapiImportResultSchema, { method: 'POST' }),
   listClaudeConnections: () => readParsed('/api/native/claude/connections', {}, claudeConnectionListSchema),
   saveClaudeConnection: (id, body) => sendParsed(
     id ? `/api/native/claude/connections/${encodeURIComponent(id)}` : '/api/native/claude/connections',
