@@ -22,7 +22,7 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import { useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useI18n } from '@/lib/i18n';
-import { NativeMemorySettings } from './NativeMemorySettings';
+import { useNativeMemoryAutoSetup } from './useNativeMemoryAutoSetup';
 import { cn } from '@/lib/utils';
 
 interface ToolRowProps {
@@ -74,7 +74,6 @@ const ToolRow: React.FC<ToolRowProps> = ({ icon, title, summary, info, ariaLabel
  * the list rather than in it.
  */
 export const OpenChamberToolsSettings: React.FC = () => {
-  const [memoryRefreshRevision, setMemoryRefreshRevision] = React.useState(0);
   const { t } = useI18n();
   const agentControlToolEnabled = useUIStore((state) => state.agentControlToolEnabled);
   const setAgentControlToolEnabled = useUIStore((state) => state.setAgentControlToolEnabled);
@@ -87,6 +86,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
   // Older runtimes can explicitly lack the memory capability.
   const agentMemoryAvailable = useUIStore((state) => state.agentMemoryFeatureAvailable);
   const setAgentMemoryToolEnabled = useUIStore((state) => state.setAgentMemoryToolEnabled);
+  const { result: memorySetupResult, runSetup: runMemorySetup } = useNativeMemoryAutoSetup(agentMemoryToolEnabled);
   const agentKnowledgeToolEnabled = useUIStore((state) => state.agentKnowledgeToolEnabled);
   const setAgentKnowledgeToolEnabled = useUIStore((state) => state.setAgentKnowledgeToolEnabled);
   const agentNotifyToolEnabled = useUIStore((state) => state.agentNotifyToolEnabled);
@@ -154,21 +154,15 @@ export const OpenChamberToolsSettings: React.FC = () => {
   }, [setBrowserProvider]);
 
   // Disabling stops agent access and hides the project memory view. Stored
-  // entries remain available when the user enables memory again.
+  // entries and terminal hooks remain available when the user enables memory again.
   const handleAgentMemoryToolChange = React.useCallback((enabled: boolean) => {
     setAgentMemoryToolEnabled(enabled);
-    // Re-read after the write lands, not before. The switch flips the client
-    // immediately, which makes the panel ask the server straight away — and
-    // while the setting is still being written the server truthfully answers
-    // "disabled", which used to leave the tab hidden until a restart.
-    void updateDesktopSettings({ agentMemoryToolEnabled: enabled })
-      .finally(() => {
-        setMemoryRefreshRevision((revision) => revision + 1);
-        if (enabled) {
-          void useAgentMemoryStore.getState().refresh();
-        }
-      });
-  }, [setAgentMemoryToolEnabled]);
+    void updateDesktopSettings({ agentMemoryToolEnabled: enabled }).then((result) => {
+      if (!enabled) return;
+      void useAgentMemoryStore.getState().refresh();
+      if (result.ok && useUIStore.getState().agentMemoryToolEnabled) void runMemorySetup();
+    });
+  }, [runMemorySetup, setAgentMemoryToolEnabled]);
 
   return (
     <SettingsSection title={t('settings.openchamber.tools.title')}>
@@ -287,19 +281,33 @@ export const OpenChamberToolsSettings: React.FC = () => {
         />
 
         {agentMemoryAvailable ? (
-          <ToolRow
-            icon="brain"
-            settingsItem="sessions.agent-memory-tool"
-            checked={agentMemoryToolEnabled}
-            onChange={handleAgentMemoryToolChange}
-            title={t('settings.openchamber.tools.field.agentMemoryTool')}
-            summary={t('settings.openchamber.tools.field.agentMemoryToolSummary')}
-            info={t('settings.openchamber.tools.field.agentMemoryToolInfo')}
-            ariaLabel={t('settings.openchamber.tools.field.agentMemoryToolAria')}
-          />
+          <div>
+            <ToolRow
+              icon="brain"
+              settingsItem="sessions.agent-memory-tool"
+              checked={agentMemoryToolEnabled}
+              onChange={handleAgentMemoryToolChange}
+              title={t('settings.openchamber.tools.field.agentMemoryTool')}
+              summary={t('settings.openchamber.tools.field.agentMemoryToolSummary')}
+              info={t('settings.openchamber.tools.field.agentMemoryToolInfo')}
+              ariaLabel={t('settings.openchamber.tools.field.agentMemoryToolAria')}
+            />
+            {memorySetupResult ? (
+              <div className={cn('pb-3 pe-4', TOOL_ROW_TEXT_INSET_CLASS)}>
+                {memorySetupResult.kind === 'failed' ? (
+                  <p role="alert" className="typography-meta text-[var(--status-error)]">{t('nativeMemory.setupFailed')}</p>
+                ) : null}
+                {memorySetupResult.kind === 'remote' ? (
+                  <p className="typography-meta text-muted-foreground">{t('nativeMemory.hostOnly')}</p>
+                ) : null}
+                {memorySetupResult.reviewRequired ? (
+                  <p className="typography-meta text-muted-foreground">{t('nativeMemory.review')}</p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
-      {agentMemoryAvailable ? <NativeMemorySettings refreshRevision={memoryRefreshRevision} /> : null}
 
       <SettingsCheckboxRow
         className="mt-4"

@@ -876,15 +876,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'general',
     titleKey: 'settings.openchamber.tools.field.agentMemoryTool',
     descriptionKey: 'settings.openchamber.tools.field.agentMemoryToolInfo',
-    keywords: ['agent', 'tool', 'memory', 'remember', 'recall', 'preferences', 'openchamber'],
-    isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().agentMemoryFeatureAvailable,
-  },
-  {
-    id: 'general.native-memory-sharing',
-    page: 'general',
-    titleKey: 'nativeMemory.title',
-    descriptionKey: 'nativeMemory.hint',
-    keywords: ['claude', 'codex', 'cli', 'memory', 'handoff', 'progress'],
+    keywords: ['agent', 'tool', 'memory', 'remember', 'recall', 'preferences', 'openchamber', 'claude', 'codex', 'cli', 'handoff'],
     isAvailable: (ctx) => !ctx.isVSCode && useUIStore.getState().agentMemoryFeatureAvailable,
   },
   {

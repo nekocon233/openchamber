@@ -4001,6 +4001,7 @@ export const dict = {
   'nativeMemory.review': 'Review this hook in Codex before it can run.',
   'nativeMemory.title': 'CLI memory sharing',
   'nativeMemory.unavailable': 'Memory sharing is unavailable on this runtime.',
+  'nativeMemory.setupFailed': 'לא ניתן היה להגדיר חלק מהווים של CLI. כבה את הזיכרון והפעיל אותו מחדש כדי לנסות שוב.',
   'nativeMemory.waiting': 'Waiting for the first hook refresh',
   'sessions.sidebar.activity.recentTitle': 'recent',
   'sessions.sidebar.activity.timelineTitle': 'projects',

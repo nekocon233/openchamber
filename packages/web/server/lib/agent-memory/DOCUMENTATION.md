@@ -34,11 +34,15 @@ marks progress unavailable. No background polling runs.
 
 ## Native terminal hooks
 
-Settings > General > OpenChamber tools offers CLI memory sharing. Enrollment is
-explicit and local to the server computer. Web and Electron use that host's
-CLIs; remote and mobile clients can inspect sharing and import known references,
-but cannot install executable hooks on a different computer. VS Code retains
-its explicit unsupported native API.
+Settings > General > OpenChamber tools installs missing terminal hooks when the
+Agent memory tool is enabled. Setup is explicit through that switch and local to
+the server computer. Web and Electron use that host's CLIs; remote and mobile
+clients can enable memory and inspect sharing, but cannot install executable
+hooks on a different computer. Turning the tool off stops agent reads, writes
+and handoff capture without removing the installed hooks. VS Code retains its
+explicit unsupported native API. The `openchamber memory` CLI remains the
+manual connect/disconnect path, and the import API remains available to server
+clients even though Settings no longer has an import row.
 
 `native-connections.js` adds only its owned command handlers to Claude's user
 settings and Codex's `hooks.json`. Other configuration and hooks survive connect,

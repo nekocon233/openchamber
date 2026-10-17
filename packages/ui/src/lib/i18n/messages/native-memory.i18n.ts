@@ -15,7 +15,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "No handoffs recorded for this project.",
     "nativeMemory.import": "Import reference",
     "nativeMemory.hostOnly": "Connect terminal CLIs on the server computer.",
-    "nativeMemory.unavailable": "Memory sharing is unavailable on this runtime."
+    "nativeMemory.unavailable": "Memory sharing is unavailable on this runtime.",
+    "nativeMemory.setupFailed": "Some CLI hooks couldn't be set up. Turn memory off and back on to try again."
   },
   "de": {
     "nativeMemory.ended": "Durchlauf beendet",
@@ -33,7 +34,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "Für dieses Projekt sind keine Übergaben gespeichert.",
     "nativeMemory.import": "Verweis importieren",
     "nativeMemory.hostOnly": "Verbinde die Terminal-CLIs auf dem Servercomputer.",
-    "nativeMemory.unavailable": "Geteilter Speicher ist in dieser Laufzeit nicht verfügbar."
+    "nativeMemory.unavailable": "Geteilter Speicher ist in dieser Laufzeit nicht verfügbar.",
+    "nativeMemory.setupFailed": "Einige CLI-Hooks konnten nicht eingerichtet werden. Schalte den Speicher aus und wieder ein, um es erneut zu versuchen."
   },
   "fr": {
     "nativeMemory.ended": "Tour terminé",
@@ -51,7 +53,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "Aucune passation enregistrée pour ce projet.",
     "nativeMemory.import": "Importer la référence",
     "nativeMemory.hostOnly": "Connectez les CLI sur l’ordinateur serveur.",
-    "nativeMemory.unavailable": "La mémoire partagée est indisponible dans cet environnement."
+    "nativeMemory.unavailable": "La mémoire partagée est indisponible dans cet environnement.",
+    "nativeMemory.setupFailed": "Certains hooks CLI n'ont pas pu être configurés. Désactivez puis réactivez la mémoire pour réessayer."
   },
   "es": {
     "nativeMemory.ended": "Turno finalizado",
@@ -69,7 +72,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "No hay traspasos guardados para este proyecto.",
     "nativeMemory.import": "Importar referencia",
     "nativeMemory.hostOnly": "Conecta las CLI de terminal en el equipo servidor.",
-    "nativeMemory.unavailable": "La memoria compartida no está disponible en este entorno."
+    "nativeMemory.unavailable": "La memoria compartida no está disponible en este entorno.",
+    "nativeMemory.setupFailed": "No se pudieron configurar algunos hooks de CLI. Desactiva y vuelve a activar la memoria para intentarlo de nuevo."
   },
   "ja": {
     "nativeMemory.ended": "ターン終了",
@@ -87,7 +91,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "このプロジェクトの引き継ぎはまだありません。",
     "nativeMemory.import": "参照を取り込む",
     "nativeMemory.hostOnly": "サーバー側のコンピューターでターミナル CLI を接続してください。",
-    "nativeMemory.unavailable": "この実行環境ではメモリ共有を利用できません。"
+    "nativeMemory.unavailable": "この実行環境ではメモリ共有を利用できません。",
+    "nativeMemory.setupFailed": "一部の CLI フックを設定できませんでした。メモリをいったんオフにしてから再度オンにしてやり直してください。"
   },
   "ko": {
     "nativeMemory.ended": "턴 종료",
@@ -105,7 +110,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "이 프로젝트에 기록된 인계가 없습니다.",
     "nativeMemory.import": "참조 가져오기",
     "nativeMemory.hostOnly": "서버 컴퓨터에서 터미널 CLI를 연결하세요.",
-    "nativeMemory.unavailable": "이 실행 환경에서는 메모리 공유를 사용할 수 없습니다."
+    "nativeMemory.unavailable": "이 실행 환경에서는 메모리 공유를 사용할 수 없습니다.",
+    "nativeMemory.setupFailed": "일부 CLI 훅을 설정하지 못했습니다. 메모리를 껐다가 다시 켜서 다시 시도하세요."
   },
   "pl": {
     "nativeMemory.ended": "Tura zakończona",
@@ -123,7 +129,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "Brak zapisanych przekazań dla tego projektu.",
     "nativeMemory.import": "Importuj odwołanie",
     "nativeMemory.hostOnly": "Połącz terminalowe CLI na komputerze serwera.",
-    "nativeMemory.unavailable": "Wspólna pamięć jest niedostępna w tym środowisku."
+    "nativeMemory.unavailable": "Wspólna pamięć jest niedostępna w tym środowisku.",
+    "nativeMemory.setupFailed": "Nie udało się skonfigurować niektórych haków CLI. Wyłącz i włącz pamięć ponownie, aby spróbować jeszcze raz."
   },
   "pt-BR": {
     "nativeMemory.ended": "Turno encerrado",
@@ -141,7 +148,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "Nenhuma passagem registrada para este projeto.",
     "nativeMemory.import": "Importar referência",
     "nativeMemory.hostOnly": "Conecte as CLI de terminal no computador servidor.",
-    "nativeMemory.unavailable": "A memória compartilhada não está disponível neste ambiente."
+    "nativeMemory.unavailable": "A memória compartilhada não está disponível neste ambiente.",
+    "nativeMemory.setupFailed": "Não foi possível configurar alguns hooks de CLI. Desative e reative a memória para tentar novamente."
   },
   "tr": {
     "nativeMemory.ended": "Tur sona erdi",
@@ -159,7 +167,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "Bu proje için kayıtlı devir yok.",
     "nativeMemory.import": "Başvuruyu içe aktar",
     "nativeMemory.hostOnly": "Terminal CLI araçlarını sunucu bilgisayarında bağlayın.",
-    "nativeMemory.unavailable": "Bu çalışma ortamında bellek paylaşımı kullanılamıyor."
+    "nativeMemory.unavailable": "Bu çalışma ortamında bellek paylaşımı kullanılamıyor.",
+    "nativeMemory.setupFailed": "Bazı CLI kancaları ayarlanamadı. Yeniden denemek için belleği kapatıp açın."
   },
   "uk": {
     "nativeMemory.ended": "Хід завершено",
@@ -177,7 +186,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "Для цього проєкту немає записів передавання.",
     "nativeMemory.import": "Імпортувати посилання",
     "nativeMemory.hostOnly": "Під’єднайте термінальні CLI на комп’ютері сервера.",
-    "nativeMemory.unavailable": "Спільна пам’ять недоступна в цьому середовищі."
+    "nativeMemory.unavailable": "Спільна пам’ять недоступна в цьому середовищі.",
+    "nativeMemory.setupFailed": "Деякі CLI-хуки не вдалося налаштувати. Вимкніть і знову увімкніть пам’ять, щоб повторити спробу."
   },
   "zh-CN": {
     "nativeMemory.ended": "本轮已结束",
@@ -195,7 +205,8 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "此项目尚无交接记录。",
     "nativeMemory.import": "导入引用",
     "nativeMemory.hostOnly": "请在服务器所在电脑接入终端 CLI。",
-    "nativeMemory.unavailable": "当前运行环境不支持记忆共享。"
+    "nativeMemory.unavailable": "当前运行环境不支持记忆共享。",
+    "nativeMemory.setupFailed": "部分 CLI hook 未能设置。请关闭记忆工具后重新打开再试。"
   },
   "zh-TW": {
     "nativeMemory.ended": "本輪已結束",
@@ -213,6 +224,7 @@ export const nativeMemoryI18n = {
     "nativeMemory.empty": "此專案尚無交接紀錄。",
     "nativeMemory.import": "匯入參照",
     "nativeMemory.hostOnly": "請在伺服器所在電腦接入終端 CLI。",
-    "nativeMemory.unavailable": "目前執行環境不支援記憶共享。"
+    "nativeMemory.unavailable": "目前執行環境不支援記憶共享。",
+    "nativeMemory.setupFailed": "部分 CLI hook 未能設定。請關閉記憶工具後重新開啟再試。"
   }
 } as const;
