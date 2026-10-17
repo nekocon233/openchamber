@@ -415,8 +415,9 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   );
   // Flat rows: no tree gutter, live state on the right. Chats and the Tree
   // view's Pinned and In work rows keep it on one line.
-  const isOneLineTimelineRow = renderContext === 'timeline-chat' || renderContext === 'tree-chat' || renderContext === 'mixed-compact';
+  const isOneLineTimelineRow = renderContext === 'timeline-chat' || renderContext === 'tree-chat' || renderContext === 'mixed-compact' || renderContext === 'work-compact';
   const isTimelineRow = isTwoLineTimelineContext(renderContext) || isOneLineTimelineRow;
+  const isWorkZoneContext = renderContext === 'work-compact' || renderContext === 'timeline-mixed-work';
   // The Tree view's one-line Chats, Pinned and In work rows never expand, but
   // they keep the tree's slot and geometry, so their state reads down the
   // same left edge as the tree under them. List rows stay flat.
@@ -665,8 +666,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   ) : null;
   const sessionTitle = resolvedSession.title || t('sessions.sidebar.session.untitled');
   const isPinnedSession = isSessionPinned(pinnedSessionIds, sessionDirectory, session.id);
-  // Timeline rows stay flat. Tree's one-line Pinned rows are the exception:
-  // they keep the tree slot and can reveal the same subagents the project row can.
+  // Timeline rows stay flat, except In work's two contexts, which keep children
+  // like the Tree zones. List's Pinned rows and other timeline rows do not.
   const hasChildren = sessionRowCanExpand(renderContext, isTimelineRow) && node.children.length > 0;
   const actionSupport = sessionActionSupport(session.id);
   // Per-render-context expansion key: the same session can appear in both
@@ -1085,6 +1086,11 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       ) : liveStateMark}
     </span>
   ) : treeChevron ?? <span aria-hidden className="h-3.5 w-3.5 flex-shrink-0" />;
+  // Two-line zone rows have no tree slot, but In work still reveals its
+  // subsessions: give the chevron a slot that keeps leaf rows aligned.
+  const workZoneSlot = renderContext === 'timeline-mixed-work'
+    ? treeChevron ?? <span aria-hidden className="h-3.5 w-3.5 flex-shrink-0" />
+    : null;
 
   const streamingIndicator = isZombie
     ? <Icon name="error-warning" className="h-4 w-4 text-status-warning" />
@@ -1798,10 +1804,15 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 // List rows have no gutter: their content sits 10px in.
                 // Rows with the tree slot use the file tree geometry: 12px per
                 // level from an 8px edge, then the slot and a 6px gap.
-                style={{ paddingInlineStart: hasTreeSlot ? sessionTreeRowPaddingLeft(depth) : TIMELINE_ROW_LEFT_PX }}
+                style={{
+                  paddingInlineStart: hasTreeSlot
+                    ? sessionTreeRowPaddingLeft(depth)
+                    : TIMELINE_ROW_LEFT_PX + (renderContext === 'timeline-mixed-work' ? depth * 12 : 0),
+                  marginBlock: isWorkZoneContext ? 0 : undefined,
+                }}
                 className={cn(
                   'oc-ref-tint-scope group relative my-0.5 flex cursor-pointer items-center rounded-md pe-2.5',
-                  hasTreeSlot && 'gap-1.5',
+                  (hasTreeSlot || renderContext === 'timeline-mixed-work') && 'gap-1.5',
                   // Tree rows sit a little tighter than the timeline's.
                   isTimelineRow ? (isOneLineTimelineRow ? 'py-1' : 'py-1.5') : 'py-[3px]',
                   !(isActive || isRowSelected) && 'hover:bg-interactive-hover/60',
@@ -1811,6 +1822,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
               />
             }
           >
+          {workZoneSlot}
           {treeSlot}
           <div className="flex min-w-0 flex-1 items-center">
             {(

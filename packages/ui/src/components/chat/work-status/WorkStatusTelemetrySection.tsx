@@ -14,13 +14,20 @@ import {
   formatTelemetryDuration,
   formatTelemetryTokens,
   formatThroughputRate,
+  getCompletedTurnAverages,
   getLatestCompletedTurnStats,
+  type CompletedTurnAverages,
   type CompletedTurnStats,
 } from './telemetry';
 
 type Props = {
   sessionId: string | null;
   directory: string | null;
+};
+
+type ComputedTelemetry = {
+  stats: CompletedTurnStats | null;
+  averages: CompletedTurnAverages | null;
 };
 
 /** One hover/focus target covers both the label and its value. */
@@ -60,21 +67,27 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
     { enabled: eligibleForStats },
   );
 
-  const computed = React.useMemo(() => {
+  const computed = React.useMemo<ComputedTelemetry | null>(() => {
     if (!eligibleForStats) return null;
-    return getLatestCompletedTurnStats(records);
+    return {
+      stats: getLatestCompletedTurnStats(records),
+      averages: getCompletedTurnAverages(records),
+    };
   }, [eligibleForStats, records]);
 
   // Retain only one committed result, never message history or a global ID cache.
-  const [retained, setRetained] = React.useState<{ scope: string; stats: CompletedTurnStats | null } | null>(null);
+  const [retained, setRetained] = React.useState<{ scope: string; computed: ComputedTelemetry } | null>(null);
   React.useEffect(() => {
-    if (eligibleForStats) {
-      setRetained({ scope, stats: computed });
-    } else {
+    if (eligibleForStats && computed) {
+      setRetained({ scope, computed });
+    } else if (!eligibleForStats) {
       setRetained((previous) => previous?.scope === scope && status !== 'unknown' ? previous : null);
     }
   }, [scope, status, eligibleForStats, computed]);
-  const stats = eligibleForStats ? computed : status !== 'unknown' && retained?.scope === scope ? retained.stats : null;
+  const current = eligibleForStats ? computed : status !== 'unknown' && retained?.scope === scope ? retained.computed : null;
+  const stats = current?.stats ?? null;
+  const averages = current?.averages ?? null;
+  const turnInProgress = status === 'busy' || status === 'retry';
   const summary = stats && stats.responseTokensPerSecond !== null
     ? formatThroughputRate(stats.responseTokensPerSecond)
     : undefined;
@@ -100,11 +113,11 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
               value={<WorkStatusValue>{formatThroughputRate(stats.responseTokensPerSecond)}</WorkStatusValue>}
             />
           ) : null}
-          {stats.tokensPerSecond !== null ? (
+          {averages && averages.tokensPerSecond !== null ? (
             <TelemetryRow
               label={t('chat.workStatus.telemetry.speed')}
               description={t('chat.workStatus.telemetry.speedDescription')}
-              value={<WorkStatusValue>{formatThroughputRate(stats.tokensPerSecond)}</WorkStatusValue>}
+              value={<WorkStatusValue>{formatThroughputRate(averages.tokensPerSecond)}</WorkStatusValue>}
             />
           ) : null}
           {stats.elapsedDurationMs !== null ? (
@@ -166,13 +179,13 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
             />
           ) : null}
 
-          {stats.cacheHitPercent !== null ? (
+          {averages && averages.cacheHitPercent !== null ? (
             <TelemetryRow
               label={t('chat.workStatus.telemetry.cacheHit')}
               description={t('chat.workStatus.telemetry.cacheHitDescription')}
               value={(
-                <WorkStatusValue tone={stats.cacheHitPercent >= 50 ? 'success' : 'default'}>
-                  {`${stats.cacheHitPercent}%`}
+                <WorkStatusValue tone={averages.cacheHitPercent >= 50 ? 'success' : 'default'}>
+                  {`${averages.cacheHitPercent}%`}
                 </WorkStatusValue>
               )}
             />
@@ -186,6 +199,8 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
             />
           ) : null}
         </>
+      ) : turnInProgress ? (
+        <WorkStatusRow muted label={t('chat.workStatus.telemetry.inProgress')} />
       ) : null}
     </WorkStatusCollapsibleSection>
   );

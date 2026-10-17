@@ -244,14 +244,16 @@ default) shows it. With the zone hidden its sessions stay in their projects.
 in its project group and folders, in both views, so it appears in two places.
 Search lists it once, in the work block. Chats are never in work
 and offer no Track action. An empty zone is not rendered. In List, rows use
-`renderContext: 'timeline-mixed'`: two lines, the project's icon before the
-branch. In Tree they use `'mixed-compact'` by default: one line like a Chats
+`renderContext: 'timeline-mixed-work'`: two lines, the project's icon before the
+branch. In Tree they use `'work-compact'` by default: one line like a Chats
 row, the PR or issue as a coloured mark without its number (its tooltip lists
 the links), the branch, project and model in the whole-row tooltip. The display
 menu's Detailed rows toggle (`detailedZoneRows`, `sidebarDetailedZoneRows`, per
 surface, off by default, offered in Tree only) gives Tree the two-line rows.
-In work rows never expand, with subsessions feeding the badges; a run row there opens
-its overview. Search
+In work rows expand their subsessions in both views; a run row there still
+opens its overview instead. In work carries its own compact spacing: no
+vertical margin between rows, and a 4px gap before the next section, while
+Pinned keeps the shared 2px row gap and 8px section gap. Search
 keeps a root whose subsession matches (`sessionTreeMatchesSidebarQuery`): those
 subsessions are nowhere else in the sidebar. The zone counts only sessions that match
 themselves (`countSessionTreeQueryMatches`) over the whole tree; the row drops
@@ -303,7 +305,8 @@ Pinned only. Like In work, its sessions also stay in their projects, search
 lists each of them once, in the zone (`zoneSessionIds` carries both zones' ids),
 and the rows follow the same render context. Tree's one-line Pinned rows keep
 their active subtree and can expand it; List, detailed zone rows and search stay
-flat. In work rows do not expand in either view. Its rows show no pin marker,
+flat. In work rows expand in both views, including detailed zone rows; Pinned
+does not. Its rows show no pin marker,
 because the header already says they are pinned; In work rows show it only
 while the zone is hidden, since otherwise no pinned session reaches In work. Pins are the device-local
 `useSessionPinnedStore`, so the zone differs between devices. The phone sheet
@@ -362,8 +365,11 @@ all / Expand all.
   the Tree's failure line under it. The phone's timeline shows the space's bucket header the same
   way, through the header the phone tree uses.
 - Timeline rows carry `renderContext: 'timeline'` (under a project) or
-  `'timeline-mixed'` (Pinned and In work), depth 0 and empty children. They
-  never expand, show no chevron, no folders and no worktree groups. Folders are
+  `'timeline-mixed'` (Pinned). In work uses `'timeline-mixed-work'` in List and
+  `'work-compact'` in Tree. Project timeline rows and Pinned never expand and
+  show no chevron; In work rows do expand, and the two-line form reserves a
+  chevron slot so leaf rows stay aligned. All of them show no folders and no
+  worktree groups. Folders are
   not projected, so the row menu hides `Move to folder`. Their archive/delete
   actions still cover the full subtree, because `collectSessionSubtreeIds`
   resolves descendants from the global cache at action time. `Move to
@@ -506,10 +512,10 @@ matching and ordering. Search does not fetch sessions or broaden list membership
   chevron and its state goes to the right. Session rows use the one-line form
   of `SessionTimelineRowBody`: pin, done hint and time on the right. The Tree
   view's one-line Chats, Pinned and In work rows (`'tree-chat'`,
-  `'mixed-compact'`, session and run rows) take the same geometry at level 0
-  with the state in the slot, so it reads down one edge from the zones into
-  the projects. List rows and Tree's detailed zone rows are flat and keep the
-  live state on the right. Session and run titles are muted at rest. Session
+  `'mixed-compact'`, `'work-compact'`, session and run rows) take the same
+  geometry at level 0 with the state in the slot, so it reads down one edge
+  from the zones into the projects. List rows and Tree's detailed zone rows are
+  flat and keep the live state on the right. Session and run titles are muted at rest. Session
   and run rows take the same faint hover fill as timeline rows; worktree,
   space, archive and folder headers take none, so a pointer moving down the
   sidebar tells sessions from their containers. Show more, empty and

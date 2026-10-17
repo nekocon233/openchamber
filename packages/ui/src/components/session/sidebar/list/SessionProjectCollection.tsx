@@ -473,7 +473,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     () => new Set([...zoneSessions.pinned, ...zoneSessions.work].map((session) => session.id)),
     [zoneSessions],
   );
-  const buildZoneItems = React.useCallback((zone: readonly Session[], { allowExpansion }: { allowExpansion: boolean }) => {
+  const buildZoneItems = React.useCallback((zone: readonly Session[], { allowExpansion, allowTimelineExpansion = false }: { allowExpansion: boolean; allowTimelineExpansion?: boolean }) => {
     if (zone.length === 0) return EMPTY_TIMELINE_ITEMS;
     const locations = resolveSidebarSessionLocations({
       sessions: [...zone],
@@ -487,10 +487,10 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       hideBranchMatchingProjectLabel: false,
     });
     const query = view.hasSessionSearchQuery ? view.normalizedSessionSearchQuery : '';
-    // Only Tree's plain Pinned rows expand. List, detailed zone rows, Work,
-    // and search stay flat; search still looks through the whole tree so a
+    // Pinned expands in Tree only. In work also expands in List and in
+    // detailed zone rows; search still looks through the whole tree so a
     // matching subsession keeps its root listed.
-    const keepChildren = allowExpansion && !timelineMode && !detailedZoneRows && query === '';
+    const keepChildren = allowExpansion && query === '' && (allowTimelineExpansion || (!timelineMode && !detailedZoneRows));
     const badgeScopesBySessionId = new Map<string, ReturnType<typeof selectBlockingBadgeSessionScopes>>();
     const trees = new Map(zone.map((session) => [session.id, buildActiveSessionNode(collection.childrenMap, session)]));
     const nodes = new Map(zone.map((session) => {
@@ -525,7 +525,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     });
   }, [collection.childrenMap, detailedZoneRows, ownership.bySessionId, spaceLabelById, timelineMode, topology.availableWorktreesByProject, topology.gitBranches, topology.projectRootBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
   const pinnedItems = React.useMemo(() => buildZoneItems(zoneSessions.pinned, { allowExpansion: true }), [buildZoneItems, zoneSessions.pinned]);
-  const workItems = React.useMemo(() => buildZoneItems(zoneSessions.work, { allowExpansion: false }), [buildZoneItems, zoneSessions.work]);
+  const workItems = React.useMemo(() => buildZoneItems(zoneSessions.work, { allowExpansion: true, allowTimelineExpansion: true }), [buildZoneItems, zoneSessions.work]);
   // Worktree branches whose PR badge is on screen in the current mode:
   // Timeline rows there; expanded project groups in the Projects view; In
   // work rows in both. Collapse state from the Projects

@@ -61,11 +61,11 @@ describe('SessionSidebarRows section spacing', () => {
     return sectionSpacingAfter(rows[index - 1], rows[index]);
   };
 
-  test('zones and projects open with the same gap', () => {
+  test('zones open with the shared gap and In work closes with its tighter gap', () => {
     for (const withChats of [true, false]) {
       const rows = buildSessionSidebarRowModel(input(withChats)).rows;
       if (withChats) expect(spacingBefore(rows, 'activity-header', 'activity:work:header')).toBe('pb-2');
-      expect(spacingBefore(rows, 'project-header')).toBe('pb-2');
+      expect(spacingBefore(rows, 'project-header')).toBe('pb-1');
     }
   });
 
@@ -74,9 +74,9 @@ describe('SessionSidebarRows section spacing', () => {
     const lastBeforeProjects = rows.findIndex((row) => row.kind === 'project-header') - 1;
     const last = rows[lastBeforeProjects];
     expect(last.kind).toBe('session');
-    expect(estimateSessionSidebarRowSize(last, rows[lastBeforeProjects + 1])).toBe(last.estimateSize + 8);
+    expect(estimateSessionSidebarRowSize(last, rows[lastBeforeProjects + 1])).toBe(last.estimateSize + 4);
     // A sibling measured mid-section tells its height; the gap is added as measured.
-    expect(estimateSessionSidebarRowSize(last, rows[lastBeforeProjects + 1], { height: 30, gapBySpacing: new Map([['pb-2', 10]]) })).toBe(40);
+    expect(estimateSessionSidebarRowSize(last, rows[lastBeforeProjects + 1], { height: 30, gapBySpacing: new Map([['pb-1', 10]]) })).toBe(40);
     expect(estimateSessionSidebarRowSize(last, undefined, { height: 30 })).toBe(30);
   });
 

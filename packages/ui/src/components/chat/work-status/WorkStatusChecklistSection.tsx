@@ -1,18 +1,12 @@
 import React from 'react';
 import { useI18n } from '@/lib/i18n';
 import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
-import { useUIStore } from '@/stores/useUIStore';
 import { useSessionNativeChecklist } from '@/sync/session-native-checklist';
-import { selectNativeTasksTab } from '../native-tasks/task-ui-store';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
+import { useWorkStatusNavigation } from './useWorkStatusNavigation';
 
 const SECTION_ID = 'taskChecklist';
-
-const openTasks = (directory: string, tab: 'checklist' | 'background') => {
-  selectNativeTasksTab(tab);
-  useUIStore.getState().openContextSurface(directory, 'tasks');
-};
 
 const ITEM_STATUS_KEYS = {
   pending: 'chat.nativeTasks.status.pending',
@@ -25,6 +19,7 @@ export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId
   const { t } = useI18n();
   const enabled = Boolean(sessionId && directory && nativeBackendOfSessionId(sessionId) === 'claude');
   const state = useSessionNativeChecklist(sessionId, directory, { enabled, visible: false });
+  const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;
   const items = snapshot?.items ?? [];
   useReportWorkStatusPresence(SECTION_ID, enabled);
@@ -49,7 +44,7 @@ export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId
             key={item.id}
             label={item.subject}
             value={<WorkStatusValue tone={ITEM_STATUS_TONES[item.status]}>{t(ITEM_STATUS_KEYS[item.status])}</WorkStatusValue>}
-            onClick={() => openTasks(directory, 'checklist')}
+            onClick={() => openTasks('checklist')}
             ariaLabel={t('chat.nativeTasks.openChecklist')}
           />
         ))}

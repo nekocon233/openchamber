@@ -8,7 +8,6 @@ import { runBackgroundNetworkTask } from '@/lib/background-network';
 import { useFreshestSourceControlVisualSummaryForBranch } from '@/stores/useGitHubPrStatusStore';
 import { useSessionMessages } from '@/sync/sync-context';
 import { useContextWindowLimits } from '@/hooks/useContextWindowLimits';
-import { useUIStore } from '@/stores/useUIStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -27,6 +26,8 @@ import {
   WorkStatusValue,
 } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
+import { useWorkStatusNavigation } from './useWorkStatusNavigation';
+import { WorkStatusPrPrewarm } from './useWorkStatusPrPrewarm';
 import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
 import { formatChangeRequestReference } from '@/lib/source-control/identity';
 import { ProjectActionsButton } from '@/components/layout/ProjectActionsButton';
@@ -40,6 +41,8 @@ type Props = {
   goalRow: React.ReactNode;
   showSession: boolean;
   showRepository: boolean;
+  /** Mobile sheet only: warm the branch's change-request summary on open. */
+  prewarmPrStatus?: boolean;
   /** Lets the panel place the two readouts independently without duplicating their subscriptions. */
   children: (sections: { session: React.ReactNode; repository: React.ReactNode }) => React.ReactNode;
 };
@@ -55,7 +58,7 @@ const UNKNOWN_PERCENT = '\u2014';
  * the pull request look like. All of it stays true for as long as the session
  * is open, so it sits above anything episodic.
  */
-export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, goalRow, showSession, showRepository, children }) => {
+export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, goalRow, showSession, showRepository, prewarmPrStatus = false, children }) => {
   const { t } = useI18n();
   const projectActionsContext = useProjectActionsContext();
   const { git } = useRuntimeAPIs();
@@ -178,23 +181,10 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
     [sessionMessages, contextLimit],
   );
 
-  const openContextSurface = useUIStore((state) => state.openContextSurface);
-  const openContextOverview = useUIStore((state) => state.openContextOverview);
-  const openContextPanelTab = useUIStore((state) => state.openContextPanelTab);
-  const openSurface = React.useCallback(
-    (mode: 'git' | 'pr') => { if (directory) openContextSurface(directory, mode); },
-    [directory, openContextSurface],
-  );
-  // Working-tree diff without a target path: the panel opens on the whole
-  // change set rather than picking a file on the user's behalf.
-  // Same destination as the header's context readout.
-  const openContext = React.useCallback(() => {
-    if (directory) openContextOverview(directory);
-  }, [directory, openContextOverview]);
-
-  const openChanges = React.useCallback(() => {
-    if (directory) openContextPanelTab(directory, { mode: 'diff', diffScope: 'working' });
-  }, [directory, openContextPanelTab]);
+  const nav = useWorkStatusNavigation(directory);
+  // The desktop context panel's tab actions have no mobile host. The work
+  // status sheet routes the readouts to the workspace drawer instead.
+  const showProjectActions = !nav.isMobileHost && Boolean(projectActionsContext);
 
   // Working-tree changes, from the same git status the Git panel reads.
   //
@@ -250,7 +240,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
   // restate the number directly above it.
   const showCostBreakdown = cost !== null && subagentCount > 0 && subagentCost > 0;
   const hasSession = showSession && (contextUsage !== null || cost !== null || Boolean(goalRow));
-  const hasRepository = showRepository && Boolean(branch || changed || prSummary || attentionLabel || projectActionsContext);
+  const hasRepository = showRepository && Boolean(branch || changed || prSummary || attentionLabel || showProjectActions);
 
   useReportWorkStatusPresence('session-repository', hasSession || hasRepository);
 
@@ -261,7 +251,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
             <>
               <WorkStatusRow
                 icon="donut-chart"
-                onClick={directory ? openContext : undefined}
+                onClick={directory ? nav.openContext : undefined}
                 ariaLabel={t('chat.workStatus.action.openContext')}
                 label={t('chat.workStatus.context.label')}
                 value={(
@@ -302,10 +292,13 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
         <WorkStatusSection
           title={t('chat.workStatus.section.project')}
           subject={projectLabel}
-          summary={projectActionsContext?.directory
+          summary={showProjectActions && projectActionsContext?.directory
             ? <OpenInAppButton directory={projectActionsContext.directory} />
             : null}
         >
+          {prewarmPrStatus && showRepository && gitDirectory && branch
+            ? <WorkStatusPrPrewarm directory={gitDirectory} branch={branch} />
+            : null}
           {attentionLabel ? <WorkStatusCallout>{attentionLabel}</WorkStatusCallout> : null}
 
           {/* Branch first: the changes below are the changes *on it*, and the
@@ -313,7 +306,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
           {branch ? (
             <WorkStatusRow
               icon="git-branch"
-              onClick={directory ? () => openSurface('git') : undefined}
+              onClick={directory ? nav.openGit : undefined}
               ariaLabel={t('chat.workStatus.action.openGit')}
               label={branch}
               value={(gitStatus?.ahead ?? 0) > 0 || (gitStatus?.behind ?? 0) > 0 ? (
@@ -330,7 +323,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
           {nestedRepoLabel ? (
             <WorkStatusRow
               icon="folder"
-              onClick={directory ? () => openSurface('git') : undefined}
+              onClick={directory ? nav.openGit : undefined}
               ariaLabel={t('chat.workStatus.action.openGit')}
               label={nestedRepoLabel}
               muted
@@ -340,7 +333,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
           {changed ? (
             <WorkStatusRow
               icon="file-edit"
-              onClick={directory ? openChanges : undefined}
+              onClick={directory ? nav.openChanges : undefined}
               ariaLabel={t('chat.workStatus.action.openChanges')}
               // The count names the row, matching the composer's changed-files
               // bar; the diffstat stays the trailing value.
@@ -363,7 +356,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
             <>
               <WorkStatusRow
                 icon="git-pull-request"
-                onClick={directory ? () => openSurface('pr') : undefined}
+                onClick={prSummary ? () => nav.openChangeRequest(prSummary) : undefined}
                 ariaLabel={t(changeRequestCopy('chat.workStatus.action.openPr', prSummary.provider))}
                 iconColor={`var(--pr-${prSummary.visualState})`}
                 label={prSummary.title ?? t(changeRequestCopy('chat.workStatus.pr.untitled', prSummary.provider))}
@@ -379,7 +372,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
               {prSummary.checks && prSummary.checks.total > 0 ? (
                 <WorkStatusRow
                   icon="checkbox-circle"
-                  onClick={directory ? () => openSurface('pr') : undefined}
+                  onClick={prSummary ? () => nav.openChangeRequest(prSummary) : undefined}
                   ariaLabel={t(changeRequestCopy('chat.workStatus.action.openPr', prSummary.provider))}
                   label={t('chat.workStatus.pr.checks')}
                   muted
@@ -408,7 +401,7 @@ export const WorkStatusPrimaryGroup: React.FC<Props> = ({ sessionId, directory, 
           ) : null}
 
           {/* Last: the readouts above describe the project, this runs something in it. */}
-          {projectActionsContext ? <ProjectActionsButton /> : null}
+          {showProjectActions ? <ProjectActionsButton /> : null}
         </WorkStatusSection>
       ) : null,
   });

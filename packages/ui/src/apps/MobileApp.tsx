@@ -33,9 +33,11 @@ import { useEnterprisePolicySync } from '@/hooks/useEnterprisePolicySync';
 import { useRoutingSync } from '@/hooks/useRoutingSync';
 import { useAgentMemorySync } from '@/hooks/useAgentMemorySync';
 import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
+import { resolveEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { opencodeClient } from '@/lib/opencode/client';
 import type { RuntimeAPIs } from '@/lib/api/types';
 import type { ProjectRef } from '@/lib/projectContextApi';
+import { normalizePath } from '@/lib/pathNormalization';
 import { readTabletLayout, useOrientation, useTabletLayout } from '@/lib/device';
 import { useHardwareKeyboard } from '@/lib/hardwareKeyboard';
 import { useI18n } from '@/lib/i18n';
@@ -54,6 +56,7 @@ import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useGitStore } from '@/stores/useGitStore';
 import { useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
+import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import {
   listProjectWorktrees,
   partitionWorktreesByRegisteredProject,
@@ -78,6 +81,7 @@ import { ArchiveSessionsView } from '@/components/views/ArchiveView';
 import { MobileSourceBoard } from '@/components/sourceBoard/SourceBoardView';
 import { ScheduledTasksView, type ScheduledTasksLeaveReason } from '@/components/session/ScheduledTasksDialog';
 import { MobileWorkspaceDrawer, type MobileWorkspaceTab } from './MobileWorkspaceDrawer';
+import { MobileWorkStatusSheet } from './MobileWorkStatusSheet';
 import { DedicatedMobileAppProvider, type MobileAppActions } from './mobileAppContext';
 import { autoConnectLastInstance, getAutoConnectTargetLabel, logMobileConnectEvent, reprobeActiveConnection, suppressAutoConnectUntilManualConnect, type AutoConnectOutcome } from './mobileConnections';
 import { isCapacitorMobileApp, useNativeAndroidBackButton, useNativeMobileChrome, useNativeMobileLifecycle } from './mobileNativeChrome';
@@ -143,10 +147,13 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
   // are idle-reaped by the server while the workspace drawer is closed.
   useTerminalSessionKeepalive();
   const [sessionsSheetOpen, setSessionsSheetOpen] = React.useState(false);
+  const [workStatusOpen, setWorkStatusOpen] = React.useState(false);
+  const openWorkStatus = React.useCallback(() => setWorkStatusOpen(true), []);
   // The run overview covers the chat; selecting any session returns to it.
   React.useEffect(() => useSessionUIStore.subscribe((state, prev) => {
     if (state.currentSessionId && state.currentSessionId !== prev.currentSessionId) {
       useUIStore.getState().setRunOverviewKey(null);
+      setWorkStatusOpen(false);
     }
   }), []);
   const runOverviewOpen = useUIStore((state) => state.runOverviewKey !== null);
@@ -304,11 +311,41 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
   const mobileActions = React.useMemo<MobileAppActions>(
     () => ({
       openChanges: ({ diffPath, staged } = {}) => {
+        setWorkStatusOpen(false);
         openChangesSurface(diffPath ? { path: diffPath, staged: staged === true } : null);
       },
-      openFiles: () => openFilesSurface(),
-      openSettings: () => openSettingsSurface('nav'),
-      openSourceBoard: () => openSurface('board'),
+      openFiles: () => {
+        setWorkStatusOpen(false);
+        openFilesSurface();
+      },
+      openSettings: () => {
+        setWorkStatusOpen(false);
+        openSettingsSurface('nav');
+      },
+      openSourceBoard: () => {
+        setWorkStatusOpen(false);
+        openSurface('board');
+      },
+      openWorkspaceTab: (tab) => {
+        setWorkStatusOpen(false);
+        setWorkspaceTab(tab);
+        setWorkspaceOpen(true);
+      },
+      openChangeRequest: ({ number, owner, repo }) => {
+        setWorkStatusOpen(false);
+        setPendingChangesDiff(null);
+        const rootDirectory = normalizePath(resolveEffectiveDirectory() ?? null);
+        if (rootDirectory) {
+          usePullRequestSelectionStore.getState().requestDiff(rootDirectory, {
+            kind: 'pr',
+            number,
+            sourceRepo: { owner, repo },
+          });
+        }
+        setWorkspaceTab('changes');
+        setWorkspaceOpen(true);
+      },
+      closeWorkStatusSheet: () => setWorkStatusOpen(false),
     }),
     [openChangesSurface, openFilesSurface, openSettingsSurface, openSurface],
   );
@@ -569,6 +606,7 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
           <MobileHeader
             onOpenSessions={() => (isTabletLayout ? toggleSidebar() : setSessionsSheetOpen(true))}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
+            onOpenWorkStatus={openWorkStatus}
             compactTitle={isTabletLayout}
           />
           <main ref={chatMainRef} className="relative min-h-0 flex-1 overflow-hidden" data-page-scroll-lock="true">
@@ -580,6 +618,10 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
             <ErrorBoundary><RunOverview /></ErrorBoundary>
           </main>
         </div>
+
+        {workStatusOpen ? (
+          <MobileWorkStatusSheet open onClose={() => setWorkStatusOpen(false)} />
+        ) : null}
 
         {/* Mounted permanently on phones (parked off-screen while closed) so
             the sessions/worktree state stays warm and the drawer opens with

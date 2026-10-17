@@ -1927,7 +1927,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
                 one thing an overlay must not do. */}
             {workStatusOverlayMountable ? (
                 <WorkStatusPanel
-                    overlay
+                    presentation="overlay"
                     visible={showWorkStatusOverlay}
                     sessionId={currentSessionId ?? null}
                     directory={workStatusDirectory ?? null}

@@ -40,6 +40,8 @@ import { isNativeSessionId } from '@/lib/native-agents/ids';
 // uses none of it, so the panel leaves them out there rather than misreport.
 const OPENCODE_CONTEXT_SECTIONS = new Set<WorkStatusSectionId>(['mcp', 'pinned', 'contextSources']);
 
+export type WorkStatusPresentation = 'inline' | 'overlay' | 'sheet';
+
 type Props = {
   /** Null on a new-session draft: repository readouts still apply. */
   sessionId: string | null;
@@ -55,10 +57,13 @@ type Props = {
    */
   reserved?: boolean;
   /**
-   * Floats over the transcript instead of sitting beside it, for when the chat
-   * is too narrow to give it a column of its own.
+   * Inline sits beside the transcript, overlay floats over it, and sheet
+   * renders as the body of a mobile bottom sheet with no width or scroll of
+   * its own.
    */
-  overlay?: boolean;
+  presentation?: WorkStatusPresentation;
+  /** Mobile sheet only: warm the branch's change-request summary on open. */
+  prewarmPrStatus?: boolean;
 };
 
 /**
@@ -83,9 +88,12 @@ const PANEL_TRANSITION_EASING = LAYOUT_ANIMATION_EASING;
  * eat a visible slice of every row's trailing value, and the shadows already
  * say there is more to see.
  */
-export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, reserved = false, repositoryEnabled = true, overlay = false }) => {
+export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, reserved = false, repositoryEnabled = true, presentation = 'inline', prewarmPrStatus = false }) => {
   const { t, direction } = useI18n();
   const nativeSession = sessionId !== null && isNativeSessionId(sessionId);
+  const isInline = presentation === 'inline';
+  const isOverlay = presentation === 'overlay';
+  const isSheet = presentation === 'sheet';
   // The card's fade and lift follow the side columns' animation setting.
   const panelTransitionMs = useLayoutAnimationMs();
   const setScrollTop = useUIStore((state) => state.setWorkStatusScrollTop);
@@ -123,12 +131,14 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   // for the transient "no data yet" state so the panel doesn't flash a bare
   // bordered card on first mount.
   const allSectionsHidden = areAllWorkStatusSectionsHidden(hiddenSections, extensionSections.ids);
-  const { interactive, showEmptyState } = getWorkStatusPanelPresentation({
+  const presentationState = getWorkStatusPanelPresentation({
     visible,
     contentMounted,
     renderedSections,
     allSectionsHidden,
   });
+  const interactive = isSheet ? visible : presentationState.interactive;
+  const showEmptyState = presentationState.showEmptyState;
   React.useEffect(() => {
     if (visible) {
       setContentMounted(true);
@@ -145,12 +155,12 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   // Tells the right slot whether to keep the card's column. A card whose
   // sections all reported nothing gives it back, as its collapse did before.
   const empty = contentMounted && renderedSections === 0 && !allSectionsHidden;
-  const wantsColumn = !overlay && reserved && !empty;
+  const wantsColumn = isInline && reserved && !empty;
   React.useLayoutEffect(() => {
-    if (overlay) return undefined;
+    if (!isInline) return undefined;
     setWorkStatusReserved(wantsColumn);
     return () => setWorkStatusReserved(false);
-  }, [overlay, wantsColumn]);
+  }, [isInline, wantsColumn]);
 
   const restore = React.useCallback((node: HTMLElement | null) => {
     if (!node) return;
@@ -177,8 +187,9 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   // general: restoring one session's scroll into another's shorter panel lands
   // somewhere arbitrary.
   React.useEffect(() => {
+    if (isSheet) return;
     setScrollTop(0);
-  }, [sessionId, setScrollTop]);
+  }, [isSheet, sessionId, setScrollTop]);
 
   // Dismissed like any transient surface: a click elsewhere or Escape. It
   // covers the transcript, so leaving it up would block the thing it reports on.
@@ -186,7 +197,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   React.useEffect(() => {
     // Only while it is actually up: a hidden overlay listening for clicks would
     // swallow the very press that opens it.
-    if (!overlay || !visible || sectionsDialogOpen) return undefined;
+    if (!isOverlay || !visible || sectionsDialogOpen) return undefined;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       if (overlayRef.current?.contains(target)) return;
@@ -207,7 +218,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [overlay, setOverlayOpen, visible, sectionsDialogOpen]);
+  }, [isOverlay, setOverlayOpen, visible, sectionsDialogOpen]);
 
   // Keep these elements owned by the panel so primary readout updates do not
   // rerender unrelated sections through the composition callback.
@@ -224,32 +235,57 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
     taskTodos: <WorkStatusTodosSection sessionId={sessionId} directory={directory} />,
   } satisfies Record<Exclude<WorkStatusSectionId, 'session' | 'repository'>, React.ReactNode>;
 
+  const sections = (
+    <WorkStatusPresenceProvider onChange={setRenderedSections}>
+      <WorkStatusPrimaryGroup
+        sessionId={sessionId}
+        directory={directory}
+        showSession={sectionVisible('session')}
+        showRepository={repositoryEnabled && sectionVisible('repository')}
+        prewarmPrStatus={prewarmPrStatus}
+        goalRow={<WorkStatusGoalRow sessionId={sessionId} directory={directory} />}
+      >
+        {(primary) => sectionOrder.map((id) => {
+          if (!sectionVisible(id) || (nativeSession && !isExtensionSectionId(id) && OPENCODE_CONTEXT_SECTIONS.has(id))) return null;
+          if (isExtensionSectionId(id)) {
+            const guest = extensionSections.byId.get(id);
+            return guest ? <WorkStatusExtensionSection key={id} guest={guest} directory={directory} /> : null;
+          }
+          return <React.Fragment key={id}>{id === 'session' || id === 'repository' ? primary[id] : secondarySections[id]}</React.Fragment>;
+        })}
+      </WorkStatusPrimaryGroup>
+    </WorkStatusPresenceProvider>
+  );
+
   return (
     <aside
       ref={overlayRef}
       aria-label={t('chat.workStatus.ariaLabel')}
-      aria-hidden={!interactive}
+      aria-hidden={isSheet ? undefined : !interactive}
       // The card stays mounted while hidden so it can animate its own collapse,
       // and the sections button sits outside the content gate. Without `inert`
       // Tab could land on an invisible control — and `aria-hidden` around a
       // focusable descendant is an accessibility fault in its own right.
-      inert={!interactive}
+      inert={isSheet ? undefined : !interactive}
+      data-work-status-presentation={presentation}
       className={cn(
         // `self-start` keeps the card at content height instead of stretching
         // to the row; `max-h` then caps it so a long panel scrolls rather than
         // overflowing the chat.
         // A left margin as well as a right one: flush against the transcript
         // the card's own shadow had no room and was clipped down that edge.
-        'relative my-4 ms-2 me-4 flex shrink-0 flex-col self-start overflow-hidden',
-        'max-h-[calc(100%-2rem)]',
+        (isInline || isOverlay) && 'relative flex shrink-0 flex-col self-start overflow-hidden',
+        isInline && ['my-4 ms-2 me-4', 'max-h-[calc(100%-2rem)]'],
         // Out of the flow entirely, anchored to the chat column's top-right so
         // it reads as a dropdown from the header button. As a flex child it
         // took part in the layout and pushed the transcript, which is the one
         // thing an overlay must not do.
-        overlay && [
+        isOverlay && [
           'absolute inset-e-3 top-3 z-30 mx-0 my-0',
           'max-h-[calc(100%-1.5rem)]',
         ],
+        // The sheet host owns width, height, scrolling and animation.
+        isSheet && 'relative flex w-full flex-col',
         // When every section is hidden the card keeps its edge and background
         // so the settings button stays discoverable — going transparent made the
         // only recovery path unreachable.
@@ -257,14 +293,14 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
         // Beside the chat: the layout panels' ring (`oc-panel-edge`, shared
         // with the context panel card). Over the chat it is a dropdown and
         // takes the dropdown's full edge (`data-edge-floating`).
-        'oc-panel-edge rounded-xl',
-        !overlay && 'bg-[var(--surface-muted)]/40',
+        !isSheet && 'oc-panel-edge rounded-xl',
+        isInline && 'bg-[var(--surface-muted)]/40',
       )}
       // Hidden, the overlay's edge fades out alongside the glass fade: see
       // the opacity note below.
-      data-edge-hidden={overlay && !interactive ? '' : undefined}
-      data-edge-floating={overlay ? '' : undefined}
-      style={{
+      data-edge-hidden={isOverlay && !interactive ? '' : undefined}
+      data-edge-floating={isOverlay ? '' : undefined}
+      style={isSheet ? undefined : {
         // Neither form animates its width: inline, the right slot around the
         // card does; the overlay takes no space from the chat. Inline, the
         // card only fades. The overlay lifts like the dropdown it reads as and
@@ -273,11 +309,11 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
         // unblurred, for the whole fade and frosted only at the end. The glass
         // layer fades itself; the edge fades with it.
         width: WORK_STATUS_PANEL_WIDTH,
-        opacity: overlay || interactive ? 1 : 0,
-        transform: overlay ? (visible ? 'translateY(0) scale(1)' : 'translateY(-6px) scale(0.98)') : undefined,
+        opacity: isOverlay || interactive ? 1 : 0,
+        transform: isOverlay ? (visible ? 'translateY(0) scale(1)' : 'translateY(-6px) scale(0.98)') : undefined,
         // The overlay sits at the chat's end corner: top right, or top left in RTL.
         transformOrigin: direction === 'rtl' ? 'top left' : 'top right',
-        transitionProperty: overlay ? 'transform, box-shadow' : 'opacity',
+        transitionProperty: isOverlay ? 'transform, box-shadow' : 'opacity',
         transitionDuration: `${panelTransitionMs}ms`,
         transitionTimingFunction: PANEL_TRANSITION_EASING,
         pointerEvents: interactive ? undefined : 'none',
@@ -289,8 +325,8 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
           shadow: on one element Chromium grows the backdrop-filter layer by
           the shadow's blur and paints a grey band past the card's edge. */}
       <div
-        className={cn('flex min-h-0 flex-1 flex-col', overlay && 'oc-glass-panel')}
-        style={overlay ? {
+        className={cn('flex min-h-0 flex-1 flex-col', isOverlay && 'oc-glass-panel')}
+        style={isOverlay ? {
           opacity: interactive ? 1 : 0,
           transitionProperty: 'opacity',
           transitionDuration: `${panelTransitionMs}ms`,
@@ -309,33 +345,20 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       </button>
 
       {contentMounted ? (
-      <WorkStatusPresenceProvider onChange={setRenderedSections}>
-      <ScrollShadow
-        ref={restore}
-        onScroll={handleScroll}
-        size={24}
-        // Sections returning null leave no DOM node, so this reserves room for
-        // settings in the first rendered heading, regardless of saved order.
-        className="oc-hide-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-2 [&>section:first-child>[data-work-status-heading]]:pe-7"
-      >
-        <WorkStatusPrimaryGroup
-          sessionId={sessionId}
-          directory={directory}
-          showSession={sectionVisible('session')}
-          showRepository={repositoryEnabled && sectionVisible('repository')}
-          goalRow={<WorkStatusGoalRow sessionId={sessionId} directory={directory} />}
-        >
-          {(primary) => sectionOrder.map((id) => {
-            if (!sectionVisible(id) || (nativeSession && !isExtensionSectionId(id) && OPENCODE_CONTEXT_SECTIONS.has(id))) return null;
-            if (isExtensionSectionId(id)) {
-              const guest = extensionSections.byId.get(id);
-              return guest ? <WorkStatusExtensionSection key={id} guest={guest} directory={directory} /> : null;
-            }
-            return <React.Fragment key={id}>{id === 'session' || id === 'repository' ? primary[id] : secondarySections[id]}</React.Fragment>;
-          })}
-        </WorkStatusPrimaryGroup>
-      </ScrollShadow>
-      </WorkStatusPresenceProvider>
+        isSheet ? (
+          <div className="p-2 [&>section:first-child>[data-work-status-heading]]:pe-7">{sections}</div>
+        ) : (
+          <ScrollShadow
+            ref={restore}
+            onScroll={handleScroll}
+            size={24}
+            // Sections returning null leave no DOM node, so this reserves room for
+            // settings in the first rendered heading, regardless of saved order.
+            className="oc-hide-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-2 [&>section:first-child>[data-work-status-heading]]:pe-7"
+          >
+            {sections}
+          </ScrollShadow>
+        )
       ) : null}
 
       {showEmptyState ? (

@@ -6,6 +6,7 @@ import type { Session } from '@/lib/opencode/model';
 import { Icon } from '@/components/icon/Icon';
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
 import { useSessionAiRenameAction } from '@/components/session/useSessionAiRenameAction';
+import { FileTreeChevron } from '@/components/views/files/FileTreeRowParts';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { useSessionUnseenCount } from '@/sync/notification-store';
@@ -78,6 +79,7 @@ const TIMELINE_ROW_INDENT = 12;
 // utility, sets their height, because mobile.css gives every button a 36px
 // floor that beats Tailwind's min-h-*.
 const TIMELINE_ROW_LAYOUT_CLASS = 'flex min-w-0 flex-1 flex-col gap-1 py-2.5 pe-3 text-start';
+const TIMELINE_ROW_DENSE_LAYOUT_CLASS = 'flex min-w-0 flex-1 flex-col gap-1 py-2 pe-3 text-start';
 
 // The second line has a fixed height and is always rendered, so a row without
 // a branch is as tall as its neighbours and a branch arriving does not move
@@ -87,6 +89,7 @@ const TIMELINE_META_LINE_CLASS = 'flex h-4 min-w-0 items-center gap-1.5 text-mut
 // One-line rows (Pinned and In work in the Tree view): the title line alone,
 // with the goal and waiting requests joining its status cluster.
 const COMPACT_ROW_LAYOUT_CLASS = 'flex min-w-0 flex-1 flex-col justify-center py-2.5 pe-3 text-start';
+const COMPACT_ROW_DENSE_LAYOUT_CLASS = 'flex min-w-0 flex-1 flex-col justify-center py-2 pe-3 text-start';
 
 /** The project's icon, opening the second line where projects mix. */
 const TimelineRowProject: React.FC<{ project: TimelineProject }> = ({ project }) => (
@@ -157,7 +160,14 @@ const MobileTimelineRow: React.FC<{
   renaming: boolean;
   indent: number;
   handlers: TimelineRowHandlers;
-}> = ({ entry, showProject, compact, pinMarker, active, revealed, confirmingDelete, renaming, indent, handlers }) => {
+  /** In work rows sit a little tighter. */
+  dense?: boolean;
+  /** In work rows can reveal their subsessions in place. */
+  expandable?: boolean;
+  hasChildren?: boolean;
+  expanded?: boolean;
+  onToggleChildren?: () => void;
+}> = ({ entry, showProject, compact, pinMarker, active, revealed, confirmingDelete, renaming, indent, handlers, dense = false, expandable = false, hasChildren = false, expanded = false, onToggleChildren }) => {
   const { t } = useI18n();
   const { session, project, branch, inSpace } = entry;
   const title = session.title?.trim() || t('mobile.sessions.untitled');
@@ -251,6 +261,31 @@ const MobileTimelineRow: React.FC<{
               />
             ) : (
               <span className="flex min-w-0 items-center gap-2">
+                {expandable ? (
+                  hasChildren ? (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={expanded
+                        ? t('sessions.sidebar.session.subsessions.collapse')
+                        : t('sessions.sidebar.session.subsessions.expand')}
+                      aria-expanded={expanded}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleChildren?.();
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onToggleChildren?.();
+                      }}
+                      className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-md text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <FileTreeChevron expanded={expanded} />
+                    </span>
+                  ) : <span aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                ) : null}
                 <span dir="auto" className={cn('block min-w-0 flex-1 truncate oc-ui-start-align typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
                   {title}
                 </span>
@@ -276,7 +311,9 @@ const MobileTimelineRow: React.FC<{
             </span>}
           </>
         );
-        const layoutClassName = compact ? COMPACT_ROW_LAYOUT_CLASS : TIMELINE_ROW_LAYOUT_CLASS;
+        const layoutClassName = compact
+          ? (dense ? COMPACT_ROW_DENSE_LAYOUT_CLASS : COMPACT_ROW_LAYOUT_CLASS)
+          : (dense ? TIMELINE_ROW_DENSE_LAYOUT_CLASS : TIMELINE_ROW_LAYOUT_CLASS);
         if (renaming) {
           return <div className={layoutClassName} style={{ paddingInlineStart: indent }}>{lines}</div>;
         }
@@ -315,24 +352,62 @@ export const MobileTimelineRows: React.FC<{
   /** Left inset of the rows; the sessions sheet passes its shared text column. */
   indent?: number;
   handlers: TimelineRowHandlers;
-}> = ({ entries, showProject, compact = false, pinMarker = true, indent = TIMELINE_ROW_INDENT, handlers }) => (
-  <>
-    {entries.map((entry) => (entry.kind === 'run' ? (
-      <MobileTimelineRunRow key={`run:${entry.run.key}`} entry={entry} showProject={showProject} compact={compact} indent={indent} />
-    ) : (
-      <MobileTimelineRow
-        key={entry.session.id}
-        entry={entry}
-        showProject={showProject}
-        compact={compact}
-        pinMarker={pinMarker}
-        indent={indent}
-        active={handlers.currentSessionId === entry.session.id}
-        revealed={handlers.revealedSessionId === entry.session.id}
-        confirmingDelete={handlers.confirmingDeleteSessionId === entry.session.id}
-        renaming={handlers.renamingSessionId === entry.session.id}
-        handlers={handlers}
-      />
-    )))}
-  </>
-);
+  /** In work rows use the tighter padding and can reveal subsessions. */
+  dense?: boolean;
+  expandable?: boolean;
+  expandedParents?: Record<string, boolean>;
+  onToggleChildren?: (sessionId: string) => void;
+  childEntriesByParent?: ReadonlyMap<string, readonly TimelineEntry[]>;
+}> = ({
+  entries,
+  showProject,
+  compact = false,
+  pinMarker = true,
+  indent = TIMELINE_ROW_INDENT,
+  handlers,
+  dense = false,
+  expandable = false,
+  expandedParents,
+  onToggleChildren,
+  childEntriesByParent,
+}) => {
+  const renderEntries = (list: readonly TimelineEntry[], depth: number): React.ReactNode => list.map((entry) => {
+    if (entry.kind === 'run') {
+      return (
+        <MobileTimelineRunRow
+          key={`run:${entry.run.key}`}
+          entry={entry}
+          showProject={showProject}
+          compact={compact}
+          indent={indent + depth * 12}
+        />
+      );
+    }
+    const children = expandable ? childEntriesByParent?.get(entry.session.id) ?? [] : [];
+    const hasChildren = children.length > 0;
+    const expanded = Boolean(expandedParents?.[entry.session.id]);
+    return (
+      <React.Fragment key={entry.session.id}>
+        <MobileTimelineRow
+          entry={entry}
+          showProject={showProject}
+          compact={compact}
+          pinMarker={pinMarker}
+          indent={indent + depth * 12}
+          active={handlers.currentSessionId === entry.session.id}
+          revealed={handlers.revealedSessionId === entry.session.id}
+          confirmingDelete={handlers.confirmingDeleteSessionId === entry.session.id}
+          renaming={handlers.renamingSessionId === entry.session.id}
+          handlers={handlers}
+          dense={dense}
+          expandable={expandable}
+          hasChildren={hasChildren}
+          expanded={expanded}
+          onToggleChildren={hasChildren ? () => onToggleChildren?.(entry.session.id) : undefined}
+        />
+        {hasChildren && expanded ? renderEntries(children, depth + 1) : null}
+      </React.Fragment>
+    );
+  });
+  return <>{renderEntries(entries, 0)}</>;
+};

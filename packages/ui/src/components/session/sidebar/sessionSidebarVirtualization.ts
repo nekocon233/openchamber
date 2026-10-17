@@ -23,7 +23,7 @@ export const findFirstVisibleSessionSidebarRowIndex = (
   scrollOffset: number,
 ): number => items.find((item) => item.end > scrollOffset)?.index ?? 0;
 
-const SECTION_SPACING_ESTIMATE = { 'pb-2': 8, 'pb-1.5': 6 } as const;
+const SECTION_SPACING_ESTIMATE = { 'pb-2': 8, 'pb-1.5': 6, 'pb-1': 4 } as const;
 
 type SectionSpacing = keyof typeof SECTION_SPACING_ESTIMATE;
 
@@ -70,6 +70,6 @@ export const sectionSpacingAfter = (row: SessionSidebarRow, nextRow: SessionSide
   // so each opens with the same gap. A worktree header opens a smaller one
   // inside its project, so its sessions read as a group of their own.
   const startsSection = nextRow?.kind === 'activity-header' || nextRow?.kind === 'project-header';
-  if (startsSection) return 'pb-2';
+  if (startsSection) return row.kind === 'session' && row.compactSpacing ? 'pb-1' : 'pb-2';
   return nextRow?.kind === 'group-header' && row.kind !== 'project-header' ? 'pb-1.5' : undefined;
 };

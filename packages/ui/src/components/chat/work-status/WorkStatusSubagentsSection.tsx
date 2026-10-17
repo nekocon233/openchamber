@@ -10,6 +10,7 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { getProviderModelDisplayName } from '@/lib/modelDisplay';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { normalizePath } from '@/lib/pathNormalization';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
@@ -82,6 +83,7 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
   const openContextPanelTab = useUIStore((state) => state.openContextPanelTab);
   const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
   const setSectionExpanded = useUIStore((state) => state.setWorkStatusSectionExpanded);
+  const mobileActions = useMobileAppActions();
 
   // Subagents appearing where there were none is the one moment this section
   // has something urgent to say, so it opens itself. Only on the empty→present
@@ -99,6 +101,7 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
   const openChildSession = React.useCallback((childId: string, label: string) => {
     if (!directory) return;
     if (isMobile || isVSCodeRuntime()) {
+      mobileActions?.closeWorkStatusSheet();
       setCurrentSession(childId, directory);
       return;
     }
@@ -108,7 +111,7 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
       label,
       readOnly: true,
     });
-  }, [directory, isMobile, openContextPanelTab, setCurrentSession]);
+  }, [directory, isMobile, mobileActions, openContextPanelTab, setCurrentSession]);
 
   useReportWorkStatusPresence('subagents', children.length > 0);
 

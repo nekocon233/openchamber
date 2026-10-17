@@ -440,6 +440,14 @@ export const createClaudeProjection = ({
       });
       if (skill) upsertPart(record, skill);
     }
+    // OpenCode completes a step after its tools finish. A Claude entry stamps
+    // the message when the assistant text ends, before the result entry
+    // arrives, so extend it to keep tool intervals inside the step window.
+    const completed = record.info.time.completed;
+    record.info.time = {
+      created: record.info.time.created,
+      completed: Math.max(completed ?? 0, time),
+    };
     return { record, part: upsertPart(record, finished) };
   };
 

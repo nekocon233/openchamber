@@ -35,7 +35,7 @@ export const SIDEBAR_ACTIVITY_KEYS: readonly SessionSidebarActivityKey[] = ['cha
 // Tree view's default for Pinned and In work; 'timeline-chat' is a one-line
 // Chats row in List, 'tree-chat' the same row in Tree. The Recent and Pinned
 // zones render their rows as 'recent' and 'pinned'.
-export type SessionSidebarRenderContext = 'project' | 'recent' | 'pinned' | 'timeline' | 'timeline-mixed' | 'mixed-compact' | 'timeline-chat' | 'tree-chat';
+export type SessionSidebarRenderContext = 'project' | 'recent' | 'pinned' | 'timeline' | 'timeline-mixed' | 'timeline-mixed-work' | 'mixed-compact' | 'work-compact' | 'timeline-chat' | 'tree-chat';
 
 /**
  * Rows that keep the tree's geometry and its slot left of the title, which
@@ -43,17 +43,17 @@ export type SessionSidebarRenderContext = 'project' | 'recent' | 'pinned' | 'tim
  * rows are flat and show the state on the right.
  */
 export const hasTreeSlotContext = (context: SessionSidebarRenderContext): boolean => (
-  context === 'project' || context === 'mixed-compact' || context === 'tree-chat'
+  context === 'project' || context === 'mixed-compact' || context === 'work-compact' || context === 'tree-chat'
 );
 
 /** Rows that render through `SessionTimelineRowBody` with two lines. */
 export const isTwoLineTimelineContext = (context: SessionSidebarRenderContext): boolean => (
-  context === 'timeline' || context === 'timeline-mixed'
+  context === 'timeline' || context === 'timeline-mixed' || context === 'timeline-mixed-work'
 );
 
-/** Flat zone and timeline rows never expand: a run row opens its overview instead. */
+/** Run rows in flat zone and timeline contexts never expand: the overview lists the lanes. */
 const isNeverExpandedContext = (context: SessionSidebarRenderContext): boolean => (
-  isTwoLineTimelineContext(context) || context === 'mixed-compact'
+  isTwoLineTimelineContext(context) || context === 'mixed-compact' || context === 'work-compact'
 );
 
 export type SessionSidebarViewMode = 'projects' | 'timeline';
@@ -82,7 +82,7 @@ export type SessionSidebarRow =
   // `empty`: nothing to list under the header, so it offers no chevron.
   | (RowBase & { kind: 'group-header'; group: SessionGroup; groupKey: string; projectId: string | null; collapsed: boolean; forceExpanded: boolean; empty: boolean; allSessions: readonly Session[] })
   | (RowBase & { kind: 'folder-header'; depth: number; group: SessionGroup; folder: SessionFolder; displayName: string; scopeKey: string; scopeDirectory: string | null; ownerKey: string | null; nodes: readonly SessionNode[]; activityNodes: readonly SessionNode[]; projectId: string | null; archived: boolean; collapsed: boolean; forceExpanded: boolean; empty: boolean; deleteSessions: readonly Session[]; subFolderCount: number; dropEnabled: boolean })
-  | (RowBase & { kind: 'session'; node: SessionNode; blockingBadgeSessionScopes?: readonly BlockingBadgeSessionScope[]; depth: number; projectId: string | null; groupDirectory: string | null; ownerKey: string | null; selectionScopeKey: string | null; archived: boolean; renderContext: SessionSidebarRenderContext; secondaryMeta: SessionSidebarActivityItem['secondaryMeta'] })
+  | (RowBase & { kind: 'session'; node: SessionNode; blockingBadgeSessionScopes?: readonly BlockingBadgeSessionScope[]; depth: number; projectId: string | null; groupDirectory: string | null; ownerKey: string | null; selectionScopeKey: string | null; archived: boolean; renderContext: SessionSidebarRenderContext; compactSpacing?: boolean; secondaryMeta: SessionSidebarActivityItem['secondaryMeta'] })
   // A multi-run: one derived parent row over its member sessions. It is not a
   // session, so it never enters selection, and its lanes render as session
   // rows one level deeper when it is expanded.
@@ -363,6 +363,8 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     selectionScopeKey: string | null;
     archived: boolean;
     renderContext: SessionSidebarRenderContext;
+    /** In work rows sit tighter and take a smaller gap before the next section. */
+    compactSpacing?: boolean;
     secondaryMeta?: SessionSidebarActivityItem['secondaryMeta'];
     getSecondaryMeta?: SessionSidebarActivityItem['getSecondaryMeta'];
     // Per-row badge scopes for containers whose top rows come from different
@@ -435,6 +437,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
         selectionScopeKey: options.selectionScopeKey,
         archived: options.archived,
         renderContext: options.renderContext,
+        compactSpacing: options.compactSpacing,
         secondaryMeta: options.getSecondaryMeta
           ? options.getSecondaryMeta(current.node.session.id)
           : options.secondaryMeta ?? null,
@@ -699,6 +702,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     entry: ActivityRunEntry,
     containerKey: string,
     renderContext: SessionSidebarRenderContext,
+    compactSpacing = false,
   ): void => {
     const first = entry.items[0];
     if (!first) return;
@@ -715,6 +719,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     appendRun({ run: entry.run, lanes }, {
       nodes: lanes, containerKey, projectId: first.projectId, groupDirectory: first.groupDirectory,
       ownerKey, selectionScopeKey: null, archived: false, renderContext,
+      compactSpacing,
       getSecondaryMeta: (sessionId) => metaById.get(sessionId) ?? null,
       getBlockingBadgeSessionScopes: (sessionId) => badgeScopesById.get(sessionId),
       indexedNodes: indexed, selectionPoolOffset,
@@ -726,10 +731,11 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     containerKey: string,
     renderContext: SessionSidebarRenderContext,
     countMatches: (item: SessionSidebarActivityItem) => number = () => 1,
+    compactSpacing = false,
   ): void => {
     for (const entry of collapseActivityItems(items)) {
       if (isActivityRunEntry(entry)) {
-        appendActivityRun(entry, containerKey, renderContext);
+        appendActivityRun(entry, containerKey, renderContext, compactSpacing);
         if (search) searchMatchCount += entry.items.reduce((total, item) => total + countMatches(item), 0);
         continue;
       }
@@ -742,6 +748,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
         nodes: [item.node], containerKey, projectId: item.projectId, groupDirectory: item.groupDirectory,
         // In work and the timeline lists carry no selection scope.
         ownerKey, selectionScopeKey: null, archived: false, renderContext,
+        compactSpacing,
         blockingBadgeSessionScopes: item.blockingBadgeSessionScopes,
         secondaryMeta: item.secondaryMeta, getSecondaryMeta: item.getSecondaryMeta, indexedNodes: indexed, selectionPoolOffset,
       });
@@ -767,6 +774,10 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
   // rows with the project's icon in List, one-line rows in Tree unless the
   // user asked for detailed rows.
   const zoneRenderContext: SessionSidebarRenderContext = timelineMode || args.detailedZoneRows ? 'timeline-mixed' : 'mixed-compact';
+  // In work keeps its own contexts so it can reveal subsessions in both views
+  // and sit a little tighter than Pinned, which shares the visual language but
+  // keeps the old spacing.
+  const workRenderContext: SessionSidebarRenderContext = timelineMode || args.detailedZoneRows ? 'timeline-mixed-work' : 'work-compact';
 
   /**
    * A list that reveals `initial` entries, then `increment` more per Show
@@ -794,7 +805,13 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
   const appendZone = (activityKey: 'pinned' | 'work', items: readonly SessionSidebarActivityItem[]): void => {
     if (items.length === 0) return;
     const collapsed = appendActivityHeader(activityKey);
-    if (!collapsed) appendActivityItems(items, `activity:${activityKey}`, zoneRenderContext, (item) => item.searchMatchCount ?? countSessionTreeQueryMatches(item.node, args.normalizedQuery));
+    if (!collapsed) appendActivityItems(
+      items,
+      `activity:${activityKey}`,
+      activityKey === 'work' ? workRenderContext : zoneRenderContext,
+      (item) => item.searchMatchCount ?? countSessionTreeQueryMatches(item.node, args.normalizedQuery),
+      activityKey === 'work',
+    );
   };
   appendZone('pinned', args.pinnedItems ?? []);
   appendZone('work', args.workItems ?? []);

@@ -7,6 +7,7 @@ import { useDirectorySync, useSession } from '@/sync/sync-context';
 import { opencodeClient } from '@/lib/opencode/client';
 import type { Part } from '@/lib/opencode/model';
 import { readMessageFocusInFlight, requestMessageFocus, subscribeMessageFocusStatus } from '@/lib/router/messageFocus';
+import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { getContextObligatoryMessages } from '@/lib/contextObligatoryMessages';
 import { setContextObligatoryMessage } from '@/sync/session-actions';
 import { WorkStatusRow, WorkStatusSection } from './WorkStatusPrimitives';
@@ -115,9 +116,12 @@ export const WorkStatusPinnedSection: React.FC<Props> = ({ sessionId, directory 
   // The message-link request: the timeline loads older history until the
   // message is there, opens a collapsed turn around it and shows it where
   // links land. A repeated press is a new request.
+  const mobileActions = useMobileAppActions();
   const handleReveal = React.useCallback((messageId: string) => {
-    if (sessionId) requestMessageFocus(sessionId, messageId);
-  }, [sessionId]);
+    if (!sessionId) return;
+    mobileActions?.closeWorkStatusSheet();
+    requestMessageFocus(sessionId, messageId);
+  }, [mobileActions, sessionId]);
 
   // While the timeline loads older history to reach a pin, its row spins.
   const inFlightId = React.useSyncExternalStore(

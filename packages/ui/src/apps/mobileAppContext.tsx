@@ -1,6 +1,8 @@
 /* oxlint-disable react/only-export-components */
 import React from 'react';
 
+import type { MobileWorkspaceTab } from './MobileWorkspaceDrawer';
+
 export type MobileAppActions = {
   /** Open the Changes surface as a modal and (optionally) navigate it to a specific diff. */
   openChanges: (options?: { diffPath?: string | null; staged?: boolean }) => void;
@@ -10,6 +12,12 @@ export type MobileAppActions = {
   openSettings: () => void;
   /** Open the issues and PRs board page; what it shows is set in its store first. */
   openSourceBoard: () => void;
+  /** Open the workspace drawer on a tab, closing the work-status sheet first. */
+  openWorkspaceTab: (tab: MobileWorkspaceTab) => void;
+  /** Open the Changes surface in PR mode for one change request. */
+  openChangeRequest: (options: { number: number; owner: string; repo: string }) => void;
+  /** Dismiss the work-status sheet before navigating away from it. */
+  closeWorkStatusSheet: () => void;
 };
 
 const DedicatedMobileAppContext = React.createContext<MobileAppActions | null>(null);

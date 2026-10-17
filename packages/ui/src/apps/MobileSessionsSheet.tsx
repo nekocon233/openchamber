@@ -1937,7 +1937,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       spaceLabelById,
     });
     for (const session of projectSessions) {
-      if (getParentId(session)) continue;
       const location = locations.get(session.id);
       const project = location ? projectsMeta.find((candidate) => candidate.id === location.projectId) : null;
       if (!project || !location) continue;
@@ -1982,6 +1981,22 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     () => (listActive ? toTimelineEntries(workBucket.sessions.filter((session) => !getParentId(session))) : []),
     [listActive, toTimelineEntries, workBucket],
   );
+  // In work rows reveal their subsessions in place. The children are already
+  // in the bucket; giving each one the same project/branch context lets them
+  // reuse the timeline row.
+  const workChildTimelineEntries = React.useMemo(() => {
+    const byParent = new Map<string, TimelineEntry[]>();
+    for (const session of workBucket.sessions) {
+      const parentId = getParentId(session);
+      if (!parentId) continue;
+      const entries = toTimelineEntries([session]);
+      if (entries.length === 0) continue;
+      const list = byParent.get(parentId);
+      if (list) list.push(...entries);
+      else byParent.set(parentId, entries);
+    }
+    return byParent;
+  }, [toTimelineEntries, workBucket.sessions]);
   const pinnedTimelineEntries = React.useMemo(
     () => (listActive ? toTimelineEntries(pinnedBucket.sessions.filter((session) => !getParentId(session))) : []),
     [listActive, toTimelineEntries, pinnedBucket],
@@ -2130,9 +2145,18 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     entries: readonly TimelineEntry[],
     /** With a label, an empty section keeps its header and says so; without
         one it is left out entirely, as Pinned has always been. */
-    options?: { emptyLabel?: string },
+    options?: {
+      emptyLabel?: string;
+      /** In work: tighter rows and subsessions revealed in place. */
+      expandable?: boolean;
+      dense?: boolean;
+      childEntriesByParent?: ReadonlyMap<string, readonly TimelineEntry[]>;
+    },
   ): React.ReactNode => {
     const emptyLabel = options?.emptyLabel;
+    const expandable = options?.expandable === true;
+    const dense = options?.dense === true;
+    const childEntriesByParent = options?.childEntriesByParent;
     // The count is the rows: a run's lanes share one, and a session whose
     // project is unresolved has none.
     if (entries.length === 0 && !emptyLabel) return null;
@@ -2168,9 +2192,21 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           </span>
         </button>
         <MobileDisclosure open={expanded}>{() => (
-          <div className="pb-2">
+          <div className={dense ? 'pb-1' : 'pb-2'}>
             {entries.length > 0 ? (
-              <MobileTimelineRows entries={entries} showProject compact={compactZoneRows} pinMarker={sectionId !== PINNED_SECTION_ID} indent={MOBILE_ROW_TEXT_INSET} handlers={timelineHandlers} />
+              <MobileTimelineRows
+                entries={entries}
+                showProject
+                compact={compactZoneRows}
+                pinMarker={sectionId !== PINNED_SECTION_ID}
+                indent={MOBILE_ROW_TEXT_INSET}
+                handlers={timelineHandlers}
+                dense={dense}
+                expandable={expandable}
+                expandedParents={expandedParents}
+                onToggleChildren={toggleParent}
+                childEntriesByParent={childEntriesByParent}
+              />
             ) : (
               <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingInlineStart: MOBILE_ROW_TEXT_INSET }}>
                 {emptyLabel}
@@ -2533,7 +2569,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                 );
               })()}
               {renderZoneSection(PINNED_SECTION_ID, 'pushpin', t('sessions.sidebar.activity.pinnedTitle'), pinnedTimelineEntries)}
-              {showWorkSection ? renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries, { emptyLabel: t('sessions.sidebar.work.empty') }) : null}
+              {showWorkSection ? renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries, { emptyLabel: t('sessions.sidebar.work.empty'), expandable: true, dense: true, childEntriesByParent: workChildTimelineEntries }) : null}
               {orderedNodes.map((node) => {
                 const projectExpanded = isProjectExpanded(node);
                 const buckets = normalizedQuery

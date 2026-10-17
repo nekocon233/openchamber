@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AssistantMessage, Part, SyntheticMessage, TextPart, TokenUsageInfo, UserMessage } from '@/lib/opencode/model';
-import { formatTelemetryDuration, formatTelemetryTokens, formatThroughputRate, getLatestCompletedTurnStats, mergeTimeIntervals, sumIntervalsDuration } from './telemetry';
+import { formatTelemetryDuration, formatTelemetryTokens, formatThroughputRate, getCompletedTurnAverages, getLatestCompletedTurnStats, mergeTimeIntervals, sumIntervalsDuration } from './telemetry';
 
 const user: UserMessage = { id: 'u1', sessionID: 'session-1', role: 'user', time: { created: 0 } };
 const baseTokens = (): TokenUsageInfo => ({ input: 100, output: 100, reasoning: 0, cache: { read: 0, write: 0 } });
@@ -54,6 +54,75 @@ describe('turn telemetry', () => {
     expect(stats).toEqual({ stepsCount: 2, lastAssistantMessageId: 'a2', elapsedDurationMs: 24000, totalToolDurationMs: 3000,
       totalLlmDurationMs: 10000, outputTokens: 300, reasoningTokens: 300, totalGeneratedTokens: 600,
       inputTokens: 2500, cost: 0.015, tokensPerSecond: 60, responseTokensPerSecond: null, avgTtftMs: 1000, cacheHitPercent: 44 });
+  });
+
+  test('weights cache and speed across completed turns instead of averaging per-turn rates', () => {
+    const first = turn(assistant({
+      time: { created: 1000, completed: 5000 },
+      tokens: { input: 100, output: 20, reasoning: 10, cache: { read: 40, write: 0 } },
+    }));
+    const second = [
+      { info: { ...user, id: 'u2', time: { created: 6000 } }, parts: [] },
+      { info: assistant({
+        id: 'a2',
+        time: { created: 9000, completed: 10000 },
+        tokens: { input: 900, output: 10, reasoning: 0, cache: { read: 100, write: 0 } },
+      }), parts: [] },
+    ];
+
+    // Latest turn alone would be 10 tok/s and 10%; the weighted result is
+    // 40 generated tokens over 5s and 140 cached reads over 1140 inputs.
+    expect(getCompletedTurnAverages([...first, ...second])).toEqual({
+      turnsCount: 2,
+      cacheHitPercent: 12,
+      tokensPerSecond: 8,
+    });
+  });
+
+  test('skips the truncated leading segment and every unfinished trailing turn', () => {
+    const records = [
+      { info: assistant({ id: 'leading' }), parts: [] },
+      ...turn(),
+      { info: { ...user, id: 'u2', time: { created: 6000 } }, parts: [] },
+      { info: { ...user, id: 'u3', time: { created: 7000 } }, parts: [] },
+      { info: assistant({ id: 'unfinished', time: { created: 8000 } }), parts: [] },
+    ];
+    expect(getCompletedTurnAverages(records)).toEqual({
+      turnsCount: 1,
+      cacheHitPercent: 0,
+      tokensPerSecond: 25,
+    });
+    expect(getCompletedTurnAverages([{ info: user, parts: [] }])).toBeNull();
+    expect(getCompletedTurnAverages([{ info: user, parts: [] }, { info: assistant({ time: { created: 1000 } }), parts: [] }])).toBeNull();
+    expect(getCompletedTurnAverages(null)).toBeNull();
+    expect(getCompletedTurnAverages([])).toBeNull();
+  });
+
+  test('missing cache or timing only removes the dependent average', () => {
+    const withoutCache = baseTokens();
+    Reflect.deleteProperty(withoutCache, 'cache');
+    const noCache = getCompletedTurnAverages([
+      ...turn(),
+      { info: assistant({ id: 'a2', tokens: withoutCache }), parts: [] },
+    ]);
+    expect(noCache?.turnsCount).toBe(1);
+    expect(noCache?.cacheHitPercent).toBeNull();
+    expect(noCache?.tokensPerSecond).toBe(25);
+
+    const noTiming = getCompletedTurnAverages([
+      ...turn(),
+      { info: assistant({ id: 'a3', time: { created: 6000, completed: 5000 } }), parts: [] },
+    ]);
+    expect(noTiming?.cacheHitPercent).toBe(0);
+    expect(noTiming?.tokensPerSecond).toBeNull();
+  });
+
+  test('preserves genuine zero averages', () => {
+    const averages = getCompletedTurnAverages(turn(assistant({
+      tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    })));
+    expect(averages?.cacheHitPercent).toBe(0);
+    expect(averages?.tokensPerSecond).toBe(0);
   });
 
   test('omits elapsed time when turn boundary timestamps are invalid', () => {

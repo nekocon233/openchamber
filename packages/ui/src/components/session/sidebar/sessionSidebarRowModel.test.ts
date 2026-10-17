@@ -3,6 +3,7 @@ import type { Session } from '@/lib/opencode/model';
 import type { SessionGroup, SessionNode } from './types';
 import type { ProjectSection } from './projects/sessionProjectRender';
 import { buildSessionSidebarRowModel, countSessionSearchMatches, resolveSessionSidebarStickyHeader, runExpansionKey, timelineProjectContainerKey, type SessionSidebarActivityItem, type SessionSidebarRowModelArgs } from './sessionSidebarRowModel';
+import { sectionSpacingAfter } from './sessionSidebarVirtualization';
 import { countSessionTreeQueryMatches, deriveRecentActivitySections } from './recent/activitySections';
 import { buildMultiRunIndex } from '@/lib/multirun/runs';
 import { withMultiRunMembership } from '@/lib/multirun/identity';
@@ -146,9 +147,33 @@ describe('buildSessionSidebarRowModel', () => {
     const sessionRows = model.rows.flatMap((row) => (row.kind === 'session' ? [`${row.renderContext}:${row.node.session.id}`] : []));
 
     expect(model.rows[0]).toMatchObject({ kind: 'activity-header', activityKey: 'work' });
-    expect(sessionRows).toEqual(['mixed-compact:working', 'project:other', 'project:working']);
+    expect(sessionRows).toEqual(['work-compact:working', 'project:other', 'project:working']);
     expect(model.selectionEntries.filter((entry) => entry.id === 'working')).toHaveLength(2);
     expect(new Set(model.rows.map((row) => row.key)).size).toBe(model.rows.length);
+  });
+
+  test('In work reveals subsessions in Tree and List and keeps the tighter spacing', () => {
+    const child = node('child');
+    const parent = node('parent', [child]);
+    const input = args([project([group([parent])])]);
+    input.workItems = [{ ...timelineItem('parent'), node: parent }];
+    input.zoneSessionIds = new Set(['parent']);
+    input.expandedParents = new Set(['work-compact:active:parent']);
+
+    const treeRows = buildSessionSidebarRowModel(input).rows;
+    const treeSessions = treeRows.flatMap((row) => row.kind === 'session' ? [`${row.renderContext}:${row.node.session.id}`] : []);
+    expect(treeSessions).toContain('work-compact:parent');
+    expect(treeSessions).toContain('work-compact:child');
+    const workTreeRow = treeRows.find((row) => row.kind === 'session' && row.node.session.id === 'child' && row.renderContext === 'work-compact');
+    if (!workTreeRow) throw new Error('Expected the last In work row');
+    const workTreeIndex = treeRows.indexOf(workTreeRow);
+    expect(sectionSpacingAfter(workTreeRow, treeRows[workTreeIndex + 1])).toBe('pb-1');
+
+    input.viewMode = 'timeline';
+    input.expandedParents = new Set(['timeline-mixed-work:active:parent']);
+    const listSessions = buildSessionSidebarRowModel(input).rows.flatMap((row) => row.kind === 'session' ? [`${row.renderContext}:${row.node.session.id}`] : []);
+    expect(listSessions).toContain('timeline-mixed-work:parent');
+    expect(listSessions).toContain('timeline-mixed-work:child');
   });
 
   test('detailed zone rows give the Tree view the two-line row', () => {
@@ -160,7 +185,7 @@ describe('buildSessionSidebarRowModel', () => {
     const rows = buildSessionSidebarRowModel(input).rows;
     const zoneRow = rows.find((row) => row.kind === 'session');
 
-    expect(zoneRow?.kind === 'session' && zoneRow.renderContext).toBe('timeline-mixed');
+    expect(zoneRow?.kind === 'session' && zoneRow.renderContext).toBe('timeline-mixed-work');
   });
 
   test('Pinned opens above In work and its sessions stay in their project', () => {
@@ -176,7 +201,7 @@ describe('buildSessionSidebarRowModel', () => {
           : []
     ));
 
-    expect(order).toEqual(['pinned', 'mixed-compact:pinned', 'work', 'mixed-compact:working', 'project:pinned', 'project:working']);
+    expect(order).toEqual(['pinned', 'mixed-compact:pinned', 'work', 'work-compact:working', 'project:pinned', 'project:working']);
   });
 
   test('search lists a pinned session once, in Pinned', () => {
@@ -211,7 +236,7 @@ describe('buildSessionSidebarRowModel', () => {
     const rows = buildSessionSidebarRowModel(input).rows.filter((row) => row.kind === 'folder-header' || row.kind === 'session');
 
     expect(rows.map((row) => (row.kind === 'session' ? `${row.renderContext}:${row.node.session.id}` : row.displayName))).toEqual([
-      'mixed-compact:in-folder', 'Outer', 'project:in-folder', 'project:top-level',
+      'work-compact:in-folder', 'Outer', 'project:in-folder', 'project:top-level',
     ]);
   });
 
@@ -251,7 +276,7 @@ describe('buildSessionSidebarRowModel', () => {
     const sessions = rows.flatMap((row) => (row.kind === 'session' ? [`${row.renderContext}:${row.node.session.id}`] : []));
 
     expect(headers).toEqual(['work', 'project-a']);
-    expect(sessions).toEqual(['timeline-mixed:working', 'timeline:working', 'timeline:other']);
+    expect(sessions).toEqual(['timeline-mixed-work:working', 'timeline:working', 'timeline:other']);
   });
 
   test('timeline reveals seven sessions per project, seven more per Show more', () => {

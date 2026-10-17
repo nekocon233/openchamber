@@ -164,7 +164,13 @@ export const WorkStatusSectionsDialog: React.FC<{
       dragging.current = false;
       onOpenChange(nextOpen);
     }}>
-      <DialogContent className="max-w-md" data-work-status-sections-dialog>
+      <DialogContent
+        className="max-w-md"
+        data-work-status-sections-dialog
+        // Above the mobile work-status sheet (z-60), which can host this dialog.
+        layerClassName="z-[70]"
+        backdropProps={{ className: 'z-[70]' }}
+      >
         <DialogHeader>
           <DialogTitle>{t('chat.workStatus.sections.dialogTitle')}</DialogTitle>
           <DialogDescription>{t('chat.workStatus.sections.dialogDescription')}</DialogDescription>

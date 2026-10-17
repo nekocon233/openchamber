@@ -6,6 +6,7 @@ import { slimToolResult } from './tools.js';
 import { compareMessagesChronologically } from '@openchamber/ui/sync/message-ordering';
 import { nativePartSchema } from '@openchamber/ui/lib/native-agents/schemas';
 import { showsWithFileChangesOnly } from '@openchamber/ui/components/chat/message/parts/toolRenderUtils';
+import { getLatestCompletedTurnStats } from '@openchamber/ui/components/chat/work-status/telemetry';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 
@@ -92,6 +93,22 @@ describe('Claude history projection', () => {
       multiple: false,
       options: [{ label: 'red' }, { label: 'blue' }],
     });
+  });
+
+  it('completes a message after its last tool result so the step window holds every tool', () => {
+    const assistants = new Map(records
+      .filter((record) => record.info.role === 'assistant')
+      .map((record) => [record.info.id, record]));
+    for (const part of toolParts(records)) {
+      if (part.state.status !== 'completed' && part.state.status !== 'error') continue;
+      expect(assistants.get(part.messageID).info.time.completed).toBeGreaterThanOrEqual(part.state.time.end);
+    }
+
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats).not.toBeNull();
+    expect(stats.totalLlmDurationMs).not.toBeNull();
+    expect(stats.totalToolDurationMs).not.toBeNull();
+    expect(stats.tokensPerSecond).not.toBeNull();
   });
 
   it('emits parts the renderers accept: session ids, finished times', () => {

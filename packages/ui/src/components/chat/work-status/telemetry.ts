@@ -338,3 +338,71 @@ export function getLatestCompletedTurnStats(
     cost: totalCost,
   };
 }
+
+/**
+ * Weighted averages over every completed turn in the loaded records. The
+ * window grows when older history is paged in, so the result describes what
+ * is loaded rather than assuming it covers the whole session.
+ */
+export type CompletedTurnAverages = {
+  turnsCount: number;
+  cacheHitPercent: number | null;
+  tokensPerSecond: number | null;
+};
+
+export function getCompletedTurnAverages(
+  records: readonly SessionMessageRecord[] | null | undefined,
+): CompletedTurnAverages | null {
+  if (!records || records.length === 0) return null;
+
+  // A turn needs a user message and assistant steps that have all finished.
+  // A truncated leading segment and the running turn are skipped, not treated
+  // as zero, so the average describes only complete turns that are loaded.
+  const turns: CompletedStepStats[][] = [];
+  let current: CompletedStepStats[] | null = null;
+  let currentComplete = true;
+  for (const record of records) {
+    if (record.info.role === 'user') {
+      if (current && currentComplete && current.length > 0) turns.push(current);
+      current = [];
+      currentComplete = true;
+      continue;
+    }
+    if (record.info.role !== 'assistant' || current === null) continue;
+    const step = calculateCompletedStepStats(record);
+    if (step) current.push(step);
+    else currentComplete = false;
+  }
+  if (current && currentComplete && current.length > 0) turns.push(current);
+  if (turns.length === 0) return null;
+
+  let totalInputTokens: number | null = 0;
+  let totalCacheReadTokens: number | null = 0;
+  let totalCacheWriteTokens: number | null = 0;
+  let totalGeneratedTokens: number | null = 0;
+  let totalLlmDurationMs: number | null = 0;
+  for (const turn of turns) {
+    for (const step of turn) {
+      totalInputTokens = add(totalInputTokens, step.inputTokens);
+      totalCacheReadTokens = add(totalCacheReadTokens, step.cacheReadTokens);
+      totalCacheWriteTokens = add(totalCacheWriteTokens, step.cacheWriteTokens);
+      totalGeneratedTokens = add(totalGeneratedTokens, add(step.outputTokens, step.reasoningTokens));
+      totalLlmDurationMs = add(totalLlmDurationMs, step.adjustedLlmDurationMs);
+    }
+  }
+
+  const cacheHit = totalInputTokens !== null && totalCacheReadTokens !== null && totalCacheWriteTokens !== null
+    ? computeCacheHitRate({
+      input: totalInputTokens,
+      cache: { read: totalCacheReadTokens, write: totalCacheWriteTokens },
+    })
+    : null;
+
+  return {
+    turnsCount: turns.length,
+    cacheHitPercent: cacheHit?.hasInput ? Math.round(cacheHit.percent) : null,
+    tokensPerSecond: totalGeneratedTokens !== null && totalLlmDurationMs !== null
+      ? tokenRate(totalGeneratedTokens, totalLlmDurationMs)
+      : null,
+  };
+}

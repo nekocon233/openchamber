@@ -59,7 +59,11 @@ describe('MobileSessionsSheet session structure', () => {
   });
 
   test('lets the In work section be switched off, and says so when it is empty', () => {
-    expect(source).toContain("renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries, { emptyLabel: t('sessions.sidebar.work.empty') })");
+    expect(source).toContain("renderZoneSection(WORK_SECTION_ID, 'eye', t('sessions.sidebar.work.title'), workTimelineEntries, { emptyLabel: t('sessions.sidebar.work.empty'), expandable: true, dense: true, childEntriesByParent: workChildTimelineEntries })");
+    // In work reveals its subsessions in place; the child entries reuse the
+    // same timeline context as their parents.
+    expect(source).toContain('const workChildTimelineEntries = React.useMemo');
+    expect(source).toContain('childEntriesByParent={childEntriesByParent}');
     // The zone may not render without its label, or the toggle would have
     // nothing to show whenever no session is in work.
     expect(source).toContain('if (entries.length === 0 && !emptyLabel) return null;');

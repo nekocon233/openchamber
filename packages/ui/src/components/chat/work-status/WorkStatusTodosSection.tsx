@@ -1,18 +1,12 @@
 import React from 'react';
 import { useI18n } from '@/lib/i18n';
 import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
-import { useUIStore } from '@/stores/useUIStore';
 import { useSessionNativeTodos } from '@/sync/session-native-todos';
-import { selectNativeTasksTab } from '../native-tasks/task-ui-store';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
+import { useWorkStatusNavigation } from './useWorkStatusNavigation';
 
 const SECTION_ID = 'taskTodos';
-
-const openTasks = (directory: string, tab: 'plan' | 'todos') => {
-  selectNativeTasksTab(tab);
-  useUIStore.getState().openContextSurface(directory, 'tasks');
-};
 
 const STEP_STATUS_KEYS = {
   pending: 'chat.nativeTasks.status.pending',
@@ -25,6 +19,7 @@ export function WorkStatusTodosSection({ sessionId, directory }: { sessionId: st
   const { t } = useI18n();
   const enabled = Boolean(sessionId && directory && nativeBackendOfSessionId(sessionId) === 'codex');
   const state = useSessionNativeTodos(sessionId, directory, { enabled, visible: false });
+  const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;
   const steps = snapshot?.todos ?? [];
   useReportWorkStatusPresence(SECTION_ID, enabled);
@@ -52,7 +47,7 @@ export function WorkStatusTodosSection({ sessionId, directory }: { sessionId: st
             key={step.id}
             label={step.content}
             value={<WorkStatusValue tone={STEP_STATUS_TONES[step.status]}>{t(STEP_STATUS_KEYS[step.status])}</WorkStatusValue>}
-            onClick={() => openTasks(directory, 'todos')}
+            onClick={() => openTasks('todos')}
             ariaLabel={t('chat.nativeTasks.openChecklist')}
           />
         ))}

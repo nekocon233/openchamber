@@ -54,7 +54,8 @@ The overlay form stays inside the chat column in `ChatContainer`.
 `useWorkStatusVisibility` hides the panel when any of these hold:
 
 - the user switched it off;
-- the runtime is mobile or VS Code;
+- the runtime is VS Code, or the mobile shell, where the inline and overlay
+  forms do not exist and the same sections render in the mobile sheet instead;
 - the context panel is open for the directory the app is effectively on —
   looked up through `useEffectiveDirectory` and `normalizeContextPanelDirectoryKey`,
   the same key the rail and the panel use. It is deliberately **not** the
@@ -65,10 +66,45 @@ The overlay form stays inside the chat column in `ChatContainer`.
   (`roomy`); the width itself is not, because it changes on every frame of a
   sidebar animation and storing it re-rendered the whole chat each frame.
 
-`ChatContainer` additionally suppresses it in mini-chat and in expanded-input
-mode. It remains available on a new-session draft: when the draft targets a
+`ChatContainer` additionally suppresses it in mini-chat. It remains available
+on a new-session draft: when the draft targets a
 project or pending worktree, the panel uses that directory for project, MCP,
 and usage readouts before a session exists.
+
+### Mobile sheet
+
+The mobile shell has no right slot and no desktop header, so the panel travels
+as a bottom sheet. `MobileSessionMetadata`'s popover carries a Work status row;
+the row closes the popover and opens `apps/MobileWorkStatusSheet.tsx`, which
+wraps the same `WorkStatusPanel` in `MobileOverlayPanel` with
+`presentation="sheet"`.
+
+Sheet presentation changes only the host:
+
+- no fixed width, height cap or inner scroller; `MobileOverlayPanel` owns
+  scroll, keyboard insets, the scrim and the Android back layer;
+- no right-slot reservation, no scroll-offset persistence and no
+  overlay-style outside-click dismissal;
+- the equalizer and `WorkStatusSectionsDialog` stay, with the dialog raised to
+  `z-70` so it sits above the sheet's `z-60`;
+- managed Chats pass `directory=null` and `repositoryEnabled=false`, exactly as
+  the desktop panel does.
+
+Rows navigate to the mobile host through `useWorkStatusNavigation`: the
+context readout opens the Notes workspace tab, branch and changed files open
+Changes, a change request opens Changes in PR mode through
+`usePullRequestSelectionStore.requestDiff`, task rows select their tab and open
+Tasks, a pinned message requests timeline focus, and a subagent switches to the
+child session. Every one of those closes the sheet first. Project actions are
+not offered on mobile because `ProjectActionsProvider` is not mounted there.
+
+The desktop rows stay read-only for change requests, because the sidebar
+tracker owns discovery. The mobile sheet passes `prewarmPrStatus`, letting
+`useWorkStatusPrPrewarm` register the same active context and run one silent
+`refreshTargets` on open. The store keeps its 90-second TTL, concurrency gate
+and in-flight de-duplication; closing the sheet only releases the
+registration. Extension status sections remain empty on mobile by the guest
+surface policy.
 
 Managed Chats never render or warm the Project repository section. A Chat draft
 also passes no fallback directory to the panel, so an active project's branch
@@ -115,7 +151,7 @@ native task summaries request their session snapshot once and follow live events
 | Subagent blockers | directory `permission` / `question` maps | one subscription covers every child |
 | Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | grouping shared with the mobile popover; presentation is not |
 | Linked threads | `lib/linkedIssues.ts` over session metadata | written by the flows that attach an issue or PR |
-| Turn stats | `telemetry.ts` over `useSessionMessageRecords` | computed only while expanded and authoritatively idle; either rate above 5,000 tok/s is reported as unknown (see the two-rate description below) |
+| Turn stats | `telemetry.ts` over `useSessionMessageRecords` | computed only while expanded and authoritatively idle; response speed and the header use the newest turn, while cache and speed are token-weighted averages over complete turns in the loaded records and grow when older history is paged in; while busy or retrying with no committed result to retain, a muted row says the stats appear when the turn finishes; either rate above 5,000 tok/s is reported as unknown (see the two-rate description below) |
 | Goal | `useSessionGoal` | respects the Settings toggle |
 | MCP | `useMcpStore` | connect/disconnect reuses the dropdown's actions |
 | Pinned messages | `getContextObligatoryMessages` + `state.part`, else one `getSessionMessage` read | see below |
@@ -221,9 +257,12 @@ tooltip. Model-only session updates invalidate the live-session comparison.
 
 The section follows Usage by default and reuses the panel's existing rows. Only its header
 has an icon; metric rows use labels and values without leading icons. It
-reads already-loaded records without fetching history. The newest turn needs a
-preceding user message and completed assistant steps. A truncated or unfinished
-turn has no whole-turn result; later materialization can supply it.
+reads already-loaded records without fetching history. Response speed and the
+header describe the newest turn, which needs a preceding user message and
+completed assistant steps. The cache and speed rows instead average every
+complete turn in the loaded records, so paging in older history recalculates
+them. A truncated leading segment or an unfinished trailing turn is skipped
+rather than counted as zero.
 
 Two rates answer different questions. Response speed uses the final assistant
 message's output tokens divided by the union of its nonempty text intervals.
@@ -231,14 +270,19 @@ It excludes initial waiting, reasoning tokens and reasoning time, and earlier
 tool steps. It requires complete, valid text timing and a final message without
 tools, errors, synthetic text or ignored text. This measures text delivery from
 stored timestamps, not provider-side decode speed. The header shows only this
-rate; unavailable response timing never falls back to whole-turn speed.
+rate; unavailable response timing never falls back to the average speed.
 
-Whole-turn speed uses output plus reasoning tokens from every step, divided by
-elapsed assistant time minus the union of completed and failed tool intervals.
-Waiting for each model response remains included. Invalid or missing inputs
-omit the dependent metric rather than becoming zero; reported zeros remain
-valid. TTFT averages the earliest text/reasoning start delay from every step,
-only when all steps have a valid sample.
+Average speed sums output plus reasoning tokens and model time across every
+complete loaded turn, then divides the totals. Model time is each step's
+duration minus the union of its completed and failed tool intervals. The
+average is token-weighted, so a short turn cannot dominate a long one. Average
+cache sums the same steps' input and cache fields and divides cache reads by
+input plus reads and writes, also token-weighted. Both tooltips say that the
+value covers history loaded in the session and changes when older history is
+paged in. Invalid or missing inputs omit the dependent metric rather than
+becoming zero; reported zeros remain valid. TTFT averages the earliest
+text/reasoning start delay from every step of the newest turn, only when all
+steps have a valid sample.
 
 Either rate above 5,000 tok/s is reported as unknown. No provider streams that
 fast, so such a value means the measured window is broken: a tool that runs

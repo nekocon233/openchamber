@@ -2,18 +2,12 @@ import React from 'react';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import type { NativeExecutionTask } from '@/lib/native-agents/task-schemas';
-import { useUIStore } from '@/stores/useUIStore';
 import { useSessionNativeTaskDetails } from '@/sync/session-background-tasks';
-import { selectNativeTasksTab } from '../native-tasks/task-ui-store';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
+import { useWorkStatusNavigation } from './useWorkStatusNavigation';
 
 const SECTION_ID = 'taskBackground';
-
-const openTasks = (directory: string, tab: 'checklist' | 'background') => {
-  selectNativeTasksTab(tab);
-  useUIStore.getState().openContextSurface(directory, 'tasks');
-};
 
 const TASK_STATUS_KEYS = {
   unknown: 'chat.nativeTasks.status.unknown',
@@ -38,6 +32,7 @@ export function WorkStatusBackgroundTasksSection({ sessionId, directory }: { ses
   const { t } = useI18n();
   const enabled = Boolean(sessionId && directory && nativeBackendOfSessionId(sessionId) === 'claude');
   const state = useSessionNativeTaskDetails(sessionId, directory, { enabled, visible: false });
+  const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;
   const tasks = snapshot?.tasks ?? [];
   useReportWorkStatusPresence(SECTION_ID, enabled);
@@ -66,7 +61,7 @@ export function WorkStatusBackgroundTasksSection({ sessionId, directory }: { ses
               muted={!task.active}
               label={task.description || task.id}
               value={<WorkStatusValue tone={task.active ? TASK_STATUS_TONES[task.status] : 'muted'}>{t(TASK_STATUS_KEYS[task.status])}</WorkStatusValue>}
-              onClick={() => openTasks(directory, 'background')}
+              onClick={() => openTasks('background')}
               ariaLabel={t('chat.nativeTasks.openBackground')}
             />
           ))

@@ -105,6 +105,9 @@ depends on:
 - Every part carries `sessionID`. Finished text parts have `time.end`;
   finished tools have `state.time.end`. A tool that never got a result is
   settled as interrupted.
+- An assistant message's `time.completed` covers every finished tool it
+  issued: a later tool result extends it. OpenCode completes a step after its
+  tools, and turn telemetry subtracts tool time inside that window.
 - Tool names map onto the tools the UI knows (`Bash` to `bash`, `Edit` and
   `MultiEdit` to `edit`, Codex `commandExecution` to `bash`, `fileChange` to
   `apply_patch`, MCP tools to `<server>_<tool>`), with the file diff metadata
@@ -262,7 +265,9 @@ kept open between turns.
   change in place.
 - The projector's live mode opens the assistant message and its text and
   reasoning parts from stream events and completes the message on
-  `message_stop`, because tools start while later blocks still stream. Usage
+  `message_stop`, because tools start while later blocks still stream. A tool
+  result that arrives afterwards moves `time.completed` to the result time.
+  Usage
   accumulates privately from `message_start` and each `message_delta`; it is
   written to the message only after both cache fields have arrived. Proxied
   streams can omit those fields until the result frame, and incomplete usage is

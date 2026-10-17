@@ -91,7 +91,7 @@ describe('mounted turn telemetry with live sync stores', () => {
 
   test('waits for authority, then shows actual token values even when idle is omitted from the snapshot', async () => {
     expect(dom.container.textContent).toContain('Turn stats');
-    expect(dom.container.textContent).not.toContain('Whole turn');
+    expect(dom.container.textContent).not.toContain('Avg speed');
     await act(async () => store().setState({ sessionStatusReady: true }));
     expect(dom.container.textContent).toContain('~6 tok/s');
     expect(dom.container.textContent).toContain('Elapsed6.0s');
@@ -126,7 +126,7 @@ describe('mounted turn telemetry with live sync stores', () => {
     await render();
     expect(dom.container.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
     expect(dom.container.textContent).toContain('Turn stats');
-    expect(dom.container.textContent).not.toContain('Whole turn');
+    expect(dom.container.textContent).not.toContain('Avg speed');
     const reopen = dom.container.querySelector('button');
     if (!reopen) throw new Error('Expected reopen button');
     await act(async () => reopen.click());
@@ -162,6 +162,39 @@ describe('mounted turn telemetry with live sync stores', () => {
     }
   });
 
+  test('busy and retry explain when no completed turn is available, and never replace retained stats', async () => {
+    expect(dom.container.textContent).not.toContain('Stats appear when the turn finishes.');
+    await act(async () => store().setState({ session_status: { [sessionId]: { type: 'busy' } } }));
+    expect(dom.container.textContent).toContain('Stats appear when the turn finishes.');
+    expect(dom.container.textContent).not.toContain('Avg speed');
+    await act(async () => store().setState({ session_status: { [sessionId]: { type: 'retry', attempt: 1, message: 'retry', next: 0 } } }));
+    expect(dom.container.textContent).toContain('Stats appear when the turn finishes.');
+    await act(async () => store().setState({ session_status: { [sessionId]: { type: 'idle' } } }));
+    expect(dom.container.textContent).not.toContain('Stats appear when the turn finishes.');
+    expect(dom.container.textContent).toContain('Avg speed');
+    await act(async () => store().setState({ session_status: { [sessionId]: { type: 'busy' } } }));
+    expect(dom.container.textContent).toContain('Avg speed');
+    expect(dom.container.textContent).not.toContain('Stats appear when the turn finishes.');
+  });
+
+  test('shows a token-weighted average across loaded completed turns, not the latest turn alone', async () => {
+    const user2: UserMessage = { id: 'user-2', sessionID: sessionId, role: 'user', time: { created: 8000 } };
+    const assistant2: AssistantMessage = {
+      id: 'assistant-2', sessionID: sessionId, role: 'assistant',
+      agent: 'build', providerID: 'test', modelID: 'test',
+      time: { created: 9000, completed: 10000 }, cost: 0,
+      tokens: { input: 900, output: 10, reasoning: 0, cache: { read: 100, write: 0 } },
+    };
+    await act(async () => store().setState({
+      sessionStatusReady: true,
+      message: { [sessionId]: [user, assistant, user2, assistant2] },
+      part: { [assistant.id]: [], [assistant2.id]: [] },
+    }));
+    expect(dom.container.textContent).toContain('Avg speed~7 tok/s');
+    expect(dom.container.textContent).toContain('Avg cache hit12%');
+    expect(dom.container.textContent).not.toContain('~10 tok/s');
+  });
+
   test('session and directory changes cannot retain another scope, including equal IDs', async () => {
     await act(async () => store().setState({ session_status: { [sessionId]: { type: 'idle' } } }));
     expect(dom.container.textContent).toContain('~6 tok/s');
@@ -176,7 +209,7 @@ describe('mounted turn telemetry with live sync stores', () => {
 
   test('same-ID corrections, partial history and reverts replace rather than cache stale stats', async () => {
     await act(async () => store().setState({ session_status: { [sessionId]: { type: 'idle' } }, message: { [sessionId]: [assistant] } }));
-    expect(dom.container.textContent).not.toContain('Whole turn');
+    expect(dom.container.textContent).not.toContain('Avg speed');
     await act(async () => store().setState({ message: { [sessionId]: [user, assistant] } }));
     expect(dom.container.textContent).toContain('~6 tok/s');
     const corrected: AssistantMessage = { ...assistant, tokens: { input: 100, output: 90, reasoning: 10, cache: { read: 40, write: 0 } } };
@@ -205,11 +238,11 @@ describe('mounted turn telemetry with live sync stores', () => {
     ] } }));
     expect(dom.container.querySelector('button')?.textContent).toBe('Turn stats~10 tok/s');
     expect(dom.container.textContent).toContain('Response~10 tok/s');
-    expect(dom.container.textContent).toContain('Whole turn~6 tok/s');
+    expect(dom.container.textContent).toContain('Avg speed~6 tok/s');
     await act(async () => store().setState({ part: { [assistant.id]: [] } }));
     expect(dom.container.querySelector('button')?.textContent).toBe('Turn stats');
     expect(dom.container.textContent).not.toContain('Response');
-    expect(dom.container.textContent).toContain('Whole turn~6 tok/s');
+    expect(dom.container.textContent).toContain('Avg speed~6 tok/s');
   });
 
   test('every metric has a full-row focus target and hover waits 750ms', async () => {

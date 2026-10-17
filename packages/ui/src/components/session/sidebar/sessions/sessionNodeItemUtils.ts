@@ -38,7 +38,12 @@ export type SessionNodeRenderExtras<TNode = SessionNode> = SessionNodeChildRende
 export const sessionRowCanExpand = (
   renderContext: SessionSidebarRenderContext,
   isTimelineRow: boolean,
-): boolean => !isTimelineRow || renderContext === 'mixed-compact';
+): boolean => (
+  !isTimelineRow
+  || renderContext === 'mixed-compact'
+  || renderContext === 'work-compact'
+  || renderContext === 'timeline-mixed-work'
+);
 
 /**
  * Walk `nodes` and add `node.session.id` to `result` for every node

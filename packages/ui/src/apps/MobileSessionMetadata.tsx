@@ -6,6 +6,7 @@ import { preloadProviderLogos } from '@/hooks/useProviderLogo';
 import { useTabletLayout } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
 import { clampPercent, resolveUsageTone } from '@/lib/quota';
+import { registerBackLayer } from '@/lib/mobileBackLayers';
 import { UsageProviderCards } from '@/components/usage/UsageProviderCards';
 import { useUsageProviderGroups, type UsageProviderGroup } from '@/components/usage/usageGroups';
 import { cn } from '@/lib/utils';
@@ -109,17 +110,31 @@ const MetadataRow: React.FC<{
 const SessionMetadataOverlay: React.FC<{
   open: boolean;
   onClose: () => void;
+  onOpenWorkStatus: () => void;
   anchorRef: React.RefObject<HTMLElement | null>;
   contextDisplay: ContextDisplay;
   usageGroups: UsageProviderGroup[];
   usageDisplayMode: 'usage' | 'remaining';
   isUsageLoading: boolean;
   timeFormatPreference: TimeFormatPreference;
-}> = ({ open, onClose, anchorRef, contextDisplay, usageGroups, usageDisplayMode, isUsageLoading, timeFormatPreference }) => {
+}> = ({ open, onClose, onOpenWorkStatus, anchorRef, contextDisplay, usageGroups, usageDisplayMode, isUsageLoading, timeFormatPreference }) => {
   const { t } = useI18n();
   const panelRef = React.useRef<HTMLDivElement>(null);
   const [shouldRender, setShouldRender] = React.useState(open);
   const [isExiting, setIsExiting] = React.useState(false);
+
+  // The Android back button closes the newest open layer. This overlay is a
+  // sibling of MobileOverlayPanel rather than one of its instances, so it
+  // registers itself the same way.
+  const onCloseRef = React.useRef(onClose);
+  React.useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  const closeLayer = React.useCallback(() => onCloseRef.current(), []);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    return registerBackLayer(closeLayer);
+  }, [closeLayer, open]);
   // Tablet: a phone-width sheet stretched across the whole chat column looks
   // broken — render a popover anchored to the metadata button instead.
   const { enabled: isTabletLayout } = useTabletLayout();
@@ -253,6 +268,23 @@ const SessionMetadataOverlay: React.FC<{
           {contextDisplay?.state === 'pending' ? (
             <p className="px-2.5 pb-1 typography-meta text-muted-foreground">{t('mobile.header.metadata.contextPending')}</p>
           ) : null}
+          <button
+            type="button"
+            aria-label={t('mobile.header.metadata.openWorkStatusAria')}
+            onClick={() => {
+              onClose();
+              onOpenWorkStatus();
+            }}
+            className="flex w-full min-w-0 items-center gap-3 rounded-xl px-2.5 py-2.5 text-start transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+              <Icon name="layout-right" className="size-[18px]" />
+            </span>
+            <span className="min-w-0 flex-1 truncate typography-ui-label text-foreground">
+              {t('mobile.header.metadata.workStatus')}
+            </span>
+            <Icon name="arrow-right-s" className="size-4 shrink-0 text-muted-foreground" />
+          </button>
           <MobileUsageLimits
             groups={usageGroups}
             displayMode={usageDisplayMode}
@@ -323,12 +355,14 @@ const MobileUsageLimits: React.FC<{
 export const MobileSessionMetadataButton = React.memo(function MobileSessionMetadataButton({
   open,
   onOpenChange,
+  onOpenWorkStatus,
   currentSessionId,
   effectiveDirectory,
   isNewSessionDraftOpen,
 }: {
   open: boolean;
   onOpenChange: (open: boolean | ((open: boolean) => boolean)) => void;
+  onOpenWorkStatus: () => void;
   currentSessionId: string | null;
   effectiveDirectory: string | null;
   isNewSessionDraftOpen: boolean;
@@ -458,6 +492,7 @@ export const MobileSessionMetadataButton = React.memo(function MobileSessionMeta
       <SessionMetadataOverlay
         open={open}
         onClose={() => onOpenChange(false)}
+        onOpenWorkStatus={onOpenWorkStatus}
         anchorRef={metadataTriggerRef}
         contextDisplay={contextDisplay}
         usageGroups={usageGroups}
