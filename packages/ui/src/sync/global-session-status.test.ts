@@ -6,6 +6,7 @@ import {
   applyGlobalSessionStatusSnapshot,
   getDirectoryOwnedSessionIds,
   getGlobalSessionStatusRevision,
+  getOpenTurnSessionIds,
   resetGlobalSessionStatuses,
   resolveSessionStatusType,
   setGlobalSessionStatus,
@@ -526,5 +527,29 @@ describe("a background command keeps its session's turn open", () => {
     applyBackgroundShellEvents("/repo", [started])
     applyGlobalSessionStatusSnapshot("/repo", {}, ["session"])
     expect(timing().startedAt.has("session")).toBe(true)
+  })
+})
+
+describe("getOpenTurnSessionIds", () => {
+  beforeEach(() => {
+    setSessionParentResolver((sessionId) => (sessionId === "child" ? "parent" : undefined))
+    resetBackgroundShells()
+    useSessionBackgroundTasksStore.setState({ tasksBySession: new Map(), eventRevisionBySession: new Map(), revision: 0 })
+  })
+
+  test("collects active sessions, ancestors, shell waiters and task waiters", () => {
+    applyGlobalSessionStatusEvents("/repo", [statusEvent("active", "busy"), statusEvent("child", "busy")])
+    applyBackgroundShellEvents("/repo", [{
+      type: "shell.started",
+      properties: { shell: { id: "sh_open", sessionID: "shell-waiting", command: "sleep 300", file: "/tmp/sh_open.out", startedAt: 1 } },
+    } satisfies SyncEvent])
+    applySessionBackgroundTasksEvent("task-waiting", [{ id: "task-open", type: "local_bash", description: "Wait" }], getRuntimeKey())
+
+    const open = getOpenTurnSessionIds()
+    expect(open.has("active")).toBe(true)
+    expect(open.has("parent")).toBe(true)
+    expect(open.has("shell-waiting")).toBe(true)
+    expect(open.has("task-waiting")).toBe(true)
+    expect(open.has("idle")).toBe(false)
   })
 })

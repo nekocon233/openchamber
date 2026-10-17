@@ -14,6 +14,7 @@ import {
   resolveTooltipBranchLabel,
   selectFolderRootNodes,
   selectBlockingBadgeSessionScopes,
+  sessionRowCanExpand,
 } from './sessionNodeItemUtils';
 import type { SessionNode } from '../types';
 
@@ -27,6 +28,16 @@ const rootWithChild = (childSession: Session): SessionNode => ({
   session: session('root', 'Root'),
   children: [{ session: childSession, children: [], worktree: null }],
   worktree: null,
+});
+
+describe('sessionRowCanExpand', () => {
+  test('allows tree rows and one-line zone rows when their projection keeps children', () => {
+    expect(sessionRowCanExpand('project', false)).toBe(true);
+    expect(sessionRowCanExpand('mixed-compact', true)).toBe(true);
+    expect(sessionRowCanExpand('timeline-mixed', true)).toBe(false);
+    expect(sessionRowCanExpand('timeline', true)).toBe(false);
+    expect(sessionRowCanExpand('tree-chat', true)).toBe(false);
+  });
 });
 
 describe('computeNodeStructureKey', () => {

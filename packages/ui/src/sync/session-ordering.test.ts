@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
 import {
+  comparePinnedZoneSessions,
   compareSessionsByLifecycleOrder,
   observeSessionActivityEvent,
   orderSessionsByLifecycleScopes,
@@ -21,6 +22,11 @@ const session = (
   parentID,
   time: { created: updated - 1, updated },
 } as Session);
+
+const sessionWithTimes = (id: string, created: number, updated: number): Session => ({
+  ...session(id, updated),
+  time: { created, updated },
+});
 
 beforeEach(() => resetSessionOrdering());
 
@@ -216,5 +222,57 @@ describe('session lifecycle ordering', () => {
   test('a migrated session without idle still orders by updated', () => {
     raiseSessionOrderingBaselines([session('migrated', 50), session('fresh', 20)]);
     expect(compareSessionsByLifecycleOrder(session('migrated', 50), session('fresh', 20), new Set(), new Map())).toBeLessThan(0);
+  });
+});
+
+describe('comparePinnedZoneSessions', () => {
+  test('puts open turns first, then lifecycle activity', () => {
+    const older = session('older', 10);
+    const newer = session('newer', 20);
+    expect(comparePinnedZoneSessions(older, newer, new Map(), new Set())).toBeGreaterThan(0);
+    expect(comparePinnedZoneSessions(older, newer, new Map(), new Set(['older']))).toBeLessThan(0);
+
+    const runningOlder = session('running-older', 10);
+    const runningNewer = session('running-newer', 20);
+    expect(comparePinnedZoneSessions(runningOlder, runningNewer, new Map(), new Set([runningOlder.id, runningNewer.id]))).toBeGreaterThan(0);
+    expect(comparePinnedZoneSessions(older, newer, new Map([['older', 100]]), new Set())).toBeLessThan(0);
+  });
+
+  test('freezes activity baselines until an authoritative snapshot raises them', () => {
+    const older = session('older', 10);
+    const newer = session('newer', 20);
+    expect(comparePinnedZoneSessions(older, newer, new Map(), new Set())).toBeGreaterThan(0);
+
+    const metadataOnlyUpdate = session('older', 30);
+    expect(comparePinnedZoneSessions(metadataOnlyUpdate, newer, new Map(), new Set())).toBeGreaterThan(0);
+
+    raiseSessionOrderingBaselines([metadataOnlyUpdate, newer]);
+    expect(comparePinnedZoneSessions(metadataOnlyUpdate, newer, new Map(), new Set())).toBeLessThan(0);
+  });
+
+  test('breaks ties by created time and id', () => {
+    const first = sessionWithTimes('b', 20, 10);
+    const second = sessionWithTimes('a', 20, 10);
+    const olderCreated = sessionWithTimes('c', 10, 10);
+    expect(comparePinnedZoneSessions(first, olderCreated, new Map(), new Set())).toBeLessThan(0);
+    expect(comparePinnedZoneSessions(second, first, new Map(), new Set())).toBeLessThan(0);
+  });
+});
+
+describe('orderSessionsByLifecycleScopes compareRoots', () => {
+  test('uses a custom root comparator without changing sibling order', () => {
+    const rootA = session('root-a', 10);
+    const rootB = session('root-b', 20);
+    const childOlder = session('child-older', 5, 'root-a');
+    const childNewer = session('child-newer', 6, 'root-a');
+    const compareRoots = (left: Session, right: Session) => left.id.localeCompare(right.id);
+
+    expect(orderSessionsByLifecycleScopes(
+      [rootB, childOlder, rootA, childNewer],
+      new Set(),
+      new Map(),
+      undefined,
+      { compareRoots },
+    ).map((item) => item.id)).toEqual(['root-a', 'child-newer', 'child-older', 'root-b']);
   });
 });

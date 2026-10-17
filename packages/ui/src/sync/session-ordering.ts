@@ -202,6 +202,25 @@ export const getSessionLifecycleOrderValue = (
   pinned = false,
 ): number => rankById.get(session.id) ?? baselineRank(session, pinned);
 
+/** Pinned zones: open turns first, then the same activity order unpinned lists use. */
+export const comparePinnedZoneSessions = (
+  left: Session,
+  right: Session,
+  rankById: ReadonlyMap<string, number>,
+  runningIds: ReadonlySet<string>,
+): number => {
+  const leftRunning = runningIds.has(left.id);
+  const rightRunning = runningIds.has(right.id);
+  if (leftRunning !== rightRunning) return leftRunning ? -1 : 1;
+
+  const lifecycleDelta = getSessionLifecycleOrderValue(right, rankById, false)
+    - getSessionLifecycleOrderValue(left, rankById, false);
+  if (lifecycleDelta !== 0) return lifecycleDelta;
+  const createdDelta = finiteTime(right.time?.created) - finiteTime(left.time?.created);
+  if (createdDelta !== 0) return createdDelta;
+  return left.id.localeCompare(right.id);
+};
+
 export const compareSessionsByLifecycleOrder = (
   left: Session,
   right: Session,
@@ -234,6 +253,9 @@ export const orderSessionsByLifecycleScopes = (
   hierarchy?: {
     rootIds: readonly string[];
     childrenByParentId: ReadonlyMap<string, readonly string[]>;
+  },
+  options?: {
+    compareRoots?: (left: Session, right: Session) => number;
   },
 ): Session[] => {
   countSyncPerformance('sidebarOrderBuilds');
@@ -306,7 +328,8 @@ export const orderSessionsByLifecycleScopes = (
     if (createdDelta !== 0) return createdDelta;
     return left.id.localeCompare(right.id);
   };
-  roots.sort(compare);
+  const compareRoots = options?.compareRoots ?? compare;
+  roots.sort(compareRoots);
   for (const siblings of childrenByParent.values()) {
     siblings.sort(compare);
   }
@@ -324,7 +347,7 @@ export const orderSessionsByLifecycleScopes = (
   for (const root of roots) {
     append(root);
   }
-  const remaining = sessions.filter((session) => !visited.has(session.id)).sort(compare);
+  const remaining = sessions.filter((session) => !visited.has(session.id)).sort(compareRoots);
   for (const session of remaining) {
     append(session);
   }

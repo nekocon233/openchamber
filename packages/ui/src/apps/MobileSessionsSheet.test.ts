@@ -20,6 +20,15 @@ describe('MobileSessionsSheet session structure', () => {
     expect(source).toContain('for (const session of projectSessions)');
   });
 
+  test('sorts the Pinned zone with open turns before recent activity', () => {
+    expect(source).toContain('comparePinnedZoneSessions');
+    expect(source).toContain('getOpenTurnSessionIds(activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession)');
+    expect(source).toContain('{ compareRoots: (left, right) => comparePinnedZoneSessions(left, right, sessionOrderRanks, openTurnSessionIds) }');
+    expect(source).toContain('heldActiveSessionIdsRef');
+    expect(source).toContain('heldBackgroundShellIdsRef');
+    expect(source).toContain('heldBackgroundTasksRef');
+  });
+
   test('renders Chats, Pinned and In work, then the project tree with stable bucket identity', () => {
     const chatsSectionIndex = source.indexOf("const chatsLabel = t('mobile.sessions.section.chats')");
     const pinnedSectionIndex = source.indexOf('renderZoneSection(PINNED_SECTION_ID');

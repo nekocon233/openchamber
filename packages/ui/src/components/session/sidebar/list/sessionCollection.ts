@@ -152,6 +152,17 @@ export const buildActiveSessionNode = (
   return build(session);
 };
 
+/** Zone rows keep the resolved worktree; expandable ones also keep the active subtree. */
+export const buildZoneSessionNode = (
+  tree: SessionNode,
+  worktree: SessionNode['worktree'],
+  keepChildren: boolean,
+): SessionNode => ({
+  ...tree,
+  children: keepChildren ? tree.children : [],
+  worktree,
+});
+
 type SidebarSessionProjectionArgs = ProjectSidebarActiveSessionsArgs & {
   pinnedSessionIds: Set<string>;
   sessionOrderRanks: ReadonlyMap<string, number>;

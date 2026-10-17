@@ -108,7 +108,11 @@ export const hasActiveSubagent = (sessionId: string, activeSessionIds: ReadonlyS
  * Active sessions plus every session whose turn they keep open: ancestors of
  * running subagents, and sessions waiting on a background command.
  */
-const withBackgroundWork = (activeSessionIds: ReadonlySet<string>): ReadonlySet<string> => {
+const withBackgroundWork = (
+  activeSessionIds: ReadonlySet<string>,
+  shellSessionIds: ReadonlySet<string> = useBackgroundShellsStore.getState().sessionIds,
+  tasksBySession: ReadonlyMap<string, unknown> = useSessionBackgroundTasksStore.getState().tasksBySession,
+): ReadonlySet<string> => {
   let extended: Set<string> | null = null;
   const add = (sessionId: string): void => {
     if (activeSessionIds.has(sessionId)) return;
@@ -116,7 +120,8 @@ const withBackgroundWork = (activeSessionIds: ReadonlySet<string>): ReadonlySet<
     extended.add(sessionId);
   };
   for (const activeId of activeSessionIds) forEachAncestorId(activeId, add);
-  for (const sessionId of useBackgroundShellsStore.getState().sessionIds) add(sessionId);
+  for (const sessionId of shellSessionIds) add(sessionId);
+  for (const sessionId of tasksBySession.keys()) add(sessionId);
   return extended ?? activeSessionIds;
 };
 
@@ -146,14 +151,18 @@ const turnStaysOpen = (sessionId: string, activeSessionIds: ReadonlySet<string>)
 );
 
 /** Sessions whose turn is open: active ones, their ancestors, and those waiting on background work. */
-const withOpenTurns = (activeSessionIds: ReadonlySet<string>): ReadonlySet<string> => {
-  const open = withBackgroundWork(activeSessionIds);
-  const { tasksBySession } = useSessionBackgroundTasksStore.getState();
-  if (tasksBySession.size === 0) return open;
-  const extended = new Set(open);
-  for (const sessionId of tasksBySession.keys()) extended.add(sessionId);
-  return extended;
-};
+const withOpenTurns = (
+  activeSessionIds: ReadonlySet<string>,
+  shellSessionIds: ReadonlySet<string> = useBackgroundShellsStore.getState().sessionIds,
+  tasksBySession: ReadonlyMap<string, unknown> = useSessionBackgroundTasksStore.getState().tasksBySession,
+): ReadonlySet<string> => withBackgroundWork(activeSessionIds, shellSessionIds, tasksBySession);
+
+/** Sessions whose turn is open now: active sessions, their ancestors, and shell/task waiters. */
+export const getOpenTurnSessionIds = (
+  activeSessionIds: ReadonlySet<string> = useGlobalSessionStatusStore.getState().activeSessionIds,
+  shellSessionIds: ReadonlySet<string> = useBackgroundShellsStore.getState().sessionIds,
+  tasksBySession: ReadonlyMap<string, unknown> = useSessionBackgroundTasksStore.getState().tasksBySession,
+): ReadonlySet<string> => withOpenTurns(activeSessionIds, shellSessionIds, tasksBySession);
 
 /**
  * What keeps the session's turn open, or null when nothing does: the session

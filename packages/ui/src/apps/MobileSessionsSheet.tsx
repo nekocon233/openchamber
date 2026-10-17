@@ -79,14 +79,17 @@ import { useSessionDisplayStore, type ProjectSortOrder } from '@/stores/useSessi
 import { orderWorktrees, useWorktreeOrderStore } from '@/stores/useWorktreeOrderStore';
 import {
   EMPTY_SESSION_ORDER_RANKS,
+  comparePinnedZoneSessions,
   orderSessionsByLifecycleScopes,
   useSessionOrderingStore,
 } from '@/sync/session-ordering';
+import { useBackgroundShellsStore } from '@/sync/background-shells';
+import { useSessionBackgroundTasksStore } from '@/sync/session-background-tasks';
 import { readDirectoryStatuses, type DirectoryStatusSnapshot } from '@/sync/native-directory-snapshots';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useAllLiveSessions, useAllAuthoritativeLiveSessionIds, useAllSessionStatuses } from '@/sync/sync-context';
 import { useGlobalSyncStore } from '@/sync/global-sync-store';
-import { applyGlobalSessionStatusSnapshot, getGlobalSessionStatusRevision, useGlobalSessionStatusStore } from '@/sync/global-session-status';
+import { applyGlobalSessionStatusSnapshot, getGlobalSessionStatusRevision, getOpenTurnSessionIds, useGlobalSessionStatusStore } from '@/sync/global-session-status';
 import { useSessionUnseenCount } from '@/sync/notification-store';
 import { useHasSessionActivityDuration } from '@/sync/session-activity-timing';
 import { useSessionAiRenameAction } from '@/components/session/useSessionAiRenameAction';
@@ -154,6 +157,8 @@ type MobileSessionsSheetProps = {
 };
 
 const EMPTY_PINNED_SESSION_IDS = new Set<string>();
+const EMPTY_LIVE_SESSION_IDS: ReadonlySet<string> = new Set();
+const EMPTY_BACKGROUND_TASKS: ReadonlyMap<string, unknown> = new Map();
 
 // Same orders, same labels as the desktop sidebar's sort menu — the setting
 // itself is shared, so the two surfaces must offer the same choices.
@@ -861,6 +866,30 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     },
     [presented],
   ));
+  const heldActiveSessionIdsRef = React.useRef<ReadonlySet<string>>(EMPTY_LIVE_SESSION_IDS);
+  const activeSessionIds = useGlobalSessionStatusStore(React.useCallback(
+    (state) => {
+      if (presented) heldActiveSessionIdsRef.current = state.activeSessionIds;
+      return heldActiveSessionIdsRef.current;
+    },
+    [presented],
+  ));
+  const heldBackgroundShellIdsRef = React.useRef<ReadonlySet<string>>(EMPTY_LIVE_SESSION_IDS);
+  const backgroundShellSessionIds = useBackgroundShellsStore(React.useCallback(
+    (state) => {
+      if (presented) heldBackgroundShellIdsRef.current = state.sessionIds;
+      return heldBackgroundShellIdsRef.current;
+    },
+    [presented],
+  ));
+  const heldBackgroundTasksRef = React.useRef(EMPTY_BACKGROUND_TASKS);
+  const backgroundTasksBySession = useSessionBackgroundTasksStore(React.useCallback(
+    (state) => {
+      if (presented) heldBackgroundTasksRef.current = state.tasksBySession;
+      return heldBackgroundTasksRef.current;
+    },
+    [presented],
+  ));
   const projects = useProjectsStore((state) => state.projects);
   const authoritativeProjects = useGlobalSyncStore((state) => state.projects);
   const activeProjectId = useProjectsStore((state) => state.activeProjectId);
@@ -1202,6 +1231,10 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       .filter((session) => isSessionPinned(pinnedSessionIds, getSessionDirectory(session) || null, session.id))
       .map((session) => session.id),
   ), [chatsBucket, pinnedSessionIds]);
+  const openTurnSessionIds = React.useMemo(
+    () => getOpenTurnSessionIds(activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession),
+    [activeSessionIds, backgroundShellSessionIds, backgroundTasksBySession],
+  );
   const pinnedBucket = React.useMemo<WorktreeBucket>(() => ({
     key: PINNED_SECTION_ID,
     label: '',
@@ -1209,9 +1242,15 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     worktree: null,
     space: null,
     sessions: pinnedZoneSessionIds.size > 0
-      ? orderSessionsByLifecycleScopes(sessions.filter((session) => pinnedZoneSessionIds.has(session.id)), pinnedSessionIds, sessionOrderRanks)
+      ? orderSessionsByLifecycleScopes(
+        sessions.filter((session) => pinnedZoneSessionIds.has(session.id)),
+        pinnedSessionIds,
+        sessionOrderRanks,
+        undefined,
+        { compareRoots: (left, right) => comparePinnedZoneSessions(left, right, sessionOrderRanks, openTurnSessionIds) },
+      )
       : [],
-  }), [pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions]);
+  }), [openTurnSessionIds, pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions]);
   const workBucket = React.useMemo<WorktreeBucket>(() => ({
     key: WORK_SECTION_ID,
     label: '',

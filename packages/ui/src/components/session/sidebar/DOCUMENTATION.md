@@ -250,7 +250,7 @@ row, the PR or issue as a coloured mark without its number (its tooltip lists
 the links), the branch, project and model in the whole-row tooltip. The display
 menu's Detailed rows toggle (`detailedZoneRows`, `sidebarDetailedZoneRows`, per
 surface, off by default, offered in Tree only) gives Tree the two-line rows.
-Both never expand, with subsessions feeding the badges; a run row there opens
+In work rows never expand, with subsessions feeding the badges; a run row there opens
 its overview. Search
 keeps a root whose subsession matches (`sessionTreeMatchesSidebarQuery`): those
 subsessions are nowhere else in the sidebar. The zone counts only sessions that match
@@ -301,7 +301,9 @@ top-level, unarchived project sessions in the shared lifecycle order; pinned
 chats stay pinned at the top of Chats. A pinned session in work is listed in
 Pinned only. Like In work, its sessions also stay in their projects, search
 lists each of them once, in the zone (`zoneSessionIds` carries both zones' ids),
-and the rows follow the same render context. Its rows show no pin marker,
+and the rows follow the same render context. Tree's one-line Pinned rows keep
+their active subtree and can expand it; List, detailed zone rows and search stay
+flat. In work rows do not expand in either view. Its rows show no pin marker,
 because the header already says they are pinned; In work rows show it only
 while the zone is hidden, since otherwise no pinned session reaches In work. Pins are the device-local
 `useSessionPinnedStore`, so the zone differs between devices. The phone sheet

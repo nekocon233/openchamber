@@ -6,6 +6,7 @@ import { deriveRecentSessions } from '../recent/activitySections';
 import {
   buildActiveSessionNode,
   buildSidebarSessionProjection,
+  buildZoneSessionNode,
   getDescendantIds,
   partitionSidebarSessions,
   projectSidebarActiveSessions,
@@ -332,6 +333,20 @@ describe('buildActiveSessionNode', () => {
 
     expect(node.children.map((entry) => entry.session.id)).toEqual(['a']);
     expect(node.children[0]?.children).toEqual([]);
+  });
+});
+
+describe('buildZoneSessionNode', () => {
+  test('keeps the subtree only for an expandable zone row', () => {
+    const child = session('child', '/workspace');
+    const tree = buildActiveSessionNode(new Map([['root', [child]]]), session('root', '/workspace'));
+    const worktree = { path: '/workspace', projectDirectory: '/workspace', branch: 'main', label: 'main' };
+
+    expect(buildZoneSessionNode(tree, worktree, true)).toMatchObject({
+      worktree,
+      children: [{ session: { id: 'child' } }],
+    });
+    expect(buildZoneSessionNode(tree, worktree, false)).toMatchObject({ worktree, children: [] });
   });
 });
 

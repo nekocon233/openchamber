@@ -47,7 +47,7 @@ import { getSyncSessionMaterializationStatus } from '@/sync/sync-refs';
 import { useViewportStore, viewportSessionKey } from '@/sync/viewport-store';
 import { DraggableSessionRow } from '../folders/sessionFolderDnd';
 import { useSessionRowOrderRegistry } from './sessionRowOrder';
-import { canShowSessionWorktreeMenu, getSessionWorktreeMenuDisabled, nodeContainsSessionId, nodeHasPinnedMembershipChange, resolveSessionPrLookup, resolveTooltipBranchLabel, selectBlockingBadgeSessionScopes, type BlockingBadgeSessionScope } from './sessionNodeItemUtils';
+import { canShowSessionWorktreeMenu, getSessionWorktreeMenuDisabled, nodeContainsSessionId, nodeHasPinnedMembershipChange, resolveSessionPrLookup, resolveTooltipBranchLabel, selectBlockingBadgeSessionScopes, sessionRowCanExpand, type BlockingBadgeSessionScope } from './sessionNodeItemUtils';
 import { useSessionRowMenuState } from './useSessionRowMenuState';
 import { buildActiveSessionTreeFromCache, collectSessionMoveDescendants } from './sessionSubtreeActions';
 import type { SessionNode } from '../types';
@@ -664,10 +664,10 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     </RowMarkTooltip>
   ) : null;
   const sessionTitle = resolvedSession.title || t('sessions.sidebar.session.untitled');
-  // Timeline is a flat list: a node that still carries children renders as a
-  // leaf, without a chevron and without an expansion state.
-  const hasChildren = !isTimelineRow && node.children.length > 0;
   const isPinnedSession = isSessionPinned(pinnedSessionIds, sessionDirectory, session.id);
+  // Timeline rows stay flat. Tree's one-line Pinned rows are the exception:
+  // they keep the tree slot and can reveal the same subagents the project row can.
+  const hasChildren = sessionRowCanExpand(renderContext, isTimelineRow) && node.children.length > 0;
   const actionSupport = sessionActionSupport(session.id);
   // Per-render-context expansion key: the same session can appear in both
   // the project's root and the "Recent" list, and expanding one should not

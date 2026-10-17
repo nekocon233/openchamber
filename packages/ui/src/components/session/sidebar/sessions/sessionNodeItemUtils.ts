@@ -34,6 +34,12 @@ export type SessionNodeRenderExtras<TNode = SessionNode> = SessionNodeChildRende
   childRenderExtrasFor?: (child: TNode) => SessionNodeChildRenderExtras;
 };
 
+/** Tree rows can reveal subsessions; flat rows cannot. Zone data decides which mixed-compact rows keep children. */
+export const sessionRowCanExpand = (
+  renderContext: SessionSidebarRenderContext,
+  isTimelineRow: boolean,
+): boolean => !isTimelineRow || renderContext === 'mixed-compact';
+
 /**
  * Walk `nodes` and add `node.session.id` to `result` for every node
  * whose subtree contains `targetId`. This is used to precompute, once
