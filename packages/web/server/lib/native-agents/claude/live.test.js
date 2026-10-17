@@ -247,6 +247,25 @@ describe('Claude live sessions', () => {
     expect(harness.live.busySessionIds(DIRECTORY)).toEqual([CHILD_ID]);
   });
 
+  it('applies result usage and the reported context window without spreading the aggregate', async () => {
+    const harness = createHarness();
+    await sendPrompt(harness.live);
+    await answerQuestion(harness);
+    await waitFor(() => payloads(harness.events, 'session.idle').length > 0);
+
+    const assistants = harness.live.liveRecords(SESSION_ID).filter((record) => record.info.role === 'assistant');
+    expect(assistants).toHaveLength(4);
+    expect(assistants.at(-1).info.tokens).toEqual({
+      total: 19095,
+      input: 8,
+      output: 225,
+      reasoning: 0,
+      cache: { read: 17989, write: 873 },
+    });
+    expect(assistants.map((record) => record.info.contextWindow)).toEqual([200000, 200000, 200000, 200000]);
+    expect(assistants.some((record) => record.info.tokens.input === 34 && record.info.tokens.output === 1769)).toBe(false);
+  });
+
   it('opts the query into the task-tracking tools a connected model would not get', async () => {
     const harness = createHarness();
     await sendPrompt(harness.live);

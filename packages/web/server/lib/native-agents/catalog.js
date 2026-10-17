@@ -48,6 +48,24 @@ export const claudeLaunchModel = (id) => {
   return model?.contextWindow === CLAUDE_1M_CONTEXT_WINDOW ? `${id}[1m]` : id;
 };
 
+const CLAUDE_API_MODEL_FAMILY = /^claude-(opus|sonnet|fable|haiku)(?:-|$)/;
+
+/**
+ * Window OpenChamber configured for a Claude catalog alias or API model id.
+ * Returns 0 for connection-specific and unknown models; their connection is
+ * the authority.
+ * @param {string | null | undefined} id
+ * @returns {number}
+ */
+export const claudeModelContextWindow = (id) => {
+  if (!id) return 0;
+  const alias = id.endsWith('[1m]') ? id.slice(0, -'[1m]'.length) : id;
+  const direct = CLAUDE_MODELS.find((entry) => entry.id === alias);
+  if (direct) return direct.contextWindow;
+  const family = CLAUDE_API_MODEL_FAMILY.exec(alias)?.[1];
+  return CLAUDE_MODELS.find((entry) => entry.id === family)?.contextWindow ?? 0;
+};
+
 const codexModelSchema = z.object({
   id: z.string(),
   model: z.string().optional(),

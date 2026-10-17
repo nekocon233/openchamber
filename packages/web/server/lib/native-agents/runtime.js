@@ -16,7 +16,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { codexVariantSettings } from './catalog.js';
-import { createClaudeConnections } from './claude/connections.js';
+import { compactLaunchOverride, createClaudeConnections } from './claude/connections.js';
 import { createCliproxyapiBinaryManager } from './cliproxyapi/binary-manager.js';
 import { createCliproxyapiService } from './cliproxyapi/service.js';
 import { createClaudeLiveSessions } from './claude/live.js';
@@ -328,7 +328,7 @@ export const createNativeAgentsRuntime = ({
     },
     now,
   });
-  const claude = createClaudeSessionStore({ loadSdk, registry, isSessionRunning: (sessionId) => claudeLive.isSessionRunning(sessionId) });
+  const claude = createClaudeSessionStore({ loadSdk, registry, connections: claudeConnections, isSessionRunning: (sessionId) => claudeLive.isSessionRunning(sessionId) });
   const codex = createCodexSessionStore({ appServer, registry, readGlobalInstructions });
   const codexTitles = createCodexAutoTitles({
     store: codex,
@@ -424,9 +424,10 @@ export const createNativeAgentsRuntime = ({
   // Hands a prompt to Claude Code. The query resumes at a pending revert's
   // entry, and the revert ends once the transcript shows the rewind. A hidden
   // prompt, such as /compact, shows no user message: its effect does.
-  const sendToClaude = async (sessionId, request, send, { visible }) => {
+  const sendToClaude = async (sessionId, request, send, { visible, launchOverride = null }) => {
     const { directory, messageID } = request;
-    const launch = await claudeConnections.resolve(request.model.modelID, request.variant ?? null);
+    let launch = await claudeConnections.resolve(request.model.modelID, request.variant ?? null);
+    if (launchOverride) launch = launchOverride(launch);
     if (launch.descriptor && request.variant !== undefined && !launch.descriptor.efforts.includes(request.variant)) {
       throw invalidRequestError('This model does not support the selected reasoning effort');
     }
@@ -692,7 +693,7 @@ export const createNativeAgentsRuntime = ({
       if (backend === NATIVE_BACKEND_CLAUDE) {
         const text = request.instructions === undefined ? '/compact' : `/compact ${request.instructions}`;
         const command = { ...request, messageID: claudeUserMessageId(randomUUID()), parts: [{ type: 'text', text }] };
-        await sendToClaude(sessionId, command, sendRecordOf(request), { visible: false });
+        await sendToClaude(sessionId, command, sendRecordOf(request), { visible: false, launchOverride: compactLaunchOverride });
         return;
       }
       if (request.instructions !== undefined) throw invalidRequestError('Codex compacts without instructions');

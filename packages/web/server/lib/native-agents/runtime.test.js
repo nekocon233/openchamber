@@ -735,6 +735,31 @@ describe('native session management', () => {
 });
 
 describe('native compaction', () => {
+  it('uses a capped connection launch for manual Claude compaction', async () => {
+    const runtime = createRuntime({ snapshotGit: async () => '' });
+    const modelUUID = '9c1e4f27-3a4b-4d5e-8f60-1b2c3d4e5f61';
+    const connection = await runtime.claudeConnections.save(null, {
+      kind: 'anthropic', name: 'DeepSeek', baseURL: 'https://api.deepseek.com/anthropic', auth: 'api-key', apiKey: 'test-only-key',
+      models: [{ id: modelUUID, name: 'DeepSeek', modelID: 'deepseek-flash', contextWindow: 1_000_000, outputLimit: 384_000, input: { image: false, pdf: false }, efforts: [] }],
+    });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    const model = { providerID: 'claude-native', modelID: `connection:${connection.id}:${modelUUID}` };
+    await runtime.prompt(session.id, { ...promptRequest('ncl_u_4b0e1c52-2f1f-4c3a-9d8e-0a7b6c5d4e40'), model });
+    await waitFor(() => runtime.turns.started === 1);
+    runtime.turns.finish.resolve();
+    await waitFor(async () => Object.keys(await runtime.statuses(DIRECTORY)).length === 0);
+
+    await runtime.compact(session.id, { directory: DIRECTORY, model, agent: 'build' });
+    await waitFor(() => runtime.turns.started === 2);
+
+    expect(runtime.queries).toHaveLength(2);
+    expect(runtime.queries[1].env).toMatchObject({
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '872000',
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '65536',
+    });
+    await runtime.shutdown();
+  });
+
   it('sends /compact to Claude Code without a user message of its own, and refuses instructions for Codex', async () => {
     const runtime = createRevertRuntime();
     const { id } = await runtime.createSession({ backend: 'claude', directory: runtime.project });

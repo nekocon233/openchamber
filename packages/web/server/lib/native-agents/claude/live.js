@@ -29,6 +29,7 @@ import { z } from 'zod';
 import { invalidRequestError, NativeAgentError } from '../errors.js';
 import { launchableClaudeExecutable } from '../executables.js';
 import { decodeNativeSessionId, encodeClaudeChildSessionId, encodeClaudeSessionId } from '../ids.js';
+import { claudeModelContextWindow } from '../catalog.js';
 import { claudeAbortedError, claudeTurnError, createClaudeProjection } from './projector.js';
 import { prepareClaudeConnection, redactClaudeConnectionError } from './connections.js';
 import { claudeChecklistSource, createClaudeChecklists, todosFromTodoWrite } from './tasks.js';
@@ -69,6 +70,8 @@ const resultFrameSchema = z.object({
   errors: z.array(z.string()).optional(),
   terminal_reason: z.string().nullish(),
   queued_turn_count: z.number().optional(),
+  usage: z.unknown().nullish(),
+  modelUsage: z.unknown().nullish(),
 }).passthrough();
 
 const sameBackgroundTasks = (left, right) => left.length === right.length
@@ -361,7 +364,12 @@ export const createClaudeLiveSessions = ({
     }
     if (frame.type === 'result') {
       const parsed = resultFrameSchema.safeParse(frame);
-      if (parsed.success) finishTurn(live, parsed.data);
+      if (parsed.success) {
+        if (parsed.data.subtype === 'success' && !parsed.data.is_error) {
+          publishRecords(live, live.projection.applyResult(parsed.data));
+        }
+        finishTurn(live, parsed.data);
+      }
     }
   };
 
@@ -540,6 +548,7 @@ export const createClaudeLiveSessions = ({
       now,
       sendRecordFor: (messageId) => live.sends.get(messageId) ?? null,
       childSessionIdForToolUse: (toolUseId) => encodeClaudeChildSessionId(sessionUuid, toolUseId),
+      contextWindowFor: (modelID) => live.config.launch?.descriptor?.contextWindow ?? claudeModelContextWindow(modelID),
     });
     const options = {
       cwd: directory,

@@ -300,6 +300,11 @@ Native responses may report `contextWindow`, their effective configured limit.
 That value takes precedence over the current catalog in the shared header,
 sidebar, work-status and mobile readers. Missing usage is unmeasured; a failed
 supplemental read does not erase the previous reading for the same message.
+Claude streams reached through a proxy can omit cache fields until the turn
+result. The native projector keeps that incomplete usage unmeasured, so the
+panel retains the previous committed turn while the turn runs; the successful
+result frame's per-request iterations then write the actual values. The frame's
+aggregate usage is never assigned to one assistant message.
 
 Two further rules on this readout:
 

@@ -8,9 +8,12 @@
 //
 // Live mode adds what only a running query knows. Stream events open the
 // assistant message and its text and reasoning parts before their blocks are
-// complete, and hand back text deltas. The message completes on
-// `message_stop`, not on its first block, because tools start running while
-// later blocks of the same message still stream in.
+// complete, and hand back text deltas. Usage stays private to the projection
+// until both cache fields have arrived; a proxied stream that omits them must
+// not turn the running message into a false zero-cache reading. The turn's
+// successful result frame then applies the CLI's per-request usage. The message
+// completes on `message_stop`, not on its first block, because tools start
+// running while later blocks of the same message still stream in.
 //
 // Mapping:
 // - a human user entry becomes a user message (ncl_u_<entry uuid>);
@@ -89,6 +92,16 @@ const usageSchema = z.object({
   output_tokens: z.number().catch(0),
   cache_read_input_tokens: z.number().nullish().transform((value) => value ?? 0),
   cache_creation_input_tokens: z.number().nullish().transform((value) => value ?? 0),
+}).passthrough();
+
+const resultMetadataSchema = z.object({
+  usage: z.object({
+    iterations: z.array(usageSchema).catch([]),
+  }).passthrough().nullish(),
+  modelUsage: z.record(z.string(), z.object({
+    contextWindow: z.number().positive().optional(),
+    canonicalModel: z.string().optional(),
+  }).passthrough()).nullish(),
 }).passthrough();
 
 const assistantMessageSchema = z.object({
@@ -202,6 +215,56 @@ const tokensFromUsage = (usage) => {
   return { total: input + output + read + write, input, output, reasoning: 0, cache: { read, write } };
 };
 
+const cacheUsagePresenceSchema = z.record(z.string(), z.unknown()).refine((usage) => (
+  'cache_read_input_tokens' in usage && 'cache_creation_input_tokens' in usage
+));
+/** Live proxy streams can omit cache fields until the result frame; missing is not zero. */
+const hasCompleteCacheUsage = (usage) => cacheUsagePresenceSchema.safeParse(usage).success;
+
+const usageCarrierSchema = z.object({ usage: z.unknown().optional() }).passthrough();
+const rawUsageOf = (message) => usageCarrierSchema.safeParse(message).data?.usage ?? null;
+
+const usageRecordSchema = z.record(z.string(), z.unknown());
+const hasUsageField = (usage, key) => usageRecordSchema.safeParse(usage).success && key in usage;
+
+/** Parsed live usage with only the fields the raw frame actually carried. */
+const liveUsageFromFrame = (rawUsage, usage) => (usage ? {
+  input_tokens: hasUsageField(rawUsage, 'input_tokens') ? usage.input_tokens : undefined,
+  output_tokens: hasUsageField(rawUsage, 'output_tokens') ? usage.output_tokens : undefined,
+  cache_read_input_tokens: hasUsageField(rawUsage, 'cache_read_input_tokens') ? usage.cache_read_input_tokens : undefined,
+  cache_creation_input_tokens: hasUsageField(rawUsage, 'cache_creation_input_tokens') ? usage.cache_creation_input_tokens : undefined,
+} : null);
+
+const createUsageAccumulator = () => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cacheComplete: false,
+});
+
+const mergeUsage = (target, usage, cacheComplete) => {
+  if (!usage) return;
+  if (usage.input_tokens !== undefined) target.input = usage.input_tokens;
+  if (usage.output_tokens !== undefined) target.output = usage.output_tokens;
+  if (usage.cache_read_input_tokens !== undefined) target.cacheRead = usage.cache_read_input_tokens;
+  if (usage.cache_creation_input_tokens !== undefined) target.cacheWrite = usage.cache_creation_input_tokens;
+  if (cacheComplete) target.cacheComplete = true;
+};
+
+const tokensFromAccumulator = (usage) => tokensFromUsage({
+  input_tokens: usage.input,
+  output_tokens: usage.output,
+  cache_read_input_tokens: usage.cacheRead,
+  cache_creation_input_tokens: usage.cacheWrite,
+});
+
+const publishAccumulatedUsage = (state) => {
+  if (!state.usage.cacheComplete) return false;
+  state.record.info.tokens = tokensFromAccumulator(state.usage);
+  return true;
+};
+
 const byteLengthOfBase64 = (data) => Math.floor((data.length * 3) / 4);
 
 /**
@@ -212,6 +275,8 @@ const byteLengthOfBase64 = (data) => Math.floor((data.length * 3) / 4);
  *   What OpenChamber sent for a user message it created.
  * @param {(toolUseId: string) => (string | null)} [options.childSessionIdForToolUse]
  *   Child session id for an Agent/Task tool call, when its subagent is known.
+ * @param {(modelID: string | null) => number} [options.contextWindowFor]
+ *   Effective configured window for the model that produced the message, 0 when unknown.
  * @param {boolean} [options.live] projecting a running query rather than history
  * @param {() => number} [options.now] clock for stream events, which carry no timestamp
  */
@@ -220,12 +285,16 @@ export const createClaudeProjection = ({
   cwd,
   sendRecordFor = () => null,
   childSessionIdForToolUse = () => null,
+  contextWindowFor = () => 0,
   live = false,
   now = Date.now,
 }) => {
   const records = [];
   const recordById = new Map();
   const toolParts = new Map();
+  // Main-conversation assistant states since the last result frame. Result
+  // iterations have no message ids, so this is the only safe mapping source.
+  const turnAssistants = [];
   let currentUser = null;
   let currentAssistant = null;
   let lastCreated = 0;
@@ -456,6 +525,9 @@ export const createClaudeProjection = ({
     const sent = sendRecordFor(parent.info.id);
     const previousModelID = currentAssistant?.record.info.parentID === parent.info.id
       ? currentAssistant.record.info.modelID : '';
+    const modelID = sent?.modelID?.startsWith('connection:')
+      ? sent.modelID
+      : normalizeClaudeModelId(message.model) || previousModelID || sent?.modelID || '';
     const record = recordById.get(messageId) ?? addRecord(buildAssistantMessage({
       id: messageId,
       sessionID: sessionId,
@@ -463,15 +535,21 @@ export const createClaudeProjection = ({
       created: createdAfterPrevious(time),
       completed: null,
       providerID: NATIVE_PROVIDER_CLAUDE,
-      modelID: sent?.modelID?.startsWith('connection:')
-        ? sent.modelID
-        : normalizeClaudeModelId(message.model) || previousModelID || sent?.modelID || '',
+      modelID,
       agent: sent?.agent ?? DEFAULT_AGENT,
       cwd,
       tokens: EMPTY_TOKENS,
+      contextWindow: contextWindowFor(sent?.modelID ?? (modelID || null)),
       variant: sent?.variant ?? null,
     }));
-    currentAssistant = { record, apiMessageId: message.id, nextBlockIndex: 0, finish: null };
+    currentAssistant = {
+      record,
+      apiMessageId: message.id,
+      nextBlockIndex: 0,
+      finish: null,
+      usage: createUsageAccumulator(),
+    };
+    turnAssistants.push(currentAssistant);
     return currentAssistant;
   };
 
@@ -538,9 +616,18 @@ export const createClaudeProjection = ({
     }
 
     const info = record.info;
-    info.tokens = tokensFromUsage(message.usage);
+    const rawUsage = rawUsageOf(entry.message);
+    if (live) {
+      mergeUsage(assistant.usage, liveUsageFromFrame(rawUsage, message.usage), hasCompleteCacheUsage(rawUsage));
+      publishAccumulatedUsage(assistant);
+    } else {
+      info.tokens = tokensFromUsage(message.usage);
+    }
     const modelID = normalizeClaudeModelId(message.model);
     if (modelID) info.modelID = modelID;
+    const sent = sendRecordFor(info.parentID ?? '');
+    const contextWindow = contextWindowFor(sent?.modelID ?? (modelID || info.modelID || null));
+    if (contextWindow > 0) info.contextWindow = contextWindow;
     if (!live) {
       info.time = { created: info.time.created, completed: Math.max(info.time.created, time) };
       const finish = message.stop_reason ? FINISH_BY_STOP_REASON.get(message.stop_reason) ?? 'other' : null;
@@ -556,10 +643,12 @@ export const createClaudeProjection = ({
   const applyStreamEvent = (event, time) => {
     const none = { changed: [], delta: null };
     if (event.type === 'message_start') {
+      const rawUsage = rawUsageOf(event.message);
       const message = assistantMessageSchema.safeParse(event.message);
       if (!message.success) return none;
-      const { record } = ensureAssistant(message.data, time);
-      if (message.data.usage) record.info.tokens = tokensFromUsage(message.data.usage);
+      const { record, usage } = ensureAssistant(message.data, time);
+      mergeUsage(usage, liveUsageFromFrame(rawUsage, message.data.usage), hasCompleteCacheUsage(rawUsage));
+      publishAccumulatedUsage(currentAssistant);
       return { changed: [record.info.id], delta: null };
     }
     if (!currentAssistant) return none;
@@ -595,14 +684,8 @@ export const createClaudeProjection = ({
       const stopReason = parsed.data.delta.stop_reason;
       if (stopReason) record.info.finish = FINISH_BY_STOP_REASON.get(stopReason) ?? 'other';
       if (parsed.data.usage) {
-        const usage = parsed.data.usage;
-        const tokens = record.info.tokens;
-        record.info.tokens = tokensFromUsage({
-          input_tokens: usage.input_tokens ?? tokens.input,
-          output_tokens: usage.output_tokens,
-          cache_read_input_tokens: usage.cache_read_input_tokens ?? tokens.cache.read,
-          cache_creation_input_tokens: usage.cache_creation_input_tokens ?? tokens.cache.write,
-        });
+        mergeUsage(currentAssistant.usage, parsed.data.usage, hasCompleteCacheUsage(parsed.data.usage));
+        publishAccumulatedUsage(currentAssistant);
       }
       return { changed: [messageID], delta: null };
     }
@@ -666,6 +749,46 @@ export const createClaudeProjection = ({
     return changed;
   };
 
+  const applyResultMetadata = (rawMetadata) => {
+    const parsed = resultMetadataSchema.safeParse(rawMetadata);
+    if (!parsed.success) return [];
+    const changed = new Set();
+    const iterations = parsed.data.usage?.iterations ?? [];
+    if (turnAssistants.length > 0 && iterations.length > 0) {
+      const positional = iterations.length === turnAssistants.length;
+      const states = positional ? turnAssistants : [turnAssistants[turnAssistants.length - 1]];
+      const usages = positional ? iterations : [iterations[iterations.length - 1]];
+      for (let index = 0; index < states.length; index += 1) {
+        const state = states[index];
+        state.usage = createUsageAccumulator();
+        mergeUsage(state.usage, usages[index], true);
+        publishAccumulatedUsage(state);
+        changed.add(state.record.info.id);
+      }
+    }
+
+    const modelUsage = Object.entries(parsed.data.modelUsage ?? {})
+      .filter((entry) => (entry[1].contextWindow ?? 0) > 0);
+    if (modelUsage.length === 1) {
+      const contextWindow = modelUsage[0][1].contextWindow;
+      for (const state of turnAssistants) {
+        if (state.record.info.contextWindow === contextWindow) continue;
+        state.record.info.contextWindow = contextWindow;
+        changed.add(state.record.info.id);
+      }
+    } else if (modelUsage.length > 1) {
+      for (const state of turnAssistants) {
+        const modelID = state.record.info.modelID;
+        const match = modelUsage.find(([id, usage]) => normalizeClaudeModelId(id) === modelID || usage.canonicalModel === modelID);
+        const contextWindow = match?.[1].contextWindow ?? 0;
+        if (contextWindow <= 0 || state.record.info.contextWindow === contextWindow) continue;
+        state.record.info.contextWindow = contextWindow;
+        changed.add(state.record.info.id);
+      }
+    }
+    return [...changed];
+  };
+
   return {
     /**
      * Applies one history entry or complete live frame.
@@ -717,6 +840,15 @@ export const createClaudeProjection = ({
       const parsed = streamFrameSchema.safeParse(rawFrame);
       if (!parsed.success || parsed.data.parent_tool_use_id) return { changed: [], delta: null };
       return applyStreamEvent(parsed.data.event, liveTime());
+    },
+
+    /**
+     * Applies the successful result frame's per-request usage and model metadata.
+     * Iterations without a one-to-one assistant count only correct the final reply.
+     * @returns {string[]} ids of messages whose record changed
+     */
+    applyResult(rawMetadata) {
+      return applyResultMetadata(rawMetadata);
     },
 
     /**
@@ -772,6 +904,7 @@ export const createClaudeProjection = ({
         changed.push(record.info.id);
       }
       currentAssistant = null;
+      turnAssistants.length = 0;
       return changed;
     },
 

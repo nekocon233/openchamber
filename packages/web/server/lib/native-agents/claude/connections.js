@@ -9,6 +9,11 @@ import { fetchKimiQuota, isKimiCodingEndpoint } from '../../quota/providers/kimi
 import { buildResult } from '../../quota/utils/index.js';
 
 const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+// Claude Code 2.1.301 caps the request increment of custom models at 128k,
+// even when the connection advertises a larger output budget. Revisit on CLI upgrades.
+const CLAUDE_CODE_EFFECTIVE_OUTPUT_LIMIT = 128_000;
+const MIN_AUTO_COMPACT_WINDOW = 32_000;
+const COMPACT_OUTPUT_LIMIT = 65_536;
 const connectionModelSchema = z.object({
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(120),
@@ -51,29 +56,48 @@ const catalogModels = (connection) => connection.models.map((model) => ({
   fast: false,
 }));
 
-const claudeConnectionEnvironment = (connection, model) => ({
-  ANTHROPIC_BASE_URL: connection.baseURL,
-  ANTHROPIC_API_KEY: connection.auth === 'api-key' ? connection.apiKey : '',
-  ANTHROPIC_AUTH_TOKEN: connection.auth === 'bearer' ? connection.apiKey : '',
-  CLAUDE_CODE_OAUTH_TOKEN: '',
-  CLAUDE_CODE_USE_BEDROCK: '0',
-  CLAUDE_CODE_USE_VERTEX: '0',
-  CLAUDE_CODE_USE_FOUNDRY: '0',
-  ANTHROPIC_MODEL: model.modelID,
-  ANTHROPIC_SMALL_FAST_MODEL: model.modelID,
-  CLAUDE_CODE_SUBAGENT_MODEL: model.modelID,
-  ANTHROPIC_DEFAULT_OPUS_MODEL: model.modelID,
-  ANTHROPIC_DEFAULT_SONNET_MODEL: model.modelID,
-  ANTHROPIC_DEFAULT_HAIKU_MODEL: model.modelID,
-  ANTHROPIC_DEFAULT_FABLE_MODEL: model.modelID,
-  CLAUDE_CODE_MAX_CONTEXT_TOKENS: model.contextWindow ? String(model.contextWindow) : '',
-  CLAUDE_CODE_MAX_OUTPUT_TOKENS: model.outputLimit ? String(model.outputLimit) : '',
-  CLAUDE_CODE_AUTO_COMPACT_WINDOW: model.contextWindow ? String(model.contextWindow) : '',
-  CLAUDE_CODE_EFFORT_LEVEL: '',
-  // Tool Search writes tool_reference blocks into history, which
-  // Anthropic-compatible third-party endpoints reject with HTTP 400.
-  ENABLE_TOOL_SEARCH: 'false',
-});
+const claudeConnectionEnvironment = (connection, model) => {
+  const outputReserve = Math.min(model.outputLimit, CLAUDE_CODE_EFFECTIVE_OUTPUT_LIMIT);
+  const autoCompactWindow = model.contextWindow
+    ? Math.max(model.contextWindow - outputReserve, MIN_AUTO_COMPACT_WINDOW)
+    : 0;
+  return {
+    ANTHROPIC_BASE_URL: connection.baseURL,
+    ANTHROPIC_API_KEY: connection.auth === 'api-key' ? connection.apiKey : '',
+    ANTHROPIC_AUTH_TOKEN: connection.auth === 'bearer' ? connection.apiKey : '',
+    CLAUDE_CODE_OAUTH_TOKEN: '',
+    CLAUDE_CODE_USE_BEDROCK: '0',
+    CLAUDE_CODE_USE_VERTEX: '0',
+    CLAUDE_CODE_USE_FOUNDRY: '0',
+    ANTHROPIC_MODEL: model.modelID,
+    ANTHROPIC_SMALL_FAST_MODEL: model.modelID,
+    CLAUDE_CODE_SUBAGENT_MODEL: model.modelID,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: model.modelID,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: model.modelID,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: model.modelID,
+    ANTHROPIC_DEFAULT_FABLE_MODEL: model.modelID,
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: model.contextWindow ? String(model.contextWindow) : '',
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: model.outputLimit ? String(model.outputLimit) : '',
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: autoCompactWindow > 0 ? String(autoCompactWindow) : '',
+    CLAUDE_CODE_EFFORT_LEVEL: '',
+    // Tool Search writes tool_reference blocks into history, which
+    // Anthropic-compatible third-party endpoints reject with HTTP 400.
+    ENABLE_TOOL_SEARCH: 'false',
+  };
+};
+
+/** Manual compaction gets a smaller summary budget so a session near the hard window can recover. */
+export const compactLaunchOverride = (launch) => {
+  if (!launch?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS) return launch;
+  const configured = Number(launch.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS);
+  const outputLimit = Math.min(Number.isFinite(configured) && configured > 0 ? configured : COMPACT_OUTPUT_LIMIT, COMPACT_OUTPUT_LIMIT);
+  if (launch.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS === String(outputLimit)) return launch;
+  return {
+    ...launch,
+    key: `${launch.key}:compact`,
+    env: { ...launch.env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputLimit) },
+  };
+};
 
 /** Credentials belong to this server, never to the UI preference mirror. */
 export const createClaudeConnections = ({ dataDir, fetchKimiUsage = fetchKimiQuota }) => {

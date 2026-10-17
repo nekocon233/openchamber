@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createClaudeConnections, prepareClaudeConnection } from './connections.js';
+import { compactLaunchOverride, createClaudeConnections, prepareClaudeConnection } from './connections.js';
 
 const directories = [];
 const fixture = async () => {
@@ -36,6 +36,37 @@ describe('Claude connections', () => {
     expect(launch.model).toBe('kimi-for-coding');
     expect(JSON.stringify(await store.list())).not.toContain('test-only-key');
     if (process.platform !== 'win32') expect((await fs.stat(path.join(dataDir, 'native-agents', 'claude-connections.json'))).mode & 0o777).toBe(0o600);
+  });
+
+  it('reserves the effective output budget before auto-compaction and caps manual compaction', async () => {
+    const { store } = await fixture();
+    await store.save(null, input());
+    const catalogModel = (await store.catalog()).find((entry) => entry.name === 'Kimi');
+    const launch = await store.resolve(catalogModel.id);
+    expect(launch.env).toMatchObject({
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '262144',
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '230144',
+    });
+    const compact = compactLaunchOverride(launch);
+    expect(compact).toBe(launch);
+
+    await store.save(null, {
+      ...input('DeepSeek'),
+      models: [{ ...input().models[0], id: randomUUID(), modelID: 'deepseek-flash', contextWindow: 1_000_000, outputLimit: 384_000 }],
+    });
+    const deepseek = (await store.catalog()).find((entry) => entry.modelID === 'deepseek-flash');
+    const large = await store.resolve(deepseek.id);
+    expect(large.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('872000');
+    expect(compactLaunchOverride(large).env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('65536');
+
+    await store.save(null, {
+      ...input('Misconfigured'),
+      models: [{ ...input().models[0], id: randomUUID(), modelID: 'tiny', contextWindow: 16_000, outputLimit: 128_000 }],
+    });
+    const tiny = (await store.catalog()).find((entry) => entry.modelID === 'tiny');
+    expect((await store.resolve(tiny.id)).env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('32000');
+    expect(compactLaunchOverride(await store.resolve('opus'))).toMatchObject({ key: 'default', env: null });
   });
 
   it('keeps model identity separate for different connections and serializes writes', async () => {

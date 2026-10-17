@@ -14,6 +14,7 @@
 import { z } from 'zod';
 
 import { invalidRequestError, messageNotFoundError, rewindBeforeCompactionError } from '../errors.js';
+import { claudeModelContextWindow } from '../catalog.js';
 import {
   claudeEntryUuidOfUserMessageId,
   claudeUserMessageId,
@@ -142,9 +143,11 @@ const titleOf = (info) => {
  * @param {object} options
  * @param {() => Promise<import('@anthropic-ai/claude-agent-sdk')>} options.loadSdk
  * @param {ReturnType<typeof import('../registry.js').createNativeRegistry>} options.registry
+ * @param {Pick<ReturnType<typeof import('./connections.js').createClaudeConnections>, 'catalog'>} [options.connections]
+ *   Claude connections whose catalog maps connection and upstream model ids to configured windows.
  * @param {number} [options.historyCacheBytes] transcript bytes whose projections are kept in memory
  */
-export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes = DEFAULT_HISTORY_CACHE_BYTES, isSessionRunning = () => false }) => {
+export const createClaudeSessionStore = ({ loadSdk, registry, connections = null, historyCacheBytes = DEFAULT_HISTORY_CACHE_BYTES, isSessionRunning = () => false }) => {
   // Projecting a large transcript costs about 100 ms (89 MB, 1,642 messages),
   // and the UI reads history a page at a time, so projections are reused
   // while the transcript is unchanged. Least recently used first out.
@@ -290,7 +293,24 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     return result && entry.tool_use_result === undefined ? { ...entry, tool_use_result: result } : entry;
   }));
 
-  const project = ({ sessionId, directory, entries, sendRecords, subagents, recoveredResults = [] }) => {
+  const readContextWindowFor = async () => {
+    if (!connections) return claudeModelContextWindow;
+    try {
+      const byModelId = new Map();
+      for (const model of await connections.catalog()) {
+        if ((model.contextWindow ?? 0) <= 0) continue;
+        byModelId.set(model.id, model.contextWindow);
+        if (model.modelID) byModelId.set(model.modelID, model.contextWindow);
+      }
+      return (modelID) => byModelId.get(modelID) ?? claudeModelContextWindow(modelID);
+    } catch {
+      // Context windows are additive metadata. A broken connection store must
+      // not make unrelated Claude history unreadable.
+      return claudeModelContextWindow;
+    }
+  };
+
+  const project = ({ sessionId, directory, entries, sendRecords, subagents, recoveredResults = [], contextWindowFor }) => {
     const decoded = decodeNativeSessionId(sessionId);
     const projection = createClaudeProjection({
       sessionId,
@@ -299,6 +319,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
       childSessionIdForToolUse: (toolUseId) => (subagents.has(toolUseId) && decoded
         ? encodeClaudeChildSessionId(decoded.sessionUuid, toolUseId)
         : null),
+      contextWindowFor: contextWindowFor ?? claudeModelContextWindow,
     });
     for (const entry of entries) projection.applyEntry(entry);
     for (const entry of recoveredResults) projection.applyToolResults(entry);
@@ -418,12 +439,12 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
   // The earlier segments projected on their own, with the entry uuids they
   // hold. They never change while their last compaction stays the last one.
   // A failure leaves them out; the chain after the compaction still shows.
-  const projectEarlier = async ({ sdk, sessionId, sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents }) => {
+  const projectEarlier = async ({ sdk, sessionId, sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents, contextWindowFor }) => {
     try {
       const entries = await earlierEntries(sdk, sessionUuid, directory, raw, boundaryUuid);
       return {
         boundaryUuid,
-        records: project({ sessionId, directory, entries: withStructuredResults(entries, editResults), sendRecords, subagents }),
+        records: project({ sessionId, directory, entries: withStructuredResults(entries, editResults), sendRecords, subagents, contextWindowFor }),
         uuids: new Set(entries.map(entryUuidOf)),
       };
     } catch (error) {
@@ -458,10 +479,11 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
         rememberHistory(cacheKey, cached);
         return { records: cached.value.records, childSessions: await withParentArchive(sessionId, cached.value.childSessions) };
       }
-      const [entries, sendRecords, subagents] = await Promise.all([
+      const [entries, sendRecords, subagents, contextWindowFor] = await Promise.all([
         sdk.getSessionMessages(decoded.sessionUuid, { dir: directory, includeSystemMessages: true }),
         registry.sendRecords(sessionId),
         subagentsByToolUse(sdk, decoded.sessionUuid, directory),
+        readContextWindowFor(),
       ]);
       // A compacted conversation also shows what came before its last
       // compaction. Those segments are reused while that compaction stays the
@@ -475,12 +497,12 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
         : { results: addStructuredResults(new Map(), raw), complete: true };
       const editResults = supplement.results;
       const earlier = reusable ?? (raw === null ? null : await projectEarlier({
-        sdk, sessionId, sessionUuid: decoded.sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents,
+        sdk, sessionId, sessionUuid: decoded.sessionUuid, directory, raw, boundaryUuid, editResults, sendRecords, subagents, contextWindowFor,
       }));
       const current = earlier === null ? entries : entries.filter((entry) => !earlier.uuids.has(entryUuidOf(entry)));
       const records = [
         ...(earlier?.records ?? []),
-        ...project({ sessionId, directory, entries: withStructuredResults(current, editResults), sendRecords, subagents }),
+        ...project({ sessionId, directory, entries: withStructuredResults(current, editResults), sendRecords, subagents, contextWindowFor }),
       ];
       const value = { records, childSessions: childSessionRecords(sessionId, records, subagents, decoded.sessionUuid, directory), earlier };
       if (supplement.complete) rememberHistory(cacheKey, { fingerprint, bytes: info.fileSize ?? 0, value });
@@ -496,8 +518,9 @@ export const createClaudeSessionStore = ({ loadSdk, registry, historyCacheBytes 
     if (!agentId) return null;
     const entries = await sdk.getSubagentMessages(decoded.sessionUuid, agentId, { dir: directory });
     const { edits, recoveredResults, complete } = await subagentToolResults(sdk, decoded.sessionUuid, agentId, directory, entries);
+    const contextWindowFor = await readContextWindowFor();
     const result = {
-      records: project({ sessionId, directory, entries: withStructuredResults(entries, edits), sendRecords: new Map(), subagents: new Map(), recoveredResults }),
+      records: project({ sessionId, directory, entries: withStructuredResults(entries, edits), sendRecords: new Map(), subagents: new Map(), recoveredResults, contextWindowFor }),
       childSessions: [],
     };
     if (!complete) result.metadataComplete = false;

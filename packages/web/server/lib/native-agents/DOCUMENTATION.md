@@ -137,6 +137,10 @@ Claude gotchas:
   replaces a real model already observed in the stream; a later real model
   replaces the fallback. History and live frames use the same rule and keep
   the notice's text and usage.
+- Assistant messages carry `contextWindow` when OpenChamber knows the
+  effective window for the turn: the connection/catalog value on launch and
+  history projection, or the CLI's `modelUsage` value on a live result. An
+  unknown window stays absent rather than falling back to another model.
 - `getSessionMessages` drops `toolUseResult`, which holds the
   `structuredPatch` the edit diffs are built from and a command's
   `bashEditDiff`. When a conversation used Edit, MultiEdit, Write or Bash,
@@ -259,10 +263,15 @@ kept open between turns.
 - The projector's live mode opens the assistant message and its text and
   reasoning parts from stream events and completes the message on
   `message_stop`, because tools start while later blocks still stream. Usage
-  starts from `message_start`. Each `message_delta` replaces only the usage
-  fields it carries, so output-only deltas preserve previously reported input
-  and cache tokens. Only `assistant` and `user` frames and the
-  `compact_boundary` system frame reach `applyEntry`. A Task call announces the subagent session with
+  accumulates privately from `message_start` and each `message_delta`; it is
+  written to the message only after both cache fields have arrived. Proxied
+  streams can omit those fields until the result frame, and incomplete usage is
+  unknown rather than zero. A successful result frame then applies its
+  per-request `usage.iterations`: a one-to-one count updates every assistant in
+  the turn, and any other count updates only the final assistant. The frame's
+  aggregate usage never describes one message. Its `modelUsage` also stamps the
+  effective `contextWindow` when the model is unambiguous. Only `assistant` and
+  `user` frames and the `compact_boundary` system frame reach `applyEntry`. A Task call announces the subagent session with
   `session.created`. `claude/subagents.js` routes child frames by
   `parent_tool_use_id` to an independent projection and publishes that child's
   messages, reasoning, tools and deltas through the same event hub. Full-frame
@@ -595,7 +604,10 @@ a turn of its own. A pending revert commits first, as for a prompt. Either
 way the conversation shows a `compaction` message with explicit lifecycle and
 Claude's summary. IDs and legacy compaction parts remain stable. A successful
 compaction clears the measured window until the next response; a running or
-failed compaction does not erase the prior reading:
+failed compaction does not erase the prior reading. Connection sessions use a
+separate capped launch for this command, so a manual compaction requested
+while a turn or background task is running fails with
+`NATIVE_CONNECTION_BUSY` instead of replacing that process.
 
 - Claude's live `compact_boundary` frame opens the marker, the synthetic user
   frame after it is the summary, and replayed local-command output is
@@ -907,7 +919,13 @@ CLI models remain available with their existing IDs and inherited settings.
 A connection resolves to a revisioned launch configuration. The main model,
 family aliases and subagents use its upstream model ID. Credentials, endpoint,
 context/output budgets and competing backend/auth variables are supplied per
-process. A private temporary settings file takes precedence over user/project
+process. The auto-compact window reserves the effective output increment
+(currently capped at 128k for Claude Code 2.1.301) inside the configured
+context window, so a turn is compacted before `messages + max_tokens` can cross
+the provider's hard limit. A manual `/compact` uses the same connection with a
+64k summary budget under a distinct launch key, which lets a session already
+near the hard window recover; the next ordinary prompt resumes the normal
+budget. A private temporary settings file takes precedence over user/project
 settings without putting keys in command-line arguments or modifying terminal
 configuration. It is removed when the query exits, including failed starts.
 A hard process kill can leave an owner-only temporary file for OS temp cleanup.

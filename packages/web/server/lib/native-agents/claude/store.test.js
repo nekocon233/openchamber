@@ -51,7 +51,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const createHarness = async ({ importFails = false, replayChain = poisonedChain } = {}) => {
+const createHarness = async ({ importFails = false, replayChain = poisonedChain, connections = null } = {}) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-claude-store-'));
   directories.push(dir);
   const registry = createNativeRegistry({ filePath: path.join(dir, 'registry.json') });
@@ -92,7 +92,7 @@ const createHarness = async ({ importFails = false, replayChain = poisonedChain 
       await target.append({ projectKey: 'work-project', sessionId }, rawToolResultEntries());
     },
   };
-  const store = createClaudeSessionStore({ loadSdk: async () => sdk, registry });
+  const store = createClaudeSessionStore({ loadSdk: async () => sdk, registry, connections });
   return { store, infos, calls, registry, allowImports: () => { importFails = false; } };
 };
 
@@ -136,6 +136,32 @@ describe('Claude session store', () => {
     const child = await store.loadHistory(childId, DIRECTORY);
     expect(child.records[0].info).toMatchObject({ role: 'user', sessionID: childId });
     expect(child.records[0].parts[0].text).toBe('Run wc -l notes.txt');
+  });
+
+  it('stamps history messages with the connection context window for their send record', async () => {
+    const connectionModel = { id: 'connection:conn-1:model-1', modelID: 'gpt-6.1-sol', contextWindow: 872000 };
+    const { store, registry } = await createHarness({ connections: { catalog: async () => [connectionModel] } });
+    await registry.recordSend(`ncl_${OPENCHAMBER_UUID}`, {
+      messageId: 'ncl_u_a22f0a7a-a88c-4093-a5e3-6653ff44f6d3',
+      providerID: 'claude-native',
+      modelID: connectionModel.id,
+      agent: 'build',
+      sentAt: 1,
+    });
+    const history = await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    expect(history.records.filter((record) => record.info.role === 'assistant').map((record) => record.info.contextWindow)).toEqual([872000, 872000, 872000, 872000]);
+  });
+
+  it('resolves default Claude API model ids in history without a send record', async () => {
+    const { store } = await createHarness();
+    const history = await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    expect(history.records.filter((record) => record.info.role === 'assistant').map((record) => record.info.contextWindow)).toEqual([200000, 200000, 200000, 200000]);
+  });
+
+  it('keeps history readable with default model windows when the connection catalog fails', async () => {
+    const { store } = await createHarness({ connections: { catalog: async () => { throw new Error('connections unavailable'); } } });
+    const history = await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    expect(history.records.filter((record) => record.info.role === 'assistant').map((record) => record.info.contextWindow)).toEqual([200000, 200000, 200000, 200000]);
   });
 
   it('gives subagent sessions the archive flag of their parent, which archiving changes without the transcript', async () => {

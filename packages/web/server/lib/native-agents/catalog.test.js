@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { claudeLaunchModel, claudeModels, codexModels, codexVariantSettings } from './catalog.js';
+import { claudeLaunchModel, claudeModelContextWindow, claudeModels, codexModels, codexVariantSettings } from './catalog.js';
 
 describe('native model catalogs', () => {
   it('offers every Claude effort level on each alias', () => {
@@ -17,6 +17,14 @@ describe('native model catalogs', () => {
       ['haiku', 200_000, 'haiku'],
     ]);
     expect(claudeLaunchModel('claude-opus-5-5')).toBe('claude-opus-5-5');
+  });
+
+  it('resolves Claude aliases and API model ids to their configured window', () => {
+    expect(claudeModelContextWindow('sonnet[1m]')).toBe(1_000_000);
+    expect(claudeModelContextWindow('claude-sonnet-4-5-20250929')).toBe(1_000_000);
+    expect(claudeModelContextWindow('claude-haiku-4-5')).toBe(200_000);
+    expect(claudeModelContextWindow('gpt-6.1-sol')).toBe(0);
+    expect(claudeModelContextWindow(null)).toBe(0);
   });
 
   it('keeps the visible Codex models with the efforts Codex reports for each', () => {

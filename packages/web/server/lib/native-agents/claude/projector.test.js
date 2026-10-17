@@ -113,6 +113,16 @@ describe('Claude history projection', () => {
     expect(withRecords[0].info.agent).toBe('plan');
     expect(withRecords[1].info).toMatchObject({ agent: 'plan', variant: 'low' });
   });
+
+  it('stamps the effective context window resolved for the answering model', () => {
+    const withRecords = projectHistory(fixture('haiku-tools.session-messages.json'), {
+      sendRecordFor: (messageId) => (messageId === USER_ID ? { modelID: 'connection:provider:model', agent: 'build' } : null),
+      contextWindowFor: (modelID) => (modelID === 'connection:provider:model' ? 872000 : 0),
+    });
+    expect(withRecords[1].info.contextWindow).toBe(872000);
+    const withoutResolver = projectHistory(fixture('haiku-tools.session-messages.json'));
+    expect(withoutResolver[1].info).not.toHaveProperty('contextWindow');
+  });
 });
 
 describe('Claude placeholder model projection', () => {
@@ -221,6 +231,116 @@ describe('Claude live usage projection', () => {
       type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 },
     } });
     expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens).toEqual({ total: 12, input: 6, output: 3, reasoning: 0, cache: { read: 2, write: 1 } });
+  });
+
+  it('preserves accumulated cache usage when a complete live frame omits it', () => {
+    const projection = liveProjection();
+    start(projection);
+    projection.applyEntry({
+      type: 'assistant', uuid: 'live-usage-frame', message: {
+        id: 'msg_live_usage', model: 'gpt-6.1-sol', content: [{ type: 'text', text: 'Done.' }],
+        usage: { input_tokens: 4, output_tokens: 3 },
+      },
+    });
+    expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens).toEqual({ total: 10, input: 4, output: 3, reasoning: 0, cache: { read: 2, write: 1 } });
+  });
+
+  it('keeps usage unmeasured while a proxy stream omits cache fields', () => {
+    const projection = liveProjection();
+    projection.startUserPrompt(USER_ID, { kind: 'text', text: 'Check the parser.' });
+    projection.applyStreamEvent({ type: 'stream_event', event: {
+      type: 'message_start',
+      message: { id: 'msg_proxy', model: 'gpt-6.1-sol', content: [], usage: { input_tokens: 6, output_tokens: 0 } },
+    } });
+    const assistant = () => projection.records().find((record) => record.info.role === 'assistant');
+    expect(assistant().info.tokens).toEqual({ total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
+    projection.applyStreamEvent({ type: 'stream_event', event: {
+      type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 },
+    } });
+    expect(assistant().info.tokens.total).toBe(0);
+    expect(projection.applyResult({
+      usage: { iterations: [{ input_tokens: 6, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 }] },
+      modelUsage: { 'gpt-6.1-sol': { contextWindow: 872000, maxOutputTokens: 128000 } },
+    })).toEqual([assistant().info.id]);
+    expect(assistant().info.tokens).toEqual({ total: 12, input: 6, output: 3, reasoning: 0, cache: { read: 2, write: 1 } });
+    expect(assistant().info.contextWindow).toBe(872000);
+  });
+
+  it('merges cache fields that arrive in a later delta', () => {
+    const projection = liveProjection();
+    projection.applyStreamEvent({ type: 'stream_event', event: {
+      type: 'message_start',
+      message: { id: 'msg_delayed_cache', model: 'gpt-6.1-sol', content: [], usage: { input_tokens: 6, output_tokens: 0 } },
+    } });
+    projection.applyStreamEvent({ type: 'stream_event', event: {
+      type: 'message_delta', delta: { stop_reason: 'end_turn' },
+      usage: { output_tokens: 3, cache_read_input_tokens: 4, cache_creation_input_tokens: 2 },
+    } });
+    expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens).toEqual({ total: 15, input: 6, output: 3, reasoning: 0, cache: { read: 4, write: 2 } });
+  });
+
+  it('does not write usage from a complete live frame that omits cache fields', () => {
+    const projection = liveProjection();
+    projection.applyEntry({
+      type: 'assistant', uuid: 'live-assistant', message: {
+        id: 'msg_live_frame', model: 'gpt-6.1-sol', content: [{ type: 'text', text: 'Working.' }],
+        usage: { input_tokens: 6, output_tokens: 3 },
+      },
+    });
+    expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens.total).toBe(0);
+  });
+
+  it('applies a single result iteration only to the final assistant message', () => {
+    const projection = liveProjection();
+    for (const id of ['msg_first', 'msg_final']) {
+      projection.applyStreamEvent({ type: 'stream_event', event: {
+        type: 'message_start',
+        message: { id, model: 'gpt-6.1-sol', content: [], usage: { input_tokens: 6, output_tokens: 0 } },
+      } });
+    }
+    const assistants = projection.records().filter((record) => record.info.role === 'assistant');
+    projection.applyResult({
+      usage: { iterations: [{ input_tokens: 8, output_tokens: 225, cache_read_input_tokens: 17989, cache_creation_input_tokens: 873 }] },
+      modelUsage: { 'gpt-6.1-sol': { contextWindow: 872000 } },
+    });
+    expect(assistants[0].info.tokens.total).toBe(0);
+    expect(assistants[1].info.tokens).toEqual({ total: 19095, input: 8, output: 225, reasoning: 0, cache: { read: 17989, write: 873 } });
+    expect(assistants.map((record) => record.info.contextWindow)).toEqual([872000, 872000]);
+  });
+
+  it('maps result iterations positionally only when their count matches the turn', () => {
+    const projection = liveProjection();
+    for (const id of ['msg_one', 'msg_two']) {
+      projection.applyStreamEvent({ type: 'stream_event', event: {
+        type: 'message_start',
+        message: { id, model: 'gpt-6.1-sol', content: [], usage: { input_tokens: 1, output_tokens: 0 } },
+      } });
+    }
+    const assistants = projection.records().filter((record) => record.info.role === 'assistant');
+    projection.applyResult({ usage: { iterations: [
+      { input_tokens: 2, output_tokens: 3, cache_read_input_tokens: 4, cache_creation_input_tokens: 5 },
+      { input_tokens: 6, output_tokens: 7, cache_read_input_tokens: 8, cache_creation_input_tokens: 9 },
+    ] } });
+    expect(assistants.map((record) => record.info.tokens)).toEqual([
+      { total: 14, input: 2, output: 3, reasoning: 0, cache: { read: 4, write: 5 } },
+      { total: 30, input: 6, output: 7, reasoning: 0, cache: { read: 8, write: 9 } },
+    ]);
+  });
+
+  it('matches result modelUsage entries to each assistant model before stamping windows', () => {
+    const projection = liveProjection();
+    for (const [id, model] of [['msg_haiku', 'claude-haiku-4-5-20251001'], ['msg_sonnet', 'claude-sonnet-4-5-20250929']]) {
+      projection.applyStreamEvent({ type: 'stream_event', event: {
+        type: 'message_start',
+        message: { id, model, content: [], usage: { input_tokens: 1, output_tokens: 0 } },
+      } });
+    }
+    const assistants = projection.records().filter((record) => record.info.role === 'assistant');
+    projection.applyResult({ modelUsage: {
+      'claude-haiku-4-5-20251001': { contextWindow: 200000, canonicalModel: 'claude-haiku-4-5' },
+      'claude-sonnet-4-5-20250929': { contextWindow: 1000000, canonicalModel: 'claude-sonnet-4-5' },
+    } });
+    expect(assistants.map((record) => record.info.contextWindow)).toEqual([200000, 1000000]);
   });
 });
 
