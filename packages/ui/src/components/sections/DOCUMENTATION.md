@@ -140,6 +140,28 @@ the list again on every visit and after every credential write, a read
 started earlier never replaces a later one, and a snapshot from another
 runtime is ignored.
 
+### DeepSeek Harness
+
+Selecting `deepseek-native` opens `DeepseekHarnessPage.tsx`. Authenticated
+remote clients can edit the connected server's DSH API key, endpoint and
+model IDs through `RuntimeAPIs.nativeAgents`. DSH owns persistence. Keys are
+write-only; blank retains the current key. Read-only credential sources stay
+disabled. A settings conflict requires reload; a credential failure retains
+the typed key and the committed settings revision for retry. Saving refreshes
+the model picker. The shared Settings save indicator reports persistence.
+`providers.deepseek-harness` prepares the page before highlighting its status
+section. The page and search entry are absent in VS Code; Web, desktop, hosted
+mobile and Capacitor configure their connected server. Enterprise mode disables
+the editor, and the server enforces the same refusal.
+The untitled status section contains the setup and reload buttons without a
+duplicate setup label. The endpoint placeholder explains that blank uses DSH’s
+default; saving blank removes the native override. DeepSeek uses a bundled local
+provider logo. The one-click setup action installs a missing CLI and opens the
+independent configuration form. It never reuses Claude Code credentials. Progress polling
+runs only while setup is active, stops on unmount or runtime changes, and
+retains an unconfirmed result on network failure. Completed setup reloads the
+configuration and model picker; an existing DSH credential is preserved.
+
 ### Claude Code connections
 
 Selecting `claude-native` opens `providers/ClaudeConnectionsPage.tsx` instead

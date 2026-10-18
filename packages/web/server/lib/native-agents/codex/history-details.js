@@ -1,5 +1,6 @@
-// Supplemental metadata the history RPC omits. Conversation records still come
-// from thread/turns/list; only metadata for its retained turns is projected.
+// Supplemental metadata the history RPC omits: usage, item lifecycle times and
+// user-input calls. Conversation records still come from thread/turns/list;
+// only metadata for its retained turns is projected.
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
@@ -7,7 +8,7 @@ import { z } from 'zod';
 import { codexLegacyUsage, codexPersistedUsage, createCodexUsage, observeCodexUsage } from './usage.js';
 import { codexQuestionItem, codexSkillId, codexSkillTextHash } from './items.js';
 
-const entry = z.object({ type: z.string(), payload: z.unknown() });
+const entry = z.object({ type: z.string(), payload: z.unknown(), timestamp: z.unknown().optional() });
 const session = z.object({ id: z.string() });
 const context = z.object({
   turn_id: z.string(), model: z.string(), effort: z.string().nullish(),
@@ -15,7 +16,12 @@ const context = z.object({
 });
 const event = z.object({ type: z.string() }).passthrough();
 const start = z.object({ turn_id: z.string(), model_context_window: z.number().positive().nullish() });
-const itemEvent = z.object({ turn_id: z.string(), item: z.object({ type: z.string(), id: z.string() }).passthrough() });
+const itemEvent = z.object({
+  turn_id: z.string(),
+  item: z.object({ type: z.string(), id: z.string() }).passthrough(),
+  started_at_ms: z.unknown().optional(),
+  completed_at_ms: z.unknown().optional(),
+});
 const functionCall = z.object({ type: z.literal('function_call'), name: z.literal('request_user_input'), call_id: z.string(), arguments: z.string() });
 const functionOutput = z.object({ type: z.literal('function_call_output'), call_id: z.string(), output: z.string() });
 const answerOutput = z.object({ answers: z.record(z.string(), z.object({ answers: z.array(z.string()) })) });
@@ -24,6 +30,19 @@ const verifiedAnswer = z.object({
   questions: z.array(z.object({ question: z.string(), answer: z.string() })),
 });
 const userContent = z.object({ type: z.literal('message'), role: z.literal('user'), content: z.array(z.object({ text: z.string() }).passthrough()) });
+const skillContent = z.object({ type: z.literal('skill'), name: z.string() });
+
+/** A positive epoch-millisecond value, or null when the field is unusable. */
+const finiteMs = (value) => (
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+);
+
+/** The rollout line's own time. Item timestamps are epoch milliseconds to match. */
+const timestampMs = (value) => {
+  if (typeof value !== 'string') return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+};
 
 export const createCodexTurnDetails = () => ({
   usage: createCodexUsage(), model: null, effort: null, agent: null,
@@ -31,6 +50,7 @@ export const createCodexTurnDetails = () => ({
   extraItems: [], lastItemId: null,
   lastUserId: null,
   completedCompactions: new Set(),
+  itemTimes: new Map(),
 });
 
 /** Read one app-server supplied rollout, never search another thread's files. */
@@ -57,6 +77,7 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
       const parsed = entry.safeParse(json);
       if (!parsed.success) continue;
       const { type, payload } = parsed.data;
+      const lineMs = timestampMs(parsed.data.timestamp);
       if (type === 'session_meta') {
         const meta = session.safeParse(payload);
         if (meta.success && meta.data.id !== threadId) throw new Error('Codex history thread identity mismatch');
@@ -89,10 +110,31 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
           if (!result.success) continue;
           const detail = detailFor(result.data.turn_id);
           detail.lastItemId = result.data.item.id;
+          const itemStart = finiteMs(result.data.started_at_ms) ?? finiteMs(result.data.completed_at_ms);
+          const itemEnd = finiteMs(result.data.completed_at_ms);
+          if (itemStart !== null || itemEnd !== null) {
+            const previous = detail.itemTimes.get(result.data.item.id);
+            // A completed item is immutable; duplicate records must not erase it.
+            if (!previous || previous.end === null) {
+              detail.itemTimes.set(result.data.item.id, {
+                start: previous?.start ?? itemStart ?? itemEnd,
+                end: previous?.end ?? itemEnd ?? null,
+              });
+            }
+          }
           if (result.data.item.type === 'UserMessage') {
             detail.lastUserId = result.data.item.id;
             if (detail.hasAssistant) detail.segment = result.data.item.id;
             detail.hasAssistant = false;
+            const content = z.array(z.unknown()).safeParse(result.data.item.content);
+            if (itemStart !== null && content.success) {
+              for (const raw of content.data) {
+                const skill = skillContent.safeParse(raw);
+                if (!skill.success) continue;
+                const id = codexSkillId(result.data.turn_id, result.data.item.id, skill.data.name);
+                if (!detail.itemTimes.has(id)) detail.itemTimes.set(id, { start: itemStart, end: itemEnd ?? itemStart });
+              }
+            }
           } else if (result.data.item.type === 'ContextCompaction') {
             detail.completedCompactions.add(result.data.item.id);
             detail.segment = result.data.item.id;
@@ -119,9 +161,13 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
           try { args = JSON.parse(call.data.arguments); } catch { continue; }
           const question = codexQuestionItem.safeParse({ ...args, type: 'openchamberQuestion', id: call.data.call_id });
           if (question.success) {
+            const id = question.data.id;
             const value = { item: question.data, after: detail.lastItemId };
             detail.extraItems.push(value);
-            questionById.set(question.data.id, value.item);
+            questionById.set(id, value.item);
+            if (lineMs !== null && !detail.itemTimes.has(id)) {
+              detail.itemTimes.set(id, { start: lineMs, end: null });
+            }
           }
           continue;
         }
@@ -129,6 +175,8 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
         if (result.success) {
           const item = questionById.get(result.data.call_id);
           if (!item) continue;
+          const time = detail.itemTimes.get(result.data.call_id);
+          if (time && time.end === null && lineMs !== null) time.end = lineMs;
           let json;
           try { json = JSON.parse(result.data.output); } catch { continue; }
           const answers = answerOutput.safeParse(json);
@@ -143,9 +191,13 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
             const name = /^\s*<skill>\s*<name>([^<]+)<\/name>/.exec(content.text)?.[1];
             if (!name) continue;
             const path = /<path>([^<]+)<\/path>/.exec(content.text)?.[1];
+            const id = codexSkillId(activeTurn, detail.lastUserId ?? activeTurn, name);
             detail.extraItems.push({ after: detail.lastItemId, sourceTextHash: codexSkillTextHash(content.text), item: {
-              type: 'openchamberSkill', id: codexSkillId(activeTurn, detail.lastUserId ?? activeTurn, name), name, path, source: 'attached',
+              type: 'openchamberSkill', id, name, path, source: 'attached',
             } });
+            if (lineMs !== null && !detail.itemTimes.has(id)) {
+              detail.itemTimes.set(id, { start: lineMs, end: lineMs });
+            }
           }
         }
       } else if (type === 'retained_context') {
@@ -153,6 +205,8 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
         if (!answer.success) continue;
         const item = questionById.get(answer.data.call_id);
         if (!item) continue;
+        const time = detailFor(answer.data.turn_id).itemTimes.get(answer.data.call_id);
+        if (time && time.end === null && lineMs !== null) time.end = lineMs;
         item.answers = item.questions.map((question) => {
           const value = answer.data.questions.find((entry) => entry.question === question.question)?.answer;
           return value === undefined ? [] : [value];
@@ -165,4 +219,15 @@ export const readCodexHistoryDetails = async (filePath, threadId) => {
     input.destroy();
   }
   return turns;
+};
+
+/** Merge every retained turn's item lifecycle into the projector's lookup. */
+export const codexItemTimes = (details) => {
+  const merged = new Map();
+  for (const detail of details?.values() ?? []) {
+    for (const [id, time] of detail.itemTimes) {
+      if (!merged.has(id)) merged.set(id, time);
+    }
+  }
+  return merged;
 };

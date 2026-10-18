@@ -1,5 +1,6 @@
 /* oxlint-disable react/only-export-components -- Provider and hooks are one contract. */
 import React from 'react';
+import type { Session } from '@/lib/opencode/model';
 
 export type SessionRowOrderEntry = {
   id: string;
@@ -12,7 +13,7 @@ export type SessionRowOrderEntry = {
 type SessionRowOrderRegistry = {
   getEntries: () => readonly SessionRowOrderEntry[];
   getDescendantIds: () => readonly string[];
-  getSessionsById: () => ReadonlyMap<string, { time?: { archived?: number | null } }>;
+  getSessionsById: () => ReadonlyMap<string, { time?: { archived?: number | null }; metadata?: Session['metadata'] }>;
 };
 
 const SessionRowOrderContext = React.createContext<SessionRowOrderRegistry | null>(null);
@@ -20,7 +21,7 @@ const SessionRowOrderContext = React.createContext<SessionRowOrderRegistry | nul
 export const SessionRowOrderProvider: React.FC<{
   entries: readonly SessionRowOrderEntry[];
   descendantIds: readonly string[];
-  sessionsById: ReadonlyMap<string, { time?: { archived?: number | null } }>;
+  sessionsById: ReadonlyMap<string, { time?: { archived?: number | null }; metadata?: Session['metadata'] }>;
   children: React.ReactNode;
 }> = ({ entries, descendantIds, sessionsById, children }) => {
   const entriesRef = React.useRef(entries);
@@ -69,7 +70,7 @@ export const deriveSessionRowBulkSelectAll = (
 
 export const deriveSessionRowSelectionArchived = (
   selectedIds: ReadonlySet<string>,
-  sessionsById: ReadonlyMap<string, { time?: { archived?: number | null } }>,
+  sessionsById: ReadonlyMap<string, { time?: { archived?: number | null }; metadata?: Session['metadata'] }>,
 ): boolean => {
   if (selectedIds.size === 0) return false;
   for (const id of selectedIds) {

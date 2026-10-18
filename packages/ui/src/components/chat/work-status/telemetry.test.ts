@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AssistantMessage, Part, SyntheticMessage, TextPart, TokenUsageInfo, UserMessage } from '@/lib/opencode/model';
-import { formatTelemetryDuration, formatTelemetryTokens, formatThroughputRate, getCompletedTurnAverages, getLatestCompletedTurnStats, mergeTimeIntervals, sumIntervalsDuration } from './telemetry';
+import { formatTelemetryDuration, formatTelemetryTokens, formatThroughputRate, getCompletedTurnAverages, getCompletedTurnTelemetry, getLatestCompletedTurnStats, mergeTimeIntervals, sumIntervalsDuration } from './telemetry';
 
 const user: UserMessage = { id: 'u1', sessionID: 'session-1', role: 'user', time: { created: 0 } };
 const baseTokens = (): TokenUsageInfo => ({ input: 100, output: 100, reasoning: 0, cache: { read: 0, write: 0 } });
@@ -52,8 +52,26 @@ describe('turn telemetry', () => {
     }), parts: [text(21500)] });
     const stats = getLatestCompletedTurnStats(records);
     expect(stats).toEqual({ stepsCount: 2, lastAssistantMessageId: 'a2', elapsedDurationMs: 24000, totalToolDurationMs: 3000,
-      totalLlmDurationMs: 10000, outputTokens: 300, reasoningTokens: 300, totalGeneratedTokens: 600,
-      inputTokens: 2500, cost: 0.015, tokensPerSecond: 60, responseTokensPerSecond: null, avgTtftMs: 1000, cacheHitPercent: 44 });
+      totalLlmDurationMs: 21000, outputTokens: 300, reasoningTokens: 300, totalGeneratedTokens: 600,
+      inputTokens: 2500, cost: 0.015, tokensPerSecond: 600 / 21, responseTokensPerSecond: null, avgTtftMs: 1000, cacheHitPercent: 44 });
+  });
+
+  test('measures from the prompt when the first content block lands late', () => {
+    const stats = getLatestCompletedTurnStats(turn(assistant({
+      time: { created: 4000, completed: 5000 },
+      tokens: { ...baseTokens(), output: 100, reasoning: 0 },
+    })));
+    // 100 tokens over the 5s prompt-to-completion window, not the 1s step window.
+    expect(stats?.totalLlmDurationMs).toBe(5000);
+    expect(stats?.tokensPerSecond).toBe(20);
+  });
+
+  test('includes the gap between steps in the turn window', () => {
+    const records = turn(assistant({ time: { created: 1000, completed: 2000 } }));
+    records.push({ info: assistant({ id: 'a2', time: { created: 6000, completed: 7000 } }), parts: [] });
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats?.totalLlmDurationMs).toBe(7000);
+    expect(stats?.tokensPerSecond).toBe(200 / 7);
   });
 
   test('weights cache and speed across completed turns instead of averaging per-turn rates', () => {
@@ -62,7 +80,7 @@ describe('turn telemetry', () => {
       tokens: { input: 100, output: 20, reasoning: 10, cache: { read: 40, write: 0 } },
     }));
     const second = [
-      { info: { ...user, id: 'u2', time: { created: 6000 } }, parts: [] },
+      { info: { ...user, id: 'u2', time: { created: 5000 } }, parts: [] },
       { info: assistant({
         id: 'a2',
         time: { created: 9000, completed: 10000 },
@@ -70,12 +88,12 @@ describe('turn telemetry', () => {
       }), parts: [] },
     ];
 
-    // Latest turn alone would be 10 tok/s and 10%; the weighted result is
-    // 40 generated tokens over 5s and 140 cached reads over 1140 inputs.
+    // Latest turn alone would be 2 tok/s and 10%; the weighted result is
+    // 40 generated tokens over 10s and 140 cached reads over 1140 inputs.
     expect(getCompletedTurnAverages([...first, ...second])).toEqual({
       turnsCount: 2,
       cacheHitPercent: 12,
-      tokensPerSecond: 8,
+      tokensPerSecond: 4,
     });
   });
 
@@ -90,7 +108,7 @@ describe('turn telemetry', () => {
     expect(getCompletedTurnAverages(records)).toEqual({
       turnsCount: 1,
       cacheHitPercent: 0,
-      tokensPerSecond: 25,
+      tokensPerSecond: 20,
     });
     expect(getCompletedTurnAverages([{ info: user, parts: [] }])).toBeNull();
     expect(getCompletedTurnAverages([{ info: user, parts: [] }, { info: assistant({ time: { created: 1000 } }), parts: [] }])).toBeNull();
@@ -107,7 +125,7 @@ describe('turn telemetry', () => {
     ]);
     expect(noCache?.turnsCount).toBe(1);
     expect(noCache?.cacheHitPercent).toBeNull();
-    expect(noCache?.tokensPerSecond).toBe(25);
+    expect(noCache?.tokensPerSecond).toBe(40);
 
     const noTiming = getCompletedTurnAverages([
       ...turn(),
@@ -162,14 +180,57 @@ describe('turn telemetry', () => {
     ])).toBeNull();
   });
 
+  test('running telemetry excludes the whole newest turn, including completed tool steps', () => {
+    const records = [
+      ...turn(),
+      { info: { ...user, id: 'u2', time: { created: 6000 } }, parts: [] },
+      { info: assistant({ id: 'tool-step', time: { created: 7000, completed: 10000 },
+        tokens: { ...baseTokens(), input: 900, output: 500, cache: { read: 100, write: 0 } },
+      }), parts: [tool(7500, 9000)] },
+    ];
+    expect(getCompletedTurnTelemetry(records, true)).toEqual({
+      stats: getLatestCompletedTurnStats(turn()),
+      averages: { turnsCount: 1, cacheHitPercent: 0, tokensPerSecond: 20 },
+    });
+  });
+
+  test('pending completion keeps the previous telemetry until the latest turn is ready', () => {
+    const nextUser = { ...user, id: 'u2', time: { created: 6000 } };
+    const pending = [...turn(), { info: nextUser, parts: [] },
+      { info: assistant({ id: 'a2', time: { created: 7000 } }), parts: [] }];
+    const previous = getCompletedTurnTelemetry(turn(), false);
+    expect(getCompletedTurnTelemetry(pending, true)).toEqual(previous);
+    expect(getCompletedTurnTelemetry(pending, false)).toEqual(previous);
+
+    const finished = [...turn(), { info: nextUser, parts: [] },
+      { info: assistant({ id: 'a2', time: { created: 7000, completed: 10000 } }), parts: [] }];
+    expect(getCompletedTurnTelemetry(finished, true)).toEqual(previous);
+    expect(getCompletedTurnTelemetry(finished, false)).toEqual({
+      stats: getLatestCompletedTurnStats(finished),
+      averages: getCompletedTurnAverages(finished),
+    });
+  });
+
+  test('running telemetry requires a complete previous turn with its prompt', () => {
+    expect(getCompletedTurnTelemetry([], true)).toBeNull();
+    expect(getCompletedTurnTelemetry(turn(), true)).toBeNull();
+    expect(getCompletedTurnTelemetry([{ info: user, parts: [] }], true)).toBeNull();
+    expect(getCompletedTurnTelemetry([
+      { info: assistant(), parts: [] }, { info: { ...user, id: 'u2' }, parts: [] },
+    ], true)).toBeNull();
+    expect(getCompletedTurnTelemetry([
+      ...turn(assistant({ time: { created: 1000 } })), { info: { ...user, id: 'u2' }, parts: [] },
+    ], true)).toBeNull();
+  });
+
   test('recomputes after history materializes and after same-ID message or part corrections', () => {
     const info = assistant();
     expect(getLatestCompletedTurnStats([{ info, parts: [] }])).toBeNull();
-    expect(getLatestCompletedTurnStats(turn(info))?.tokensPerSecond).toBe(25);
-    expect(getLatestCompletedTurnStats(turn({ ...info, tokens: { ...baseTokens(), output: 200 } }))?.tokensPerSecond).toBe(50);
-    expect(getLatestCompletedTurnStats(turn(info, [tool(2000, 4000)]))?.tokensPerSecond).toBe(50);
+    expect(getLatestCompletedTurnStats(turn(info))?.tokensPerSecond).toBe(20);
+    expect(getLatestCompletedTurnStats(turn({ ...info, tokens: { ...baseTokens(), output: 200 } }))?.tokensPerSecond).toBe(40);
+    expect(getLatestCompletedTurnStats(turn(info, [tool(2000, 4000)]))?.tokensPerSecond).toBe(100 / 3);
     // A second directory/runtime may reuse IDs but must never reuse the result.
-    expect(getLatestCompletedTurnStats(turn(info))?.tokensPerSecond).toBe(25);
+    expect(getLatestCompletedTurnStats(turn(info))?.tokensPerSecond).toBe(20);
   });
 
   test('missing usage in one step invalidates whole-turn usage, not valid durations', () => {
@@ -178,7 +239,7 @@ describe('turn telemetry', () => {
     Reflect.deleteProperty(missing, 'cost');
     const stats = getLatestCompletedTurnStats([...turn(), { info: missing, parts: [] }]);
     expect(stats?.stepsCount).toBe(2);
-    expect(stats?.totalLlmDurationMs).toBe(5000);
+    expect(stats?.totalLlmDurationMs).toBe(6000);
     expect(stats?.tokensPerSecond).toBeNull();
     expect(stats?.inputTokens).toBeNull();
     expect(stats?.cost).toBeNull();
@@ -207,7 +268,7 @@ describe('turn telemetry', () => {
     const reasoning: Part = { id: 'reasoning', sessionID: user.sessionID, messageID: 'a1', type: 'reasoning', text: '', time: { start: 1200 } };
     const stats = getLatestCompletedTurnStats(turn(assistant(), [text(1600), reasoning, tool(2000, 3000), failed]));
     expect(stats?.totalToolDurationMs).toBe(2000);
-    expect(stats?.totalLlmDurationMs).toBe(2000);
+    expect(stats?.totalLlmDurationMs).toBe(3000);
     expect(stats?.avgTtftMs).toBe(200);
   });
 
@@ -249,11 +310,10 @@ describe('turn telemetry', () => {
   });
 
   test('hides a throughput the measured window cannot have produced', () => {
-    // A tool that runs for all but 1 ms of its step (seen in real data) leaves
-    // a residual LLM window that turns 100 tokens into 100,000 tok/s.
+    // The turn window keeps the residual LLM time after subtracting tools.
     const residual = turn(assistant({ time: { created: 1000, completed: 1560 } }), [tool(1000, 1559)]);
-    expect(getLatestCompletedTurnStats(residual)?.tokensPerSecond).toBeNull();
-    expect(getLatestCompletedTurnStats(residual)?.totalLlmDurationMs).toBe(1);
+    expect(getLatestCompletedTurnStats(residual)?.tokensPerSecond).toBe(100 / 1.001);
+    expect(getLatestCompletedTurnStats(residual)?.totalLlmDurationMs).toBe(1001);
 
     const finalText = turn(assistant({ tokens: { ...baseTokens(), output: 400 } }),
       [{ ...text(1000), text: 'Final answer', time: { start: 1000, end: 1002 } }]);
@@ -261,7 +321,14 @@ describe('turn telemetry', () => {
 
     // A fast but possible rate still shows.
     const quick = turn(assistant({ time: { created: 1000, completed: 1100 }, tokens: { ...baseTokens(), output: 200 } }));
-    expect(getLatestCompletedTurnStats(quick)?.tokensPerSecond).toBe(2000);
+    expect(getLatestCompletedTurnStats(quick)?.tokensPerSecond).toBe(200 / 1.1);
+
+    // A rate beyond the plausibility ceiling stays hidden.
+    const impossible = turn(assistant({
+      time: { created: 1000, completed: 1001 },
+      tokens: { ...baseTokens(), output: 10_000 },
+    }));
+    expect(getLatestCompletedTurnStats(impossible)?.tokensPerSecond).toBeNull();
   });
 
   test('separates final text delivery from whole-turn throughput on the measured tool-heavy shape', () => {
@@ -273,7 +340,7 @@ describe('turn telemetry', () => {
       tokens: { ...baseTokens(), output: 338 },
     }), parts: [{ ...text(42661), text: 'Final answer', time: { start: 42661, end: 45442 } }] });
     const stats = getLatestCompletedTurnStats(records);
-    expect(Math.round(stats?.tokensPerSecond ?? 0)).toBe(23);
+    expect(Math.round(stats?.tokensPerSecond ?? 0)).toBe(21);
     expect(Math.round(stats?.responseTokensPerSecond ?? 0)).toBe(122);
   });
 
@@ -283,7 +350,7 @@ describe('turn telemetry', () => {
       { ...text(2500), text: 'Final answer', time: { start: 2500, end: 4500 } },
     ]));
     expect(stats?.responseTokensPerSecond).toBe(130);
-    expect(stats?.tokensPerSecond).toBe(90);
+    expect(stats?.tokensPerSecond).toBe(72);
   });
 
   test('unions overlapping text intervals without mutating the authoritative parts', () => {

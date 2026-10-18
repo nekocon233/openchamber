@@ -61,13 +61,21 @@ export const createNativeInteractions = ({ dataDir, now = Date.now }) => {
           if (part.tool === 'question') return [{ ...part, state: { ...part.state, metadata } }];
           if (!value.kind) return [part];
           const plan = z.object({ plan: z.string().optional() }).safeParse(part.state.input).data?.plan ?? '';
+          // The approval row is an OpenChamber UI interaction, not model tool
+          // time. Stamp it with the plan tool's interval so turn telemetry
+          // never subtracts an interaction that settled after the reply.
+          const planStart = part.state.time?.start;
+          const planEnd = part.state.time?.end;
+          const fallback = record.info.time?.completed ?? record.info.time?.created ?? value.settledAt;
+          const start = planStart ?? Math.min(value.settledAt, fallback);
+          const end = planEnd ?? start;
           const id = `nci_${createHash('sha256').update(`${sessionId}:${value.id}`).digest('hex').slice(0, 32)}`;
           const question = buildToolPart({
             id, sessionID: sessionId, messageID: record.info.id, callID: value.id, tool: 'question',
             input: { questions: [{ question: plan, header: 'Plan', options: [{ label: 'build', description: '' }, { label: 'plan', description: '' }] }] },
-            title: 'Plan', start: value.settledAt, metadata,
-            result: value.status === 'answered' ? { status: 'completed', output: '', end: value.settledAt }
-              : { status: 'error', error: value.status === 'interrupted' ? 'Interrupted' : 'Dismissed', end: value.settledAt },
+            title: 'Plan', start, metadata,
+            result: value.status === 'answered' ? { status: 'completed', output: '', end }
+              : { status: 'error', error: value.status === 'interrupted' ? 'Interrupted' : 'Dismissed', end },
           });
           return [part, question];
         });

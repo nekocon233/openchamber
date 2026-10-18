@@ -33,6 +33,14 @@ const childSession: Session = {
 
 type NativeRequest = { sessionID: string; directory: string; limit: number; before?: string }
 
+const waitFor = async (condition: () => boolean) => {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (condition()) return
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  }
+  throw new Error("condition never became true")
+}
+
 const createLoader = (loadNativeMessages: (request: NativeRequest) => Promise<NativeMessagePage>) => {
   const childStores = new ChildStoreManager()
   const openCodeCalls: string[] = []
@@ -105,6 +113,70 @@ describe("SessionMessageLoader with native sessions", () => {
     childStores.disposeAll()
   })
 
+  test("reports a loaded transcript without allocating one for an unopened session", async () => {
+    const { childStores, loader } = createLoader(async () => ({
+      records: [userRecord("ncl_u_1", 1)], cursor: null, complete: true, childSessions: [],
+    }))
+    const target = { directory: DIRECTORY, sessionID: SESSION }
+    expect(loader.hasLoaded(target)).toBe(false)
+    await loader.ensure(target)
+    expect(loader.hasLoaded(target)).toBe(true)
+    expect(loader.hasLoaded({ directory: DIRECTORY, sessionID: "ncl_22222222-2222-4222-8222-222222222222" })).toBe(false)
+    loader.invalidateSession(target)
+    expect(loader.hasLoaded(target)).toBe(false)
+
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("refreshes a subscribed transcript immediately when history becomes stale", async () => {
+    const requests: NativeRequest[] = []
+    const { childStores, loader } = createLoader(async (request) => {
+      requests.push(request)
+      return { records: [userRecord("ncl_u_1", 1)], cursor: null, complete: true, childSessions: [] }
+    })
+    const target = { directory: DIRECTORY, sessionID: SESSION }
+    await loader.ensure(target)
+
+    let notified = 0
+    const unsubscribe = loader.subscribe(target, () => { notified += 1 })
+    loader.markHistoryStale()
+    expect(notified).toBeGreaterThan(0)
+    await waitFor(() => requests.length >= 2)
+    expect(loader.revalidateIfStale(target)).toBe(false)
+
+    const before = requests.length
+    const unloaded = { directory: DIRECTORY, sessionID: "ncl_22222222-2222-4222-8222-222222222222" }
+    expect(loader.revalidateIfStale(unloaded)).toBe(false)
+    expect(requests).toHaveLength(before)
+
+    unsubscribe()
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
+  test("defers a stale transcript until its first subscriber attaches", async () => {
+    const requests: NativeRequest[] = []
+    const { childStores, loader } = createLoader(async (request) => {
+      requests.push(request)
+      return { records: [userRecord("ncl_u_1", 1)], cursor: null, complete: true, childSessions: [] }
+    })
+    const target = { directory: DIRECTORY, sessionID: SESSION }
+    await loader.ensure(target)
+    expect(requests).toHaveLength(1)
+
+    loader.markHistoryStale()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(requests).toHaveLength(1)
+
+    const unsubscribe = loader.subscribe(target, () => undefined)
+    await waitFor(() => requests.length >= 2)
+
+    unsubscribe()
+    loader.dispose()
+    childStores.disposeAll()
+  })
+
   test("reports a native read failure without clearing what was loaded", async () => {
     let fail = false
     const { childStores, loader } = createLoader(async () => {
@@ -123,3 +195,59 @@ describe("SessionMessageLoader with native sessions", () => {
     childStores.disposeAll()
   })
 })
+
+describe('DeepSeek paged history revisions', () => {
+  const id = `ndh_${'d'.repeat(64)}`;
+  const target = { directory: DIRECTORY, sessionID: id };
+  const record = (messageID: string, created: number): NativeMessagePage['records'][number] => ({
+    info: { id: messageID, sessionID: id, role: 'user', time: { created }, agent: 'build', model: { providerID: 'deepseek-native', modelID: 'test' } },
+    parts: [{ id: `${messageID}_p0`, sessionID: id, messageID, type: 'text', text: messageID }],
+  });
+  test('replaces discarded messages after a missed commit event, including a complete replacement page', async () => {
+    let revision = 0;
+    const { childStores, loader } = createLoader(async () => ({ historyRevision: revision,
+      records: revision === 0 ? [record('kept', 1), record('discarded', 2)] : [record('kept', 1), record('replacement', 3)],
+      cursor: null, complete: true, childSessions: [],
+    }));
+    await loader.ensure(target);
+    revision = 1;
+    await loader.refreshTail(target, 100);
+    expect(childStores.getChild(DIRECTORY)?.getState().message[id].map((message) => message.id)).toEqual(['kept', 'replacement']);
+    expect(childStores.getChild(DIRECTORY)?.getState().part.discarded).toBeUndefined();
+    loader.dispose();
+  });
+  test('loads the latest branch when pagination discovers a fork instead of prepending it to the old tail', async () => {
+    let revision = 0;
+    const requests: NativeRequest[] = [];
+    const { childStores, loader } = createLoader(async (request) => {
+      requests.push(request);
+      return {
+        historyRevision: revision,
+        records: request.before ? [record('older', 0)] : revision === 0
+          ? [1, 2, 3, 4].map((value) => record(`old-${value}`, value))
+          : [1, 2, 3, 4].map((value) => record(`new-${value}`, value + 10)),
+        cursor: request.before ? null : `cursor-${revision}`, complete: Boolean(request.before), childSessions: [],
+      };
+    });
+    const release = loader.retainSessionHistory(target);
+    await loader.ensure(target);
+    revision = 1;
+    await loader.loadOlder(target);
+    expect(childStores.getChild(DIRECTORY)?.getState().message[id].map((message) => message.id)).toEqual(['new-1', 'new-2', 'new-3', 'new-4']);
+    expect(requests.at(-1)?.before).toBeUndefined();
+    expect(loader.getSnapshot(target).cursor).toBe('cursor-1');
+    release(); loader.dispose();
+  });
+  test('restarts a mixed initial window rather than joining pages from two branches', async () => {
+    let calls = 0;
+    const { childStores, loader } = createLoader(async () => {
+      calls += 1;
+      if (calls === 1) return { records: [record('old-tail', 2)], cursor: 'old-prefix', complete: false, childSessions: [], historyRevision: 0 };
+      if (calls === 2) return { records: [record('new-prefix', 1)], cursor: null, complete: true, childSessions: [], historyRevision: 1 };
+      return { records: [record('new-prefix', 1), record('new-tail', 3)], cursor: null, complete: true, childSessions: [], historyRevision: 1 };
+    });
+    await loader.ensure(target);
+    expect(childStores.getChild(DIRECTORY)?.getState().message[id].map((message) => message.id)).toEqual(['new-prefix', 'new-tail']);
+    loader.dispose();
+  });
+});

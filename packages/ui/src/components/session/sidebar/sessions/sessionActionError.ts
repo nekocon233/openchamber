@@ -1,3 +1,4 @@
+import { NativeAgentsRequestError, nativeSessionActionErrorKey } from '@/lib/native-agents/errors';
 import type { useI18n } from '@/lib/i18n';
 import { OpencodeApiError } from '@/lib/opencode/client';
 
@@ -9,6 +10,10 @@ type Translate = ReturnType<typeof useI18n>['t'];
  * alone sends whoever reads it hunting for a server that is in fact up.
  */
 export const describeSessionActionError = (error: Error, t: Translate): string => {
+  if (error instanceof NativeAgentsRequestError) {
+    const key = nativeSessionActionErrorKey(error);
+    if (key) return t(key);
+  }
   if (error instanceof OpencodeApiError) {
     if (error.status !== undefined && error.ref) {
       return t('sessions.sidebar.session.action.upstreamErrorWithRef', {

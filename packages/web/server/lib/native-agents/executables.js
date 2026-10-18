@@ -1,4 +1,4 @@
-// Finds the user's `claude` and `codex` binaries. The login shell's PATH comes
+// Finds the user's `claude`, `codex` and `dsh` binaries. The login shell's PATH comes
 // first; the installers' default locations cover servers whose PATH does not
 // include them. Found paths are cached; a miss is looked up again next time,
 // so a CLI installed while the server runs is picked up.
@@ -49,7 +49,7 @@ const fallbackLocations = (cli, home, platform) => {
  * @param {() => string} options.buildSearchPath
  * @param {string} [options.home]
  * @param {NodeJS.Platform} [options.platform]
- * @returns {(cli: 'claude' | 'codex') => Promise<string | null>}
+ * @returns {(cli: 'claude' | 'codex' | 'dsh' | 'node' | 'npm') => Promise<string | null>}
  */
 export const createCliResolver = ({ searchPathFor, isExecutable, buildSearchPath, home = os.homedir(), platform = process.platform }) => {
   const found = new Map();

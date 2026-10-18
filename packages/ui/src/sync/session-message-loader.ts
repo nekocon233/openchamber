@@ -22,7 +22,7 @@ import { SESSION_CACHE_LIMIT } from './types';
 import { getRuntimeKey, RuntimeContextChangedError } from '@/lib/runtime-switch';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeMessagePage } from '@/lib/api/types';
-import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
+import { NativeAgentsRequestError, NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
 import { isNativeSessionId } from '@/lib/native-agents/ids';
 
 // One agent turn can span well over a hundred tool steps, so the first
@@ -99,6 +99,7 @@ type LoaderEntry = {
    * stale tail refresh joins the cache only through this record.
    */
   gapAnchorID: string | null
+  nativeHistoryRevision: number | null
 }
 
 type FetchedPage = {
@@ -107,6 +108,7 @@ type FetchedPage = {
   cursor: string | undefined
   complete: boolean
   metadataComplete?: boolean
+  historyRevision?: number
 }
 
 type LoadPerformanceDetails = {
@@ -501,18 +503,30 @@ export class SessionMessageLoader {
 
   /**
    * The event stream had a gap: any cached transcript may have missed
-   * changes. Each one refreshes its tail the next time it is opened.
+   * changes. Mounted transcripts refresh their tails now; the rest refresh
+   * when they are next opened.
    */
   markHistoryStale(): void {
+    const epoch = this.historyEpoch
+    const marked: LoaderEntry[] = []
     for (const entry of this.entries.values()) {
       // An entry already stale keeps the anchor of its first gap: an older
       // anchor only makes the tail read back further.
-      if (!entry.snapshot.resolved || entry.verifiedEpoch < this.historyEpoch) continue
+      if (!entry.snapshot.resolved || entry.verifiedEpoch < epoch) continue
       const messages = this.childStores.getChild(entry.target.directory)?.getState().message[entry.target.sessionID] ?? []
       const confirmed = messages.filter((message) => !entry.optimistic.has(message.id))
       entry.gapAnchorID = confirmed.at(-1)?.id ?? null
+      marked.push(entry)
     }
     this.historyEpoch += 1
+    for (const entry of marked) this.notify(entry)
+    // A mounted transcript revalidates now; an unopened one stays lazy and
+    // refreshes through revalidateIfStale when it is next visited.
+    for (const entry of this.entries.values()) {
+      if (!entry.snapshot.resolved || entry.evicted || entry.listeners.size === 0) continue
+      if (entry.verifiedEpoch >= this.historyEpoch) continue
+      void this.refreshTail(entry.target, STALE_HISTORY_TAIL_LIMIT)
+    }
   }
 
   /**
@@ -555,6 +569,10 @@ export class SessionMessageLoader {
     return this.startLoad(normalized, entry, store, "older", async (isCurrent, performance) => {
       let page = await this.fetchPage(normalized, HISTORY_MESSAGE_PAGE_SIZE, cursor, "older", performance)
       if (!isCurrent()) return
+      if (page.historyRevision !== undefined && page.historyRevision !== (entry.nativeHistoryRevision ?? 0)) {
+        page = await this.fetchPage(normalized, getInitialPageSize(), undefined, 'refresh', performance)
+        if (!isCurrent()) return
+      }
       const visited = new Set([cursor])
       // An interactive batch tries to start on a user prompt so the oldest
       // visible turn is whole. Every fetched record is kept, and the server
@@ -569,11 +587,17 @@ export class SessionMessageLoader {
         const older = await this.fetchPage(normalized, HISTORY_MESSAGE_PAGE_SIZE, page.cursor, "older", performance)
         if (!isCurrent()) return
         if (older.session.length === 0 && !older.complete) throw new Error("Session history pagination made no progress")
+        if (page.historyRevision !== undefined && older.historyRevision !== page.historyRevision) {
+          page = await this.fetchPage(normalized, getInitialPageSize(), undefined, 'refresh', performance)
+          if (!isCurrent()) return
+          break
+        }
         page = {
           session: [...older.session, ...page.session],
           partsByMessageID: new Map([...page.partsByMessageID, ...older.partsByMessageID]),
           cursor: older.cursor,
           complete: older.complete,
+          historyRevision: page.historyRevision,
         }
       }
       // Commit the whole batch atomically. A failed follow-up read keeps the
@@ -670,8 +694,8 @@ export class SessionMessageLoader {
           .map((message) => message.id))
       let page = await this.fetchPage(normalized, Math.max(1, limit), undefined, "refresh", performance)
       if (!isCurrent()) return
-      let replacesCache = false
-      if (previousCoverage) {
+      let replacesCache = page.historyRevision !== undefined && page.historyRevision !== (entry.nativeHistoryRevision ?? 0)
+      if (previousCoverage && !replacesCache) {
         const joinsCache = (window: FetchedPage) => window.session.some((message) => joinIDs.has(message.id))
         const window = await this.extendWindow(normalized, page, {
           isSatisfied: (candidate) => joinsCache(candidate) || hasInitialTurns(candidate.session),
@@ -712,11 +736,25 @@ export class SessionMessageLoader {
     return normalized ? this.getEntry(normalized).snapshot : EMPTY_SESSION_MESSAGE_LOAD_STATE
   }
 
+  /** Whether a loaded transcript exists, without allocating an entry for a session never opened. */
+  hasLoaded(target: SessionMessageTarget): boolean {
+    const normalized = this.normalizeTarget(target)
+    if (!normalized || this.disposed) return false
+    const entry = this.entries.get(this.keyFor(normalized))
+    return Boolean(entry && entry.snapshot.resolved && !entry.evicted)
+  }
+
   subscribe(target: SessionMessageTarget, listener: () => void): () => void {
     const normalized = this.normalizeTarget(target)
     if (!normalized) return () => undefined
     const entry = this.getEntry(normalized)
     entry.listeners.add(listener)
+    // A transcript that went stale while unopened revalidates on its first
+    // subscriber, without waiting for another stream gap.
+    if (entry.listeners.size === 1 && entry.snapshot.resolved && !entry.evicted
+      && entry.verifiedEpoch < this.historyEpoch) {
+      void this.refreshTail(normalized, STALE_HISTORY_TAIL_LIMIT)
+    }
     return () => entry.listeners.delete(listener)
   }
 
@@ -768,13 +806,14 @@ export class SessionMessageLoader {
    * older" and take away the way to it. A cut that took every confirmed
    * record leaves no window to describe, and coverage starts over.
    */
-  invalidateSession(target: SessionMessageTarget, preservedMessages: readonly Message[] = []): void {
+  invalidateSession(target: SessionMessageTarget, preservedMessages: readonly Message[] = [], nativeRevision?: number): void {
     const normalized = this.normalizeTarget(target)
     if (!normalized) return
     clearSessionPrefetch(normalized.directory, [normalized.sessionID], this.runtimeKey)
     const entry = this.entries.get(this.keyFor(normalized))
     if (!entry) return
     this.bumpGeneration(entry)
+    if (nativeRevision !== undefined) entry.nativeHistoryRevision = nativeRevision
     entry.inflight = null
     const preservedIDs = new Set(preservedMessages.map((message) => message.id))
     for (const messageID of entry.optimistic.keys()) {
@@ -869,6 +908,7 @@ export class SessionMessageLoader {
       // Unknown provenance: confirmed only as of the loader's first epoch.
       verifiedEpoch: 0,
       gapAnchorID: null,
+      nativeHistoryRevision: null,
     }
     this.entries.set(key, entry)
     return entry
@@ -993,6 +1033,7 @@ export class SessionMessageLoader {
   ): Promise<FetchedPage | null> {
     let window = firstPage
     const visited = new Set<string>()
+    let branchRestarts = 0
     while (!window.complete && !goal.isSatisfied(window)) {
       const held = window.session.length
       const turns = countUserMessages(window.session)
@@ -1008,11 +1049,20 @@ export class SessionMessageLoader {
       const older = await this.fetchPage(target, limit, cursor, "initial-page", performance)
       if (!isCurrent()) return null
       if (older.session.length === 0 && !older.complete) break
+      if (window.historyRevision !== undefined && older.historyRevision !== window.historyRevision) {
+        branchRestarts += 1
+        if (branchRestarts > 2) throw new NativeAgentsRequestError('Session history changed while loading. Reload and retry.', 409, 'NATIVE_HISTORY_CHANGED')
+        window = await this.fetchPage(target, getInitialPageSize(), undefined, 'refresh', performance)
+        if (!isCurrent()) return null
+        visited.clear()
+        continue
+      }
       window = {
         session: [...older.session, ...window.session],
         partsByMessageID: new Map([...window.partsByMessageID, ...older.partsByMessageID]),
         cursor: older.cursor,
         complete: older.complete,
+        historyRevision: window.historyRevision,
       }
     }
     return window
@@ -1100,7 +1150,7 @@ export class SessionMessageLoader {
       const partsByMessageID = new Map(page.records.map((record) => [record.info.id, filterIdentifiedParts(record.parts)] as const))
       recordCount = session.length
       finishPagePerformance("complete", { retryCount: Math.max(0, attempts - 1), recordCount })
-      return { session, partsByMessageID, cursor: page.cursor ?? undefined, complete: page.complete, metadataComplete: page.metadataComplete }
+      return { session, partsByMessageID, cursor: page.cursor ?? undefined, complete: page.complete, metadataComplete: page.metadataComplete, historyRevision: page.historyRevision }
     } catch (error) {
       finishPagePerformance("error", { retryCount: Math.max(0, attempts - 1), recordCount })
       throw error
@@ -1143,7 +1193,18 @@ export class SessionMessageLoader {
     if (!isCurrent()) return null
     const current = store.getState()
     const echoed = withoutEchoedOptimisticRecords(current, target.sessionID, page, entry.optimistic)
-    const state = mode === "replace" ? withoutHistoryOutsideWindow(echoed, target.sessionID, page, entry.optimistic) : echoed
+    const branchChanged = page.historyRevision !== undefined && page.historyRevision !== (entry.nativeHistoryRevision ?? 0)
+    if (page.historyRevision !== undefined && entry.nativeHistoryRevision !== null && page.historyRevision < entry.nativeHistoryRevision) {
+      throw new NativeAgentsRequestError('Session history changed while loading. Reload and retry.', 409, 'NATIVE_HISTORY_CHANGED')
+    }
+    let state = mode === "replace" ? withoutHistoryOutsideWindow(echoed, target.sessionID, page, entry.optimistic) : echoed
+    if (branchChanged) {
+      const kept = (echoed.message[target.sessionID] ?? []).filter((message) => entry.optimistic.has(message.id))
+      const part = { ...echoed.part }
+      for (const message of echoed.message[target.sessionID] ?? []) if (!entry.optimistic.has(message.id)) delete part[message.id]
+      state = { ...echoed, message: { ...echoed.message, [target.sessionID]: kept }, part }
+    }
+    if (page.historyRevision !== undefined) entry.nativeHistoryRevision = page.historyRevision
     const merged = mergeOptimisticPage({
       session: page.session,
       part: [...page.partsByMessageID].map(([id, part]) => ({ id, part })),

@@ -20,7 +20,7 @@ import { buildSessionRecord, unconfirmedSessionRecord } from '../records.js';
 import { codexPlanItemSchema } from './items.js';
 import { codexUserMessages, projectCodexTurns } from './projector.js';
 import { JsonRpcError } from './rpc.js';
-import { readCodexHistoryDetails } from './history-details.js';
+import { codexItemTimes, readCodexHistoryDetails } from './history-details.js';
 
 const LISTED_SOURCES = ['cli', 'vscode'];
 const HIDDEN_ORIGINATORS = new Set(['openchamber_codex']);
@@ -243,6 +243,7 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
       turns,
       threadModel: '',
       sendRecordFor: (messageId) => sendRecords.get(messageId) ?? null,
+      itemTimes: details ? codexItemTimes(details) : undefined,
       details,
     });
     const childIds = new Set();

@@ -11,7 +11,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 const record = (tool, callID) => ({
-  info: { id: 'assistant', role: 'assistant' },
+  info: { id: 'assistant', role: 'assistant', time: { created: 1, completed: 2 } },
   parts: [{ id: 'part', messageID: 'assistant', sessionID: sessionId, type: 'tool', tool, callID,
     state: { status: 'completed', input: { plan: 'A plan', questions: [{ question: 'Q' }] }, metadata: {}, output: '', time: { start: 1, end: 2 } } }],
 });
@@ -28,6 +28,9 @@ describe('native interaction answers', () => {
     expect(attached[0].parts[0].state.metadata.questionAnswers).toEqual([['A', 'B'], ['"quoted"\n第二行']]);
     const plan = await reopened.attach(sessionId, [record('plan_exit', 'plan-call')]);
     expect(plan[0].parts[1]).toMatchObject({ tool: 'question', state: { metadata: { questionAnswers: [['plan']], nativeQuestionKind: 'codex-plan-exit' } } });
+    // The approval settled at 3, after the reply completed at 2; the row keeps
+    // the plan tool's interval so it cannot invalidate turn telemetry.
+    expect(plan[0].parts[1].state.time).toEqual({ start: 1, end: 2 });
     await reopened.fork(sessionId, forkId, new Set(['call-one']));
     expect((await reopened.attach(forkId, [record('plan_exit', 'plan-call')]))[0].parts).toHaveLength(1);
     expect((await reopened.attach(forkId, [record('question', 'call-one')]))[0].parts[0].state.metadata.questionAnswers).toHaveLength(2);

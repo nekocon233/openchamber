@@ -1,7 +1,16 @@
 import React from 'react';
 import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useDirectorySync, useSessionMessageRecords, useSyncDirectory, useSyncRuntime } from '@/sync/sync-context';
+import {
+  buildSessionMessageRecordsSnapshot,
+  useDirectoryStore,
+  useDirectorySync,
+  useSessionMessageLoadState,
+  useSessionMessageRecords,
+  useSessionSelector,
+  useSyncDirectory,
+  useSyncRuntime,
+} from '@/sync/sync-context';
 import { normalizePath } from '@/lib/pathNormalization';
 import { useUIStore } from '@/stores/useUIStore';
 import {
@@ -14,20 +23,13 @@ import {
   formatTelemetryDuration,
   formatTelemetryTokens,
   formatThroughputRate,
-  getCompletedTurnAverages,
-  getLatestCompletedTurnStats,
-  type CompletedTurnAverages,
-  type CompletedTurnStats,
+  getCompletedTurnTelemetry,
+  type CompletedTurnTelemetry,
 } from './telemetry';
 
 type Props = {
   sessionId: string | null;
   directory: string | null;
-};
-
-type ComputedTelemetry = {
-  stats: CompletedTurnStats | null;
-  averages: CompletedTurnAverages | null;
 };
 
 /** One hover/focus target covers both the label and its value. */
@@ -52,14 +54,32 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
   );
   const { runtimeKey } = useSyncRuntime();
   const syncDirectory = useSyncDirectory();
-  const scope = JSON.stringify([runtimeKey, normalizePath(directory ?? syncDirectory), sessionId]);
+  const effectiveDirectory = directory ?? syncDirectory;
+  const store = useDirectoryStore(effectiveDirectory);
+  const scope = JSON.stringify([runtimeKey, normalizePath(effectiveDirectory), sessionId]);
   const status = useDirectorySync(
     React.useCallback((state) => sessionId
       ? state.session_status[sessionId]?.type ?? (state.sessionStatusReady && !state.sessionStatusInvalidated?.[sessionId] ? 'idle' : 'unknown')
       : 'unknown', [sessionId]),
     directory ?? undefined,
   );
-  const eligibleForStats = Boolean(sessionId && expanded && status === 'idle');
+  const hasRecords = useDirectorySync(
+    React.useCallback((state) => Boolean(sessionId && state.message[sessionId]?.length), [sessionId]),
+    effectiveDirectory,
+  );
+  const revertMessageID = useSessionSelector(
+    sessionId,
+    effectiveDirectory,
+    React.useCallback((session) => session?.revert?.messageID, []),
+  );
+  const loadState = useSessionMessageLoadState(sessionId ?? '', effectiveDirectory);
+  // A provider can keep its directory stores while its runtime changes. After
+  // a switch, only the new runtime's loader can authorize reading that history.
+  const historyRuntime = React.useRef({ key: runtimeKey, switched: false });
+  if (historyRuntime.current.key !== runtimeKey) historyRuntime.current = { key: runtimeKey, switched: true };
+  const historyReady = !historyRuntime.current.switched || loadState.resolved;
+  const turnInProgress = status === 'busy' || status === 'retry';
+  const eligibleForStats = Boolean(sessionId && expanded && historyReady && status === 'idle');
 
   const records = useSessionMessageRecords(
     sessionId ?? '',
@@ -67,30 +87,41 @@ export const WorkStatusTelemetrySection: React.FC<Props> = ({ sessionId, directo
     { enabled: eligibleForStats },
   );
 
-  const computed = React.useMemo<ComputedTelemetry | null>(() => {
+  const computed = React.useMemo(() => {
     if (!eligibleForStats) return null;
-    return {
-      stats: getLatestCompletedTurnStats(records),
-      averages: getCompletedTurnAverages(records),
-    };
+    return getCompletedTurnTelemetry(records, false);
   }, [eligibleForStats, records]);
 
   // Retain only one committed result, never message history or a global ID cache.
-  const [retained, setRetained] = React.useState<{ scope: string; computed: ComputedTelemetry } | null>(null);
+  const [retained, setRetained] = React.useState<{
+    scope: string;
+    revertMessageID: string | undefined;
+    computed: CompletedTurnTelemetry;
+  } | null>(null);
+  const retainedForScope = hasRecords && retained?.scope === scope && retained.revertMessageID === revertMessageID
+    ? retained.computed
+    : null;
+  const runningSnapshot = React.useMemo(() => {
+    if (!sessionId || !expanded || !turnInProgress || !hasRecords || !historyReady) return null;
+    if (retained?.scope === scope && retained.revertMessageID === revertMessageID) return retained.computed;
+    if (loadState.status === 'loading' && !loadState.resolved) return null;
+    // Sample once on opening or history publication, without a live records
+    // subscription. A delayed initial history load can then supply the last turn.
+    const snapshot = buildSessionMessageRecordsSnapshot(store.getState(), sessionId);
+    return getCompletedTurnTelemetry(snapshot.list, true);
+  }, [scope, sessionId, expanded, turnInProgress, hasRecords, historyReady, retained, store, loadState, revertMessageID]);
+  const current = status === 'unknown' ? null : expanded ? computed ?? runningSnapshot : retainedForScope;
   React.useEffect(() => {
-    if (eligibleForStats && computed) {
-      setRetained({ scope, computed });
-    } else if (!eligibleForStats) {
-      setRetained((previous) => previous?.scope === scope && status !== 'unknown' ? previous : null);
+    if (expanded || !current) {
+      setRetained(current ? { scope, revertMessageID, computed: current } : null);
     }
-  }, [scope, status, eligibleForStats, computed]);
-  const current = eligibleForStats ? computed : status !== 'unknown' && retained?.scope === scope ? retained.computed : null;
+  }, [scope, revertMessageID, expanded, current]);
   const stats = current?.stats ?? null;
   const averages = current?.averages ?? null;
-  const turnInProgress = status === 'busy' || status === 'retry';
-  const summary = stats && stats.responseTokensPerSecond !== null
-    ? formatThroughputRate(stats.responseTokensPerSecond)
-    : undefined;
+  const summaryRate = stats
+    ? stats.responseTokensPerSecond ?? averages?.tokensPerSecond ?? null
+    : null;
+  const summary = summaryRate !== null ? formatThroughputRate(summaryRate) : undefined;
 
   useReportWorkStatusPresence('telemetry', Boolean(sessionId));
 

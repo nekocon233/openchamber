@@ -87,6 +87,18 @@
         "to": "native-memory-hook.mjs"
       },
       {
+        "from": "resources/native-memory-cli.mjs",
+        "to": "native-memory-cli.mjs"
+      },
+      {
+        "from": "resources/deepseek-maintenance-worker.mjs",
+        "to": "deepseek-maintenance-worker.mjs"
+      },
+      {
+        "from": "resources/deepseek-maintenance-plugin.mjs",
+        "to": "deepseek-maintenance-plugin.mjs"
+      },
+      {
         "from": "resources/web-dist",
         "to": "web-dist"
       },

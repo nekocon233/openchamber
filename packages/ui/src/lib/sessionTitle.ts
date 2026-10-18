@@ -12,6 +12,22 @@ type TitleTurn = {
   assistant: { info: AssistantMessage; parts: Part[] };
 };
 
+const planExitInputSchema = z.object({ plan: z.string() });
+
+/**
+ * A plan-mode turn's proposal. Codex's `plan` item and Claude's ExitPlanMode
+ * both project as `plan_exit`, with the document in `input.plan`.
+ */
+const planText = (parts: readonly Part[]): string => {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part.type !== 'tool' || part.tool !== 'plan_exit') continue;
+    const parsed = planExitInputSchema.safeParse(part.state.input);
+    if (parsed.success && parsed.data.plan.trim()) return parsed.data.plan;
+  }
+  return '';
+};
+
 // Adapted from OpenCode's agent/prompt/title.txt for recent completed turns.
 // A session usually ends on a housekeeping request ("commit and push"), so the
 // prompt names the work itself and treats such requests as pointers back to it.
@@ -19,7 +35,7 @@ const TITLE_SYSTEM_PROMPT = [
   'You are a title generator. Output ONLY a thread title. Nothing else.',
   'Generate a brief title that helps the user find this coding session later in a list of sessions.',
   'The input contains the current session title, which may be outdated or a placeholder, then up to three recent completed turns, oldest first.',
-  'Name the topic of the session the way a person labels a folder: the feature, area, problem, or question it is about. Use the assistant final responses to learn what was actually done.',
+  'Name the topic of the session the way a person labels a folder: the feature, area, problem, or question it is about. Use the assistant final responses and proposed plans to learn what was actually done.',
   'Requests that only move finished work along name a step, not the subject: commit, push, open or update a PR, merge, rebase, release, run tests, review the diff, continue, thanks, ok. When the latest turns are such requests, title the work they refer to.',
   'When the session moved on to a different task, title the newest task. When the turns still match the current title, keep its subject.',
   'Output a single line: a short noun phrase of two to four words, at most 40 characters, with no explanations, quotes, markdown, or prefix.',
@@ -55,7 +71,7 @@ export function collectSessionTitleTurns(records: readonly MessageRecord[], reve
     if (!user || !answer) return;
     if (answer.info.finish !== 'stop' || !answer.info.time.completed || answer.info.error) return;
     if (!hasText(user.parts) && userContext.length === 0) return;
-    if (!hasText(answer.parts)) return;
+    if (!hasText(answer.parts) && !planText(answer.parts)) return;
     turns.push({ user, context: userContext, assistant: answer });
   };
 
@@ -95,8 +111,11 @@ export function formatSessionTitleContext(turns: readonly TitleTurn[]): string {
       ...turn.context.map((item) => formatContextMessage(item, 2000)),
       formatMessageText(turn.user.parts, { user: true, fieldLimit: 2000 }),
     ].map((block) => block.trim()).filter(Boolean).join('\n\n'), 4000),
-    '**Assistant final response**',
-    excerptMarkdown(formatMessageText(turn.assistant.parts, { fieldLimit: 4000 }), 4000),
+    '**Assistant final response or proposed plan**',
+    excerptMarkdown([
+      formatMessageText(turn.assistant.parts, { fieldLimit: 4000 }),
+      planText(turn.assistant.parts),
+    ].filter((block) => block.trim()).join('\n\n'), 4000),
   ].join('\n\n')).join('\n\n---\n\n');
 }
 

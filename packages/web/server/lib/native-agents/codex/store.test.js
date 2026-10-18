@@ -95,6 +95,59 @@ describe('Codex session store', () => {
     expect(history.childSessions).toEqual([expect.objectContaining({ id: `ncx_${CHILD_THREAD}`, parentID: `ncx_${THREAD_ID}` })]);
   });
 
+  it('passes rollout item times into projected history', async () => {
+    const rolloutDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-codex-rollout-'));
+    directories.push(rolloutDir);
+    const rollout = path.join(rolloutDir, 'rollout.jsonl');
+    fs.writeFileSync(rollout, [
+      { type: 'session_meta', payload: { id: THREAD_ID } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-1' } },
+      { type: 'event_msg', payload: {
+        type: 'item_completed', turn_id: 'turn-1', started_at_ms: 1100, completed_at_ms: 2100,
+        item: { type: 'CommandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
+      } },
+    ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+
+    const { store } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID, { path: rollout }) }),
+      'thread/turns/list': async () => ({
+        data: [{
+          id: 'turn-1', status: 'completed', startedAt: 1, completedAt: 2,
+          items: [
+            { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
+            { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
+          ],
+        }],
+        nextCursor: null,
+      }),
+    });
+    const history = await store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY);
+    const assistant = history.records.find((record) => record.info.role === 'assistant');
+    expect(history.metadataComplete).toBe(true);
+    expect(assistant.info.time.completed).toBe(2100);
+    expect(assistant.parts.find((part) => part.type === 'tool').state.time).toEqual({ start: 1100, end: 2100 });
+  });
+
+  it('keeps projected history usable when the rollout cannot be read', async () => {
+    const { store } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID, { path: '/nonexistent/rollout.jsonl' }) }),
+      'thread/turns/list': async () => ({
+        data: [{
+          id: 'turn-1', status: 'completed', startedAt: 1, completedAt: 2,
+          items: [
+            { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
+            { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
+          ],
+        }],
+        nextCursor: null,
+      }),
+    });
+    const history = await store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY);
+    const assistant = history.records.find((record) => record.info.role === 'assistant');
+    expect(history.metadataComplete).toBe(false);
+    expect(assistant.parts.find((part) => part.type === 'tool').state.time).toEqual({ start: 1000, end: 2000 });
+  });
+
   it('rewinds before the turn a message starts, and refuses a message steered into a turn', async () => {
     const user = (id, clientId = null) => ({ type: 'userMessage', id, clientId, content: [{ type: 'text', text: id }] });
     const reply = (id) => ({ type: 'agentMessage', id, text: 'ok' });

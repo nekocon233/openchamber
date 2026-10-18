@@ -9,9 +9,10 @@
 // Live mode adds what only a running query knows. Stream events open the
 // assistant message and its text and reasoning parts before their blocks are
 // complete, and hand back text deltas. Usage stays private to the projection
-// until both cache fields have arrived; a proxied stream that omits them must
-// not turn the running message into a false zero-cache reading. The turn's
-// successful result frame then applies the CLI's per-request usage. The message
+// until both cache fields have arrived; a proxied stream that omits them
+// leaves the message without `tokens` instead of a false zero-cache reading.
+// The turn's successful result frame then applies the CLI's per-request usage.
+// The message
 // completes on `message_stop`, not on its first block, because tools start
 // running while later blocks of the same message still stream in.
 //
@@ -546,7 +547,6 @@ export const createClaudeProjection = ({
       modelID,
       agent: sent?.agent ?? DEFAULT_AGENT,
       cwd,
-      tokens: EMPTY_TOKENS,
       contextWindow: contextWindowFor(sent?.modelID ?? (modelID || null)),
       variant: sent?.variant ?? null,
     }));
@@ -628,7 +628,9 @@ export const createClaudeProjection = ({
     if (live) {
       mergeUsage(assistant.usage, liveUsageFromFrame(rawUsage, message.usage), hasCompleteCacheUsage(rawUsage));
       publishAccumulatedUsage(assistant);
-    } else {
+    } else if (message.usage) {
+      // An entry without usage must not overwrite a value another block of the
+      // same API message already measured.
       info.tokens = tokensFromUsage(message.usage);
     }
     const modelID = normalizeClaudeModelId(message.model);

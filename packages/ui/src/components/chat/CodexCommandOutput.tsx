@@ -4,6 +4,7 @@ import type { NativeCodexCommandResult } from '@/lib/api/types';
 import { useI18n } from '@/lib/i18n';
 
 export type CodexCommandOutputState = {
+  cliName?: 'Codex' | 'DeepSeek Harness';
   command: string;
   output: Extract<NativeCodexCommandResult, { kind: 'output' }>;
 };
@@ -17,7 +18,7 @@ export function CodexCommandOutput({ value, onClose, onCommand }: {
   return (
     <Dialog open={value !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="sm:max-w-xl" aria-describedby={undefined}>
-        <DialogHeader><DialogTitle>Codex /{value?.command}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{value?.cliName ?? 'Codex'} /{value?.command}</DialogTitle></DialogHeader>
         <div className="max-h-[60dvh] space-y-4 overflow-y-auto">
           {value?.output.notices.map((notice, index) => <p key={index} className="whitespace-pre-wrap break-words text-sm text-[var(--status-warning-text)]">{notice}</p>)}
           {value?.output.entries.map((entry, index) => (

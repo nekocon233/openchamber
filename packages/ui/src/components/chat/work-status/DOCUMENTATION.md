@@ -151,7 +151,7 @@ native task summaries request their session snapshot once and follow live events
 | Subagent blockers | directory `permission` / `question` maps | one subscription covers every child |
 | Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | grouping shared with the mobile popover; presentation is not |
 | Linked threads | `lib/linkedIssues.ts` over session metadata | written by the flows that attach an issue or PR |
-| Turn stats | `telemetry.ts` over `useSessionMessageRecords` | computed only while expanded and authoritatively idle; response speed and the header use the newest turn, while cache and speed are token-weighted averages over complete turns in the loaded records and grow when older history is paged in; while busy or retrying with no committed result to retain, a muted row says the stats appear when the turn finishes; either rate above 5,000 tok/s is reported as unknown (see the two-rate description below) |
+| Turn stats | `telemetry.ts` over loaded message records | expanded idle sections follow completed records; busy or retrying sections retain the previous turn or recover it from a snapshot on opening or history publication; response speed describes that turn, while cache and speed average the completed history through it; the header falls back to average speed when response timing is unavailable; without a complete previous turn, the existing waiting row remains; either rate above 5,000 tok/s is unknown |
 | Goal | `useSessionGoal` | respects the Settings toggle |
 | MCP | `useMcpStore` | connect/disconnect reuses the dropdown's actions |
 | Pinned messages | `getContextObligatoryMessages` + `state.part`, else one `getSessionMessage` read | see below |
@@ -269,18 +269,21 @@ message's output tokens divided by the union of its nonempty text intervals.
 It excludes initial waiting, reasoning tokens and reasoning time, and earlier
 tool steps. It requires complete, valid text timing and a final message without
 tools, errors, synthetic text or ignored text. This measures text delivery from
-stored timestamps, not provider-side decode speed. The header shows only this
-rate; unavailable response timing never falls back to the average speed.
+stored timestamps, not provider-side decode speed. The header shows this rate
+when it is available and falls back to the average speed when it is not.
 
 Average speed sums output plus reasoning tokens and model time across every
-complete loaded turn, then divides the totals. Model time is each step's
-duration minus the union of its completed and failed tool intervals. The
-average is token-weighted, so a short turn cannot dominate a long one. Average
-cache sums the same steps' input and cache fields and divides cache reads by
-input plus reads and writes, also token-weighted. Both tooltips say that the
-value covers history loaded in the session and changes when older history is
-paged in. Invalid or missing inputs omit the dependent metric rather than
-becoming zero; reported zeros remain valid. TTFT averages the earliest
+complete loaded turn, then divides the totals. Model time is the turn's
+wall-clock time from its user message through its last completed step, minus
+the union of its completed and failed tool intervals. Using the whole turn
+covers thinking and queue time before each step's first content block, which
+per-step windows leave out and which made proxy sessions report implausibly
+high rates. The average is token-weighted, so a short turn cannot dominate a
+long one. Average cache sums the same steps' input and cache fields and divides
+cache reads by input plus reads and writes, also token-weighted. Both tooltips
+say that the value covers history loaded in the session and changes when older
+history is paged in. Invalid or missing inputs omit the dependent metric rather
+than becoming zero; reported zeros remain valid. TTFT averages the earliest
 text/reasoning start delay from every step of the newest turn, only when all
 steps have a valid sample.
 
@@ -291,7 +294,8 @@ interval can be equally short. The row is omitted rather than shown wrong.
 
 Elapsed time is wall-clock time from the first user message in the turn through
 the final assistant completion. It includes model waits, tool execution,
-compaction, and other gaps; it is not used as a throughput denominator.
+compaction, and other gaps. Average speed uses it minus tool time as its
+denominator; response speed continues to use text intervals.
 
 Metric labels stay short. Every row is a single hover and keyboard-focus target
 for a shared tooltip, with a 750ms hover delay and a portal outside the panel's
@@ -299,13 +303,27 @@ scroller. Tooltips explain the measurement in every locale. The token row uses
 compact input/output arrows; its tooltip gives full counts and explains that
 input excludes cached tokens and output includes reasoning across all steps.
 
-Records subscriptions and aggregation stop while collapsed, busy, retrying, or
-awaiting status authority. Explicit idle events or a successful directory status
-snapshot allow computation. One component-owned committed result keeps the
-headline and rows stable during the next active turn. Its identity includes
-runtime, normalized directory and session. Scope changes discard it; fresh empty
-or reverted records clear it. There is no global message-ID cache. Corrections
-to existing message/part identities invalidate the current result.
+Live records subscriptions stop while collapsed, busy, retrying, or awaiting
+status authority. Explicit idle events or a successful directory status snapshot
+allow reactive computation. One component-owned committed result keeps the
+headline and rows stable during the next active turn. When a section opens during
+that turn without a retained result, it samples the already-loaded visible
+records once. A later history-loader publication can supply delayed history.
+Both paths exclude the entire running user-bounded turn, including completed
+tool steps, from the selected turn and the averages. Streaming message and part
+updates do not resample or aggregate that history, and the section fetches no
+messages. With no complete previous turn, it keeps the existing waiting row.
+
+The latest turn replaces every readout together after idle and completed records
+are both available. If idle arrives before the final records, the previous turn
+remains visible until those records arrive. Retained identity includes runtime,
+normalized directory, session and revert boundary. Scope changes, fresh empty
+records and reverts discard invalid results. After a runtime switch within a
+mounted provider, its new history loader must resolve before old directory
+records can be read. There is no global message-ID cache. Corrections to existing
+message/part identities invalidate the current idle result. The web and desktop
+panel and both mobile sheets use this shared logic; VS Code keeps the panel
+hidden.
 
 ### Context usage has its own computation, on purpose
 

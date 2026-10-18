@@ -37,7 +37,7 @@ export const projectNativeQuestion = (question: QuestionRequest): FormRequest | 
 /** Localize the plan decision while retaining the CLI's exact answer values. */
 export const localizeNativeForm = (form: FormRequest, t: Translate): FormRequest => {
   const kind = form.metadata?.openchamberNativeQuestionKind;
-  if (kind !== 'claude-plan-exit' && kind !== 'codex-plan-exit') return form;
+  if (kind !== 'claude-plan-exit' && kind !== 'codex-plan-exit' && kind !== 'deepseek-plan-exit') return form;
   const [first, ...rest] = form.fields.map((field): FormField => {
     if (field.type !== 'string' && field.type !== 'multiselect') return field;
     const options = field.options?.map((option) => ({

@@ -6,12 +6,20 @@ import {
   isProviderPickableForSession,
   NATIVE_PROVIDER_CLAUDE,
   NATIVE_PROVIDER_CODEX,
+  NATIVE_PROVIDER_DEEPSEEK,
 } from './ids';
 
 const CLAUDE_SESSION = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const CODEX_SESSION = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
 
 describe('isProviderPickableForSession', () => {
+  test('keeps DeepSeek sessions on DeepSeek and rejects their models for OpenCode', () => {
+    const sessionId = `ndh_${'a'.repeat(64)}`;
+    expect(isProviderPickableForSession(sessionId, NATIVE_PROVIDER_DEEPSEEK)).toBe(true);
+    expect(isProviderPickableForSession(sessionId, NATIVE_PROVIDER_CODEX)).toBe(false);
+    expect(isProviderPickableForSession('ses_open', NATIVE_PROVIDER_DEEPSEEK)).toBe(false);
+    expect(isNativeUserMessageIdFor('deepseek', createNativeUserMessageId('deepseek', sessionId))).toBe(true);
+  });
   test('a native session offers only its own CLI', () => {
     expect(isProviderPickableForSession(CLAUDE_SESSION, NATIVE_PROVIDER_CLAUDE)).toBe(true);
     expect(isProviderPickableForSession(CLAUDE_SESSION, NATIVE_PROVIDER_CODEX)).toBe(false);

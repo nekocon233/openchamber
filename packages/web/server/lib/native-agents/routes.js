@@ -9,13 +9,14 @@ import { cliproxyapiCallbackSchema, cliproxyapiConnectionSchema, cliproxyapiImpo
 import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
+import { deepseekConfigurationWrite } from './deepseek/configuration.js';
 
 const directoryQuery = z.object({ directory: z.string().min(1) }).passthrough();
 const taskOperationInput = z.object({ directory: z.string().min(1), generation: z.string().min(1).max(128) }).strict();
 const taskIdParam = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
-const commandsQuery = z.object({ backend: z.enum(['claude', 'codex']), directory: z.string().min(1) }).passthrough();
+const commandsQuery = z.object({ backend: z.enum(['claude', 'codex', 'deepseek']), directory: z.string().min(1), sessionId: z.string().min(1).optional() }).passthrough();
 const createSessionBody = z.object({
-  backend: z.enum(['claude', 'codex']),
+  backend: z.enum(['claude', 'codex', 'deepseek']),
   directory: z.string().min(1),
   title: z.string().min(1).max(200).optional(),
 }).passthrough();
@@ -172,12 +173,22 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.post(`${cliproxyapi}/connection`, handle((req) => runtime.cliproxyapi.saveConnection(cliproxyapiConnectionSchema.parse(req.body))));
 
   app.get('/api/native/catalog', handle(() => runtime.catalog()));
+  app.get('/api/native/deepseek/configuration', handle(() => runtime.deepseekConfiguration.read()));
+  app.post('/api/native/deepseek/configuration', handle((req) => runtime.deepseekConfiguration.save(deepseekConfigurationWrite.parse(req.body))));
+  app.get('/api/native/deepseek/setup', handle(() => runtime.deepseekSetup.status()));
+  app.post('/api/native/deepseek/setup', handle((req) => {
+    z.object({}).strict().parse(req.body ?? {});
+    return runtime.deepseekSetup.start();
+  }));
 
   app.post('/api/native/codex/command', handle((req) => runtime.codexCommand(codexCommandBody.parse(req.body))));
+  app.post('/api/native/deepseek/command', handle((req) => runtime.deepseekCommand(z.object({
+    sessionId: z.string().min(1), directory: z.string().min(1), line: z.string().trim().min(1).max(8000).regex(/^\//),
+  }).parse(req.body))));
 
   app.get('/api/native/commands', handle((req) => {
     const query = commandsQuery.parse(req.query);
-    return runtime.commands(query.backend, query.directory);
+    return runtime.commands(query.backend, query.directory, query.sessionId);
   }));
 
   // Registered before /:sessionId so the literal segments win.

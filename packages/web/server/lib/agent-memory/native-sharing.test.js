@@ -117,3 +117,29 @@ describe('shared native CLI memory', () => {
     expect(await fs.readFile(claudeFile, 'utf8')).toBe('{invalid');
   });
 });
+
+it('shares managed DeepSeek knowledge across backends and hides, restores and deletes only its own handoff', async () => {
+  const { memory, sharing, checkpoint, a, b } = await setup();
+  const id = `ndh_${'b'.repeat(64)}`;
+  await memory.create({ scope: 'global' }, { title: 'Language', body: 'Replies use simplified Chinese.', type: 'preference' });
+  await memory.create({ scope: 'project', projectId: 'a' }, { title: 'Build command', body: 'Run the existing build script.' });
+  await checkpoint('claude', 'old-claude', 'Prepared the parser.');
+  const context = await sharing.context({ backend: 'deepseek', sessionId: id, directory: a });
+  expect(context.text).toContain('Language');
+  expect(context.text).toContain('native-cli.mjs');
+  expect(context.text).toContain('Build command');
+  expect(context.text).toContain('Prepared the parser.');
+  await checkpoint('deepseek', id, 'Completed the UI.', { turnId: 'branch-one:1', observedAt: 2000 });
+  expect((await sharing.context({ backend: 'codex', sessionId: 'codex', directory: a })).text).toContain('Completed the UI.');
+  expect((await sharing.context({ backend: 'deepseek', sessionId: id, directory: a })).text).not.toContain('Completed the UI.');
+  expect((await sharing.context({ backend: 'codex', sessionId: 'other', directory: b })).text).not.toContain('Completed the UI.');
+  await sharing.setProgressVisible(id, a, false);
+  expect((await sharing.status(a)).progress.some((row) => row.backend === 'deepseek')).toBe(false);
+  expect((await sharing.context({ backend: 'codex', sessionId: 'codex', directory: a })).text).not.toContain('Completed the UI.');
+  await sharing.setProgressVisible(id, a, true);
+  expect((await sharing.status(a)).progress.find((row) => row.backend === 'deepseek').summary).toBe('Completed the UI.');
+  await sharing.forget(id, a);
+  expect((await sharing.status(a)).progress.map((row) => row.backend)).toEqual(['claude']);
+  expect((await sharing.context({ backend: 'codex', sessionId: 'codex', directory: a })).text).toContain('Build command');
+  expect((await memory.readAll('a')).global.map((row) => row.title)).toContain('Language');
+});

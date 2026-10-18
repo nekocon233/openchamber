@@ -49,6 +49,11 @@ authoritative cleanup. Root-level `useGlobalSessionsPolling` remains the only
 initial and 45-second global poller, with bounded startup recovery.
 `useSessionListSync` must not create a second global polling lifecycle.
 
+Native DSH rows read undo/delete support from the server-owned native metadata.
+Bulk selection carries the same metadata through the row registry, and mobile
+action widths and buttons use the same capability decision. Older servers that
+omit those flags keep the actions unavailable.
+
 The global sessions cache is the complete source for active and archived
 coverage. Initialized directory stores only supply sessions missing from that
 cache. Live busy and retry state comes from `global-session-status`, never from
@@ -132,7 +137,9 @@ sessions from every worktree and space, 7 at a time with Show more / Show
 fewer (collapsing a project resets it), two-line rows with a fixed-height
 second line, and the project's icon on that line in In work. The
 phone's Tree view follows the desktop tree: Pinned and In work use one-line
-rows unless Detailed rows is on, Chats one-line rows without a gutter, and project sessions are
+rows unless Detailed rows is on. In work reuses the project's session and run
+rows. Session rows are 36px high, with a separate subsession chevron target,
+time column and inline pin button. Chats use one-line rows without a gutter, and project sessions are
 tree rows (12px per level, subsession chevron on the left with a
 thumb-sized target, live state on the right) under worktree headers drawn as
 folder rows (chevron, 12px icon, medium-weight label), each opening with a
@@ -311,8 +318,11 @@ because the header already says they are pinned; In work rows show it only
 while the zone is hidden, since otherwise no pinned session reaches In work. Pins are the device-local
 `useSessionPinnedStore`, so the zone differs between devices. The phone sheet
 mirrors the section toggles: its display menu offers Show chats section, Show
-pinned section and, in Tree, Detailed rows, and its Pinned and In work sections render
-`MobileTimelineRows` with `compact` in Tree unless detailed rows are on. VS Code
+pinned section and, in Tree, Detailed rows. `MobileTimelineRows` renders both
+zones' entries and In work's expanded children. In Tree, In work supplies the same compact session
+and run rows as the project list; Pinned keeps its compact timeline rows.
+Detailed and List rows keep their second line, with In work's subsession
+chevron in a separate gutter so titles share the other rows' text column. VS Code
 shows no section toggles, so it has no Pinned zone and its In work rows stay on
 one line.
 

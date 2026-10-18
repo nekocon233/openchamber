@@ -1896,7 +1896,7 @@ const AssistantMessageBody = React.memo(({
     // copied/sharing states that only make sense on a button that stays put.
     const [actionSheetOpen, setActionSheetOpen] = React.useState(false);
     const footerFactsRef = React.useRef<HTMLDivElement>(null);
-    useFactsFit(footerFactsRef);
+    useFactsFit(footerFactsRef, !conciseTranscript);
     const { isPlaying: isFooterTTSPlaying, play: playFooterTTS, stop: stopFooterTTS } = useMessageTTS(messageId);
     const showMessageTTSButtons = useConfigStore((state) => state.showMessageTTSButtons);
 
@@ -2220,26 +2220,18 @@ const AssistantMessageBody = React.memo(({
                         className="mt-2 mb-1 flex flex-col gap-y-1.5"
                         style={MESSAGE_FOOTER_CONTAINER_STYLE}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        {/* One line, always. The facts are ordered by how much they
-                            matter, and the CSS drops them from the tail as the row
-                            narrows: first the time, then the agent, then the thinking
-                            effort. Model and duration never leave — the model only
-                            truncates once those two alone stop fitting. */}
-                        {/* The concise transcript keeps the facts out of the way: they
-                            appear with the actions on hover, and touch has no hover,
-                            so there they stay hidden while holding their place. */}
+                      <div className={cn('flex justify-between gap-2', conciseTranscript ? 'items-start' : 'items-center')}>
+                        {/* Concise transcripts keep all facts visible and wrap them.
+                            Standard transcripts fit one line by hiding lower-priority facts. */}
                         <div
                             ref={footerFactsRef}
                             className={cn(
-                                'message-footer__facts whitespace-nowrap text-sm text-muted-foreground/60',
-                                conciseTranscript && (alwaysShowMessageActions || isTouchContext
-                                    ? 'invisible'
-                                    : 'opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100'),
+                                'message-footer__facts text-sm text-muted-foreground/60',
+                                conciseTranscript ? 'message-footer__facts--wrap' : 'whitespace-nowrap',
                             )}
                         >
                             {footerModelName ? (
-                                <span className="flex min-w-0 shrink items-center gap-1.5">
+                                <span className={cn('flex min-w-0 shrink items-center gap-1.5', conciseTranscript && 'max-w-full')}>
                                     {footerHasLogo && footerLogoSrc ? (
                                         <img
                                             src={footerLogoSrc}
@@ -2253,7 +2245,7 @@ const AssistantMessageBody = React.memo(({
                                     ) : (
                                         <AgentModelIcon agentName={footerAgentName} />
                                     )}
-                                    <span data-fact-model className="truncate">{footerModelName}</span>
+                                    <span data-fact-model className={conciseTranscript ? 'min-w-0 [overflow-wrap:anywhere]' : 'truncate'}>{footerModelName}</span>
                                 </span>
                             ) : null}
                             {footerVariant && !['default', 'none'].includes(footerVariant.toLowerCase()) ? (
@@ -2274,10 +2266,9 @@ const AssistantMessageBody = React.memo(({
                                     {turnDurationText}
                                 </span>
                             ) : null}
-                            {/* Pointer surfaces keep the timestamp inline (it is the first
-                                fact the row gives up); touch reads it in the actions sheet,
-                                where nothing can push it off the row. */}
-                            {footerTimestamp && !(alwaysShowMessageActions || isTouchContext) ? (
+                            {/* Concise transcripts show the time inline on every surface.
+                                Standard touch rows keep it in the actions sheet. */}
+                            {footerTimestamp && (conciseTranscript || !(alwaysShowMessageActions || isTouchContext)) ? (
                                 <span
                                     data-fact-priority="1"
                                     className={cn(footerTimestampClassName, 'message-footer__fact')}

@@ -22,6 +22,8 @@ export const nativeSessionSchema = z.object({
   directory: z.string().min(1),
   parentID: z.string().optional(),
   title: z.string(),
+  agent: z.string().optional(),
+  model: z.object({ providerID: z.string(), id: z.string(), variant: z.string().optional() }).optional(),
   cost: z.number().default(0),
   tokens: tokenUsageSchema.default(() => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })),
   time: z.object({ created: z.number(), updated: z.number(), archived: z.number().optional() }),
@@ -172,6 +174,7 @@ export const nativeMessagePageSchema = z.object({
   complete: z.boolean(),
   childSessions: z.array(nativeSessionSchema),
   metadataComplete: z.boolean().optional(),
+  historyRevision: z.number().int().nonnegative().optional(),
 });
 
 const sessionPartitionSchema = z.discriminatedUnion('status', [
@@ -180,7 +183,7 @@ const sessionPartitionSchema = z.discriminatedUnion('status', [
 ]);
 
 export const nativeSessionListSchema = z.object({
-  backends: z.object({ claude: sessionPartitionSchema, codex: sessionPartitionSchema }),
+  backends: z.object({ claude: sessionPartitionSchema, codex: sessionPartitionSchema, deepseek: sessionPartitionSchema.optional() }),
 });
 
 
@@ -204,7 +207,7 @@ const catalogPartitionSchema = z.discriminatedUnion('status', [
 ]);
 
 export const nativeCatalogSchema = z.object({
-  backends: z.object({ claude: catalogPartitionSchema, codex: catalogPartitionSchema }),
+  backends: z.object({ claude: catalogPartitionSchema, codex: catalogPartitionSchema, deepseek: catalogPartitionSchema.optional() }),
 });
 
 export const nativeCapabilitiesSchema = z.object({
@@ -226,6 +229,10 @@ export const nativeCapabilitiesSchema = z.object({
       // views at all may still predate it.
       tasks: z.object({ plan: z.boolean(), todos: z.boolean().optional() }).optional(),
     }),
+    deepseek: z.object({
+      cli: z.boolean(), blockedByEnterprise: z.boolean(),
+      actions: z.object({ revert: z.boolean(), delete: z.boolean(), fork: z.boolean() }),
+    }).optional(),
   }),
   registry: z.object({ reset: z.boolean(), resetAt: z.number().optional() }),
 });
@@ -253,7 +260,7 @@ export const nativeCommandListSchema = z.object({
   warnings: z.array(z.string()).optional(),
 });
 
-export const nativeCodexCommandResultSchema = z.discriminatedUnion('kind', [
+export const nativeCommandResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('accepted') }),
   z.object({
     kind: z.literal('output'),
@@ -278,7 +285,7 @@ export const nativeQuestionRejectedSchema = z.object({ rejected: z.literal(true)
 export const nativeQuestionSchema = z.object({
   id: z.string().min(1),
   sessionID: nativeSessionIdSchema,
-  kind: z.enum(['claude-plan-exit', 'codex-plan-exit']).optional(),
+  kind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit']).optional(),
   questions: z.array(z.object({
     question: z.string(),
     header: z.string(),

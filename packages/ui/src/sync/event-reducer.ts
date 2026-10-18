@@ -14,6 +14,7 @@ import type { State } from "./types"
 import { dropSessionCaches } from "./session-cache"
 import { syncDebug } from "./debug"
 import { shouldSkipStaleSessionEvent } from "./session-event-freshness"
+import { nativeHistoryRevision, withNativeHistoryRevision } from "@/lib/native-agents/history"
 import {
   compareMessagesChronologically,
   findMessageIndex,
@@ -368,6 +369,13 @@ export function applyDirectoryEvent(
       const next = applySessionPatch(sessions[result.index], patch)
       if (shouldSkipStaleSessionEvent(sessions[result.index], next)) return false
 
+      // A reconnect may miss the range-commit event. A new DSH branch cannot
+      // inherit cached messages from the discarded branch's tail.
+      if (sessionID.startsWith('ndh_') && (nativeHistoryRevision(next.metadata) ?? 0) > (nativeHistoryRevision(sessions[result.index].metadata) ?? 0)) {
+        for (const message of draft.message[sessionID] ?? []) delete draft.part[message.id]
+        draft.message[sessionID] = []
+      }
+
       // Archiving removes the session from the live list; its caches go too.
       if (next.time.archived && !sessions[result.index].time.archived) {
         sessions.splice(result.index, 1)
@@ -389,7 +397,7 @@ export function applyDirectoryEvent(
       // per-message removals, so the same range goes here. The loaded window
       // is always the transcript's tail: a boundary the window does not hold
       // is older than everything loaded, so a matching marker trims it all.
-      const { sessionID, to } = event.properties
+      const { sessionID, to, nativeHistoryRevision: revision } = event.properties
       const sessions = draft.session
       const result = Binary.search(sessions, sessionID, (s) => s.id)
       const session = result.found ? sessions[result.index] : undefined
@@ -404,9 +412,10 @@ export function applyDirectoryEvent(
           changed = true
         }
       }
-      if (session?.revert) {
+      if (session && (session.revert || revision !== undefined)) {
         const rest = { ...session }
         delete rest.revert
+        if (revision !== undefined) rest.metadata = withNativeHistoryRevision(rest.metadata, revision)
         sessions[result.index] = rest
         markSessionEvent(sessionID, false)
         changed = true

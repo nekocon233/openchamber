@@ -1,4 +1,5 @@
 import React from 'react';
+import { sessionActionSupport } from '@/lib/native-agents/capabilities';
 import { useSessionTurnActivity } from '@/sync/global-session-status';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import { createPortal } from 'react-dom';
@@ -613,7 +614,7 @@ const SessionRow: React.FC<{
 
   return (
     <MobileSwipeActionsRow
-      actionsWidth={ROW_ACTIONS_WIDTH + (work ? ROW_ACTION_SLOT_WIDTH : 0) + (pin ? ROW_ACTION_SLOT_WIDTH : 0)}
+      actionsWidth={ROW_ACTIONS_WIDTH - (sessionActionSupport(session.id, session.metadata).delete ? 0 : ROW_ACTION_SLOT_WIDTH) + (work ? ROW_ACTION_SLOT_WIDTH : 0) + (pin ? ROW_ACTION_SLOT_WIDTH : 0)}
       revealed={revealed}
       onRevealedChange={(next) => onRevealedChange?.(next)}
       dataActiveSession={active}
@@ -623,6 +624,7 @@ const SessionRow: React.FC<{
       )}
       actions={(
         <MobileSessionRowActions
+          sessionMetadata={session.metadata}
           sessionId={session.id}
           title={title}
           revealed={revealed}
@@ -1515,6 +1517,44 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     });
   };
 
+  const renderSessionRow = (session: Session, rowDepth: number | null, hasChildren: boolean): React.ReactNode => {
+    const expanded = rowDepth !== null && Boolean(expandedParents[session.id]);
+    const sessionDirectory = getSessionDirectory(session);
+    return (
+      <SessionRow
+        session={session}
+        active={currentSessionId === session.id}
+        indent={MOBILE_ROW_TEXT_INSET}
+        treeDepth={rowDepth ?? undefined}
+        statusOnRight={rowDepth === null}
+        activityTimestamp={getSessionTimestamp(session)}
+        statusType={getSessionStatusType(session.id)}
+        pinned={isSessionPinned(pinnedSessionIds, sessionDirectory, session.id)}
+        hasChildren={hasChildren}
+        expanded={expanded}
+        onToggleChildren={hasChildren ? () => toggleParent(session.id) : undefined}
+        onSelect={() => handleSelectSession(session)}
+        onTogglePinned={sessionDirectory ? () => togglePinnedSession({
+          directory: sessionDirectory,
+          sessionId: session.id,
+        }) : undefined}
+        revealed={revealedSessionId === session.id}
+        onRevealedChange={(nextRevealed) => handleRowRevealedChange(session.id, nextRevealed)}
+        confirmingDelete={confirmingDeleteSessionId === session.id}
+        onArchive={() => void handleArchive(session)}
+        onRequestDelete={() => setConfirmingDeleteSessionId(session.id)}
+        onConfirmDelete={() => void handleConfirmDelete(session)}
+        renaming={renamingSessionId === session.id}
+        onRequestRename={() => handleRequestRename(session.id)}
+        onSubmitRename={(nextTitle) => void handleSubmitRename(session.id, nextTitle)}
+        onCancelRename={() => setRenamingSessionId(null)}
+        work={workActionFor(session)}
+        pin={pinActionFor(session)}
+        descendantIdsOf={descendantIdsOf}
+      />
+    );
+  };
+
   // Paginated, tree-aware list of a bucket's sessions: top-level sessions paginate,
   // and a parent with subsessions can be expanded to reveal its children (nested,
   // recursively). Pagination counts only top-level sessions. `depth` is the tree
@@ -1577,40 +1617,9 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       const children = childrenByParent.get(session.id) ?? [];
       const hasChildren = children.length > 0;
       const expanded = rowDepth !== null && Boolean(expandedParents[session.id]);
-      const sessionDirectory = getSessionDirectory(session);
       return (
         <React.Fragment key={session.id}>
-          <SessionRow
-            session={session}
-            active={currentSessionId === session.id}
-            indent={MOBILE_ROW_TEXT_INSET}
-            treeDepth={rowDepth ?? undefined}
-            statusOnRight={rowDepth === null}
-            activityTimestamp={getSessionTimestamp(session)}
-            statusType={getSessionStatusType(session.id)}
-            pinned={isSessionPinned(pinnedSessionIds, sessionDirectory, session.id)}
-            hasChildren={hasChildren}
-            expanded={expanded}
-            onToggleChildren={hasChildren ? () => toggleParent(session.id) : undefined}
-            onSelect={() => handleSelectSession(session)}
-            onTogglePinned={sessionDirectory ? () => togglePinnedSession({
-              directory: sessionDirectory,
-              sessionId: session.id,
-            }) : undefined}
-            revealed={revealedSessionId === session.id}
-            onRevealedChange={(nextRevealed) => handleRowRevealedChange(session.id, nextRevealed)}
-            confirmingDelete={confirmingDeleteSessionId === session.id}
-            onArchive={() => void handleArchive(session)}
-            onRequestDelete={() => setConfirmingDeleteSessionId(session.id)}
-            onConfirmDelete={() => void handleConfirmDelete(session)}
-            renaming={renamingSessionId === session.id}
-            onRequestRename={() => handleRequestRename(session.id)}
-            onSubmitRename={(nextTitle) => void handleSubmitRename(session.id, nextTitle)}
-            onCancelRename={() => setRenamingSessionId(null)}
-            work={workActionFor(session)}
-            pin={pinActionFor(session)}
-            descendantIdsOf={descendantIdsOf}
-          />
+          {renderSessionRow(session, rowDepth, hasChildren)}
           {hasChildren && expanded && rowDepth !== null
             ? children.map((child) => renderNode(child, rowDepth + 1))
             : null}
@@ -2002,6 +2011,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     [listActive, toTimelineEntries, pinnedBucket],
   );
 
+  const renderWorkTreeRow = (entry: TimelineEntry, depth: number, hasChildren: boolean): React.ReactNode => (
+    entry.kind === 'run'
+      ? <MobileRunRow run={entry.run} laneNodes={entry.laneNodes} depth={depth} />
+      : renderSessionRow(entry.session, depth, hasChildren)
+  );
+
   /**
    * A worktree's or a space's header: the swipe row with its chevron, icon
    * and label, and for a space its state line. The tree puts its sessions
@@ -2206,6 +2221,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
                 expandedParents={expandedParents}
                 onToggleChildren={toggleParent}
                 childEntriesByParent={childEntriesByParent}
+                renderCompactRow={sectionId === WORK_SECTION_ID ? renderWorkTreeRow : undefined}
               />
             ) : (
               <p className="px-3 pb-1 typography-micro text-muted-foreground" style={{ paddingInlineStart: MOBILE_ROW_TEXT_INSET }}>

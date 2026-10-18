@@ -13,6 +13,7 @@ const TURN = 'first-turn';
 const entry = { backend: 'codex', origin: 'openchamber', directory: DIRECTORY };
 const user = (text) => ({ type: 'userMessage', id: 'user', content: [{ type: 'text', text }] });
 const answer = (text, phase = 'final_answer') => ({ type: 'agentMessage', id: 'answer', text, phase });
+const plan = (text, id = 'plan') => ({ type: 'plan', id, text });
 
 const fixture = ({ generateText = async () => ({ text: '修复登录超时' }), beforeWrite = async () => {}, publish = async () => {} } = {}) => {
   const state = {
@@ -84,6 +85,42 @@ describe('automatic Codex titles', () => {
     expect(generated).toHaveLength(1);
   });
 
+  it('generates from the proposed plan when the first turn has no final answer', async () => {
+    const { run, state, generated, store } = fixture({ generateText: async () => ({ text: '霰弹枪后坐力方案' }) });
+    state.turn.items = [
+      user('请设计霰弹枪夸张后坐力'),
+      answer('我先查看现有实现。', 'commentary'),
+      plan('# 霰弹枪后坐力\n\n- 踉跄\n- 坐地'),
+    ];
+    expect(await run()).toBe(true);
+    expect(JSON.parse(generated[0].prompt)).toEqual({
+      user: '请设计霰弹枪夸张后坐力',
+      assistant: '# 霰弹枪后坐力\n\n- 踉跄\n- 坐地',
+    });
+    expect((await store.getSession(SESSION, DIRECTORY)).title).toBe('霰弹枪后坐力方案');
+  });
+
+  it('prefers a final answer over a plan in the same turn', async () => {
+    const { run, state, generated } = fixture();
+    state.turn.items = [user('Q'), plan('Plan text'), answer('Final answer')];
+    expect(await run()).toBe(true);
+    expect(JSON.parse(generated[0].prompt).assistant).toBe('Final answer');
+  });
+
+  it('takes the last nonempty plan', async () => {
+    const { run, state, generated } = fixture();
+    state.turn.items = [user('Q'), plan('first'), plan('   '), plan('second')];
+    expect(await run()).toBe(true);
+    expect(JSON.parse(generated[0].prompt).assistant).toBe('second');
+  });
+
+  it('bounds the plan fallback input', async () => {
+    const { run, state, generated } = fixture();
+    state.turn.items = [user('Q'), plan('x'.repeat(100_000))];
+    expect(await run()).toBe(true);
+    expect(JSON.parse(generated[0].prompt).assistant.length).toBeLessThanOrEqual(8000);
+  });
+
   it.each([
     { name: 'My own title' },
     { path: '/home/.codex/archived_sessions/thread.jsonl' },
@@ -119,7 +156,7 @@ describe('automatic Codex titles', () => {
     state.turn.id = 'different-first-turn';
     expect(await run()).toBe(false);
     state.turn.id = TURN;
-    state.turn.items = [user('Question'), answer('progress only', 'commentary')];
+    state.turn.items = [user('Question'), answer('progress only', 'commentary'), plan('   ')];
     expect(await run()).toBe(false);
     expect(generated).toHaveLength(0);
   });

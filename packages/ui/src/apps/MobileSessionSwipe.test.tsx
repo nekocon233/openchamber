@@ -7,7 +7,11 @@ import { toast } from 'sonner';
 import { I18nProvider } from '@/lib/i18n';
 import { MobileSessionRowActions, MobileSwipeActionsRow, ROW_ACTIONS_WIDTH } from './MobileSessionSwipe';
 
-test('mobile session swipe actions copy the exact ID and close only after a successful copy', async () => {
+for (const { sessionId, expectedActions } of [
+  { sessionId: 'ses_exact-mobile-session-id_42', expectedActions: 4 },
+  { sessionId: `ndh_${'a'.repeat(64)}`, expectedActions: 3 },
+]) {
+test(`mobile session swipe actions preserve identity with ${expectedActions} available actions`, async () => {
   const dom = new Window({ url: 'http://localhost' });
   const originals = new Map<string, PropertyDescriptor | undefined>();
   const globals = {
@@ -33,7 +37,6 @@ test('mobile session swipe actions copy the exact ID and close only after a succ
   }
   Object.defineProperty(dom.document, 'execCommand', { configurable: true, value: () => false });
 
-  const sessionId = 'ses_exact-mobile-session-id_42';
   const changes: boolean[] = [];
   let setRevealed: (next: boolean) => void = () => {};
   const container = document.createElement('div');
@@ -80,7 +83,7 @@ test('mobile session swipe actions copy the exact ID and close only after a succ
   try {
     await act(async () => root.render(<I18nProvider><Harness /></I18nProvider>));
     expect(ROW_ACTIONS_WIDTH).toBe(192);
-    expect(container.querySelectorAll('[aria-hidden="false"] button')).toHaveLength(4);
+    expect(container.querySelectorAll('[aria-hidden="false"] button')).toHaveLength(expectedActions);
 
     await act(async () => {
       getCopyButton().click();
@@ -116,3 +119,4 @@ test('mobile session swipe actions copy the exact ID and close only after a succ
     }
   }
 });
+}

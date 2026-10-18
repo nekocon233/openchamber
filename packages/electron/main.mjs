@@ -1705,6 +1705,15 @@ const spawnLocalServer = async () => {
     OPENCHAMBER_NATIVE_MEMORY_HOOK_PATH: app.isPackaged
       ? path.join(process.resourcesPath, 'native-memory-hook.mjs')
       : undefined,
+    OPENCHAMBER_NATIVE_MEMORY_CLI_PATH: app.isPackaged
+      ? path.join(process.resourcesPath, 'native-memory-cli.mjs')
+      : undefined,
+    OPENCHAMBER_DSH_WORKER_PATH: app.isPackaged
+      ? path.join(process.resourcesPath, 'deepseek-maintenance-worker.mjs')
+      : undefined,
+    OPENCHAMBER_DSH_PLUGIN_PATH: app.isPackaged
+      ? path.join(process.resourcesPath, 'deepseek-maintenance-plugin.mjs')
+      : undefined,
     // OpenCode uses process cwd as a fallback directory; app userData would make
     // packaged desktop look like a separate empty workspace.
     OPENCHAMBER_OPENCODE_CWD: resolveManagedOpenCodeCwd({

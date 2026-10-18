@@ -1,4 +1,6 @@
+import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import React from 'react';
+import { sessionActionSupport } from '@/lib/native-agents/capabilities';
 import {
     Dialog,
     DialogContent,
@@ -108,6 +110,7 @@ const TimelineDialogBody: React.FC<TimelineDialogBodyProps> = ({
 }) => {
     const { t } = useI18n();
     const messages = useSessionMessageRecords(currentSessionId, currentSessionDirectory);
+    const canRevert = useGlobalSessionsStore((state) => sessionActionSupport(currentSessionId, state.entityById.get(currentSessionId)?.metadata).revert);
     const revertToMessage = useSessionUIStore((state) => state.revertToMessage);
     const forkFromMessage = useSessionUIStore((state) => state.forkFromMessage);
     const { isMobile, isTablet } = useDeviceInfo();
@@ -402,7 +405,7 @@ const TimelineDialogBody: React.FC<TimelineDialogBodyProps> = ({
 
                                         <div className="flex-shrink-0 h-5 flex items-center me-2">
                                             <div className={cn("gap-1", alwaysShowActions ? "flex" : "hidden group-hover:flex")}>
-                                                <Tooltip>
+                                                {canRevert ? <Tooltip>
                                                     <TooltipTrigger asChild>
                                                         <button
                                                             type="button"
@@ -417,7 +420,7 @@ const TimelineDialogBody: React.FC<TimelineDialogBodyProps> = ({
                                                         </button>
                                                     </TooltipTrigger>
                                                     <TooltipContent sideOffset={6}>{t('chat.timeline.actions.revertFromHere')}</TooltipContent>
-                                                </Tooltip>
+                                                </Tooltip> : null}
 
                                                 <Tooltip>
                                                     <TooltipTrigger asChild>

@@ -78,8 +78,9 @@ export const nativeSendMessageId = (sessionId: string, requested: string | undef
   const backend = nativeBackendOfSessionId(sessionId)
   if (!backend) throw new Error(`Not a native session: ${sessionId}`)
   return requested !== undefined && isNativeUserMessageIdFor(backend, requested)
+    && (backend !== 'deepseek' || requested.startsWith(`ndh_u_${sessionId.slice(4, 28)}_`))
     ? requested
-    : createNativeUserMessageId(backend)
+    : createNativeUserMessageId(backend, sessionId)
 }
 
 const NATIVE_COMPACT_COMMAND = /^\/compact(?:\s+([\s\S]*?))?\s*$/

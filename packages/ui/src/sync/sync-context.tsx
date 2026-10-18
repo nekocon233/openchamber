@@ -1,3 +1,4 @@
+import { nativeHistoryRevision } from '@/lib/native-agents/history';
 /* oxlint-disable react/only-export-components */
 import React, { createContext, useContext, useEffect, useRef, useCallback, useMemo } from "react"
 import type { StoreApi } from "zustand"
@@ -174,6 +175,7 @@ import {
   setImperativeSessionMessageLoader,
   type SessionMessageLoadState,
 } from "./session-message-loader"
+import { refreshNativeHistoryOnIdle } from "./native-idle-refresh"
 import { retainEffectResourceThroughReplay } from "./effect-resource-lifecycle"
 
 // ---------------------------------------------------------------------------
@@ -2218,6 +2220,9 @@ export function handleEvent(
       if (idleSessionID && nativeBackendOfSessionId(idleSessionID) === "codex") {
         refreshSessionNativePlan(idleSessionID, directory)
       }
+      // The live projection may have left usage or completion unknown. Re-read
+      // the settled transcript so its records replace the live placeholders.
+      if (idleSessionID) refreshNativeHistoryOnIdle(idleSessionID, directory)
     }
   }
 
@@ -2401,6 +2406,8 @@ export function handleEvent(
   const directoryBeforePatch = payload.type === "session.patched" && payload.properties.patch.directory !== undefined
     ? current.session.find((session) => session.id === payload.properties.sessionID)?.directory
     : undefined
+  const nativeBranchChanged = payload.type === 'session.patched' && payload.properties.sessionID.startsWith('ndh_')
+    && (nativeHistoryRevision(payload.properties.patch.metadata) ?? 0) > (nativeHistoryRevision(current.session.find((session) => session.id === payload.properties.sessionID)?.metadata) ?? 0)
   let sessionMove: SessionMove | null = null
   const draft: State = { ...current }
   const clonedFields = batch?.clonedFields.get(store) ?? new Set<keyof State>()
@@ -2419,6 +2426,7 @@ export function handleEvent(
       cloneField("permission", (value) => ({ ...value }))
       cloneField("form", (value) => ({ ...value }))
       cloneField("part", (value) => ({ ...value }))
+      if (nativeBranchChanged) cloneField("message", (value) => ({ ...value }))
       cloneField("sessionEventRevision", (value) => ({ ...(value ?? {}) }))
       cloneField("sessionDeletedRevision", (value) => ({ ...(value ?? {}) }))
       break
@@ -2478,8 +2486,15 @@ export function handleEvent(
   if (payload.type === "session.revert.committed") {
     const { sessionID } = payload.properties
     getImperativeSessionMessageLoader()?.invalidateSession(
-      { directory: resolvedDirectory, sessionID }, draft.message[sessionID] ?? [],
+      { directory: resolvedDirectory, sessionID }, draft.message[sessionID] ?? [], payload.properties.nativeHistoryRevision,
     )
+  }
+  if (nativeBranchChanged && reducerChanged && payload.type === 'session.patched') {
+    const target = { directory: resolvedDirectory, sessionID: payload.properties.sessionID }
+    const loader = getImperativeSessionMessageLoader()
+    loader?.invalidateSession(target, [], nativeHistoryRevision(payload.properties.patch.metadata) ?? undefined)
+    // Let this event's store commit finish before the authoritative reload.
+    queueMicrotask(() => { void loader?.ensure(target, { force: true }).catch(() => undefined) })
   }
   if (reducerChanged && (payload.type === "session.patched" || payload.type === "session.deleted")) {
     recordDirectoryRecoveryEvent(store, payload)

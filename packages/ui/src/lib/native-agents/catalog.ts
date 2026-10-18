@@ -9,7 +9,7 @@ import { buildNativeProvider, type NativeProvider } from './providers';
 // at most once a minute.
 
 const RETRY_AFTER_FAILURE_MS = 60_000;
-const BACKENDS: NativeBackend[] = ['claude', 'codex'];
+const BACKENDS: NativeBackend[] = ['claude', 'codex', 'deepseek'];
 
 type CatalogState = {
   providers: Map<NativeBackend, NativeProvider>;
@@ -58,6 +58,8 @@ export const loadNativeProviders = async (): Promise<NativeProvider[]> => {
       let complete = true;
       for (const backend of BACKENDS) {
         const partition = catalog.backends[backend];
+        // An older server has no DeepSeek adapter, rather than a failed catalog.
+        if (!partition) { current.providers.delete(backend); continue; }
         if (partition.status === 'ok') {
           if (partition.models.length > 0) current.providers.set(backend, buildNativeProvider(backend, partition.models));
           else current.providers.delete(backend);

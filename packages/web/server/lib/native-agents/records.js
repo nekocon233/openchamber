@@ -11,7 +11,7 @@
 /**
  * @param {object} input
  * @param {string} input.id
- * @param {'claude' | 'codex'} input.backend
+ * @param {'claude' | 'codex' | 'deepseek'} input.backend
  * @param {string} input.directory
  * @param {string} input.title
  * @param {number} input.created

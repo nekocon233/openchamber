@@ -116,7 +116,7 @@ export type SyncEvent =
    * because no `message.removed` follows and a later fetch keeps whatever the
    * store still holds.
    */
-  | { type: "session.revert.committed"; properties: { sessionID: string; to: string } }
+  | { type: "session.revert.committed"; properties: { sessionID: string; to: string; nativeHistoryRevision?: number } }
   | { type: "session.status"; properties: { sessionID: string; status: SessionStatus } }
   /** A native session's whole live set of background tasks; empty once none run. */
   | { type: "session.background.updated"; properties: { sessionID: string; tasks: SessionBackgroundTask[] } }

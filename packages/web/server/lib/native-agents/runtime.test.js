@@ -10,7 +10,7 @@ import { registerCommonRequestMiddleware } from '../opencode/core-routes.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError, sessionNotFoundError } from './errors.js';
 import { registerNativeAgentRoutes } from './routes.js';
-import { createNativeAgentsRuntime } from './runtime.js';
+import { createNativeAgentsRuntime, overlay } from './runtime.js';
 import { createSnapshotStore } from './snapshots.js';
 
 const fixture = (name) => JSON.parse(fs.readFileSync(new URL(`./claude/fixtures/${name}`, import.meta.url), 'utf8'));
@@ -136,6 +136,82 @@ const promptRequest = (messageID) => ({
   parts: [{ type: 'text', text: 'Say done' }],
   model: { providerID: 'claude-native', modelID: 'haiku' },
   agent: 'build',
+});
+
+describe('native live overlay', () => {
+  const overlayRecord = (id, role, created, extra = {}) => ({
+    info: { id, role, time: { created }, ...extra },
+    parts: [],
+  });
+
+  it('uses a completed history record over an unsettled live copy', () => {
+    const history = [overlayRecord('msg', 'assistant', 1, {
+      time: { created: 1, completed: 2 },
+      tokens: { total: 9, input: 4, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+    })];
+    const live = [overlayRecord('msg', 'assistant', 1)];
+    expect(overlay(history, live)[0]).toBe(history[0]);
+  });
+
+  it('keeps a completed live record over history', () => {
+    const live = [overlayRecord('msg', 'assistant', 1, {
+      time: { created: 1, completed: 3 },
+      tokens: { total: 9, input: 4, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+    })];
+    const history = [overlayRecord('msg', 'assistant', 1, { time: { created: 1, completed: 2 } })];
+    expect(overlay(history, live)[0]).toBe(live[0]);
+  });
+
+  it('keeps an unsettled live record when history is also unsettled', () => {
+    const live = [overlayRecord('msg', 'assistant', 1)];
+    const history = [overlayRecord('msg', 'assistant', 1)];
+    expect(overlay(history, live)[0]).toBe(live[0]);
+  });
+
+  it('fills missing live measurements from history without replacing live parts', () => {
+    const tokens = { total: 12, input: 6, output: 3, reasoning: 0, cache: { read: 2, write: 1 } };
+    const history = [overlayRecord('msg', 'assistant', 1, { tokens, contextWindow: 872000 })];
+    const liveParts = [{ id: 'part', type: 'text', text: 'streaming' }];
+    const live = [{ ...overlayRecord('msg', 'assistant', 1), parts: liveParts }];
+    const [merged] = overlay(history, live);
+    expect(merged.info.tokens).toEqual(tokens);
+    expect(merged.info.contextWindow).toBe(872000);
+    expect(merged.parts).toBe(liveParts);
+  });
+
+  it('keeps live measurements even when they are zero', () => {
+    const liveTokens = { total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+    const history = [overlayRecord('msg', 'assistant', 1, {
+      tokens: { total: 9, input: 4, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+    })];
+    const live = [overlayRecord('msg', 'assistant', 1, { tokens: liveTokens })];
+    expect(overlay(history, live)[0].info.tokens).toBe(liveTokens);
+  });
+
+  it('fills only the missing context window', () => {
+    const tokens = { total: 9, input: 4, output: 5, reasoning: 0, cache: { read: 0, write: 0 } };
+    const history = [overlayRecord('msg', 'assistant', 1, { tokens, contextWindow: 872000 })];
+    const live = [overlayRecord('msg', 'assistant', 1, { tokens })];
+    expect(overlay(history, live)[0].info).toMatchObject({ tokens, contextWindow: 872000 });
+  });
+
+  it('does not copy measurements onto non-assistant records', () => {
+    const history = [overlayRecord('msg', 'user', 1, { tokens: { total: 9 } })];
+    const live = [overlayRecord('msg', 'user', 1)];
+    expect(overlay(history, live)[0].info).not.toHaveProperty('tokens');
+  });
+
+  it('keeps ordering and live-only records', () => {
+    const history = [overlayRecord('a', 'assistant', 1), overlayRecord('c', 'assistant', 3)];
+    const live = [overlayRecord('b', 'assistant', 2), overlayRecord('c', 'assistant', 3)];
+    expect(overlay(history, live).map((record) => record.info.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not add a tokens key when neither side measured it', () => {
+    const history = [overlayRecord('msg', 'assistant', 1)];
+    const live = [overlayRecord('msg', 'assistant', 1)];
+    expect(overlay(history, live)[0].info).not.toHaveProperty('tokens');
+  });
 });
 
 describe('native agents runtime', () => {

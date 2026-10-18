@@ -1,7 +1,8 @@
 import { ClaudeConnectionsPage } from './ClaudeConnectionsPage';
 import { CodexConnectionsPage } from './CodexConnectionsPage';
+import { DeepseekHarnessPage } from './DeepseekHarnessPage';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import { NATIVE_PROVIDER_CLAUDE, NATIVE_PROVIDER_CODEX, isNativeProviderId } from '@/lib/native-agents/ids';
+import { NATIVE_PROVIDER_CLAUDE, NATIVE_PROVIDER_CODEX, NATIVE_PROVIDER_DEEPSEEK, isNativeProviderId } from '@/lib/native-agents/ids';
 import { rankByQuery } from '@/lib/search/fuzzySearch';
 import React from 'react';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
@@ -107,7 +108,7 @@ const CODEX_NATIVE_ID = NATIVE_PROVIDER_CODEX;
 
 /** Whether the id names an OpenChamber agent connection rather than an OpenCode provider. */
 const isNativeAgentPageId = (providerId: string): boolean =>
-  providerId === CLAUDE_NATIVE_ID || providerId === CODEX_NATIVE_ID;
+  isNativeProviderId(providerId);
 
 export const ProvidersPage: React.FC = () => {
   const { t } = useI18n();
@@ -607,6 +608,7 @@ export const ProvidersPage: React.FC = () => {
   // so nothing below can render it. Where the runtime cannot reach the CLIs the
   // entry never appears, and the id stays an ordinary (unknown) provider.
   if (nativeAgents.supported && isNativeAgentPageId(selectedProviderId)) {
+    if (selectedProviderId === NATIVE_PROVIDER_DEEPSEEK) return <DeepseekHarnessPage titleLeading={backButton} />;
     return selectedProviderId === CLAUDE_NATIVE_ID ? <ClaudeConnectionsPage titleLeading={backButton} /> : <CodexConnectionsPage titleLeading={backButton} />;
   }
 
@@ -726,6 +728,7 @@ export const ProvidersPage: React.FC = () => {
         nativeEntries={nativeAgents.supported ? [
           { id: CLAUDE_NATIVE_ID, label: t('settings.claudeConnections.title') },
           { id: CODEX_NATIVE_ID, label: t('settings.codexConnections.title') },
+          { id: NATIVE_PROVIDER_DEEPSEEK, label: 'DeepSeek Harness' },
         ] : undefined}
         onSelect={setSelectedProvider}
         onConnect={() => setSelectedProvider(ADD_PROVIDER_ID)}

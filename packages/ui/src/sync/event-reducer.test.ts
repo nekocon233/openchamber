@@ -572,3 +572,24 @@ describe("permission requests", () => {
     expect(apply(draft, { type: "permission.replied", properties: { sessionID: "ses_1", requestID: "perm_x" } })).toBe(false)
   })
 })
+
+describe('DeepSeek branch revisions', () => {
+  const id = `ndh_${'a'.repeat(64)}`;
+  const metadata = (revision: number) => ({ openchamber: { native: { backend: 'deepseek', historyRevision: revision, actions: { revert: true, delete: true } } } });
+  test('a new branch clears the discarded cache even when its native timestamp is older', () => {
+    const record = assistant({ sessionID: id });
+    const draft = state({ session: [session({ id, metadata: metadata(0), time: { created: 1, updated: 100 } })], message: { [id]: [record] }, part: { [record.id]: [] } });
+    expect(apply(draft, { type: 'session.patched', properties: { sessionID: id, patch: { metadata: metadata(1), time: { updated: 50 } } } })).toBe(true);
+    expect(draft.message[id]).toEqual([]);
+    expect(draft.part[record.id]).toBeUndefined();
+    expect(apply(draft, { type: 'session.patched', properties: { sessionID: id, patch: { metadata: metadata(0), time: { updated: 200 } } } })).toBe(false);
+  });
+  test('a received range commit advances the revision without discarding the retained prefix', () => {
+    const kept = assistant({ id: 'msg_kept', sessionID: id });
+    const removed = assistant({ id: 'msg_removed', sessionID: id });
+    const draft = state({ session: [session({ id, metadata: metadata(0), revert: { messageID: removed.id } })], message: { [id]: [kept, removed] } });
+    apply(draft, { type: 'session.revert.committed', properties: { sessionID: id, to: removed.id, nativeHistoryRevision: 1 } });
+    apply(draft, { type: 'session.patched', properties: { sessionID: id, patch: { metadata: metadata(1), revert: null } } });
+    expect(draft.message[id].map((message) => message.id)).toEqual([kept.id]);
+  });
+});

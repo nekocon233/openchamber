@@ -1,5 +1,5 @@
 import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCallbackResultSchema, cliproxyapiCancelResultSchema, cliproxyapiImportResultSchema, cliproxyapiLoginSchema, cliproxyapiModelsSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
-import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
+import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeDeepseekCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
 import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
 import {
@@ -9,7 +9,7 @@ import {
   nativeCatalogSchema,
   nativeChatDirectoriesSchema,
   nativeCommandListSchema,
-  nativeCodexCommandResultSchema,
+  nativeCommandResultSchema,
   nativeDeleteResultSchema,
   nativeMessagePageSchema,
   nativePromptAcceptedSchema,
@@ -32,6 +32,7 @@ import {
 import { runtimeFetch } from '@openchamber/ui/lib/runtime-fetch';
 import { z } from 'zod';
 import { nativeMemoryStatusSchema, nativeMemoryConnectionSchema } from '@openchamber/ui/lib/native-agents/memory-schemas';
+import { deepseekConfigurationSchema, deepseekConfigurationSaveSchema, deepseekSetupStatusSchema, type DeepseekConfigurationWrite } from '@openchamber/ui/lib/native-agents/deepseek';
 
 // Matches the OpenCode read deadline: a half-open socket must not hold a
 // bootstrap or history read forever.
@@ -46,10 +47,12 @@ type NativeWriteBody =
   | CliproxyapiConnectionWrite
   | ClaudeConnectionWrite
   | CodexConnectionWrite
+  | DeepseekConfigurationWrite
   | { backend: NativeBackend; directory: string; title?: string }
   | NativePromptRequest
   | NativeCompactRequest
   | NativeCodexCommandRequest
+  | NativeDeepseekCommandRequest
   | { answers: string[][] }
   | { directory: string; messageID?: string }
   | { directory: string; generation: string }
@@ -152,6 +155,10 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     await sendParsed(`/api/native/claude/connections/${encodeURIComponent(id)}`, nativeDeleteResultSchema, { method: 'DELETE', query: {} });
   },
   listCodexConnections: () => readParsed('/api/native/codex/connections', {}, codexConnectionListSchema),
+  deepseekConfiguration: () => readParsed('/api/native/deepseek/configuration', {}, deepseekConfigurationSchema),
+  saveDeepseekConfiguration: (body) => sendParsed('/api/native/deepseek/configuration', deepseekConfigurationSaveSchema, { method: 'POST', body }),
+  deepseekSetupStatus: (options) => readParsed('/api/native/deepseek/setup', {}, deepseekSetupStatusSchema, options?.signal),
+  setupDeepseek: () => sendParsed('/api/native/deepseek/setup', deepseekSetupStatusSchema, { method: 'POST' }),
   saveCodexConnection: (id, body) => sendParsed(
     id ? `/api/native/codex/connections/${encodeURIComponent(id)}` : '/api/native/codex/connections',
     codexConnectionSchema,
@@ -160,13 +167,12 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   deleteCodexConnection: async (id) => {
     await sendParsed(`/api/native/codex/connections/${encodeURIComponent(id)}`, nativeDeleteResultSchema, { method: 'DELETE', query: {} });
   },
-  codexCommand: (request) => writeParsed('/api/native/codex/command', nativeCodexCommandResultSchema, request),
-  commands: (backend, directory, options) => readParsed(
-    '/api/native/commands',
-    { backend, directory },
-    nativeCommandListSchema,
-    options?.signal,
-  ),
+  codexCommand: (request) => writeParsed('/api/native/codex/command', nativeCommandResultSchema, request),
+  deepseekCommand: (request) => writeParsed('/api/native/deepseek/command', nativeCommandResultSchema, request),
+  commands: (backend, directory, options) => {
+    if (options?.sessionId) return readParsed('/api/native/commands', { backend, directory, sessionId: options.sessionId }, nativeCommandListSchema, options.signal);
+    return readParsed('/api/native/commands', { backend, directory }, nativeCommandListSchema, options?.signal);
+  },
   listSessions: (directory, options) => readParsed(
     '/api/native/sessions',
     { directory },

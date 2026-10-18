@@ -7,9 +7,10 @@
 // compaction message, the marker the UI shows for OpenCode's own compactions.
 // Its item id also starts a new assistant segment, preserving both sides of
 // the boundary when the UI reconciles messages by id.
-// Live item notifications carry start/completion times; persisted items do
-// not, so history parts fall back to turn times. Message creation times stay
-// strictly increasing in turn order.
+// Live item notifications carry start/completion times, and history recovers
+// them from the rollout's item_completed records. Only items without a time
+// fall back to turn times. Message creation times stay strictly increasing in
+// turn order.
 
 import { z } from 'zod';
 
@@ -55,6 +56,23 @@ const outcomeOf = (turn) => {
   return null;
 };
 
+const partEnd = (part) => part.time?.end ?? part.state?.time?.end;
+
+/**
+ * A turn's completedAt has second precision; an item's end can land after it.
+ * The assistant step covers every finished part it issued.
+ */
+const extendAssistantCompleted = (assistant, parts) => {
+  const completed = assistant.info.time.completed;
+  if (completed === undefined) return;
+  let latest = completed;
+  for (const part of parts) {
+    const end = partEnd(part);
+    if (typeof end === 'number' && Number.isFinite(end) && end > latest) latest = end;
+  }
+  assistant.info.time.completed = latest;
+};
+
 /**
  * Id for a user message: the id OpenChamber sent with it, else one derived
  * from the thread item for messages typed in another Codex client.
@@ -95,7 +113,7 @@ export const codexUserMessages = ({ threadId, turns }) => {
  * @param {unknown[]} input.turns oldest first
  * @param {string} input.threadModel model the thread last ran with
  * @param {(userMessageId: string) => ({ modelID: string, variant?: string, agent: string } | null)} [input.sendRecordFor]
- * @param {Map<string, { start: number, end: number | null }>} [input.itemTimes] live item lifecycle timestamps in milliseconds
+ * @param {Map<string, { start: number, end: number | null }>} [input.itemTimes] item lifecycle timestamps in milliseconds, live or recovered from the rollout
  */
 export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel, sendRecordFor = () => null, itemTimes, details = new Map() }) => {
   const records = [];
@@ -236,6 +254,7 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
       }
 
       currentAssistant.parts.push(...parts);
+      extendAssistantCompleted(currentAssistant, parts);
     }
   }
   return records;

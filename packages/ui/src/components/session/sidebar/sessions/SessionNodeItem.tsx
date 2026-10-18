@@ -254,7 +254,7 @@ type QuickSessionActionProps = {
   onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onMouseDown: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onArchive: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  onDelete: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onDelete?: (event: React.MouseEvent<HTMLButtonElement>) => void;
 };
 
 // Extracted so only this small button re-renders when Shift is pressed/released,
@@ -270,10 +270,11 @@ const QuickSessionAction = React.memo(function QuickSessionAction({
   onDelete,
 }: QuickSessionActionProps): React.ReactNode {
   const shiftHeld = useShiftKeyHeld();
-  const label = shiftHeld ? deleteLabel : archiveLabel;
+  const deleting = shiftHeld && Boolean(onDelete);
+  const label = deleting ? deleteLabel : archiveLabel;
 
   const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-    if (shiftHeld || event.shiftKey) {
+    if ((shiftHeld || event.shiftKey) && onDelete) {
       onDelete(event);
       return;
     }
@@ -287,7 +288,7 @@ const QuickSessionAction = React.memo(function QuickSessionAction({
           type="button"
           className={cn(
             'inline-flex items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-opacity',
-            shiftHeld
+            deleting
               ? 'text-destructive hover:text-destructive'
               : 'text-muted-foreground hover:text-foreground',
             buttonSizeClass,
@@ -298,7 +299,7 @@ const QuickSessionAction = React.memo(function QuickSessionAction({
           onClick={handleClick}
           onKeyDown={(event) => event.stopPropagation()}
         >
-          <Icon name={shiftHeld ? 'delete-bin' : 'archive'} className={iconSizeClass} />
+          <Icon name={deleting ? 'delete-bin' : 'archive'} className={iconSizeClass} />
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" sideOffset={6}>
@@ -669,7 +670,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   // Timeline rows stay flat, except In work's two contexts, which keep children
   // like the Tree zones. List's Pinned rows and other timeline rows do not.
   const hasChildren = sessionRowCanExpand(renderContext, isTimelineRow) && node.children.length > 0;
-  const actionSupport = sessionActionSupport(session.id);
+  const actionSupport = sessionActionSupport(session.id, session.metadata);
   // Per-render-context expansion key: the same session can appear in both
   // the project's root and the "Recent" list, and expanding one should not
   // expand the other. Matches the format of menuInstanceKey.
@@ -1581,12 +1582,12 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
         </Item>
         </SessionMenuItemHint>
       ) : null}
-      <SessionMenuItemHint hint={t('sessions.sidebar.session.menuHint.delete')}>
+      {actionSupport.delete ? <SessionMenuItemHint hint={t('sessions.sidebar.session.menuHint.delete')}>
       <Item className="text-destructive focus:text-destructive [&>svg]:me-1" onClick={() => handleDeleteSession(session, { archivedBucket, hardDelete: true })}>
         <Icon name="delete-bin" className="me-1 h-4 w-4" />
         {t('sessions.sidebar.bulkActions.delete')}
       </Item>
-      </SessionMenuItemHint>
+      </SessionMenuItemHint> : null}
     </>
   );
 
@@ -1963,7 +1964,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 onPointerDown={handleRowActionPointerDown}
                 onMouseDown={handleRowActionMouseDown}
                 onArchive={handleQuickArchiveClick}
-                onDelete={handleQuickDeleteClick}
+                onDelete={actionSupport.delete ? handleQuickDeleteClick : undefined}
               />
             ) : null}
             {showOpenInEditorAction ? (

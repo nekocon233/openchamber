@@ -140,6 +140,35 @@ describe('Claude history projection', () => {
     const withoutResolver = projectHistory(fixture('haiku-tools.session-messages.json'));
     expect(withoutResolver[1].info).not.toHaveProperty('contextWindow');
   });
+
+  it('keeps measured usage when a later block of the same API message has none', () => {
+    const records = projectHistory([
+      { type: 'user', uuid: 'usage-prompt', message: { role: 'user', content: 'Check the parser.' } },
+      { type: 'assistant', uuid: 'usage-first', timestamp: '2026-09-24T10:00:00.000Z', message: {
+        id: 'msg_usage', model: 'gpt-6.1-sol', stop_reason: 'tool_use',
+        content: [{ type: 'text', text: 'Working.' }],
+        usage: { input_tokens: 6, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 },
+      } },
+      { type: 'assistant', uuid: 'usage-second', timestamp: '2026-09-24T10:00:01.000Z', message: {
+        id: 'msg_usage', model: 'gpt-6.1-sol', stop_reason: 'tool_use',
+        content: [{ type: 'tool_use', id: 'tool-read', name: 'Read', input: { file_path: '/work/project/a.txt' } }],
+      } },
+    ]);
+    const assistant = records.find((record) => record.info.role === 'assistant');
+    expect(assistant.info.tokens).toEqual({ total: 12, input: 6, output: 3, reasoning: 0, cache: { read: 2, write: 1 } });
+  });
+
+  it('leaves tokens unknown when the assistant entry carries no usage', () => {
+    const records = projectHistory([
+      { type: 'user', uuid: 'unknown-prompt', message: { role: 'user', content: 'Check the parser.' } },
+      { type: 'assistant', uuid: 'unknown-answer', timestamp: '2026-09-24T10:00:02.000Z', message: {
+        id: 'msg_unknown_usage', model: 'gpt-6.1-sol', stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'Done.' }],
+      } },
+    ]);
+    const assistant = records.find((record) => record.info.role === 'assistant');
+    expect(assistant.info).not.toHaveProperty('tokens');
+  });
 });
 
 describe('Claude placeholder model projection', () => {
@@ -270,11 +299,11 @@ describe('Claude live usage projection', () => {
       message: { id: 'msg_proxy', model: 'gpt-6.1-sol', content: [], usage: { input_tokens: 6, output_tokens: 0 } },
     } });
     const assistant = () => projection.records().find((record) => record.info.role === 'assistant');
-    expect(assistant().info.tokens).toEqual({ total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
+    expect(assistant().info).not.toHaveProperty('tokens');
     projection.applyStreamEvent({ type: 'stream_event', event: {
       type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 },
     } });
-    expect(assistant().info.tokens.total).toBe(0);
+    expect(assistant().info).not.toHaveProperty('tokens');
     expect(projection.applyResult({
       usage: { iterations: [{ input_tokens: 6, output_tokens: 3, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 }] },
       modelUsage: { 'gpt-6.1-sol': { contextWindow: 872000, maxOutputTokens: 128000 } },
@@ -304,7 +333,7 @@ describe('Claude live usage projection', () => {
         usage: { input_tokens: 6, output_tokens: 3 },
       },
     });
-    expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens.total).toBe(0);
+    expect(projection.records().find((record) => record.info.role === 'assistant').info).not.toHaveProperty('tokens');
   });
 
   it('applies a single result iteration only to the final assistant message', () => {
@@ -320,7 +349,7 @@ describe('Claude live usage projection', () => {
       usage: { iterations: [{ input_tokens: 8, output_tokens: 225, cache_read_input_tokens: 17989, cache_creation_input_tokens: 873 }] },
       modelUsage: { 'gpt-6.1-sol': { contextWindow: 872000 } },
     });
-    expect(assistants[0].info.tokens.total).toBe(0);
+    expect(assistants[0].info).not.toHaveProperty('tokens');
     expect(assistants[1].info.tokens).toEqual({ total: 19095, input: 8, output: 225, reasoning: 0, cache: { read: 17989, write: 873 } });
     expect(assistants.map((record) => record.info.contextWindow)).toEqual([872000, 872000]);
   });
@@ -390,6 +419,7 @@ describe('Claude compaction projection', () => {
     // The history read does not say what started it, so the marker makes no claim.
     expect(boundary.parts).toEqual([expect.objectContaining({ type: 'compaction', auto: false })]);
     expect(summary.info).toMatchObject({ role: 'assistant', summary: true, finish: 'stop', parentID: 'ncl_k_boundary-1' });
+    expect(summary.info.tokens.total).toBe(0);
     expect(summary.parts[0].text).toContain('continued from a previous conversation');
     expect(preserved.info.parentID).toBe('ncl_k_boundary-1');
   });
@@ -434,6 +464,7 @@ describe('Claude compaction projection', () => {
     const [prompt, failure] = projection.records();
     expect(compareMessagesChronologically(prompt.info, failure.info)).toBeLessThan(0);
     expect(failure.info.time.completed).toBeGreaterThanOrEqual(failure.info.time.created);
+    expect(failure.info.tokens.total).toBe(0);
   });
 
   it('shows nothing for the other system entries a history read returns', () => {

@@ -23,7 +23,7 @@ type Props = {
   canRemoveFromFolder: boolean;
   onRestore: () => void;
   onArchive: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
   onDone: () => void;
 };
 
@@ -134,7 +134,7 @@ export const BulkActionBar: React.FC<Props> = ({
           </Tooltip>
         ) : null}
 
-        <Tooltip>
+        {onDelete ? <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
@@ -147,7 +147,7 @@ export const BulkActionBar: React.FC<Props> = ({
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" sideOffset={4}><p>{t('sessions.sidebar.bulkActions.delete')}</p></TooltipContent>
-        </Tooltip>
+        </Tooltip> : null}
 
         <Tooltip>
           <TooltipTrigger asChild>

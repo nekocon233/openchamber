@@ -9,6 +9,7 @@
 // - the model, effort and agent each OpenChamber prompt was sent with;
 // - the work-tree snapshots taken around each OpenChamber turn, and a revert
 //   waiting for the CLI to rewind the conversation.
+// - DSH's opaque session identity behind its route-safe hash.
 //
 // Persistence rules: a missing file is an empty registry; an unparseable file
 // is moved aside and the registry starts empty (reported through `status()`);
@@ -19,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { deepseekHistorySchema, deepseekRewindSchema } from './deepseek/history.js';
 
 const MAX_SENDS_PER_SESSION = 200;
 const MAX_TURNS_PER_SESSION = 200;
@@ -53,7 +55,7 @@ const checklistProjectionSchema = z.object({
 });
 
 const sessionEntrySchema = z.object({
-  backend: z.enum(['claude', 'codex']),
+  backend: z.enum(['claude', 'codex', 'deepseek']),
   nativeId: z.string().min(1),
   directory: z.string().min(1),
   origin: z.enum(['openchamber', 'adopted']),
@@ -61,6 +63,8 @@ const sessionEntrySchema = z.object({
   confirmedAt: z.number().optional(),
   archivedAt: z.number().optional(),
   title: z.string().optional(),
+  deepseekHistory: deepseekHistorySchema.optional(),
+  deepseekDeletion: z.object({ root: z.string().min(1) }).optional(),
   // Malformed metadata is dropped; it never costs the session its entry.
   metadata: metadataSchema.optional().catch(undefined),
   // Captured launch source only. Never exposed in a session/API record.
@@ -98,6 +102,7 @@ const pendingRevertSchema = z.object({
   files: z.array(z.string()),
   resumeAt: z.string().min(1).optional(),
   beforeTurnId: z.string().min(1).optional(),
+  deepseek: deepseekRewindSchema.optional(),
 });
 
 const registryFileSchema = z.object({
@@ -235,7 +240,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
       return state.sessions.get(sessionId) ?? null;
     },
 
-    /** @param {{ backend?: 'claude' | 'codex', directory?: string }} [filter] */
+    /** @param {{ backend?: 'claude' | 'codex' | 'deepseek', directory?: string }} [filter] */
     async listSessions(filter = {}) {
       await load();
       return Array.from(state.sessions, ([sessionId, entry]) => ({ sessionId, ...entry }))
@@ -246,7 +251,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
     /**
      * Sessions OpenChamber created that no finished turn has confirmed yet.
      * The CLI may have no transcript for them, so they exist here alone.
-     * @param {{ backend?: 'claude' | 'codex', directory?: string, sessionId?: string }} [filter]
+     * @param {{ backend?: 'claude' | 'codex' | 'deepseek', directory?: string, sessionId?: string }} [filter]
      */
     async unconfirmedSessions(filter = {}) {
       await load();
@@ -303,6 +308,30 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
         next.sends.delete(sessionId);
         next.turns.delete(sessionId);
         next.reverts.delete(sessionId);
+      });
+    },
+
+    /** One durable branch binding; the original session identity never changes. */
+    setDeepseekHistory(sessionId, history) {
+      const parsed = deepseekHistorySchema.parse(history);
+      return mutate((next) => {
+        const entry = next.sessions.get(sessionId);
+        if (!entry || entry.backend !== 'deepseek') throw new Error('Unknown DeepSeek session');
+        next.sessions.set(sessionId, { ...entry, deepseekHistory: parsed });
+      });
+    },
+
+    /** Intent survives native deletion until integration cleanup is durable. */
+    setDeepseekDeletion(sessionId, intent) {
+      return mutate((next) => {
+        const entry = next.sessions.get(sessionId);
+        if (!entry || entry.backend !== 'deepseek') throw new Error('Unknown DeepSeek session');
+        const updated = { ...entry };
+        if (intent === null) delete updated.deepseekDeletion;
+        else updated.deepseekDeletion = intent;
+        const parsed = sessionEntrySchema.parse(updated);
+        next.sessions.set(sessionId, parsed);
+        return parsed;
       });
     },
 

@@ -41,6 +41,7 @@ import { toast } from 'sonner';
 import { useCopyMessageLink } from './message/useCopyMessageLink';
 import { useI18n } from '@/lib/i18n';
 import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { sessionActionSupport } from '@/lib/native-agents/capabilities';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { getContextObligatoryMessages } from '@/lib/contextObligatoryMessages';
 import { setContextObligatoryMessage } from '@/sync/session-actions';
@@ -128,6 +129,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     reviewTransferDirection = null,
 }) => {
     const { t } = useI18n();
+    const canRevert = useGlobalSessionsStore((state) => sessionActionSupport(message.info.sessionID, state.entityById.get(message.info.sessionID)?.metadata).revert);
     const { isMobile, isTablet, hasTouchInput } = useDeviceInfo();
     const alwaysShowMessageActions = isMobile || isTablet;
     // Pins ride along OpenCode prompts as OpenChamber context; a native CLI
@@ -699,7 +701,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 copiedMessage={copiedMessage}
                                                 showReasoningTraces={showReasoningTraces}
                                                 agentMention={agentMention}
-                                                onRevert={handleRevert}
+                                                onRevert={canRevert ? handleRevert : undefined}
                                                 onFork={isUser ? handleFork : undefined}
                                                 contextPinned={isPinnedIntoContext}
                                                 contextPinPending={pinPending}
@@ -734,7 +736,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                         copiedMessage={copiedMessage}
                                         showReasoningTraces={showReasoningTraces}
                                         agentMention={agentMention}
-                                        onRevert={handleRevert}
+                                        onRevert={canRevert ? handleRevert : undefined}
                                         onFork={isUser ? handleFork : undefined}
                                         contextPinned={isPinnedIntoContext}
                                         contextPinPending={pinPending}

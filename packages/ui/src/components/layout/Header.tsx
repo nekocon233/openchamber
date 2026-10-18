@@ -1,3 +1,5 @@
+import { takeSessionActionFailure } from '@/sync/session-action-failures';
+import { describeSessionActionError } from '@/components/session/sidebar/sessions/sessionActionError';
 import React, { useEffect } from 'react';
 import { useGuestsStore } from '@/lib/guests/store';
 import {
@@ -87,6 +89,8 @@ type HeaderSessionSnapshot = {
   created: number | null;
   slug: string | null;
   parentId: string | null;
+  canRevert: boolean;
+  canDelete: boolean;
 };
 
 export const Header: React.FC = () => {
@@ -108,12 +112,15 @@ export const Header: React.FC = () => {
          .find((candidate) => candidate.id === currentSessionId);
       if (!session) return null;
       const record = session as typeof session & { directory?: string | null; slug?: string | null };
+      const support = sessionActionSupport(session.id, session.metadata);
       return {
         title: session.title ?? null,
         directory: record.directory ?? null,
         created: session.time?.created ?? null,
         slug: record.slug ?? null,
         parentId: session.parentID ?? null,
+        canRevert: support.revert,
+        canDelete: support.delete,
       };
     },
     [currentSessionId],
@@ -341,7 +348,7 @@ export const Header: React.FC = () => {
     return normalize(raw || '');
   }, [currentSession?.directory]);
   const isCurrentSessionAiRenaming = useIsSessionAiRenamePending(currentSessionId ?? '', sessionDirectory);
-  const currentSessionActionSupport = currentSessionId ? sessionActionSupport(currentSessionId) : null;
+  const currentSessionActionSupport = currentSessionId ? { ...sessionActionSupport(currentSessionId), revert: currentSession?.canRevert ?? false, delete: currentSession?.canDelete ?? false } : null;
 
   const draftDirectory = useSessionUIStore((state) => {
     if (!state.newSessionDraft?.open) {
@@ -585,7 +592,10 @@ export const Header: React.FC = () => {
     const reopenId = useSessionUIStore.getState().currentSessionId === sessionId ? sessionId : null;
     if (action === 'delete') {
       const { failedIds } = await deleteSessions(ids);
-      if (failedIds.length > 0) toast.error(t('sessions.sidebar.session.delete.error'));
+      if (failedIds.length > 0) {
+        const error = takeSessionActionFailure(failedIds);
+        toast.error(t('sessions.sidebar.session.delete.error'), error ? { description: describeSessionActionError(error, t) } : undefined);
+      }
       else toast.success(t('sessions.sidebar.session.delete.success'));
       return;
     }
@@ -949,7 +959,7 @@ export const Header: React.FC = () => {
 
   const renderSessionTabMenu = React.useCallback(({ session, open, isActive, select, closeOtherTabs, components }: SessionTabMenuArgs) => {
     const { Item, Separator } = components;
-    const support = sessionActionSupport(session.id);
+    const support = sessionActionSupport(session.id, session.metadata);
     const canMoveToWorktree = support.moveToWorktree && isActive && !isVSCode && !isChatContext && currentSession && !currentSession.parentId;
     const canMoveToProject = isActive && !isVSCode && isChatContext && currentSession && !currentSession.parentId && hasProjects;
     return (
@@ -1025,11 +1035,11 @@ export const Header: React.FC = () => {
           Item={Item}
           onArchive={() => setPendingHeaderRetentionAction({ action: 'archive', sessionId: session.id })}
         />
-        <SessionMenuItemHint hint={t('sessions.sidebar.session.menuHint.delete')}>
+        {support.delete ? <SessionMenuItemHint hint={t('sessions.sidebar.session.menuHint.delete')}>
           <Item className="text-destructive focus:text-destructive" onClick={() => setPendingHeaderRetentionAction({ action: 'delete', sessionId: session.id })}>
             <Icon name="delete-bin" className="me-1 size-4" />{t('sessions.sidebar.bulkActions.delete')}
           </Item>
-        </SessionMenuItemHint>
+        </SessionMenuItemHint> : null}
       </>
     );
   }, [copySessionIdFor, currentSession, currentSessionOpenDirectory, exportCurrentSession, hasElectronDesktopIPC, hasProjects, isChatContext, isCurrentSessionActive, isCurrentSessionMovingToWorktree, isVSCode, moveCurrentSessionToWorktree, openSessionInMiniChat, renderGuestSessionActionItems, sessionDirectory, t]);
@@ -1237,7 +1247,7 @@ export const Header: React.FC = () => {
                       Item={DropdownMenuItem}
                       onArchive={() => setPendingHeaderRetentionAction({ action: 'archive', sessionId: currentSessionId })}
                     />
-                    <SessionMenuItemHint hint={t('sessions.sidebar.session.menuHint.delete')}><DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => { if (currentSessionId) setPendingHeaderRetentionAction({ action: 'delete', sessionId: currentSessionId }); }}><Icon name="delete-bin" className="me-1 size-4" />{t('sessions.sidebar.bulkActions.delete')}</DropdownMenuItem></SessionMenuItemHint>
+                    {currentSessionActionSupport?.delete ? <SessionMenuItemHint hint={t('sessions.sidebar.session.menuHint.delete')}><DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => { if (currentSessionId) setPendingHeaderRetentionAction({ action: 'delete', sessionId: currentSessionId }); }}><Icon name="delete-bin" className="me-1 size-4" />{t('sessions.sidebar.bulkActions.delete')}</DropdownMenuItem></SessionMenuItemHint> : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}

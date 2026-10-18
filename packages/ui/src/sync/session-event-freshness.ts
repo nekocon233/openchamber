@@ -1,4 +1,5 @@
 import type { Session } from "@/lib/opencode/model"
+import { nativeHistoryRevision } from "@/lib/native-agents/history"
 
 const MAX_REMOVAL_HISTORY = 5_000
 let removalRevision = 0
@@ -38,5 +39,10 @@ const getSessionRecencyTimestamp = (session: Session): number => {
 
 export const shouldSkipStaleSessionEvent = (currentSession: Session | null, incomingSession: Session): boolean => {
   if (!currentSession) return false
+  if (incomingSession.id.startsWith('ndh_')) {
+    const before = nativeHistoryRevision(currentSession.metadata)
+    const after = nativeHistoryRevision(incomingSession.metadata)
+    if (before !== null && after !== null && before !== after) return after < before
+  }
   return getSessionRecencyTimestamp(incomingSession) < getSessionRecencyTimestamp(currentSession)
 }

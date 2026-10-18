@@ -5,6 +5,7 @@ import {
   encodeClaudeChildSessionId,
   encodeClaudeSessionId,
   encodeCodexSessionId,
+  encodeDeepseekSessionId,
   isCodexPlanApprovalMessageId,
   isNativeClientUserMessageId,
   isNativeSessionId,
@@ -19,6 +20,15 @@ const CODEX_THREAD = '01a0d2a6-b55b-7162-a837-c62053537e00';
 const TOOL_USE = 'toolu_01VAnMEDHHeuo92ZtfbaNtwQ';
 
 describe('native session ids', () => {
+  it('keeps opaque DeepSeek ids bounded and scopes client ids to their session', () => {
+    const id = encodeDeepseekSessionId('session / arbitrary identity '.repeat(20));
+    expect(id).toMatch(/^ndh_[a-f0-9]{64}$/);
+    expect(decodeNativeSessionId(id)).toEqual({ backend: 'deepseek', key: id.slice(4) });
+    expect(nativeBackendOfProviderId('deepseek-native')).toBe('deepseek');
+    const messageId = newNativeClientUserMessageId(id);
+    expect(isNativeClientUserMessageId(messageId)).toBe(true);
+    expect(messageId.startsWith(`ndh_u_${id.slice(4, 28)}_`)).toBe(true);
+  });
   it('round-trips Claude, Claude subagent and Codex ids', () => {
     expect(decodeNativeSessionId(encodeClaudeSessionId(CLAUDE_UUID))).toEqual({
       backend: 'claude', sessionUuid: CLAUDE_UUID, toolUseId: null,

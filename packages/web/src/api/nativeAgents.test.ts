@@ -29,6 +29,45 @@ afterEach(() => {
 });
 
 describe('web native agents API', () => {
+  it('starts one-click DeepSeek setup with no credentials or executable arguments', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
+      if (init?.body) bodies.push(String(init.body));
+      return Response.json({ state: init?.method === 'POST' ? 'installing' : 'needs-key' });
+    });
+    const api = createWebNativeAgentsAPI();
+    expect(await api.setupDeepseek()).toEqual({ state: 'installing' });
+    expect(await api.deepseekSetupStatus()).toEqual({ state: 'needs-key' });
+    expect(requests.map((url) => url.pathname)).toEqual(['/api/native/deepseek/setup', '/api/native/deepseek/setup']);
+    expect(bodies).toEqual(['{}']);
+  });
+
+  it('saves DeepSeek configuration on the connected runtime and preserves explicit partial failures', async () => {
+    const configuration = { revision: 2, writable: true, baseURL: 'https://provider.test/anthropic', modelIDs: ['model-a'], credential: { configured: false, writable: true } };
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
+      if (init?.body) bodies.push(String(init.body));
+      return Response.json(init?.method === 'POST' ? { status: 'credential-error', configuration } : configuration);
+    });
+    const api = createWebNativeAgentsAPI();
+    expect(await api.deepseekConfiguration()).toEqual(configuration);
+    const input = { revision: 1, baseURL: configuration.baseURL, modelIDs: configuration.modelIDs, apiKey: 'fixture-api-key' };
+    expect(await api.saveDeepseekConfiguration(input)).toEqual({ status: 'credential-error', configuration });
+    expect(requests.map((url) => url.pathname)).toEqual(['/api/native/deepseek/configuration', '/api/native/deepseek/configuration']);
+    expect(JSON.parse(bodies[0])).toEqual(input);
+  });
+
+  it('uses the DeepSeek command route and includes session identity in command discovery', async () => {
+    stubFetch(async () => Response.json({ kind: 'output', entries: [], notices: ['Plan mode on.'] }));
+    const api = createWebNativeAgentsAPI();
+    await api.deepseekCommand({ sessionId: 'ndh_test', directory: '/work/project', line: '/plan' });
+    expect(requests[0]?.pathname).toBe('/api/native/deepseek/command');
+    stubFetch(async () => Response.json({ commands: [] }));
+    await api.commands('deepseek', '/work/project', { sessionId: 'ndh_test' });
+    expect(requests[1]?.searchParams.get('sessionId')).toBe('ndh_test');
+  });
   it('uses the dedicated Codex command route and parses the output without creating a prompt', async () => {
     const bodies: string[] = [];
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {

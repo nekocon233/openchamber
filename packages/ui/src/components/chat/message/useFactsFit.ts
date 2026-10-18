@@ -20,7 +20,7 @@ import React from 'react';
  * after a render it runs only when the row mounted or its text changed; a
  * resize or a web font finishing loading refits through the listeners.
  */
-export const useFactsFit = (ref: React.RefObject<HTMLElement | null>): void => {
+export const useFactsFit = (ref: React.RefObject<HTMLElement | null>, enabled = true): void => {
   // The row last fitted and its text then. Reading textContent forces no layout.
   const fittedRef = React.useRef<{ container: HTMLElement; text: string | null } | null>(null);
   const observedRef = React.useRef<{ container: HTMLElement; release: () => void } | null>(null);
@@ -29,6 +29,17 @@ export const useFactsFit = (ref: React.RefObject<HTMLElement | null>): void => {
   // while a turn finishes (the duration keeps counting), and that changes what
   // fits without changing any box the observer watches.
   React.useLayoutEffect(() => {
+    if (!enabled) {
+      observedRef.current?.release();
+      observedRef.current = null;
+      if (fittedRef.current) {
+        for (const fact of fittedRef.current.container.querySelectorAll<HTMLElement>('[data-fact-priority]')) {
+          fact.style.display = '';
+        }
+        fittedRef.current = null;
+      }
+      return;
+    }
     const container = ref.current;
     if (observedRef.current?.container !== container) {
       observedRef.current?.release();

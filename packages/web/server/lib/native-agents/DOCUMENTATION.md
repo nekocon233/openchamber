@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Lets OpenChamber act as a frontend for the user's own Claude Code and Codex
-CLIs. The CLI's session store is the only source of truth: this module reads
+Lets OpenChamber act as a frontend for the user's own Claude Code, Codex and
+DeepSeek Harness CLIs. The CLI's session store is the only source of truth: this module reads
 it, projects it into the Session, Message and Part records the shared UI
 already renders, and never keeps a copy of the conversation. Native sessions
 sit next to OpenCode sessions in the same projects and sidebar, but OpenCode
@@ -11,10 +11,14 @@ never sees them.
 
 OpenChamber retains lossless selections made through its own question UI as
 integration metadata. Question text, tools and replies still come from the CLI.
+DeepSeek's process authentication, Web protocol, event-position cursors,
+remote provider configuration and operation limits are owned by
+`deepseek/DOCUMENTATION.md`. Read it when changing
+that adapter or its shared UI contracts.
 Shared long-term memory and project handoffs are owned by
 `../agent-memory/DOCUMENTATION.md`, not by the native transcript stores.
 
-OpenChamber lists and reads both CLIs' sessions, creates sessions, and drives
+OpenChamber lists and reads the CLIs' sessions, creates sessions, and drives
 turns: prompts, steering, stops, model and effort changes, plan mode and the
 model's questions. Every tool runs without asking. Reverts, forks, rename,
 archive, delete and compaction work the way they do for OpenCode sessions.
@@ -66,7 +70,7 @@ manually sent prompt never reuses an automatic approval's provenance.
 ## Listing
 
 `GET /api/native/sessions?directory=` reports each backend separately:
-`{ backends: { claude, codex } }`, each `{ status: 'ok', sessions }` or
+`{ backends: { claude, codex, deepseek } }`, each `{ status: 'ok', sessions }` or
 `{ status: 'error', message }`. One backend failing never hides the other,
 and the UI keeps its previous sessions for a failed backend.
 
@@ -80,6 +84,10 @@ and the UI keeps its previous sessions for a failed backend.
   source `vscode`.
 - Subagents are never listed. Loading a parent's history returns them as
   `childSessions`, the only place they open from.
+- DeepSeek lists persisted Web root summaries with `session/list`. Its stable
+  logical ids can bind to active native forks after rewind; registry history
+  metadata hides their internal predecessors. Older
+  servers omit `deepseek`; that is unsupported, not an empty success.
 - `GET /api/native/chat-directories` returns `{ directories }`: the
   directories of registry sessions below a managed chats root, matched by
   the root's configured and real path. Each managed chat has a directory of
@@ -105,9 +113,14 @@ depends on:
 - Every part carries `sessionID`. Finished text parts have `time.end`;
   finished tools have `state.time.end`. A tool that never got a result is
   settled as interrupted.
-- An assistant message's `time.completed` covers every finished tool it
-  issued: a later tool result extends it. OpenCode completes a step after its
-  tools, and turn telemetry subtracts tool time inside that window.
+- Codex history recovers each item's start and end from the rollout's
+  `item_completed` records. Synthesized question and skill rows take the time
+  of the response record that produced them. An item without a recorded time
+  falls back to its turn's bounds.
+- An assistant message's `time.completed` covers every finished part it
+  issued: a later tool result, or an item end later than the second-precision
+  turn end, extends it. OpenCode completes a step after its tools, and turn
+  telemetry subtracts tool time inside that window.
 - Tool names map onto the tools the UI knows (`Bash` to `bash`, `Edit` and
   `MultiEdit` to `edit`, Codex `commandExecution` to `bash`, `fileChange` to
   `apply_patch`, MCP tools to `<server>_<tool>`), with the file diff metadata
@@ -215,9 +228,14 @@ Codex gotchas:
   project's session into the currently selected project.
 - History comes from `thread/turns/list { itemsView: 'full' }`; reading it
   does not resume the thread.
-- That RPC omits usage and user-input calls. `codex/history-details.js` streams
-  supplemental metadata from the app-server supplied rollout, verifies the
-  thread identity and joins only retained turns. Modern `token_usage_record`
+- That RPC omits usage, item lifecycle times and user-input calls.
+  `codex/history-details.js` streams supplemental metadata from the app-server
+  supplied rollout, verifies the thread identity and joins only retained
+  turns. It records each `item_completed` event's `started_at_ms` and
+  `completed_at_ms`. Synthesized question rows use the `function_call` line
+  time as their start and the `function_call_output` or `retained_context`
+  line time as their end; synthesized skill rows use the response line time.
+  Modern `token_usage_record`
   and legacy `token_count` records share one counter ledger, so a request
   represented in both is counted once. Question calls and verified answers
   restore the question tool row. Explicit skill attachments and successful
@@ -227,6 +245,10 @@ Codex gotchas:
   `tokens.total` is the final request window. `contextWindow` is the effective
   limit the CLI reported. Missing usage or monetary cost is unknown, not zero.
   Per-turn model/effort metadata fills gaps in the bounded send registry.
+- A turn's `completedAt` has second precision; an item end can land after it.
+  The projector extends the assistant's `time.completed` to the latest
+  finished part. Items without a recorded time still fall back to the turn's
+  bounds.
 - A steer starts a new user message segment inside the same turn. Failed and
   interrupted turns carry an error on their assistant message.
 - Only JSON-RPC `-32600` "thread not loaded" or "invalid thread id" means a
@@ -269,9 +291,12 @@ kept open between turns.
   result that arrives afterwards moves `time.completed` to the result time.
   Usage
   accumulates privately from `message_start` and each `message_delta`; it is
-  written to the message only after both cache fields have arrived. Proxied
-  streams can omit those fields until the result frame, and incomplete usage is
-  unknown rather than zero. A successful result frame then applies its
+  written to the message only after both cache fields have arrived. A proxied
+  stream that omits them leaves the message without `tokens`, so the UI hides
+  the measurement instead of reading a false zero. A history read fills a live
+  record's missing `tokens` and `contextWindow` from the transcript, and a
+  settled Claude turn refreshes the open transcript so those measurements
+  replace the live placeholder. A successful result frame then applies its
   per-request `usage.iterations`: a one-to-one count updates every assistant in
   the turn, and any other count updates only the final assistant. The frame's
   aggregate usage never describes one message. Its `modelUsage` also stamps the
@@ -377,15 +402,21 @@ Codex (`codex/live.js`): turns on the shared app-server.
 - A compaction starts a new assistant segment keyed by the compaction item id.
   Replies before and after it keep distinct message ids across live updates
   and history reads, so reconciliation cannot merge them across the marker.
+- A completed history assistant record supersedes a live copy of the same id
+  that never observed the turn finish. The live copy may still be an
+  in-progress projection with unfinished tools; the transcript is the settled
+  state. A live record that is itself completed keeps its parts and only takes
+  missing tokens or contextWindow from history.
 - Every `item/started` and `item/completed` re-projects the running turn with
   the history projector; agent text streams as deltas. The live turn owns each
   item's `startedAtMs` and `completedAtMs` (receipt time for older CLIs), so a
   finished patch exposes its output and a finished reasoning block stops
   streaming before the whole turn ends. Duplicate starts, events for another
   turn, and deltas after item completion cannot reopen or overwrite it.
-  These timestamps leave memory with the turn; persisted history falls back
-  to turn times because its items carry no timing. `turn/plan/updated` becomes
-  the `session.todos.updated` snapshot below.
+  These timestamps leave memory with the turn; persisted history recovers
+  them from the rollout's `item_completed` records and falls back to turn
+  times only for items without one. `turn/plan/updated` becomes the
+  `session.todos.updated` snapshot below.
 - A `plan` item is the plan a planning turn wrote. It projects as the
   `plan_exit` tool part Claude Code's ExitPlanMode projects as — a collapsed
   row the reader opens — so a session keeps one record of the plan it was
@@ -431,6 +462,9 @@ Codex (`codex/live.js`): turns on the shared app-server.
   Codex's plan exit left no trace until its question named the plan item's own
   part. That part is what `attach` matches, and an answer arrives after the
   turn has settled, so the match happens on a history read rather than live.
+  The restored row keeps the plan tool's interval, not the approval timestamp:
+  an approval can settle long after the assistant completed, and turn
+  telemetry must not subtract time outside that step.
   A failed start publishes a session error without retrying or recording a
   successful Build prompt.
 - Plan decisions remain cancellable through prompt preparation and thread
@@ -442,6 +476,10 @@ Codex (`codex/live.js`): turns on the shared app-server.
 
 `questions.js` holds native questions in memory. A reply or rejection resolves
 the pending callback and publishes `question.replied` or `question.rejected`.
+The optional per-question `onReply` acknowledges delivery before settlement.
+A failed delivery retains the question for retry; another reply during delivery
+returns `NATIVE_QUESTION_REPLY_PENDING`. Authoritative interruption still
+withdraws an in-flight question. DeepSeek uses this acknowledgement boundary.
 Tool questions end with their turn; a completed Codex plan's decision has the
 separate lifetime described above.
 
@@ -487,6 +525,13 @@ picks up an edit only after it compacts. A missing, empty or unreadable file
 adds nothing. No other OpenChamber context reaches the CLIs.
 
 ## Reverts and forks
+
+DeepSeek uses the same pending/file restore contract, then creates a native fork
+on commit while preserving its logical session identity. Its versioned cursor,
+identity segments, admission recovery and locked permanent deletion contracts
+are detailed in `deepseek/DOCUMENTATION.md`. Managed DSH prompts also participate
+in the existing shared memory store; independent terminal enrollment remains
+Claude/Codex-only.
 
 A revert follows OpenCode's model: files go back at once, the session record
 carries `revert: { messageID }` while the revert can still be undone, and the
@@ -562,8 +607,11 @@ forks and subagents do not trigger generation. No startup history scan runs.
 The title uses the configured Small Model with the same explicit-provider
 override rules as manual AI rename. It reads only the first persisted turn,
 supplying at most 4,000 characters of user text and 8,000 of final reply text.
-Tools, reasoning, commentary and injected OpenChamber instructions are excluded.
-A title is written through `thread/name/set` and announced as `session.updated`.
+When the turn has no non-commentary final answer, the last nonempty `plan` item
+supplies the assistant text, because a plan-mode turn delivers its result
+there. Other tools, reasoning, commentary and injected OpenChamber instructions
+are excluded. A title is written through `thread/name/set` and announced as
+`session.updated`.
 This server operation works with the UI closed on web, Electron and connected
 mobile clients. VS Code still has no native CLI runtime.
 
@@ -1162,8 +1210,8 @@ the CLIs installed on their connected server. VS Code retains the explicit
 
 ## Child processes
 
-- `executables.js` finds `claude` and `codex` on the login shell's PATH, then
-  in the installers' default locations. A miss is looked up again on the next
+- `executables.js` finds `claude`, `codex`, `dsh`, Node and npm on the login
+  shell's PATH, then in the installers' default locations. A miss is looked up again on the next
   call, so a CLI installed while the server runs is picked up.
 - On Windows, npm installs a CLI as a `.cmd` shim, which Node cannot start
   without a shell. A native `.exe` in the installers' folder wins over a shim

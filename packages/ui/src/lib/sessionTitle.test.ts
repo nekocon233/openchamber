@@ -1,7 +1,7 @@
 import { ChildStoreManager } from '@/sync/child-store';
 import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
-import type { AssistantMessage, Message, Part, Session, SyntheticMessage, TextPart } from '@/lib/opencode/model';
+import type { AssistantMessage, Message, Part, Session, SyntheticMessage, TextPart, ToolInput } from '@/lib/opencode/model';
 import { collectSessionTitleTurns, formatSessionTitleContext, generatedSessionTitleSchema, generateSessionTitle } from './sessionTitle';
 import { configureRuntimeUrlResolver } from './runtime-url';
 import { createContextPart, type ContextPartPayload } from './messages/contextParts';
@@ -32,6 +32,10 @@ function assistant(turnID: string, options: Partial<AssistantMessage> = {}, part
     }, parts,
   };
 }
+const planExit = (input: ToolInput): Part => ({
+  id: 'plan', sessionID: 'session', messageID: 'message', type: 'tool', callID: 'plan', tool: 'plan_exit',
+  state: { status: 'completed', input, output: '', time: { start: 1, end: 2 } },
+});
 /** Legacy inline context: a text part that carries context metadata. */
 const contextPart = (payload: ContextPartPayload): TextPart => ({
   ...textPart(''),
@@ -67,6 +71,32 @@ describe('session title context', () => {
     expect(context).not.toContain('Request running');
     expect(context.indexOf('Request one')).toBeLessThan(context.indexOf('Answer one'));
     expect(context.indexOf('Answer one')).toBeLessThan(context.indexOf('Request two'));
+  });
+
+  test('collects a plan-only final assistant turn and includes the plan in the context', () => {
+    const turns = collectSessionTitleTurns([
+      user('design'),
+      assistant('plan', {}, [planExit({ plan: '# Plan\n\n- step' })]),
+    ]);
+    expect(turns).toHaveLength(1);
+    const context = formatSessionTitleContext(turns);
+    expect(context).toContain('**Assistant final response or proposed plan**');
+    expect(context).toContain('# Plan');
+    expect(context).toContain('- step');
+  });
+
+  test('keeps assistant text and appends the plan', () => {
+    const context = formatSessionTitleContext(collectSessionTitleTurns([
+      user('design'),
+      assistant('plan', {}, [textPart('Here is the plan.'), planExit({ plan: '## Plan' })]),
+    ]));
+    expect(context.indexOf('Here is the plan.')).toBeLessThan(context.indexOf('## Plan'));
+  });
+
+  test('ignores absent, empty and non-string plans', () => {
+    expect(collectSessionTitleTurns([user('none'), assistant('none', {}, [planExit({})])])).toEqual([]);
+    expect(collectSessionTitleTurns([user('blank'), assistant('blank', {}, [planExit({ plan: '   ' })])])).toEqual([]);
+    expect(collectSessionTitleTurns([user('number'), assistant('number', {}, [planExit({ plan: 5 })])])).toEqual([]);
   });
 
   test('does not promote a prior final when a newer response to the same user is unfinished', () => {

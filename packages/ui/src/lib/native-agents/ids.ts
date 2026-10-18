@@ -1,35 +1,39 @@
-// Native CLI sessions (Claude Code, Codex) live in their own id namespace, so
+// Native CLI sessions live in their own id namespaces, so
 // every layer can tell them from OpenCode sessions by id alone. The server
 // defines the same rules in packages/web/server/lib/native-agents/ids.js.
 
-export type NativeBackend = 'claude' | 'codex';
+export type NativeBackend = 'claude' | 'codex' | 'deepseek';
 
 export const NATIVE_PROVIDER_CLAUDE = 'claude-native';
 export const NATIVE_PROVIDER_CODEX = 'codex-native';
+export const NATIVE_PROVIDER_DEEPSEEK = 'deepseek-native';
 
 const SESSION_PREFIX = {
   claude: 'ncl_',
   codex: 'ncx_',
+  deepseek: 'ndh_',
 } satisfies Record<NativeBackend, string>;
 
-export const isNativeSessionId = (sessionId: string): boolean => /^nc[lx]_/.test(sessionId);
+export const isNativeSessionId = (sessionId: string): boolean => /^(?:nc[lx]|ndh)_/.test(sessionId);
 
 export const nativeBackendOfSessionId = (sessionId: string): NativeBackend | null => {
   if (sessionId.startsWith(SESSION_PREFIX.claude)) return 'claude';
   if (sessionId.startsWith(SESSION_PREFIX.codex)) return 'codex';
+  if (sessionId.startsWith(SESSION_PREFIX.deepseek)) return 'deepseek';
   return null;
 };
 
 export const nativeBackendOfProviderId = (providerId: string): NativeBackend | null => {
   if (providerId === NATIVE_PROVIDER_CLAUDE) return 'claude';
   if (providerId === NATIVE_PROVIDER_CODEX) return 'codex';
+  if (providerId === NATIVE_PROVIDER_DEEPSEEK) return 'deepseek';
   return null;
 };
 
 export const isNativeProviderId = (providerId: string): boolean => nativeBackendOfProviderId(providerId) !== null;
 
 export const nativeProviderIdOf = (backend: NativeBackend): string => (
-  backend === 'claude' ? NATIVE_PROVIDER_CLAUDE : NATIVE_PROVIDER_CODEX
+  { claude: NATIVE_PROVIDER_CLAUDE, codex: NATIVE_PROVIDER_CODEX, deepseek: NATIVE_PROVIDER_DEEPSEEK }[backend]
 );
 
 /**
@@ -62,9 +66,15 @@ const randomUuid = (): string => {
  * it (Claude as the transcript entry uuid, Codex as the client message id), so
  * the optimistic message and the one read back from history match.
  */
-export const createNativeUserMessageId = (backend: NativeBackend): string => `${SESSION_PREFIX[backend]}u_${randomUuid()}`;
+export const createNativeUserMessageId = (backend: NativeBackend, sessionId?: string): string => {
+  if (backend === 'deepseek') {
+    if (!sessionId?.startsWith(SESSION_PREFIX.deepseek)) throw new Error('A DeepSeek Harness message needs its session identity');
+    return `ndh_u_${sessionId.slice(4, 28)}_${randomUuid()}`;
+  }
+  return `${SESSION_PREFIX[backend]}u_${randomUuid()}`;
+};
 
-const USER_MESSAGE_ID = /^nc[lx]_u_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const USER_MESSAGE_ID = /^(?:nc[lx]_u_|ndh_u_[0-9a-f]{24}_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Whether `messageId` is a user message id the backend's CLI can record. */
 export const isNativeUserMessageIdFor = (backend: NativeBackend, messageId: string): boolean => (

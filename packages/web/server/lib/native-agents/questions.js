@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { NativeAgentError } from './errors.js';
 
 /** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean }} QuestionInfo */
-/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
+/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
 /** @typedef {{ status: 'replied', answers: string[][] } | { status: 'rejected', reason?: 'interrupted' }} QuestionOutcome */
 
 const questionNotFoundError = (requestId) => new NativeAgentError(
@@ -22,31 +22,42 @@ const questionNotFoundError = (requestId) => new NativeAgentError(
  * @param {(directory: string, payload: { type: string, properties: object }) => void} options.publish
  */
 export const createQuestionRegistry = ({ publish, onSettled = () => undefined }) => {
-  /** @type {Map<string, { request: QuestionRequest, directory: string, settle: (outcome: QuestionOutcome) => void }>} */
+  /** @type {Map<string, { request: QuestionRequest, directory: string, phase: 'open' | 'replying', signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void>, settle: (outcome: QuestionOutcome) => void }>} */
   const pending = new Map();
 
   const settle = (requestId, outcome) => {
     const entry = pending.get(requestId);
     if (!entry) throw questionNotFoundError(requestId);
-    pending.delete(requestId);
-    publish(entry.directory, {
-      type: outcome.status === 'replied' ? 'question.replied' : 'question.rejected',
-      properties: outcome.status === 'replied'
-        ? { sessionID: entry.request.sessionID, requestID: requestId, answers: outcome.answers }
-        : { sessionID: entry.request.sessionID, requestID: requestId },
+    const commit = () => {
+      if (pending.get(requestId) !== entry) throw questionNotFoundError(requestId);
+      pending.delete(requestId);
+      publish(entry.directory, {
+        type: outcome.status === 'replied' ? 'question.replied' : 'question.rejected',
+        properties: outcome.status === 'replied'
+          ? { sessionID: entry.request.sessionID, requestID: requestId, answers: outcome.answers }
+          : { sessionID: entry.request.sessionID, requestID: requestId },
+      });
+      entry.settle(outcome);
+      return onSettled(entry.request, outcome, entry.directory);
+    };
+    const deliver = entry.onReply;
+    if (!deliver || entry.signal?.aborted || outcome.status === 'rejected' && outcome.reason === 'interrupted') return commit();
+    if (entry.phase === 'replying') throw new NativeAgentError('This native question answer is being delivered', { status: 409, code: 'NATIVE_QUESTION_REPLY_PENDING' });
+    entry.phase = 'replying';
+    return Promise.resolve().then(() => deliver(outcome)).then(commit, (error) => {
+      if (pending.get(requestId) === entry) entry.phase = 'open';
+      throw error;
     });
-    entry.settle(outcome);
-    return onSettled(entry.request, outcome, entry.directory);
   };
 
   return {
     /**
      * Publishes a question and resolves once it is answered or rejected. An
      * abort signal rejects it, as does ending the session's turn.
-     * @param {{ directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal }} input
+     * @param {{ directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void> }} input
      * @returns {Promise<QuestionOutcome>}
      */
-    ask({ directory, sessionID, questions, kind, tool, signal }) {
+    ask({ directory, sessionID, questions, kind, tool, signal, onReply }) {
       /** @type {QuestionRequest} */
       const request = {
         id: `ncq_${randomUUID()}`, sessionID, questions,
@@ -60,6 +71,7 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
         pending.set(request.id, {
           request,
           directory,
+          phase: 'open', signal, onReply,
           settle: (outcome) => {
             signal?.removeEventListener('abort', onAbort);
             resolve(outcome);

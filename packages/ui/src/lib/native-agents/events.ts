@@ -24,6 +24,7 @@ const nativeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.created'), properties: z.object({ info: nativeSessionSchema }) }),
   z.object({ type: z.literal('session.updated'), properties: z.object({ info: nativeSessionSchema }) }),
   z.object({ type: z.literal('session.deleted'), properties: sessionIdentity }),
+  z.object({ type: z.literal('session.revert.committed'), properties: sessionIdentity.extend({ to: z.string().min(1), nativeHistoryRevision: z.number().int().nonnegative().optional() }) }),
   z.object({ type: z.literal('session.status'), properties: sessionIdentity.extend({ status: nativeSessionStatusSchema }) }),
   z.object({ type: z.literal('session.background.updated'), properties: sessionIdentity.extend({ tasks: z.array(nativeBackgroundTaskSchema) }) }),
   z.object({ type: z.literal('session.checklist.updated'), properties: sessionIdentity.extend({ snapshot: nativeChecklistSnapshotSchema }) }),
@@ -32,6 +33,7 @@ const nativeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.idle'), properties: sessionIdentity }),
   z.object({ type: z.literal('session.error'), properties: sessionIdentity.extend({ error: nativeMessageErrorSchema }) }),
   z.object({ type: z.literal('message.updated'), properties: z.object({ info: nativeMessageSchema }) }),
+  z.object({ type: z.literal('message.removed'), properties: sessionIdentity.extend({ messageID: z.string().min(1) }) }),
   z.object({ type: z.literal('message.part.updated'), properties: z.object({ part: nativePartSchema }) }),
   z.object({ type: z.literal('message.part.delta'), properties: sessionIdentity.extend({
     messageID: z.string().min(1), partID: z.string().min(1), field: z.enum(['text', 'raw']), delta: z.string(),

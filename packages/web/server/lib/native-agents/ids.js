@@ -12,19 +12,22 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export const NATIVE_BACKEND_CLAUDE = 'claude';
 export const NATIVE_BACKEND_CODEX = 'codex';
+export const NATIVE_BACKEND_DEEPSEEK = 'deepseek';
 
 export const NATIVE_PROVIDER_CLAUDE = 'claude-native';
 export const NATIVE_PROVIDER_CODEX = 'codex-native';
+export const NATIVE_PROVIDER_DEEPSEEK = 'deepseek-native';
 
 const CLAUDE_SESSION_PREFIX = 'ncl_';
 const CODEX_SESSION_PREFIX = 'ncx_';
+const DEEPSEEK_SESSION_PREFIX = 'ndh_';
 const CODEX_PLAN_APPROVAL_PREFIX = 'ncx_u_plan_';
 const CLAUDE_CHILD_SEPARATOR = '_t_';
 
 // Charset and length accepted by every OpenChamber route that carries a
 // session id (the message-queue pattern is the strictest).
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{4,128}$/;
-const NATIVE_SESSION_ID_PATTERN = /^nc[lx]_/;
+const NATIVE_SESSION_ID_PATTERN = /^(?:nc[lx]|ndh)_/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOOL_USE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -33,11 +36,12 @@ export const isNativeSessionId = (sessionId) => NATIVE_SESSION_ID_PATTERN.test(s
 
 /**
  * @param {string} sessionId
- * @returns {'claude' | 'codex' | null}
+ * @returns {'claude' | 'codex' | 'deepseek' | null}
  */
 export const nativeBackendOfSessionId = (sessionId) => {
   if (sessionId.startsWith(CLAUDE_SESSION_PREFIX)) return NATIVE_BACKEND_CLAUDE;
   if (sessionId.startsWith(CODEX_SESSION_PREFIX)) return NATIVE_BACKEND_CODEX;
+  if (sessionId.startsWith(DEEPSEEK_SESSION_PREFIX)) return NATIVE_BACKEND_DEEPSEEK;
   return null;
 };
 
@@ -45,6 +49,7 @@ export const nativeBackendOfSessionId = (sessionId) => {
 export const nativeBackendOfProviderId = (providerId) => {
   if (providerId === NATIVE_PROVIDER_CLAUDE) return NATIVE_BACKEND_CLAUDE;
   if (providerId === NATIVE_PROVIDER_CODEX) return NATIVE_BACKEND_CODEX;
+  if (providerId === NATIVE_PROVIDER_DEEPSEEK) return NATIVE_BACKEND_DEEPSEEK;
   return null;
 };
 
@@ -77,9 +82,16 @@ export const encodeCodexSessionId = (threadId) => {
   return assertSessionId(`${CODEX_SESSION_PREFIX}${threadId}`);
 };
 
+// DSH identities are opaque and may exceed the route's length or charset.
+// The registry retains the original identity; hashing keeps every route bounded.
+export const encodeDeepseekSessionId = (nativeId) => assertSessionId(
+  `${DEEPSEEK_SESSION_PREFIX}${createHash('sha256').update(nativeId).digest('hex')}`,
+);
+
 /**
  * @typedef {{ backend: 'claude', sessionUuid: string, toolUseId: string | null }
- *   | { backend: 'codex', threadId: string }} NativeSessionRef
+ *   | { backend: 'codex', threadId: string }
+ *   | { backend: 'deepseek', key: string }} NativeSessionRef
  */
 
 /**
@@ -90,6 +102,9 @@ export const encodeCodexSessionId = (threadId) => {
  */
 export const decodeNativeSessionId = (sessionId) => {
   if (!SESSION_ID_PATTERN.test(sessionId)) return null;
+  if (/^ndh_[0-9a-f]{64}$/.test(sessionId)) {
+    return { backend: NATIVE_BACKEND_DEEPSEEK, key: sessionId.slice(DEEPSEEK_SESSION_PREFIX.length) };
+  }
   if (sessionId.startsWith(CLAUDE_SESSION_PREFIX)) {
     const rest = sessionId.slice(CLAUDE_SESSION_PREFIX.length);
     const sessionUuid = rest.slice(0, 36);
@@ -162,7 +177,7 @@ export const isCodexPlanApprovalMessageId = (messageId) => (
 
 /** A client-generated user message id OpenChamber sends with a native prompt. */
 export const isNativeClientUserMessageId = (messageId) => (
-  /^nc[lx]_u_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)
+  /^(?:nc[lx]_u_|ndh_u_[0-9a-f]{24}_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)
   || isCodexPlanApprovalMessageId(messageId)
 );
 
@@ -170,7 +185,9 @@ export const isNativeClientUserMessageId = (messageId) => (
 export const newNativeClientUserMessageId = (sessionId) => {
   const backend = nativeBackendOfSessionId(sessionId);
   if (!backend) throw new Error(`Not a native session: ${sessionId}`);
-  return `${backend === NATIVE_BACKEND_CLAUDE ? CLAUDE_SESSION_PREFIX : CODEX_SESSION_PREFIX}u_${randomUUID()}`;
+  if (backend === NATIVE_BACKEND_DEEPSEEK) return `ndh_u_${sessionId.slice(4, 28)}_${randomUUID()}`;
+  const prefix = { claude: CLAUDE_SESSION_PREFIX, codex: CODEX_SESSION_PREFIX, deepseek: DEEPSEEK_SESSION_PREFIX }[backend];
+  return `${prefix}u_${randomUUID()}`;
 };
 
 export const userTextPartId = (messageId, index) => `${messageId}_p${index}`;

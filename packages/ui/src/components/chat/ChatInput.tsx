@@ -1710,6 +1710,36 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             return;
         }
 
+        const deepseekCommand = nativeTargetBackend === 'deepseek' && inputMode === 'normal' && !isBtwActive
+            ? /^\/([a-z][a-z0-9_-]*)(?:\s|$)/i.exec(inputSnapshot.message.trim())
+            : null;
+        if (deepseekCommand && !isNativeLocalCommand(deepseekCommand[1]) && deepseekCommand[1] !== 'compact') {
+            if (!currentSessionId) {
+                toast.error(t('chat.deepseekCommand.needsSession'));
+                return;
+            }
+            const directory = currentSessionDirectoryForSync ?? currentDirectory;
+            if (!directory || codexCommandRunning.current) return;
+            const originalText = inputSnapshot.message;
+            const originalMentions = new Set(confirmedMentionsRef.current);
+            codexCommandRunning.current = true;
+            closeAutocomplete();
+            try {
+                const result = await nativeAgents.deepseekCommand({ sessionId: currentSessionId, directory, line: originalText.trim() });
+                if (!isSubmissionContextCurrent()) return;
+                setMessage('');
+                messageRef.current = '';
+                persistDraftImmediately(chatDraftIdentity, '');
+                if (result.kind === 'output') setCodexCommandOutput({ cliName: 'DeepSeek Harness', command: deepseekCommand[1], output: result });
+            } catch (error) {
+                restoreDraft(chatDraftIdentity, originalText, originalMentions);
+                if (isSubmissionContextCurrent()) toast.error(getSubmitErrorMessage(error, t('chat.deepseekCommand.failed')));
+            } finally {
+                codexCommandRunning.current = false;
+            }
+            return;
+        }
+
         let codexAgentOverride: 'plan' | undefined;
         const codexCommand = nativeTargetBackend === 'codex' && inputMode === 'normal' && !isBtwActive
             ? parseCodexComposerCommand(inputSnapshot.message)

@@ -14,7 +14,7 @@ import type {
   nativeCapabilitiesSchema,
   nativeCatalogSchema,
   nativeCommandListSchema,
-  nativeCodexCommandResultSchema,
+  nativeCommandResultSchema,
   nativeMessagePageSchema,
   nativeQuestionListSchema,
   nativeRevertResultSchema,
@@ -22,6 +22,7 @@ import type {
   nativeStatusSnapshotSchema,
 } from '@/lib/native-agents/schemas';
 import type { NativeBackend } from '@/lib/native-agents/ids';
+import type { DeepseekConfiguration, DeepseekConfigurationWrite, DeepseekConfigurationSave, DeepseekSetupStatus } from '@/lib/native-agents/deepseek';
 import type { NativeChecklistSnapshot, NativePlanSnapshot, NativeTaskOutput, NativeTaskSnapshot, NativeTodosSnapshot } from '@/lib/native-agents/task-schemas';
 import type { GitIdentityProfile, GitIdentitySummary } from './git-identity';
 import type {
@@ -2213,7 +2214,7 @@ export type NativeBackgroundTaskSnapshot = z.infer<typeof nativeBackgroundTaskSn
 export type NativeQuestionList = z.infer<typeof nativeQuestionListSchema>;
 export type NativeRevertResult = z.infer<typeof nativeRevertResultSchema>;
 export type NativeCommandList = z.infer<typeof nativeCommandListSchema>;
-export type NativeCodexCommandResult = z.infer<typeof nativeCodexCommandResultSchema>;
+export type NativeCodexCommandResult = z.infer<typeof nativeCommandResultSchema>;
 export type NativeCodexReviewTarget =
   | { type: 'uncommittedChanges' }
   | { type: 'baseBranch'; branch: string }
@@ -2225,6 +2226,8 @@ export type NativeCodexCommandRequest = { directory: string } & (
   | { name: 'ps' | 'stop'; sessionId: string }
   | { name: 'review'; sessionId: string; model: string; variant?: string; target: NativeCodexReviewTarget }
 );
+export type NativeDeepseekCommandRequest = { directory: string; sessionId: string; line: string };
+export type NativeCommandResult = NativeCodexCommandResult;
 
 /** Cancels a native read early; every read also has its own deadline. */
 export type NativeReadOptions = { signal?: AbortSignal };
@@ -2262,13 +2265,13 @@ export type NativePromptRequest = {
 };
 
 /**
- * Native Claude Code and Codex sessions, read and driven by the OpenChamber
+ * Native CLI sessions, read and driven by the OpenChamber
  * server. Every method throws on failure; none reports a failure as empty.
  */
 export interface NativeAgentsAPI {
   memoryStatus(directory?: string, options?: NativeReadOptions): Promise<NativeMemoryStatus>;
-  connectMemory(backend: NativeBackend): Promise<NativeMemoryConnection>;
-  disconnectMemory(backend: NativeBackend): Promise<NativeMemoryConnection>;
+  connectMemory(backend: Exclude<NativeBackend, 'deepseek'>): Promise<NativeMemoryConnection>;
+  disconnectMemory(backend: Exclude<NativeBackend, 'deepseek'>): Promise<NativeMemoryConnection>;
   importMemory(sourceId: string, directory: string): Promise<void>;
   /** False for runtimes without an OpenChamber server, currently VS Code. */
   supported: boolean;
@@ -2296,9 +2299,14 @@ export interface NativeAgentsAPI {
   listCodexConnections(): Promise<CodexConnection[]>;
   saveCodexConnection(id: string | null, connection: CodexConnectionWrite): Promise<CodexConnection>;
   deleteCodexConnection(id: string): Promise<void>;
+  deepseekConfiguration(): Promise<DeepseekConfiguration>;
+  saveDeepseekConfiguration(input: DeepseekConfigurationWrite): Promise<DeepseekConfigurationSave>;
+  deepseekSetupStatus(options?: NativeReadOptions): Promise<DeepseekSetupStatus>;
+  setupDeepseek(): Promise<DeepseekSetupStatus>;
   /** Claude's slash commands or Codex's enabled skills in a directory. */
-  commands(backend: NativeBackend, directory: string, options?: NativeReadOptions): Promise<NativeCommandList>;
+  commands(backend: NativeBackend, directory: string, options?: NativeReadOptions & { sessionId?: string }): Promise<NativeCommandList>;
   codexCommand(request: NativeCodexCommandRequest): Promise<NativeCodexCommandResult>;
+  deepseekCommand(request: NativeDeepseekCommandRequest): Promise<NativeCommandResult>;
   /** Root sessions of a directory, reported per backend. */
   listSessions(directory: string, options?: NativeReadOptions): Promise<NativeSessionList>;
   /** Directories of managed chats holding native sessions; no project names them. */

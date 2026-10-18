@@ -29,12 +29,19 @@ describe('resolveNativeSessions', () => {
   const child = session('ncl_old_t_toolu_1', '/p', 'ncl_old');
   const grandchild = session('ncl_old_t_toolu_2', '/p', 'ncl_old_t_toolu_1');
   const openCode = session('ses_x', '/p');
+  test('preserves DeepSeek on failure while applying successful empty results for other backends', () => {
+    const deepseek = session('ndh_old', '/p');
+    const resolved = resolveNativeSessions([claudeOld, codexOld, deepseek], new Map([
+      ['/p', { claude: [], codex: [], deepseek: null }],
+    ]));
+    expect(resolved.map((entry) => entry.id)).toEqual(['ndh_old']);
+  });
 
   test('replaces a backend that answered and keeps one that failed', () => {
     const fresh = session('ncl_new', '/p');
     const resolved = resolveNativeSessions(
       [claudeOld, codexOld, elsewhere, openCode],
-      new Map([['/p', { claude: [fresh], codex: null }]]),
+      new Map([['/p', { claude: [fresh], codex: null, deepseek: null }]]),
     );
     expect(resolved.map((entry) => entry.id).sort()).toEqual(['ncl_elsewhere', 'ncl_new', 'ncx_old']);
   });
@@ -42,11 +49,11 @@ describe('resolveNativeSessions', () => {
   test('keeps subagent sessions, nested ones too, while their parent is held', () => {
     const kept = resolveNativeSessions(
       [grandchild, child, claudeOld],
-      new Map([['/p', { claude: [claudeOld], codex: [] }]]),
+      new Map([['/p', { claude: [claudeOld], codex: [], deepseek: [] }]]),
     );
     expect(kept.map((entry) => entry.id).sort()).toEqual(['ncl_old', 'ncl_old_t_toolu_1', 'ncl_old_t_toolu_2']);
 
-    const orphaned = resolveNativeSessions([grandchild, child, claudeOld], new Map([['/p', { claude: [], codex: [] }]]));
+    const orphaned = resolveNativeSessions([grandchild, child, claudeOld], new Map([['/p', { claude: [], codex: [], deepseek: [] }]]));
     expect(orphaned).toEqual([]);
   });
 });
@@ -57,7 +64,7 @@ describe('fetchNativePartition', () => {
     const ok = await fetchNativePartition(apiListing(async () => ({
       backends: { claude: { status: 'ok', sessions: [fresh] }, codex: { status: 'error', message: 'codex missing' } },
     })), '/p');
-    expect(ok).toEqual({ claude: [fresh], codex: null });
+    expect(ok).toEqual({ claude: [fresh], codex: null, deepseek: null });
 
     const originalWarn = console.warn;
     console.warn = () => {};
@@ -65,7 +72,7 @@ describe('fetchNativePartition', () => {
       const failed = await fetchNativePartition(apiListing(async () => {
         throw new Error('offline');
       }), '/p');
-      expect(failed).toEqual({ claude: null, codex: null });
+      expect(failed).toEqual({ claude: null, codex: null, deepseek: null });
     } finally {
       console.warn = originalWarn;
     }

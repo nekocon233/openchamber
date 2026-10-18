@@ -1,4 +1,5 @@
 import React from 'react';
+import { sessionActionSupport } from '@/lib/native-agents/capabilities';
 import { useSessionTurnActivity } from '@/sync/global-session-status';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import type { Session } from '@/lib/opencode/model';
@@ -86,10 +87,9 @@ const TIMELINE_ROW_DENSE_LAYOUT_CLASS = 'flex min-w-0 flex-1 flex-col gap-1 py-2
 // the list.
 const TIMELINE_META_LINE_CLASS = 'flex h-4 min-w-0 items-center gap-1.5 text-muted-foreground';
 
-// One-line rows (Pinned and In work in the Tree view): the title line alone,
-// with the goal and waiting requests joining its status cluster.
+// One-line Pinned rows, with the goal and waiting requests in the status cluster.
+// In work supplies the same tree rows as the project list.
 const COMPACT_ROW_LAYOUT_CLASS = 'flex min-w-0 flex-1 flex-col justify-center py-2.5 pe-3 text-start';
-const COMPACT_ROW_DENSE_LAYOUT_CLASS = 'flex min-w-0 flex-1 flex-col justify-center py-2 pe-3 text-start';
 
 /** The project's icon, opening the second line where projects mix. */
 const TimelineRowProject: React.FC<{ project: TimelineProject }> = ({ project }) => (
@@ -195,7 +195,7 @@ const MobileTimelineRow: React.FC<{
   return (
     <MobileSwipeActionsRow
       // Every timeline row is top-level, so Pin is always there.
-      actionsWidth={ROW_ACTIONS_WIDTH + ROW_ACTION_SLOT_WIDTH + (work ? ROW_ACTION_SLOT_WIDTH : 0)}
+      actionsWidth={ROW_ACTIONS_WIDTH - (sessionActionSupport(session.id, session.metadata).delete ? 0 : ROW_ACTION_SLOT_WIDTH) + ROW_ACTION_SLOT_WIDTH + (work ? ROW_ACTION_SLOT_WIDTH : 0)}
       revealed={revealed}
       onRevealedChange={(next) => handlers.onRevealedChange(session.id, next)}
       dataActiveSession={active}
@@ -205,6 +205,7 @@ const MobileTimelineRow: React.FC<{
       )}
       actions={(
         <MobileSessionRowActions
+          sessionMetadata={session.metadata}
           sessionId={session.id}
           title={title}
           revealed={revealed}
@@ -219,6 +220,23 @@ const MobileTimelineRow: React.FC<{
         />
       )}
     >
+      {expandable && hasChildren && !renaming ? (
+        <button
+          type="button"
+          className="absolute z-10 flex w-[30px] items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          style={{ insetInlineStart: indent - 28, top: 0, bottom: 0, touchAction: 'manipulation' }}
+          aria-label={expanded
+            ? t('sessions.sidebar.session.subsessions.collapse')
+            : t('sessions.sidebar.session.subsessions.expand')}
+          aria-expanded={expanded}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleChildren?.();
+          }}
+        >
+          <FileTreeChevron expanded={expanded} />
+        </button>
+      ) : null}
       {(() => {
         const status = (
           <>
@@ -261,31 +279,6 @@ const MobileTimelineRow: React.FC<{
               />
             ) : (
               <span className="flex min-w-0 items-center gap-2">
-                {expandable ? (
-                  hasChildren ? (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      aria-label={expanded
-                        ? t('sessions.sidebar.session.subsessions.collapse')
-                        : t('sessions.sidebar.session.subsessions.expand')}
-                      aria-expanded={expanded}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onToggleChildren?.();
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter' && event.key !== ' ') return;
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onToggleChildren?.();
-                      }}
-                      className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-md text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <FileTreeChevron expanded={expanded} />
-                    </span>
-                  ) : <span aria-hidden className="h-3.5 w-3.5 shrink-0" />
-                ) : null}
                 <span dir="auto" className={cn('block min-w-0 flex-1 truncate oc-ui-start-align typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
                   {title}
                 </span>
@@ -312,7 +305,7 @@ const MobileTimelineRow: React.FC<{
           </>
         );
         const layoutClassName = compact
-          ? (dense ? COMPACT_ROW_DENSE_LAYOUT_CLASS : COMPACT_ROW_LAYOUT_CLASS)
+          ? COMPACT_ROW_LAYOUT_CLASS
           : (dense ? TIMELINE_ROW_DENSE_LAYOUT_CLASS : TIMELINE_ROW_LAYOUT_CLASS);
         if (renaming) {
           return <div className={layoutClassName} style={{ paddingInlineStart: indent }}>{lines}</div>;
@@ -341,8 +334,8 @@ const MobileTimelineRow: React.FC<{
 
 /** Two-line timeline rows. Under a project header they need no project mark;
     Pinned and In work mix projects, so there each row shows its project's
-    icon. `compact` puts a row on one line, the Tree view's default for Pinned
-    and In work. The Pinned section passes `pinMarker={false}`: its header
+    icon. `compact` puts Pinned on one line and lets In work reuse the sheet's
+    tree rows. The Pinned section passes `pinMarker={false}`: its header
     already says every row there is pinned. */
 export const MobileTimelineRows: React.FC<{
   entries: readonly TimelineEntry[];
@@ -358,6 +351,8 @@ export const MobileTimelineRows: React.FC<{
   expandedParents?: Record<string, boolean>;
   onToggleChildren?: (sessionId: string) => void;
   childEntriesByParent?: ReadonlyMap<string, readonly TimelineEntry[]>;
+  /** In work reuses the project's session and run rows in the compact view. */
+  renderCompactRow?: (entry: TimelineEntry, depth: number, hasChildren: boolean) => React.ReactNode;
 }> = ({
   entries,
   showProject,
@@ -370,24 +365,26 @@ export const MobileTimelineRows: React.FC<{
   expandedParents,
   onToggleChildren,
   childEntriesByParent,
+  renderCompactRow,
 }) => {
   const renderEntries = (list: readonly TimelineEntry[], depth: number): React.ReactNode => list.map((entry) => {
-    if (entry.kind === 'run') {
-      return (
+    const children = entry.kind === 'session' && expandable ? childEntriesByParent?.get(entry.session.id) ?? [] : [];
+    const hasChildren = children.length > 0;
+    const expanded = entry.kind === 'session' && Boolean(expandedParents?.[entry.session.id]);
+    let row: React.ReactNode;
+    if (compact && renderCompactRow) {
+      row = renderCompactRow(entry, depth, hasChildren);
+    } else if (entry.kind === 'run') {
+      row = (
         <MobileTimelineRunRow
-          key={`run:${entry.run.key}`}
           entry={entry}
           showProject={showProject}
           compact={compact}
           indent={indent + depth * 12}
         />
       );
-    }
-    const children = expandable ? childEntriesByParent?.get(entry.session.id) ?? [] : [];
-    const hasChildren = children.length > 0;
-    const expanded = Boolean(expandedParents?.[entry.session.id]);
-    return (
-      <React.Fragment key={entry.session.id}>
+    } else {
+      row = (
         <MobileTimelineRow
           entry={entry}
           showProject={showProject}
@@ -405,6 +402,11 @@ export const MobileTimelineRows: React.FC<{
           expanded={expanded}
           onToggleChildren={hasChildren ? () => onToggleChildren?.(entry.session.id) : undefined}
         />
+      );
+    }
+    return (
+      <React.Fragment key={entry.kind === 'run' ? `run:${entry.run.key}` : entry.session.id}>
+        {row}
         {hasChildren && expanded ? renderEntries(children, depth + 1) : null}
       </React.Fragment>
     );

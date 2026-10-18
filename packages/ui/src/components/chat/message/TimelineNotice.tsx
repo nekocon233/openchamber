@@ -1,3 +1,4 @@
+import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 /**
  * Timeline rows for the message roles that are not a conversation turn.
  *
@@ -12,6 +13,7 @@
  */
 
 import React from 'react';
+import { sessionActionSupport } from '@/lib/native-agents/capabilities';
 
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
@@ -171,6 +173,8 @@ const NOTICE_ACTION_BUTTON_CLASS = 'h-6 w-6 text-muted-foreground bg-transparent
  * prompt. A run still in progress has no message to cut at yet.
  */
 const SubagentRunActions: React.FC<{ message: SyntheticMessage; canFork: boolean; alwaysVisible: boolean }> = ({ message, canFork, alwaysVisible }) => {
+    const canRevert = useGlobalSessionsStore((state) => sessionActionSupport(message.sessionID, state.entityById.get(message.sessionID)?.metadata).revert);
+
     const { t } = useI18n();
     const handleRevert = React.useCallback(() => {
         void useSessionUIStore.getState().revertToMessage(message.sessionID, message.id);
@@ -188,7 +192,7 @@ const SubagentRunActions: React.FC<{ message: SyntheticMessage; canFork: boolean
                     : 'pointer-events-none opacity-0 transition-opacity duration-150 group-hover/subagent-run:pointer-events-auto group-hover/subagent-run:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
             )}
         >
-            <Tooltip>
+            {canRevert ? <Tooltip>
                 <TooltipTrigger asChild>
                     <Button
                         type="button"
@@ -202,7 +206,7 @@ const SubagentRunActions: React.FC<{ message: SyntheticMessage; canFork: boolean
                     </Button>
                 </TooltipTrigger>
                 <TooltipContent sideOffset={6}>{t('chat.messageBody.actions.revert')}</TooltipContent>
-            </Tooltip>
+            </Tooltip> : null}
             {canFork ? (
                 <Tooltip>
                     <TooltipTrigger asChild>

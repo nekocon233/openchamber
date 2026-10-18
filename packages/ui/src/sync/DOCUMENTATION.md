@@ -290,7 +290,7 @@ own record does.
 - A mounted directory-store consumer pins that store for its lifetime. Eviction may dispose only unmounted directories, so optimistic actions and realtime events cannot move to a replacement store while visible React consumers remain subscribed to an older identity.
 - Selected, active-project, expanded, and visible bootstrap demand also protects a store from eviction. This keeps virtualized off-screen directories alive while their owner still needs them; background demand remains evictable so the complete known topology does not make the cache unbounded.
 - Reconfiguration and runtime switching invalidate stale generations. A stale completion must not publish state into the new runtime.
-- A `server.connected` outside the boot window means OpenCode's stream restarted and events were lost. `ChildStoreManager.refreshAfterStreamRestart` marks every bootstrapped store stale and forces a bootstrap now only for the current directory, stores with foreground demand, and stores showing live state the gap may have made wrong (a non-idle status or a pending permission or form); the last group runs at background priority, one at a time. Every other store re-reads on its next foreground demand (selected, active project, expanded, or visible), once. That judgment uses what each store showed before the gap, so one more pass catches a store that looked idle while its session started a turn or asked a permission or form during the gap: one global `session.active` read (it starts no location; a session waiting on a request is still running its turn) and `refreshStaleDirectoriesWithActiveSessions` queues, at background priority, every still-deferred store that lists or holds a status for one of those sessions. A failed read leaves them deferred. Isolated-space sessions are not in the host's list and keep the on-demand re-read. Background-shell lists are refreshed for directories with running commands that this pass did not queue.
+- A `server.connected` outside the boot window means OpenCode's stream restarted and events were lost. `SessionMessageLoader.markHistoryStale` refreshes the tails of mounted transcripts immediately; transcripts that went stale while unopened revalidate when their first subscriber attaches, or through `revalidateIfStale` on the next visit. Open chats therefore replace records cached before the restart instead of keeping them indefinitely. `ChildStoreManager.refreshAfterStreamRestart` marks every bootstrapped store stale and forces a bootstrap now only for the current directory, stores with foreground demand, and stores showing live state the gap may have made wrong (a non-idle status or a pending permission or form); the last group runs at background priority, one at a time. Every other store re-reads on its next foreground demand (selected, active project, expanded, or visible), once. That judgment uses what each store showed before the gap, so one more pass catches a store that looked idle while its session started a turn or asked a permission or form during the gap: one global `session.active` read (it starts no location; a session waiting on a request is still running its turn) and `refreshStaleDirectoriesWithActiveSessions` queues, at background priority, every still-deferred store that lists or holds a status for one of those sessions. A failed read leaves them deferred. Isolated-space sessions are not in the host's list and keep the on-demand re-read. Background-shell lists are refreshed for directories with running commands that this pass did not queue.
 - Failure is recorded as `failed`; it is not converted into a successful empty snapshot. Forced demand can retry failed or completed work.
 - A bootstrap that ran while OpenCode was still starting fails, and the boot window ignores `server.connected` as a stream restart. The first `server.connected` per sync owner and runtime (`first-server-connect.ts`), inside the boot window or not, therefore calls `ChildStoreManager.retryFailedBootstraps`: every `failed` directory with foreground demand re-reads now with force; every other `failed` directory joins the stale set and re-reads on its next foreground demand. `complete` directories are not touched, since a read starts that directory's location. A retry that fails again stays `failed` until forced demand. The same first event lets the global session polling run a failed initial load at once (see Global session list).
 - A failed bootstrap is classified as `os-permission` only when the owning runtime filesystem API independently confirms `EPERM`/`EACCES` for that exact directory. OpenCode/proxy error text is never used as permission evidence. The scheduler retains the directory-scoped reason so local Desktop can offer native folder selection before a forced retry.
@@ -649,11 +649,28 @@ Initial loads use smaller requests on constrained VS Code/mobile surfaces and pu
 
 ## Native CLI sessions
 
-Native Claude Code (`ncl_`) and Codex (`ncx_`) sessions come from the
+Native Claude Code (`ncl_`), Codex (`ncx_`) and DeepSeek Harness (`ndh_`) sessions come from the
 OpenChamber server through `RuntimeAPIs.nativeAgents`, never from OpenCode.
 The server contract is in `packages/web/server/lib/native-agents/DOCUMENTATION.md`.
-`lib/native-agents/ids.ts` tells the two kinds apart by prefix, and every native
+`lib/native-agents/ids.ts` tells the backends apart by prefix, and every native
 branch keys on it.
+
+DeepSeek preserves the same partition, optimistic-send and runtime boundaries.
+Its opaque history cursor uses a native event position. Sequenced plan/model
+projections populate `session.agent` and `session.model`; restored historical
+messages do not establish its current selection. Undo and redo use native file
+snapshots and an active DSH fork behind the same logical session id. Versioned
+cursors remain valid only in retained prefixes. A native revert-commit event
+advances the branch revision and trims the discarded range; a newer native
+metadata revision also resets stale history after a missed event. Branch
+revision precedes native timestamps when rejecting stale session patches.
+Native message pages carry an optional `historyRevision`; the loader replaces
+an obsolete confirmed window even if every commit/metadata event was missed,
+and restarts a mixed initial window rather than merging different branches.
+Server-advertised native action flags gate undo and permanent deletion across
+desktop, timeline, bulk and mobile controls.
+The host contract is in
+`packages/web/server/lib/native-agents/deepseek/DOCUMENTATION.md`.
 
 Each source answers only for its own sessions. A native read that fails keeps
 what the stores hold for native sessions and never blocks OpenCode's:
@@ -671,7 +688,9 @@ what the stores hold for native sessions and never blocks OpenCode's:
   already held are still listed through their own directories.
 - History. `SessionMessageLoader` reads native pages through
   `nativeAgents.loadMessages` with the server's message-id cursor and holds the
-  subagent sessions a page links to in the directory store.
+  subagent sessions a page links to in the directory store. A settled native
+  turn refreshes the loaded transcript's tail, so usage and completed parts
+  measured in the transcript replace the live projection's placeholders.
 - Statuses. `readDirectoryStatuses` in `native-directory-snapshots.ts` merges
   OpenCode's snapshot with the native one and says which sessions it `covers`.
   After a failed native read it covers OpenCode sessions only. Resync filters
@@ -990,12 +1009,14 @@ Rules:
 
 `use-session-ai-rename.ts` connects the shared menus to Small Model and the
 existing title action. `session-title-context.ts` uses `SessionMessageLoader`
-to page backward only until three completed user/final-answer pairs are covered.
-Opening a menu checks eligibility on demand; row mounts do not load history.
-The collector uses chronological records (a turn is a user message plus the last
-assistant message before the next one), excludes unfinished, failed, summary,
-synthetic-only and reverted turns, and retains user-attached context even when
-its transport part is synthetic. The Small Model input is the current session
+to page backward only until three completed user/final-answer-or-plan pairs are
+covered. Opening a menu checks eligibility on demand; row mounts do not load
+history. The collector uses chronological records (a turn is a user message
+plus the last assistant message before the next one), excludes unfinished,
+failed, summary, synthetic-only and reverted turns, and retains user-attached
+context even when its transport part is synthetic. Native `plan_exit` tool
+parts (Codex `plan` items and Claude `ExitPlanMode`) contribute their
+`input.plan` as assistant content, so a plan-only turn is a title candidate. The Small Model input is the current session
 title followed by those turns. Sessions usually end on housekeeping requests
 such as "commit and push", so the system prompt in `lib/sessionTitle.ts` names
 the work those requests refer to and uses the current title as the anchor when

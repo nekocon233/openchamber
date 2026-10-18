@@ -1,4 +1,5 @@
 import React from 'react';
+import { sessionActionSupport } from '@/lib/native-agents/capabilities';
 import { toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
 import { takeSessionActionFailure } from '@/sync/session-action-failures';
@@ -101,6 +102,7 @@ export const useSidebarBulkActions = (args: Args) => {
   const selectedIds = useSessionMultiSelectStore((state) => state.selectedIds);
   const selectionScopeKey = useSessionMultiSelectStore((state) => state.scopeKey);
   const rowOrderRegistry = useSessionRowOrderRegistry();
+  const canDeleteSelected = Array.from(selectedIds).every((id) => sessionActionSupport(id, rowOrderRegistry?.getSessionsById().get(id)?.metadata).delete);
 
   const handleToggleSelectionMode = React.useCallback(() => {
     useSessionMultiSelectStore.getState().toggleMode();
@@ -215,13 +217,14 @@ export const useSidebarBulkActions = (args: Args) => {
 
   const requestBulkDestructive = React.useCallback((hardDelete: boolean) => {
     if (!hasSelection) return;
+    if (hardDelete && !canDeleteSelected) return;
     const sessionIds = Array.from(selectedIds);
     if (!showDeletionDialog) {
       void executeBulkDelete(sessionIds, hardDelete);
       return;
     }
     setBulkDeleteConfirm({ sessionIds, sessionCount: sessionIds.length, archivedBucket: hardDelete });
-  }, [executeBulkDelete, selectedIds, showDeletionDialog, setBulkDeleteConfirm, hasSelection]);
+  }, [executeBulkDelete, selectedIds, showDeletionDialog, setBulkDeleteConfirm, hasSelection, canDeleteSelected]);
   /** Archive active sessions; already-archived ones can only be deleted. */
   const handleBulkDelete = React.useCallback(() => requestBulkDestructive(bulkScopeIsArchived), [bulkScopeIsArchived, requestBulkDestructive]);
   const handleBulkArchive = React.useCallback(() => requestBulkDestructive(false), [requestBulkDestructive]);
@@ -296,6 +299,7 @@ export const useSidebarBulkActions = (args: Args) => {
     selectionModeEnabled,
     hasSelection,
     selectedIdsSize,
+    canDeleteSelected,
     bulkScopeIsArchived,
     derivedSelectionScope,
     bulkScopeFolders,

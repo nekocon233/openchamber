@@ -10,7 +10,8 @@ import { NativeAgentError } from '../native-agents/errors.js';
 import { withMemoryFileLock } from './file-lock.js';
 import { projectPathFromId, projectConfigFileStemOf } from '../projects/project-id.js';
 
-const backend = z.enum(['claude', 'codex']);
+const terminalBackend = z.enum(['claude', 'codex']);
+const backend = z.enum(['claude', 'codex', 'deepseek']);
 const identity = z.object({
   backend, sessionId: z.string().min(1).max(128), directory: z.string().min(1),
   delivery: z.enum(['managed', 'hook']).default('managed'),
@@ -20,7 +21,7 @@ const checkpoint = identity.extend({
   status: z.enum(['completed', 'interrupted']).default('completed'),
   observedAt: z.number().int().positive(),
 });
-const progressEntry = checkpoint.extend({ projectId: z.string(), revision: z.number().int().nonnegative() });
+const progressEntry = checkpoint.extend({ projectId: z.string(), revision: z.number().int().nonnegative(), hidden: z.boolean().optional() });
 const stateSchema = z.object({ version: z.literal(1), revision: z.number().int().nonnegative(), progress: z.array(progressEntry) });
 const missingFile = z.object({ code: z.literal('ENOENT') });
 const sourceId = (value) => createHash('sha256').update(value).digest('hex').slice(0, 32);
@@ -32,6 +33,7 @@ export const createNativeMemorySharing = ({
   dataDir, agentMemoryRuntime, isEnabled, resolveProjectId, getEnv = () => process.env,
   hookPath = fileURLToPath(new URL('./native-hook.js', import.meta.url)), now = Date.now, getPort = () => null,
   getNodeExecutable = () => process.execPath,
+  commandPath = process.env.OPENCHAMBER_NATIVE_MEMORY_CLI_PATH ?? fileURLToPath(new URL('./native-cli.mjs', import.meta.url)),
   onMemoryChanged = () => {},
 }) => {
   const fileOf = (projectId) => path.join(dataDir, 'native-memory', 'projects', projectConfigFileStemOf(projectId), 'progress.json');
@@ -84,18 +86,24 @@ export const createNativeMemorySharing = ({
   const context = async (raw) => {
     const input = nativeIdentity(identity.parse(raw));
     if (!await isEnabled()) return { enabled: false, text: '' };
-    if (input.delivery === 'hook') await connections.observe(input.backend);
+    if (input.delivery === 'hook') await connections.observe(terminalBackend.parse(input.backend));
     if (input.delivery === 'hook' && managed.has(actorKey(input))) return { enabled: true, text: '' };
     const projectId = await resolveProjectId(input.directory);
     const [memories, state] = await Promise.all([agentMemoryRuntime.readAll(projectId || null), read(projectId).catch(() => null)]);
     const port = getPort();
-    const cli = port ? `openchamber memory --port ${port}` : 'openchamber memory';
+    let cli = port ? `openchamber memory --port ${port}` : 'openchamber memory';
+    if (input.backend === 'deepseek' && input.delivery === 'managed') {
+      const executable = await getNodeExecutable();
+      if (!executable) throw new NativeAgentError('A runtime executable is required for managed memory commands', { status: 503, code: 'NATIVE_MEMORY_NODE_MISSING' });
+      const quote = (value) => process.platform === 'win32' ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, `'\\''`)}'`;
+      cli = `${process.platform === 'win32' ? '& ' : ''}${quote(executable)} ${quote(commandPath)} memory${port ? ` --port ${port}` : ''}`;
+    }
     const titles = [
       ...memories.global.filter((entry) => !entry.flagged).map((entry) => `global: ${entry.title}`),
       ...memories.project.filter((entry) => !entry.flagged).map((entry) => `project: ${entry.title}`),
     ];
     const progress = (state?.progress ?? [])
-      .filter((entry) => entry.projectId === projectId && (entry.backend !== input.backend || entry.sessionId !== input.sessionId))
+      .filter((entry) => !entry.hidden && entry.projectId === projectId && (entry.backend !== input.backend || entry.sessionId !== input.sessionId))
       .sort((a, b) => b.revision - a.revision).slice(0, 4)
       .filter((entry) => !findThreatPattern(entry.summary));
     const text = [
@@ -111,6 +119,28 @@ export const createNativeMemorySharing = ({
     ].filter(Boolean).join('\n').slice(0, 14000);
     if (input.delivery === 'managed') managed.add(actorKey(input));
     return { enabled: true, text, revision: state?.revision ?? null };
+  };
+
+  // Progress is integration metadata. Reverting hides it; deleting the source
+  // removes it without erasing independently saved long-term memories.
+  const updateProgress = async (sessionId, directory, update) => {
+    const projectId = await resolveProjectId(directory);
+    if (!projectId) return;
+    const filePath = fileOf(projectId);
+    await withMemoryFileLock(filePath, async () => {
+      const state = await read(projectId);
+      if (!state.progress.some((entry) => entry.backend === 'deepseek' && entry.sessionId === sessionId)) return;
+      const progress = state.progress.flatMap((entry) => {
+        if (entry.backend !== 'deepseek' || entry.sessionId !== sessionId) return [entry];
+        const next = update(entry);
+        return next ? [next] : [];
+      });
+      const temporary = `${filePath}.${process.pid}.tmp`;
+      try {
+        await fs.writeFile(temporary, JSON.stringify({ ...state, revision: state.revision + 1, progress }), { mode: 0o600 });
+        await fs.rename(temporary, filePath);
+      } finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+    });
   };
 
   const sources = async (directory, projectId) => {
@@ -136,7 +166,14 @@ export const createNativeMemorySharing = ({
   return {
     enabled: isEnabled,
     context,
-    release: (sessionId) => managed.delete(`${sessionId.startsWith('ncl_') ? 'claude' : 'codex'}:${sessionId.replace(/^(?:ncl|ncx)_/, '')}`),
+    release: (sessionId) => managed.delete(`${sessionId.startsWith('ncl_') ? 'claude' : sessionId.startsWith('ncx_') ? 'codex' : 'deepseek'}:${sessionId.replace(/^(?:ncl|ncx)_/, '')}`),
+    async setProgressVisible(sessionId, directory, visible) {
+      await updateProgress(sessionId, directory, (entry) => ({ ...entry, hidden: !visible }));
+    },
+    async forget(sessionId, directory) {
+      managed.delete(`deepseek:${sessionId}`);
+      await updateProgress(sessionId, directory, () => null);
+    },
     checkpoint: saveCheckpoint,
     async status(directory) {
       const enabled = await isEnabled();
@@ -149,7 +186,7 @@ export const createNativeMemorySharing = ({
         enabled, backends,
         progressUnavailable: enabled && state === null,
         sourcesUnavailable: availableSources === null,
-        progress: state?.progress.filter((entry) => entry.projectId === projectId).sort((a, b) => b.revision - a.revision).slice(0, 20) ?? [],
+        progress: state?.progress.filter((entry) => !entry.hidden && entry.projectId === projectId).sort((a, b) => b.revision - a.revision).slice(0, 20) ?? [],
         sources: (availableSources ?? []).map(({ file, ...source }) => source),
       };
     },
@@ -158,9 +195,9 @@ export const createNativeMemorySharing = ({
       const executable = await getNodeExecutable();
       if (!executable) throw new NativeAgentError('Install Node.js on the server computer before connecting terminal hooks', { status: 503, code: 'NATIVE_MEMORY_NODE_MISSING' });
       await fs.access(hookPath);
-      return connections.connect(backend.parse(name), port, executable);
+      return connections.connect(terminalBackend.parse(name), port, executable);
     },
-    disconnect: (name) => connections.disconnect(backend.parse(name)),
+    disconnect: (name) => connections.disconnect(terminalBackend.parse(name)),
     async importSource(id, directory) {
       await requireEnabled();
       const projectId = await resolveProjectId(directory);

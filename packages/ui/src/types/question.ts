@@ -1,4 +1,4 @@
-/** The native Claude Code/Codex question protocol; OpenCode uses forms. */
+/** The native CLI question protocol; OpenCode uses forms. */
 export interface QuestionOption {
   label: string;
   description: string;
@@ -14,7 +14,7 @@ export interface QuestionInfo {
 export interface QuestionRequest {
   id: string;
   sessionID: string;
-  kind?: 'claude-plan-exit' | 'codex-plan-exit';
+  kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit';
   questions: QuestionInfo[];
   tool?: {
     messageID: string;

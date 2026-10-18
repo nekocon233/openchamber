@@ -4,7 +4,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { expandSnippets } from '../opencode/snippets.js';
 import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
 import { discoverLoops } from './loops.js';
-import { NATIVE_PROVIDER_CLAUDE, NATIVE_PROVIDER_CODEX } from '../native-agents/ids.js';
+import { nativeBackendOfProviderId } from '../native-agents/ids.js';
 import { assertOpenCodeApiResponse } from '../opencode/prompt-response.js';
 import { createExistingSessionTasks } from './existing-session.js';
 
@@ -616,7 +616,7 @@ export const createScheduledTasksRuntime = (deps) => {
   const runTaskWithWatchdog = async (projectID, task, reason, onSessionCreated) => {
     // A run is a new OpenCode session, which cannot use a native CLI's models.
     const providerID = task.execution.providerID;
-    if (providerID === NATIVE_PROVIDER_CLAUDE || providerID === NATIVE_PROVIDER_CODEX) {
+    if (nativeBackendOfProviderId(providerID)) {
       throw new Error(`scheduled tasks run in OpenCode sessions, which cannot use the ${providerID} models; pick an OpenCode model`);
     }
     const startedAt = Date.now();

@@ -17,7 +17,7 @@
 // when a turn ends lands before a revert requested after it.
 
 /**
- * @typedef {{ resumeAt: string } | { beforeTurnId: string }} ConversationRewind
+ * @typedef {{ resumeAt: string } | { beforeTurnId: string } | { deepseek: { nativeId: string, seq: number } }} ConversationRewind
  * @typedef {{
  *   messageId: string,
  *   messageIds: string[],

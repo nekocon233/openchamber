@@ -86,7 +86,7 @@ import {
 import { useInputStore, type SyntheticContextPart } from "./input-store"
 import { nativePromptRequest, nativeSendMessageId } from "./native-send"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
-import { NativeAgentsRequestError, NativeAgentsUnsupportedError } from "@/lib/native-agents/errors"
+import { NativeAgentsRequestError, NativeAgentsUnsupportedError, nativeSessionActionErrorKey } from "@/lib/native-agents/errors"
 import { isNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, type NativeBackend } from "@/lib/native-agents/ids"
 import type { I18nKey } from "@/lib/i18n"
 import { useSessionGoalArmStore } from "@/stores/useSessionGoalArmStore"
@@ -1353,7 +1353,7 @@ const nativeRevertRefusal = (error: NativeAgentsRequestError): I18nKey | null =>
   if (error.code === "NATIVE_REVERT_FIRST_MESSAGE") return "chat.revert.toast.nativeFirstMessage"
   if (error.code === "NATIVE_REVERT_MID_TURN") return "chat.revert.toast.nativeMidTurn"
   if (error.code === "NATIVE_REWIND_BEFORE_COMPACTION") return "chat.revert.toast.nativeBeforeCompaction"
-  return null
+  return nativeSessionActionErrorKey(error)
 }
 
 const showRevertToast = async (kind: "info" | "error", key: I18nKey) => {

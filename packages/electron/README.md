@@ -114,6 +114,17 @@ External OpenCode, remote instances, HMR backends without an embedded handle,
 and unavailable IPC retain the HTTP compatibility check. The renderer discards
 IPC results if its endpoint changes while the read is pending.
 
+Managed memory commands use the standalone `native-memory-cli.mjs` resource
+through system Node; main supplies `OPENCHAMBER_NATIVE_MEMORY_CLI_PATH` before
+starting the server. The entry reuses CLI authentication and needs no global CLI.
+
+DeepSeek Harness maintenance also runs through system Node. The resource build
+bundles `deepseek-maintenance-worker.mjs` and `deepseek-maintenance-plugin.mjs`
+outside ASAR; main supplies their server-only paths before starting the backend.
+The plugin uses an inherited private pipe inside the owned DSH process. It adds
+no desktop IPC or network listener. Unpackaged development uses the server source
+modules. Never point system Node at a helper inside `app.asar`.
+
 ## Main Files
 
 | File | Purpose |

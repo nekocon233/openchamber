@@ -127,6 +127,37 @@ describe('Codex history projection', () => {
   });
 });
 
+describe('Codex item lifecycle projection', () => {
+  it('covers an item end that lands after the second-precision turn end', () => {
+    const [user, assistant] = project([{
+      id: 'turn-1', status: 'completed', startedAt: 1, completedAt: 2,
+      items: [
+        { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
+        { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
+      ],
+    }], { itemTimes: new Map([['exec-1', { start: 1100, end: 2100 }]]) });
+
+    expect(user.info.time.created).toBe(1000);
+    expect(assistant.info.time.created).toBe(1001);
+    expect(assistant.info.time.completed).toBe(2100);
+    expect(assistant.parts.find((part) => part.type === 'tool').state.time).toEqual({ start: 1100, end: 2100 });
+  });
+
+  it('keeps a running turn open when item times are known', () => {
+    const records = project([{
+      id: 'turn-1', status: 'inProgress', startedAt: 1, completedAt: null,
+      items: [
+        { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
+        { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
+      ],
+    }], { itemTimes: new Map([['exec-1', { start: 1100, end: 1400 }]]) });
+
+    const assistant = records.find((record) => record.info.role === 'assistant');
+    expect(assistant.info.time.completed).toBeUndefined();
+    expect(assistant.parts.find((part) => part.type === 'tool').state.time).toEqual({ start: 1100, end: 1400 });
+  });
+});
+
 describe('Codex plan projection', () => {
   const planTurn = (text) => project([{
     id: 'turn-1',

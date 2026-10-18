@@ -21,7 +21,7 @@ import { CODEX_COMMAND_USAGE, CODEX_COMPOSER_COMMANDS } from '@/lib/native-agent
 type CommandSource = 'openchamber' | 'opencode' | 'extension' | 'native';
 
 // Product names, shown as the badge of a native CLI's own commands.
-const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } satisfies Record<NativeBackend, string>;
+const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex', deepseek: 'DeepSeek Harness' } satisfies Record<NativeBackend, string>;
 
 export interface CommandInfo {
   id: string;
@@ -103,7 +103,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   const commandsWithMetadata = useCommandsStore((s) => selectCommandsForDirectory(s, effectiveDirectory));
   const loadCommandsForDirectory = useCommandsStore((s) => s.loadCommands);
   const refreshCommands = React.useCallback(() => loadCommandsForDirectory(effectiveDirectory), [effectiveDirectory, loadCommandsForDirectory]);
-  const nativeCommands = useNativeCommands(nativeBackend, nativeBackend ? effectiveDirectory ?? null : null);
+  const nativeCommands = useNativeCommands(nativeBackend, nativeBackend ? effectiveDirectory ?? null : null, nativeBackend === 'deepseek' ? currentSessionId : null);
   const [selectedIndex, setSelectedIndex] = React.useState(0);
   const selectedIndexRef = React.useRef(0);
   const keyboardNavigationRef = React.useRef(false);
@@ -266,7 +266,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
       description: command.description || undefined,
       cliName,
     }));
-    return { localCommands, cliCommands };
+    return { localCommands: nativeBackend === 'deepseek' ? localCommands.filter((command) => !['undo', 'redo', 'timeline'].includes(command.name)) : localCommands, cliCommands };
   }, [nativeBackend, nativeCommands, hasSession, canUseReviewHandoffFlow, t]);
 
   const commands = React.useMemo(

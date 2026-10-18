@@ -1,7 +1,7 @@
 # Shared agent memory
 
-`runtime.js` owns durable global preferences and project knowledge. Both native
-CLIs and OpenCode use this store. `agentMemoryToolEnabled` is off by default;
+`runtime.js` owns durable global preferences and project knowledge. OpenCode, Claude Code, Codex and managed DeepSeek Harness
+sessions use this store. `agentMemoryToolEnabled` is off by default;
 the capability and Settings entry are available without the retired
 `OPENCHAMBER_MEMORY_ENABLE` experiment flag. Disabling memory stops agent reads,
 writes and handoff capture. Existing entries remain on disk.
@@ -26,11 +26,26 @@ writes and handoff capture. Existing entries remain on disk.
   processes. Memory, handoff and hook-config writes use atomic replacement.
   Missing storage is empty; malformed or unreadable storage is unavailable.
 
-The native live owners capture their final reply when a turn ends. Handoff
+The native live owners capture their final reply when a turn ends. DeepSeek uses
+its stable logical OpenChamber identity across native forks; revert hides its
+handoff, redo restores it, and permanent deletion removes only that actor’s
+handoff. Independent long-term memories remain shared. Late managed callbacks
+are drained or suppressed before those transitions. Handoff
 capture neither reloads the conversation nor makes an extra model request.
 Late checkpoints cannot replace a newer observation for the same session.
 Handoff read failure leaves readable long-term memory available and explicitly
 marks progress unavailable. No background polling runs.
+
+Managed DeepSeek context names an absolute runtime executable and the private
+`native-cli.mjs` entry, so memory reads/writes do not depend on a global
+`openchamber` command. That entry delegates only list/read/save/delete to the
+existing CLI command and authentication, always emits JSON and fails nonzero;
+it cannot manage hooks or run another CLI command. Packaged Electron stages a
+standalone `native-memory-cli.mjs` outside ASAR and supplies its server-only path.
+
+DeepSeek participation is limited to OpenChamber-managed sessions on the
+connected server. Hook enrollment and connection readiness still describe only
+Claude Code and Codex; no DSH terminal profile is modified.
 
 ## Native terminal hooks
 

@@ -5,7 +5,9 @@ import { toast } from 'sonner';
 import { Icon } from '@/components/icon/Icon';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { useI18n } from '@/lib/i18n';
+import { sessionActionSupport } from '@/lib/native-agents/capabilities';
 import { cn } from '@/lib/utils';
+import type { Session } from '@/lib/opencode/model';
 
 export const ROW_ACTION_SLOT_WIDTH = 48;
 
@@ -121,6 +123,7 @@ export const MobileSwipeActionsRow: React.FC<{
     delete never sits under a partial swipe. Copy ID stays in the final slot. */
 export const MobileSessionRowActions: React.FC<{
   sessionId: string;
+  sessionMetadata?: Session['metadata'];
   title: string;
   revealed: boolean;
   confirmingDelete: boolean;
@@ -135,6 +138,7 @@ export const MobileSessionRowActions: React.FC<{
   pin?: MobileSessionPinAction;
 }> = ({
   sessionId,
+  sessionMetadata,
   title,
   revealed,
   confirmingDelete,
@@ -202,7 +206,7 @@ export const MobileSessionRowActions: React.FC<{
           <Icon name={work.inWork ? 'check' : 'eye'} className={work.inWork ? 'size-5' : 'size-[18px]'} />
         </button>
       ) : null}
-      <button
+      {sessionActionSupport(sessionId, sessionMetadata).delete ? <button
         type="button"
         tabIndex={tabIndex}
         className={cn(
@@ -218,7 +222,7 @@ export const MobileSessionRowActions: React.FC<{
         style={{ touchAction: 'manipulation' }}
       >
         <RiDeleteBinLine className="size-[18px]" />
-      </button>
+      </button> : null}
       <button
         type="button"
         tabIndex={tabIndex}

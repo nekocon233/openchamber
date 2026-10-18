@@ -12,7 +12,7 @@ export const nativeMemoryStatusSchema = z.object({
   ])),
   progressUnavailable: z.boolean().optional(), sourcesUnavailable: z.boolean().optional(),
   progress: z.array(z.object({
-    backend: z.enum(['claude', 'codex']), sessionId: z.string(), projectId: z.string(),
+    backend: z.enum(['claude', 'codex', 'deepseek']), sessionId: z.string(), projectId: z.string(),
     summary: z.string(), status: z.enum(['completed', 'interrupted']), observedAt: z.number(), revision: z.number(),
   })),
   sources: z.array(z.object({ id: z.string(), backend: z.enum(['claude', 'codex']), name: z.string(), bytes: z.number() })),

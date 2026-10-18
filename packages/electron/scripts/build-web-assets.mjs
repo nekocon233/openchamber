@@ -85,6 +85,15 @@ await fs.mkdir(resourcesDir, { recursive: true });
 console.log('[electron] bundling the native memory hook...');
 run(bunExe, ['build', 'server/lib/agent-memory/native-hook.js', '--target=node', '--format=esm',
   '--outfile', path.join(resourcesDir, 'native-memory-hook.mjs')], webDir);
+run(bunExe, ['build', 'server/lib/agent-memory/native-cli.mjs', '--target=node', '--format=esm',
+  '--outfile', path.join(resourcesDir, 'native-memory-cli.mjs')], webDir);
+for (const [source, destination] of [
+  ['maintenance-worker.mjs', 'deepseek-maintenance-worker.mjs'],
+  ['maintenance-plugin.js', 'deepseek-maintenance-plugin.mjs'],
+]) {
+  run(bunExe, ['build', `server/lib/native-agents/deepseek/${source}`, '--target=node', '--format=esm',
+    '--outfile', path.join(resourcesDir, destination)], webDir);
+}
 const stagedWebDistDir = await fs.mkdtemp(path.join(resourcesDir, 'web-dist-staging-'));
 await copyDir(webDistDir, stagedWebDistDir);
 await removeDir(resourcesWebDistDir);

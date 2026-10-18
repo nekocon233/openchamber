@@ -28,6 +28,11 @@ import { z } from 'zod';
  *
  * Each feature that could send conversation content anywhere else checks it
  * at its own server boundary:
+ * - DeepSeek Harness sessions, one-click setup and provider configuration are refused
+ *   before launching or sending to the native DSH runtime, whose providers are
+ *   configured outside OpenCode
+ *   (`native-agents/deepseek/transport.js`). File/history mutations also check
+ *   the mode in `deepseek/backend.js` before restoring files or deleting logs.
  * - Model providers come only from the OpenCode config: connecting one,
  *   signing in, adding a key or creating a custom provider through this
  *   server is refused, as is probing a custom provider's model endpoint
