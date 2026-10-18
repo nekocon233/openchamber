@@ -52,6 +52,10 @@ const createFakeSdk = ({ failAfter = null, exitDelayMs = 0, permissionRequest = 
               signal: record.permissionController.signal,
               toolUseID: ASK_TOOL_ID,
             });
+            if (record.decision.behavior === 'deny' && record.decision.interrupt) {
+              yield { type: 'result', subtype: 'error_during_execution', is_error: false, terminal_reason: 'aborted_tools', queued_turn_count: 0 };
+              break;
+            }
           }
           yield frame;
         }
@@ -309,8 +313,8 @@ describe('Claude live sessions', () => {
   });
 
   describe('ExitPlanMode', () => {
-    const startPlan = async (input = { plan: 'Add a regression test, then fix the parser.' }) => {
-      const harness = createHarness({ permissionRequest: { name: 'ExitPlanMode', input } });
+    const startPlan = async (input = { plan: 'Add a regression test, then fix the parser.' }, options = {}) => {
+      const harness = createHarness({ ...options, permissionRequest: { name: 'ExitPlanMode', input } });
       await sendPrompt(harness.live, {
         config: { model: 'haiku', effort: null, permissionMode: 'plan' },
         send: { modelID: 'haiku', agent: 'plan' },
@@ -348,9 +352,57 @@ describe('Claude live sessions', () => {
       await waitFor(() => payloads(events, 'session.idle').length > 0);
       expect(calls.queries[0].decision).toMatchObject({ behavior: 'deny', interrupt: true });
       expect(calls.queries[0].decision.updatedPermissions).toBeUndefined();
+      const reply = live.liveRecords(SESSION_ID).findLast((record) => record.info.role === 'assistant');
+      expect(reply.info.error).toEqual(answers.length === 1 && answers[0].length === 1 && answers[0][0] === 'plan'
+        ? undefined : { name: 'MessageAbortedError', data: { message: 'aborted' } });
       await sendPrompt(live, { config: { model: 'haiku', effort: null, permissionMode: 'plan' } });
       expect(calls.setPermissionMode).toEqual([]);
       await live.shutdown();
+    });
+
+    it('keeps planning without publishing a stopped message and still settles tools and activity', async () => {
+      const { live, calls, questions, asked, events } = await startPlan();
+      questions.reply(asked.properties.id, [['plan']]);
+      await waitFor(() => payloads(events, 'session.idle').length > 0);
+      expect(calls.queries[0].decision).toMatchObject({ behavior: 'deny', interrupt: true });
+      expect(live.isSessionRunning(SESSION_ID)).toBe(false);
+      expect(questions.list(DIRECTORY)).toEqual([]);
+      expect(payloads(events, 'question.replied')[0].properties.answers).toEqual([['plan']]);
+      expect(payloads(events, 'message.updated').some((event) => event.properties.info.error)).toBe(false);
+      expect(payloads(events, 'session.error')).toEqual([]);
+      const records = live.liveRecords(SESSION_ID);
+      const question = records.flatMap((record) => record.parts).find((part) => part.callID === ASK_TOOL_ID);
+      expect(question.state).toMatchObject({ status: 'error', error: 'Interrupted' });
+      expect(records.find((record) => record.info.id === question.messageID).info.time.completed).toBeGreaterThan(0);
+      await live.shutdown();
+    });
+
+    it('preserves a manual stop just after the keep-planning answer arrives', async () => {
+      const { live, questions, asked, events } = await startPlan();
+      questions.reply(asked.properties.id, [['plan']]);
+      await live.abort(SESSION_ID);
+      await waitFor(() => payloads(events, 'session.idle').length > 0);
+      const reply = live.liveRecords(SESSION_ID).findLast((record) => record.info.role === 'assistant');
+      expect(reply.info.error).toEqual({ name: 'MessageAbortedError', data: { message: 'aborted' } });
+      await live.shutdown();
+    });
+
+    it('does not carry the keep-planning choice into the next turn', async () => {
+      const nextTurn = Promise.withResolvers();
+      const harness = await startPlan(undefined, { afterFrames: async function* () {
+        await nextTurn.promise;
+        yield { type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_start', message: { id: 'msg_next', model: 'claude-haiku-4-5', content: [] } } };
+        yield { type: 'result', subtype: 'error_during_execution', is_error: false, terminal_reason: 'aborted_streaming', queued_turn_count: 0 };
+      } });
+      const idleTurns = () => payloads(harness.events, 'session.idle').filter((event) => event.properties.sessionID === SESSION_ID).length;
+      harness.questions.reply(harness.asked.properties.id, [['plan']]);
+      await waitFor(() => idleTurns() === 1);
+      await sendPrompt(harness.live, { messageId: 'ncl_u_b22f0a7a-a88c-4093-a5e3-6653ff44f6d3' });
+      nextTurn.resolve();
+      await waitFor(() => idleTurns() === 2);
+      const reply = harness.live.liveRecords(SESSION_ID).findLast((record) => record.info.role === 'assistant');
+      expect(reply.info.error).toEqual({ name: 'MessageAbortedError', data: { message: 'aborted' } });
+      await harness.live.shutdown();
     });
 
     it('returns requested changes to Claude while keeping plan mode', async () => {
@@ -374,12 +426,15 @@ describe('Claude live sessions', () => {
       await live.shutdown();
     });
 
-    it('does not approve a callback canceled just after the answer arrives', async () => {
-      const { live, calls, questions, asked } = await startPlan();
-      questions.reply(asked.properties.id, [['build']]);
+    it.each(['build', 'plan'])('does not hide cancellation just after the %s answer arrives', async (answer) => {
+      const { live, calls, questions, asked, events } = await startPlan();
+      questions.reply(asked.properties.id, [[answer]]);
       calls.queries[0].permissionController.abort();
       await waitFor(() => calls.queries[0].decision);
       expect(calls.queries[0].decision).toMatchObject({ behavior: 'deny', interrupt: true });
+      await waitFor(() => payloads(events, 'session.idle').some((event) => event.properties.sessionID === SESSION_ID));
+      expect(live.liveRecords(SESSION_ID).findLast((record) => record.info.role === 'assistant').info.error)
+        .toEqual({ name: 'MessageAbortedError', data: { message: 'aborted' } });
       await live.shutdown();
     });
   });

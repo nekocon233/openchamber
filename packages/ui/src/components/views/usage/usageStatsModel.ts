@@ -34,17 +34,21 @@ export type ActivityBar = {
   /** Last day of the bucket; equals `start` for daily bars. */
   end: string;
   steps: number;
+  tokens: number | null;
+  tokensComplete: boolean;
 };
 
-export type ActivitySeries = { unit: 'day' | 'week'; bars: ActivityBar[]; max: number };
+export type ActivitySeries = { unit: 'day' | 'week'; bars: ActivityBar[]; max: number; partial: boolean };
 
 /**
  * Every calendar day of the report range, active or not, so gaps read as
  * gaps. OpenCode lists active days only. Local dates are used because the
  * request sends the viewer's own time zone.
  */
-export function buildActivitySeries(stats: Pick<UsageStats, 'range' | 'activity'>): ActivitySeries {
-  const stepsByDay = new Map(stats.activity.map((day) => [day.date, day.steps]));
+export function buildActivitySeries(stats: Pick<UsageStats, 'range' | 'activity' | 'coverage' | 'sources'>): ActivitySeries {
+  const activityByDay = new Map(stats.activity.map((day) => [day.date, day]));
+  const historyComplete = !(stats.sources?.some((source) => source.status !== 'ok'))
+    && !(stats.coverage?.failedSessions) && !(stats.coverage?.undated);
   const from = new Date(stats.range.from);
   const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   // `to` is exclusive.
@@ -53,13 +57,17 @@ export function buildActivitySeries(stats: Pick<UsageStats, 'range' | 'activity'
   const days: ActivityBar[] = [];
   for (;;) {
     const key = dateKey(cursor);
-    days.push({ start: key, end: key, steps: stepsByDay.get(key) ?? 0 });
+    const activity = activityByDay.get(key);
+    days.push({ start: key, end: key, steps: activity?.steps ?? 0,
+      tokens: activity ? activity.tokens : historyComplete ? 0 : null,
+      tokensComplete: historyComplete && (activity?.tokensComplete ?? true),
+    });
     if (key >= lastKey) break;
     cursor.setDate(cursor.getDate() + 1);
   }
 
   if (days.length <= MAX_DAILY_BARS) {
-    return { unit: 'day', bars: days, max: Math.max(0, ...days.map((day) => day.steps)) };
+    return { unit: 'day', bars: days, max: Math.max(0, ...days.map((day) => day.tokens ?? 0)), partial: days.some((day) => !day.tokensComplete) };
   }
 
   const weeks: ActivityBar[] = [];
@@ -69,9 +77,12 @@ export function buildActivitySeries(stats: Pick<UsageStats, 'range' | 'activity'
       start: chunk[0].start,
       end: chunk[chunk.length - 1].end,
       steps: chunk.reduce((sum, day) => sum + day.steps, 0),
+      tokens: chunk.every((day) => day.tokensComplete) || chunk.some((day) => day.steps > 0 && day.tokens !== null)
+        ? chunk.reduce((sum, day) => sum + (day.tokens ?? 0), 0) : null,
+      tokensComplete: chunk.every((day) => day.tokensComplete),
     });
   }
-  return { unit: 'week', bars: weeks, max: Math.max(0, ...weeks.map((week) => week.steps)) };
+  return { unit: 'week', bars: weeks, max: Math.max(0, ...weeks.map((week) => week.tokens ?? 0)), partial: weeks.some((week) => !week.tokensComplete) };
 }
 
 /** Nothing happened in the range: no prompt and no model step. */

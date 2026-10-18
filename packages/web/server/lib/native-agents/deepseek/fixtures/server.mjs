@@ -260,6 +260,10 @@ sockets.on('connection', (socket) => {
     if (entry.endpoint === 'workspace/follow') value = { type: 'baseline', value: { items: [], archivedSessionIds: archived, pinnedSessionIds: [] } };
     if (entry.endpoint === 'session/control') value = { type: 'baseline', value: { projections: {} } };
     if (entry.endpoint === 'session/follow') {
+      if (entry.args.request.assistantStream !== undefined && entry.args.request.assistantStream !== true) {
+        socket.send(JSON.stringify({ type: 'error', streamId: entry.id, error: { code: 'invalid-request', message: 'assistantStream must be true or omitted' } }));
+        return;
+      }
       const session = sessions.get(entry.args.request.address.sessionId);
       const records = session.events.slice(-100).map((event) => ({ type: 'event', event }));
       value = { type: 'snapshot', header: { version: 4, id: session.id, createdAt: 1000, cwd: directory }, cursor: session.events.length - 1,

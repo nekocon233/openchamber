@@ -896,18 +896,20 @@ export const createClaudeProjection = ({
      * Ends the running turn: completes its open assistant message, settles
      * tools that will not finish, and records why the turn failed. A failure
      * before any reply gets an assistant message of its own to show on.
-     * @param {{ error: { name: string, data: { message: string } } | null }} outcome
+     * Keeping a plan still interrupts tools, without a stopped-message notice.
+     * @param {{ error: { name: string, data: { message: string } } | null, planKept?: boolean }} outcome
      */
-    finishTurn({ error }) {
+    finishTurn({ error, planKept = false }) {
       const time = liveTime();
       const changed = error === null ? [] : settleTools(error.name === 'MessageAbortedError' ? 'Interrupted' : error.data.message);
+      const messageError = planKept && error?.name === 'MessageAbortedError' ? null : error;
       if (currentAssistant) {
         const info = currentAssistant.record.info;
         if (info.finish === undefined && currentAssistant.finish !== null) info.finish = currentAssistant.finish;
         if (info.time.completed === undefined) info.time = { created: info.time.created, completed: Math.max(info.time.created, time) };
-        if (error !== null && info.error === undefined) info.error = error;
+        if (messageError !== null && info.error === undefined) info.error = messageError;
         changed.push(info.id);
-      } else if (error !== null && currentUser) {
+      } else if (messageError !== null && currentUser) {
         let record = recordById.get(`${currentUser.info.id}_error`);
         if (!record) {
           const created = createdAfterPrevious(time);
@@ -922,7 +924,7 @@ export const createClaudeProjection = ({
             agent: currentUser.info.agent,
             cwd,
             tokens: EMPTY_TOKENS,
-            error,
+            error: messageError,
           }));
         }
         changed.push(record.info.id);

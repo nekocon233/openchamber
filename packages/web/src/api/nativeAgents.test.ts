@@ -29,6 +29,16 @@ afterEach(() => {
 });
 
 describe('web native agents API', () => {
+  it('sends a fixed native statistics window and rejects malformed reports', async () => {
+    const unavailable = { status: 'unavailable', message: 'CLI unavailable', code: 'NATIVE_CLI_MISSING' };
+    stubFetch(async () => Response.json({ backends: { claude: unavailable, codex: unavailable, deepseek: unavailable } }));
+    const result = await createWebNativeAgentsAPI().stats({ from: 100, to: 200, timezone: 'Asia/Taipei', directory: '/work/project with spaces', tools: 'none' });
+    expect(result.backends.claude.status).toBe('unavailable');
+    expect(requests[0]?.pathname).toBe('/api/native/stats');
+    expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({ from: '100', to: '200', timezone: 'Asia/Taipei', directory: '/work/project with spaces', tools: 'none' });
+    stubFetch(async () => Response.json({ backends: {} }));
+    await expect(createWebNativeAgentsAPI().stats({ to: 200, timezone: 'UTC', tools: 'detail' })).rejects.toThrow();
+  });
   it('starts one-click DeepSeek setup with no credentials or executable arguments', async () => {
     const bodies: string[] = [];
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {

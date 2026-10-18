@@ -97,6 +97,34 @@ const createHarness = async ({ importFails = false, replayChain = poisonedChain,
 };
 
 describe('Claude session store', () => {
+  it('keeps the projector rules for interrupt markers, local output and meta prompts', async () => {
+    const { registry } = await createHarness();
+    const entry = (uuid, content, extra = {}) => ({ type: 'user', uuid, timestamp: '2026-10-18T01:00:00Z', message: { role: 'user', content }, ...extra });
+    const sdk = {
+      getSessionInfo: async () => ({ sessionId: OPENCHAMBER_UUID, lastModified: Date.now() }),
+      listSubagents: async () => [],
+      getSessionMessages: async () => [
+        entry(PROMPT_1, 'Actual prompt'),
+        entry(PROMPT_2, '[Request interrupted by user]'),
+        entry(PROMPT_3, [{ type: 'text', text: '<local-command-stdout>Output</local-command-stdout>' }]),
+        entry('meta', 'Internal note', { is_meta: true }),
+      ],
+    };
+    const store = createClaudeSessionStore({ loadSdk: async () => sdk, registry });
+    const snapshot = await store.loadStatistics(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    expect(snapshot.records.filter((record) => record.info.role === 'user')).toHaveLength(1);
+  });
+  it('reads statistics without diff imports or filling the chat history cache', async () => {
+    const { store, calls } = await createHarness();
+    const snapshot = await store.loadStatistics(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    expect(snapshot.records.filter((record) => record.info.role === 'assistant').length).toBeGreaterThan(0);
+    expect(snapshot.childSessions.map((child) => child.id)).toContain(`ncl_${OPENCHAMBER_UUID}_t_${TASK_TOOL_USE}`);
+    expect(snapshot.reasoningKnown).toBe(false);
+    expect(calls.imports).toHaveLength(0);
+    expect(JSON.stringify(snapshot)).not.toContain('structuredPatch');
+    await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);
+    expect(calls.getSessionMessages).toBe(2);
+  });
   it('retries incomplete answer metadata without requiring the terminal transcript to change', async () => {
     const { store, allowImports } = await createHarness({ importFails: true });
     const partial = await store.loadHistory(`ncl_${OPENCHAMBER_UUID}`, DIRECTORY);

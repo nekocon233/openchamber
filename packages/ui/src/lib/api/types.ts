@@ -22,6 +22,7 @@ import type {
   nativeStatusSnapshotSchema,
 } from '@/lib/native-agents/schemas';
 import type { NativeBackend } from '@/lib/native-agents/ids';
+import type { NativeStatistics, NativeStatisticsQuery } from '@/lib/native-agents/stats-schemas';
 import type { DeepseekConfiguration, DeepseekConfigurationWrite, DeepseekConfigurationSave, DeepseekSetupStatus } from '@/lib/native-agents/deepseek';
 import type { NativeChecklistSnapshot, NativePlanSnapshot, NativeTaskOutput, NativeTaskSnapshot, NativeTodosSnapshot } from '@/lib/native-agents/task-schemas';
 import type { GitIdentityProfile, GitIdentitySummary } from './git-identity';
@@ -2269,6 +2270,7 @@ export type NativePromptRequest = {
  * server. Every method throws on failure; none reports a failure as empty.
  */
 export interface NativeAgentsAPI {
+  stats(query: NativeStatisticsQuery, options?: NativeReadOptions): Promise<NativeStatistics>;
   memoryStatus(directory?: string, options?: NativeReadOptions): Promise<NativeMemoryStatus>;
   connectMemory(backend: Exclude<NativeBackend, 'deepseek'>): Promise<NativeMemoryConnection>;
   disconnectMemory(backend: Exclude<NativeBackend, 'deepseek'>): Promise<NativeMemoryConnection>;

@@ -1,5 +1,44 @@
 # Retained context views
 
+## Usage statistics
+
+Stats combines official OpenCode reports through `opencode/session-stats.ts`
+with native reports through `RuntimeAPIs.nativeAgents.stats`. Each read captures
+one range end and viewer timezone for all sources. Native histories are
+aggregated on the server; the browser receives counters and coverage only.
+Project lookup failure affects the OpenCode source, never an unfiltered
+fallback or the native source. VS Code skips the unsupported native capability.
+
+Activity dates merge before active days and the longest streak are computed.
+Daily activity bars show the sum of input, output, reasoning and cache read/write
+tokens, matching the summary. Ranges longer than 92 days sum these into weeks;
+step counts still determine active days and streaks. Native sources supply
+daily totals during their existing history scan. OpenCode exposes only daily
+step counts, so its adapter reads each active day's totals through `session.stats`
+with the original project, viewer timezone and clamped report window. These
+reads share four slots across reports and a 25-second deadline per report.
+Cancellation removes queued work and cannot exceed the shared concurrency limit.
+Daily read failures retain the summary and other dates. A day with no known
+usage is `tokens: null`; an observed zero remains zero. `tokensComplete` marks
+partial sums, including incomplete histories and undated records. Inactive
+days become zero only for authoritative history. Dashed bars and translated
+tooltips distinguish unknown usage; old native endpoints without daily fields
+remain readable with unknown daily usage. Undated tokens stay in the summary
+and are never assigned to a guessed day.
+
+Token and cost totals retain recorded values with coverage labels; completely
+missing metrics display unknown. Ratios with incomplete inputs display a dash.
+Model rows carry the same coverage. Source failures and incomplete histories
+are visible even when readable sources contain no activity. Source notices
+report read failures only; missing token, cost or reasoning fields do not
+produce page-level notices. Metric labels and daily bar descriptions still
+distinguish unknown and partially recorded values. A failed refresh
+keeps the previous report when no source could be read. Tool counts load on
+request for the report's fixed window; independent source medians are not
+averaged. Runtime changes abort and discard pending reports and tools.
+
+## Context panel retention
+
 `ContextPanel` keeps file, diff and walkthrough views mounted to preserve
 navigation, expanded sections and editor state. Its `visible` prop combines
 the panel's open state with the selected tab. Hiding via CSS alone does not

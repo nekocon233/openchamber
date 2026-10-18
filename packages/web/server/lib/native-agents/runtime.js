@@ -66,6 +66,7 @@ import { unconfirmedSessionRecord, unknownError } from './records.js';
 import { createNativeRegistry } from './registry.js';
 import { createNativeReverts } from './revert.js';
 import { createSnapshotStore } from './snapshots.js';
+import { readNativeStatistics } from './stats.js';
 
 const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const STOP_TIMEOUT_MS = 10_000;
@@ -629,6 +630,7 @@ export const createNativeAgentsRuntime = ({
 
   return {
     memorySharing: memory,
+    statistics: (query, options) => readNativeStatistics({ query, backends: { claude, codex, deepseek }, ...options }),
     claudeConnections,
     codexConnections,
     /** Applies a saved or removed connection to the CLI, or defers it to idle. */

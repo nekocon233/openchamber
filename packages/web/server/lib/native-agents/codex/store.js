@@ -75,6 +75,18 @@ const titleTurnSchema = z.object({ id: z.string(), status: z.string(), items: z.
 // A turn read for its items alone: the plan reader accepts any turn, where the
 // title reader needs a completed one.
 const turnItemsSchema = z.object({ id: z.string(), items: z.array(z.unknown()) });
+const statisticsItemSchema = z.object({
+  type: z.string(), id: z.string(), clientId: z.string().nullish(),
+  content: z.array(z.unknown()).optional(), command: z.string().optional(),
+  commandActions: z.array(z.object({ type: z.string().optional(), path: z.string().nullish() })).optional(),
+  cwd: z.string().nullish(), exitCode: z.number().nullish(), status: z.string().optional(),
+  server: z.string().optional(), tool: z.string().optional(), success: z.boolean().nullish(),
+  error: z.object({ message: z.string() }).nullish(), receiverThreadIds: z.array(z.string()).optional(),
+});
+const statisticsTurnSchema = z.object({
+  id: z.string(), status: z.string(), startedAt: z.number().nullish(), completedAt: z.number().nullish(),
+  error: z.unknown().optional(), items: z.array(statisticsItemSchema),
+});
 // A plan is a document the user reads, not a stream to buffer: past this the
 // panel says it was shortened rather than holding a runaway one.
 const MAX_PLAN_CHARS = 200_000;
@@ -112,10 +124,11 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     parentID,
   });
 
-  const listThreads = async (directory, archived) => {
+  const listThreads = async (directory, archived, { statistics = false, signal } = {}) => {
     const threads = [];
     let cursor = null;
-    for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+    for (let page = 0; statistics || page < MAX_LIST_PAGES; page += 1) {
+      signal?.throwIfAborted();
       const response = threadListSchema.parse(await appServer.request('thread/list', {
         cwd: directory,
         sourceKinds: LISTED_SOURCES,
@@ -128,6 +141,7 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
         if (thread.success && !HIDDEN_ORIGINATORS.has(thread.data.originator ?? '')) threads.push(thread.data);
       }
       if (!response.nextCursor) break;
+      if (response.nextCursor === cursor) throw new Error('Codex session listing did not advance');
       cursor = response.nextCursor;
     }
     return threads;
@@ -138,15 +152,15 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
    * Codex cannot be reached.
    * @param {string} directory
    */
-  const listRootSessions = async (directory) => {
+  const listRootSessions = async (directory, options) => {
     const [active, archived, unconfirmed] = await Promise.all([
-      listThreads(directory, false),
-      listThreads(directory, true),
+      listThreads(directory, false, options),
+      listThreads(directory, true, options),
       registry.unconfirmedSessions({ backend: 'codex', directory }),
     ]);
     const records = [
-      ...active.map((thread) => sessionRecord(thread, directory, { archived: false })),
-      ...archived.map((thread) => sessionRecord(thread, directory, { archived: true })),
+      ...active.map((thread) => sessionRecord(thread, directory ?? thread.cwd, { archived: false })),
+      ...archived.map((thread) => sessionRecord(thread, directory ?? thread.cwd, { archived: true })),
     ];
     const listed = new Set(records.map((record) => record.id));
     for (const entry of unconfirmed) {
@@ -177,7 +191,7 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     }
   };
 
-  const readAllTurns = async (threadId) => {
+  const readAllTurns = async (threadId, statistics = false) => {
     const turns = [];
     let cursor = null;
     do {
@@ -188,7 +202,16 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
         limit: TURN_PAGE_SIZE,
         cursor,
       }));
-      turns.push(...page.data);
+      turns.push(...(statistics ? page.data.map((raw) => {
+        const turn = statisticsTurnSchema.parse(raw);
+        return { ...turn, items: turn.items.map((item) => {
+          const summary = { ...item, text: '', summary: [], changes: [], arguments: {}, aggregatedOutput: '',
+            commandActions: item.commandActions?.map((action) => ({ type: action.type, path: action.path ?? undefined })),
+          };
+          if (item.type !== 'userMessage') summary.content = [];
+          return summary;
+        }) };
+      }) : page.data));
       cursor = page.nextCursor ?? null;
     } while (cursor !== null);
     return turns;
@@ -227,15 +250,17 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
    * @param {string} directory
    * @returns {Promise<{ records: Array<{ info: object, parts: object[] }>, childSessions: object[] } | null>}
    */
-  const loadHistory = async (sessionId, directory) => {
+  const loadHistory = async (sessionId, directory, { statistics = false, signal } = {}) => {
+    signal?.throwIfAborted();
     const decoded = decodeNativeSessionId(sessionId);
     if (!decoded || decoded.backend !== 'codex') return null;
     const thread = await readThread(decoded.threadId);
     if (!thread) return (await unconfirmedEntry(sessionId)) ? { records: [], childSessions: [] } : null;
     const [turns, sendRecords, details] = await Promise.all([
-      readAllTurns(decoded.threadId), registry.sendRecords(sessionId),
+      readAllTurns(decoded.threadId, statistics), registry.sendRecords(sessionId),
       readCodexHistoryDetails(thread.path, decoded.threadId).catch(() => null),
     ]);
+    signal?.throwIfAborted();
     const records = projectCodexTurns({
       sessionId,
       threadId: decoded.threadId,
@@ -245,6 +270,7 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
       sendRecordFor: (messageId) => sendRecords.get(messageId) ?? null,
       itemTimes: details ? codexItemTimes(details) : undefined,
       details,
+      statistics,
     });
     const childIds = new Set();
     for (const record of records) {
@@ -258,7 +284,15 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
       const childThread = child?.backend === 'codex' ? await readThread(child.threadId) : null;
       return childThread ? sessionRecord(childThread, directory, { archived: false, parentID: sessionId }) : null;
     }));
-    return { records, childSessions: children.filter((child) => child !== null), metadataComplete: details !== null };
+    if (statistics) {
+      const times = codexItemTimes(details);
+      for (const record of records) for (const part of record.parts) {
+        if (part.type === 'tool' && !times.get(part.callID)?.end) delete part.state.time.end;
+      }
+    }
+    const snapshot = { records, childSessions: children.filter((child) => child !== null), metadataComplete: details !== null };
+    if (statistics) snapshot.complete = details !== null;
+    return snapshot;
   };
 
   /** One thread as a session record, or null when it does not exist. */
@@ -379,5 +413,7 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     }
   };
 
-  return { listRootSessions, getSession, loadHistory, latestPlan, sessionExists, rewindTarget, fork, rename, initialTitleTurn, renameInitialTurn, setArchived, deleteThread };
+  return { listRootSessions, listStatisticsSessions: (signal) => listRootSessions(undefined, { statistics: true, signal }),
+    loadStatistics: (sessionId, directory, options) => loadHistory(sessionId, directory, { ...options, statistics: true }),
+    getSession, loadHistory, latestPlan, sessionExists, rewindTarget, fork, rename, initialTitleTurn, renameInitialTurn, setArchived, deleteThread };
 };

@@ -10,6 +10,7 @@ import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
 import { deepseekConfigurationWrite } from './deepseek/configuration.js';
+import { statisticsQuery } from './stats.js';
 
 const directoryQuery = z.object({ directory: z.string().min(1) }).passthrough();
 const taskOperationInput = z.object({ directory: z.string().min(1), generation: z.string().min(1).max(128) }).strict();
@@ -108,8 +109,21 @@ const handle = (work) => async (req, res) => {
  * @param {import('express').Express} app
  * @param {{ runtime: ReturnType<typeof import('./runtime.js').createNativeAgentsRuntime> }} deps
  */
-export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementRequest = () => false }) => {
+export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementRequest = () => false, statisticsDirectories = async (directory) => [directory] }) => {
   app.get('/api/native/capabilities', handle(() => runtime.capabilities()));
+  app.get('/api/native/stats', async (req, res) => {
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    res.once('close', cancel);
+    try {
+      const query = statisticsQuery.parse(req.query);
+      const scopeDirectories = query.directory ? await statisticsDirectories(query.directory) : [];
+      const result = await runtime.statistics(query, { scopeDirectories, signal: controller.signal });
+      if (!controller.signal.aborted) res.json(result);
+    } catch (error) {
+      if (!controller.signal.aborted) respondError(res, error);
+    } finally { res.off('close', cancel); }
+  });
   const memory = () => {
     if (!runtime.memorySharing) throw new NativeAgentError('Native memory sharing is unavailable', { status: 503, code: 'NATIVE_MEMORY_UNSUPPORTED' });
     return runtime.memorySharing;

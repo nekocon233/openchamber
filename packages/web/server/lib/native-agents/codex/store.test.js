@@ -47,6 +47,42 @@ const createHarness = (handlers) => {
 };
 
 describe('Codex session store', () => {
+  it('exhausts statistics listing beyond the sidebar page cap', async () => {
+    const { store } = createHarness({
+      'thread/list': async ({ archived, cursor }) => {
+        if (archived) return { data: [], nextCursor: null };
+        const page = Number(cursor ?? 0);
+        return { data: [thread(`01a0d2a6-0000-7000-8000-${String(page).padStart(12, '0')}`)], nextCursor: page < 20 ? String(page + 1) : null };
+      },
+    });
+    expect(await store.listRootSessions(DIRECTORY)).toHaveLength(20);
+    expect(await store.listStatisticsSessions()).toHaveLength(21);
+  });
+  it('keeps missing statistics timestamps unknown instead of using chat ordering keys', async () => {
+    const turns = fixture('gpt55-tools.turns.json');
+    for (const turn of turns.data) { turn.startedAt = null; turn.completedAt = null; }
+    const { store } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID) }),
+      'thread/turns/list': async () => turns,
+    });
+    const snapshot = await store.loadStatistics(`ncx_${THREAD_ID}`, DIRECTORY);
+    expect(snapshot.records.length).toBeGreaterThan(0);
+    expect(snapshot.records.every((record) => record.info.time.created === 0)).toBe(true);
+  });
+  it('reads statistics without resuming a thread and drops tool outputs', async () => {
+    const turns = fixture('gpt55-tools.turns.json');
+    const command = turns.data.flatMap((turn) => turn.items).find((item) => item.type === 'commandExecution');
+    command.commandActions = [{ type: 'search', path: null }];
+    const { store, calls } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID) }),
+      'thread/turns/list': async () => turns,
+    });
+    const snapshot = await store.loadStatistics(`ncx_${THREAD_ID}`, DIRECTORY);
+    expect(snapshot.records.some((record) => record.info.role === 'assistant')).toBe(true);
+    expect(calls.every((call) => ['thread/read', 'thread/turns/list'].includes(call.method))).toBe(true);
+    expect(snapshot.records.flatMap((record) => record.parts).filter((part) => part.type === 'tool')
+      .every((part) => !part.state.output && !part.state.time.end)).toBe(true);
+  });
   it('returns the thread’s own directory when resuming by id from another project', async () => {
     const { store } = createHarness({ 'thread/read': async () => ({ thread: thread(THREAD_ID, { cwd: '/work/actual-project' }) }) });
     expect((await store.getSession(`ncx_${THREAD_ID}`, '/work/previous-project')).directory).toBe('/work/actual-project');

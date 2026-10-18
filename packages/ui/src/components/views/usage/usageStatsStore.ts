@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 
-import { fetchUsageStats, fetchUsageTools, resolveUsageProjectID, type UsageStats, type UsageTools } from '@/lib/opencode/session-stats';
+import type { UsageStats, UsageTools } from '@/lib/opencode/session-stats';
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 
 import { rangeStart, type UsageRange } from './usageStatsModel';
+import { fetchCombinedUsageStats, fetchCombinedUsageTools } from './usageStatsFetch';
 
 /**
  * In-memory cache of Stats page reports for the app session, one entry per
@@ -31,7 +32,7 @@ export type UsageStatsFetcher = (request: UsageStatsRequest, signal: AbortSignal
 
 /**
  * Tool calls for a loaded report, fetched only on request: counting them makes
- * OpenCode read every tool call in the range. `range` is the loaded report's
+ * each source read tool history in the range. `range` is the loaded report's
  * window, so the tool numbers match the rest of the page.
  */
 export type UsageToolsEntry = {
@@ -75,19 +76,13 @@ type UsageStatsStore = {
 
 const viewerTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
-const fetchFromOpencode: UsageStatsFetcher = async ({ range, projectDirectory }, signal) => {
-  // The `project` filter takes OpenCode's project id, which only OpenCode
-  // knows: ask it for the id of the project's directory. A failed lookup is
-  // an error for this choice, never an unfiltered or empty report.
-  const projectID = projectDirectory ? await resolveUsageProjectID(projectDirectory) : undefined;
-  signal.throwIfAborted();
-  return fetchUsageStats({ from: rangeStart(range, new Date()), projectID, timezone: viewerTimeZone() }, signal);
+const fetchReport: UsageStatsFetcher = async ({ range, projectDirectory }, signal) => {
+  const now = new Date();
+  return fetchCombinedUsageStats({ from: rangeStart(range, now), to: now.getTime(), directory: projectDirectory ?? undefined, timezone: viewerTimeZone() }, signal);
 };
 
 const fetchToolsFromOpencode: UsageToolsFetcher = async ({ projectDirectory }, window, signal) => {
-  const projectID = projectDirectory ? await resolveUsageProjectID(projectDirectory) : undefined;
-  signal.throwIfAborted();
-  return fetchUsageTools({ from: window.from, to: window.to, projectID, timezone: viewerTimeZone() }, signal);
+  return fetchCombinedUsageTools({ from: window.from, to: window.to, directory: projectDirectory ?? undefined, timezone: viewerTimeZone() }, signal);
 };
 
 export function createUsageStatsStore(
@@ -133,7 +128,10 @@ export function createUsageStatsStore(
           // while it runs never lets it land on another filter.
           patch(key, { stats, fetchedAt: now(), loading: false, error: null });
           // A refreshed report moves the window, so tools already shown follow it.
-          if (get().toolsRequested) void get().loadTools(request, { force: Boolean(get().toolEntries[key]?.tools) });
+          if (get().toolsRequested) {
+            patchTools(key, { tools: null, error: null });
+            void get().loadTools(request, { force: true });
+          }
         } catch (error) {
           if (signal.aborted) return;
           // A failed read keeps the last report; it never becomes zeros.
@@ -143,21 +141,31 @@ export function createUsageStatsStore(
 
       loadTools: async (request, options) => {
         const key = usageStatsKey(runtimeKey(), request);
-        const window = get().entries[key]?.stats?.range;
-        if (!window) return;
+        const report = get().entries[key]?.stats;
+        if (!report) return;
+        const window = report.range;
         set({ toolsRequested: true });
         const entry = get().toolEntries[key];
         if (entry?.loading) return;
         if (!options?.force && (entry?.tools || entry?.error)) return;
 
         const { signal } = controller;
+        const acceptResult = () => {
+          if (signal.aborted) return false;
+          if (get().entries[key]?.stats === report) return true;
+          // The current report superseded this read. Its tools must be read
+          // again even when the previous read failed or was still loading.
+          patchTools(key, { tools: null, loading: false, error: null });
+          void get().loadTools(request, { force: true });
+          return false;
+        };
         patchTools(key, { loading: true });
         try {
           const tools = await toolsFetcher(request, window, signal);
-          if (signal.aborted) return;
+          if (!acceptResult()) return;
           patchTools(key, { tools, loading: false, error: null });
         } catch (error) {
-          if (signal.aborted) return;
+          if (!acceptResult()) return;
           patchTools(key, { loading: false, error: error instanceof Error ? error.message : String(error) });
         }
       },
@@ -171,7 +179,7 @@ export function createUsageStatsStore(
   });
 }
 
-export const useUsageStatsStore = createUsageStatsStore(fetchFromOpencode, getRuntimeKey);
+export const useUsageStatsStore = createUsageStatsStore(fetchReport, getRuntimeKey);
 
 export const selectUsageToolsEntry = (
   state: Pick<UsageStatsStore, 'toolEntries'>,

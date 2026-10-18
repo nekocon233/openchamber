@@ -30,6 +30,7 @@ import {
   nativeTodosSnapshotSchema,
 } from '@openchamber/ui/lib/native-agents/task-schemas';
 import { runtimeFetch } from '@openchamber/ui/lib/runtime-fetch';
+import { nativeStatisticsSchema } from '@openchamber/ui/lib/native-agents/stats-schemas';
 import { z } from 'zod';
 import { nativeMemoryStatusSchema, nativeMemoryConnectionSchema } from '@openchamber/ui/lib/native-agents/memory-schemas';
 import { deepseekConfigurationSchema, deepseekConfigurationSaveSchema, deepseekSetupStatusSchema, type DeepseekConfigurationWrite } from '@openchamber/ui/lib/native-agents/deepseek';
@@ -124,6 +125,7 @@ const sessionPath = (sessionId: string) => `/api/native/sessions/${encodeURIComp
 const questionPath = (requestId: string) => `/api/native/questions/${encodeURIComponent(requestId)}`;
 
 export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
+  stats: (query, options) => readParsed('/api/native/stats', Object.fromEntries(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])), nativeStatisticsSchema, options?.signal),
   supported: true,
   memoryStatus: (directory, options) => readParsed('/api/native/memory', directory ? { directory } : {}, nativeMemoryStatusSchema, options?.signal),
   connectMemory: (backend) => writeParsed(`/api/native/memory/${backend}/connect`, nativeMemoryConnectionSchema),

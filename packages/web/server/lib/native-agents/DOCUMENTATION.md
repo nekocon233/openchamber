@@ -67,6 +67,49 @@ The server alone creates `ncx_u_plan_<uuid>` for approved plans. The UI's
 normal-send ID validator remains restricted to ordinary client IDs, so a
 manually sent prompt never reuses an automatic approval's provenance.
 
+## Historical statistics
+
+`GET /api/native/stats` reads retained native histories for Stats. `from` is
+inclusive and optional, `to` is required and exclusive, and both are epoch
+milliseconds. `timezone` selects calendar-day buckets. An optional `directory`
+scopes the read to the selected project, its subdirectories and the worktrees
+supplied by the existing worktree listing. Native discovery starts no OpenCode
+locations. `tools=none` is the default; `tools=detail` counts calls on request.
+
+Each backend reports `ok`, `partial`, `error` or `unavailable` independently.
+Partial reports retain readable sessions and carry incomplete-history counts.
+Coverage distinguishes recorded token, cost and reasoning values from missing
+values. Reported zero stays zero; absent cost or usage stays unknown. Undated
+messages contribute only to all-time totals and mark a report incomplete.
+Root modification time cannot exclude newer activity in child transcripts.
+Activity rows contain `{ date, steps, tokens, tokensComplete }`. `tokens` sums
+the same disjoint buckets as the report total during the history scan and is
+null when the date has no known usage. Recorded zero remains zero. Missing
+usage on that date, incomplete history or undated records make
+`tokensComplete` false. Undated tokens stay in all-time totals without a
+calendar bucket; activity dates and streaks continue to count model steps.
+
+Statistics use chat's source visibility and retained-chain rules, including
+terminal sessions, registered SDK sessions, archives and children. The bounded
+send registry is not an accounting source. Reads do not populate chat caches,
+recover edit diffs, resume threads, send prompts or publish chat events. At
+most four histories are read concurrently across backends. Request cancellation
+stops queued work. DeepSeek closes its temporary snapshot stream, then pages
+at that watermark without entering or evicting the chat follower cache.
+Each source has a 25-second deadline, shorter than the web client's read
+deadline. A stalled history cannot discard other completed histories.
+
+Steps count retained assistant records, excluding compact summaries. Claude
+blocks sharing an API message id form one record; Codex uses assistant segments;
+DeepSeek uses turn/step identities. Codex token totals sum disjoint token
+buckets, never the last request-window `tokens.total`. Claude has no separate
+reasoning bucket. Tool medians are exact within one source; the UI omits a
+merged median when independent source populations contributed to one tool.
+
+Web, Electron, hosted mobile and Capacitor use this endpoint. VS Code retains
+its explicit unsupported native API and shows OpenCode statistics only. Reads
+rewrite no transcript or usage record and create no persistent statistics DB.
+
 ## Listing
 
 `GET /api/native/sessions?directory=` reports each backend separately:
@@ -255,8 +298,9 @@ Codex gotchas:
   The projector extends the assistant's `time.completed` to the latest
   finished part. Items without a recorded time still fall back to the turn's
   bounds.
-- A steer starts a new user message segment inside the same turn. Failed and
-  interrupted turns carry an error on their assistant message.
+- A steer starts a new user message segment inside the same turn. Failures and
+  ordinary stops carry an error on their assistant message; Claude's explicit
+  keep-planning choice follows the behavior below.
 - Only JSON-RPC `-32600` "thread not loaded" or "invalid thread id" means a
   thread is missing. Every other error propagates, so a transport failure is
   never reported as a deleted session.
@@ -327,6 +371,11 @@ kept open between turns.
   returns a session-scoped `setMode: bypassPermissions` permission update.
   `plan`, dismissal, abort and query closure leave planning in place and stop
   the turn. A custom answer returns feedback so Claude can revise the plan.
+  Only an explicit single `plan` answer suppresses the resulting aborted
+  assistant-message error, so keeping a plan does not show a stopped notice.
+  Tools, subagents and activity still settle as interrupted. This intent is
+  scoped to that turn and cleared at every result or query exit. A manual stop
+  or query closure takes precedence, and real failures remain visible.
   The shared UI translates the choices; their wire values remain `build` and
   `plan`. Calls without a `plan` input still project as `plan_exit` tools.
 - A result frame with `queued_turn_count` 0 settles the turn. A stop is

@@ -9,6 +9,7 @@ const unsupported = async (): Promise<never> => {
 };
 
 export const createVSCodeNativeAgentsAPI = (): NativeAgentsAPI => ({
+  stats: unsupported,
   supported: false,
   memoryStatus: unsupported,
   connectMemory: unsupported,

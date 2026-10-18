@@ -17,6 +17,7 @@ import { invalidRequestError, messageNotFoundError, rewindBeforeCompactionError 
 import { claudeModelContextWindow } from '../catalog.js';
 import {
   claudeEntryUuidOfUserMessageId,
+  claudeAssistantMessageId,
   claudeUserMessageId,
   decodeNativeSessionId,
   encodeClaudeChildSessionId,
@@ -88,6 +89,45 @@ const rawChainEntrySchema = z.object({
 }).passthrough();
 
 const compactSummarySchema = z.object({ isCompactSummary: z.literal(true) }).passthrough();
+const statisticsEntrySchema = z.object({
+  type: z.enum(['user', 'assistant', 'system']), uuid: z.string(), timestamp: z.string().optional(),
+  isCompactSummary: z.boolean().optional(), is_meta: z.boolean().optional(), isMeta: z.boolean().optional(),
+  isSynthetic: z.boolean().optional(), isCompletedLocalCommand: z.boolean().optional(),
+  origin: z.object({ kind: z.string() }).optional(), subtype: z.string().optional(),
+  message: z.object({ id: z.string().optional(), model: z.string().optional(), role: z.string().optional(),
+    stop_reason: z.string().nullish(), usage: z.unknown().optional(), content: z.union([
+      z.string().transform((text) => ({ kind: 'text', text })),
+      z.array(z.unknown()).transform((blocks) => ({ kind: 'blocks', blocks })),
+    ]),
+  }).nullish(),
+});
+const statisticsBlockSchema = z.object({ type: z.string(), id: z.string().optional(), name: z.string().optional(),
+  tool_use_id: z.string().optional(), is_error: z.boolean().optional(), text: z.string().optional(),
+});
+const statisticsUsageSchema = z.object({ input_tokens: z.number(), output_tokens: z.number(),
+  cache_read_input_tokens: z.number(), cache_creation_input_tokens: z.number(),
+});
+const statisticsBaseUsageSchema = z.object({ input_tokens: z.number(), output_tokens: z.number() });
+
+// Keep identities, timestamps and usage, without retaining output, images or diffs.
+const statisticsEntry = (raw) => {
+  const entry = statisticsEntrySchema.safeParse(raw);
+  if (!entry.success) return null;
+  const value = entry.data;
+  if (!value.message) return value;
+  if (value.type === 'assistant' && value.message.model === '<synthetic>') return null;
+  const content = value.message.content.kind === 'text' ? value.message.content.text : value.message.content.blocks.flatMap((rawBlock) => {
+    const parsed = statisticsBlockSchema.safeParse(rawBlock);
+    if (!parsed.success) return [];
+    const block = parsed.data;
+    if (block.type === 'tool_use') return [{ type: block.type, id: block.id, name: block.name, input: {} }];
+    if (block.type === 'tool_result') return [{ type: block.type, tool_use_id: block.tool_use_id, is_error: block.is_error, content: '' }];
+    if (block.type === 'text') return [{ type: 'text', text: value.type === 'user' ? block.text ?? '' : 'reply' }];
+    if (value.type === 'user' && ['image', 'document'].includes(block.type)) return [{ type: 'text', text: 'attachment' }];
+    return [];
+  });
+  return { ...value, message: { ...value.message, content } };
+};
 
 const entryUuidOf = (entry) => {
   const parsed = chainEntrySchema.safeParse(entry);
@@ -204,7 +244,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, connections = null
       const info = sessionInfoSchema.safeParse(raw);
       if (info.success) infos.set(info.data.sessionId, info.data);
     }
-    const records = Array.from(infos.values(), (info) => sessionRecord(info, directory, registryByUuid.get(info.sessionId)));
+    const records = Array.from(infos.values(), (info) => sessionRecord(info, directory ?? info.cwd ?? registryByUuid.get(info.sessionId)?.directory, registryByUuid.get(info.sessionId)));
     const listed = new Set(records.map((record) => record.id));
     for (const entry of unconfirmed) {
       if (!listed.has(entry.sessionId)) records.push(unconfirmedSessionRecord(entry));
@@ -310,7 +350,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, connections = null
     }
   };
 
-  const project = ({ sessionId, directory, entries, sendRecords, subagents, recoveredResults = [], contextWindowFor }) => {
+  const project = ({ sessionId, directory, entries, sendRecords, subagents, recoveredResults = [], contextWindowFor, settle = true }) => {
     const decoded = decodeNativeSessionId(sessionId);
     const projection = createClaudeProjection({
       sessionId,
@@ -323,7 +363,7 @@ export const createClaudeSessionStore = ({ loadSdk, registry, connections = null
     });
     for (const entry of entries) projection.applyEntry(entry);
     for (const entry of recoveredResults) projection.applyToolResults(entry);
-    if (decoded.toolUseId === null || !isSessionRunning(sessionId)) {
+    if (settle && (decoded.toolUseId === null || !isSessionRunning(sessionId))) {
       projection.settleOpenTools('The turn ended before this tool finished.');
     }
     return projection.records();
@@ -527,6 +567,65 @@ export const createClaudeSessionStore = ({ loadSdk, registry, connections = null
     return result;
   };
 
+  // Statistics need the same retained chains as chat, without diff recovery,
+  // model catalogs, live overlays or population of the chat history cache.
+  const loadStatistics = async (sessionId, directory, { signal } = {}) => {
+    signal?.throwIfAborted();
+    const decoded = decodeNativeSessionId(sessionId);
+    if (!decoded || decoded.backend !== 'claude') return null;
+    const sdk = await loadSdk();
+    let entries;
+    let subagents = new Map();
+    let complete = true;
+    if (decoded.toolUseId === null) {
+      const info = await findSessionInfo(sdk, decoded.sessionUuid, directory);
+      if (!info) return (await unconfirmedEntry(sessionId)) ? { records: [], childSessions: [] } : null;
+      [entries, subagents] = await Promise.all([
+        sdk.getSessionMessages(decoded.sessionUuid, { dir: directory, includeSystemMessages: true }),
+        subagentsByToolUse(sdk, decoded.sessionUuid, directory),
+      ]);
+      const boundary = compactionBoundaryUuid(entries);
+      if (boundary) {
+        const raw = await readRawTranscript(sdk, decoded.sessionUuid, directory);
+        if (raw === null) complete = false;
+        else {
+          const earlier = await earlierEntries(sdk, decoded.sessionUuid, directory, raw, boundary);
+          const seen = new Set(earlier.map(entryUuidOf));
+          entries = [...earlier, ...entries.filter((entry) => !seen.has(entryUuidOf(entry)))];
+        }
+      }
+    } else {
+      subagents = await subagentsByToolUse(sdk, decoded.sessionUuid, directory);
+      const agentId = subagents.get(decoded.toolUseId);
+      if (!agentId) return null;
+      entries = await sdk.getSubagentMessages(decoded.sessionUuid, agentId, { dir: directory });
+    }
+    signal?.throwIfAborted();
+    const slim = entries.map(statisticsEntry).filter((entry) => entry !== null);
+    const knownTokens = new Set();
+    const createdTimes = new Map();
+    let tokensComplete = true;
+    for (const entry of slim) {
+      const id = entry.type === 'user' ? claudeUserMessageId(entry.uuid)
+        : entry.type === 'assistant' && entry.message?.id ? claudeAssistantMessageId(sessionId, entry.message.id) : null;
+      if (id === null) continue;
+      const at = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+      if (Number.isFinite(at)) createdTimes.set(id, Math.min(createdTimes.get(id) ?? at, at));
+      if (entry.type === 'assistant') {
+        if (statisticsBaseUsageSchema.safeParse(entry.message?.usage).success) knownTokens.add(id);
+        if (entry.message?.usage && !statisticsUsageSchema.safeParse(entry.message.usage).success) tokensComplete = false;
+      }
+    }
+    const records = project({ sessionId, directory, entries: slim, sendRecords: await registry.sendRecords(sessionId), subagents, contextWindowFor: () => 0, settle: false });
+    for (const record of records) {
+      if (record.info.role === 'assistant' && !knownTokens.has(record.info.id)) delete record.info.tokens;
+      // Chat's increasing order keys are not recorded dates. In particular,
+      // an undated entry must not become an apparent activity day in 1970.
+      if (record.info.role !== 'compaction') record.info.time.created = createdTimes.get(record.info.id) ?? 0;
+    }
+    return { records, childSessions: decoded.toolUseId === null ? childSessionRecords(sessionId, records, subagents, decoded.sessionUuid, directory) : [], complete, reasoningKnown: false, tokensComplete };
+  };
+
   /**
    * One session record, or null when it does not exist. A subagent session is
    * found through its parent's history.
@@ -679,6 +778,8 @@ export const createClaudeSessionStore = ({ loadSdk, registry, connections = null
 
   return {
     listRootSessions,
+    listStatisticsSessions: () => listRootSessions(undefined),
+    loadStatistics,
     getSession,
     loadHistory,
     sessionExists,

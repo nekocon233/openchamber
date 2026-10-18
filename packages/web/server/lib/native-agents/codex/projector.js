@@ -115,10 +115,11 @@ export const codexUserMessages = ({ threadId, turns }) => {
  * @param {(userMessageId: string) => ({ modelID: string, variant?: string, agent: string } | null)} [input.sendRecordFor]
  * @param {Map<string, { start: number, end: number | null }>} [input.itemTimes] item lifecycle timestamps in milliseconds, live or recovered from the rollout
  */
-export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel, sendRecordFor = () => null, itemTimes, details = new Map() }) => {
+export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel, sendRecordFor = () => null, itemTimes, details = new Map(), statistics = false }) => {
   const records = [];
   let lastCreated = 0;
   const createdAfterPrevious = (time) => {
+    if (statistics) return time;
     lastCreated = Math.max(lastCreated + 1, time);
     return lastCreated;
   };
@@ -193,7 +194,7 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
         const model = sent?.variant === undefined
           ? { providerID: NATIVE_PROVIDER_CODEX, modelID: sent?.modelID ?? modelID }
           : { providerID: NATIVE_PROVIDER_CODEX, modelID: sent.modelID, variant: sent.variant };
-        currentUser = { info: buildUserMessage({ id, sessionID: sessionId, created: createdAfterPrevious(start), agent: sent?.agent ?? agent, model: detail?.effort && model.variant === undefined ? { ...model, variant: detail.effort } : model }), parts: [] };
+        currentUser = { info: buildUserMessage({ id, sessionID: sessionId, created: createdAfterPrevious(statistics ? itemTimes?.get(userItem.id)?.start ?? start : start), agent: sent?.agent ?? agent, model: detail?.effort && model.variant === undefined ? { ...model, variant: detail.effort } : model }), parts: [] };
         userItem.texts.forEach((text, index) => {
           const part = buildTextPart({ id: userTextPartId(id, index), sessionID: sessionId, messageID: id, text, start, end: start });
           if (userItem.clientId !== null && isCodexPlanApprovalMessageId(userItem.clientId)) {
@@ -236,7 +237,7 @@ export const projectCodexTurns = ({ sessionId, threadId, cwd, turns, threadModel
             id: codexAssistantMessageId(threadId, segmentKey),
             sessionID: sessionId,
             parentID: currentUser.info.id,
-            created: createdAfterPrevious(start),
+            created: createdAfterPrevious(statistics ? partStart : start),
             completed: outcome === null ? null : (end ?? start),
             providerID: NATIVE_PROVIDER_CODEX,
             modelID: sent?.modelID ?? modelID,

@@ -29,16 +29,16 @@ describe('buildActivitySeries', () => {
   test('fills inactive days with zero bars across the whole range', () => {
     const series = buildActivitySeries({
       range: { from: local(2026, 9, 1), to: local(2026, 9, 4, 12) },
-      activity: [{ date: '2026-09-02', steps: 5 }, { date: '2026-09-04', steps: 2 }],
+      activity: [{ date: '2026-09-02', steps: 5, tokens: 50, tokensComplete: true }, { date: '2026-09-04', steps: 2, tokens: 20, tokensComplete: true }],
     });
     expect(series.unit).toBe('day');
-    expect(series.bars.map((bar) => [bar.start, bar.steps])).toEqual([
+    expect(series.bars.map((bar) => [bar.start, bar.tokens])).toEqual([
       ['2026-09-01', 0],
-      ['2026-09-02', 5],
+      ['2026-09-02', 50],
       ['2026-09-03', 0],
-      ['2026-09-04', 2],
+      ['2026-09-04', 20],
     ]);
-    expect(series.max).toBe(5);
+    expect(series.max).toBe(50);
   });
 
   test('treats the range end as exclusive', () => {
@@ -46,15 +46,41 @@ describe('buildActivitySeries', () => {
     expect(series.bars.map((bar) => bar.start)).toEqual(['2026-09-01', '2026-09-02']);
   });
 
-  test('groups long ranges into weeks without losing steps', () => {
+  test('groups long ranges into weeks without losing token usage', () => {
     const series = buildActivitySeries({
       range: { from: local(2026, 1, 1), to: local(2026, 9, 1) },
-      activity: [{ date: '2026-01-01', steps: 3 }, { date: '2026-01-07', steps: 4 }, { date: '2026-08-31', steps: 1 }],
+      activity: [{ date: '2026-01-01', steps: 3, tokens: 30, tokensComplete: true }, { date: '2026-01-07', steps: 4, tokens: 40, tokensComplete: true }, { date: '2026-08-31', steps: 1, tokens: 10, tokensComplete: true }],
     });
     expect(series.unit).toBe('week');
-    expect(series.bars[0]).toEqual({ start: '2026-01-01', end: '2026-01-07', steps: 7 });
-    expect(series.bars.reduce((sum, bar) => sum + bar.steps, 0)).toBe(8);
+    expect(series.bars[0]).toEqual({ start: '2026-01-01', end: '2026-01-07', steps: 7, tokens: 70, tokensComplete: true });
+    expect(series.bars.reduce((sum, bar) => sum + (bar.tokens ?? 0), 0)).toBe(80);
     expect(series.bars[series.bars.length - 1].end).toBe('2026-08-31');
+  });
+
+  test('keeps unknown and partially known days distinct from inactive days', () => {
+    const series = buildActivitySeries({
+      range: { from: local(2026, 9, 1), to: local(2026, 9, 4) },
+      activity: [
+        { date: '2026-09-01', steps: 1, tokens: null, tokensComplete: false },
+        { date: '2026-09-02', steps: 2, tokens: 40, tokensComplete: false },
+      ],
+    });
+    expect(series.bars.map((bar) => [bar.tokens, bar.tokensComplete])).toEqual([[null, false], [40, false], [0, true]]);
+    expect(series.partial).toBe(true);
+  });
+
+  test('does not fill source failures with authoritative zeros', () => {
+    const series = buildActivitySeries({ range: { from: local(2026, 9, 1), to: local(2026, 9, 3) }, activity: [], sources: [{ source: 'codex', status: 'error' }] });
+    expect(series.bars.map((bar) => bar.tokens)).toEqual([null, null]);
+  });
+
+  test('a week with only unknown activity stays unknown even with inactive days', () => {
+    const series = buildActivitySeries({
+      range: { from: local(2026, 1, 1), to: local(2026, 6, 1) },
+      activity: [{ date: '2026-01-01', steps: 1, tokens: null, tokensComplete: false }],
+    });
+    expect(series.bars[0].tokens).toBeNull();
+    expect(series.bars[1].tokens).toBe(0);
   });
 });
 

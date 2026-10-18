@@ -165,4 +165,21 @@ describe('tool calls on request', () => {
     await read;
     expect(ctx.store.getState().toolEntries).toEqual({});
   });
+
+  test('a refreshed report rejects tool counts still reading the previous report', async () => {
+    const ctx = setup();
+    await loaded(ctx, A, report(3));
+    const oldTools = ctx.store.getState().loadTools(A);
+    const refresh = ctx.store.getState().load(A, { force: true });
+    ctx.pending[1].resolve({ ...report(4), range: { from: 300, to: 400 } });
+    await refresh;
+    ctx.pendingTools[0].resolve(toolCalls(100));
+    await oldTools;
+    expect(tools(ctx, A)?.tools).toBeNull();
+    expect(ctx.pendingTools).toHaveLength(2);
+    expect(ctx.pendingTools[1].window).toEqual({ from: 300, to: 400 });
+    ctx.pendingTools[1].resolve(toolCalls(7));
+    await Promise.resolve();
+    expect(tools(ctx, A)?.tools).toEqual(toolCalls(7));
+  });
 });

@@ -41,6 +41,17 @@ const setup = async (messages = 2, options = {}) => {
 };
 
 describe('DeepSeek Harness Web adapter', () => {
+  it('reads all statistics pages without publishing or retaining chat followers', async () => {
+    const { backend, directory, events, fixture } = await setup(260);
+    const sessions = await backend.listStatisticsSessions();
+    expect(sessions).toHaveLength(1);
+    const snapshot = await backend.loadStatistics(sessions[0].id, directory, { nativeId: sessions[0].nativeId });
+    expect(snapshot.records.filter((record) => record.info.role === 'user')).toHaveLength(260);
+    expect(snapshot.records.filter((record) => record.info.role === 'assistant')).toHaveLength(260);
+    expect(snapshot.complete).toBe(true);
+    expect(events).toHaveLength(0);
+    expect(await fixture('stream-count')).toBe(0);
+  });
   it('configures the server through official settings and credentials without returning a key', async () => {
     const { backend, fixture } = await setup();
     const configuration = await backend.configuration.read();

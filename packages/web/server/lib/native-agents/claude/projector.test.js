@@ -745,6 +745,28 @@ describe('Claude stops', () => {
     expect(assistant.info.error).toEqual({ name: 'MessageAbortedError', data: { message: 'aborted' } });
     expect(assistant.parts[0].state).toMatchObject({ status: 'error', error: 'Interrupted' });
   });
+
+  it('keeps a plan without a stopped-message error while completing its unfinished tools', () => {
+    const projection = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true, now: () => 5 });
+    projection.startUserPrompt(USER_ID, { kind: 'text', text: 'Keep planning' });
+    projection.applyEntry(toolUse);
+    const changed = projection.finishTurn({ error: { name: 'MessageAbortedError', data: { message: 'aborted' } }, planKept: true });
+    const assistant = projection.record(changed.at(-1));
+    expect(assistant.info.error).toBeUndefined();
+    expect(assistant.info.time.completed).toBeGreaterThan(0);
+    expect(assistant.parts[0].state).toMatchObject({ status: 'error', error: 'Interrupted' });
+  });
+
+  it('retains real errors even when the user chose to keep planning', () => {
+    const projection = createClaudeProjection({ sessionId: SESSION_ID, cwd: '/work/project', live: true, now: () => 5 });
+    projection.startUserPrompt(USER_ID, { kind: 'text', text: 'Keep planning' });
+    projection.applyEntry(toolUse);
+    const error = { name: 'UnknownError', data: { message: 'CLI failed' } };
+    const changed = projection.finishTurn({ error, planKept: true });
+    const assistant = projection.record(changed.at(-1));
+    expect(assistant.info.error).toEqual(error);
+    expect(assistant.parts[0].state).toMatchObject({ status: 'error', error: 'CLI failed' });
+  });
 });
 
 describe('Claude slash commands', () => {

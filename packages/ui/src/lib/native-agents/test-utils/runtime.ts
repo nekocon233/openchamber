@@ -24,6 +24,7 @@ const disabledSidebarState: SidebarStateAPI = {
 
 /** A native agents API whose methods fail unless the test supplies them. */
 export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): NativeAgentsAPI => ({
+  stats: unsupported,
   supported: true,
   memoryStatus: unsupported,
   connectMemory: unsupported,

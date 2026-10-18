@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
 import type { I18nKey } from '@/lib/i18n';
 import { getProviderModelDisplayName } from '@/lib/modelDisplay';
-import type { UsageModel, UsageStats } from '@/lib/opencode/session-stats';
+import type { UsageModel, UsageSourceState, UsageStats } from '@/lib/opencode/session-stats';
 import { formatDateTimeForPreference, formatTimeForPreference } from '@/lib/timeFormat';
 import { cn } from '@/lib/utils';
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -32,9 +32,26 @@ import {
   type UsageRange,
 } from './usageStatsModel';
 import { selectUsageStatsEntry, selectUsageToolsEntry, useUsageStatsStore, type UsageToolsEntry } from './usageStatsStore';
+import { coverageOf } from './usageStatsMerge';
 
 /** Select value for the unfiltered report; project values are OpenChamber project ids. */
 const ALL_PROJECTS = '__all__';
+const SOURCE_NAMES = { opencode: 'OpenCode', claude: 'Claude Code', codex: 'Codex', deepseek: 'DeepSeek' } as const;
+const incompleteSources = (sources?: UsageSourceState[]) => sources?.some((source) => source.status !== 'ok') ?? false;
+
+function metricText(stats: Pick<UsageStats, 'steps' | 'coverage' | 'sources'>, key: 'tokens' | 'cost', value: string, t: ReturnType<typeof useI18n>['t']): string {
+  const coverage = coverageOf(stats);
+  const incomplete = coverage[key].missing > 0 || coverage.failedSessions > 0 || incompleteSources(stats.sources);
+  if (incomplete && coverage[key].known === 0) return t('usageStats.coverage.unknown');
+  return incomplete ? t('usageStats.coverage.knownValue', { value }) : value;
+}
+
+function SourcesNotice({ sources }: { sources?: UsageSourceState[] }) {
+  const { t } = useI18n();
+  const failed = sources?.filter((source) => source.status !== 'ok').map((source) => SOURCE_NAMES[source.source]) ?? [];
+  if (!failed.length) return null;
+  return <p role="status" className="typography-micro text-muted-foreground">{t('usageStats.coverage.partial', { sources: failed.join(', ') })}</p>;
+}
 
 /** One bar color per token segment; the order matches `tokenSegments`. */
 const TOKEN_SEGMENT_CLASSES = {
@@ -175,8 +192,9 @@ export function UsageStatsView({ className }: { className?: string }): React.Rea
           </div>
         </div>
 
+        <SourcesNotice sources={stats?.sources} />
         {stats ? (
-          isEmptyReport(stats) ? (
+          isEmptyReport(stats) && !incompleteSources(stats.sources) && !coverageOf(stats).failedSessions ? (
             <div className="flex flex-col items-center gap-1 py-16 text-center">
               <p className="typography-ui-label font-semibold text-foreground">{t('usageStats.empty.title')}</p>
               <p className="typography-micro text-muted-foreground">{t('usageStats.empty.description')}</p>
@@ -238,14 +256,14 @@ function UsageReport({ stats, formats, tools }: { stats: UsageStats; formats: Fo
         <StatTile label={t('usageStats.metric.prompts')} value={formats.integer.format(stats.prompts)} />
         <StatTile
           label={t('usageStats.metric.tokens')}
-          value={formats.compact.format(stats.tokens.total)}
-          hint={t('usageStats.metric.tokensBreakdown', {
+          value={metricText(stats, 'tokens', formats.compact.format(stats.tokens.total), t)}
+          hint={coverageOf(stats).tokens.known === 0 && coverageOf(stats).tokens.missing > 0 ? undefined : t('usageStats.metric.tokensBreakdown', {
             input: formats.compact.format(stats.tokens.input),
             output: formats.compact.format(stats.tokens.output + stats.tokens.reasoning),
             cache: formats.compact.format(cache),
           })}
         />
-        <StatTile label={t('usageStats.metric.cost')} value={formats.cost.format(stats.cost)} />
+        <StatTile label={t('usageStats.metric.cost')} value={metricText(stats, 'cost', formats.cost.format(stats.cost), t)} />
         <StatTile label={t('usageStats.metric.activeDays')} value={formats.integer.format(stats.activeDays)} />
         <StatTile label={t('usageStats.metric.streak')} value={formats.integer.format(stats.streak)} />
       </div>
@@ -312,7 +330,9 @@ function ActivityChart({ stats, formats }: { stats: UsageStats; formats: Formats
     bar.start === bar.end
       ? formats.day.format(parseDay(bar.start))
       : `${formats.day.format(parseDay(bar.start))} – ${formats.day.format(parseDay(bar.end))}`;
-  const describe = (bar: ActivityBar) => t('usageStats.activity.barLabel', { date: labelFor(bar), count: formats.integer.format(bar.steps) });
+  const describe = (bar: ActivityBar) => bar.tokens === null
+    ? t('usageStats.activity.unknownBarLabel', { date: labelFor(bar) })
+    : t(bar.tokensComplete ? 'usageStats.activity.barLabel' : 'usageStats.activity.partialBarLabel', { date: labelFor(bar), count: formats.integer.format(bar.tokens) });
   const count = series.bars.length;
   const activeBar = active !== null && active < count ? series.bars[active] : null;
   const first = series.bars[0];
@@ -333,6 +353,7 @@ function ActivityChart({ stats, formats }: { stats: UsageStats; formats: Formats
 
   return (
     <Section title={title} caption={t(weekly ? 'usageStats.activity.captionWeekly' : 'usageStats.activity.captionDaily')}>
+      {series.partial ? <p className="typography-micro text-muted-foreground">{t('usageStats.activity.partialHint')}</p> : null}
       {/* Time runs left to right in the chart in every language; its tooltip
           and arrow keys measure from the left. */}
       <div dir="ltr" className="rounded-lg border border-border/60 bg-[var(--surface-elevated)] px-3 pb-2 pt-3">
@@ -340,24 +361,25 @@ function ActivityChart({ stats, formats }: { stats: UsageStats; formats: Formats
           className="relative flex h-32 items-end gap-px rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]"
           role="group"
           tabIndex={0}
-          aria-label={title}
+          aria-label={t(weekly ? 'usageStats.activity.captionWeekly' : 'usageStats.activity.captionDaily')}
           onKeyDown={handleKeyDown}
           onFocus={() => setActive((value) => value ?? (count > 0 ? count - 1 : null))}
           onBlur={() => setActive(null)}
           onPointerLeave={() => setActive(null)}
         >
           {series.bars.map((bar, index) => {
-            const height = series.max > 0 ? Math.max(bar.steps > 0 ? 4 : 0, (bar.steps / series.max) * 100) : 0;
+            const height = series.max > 0 && bar.tokens !== null ? Math.max(bar.tokens > 0 ? 4 : 0, (bar.tokens / series.max) * 100) : 0;
             const dimmed = activeBar !== null && index !== active;
             return (
               <div key={bar.start} className="flex h-full min-w-0 flex-1 items-end" onPointerEnter={() => setActive(index)}>
                 <div
                   className={cn(
                     'w-full rounded-t-[2px] transition-opacity duration-100',
-                    bar.steps > 0 ? 'bg-chart-1' : 'bg-border/60',
+                    bar.tokens === null ? 'border border-dashed border-muted-foreground/70'
+                      : bar.tokens > 0 ? 'bg-chart-1' : 'bg-border/60',
                     dimmed && 'opacity-40',
                   )}
-                  style={{ height: bar.steps > 0 ? `${height}%` : '1px' }}
+                  style={{ height: bar.tokens === null ? '6px' : bar.tokens > 0 ? `${height}%` : '1px' }}
                 />
               </div>
             );
@@ -428,12 +450,16 @@ function TokenComposition({ stats, formats }: { stats: UsageStats; formats: Form
  * how much of the output the model spent reasoning. */
 function EfficiencyTiles({ stats, formats }: { stats: UsageStats; formats: Formats }): React.ReactNode {
   const { t } = useI18n();
-  const hitRate = cacheHitRate(stats.tokens);
-  const costPerSession = averagePer(stats.cost, stats.sessions);
-  const perMillion = costPerMillionTokens(stats.cost, stats.tokens.total);
-  const tokensPerSession = averagePer(stats.tokens.total, stats.sessions);
-  const stepsPerSession = averagePer(stats.steps, stats.sessions);
-  const reasoning = reasoningShare(stats.tokens);
+  const coverage = coverageOf(stats);
+  const historyComplete = !incompleteSources(stats.sources) && coverage.failedSessions === 0 && coverage.undated === 0;
+  const tokensComplete = historyComplete && coverage.tokens.missing === 0;
+  const costComplete = historyComplete && coverage.cost.missing === 0;
+  const hitRate = tokensComplete ? cacheHitRate(stats.tokens) : null;
+  const costPerSession = costComplete ? averagePer(stats.cost, stats.sessions) : null;
+  const perMillion = costComplete && tokensComplete ? costPerMillionTokens(stats.cost, stats.tokens.total) : null;
+  const tokensPerSession = tokensComplete ? averagePer(stats.tokens.total, stats.sessions) : null;
+  const stepsPerSession = historyComplete ? averagePer(stats.steps, stats.sessions) : null;
+  const reasoning = tokensComplete && coverage.reasoning.missing === 0 ? reasoningShare(stats.tokens) : null;
   return (
     <Section title={t('usageStats.efficiency.title')}>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -501,11 +527,12 @@ function ToolsSection({ state, formats }: { state: ToolsState; formats: Formats 
     );
   }
   // Asked for and answered: zero calls is a real result, shown as such.
-  const successRate = toolSuccessRate(tools.totals);
+  const successRate = incompleteSources(tools.sources) ? null : toolSuccessRate(tools.totals);
   // OpenCode returns detail rows sorted by calls; keep the page light past a toolbox.
   const rows = tools.mode === 'detail' ? tools.usage.filter((tool) => tool.calls > 0).slice(0, 8) : [];
   return (
     <Section title={t('usageStats.tools.title')}>
+      <SourcesNotice sources={tools.sources} />
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatTile label={t('usageStats.tools.calls')} value={formats.integer.format(tools.totals.calls)} />
         <StatTile label={t('usageStats.tools.successRate')} value={successRate === null ? '—' : formats.percent.format(successRate)} />
@@ -562,13 +589,18 @@ function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Format
   const providers = useConfigStore((state) => state.providers);
   const [dimension, setDimension] = React.useState<ModelDimension>('tokens');
   const valueOf = React.useCallback(
-    (model: UsageModel): number =>
-      (dimension === 'tokens' ? model.tokens.total : dimension === 'cost' ? model.cost : model.steps),
+    (model: UsageModel): number | null => {
+      if (dimension !== 'steps') {
+        const coverage = coverageOf(model)[dimension];
+        if (coverage.known === 0 && coverage.missing > 0) return null;
+      }
+      return dimension === 'tokens' ? model.tokens.total : dimension === 'cost' ? model.cost : model.steps;
+    },
     [dimension],
   );
   // Ranked by the compared value, so the chart reads top (busiest) to bottom.
-  const ranked = React.useMemo(() => [...models].sort((a, b) => valueOf(b) - valueOf(a)), [models, valueOf]);
-  const max = ranked.reduce((peak, model) => Math.max(peak, valueOf(model)), 0);
+  const ranked = React.useMemo(() => [...models].sort((a, b) => (valueOf(b) ?? -1) - (valueOf(a) ?? -1)), [models, valueOf]);
+  const max = ranked.reduce((peak, model) => Math.max(peak, valueOf(model) ?? 0), 0);
 
   return (
     <Section
@@ -599,8 +631,8 @@ function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Format
           {ranked.map((model) => {
             const provider = providers.find((entry) => entry.id === model.providerID);
             const providerName = provider?.name || model.providerID;
-            const name = getProviderModelDisplayName(provider, model.modelID) || model.modelID;
-            const share = max > 0 ? (valueOf(model) / max) * 100 : 0;
+            const name = getProviderModelDisplayName(provider, model.modelID) || model.modelID || t('usageStats.models.unknown');
+            const share = max > 0 ? ((valueOf(model) ?? 0) / max) * 100 : 0;
             return (
               <li key={`${model.providerID}/${model.modelID}#${model.variant ?? ''}`} className="flex min-w-0 flex-col gap-1">
                 <div className="flex min-w-0 items-center gap-2">
@@ -613,8 +645,8 @@ function ModelUsage({ models, formats }: { models: UsageModel[]; formats: Format
                   </span>
                   <span className="shrink-0 typography-micro tabular-nums text-muted-foreground">
                     {dimension === 'steps'
-                      ? `${formats.integer.format(model.steps)} · ${formats.cost.format(model.cost)}`
-                      : `${formats.compact.format(model.tokens.total)} · ${formats.cost.format(model.cost)}`}
+                      ? `${formats.integer.format(model.steps)} · ${metricText(model, 'cost', formats.cost.format(model.cost), t)}`
+                      : `${metricText(model, 'tokens', formats.compact.format(model.tokens.total), t)} · ${metricText(model, 'cost', formats.cost.format(model.cost), t)}`}
                   </span>
                 </div>
                 {/* Track width is the leader's value in the compared dimension. Tokens

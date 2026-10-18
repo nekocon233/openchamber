@@ -700,6 +700,75 @@ export const createDeepseekBackend = ({
 
   const backend = {
     configuration,
+    async listStatisticsSessions(signal) {
+      await loadBindings();
+      const list = await transport.request('session/list', { _request: {} }, wire.sessionList, signal);
+      const byId = new Map(list.items.map((item) => [item.sessionId, item]));
+      return list.items.filter((item) => visible(item.sessionId)).flatMap((item) => {
+        const directory = item.cwd ?? byId.get(item.parentSessionId)?.cwd;
+        if (!directory) return [];
+        return [{ ...buildSessionRecord({ id: logicalId(item.sessionId), backend: 'deepseek', directory, title: '',
+          created: item.updatedAt, updated: item.updatedAt,
+          parentID: item.origin === 'subagent' && item.parentSessionId ? logicalId(item.parentSessionId) : null }), nativeId: item.sessionId }];
+      });
+    },
+    // A short snapshot stream and fixed-watermark pages never enter `followers`
+    // or publish chat events. In particular they cannot evict an open chat.
+    async loadStatistics(id, directory, { signal, nativeId: listedNativeId } = {}) {
+      await loadBindings();
+      const nativeId = histories.get(id)?.active ?? listedNativeId ?? (await registry.getSession(id))?.nativeId;
+      if (!nativeId) throw invalidRequestError('Invalid DeepSeek Harness session');
+      signal?.throwIfAborted();
+      let snapshot = null;
+      const handle = await transport.open('session/follow', { request: {
+        address: { kind: 'session', sessionId: nativeId }, maxMessages: 500,
+        turnWindow: { minMessages: 100, minTurns: 2 },
+      } }, (raw) => {
+        const frame = wire.followFrame.parse(raw);
+        if (frame.type === 'snapshot' && snapshot === null) snapshot = frame;
+      });
+      const cancel = () => handle.cancel();
+      signal?.addEventListener('abort', cancel, { once: true });
+      try {
+        if (signal?.aborted) cancel();
+        await handle.first;
+      } finally {
+        signal?.removeEventListener('abort', cancel);
+        handle.cancel();
+      }
+      signal?.throwIfAborted();
+      if (!snapshot || snapshot.header.id !== nativeId) throw new Error('DeepSeek Harness returned another session snapshot');
+      const historyRevision = histories.get(id)?.revision ?? 0;
+      const pages = [snapshot.records.map((record) => record.event)];
+      let hasMore = snapshot.hasMore;
+      let beforeSeq = pages[0][0]?.seq;
+      while (hasMore && beforeSeq !== undefined) {
+        const page = await transport.request('session/page', { request: {
+          address: { kind: 'session', sessionId: nativeId }, throughSeq: snapshot.cursor, beforeSeq,
+          maxMessages: 500, turnWindow: { minMessages: 100, minTurns: 2 },
+        } }, wire.historyPage, signal);
+        const events = page.records.map((record) => record.event);
+        if (!events.length || events[0].seq >= beforeSeq) throw new Error('DeepSeek Harness history did not advance');
+        pages.unshift(events);
+        beforeSeq = events[0].seq;
+        hasMore = page.hasMore;
+      }
+      if ((histories.get(id)?.active ?? nativeId) !== nativeId || (histories.get(id)?.revision ?? 0) !== historyRevision) throw new NativeAgentError('Session history changed while reading statistics', { status: 409, code: 'NATIVE_HISTORY_CHANGED' });
+      const projection = projectionFor(id, { nativeId, directory });
+      const seen = new Set();
+      let complete = !hasMore;
+      let reasoningKnown = true;
+      let tokensComplete = true;
+      for (const events of pages) for (const event of events) {
+        if (seen.has(event.seq)) continue;
+        seen.add(event.seq);
+        if (event.type === 'assistant/message' && !z.object({ usage: z.object({ reasoningTokens: z.number() }) }).safeParse(event.data).success) reasoningKnown = false;
+        if (event.type === 'assistant/message' && !z.object({ usage: z.object({ cacheReadTokens: z.number(), cacheWriteTokens: z.number() }) }).safeParse(event.data).success) tokensComplete = false;
+        try { projection.apply(event); }
+        catch (error) { if (!(error instanceof z.ZodError)) throw error; complete = false; }
+      }
+      return { records: projection.records(), childSessions: [], complete, reasoningKnown, tokensComplete };
+    },
     async catalog() {
       await ensureGlobals();
       const catalog = await transport.request('session/modelCatalog', {}, wire.modelCatalog);

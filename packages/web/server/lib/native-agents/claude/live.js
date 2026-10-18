@@ -269,6 +269,7 @@ export const createClaudeLiveSessions = ({
     clearIdleTimer(live);
     if (live.closing) return;
     live.closing = true;
+    live.turnStopReason = null;
     live.tasks.close();
     questions.rejectSession(live.sessionId);
     exits.set(live.sessionId, live.exited);
@@ -288,6 +289,7 @@ export const createClaudeLiveSessions = ({
   const markBusy = (live) => {
     clearIdleTimer(live);
     if (live.busy) return;
+    live.turnStopReason = null;
     live.busy = true;
     publisher.status(live.directory, live.sessionId, 'busy');
   };
@@ -319,7 +321,9 @@ export const createClaudeLiveSessions = ({
 
   const finishTurn = (live, frame) => {
     const error = turnErrorOf(frame, live.config.launch);
-    publishRecords(live, live.projection.finishTurn({ error }));
+    const planKept = live.turnStopReason === 'keep-planning';
+    live.turnStopReason = null;
+    publishRecords(live, live.projection.finishTurn({ error, planKept }));
     if (error?.name === 'MessageAbortedError') live.subagents.stop(error);
     const reply = live.projection.records().findLast((record) => record.info.role === 'assistant');
     onTurnFinished(live.sessionId, live.directory, {
@@ -377,6 +381,7 @@ export const createClaudeLiveSessions = ({
     if (failure) failure = redactClaudeConnectionError(failure, live.config.launch);
     live.stderrTail = redactClaudeConnectionError(live.stderrTail, live.config.launch);
     clearIdleTimer(live);
+    live.turnStopReason = null;
     if (sessions.get(live.sessionId) === live) sessions.delete(live.sessionId);
     if (live.busy) {
       const reason = live.closing
@@ -426,11 +431,12 @@ export const createClaudeLiveSessions = ({
         tool: messageID && context.toolUseID ? { messageID, callID: context.toolUseID } : undefined,
         signal: context.signal,
       });
-      if (outcome.status === 'rejected' || context.signal.aborted || live.closing) {
+      if (outcome.status === 'rejected' || context.signal.aborted || live.closing || live.turnStopReason === 'user-stop') {
         return { behavior: 'deny', message: PLAN_DECLINED, interrupt: true };
       }
       const answer = outcome.answers.length === 1 && outcome.answers[0].length === 1 ? outcome.answers[0][0] : '';
       if (answer !== 'build') {
+        if (answer === 'plan') live.turnStopReason = 'keep-planning';
         return answer && answer !== 'plan'
           ? { behavior: 'deny', message: `The user requested changes to the plan: ${answer}` }
           : { behavior: 'deny', message: PLAN_DECLINED, interrupt: true };
@@ -525,6 +531,8 @@ export const createClaudeLiveSessions = ({
       sends: new Map(),
       subagents: createClaudeSubagents({ sessionUuid, directory, publisher, now }),
       busy: false,
+      /** @type {'keep-planning' | 'user-stop' | null} intent for this turn only */
+      turnStopReason: null,
       /** @type {Array<{ id: string, type: string, description: string }>} this process's, non-ambient */
       backgroundTasks: [],
       closing: false,
@@ -688,6 +696,7 @@ export const createClaudeLiveSessions = ({
     async abort(sessionId) {
       const live = sessions.get(sessionId);
       if (!live?.busy) return false;
+      live.turnStopReason = 'user-stop';
       questions.rejectSession(sessionId);
       await live.query.interrupt();
       return true;

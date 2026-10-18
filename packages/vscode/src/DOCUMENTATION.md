@@ -8,6 +8,12 @@ Keep `bridge.ts` as a thin orchestration layer that delegates message handling t
 
 ## Runtime modules
 
+The shared Stats page reads OpenCode reports in VS Code. Native CLI statistics,
+like native sessions, require an OpenChamber server and remain explicitly
+unsupported through `NativeAgentsAPI.supported = false`. The webview native
+adapter rejects `stats` if called; it never returns a fabricated empty report
+or forwards `/api/native/stats` to OpenCode.
+
 - `bridge.ts`
   - Entry orchestration layer for bridge messages.
   - Delegates to specialized runtimes in order and handles only unmatched fallthrough cases.
