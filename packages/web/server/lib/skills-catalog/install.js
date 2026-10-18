@@ -112,7 +112,12 @@ async function cloneRepo({ cloneUrl, identity, credentialResolver, tempDir, ref 
   };
 }
 
-function getTargetSkillDir({ scope, targetSource, workingDirectory, userSkillDir, skillName }) {
+/**
+ * Where an install writes a skill: the user-level OpenCode or agents directory,
+ * or the project's. Exported for the installed-skill update, which plans
+ * against the same targets an install uses.
+ */
+export function getTargetSkillDir({ scope, targetSource, workingDirectory, userSkillDir, skillName }) {
   const source = targetSource === 'agents' ? 'agents' : 'opencode';
 
   if (scope === 'user') {

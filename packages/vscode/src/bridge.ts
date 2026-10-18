@@ -1,3 +1,4 @@
+import * as os from 'os';
 import * as vscode from 'vscode';
 import { type OpenCodeManager } from './opencode';
 import { handleStandardGitBridgeMessage } from './bridge-git-runtime';
@@ -130,6 +131,7 @@ export async function handleBridgeMessage(message: BridgeRequest, ctx?: BridgeCo
         resetMagicPromptOverride,
         resetAllMagicPromptOverrides,
         fetchOpenCodeSkillsFromApi,
+        homedir: os.homedir,
         clientReloadDelayMs: CLIENT_RELOAD_DELAY_MS,
       },
     );

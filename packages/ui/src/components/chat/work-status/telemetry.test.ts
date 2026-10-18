@@ -74,6 +74,62 @@ describe('turn telemetry', () => {
     expect(stats?.tokensPerSecond).toBe(200 / 7);
   });
 
+  test('leaves a pause longer than five minutes out of the turn window', () => {
+    const records = turn(assistant({ time: { created: 1000, completed: 5000 } }));
+    // A background task kept the turn open: 10 minutes between the two steps.
+    records.push({ info: assistant({ id: 'a2', time: { created: 605_000, completed: 609_000 } }), parts: [] });
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats?.elapsedDurationMs).toBe(609_000);
+    expect(stats?.totalLlmDurationMs).toBe(9_000);
+    expect(stats?.tokensPerSecond).toBe(200 / 9);
+  });
+
+  test('keeps a four minute pause and drops a six minute one', () => {
+    const under = getLatestCompletedTurnStats([
+      { info: user, parts: [] },
+      { info: assistant({ time: { created: 1000, completed: 5000 } }), parts: [] },
+      { info: assistant({ id: 'a2', time: { created: 245_000, completed: 249_000 } }), parts: [] },
+    ]);
+    expect(under?.totalLlmDurationMs).toBe(249_000);
+
+    const over = getLatestCompletedTurnStats([
+      { info: user, parts: [] },
+      { info: assistant({ time: { created: 1000, completed: 5000 } }), parts: [] },
+      { info: assistant({ id: 'a2', time: { created: 365_000, completed: 369_000 } }), parts: [] },
+    ]);
+    expect(over?.totalLlmDurationMs).toBe(9_000);
+  });
+
+  test('reports background-task waits as idle instead of generation', () => {
+    const records = [
+      { info: user, parts: [] },
+      { info: assistant({ id: 's1', time: { created: 10_000, completed: 40_000 } }), parts: [] },
+      // 18 minutes, 6 minutes and 1.9 hours of waiting for task notifications.
+      { info: assistant({ id: 's2', time: { created: 1_120_000, completed: 1_150_000 } }), parts: [] },
+      { info: assistant({ id: 's3', time: { created: 1_510_000, completed: 1_540_000 } }), parts: [] },
+      { info: assistant({ id: 's4', time: { created: 8_380_000, completed: 8_410_000 } }), parts: [] },
+    ];
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats?.elapsedDurationMs).toBe(8_410_000);
+    expect(stats?.totalLlmDurationMs).toBe(130_000);
+    expect(stats?.stepsCount).toBe(4);
+  });
+
+  test('weighted averages ignore the idle part of a turn', () => {
+    const records = turn(assistant({ time: { created: 1000, completed: 5000 } }));
+    records.push({ info: { ...user, id: 'u2', time: { created: 10_000 } }, parts: [] });
+    records.push({ info: assistant({ id: 'a2', time: { created: 610_000, completed: 614_000 } }), parts: [] });
+    records.push({ info: assistant({ id: 'a3', time: { created: 1_214_000, completed: 1_218_000 } }), parts: [] });
+
+    // Turn 2 waits 10 minutes before each step; only its two 4s steps count.
+    expect(getLatestCompletedTurnStats(records)?.totalLlmDurationMs).toBe(8_000);
+    expect(getCompletedTurnAverages(records)).toEqual({
+      turnsCount: 2,
+      cacheHitPercent: 0,
+      tokensPerSecond: 300 / 13,
+    });
+  });
+
   test('weights cache and speed across completed turns instead of averaging per-turn rates', () => {
     const first = turn(assistant({
       time: { created: 1000, completed: 5000 },

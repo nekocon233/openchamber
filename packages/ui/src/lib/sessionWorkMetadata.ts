@@ -21,8 +21,20 @@ export type SessionWork = z.infer<typeof workSchema>;
 
 const namespaceSchema = z.object({ openchamber: z.object({ work: workSchema }) });
 
+function workFromMetadata(metadata: Metadata | null | undefined): SessionWork | null {
+  return namespaceSchema.safeParse(metadata).data?.openchamber.work ?? null;
+}
+
 export function getSessionWork(session: Session | null | undefined): SessionWork | null {
-  return namespaceSchema.safeParse(session?.metadata).data?.openchamber.work ?? null;
+  return workFromMetadata(session?.metadata);
+}
+
+/**
+ * The recorded work state, or null when the session never carried one. For
+ * callers that hold a session snapshot rather than a whole `Session`.
+ */
+export function getSessionWorkState(metadata: Metadata | null | undefined): SessionWork['state'] | null {
+  return workFromMetadata(metadata)?.state ?? null;
 }
 
 const inWorkSchema = z.object({ openchamber: z.object({ work: z.object({ state: z.literal('open') }) }) });

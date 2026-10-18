@@ -77,6 +77,22 @@ export const createDeepseekBackend = ({
     return createDeepseekProjection({ sessionId: id, directory: source.directory, publisher: publish ? publisher : null,
       identityScope: branch ? (seq) => deepseekIdentityScope(branch, seq) : () => id });
   };
+  // A DSH event this build cannot read must not make the session unreadable and
+  // unsendable. Skip that event, keep every other one, and report it once per
+  // session so a partial transcript is never mistaken for a complete one.
+  const unreadableEvents = new Set();
+  const applyProjected = (id, directory, projection, event, options) => {
+    try {
+      projection.apply(event, options);
+    } catch (error) {
+      if (!(error instanceof z.ZodError)) throw error;
+      if (unreadableEvents.has(id)) return;
+      unreadableEvents.add(id);
+      const issue = error.issues?.[0];
+      console.warn(`[deepseek] skipped an unreadable ${event.type} event in ${id}${issue ? ` (${issue.path.join('.')}: ${issue.message})` : ''}`);
+      publisher.error(directory, id, unknownError('DeepSeek Harness sent a session event this version cannot read; part of the transcript may be missing'));
+    }
+  };
   const writable = () => {
     transport.assertAllowed();
     if (stopping) throw new NativeAgentError('DeepSeek Harness is shutting down', { status: 503, code: 'NATIVE_DEEPSEEK_UNAVAILABLE' });
@@ -458,7 +474,7 @@ export const createDeepseekBackend = ({
             if (event.type === 'turn/end') state.ownedTurns.delete(turn);
             if (activeAttempt && event.seq > activeAttempt.startedAfterSeq && ['assistant/message', 'assistant/attempt'].includes(event.type)) state.staged.push(event);
             else if (state.staged.length > 0) state.staged.push(event);
-            else state.projection.apply(event);
+            else applyProjected(id, source.directory, state.projection, event);
           }
           state.projection.restoreStream(frame.assistantStream);
           state.attemptId = frame.assistantStream?.activeAttempt?.attemptId ?? null;
@@ -505,7 +521,7 @@ export const createDeepseekBackend = ({
   };
 
   const applyLive = (state, id, event) => {
-    state.projection.apply(event, { live: true });
+    applyProjected(id, state.directory, state.projection, event, { live: true });
     const turn = turnIdentity.safeParse(event.data).data?.turn;
     if (turn !== undefined) state.currentTurn = turn;
     if (event.type === 'user/message' && managedTurns.get(id)?.has(event.data.source?.rpcId) && state.currentTurn !== null) {
@@ -567,7 +583,7 @@ export const createDeepseekBackend = ({
     const found = [];
     for (;;) {
       const projection = projectionFor(id, state);
-      for (const event of events) projection.apply(event);
+      for (const event of events) applyProjected(id, directory, projection, event);
       for (const record of projection.records()) {
         const seq = projection.position(record.info.id);
         if (seq !== undefined) found.push({ record, seq });
@@ -680,16 +696,22 @@ export const createDeepseekBackend = ({
     return content;
   };
 
+  const configuration = createDeepseekConfiguration({ transport });
+
   const backend = {
-    configuration: createDeepseekConfiguration({ transport }),
+    configuration,
     async catalog() {
       await ensureGlobals();
       const catalog = await transport.request('session/modelCatalog', {}, wire.modelCatalog);
       if (catalog.groups.length === 0 && catalog.failures.length > 0) throw new Error(catalog.failures.map((failure) => failure.message).join('\n'));
+      // The session catalog names models but not their windows. The provider
+      // settings do, and a profile that cannot answer leaves them null.
+      const limits = await configuration.modelLimits().catch(() => new Map());
       const routable = new Set(catalog.routableProviders);
       return catalog.groups.filter((group) => routable.has(group.id)).flatMap((group) => group.models.map((model) => ({
         id: wire.modelId(group.id, model.id), name: model.name,
-        contextWindow: null, outputLimit: null,
+        contextWindow: limits.get(model.id)?.contextWindow ?? null,
+        outputLimit: limits.get(model.id)?.outputLimit ?? null,
         efforts: model.reasoning?.efforts.map((effort) => effort.id) ?? [], defaultEffort: model.reasoning?.defaultEffort ?? null,
         input: { image: false, pdf: true },
       })));
@@ -921,7 +943,7 @@ export const createDeepseekBackend = ({
         events = page.records.map((record) => record.event);
         hasMore = page.hasMore;
         projection = projectionFor(id, state);
-        for (const event of events) projection.apply(event);
+        for (const event of events) applyProjected(id, directory, projection, event);
       }
       assertCurrentHistory();
       const records = projection.records();
@@ -946,7 +968,7 @@ export const createDeepseekBackend = ({
         const first = page.records[0]?.event.seq;
         if (first === undefined || first >= beforeSeq) throw new NativeAgentError('DeepSeek Harness history paging made no progress', { code: 'NATIVE_DEEPSEEK_PROTOCOL', status: 502 });
         const projection = projectionFor(id, source);
-        for (const record of page.records) projection.apply(record.event);
+        for (const record of page.records) applyProjected(id, directory, projection, record.event);
         atSeq = projection.position(messageId);
         beforeSeq = first;
         hasMore = page.hasMore;

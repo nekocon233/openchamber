@@ -30,6 +30,10 @@ const entryKey = (entry) => [entry.sourceId, entry.skillDir, entry.scope].join('
  * All recorded installs keyed by skill name. A missing or malformed file is
  * "no provenance", never an error: the badge falls back to name matching
  * rather than losing its state because one write was interrupted.
+ *
+ * Every entry comes back normalized: strings trimmed, and a scope or target
+ * source the file names but this version does not know is null. Readers branch
+ * on those values instead of re-checking the file's raw JSON.
  */
 export const readInstalledSources = () => {
   const byName = new Map();
@@ -46,7 +50,14 @@ export const readInstalledSources = () => {
     const skillDir = asNonEmptyString(entry?.skillDir);
     if (!skillName || !sourceId || !skillDir) continue;
     const list = byName.get(skillName) ?? [];
-    list.push(entry);
+    list.push({
+      skillName,
+      skillDir,
+      sourceId,
+      scope: entry?.scope === 'project' || entry?.scope === 'user' ? entry.scope : null,
+      source: entry?.source === 'agents' || entry?.source === 'opencode' ? entry.source : null,
+      sourceRef: asNonEmptyString(entry?.sourceRef),
+    });
     byName.set(skillName, list);
   }
   return byName;

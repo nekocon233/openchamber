@@ -32,7 +32,18 @@ const toolResult = z.object({ turn: z.number(), step: z.number(), message: z.obj
 }), meta: z.json().optional(), error: z.object({ reason: z.string().optional() }).optional() });
 const step = z.object({ turn: z.number(), step: z.number() });
 const turnEnd = z.object({ turn: z.number(), reason: z.object({ kind: z.string(), error: z.object({ message: z.string() }).optional() }) });
-const compaction = z.object({ compactionId: z.string(), turn: z.number().nullable().optional(), summary: z.string().optional(), error: z.string().optional() });
+// DSH writes the checkpoint as content blocks, not as finished text.
+const compaction = z.object({
+  compactionId: z.string(),
+  turn: z.number().nullable().optional(),
+  summary: z.array(contentBlock).optional(),
+  error: z.string().optional(),
+});
+const compactionSummaryText = (blocks = []) => blocks
+  .filter((block) => block.type === 'text')
+  .map((block) => block.text)
+  .join('\n')
+  .trim();
 const chunkSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('block-start'), index: z.number(), blockType: z.string() }),
   z.object({ type: z.enum(['text-delta', 'reasoning-delta']), index: z.number(), text: z.string() }),
@@ -171,7 +182,7 @@ export const createDeepseekProjection = ({ sessionId, directory, publisher = nul
         records.set(id, record);
         positions.set(id, event.seq);
       }
-      if (data.summary !== undefined) record.info.summary = data.summary;
+      if (data.summary !== undefined) record.info.summary = compactionSummaryText(data.summary);
       if (event.type === 'compaction/end') {
         record.info.status = data.error ? 'failed' : 'completed';
         if (data.error) record.info.error = unknownError(data.error);
@@ -241,7 +252,19 @@ export const createDeepseekProjection = ({ sessionId, directory, publisher = nul
     }
     if (event.type === 'tool/call') {
       const data = toolCall.parse(event.data);
-      if (calls.has(data.callId)) return;
+      const known = calls.get(data.callId);
+      if (known) {
+        // The assistant message carried this call, so its part was stamped when
+        // that message was written: the first token of a live attempt, the end
+        // of it in history. The tool starts when the CLI starts it, and the
+        // turn telemetry subtracts this interval as tool time.
+        const { time } = known.part.state;
+        if (time.start !== event.time && (time.end === undefined || event.time <= time.end)) {
+          known.part.state = { ...known.part.state, time: { ...time, start: event.time } };
+          if (live) publish(known.record);
+        }
+        return;
+      }
       const record = ensureAssistant(data.turn, data.step, event.time);
       record.parts.push(partFrom(record, { type: 'tool-call', id: data.callId, name: data.name, arguments: data.arguments }, record.parts.length, event.time, false));
       if (live) publish(record);

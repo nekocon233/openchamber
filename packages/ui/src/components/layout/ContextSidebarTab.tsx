@@ -7,6 +7,7 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { computeCacheHitRate, findLatestContextFill } from '@/stores/utils/tokenUtils';
+import { computeContextUsage } from '@/components/chat/work-status/contextUsage';
 import { useSessions, useSessionMessageRecords } from '@/sync/sync-context';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
@@ -326,7 +327,6 @@ export const ContextPanelContent: React.FC = () => {
     // After compaction the fill is unknown until another response reports it.
     const contextFill = findLatestContextFill(sessionMessages.map((entry) => entry.info));
     const contextMessage = contextFill ? sessionMessages[contextFill.index] ?? null : null;
-    const isCompacted = contextFill?.state === 'compacted';
 
     const tokenBreakdown = contextMessage ? extractTokenBreakdown(contextMessage) : EMPTY_BREAKDOWN;
 
@@ -351,12 +351,11 @@ export const ContextPanelContent: React.FC = () => {
       latestAssistantInfo?.modelID || '',
     );
 
-    const contextLimit = latestAssistantInfo?.contextWindow ?? providerModel.contextLimit;
-    const usagePercent = isCompacted
-      ? null
-      : contextLimit && contextLimit > 0
-        ? Math.min(999, (tokenBreakdown.total / contextLimit) * 100)
-        : 0;
+    const contextLimit = latestAssistantInfo?.contextWindow ?? providerModel.contextLimit ?? 0;
+    // The same computation the work-status panel uses, including its 200k
+    // estimate when the model exposes no window, so the two readouts agree.
+    const usage = computeContextUsage(sessionMessages.map((entry) => entry.info), contextLimit);
+    const usagePercent = usage?.state === 'measured' ? usage.percent : null;
 
     // OpenCode v2 delivers instruction text as its own `system` message
     // instead of hanging a `system` string off the first user message.
@@ -386,11 +385,12 @@ export const ContextPanelContent: React.FC = () => {
       providerModel,
       tokenBreakdown,
       hasTokenUsage: contextMessage?.info.role === 'assistant' && contextMessage.info.tokens !== undefined,
+      usageState: usage?.state ?? null,
       usagePercent,
       cacheHitRate,
       totalAssistantCost,
       hasReportedCost: assistantMessages.some((message) => message.info.role === 'assistant' && message.info.cost !== undefined),
-      contextLimit,
+      contextLimit: usage?.limit ?? 0,
       breakdown: {
         user: userTokens,
         assistant: assistantTokens,
@@ -466,9 +466,11 @@ export const ContextPanelContent: React.FC = () => {
             )}
           </div>
           <div className="mt-1.5 typography-micro font-medium tabular-nums text-foreground/80">
-            {viewModel.usagePercent === null
+            {viewModel.usageState === 'compacted'
               ? t('contextUsage.compacted.description')
-              : t('contextSidebar.context.percentUsed', { percent: viewModel.usagePercent.toFixed(1) })}
+              : viewModel.usagePercent !== null
+                ? t('contextSidebar.context.percentUsed', { percent: viewModel.usagePercent.toFixed(1) })
+                : '—'}
           </div>
         </div>
 

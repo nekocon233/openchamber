@@ -24,6 +24,12 @@ Typ `$` ergens in een bericht, ook aan het begin, om de skillkiezer te openen en
 
 Een `/` helemaal aan het begin opent [opdrachten](/nl/commands-snippets/); daar staan geen skills tussen.
 
+## Gebruikersskills synchroniseren vanuit agentplugins
+
+De skills in `~/.agents/skills` kunnen kopieën zijn van skills die met de Claude Code- en Codex-plugins meekomen. De vernieuwknop naast het aantal skills bij **Instellingen → Skills** toont die kopieën en vervangt ze door de versie uit de geïnstalleerde plugin.
+
+De dialoog laat zien wat wordt vervangen en wat ongemoeid blijft voordat er iets verandert. Symlinks en skills zonder pluginbron worden overgeslagen en genoemd. De hele skillmap wordt vervangen, dus lokale wijzigingen aan die kopieën gaan verloren. Skills die u zelf hebt geschreven blijven ongemoeid.
+
 ## Zie ook
 
 - [Skillcatalogus](/nl/skills-catalog/) om gepubliceerde skills te installeren

@@ -24,6 +24,12 @@ Escribe `$` en cualquier parte de un mensaje, también al principio, para abrir 
 
 Una `/` al principio del mensaje abre los [comandos](/es/commands-snippets/), que no incluyen skills.
 
+## Sincronizar skills de usuario desde plugins de agentes
+
+Los skills de `~/.agents/skills` pueden ser copias de skills que vienen con los plugins Claude Code y Codex. El botón de actualización junto al número de skills en **Settings → Skills** lista esas copias y las reemplaza por la versión del plugin instalado.
+
+El diálogo muestra qué se reemplazará y qué se dejará intacto antes de cambiar nada. Los enlaces simbólicos y los skills sin origen de plugin se omiten y se nombran. Se reemplaza la carpeta completa del skill, así que los cambios locales en esas copias se pierden. Los skills que escribiste tú nunca se tocan.
+
 ## Relacionado
 
 - [Catálogo de skills](/es/skills-catalog/) — instala skills que otros han publicado

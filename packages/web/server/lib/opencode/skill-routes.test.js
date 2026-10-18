@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import express from 'express';
 import fs from 'fs';
 import os from 'os';
@@ -658,5 +658,192 @@ describe('skill-routes directory soft fallback', () => {
     });
     expect(response.status).toBe(401);
     expect(scanned).toBe(false);
+  });
+});
+
+describe('skill catalog update', () => {
+  /** @type {string | null} */
+  let projectRoot = null;
+  /** @type {string | null} */
+  let dataDir = null;
+  /** @type {{ close: () => Promise<void> } | null} */
+  let appHandle = null;
+  /** @type {string | undefined} */
+  let previousDataDir;
+
+  const writeProvenance = (entries) => {
+    fs.writeFileSync(
+      path.join(dataDir, 'skills-installed-sources.json'),
+      JSON.stringify({ version: 1, entries }),
+    );
+  };
+
+  const installSkill = (relativeDir, name) => {
+    const dir = path.join(projectRoot, relativeDir, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name}\n---\nBody\n`);
+  };
+
+  const recorded = {
+    skillName: 'demo',
+    skillDir: 'skills/demo',
+    scope: 'project',
+    source: 'opencode',
+    sourceId: 'acme',
+    sourceRef: 'acme/skills',
+  };
+
+  const startApp = (overrides = {}) => {
+    previousDataDir = process.env.OPENCHAMBER_DATA_DIR;
+    process.env.OPENCHAMBER_DATA_DIR = dataDir;
+    appHandle = startSkillsApp({ projectRoot, overrides });
+  };
+
+  const postUpdate = (body) => fetch(
+    `${appHandle.baseUrl}/api/config/skills/catalog/update?directory=${encodeURIComponent(projectRoot)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+
+  beforeEach(() => {
+    projectRoot = createTempProject();
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-skills-update-'));
+  });
+
+  afterEach(async () => {
+    if (appHandle) {
+      await appHandle.close();
+      appHandle = null;
+    }
+    if (projectRoot) {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+      projectRoot = null;
+    }
+    if (dataDir) {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      dataDir = null;
+    }
+    if (previousDataDir === undefined) delete process.env.OPENCHAMBER_DATA_DIR;
+    else process.env.OPENCHAMBER_DATA_DIR = previousDataDir;
+    previousDataDir = undefined;
+  });
+
+  it('plans and replaces the catalog skills that are still installed', async () => {
+    installSkill('.opencode/skills', 'demo');
+    writeProvenance([recorded]);
+    const installs = [];
+    startApp({
+      installSkillsFromRepository: async (input) => {
+        installs.push(input);
+        return { ok: true, installed: [{ skillName: 'demo', scope: 'project', source: 'opencode' }], skipped: [] };
+      },
+    });
+
+    const planResponse = await postUpdate({ dryRun: true });
+    expect(planResponse.status).toBe(200);
+    expect(await planResponse.json()).toEqual({ ok: true, plan: [recorded] });
+    expect(installs).toHaveLength(0);
+
+    const runResponse = await postUpdate({});
+    expect(runResponse.status).toBe(200);
+    const run = await runResponse.json();
+    expect(run).toMatchObject({ ok: true, updated: 1, skipped: 0, failed: 0 });
+    expect(run.results).toEqual([{ skillName: 'demo', scope: 'project', source: 'opencode', status: 'updated' }]);
+    expect(installs).toHaveLength(1);
+    expect(installs[0]).toMatchObject({
+      source: 'acme/skills',
+      scope: 'project',
+      targetSource: 'opencode',
+      conflictPolicy: 'overwriteAll',
+      workingDirectory: projectRoot,
+      selections: [{ skillDir: 'skills/demo' }],
+    });
+  });
+
+  it('answers with an empty plan when nothing recorded is installed', async () => {
+    writeProvenance([recorded]);
+    startApp({
+      installSkillsFromRepository: async () => {
+        throw new Error('Nothing should be installed');
+      },
+    });
+
+    const plan = await (await postUpdate({ dryRun: true })).json();
+    expect(plan).toEqual({ ok: true, plan: [] });
+    expect(await (await postUpdate({})).json()).toEqual({
+      ok: true, results: [], updated: 0, skipped: 0, failed: 0,
+      message: 'No installed skill came from a catalog source',
+    });
+  });
+
+  it('refuses a second run while the first is in flight', async () => {
+    installSkill('.opencode/skills', 'demo');
+    writeProvenance([recorded]);
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    startApp({
+      installSkillsFromRepository: async () => {
+        markStarted();
+        await pending;
+        return { ok: true, installed: [{ skillName: 'demo' }], skipped: [] };
+      },
+    });
+
+    const first = postUpdate({});
+    await started;
+    const second = await postUpdate({});
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ ok: false, error: { kind: 'busy' } });
+
+    release();
+    expect(await (await first).json()).toMatchObject({ ok: true, updated: 1 });
+  });
+});
+
+describe('user skill sync route', () => {
+  it('plans and refreshes the user skill library', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-user-sync-route-'));
+    const projectRoot = createTempProject();
+    const writeSkill = (relative, content) => {
+      const file = path.join(home, relative, 'SKILL.md');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    };
+    writeSkill('.agents/skills/demo', 'old');
+    writeSkill('.claude/plugins/cache/market/plugin/1.0.0/skills/demo', 'new');
+
+    const appHandle = startSkillsApp({ projectRoot, overrides: { os: { ...os, homedir: () => home } } });
+    const post = (body) => fetch(`${appHandle.baseUrl}/api/config/skills/user/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    try {
+      const planResponse = await post({ dryRun: true });
+      expect(planResponse.status).toBe(200);
+      expect(await planResponse.json()).toEqual({
+        ok: true,
+        plan: [{
+          skillName: 'demo',
+          status: 'update',
+          source: { agent: 'claude', plugin: 'plugin', version: '1.0.0' },
+        }],
+      });
+
+      const runResponse = await post({});
+      expect(runResponse.status).toBe(200);
+      expect(await runResponse.json()).toMatchObject({ ok: true, updated: 1, skipped: 0, failed: 0 });
+      expect(fs.readFileSync(path.join(home, '.agents/skills/demo/SKILL.md'), 'utf8')).toBe('new');
+    } finally {
+      await appHandle.close();
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
   });
 });

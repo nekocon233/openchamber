@@ -10,10 +10,22 @@ export type SessionRowOrderEntry = {
   descendantRange?: readonly [start: number, end: number];
 };
 
+/**
+ * The part of a session the selection bar reads when it decides which bulk
+ * actions a selection can carry. The provider hands over whole sessions, so
+ * these fields cost nothing here; the type keeps consumers from reading more.
+ */
+export type SessionRowOrderSnapshot = {
+  time?: { archived?: number | null };
+  metadata?: Session['metadata'];
+  parentID?: Session['parentID'];
+  directory?: Session['directory'];
+};
+
 type SessionRowOrderRegistry = {
   getEntries: () => readonly SessionRowOrderEntry[];
   getDescendantIds: () => readonly string[];
-  getSessionsById: () => ReadonlyMap<string, { time?: { archived?: number | null }; metadata?: Session['metadata'] }>;
+  getSessionsById: () => ReadonlyMap<string, SessionRowOrderSnapshot>;
 };
 
 const SessionRowOrderContext = React.createContext<SessionRowOrderRegistry | null>(null);
@@ -21,7 +33,7 @@ const SessionRowOrderContext = React.createContext<SessionRowOrderRegistry | nul
 export const SessionRowOrderProvider: React.FC<{
   entries: readonly SessionRowOrderEntry[];
   descendantIds: readonly string[];
-  sessionsById: ReadonlyMap<string, { time?: { archived?: number | null }; metadata?: Session['metadata'] }>;
+  sessionsById: ReadonlyMap<string, SessionRowOrderSnapshot>;
   children: React.ReactNode;
 }> = ({ entries, descendantIds, sessionsById, children }) => {
   const entriesRef = React.useRef(entries);

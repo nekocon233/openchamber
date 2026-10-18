@@ -120,7 +120,9 @@ depends on:
 - An assistant message's `time.completed` covers every finished part it
   issued: a later tool result, or an item end later than the second-precision
   turn end, extends it. OpenCode completes a step after its tools, and turn
-  telemetry subtracts tool time inside that window.
+  telemetry subtracts tool time inside that window. A tool interval starts
+  when the CLI starts the tool, not when the message that requested it was
+  written, so a live attempt's first token never becomes a tool's start.
 - Tool names map onto the tools the UI knows (`Bash` to `bash`, `Edit` and
   `MultiEdit` to `edit`, Codex `commandExecution` to `bash`, `fileChange` to
   `apply_patch`, MCP tools to `<server>_<tool>`), with the file diff metadata
@@ -152,7 +154,11 @@ Claude gotchas:
   send selection. Without either, the model stays empty. A placeholder never
   replaces a real model already observed in the stream; a later real model
   replaces the fallback. History and live frames use the same rule and keep
-  the notice's text and usage.
+  the notice's text and usage, except `No response requested.`, which does
+  not become a message. The CLI writes it when an interrupted request
+  resumes, and the resume can come hours after the interrupt; a record for it
+  would stretch that turn's window across the idle time, and the turn stats
+  would report a fraction of the real rate.
 - Assistant messages carry `contextWindow` when OpenChamber knows the
   effective window for the turn: the connection/catalog value on launch and
   history projection, or the CLI's `modelUsage` value on a live result. An

@@ -24,6 +24,12 @@ Type `$` anywhere in a message, including at the start, to bring up the skill pi
 
 A `/` at the very start of the message opens [commands](/commands-snippets/), which don't include skills.
 
+## Sync user skills from agent plugins
+
+The skills in `~/.agents/skills` can be copies of skills that ship with the Claude Code and Codex plugins. The refresh button next to the skill count in **Settings → Skills** lists those copies and replaces them with the version from the installed plugin.
+
+The dialog shows what will be replaced and what will be left alone before anything changes. Symlinks and skills without a plugin source are skipped and named. The whole skill folder is replaced, so local edits to those copies are lost. Skills you wrote yourself are never touched.
+
 ## Related
 
 - [Skills Catalog](/skills-catalog/) — install skills others have published

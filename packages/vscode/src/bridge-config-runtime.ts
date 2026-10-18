@@ -63,13 +63,17 @@ import {
 import { parseWebSearchSelection } from './opencode-config-v2';
 import {
   getSkillsCatalog,
+  getSkillTargetDir,
+  getUserSkillBaseDir,
   scanSkillsRepository as scanSkillsRepositoryFromGit,
   installSkillsFromRepository as installSkillsFromGit,
   type SkillsCatalogSourceConfig,
 } from './skillsCatalog';
 import { buildAppliedResponse } from './config-mutation-response';
 import type { BridgeContext, BridgeResponse } from './bridge';
-import { appendInstalledSources, removeInstalledSources } from '../../web/server/lib/skills-catalog/installed-sources.js';
+import { appendInstalledSources, readInstalledSources, removeInstalledSources } from '../../web/server/lib/skills-catalog/installed-sources.js';
+import { planInstalledSkillUpdates, updateInstalledSkills } from '../../web/server/lib/skills-catalog/update-installed.js';
+import { syncUserSkills } from '../../web/server/lib/skills-catalog/user-sync.js';
 
 type BridgeMessageInput = {
   id: string;
@@ -85,6 +89,7 @@ type ConfigRuntimeDeps = {
   resetMagicPromptOverride: (id: string) => Promise<{ version: number; overrides: Record<string, string> }>;
   resetAllMagicPromptOverrides: () => Promise<{ version: number; overrides: Record<string, string> }>;
   fetchOpenCodeSkillsFromApi: (ctx: BridgeContext | undefined, workingDirectory?: string) => Promise<DiscoveredSkill[] | null>;
+  homedir: () => string;
   clientReloadDelayMs: number;
 };
 
@@ -817,6 +822,87 @@ export async function handleConfigBridgeMessage(
       }
 
       return { id, type, success: true, data };
+    }
+
+    case 'api:config/skills:update': {
+      // SAFETY: the webview forwards a JSON body; only `dryRun` is read, and
+      // anything but a literal `true` runs the replacement.
+      const body = (payload || {}) as { dryRun?: boolean };
+      const workingDirectory = ctx?.manager?.getWorkingDirectory() || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const plan = planInstalledSkillUpdates({
+        provenanceByName: readInstalledSources(),
+        targetDirFor: ({ scope, source, skillName }) => {
+          if (scope !== 'user' && scope !== 'project') return null;
+          if (scope === 'project' && !workingDirectory) return null;
+          return getSkillTargetDir({
+            scope,
+            targetSource: source === 'agents' ? 'agents' : 'opencode',
+            workingDirectory,
+            skillName,
+          });
+        },
+        skillExists: (targetDir) => fs.existsSync(path.join(targetDir, 'SKILL.md')),
+      });
+
+      if (body.dryRun === true) {
+        return { id, type, success: true, data: { ok: true, plan } };
+      }
+
+      if (plan.length === 0) {
+        return {
+          id, type, success: true,
+          data: {
+            ok: true, results: [], updated: 0, skipped: 0, failed: 0,
+            message: 'No installed skill came from a catalog source',
+          },
+        };
+      }
+
+      const outcome = await updateInstalledSkills({
+        plan,
+        resolveIdentity: async () => ({ ok: true, identity: null }),
+        install: installSkillsFromGit,
+        workingDirectory: workingDirectory ?? null,
+        userSkillDir: getUserSkillBaseDir(),
+      });
+
+      if (!outcome.ok) {
+        return { id, type, success: true, data: { ok: false, error: outcome.error } };
+      }
+
+      const countOf = (status: 'updated' | 'skipped' | 'failed') => (
+        outcome.results.filter((entry) => entry.status === status).length
+      );
+      const updated = countOf('updated');
+      return {
+        id, type, success: true,
+        data: {
+          ok: true,
+          results: outcome.results,
+          updated,
+          skipped: countOf('skipped'),
+          failed: countOf('failed'),
+          message: updated > 0 ? 'Installed skills updated' : 'No skill was replaced',
+        },
+      };
+    }
+
+    case 'api:config/skills:user-sync': {
+      // SAFETY: the webview forwards a JSON body; only `dryRun` is read, and
+      // anything but a literal `true` runs the replacement.
+      const body = (payload || {}) as { dryRun?: boolean };
+      try {
+        const outcome = await syncUserSkills({ homeDir: deps.homedir(), dryRun: body.dryRun === true });
+        return { id, type, success: true, data: outcome };
+      } catch (error) {
+        return {
+          id, type, success: true,
+          data: {
+            ok: false,
+            error: { kind: 'unknown', message: error instanceof Error ? error.message : 'Failed to sync user skills' },
+          },
+        };
+      }
     }
 
     case 'api:config/skills/files': {

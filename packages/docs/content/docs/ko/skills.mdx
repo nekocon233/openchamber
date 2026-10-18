@@ -24,6 +24,12 @@ description: 에이전트가 필요할 때 불러오는 재사용 가능한 지�
 
 메시지 맨 앞의 `/`는 [명령](/ko/commands-snippets/)을 엽니다. 여기에는 스킬이 포함되지 않습니다.
 
+## 에이전트 플러그인에서 사용자 skill 동기화
+
+`~/.agents/skills`의 skill은 Claude Code, Codex 플러그인에 포함된 skill의 복사본일 수 있습니다. **Settings → Skills**의 skill 수 옆에 있는 새로 고침 버튼이 그 복사본을 나열하고 설치된 플러그인의 버전으로 바꿉니다.
+
+변경 전에 대화상자가 무엇을 바꾸고 무엇을 그대로 둘지 보여 줍니다. 심볼릭 링크와 플러그인 출처가 없는 skill은 건너뛰고 이름을 표시합니다. skill 폴더가 통째로 바뀌므로 그 복사본에 적용한 로컬 수정은 사라집니다. 직접 작성한 skill은 건드리지 않습니다.
+
 ## 관련 항목
 
 - [Skills Catalog](/ko/skills-catalog/) — 다른 사람이 게시한 스킬을 설치하세요

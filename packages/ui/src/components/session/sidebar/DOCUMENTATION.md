@@ -11,7 +11,7 @@ kept at this root in `types.ts` and `utils.tsx`.
 - `sessions/` owns session rows, row actions, expansion, ownership, and activity indicators. A collapsed group or folder shows one indicator for its hidden sessions: a pending permission (shield) outranks a pending question, which outranks a running turn, which outranks unread. Pending requests are read from the cross-directory `global-blocking-requests` index, so a project never opened in this launch still shows them; running and unread come from the global status index and the notification store.
 - `recent/` owns Pinned, Recent and managed Chats activity projections, and the
   In work and timeline row projections and session locations.
-- `folders/` owns folder DnD, bulk actions, archived folders, and folder UI.
+- `folders/` owns folder DnD, bulk actions, archived folders, and folder UI. The selection bar archives or restores, moves to a folder, deletes, and marks the selected top-level project sessions done for In work; the bulk mark skips chats, subsessions, archived rows, and work that is already done.
 - `sessionSidebarRowModel.ts` owns the ordered, mode-neutral projection for
   Pinned, Chats, In work, Recent, projects, groups, folders, sessions, status notices, empty
   states, and reveal controls. `projects/SessionProjectScroller.tsx` renders these

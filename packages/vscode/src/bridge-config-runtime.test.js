@@ -34,6 +34,7 @@ const createCtx = (workingDirectory, restartImpl = async () => undefined) => {
   };
 };
 
+let syncHome = os.homedir();
 const deps = {
   readSettings: () => ({}),
   persistSettings: async (changes) => changes,
@@ -42,6 +43,7 @@ const deps = {
   resetMagicPromptOverride: async () => ({ version: 1, overrides: {} }),
   resetAllMagicPromptOverrides: async () => ({ version: 1, overrides: {} }),
   fetchOpenCodeSkillsFromApi: async () => null,
+  homedir: () => syncHome,
   clientReloadDelayMs: 800,
 };
 
@@ -329,5 +331,79 @@ describe('VS Code config bridge plugin parity', () => {
       // v1 `enabled: false` becomes the inverse v2 `disabled: true`.
       disabled: true,
     });
+  });
+});
+
+describe('skills catalog update bridge', () => {
+  test('plans the project skills that are still installed', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-skills-update-'));
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-skills-data-'));
+    const previousDataDir = process.env.OPENCHAMBER_DATA_DIR;
+    tempRoots.push(projectRoot, dataDir);
+    try {
+      const skillDir = path.join(projectRoot, '.opencode', 'skills', 'demo');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: demo\ndescription: Demo\n---\nBody\n');
+      fs.writeFileSync(path.join(dataDir, 'skills-installed-sources.json'), JSON.stringify({
+        version: 1,
+        entries: [{
+          skillName: 'demo', skillDir: 'skills/demo', scope: 'project',
+          source: 'opencode', sourceId: 'acme', sourceRef: 'acme/skills',
+        }],
+      }));
+      process.env.OPENCHAMBER_DATA_DIR = dataDir;
+
+      const response = await handleConfigBridgeMessage({
+        id: 'skills-update-plan',
+        type: 'api:config/skills:update',
+        payload: { dryRun: true },
+      }, createCtx(projectRoot), deps);
+
+      expect(response?.success).toBe(true);
+      expect(response?.data).toEqual({
+        ok: true,
+        plan: [{
+          skillName: 'demo', skillDir: 'skills/demo', scope: 'project',
+          source: 'opencode', sourceId: 'acme', sourceRef: 'acme/skills',
+        }],
+      });
+    } finally {
+      if (previousDataDir === undefined) delete process.env.OPENCHAMBER_DATA_DIR;
+      else process.env.OPENCHAMBER_DATA_DIR = previousDataDir;
+    }
+  });
+});
+
+describe('user skill sync bridge', () => {
+  test('plans the user skills from the plugin caches', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-vscode-user-sync-'));
+    const previousHome = syncHome;
+    tempRoots.push(home);
+    try {
+      fs.mkdirSync(path.join(home, '.agents', 'skills', 'demo'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.agents', 'skills', 'demo', 'SKILL.md'), 'old');
+      const cached = path.join(home, '.claude', 'plugins', 'cache', 'market', 'plugin', '1.0.0', 'skills', 'demo');
+      fs.mkdirSync(cached, { recursive: true });
+      fs.writeFileSync(path.join(cached, 'SKILL.md'), 'new');
+      syncHome = home;
+
+      const response = await handleConfigBridgeMessage({
+        id: 'user-skill-sync-plan',
+        type: 'api:config/skills:user-sync',
+        payload: { dryRun: true },
+      }, createCtx(), deps);
+
+      expect(response?.success).toBe(true);
+      expect(response?.data).toEqual({
+        ok: true,
+        plan: [{
+          skillName: 'demo',
+          status: 'update',
+          source: { agent: 'claude', plugin: 'plugin', version: '1.0.0' },
+        }],
+      });
+    } finally {
+      syncHome = previousHome;
+    }
   });
 });

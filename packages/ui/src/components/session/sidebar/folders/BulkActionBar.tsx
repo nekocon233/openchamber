@@ -22,6 +22,8 @@ type Props = {
   onRemoveFromFolder: () => void;
   canRemoveFromFolder: boolean;
   onRestore: () => void;
+  /** Optional: present when the selection holds a session that can be in work. */
+  onMarkDone?: () => void;
   onArchive: () => void;
   onDelete?: () => void;
   onDone: () => void;
@@ -37,6 +39,7 @@ export const BulkActionBar: React.FC<Props> = ({
   onRemoveFromFolder,
   canRemoveFromFolder,
   onRestore,
+  onMarkDone,
   onArchive,
   onDelete,
   onDone,
@@ -114,6 +117,23 @@ export const BulkActionBar: React.FC<Props> = ({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom" sideOffset={4}><p>{t('sessions.sidebar.bulkActions.restore')}</p></TooltipContent>
+          </Tooltip>
+        ) : null}
+
+        {onMarkDone ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onMarkDone}
+                disabled={!hasSelection}
+                className={iconButtonClass}
+                aria-label={t('sessions.sidebar.session.work.markDone')}
+              >
+                <Icon name="check" className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={4}><p>{t('sessions.sidebar.session.work.markDone')}</p></TooltipContent>
           </Tooltip>
         ) : null}
 

@@ -1,15 +1,48 @@
 import React from 'react';
 import { sessionActionSupport } from '@/lib/native-agents/capabilities';
+import { isChatDirectoryPath } from '@/lib/chatDirectories';
+import { useUIStore } from '@/stores/useUIStore';
 import { toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
+import { markSessionsDone } from '@/sync/session-actions';
 import { takeSessionActionFailure } from '@/sync/session-action-failures';
+import { getSessionWorkState } from '@/lib/sessionWorkMetadata';
 import { describeSessionActionError } from '../sessions/sessionActionError';
 import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore';
 import type { SessionFolder } from '@/stores/useSessionFoldersStore';
-import { deriveSessionRowBulkSelectAll, deriveSessionRowSelectionArchived, useSessionRowOrderRegistry } from '../sessions/sessionRowOrder';
+import {
+  deriveSessionRowBulkSelectAll,
+  deriveSessionRowSelectionArchived,
+  useSessionRowOrderRegistry,
+  type SessionRowOrderSnapshot,
+} from '../sessions/sessionRowOrder';
 import type { BulkDeleteSessionsConfirmState } from '../shell/ConfirmDialogs';
 
-const EMPTY_SESSIONS_BY_ID = new Map<string, { time?: { archived?: number | null } }>();
+const EMPTY_SESSIONS_BY_ID: ReadonlyMap<string, SessionRowOrderSnapshot> = new Map();
+
+/**
+ * The selected sessions the selection bar can mark done. A done, archived,
+ * chat or subsession row is skipped: those cannot be in work, so marking one
+ * done would write a record no surface reads.
+ */
+export const resolveBulkCompleteIds = (
+  selectedIds: ReadonlySet<string>,
+  sessionsById: ReadonlyMap<string, SessionRowOrderSnapshot>,
+  options: { sessionWorkEnabled: boolean; archivedBucket: boolean },
+): string[] => {
+  if (!options.sessionWorkEnabled || options.archivedBucket) return [];
+  const ids: string[] = [];
+  for (const id of selectedIds) {
+    const session = sessionsById.get(id);
+    if (!session) continue;
+    if (session.time?.archived) continue;
+    if (session.parentID) continue;
+    if (isChatDirectoryPath(session.directory)) continue;
+    if (getSessionWorkState(session.metadata) === 'done') continue;
+    ids.push(id);
+  }
+  return ids;
+};
 
 type Args = {
   isInlineEditing: boolean;
@@ -97,6 +130,7 @@ export const useSidebarBulkActions = (args: Args) => {
   } = args;
 
   const selectionModeEnabled = useSessionMultiSelectStore((state) => state.enabled);
+  const sessionWorkEnabled = useUIStore((state) => state.sessionWorkEnabled);
   const selectedIdsSize = useSessionMultiSelectStore((state) => state.selectedIds.size);
   const hasSelection = selectedIdsSize > 0;
   const selectedIds = useSessionMultiSelectStore((state) => state.selectedIds);
@@ -247,6 +281,31 @@ export const useSidebarBulkActions = (args: Args) => {
     useSessionMultiSelectStore.getState().removeMany(restoredIds);
   }, [bulkScopeIsArchived, failureDescription, hasSelection, selectedIds, t, unarchiveSessions]);
 
+  /**
+   * Marks the eligible part of the selection done. Chats, subsessions and
+   * already-done sessions are left out by `resolveBulkCompleteIds`, so the
+   * toast counts what actually changed.
+   */
+  const handleBulkComplete = React.useCallback(async () => {
+    const ids = resolveBulkCompleteIds(
+      selectedIds,
+      rowOrderRegistry?.getSessionsById() ?? EMPTY_SESSIONS_BY_ID,
+      { sessionWorkEnabled, archivedBucket: bulkScopeIsArchived },
+    );
+    if (ids.length === 0) return;
+    const { completedIds, failedIds } = await markSessionsDone(ids);
+    if (completedIds.length > 0) {
+      toast.success(completedIds.length === 1
+        ? t('sessions.sidebar.bulkActions.completedSingle', { count: completedIds.length })
+        : t('sessions.sidebar.bulkActions.completedPlural', { count: completedIds.length }));
+    }
+    if (failedIds.length > 0) {
+      toast.error(failedIds.length === 1
+        ? t('sessions.sidebar.bulkActions.failedCompleteSingle', { count: failedIds.length })
+        : t('sessions.sidebar.bulkActions.failedCompletePlural', { count: failedIds.length }), failureDescription(failedIds));
+    }
+  }, [bulkScopeIsArchived, failureDescription, rowOrderRegistry, selectedIds, sessionWorkEnabled, t]);
+
   const confirmBulkDelete = React.useCallback(async () => {
     if (!bulkDeleteConfirm) return;
     const sessionsById = rowOrderRegistry?.getSessionsById() ?? EMPTY_SESSIONS_BY_ID;
@@ -295,11 +354,18 @@ export const useSidebarBulkActions = (args: Args) => {
     return () => window.removeEventListener('keydown', listener);
   }, [bulkDeleteConfirm, handleBulkDelete, isInlineEditing, rowOrderRegistry, selectionModeEnabled]);
 
+  const canCompleteSelected = hasSelection && resolveBulkCompleteIds(
+    selectedIds,
+    rowOrderRegistry?.getSessionsById() ?? EMPTY_SESSIONS_BY_ID,
+    { sessionWorkEnabled, archivedBucket: bulkScopeIsArchived },
+  ).length > 0;
+
   return {
     selectionModeEnabled,
     hasSelection,
     selectedIdsSize,
     canDeleteSelected,
+    canCompleteSelected,
     bulkScopeIsArchived,
     derivedSelectionScope,
     bulkScopeFolders,
@@ -313,6 +379,7 @@ export const useSidebarBulkActions = (args: Args) => {
     handleBulkArchive,
     handleBulkHardDelete,
     handleBulkRestore,
+    handleBulkComplete,
     confirmBulkDelete,
   };
 };

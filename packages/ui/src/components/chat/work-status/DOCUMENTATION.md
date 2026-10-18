@@ -275,11 +275,15 @@ when it is available and falls back to the average speed when it is not.
 Average speed sums output plus reasoning tokens and model time across every
 complete loaded turn, then divides the totals. Model time is the turn's
 wall-clock time from its user message through its last completed step, minus
-the union of its completed and failed tool intervals. Using the whole turn
-covers thinking and queue time before each step's first content block, which
-per-step windows leave out and which made proxy sessions report implausibly
-high rates. The average is token-weighted, so a short turn cannot dominate a
-long one. Average cache sums the same steps' input and cache fields and divides
+the union of its completed and failed tool intervals, and minus every gap
+longer than 5 minutes between finished steps. Using the whole turn covers
+thinking and queue time before each step's first content block, which per-step
+windows leave out and which made proxy sessions report implausibly high rates.
+The long-gap exclusion covers waits that belong to no tool: Claude Code keeps
+a turn open while a background task it started runs, and a CLI closed mid-turn
+resumes the turn later. A 2 hour wait for a render once made a turn whose own
+steps ran at 90 report 13 tok/s. The average is token-weighted, so a short turn
+cannot dominate a long one. Average cache sums the same steps' input and cache fields and divides
 cache reads by input plus reads and writes, also token-weighted. Both tooltips
 say that the value covers history loaded in the session and changes when older
 history is paged in. Invalid or missing inputs omit the dependent metric rather
@@ -345,6 +349,9 @@ has already subscribed to for a known session and directory, and the panel
 subscribes to `currentProviderId` / `currentModelId` for the limits.
 `contextUsage.test.ts` pins the arithmetic — notably that the *latest*
 reporting assistant turn is the answer, not a sum across turns.
+The context sidebar (`layout/ContextSidebarTab.tsx`) delegates to the same
+function, including the 200k estimate for models that expose no window, so a
+session cannot read 0.0% in one place and a different share in another.
 
 Which message is "latest" is decided by `findLatestContextFill` in
 `stores/utils/tokenUtils.ts`, shared with the VS Code header, mini chat,

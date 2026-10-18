@@ -3954,3 +3954,49 @@ describe("setSessionWorkState", () => {
     expect(globalUpsertedSessions).toHaveLength(0)
   })
 });
+
+describe("markSessionsDone", () => {
+  beforeEach(() => {
+    runtimeKey = "runtime-a"
+    openchamberRouteRequests.length = 0
+    globalUpsertedSessions.length = 0
+    beforeSessionGetResolve = null
+    sessionRecords.set("ses-work-a", { ...sessionFixture("ses-work-a"), metadata: {} })
+    sessionRecords.set("ses-work-b", { ...sessionFixture("ses-work-b"), metadata: {} })
+    archiveBatchResponse = { status: 200, body: { metadata: { openchamber: { work: { state: "done" } } } } }
+  })
+
+  afterEach(() => {
+    beforeSessionGetResolve = null
+  })
+
+  test("marks every session through the metadata route", async () => {
+    const { markSessionsDone } = await import("./session-actions")
+
+    const result = await markSessionsDone(["ses-work-a", "ses-work-b"])
+
+    expect(result).toEqual({ completedIds: ["ses-work-a", "ses-work-b"], failedIds: [] })
+    const patches = openchamberRouteRequests.filter((entry) => entry.path.endsWith("/metadata"))
+    expect(patches).toHaveLength(2)
+    expect(patches[0]?.body).toMatchObject({ patch: { openchamber: { work: { state: "done" } } } })
+  })
+
+  test("keeps going when one session cannot be read", async () => {
+    const { markSessionsDone } = await import("./session-actions")
+
+    const result = await markSessionsDone(["ses-work-a", "ses-missing", "ses-work-b"])
+
+    expect(result).toEqual({ completedIds: ["ses-work-a", "ses-work-b"], failedIds: ["ses-missing"] })
+  })
+
+  test("reports the rest as failed when the runtime switches mid-run", async () => {
+    const { markSessionsDone } = await import("./session-actions")
+    beforeSessionGetResolve = () => {
+      runtimeKey = "runtime-b"
+    }
+
+    const result = await markSessionsDone(["ses-work-a", "ses-work-b"])
+
+    expect(result).toEqual({ completedIds: [], failedIds: ["ses-work-a", "ses-work-b"] })
+  })
+});

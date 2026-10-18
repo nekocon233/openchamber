@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { selectSkillsForDirectory, useSkillsStore, type DiscoveredSkill } from '@/stores/useSkillsStore';
+import { useSkillsCatalogStore } from '@/stores/useSkillsCatalogStore';
+import { SyncUserSkillsDialog } from './SyncUserSkillsDialog';
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
 import { useShallow } from 'zustand/react/shallow';
 import { cn } from '@/lib/utils';
@@ -64,6 +66,8 @@ export const SkillsSidebar: React.FC<SkillsSidebarProps> = ({ onItemSelect }) =>
   const [deleteDialogSkill, setDeleteDialogSkill] = React.useState<DiscoveredSkill | null>(null);
   const [isDeletePending, setIsDeletePending] = React.useState(false);
   const [openMenuSkill, setOpenMenuSkill] = React.useState<string | null>(null);
+  const [syncDialogOpen, setSyncDialogOpen] = React.useState(false);
+  const isSyncingUserSkills = useSkillsCatalogStore((state) => state.isSyncingUserSkills);
 
   const {
     selectedSkillName,
@@ -246,14 +250,26 @@ export const SkillsSidebar: React.FC<SkillsSidebarProps> = ({ onItemSelect }) =>
         <SettingsProjectSelector className="mb-3" />
         <div className="flex items-center justify-between gap-2">
           <span className="typography-meta text-muted-foreground">{t('settings.skills.sidebar.total', { count: skills.length })}</span>
-          <Button size="sm"
-            data-settings-item="skills.create"
-            variant="ghost"
-            className="h-7 w-7 px-0 -my-1 text-muted-foreground"
-            onClick={handleCreateNew}
-          >
-            <Icon name="add" className="h-3.5 w-3.5" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button size="sm"
+              variant="ghost"
+              className="h-7 w-7 px-0 -my-1 text-muted-foreground"
+              aria-label={t('settings.skills.userSync.button')}
+              title={t('settings.skills.userSync.button')}
+              disabled={isSyncingUserSkills}
+              onClick={() => setSyncDialogOpen(true)}
+            >
+              <Icon name="refresh" className={cn('h-3.5 w-3.5', isSyncingUserSkills && 'animate-spin')} />
+            </Button>
+            <Button size="sm"
+              data-settings-item="skills.create"
+              variant="ghost"
+              className="h-7 w-7 px-0 -my-1 text-muted-foreground"
+              onClick={handleCreateNew}
+            >
+              <Icon name="add" className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
         {skills.length > 0 ? <SettingsSidebarSearch value={query} onChange={setQuery} /> : null}
       </div>
@@ -445,6 +461,12 @@ export const SkillsSidebar: React.FC<SkillsSidebarProps> = ({ onItemSelect }) =>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <SyncUserSkillsDialog
+        open={syncDialogOpen}
+        onOpenChange={setSyncDialogOpen}
+        onSynced={() => { void loadSkills(settingsDirectory); }}
+      />
     </div>
   );
 };

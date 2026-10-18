@@ -24,7 +24,9 @@
 // - a compact boundary becomes a compaction message, and the compact
 //   summary an assistant `summary` message answering it;
 // - a slash command shows as typed; `/compact` shows as its compaction;
-// - the output of local commands and other meta entries is not shown.
+// - the output of local commands and other meta entries is not shown;
+// - the CLI's `No response requested.` answer to a resumed interrupt does not
+//   become a message.
 //
 // Creation times increase strictly in chain order. The UI breaks timestamp
 // ties by message id, which would move preserved replies ahead of a compaction
@@ -176,6 +178,15 @@ const messageDeltaSchema = z.object({
 // Claude Code records a stop as a user entry holding one of these fixed texts.
 // The stop already shows on the assistant message it cut short.
 const INTERRUPT_MARKERS = new Set(['[Request interrupted by user]', '[Request interrupted by user for tool use]']);
+
+// The CLI writes this notice when a session resumes after an interrupted
+// request, and the resume can arrive hours later. The notice carries no model
+// output, and a record for it would stretch the interrupted turn's window
+// across the idle time.
+const NO_RESPONSE_NOTICE = 'No response requested.';
+const isNoResponseNotice = (message) => message.model === '<synthetic>'
+  && message.content.length === 1
+  && textBlock.safeParse(message.content[0]).data?.text.trim() === NO_RESPONSE_NOTICE;
 
 // How Claude Code records a slash command it ran: the name and arguments in
 // tags, under the uuid of the prompt that sent it and marked as a completed
@@ -565,10 +576,13 @@ export const createClaudeProjection = ({
   const startOf = (record, partId, time) => record.parts.find((part) => part.id === partId)?.time?.start ?? time;
 
   const applyAssistantEntry = (entry, changed) => {
-    const time = monotonicTime(entry.timestamp);
     const parsed = assistantMessageSchema.safeParse(entry.message);
     if (!parsed.success) return;
     const message = parsed.data;
+    // Dropped before the clock advances, so the resume leaves no trace on the
+    // turn the interrupt ended.
+    if (isNoResponseNotice(message)) return;
+    const time = monotonicTime(entry.timestamp);
     const assistant = ensureAssistant(message, time);
     if (message.stop_reason) assistant.finish = FINISH_BY_STOP_REASON.get(message.stop_reason) ?? 'other';
 

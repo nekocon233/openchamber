@@ -1356,6 +1356,38 @@ export async function setSessionWorkState(
   }
 }
 
+/**
+ * Marks several sessions done in one pass, for the sidebar's selection bar.
+ * Each write is the same metadata patch a single row's Mark done uses. A
+ * failure is recorded per session so the caller can describe it, and the
+ * remaining sessions still run; a runtime switch stops the rest and reports
+ * them as failed rather than writing them to the new server.
+ */
+export async function markSessionsDone(
+  ids: string[],
+): Promise<{ completedIds: string[]; failedIds: string[] }> {
+  const completedIds: string[] = []
+  const failedIds: string[] = []
+  const runtimeContext = captureSessionActionRuntime()
+
+  for (const [index, id] of ids.entries()) {
+    if (!isSessionActionRuntimeCurrent(runtimeContext)) {
+      failedIds.push(...ids.slice(index))
+      break
+    }
+    try {
+      const updated = await setSessionWorkState(id, undefined, "done")
+      if (updated) completedIds.push(id)
+      else failedIds.push(id)
+    } catch (error) {
+      recordSessionActionFailure(id, toError(error))
+      failedIds.push(id)
+    }
+  }
+
+  return { completedIds, failedIds }
+}
+
 export async function setContextObligatoryMessage(
   sessionId: string,
   directory: string | null | undefined,

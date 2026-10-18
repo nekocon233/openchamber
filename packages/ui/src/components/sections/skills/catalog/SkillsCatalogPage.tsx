@@ -29,6 +29,7 @@ import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
 
 import { AddCatalogDialog } from './AddCatalogDialog';
 import { InstallSkillDialog } from './InstallSkillDialog';
+import { UpdateInstalledSkillsDialog } from './UpdateInstalledSkillsDialog';
 
 type SkillsMode = 'manual' | 'external';
 
@@ -177,6 +178,7 @@ export const SkillsCatalogPage: React.FC<SkillsCatalogPageProps> = ({ mode, onMo
     isLoadingSource,
     loadedSourceIds,
     lastCatalogError,
+    isUpdatingInstalled,
   } = useSkillsCatalogStore(useShallow((s) => ({
     sources: s.sources,
     itemsBySource: s.itemsBySource,
@@ -188,6 +190,7 @@ export const SkillsCatalogPage: React.FC<SkillsCatalogPageProps> = ({ mode, onMo
     isLoadingSource: s.isLoadingSource,
     loadedSourceIds: s.loadedSourceIds,
     lastCatalogError: s.lastCatalogError,
+    isUpdatingInstalled: s.isUpdatingInstalled,
   })));
 
   const [search, setSearch] = React.useState('');
@@ -195,6 +198,7 @@ export const SkillsCatalogPage: React.FC<SkillsCatalogPageProps> = ({ mode, onMo
   const [editingCatalogId, setEditingCatalogId] = React.useState<string | null>(null);
   const [installDialogOpen, setInstallDialogOpen] = React.useState(false);
   const [installItems, setInstallItems] = React.useState<SkillsCatalogItem[]>([]);
+  const [updateDialogOpen, setUpdateDialogOpen] = React.useState(false);
   const [selectedSkillKeys, setSelectedSkillKeys] = React.useState<Set<string>>(new Set());
   const [uninstallItems, setUninstallItems] = React.useState<SkillsCatalogItem[]>([]);
   const [isUninstalling, setIsUninstalling] = React.useState(false);
@@ -395,6 +399,18 @@ export const SkillsCatalogPage: React.FC<SkillsCatalogPageProps> = ({ mode, onMo
       <SettingsPageLayout
         title={t('settings.skills.catalog.page.title')}
         showSaveStatus={false}
+        headerEnd={(
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5"
+            disabled={isUpdatingInstalled}
+            onClick={() => setUpdateDialogOpen(true)}
+          >
+            <Icon name="refresh" className={cn('h-3.5 w-3.5', isUpdatingInstalled && 'animate-spin')} />
+            {t('settings.skills.catalog.update.button')}
+          </Button>
+        )}
       >
       {showModeTabs && (
             <div className="mb-4">
@@ -727,6 +743,12 @@ export const SkillsCatalogPage: React.FC<SkillsCatalogPageProps> = ({ mode, onMo
         {/* Dialogs */}
         <AddCatalogDialog open={catalogDialogOpen} onOpenChange={setCatalogDialogOpen} catalogId={editingCatalogId} />
         <InstallSkillDialog open={installDialogOpen} onOpenChange={setInstallDialogOpen} items={installItems} />
+        <UpdateInstalledSkillsDialog
+          open={updateDialogOpen}
+          onOpenChange={setUpdateDialogOpen}
+          directory={settingsDirectory}
+          sources={sources}
+        />
 
         <Dialog open={uninstallItems.length > 0} onOpenChange={(open) => !open && !isUninstalling && setUninstallItems([])}>
           <DialogContent className="max-w-md">

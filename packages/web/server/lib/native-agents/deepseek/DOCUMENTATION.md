@@ -77,7 +77,12 @@ cursors refer to the original branch. Pages use the follow watermark and DSH's t
 Live chunks are ordered by attempt and dense index. A committed assistant is
 staged until the remaining chunks drain, then replaces the live record under
 the same ids. A retry discards the earlier visible prefix. Unknown usage and
-cost remain absent. Compaction events produce shared compaction records.
+cost remain absent. Compaction events produce shared compaction records:
+`compaction/summary` carries the checkpoint as content blocks, so the record
+shows its text blocks joined with newlines and never the raw stream output.
+An event this build cannot parse is skipped instead of failing the whole read,
+which keeps the transcript readable and sends possible, and reports one
+`session.error` per session so missing content is never read as complete.
 Feature/global instructions use the existing hidden instruction block.
 
 Only sequenced `plan` and `modelSelection` projections supply the Session's
@@ -92,6 +97,9 @@ use DSH's inline image admission. The model catalog advertises no image
 capability it cannot establish from the public catalog.
 Catalog display names use the model's own name. Qualified model IDs retain
 the native provider for routing without prefixing the displayed name.
+The session catalog names no context window, so each model's configured
+window and output cap come from the `llm-deepseek` settings models. A profile
+that cannot answer leaves both null; the UI then uses its default estimate.
 Local file references stream through DSH's authenticated binary-upload route.
 History retains file names and references; native inline attachment previews
 are currently unavailable.

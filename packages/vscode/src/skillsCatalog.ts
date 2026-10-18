@@ -433,11 +433,34 @@ async function copyDirectoryNoSymlinks(srcDir: string, dstDir: string) {
   await walk(srcDir, dstDir);
 }
 
-function getUserSkillBaseDir() {
+export function getUserSkillBaseDir() {
   const pluralPath = path.join(OPENCODE_CONFIG_DIR, 'skills');
   const legacyPath = path.join(OPENCODE_CONFIG_DIR, 'skill');
   if (fs.existsSync(legacyPath) && !fs.existsSync(pluralPath)) return legacyPath;
   return pluralPath;
+}
+
+/**
+ * Where an install writes a skill: the user-level OpenCode or agents directory,
+ * or the project's. Exported for the installed-skill update, which plans against
+ * the same targets an install uses.
+ */
+export function getSkillTargetDir(options: {
+  scope: SkillScope;
+  targetSource?: SkillInstallSource;
+  workingDirectory?: string;
+  skillName: string;
+}): string {
+  const targetSource: SkillInstallSource = options.targetSource === 'agents' ? 'agents' : 'opencode';
+  if (options.scope === 'user') {
+    return targetSource === 'agents'
+      ? path.join(os.homedir(), '.agents', 'skills', options.skillName)
+      : path.join(getUserSkillBaseDir(), options.skillName);
+  }
+  if (!options.workingDirectory) throw new Error('workingDirectory is required for project installs');
+  return targetSource === 'agents'
+    ? path.join(options.workingDirectory, '.agents', 'skills', options.skillName)
+    : path.join(options.workingDirectory, '.opencode', 'skills', options.skillName);
 }
 
 function toFsPath(repoDir: string, repoRelPosixPath: string) {
@@ -474,7 +497,6 @@ export async function installSkillsFromRepository(options: {
     return { ok: false as const, error: { kind: 'invalidSource' as const, message: 'No skills selected for installation' } };
   }
 
-  const userSkillDir = getUserSkillBaseDir();
   const targetSource: SkillInstallSource = options.targetSource === 'agents' ? 'agents' : 'opencode';
 
   const skillPlans = requestedDirs.map((dir) => {
@@ -485,13 +507,7 @@ export async function installSkillsFromRepository(options: {
   const conflicts: Array<{ skillName: string; scope: SkillScope; source?: SkillInstallSource }> = [];
   for (const plan of skillPlans) {
     if (!plan.installable) continue;
-    const targetDir = options.scope === 'user'
-      ? (targetSource === 'agents'
-        ? path.join(os.homedir(), '.agents', 'skills', plan.skillName)
-        : path.join(userSkillDir, plan.skillName))
-      : (targetSource === 'agents'
-        ? path.join(options.workingDirectory as string, '.agents', 'skills', plan.skillName)
-        : path.join(options.workingDirectory as string, '.opencode', 'skills', plan.skillName));
+    const targetDir = getSkillTargetDir({ scope: options.scope, targetSource, workingDirectory: options.workingDirectory, skillName: plan.skillName });
 
     if (fs.existsSync(targetDir)) {
       const decision = options.conflictDecisions?.[plan.skillName];
@@ -544,13 +560,7 @@ export async function installSkillsFromRepository(options: {
         continue;
       }
 
-      const targetDir = options.scope === 'user'
-        ? (targetSource === 'agents'
-          ? path.join(os.homedir(), '.agents', 'skills', plan.skillName)
-          : path.join(userSkillDir, plan.skillName))
-        : (targetSource === 'agents'
-          ? path.join(options.workingDirectory as string, '.agents', 'skills', plan.skillName)
-          : path.join(options.workingDirectory as string, '.opencode', 'skills', plan.skillName));
+      const targetDir = getSkillTargetDir({ scope: options.scope, targetSource, workingDirectory: options.workingDirectory, skillName: plan.skillName });
 
       const exists = fs.existsSync(targetDir);
       let decision = options.conflictDecisions?.[plan.skillName] || null;

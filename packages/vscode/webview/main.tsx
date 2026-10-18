@@ -901,7 +901,7 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     const data = payload as { ok?: boolean; error?: { kind?: string } };
     if (data.ok === false) {
       const kind = data.error?.kind;
-      if (kind === 'conflicts') return 409;
+      if (kind === 'conflicts' || kind === 'busy') return 409;
       if (kind === 'authRequired') return 401;
       return 400;
     }
@@ -937,6 +937,31 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     const body = await extractJsonBody(input, init, method);
     try {
       const data = await sendBridgeMessage('api:config/skills:install', body);
+      return new Response(JSON.stringify(data), { status: skillsCatalogStatusFromPayload(data), headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ ok: false, error: { kind: 'unknown', message } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
+  // Skills catalog update: /api/config/skills/catalog/update
+  // Before the CRUD prefix below, which would read `catalog/update` as a name.
+  if (pathname === '/api/config/skills/catalog/update') {
+    const body = await extractJsonBody(input, init, method);
+    try {
+      const data = await sendBridgeMessage('api:config/skills:update', body);
+      return new Response(JSON.stringify(data), { status: skillsCatalogStatusFromPayload(data), headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ ok: false, error: { kind: 'unknown', message } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
+  // User skill sync: /api/config/skills/user/sync
+  if (pathname === '/api/config/skills/user/sync') {
+    const body = await extractJsonBody(input, init, method);
+    try {
+      const data = await sendBridgeMessage('api:config/skills:user-sync', body);
       return new Response(JSON.stringify(data), { status: skillsCatalogStatusFromPayload(data), headers: { 'Content-Type': 'application/json' } });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -123,6 +123,15 @@ const add = (left: number | null, right: number | null): number | null =>
 const MAX_PLAUSIBLE_TOKENS_PER_SECOND = 5_000;
 
 /**
+ * A pause longer than this inside a turn is not the model working. Claude Code
+ * keeps a turn open while a background task it started runs, and a CLI closed
+ * mid-turn resumes the turn later; neither wait has a tool interval, so
+ * subtracting tools alone counted them as model time. A turn that waited two
+ * hours for a render read 13 tok/s while its own steps ran at 90.
+ */
+const IDLE_GAP_MS = 5 * 60_000;
+
+/**
  * Tokens per second over a measured window, or null when the window cannot
  * have produced them.
  *
@@ -229,6 +238,43 @@ function calculateCompletedStepStats(record: SessionMessageRecord): CompletedSte
 }
 
 /**
+ * Time inside the turn when no step was running, counting only gaps longer
+ * than IDLE_GAP_MS. Short queueing and retry waits stay in model time. Tools
+ * are validated inside their step's window, so the step windows cover them.
+ */
+function calculateIdleDurationMs(
+  activity: readonly (readonly [number, number])[],
+  turnStartMs: number,
+  turnEndMs: number,
+): number {
+  let idle = 0;
+  let cursor = turnStartMs;
+  for (const [start, end] of mergeTimeIntervals(activity)) {
+    if (start - cursor > IDLE_GAP_MS) idle += start - cursor;
+    cursor = Math.max(cursor, end);
+  }
+  if (turnEndMs - cursor > IDLE_GAP_MS) idle += turnEndMs - cursor;
+  return idle;
+}
+
+/** Step windows of one turn, for `calculateIdleDurationMs`. */
+function collectStepActivity(
+  records: readonly SessionMessageRecord[],
+  fromIdx: number,
+  toIdx: number,
+): Array<[number, number]> {
+  const activity: Array<[number, number]> = [];
+  for (let i = fromIdx; i <= toIdx; i += 1) {
+    const record = records[i];
+    if (record.info.role !== 'assistant') continue;
+    const created = nonnegative(record.info.time.created);
+    const completed = nonnegative(record.info.time.completed);
+    if (created !== null && completed !== null && completed >= created) activity.push([created, completed]);
+  }
+  return activity;
+}
+
+/**
  * Calculates telemetry metrics for the latest completed turn in the session.
  * A turn encompasses all assistant steps since the preceding user message up to the final completed assistant step.
  */
@@ -304,10 +350,15 @@ export function getLatestCompletedTurnStats(
   const avgTtftMs = totalTtft === null ? null : totalTtft / stepStatsList.length;
 
   // Measure the turn from the user's prompt to the last completed step, minus
-  // tool time. Summing per-step windows would leave out the thinking and
-  // queue time before each step's first content block, which inflated rates.
+  // tool time and long pauses. Steps leave the time between them unaccounted;
+  // counting that as generation let a background-task wait read as model time.
+  // Short queue time before each step stays in, which per-step windows would
+  // leave out and which made proxy sessions report implausibly high rates.
+  const idleDurationMs = turnStartMs !== null && turnEndMs !== null
+    ? calculateIdleDurationMs(collectStepActivity(records, turnStartIdx, lastCompletedAssistantIdx), turnStartMs, turnEndMs)
+    : 0;
   const totalLlmDurationMs = elapsedDurationMs !== null && totalToolDurationMs !== null
-    ? nonnegative(elapsedDurationMs - totalToolDurationMs)
+    ? nonnegative(elapsedDurationMs - totalToolDurationMs - idleDurationMs)
     : null;
 
   const totalGeneratedTokens = add(totalOutputTokens, totalReasoningTokens);
@@ -358,9 +409,10 @@ export function getCompletedTurnAverages(
   // A truncated leading segment and the running turn are skipped, not treated
   // as zero, so the average describes only complete turns that are loaded.
   // Each turn is measured from its prompt to its last completed step, minus
-  // tool time, matching the latest-turn rate above.
+  // tool time and long pauses, matching the latest-turn rate above.
   const turns: Array<{ steps: CompletedStepStats[]; llmDurationMs: number | null }> = [];
   let current: CompletedStepStats[] | null = null;
+  let currentActivity: Array<[number, number]> = [];
   let currentStart: number | null = null;
   let currentEnd: number | null = null;
   let currentComplete = true;
@@ -370,8 +422,11 @@ export function getCompletedTurnAverages(
     const elapsedDurationMs = currentStart !== null && currentEnd !== null
       ? nonnegative(currentEnd - currentStart)
       : null;
+    const idleDurationMs = currentStart !== null && currentEnd !== null
+      ? calculateIdleDurationMs(currentActivity, currentStart, currentEnd)
+      : 0;
     const llmDurationMs = elapsedDurationMs !== null && toolDurationMs !== null
-      ? nonnegative(elapsedDurationMs - toolDurationMs)
+      ? nonnegative(elapsedDurationMs - toolDurationMs - idleDurationMs)
       : null;
     turns.push({ steps: current, llmDurationMs });
   };
@@ -379,6 +434,7 @@ export function getCompletedTurnAverages(
     if (record.info.role === 'user') {
       flush();
       current = [];
+      currentActivity = [];
       currentStart = nonnegative(record.info.time.created);
       currentEnd = null;
       currentComplete = true;
@@ -388,7 +444,9 @@ export function getCompletedTurnAverages(
     const step = calculateCompletedStepStats(record);
     if (step) {
       current.push(step);
+      const created = nonnegative(record.info.time.created);
       const completed = nonnegative(record.info.time.completed);
+      if (created !== null && completed !== null && completed >= created) currentActivity.push([created, completed]);
       if (completed !== null) currentEnd = completed;
     } else {
       currentComplete = false;

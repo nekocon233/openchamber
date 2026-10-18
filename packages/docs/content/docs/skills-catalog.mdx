@@ -22,6 +22,11 @@ If a skill with the same name already exists, OpenChamber asks what to do — sk
 
 You can add any Git repository as a source using its `owner/repo` name or a full Git URL. Private repositories need access set up on your machine (an SSH key or saved credentials); if a source can't authenticate, the catalog says so rather than failing silently. To use a branch or tag other than the default, add it after `#`: `owner/repo#develop` or `https://github.com/owner/repo.git#v1.0.0`.
 
+## Update installed skills
+
+A skill installed from a catalog keeps the version it had when you installed it. **Update installed** on the catalog page fetches every installed catalog skill from its source again and replaces the local copy. Local edits to those skills are lost, and skills you wrote yourself are never touched.
+
+The dialog lists what will be replaced before anything changes, then reports each skill it could not replace and why.
 ## Related
 
 - [Skills](/skills/) — create and manage installed skills

@@ -109,7 +109,10 @@ describe('DeepSeek Harness Web adapter', () => {
   });
   it('authenticates against the real HTTP and WebSocket gates and reads native history', async () => {
     const { backend, directory } = await setup();
-    expect((await backend.catalog())[0]).toMatchObject({ id: 'deepseek-official/test-model', name: 'Test model', efforts: ['high'] });
+    expect((await backend.catalog())[0]).toMatchObject({
+      id: 'deepseek-official/test-model', name: 'Test model', efforts: ['high'],
+      contextWindow: 1_000_000, outputLimit: 64_000,
+    });
     const sessions = await backend.listRootSessions(directory);
     expect(sessions).toHaveLength(1);
     expect(sessions[0].title).toBe('Existing DSH session');
@@ -117,6 +120,41 @@ describe('DeepSeek Harness Web adapter', () => {
     expect(page.complete).toBe(true);
     expect(page.records.map((record) => record.info.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     expect(page.records[1].parts[0].text).toBe('reply 0');
+  });
+
+  it('reads history that contains a DSH compaction checkpoint', async () => {
+    const { backend, directory, fixture } = await setup();
+    const id = encodeDeepseekSessionId('session-existing');
+    await fixture('append', { sessionId: 'session-existing', type: 'compaction/start', data: { compactionId: 'compact-1', turn: 2 } });
+    await fixture('append', { sessionId: 'session-existing', type: 'compaction/summary', data: {
+      compactionId: 'compact-1',
+      summary: [{ type: 'text', text: '## Checkpoint' }, { type: 'text', text: 'Carry on' }],
+      rawOutput: [{ type: 'reasoning', text: '' }, { type: 'text', text: '## Checkpoint' }],
+      llmStreamCall: true,
+      shadowedRange: { start: 1, end: 4 },
+      shadowedSeqs: [1, 2, 3],
+      shadowedTokenCount: 481811,
+      provider: 'deepseek-official',
+      model: 'test-model',
+      maxTokens: 65536,
+      usage: { inputTokens: 546124, outputTokens: 3557, totalTokens: 549681 },
+    } });
+    await fixture('append', { sessionId: 'session-existing', type: 'compaction/end', data: { compactionId: 'compact-1', turn: 2 } });
+    const page = await backend.loadMessages(id, directory, { limit: 50 });
+    expect(page.records.map((record) => record.info.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'compaction']);
+    expect(page.records[4].info).toMatchObject({ status: 'completed', summary: '## Checkpoint\nCarry on' });
+  });
+
+  it('skips an unreadable session event, keeps the rest of the history and reports it once', async () => {
+    const { backend, directory, fixture, events } = await setup();
+    const id = encodeDeepseekSessionId('session-existing');
+    await fixture('append', { sessionId: 'session-existing', type: 'compaction/summary', data: { compactionId: 'compact-bad', summary: [{ type: 'text', text: 42 }] } });
+    await fixture('append', { sessionId: 'session-existing', type: 'compaction/summary', data: { compactionId: 'compact-bad-2', summary: [{ type: 'text', text: 43 }] } });
+    const page = await backend.loadMessages(id, directory, { limit: 50 });
+    expect(page.records.map((record) => record.info.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    const reported = events.filter((event) => event.payload.type === 'session.error' && event.payload.properties.sessionID === id);
+    expect(reported).toHaveLength(1);
+    expect(reported[0].payload.properties.error.data.message).toContain('cannot read');
   });
 
   it('uses the durable request id for duplicate admission and cancels only the selected session', async () => {

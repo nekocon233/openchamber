@@ -22,6 +22,11 @@ Si un skill du même nom existe déjà, OpenChamber vous demande quoi faire — 
 
 Vous pouvez ajouter n’importe quel dépôt Git comme source avec son nom `owner/repo` ou une URL Git complète. Les dépôts privés nécessitent un accès configuré sur votre machine (clé SSH ou identifiants enregistrés) ; si une source ne peut pas s’authentifier, le catalogue l’indique au lieu d’échouer silencieusement. Pour utiliser une branche ou un tag autre que celui par défaut, ajoutez-le après `#` : `owner/repo#develop` ou `https://github.com/owner/repo.git#v1.0.0`.
 
+## Mettre à jour les skills installés
+
+Un skill installé depuis un catalogue reste à la version avec laquelle vous l'avez installé. **Update installed** sur la page du catalogue récupère chaque skill installé depuis sa source et remplace la copie locale. Les modifications locales de ces skills sont perdues, et les skills que vous avez écrits ne sont pas touchés.
+
+La boîte de dialogue liste d'abord ce qui sera remplacé, puis indique chaque skill qui n'a pas pu l'être, avec la raison.
 ## Pages liées
 
 - [Skills](/skills/) — créer et gérer les skills installés

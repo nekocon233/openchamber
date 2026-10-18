@@ -2709,3 +2709,82 @@ export interface SkillsInstallResponse {
   message?: string;
   reloadDelayMs?: number;
 }
+
+export interface SkillsUpdateInstalledPlanItem {
+  skillName: string;
+  skillDir: string;
+  scope: 'user' | 'project';
+  source: 'opencode' | 'agents';
+  sourceId: string;
+  sourceRef: string;
+}
+
+export type SkillsUpdateInstalledFailureKind =
+  | 'authRequired'
+  | 'gitUnavailable'
+  | 'networkError'
+  | 'invalidSource'
+  | 'unknown';
+
+export interface SkillsUpdateInstalledResult {
+  skillName: string;
+  scope: 'user' | 'project';
+  source?: 'opencode' | 'agents';
+  status: 'updated' | 'skipped' | 'failed';
+  kind?: SkillsUpdateInstalledFailureKind;
+  reason?: string;
+}
+
+export type SkillsUpdateInstalledError =
+  | { kind: 'busy'; message: string }
+  | { kind: 'invalidSource'; message: string }
+  | { kind: 'unknown'; message: string };
+
+export interface SkillsUpdateInstalledResponse {
+  ok: boolean;
+  plan?: SkillsUpdateInstalledPlanItem[];
+  results?: SkillsUpdateInstalledResult[];
+  updated?: number;
+  skipped?: number;
+  failed?: number;
+  message?: string;
+  error?: SkillsUpdateInstalledError;
+}
+
+export type SkillsUserSyncAgent = 'claude' | 'codex';
+
+export interface SkillsUserSyncSource {
+  agent: SkillsUserSyncAgent;
+  plugin: string;
+  version: string;
+}
+
+/** `external`: a symlink whose target the sync does not own. */
+export type SkillsUserSyncStatus = 'update' | 'current' | 'external' | 'noSource';
+
+export interface SkillsUserSyncPlanItem {
+  skillName: string;
+  status: SkillsUserSyncStatus;
+  source: SkillsUserSyncSource | null;
+}
+
+export interface SkillsUserSyncResult {
+  skillName: string;
+  status: 'updated' | 'skipped' | 'failed';
+  reason?: SkillsUserSyncStatus;
+  kind?: 'copyFailed';
+  message?: string;
+  source: SkillsUserSyncSource | null;
+}
+
+export type SkillsUserSyncError = { kind: 'busy' | 'unknown'; message: string };
+
+export interface SkillsUserSyncResponse {
+  ok: boolean;
+  plan?: SkillsUserSyncPlanItem[];
+  results?: SkillsUserSyncResult[];
+  updated?: number;
+  skipped?: number;
+  failed?: number;
+  error?: SkillsUserSyncError;
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDeepseekProjection } from './projector.js';
 import { encodeDeepseekSessionId } from '../ids.js';
 import { createNativeEventPublisher } from '../publisher.js';
+import { getLatestCompletedTurnStats } from '@openchamber/ui/components/chat/work-status/telemetry';
 
 const sessionId = encodeDeepseekSessionId('session-test');
 const userMessageId = `ndh_u_${sessionId.slice(4, 28)}_00000000-0000-4000-8000-000000000001`;
@@ -77,6 +78,37 @@ describe('DeepSeek history and live projection', () => {
     expect(projection.records()[1].parts[0].text).toBe('Kept');
   });
 
+  it('starts a tool interval when the tool runs, not when its message first streamed', () => {
+    const projection = createDeepseekProjection({ sessionId, directory: '/workspace' });
+    const live = { live: true };
+    projection.apply({ seq: 0, time: 1000, type: 'user/message', data: { id: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Run' }] } }, live);
+    projection.begin({ attemptId: 'live', turn: 1, step: 0 });
+    projection.chunk({ type: 'text-delta', index: 0, text: 'Running it' }, 1100);
+    projection.apply({ seq: 1, time: 5000, type: 'assistant/message', data: assistant([
+      { type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{"command":"pwd"}' },
+    ], { usage: { inputTokens: 10, outputTokens: 100, cacheReadTokens: 0 } }) }, live);
+    projection.apply({ seq: 2, time: 5100, type: 'tool/call', data: { turn: 1, step: 0, callId: 'call-1', name: 'bash', arguments: '{"command":"pwd"}' } }, live);
+    projection.apply({ seq: 3, time: 9000, type: 'tool/result', data: { turn: 1, step: 0, message: { toolCallId: 'call-1', content: [{ type: 'text', text: '/' }] } } }, live);
+
+    const records = projection.records();
+    const part = records[1].parts.find((candidate) => candidate.type === 'tool');
+    expect(part.state.time).toEqual({ start: 5100, end: 9000 });
+
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats.elapsedDurationMs).toBe(8000);
+    expect(stats.totalToolDurationMs).toBe(3900);
+    expect(stats.totalLlmDurationMs).toBe(4100);
+  });
+
+  it('keeps a replayed tool call from starting after its own result', () => {
+    const { projection, append } = setup();
+    append('assistant/message', assistant([{ type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{}' }]));
+    append('tool/result', { turn: 1, step: 0, message: { toolCallId: 'call-1', content: [{ type: 'text', text: '/' }] } });
+    append('tool/call', { turn: 1, step: 0, callId: 'call-1', name: 'bash', arguments: '{}' });
+    const part = projection.records()[1].parts[0];
+    expect(part.state.time.start).toBeLessThanOrEqual(part.state.time.end);
+  });
+
   it('settles tool results and retains disjoint token accounting', () => {
     const { projection, append } = setup();
     append('assistant/message', assistant([{ type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{"command":"pwd"}' }], {
@@ -110,12 +142,34 @@ describe('DeepSeek history and live projection', () => {
   it('renders compaction lifecycle and keeps feature instructions out of the transcript', () => {
     const { projection, append } = setup();
     append('user/message', { id: 'user-2', source: { kind: 'user' }, content: [{ type: 'text', text: 'Visible' }, { type: 'text', text: '<openchamber-instructions>Hidden</openchamber-instructions>' }] });
-    append('compaction/start', { compactionId: 'compact-1', turn: null });
-    append('compaction/summary', { compactionId: 'compact-1', summary: 'Summary' });
-    append('compaction/end', { compactionId: 'compact-1', turn: null });
+    append('compaction/start', { compactionId: 'compact-1', turn: 2 });
+    // The published DSH shape: the checkpoint is content blocks, and the record
+    // shows their text rather than the raw model output.
+    append('compaction/summary', {
+      compactionId: 'compact-1',
+      summary: [{ type: 'reasoning', text: 'Checkpoint reasoning' }, { type: 'text', text: '## Checkpoint' }, { type: 'text', text: 'Carry on' }],
+      rawOutput: [{ type: 'reasoning', text: '' }, { type: 'text', text: '## Checkpoint' }],
+      llmStreamCall: true,
+      shadowedRange: { start: 1, end: 14 },
+      shadowedSeqs: [1, 2, 3],
+      shadowedTokenCount: 481811,
+      provider: 'deepseek-official',
+      model: 'model',
+      maxTokens: 65536,
+      usage: { inputTokens: 546124, outputTokens: 3557, totalTokens: 549681 },
+    });
+    append('compaction/end', { compactionId: 'compact-1', turn: 2 });
     const records = projection.records();
     expect(records[1].parts.map((part) => part.text)).toEqual(['Visible']);
-    expect(records[2].info).toMatchObject({ role: 'compaction', status: 'completed', reason: 'manual', summary: 'Summary' });
+    expect(records[2].info).toMatchObject({ role: 'compaction', status: 'completed', reason: 'auto', summary: '## Checkpoint\nCarry on' });
+  });
+
+  it('keeps a compaction record without text blocks from failing the history read', () => {
+    const { projection, append } = setup();
+    append('compaction/start', { compactionId: 'compact-2', turn: null });
+    append('compaction/summary', { compactionId: 'compact-2', summary: [{ type: 'reasoning', text: 'Only reasoning' }] });
+    append('compaction/end', { compactionId: 'compact-2', turn: null });
+    expect(projection.records().find((record) => record.info.role === 'compaction')?.info).toMatchObject({ status: 'completed', summary: '' });
   });
 
   it('restores the compact live stream and stops incomplete tools on interruption', () => {

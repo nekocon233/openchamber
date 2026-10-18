@@ -16,12 +16,46 @@ export const deepseekConfigurationWrite = z.object({
 
 const namespace = z.object({ ns: z.string(), revision: z.number().int().nonnegative(), value: z.json() });
 const description = z.object({ writable: z.boolean(), namespaces: z.array(namespace) });
+const settingsModel = z.object({
+  id: modelId,
+  contextWindow: z.number().int().positive().max(10_000_000).optional(),
+  // DSH calls the output cap `maxTokens`; accept both spellings.
+  outputLimit: z.number().int().positive().max(1_000_000).optional(),
+  maxTokens: z.number().int().positive().max(1_000_000).optional(),
+});
 const values = z.object({
   apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).default('DEEPSEEK_API_KEY'),
   baseURL: endpoint.optional(),
   // Keep provider metadata for retained models when editing the catalog.
   models: z.array(z.object({ id: modelId }).catchall(z.json())),
 });
+
+/**
+ * Context windows the DeepSeek provider configured for its models, from the
+ * `llm-deepseek` settings namespace. The DSH session model catalog carries no
+ * window, so this is where OpenChamber learns it; profiles that omit a field
+ * leave it null and the UI falls back to its default estimate.
+ * @param {unknown} described result of `settings/describe`
+ * @returns {Map<string, { contextWindow: number | null, outputLimit: number | null }>}
+ */
+export const modelLimitsFromSettings = (described) => {
+  const limits = new Map();
+  const parsedDescription = description.safeParse(described);
+  if (!parsedDescription.success) return limits;
+  const view = parsedDescription.data.namespaces.find((item) => item.ns === 'llm-deepseek');
+  if (!view) return limits;
+  const config = values.safeParse(view.value);
+  if (!config.success) return limits;
+  for (const raw of config.data.models) {
+    const model = settingsModel.safeParse(raw);
+    if (!model.success) continue;
+    limits.set(model.data.id, {
+      contextWindow: model.data.contextWindow ?? null,
+      outputLimit: model.data.outputLimit ?? model.data.maxTokens ?? null,
+    });
+  }
+  return limits;
+};
 const credential = z.object({ configured: z.boolean(), writable: z.boolean() });
 const credentials = z.record(z.string(), credential);
 const error = (message, code, status) => new NativeAgentError(message, { code, status });
@@ -48,6 +82,10 @@ export const createDeepseekConfiguration = ({ transport }) => {
     return { view, config, key, writable: described.writable };
   };
   return {
+    /** Model windows for the catalog, without the credential reads a settings page needs. */
+    async modelLimits() {
+      return modelLimitsFromSettings(await transport.request('settings/describe', {}, description));
+    },
     async read() {
       await writes;
       const { view, writable, key } = await read();

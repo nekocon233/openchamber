@@ -193,6 +193,13 @@ const server = http.createServer(async (req, res) => {
       respond(true);
       break;
     case 'fixture/fail-answer': failAnswer = true; respond(true); break;
+    case 'fixture/append': {
+      const target = sessions.get(args.sessionId);
+      if (!target) { fail('gateway/unknown-session', args.sessionId); break; }
+      append(target, args.type, args.data);
+      respond(true);
+      break;
+    }
     case 'fixture/stream-count': respond(Array.from(streams).filter((entry) => entry.endpoint === 'session/follow').length); break;
     case 'fixture/selection':
       deliver('session/control', { type: 'projection', sessionId: args.sessionId, key: 'plan', value: { active: args.plan, pending: false }, seq: args.seq });

@@ -11,6 +11,14 @@ import type {
   SkillsInstallResponse,
   SkillsInstallError,
   SkillsCatalogSourceResponse,
+  SkillsUpdateInstalledResponse,
+  SkillsUpdateInstalledPlanItem,
+  SkillsUpdateInstalledResult,
+  SkillsUpdateInstalledError,
+  SkillsUserSyncResponse,
+  SkillsUserSyncPlanItem,
+  SkillsUserSyncResult,
+  SkillsUserSyncError,
 } from '@/lib/api/types';
 
 import { invalidateSkillsLoadCache, refreshSkillsAfterOpenCodeRestart, useSkillsStore } from '@/stores/useSkillsStore';
@@ -50,6 +58,61 @@ const getRequestDirectory = (): string | null => {
   return null;
 };
 
+const resolveUpdateDirectory = (options?: { directory?: string | null }): string | null => {
+  const override = options?.directory?.trim() || null;
+  return override ?? getRequestDirectory();
+};
+
+const requestInstalledUpdate = async (
+  directory: string | null,
+  dryRun: boolean,
+): Promise<SkillsUpdateInstalledResponse | null> => {
+  const queryParams = directory ? `?directory=${encodeURIComponent(directory)}` : '';
+  try {
+    const response = await runtimeFetch(`/api/config/skills/catalog/update${queryParams}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ dryRun }),
+    });
+    return (await response.json().catch(() => null)) as SkillsUpdateInstalledResponse | null;
+  } catch (error) {
+    console.warn('[SkillsCatalogStore] Could not reach the installed skill update:', error);
+    return null;
+  }
+};
+
+type InstalledUpdatePlanResult =
+  | { ok: true; plan: SkillsUpdateInstalledPlanItem[] }
+  | { ok: false; error: SkillsUpdateInstalledError };
+
+type InstalledUpdateRunResult =
+  | { ok: true; results: SkillsUpdateInstalledResult[]; updated: number; skipped: number; failed: number }
+  | { ok: false; error: SkillsUpdateInstalledError };
+
+const requestUserSkillSync = async (dryRun: boolean): Promise<SkillsUserSyncResponse | null> => {
+  try {
+    const response = await runtimeFetch('/api/config/skills/user/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ dryRun }),
+    });
+    // SAFETY: the sync route answers with `SkillsUserSyncResponse`; a missing
+    // body or a non-JSON answer becomes null and is treated as a failure.
+    return (await response.json().catch(() => null)) as SkillsUserSyncResponse | null;
+  } catch (error) {
+    console.warn('[SkillsCatalogStore] Could not reach the user skill sync:', error);
+    return null;
+  }
+};
+
+type UserSkillSyncPlanResult =
+  | { ok: true; plan: SkillsUserSyncPlanItem[] }
+  | { ok: false; error: SkillsUserSyncError };
+
+type UserSkillSyncRunResult =
+  | { ok: true; results: SkillsUserSyncResult[]; updated: number; skipped: number; failed: number }
+  | { ok: false; error: SkillsUserSyncError };
+
 interface SkillsCatalogState {
   sources: SkillsCatalogSource[];
   itemsBySource: Record<string, SkillsCatalogItem[]>;
@@ -60,6 +123,7 @@ interface SkillsCatalogState {
   isLoadingSource: boolean;
   isScanning: boolean;
   isInstalling: boolean;
+  isUpdatingInstalled: boolean;
 
   lastCatalogError: SkillsCatalogResponse['error'] | null;
   lastScanError: SkillsRepoScanResponse['error'] | null;
@@ -73,6 +137,11 @@ interface SkillsCatalogState {
   loadSource: (sourceId: string, options?: { refresh?: boolean }) => Promise<boolean>;
   scanRepo: (request: SkillsRepoScanRequest) => Promise<SkillsRepoScanResponse>;
   installSkills: (request: SkillsInstallRequest, options?: { directory?: string | null }) => Promise<SkillsInstallResponse>;
+  fetchInstalledUpdatePlan: (options?: { directory?: string | null }) => Promise<InstalledUpdatePlanResult>;
+  updateInstalledSkills: (options?: { directory?: string | null }) => Promise<InstalledUpdateRunResult>;
+  fetchUserSkillSyncPlan: () => Promise<UserSkillSyncPlanResult>;
+  syncUserSkills: () => Promise<UserSkillSyncRunResult>;
+  isSyncingUserSkills: boolean;
 }
 
 export const useSkillsCatalogStore = create<SkillsCatalogState>()(
@@ -89,6 +158,8 @@ export const useSkillsCatalogStore = create<SkillsCatalogState>()(
       isLoadingSource: false,
       isScanning: false,
       isInstalling: false,
+      isUpdatingInstalled: false,
+      isSyncingUserSkills: false,
 
       lastCatalogError: null,
       lastScanError: null,
@@ -358,6 +429,94 @@ export const useSkillsCatalogStore = create<SkillsCatalogState>()(
           return { ok: false, error: err };
         } finally {
           set({ isInstalling: false });
+        }
+      },
+
+      fetchInstalledUpdatePlan: async (options) => {
+        const directory = resolveUpdateDirectory(options);
+        const payload = await requestInstalledUpdate(directory, true);
+        if (!payload?.ok || !Array.isArray(payload.plan)) {
+          return {
+            ok: false,
+            error: payload?.error ?? { kind: 'unknown', message: 'Failed to read installed skills' },
+          };
+        }
+        return { ok: true, plan: payload.plan };
+      },
+
+      updateInstalledSkills: async (options) => {
+        set({ isUpdatingInstalled: true });
+        try {
+          const directory = resolveUpdateDirectory(options);
+          const payload = await requestInstalledUpdate(directory, false);
+          if (!payload?.ok || !Array.isArray(payload.results)) {
+            return {
+              ok: false,
+              error: payload?.error ?? { kind: 'unknown', message: 'Failed to update installed skills' },
+            };
+          }
+
+          const results = payload.results;
+          const countOf = (status: SkillsUpdateInstalledResult['status']) => (
+            results.filter((entry) => entry.status === status).length
+          );
+          // The files on disk changed, so the next skills read must not come
+          // from the cached list.
+          invalidateSkillsLoadCache(directory);
+          void useSkillsStore.getState().loadSkills();
+
+          return {
+            ok: true,
+            results,
+            updated: payload.updated ?? countOf('updated'),
+            skipped: payload.skipped ?? countOf('skipped'),
+            failed: payload.failed ?? countOf('failed'),
+          };
+        } finally {
+          set({ isUpdatingInstalled: false });
+        }
+      },
+
+      fetchUserSkillSyncPlan: async () => {
+        const payload = await requestUserSkillSync(true);
+        if (!payload?.ok || !Array.isArray(payload.plan)) {
+          return {
+            ok: false,
+            error: payload?.error ?? { kind: 'unknown', message: 'Failed to read the user skill library' },
+          };
+        }
+        return { ok: true, plan: payload.plan };
+      },
+
+      syncUserSkills: async () => {
+        set({ isSyncingUserSkills: true });
+        try {
+          const payload = await requestUserSkillSync(false);
+          if (!payload?.ok || !Array.isArray(payload.results)) {
+            return {
+              ok: false,
+              error: payload?.error ?? { kind: 'unknown', message: 'Failed to sync the user skill library' },
+            };
+          }
+
+          const results = payload.results;
+          const countOf = (status: SkillsUserSyncResult['status']) => (
+            results.filter((entry) => entry.status === status).length
+          );
+          // The files on disk changed, so the next skills read must not come
+          // from the cached list.
+          invalidateSkillsLoadCache();
+          void useSkillsStore.getState().loadSkills();
+
+          return {
+            ok: true,
+            results,
+            updated: payload.updated ?? countOf('updated'),
+            skipped: payload.skipped ?? countOf('skipped'),
+            failed: payload.failed ?? countOf('failed'),
+          };
+        } finally {
+          set({ isSyncingUserSkills: false });
         }
       },
     }),

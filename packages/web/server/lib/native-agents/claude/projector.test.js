@@ -191,7 +191,7 @@ describe('Claude placeholder model projection', () => {
     },
   };
 
-  it.each(["You've hit your session limit.", 'No response requested.'])('keeps the turn model for the placeholder %s', (text) => {
+  it.each(["You've hit your session limit.", 'Failed to refresh OAuth token: another Claude Code process is refreshing it.'])('keeps the turn model for the placeholder %s', (text) => {
     const records = projectHistory([prompt, answer, {
       ...notice, message: { ...notice.message, content: [{ type: 'text', text }] },
     }], {
@@ -247,6 +247,62 @@ describe('Claude placeholder model projection', () => {
     projection.startUserPrompt('ncl_u_next-user', { kind: 'text', text: 'Check another file.' });
     projection.applyEntry(notice);
     expect(projection.records().at(-1).info).toMatchObject({ parentID: 'ncl_u_next-user', modelID: 'haiku' });
+  });
+});
+
+describe('Claude CLI no-response notice', () => {
+  const prompt = {
+    type: 'user', uuid: 'notice-prompt', timestamp: '2026-01-01T10:00:00.000Z',
+    message: { role: 'user', content: 'Fix the parser.' },
+  };
+  const answer = {
+    type: 'assistant', uuid: 'notice-answer', timestamp: '2026-01-01T10:00:10.000Z',
+    message: {
+      id: 'msg_notice_answer', model: 'claude-opus-5-5', stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'toolu_notice', name: 'Bash', input: { command: 'ls' } }],
+      usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    },
+  };
+  const rejected = {
+    type: 'user', uuid: 'notice-rejected', timestamp: '2026-01-01T10:00:20.000Z',
+    tool_use_result: 'User rejected tool use',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_notice', is_error: true, content: 'The user does not want to proceed.' }] },
+  };
+  const stop = {
+    type: 'user', uuid: 'notice-stop', timestamp: '2026-01-01T10:00:20.002Z',
+    message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] },
+  };
+  const notice = {
+    type: 'assistant', uuid: 'notice-ack', timestamp: '2026-01-02T09:00:00.000Z', isApiErrorMessage: false,
+    message: {
+      id: 'msg_no_response', model: '<synthetic>', stop_reason: 'stop_sequence',
+      content: [{ type: 'text', text: 'No response requested.' }],
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    },
+  };
+
+  it('drops the CLI answer to a resumed interrupt so the turn keeps its real window', () => {
+    const records = projectHistory([prompt, answer, rejected, stop, notice]);
+    expect(records).toHaveLength(2);
+    expect(records.flatMap((record) => record.parts)
+      .some((part) => part.type === 'text' && part.text === 'No response requested.')).toBe(false);
+
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats).not.toBeNull();
+    expect(stats.elapsedDurationMs).toBe(20_000);
+    expect(stats.totalToolDurationMs).toBe(10_000);
+    expect(stats.totalLlmDurationMs).toBe(10_000);
+    expect(stats.tokensPerSecond).toBe(10);
+  });
+
+  it('keeps an API error notice the user has to see', () => {
+    const text = "Failed to authenticate. API Error: 403 You've reached your 5-hour usage limit";
+    const records = projectHistory([prompt, {
+      ...notice, uuid: 'notice-error', isApiErrorMessage: true,
+      message: { ...notice.message, id: 'msg_api_error', content: [{ type: 'text', text }] },
+    }]);
+    expect(records).toHaveLength(2);
+    expect(records.at(-1).parts).toMatchObject([{ type: 'text', text }]);
   });
 });
 

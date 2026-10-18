@@ -924,6 +924,7 @@ within a ten-minute overall deadline.
   - Create, edit and rename run one at a time per process, so an existence check cannot go stale before its own write; create also writes `SKILL.md` with `wx` and reports an existing file as "already exists" instead of overwriting it
   - `disableModelInvocation` (detail `sources.md`, create/update body) is "run only when called": it writes both `disable-model-invocation: true` and `metadata.opencode/autoinvoke: false` so every supported OpenCode 2.x and Claude Code honour it, reads back the way OpenCode resolves the pair (`opencode/autoinvoke` wins), and clearing it removes both keys while keeping other `metadata`. The VS Code runtime mirrors this in `opencodeConfig.ts`
   - Skills catalog listing/source pagination, scan, and install routes
+  - `POST /api/config/skills/catalog/update` replaces the skills whose install records point at a catalog source. `{ dryRun: true }` returns the plan without touching disk; the run clones each source once per scope, overwrites the recorded targets, and answers one result per skill. A second run while one is in flight answers 409 `busy`. The identity comes from the source's current catalog entry, not from the record, which never stored one.
   - Supporting skill file read/write/delete routes
   - Directory resolution prefers an explicit request directory, then soft-falls
     back to the active project / `lastDirectory` so repository-local

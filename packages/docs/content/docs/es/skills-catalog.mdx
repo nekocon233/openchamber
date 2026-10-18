@@ -22,6 +22,11 @@ Si ya existe una skill con el mismo nombre, OpenChamber pregunta qué hacer: omi
 
 Puedes añadir cualquier repositorio de Git como fuente usando su nombre `owner/repo` o una URL de Git completa. Los repositorios privados necesitan tener el acceso configurado en tu máquina (una clave SSH o credenciales guardadas); si una fuente no puede autenticarse, el catálogo lo indica en lugar de fallar en silencio. Para usar una rama o etiqueta distinta de la predeterminada, añádela tras `#`: `owner/repo#develop` o `https://github.com/owner/repo.git#v1.0.0`.
 
+## Actualizar los skills instalados
+
+Un skill instalado desde un catálogo se queda en la versión con la que lo instalaste. **Update installed** en la página del catálogo descarga de nuevo cada skill de catálogo instalado desde su fuente y sustituye la copia local. Los cambios locales en esos skills se pierden, y los skills que escribiste tú no se tocan.
+
+El diálogo muestra antes qué se va a sustituir y después informa de cada skill que no se pudo sustituir, con el motivo.
 ## Relacionado
 
 - [Skills](/es/skills/) — crea y gestiona las skills instaladas

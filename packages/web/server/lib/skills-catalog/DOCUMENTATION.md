@@ -1,7 +1,7 @@
 # Skills Catalog Module Documentation
 
 ## Purpose
-This module provides skill discovery, scanning, and installation capabilities for OpenCode. It supports skill sources backed by git repositories, with caching and conflict resolution for skill installation.
+This module provides skill discovery, scanning, installation, and updating capabilities for OpenCode. It supports skill sources backed by git repositories, with caching and conflict resolution for skill installation.
 
 ## Entrypoints and structure
 - `packages/web/server/lib/skills-catalog/`: Skills catalog module directory containing all skill-related functionality.
@@ -13,6 +13,8 @@ This module provides skill discovery, scanning, and installation capabilities fo
   - `installed-sources.js`: Which source and repo subpath each catalog-installed skill came from, for the Installed badge.
   - `scan.js`: Skills scanning from git repositories.
   - `source.js`: Source string parsing for git repositories.
+  - `update-installed.js`: Replacing catalog-installed skills with their source's current content.
+  - `user-sync.js`: Refreshing the user skill library from the installed agent plugins.
 
 ## Public API
 
@@ -43,6 +45,22 @@ The following functions are exported and used by the web server:
 
 ### Git Repository Installation (`install.js`)
 - `installSkillsFromRepository({ source, subpath, defaultSubpath, identity, credentialResolver, scope, targetSource, workingDirectory, userSkillDir, selections, conflictPolicy, conflictDecisions })`: Install selected skills from a Git repository. It uses the same identity transports as scanning and supports user/project scopes, opencode/agents targets, conflict resolution (prompt/skipAll/overwriteAll), and sparse checkout.
+- `getTargetSkillDir({ scope, targetSource, workingDirectory, userSkillDir, skillName })`: The directory an install writes a skill to. Exported so the update plans against exactly the targets an install uses.
+
+### Installed skill updates (`update-installed.js`)
+Replaces catalog-installed skills with their source's current content. The install record is the whole plan: a skill the user wrote, or one whose recorded directory no longer holds a `SKILL.md`, is left alone.
+
+- `planInstalledSkillUpdates({ provenanceByName, targetDirFor, skillExists })`: The skills an update would replace. Records are validated (scope, target source, non-empty repo source, repo directory basename matching the skill name), one target keeps the newest record, and a record whose target directory is gone is dropped. Project-scope records whose directory is not the current project resolve to no target and are dropped too.
+- `updateInstalledSkills({ plan, resolveIdentity, install, workingDirectory, userSkillDir })`: Runs the plan grouped by `(sourceRef, scope, targetSource)`, so one source is cloned once per scope. Each group installs with `conflictPolicy: 'overwriteAll'`; a failed group marks its skills failed and does not stop the others. Returns `{ ok: true, results }` with `updated`/`skipped`/`failed` per skill, or `{ ok: false, error }` with `kind: 'busy'` while another run holds the module lock. Two concurrent runs would clone and copy onto the same target directories, so the lock is required, not cosmetic.
+- The module imports `node:path` and the shared guards helper only, so the VS Code extension host can share it the way it shares `installed-sources.js`.
+
+### User skill sync (`user-sync.js`)
+
+- `syncUserSkills({ homeDir, dryRun })`: Plans or replaces the skill directories in `<homeDir>/.agents/skills` from the skills bundled with the installed Claude Code and Codex plugins (`<homeDir>/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/<skill>` and the same under `.codex`).
+- A directory is matched by name and only when it already exists in the user library; no new skills are added. A symlink is `external`, a name no plugin ships is `noSource`, an identical copy is `current`, and only `update` entries are copied.
+- The highest version wins; Claude Code comes before Codex on a tie. The whole directory is replaced, so files the source does not have disappear and local edits are lost.
+- The old directory moves aside until the new copy is in place, so a failed copy leaves the previous skill usable. Each entry fails independently.
+- One run at a time; a second run returns `kind: 'busy'`. The route (`POST /api/config/skills/user/sync`) and the VS Code bridge pass the running user's home directory.
 
 ### Install provenance (`installed-sources.js`)
 The catalog's Installed badge used to match by name alone, so every same-named entry from every source read as installed (#4756). An install that names its catalog `sourceId` now records `{ skillName, skillDir, sourceId, scope, source, sourceRef }` in `skills-installed-sources.json` in the OpenChamber data dir (`version: 1`, mode 0600, atomic rename through a per-write temporary name).
@@ -50,7 +68,7 @@ The catalog's Installed badge used to match by name alone, so every same-named e
 - `readInstalledSources()`: entries keyed by skill name. A missing or malformed file means "no records", never an error.
 - `removeInstalledSources(skillName)`: forget a deleted skill's records, called after a skill delete.
 - `isInstalledFromSource(byName, skillName, sourceId, skillDir)`: the badge rule. A name with records reads as installed only for a recorded source and subpath; a name without records (installed before the registry existed, or by hand) keeps the plain name match.
-Web (`../opencode/skill-routes.js`) and VS Code (`packages/vscode/src/skillsCatalog.ts`, `bridge-config-runtime.ts`) share this module and file.
+Web (`../opencode/skill-routes.js`) and VS Code (`packages/vscode/src/skillsCatalog.ts`, `bridge-config-runtime.ts`) share this module, `update-installed.js`, and this file.
 
 ## Internal Helpers
 
@@ -78,7 +96,6 @@ The following functions are internal helpers used by exported functions:
 
 ### Path Helpers (`install.js`)
 - `toFsPath(repoDir, repoRelPosixPath)`: Convert POSIX path to filesystem path.
-- `getTargetSkillDir({ scope, targetSource, workingDirectory, userSkillDir, skillName })`: Determine target installation directory based on scope (user/project), targetSource (opencode/agents), and skill name.
 
 ## Response Contracts
 
@@ -94,6 +111,12 @@ The following functions are internal helpers used by exported functions:
 - `installed`: Array of installed skills with `{ skillName, skillDir, scope, source }`; `skillDir` is the repo subpath the skill was copied from.
 - `skipped`: Array of skipped skills with `{ skillName, reason }`.
 - `error`: Error object with `{ kind, message, conflicts? }` on failure. Kinds: `authRequired`, `networkError`, `conflicts`, `invalidSource`, `unknown`.
+
+### Update Installed Skills Response
+- `plan`: `planInstalledSkillUpdates` items with `{ skillName, skillDir, scope, source, sourceId, sourceRef }`. Returned for a dry run.
+- `results`: One entry per planned skill with `{ skillName, scope, source, status }`; `status` is `updated`, `skipped` or `failed`. A skipped entry carries the install's `reason`; a failed entry carries `kind` (`authRequired`, `gitUnavailable`, `networkError`, `invalidSource`, `unknown`) and `reason`.
+- `updated`, `skipped`, `failed`: counts over `results`.
+- `error`: `{ kind, message }` for a request-level failure. Kinds: `busy`, `invalidSource`, `unknown`.
 
 ### Parse Source Response
 - `ok`: Boolean indicating success.

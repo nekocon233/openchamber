@@ -24,6 +24,12 @@ Gib irgendwo in einer Nachricht `$` ein, auch ganz am Anfang, um die Skill-Auswa
 
 Ein `/` ganz am Anfang der Nachricht öffnet [Befehle](/commands-snippets/); Skills sind dort nicht dabei.
 
+## Benutzerskills aus Agent-Plugins synchronisieren
+
+Die Skills in `~/.agents/skills` können Kopien von Skills sein, die mit den Plugins Claude Code und Codex ausgeliefert werden. Die Aktualisieren-Schaltfläche neben der Skill-Anzahl unter **Einstellungen → Skills** listet diese Kopien und ersetzt sie durch die Version aus dem installierten Plugin.
+
+Der Dialog zeigt vor jeder Änderung, was ersetzt und was unangetastet bleibt. Symlinks und Skills ohne Plugin-Quelle werden übersprungen und genannt. Der ganze Skill-Ordner wird ersetzt, lokale Änderungen an diesen Kopien gehen verloren. Skills, die du selbst geschrieben hast, bleiben unangetastet.
+
 ## Weiterführend
 
 - [Skills-Katalog](/skills-catalog/) — installiere Skills, die andere veröffentlicht haben

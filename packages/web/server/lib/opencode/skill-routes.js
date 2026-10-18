@@ -2,6 +2,9 @@ import { OpenCode } from '@opencode/client';
 import { buildAppliedResponse } from './config-mutation-response.js';
 import { OPENCODE_CONFIG_DIR } from './shared.js';
 import { asNonEmptyString } from '../shared/guards.js';
+import { getTargetSkillDir } from '../skills-catalog/install.js';
+import { planInstalledSkillUpdates, updateInstalledSkills } from '../skills-catalog/update-installed.js';
+import { syncUserSkills } from '../skills-catalog/user-sync.js';
 import { appendInstalledSources, isInstalledFromSource, readInstalledSources, removeInstalledSources } from '../skills-catalog/installed-sources.js';
 
 /**
@@ -657,6 +660,91 @@ export const registerSkillRoutes = (app, dependencies) => {
     } catch (error) {
       console.error('Failed to install skills:', error);
       res.status(500).json({ ok: false, error: { kind: 'unknown', message: error.message || 'Failed to install skills' } });
+    }
+  });
+
+  // The identity a recorded install should clone with now: the source's current
+  // Git identity, resolved from the catalog settings rather than the record,
+  // which never stored one.
+  const resolveInstalledUpdateIdentity = async (sourceId, sourceRef) => {
+    const settings = await readSettingsFromDisk();
+    const custom = (sanitizeSkillCatalogs(settings.skillCatalogs) || []).map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      gitIdentityId: entry.gitIdentityId,
+    }));
+    const matched = [...getCuratedSkillsSources(), ...custom].find((entry) => entry.id === sourceId);
+    return resolveCatalogGitIdentity(matched?.gitIdentityId, matched?.source ?? sourceRef);
+  };
+
+  const targetDirForInstalledSkill = (directory) => ({ scope, source, skillName }) => {
+    if (scope === 'project' && !directory) return null;
+    return getTargetSkillDir({ scope, targetSource: source, workingDirectory: directory, userSkillDir: SKILL_DIR, skillName });
+  };
+
+  app.post('/api/config/skills/catalog/update', async (req, res) => {
+    try {
+      const { directory, error } = await resolveOptionalProjectDirectory(req);
+      if (error) {
+        return res.status(400).json({ ok: false, error: { kind: 'invalidSource', message: error } });
+      }
+
+      const plan = planInstalledSkillUpdates({
+        provenanceByName: readInstalledSources(),
+        targetDirFor: targetDirForInstalledSkill(directory),
+        skillExists: (targetDir) => fs.existsSync(path.join(targetDir, 'SKILL.md')),
+      });
+
+      if (req.body?.dryRun === true) {
+        return res.json({ ok: true, plan });
+      }
+
+      if (plan.length === 0) {
+        return res.json({
+          ok: true, results: [], updated: 0, skipped: 0, failed: 0,
+          message: 'No installed skill came from a catalog source',
+        });
+      }
+
+      const outcome = await updateInstalledSkills({
+        plan,
+        resolveIdentity: resolveInstalledUpdateIdentity,
+        install: installSkillsFromRepository,
+        workingDirectory: directory,
+        userSkillDir: SKILL_DIR,
+      });
+
+      if (!outcome.ok) {
+        return res.status(outcome.error.kind === 'busy' ? 409 : 500).json({ ok: false, error: outcome.error });
+      }
+
+      const results = outcome.results ?? [];
+      const countOf = (status) => results.filter((entry) => entry.status === status).length;
+      const updated = countOf('updated');
+      return res.json({
+        ok: true,
+        results,
+        updated,
+        skipped: countOf('skipped'),
+        failed: countOf('failed'),
+        message: updated > 0 ? 'Installed skills updated' : 'No skill was replaced',
+      });
+    } catch (error) {
+      console.error('Failed to update installed skills:', error);
+      res.status(500).json({ ok: false, error: { kind: 'unknown', message: error.message || 'Failed to update installed skills' } });
+    }
+  });
+
+  app.post('/api/config/skills/user/sync', async (req, res) => {
+    try {
+      const outcome = await syncUserSkills({ homeDir: os.homedir(), dryRun: req.body?.dryRun === true });
+      if (!outcome.ok) {
+        return res.status(outcome.error.kind === 'busy' ? 409 : 500).json(outcome);
+      }
+      return res.json(outcome);
+    } catch (error) {
+      console.error('Failed to sync user skills:', error);
+      res.status(500).json({ ok: false, error: { kind: 'unknown', message: error.message || 'Failed to sync user skills' } });
     }
   });
 
