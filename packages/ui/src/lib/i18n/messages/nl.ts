@@ -21,10 +21,8 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
-  "usage.refresh.updated": "Bijgewerkt op {updated}. Handmatig vernieuwen mogelijk vanaf {next}.",
-  "usage.refresh.limitedWithSample": "Gebruiksaanvraag beperkt. Bijgewerkt op {updated}. Handmatig vernieuwen mogelijk vanaf {next}.",
-  "usage.refresh.limitedWithoutSample": "Gebruiksaanvraag beperkt. Geen opgeslagen gebruiksgegevens. Handmatig vernieuwen mogelijk vanaf {next}.",
-  "usage.refresh.nextAttempt": "Handmatig vernieuwen mogelijk vanaf {next}.",
+  "usage.refresh.limited": "Gebruiksaanvraag beperkt.",
+
 
   "opencodeCompatibility.bundled": "OpenCode is inbegrepen bij OpenChamber. Werk OpenChamber bij om OpenCode v2 te krijgen.",
   "opencodeCompatibility.title": "OpenCode v2 vereist",

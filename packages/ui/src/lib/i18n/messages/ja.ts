@@ -23,10 +23,8 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
-  "usage.refresh.updated": "更新日時 {updated}。{next} 以降に手動で更新できます。",
-  "usage.refresh.limitedWithSample": "使用量の照会が制限されています。更新日時 {updated}。{next} 以降に手動で更新できます。",
-  "usage.refresh.limitedWithoutSample": "使用量の照会が制限されています。保存された使用量データはありません。{next} 以降に手動で更新できます。",
-  "usage.refresh.nextAttempt": "{next} 以降に手動で更新できます。",
+  "usage.refresh.limited": "使用量の照会が制限されています。",
+
 
   "chat.nativeTasks.title": "タスク",
   "chat.nativeTasks.open": "セッションのタスクを開く",

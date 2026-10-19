@@ -23,10 +23,8 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
-  "usage.refresh.updated": "更新於 {updated}。可於 {next} 後手動重新整理。",
-  "usage.refresh.limitedWithSample": "用量查詢受限。更新於 {updated}。可於 {next} 後手動重新整理。",
-  "usage.refresh.limitedWithoutSample": "用量查詢受限，暫無已儲存的用量。可於 {next} 後手動重新整理。",
-  "usage.refresh.nextAttempt": "可於 {next} 後手動重新整理。",
+  "usage.refresh.limited": "用量查詢受限。",
+
 
   "chat.nativeTasks.title": "任務",
   "chat.nativeTasks.open": "開啟對話任務",

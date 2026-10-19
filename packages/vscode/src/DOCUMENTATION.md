@@ -149,7 +149,7 @@ The webview build emits each worker as one self-contained file. VS Code webviews
 - Claude quota tracking
   - `quotaProviders.ts` delegates to `web/server/lib/quota/providers/claude/tracker.js`, the same parser and request owner used by Web/Electron. Five-minute result reuse, 5/10/20/40/60-minute 429 cooldowns, complete `Retry-After` waits, and a 15-second request/body deadline apply to manual refresh. Claude is excluded from automatic UI refresh, startup and popover opening; no timer queries it when the cooldown ends.
   - Activation scopes the private versioned usage snapshot to `context.storageUri` or `context.globalStorageUri` for an empty window. Reloading the extension preserves the sample timestamp and cooldown. Credential changes discard prior account state; old requests cannot overwrite it. The snapshot stores a token fingerprint and normalized usage, never tokens, and rejects usage older than 24 hours. See the quota module documentation for persistence bounds and failure behavior.
-  - `api:quota:get` forwards the optional `refresh` metadata unchanged. Shared UI displays the original sample time and earliest next manual refresh time, including alongside retained data after a failed refresh. External OpenCode runtimes still return unsupported before inspecting extension-host credentials.
+  - `api:quota:get` forwards the optional `refresh` metadata unchanged. Shared UI omits sample-time and manual-refresh timing hints, while retaining a short error alongside saved data when a refresh fails. External OpenCode runtimes still return unsupported before inspecting extension-host credentials.
 
 - `process-launch.ts`
   - Owns shared executable lookup and Windows `.cmd`/`.bat` launch shaping for

@@ -106,15 +106,15 @@ refresh attempt per opening, so a failed first load cannot create a retry loop.
 
 Claude responses with `refresh` own their entire account-scoped snapshot, even
 when `ok` is false. The store replaces that entry and accepts its retained usage
-or explicit `usage: null`; it must not keep another credential's sample. The
-original `refresh.sampledAt` drives Claude's displayed update time rather than
-the global successful-refresh timestamp or response `fetchedAt`.
+or explicit `usage: null`; it must not keep another credential's sample. The runtime keeps the original sample and cooldown metadata for cache ownership.
+Shared UI omits their timing hints: successful Claude values have no extra status
+line, and failed refreshes show a short error alongside any retained data.
 Claude is manual-only. `fetchQuotas`, `fetchAllQuotas`, and
 `refreshSelectedQuotas` skip it unless the caller passes `manual: true`; the explicit refresh controls do so. The shared
 three-minute timer, initialization, page opening, mobile popovers, and tray
 bootstrap never query Claude, including against older servers without metadata.
-There is no Claude retry timer. `refresh.nextAttemptAt` only tells the person
-when another manual refresh is allowed. The runtime still enforces the same
+There is no Claude retry timer. `refresh.nextAttemptAt` remains response metadata
+for the runtime request budget; the UI does not display it. The runtime still enforces the same
 five-minute budget and retained-data policy.
 
 With only Claude selected, bootstrap completes after settings and metadata load;

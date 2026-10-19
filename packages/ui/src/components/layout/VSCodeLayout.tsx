@@ -766,14 +766,14 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       const windows = (result?.usage?.windows ?? {}) as Record<string, UsageWindow>;
       const entries = Object.entries(windows);
       const error = (result && !result.ok && result.configured) ? result.error : undefined;
-      const status = formatQuotaRefreshStatus(result, t, timeFormatPreference);
+      const status = formatQuotaRefreshStatus(result, t);
       if (entries.length > 0 || error || status) {
         groups.push({ providerId: provider.id, providerName: provider.name, entries, error, status });
       }
     }
 
     return groups;
-  }, [dropdownProviderIds, quotaResults, t, timeFormatPreference]);
+  }, [dropdownProviderIds, quotaResults, t]);
   const hasRateLimits = rateLimitGroups.length > 0;
 
   const handleDisplayModeChange = React.useCallback(async (mode: 'usage' | 'remaining') => {

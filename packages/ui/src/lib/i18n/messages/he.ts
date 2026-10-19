@@ -21,10 +21,8 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
-  "usage.refresh.updated": "עודכן ב־{updated}. אפשר לרענן ידנית אחרי {next}.",
-  "usage.refresh.limitedWithSample": "בקשות בדיקת השימוש הוגבלו. עודכן ב־{updated}. אפשר לרענן ידנית אחרי {next}.",
-  "usage.refresh.limitedWithoutSample": "בקשות בדיקת השימוש הוגבלו. אין נתוני שימוש שמורים. אפשר לרענן ידנית אחרי {next}.",
-  "usage.refresh.nextAttempt": "אפשר לרענן ידנית אחרי {next}.",
+  "usage.refresh.limited": "בקשות בדיקת השימוש הוגבלו.",
+
 
   'opencodeCompatibility.bundled': 'OpenCode מגיע יחד עם OpenChamber. יש לעדכן את OpenChamber כדי לקבל את OpenCode v2.',
   'opencodeCompatibility.title': 'נדרש OpenCode v2',

@@ -248,13 +248,13 @@ plugin's `claude-code` integration sign-in through the shared
 finishes. Usage is queried only when the person presses refresh. Without the plugin, or when the integration list cannot be read, it
 shows the `claude auth login` command, which works in both cases.
 
-Claude results with `refresh` display the runtime's original successful sample
-time and earliest next manual refresh time. A 429 keeps any retained usage visible and explains
-when another manual refresh is allowed in the active locale; a first-load 429 never invents an update
-time. Runtime-owned errors replace the complete Claude sample so an account
-switch cannot leave the preceding account's numbers visible. The refresh button
-uses the runtime request budget. Opening the page, signing in, and waiting for a cooldown to end do not query Claude. Timing and restart
-behavior belong to the quota module, not the Settings page.
+Claude usage shows no update-time or cooldown-time hint. Its header may show
+its plan label, and failed refreshes show a short error while any retained usage
+remains visible. Runtime-owned errors replace the complete Claude sample so an
+account switch cannot leave the preceding account's numbers visible. The refresh
+button uses the runtime request budget. Opening the page, signing in, and waiting
+for a cooldown to end do not query Claude. Timing and restart behavior belong to
+the quota module.
 
 ### Policy-blocked MCP servers and skills
 

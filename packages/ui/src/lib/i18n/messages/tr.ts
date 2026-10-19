@@ -22,10 +22,8 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
-  "usage.refresh.updated": "Güncelleme zamanı {updated}. {next} sonrasında elle yenilenebilir.",
-  "usage.refresh.limitedWithSample": "Kullanım sorgusu sınırlandırıldı. Güncelleme zamanı {updated}. {next} sonrasında elle yenilenebilir.",
-  "usage.refresh.limitedWithoutSample": "Kullanım sorgusu sınırlandırıldı. Kaydedilmiş kullanım verisi yok. {next} sonrasında elle yenilenebilir.",
-  "usage.refresh.nextAttempt": "{next} sonrasında elle yenilenebilir.",
+  "usage.refresh.limited": "Kullanım sorgusu sınırlandırıldı.",
+
 
   "chat.nativeTasks.title": "Görevler",
   "chat.nativeTasks.open": "Oturum görevlerini aç",

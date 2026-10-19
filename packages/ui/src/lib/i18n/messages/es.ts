@@ -23,10 +23,8 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
-  "usage.refresh.updated": "Actualizado el {updated}. Actualización manual disponible después de {next}.",
-  "usage.refresh.limitedWithSample": "Consulta de uso limitada. Actualizado el {updated}. Actualización manual disponible después de {next}.",
-  "usage.refresh.limitedWithoutSample": "Consulta de uso limitada. No hay datos de uso guardados. Actualización manual disponible después de {next}.",
-  "usage.refresh.nextAttempt": "Actualización manual disponible después de {next}.",
+  "usage.refresh.limited": "Consulta de uso limitada.",
+
 
   "chat.nativeTasks.title": "Tareas",
   "chat.nativeTasks.open": "Abrir tareas de la sesión",

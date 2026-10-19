@@ -22,10 +22,8 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
-  "usage.refresh.updated": "Mis à jour le {updated}. Actualisation manuelle possible après {next}.",
-  "usage.refresh.limitedWithSample": "Requête d'utilisation limitée. Mis à jour le {updated}. Actualisation manuelle possible après {next}.",
-  "usage.refresh.limitedWithoutSample": "Requête d'utilisation limitée. Aucune donnée d'utilisation enregistrée. Actualisation manuelle possible après {next}.",
-  "usage.refresh.nextAttempt": "Actualisation manuelle possible après {next}.",
+  "usage.refresh.limited": "Requête d'utilisation limitée.",
+
 
   "chat.nativeTasks.title": "Tâches",
   "chat.nativeTasks.open": "Ouvrir les tâches de la session",

@@ -81,8 +81,7 @@ export const UsagePage: React.FC = () => {
   const providerName = providerMeta?.name ?? selectedProviderId ?? t('settings.usage.sidebar.title');
   const usage = selectedResult?.usage;
   const refreshError = selectedProviderId ? refreshErrors[selectedProviderId] : undefined;
-  const refreshStatus = formatQuotaRefreshStatus(selectedResult, t, timeFormatPreference, refreshError);
-  const sampleUpdatedAt = selectedResult?.refresh ? selectedResult.refresh.sampledAt : lastUpdated;
+  const refreshStatus = formatQuotaRefreshStatus(selectedResult, t, refreshError);
   const selectedProviderError = selectedResult?.refresh
     ? (!selectedResult.ok || refreshError ? refreshStatus : null)
     : refreshError
@@ -180,15 +179,15 @@ export const UsagePage: React.FC = () => {
       description={
         isLoading ? (
           <span className="animate-pulse typography-settings-description text-muted-foreground">{t('settings.usage.page.header.refreshing')}</span>
-        ) : refreshStatus && !selectedProviderError ? (
-          selectedResult?.planLabel ? `${selectedResult.planLabel} · ${refreshStatus}` : refreshStatus
+        ) : selectedProviderId === 'claude' ? (
+          selectedResult?.planLabel
         ) : selectedResult?.planLabel ? (
           t('settings.usage.page.header.lastUpdatedWithPlan', {
             plan: selectedResult.planLabel,
-            time: formatTime(sampleUpdatedAt, timeFormatPreference),
+            time: formatTime(lastUpdated, timeFormatPreference),
           })
         ) : (
-          t('settings.usage.page.header.lastUpdated', { time: formatTime(sampleUpdatedAt, timeFormatPreference) })
+          t('settings.usage.page.header.lastUpdated', { time: formatTime(lastUpdated, timeFormatPreference) })
         )
       }
       showSaveStatus
