@@ -3,6 +3,8 @@ import type { Part } from '@/lib/opencode/model';
 
 import UserTextPart from './parts/UserTextPart';
 import ToolPart from './parts/ToolPart';
+import { PlanToolPart } from './parts/PlanToolPart';
+import { findFinalPlan, readPlanPart } from './planPart';
 import AssistantTextPart from './parts/AssistantTextPart';
 import ReasoningPart from './parts/ReasoningPart';
 import { MessageFilesDisplay } from '../FileAttachment';
@@ -51,7 +53,7 @@ import { HtmlRenderFrame, ShownPage } from './parts/HtmlRenderFrame';
 import { renderedPage } from '@/lib/opencode/tools';
 import { LiveActivityCollapse } from '../components/LiveActivityCollapse';
 import { ActivityRowSkipContext, isActivityRowPart, isToolRowShown } from '../lib/turns/activityRows';
-import { LiveFinalActivityContext, LiveTurnHoistedPagesContext } from '../components/liveActivityContext';
+import { LiveFinalActivityContext, LiveTurnHoistedPagesContext, LiveTurnHoistedPlanContext } from '../components/liveActivityContext';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
@@ -1291,6 +1293,9 @@ const AssistantMessageBody = React.memo(({
     const liveFinalActivity = React.useContext(LiveFinalActivityContext);
     const activityRowSkip = React.useContext(ActivityRowSkipContext);
     const hoistedPages = React.useContext(LiveTurnHoistedPagesContext);
+    const hoistedPlan = React.useContext(LiveTurnHoistedPlanContext);
+    const finalPlanPartID = turnGroupingContext ? turnGroupingContext.finalPlanPartID
+        : findFinalPlan([{ info: { id: messageId ?? '' }, parts }])?.part.id;
     const isLastAssistantInTurn = turnGroupingContext?.isLastAssistantInTurn ?? false;
     const hasStopFinish = messageFinish === 'stop';
     const effectiveStreamPhase: StreamPhase = hasStopFinish ? 'completed' : streamPhase;
@@ -1674,6 +1679,10 @@ const AssistantMessageBody = React.memo(({
         let i = 0;
         while (i < visibleParts.length) {
             const part = visibleParts[i];
+            if (hoistedPlan?.has(part.id)) {
+                i++;
+                continue;
+            }
             if (rowsToSkip > 0 && isActivityRowPart(part)) {
                 rowsToSkip -= 1;
                 i += 1;
@@ -1784,10 +1793,14 @@ const AssistantMessageBody = React.memo(({
 
                 // Expandable tools: bash, edit, write, task, question — individual rows
                 if (isExpandableTool(toolName, toolMetadata)) {
+                    const plan = readPlanPart(toolPart);
                     rendered.push(
                         <FadeInOnReveal key={`tool-${toolPart.id}`}>
                             <ToolRevealOnMount animate={animatedToolIdsLookup.has(toolPart.id)} wipe>
-                                <ToolPart
+                                {plan ? <PlanToolPart part={toolPart} callID={plan.callID}
+                                    defaultExpanded={toolPart.id === finalPlanPartID} isMobile={isMobile}
+                                    alwaysShowActions={alwaysShowMessageActions} onShowPopup={onShowPopup}
+                                    animateTailText={animatedToolIdsLookup.has(toolPart.id)} /> : <ToolPart
                                     part={toolPart}
                                     isExpanded={expandedTools.has(toolPart.id)}
                                     onToggle={onToggleTool}
@@ -1795,7 +1808,7 @@ const AssistantMessageBody = React.memo(({
                                     alwaysShowActions={alwaysShowMessageActions}
                                     onShowPopup={onShowPopup}
                                     animateTailText={animatedToolIdsLookup.has(toolPart.id)}
-                                />
+                                />}
                             </ToolRevealOnMount>
                         </FadeInOnReveal>
                     );
@@ -1846,6 +1859,8 @@ const AssistantMessageBody = React.memo(({
         activityRowSkip,
         alwaysShowMessageActions,
         hoistedPages,
+        hoistedPlan,
+        finalPlanPartID,
         animatedToolIdsLookup,
         collapsibleThinkingBlocks,
         expandedTools,

@@ -14,3 +14,6 @@ export const LiveFinalActivityContext = createContext<{
 
 /** Calls whose page the final answer draws, so their own row stays out of the fold. */
 export const LiveTurnHoistedPagesContext = createContext<ReadonlySet<string> | null>(null);
+
+/** The final plan is drawn outside Activity; its original rows stay in the record. */
+export const LiveTurnHoistedPlanContext = createContext<ReadonlySet<string> | null>(null);

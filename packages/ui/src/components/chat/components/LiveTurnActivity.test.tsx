@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { OpenCode } from '@opencode/client';
-import type { Part, AssistantMessage } from '@/lib/opencode/model';
+import type { Part, AssistantMessage, ToolPart } from '@/lib/opencode/model';
 import { I18nProvider, useI18nStore } from '@/lib/i18n';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { ThemeSystemContext, type ThemeContextValue } from '@/contexts/theme-system-context';
@@ -18,7 +18,6 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { projectTurnRecords } from '../lib/turns/projectTurnRecords';
 import type { ChatMessageEntry, TurnChangedFile, TurnRecord } from '../lib/turns/types';
-import { LiveTurnActivity } from './LiveTurnActivity';
 
 plugin({
     name: 'live-activity-worker-url',
@@ -66,6 +65,7 @@ const sdk = OpenCode.make({ baseUrl: 'http://localhost', fetch: async () => new 
 // trigger, so the changed-file toggle is the one that opens no popup.
 const changedFilesToggle = () => document.querySelector<HTMLButtonElement>('[data-fixture-message="final"] button[aria-expanded]:not([aria-haspopup])');
 let MessageBody: typeof import('../message/MessageBody').default;
+let LiveTurnActivity: typeof import('./LiveTurnActivity').LiveTurnActivity;
 
 function assistant(id: string, parts: Part[], finish?: AssistantMessage['finish']): ChatMessageEntry {
     const info: AssistantMessage = {
@@ -89,13 +89,14 @@ function turn(messages: ChatMessageEntry[]): TurnRecord {
     }, ...messages]).turns[0];
 }
 
-function Harness({ record, retired = false, changedFiles, isLatestTurn = true, onCopyMessage, onCopyTurn }: {
+function Harness({ record, retired = false, changedFiles, isLatestTurn = true, onCopyMessage, onCopyTurn, allActivityExpanded = false }: {
     record: TurnRecord;
     retired?: boolean;
     changedFiles?: TurnChangedFile[];
     isLatestTurn?: boolean;
     onCopyMessage?: (messageId: string) => boolean;
     onCopyTurn?: () => Promise<boolean>;
+    allActivityExpanded?: boolean;
 }) {
     const [expanded, setExpanded] = React.useState(false);
     const renderMessage = (message: ChatMessageEntry) => (
@@ -112,6 +113,7 @@ function Harness({ record, retired = false, changedFiles, isLatestTurn = true, o
                 turnGroupingContext={{
                     turnId: 'user', isFirstAssistantInTurn: message === record.assistantMessages[0],
                     isLastAssistantInTurn: message === record.assistantMessages.at(-1),
+                    finalPlanPartID: record.finalPlan?.messageID === message.info.id ? record.finalPlan.part.id : undefined,
                     isLatestTurn, changedFiles, isWorking: false, hasTools: record.hasTools, hasReasoning: record.hasReasoning,
                 }}
             />
@@ -121,8 +123,9 @@ function Harness({ record, retired = false, changedFiles, isLatestTurn = true, o
         <ThemeSystemContext.Provider value={themeContext}>
             <SyncProvider sdk={sdk} directory="/project">
                 <I18nProvider>
-                    <LiveTurnActivity turn={record} hasLaterAssistant={retired} expanded={expanded}
-                        onToggle={() => setExpanded((value) => !value)} renderMessage={renderMessage} />
+                    {allActivityExpanded ? record.assistantMessages.map(renderMessage) :
+                        <LiveTurnActivity turn={record} hasLaterAssistant={retired} expanded={expanded}
+                            onToggle={() => setExpanded((value) => !value)} renderMessage={renderMessage} />}
                 </I18nProvider>
             </SyncProvider>
         </ThemeSystemContext.Provider>
@@ -166,10 +169,60 @@ describe('live Activity with the real message body', () => {
         useDirectoryStore.setState({ currentDirectory: '/project' });
         useI18nStore.getState().setLocale('en');
         MessageBody = (await import('../message/MessageBody')).default;
+        LiveTurnActivity = (await import('./LiveTurnActivity')).LiveTurnActivity;
     });
     afterEach(async () => {
         await act(async () => root.unmount());
         restore();
+    });
+
+    const proposal = (id: string): ToolPart => ({
+        type: 'tool', tool: 'plan_exit', id, callID: id, messageID: 'proposal', sessionID: 'session',
+        state: { status: 'completed', input: { plan: '# Final repair plan\n\nCover malformed input.' }, output: '', time: { start: 2, end: 3 } },
+    });
+
+    test('shows the final plan once outside folded activity and keeps it when activity opens', async () => {
+        const progress = assistant('progress', [readPart], 'tool-calls');
+        const plan = assistant('proposal', [proposal('default-expanded-plan')], 'tool-calls');
+        await act(async () => root.render(<Harness record={turn([progress, plan])} retired />));
+        const card = container.querySelector('[data-final-plan]');
+        expect(card?.textContent).toContain('Cover malformed input.');
+        expect(card?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true');
+        expect(container.querySelector('button[aria-controls]')?.getAttribute('aria-expanded')).toBe('false');
+        expect(container.querySelectorAll('[data-final-plan]')).toHaveLength(1);
+        await act(async () => container.querySelector<HTMLButtonElement>('button[aria-controls]')?.click());
+        expect(container.querySelectorAll('[data-final-plan]')).toHaveLength(1);
+        expect(container.querySelector('[data-fixture-message="proposal"]')?.textContent).not.toContain('Final repair plan');
+    });
+
+    test('keeps a manual collapse through an answered question, remount and activity-mode change', async () => {
+        const original = proposal('stable-plan');
+        const progress = assistant('progress', [readPart], 'tool-calls');
+        await act(async () => root.render(<Harness record={turn([progress, assistant('proposal', [original], 'tool-calls')])} retired />));
+        await act(async () => container.querySelector<HTMLElement>('[data-final-plan] [aria-expanded]')?.click());
+        expect(container.querySelector('[data-final-plan] [aria-expanded]')?.getAttribute('aria-expanded')).toBe('false');
+        const answered: ToolPart = {
+            ...original, id: 'stable-question', callID: 'ncq_stable', tool: 'question', state: {
+                status: 'completed', input: { questions: [{ question: '# Final repair plan\n\nCover malformed input.', options: [{ label: 'plan' }] }] },
+                metadata: { nativeQuestionKind: 'claude-plan-exit', nativePlanCallID: original.callID, questionAnswers: [['plan']], questionStatus: 'answered' },
+                output: '', time: { start: 2, end: 3 },
+            },
+        };
+        const record = turn([progress, assistant('proposal', [original, answered], 'tool-calls')]);
+        await act(async () => root.render(<Harness record={record} retired />));
+        expect(container.querySelector('[data-final-plan] [aria-expanded]')?.getAttribute('aria-expanded')).toBe('false');
+        await act(async () => root.render(<Harness key="remounted" record={record} retired />));
+        expect(container.querySelector('[data-final-plan] [aria-expanded]')?.getAttribute('aria-expanded')).toBe('false');
+        await act(async () => root.render(<Harness key="remounted" record={record} allActivityExpanded />));
+        expect(container.querySelector('[data-fixture-message="proposal"] [aria-expanded]')?.getAttribute('aria-expanded')).toBe('false');
+        await act(async () => container.querySelector<HTMLElement>('[data-fixture-message="proposal"] [aria-expanded]')?.click());
+        expect(container.querySelector('[data-fixture-message="proposal"] [aria-expanded]')?.getAttribute('aria-expanded')).toBe('true');
+        const newer = proposal('new-version-plan');
+        await act(async () => root.render(<Harness key="remounted" record={turn([
+            progress, assistant('proposal', [original, answered, newer], 'tool-calls'),
+        ])} retired />));
+        expect(container.querySelector('[data-final-plan]')?.getAttribute('data-final-plan')).toBe(newer.id);
+        expect(container.querySelector('[data-final-plan] [aria-expanded]')?.getAttribute('aria-expanded')).toBe('true');
     });
 
     test('keeps active prose and tools visible; stop folds history but leaves the answer', async () => {

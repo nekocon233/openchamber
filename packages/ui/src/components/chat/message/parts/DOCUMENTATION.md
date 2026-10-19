@@ -268,6 +268,21 @@ consumers; the message role owns the current context-window boundary.
   such question and keeps its own row. This is a rendering rule, not a data
   one: the part stays in the record, so the model choice recovered from it on
   a Claude turn still resolves.
+- Every turn's last nonempty plan is expanded by default. `planPart.ts` uses
+  explicit plan tools and native plan-question metadata, not ordinary question
+  text. A question's optional `nativePlanCallID` links it to the original call;
+  that call owns proposal order even when an older answer arrives late.
+  Turn records derive the final plan lazily, only when a row reads it.
+- With Activity collapsed, `LiveTurnActivity` draws that plan outside its fold
+  and keeps both original rows out of the fold's content and row budget. A
+  plan-only turn gets no empty Activity header. Other proposals keep their
+  normal rows. Both representations use `PlanToolPart` and the same explicit
+  disclosure choice, scoped to runtime, session, message and original call.
+  User choices override defaults through streaming, answer attachment,
+  remounts and Activity-mode changes; a new proposal starts with its own
+  default. The window targets a 4,000-choice cache, never evicting a displayed
+  choice; a reload clears it. Plain plan input uses the existing
+  Markdown and scrolling presentation rather than a JSON argument dump.
 - Explicit native skill inputs and successful manifest reads use the existing
   static skill row. Catalog availability or a textual mention is not usage.
 

@@ -13,7 +13,8 @@ import type { ChatMessageEntry, TurnRecord } from '../lib/turns/types';
 import { getLiveFinalMessage, getShownPages } from '../lib/turns/liveActivity';
 import { summarizeLiveActivity } from '../lib/turns/liveActivitySummary';
 import { LiveActivityCollapse } from './LiveActivityCollapse';
-import { LiveFinalActivityContext, LiveTurnHoistedPagesContext } from './liveActivityContext';
+import { LiveFinalActivityContext, LiveTurnHoistedPagesContext, LiveTurnHoistedPlanContext } from './liveActivityContext';
+import { FinalPlanCard } from '../message/parts/PlanToolPart';
 import { ShownPage } from '../message/parts/HtmlRenderFrame';
 import { TurnMessageWindow } from './TurnMessageWindow';
 import { useActivityRowGlide } from './useActivityRowGlide';
@@ -32,6 +33,8 @@ export function LiveTurnActivity({ turn, hasLaterAssistant, expanded, onToggle, 
     const contentId = React.useId();
     const finalContentId = React.useId();
     const finalMessage = getLiveFinalMessage(turn.assistantMessages);
+    const finalPlan = turn.finalPlan;
+    const planParts = finalPlan?.sourcePartIDs ?? null;
     const activityMessages = React.useMemo(
         () => (finalMessage ? turn.assistantMessages.filter((message) => message !== finalMessage) : turn.assistantMessages),
         [finalMessage, turn.assistantMessages],
@@ -46,10 +49,10 @@ export function LiveTurnActivity({ turn, hasLaterAssistant, expanded, onToggle, 
     const trimRows = !expanded;
     const trim = React.useMemo(() => (trimRows
         ? planActivityTrim(
-            activityMessages.map((message) => activityRowParts(message.parts, showReasoningTraces).length),
+            activityMessages.map((message) => activityRowParts(message.parts, showReasoningTraces, planParts ?? undefined).length),
             LIVE_ACTIVITY_VISIBLE_ROWS,
         )
-        : null), [activityMessages, showReasoningTraces, trimRows]);
+        : null), [activityMessages, showReasoningTraces, trimRows, planParts]);
     const shownMessages = React.useMemo(
         () => (trim && trim.hiddenMessages > 0 ? activityMessages.slice(trim.hiddenMessages) : activityMessages),
         [activityMessages, trim],
@@ -123,6 +126,7 @@ export function LiveTurnActivity({ turn, hasLaterAssistant, expanded, onToggle, 
     const headerClass = 'w-full justify-start normal-case !ps-px !pe-2 text-[var(--tools-description)] hover:!bg-transparent active:!bg-transparent';
     return (
         <LiveTurnHoistedPagesContext.Provider value={hoistedPages}>
+          <LiveTurnHoistedPlanContext.Provider value={planParts}>
             <div className="relative z-0" data-live-turn-activity={turn.turnId}>
                 <div className="chat-message-column @container">
                     <div className="mt-1">
@@ -144,10 +148,12 @@ export function LiveTurnActivity({ turn, hasLaterAssistant, expanded, onToggle, 
                         {pages.map((part) => <ShownPage key={part.id} part={part} />)}
                     </div>
                 ) : null}
+                {finalPlan ? <FinalPlanCard plan={finalPlan} /> : null}
                 <LiveFinalActivityContext.Provider value={finalContext}>
                     {finalMessage ? renderMessage(finalMessage) : null}
                 </LiveFinalActivityContext.Provider>
             </div>
+          </LiveTurnHoistedPlanContext.Provider>
         </LiveTurnHoistedPagesContext.Provider>
     );
 }

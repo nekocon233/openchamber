@@ -541,8 +541,11 @@ separate lifetime described above.
 `interactions.js` retains call IDs, choices, outcomes and timestamps, without
 copying question bodies. It restores exact multi-select/custom answers and
 plan decisions after reload. Forks copy only retained calls; deletion removes
-the metadata. Reply acknowledgement awaits the metadata write. Native history
-remains readable if supplemental metadata fails: `metadataComplete: false`
+the metadata. Reply acknowledgement awaits the metadata write. Plan questions
+include optional `nativePlanCallID` metadata naming the
+original call, so the UI keeps disclosure state across the original tool and
+its answered question. It is rebuilt from saved call IDs without a migration.
+Native history remains readable if supplemental metadata fails: `metadataComplete: false`
 reports the partial read and the UI keeps previously measured token fields.
 
 Codex consumes `thread/tokenUsage/updated` for its matching active turn.

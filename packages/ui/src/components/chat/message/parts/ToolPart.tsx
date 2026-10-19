@@ -123,6 +123,7 @@ import { findSubagentCancellation, findSubagentRun, readBackgroundSubagentChildI
 import { useGlobalSessionStatusStore } from '@/sync/global-session-status';
 import { useBackgroundShellOutput } from './useBackgroundShellOutput';
 import { useToolContentCompletion } from './useToolContentCompletion';
+import { readPlanPart, readPlanQuestion } from '../planPart';
 
 // Names of files a command changed without a diff, shown in its collapsed row.
 const COLLAPSED_CHANGED_FILE_NAMES = 5;
@@ -1620,7 +1621,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         if (isQuestionTool(part.tool)) {
             const transcript = readQuestionTranscript(input, metadata);
             if (transcript) {
-                const isPlanChoice = metadata?.nativeQuestionKind === 'claude-plan-exit' || metadata?.nativeQuestionKind === 'codex-plan-exit';
+                const isPlanChoice = readPlanQuestion(part) !== null;
                 const choiceLabel = (value: string) => isPlanChoice && value === 'build'
                     ? t('chat.questionCard.planExitApprove')
                     : isPlanChoice && value === 'plan' ? t('chat.questionCard.planExitKeepPlanning') : value;
@@ -1779,6 +1780,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     };
 
     const hasVisibleOutput = outputString.trim().length > 0;
+    const plan = part.tool === 'plan_exit' ? readPlanPart(part) : null;
     const shouldRenderResult = (state.status === 'completed' && 'output' in state)
         || (isShellTool(part.tool) && hasVisibleOutput);
 
@@ -1788,7 +1790,12 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                 'relative pe-2 pb-2 pt-2 space-y-2 ps-4'
             )}
         >
-            {isQuestionTool(part.tool) ? (
+            {plan ? (
+                renderScrollableBlock(<div className="space-y-2">
+                    <FormMarkdown content={plan.text} size="meta" className="text-foreground" />
+                    {state.status === 'error' ? <div className="typography-meta text-[var(--status-error)]">{state.error}</div> : null}
+                </div>, { maxHeightClass: 'max-h-[40vh]' })
+            ) : isQuestionTool(part.tool) ? (
                 renderResultContent()
             ) : (
                 <>

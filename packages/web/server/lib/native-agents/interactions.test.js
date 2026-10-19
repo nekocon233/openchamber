@@ -27,7 +27,7 @@ describe('native interaction answers', () => {
     const attached = await reopened.attach(sessionId, [record('question', 'call-one')]);
     expect(attached[0].parts[0].state.metadata.questionAnswers).toEqual([['A', 'B'], ['"quoted"\n第二行']]);
     const plan = await reopened.attach(sessionId, [record('plan_exit', 'plan-call')]);
-    expect(plan[0].parts[1]).toMatchObject({ tool: 'question', state: { metadata: { questionAnswers: [['plan']], nativeQuestionKind: 'codex-plan-exit' } } });
+    expect(plan[0].parts[1]).toMatchObject({ tool: 'question', state: { metadata: { questionAnswers: [['plan']], nativeQuestionKind: 'codex-plan-exit', nativePlanCallID: 'plan-call' } } });
     // The approval settled at 3, after the reply completed at 2; the row keeps
     // the plan tool's interval so it cannot invalidate turn telemetry.
     expect(plan[0].parts[1].state.time).toEqual({ start: 1, end: 2 });

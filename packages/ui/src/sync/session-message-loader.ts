@@ -1235,7 +1235,7 @@ export class SessionMessageLoader {
             if (part.type !== 'tool' || old?.type !== 'tool' || part.state.status === 'pending' || old.state.status === 'pending') return part
             const metadata = { ...part.state.metadata }
             let changed = false
-            for (const key of ['questionAnswers', 'questionStatus', 'questionResponse', 'nativeQuestionKind']) {
+            for (const key of ['questionAnswers', 'questionStatus', 'questionResponse', 'nativeQuestionKind', 'nativePlanCallID']) {
               if (metadata[key] === undefined && old.state.metadata?.[key] !== undefined) {
                 metadata[key] = old.state.metadata[key]
                 changed = true

@@ -57,7 +57,10 @@ export const createNativeInteractions = ({ dataDir, now = Date.now }) => {
           if (!value) return [part];
           changed = true;
           const metadata = { ...part.state.metadata, questionAnswers: value.answers, questionStatus: value.status };
-          if (value.kind) metadata.nativeQuestionKind = value.kind;
+          if (value.kind) {
+            metadata.nativeQuestionKind = value.kind;
+            metadata.nativePlanCallID = value.callID;
+          }
           if (part.tool === 'question') return [{ ...part, state: { ...part.state, metadata } }];
           if (!value.kind) return [part];
           const plan = z.object({ plan: z.string().optional() }).safeParse(part.state.input).data?.plan ?? '';

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { type Session } from "@/lib/opencode/model"
+import { type Metadata, type Session } from "@/lib/opencode/model"
 
 import type { NativeMessagePage } from "@/lib/api/types"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
@@ -62,7 +62,11 @@ describe("SessionMessageLoader with native sessions", () => {
   test("retains measured tokens when supplemental native metadata temporarily fails", async () => {
     let available = true
     const tokens = { total: 1000, input: 200, output: 50, reasoning: 0, cache: { read: 750, write: 0 } }
-    const { childStores, loader } = createLoader(async () => ({
+    const { childStores, loader } = createLoader(async () => {
+      const metadata: Metadata = available ? {
+        nativeQuestionKind: 'claude-plan-exit', nativePlanCallID: 'original-plan', questionAnswers: [['plan']], questionStatus: 'answered',
+      } : {}
+      return {
       records: [userRecord('ncl_u_prompt', 1), {
         info: {
           id: 'ncl_a_reply', sessionID: SESSION, role: 'assistant', time: { created: 2, completed: 3 },
@@ -70,9 +74,16 @@ describe("SessionMessageLoader with native sessions", () => {
           path: { cwd: DIRECTORY, root: DIRECTORY }, cost: 0,
           tokens: available ? tokens : undefined, contextWindow: available ? 200000 : undefined,
         },
-        parts: [{ id: 'ncl_p_reply', sessionID: SESSION, messageID: 'ncl_a_reply', type: 'text', text: available ? 'Before' : 'Fresh text' }],
+        parts: [
+          { id: 'ncl_p_reply', sessionID: SESSION, messageID: 'ncl_a_reply', type: 'text', text: available ? 'Before' : 'Fresh text' },
+          { id: 'nci_plan', sessionID: SESSION, messageID: 'ncl_a_reply', type: 'tool', tool: 'question', callID: 'ncq_plan', state: {
+            status: 'completed', title: 'Plan', input: { questions: [{ question: '# Repair plan' }] }, output: '', time: { start: 2, end: 3 },
+            metadata,
+          } },
+        ],
       }], cursor: null, complete: true, childSessions: [], metadataComplete: available,
-    }))
+      }
+    })
     const target = { sessionID: SESSION, directory: DIRECTORY }
     await loader.ensure(target)
     available = false
@@ -80,6 +91,9 @@ describe("SessionMessageLoader with native sessions", () => {
     const state = childStores.getChild(DIRECTORY)?.getState()
     expect(state?.message[SESSION]?.find((message) => message.id === 'ncl_a_reply')).toMatchObject({ tokens, contextWindow: 200000, modelID: 'opus' })
     expect(state?.part.ncl_a_reply?.[0]).toMatchObject({ text: 'Fresh text' })
+    expect(state?.part.ncl_a_reply?.[1]).toMatchObject({ state: { metadata: {
+      nativePlanCallID: 'original-plan', nativeQuestionKind: 'claude-plan-exit', questionAnswers: [['plan']],
+    } } })
     loader.dispose()
     childStores.disposeAll()
   })

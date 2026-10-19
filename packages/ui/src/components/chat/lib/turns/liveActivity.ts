@@ -28,8 +28,9 @@ export function getLiveFinalMessage(messages: readonly ChatMessageEntry[]): Chat
 
 /** Subagent calls do not count: a turn that only ran subagents gets no fold, so their rows stay in view. */
 export function hasLiveActivity(turn: TurnRecord, showReasoning: boolean): boolean {
+    const planParts = turn.finalPlan?.sourcePartIDs;
     return turn.activityParts.some((activity) => (
-        (activity.part.type === 'tool' && !isStandaloneTool(activity.part.tool))
+        (!planParts?.has(activity.part.id) && activity.part.type === 'tool' && !isStandaloneTool(activity.part.tool))
         || (showReasoning && activity.kind === 'reasoning')
     ));
 }

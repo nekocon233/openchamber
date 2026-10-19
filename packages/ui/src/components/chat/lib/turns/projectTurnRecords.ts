@@ -1,4 +1,5 @@
 import { isHiddenUserMessage } from '../../message/hiddenUserMessage';
+import { findFinalPlan } from '../../message/planPart';
 import { createNoticeTurnSplitter, isTurnOpeningNotice } from '../timelineRoles';
 import { projectTurnActivity } from './projectTurnActivity';
 import { projectTurnIndexes } from './projectTurnIndexes';
@@ -147,6 +148,11 @@ const hydrateTurnRecord = (
         activity ??= projectTurnActivity({ turnId, assistantMessages });
         return activity;
     };
+    let finalPlan: { value: TurnRecord['finalPlan'] } | undefined;
+    const readFinalPlan = () => {
+        finalPlan ??= { value: findFinalPlan(assistantMessages) };
+        return finalPlan.value;
+    };
 
     const lazy = <T>(read: () => T): PropertyDescriptor => ({ get: read, enumerable: true, configurable: true });
     Object.defineProperties(turn, {
@@ -156,6 +162,7 @@ const hydrateTurnRecord = (
         activityParts: lazy(() => readActivity().activityParts),
         hasTools: lazy(() => readActivity().hasTools),
         hasReasoning: lazy(() => readActivity().hasReasoning),
+        finalPlan: lazy(readFinalPlan),
     });
 
     turn.stream = buildTurnStreamState(turn.userMessage, assistantMessages);

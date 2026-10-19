@@ -827,6 +827,12 @@ with a native branch (`sync/native-send.ts`):
   the selection to Build. Decisions are recovered from the live questions
   endpoint, not inferred from transcript text.
 
+Answered native plan questions carry optional `nativePlanCallID` metadata for
+their original call. Tail refreshes retain this identity and the saved answer
+when supplemental metadata is temporarily unavailable, so a plan's explicit
+disclosure choice cannot reset during recovery. Rendering and per-turn plan
+selection are owned by `components/chat/message/parts/DOCUMENTATION.md`.
+
 Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
 (optimistic marker, composer restore, rollback) with a native branch:
 

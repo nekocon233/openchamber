@@ -29,8 +29,8 @@ export const isActivityRowPart = (part: Part): boolean => {
 };
 
 /** The parts of a message that draw a row, in order. */
-export const activityRowParts = (parts: Part[], showReasoning: boolean): Part[] => (
-    filterVisibleParts(parts, { includeReasoning: showReasoning }).filter(isActivityRowPart)
+export const activityRowParts = (parts: Part[], showReasoning: boolean, excluded?: ReadonlySet<string>): Part[] => (
+    filterVisibleParts(parts, { includeReasoning: showReasoning }).filter((part) => !excluded?.has(part.id) && isActivityRowPart(part))
 );
 
 interface ActivityTrim {

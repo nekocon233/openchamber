@@ -1,4 +1,5 @@
 import type { Message, Part } from '@/lib/opencode/model';
+import type { FinalPlan } from '../../message/planPart';
 
 export interface ChatMessageEntry {
     info: Message;
@@ -64,6 +65,8 @@ export interface TurnRecord {
     hasTools: boolean;
     hasReasoning: boolean;
     changedFiles?: TurnChangedFile[];
+    /** Derived lazily for rendered turns only. */
+    finalPlan?: FinalPlan;
     stream: TurnStreamState;
     startedAt?: number;
     completedAt?: number;
@@ -101,6 +104,7 @@ export interface TurnGroupingContext {
     turnId: string;
     isFirstAssistantInTurn: boolean;
     isLastAssistantInTurn: boolean;
+    finalPlanPartID?: string;
     /**
      * Text the turn's earlier assistant messages wrote, one entry per text
      * part, in order. Set on the last assistant message only, so the turn

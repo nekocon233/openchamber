@@ -58,6 +58,11 @@ describe('completed-turn changed files', () => {
   });
 });
 
+test('a changed final-plan identity invalidates its message context', () => {
+  expect(areRelevantTurnGroupingContextsEqual(finalAnswerContext, { ...finalAnswerContext, finalPlanPartID: 'plan' }, 'answer', false)).toBe(false);
+  expect(areRelevantTurnGroupingContextsEqual({ ...finalAnswerContext, finalPlanPartID: 'plan' }, { ...finalAnswerContext, finalPlanPartID: 'plan' }, 'answer', false)).toBe(true);
+});
+
 describe('running compaction', () => {
   const running: CompactionMessage = {
     id: 'msg_compact', sessionID: 'ses_1', role: 'compaction', time: { created: 1 }, status: 'running', reason: 'auto', summary: '',
