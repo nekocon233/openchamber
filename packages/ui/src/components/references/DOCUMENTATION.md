@@ -115,11 +115,26 @@ preview's footer holds actions instead of what the agent gets.
   is read rather than searched. The board takes from that answer only the item
   whose link names the same repository and number, never just the first row, and
   each request is shown once, so the item shown for the previous link never
-  answers for a new one. One the host does not know opens in the
-  browser, and a Linear identifier Linear cannot read is searched for. The phone opens the found
-  item's preview. Cmd or Ctrl-click, VS Code, a session outside any
-  project, Linear while disconnected and links the board does not list open in
-  the browser. A badge's `+N` does nothing; its tooltip lists the others.
+  answers for a new one. Chat link requests carry `failureBehavior: 'manual'`:
+  loading and failed lookups replace the preview with `SourceBoardLinkFeedback`,
+  retaining the original URL with Retry and an explicit external-browser button.
+  A failed chat link never opens a browser automatically. A request outside chat
+  keeps the automatic behavior: an unknown repository link opens externally and
+  an unreadable Linear identifier is searched for. The phone shows link feedback
+  in its preview page too. Cmd or Ctrl-click and VS Code use the external link.
+  A chat whose project or integration cannot open the board shows a notice with
+  a manual external action. A badge's `+N` does nothing; its tooltip lists the others.
+
+- General settings offers two destinations for chat tracker links, backed by
+  the existing profile boolean `openTrackerLinksOnBoard`: true is OpenChamber,
+  false is the external browser. External tracker links bypass the ordinary
+  desktop `openLinksInBrowserPanel` preference. Existing values and the initial
+  true default are preserved. Mini chat uses external links. The Markdown
+  renderer and web-search result cards share `useOpenChatLink` for this choice.
+  `sourceBoard/boardLinkTarget.ts` owns URL classification and repository-item
+  equivalence without React or store imports, so Markdown can classify a link
+  without loading the board. User Markdown selects tracker-only routing;
+  its ordinary HTTP links keep their browser behavior.
 - A PR's review threads read as the comment that opened them with the
   replies under it (`ReferenceCommentItem.thread`); a reply is not an entry of
   its own. A resolved thread folds to one line ("Resolved · N replies") and

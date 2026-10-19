@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { sourceBoardI18n } from './source-board.i18n';
 
-const locales = ['en', 'de', 'fr', 'nl', 'es', 'ja', 'pt-BR', 'uk', 'ko', 'pl', 'zh-CN', 'zh-TW', 'tr'] as const;
+const locales = ['en', 'de', 'fr', 'nl', 'es', 'ja', 'pt-BR', 'uk', 'ko', 'pl', 'zh-CN', 'zh-TW', 'tr', 'ar', 'he'] as const;
 
 // Words a language writes the same as English.
 const SAME_AS_ENGLISH = new Map<string, string[]>([

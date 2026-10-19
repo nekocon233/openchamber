@@ -1629,14 +1629,26 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
                                 />
                             )}
                             {shouldShow('openTrackerLinksOnBoard') && !isVSCode && (
-                                <SettingsCheckboxRow
-                                    checked={openTrackerLinksOnBoard}
-                                    onChange={setOpenTrackerLinksOnBoard}
-                                    label={t('settings.openchamber.visual.field.openTrackerLinksOnBoard')}
-                                    ariaLabel={t('settings.openchamber.visual.field.openTrackerLinksOnBoard')}
+                                <SettingsControlGroup
+                                    title={t('settings.openchamber.visual.field.openTrackerLinksOnBoard')}
                                     info={t('settings.openchamber.visual.field.openTrackerLinksOnBoardInfo')}
                                     settingsItem="appearance.open-tracker-links-on-board"
-                                />
+                                >
+                                    <SettingsRadioGroup aria-label={t('settings.openchamber.visual.field.openTrackerLinksOnBoard')}>
+                                        <SettingsRadioOption
+                                            selected={openTrackerLinksOnBoard}
+                                            onSelect={() => setOpenTrackerLinksOnBoard(true)}
+                                            label={t('sourceBoard.link.option.board')}
+                                            ariaLabel={t('sourceBoard.link.option.board')}
+                                        />
+                                        <SettingsRadioOption
+                                            selected={!openTrackerLinksOnBoard}
+                                            onSelect={() => setOpenTrackerLinksOnBoard(false)}
+                                            label={t('sourceBoard.link.option.external')}
+                                            ariaLabel={t('sourceBoard.link.option.external')}
+                                        />
+                                    </SettingsRadioGroup>
+                                </SettingsControlGroup>
                             )}
                             {showTerminalShellSetting && (
                                 <SettingsStackedField

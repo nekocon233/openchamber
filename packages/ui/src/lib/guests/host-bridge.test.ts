@@ -33,6 +33,7 @@ const effects = (overrides: Partial<BridgeEffects> = {}): BridgeEffects => ({
   openSession: overrides.openSession ?? (() => {}),
   toast: overrides.toast ?? (() => {}),
   openUrl: overrides.openUrl ?? (async () => true),
+  openBrowser: overrides.openBrowser ?? (() => {}),
   openSurface: overrides.openSurface ?? (() => {}),
   writeClipboard: overrides.writeClipboard ?? (async () => true),
   compose: overrides.compose ?? (() => {}),
@@ -108,6 +109,24 @@ describe('answerGuestMessage', () => {
     }, effects());
     expect(reply?.type).toBe('result');
     expect(reply && reply.type === 'result' && reply.ok).toBe(false);
+  });
+
+  test('opens an in-app browser through its owner and rejects unsafe addresses before opening', async () => {
+    const urls: string[] = [];
+    const bridge = effects({ openBrowser: (url) => { urls.push(url); } });
+    const base = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'open-browser', id: 'browser-1' } as const;
+    const reply = await answerGuestMessage({ ...base, payload: { url: 'https://example.test/?session=1' } }, bridge);
+    expect(reply).toMatchObject({ type: 'result', ok: true });
+    for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,hello', 'broken']) {
+      expect(await answerGuestMessage({ ...base, payload: { url } }, bridge)).toMatchObject({ type: 'result', ok: false });
+    }
+    expect(urls).toEqual(['https://example.test/?session=1']);
+    for (const code of ['UNSUPPORTED', 'NO_DIRECTORY'] as const) {
+      const refused = await answerGuestMessage({ ...base, payload: { url: 'https://example.test' } }, effects({
+        openBrowser: () => { throw new HostRequestError(code, 'Browser is unavailable.'); },
+      }));
+      expect(refused).toMatchObject({ type: 'result', ok: false, code });
+    }
   });
 
   test('rejects an unknown surface', async () => {

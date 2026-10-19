@@ -135,6 +135,46 @@ describe('quota refresh failure is not empty success', () => {
     expect(useQuotaStore.getState().lastUpdated).toBe(before.lastUpdated);
     expect(useQuotaStore.getState().refreshErrors.claude).toBe('Provider API unavailable');
   });
+
+  test('accepts the runtime-owned retained sample and cooldown metadata on a failed refresh', async () => {
+    await useQuotaStore.getState().fetchProviderQuota('claude');
+    const refresh: NonNullable<ProviderResult['refresh']> = { state: 'rate-limited', sampledAt: 123, nextAttemptAt: 300_123 };
+    handleRequest = async () => json({ ...result(), ok: false, error: 'limited', fetchedAt: 456, refresh });
+    await useQuotaStore.getState().fetchProviderQuota('claude');
+    const current = useQuotaStore.getState().results[0];
+    expect(current.usage?.windows.session.usedPercent).toBe(42);
+    expect(current.refresh).toEqual(refresh);
+    expect(current.ok).toBe(false);
+  });
+
+  test('a runtime-owned empty sample cannot retain usage from another Claude account', async () => {
+    await useQuotaStore.getState().fetchProviderQuota('claude');
+    handleRequest = async () => json({ ...result(), ok: false, usage: null, error: 'limited',
+      refresh: { state: 'rate-limited', sampledAt: null, nextAttemptAt: 300_123 } });
+    await useQuotaStore.getState().fetchProviderQuota('claude');
+    expect(useQuotaStore.getState().results[0].usage).toBeNull();
+    expect(useQuotaStore.getState().results[0].refresh?.sampledAt).toBeNull();
+  });
+
+  test('rejects invalid refresh metadata instead of replacing a valid sample', async () => {
+    await useQuotaStore.getState().fetchProviderQuota('claude');
+    const previous = useQuotaStore.getState().results;
+    handleRequest = async () => json({ ...result(), refresh: { state: 'fresh', sampledAt: 123, nextAttemptAt: -1 } });
+    expect(await useQuotaStore.getState().fetchProviderQuota('claude')).toBe(false);
+    expect(useQuotaStore.getState().results).toBe(previous);
+  });
+
+  test('the three-minute timer leaves Claude to its own deadline while refreshing other providers', async () => {
+    useQuotaStore.setState({ dropdownProvidersExplicit: true, dropdownProviderIds: ['claude', 'codex'], results: [
+      { ...result(), refresh: { state: 'cached', sampledAt: 123, nextAttemptAt: 300_123 } },
+    ] });
+    handleRequest = async url => json(result(url.endsWith('/codex') ? 'codex' : 'claude'));
+    await useQuotaStore.getState().refreshSelectedQuotas({ automatic: true });
+    expect(network.mock.calls.map(call => call[0].toString()).some(url => url.endsWith('/claude'))).toBe(false);
+    expect(network.mock.calls.map(call => call[0].toString()).some(url => url.endsWith('/codex'))).toBe(true);
+    await useQuotaStore.getState().refreshSelectedQuotas();
+    expect(network.mock.calls.map(call => call[0].toString()).some(url => url.endsWith('/claude'))).toBe(true);
+  });
 });
 
 describe('quota request deadline', () => {

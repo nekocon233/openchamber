@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { boardTargetOfUrl, isSameRepositoryItemLink } from './openOnBoard';
+import { boardTargetOfUrl, isSameRepositoryItemLink } from './boardLinkTarget';
 
 describe('boardTargetOfUrl', () => {
   test('names the board tab a link belongs on', () => {

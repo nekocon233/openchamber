@@ -889,6 +889,16 @@ describe('actions, commands, and badge wire shapes', () => {
     expect(parseGuestMessage({ ...envelope, type: 'resolve-result', id: 'r-1', payload: { error: '' } })).toBeNull();
   });
 
+  test('round-trips browser requests and the optional host capability', () => {
+    const request = { ...envelope, type: 'open-browser', id: 'browser-1', payload: { url: 'https://example.test/?session=s1' } };
+    expect(parseGuestMessage(request)).toEqual(request);
+    expect(parseGuestMessage({ ...request, payload: { url: '' } })).toBeNull();
+    expect(parseGuestMessage({ ...request, payload: {} })).toBeNull();
+    const supported = { ...envelope, type: 'ready', payload: { ...readyPayload, features: { browserTabs: true } } };
+    expect(parseHostMessage(supported)).toMatchObject({ payload: { features: { browserTabs: true } } });
+    expect(parseHostMessage({ ...supported, payload: { ...readyPayload, features: { browserTabs: 'true' } } })).toBeNull();
+  });
+
   test('accepts open-commit only with a hex commit id', () => {
     expect(parseGuestMessage({ ...envelope, type: 'open-commit', id: 'c-1', payload: { sha: 'abc1234' } })).toMatchObject({ payload: { sha: 'abc1234' } });
     for (const sha of ['abc12', 'HEAD', '--output=x', 'abc1234 ', 'g'.repeat(40), 'a'.repeat(65)]) {

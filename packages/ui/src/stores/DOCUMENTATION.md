@@ -17,6 +17,13 @@ Do not put high-frequency local component state here just because it is convenie
 
 ## Architecture
 
+`useSourceBoardStore` keeps per-runtime board choices and transient requests to
+show a link. Repository focus names its project; both repository and Linear
+focus retain the original URL and a failure behavior. Chat requests use
+`manual`, so a failed lookup remains on the board with an explicit external
+action. Other entry points use `automatic` for their existing fallback.
+Focus requests are consumed once and are excluded from persisted choices.
+
 There are multiple store categories in this directory.
 
 ### Catalog refresh
@@ -96,6 +103,21 @@ rather than the user's selection.
 request, including JSON body delivery. Compact usage cards and Settings display
 refresh errors alongside retained data. The mobile popover makes at most one
 refresh attempt per opening, so a failed first load cannot create a retry loop.
+
+Claude responses with `refresh` own their entire account-scoped snapshot, even
+when `ok` is false. The store replaces that entry and accepts its retained usage
+or explicit `usage: null`; it must not keep another credential's sample. The
+original `refresh.sampledAt` drives Claude's displayed update time rather than
+the global successful-refresh timestamp or response `fetchedAt`.
+`lib/quota/claudeAutoRefresh.ts` schedules one shared deadline from
+`refresh.nextAttemptAt` while quota consumers are mounted. Claude with this
+metadata is omitted from the ordinary three-minute automatic refresh; older
+servers without it retain that cadence. Manual refresh still reaches the
+runtime, which enforces the same five-minute budget. A transport failure backs
+off three minutes locally instead of spinning on an expired server deadline.
+Runtime reset and the last consumer leaving retire the deadline and its store
+subscription. Other providers continue refreshing independently.
+
 Native Kimi sources are discovered from the connected runtime's Claude connection
 metadata, once per load/refresh rather than per render. Their connection revision
 owns invalidation: changed credentials abort older requests and clear only that

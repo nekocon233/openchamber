@@ -123,10 +123,8 @@ export const WorkStatusUsageSection: React.FC = () => {
           <WorkStatusRow
             leading={<ProviderLogo providerId={group.providerId} className="size-4 shrink-0" />}
             label={<span className="font-semibold text-foreground">{group.providerName}</span>}
-            value={group.status && group.rows.length === 0 ? (
-              <WorkStatusValue tone="muted">{group.status}</WorkStatusValue>
-            ) : undefined}
           />
+          {group.status && <p className="px-2 pb-1 typography-micro text-muted-foreground break-words">{group.status}</p>}
           {group.rows.map((row) => {
             const displayPercent = displayMode === 'remaining'
               ? row.window.remainingPercent

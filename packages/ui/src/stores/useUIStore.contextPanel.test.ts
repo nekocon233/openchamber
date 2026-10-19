@@ -477,6 +477,22 @@ describe('useUIStore browser tabs opened with an address', () => {
   const url = 'http://localhost:5173/';
   const tabID = `browser:${url}`;
 
+  test('session URLs reuse their own tab within a project and keep other pages available', () => {
+    useUIStore.setState({ contextSurfaceZones: {} });
+    const first = 'https://example.test/?session=s1';
+    const second = 'https://example.test/?session=s2';
+    const store = useUIStore.getState();
+    store.openContextBrowser('/repo', url);
+    store.openContextBrowser('/repo', first);
+    store.openContextBrowser('/repo', second);
+    store.openContextBrowser('/repo', first);
+    expect(getContextPanelTabs('/repo').map((tab) => tab.targetPath)).toEqual([url, first, second]);
+    expect(useUIStore.getState().contextPanelByDirectory['/repo'].activeTabId).toBe(`browser:${first}`);
+    store.openContextBrowser('/other', first);
+    expect(getContextPanelTabs('/other').map((tab) => tab.targetPath)).toEqual([first]);
+    expect(getContextPanelTabs('/repo')).toHaveLength(3);
+  });
+
   test('a new tab counts as opened now, so its first load may wait for the server', () => {
     forgetBrowserTabOpenedWithAddress('/repo', tabID);
     useUIStore.getState().openContextPreview('/repo', url);

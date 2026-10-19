@@ -9,6 +9,7 @@ import type { DesktopSettings } from '@/lib/desktop';
 import { getDefaultModels } from '@/lib/quota/model-families';
 import { loadDesktopSettings, updateDesktopSettings } from '@/lib/persistence';
 import { fetchQuota } from '@/lib/quota/fetchQuota';
+import { startClaudeQuotaRefresh } from '@/lib/quota/claudeAutoRefresh';
 import { getRuntimeKey, isTransientRuntimeKey } from '@/lib/runtime-switch';
 import { useConfigStore } from '@/stores/useConfigStore';
 
@@ -26,6 +27,7 @@ let inFlightRuntimeLoad: Promise<void> | null = null;
 const quotaRequests = new Map<QuotaProviderId, { controller: AbortController; promise: Promise<boolean> }>();
 let quotaAutoRefreshConsumers = 0;
 let quotaAutoRefreshInterval: number | null = null;
+let stopClaudeAutoRefresh: (() => void) | null = null;
 
 interface QuotaSettingsState {
   dropdownProvidersExplicit: boolean;
@@ -39,7 +41,7 @@ interface QuotaStore extends QuotaSettingsState {
   nativeProviders: NativeQuotaProvider[];
   nativeProviderError: string | null;
   loadNativeProviders: (force?: boolean) => Promise<void>;
-  refreshSelectedQuotas: () => Promise<boolean>;
+  refreshSelectedQuotas: (options?: { automatic?: boolean }) => Promise<boolean>;
   results: ProviderResult[];
   /** Instance whose quotas `results` describes, or `null` when nothing is loaded. */
   loadedRuntimeKey: string | null;
@@ -200,7 +202,7 @@ export const useQuotaStore = create<QuotaStore>()(
         return nativeQuotaLoad;
       },
 
-      refreshSelectedQuotas: async () => {
+      refreshSelectedQuotas: async ({ automatic = false } = {}) => {
         const generation = quotaGeneration;
         const state = get();
         if (state.dropdownProvidersExplicit && state.dropdownProviderIds.length === 0) return false;
@@ -208,7 +210,9 @@ export const useQuotaStore = create<QuotaStore>()(
           await get().loadNativeProviders();
         }
         if (generation !== quotaGeneration) return false;
-        return get().fetchQuotas(get().dropdownProviderIds);
+        const current = get();
+        const claudeScheduled = current.results.some(result => result.providerId === 'claude' && result.refresh);
+        return current.fetchQuotas(current.dropdownProviderIds.filter(id => !(automatic && claudeScheduled && id === 'claude')));
       },
 
       fetchQuotas: async (providerIds, { invalidate = false } = {}) => {
@@ -260,7 +264,9 @@ export const useQuotaStore = create<QuotaStore>()(
                 // blanking the surface on a blip. After a switch it is wrong:
                 // that sample belongs to the account just left, so keeping it
                 // shows one account's usage as if it were the new account's.
-                const keepPrevious = previous?.configured && !invalidate;
+                // Claude's runtime owns its retained sample, including account
+                // changes detected outside this UI. Accept that entire snapshot.
+                const keepPrevious = previous?.configured && !invalidate && !result.refresh;
                 const results = keepPrevious
                   ? state.results
                   : [...state.results.filter(entry => entry.providerId !== providerId), result];
@@ -428,8 +434,22 @@ export const useQuotaAutoRefresh = () => {
     quotaAutoRefreshConsumers += 1;
     if (quotaAutoRefreshInterval === null) {
       quotaAutoRefreshInterval = window.setInterval(() => {
-        void useQuotaStore.getState().refreshSelectedQuotas();
+        void useQuotaStore.getState().refreshSelectedQuotas({ automatic: true });
       }, QUOTA_REFRESH_INTERVAL_MS);
+      stopClaudeAutoRefresh = startClaudeQuotaRefresh({
+        read: () => {
+          const state = useQuotaStore.getState();
+          const claude = state.results.find(result => result.providerId === 'claude');
+          return {
+            generation: quotaGeneration,
+            enabled: state.dropdownProviderIds.includes('claude') && claude?.configured === true,
+            fetching: state.isFetchingProvider.claude === true,
+            refresh: claude?.refresh,
+          };
+        },
+        subscribe: listener => useQuotaStore.subscribe(listener),
+        refresh: () => useQuotaStore.getState().fetchProviderQuota('claude'),
+      });
     }
 
     return () => {
@@ -437,6 +457,8 @@ export const useQuotaAutoRefresh = () => {
       if (quotaAutoRefreshConsumers === 0 && quotaAutoRefreshInterval !== null) {
         window.clearInterval(quotaAutoRefreshInterval);
         quotaAutoRefreshInterval = null;
+        stopClaudeAutoRefresh?.();
+        stopClaudeAutoRefresh = null;
       }
     };
   }, []);

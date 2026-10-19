@@ -5,6 +5,8 @@ type AppLinkInteractionOptions = {
   allowExternalHttp: boolean;
   openAppLink: (url: string) => void;
   openExternalHttp: (url: string) => void;
+  /** Leave other HTTP links to the browser, for surfaces that route tracker links only. */
+  shouldHandleExternalHttp?: (url: string) => boolean;
   /** Opens a link to a session or message of this app in place. */
   openSessionLink?: (target: SessionLinkTarget) => void;
   /** Addresses serving this instance; web session links count only when they point at one. */
@@ -76,6 +78,7 @@ export const attachAppLinkInteractions = (
 
     const href = findLink(event)?.getAttribute('href') ?? '';
     if (!isExternalHttpUrl(href)) return;
+    if (options.shouldHandleExternalHttp && !options.shouldHandleExternalHttp(href)) return;
     event.preventDefault();
     event.stopPropagation();
     options.openExternalHttp(href);

@@ -4,6 +4,13 @@ One directory per Settings page. `shared/` holds the page chrome and controls
 every page is built from; see `.agents/skills/settings-ui-patterns/SKILL.md` for
 which primitive to reach for.
 
+General's Navigation section offers the chat Issue/PR destination as a radio
+group, using `SettingsControlGroup`, `SettingsRadioGroup` and
+`SettingsRadioOption`. It retains the `openTrackerLinksOnBoard` profile setting
+and the `appearance.open-tracker-links-on-board` search anchor. The external
+choice opens tracker links in the system browser, independent of the ordinary
+links' built-in-browser checkbox. The shared UI hides this choice in VS Code.
+
 ## Autosave on the OpenCode configuration pages
 
 `agents/`, `commands/`, `skills/`, `mcp/`, `plugins/` and `behavior/` edit files
@@ -240,6 +247,14 @@ plugin's `claude-code` integration sign-in through the shared
 `providers/ProviderOAuthMethods.tsx` and re-reads Claude usage once it
 finishes. Without the plugin, or when the integration list cannot be read, it
 shows the `claude auth login` command, which works in both cases.
+
+Claude results with `refresh` display the runtime's original successful sample
+time and next query time. A 429 keeps any retained usage visible and explains
+the next attempt in the active locale; a first-load 429 never invents an update
+time. Runtime-owned errors replace the complete Claude sample so an account
+switch cannot leave the preceding account's numbers visible. The refresh button
+uses the same runtime request budget as automatic refreshes. Timing and restart
+behavior belong to the quota module, not the Settings page.
 
 ### Policy-blocked MCP servers and skills
 

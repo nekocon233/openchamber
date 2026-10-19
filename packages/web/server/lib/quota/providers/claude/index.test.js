@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const credential = vi.fn();
@@ -38,13 +41,22 @@ const errorResponse = (status, headers = {}) => ({
   json: async () => ({}),
 });
 
+let directory;
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(Date.parse('2026-10-19T08:00:00Z'));
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-claude-provider-'));
+  vi.stubEnv('OPENCHAMBER_DATA_DIR', directory);
   resetClaudeQuotaCache();
   credential.mockReturnValue(CREDENTIAL);
 });
 
 afterEach(() => {
+  resetClaudeQuotaCache();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+  fs.rmSync(directory, { recursive: true, force: true });
 });
 
 describe('Claude quota provider', () => {
@@ -77,6 +89,7 @@ describe('Claude quota provider', () => {
 
     const first = fetchQuota();
     const second = fetchQuota();
+    await Promise.resolve();
     resolveResponse(jsonResponse(PAYLOAD));
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
@@ -93,9 +106,11 @@ describe('Claude quota provider', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await fetchQuota();
+    vi.setSystemTime(Date.now() + 300_000);
     const rateLimited = await fetchQuota();
 
-    expect(rateLimited.ok).toBe(true);
+    expect(rateLimited.ok).toBe(false);
+    expect(rateLimited.refresh.state).toBe('rate-limited');
     expect(rateLimited.usage.windows['5h'].usedPercent).toBe(5);
   });
 
@@ -106,6 +121,7 @@ describe('Claude quota provider', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await fetchQuota();
+    vi.setSystemTime(Date.now() + 300_000);
     await fetchQuota();
     await fetchQuota();
 
@@ -143,6 +159,6 @@ describe('Claude quota provider', () => {
 
     expect(result.ok).toBe(false);
     expect(result.usage).toBeNull();
-    expect(result.error).toBe('socket hang up');
+    expect(result.error).toContain('request failed');
   });
 });

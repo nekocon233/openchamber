@@ -146,6 +146,8 @@ export type HostClient = {
   onAction: (handler: (item: GuestActionItem) => void | Promise<void>) => () => void;
   toast: (request: ToastRequest) => Promise<void>;
   openUrl: (url: string) => Promise<void>;
+  /** Open or focus an in-app browser tab in the current project. Requires ready.features.browserTabs. */
+  openBrowser: (url: string) => Promise<void>;
   /**
    * Show a commit of the open project in the host's Diff view (commit scope).
    * `sha` is 7 to 64 hex characters; the host reads the commit itself. No open
@@ -873,6 +875,18 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       id: nextId(ids),
       payload: { url },
     }),
+    openBrowser: (url) => {
+      if (lastReady?.features?.browserTabs !== true) {
+        return Promise.reject(new HostRequestError('UNSUPPORTED', 'This host does not support opening browser tabs.'));
+      }
+      return request({
+        channel: OPENCHAMBER_SDK_CHANNEL,
+        v: OPENCHAMBER_SDK_API_VERSION,
+        type: 'open-browser',
+        id: nextId(ids),
+        payload: { url },
+      });
+    },
     openCommit: (sha) => (isGuestCommitSha(sha) ? request({
       channel: OPENCHAMBER_SDK_CHANNEL,
       v: OPENCHAMBER_SDK_API_VERSION,

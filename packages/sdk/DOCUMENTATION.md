@@ -23,6 +23,8 @@ Public author pages live in `packages/docs/content/docs/sdk.mdx`, `sdk/host.mdx`
 
 ## Invariants
 
+- `openBrowser(url)` posts `open-browser { url }` only when `ready.features.browserTabs` is true; otherwise the client rejects with `UNSUPPORTED` before posting. The host validates HTTP/HTTPS and opens the current project's browser tab through `openContextBrowser`, reusing a tab with the same URL and revealing it in its existing zone. The calling frame's directory is authoritative. Web and Electron support this; VS Code and hosted/native mobile return `UNSUPPORTED`, and no project returns `NO_DIRECTORY`. No new capability is required. This is user navigation, so these tabs have no agent owner. `openUrl` retains its external-browser behavior.
+
 - `scripts/bump-version.mjs` refreshes `bun.lock` after bumping package versions; include both in the release commit. Bun resolves `workspace:*` in published archives from lockfile versions, and a frozen install can succeed with stale versions. `scripts/bump-version.test.mjs` covers the bump, frozen install, and packed dependency versions together.
 
 - Extension activity uses `useConfigStore.isConnected` plus live status records and directory `sessionStatusReady` authority. `useUIStore.eventStreamStatus` is an unmaintained diagnostic field, not a connection gate; its default `idle` must not hide known running or idle sessions as `unknown`.

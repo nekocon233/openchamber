@@ -252,6 +252,7 @@ const readyPayloadSchema = z.object({
     deviceStorage: z.literal(true).optional(),
     statusControls: z.literal(true).optional(),
     popovers: z.literal(true).optional(),
+    browserTabs: z.literal(true).optional(),
   }).optional(),
 });
 
@@ -481,6 +482,14 @@ export const guestMessageSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('open-url'),
+    id: z.string().min(1),
+    payload: z.object({
+      url: z.string().trim().min(1).max(GUEST_ATTACH_URL_MAX),
+    }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('open-browser'),
     id: z.string().min(1),
     payload: z.object({
       url: z.string().trim().min(1).max(GUEST_ATTACH_URL_MAX),

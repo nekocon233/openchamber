@@ -95,6 +95,24 @@ describe('app link interactions', () => {
     expect(disabled.httpLinks).toEqual([]);
   });
 
+  test('a tracker-only surface routes matching links once and leaves ordinary and modified links to the browser', () => {
+    const container = new TestContainer();
+    const opened: string[] = [];
+    const tracker = 'https://github.com/org/repo/pull/12';
+    const ordinary = 'https://example.com/help';
+    const cleanup = attachAppLinkInteractions(container, {
+      allowExternalHttp: true,
+      shouldHandleExternalHttp: (url) => url === tracker,
+      openAppLink: () => {},
+      openExternalHttp: (url) => opened.push(url),
+    });
+    expect(container.dispatch('click', ordinary).defaultPrevented).toBe(false);
+    expect(container.dispatch('click', tracker, { ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(container.dispatch('click', tracker).defaultPrevented).toBe(true);
+    expect(opened).toEqual([tracker]);
+    cleanup();
+  });
+
   test('opens session links in place', () => {
     const { container, sessionLinks, httpLinks } = setup();
 

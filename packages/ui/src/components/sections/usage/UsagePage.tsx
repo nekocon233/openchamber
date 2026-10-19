@@ -15,6 +15,7 @@ import type { UsageWindows, QuotaProviderId } from '@/types';
 import { getAllModelFamilies, getDisplayModelName, sortModelFamilies, groupModelsByFamilyWithGetter } from '@/lib/quota/model-families';
 import { Icon } from "@/components/icon/Icon";
 import { useI18n } from '@/lib/i18n';
+import { formatQuotaRefreshStatus } from '@/lib/quota/refreshStatus';
 import { formatTimeForPreference } from '@/lib/timeFormat';
 import { useUIStore, type TimeFormatPreference } from '@/stores/useUIStore';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
@@ -80,7 +81,11 @@ export const UsagePage: React.FC = () => {
   const providerName = providerMeta?.name ?? selectedProviderId ?? t('settings.usage.sidebar.title');
   const usage = selectedResult?.usage;
   const refreshError = selectedProviderId ? refreshErrors[selectedProviderId] : undefined;
-  const selectedProviderError = refreshError
+  const refreshStatus = formatQuotaRefreshStatus(selectedResult, t, timeFormatPreference, refreshError);
+  const sampleUpdatedAt = selectedResult?.refresh ? selectedResult.refresh.sampledAt : lastUpdated;
+  const selectedProviderError = selectedResult?.refresh
+    ? (!selectedResult.ok || refreshError ? refreshStatus : null)
+    : refreshError
     ? usage
       ? t('header.services.usageRefreshFailedStale', { error: refreshError })
       : refreshError
@@ -175,13 +180,15 @@ export const UsagePage: React.FC = () => {
       description={
         isLoading ? (
           <span className="animate-pulse typography-settings-description text-muted-foreground">{t('settings.usage.page.header.refreshing')}</span>
+        ) : refreshStatus && !selectedProviderError ? (
+          selectedResult?.planLabel ? `${selectedResult.planLabel} · ${refreshStatus}` : refreshStatus
         ) : selectedResult?.planLabel ? (
           t('settings.usage.page.header.lastUpdatedWithPlan', {
             plan: selectedResult.planLabel,
-            time: formatTime(lastUpdated, timeFormatPreference),
+            time: formatTime(sampleUpdatedAt, timeFormatPreference),
           })
         ) : (
-          t('settings.usage.page.header.lastUpdated', { time: formatTime(lastUpdated, timeFormatPreference) })
+          t('settings.usage.page.header.lastUpdated', { time: formatTime(sampleUpdatedAt, timeFormatPreference) })
         )
       }
       showSaveStatus

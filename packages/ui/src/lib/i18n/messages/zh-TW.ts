@@ -23,6 +23,11 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "usage.refresh.updated": "更新於 {updated}。下次查詢 {next}。",
+  "usage.refresh.limitedWithSample": "用量查詢受限。更新於 {updated}。下次嘗試 {next}。",
+  "usage.refresh.limitedWithoutSample": "用量查詢受限，暫無已儲存的用量。下次嘗試 {next}。",
+  "usage.refresh.nextAttempt": "下次嘗試 {next}。",
+
   "chat.nativeTasks.title": "任務",
   "chat.nativeTasks.open": "開啟對話任務",
   "chat.nativeTasks.description": "此對話的待辦清單、背景任務和計畫書。",

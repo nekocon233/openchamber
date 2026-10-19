@@ -23,6 +23,11 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "usage.refresh.updated": "Actualizado el {updated}. Próxima consulta el {next}.",
+  "usage.refresh.limitedWithSample": "Consulta de uso limitada. Actualizado el {updated}. Próximo intento el {next}.",
+  "usage.refresh.limitedWithoutSample": "Consulta de uso limitada. No hay datos de uso guardados. Próximo intento el {next}.",
+  "usage.refresh.nextAttempt": "Próximo intento el {next}.",
+
   "chat.nativeTasks.title": "Tareas",
   "chat.nativeTasks.open": "Abrir tareas de la sesión",
   "chat.nativeTasks.description": "Listas, tareas en segundo plano y planes de esta sesión.",

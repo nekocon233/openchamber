@@ -2,6 +2,12 @@
 
 This folder contains renderers for chat message parts (text, tools, reasoning, placeholders) and shared tool presentation helpers.
 
+User text rendered as Markdown passes `trackerLinksOnly` to
+`SimpleMarkdownRenderer`: Issue/PR links follow the chat destination preference,
+while ordinary HTTP links keep their browser behavior. App and session link
+interception still runs through the shared link interaction handler. Assistant
+Markdown and web-search result cards use the general chat link router.
+
 Use this doc when you ask an agent to change tool/header/description behavior.
 
 ## High-level flow

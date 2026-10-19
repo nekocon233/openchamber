@@ -3,11 +3,12 @@ import { OPENCODE_CONFIG_DIR } from './opencodeConfigPaths';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createHash } from 'node:crypto';
 import { fetchOpenCodeGoUsage, type OpenCodeGoApiKeyCredential, type OpenCodeGoConsoleCredential } from './opencodeGoQuota';
 import { deleteLegacyOllamaCloudCredential, deleteLegacyOpenCodeGoCredential, readCredential } from './quotaCredentials';
 import { readOpenCodeCredentials } from './opencodeAuth';
 import { loadClaudeCredential } from './claudeAuth';
+import { createClaudeQuotaTracker } from '../../web/server/lib/quota/providers/claude/tracker.js';
+import type { QuotaRefresh } from '../../ui/src/types/quota';
 import type { ClaudeCredential } from './claudeAuth';
 import { readConfig } from './opencodeConfig';
 import { isRecord, toProviderEntity } from './opencode-config-v2';
@@ -258,6 +259,7 @@ type ProviderResult = {
   configured: boolean;
   usage: ProviderUsage | null;
   fetchedAt: number;
+  refresh?: QuotaRefresh;
   error?: string;
   availability?: 'available' | 'unsupported';
   planLabel?: string | null;
@@ -1588,205 +1590,18 @@ const fetchAntigravityQuota = async (): Promise<ProviderResult> => {
   });
 };
 
-const CLAUDE_DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
-const CLAUDE_MAX_COOLDOWN_MS = 60 * 60 * 1000;
-let claudeCredentialFingerprint: string | null = null;
-let claudeCachedUsage: {
-  fingerprint: string;
-  usage: ProviderUsage;
-  planLabel: string | null;
-} | null = null;
-let claudeCooldownUntil = 0;
+let claudeTracker = createClaudeQuotaTracker({ cacheScope: 'vscode', loadCredential: loadClaudeCredential });
 
-const claudeCooldownFromResponse = (response: Response): number => {
-  const raw = response.headers.get('retry-after');
-  const seconds = raw ? Number(raw) : Number.NaN;
-  if (Number.isFinite(seconds) && seconds > 0) {
-    return Math.min(seconds * 1000, CLAUDE_MAX_COOLDOWN_MS);
-  }
-  if (raw) {
-    const retryAt = Date.parse(raw);
-    if (Number.isFinite(retryAt) && retryAt > Date.now()) {
-      return Math.min(retryAt - Date.now(), CLAUDE_MAX_COOLDOWN_MS);
-    }
-  }
-  return CLAUDE_DEFAULT_COOLDOWN_MS;
+export const configureClaudeQuotaScope = (scope: string): void => {
+  claudeTracker.reset();
+  claudeTracker = createClaudeQuotaTracker({ cacheScope: `vscode:${scope}`, loadCredential: loadClaudeCredential });
 };
 
-const buildClaudeRateLimitResult = (fingerprint: string, planLabel: string | null): ProviderResult => {
-  if (claudeCachedUsage?.fingerprint === fingerprint) {
-    return buildResult({
-      providerId: 'claude',
-      providerName: 'Claude',
-      ok: true,
-      configured: true,
-      usage: claudeCachedUsage.usage,
-      planLabel: planLabel ?? claudeCachedUsage.planLabel,
-    });
-  }
-  return buildResult({
-    providerId: 'claude',
-    providerName: 'Claude',
-    ok: false,
-    configured: true,
-    error: 'Rate limited. Retrying soon.',
-  });
-};
-
-const buildClaudeUsage = (payload: Record<string, unknown>): ProviderUsage => {
-  const windows: Record<string, UsageWindow> = {};
-  const models: Record<string, ProviderUsage> = {};
-  const limits = Array.isArray(payload.limits) ? payload.limits : [];
-
-  for (const entry of limits) {
-    const limit = asObject(entry);
-    if (!limit) continue;
-    const usedPercent = toNumber(limit.percent);
-    const resetAt = toTimestamp(limit.resets_at);
-    if (limit.kind === 'session') {
-      windows['5h'] = toUsageWindow({ usedPercent, windowSeconds: 5 * 60 * 60, resetAt });
-    } else if (limit.kind === 'weekly_all') {
-      windows['7d'] = toUsageWindow({ usedPercent, windowSeconds: 7 * 24 * 60 * 60, resetAt });
-    } else if (limit.kind === 'weekly_scoped') {
-      const modelName = asNonEmptyString(asObject(asObject(limit.scope)?.model)?.display_name);
-      if (modelName) {
-        models[modelName] = {
-          windows: {
-            '7d': toUsageWindow({ usedPercent, windowSeconds: 7 * 24 * 60 * 60, resetAt }),
-          },
-        };
-      }
-    }
-  }
-
-  if (!limits.length) {
-    const fiveHour = asObject(payload.five_hour);
-    const sevenDay = asObject(payload.seven_day);
-    if (fiveHour) {
-      windows['5h'] = toUsageWindow({
-        usedPercent: toNumber(fiveHour.utilization),
-        windowSeconds: 5 * 60 * 60,
-        resetAt: toTimestamp(fiveHour.resets_at),
-      });
-    }
-    if (sevenDay) {
-      windows['7d'] = toUsageWindow({
-        usedPercent: toNumber(sevenDay.utilization),
-        windowSeconds: 7 * 24 * 60 * 60,
-        resetAt: toTimestamp(sevenDay.resets_at),
-      });
-    }
-  }
-
-  const spend = asObject(payload.spend);
-  if (spend?.enabled === true) {
-    const usedMoney = asObject(spend.used);
-    const limitMoney = asObject(spend.limit);
-    const usedMinor = toNumber(usedMoney?.amount_minor);
-    const limitMinor = toNumber(limitMoney?.amount_minor);
-    const exponent = toNumber(usedMoney?.exponent) ?? 2;
-    const currency = asNonEmptyString(usedMoney?.currency);
-    const prefix = currency === 'USD' || !currency ? '$' : `${currency} `;
-    const used = usedMinor === null ? null : usedMinor / 10 ** exponent;
-    const limit = limitMinor === null ? null : limitMinor / 10 ** (toNumber(limitMoney?.exponent) ?? 2);
-    windows.extra_usage = toUsageWindow({
-      usedPercent: toNumber(spend.percent),
-      windowSeconds: null,
-      resetAt: null,
-      valueLabel: used === null ? null : `${prefix}${formatMoney(used)}${limit === null ? '' : ` / ${prefix}${formatMoney(limit)}`}`,
-    });
-  }
-
-  return Object.keys(models).length ? { windows, models } : { windows };
-};
-
-export const fetchClaudeQuota = async (
+export const fetchClaudeQuota = (
   loadCredential: () => ClaudeCredential | null | Promise<ClaudeCredential | null> = loadClaudeCredential,
-): Promise<ProviderResult> => {
-  const credential = await loadCredential();
-  if (!credential) {
-    return buildResult({
-      providerId: 'claude',
-      providerName: 'Claude',
-      ok: false,
-      configured: false,
-      error: 'Not configured',
-    });
-  }
+): Promise<ProviderResult> => claudeTracker.fetchQuota(loadCredential);
 
-  const fingerprint = createHash('sha256')
-    .update(`${credential.accessToken}\0${credential.refreshToken ?? ''}`)
-    .digest('hex');
-  if (claudeCredentialFingerprint !== fingerprint) {
-    claudeCredentialFingerprint = fingerprint;
-    claudeCachedUsage = null;
-    claudeCooldownUntil = 0;
-  }
-  if (Date.now() < claudeCooldownUntil) {
-    return buildClaudeRateLimitResult(fingerprint, credential.planLabel);
-  }
-
-  try {
-    const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${credential.accessToken}`,
-        'anthropic-beta': 'oauth-2025-04-20',
-      },
-    });
-
-    if (response.status === 429) {
-      claudeCooldownUntil = Date.now() + claudeCooldownFromResponse(response);
-      return buildClaudeRateLimitResult(fingerprint, credential.planLabel);
-    }
-
-    if (response.status === 401 || response.status === 403) {
-      return buildResult({
-        providerId: 'claude',
-        providerName: 'Claude',
-        ok: false,
-        configured: true,
-        error: 'Claude session expired. Open Claude Code to sign in again.',
-      });
-    }
-
-    if (!response.ok) {
-      return buildResult({
-        providerId: 'claude',
-        providerName: 'Claude',
-        ok: false,
-        configured: true,
-        error: `API error: ${response.status}`,
-      });
-    }
-
-    const payload = await response.json() as Record<string, unknown>;
-    const usage = buildClaudeUsage(payload);
-    claudeCachedUsage = { fingerprint, usage, planLabel: credential.planLabel };
-    return buildResult({
-      providerId: 'claude',
-      providerName: 'Claude',
-      ok: true,
-      configured: true,
-      usage,
-      planLabel: credential.planLabel,
-    });
-  } catch (error) {
-    return buildResult({
-      providerId: 'claude',
-      providerName: 'Claude',
-      ok: false,
-      configured: true,
-      error: error instanceof Error ? error.message : 'Request failed',
-    });
-  }
-};
-
-export const resetClaudeQuotaCache = (): void => {
-  claudeCredentialFingerprint = null;
-  claudeCachedUsage = null;
-  claudeCooldownUntil = 0;
-};
+export const resetClaudeQuotaCache = (): void => claudeTracker.reset();
 
 const buildCopilotWindows = (payload: Record<string, unknown>) => {
   const quota = (payload.quota_snapshots as Record<string, unknown>) ?? {};

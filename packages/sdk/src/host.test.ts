@@ -1033,6 +1033,33 @@ describe('connectHost resolve and badge', () => {
     await Promise.all(calls);
   });
 
+  test('openBrowser requires host support and carries the host result back to the guest', async () => {
+    const frame = createFrame();
+    const host = connectHost({ target: frame, acceptSource: () => true });
+    frame.dispatch(new MessageEvent('message', { data: ready }));
+    await expect(host.openBrowser('https://example.test/?session=1')).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+    expect(frame.posted.some((message) => message.type === 'open-browser')).toBe(false);
+
+    frame.dispatch(new MessageEvent('message', { data: { ...ready, payload: { ...ready.payload, features: { browserTabs: true } } } }));
+    const opened = host.openBrowser('https://example.test/?session=1');
+    const message = frame.posted.at(-1);
+    if (message?.type !== 'open-browser') throw new Error('Missing browser request');
+    expect(message.payload).toEqual({ url: 'https://example.test/?session=1' });
+    frame.dispatch(new MessageEvent('message', { data: {
+      channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'result', id: message.id, ok: true,
+    } }));
+    await opened;
+
+    const refused = host.openBrowser('https://example.test/?session=2');
+    const request = frame.posted.at(-1);
+    if (request?.type !== 'open-browser') throw new Error('Missing browser request');
+    frame.dispatch(new MessageEvent('message', { data: {
+      channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'result', id: request.id, ok: false, code: 'NO_DIRECTORY', error: 'No project is open.',
+    } }));
+    await expect(refused).rejects.toMatchObject({ code: 'NO_DIRECTORY' });
+    host.dispose();
+  });
+
   test('openCommit posts a valid hash and refuses anything else locally', async () => {
     const parent = createFrame();
     const guest = createFrame();

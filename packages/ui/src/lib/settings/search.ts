@@ -277,7 +277,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'general',
     titleKey: 'settings.openchamber.visual.field.openTrackerLinksOnBoard',
     descriptionKey: 'settings.openchamber.visual.field.openTrackerLinksOnBoardInfo',
-    keywords: ['links', 'github', 'gitlab', 'linear', 'issue', 'pull request', 'merge request', 'board'],
+    keywords: ['links', 'github', 'gitlab', 'linear', 'issue', 'pull request', 'merge request', 'board', 'popup', 'external', 'browser'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {

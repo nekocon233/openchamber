@@ -50,6 +50,11 @@ export const fetchQuota = async (
       planLabel: z.string().nullable().optional(),
       usage: z.object({ windows: windowsSchema, models: z.record(z.string(), z.object({ windows: windowsSchema })).optional() }).nullable(),
       fetchedAt: z.number(),
+      refresh: z.object({
+        state: z.enum(['fresh', 'cached', 'rate-limited', 'error']),
+        sampledAt: z.number().nonnegative().nullable(),
+        nextAttemptAt: z.number().nonnegative(),
+      }).optional(),
     }).parse(payload);
   };
   try {

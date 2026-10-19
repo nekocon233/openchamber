@@ -112,7 +112,10 @@ export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode
         });
       }
       const { fetchQuotaForProvider } = await getQuotaProviders();
-      res.json(await fetchQuotaForProvider(providerId));
+      const claudeCacheScope = process.env.OPENCHAMBER_RUNTIME === 'desktop'
+        ? 'desktop'
+        : `web:${req.socket.localPort}`;
+      res.json(await fetchQuotaForProvider(providerId, { claudeCacheScope }));
     } catch (error) {
       console.error('Failed to fetch quota:', error);
       res.status(500).json({ error: error.message || 'Failed to fetch quota' });

@@ -219,7 +219,7 @@ export const listConfiguredQuotaProviders = async () => {
   return configured;
 };
 
-const fetchQuotaForProviderUncoalesced = async (providerId) => {
+const fetchQuotaForProviderUncoalesced = async (providerId, claudeCacheScope = 'web') => {
   const provider = registry[providerId];
 
   if (!provider) {
@@ -233,7 +233,7 @@ const fetchQuotaForProviderUncoalesced = async (providerId) => {
   }
 
   try {
-    return await provider.fetchQuota();
+    return await (providerId === claude.providerId ? claude.fetchQuota(claudeCacheScope) : provider.fetchQuota());
   } catch (error) {
     return buildResult({
       providerId: provider.providerId,
@@ -245,7 +245,10 @@ const fetchQuotaForProviderUncoalesced = async (providerId) => {
   }
 };
 
-export const fetchQuotaForProvider = (providerId) => {
+export const fetchQuotaForProvider = (providerId, { claudeCacheScope = 'web' } = {}) => {
+  // Claude reads the credential before joining an in-flight request, so an
+  // account switch never joins the previous account's fetch.
+  if (providerId === claude.providerId) return fetchQuotaForProviderUncoalesced(providerId, claudeCacheScope);
   const existing = pendingFetches.get(providerId);
   if (existing) return existing;
 

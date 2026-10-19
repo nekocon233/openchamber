@@ -57,6 +57,7 @@ type HostBridgeEffects = {
   openSession: (sessionId: string) => void;
   toast: (request: ToastRequest) => void;
   openUrl: (url: string) => Promise<boolean>;
+  openBrowser: (url: string) => void;
   openSurface: (mode: ContextPanelMode) => void;
   writeClipboard: (text: string) => Promise<boolean>;
   compose: (text: string, mode: 'replace' | 'append') => void;
@@ -283,6 +284,13 @@ export const answerGuestMessage = async (
       }
       const opened = await effects.openUrl(message.payload.url);
       return opened ? okResult(message.id) : errorResult(message.id, 'Could not open URL.');
+    }
+    case 'open-browser': {
+      if (!isHttpUrl(message.payload.url)) {
+        return errorResult(message.id, 'URL must be http or https.');
+      }
+      effects.openBrowser(message.payload.url);
+      return okResult(message.id);
     }
     case 'open-surface': {
       if (!isContextPanelMode(message.payload.surfaceId)) {

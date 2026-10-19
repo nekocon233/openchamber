@@ -3,6 +3,7 @@ import { ChatViewProvider } from './ChatViewProvider';
 import { SessionEditorPanelProvider } from './SessionEditorPanelProvider';
 import { createOpenCodeManager, type OpenCodeManager } from './opencode';
 import { configureOpenCodeCredentials, openCodeCredentialSource } from './opencodeAuth';
+import { configureClaudeQuotaScope } from './quotaProviders';
 import { configureProjectStartCommandSource, openCodeProjectStartCommandSource } from '../../web/server/lib/opencode/project-start-command.js';
 import { startGlobalEventWatcher, stopGlobalEventWatcher, setChatViewProvider } from './sessionActivityWatcher';
 import { pathsEqualWithNormalizedDriveLetter } from './pathUtils';
@@ -57,6 +58,7 @@ const formatDurationMs = (value: number | null | undefined) => {
 
 export async function activate(context: vscode.ExtensionContext) {
   applyConnectAttemptTimeout();
+  configureClaudeQuotaScope((context.storageUri ?? context.globalStorageUri).fsPath);
   outputChannel = vscode.window.createOutputChannel('OpenChamber');
 
   let moveToRightSidebarScheduled = false;

@@ -234,6 +234,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
   const readableColors = React.useMemo(() => getReadableThemeColors(currentTheme), [currentTheme]);
   const ready = React.useMemo<HostReadyContext>(() => {
     const features: NonNullable<HostReadyContext['features']> = {};
+    if (!isVSCodeRuntime() && !isMobileSurfaceRuntime()) features.browserTabs = true;
     if (guest?.storageId && globalThis.indexedDB) features.deviceStorage = true;
     if (surface === 'status' && onStatusControls) features.statusControls = true;
     if (!popoverHost && !popover && !headless && !isVSCodeRuntime() && !isMobileSurfaceRuntime()
@@ -627,6 +628,14 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
           showGuestToast(request);
         },
         openUrl: openExternalUrl,
+        openBrowser: (url) => {
+          if (isVSCodeRuntime() || isMobileSurfaceRuntime()) {
+            throw new HostRequestError('UNSUPPORTED', 'This OpenChamber surface has no extension browser tabs.');
+          }
+          const dir = directoryRef.current;
+          if (!dir) throw new HostRequestError('NO_DIRECTORY', 'No project is open.');
+          useUIStore.getState().openContextBrowser(dir, url);
+        },
         openSurface: (surfaceMode) => {
           const dir = directoryRef.current || '';
           if (dir) useUIStore.getState().openContextSurface(dir, surfaceMode);

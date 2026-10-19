@@ -278,6 +278,7 @@ export type {
   GuestOauthStartMessage,
   GuestOpenSurfaceMessage,
   GuestOpenUrlMessage,
+  GuestOpenBrowserMessage,
   GuestRequest,
   GuestRequestMessage,
   GuestRequestMethod,

@@ -23,6 +23,11 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  "usage.refresh.updated": "업데이트 {updated}. 다음 확인 {next}.",
+  "usage.refresh.limitedWithSample": "사용량 조회가 제한되었습니다. 업데이트 {updated}. 다음 시도 {next}.",
+  "usage.refresh.limitedWithoutSample": "사용량 조회가 제한되었습니다. 저장된 사용량이 없습니다. 다음 시도 {next}.",
+  "usage.refresh.nextAttempt": "다음 시도 {next}.",
+
   "chat.nativeTasks.title": "작업",
   "chat.nativeTasks.open": "세션 작업 열기",
   "chat.nativeTasks.description": "이 세션의 체크리스트, 백그라운드 작업, 계획서입니다.",

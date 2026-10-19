@@ -910,9 +910,20 @@ describe('Claude quota provider (VS Code parity)', () => {
     source: 'credentials-file',
   } satisfies ClaudeCredential;
 
+  const realNow = Date.now;
+  let clock = Date.parse('2026-10-19T08:00:00Z');
   beforeEach(() => {
+    clock = Date.parse('2026-10-19T08:00:00Z');
+    Date.now = () => clock;
+    const directory = path.join(temporaryQuotaDataDirectory, 'quota');
+    if (fs.existsSync(directory)) {
+      for (const name of fs.readdirSync(directory)) {
+        if (name.startsWith('claude-usage-')) fs.unlinkSync(path.join(directory, name));
+      }
+    }
     resetClaudeQuotaCache();
   });
+  afterEach(() => { Date.now = realNow; });
 
   test('parses current limits, model-scoped limits, and extra usage', async () => {
     stubFetchReturning(() => Promise.resolve(mockResponse({
@@ -957,15 +968,32 @@ describe('Claude quota provider (VS Code parity)', () => {
     }) as typeof fetch;
 
     const initial = await fetchClaudeQuota(() => credential);
+    clock += 300_000;
     const rateLimited = await fetchClaudeQuota(() => credential);
     const duringCooldown = await fetchClaudeQuota(() => credential);
 
     assert.equal(initial.ok, true);
-    assert.equal(rateLimited.ok, true);
-    assert.equal(duringCooldown.ok, true);
+    assert.equal(rateLimited.ok, false);
+    assert.equal(rateLimited.refresh?.state, 'rate-limited');
+    assert.equal(duringCooldown.ok, false);
     assert.equal(duringCooldown.planLabel, 'max');
     assert.equal(duringCooldown.usage?.windows['5h']?.usedPercent, 12);
     assert.equal(requestCount, 2);
+  });
+
+  test('shares staggered refreshes and restores the sample after an extension reload', async () => {
+    let count = 0;
+    globalThis.fetch = async () => { count += 1; return Response.json({ five_hour: { utilization: 12 } }); };
+    const first = await fetchClaudeQuota(() => credential);
+    for (let index = 0; index < 10; index++) {
+      clock += 20_000;
+      await fetchClaudeQuota(() => credential);
+    }
+    resetClaudeQuotaCache();
+    const restored = await fetchClaudeQuota(() => credential);
+    assert.equal(count, 1);
+    assert.equal(restored.refresh?.sampledAt, first.refresh?.sampledAt);
+    assert.equal(restored.refresh?.state, 'cached');
   });
 
   test('does not carry a rate-limit cooldown to a different Claude credential', async () => {

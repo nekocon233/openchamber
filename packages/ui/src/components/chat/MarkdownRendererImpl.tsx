@@ -11,6 +11,7 @@ import type { Theme } from '@/types/theme';
 import { openAppLinkWithConfirmation } from './appLinkConfirmation';
 import { attachAppLinkInteractions } from './appLinkInteractions';
 import { useOpenChatLink } from './useOpenChatLink';
+import { boardTargetOfUrl } from '@/components/sourceBoard/boardLinkTarget';
 import { attachFileRefClickGuard, FILE_REFERENCE_LINK_SELECTOR } from './fileRefClickGuard';
 import type { ToolPopupContent } from './message/types';
 import { FadeInOnReveal } from './message/FadeInOnReveal';
@@ -101,11 +102,11 @@ const useMarkdownVideoFallback = (containerRef: React.RefObject<HTMLDivElement |
 
 const useLinkInteractions = ({
   containerRef,
-  enabled,
+  mode = 'all',
   directory,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>;
-  enabled?: boolean;
+  mode?: 'all' | 'trackers' | 'external';
   directory: string;
 }) => {
   const openChatLink = useOpenChatLink(directory);
@@ -118,7 +119,8 @@ const useLinkInteractions = ({
     // VS Code keeps session links inert: its sessions live on its own OpenCode.
     const opensSessionLinks = !isVSCodeRuntime();
     return attachAppLinkInteractions(container, {
-      allowExternalHttp: enabled !== false,
+      allowExternalHttp: mode !== 'external',
+      shouldHandleExternalHttp: mode === 'trackers' ? (url) => boardTargetOfUrl(url) !== null : undefined,
       openAppLink: (href) => void openAppLinkWithConfirmation(href),
       openExternalHttp: openChatLink,
       openSessionLink: opensSessionLinks
@@ -126,7 +128,7 @@ const useLinkInteractions = ({
         : undefined,
       ownOrigins: resolveOwnOrigins(),
     });
-  }, [containerRef, enabled, openChatLink]);
+  }, [containerRef, mode, openChatLink]);
 };
 
 const DEFAULT_MERMAID_CONTROLS: MermaidControlOptions = {
@@ -1497,6 +1499,8 @@ const SimpleMarkdownRendererImpl: React.FC<{
   variant?: MarkdownVariant;
   // App links remain confirmed even where ordinary HTTP link handling is off.
   disableLinkSafety?: boolean;
+  /** User messages route tracker links by preference while ordinary links keep their browser behavior. */
+  trackerLinksOnly?: boolean;
   /** A leading frontmatter block: `hide` drops it, `properties` shows it above the body. Without it the block renders as Markdown. */
   frontmatter?: 'hide' | 'properties';
   onShowPopup?: (content: ToolPopupContent) => void;
@@ -1510,6 +1514,7 @@ const SimpleMarkdownRendererImpl: React.FC<{
   className,
   variant = 'assistant',
   disableLinkSafety,
+  trackerLinksOnly = false,
   frontmatter: frontmatterMode,
   onShowPopup,
   mermaidControls = DEFAULT_MERMAID_CONTROLS,
@@ -1541,7 +1546,7 @@ const SimpleMarkdownRendererImpl: React.FC<{
     preferRuntimeEditor: runtime.isVSCode,
     enabled: enableFileReferences,
   });
-  useLinkInteractions({ containerRef, enabled: !disableLinkSafety, directory: effectiveDirectory });
+  useLinkInteractions({ containerRef, mode: trackerLinksOnly ? 'trackers' : disableLinkSafety ? 'external' : 'all', directory: effectiveDirectory });
   useMarkdownVideoFallback(containerRef);
 
   const syntaxVars = React.useMemo(() => getMarkdownSyntaxVars(currentTheme), [currentTheme]);
@@ -1577,6 +1582,7 @@ export const SimpleMarkdownRenderer = React.memo(SimpleMarkdownRendererImpl, (pr
     && prev.variant === next.variant
     && prev.className === next.className
     && prev.disableLinkSafety === next.disableLinkSafety
+    && prev.trackerLinksOnly === next.trackerLinksOnly
     && prev.frontmatter === next.frontmatter
     && prev.onShowPopup === next.onShowPopup
     && prevMermaidControls.download === nextMermaidControls.download

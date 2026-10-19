@@ -22,6 +22,11 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
+  "usage.refresh.updated": "Aktualisiert am {updated}. Nächste Abfrage am {next}.",
+  "usage.refresh.limitedWithSample": "Nutzungsabfrage begrenzt. Aktualisiert am {updated}. Nächster Versuch am {next}.",
+  "usage.refresh.limitedWithoutSample": "Nutzungsabfrage begrenzt. Keine gespeicherten Nutzungsdaten. Nächster Versuch am {next}.",
+  "usage.refresh.nextAttempt": "Nächster Versuch am {next}.",
+
   "chat.nativeTasks.title": "Aufgaben",
   "chat.nativeTasks.open": "Sitzungsaufgaben öffnen",
   "chat.nativeTasks.description": "Checklisten, Hintergrundaufgaben und Pläne für diese Sitzung.",

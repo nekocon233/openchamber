@@ -21,6 +21,11 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
+  "usage.refresh.updated": "עודכן ב־{updated}. הבדיקה הבאה ב־{next}.",
+  "usage.refresh.limitedWithSample": "בקשות בדיקת השימוש הוגבלו. עודכן ב־{updated}. הניסיון הבא ב־{next}.",
+  "usage.refresh.limitedWithoutSample": "בקשות בדיקת השימוש הוגבלו. אין נתוני שימוש שמורים. הניסיון הבא ב־{next}.",
+  "usage.refresh.nextAttempt": "הניסיון הבא ב־{next}.",
+
   'opencodeCompatibility.bundled': 'OpenCode מגיע יחד עם OpenChamber. יש לעדכן את OpenChamber כדי לקבל את OpenCode v2.',
   'opencodeCompatibility.title': 'נדרש OpenCode v2',
   'opencodeCompatibility.outdatedTitle': 'עדכן את OpenCode',
@@ -3801,8 +3806,8 @@ export const dict = {
   'settings.openchamber.visual.field.layoutAnimationsInfo': "סרגל הצד, החלוניות סביב הצ'אט וכרטיס מצב העבודה מחליקים בזמן פתיחה וסגירה. כיבוי האפשרות מציג ומסתיר אותם מיד.",
   'settings.openchamber.visual.field.openLinksInBrowserPanel': 'פתיחת קישורים בדפדפן המובנה',
   'settings.openchamber.visual.field.openLinksInBrowserPanelInfo': 'קישורים בצ׳אט נפתחים בכרטיסיית דפדפן לצד הצ׳אט. Cmd+לחיצה או Ctrl+לחיצה פותחת אותם בדפדפן ברירת המחדל.',
-  'settings.openchamber.visual.field.openTrackerLinksOnBoard': 'פתיחת בעיות ובקשות משיכה ב-OpenChamber',
-  'settings.openchamber.visual.field.openTrackerLinksOnBoardInfo': 'קישורים לבעיות, בקשות משיכה ובקשות מיזוג ב-GitHub וב-GitLab ולבעיות Linear נפתחים בלוח בעיות ו-PR כשהפרויקט שלהם פתוח כאן. Cmd+לחיצה או Ctrl+לחיצה פותחת את הקישור עצמו.',
+  "settings.openchamber.visual.field.openTrackerLinksOnBoard": "קישורים לנושאים ולבקשות משיכה בצ׳אט",
+  "settings.openchamber.visual.field.openTrackerLinksOnBoardInfo": "בחר היכן לפתוח קישורי GitHub, GitLab ו-Linear. אם OpenChamber אינו יכול לטעון קישור, נסה שוב או פתח אותו בדפדפן חיצוני.",
   'settings.openchamber.visual.field.fileTreeSide': 'צד עץ הקבצים',
   'settings.openchamber.visual.option.fileTreeSide.left': 'ימין',
   'settings.openchamber.visual.option.fileTreeSide.right': 'שמאל',

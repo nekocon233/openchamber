@@ -33,7 +33,7 @@ import { resolveLinearMappedProjectPath } from '@/lib/linearProjectMapping';
 import { normalizeProjectPath, resolveProjectForSessionDirectory } from '@/lib/projectResolution';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { useSourceBoardChoice, useSourceBoardStore, type SourceBoardTab } from '@/stores/useSourceBoardStore';
+import { useSourceBoardChoice, useSourceBoardStore, type SourceBoardTab, type BoardLinkFailureBehavior, type BoardLinearFocus } from '@/stores/useSourceBoardStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
@@ -43,10 +43,11 @@ import { SourceBoardReply } from './SourceBoardReply';
 import { SourceBoardChecksDialog } from './SourceBoardChecksDialog';
 import { SourceBoardLabels, SourceBoardReviewers } from './SourceBoardMetaEditors';
 import { SourceBoardProjectPicker, SourceBoardTeamPicker } from './SourceBoardPickers';
-import { isSameRepositoryItemLink } from './openOnBoard';
+import { isSameRepositoryItemLink } from './boardLinkTarget';
 import { usePullAttachments } from './pullAttachments';
 import { useThreadActions } from './threadActions';
 import { useBoardRevalidation } from './useBoardRevalidation';
+import { SourceBoardLinkFeedback, type BoardLinkFeedbackState } from './SourceBoardLinkFeedback';
 
 const LIST_MIN_WIDTH = 280;
 /** Below this the list leaves its column for a dropdown, so the preview keeps the width. */
@@ -164,6 +165,9 @@ const SourceBoard: React.FC<{ layout: SourceBoardLayout; onLeave?: () => void; o
     const directory = project ? normalizeProjectPath(project.path) : null;
     const hostProvider = useRepositoryHostProvider(directory);
     const hasRepository = hostProvider === 'github' || hostProvider === 'gitlab';
+    const pendingRepositoryFocus = useSourceBoardStore((state) => state.repositoryFocus);
+    const manualWithoutRepository = !hasRepository && pendingRepositoryFocus?.failureBehavior === 'manual'
+        && pendingRepositoryFocus.projectId === project?.id && choice.tab === 'repository';
     const hasLinear = Boolean(linear);
     const linearConnected = useLinearAuthStore((state) => state.status?.connected === true);
     const tab: SourceBoardTab | null = choice.tab === 'linear' && hasLinear
@@ -204,7 +208,7 @@ const SourceBoard: React.FC<{ layout: SourceBoardLayout; onLeave?: () => void; o
         updateChoice({ tab: 'repository' });
     };
 
-    if (!tab) {
+    if (!tab || manualWithoutRepository) {
         return (
             <>
                 {layout === 'mobile' ? (
@@ -212,12 +216,14 @@ const SourceBoard: React.FC<{ layout: SourceBoardLayout; onLeave?: () => void; o
                 ) : (
                     <div className="flex h-12 shrink-0 items-center border-b border-border/60 px-2">{projectPicker}</div>
                 )}
-                <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center typography-meta text-muted-foreground">
+                {manualWithoutRepository ? (
+                    <SourceBoardLinkFeedback url={pendingRepositoryFocus.query} state={hostProvider === null ? 'loading' : 'noRepository'} />
+                ) : <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center typography-meta text-muted-foreground">
                     <span>{t(projects.length === 0 ? 'sourceBoard.empty.noProjects' : 'sourceBoard.empty.noSource')}</span>
                     {projects.length > 0 ? (
                         <Button size="sm" variant="outline" onClick={openIntegrationsSettings}>{t('references.picker.actions.openSettings')}</Button>
                     ) : null}
-                </div>
+                </div>}
             </>
         );
     }
@@ -267,8 +273,9 @@ const SourceBoardBody: React.FC<{
     // An item another surface asked to show: an issue or PR by its link, a
     // Linear issue by its identifier. It is read on its own, not typed into the
     // search: the list stays as it was, and the preview opens on the item.
-    const [pinnedLink, setPinnedLink] = React.useState<{ kind: GitHubReferenceKind; url: string } | null>(null);
-    const [pinnedLinearId, setPinnedLinearId] = React.useState<string | null>(null);
+    const [pinnedLink, setPinnedLink] = React.useState<{ kind: GitHubReferenceKind; url: string; failureBehavior: BoardLinkFailureBehavior } | null>(null);
+    const [pinnedLinearRequest, setPinnedLinearRequest] = React.useState<BoardLinearFocus | null>(null);
+    const pinnedLinearId = pinnedLinearRequest?.identifier ?? null;
     // Counts the requests to show an item, so each is shown once, and the one
     // shown before never answers for the one just asked.
     const [pinRequest, setPinRequest] = React.useState(0);
@@ -279,7 +286,7 @@ const SourceBoardBody: React.FC<{
         filter: DEFAULT_REPOSITORY_FILTER,
         query: pinnedLink?.url ?? '',
     });
-    const { detail: pinnedLinear } = useLinearIssueDetail(tab === 'linear' ? pinnedLinearId : null, true);
+    const { detail: pinnedLinear, refresh: retryPinnedLinear } = useLinearIssueDetail(tab === 'linear' ? pinnedLinearId : null, true);
     // Only the item the link names: a lookup that fell back to a search lists others.
     const pinnedReference = tab === 'repository' && pinnedLink
         ? pinnedLookup.items.find((item) => isSameRepositoryItemLink(item.url, pinnedLink.url)) ?? null
@@ -305,16 +312,16 @@ const SourceBoardBody: React.FC<{
         if (!linearFocus) return;
         setPinRequest((request) => request + 1);
         setQuery('');
-        setPinnedLinearId(linearFocus);
+        setPinnedLinearRequest(linearFocus);
         useSourceBoardStore.getState().clearLinearFocus();
     }, [linearFocus, setQuery]);
-    const repositoryFocus = useSourceBoardStore((state) => (tab === 'repository' ? state.repositoryFocus : null));
+    const repositoryFocus = useSourceBoardStore((state) => (tab === 'repository' && state.repositoryFocus?.projectId === project?.id ? state.repositoryFocus : null));
     React.useEffect(() => {
         if (!repositoryFocus) return;
         setPinRequest((request) => request + 1);
         selectGitHubKind(repositoryFocus.kind);
         setQuery('');
-        setPinnedLink({ kind: repositoryFocus.kind, url: repositoryFocus.query });
+        setPinnedLink({ kind: repositoryFocus.kind, url: repositoryFocus.query, failureBehavior: repositoryFocus.failureBehavior });
         useSourceBoardStore.getState().clearRepositoryFocus();
     }, [repositoryFocus, selectGitHubKind, setQuery]);
     // Shown once found; the user then moves on from it like from any row. The
@@ -329,16 +336,16 @@ const SourceBoardBody: React.FC<{
     // a Linear identifier is searched for instead.
     const pinnedLinkStatus = pinnedLookup.status;
     React.useEffect(() => {
-        if (!pinnedLink || pinnedLinkStatus === 'loading' || pinnedReference) return;
+        if (!pinnedLink || pinnedLink.failureBehavior === 'manual' || pinnedLinkStatus === 'loading' || pinnedLookup.refreshing || pinnedReference) return;
         void openExternalUrl(pinnedLink.url);
         setPinnedLink(null);
-    }, [pinnedLink, pinnedLinkStatus, pinnedReference]);
+    }, [pinnedLink, pinnedLinkStatus, pinnedLookup.refreshing, pinnedReference]);
     const pinnedLinearStatus = pinnedLinear.status;
     React.useEffect(() => {
-        if (!pinnedLinearId || pinnedLinearStatus !== 'error') return;
+        if (!pinnedLinearId || pinnedLinearRequest?.failureBehavior === 'manual' || pinnedLinearStatus !== 'error') return;
         setQuery(pinnedLinearId);
-        setPinnedLinearId(null);
-    }, [pinnedLinearId, pinnedLinearStatus, setQuery]);
+        setPinnedLinearRequest(null);
+    }, [pinnedLinearId, pinnedLinearRequest?.failureBehavior, pinnedLinearStatus, setQuery]);
     const currentDirectory = useEffectiveDirectory();
     const worktreesByProject = useSessionUIStore((state) => state.availableWorktreesByProject);
     const [worktreeRequest, setWorktreeRequest] = React.useState<{ project: SourceBoardProject; selection: ReferencePickerSelection } | null>(null);
@@ -425,7 +432,22 @@ const SourceBoardBody: React.FC<{
         await refreshRepositoryItem();
     };
 
-    const preview = (
+    let linkFeedback: React.ReactNode = null;
+    if (pinnedLink?.failureBehavior === 'manual' && !pinnedReference) {
+        const state: BoardLinkFeedbackState = pinnedLookup.status === 'loading' || pinnedLookup.refreshing ? 'loading'
+            : pinnedLookup.error ? 'error'
+                : pinnedLookup.unavailable === 'disconnected' ? 'disconnected'
+                    : pinnedLookup.unavailable === 'no-repo' ? 'noRepository' : 'notFound';
+        linkFeedback = <SourceBoardLinkFeedback url={pinnedLink.url} state={state} error={pinnedLookup.error} onRetry={() => { void pinnedLookup.retry(); }} />;
+    } else if (pinnedLinearRequest?.failureBehavior === 'manual' && !pinnedLinearIssue) {
+        linkFeedback = <SourceBoardLinkFeedback
+            url={pinnedLinearRequest.url}
+            state={pinnedLinear.status === 'error' ? 'error' : 'loading'}
+            error={pinnedLinear.status === 'error' ? pinnedLinear.error : null}
+            onRetry={() => { void retryPinnedLinear(); }}
+        />;
+    }
+    const preview = linkFeedback ?? (
         <ReferencePreview
             item={previewItem}
             directory={browser.directory}
@@ -627,11 +649,15 @@ const SourceBoardBody: React.FC<{
     };
 
     if (isMobile) {
-        const inPreview = Boolean(browser.mobilePreviewKey && previewItem);
+        const inPreview = Boolean(linkFeedback || (browser.mobilePreviewKey && previewItem));
         return (
             <>
                 {inPreview ? (
-                    <MobileBoardHeader onBack={browser.closeMobilePreview}>
+                    <MobileBoardHeader onBack={() => {
+                        setPinnedLink(null);
+                        setPinnedLinearRequest(null);
+                        browser.closeMobilePreview();
+                    }}>
                         <h2 className="truncate px-1 typography-ui-label tabular-nums text-foreground">{itemLabel}</h2>
                     </MobileBoardHeader>
                 ) : (

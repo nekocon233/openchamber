@@ -54,6 +54,14 @@ interface ProviderUsage extends UsageWindows {
   models?: Record<string, UsageWindows>;
 }
 
+export interface QuotaRefresh {
+  state: 'fresh' | 'cached' | 'rate-limited' | 'error';
+  /** Last successful upstream sample, never the time a cache entry was served. */
+  sampledAt: number | null;
+  /** Earliest next upstream attempt, also respected by manual refresh. */
+  nextAttemptAt: number;
+}
+
 export interface ProviderResult {
   providerId: QuotaProviderId;
   providerName: string;
@@ -66,4 +74,5 @@ export interface ProviderResult {
   planLabel?: string | null;
   usage: ProviderUsage | null;
   fetchedAt: number;
+  refresh?: QuotaRefresh;
 }

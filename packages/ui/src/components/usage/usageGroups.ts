@@ -2,7 +2,9 @@ import React from 'react';
 import { useI18n } from '@/lib/i18n';
 import { formatWindowLabel, getQuotaProviderList } from '@/lib/quota';
 import { getDisplayModelName } from '@/lib/quota/model-families';
+import { formatQuotaRefreshStatus } from '@/lib/quota/refreshStatus';
 import { useQuotaStore } from '@/stores/useQuotaStore';
+import { useUIStore } from '@/stores/useUIStore';
 import type { QuotaProviderId, UsageWindow } from '@/types';
 
 export type UsageLimitRow = {
@@ -38,6 +40,7 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
   const dropdownProviderIds = useQuotaStore((state) => state.dropdownProviderIds);
   const selectedQuotaModels = useQuotaStore((state) => state.selectedModels);
+  const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
 
   return React.useMemo<UsageProviderGroup[]>(() => {
     const resultsByProvider = new Map(quotaResults.map((result) => [result.providerId, result]));
@@ -73,15 +76,17 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
         }
 
         const refreshError = refreshErrors[providerMeta.id];
-        let status: string | null = null;
-        if (refreshError) {
-          status = result?.usage
-            ? t('header.services.usageRefreshFailedStale', { error: refreshError })
-            : refreshError;
-        } else if (!result?.ok && result?.error) {
-          status = result.error;
-        } else if (rows.length === 0) {
-          status = t('header.services.noRateLimitsReported');
+        let status = formatQuotaRefreshStatus(result, t, timeFormatPreference, refreshError);
+        if (!status) {
+          if (refreshError) {
+            status = result?.usage
+              ? t('header.services.usageRefreshFailedStale', { error: refreshError })
+              : refreshError;
+          } else if (!result?.ok && result?.error) {
+            status = result.error;
+          } else if (rows.length === 0) {
+            status = t('header.services.noRateLimitsReported');
+          }
         }
 
         return {
@@ -92,5 +97,5 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
           status,
         };
       });
-  }, [dropdownProviderIds, nativeProviders, quotaResults, refreshErrors, selectedQuotaModels, t]);
+  }, [dropdownProviderIds, nativeProviders, quotaResults, refreshErrors, selectedQuotaModels, t, timeFormatPreference]);
 };

@@ -41,3 +41,18 @@ describe('external OpenCode quota ownership', () => {
     expect(getQuotaProviders).not.toHaveBeenCalled();
   });
 });
+
+it('passes the serving instance scope and refresh metadata through the quota route', async () => {
+  const app = express();
+  const quota = {
+    providerId: 'claude', providerName: 'Claude', configured: true, ok: false, usage: null, fetchedAt: 123,
+    refresh: { state: 'rate-limited', sampledAt: null, nextAttemptAt: 300_123 },
+  };
+  const fetchQuotaForProvider = vi.fn(async () => quota);
+  registerQuotaRoutes(app, { getQuotaProviders: async () => ({ fetchQuotaForProvider }) });
+  const response = await request(app).get('/api/quota/claude').expect(200);
+  expect(response.body).toEqual(quota);
+  expect(fetchQuotaForProvider).toHaveBeenCalledWith('claude', {
+    claudeCacheScope: expect.stringMatching(/^(web:\d+|desktop)$/),
+  });
+});

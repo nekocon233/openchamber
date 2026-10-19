@@ -141,6 +141,7 @@ Access tokens never appear in `ready` or in request results.
 | ----------------- | --------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
 | `toast` | `{ kind: 'info' \| 'success' \| 'error', message, copy?, dismiss?, persistent? }` | `Promise<void>` | Show a toast, optionally with host-owned Copy and OK buttons; see Toast buttons below |
 | `openUrl`         | `url: string`                     | `Promise<void>`                | Open URL in the host                                                                  |
+| `openBrowser`     | `url: string`                     | `Promise<void>`                | Open or focus an in-app browser tab in the current project. HTTP/HTTPS only; requires `ready.features.browserTabs: true`. `NO_DIRECTORY` without a project; `UNSUPPORTED` on older hosts, VS Code and mobile |
 | `openSurface`     | `surfaceId: string`               | `Promise<void>`                | Switch host chrome to that surface                                                    |
 | `writeClipboard`  | `text: string`                    | `Promise<void>`                | Copy in the host (1–32000 chars)                                                      |
 | `compose`         | `{ text, mode?: 'append'          | 'replace' }`                   | `Promise<void>`                                                                       |

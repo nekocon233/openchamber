@@ -12,6 +12,20 @@ const merge = (persisted: StoredValue, current: ReturnType<typeof useSourceBoard
 };
 
 describe('source board choice', () => {
+  test('captures the original link and failure behavior separately for each focus request', () => {
+    const store = useSourceBoardStore.getState();
+    store.focusRepositoryItem('p1', 'pull', 'https://github.com/org/repo/pull/1', 'manual');
+    expect(useSourceBoardStore.getState().repositoryFocus).toEqual({ projectId: 'p1', kind: 'pull', query: 'https://github.com/org/repo/pull/1', failureBehavior: 'manual' });
+    store.focusRepositoryItem('p2', 'issue', 'https://github.com/other/repo/issues/2');
+    expect(useSourceBoardStore.getState().repositoryFocus).toMatchObject({ projectId: 'p2', failureBehavior: 'automatic' });
+    store.focusLinearIssue('PROJ-3', 'https://linear.app/workspace/issue/PROJ-3', 'manual');
+    expect(useSourceBoardStore.getState().linearFocus).toEqual({ identifier: 'PROJ-3', url: 'https://linear.app/workspace/issue/PROJ-3', failureBehavior: 'manual' });
+    store.clearRepositoryFocus();
+    store.clearLinearFocus();
+    expect(useSourceBoardStore.getState().repositoryFocus).toBeNull();
+    expect(useSourceBoardStore.getState().linearFocus).toBeNull();
+  });
+
   test('remembers project, tab and team per runtime', () => {
     useSourceBoardStore.setState({ choices: {} });
     useSourceBoardStore.getState().update({ projectId: 'p1' });

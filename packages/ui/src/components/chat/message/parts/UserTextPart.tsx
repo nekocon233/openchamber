@@ -339,7 +339,7 @@ const UserTextPart: React.FC<UserTextPartProps> = ({
                                  "[&_[data-md-code-lines]>.line]:before:!hidden",
                              ]
                         )}
-                        disableLinkSafety
+                        trackerLinksOnly
                         enableFileReferences={false}
                     />
                 ) : (

@@ -2,49 +2,16 @@ import * as React from 'react';
 
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
-import type { GitHubReferenceKind } from '@/lib/api/types';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
-import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
-import { parseIssueReference } from '@/lib/source-control/issueReference';
 import { openExternalUrl } from '@/lib/url';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { useSourceBoardStore } from '@/stores/useSourceBoardStore';
+import { useSourceBoardStore, type BoardLinkFailureBehavior } from '@/stores/useSourceBoardStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
-const LINEAR_ISSUE_URL = /^https?:\/\/linear\.app\/[^/]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)(?:[/?#]|$)/;
-
-type BoardTarget =
-    | { source: 'repository'; kind: GitHubReferenceKind }
-    | { source: 'linear'; identifier: string };
-
-/** What a link names, as the board lists it; null for anything else. */
-export const boardTargetOfUrl = (url: string): BoardTarget | null => {
-    const linear = url.match(LINEAR_ISSUE_URL);
-    if (linear) return { source: 'linear', identifier: linear[1].toUpperCase() };
-    // Only links: a bare `#12` says nothing about which repository it is in.
-    if (parseChangeRequestReference(url)?.project) return { source: 'repository', kind: 'pull' };
-    if (parseIssueReference(url)?.project) return { source: 'repository', kind: 'issue' };
-    return null;
-};
-
-/** The issue or PR a link names, as one comparable string; null for anything else. */
-const repositoryItemOfUrl = (url: string): string | null => {
-    const changeRequest = parseChangeRequestReference(url);
-    const reference = changeRequest?.project ? changeRequest : parseIssueReference(url);
-    if (!reference?.project) return null;
-    // GitLab numbers issues and merge requests separately; on GitHub they share one number.
-    const kind = reference.identity?.provider === 'gitlab' ? (reference === changeRequest ? '!' : '#') : '#';
-    return `${reference.identity?.instance ?? ''}/${reference.project.owner}/${reference.project.name}${kind}${reference.number}`.toLowerCase();
-};
-
-/** Whether two links name the same issue or PR, whatever page of it each opens. */
-export const isSameRepositoryItemLink = (left: string, right: string): boolean => {
-    const item = repositoryItemOfUrl(left);
-    return item !== null && item === repositoryItemOfUrl(right);
-};
+import { boardTargetOfUrl } from './boardLinkTarget';
 
 /**
  * Shows the issue, PR or Linear issue a link names on the issues and PRs
@@ -58,7 +25,7 @@ export function useShowOnBoard() {
     // without one a Linear link simply opens in the browser.
     const linear = React.useContext(RuntimeAPIContext)?.linear;
 
-    return React.useCallback((url: string, directory: string | null | undefined): boolean => {
+    return React.useCallback((url: string, directory: string | null | undefined, failureBehavior: BoardLinkFailureBehavior = 'automatic'): boolean => {
         if (isVSCodeRuntime()) return false;
         const target = boardTargetOfUrl(url);
         if (!target) return false;
@@ -66,7 +33,7 @@ export function useShowOnBoard() {
         const board = useSourceBoardStore.getState();
         if (target.source === 'linear') {
             if (!linear || useLinearAuthStore.getState().status?.connected !== true) return false;
-            board.focusLinearIssue(target.identifier);
+            board.focusLinearIssue(target.identifier, url, failureBehavior);
         } else {
             const project = resolveProjectForSessionDirectory(
                 useProjectsStore.getState().projects,
@@ -75,7 +42,7 @@ export function useShowOnBoard() {
             );
             if (!project) return false;
             // The link itself is the search: it finds that one item, in its own repository.
-            board.focusRepositoryItem(project.id, target.kind, url);
+            board.focusRepositoryItem(project.id, target.kind, url, failureBehavior);
         }
         if (mobile) mobile.openSourceBoard();
         else useUIStore.getState().setSourceBoardOpen(true);

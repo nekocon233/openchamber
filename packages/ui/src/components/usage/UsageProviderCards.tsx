@@ -40,9 +40,6 @@ export const UsageProviderCards: React.FC<{
               {group.planLabel}
             </span>
           ) : null}
-          {group.status && group.rows.length === 0 ? (
-            <span className="shrink-0 truncate typography-micro text-muted-foreground">{group.status}</span>
-          ) : null}
         </div>
 
         {group.rows.length > 0 ? (
@@ -83,8 +80,8 @@ export const UsageProviderCards: React.FC<{
           </div>
         ) : null}
 
-        {group.status && group.rows.length > 0 ? (
-          <div className="mt-1.5 typography-micro text-muted-foreground">{group.status}</div>
+        {group.status ? (
+          <div className="mt-1.5 typography-micro text-muted-foreground break-words">{group.status}</div>
         ) : null}
       </div>
     ))}

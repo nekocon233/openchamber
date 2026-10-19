@@ -1,3 +1,4 @@
+import { formatQuotaRefreshStatus } from '@/lib/quota/refreshStatus';
 import React from 'react';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { SessionSidebar } from '@/components/session/SessionSidebar';
@@ -754,6 +755,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       providerName: string;
       entries: Array<[string, UsageWindow]>;
       error?: string;
+      status: string | null;
     }> = [];
 
     for (const provider of QUOTA_PROVIDERS) {
@@ -764,13 +766,14 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       const windows = (result?.usage?.windows ?? {}) as Record<string, UsageWindow>;
       const entries = Object.entries(windows);
       const error = (result && !result.ok && result.configured) ? result.error : undefined;
-      if (entries.length > 0 || error) {
-        groups.push({ providerId: provider.id, providerName: provider.name, entries, error });
+      const status = formatQuotaRefreshStatus(result, t, timeFormatPreference);
+      if (entries.length > 0 || error || status) {
+        groups.push({ providerId: provider.id, providerName: provider.name, entries, error, status });
       }
     }
 
     return groups;
-  }, [dropdownProviderIds, quotaResults]);
+  }, [dropdownProviderIds, quotaResults, t, timeFormatPreference]);
   const hasRateLimits = rateLimitGroups.length > 0;
 
   const handleDisplayModeChange = React.useCallback(async (mode: 'usage' | 'remaining') => {
@@ -926,7 +929,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
                     closeOnClick={false}
                   >
                     <span className="typography-ui-label text-muted-foreground">
-                      {group.error ?? t('vscodeLayout.quota.noRateLimitsReported')}
+                      {group.status ?? group.error ?? t('vscodeLayout.quota.noRateLimitsReported')}
                     </span>
                   </DropdownMenuItem>
                 ) : (
@@ -960,6 +963,11 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
                     </DropdownMenuItem>
                     );
                   })
+                )}
+                {group.entries.length > 0 && group.status && (
+                  <DropdownMenuLabel className="typography-micro text-muted-foreground font-normal whitespace-normal break-words">
+                    {group.status}
+                  </DropdownMenuLabel>
                 )}
                 {index < rateLimitGroups.length - 1 && <DropdownMenuSeparator />}
               </React.Fragment>
