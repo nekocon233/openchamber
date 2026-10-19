@@ -72,7 +72,7 @@ export const UsageSidebar: React.FC<UsageSidebarProps> = ({ onItemSelect }) => {
             <Button size="sm"
               variant="ghost"
               className="h-7 w-7 px-0 text-muted-foreground"
-              onClick={() => fetchAllQuotas()}
+              onClick={() => fetchAllQuotas({ manual: true })}
               aria-label={t('settings.usage.sidebar.actions.refreshAria')}
               title={t('settings.usage.sidebar.actions.refreshTitle')}
               disabled={isLoading}

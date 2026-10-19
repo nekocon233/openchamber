@@ -23,10 +23,10 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
-  "usage.refresh.updated": "Zaktualizowano {updated}. Następne sprawdzenie {next}.",
-  "usage.refresh.limitedWithSample": "Ograniczono zapytania o użycie. Zaktualizowano {updated}. Następna próba {next}.",
-  "usage.refresh.limitedWithoutSample": "Ograniczono zapytania o użycie. Brak zapisanych danych użycia. Następna próba {next}.",
-  "usage.refresh.nextAttempt": "Następna próba {next}.",
+  "usage.refresh.updated": "Zaktualizowano {updated}. Ręczne odświeżenie dostępne po {next}.",
+  "usage.refresh.limitedWithSample": "Ograniczono zapytania o użycie. Zaktualizowano {updated}. Ręczne odświeżenie dostępne po {next}.",
+  "usage.refresh.limitedWithoutSample": "Ograniczono zapytania o użycie. Brak zapisanych danych użycia. Ręczne odświeżenie dostępne po {next}.",
+  "usage.refresh.nextAttempt": "Ręczne odświeżenie dostępne po {next}.",
 
   "chat.nativeTasks.title": "Zadania",
   "chat.nativeTasks.open": "Otwórz zadania sesji",

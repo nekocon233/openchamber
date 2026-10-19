@@ -244,16 +244,16 @@ Providers page cannot add. When Claude reports not configured, the Usage page
 shows `usage/ClaudeCodeSignIn.tsx` in its warning instead of the "go to
 Providers" text. With the opencode-claude plugin installed it mounts the
 plugin's `claude-code` integration sign-in through the shared
-`providers/ProviderOAuthMethods.tsx` and re-reads Claude usage once it
-finishes. Without the plugin, or when the integration list cannot be read, it
+`providers/ProviderOAuthMethods.tsx` and clears any previous Claude usage when sign-in
+finishes. Usage is queried only when the person presses refresh. Without the plugin, or when the integration list cannot be read, it
 shows the `claude auth login` command, which works in both cases.
 
 Claude results with `refresh` display the runtime's original successful sample
-time and next query time. A 429 keeps any retained usage visible and explains
-the next attempt in the active locale; a first-load 429 never invents an update
+time and earliest next manual refresh time. A 429 keeps any retained usage visible and explains
+when another manual refresh is allowed in the active locale; a first-load 429 never invents an update
 time. Runtime-owned errors replace the complete Claude sample so an account
 switch cannot leave the preceding account's numbers visible. The refresh button
-uses the same runtime request budget as automatic refreshes. Timing and restart
+uses the runtime request budget. Opening the page, signing in, and waiting for a cooldown to end do not query Claude. Timing and restart
 behavior belong to the quota module, not the Settings page.
 
 ### Policy-blocked MCP servers and skills

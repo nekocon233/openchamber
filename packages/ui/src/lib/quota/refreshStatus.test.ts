@@ -18,7 +18,7 @@ describe('quota refresh status', () => {
     const status = formatQuotaRefreshStatus(value, translate, '24h');
     expect(status).toContain('Usage query limited.');
     expect(status).toContain(formatDateTimeForPreference(100_000, '24h', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
-    expect(status).toContain('Next attempt');
+    expect(status).toContain('Manual refresh');
   });
 
   test('does not invent an update time when no successful sample exists', () => {

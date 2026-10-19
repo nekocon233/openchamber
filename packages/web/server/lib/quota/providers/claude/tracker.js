@@ -212,7 +212,7 @@ export const createClaudeQuotaTracker = ({
       }
     } catch {
       snapshot.state = 'error';
-      snapshot.error = 'Claude usage request failed. Retrying later.';
+      snapshot.error = 'Claude usage request failed.';
     } finally {
       clearTimeout(timeout);
       snapshot.nextAttemptAt = Math.max(snapshot.nextAttemptAt, now() + REFRESH_INTERVAL_MS);

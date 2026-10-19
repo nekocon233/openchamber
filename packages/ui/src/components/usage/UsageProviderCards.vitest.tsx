@@ -49,11 +49,18 @@ afterEach(() => {
 });
 
 describe('Claude usage status alongside quota rows', () => {
+  test('keeps the manual refresh surface reachable before the first Claude query', () => {
+    flushSync(() => useQuotaStore.setState({ results: [], refreshErrors: {} }));
+    expect(container.textContent).toContain('Claude');
+    expect(container.textContent).toContain('No usage data available yet.');
+    expect(container.textContent).not.toContain('12%');
+  });
+
   test('keeps the last measured percentage and displays its age and retry time', () => {
     expect(container.textContent).toContain('12%');
     expect(container.textContent).toContain('Usage query limited.');
     expect(container.textContent).toContain('Updated');
-    expect(container.textContent).toContain('Next attempt');
+    expect(container.textContent).toContain('Manual refresh');
   });
 
   test('reports no saved usage when the runtime clears the sample for another account', () => {
@@ -69,7 +76,7 @@ describe('Claude usage status alongside quota rows', () => {
   test('reacts to a locale change while preserving the quota rows', () => {
     flushSync(() => useI18nStore.setState({ locale: 'zh-CN', dictionary: chinese, loadingLocale: null }));
     expect(container.textContent).toContain('用量查询受限');
-    expect(container.textContent).toContain('下次尝试');
+    expect(container.textContent).toContain('手动刷新');
     expect(container.textContent).toContain('12%');
   });
 });

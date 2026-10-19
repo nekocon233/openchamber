@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { QUOTA_PROVIDERS } from "@/lib/quota/providers";
 import { catalogRefreshTasks } from "./catalogRefresh";
@@ -90,6 +90,32 @@ describe("the usage task on a credential change", () => {
     // Nothing is on screen to update, and the provider list is still its
     // default of every tracker rather than the user's selection.
     expect(called).toBe(false);
+  });
+
+  test("clears Claude and refreshes other shown providers without querying Claude", async () => {
+    const asked: string[][] = [];
+    useQuotaStore.setState({ fetchQuotas: async ids => { asked.push(ids); return true; } });
+    shown(["claude", "codex"]);
+    const codex = useQuotaStore.getState().results[1];
+    await usageTask()();
+    expect(asked).toEqual([["codex"]]);
+    expect(useQuotaStore.getState().results).toEqual([codex]);
+  });
+
+  test("aborts a first manual Claude read when the credential changes", async () => {
+    let complete: ((response: Response) => void) | undefined;
+    const network = spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    try {
+      const pending = useQuotaStore.getState().fetchProviderQuota('claude');
+      await Promise.resolve();
+      await usageTask()();
+      expect(await pending).toBe(false);
+      expect(network.mock.calls).toHaveLength(1);
+      expect(useQuotaStore.getState().results).toEqual([]);
+    } finally {
+      complete?.(Response.json({}));
+      network.mockRestore();
+    }
   });
 
   test("a switch invalidates, so the previous account's sample is not kept", async () => {

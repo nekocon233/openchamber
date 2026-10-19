@@ -33,11 +33,43 @@ afterEach(() => {
 afterAll(() => network.mockRestore());
 
 describe('quota refresh failure is not empty success', () => {
-  test('keeps the exact previous snapshot, configuration and timestamp on network failure', async () => {
+  test('automatic batches never query Claude, including before any sample exists', async () => {
+    useQuotaStore.setState({ dropdownProvidersExplicit: true, dropdownProviderIds: ['claude'] });
     await useQuotaStore.getState().fetchQuotas(['claude']);
+    await useQuotaStore.getState().refreshSelectedQuotas();
+    expect(network.mock.calls).toHaveLength(0);
+    expect(useQuotaStore.getState().results).toEqual([]);
+    await useQuotaStore.getState().fetchProviderQuota('claude');
+    const before = useQuotaStore.getState().results;
+    const queriesBefore = network.mock.calls.length;
+    await useQuotaStore.getState().refreshSelectedQuotas();
+    expect(network.mock.calls).toHaveLength(queriesBefore);
+    expect(useQuotaStore.getState().results).toBe(before);
+  });
+
+  test('automatic credential invalidation clears Claude without querying or preserving an old account', async () => {
+    await useQuotaStore.getState().fetchProviderQuota('claude');
+    const codex = result('codex');
+    useQuotaStore.setState(state => ({ results: [...state.results, codex] }));
+    const queriesBefore = network.mock.calls.length;
+    await useQuotaStore.getState().fetchQuotas(['claude'], { invalidate: true });
+    expect(network.mock.calls).toHaveLength(queriesBefore);
+    expect(useQuotaStore.getState().results).toEqual([codex]);
+  });
+
+  test('bulk loading skips Claude unless a refresh explicitly requests it', async () => {
+    handleRequest = async url => json(result(url.endsWith('/claude') ? 'claude' : 'codex'));
+    await useQuotaStore.getState().fetchAllQuotas();
+    expect(network.mock.calls.some(call => call[0].toString().endsWith('/claude'))).toBe(false);
+    await useQuotaStore.getState().fetchAllQuotas({ manual: true });
+    expect(network.mock.calls.filter(call => call[0].toString().endsWith('/claude'))).toHaveLength(1);
+  });
+
+  test('keeps the exact previous snapshot, configuration and timestamp on network failure', async () => {
+    await useQuotaStore.getState().fetchQuotas(['claude'], { manual: true });
     const before = useQuotaStore.getState();
     handleRequest = async () => { throw new Error('network down'); };
-    expect(await useQuotaStore.getState().fetchQuotas(['claude'])).toBe(false);
+    expect(await useQuotaStore.getState().fetchQuotas(['claude'], { manual: true })).toBe(false);
     const after = useQuotaStore.getState();
     expect(after.results).toBe(before.results);
     expect(after.results[0].configured).toBe(true);
@@ -62,7 +94,7 @@ describe('quota refresh failure is not empty success', () => {
       await pause();
       return json(result('codex'));
     };
-    expect(await useQuotaStore.getState().fetchQuotas(['claude', 'codex'])).toBe(true);
+    expect(await useQuotaStore.getState().fetchQuotas(['claude', 'codex'], { manual: true })).toBe(true);
     expect(useQuotaStore.getState().results).toHaveLength(2);
     expect(useQuotaStore.getState().refreshErrors).toEqual({ claude: 'claude unreachable' });
     expect(useQuotaStore.getState().error).toBe('claude unreachable');
@@ -164,15 +196,15 @@ describe('quota refresh failure is not empty success', () => {
     expect(useQuotaStore.getState().results).toBe(previous);
   });
 
-  test('the three-minute timer leaves Claude to its own deadline while refreshing other providers', async () => {
+  test('periodic refresh skips Claude while manual refresh includes it', async () => {
     useQuotaStore.setState({ dropdownProvidersExplicit: true, dropdownProviderIds: ['claude', 'codex'], results: [
       { ...result(), refresh: { state: 'cached', sampledAt: 123, nextAttemptAt: 300_123 } },
     ] });
     handleRequest = async url => json(result(url.endsWith('/codex') ? 'codex' : 'claude'));
-    await useQuotaStore.getState().refreshSelectedQuotas({ automatic: true });
+    await useQuotaStore.getState().refreshSelectedQuotas();
     expect(network.mock.calls.map(call => call[0].toString()).some(url => url.endsWith('/claude'))).toBe(false);
     expect(network.mock.calls.map(call => call[0].toString()).some(url => url.endsWith('/codex'))).toBe(true);
-    await useQuotaStore.getState().refreshSelectedQuotas();
+    await useQuotaStore.getState().refreshSelectedQuotas({ manual: true });
     expect(network.mock.calls.map(call => call[0].toString()).some(url => url.endsWith('/claude'))).toBe(true);
   });
 });

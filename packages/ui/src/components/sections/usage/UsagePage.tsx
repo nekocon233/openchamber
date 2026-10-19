@@ -47,7 +47,7 @@ export const UsagePage: React.FC = () => {
   const setSelectedProvider = useQuotaStore((state) => state.setSelectedProvider);
   const loadSettings = useQuotaStore((state) => state.loadSettings);
   const fetchAllQuotas = useQuotaStore((state) => state.fetchAllQuotas);
-  const fetchProviderQuota = useQuotaStore((state) => state.fetchProviderQuota);
+  const invalidateProviderQuota = useQuotaStore((state) => state.invalidateProviderQuota);
   const isLoading = useQuotaStore((state) => state.isLoading);
   const lastUpdated = useQuotaStore((state) => state.lastUpdated);
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
@@ -225,7 +225,7 @@ export const UsagePage: React.FC = () => {
           {selectedProviderId === 'claude' ? (
             <>
               <p className="typography-ui-label font-medium text-[var(--status-warning)]">{t('settings.usage.page.state.claudeSignedOutTitle')}</p>
-              <ClaudeCodeSignIn onSignedIn={() => void fetchProviderQuota('claude')} />
+              <ClaudeCodeSignIn onSignedIn={() => invalidateProviderQuota('claude')} />
             </>
           ) : (
             <>

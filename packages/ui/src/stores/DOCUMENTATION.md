@@ -92,7 +92,7 @@ A switch is picked up from OpenCode's event stream rather than from the screen
 that made it, so `catalogRefreshTasks("credential")` re-reads the selected
 trackers when a credential changes. That is what covers a switch made in
 OpenCode's own TUI or by another client, which no OpenChamber screen can see.
-Only the trackers the store already shows are re-read. That is gated on the
+Only automatic trackers the store already shows are re-read. Claude is invalidated without a query. That is gated on the
 results the store holds, not on the instance-level load flag, because runtimes
 differ in how they load: the VS Code layout fetches quotas on open and never
 calls `ensureLoadedForRuntime`, so `loadedRuntimeKey` stays null there and
@@ -109,14 +109,24 @@ when `ok` is false. The store replaces that entry and accepts its retained usage
 or explicit `usage: null`; it must not keep another credential's sample. The
 original `refresh.sampledAt` drives Claude's displayed update time rather than
 the global successful-refresh timestamp or response `fetchedAt`.
-`lib/quota/claudeAutoRefresh.ts` schedules one shared deadline from
-`refresh.nextAttemptAt` while quota consumers are mounted. Claude with this
-metadata is omitted from the ordinary three-minute automatic refresh; older
-servers without it retain that cadence. Manual refresh still reaches the
-runtime, which enforces the same five-minute budget. A transport failure backs
-off three minutes locally instead of spinning on an expired server deadline.
-Runtime reset and the last consumer leaving retire the deadline and its store
-subscription. Other providers continue refreshing independently.
+Claude is manual-only. `fetchQuotas`, `fetchAllQuotas`, and
+`refreshSelectedQuotas` skip it unless the caller passes `manual: true`; the explicit refresh controls do so. The shared
+three-minute timer, initialization, page opening, mobile popovers, and tray
+bootstrap never query Claude, including against older servers without metadata.
+There is no Claude retry timer. `refresh.nextAttemptAt` only tells the person
+when another manual refresh is allowed. The runtime still enforces the same
+five-minute budget and retained-data policy.
+
+With only Claude selected, bootstrap completes after settings and metadata load;
+its usage remains unknown until manual refresh. Bootstrap readiness never
+implies that a Claude query has occurred.
+
+Credential events invalidate Claude's cached UI sample and abort any pending
+manual read, including a first read with no visible result yet. They do not
+query Claude. Completing sign-in also invalidates the preceding UI sample and
+waits for manual refresh. With no Claude sample, the selected Claude group shows
+an empty-data message so the existing refresh action stays reachable. Other
+providers continue refreshing independently.
 
 Native Kimi sources are discovered from the connected runtime's Claude connection
 metadata, once per load/refresh rather than per render. Their connection revision

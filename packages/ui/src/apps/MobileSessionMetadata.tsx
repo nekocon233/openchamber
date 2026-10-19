@@ -408,7 +408,8 @@ export const MobileSessionMetadataButton = React.memo(function MobileSessionMeta
     }
     if (quotaRefreshAttempted.current || isQuotaLoading) return;
     const missingEnabledProvider = dropdownProviderIds.some((providerId) => (
-      !quotaResults.some((result) => result.providerId === providerId) || quotaRefreshErrors[providerId]
+      providerId !== 'claude'
+      && (!quotaResults.some((result) => result.providerId === providerId) || quotaRefreshErrors[providerId])
     ));
     if (!missingEnabledProvider) return;
     // Trigger at most one attempt per opening. A failed first load remains

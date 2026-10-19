@@ -109,7 +109,7 @@ export const WorkStatusUsageSection: React.FC = () => {
           size="icon"
           variant="ghost"
           className="size-6 shrink-0 text-muted-foreground"
-          onClick={() => void refreshQuotas()}
+          onClick={() => void refreshQuotas({ manual: true })}
           aria-label={t('settings.usage.sidebar.actions.refreshAria')}
           title={t('settings.usage.sidebar.actions.refreshTitle')}
           disabled={isLoading}

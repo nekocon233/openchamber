@@ -23,10 +23,10 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
-  "usage.refresh.updated": "更新于 {updated}。下次查询 {next}。",
-  "usage.refresh.limitedWithSample": "用量查询受限。更新于 {updated}。下次尝试 {next}。",
-  "usage.refresh.limitedWithoutSample": "用量查询受限，暂无已保存的用量。下次尝试 {next}。",
-  "usage.refresh.nextAttempt": "下次尝试 {next}。",
+  "usage.refresh.updated": "更新于 {updated}。可在 {next} 后手动刷新。",
+  "usage.refresh.limitedWithSample": "用量查询受限。更新于 {updated}。可在 {next} 后手动刷新。",
+  "usage.refresh.limitedWithoutSample": "用量查询受限，暂无已保存的用量。可在 {next} 后手动刷新。",
+  "usage.refresh.nextAttempt": "可在 {next} 后手动刷新。",
 
   "chat.nativeTasks.title": "任务",
   "chat.nativeTasks.open": "打开会话任务",

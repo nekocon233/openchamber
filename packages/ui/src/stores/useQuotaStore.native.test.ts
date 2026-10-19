@@ -58,7 +58,7 @@ describe('native connection quota identity', () => {
     expect(fetcher.mock.calls).toHaveLength(0);
     useQuotaStore.getState().setDropdownProviderIds(['claude']);
     requests = async () => Response.json({ ...quota(10), providerId: 'claude' });
-    await useQuotaStore.getState().refreshSelectedQuotas();
+    await useQuotaStore.getState().refreshSelectedQuotas({ manual: true });
     expect(discoveryCalls).toBe(0);
     expect(fetcher.mock.calls).toHaveLength(1);
   });

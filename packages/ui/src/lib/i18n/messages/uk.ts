@@ -23,10 +23,10 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
-  "usage.refresh.updated": "Оновлено {updated}. Наступна перевірка {next}.",
-  "usage.refresh.limitedWithSample": "Частоту запитів використання обмежено. Оновлено {updated}. Наступна спроба {next}.",
-  "usage.refresh.limitedWithoutSample": "Частоту запитів використання обмежено. Збережених даних використання немає. Наступна спроба {next}.",
-  "usage.refresh.nextAttempt": "Наступна спроба {next}.",
+  "usage.refresh.updated": "Оновлено {updated}. Ручне оновлення доступне після {next}.",
+  "usage.refresh.limitedWithSample": "Частоту запитів використання обмежено. Оновлено {updated}. Ручне оновлення доступне після {next}.",
+  "usage.refresh.limitedWithoutSample": "Частоту запитів використання обмежено. Збережених даних використання немає. Ручне оновлення доступне після {next}.",
+  "usage.refresh.nextAttempt": "Ручне оновлення доступне після {next}.",
 
   "chat.nativeTasks.title": "Завдання",
   "chat.nativeTasks.open": "Відкрити завдання сеансу",

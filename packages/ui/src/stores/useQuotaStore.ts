@@ -9,7 +9,6 @@ import type { DesktopSettings } from '@/lib/desktop';
 import { getDefaultModels } from '@/lib/quota/model-families';
 import { loadDesktopSettings, updateDesktopSettings } from '@/lib/persistence';
 import { fetchQuota } from '@/lib/quota/fetchQuota';
-import { startClaudeQuotaRefresh } from '@/lib/quota/claudeAutoRefresh';
 import { getRuntimeKey, isTransientRuntimeKey } from '@/lib/runtime-switch';
 import { useConfigStore } from '@/stores/useConfigStore';
 
@@ -27,7 +26,6 @@ let inFlightRuntimeLoad: Promise<void> | null = null;
 const quotaRequests = new Map<QuotaProviderId, { controller: AbortController; promise: Promise<boolean> }>();
 let quotaAutoRefreshConsumers = 0;
 let quotaAutoRefreshInterval: number | null = null;
-let stopClaudeAutoRefresh: (() => void) | null = null;
 
 interface QuotaSettingsState {
   dropdownProvidersExplicit: boolean;
@@ -41,9 +39,9 @@ interface QuotaStore extends QuotaSettingsState {
   nativeProviders: NativeQuotaProvider[];
   nativeProviderError: string | null;
   loadNativeProviders: (force?: boolean) => Promise<void>;
-  refreshSelectedQuotas: (options?: { automatic?: boolean }) => Promise<boolean>;
+  refreshSelectedQuotas: (options?: { manual?: boolean }) => Promise<boolean>;
   results: ProviderResult[];
-  /** Instance whose quotas `results` describes, or `null` when nothing is loaded. */
+  /** Runtime whose automatic bootstrap finished; manual Claude usage may still be unknown. */
   loadedRuntimeKey: string | null;
   selectedProviderId: QuotaProviderId | null;
   isLoading: boolean;
@@ -54,11 +52,12 @@ interface QuotaStore extends QuotaSettingsState {
   refreshErrors: Partial<Record<QuotaProviderId, string>>;
 
   loadSettings: () => Promise<void>;
-  fetchAllQuotas: () => Promise<void>;
+  fetchAllQuotas: (options?: { manual?: boolean }) => Promise<void>;
   /** Resolves true when at least one provider answered — see `ensureLoadedForRuntime`. */
-  fetchQuotas: (providerIds: QuotaProviderId[], options?: { invalidate?: boolean }) => Promise<boolean>;
-  /** Resolves true when the instance answered, false on a transport failure. */
+  fetchQuotas: (providerIds: QuotaProviderId[], options?: { invalidate?: boolean; manual?: boolean }) => Promise<boolean>;
+  /** Explicit single-provider query. Claude callers must be user initiated. */
   fetchProviderQuota: (providerId: QuotaProviderId, invalidate?: boolean) => Promise<boolean>;
+  invalidateProviderQuota: (providerId: QuotaProviderId) => void;
   setSelectedProvider: (providerId: QuotaProviderId | null) => void;
   setDisplayMode: (mode: 'usage' | 'remaining') => void;
   setDropdownProviderIds: (providerIds: QuotaProviderId[]) => void;
@@ -68,7 +67,8 @@ interface QuotaStore extends QuotaSettingsState {
   toggleFamilyExpanded: (providerId: string, familyId: string) => void;
   applyDefaultSelections: (providerId: QuotaProviderId, availableModels: string[]) => void;
   /**
-   * Load settings and quotas once per instance, when that instance is ready.
+   * Load settings and automatic quotas once per ready instance. Claude waits
+   * for an explicit refresh, including on its first load.
    *
    * Providers report themselves as configured only after the instance can read
    * their credentials, which on a remote instance is not true the moment the UI
@@ -202,7 +202,7 @@ export const useQuotaStore = create<QuotaStore>()(
         return nativeQuotaLoad;
       },
 
-      refreshSelectedQuotas: async ({ automatic = false } = {}) => {
+      refreshSelectedQuotas: async ({ manual = false } = {}) => {
         const generation = quotaGeneration;
         const state = get();
         if (state.dropdownProvidersExplicit && state.dropdownProviderIds.length === 0) return false;
@@ -210,16 +210,16 @@ export const useQuotaStore = create<QuotaStore>()(
           await get().loadNativeProviders();
         }
         if (generation !== quotaGeneration) return false;
-        const current = get();
-        const claudeScheduled = current.results.some(result => result.providerId === 'claude' && result.refresh);
-        return current.fetchQuotas(current.dropdownProviderIds.filter(id => !(automatic && claudeScheduled && id === 'claude')));
+        return get().fetchQuotas(get().dropdownProviderIds, { manual });
       },
 
-      fetchQuotas: async (providerIds, { invalidate = false } = {}) => {
+      fetchQuotas: async (providerIds, { invalidate = false, manual = false } = {}) => {
         const generation = quotaGeneration;
+        if (!manual && invalidate && providerIds.includes('claude')) get().invalidateProviderQuota('claude');
+        const targets = providerIds.filter(id => manual || id !== 'claude');
         try {
           const answered = await Promise.all(
-            providerIds.map((providerId) => get().fetchProviderQuota(providerId, invalidate))
+            targets.map((providerId) => get().fetchProviderQuota(providerId, invalidate))
           );
           if (generation !== quotaGeneration) return false;
           return answered.some(Boolean);
@@ -231,11 +231,27 @@ export const useQuotaStore = create<QuotaStore>()(
         }
       },
 
-      fetchAllQuotas: async () => {
+      fetchAllQuotas: async ({ manual = false } = {}) => {
         const generation = quotaGeneration;
         await get().loadNativeProviders();
         if (generation !== quotaGeneration) return;
-        await get().fetchQuotas([...QUOTA_PROVIDERS, ...get().nativeProviders].map((provider) => provider.id));
+        await get().fetchQuotas([...QUOTA_PROVIDERS, ...get().nativeProviders].map((provider) => provider.id), { manual });
+      },
+
+      invalidateProviderQuota: (providerId) => {
+        quotaRequests.get(providerId)?.controller.abort();
+        quotaRequests.delete(providerId);
+        set(state => {
+          const refreshErrors = { ...state.refreshErrors };
+          delete refreshErrors[providerId];
+          return {
+            results: state.results.filter(result => result.providerId !== providerId),
+            refreshErrors,
+            error: Object.values(refreshErrors)[0] ?? null,
+            isFetchingProvider: { ...state.isFetchingProvider, [providerId]: false },
+            isLoading: quotaRequests.size > 0,
+          };
+        });
       },
 
       fetchProviderQuota: async (providerId, invalidate = false) => {
@@ -327,6 +343,10 @@ export const useQuotaStore = create<QuotaStore>()(
           if (generation !== quotaGeneration) return;
           const { dropdownProviderIds, fetchQuotas } = get();
           if (dropdownProviderIds.length === 0) return;
+          if (dropdownProviderIds.every(providerId => providerId === 'claude')) {
+            set({ loadedRuntimeKey: runtimeKey });
+            return;
+          }
           const answered = await fetchQuotas(dropdownProviderIds);
           // Mark the instance loaded only once it actually answered. Claiming it
           // up front meant a load that failed on a cold or briefly unreachable
@@ -434,22 +454,8 @@ export const useQuotaAutoRefresh = () => {
     quotaAutoRefreshConsumers += 1;
     if (quotaAutoRefreshInterval === null) {
       quotaAutoRefreshInterval = window.setInterval(() => {
-        void useQuotaStore.getState().refreshSelectedQuotas({ automatic: true });
+        void useQuotaStore.getState().refreshSelectedQuotas();
       }, QUOTA_REFRESH_INTERVAL_MS);
-      stopClaudeAutoRefresh = startClaudeQuotaRefresh({
-        read: () => {
-          const state = useQuotaStore.getState();
-          const claude = state.results.find(result => result.providerId === 'claude');
-          return {
-            generation: quotaGeneration,
-            enabled: state.dropdownProviderIds.includes('claude') && claude?.configured === true,
-            fetching: state.isFetchingProvider.claude === true,
-            refresh: claude?.refresh,
-          };
-        },
-        subscribe: listener => useQuotaStore.subscribe(listener),
-        refresh: () => useQuotaStore.getState().fetchProviderQuota('claude'),
-      });
     }
 
     return () => {
@@ -457,8 +463,6 @@ export const useQuotaAutoRefresh = () => {
       if (quotaAutoRefreshConsumers === 0 && quotaAutoRefreshInterval !== null) {
         window.clearInterval(quotaAutoRefreshInterval);
         quotaAutoRefreshInterval = null;
-        stopClaudeAutoRefresh?.();
-        stopClaudeAutoRefresh = null;
       }
     };
   }, []);

@@ -105,12 +105,14 @@ const refreshProvidersAfterCredentialChange = async (): Promise<void> => {
  * account. That is also what covers a switch made in OpenCode's own TUI or by
  * another client, which no OpenChamber screen can see.
  *
- * Every tracker the user selected is re-read, because the event does not name
- * the provider and threading that through the event, the sync layer and this
- * table costs more than the extra requests on an action a person performs a few
- * times a day.
+ * Automatic trackers already shown are re-read because the event does not name
+ * the provider. Claude is manual-only: invalidate its previous account's data
+ * and pending read, then wait for an explicit refresh.
  */
 const refreshUsageAfterCredentialChange = async (): Promise<void> => {
+  // Claude is queried only on manual refresh. Invalidate even a first request
+  // still in flight, so it cannot publish the previous credential's usage.
+  useQuotaStore.getState().invalidateProviderQuota('claude');
   const { results, dropdownProviderIds, fetchQuotas } = useQuotaStore.getState();
   // Only the trackers this store already shows. Gating on `results` rather than
   // on the instance-level load flag is what makes this work in the VS Code

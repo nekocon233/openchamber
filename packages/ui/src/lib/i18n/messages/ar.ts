@@ -21,10 +21,10 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
-  "usage.refresh.updated": "آخر تحديث {updated}. التحقق التالي {next}.",
-  "usage.refresh.limitedWithSample": "تم تقييد طلبات الاستعلام عن الاستخدام. آخر تحديث {updated}. المحاولة التالية {next}.",
-  "usage.refresh.limitedWithoutSample": "تم تقييد طلبات الاستعلام عن الاستخدام. لا توجد بيانات استخدام محفوظة. المحاولة التالية {next}.",
-  "usage.refresh.nextAttempt": "المحاولة التالية {next}.",
+  "usage.refresh.updated": "آخر تحديث {updated}. يمكن التحديث يدوياً بعد {next}.",
+  "usage.refresh.limitedWithSample": "تم تقييد طلبات الاستعلام عن الاستخدام. آخر تحديث {updated}. يمكن التحديث يدوياً بعد {next}.",
+  "usage.refresh.limitedWithoutSample": "تم تقييد طلبات الاستعلام عن الاستخدام. لا توجد بيانات استخدام محفوظة. يمكن التحديث يدوياً بعد {next}.",
+  "usage.refresh.nextAttempt": "يمكن التحديث يدوياً بعد {next}.",
 
   'opencodeCompatibility.bundled': 'يأتي OpenCode مضمّنًا مع OpenChamber. حدّث OpenChamber للحصول على OpenCode v2.',
   'opencodeCompatibility.title': 'يلزم OpenCode v2',

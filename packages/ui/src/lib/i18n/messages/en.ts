@@ -22,10 +22,10 @@ import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
-  "usage.refresh.updated": "Updated {updated}. Next check {next}.",
-  "usage.refresh.limitedWithSample": "Usage query limited. Updated {updated}. Next attempt {next}.",
-  "usage.refresh.limitedWithoutSample": "Usage query limited. No saved usage. Next attempt {next}.",
-  "usage.refresh.nextAttempt": "Next attempt {next}.",
+  "usage.refresh.updated": "Updated {updated}. Manual refresh available after {next}.",
+  "usage.refresh.limitedWithSample": "Usage query limited. Updated {updated}. Manual refresh available after {next}.",
+  "usage.refresh.limitedWithoutSample": "Usage query limited. No saved usage. Manual refresh available after {next}.",
+  "usage.refresh.nextAttempt": "Manual refresh available after {next}.",
 
   'chat.nativeTasks.title': 'Tasks',
   'chat.nativeTasks.open': 'Open session tasks',

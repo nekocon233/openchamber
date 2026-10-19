@@ -899,7 +899,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
                   <button
                     type="button"
                     className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={() => fetchAllQuotas()}
+                    onClick={() => fetchAllQuotas({ manual: true })}
                     disabled={isQuotaLoading}
                     aria-label={t('vscodeLayout.quota.actions.refreshAria')}
                   >

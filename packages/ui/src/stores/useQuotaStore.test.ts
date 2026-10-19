@@ -3,6 +3,7 @@ import type { ProviderResult } from "@/types"
 
 let runtimeKey = "url:https://instance-a"
 let isInitialized = true
+let quotaProvider: "claude" | "codex" = "codex"
 const fetched: string[] = []
 
 type StubPayload = { usageDropdownProviders: string[] } | ProviderResult
@@ -27,12 +28,12 @@ mock.module("@/lib/runtime-fetch", () => ({
   runtimeFetch: async (path: string) => {
     fetched.push(path)
     if (quotaRequestsFail) throw new Error("network down")
-    if (path.startsWith("/api/config/settings")) return json({ usageDropdownProviders: ["claude"] })
+    if (path.startsWith("/api/config/settings")) return json({ usageDropdownProviders: [quotaProvider] })
     if (quotaGate) await quotaGate()
     // A reachable instance reporting a provider failure, which is different
     // from the transport failure `quotaRequestsFail` models.
-    if (quotaFails) return json({ providerId: "claude", providerName: "Claude", ok: false, configured: true, error: "authentication failed", usage: null, fetchedAt: 2 })
-    return json({ providerId: "claude", providerName: "Claude", ok: true, configured: true, usage: null, fetchedAt: 1 })
+    if (quotaFails) return json({ providerId: quotaProvider, providerName: quotaProvider, ok: false, configured: true, error: "authentication failed", usage: null, fetchedAt: 2 })
+    return json({ providerId: quotaProvider, providerName: quotaProvider, ok: true, configured: true, usage: null, fetchedAt: 1 })
   },
 }))
 
@@ -43,14 +44,28 @@ mock.module("@/stores/useConfigStore", () => ({
 }))
 
 const { useQuotaStore } = await import("./useQuotaStore")
+const { invalidateSettingsCache } = await import("@/lib/persistence")
 
 describe("Usage quotas are loaded once per ready instance", () => {
   beforeEach(() => {
     runtimeKey = "url:https://instance-a"
+    quotaProvider = "codex"
     isInitialized = true
     fetched.length = 0
     quotaRequestsFail = false
+    invalidateSettingsCache()
     useQuotaStore.getState().resetForRuntimeSwitch()
+  })
+
+  test("a Claude-only runtime completes bootstrap without querying usage", async () => {
+    quotaProvider = "claude"
+    await useQuotaStore.getState().ensureLoadedForRuntime()
+    const afterFirst = fetched.length
+    await useQuotaStore.getState().ensureLoadedForRuntime()
+    expect(fetched.filter(path => path.startsWith('/api/quota/'))).toEqual([])
+    expect(fetched.length).toBe(afterFirst)
+    expect(useQuotaStore.getState().results).toEqual([])
+    expect(useQuotaStore.getState().loadedRuntimeKey).toBe(runtimeKey)
   })
 
   test("nothing is fetched while the instance has not reported itself initialised", async () => {
@@ -94,7 +109,7 @@ describe("Usage quotas are loaded once per ready instance", () => {
   })
 
   test("a quota still in flight for the previous instance cannot land in the new one", async () => {
-    const pending = useQuotaStore.getState().fetchProviderQuota("claude")
+    const pending = useQuotaStore.getState().fetchProviderQuota("codex")
     useQuotaStore.getState().resetForRuntimeSwitch()
     await pending
 
@@ -133,7 +148,7 @@ describe("Usage quotas are loaded once per ready instance", () => {
 
   test("a switch drops the previous instance's display settings", async () => {
     await useQuotaStore.getState().ensureLoadedForRuntime()
-    expect(useQuotaStore.getState().dropdownProviderIds).toEqual(["claude"])
+    expect(useQuotaStore.getState().dropdownProviderIds).toEqual(["codex"])
     useQuotaStore.getState().setDisplayMode("remaining")
 
     useQuotaStore.getState().resetForRuntimeSwitch()
@@ -148,11 +163,13 @@ describe("Usage quotas are loaded once per ready instance", () => {
 describe("A provider-account switch re-reads the trackers", () => {
   beforeEach(() => {
     runtimeKey = "url:https://instance-a"
+    quotaProvider = "codex"
     isInitialized = true
     fetched.length = 0
     quotaRequestsFail = false
     quotaFails = false
     quotaGate = null
+    invalidateSettingsCache()
     useQuotaStore.getState().resetForRuntimeSwitch()
   })
 
@@ -161,30 +178,30 @@ describe("A provider-account switch re-reads the trackers", () => {
     // the credential looked unchanged. They did not move because the new
     // account's fetch failed and the old account's sample was preserved.
     await useQuotaStore.getState().ensureLoadedForRuntime()
-    expect(useQuotaStore.getState().results.some((r) => r.providerId === "claude")).toBe(true)
+    expect(useQuotaStore.getState().results.some((r) => r.providerId === "codex")).toBe(true)
 
     quotaFails = true
-    await useQuotaStore.getState().fetchQuotas(["claude"], { invalidate: true })
+    await useQuotaStore.getState().fetchQuotas(["codex"], { invalidate: true })
 
     // The old account's sample is gone; what remains is this account's failure.
-    const entry = useQuotaStore.getState().results.find((r) => r.providerId === "claude")
+    const entry = useQuotaStore.getState().results.find((r) => r.providerId === "codex")
     expect(entry?.usage).toBeNull()
     expect(entry?.ok).toBe(false)
-    expect(useQuotaStore.getState().refreshErrors.claude).toBeTruthy()
+    expect(useQuotaStore.getState().refreshErrors.codex).toBeTruthy()
   })
 
   test("a periodic refresh still preserves the last sample when a fetch fails", async () => {
     // The other half of the rule: a blip must not blank a surface showing real
     // numbers for the same account.
     await useQuotaStore.getState().ensureLoadedForRuntime()
-    const before = useQuotaStore.getState().results.find((r) => r.providerId === "claude")
+    const before = useQuotaStore.getState().results.find((r) => r.providerId === "codex")
 
     quotaFails = true
-    await useQuotaStore.getState().fetchQuotas(["claude"])
+    await useQuotaStore.getState().fetchQuotas(["codex"])
 
-    const after = useQuotaStore.getState().results.find((r) => r.providerId === "claude")
+    const after = useQuotaStore.getState().results.find((r) => r.providerId === "codex")
     expect(after?.fetchedAt).toBe(before?.fetchedAt)
-    expect(useQuotaStore.getState().refreshErrors.claude).toBeTruthy()
+    expect(useQuotaStore.getState().refreshErrors.codex).toBeTruthy()
   })
 
   test("a switch does not reuse a request in flight for the previous account", async () => {
@@ -201,20 +218,20 @@ describe("A provider-account switch re-reads the trackers", () => {
       ...runtimeFetchModule,
       runtimeFetch: async (path: string) => {
         fetched.push(path)
-        if (path === "/api/quota/claude") await gate
+        if (path === "/api/quota/codex") await gate
         return realFetch(path)
       },
     }))
 
-    const superseded = useQuotaStore.getState().fetchProviderQuota("claude")
-    const afterSwitch = useQuotaStore.getState().fetchProviderQuota("claude", true)
+    const superseded = useQuotaStore.getState().fetchProviderQuota("codex")
+    const afterSwitch = useQuotaStore.getState().fetchProviderQuota("codex", true)
 
     release()
     expect(await superseded).toBe(false)
     expect(await afterSwitch).toBe(true)
-    expect(useQuotaStore.getState().refreshErrors.claude).toBeUndefined()
+    expect(useQuotaStore.getState().refreshErrors.codex).toBeUndefined()
     // Two requests: the switch asked again rather than waiting for the first.
-    expect(fetched.filter((path) => path === "/api/quota/claude")).toHaveLength(2)
+    expect(fetched.filter((path) => path === "/api/quota/codex")).toHaveLength(2)
   })
 
   test("the provider stays fetching while the request that superseded another is still out", async () => {
@@ -223,14 +240,14 @@ describe("A provider-account switch re-reads the trackers", () => {
 
     // The switch aborts the first request, which settles at once while the
     // replacement is still waiting on the network.
-    const superseded = useQuotaStore.getState().fetchProviderQuota("claude")
-    const afterSwitch = useQuotaStore.getState().fetchProviderQuota("claude", true)
+    const superseded = useQuotaStore.getState().fetchProviderQuota("codex")
+    const afterSwitch = useQuotaStore.getState().fetchProviderQuota("codex", true)
     expect(await superseded).toBe(false)
-    expect(useQuotaStore.getState().isFetchingProvider.claude).toBe(true)
+    expect(useQuotaStore.getState().isFetchingProvider.codex).toBe(true)
 
     while (releases.length === 0) await new Promise((resolve) => setTimeout(resolve, 0))
     releases[0]()
     await afterSwitch
-    expect(useQuotaStore.getState().isFetchingProvider.claude).toBe(false)
+    expect(useQuotaStore.getState().isFetchingProvider.codex).toBe(false)
   })
 })

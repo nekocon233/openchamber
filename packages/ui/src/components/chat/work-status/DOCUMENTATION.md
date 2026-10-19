@@ -438,11 +438,11 @@ the row reflects the reset tree rather than a mid-creation snapshot.
 ## Section order
 
 Usage provider status is visible alongside both populated and empty quota
-rows. Claude's status shows the last successful sample and next query deadline
+rows. Claude's status shows the last successful sample and earliest next manual refresh time
 from runtime `refresh` metadata, including when a failed refresh carries older
 numbers. Settings, mobile cards, and the VS Code quota dropdown share the same
 localized formatter. The runtime owns request limits; opening this panel or
-pressing refresh cannot bypass them.
+pressing refresh cannot bypass them. Opening the panel and periodic refreshes never query Claude; only the refresh action does.
 
 The default order is by durability:
 
