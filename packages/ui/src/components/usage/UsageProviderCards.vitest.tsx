@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -7,6 +7,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n';
 import { dict as english } from '@/lib/i18n/messages/en';
 import { dict as chinese } from '@/lib/i18n/messages/zh-CN';
 import { useQuotaStore } from '@/stores/useQuotaStore';
+import type { ProviderResult } from '@/types';
 import { useUsageProviderGroups } from './usageGroups';
 import { UsageProviderCards } from './UsageProviderCards';
 
@@ -49,10 +50,31 @@ afterEach(() => {
 });
 
 describe('Claude usage status alongside quota rows', () => {
+  test('restores saved usage without a live refresh or an empty-data message', async () => {
+    const current = useQuotaStore.getState().results[0];
+    const saved: ProviderResult = { ...current, ok: true,
+      refresh: { state: 'cached', sampledAt: SAMPLE, nextAttemptAt: SAMPLE + 600_000 } };
+    flushSync(() => useQuotaStore.setState({ results: [], refreshErrors: {} }));
+    const network = spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      expect(input.toString()).toBe('/api/quota/claude/cached');
+      return Response.json(saved);
+    });
+    try {
+      await useQuotaStore.getState().loadCachedClaudeQuota();
+      flushSync(() => root.render(<I18nProvider><UsageProviderCardsFixture /></I18nProvider>));
+      expect(container.textContent).toContain('12%');
+      expect(container.textContent).not.toContain('No usage data available yet.');
+      expect(container.textContent).not.toContain('Updated');
+      expect(network.mock.calls).toHaveLength(1);
+    } finally {
+      network.mockRestore();
+    }
+  });
+
   test('keeps the manual refresh surface reachable before the first Claude query', () => {
     flushSync(() => useQuotaStore.setState({ results: [], refreshErrors: {} }));
     expect(container.textContent).toContain('Claude');
-    expect(container.textContent).toContain('No usage data available yet.');
+    expect(container.textContent).not.toContain('No usage data available yet.');
     expect(container.textContent).not.toContain('12%');
   });
 

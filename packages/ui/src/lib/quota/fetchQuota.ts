@@ -17,11 +17,19 @@ const windowsSchema = z.record(z.string(), windowSchema);
 
 export type QuotaGiftResetType = 'FIVE_HOUR' | 'WEEK';
 
+interface QuotaReadOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+function requestQuota(providerId: QuotaProviderId, options: QuotaReadOptions, cached: false): Promise<ProviderResult>;
+function requestQuota(providerId: 'claude', options: QuotaReadOptions, cached: true): Promise<ProviderResult | null>;
 /** The deadline covers response bodies too, including transports that ignore abort. */
-export const fetchQuota = async (
+async function requestQuota(
   providerId: QuotaProviderId,
-  { signal, timeoutMs = 30_000 }: { signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<ProviderResult> => {
+  { signal, timeoutMs = 30_000 }: QuotaReadOptions,
+  cached: boolean,
+): Promise<ProviderResult | null> {
   const controller = new AbortController();
   const abort = () => controller.abort(new DOMException('The operation was aborted.', 'AbortError'));
   if (signal?.aborted) abort();
@@ -35,17 +43,19 @@ export const fetchQuota = async (
   });
   const readResult = async () => {
     controller.signal.throwIfAborted();
-    const response = await runtimeFetch(`/api/quota/${encodeURIComponent(providerId)}`, { signal: controller.signal });
+    const route = cached ? '/api/quota/claude/cached' : `/api/quota/${encodeURIComponent(providerId)}`;
+    const response = await runtimeFetch(route, { signal: controller.signal });
     const payload = await response.json();
     if (!response.ok) {
       const failure = z.object({ error: z.string() }).safeParse(payload);
       throw new Error(failure.success ? failure.data.error : `Failed to fetch quota (${response.status})`);
     }
-    return z.object({
+    const schema = z.object({
       providerId: z.literal(providerId),
       providerName: z.string(),
       ok: z.boolean(),
       configured: z.boolean(),
+      availability: z.enum(['available', 'unsupported']).optional(),
       error: z.string().optional(),
       planLabel: z.string().nullable().optional(),
       usage: z.object({ windows: windowsSchema, models: z.record(z.string(), z.object({ windows: windowsSchema })).optional() }).nullable(),
@@ -55,7 +65,11 @@ export const fetchQuota = async (
         sampledAt: z.number().nonnegative().nullable(),
         nextAttemptAt: z.number().nonnegative(),
       }).optional(),
-    }).parse(payload);
+    });
+    if (!cached) return schema.parse(payload);
+    const parsed = schema.nullable().safeParse(payload);
+    if (!parsed.success) throw new Error('Could not read saved Claude usage');
+    return parsed.data;
   };
   try {
     return await Promise.race([readResult(), aborted]);
@@ -64,7 +78,14 @@ export const fetchQuota = async (
     signal?.removeEventListener('abort', abort);
     controller.signal.removeEventListener('abort', rejectAborted);
   }
-};
+}
+
+export const fetchQuota = (providerId: QuotaProviderId, options: QuotaReadOptions = {}): Promise<ProviderResult> =>
+  requestQuota(providerId, options, false);
+
+/** Cache misses and unsupported older servers never fall back to a live query. */
+export const readCachedClaudeQuota = (options: QuotaReadOptions = {}): Promise<ProviderResult | null> =>
+  requestQuota('claude', options, true);
 
 /** The deadline covers response bodies too, including transports that ignore abort. */
 export const activateGiftReset = async (

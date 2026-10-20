@@ -11,7 +11,7 @@ let quotaRequestsFail = false
 let quotaFails = false;
 // Holds a quota request open until the test lets it answer.
 let quotaGate: (() => Promise<void>) | null = null
-const json = (body: StubPayload) => new Response(
+const json = (body: StubPayload | null) => new Response(
   JSON.stringify(body),
   { status: 200, headers: { "content-type": "application/json" } },
 )
@@ -29,6 +29,7 @@ mock.module("@/lib/runtime-fetch", () => ({
     fetched.push(path)
     if (quotaRequestsFail) throw new Error("network down")
     if (path.startsWith("/api/config/settings")) return json({ usageDropdownProviders: [quotaProvider] })
+    if (path === "/api/quota/claude/cached") return json(null)
     if (quotaGate) await quotaGate()
     // A reachable instance reporting a provider failure, which is different
     // from the transport failure `quotaRequestsFail` models.
@@ -62,7 +63,8 @@ describe("Usage quotas are loaded once per ready instance", () => {
     await useQuotaStore.getState().ensureLoadedForRuntime()
     const afterFirst = fetched.length
     await useQuotaStore.getState().ensureLoadedForRuntime()
-    expect(fetched.filter(path => path.startsWith('/api/quota/'))).toEqual([])
+    expect(fetched.filter(path => path === '/api/quota/claude')).toEqual([])
+    expect(fetched.filter(path => path === '/api/quota/claude/cached')).toHaveLength(1)
     expect(fetched.length).toBe(afterFirst)
     expect(useQuotaStore.getState().results).toEqual([])
     expect(useQuotaStore.getState().loadedRuntimeKey).toBe(runtimeKey)

@@ -438,7 +438,8 @@ the row reflects the reset tree rather than a mid-creation snapshot.
 ## Section order
 
 Usage provider errors are visible alongside both populated and empty quota
-rows. Successful Claude values have no extra update-time or manual-refresh timing
+rows. Claude restores the owning runtime's last successful cached usage; missing
+cache data adds no empty-data message and never triggers a provider query. Successful Claude values have no extra update-time or manual-refresh timing
 hint. Failed refreshes keep a short status alongside any retained numbers.
 Settings, mobile cards, and the VS Code quota dropdown share that formatter.
 The runtime owns request limits. Opening the panel and periodic refreshes never

@@ -8,7 +8,6 @@ import { toClaudeUsage } from './transforms.js';
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_BACKOFF_MS = 60 * 60 * 1000;
-const MAX_SAMPLE_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_CACHE_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -37,7 +36,8 @@ const snapshotSchema = z.object({
   rateLimitLevel: z.number().int().min(0).max(5),
   state: z.enum(['fresh', 'rate-limited', 'error']),
   error: z.string().nullable(),
-}).refine(value => (value.usage === null) === (value.sampledAt === null));
+}).refine(value => (value.usage === null) === (value.sampledAt === null)
+  && (value.usage === null || hasUsage(value.usage)));
 
 const hasUsage = (usage) => Object.keys(usage.windows).length > 0
   || Object.values(usage.models ?? {}).some(model => Object.keys(model.windows).length > 0);
@@ -99,8 +99,9 @@ export const createClaudeQuotaTracker = ({
       if (parsed.data.fingerprint !== fingerprint) return null;
       return parsed.data;
     } catch (error) {
-      if (error?.code !== 'ENOENT') warn();
-      return null;
+      if (error?.code === 'ENOENT') return null;
+      warn();
+      throw error;
     }
   };
 
@@ -126,33 +127,33 @@ export const createClaudeQuotaTracker = ({
     }
   };
 
-  const expireSample = (snapshot) => {
+  const clearInvalidSample = (snapshot) => {
     if (snapshot.sampledAt !== null
-      && (now() - snapshot.sampledAt > MAX_SAMPLE_AGE_MS || snapshot.sampledAt > now())) {
+      && snapshot.sampledAt > now()) {
       snapshot.usage = null;
       snapshot.sampledAt = null;
       if (snapshot.state === 'fresh') {
         snapshot.state = 'error';
-        snapshot.error = 'No recent Claude usage is available.';
+        snapshot.error = 'Saved Claude usage has an invalid timestamp.';
       }
       return true;
     }
     return false;
   };
 
-  const resultFor = (snapshot, cached = false) => {
+  const resultFor = (snapshot, state = snapshot.state, error = snapshot.error) => {
     return {
       ...buildResult({
         providerId: 'claude',
         providerName: 'Claude',
-        ok: snapshot.state === 'fresh' && snapshot.usage !== null,
+        ok: (state === 'fresh' || state === 'cached') && snapshot.usage !== null,
         configured: true,
         usage: snapshot.usage,
         planLabel: snapshot.planLabel,
-        error: snapshot.error,
+        error,
       }),
       refresh: {
-        state: cached && snapshot.state === 'fresh' ? 'cached' : snapshot.state,
+        state,
         sampledAt: snapshot.sampledAt,
         nextAttemptAt: snapshot.nextAttemptAt,
       },
@@ -216,7 +217,7 @@ export const createClaudeQuotaTracker = ({
     } finally {
       clearTimeout(timeout);
       snapshot.nextAttemptAt = Math.max(snapshot.nextAttemptAt, now() + REFRESH_INTERVAL_MS);
-      expireSample(snapshot);
+      clearInvalidSample(snapshot);
       persist(owner);
     }
     if (active !== owner) {
@@ -225,18 +226,21 @@ export const createClaudeQuotaTracker = ({
     return resultFor(snapshot);
   };
 
-  const fetchQuota = async (readCredential = loadCredential) => {
+  const loadOwner = async (readCredential, cachedOnly = false) => {
     const credential = await readCredential();
     if (!credential) {
       removeCache(active?.file ?? cacheFile());
       active = null;
-      return buildResult({ providerId: 'claude', providerName: 'Claude', configured: false, ok: false, error: 'Not configured' });
+      return null;
     }
     const fingerprint = createHash('sha256')
       .update(`${credential.accessToken}\0${credential.refreshToken ?? ''}`).digest('hex');
     if (active?.snapshot.fingerprint !== fingerprint) {
       const file = cacheFile();
-      const saved = readSnapshot(file, fingerprint);
+      let saved = null;
+      try { saved = readSnapshot(file, fingerprint); } catch {
+        if (cachedOnly) throw new Error('Could not read saved Claude usage');
+      }
       if (!saved) removeCache(file);
       active = {
         file,
@@ -256,9 +260,24 @@ export const createClaudeQuotaTracker = ({
     }
     const owner = active;
     owner.snapshot.planLabel = credential.planLabel ?? owner.snapshot.planLabel;
-    if (expireSample(owner.snapshot)) persist(owner);
+    if (clearInvalidSample(owner.snapshot)) persist(owner);
+    return { owner, credential };
+  };
+
+  const readCachedQuota = async (readCredential = loadCredential) => {
+    const loaded = await loadOwner(readCredential, true);
+    if (!loaded?.owner.snapshot.usage) return null;
+    // Reading the saved successful sample is independent of the last refresh
+    // attempt. It neither waits for a live request nor changes its cooldown.
+    return resultFor(loaded.owner.snapshot, 'cached', null);
+  };
+
+  const fetchQuota = async (readCredential = loadCredential) => {
+    const loaded = await loadOwner(readCredential);
+    if (!loaded) return buildResult({ providerId: 'claude', providerName: 'Claude', configured: false, ok: false, error: 'Not configured' });
+    const { owner, credential } = loaded;
     if (owner.pending) return owner.pending;
-    if (now() < owner.snapshot.nextAttemptAt) return resultFor(owner.snapshot, true);
+    if (now() < owner.snapshot.nextAttemptAt) return resultFor(owner.snapshot, owner.snapshot.state === 'fresh' ? 'cached' : owner.snapshot.state);
 
     // Persist the attempt before sending it so a restart during the request
     // preserves the interval. Only a completed success updates the sample.
@@ -268,5 +287,5 @@ export const createClaudeQuotaTracker = ({
     return owner.pending;
   };
 
-  return { fetchQuota, reset: () => { active = null; warned = false; } };
+  return { fetchQuota, readCachedQuota, reset: () => { active = null; warned = false; } };
 };

@@ -82,9 +82,7 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
               : refreshError;
           } else if (!result?.ok && result?.error) {
             status = result.error;
-          } else if (providerMeta.id === 'claude' && !result) {
-            status = t('settings.usage.page.state.noData');
-          } else if (rows.length === 0) {
+          } else if (rows.length === 0 && providerMeta.id !== 'claude') {
             status = t('header.services.noRateLimitsReported');
           }
         }

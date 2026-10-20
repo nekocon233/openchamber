@@ -23,7 +23,7 @@ const network = spyOn(globalThis, 'fetch');
 
 beforeEach(() => {
   useQuotaStore.getState().resetForRuntimeSwitch();
-  handleRequest = async () => json(result());
+  handleRequest = async url => url.endsWith('/cached') ? Response.json(null) : json(result());
   network.mockImplementation((input, init) => handleRequest(input.toString(), init?.signal));
 });
 afterEach(() => {
@@ -37,7 +37,7 @@ describe('quota refresh failure is not empty success', () => {
     useQuotaStore.setState({ dropdownProvidersExplicit: true, dropdownProviderIds: ['claude'] });
     await useQuotaStore.getState().fetchQuotas(['claude']);
     await useQuotaStore.getState().refreshSelectedQuotas();
-    expect(network.mock.calls).toHaveLength(0);
+    expect(network.mock.calls.map(call => call[0].toString())).toEqual(['/api/quota/claude/cached']);
     expect(useQuotaStore.getState().results).toEqual([]);
     await useQuotaStore.getState().fetchProviderQuota('claude');
     const before = useQuotaStore.getState().results;
@@ -58,7 +58,7 @@ describe('quota refresh failure is not empty success', () => {
   });
 
   test('bulk loading skips Claude unless a refresh explicitly requests it', async () => {
-    handleRequest = async url => json(result(url.endsWith('/claude') ? 'claude' : 'codex'));
+    handleRequest = async url => url.endsWith('/cached') ? Response.json(null) : json(result(url.endsWith('/claude') ? 'claude' : 'codex'));
     await useQuotaStore.getState().fetchAllQuotas();
     expect(network.mock.calls.some(call => call[0].toString().endsWith('/claude'))).toBe(false);
     await useQuotaStore.getState().fetchAllQuotas({ manual: true });
@@ -231,5 +231,64 @@ describe('quota request deadline', () => {
     controller.abort();
     await expect(fetchQuota('claude', { signal: controller.signal })).rejects.toThrow('aborted');
     expect(network.mock.calls).toHaveLength(0);
+  });
+});
+
+describe('Claude saved usage hydration', () => {
+  test('restores the previous sample once without a live request or a refresh spinner', async () => {
+    const saved: ProviderResult = { ...result(), refresh: { state: 'cached', sampledAt: 123, nextAttemptAt: 300_123 } };
+    handleRequest = async url => {
+      expect(url).toBe('/api/quota/claude/cached');
+      return json(saved);
+    };
+    expect(await useQuotaStore.getState().loadCachedClaudeQuota()).toBe(true);
+    expect(useQuotaStore.getState().results[0].usage).toEqual(saved.usage);
+    expect(useQuotaStore.getState().isLoading).toBe(false);
+    expect(useQuotaStore.getState().lastUpdated).toBe(123);
+    await useQuotaStore.getState().loadCachedClaudeQuota();
+    expect(network.mock.calls).toHaveLength(1);
+  });
+
+  test('cache misses and unsupported older endpoints never trigger a live request', async () => {
+    handleRequest = async () => Response.json(null);
+    await useQuotaStore.getState().loadCachedClaudeQuota();
+    expect(useQuotaStore.getState().results).toEqual([]);
+    expect(network.mock.calls.map(call => call[0].toString())).toEqual(['/api/quota/claude/cached']);
+    useQuotaStore.getState().resetForRuntimeSwitch();
+    handleRequest = async () => Response.json({ error: 'not found' }, { status: 404 });
+    expect(await useQuotaStore.getState().loadCachedClaudeQuota()).toBe(false);
+    expect(network.mock.calls.every(call => call[0].toString().endsWith('/claude/cached'))).toBe(true);
+  });
+
+  test('a slower saved read cannot replace a newer manual result', async () => {
+    const old = deferredResponse();
+    handleRequest = async url => url.endsWith('/cached') ? old.promise : json({ ...result(), fetchedAt: 999 });
+    const restoring = useQuotaStore.getState().loadCachedClaudeQuota();
+    await pause();
+    const manual = useQuotaStore.getState().fetchProviderQuota('claude');
+    expect(await manual).toBe(true);
+    old.complete(json({ ...result(), fetchedAt: 123 }));
+    expect(await restoring).toBe(false);
+    expect(useQuotaStore.getState().results[0].fetchedAt).toBe(999);
+  });
+
+  test('a saved read for a previous runtime cannot reach the new runtime', async () => {
+    const old = deferredResponse();
+    handleRequest = async () => old.promise;
+    const restoring = useQuotaStore.getState().loadCachedClaudeQuota();
+    await pause();
+    useQuotaStore.getState().resetForRuntimeSwitch();
+    old.complete(json(result()));
+    expect(await restoring).toBe(false);
+    expect(useQuotaStore.getState().results).toEqual([]);
+  });
+
+  test('a failed local read preserves an existing complete sample', async () => {
+    const saved = result();
+    useQuotaStore.setState({ results: [saved] });
+    handleRequest = async () => { throw new Error('cache unavailable'); };
+    expect(await useQuotaStore.getState().loadCachedClaudeQuota()).toBe(false);
+    expect(useQuotaStore.getState().results).toEqual([saved]);
+    expect(useQuotaStore.getState().refreshErrors.claude).toBe('cache unavailable');
   });
 });

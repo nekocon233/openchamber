@@ -1601,6 +1601,10 @@ export const fetchClaudeQuota = (
   loadCredential: () => ClaudeCredential | null | Promise<ClaudeCredential | null> = loadClaudeCredential,
 ): Promise<ProviderResult> => claudeTracker.fetchQuota(loadCredential);
 
+export const readCachedClaudeQuota = (
+  loadCredential: () => ClaudeCredential | null | Promise<ClaudeCredential | null> = loadClaudeCredential,
+): Promise<ProviderResult | null> => claudeTracker.readCachedQuota(loadCredential);
+
 export const resetClaudeQuotaCache = (): void => claudeTracker.reset();
 
 const buildCopilotWindows = (payload: Record<string, unknown>) => {

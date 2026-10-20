@@ -205,7 +205,7 @@ describe('Claude usage restart and account isolation', () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
-  it('discards samples older than 24 hours while retaining a longer server cooldown', async () => {
+  it('retains the last successful sample past 24 hours and keeps the server cooldown', async () => {
     await tracker.fetchQuota();
     vi.setSystemTime(START + INTERVAL);
     network.mockResolvedValue(limited({ 'retry-after': '172800' }));
@@ -213,11 +213,11 @@ describe('Claude usage restart and account isolation', () => {
     vi.setSystemTime(START + 86_400_001);
     tracker = createTracker();
     const result = await tracker.fetchQuota();
-    expect(result.usage).toBeNull();
-    expect(result.refresh.sampledAt).toBeNull();
+    expect(result.usage.windows['5h'].usedPercent).toBe(12);
+    expect(result.refresh.sampledAt).toBe(START);
     expect(result.refresh.state).toBe('rate-limited');
     expect(network).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fs.readFileSync(file, 'utf8')).usage).toBeNull();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).usage).not.toBeNull();
   });
 
   it('ignores malformed cache data and reports a successful fresh read honestly', async () => {
@@ -235,5 +235,68 @@ describe('Claude usage restart and account isolation', () => {
     await tracker.fetchQuota();
     expect(network).toHaveBeenCalledTimes(1);
     expect(warning).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Claude cache-only reads', () => {
+  it('reports a local cache read failure without falling back to Anthropic', async () => {
+    fs.writeFileSync(path.join(directory, 'blocked'), 'fixture');
+    file = path.join(directory, 'blocked', 'usage.json');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(tracker.readCachedQuota()).rejects.toThrow('Could not read saved Claude usage');
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it('returns a cache miss without querying Anthropic or creating a snapshot', async () => {
+    expect(await tracker.readCachedQuota()).toBeNull();
+    expect(network).not.toHaveBeenCalled();
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('restores the last successful sample after restart even when the query interval expired days ago', async () => {
+    const first = await tracker.fetchQuota();
+    vi.setSystemTime(START + 3 * 86_400_000);
+    tracker = createTracker();
+    const saved = await tracker.readCachedQuota();
+    expect(saved.usage).toEqual(first.usage);
+    expect(saved.refresh.sampledAt).toBe(START);
+    expect(saved.refresh.state).toBe('cached');
+    expect(saved.ok).toBe(true);
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the successful sample without presenting an old error or resetting its cooldown', async () => {
+    const first = await tracker.fetchQuota();
+    vi.setSystemTime(START + INTERVAL);
+    network.mockResolvedValue(limited());
+    const failure = await tracker.fetchQuota();
+    tracker = createTracker();
+    const saved = await tracker.readCachedQuota();
+    expect(saved.ok).toBe(true);
+    expect(saved.error).toBeUndefined();
+    expect(saved.usage).toEqual(first.usage);
+    expect(saved.refresh.nextAttemptAt).toBe(failure.refresh.nextAttemptAt);
+    expect((await tracker.fetchQuota()).ok).toBe(false);
+    expect(network).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not show a previous credential or query for the new one', async () => {
+    await tracker.fetchQuota();
+    credential = { ...CREDENTIAL, accessToken: 'changed-fixture-credential' };
+    expect(await tracker.readCachedQuota()).toBeNull();
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves the previous sample while a manual upstream refresh is still pending', async () => {
+    await tracker.fetchQuota();
+    vi.setSystemTime(START + INTERVAL);
+    let complete;
+    network.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const pending = tracker.fetchQuota();
+    const saved = await tracker.readCachedQuota();
+    expect(saved.usage.windows['5h'].usedPercent).toBe(12);
+    expect(network).toHaveBeenCalledTimes(2);
+    complete(Response.json({ limits: [{ kind: 'session', percent: 25 }] }));
+    expect((await pending).usage.windows['5h'].usedPercent).toBe(25);
   });
 });

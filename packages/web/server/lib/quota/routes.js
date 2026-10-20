@@ -30,6 +30,10 @@ const credentialError = (res, error) => res.status(400).json({
   error: error instanceof Error ? error.message : 'Credential validation failed',
 });
 
+const claudeCacheScopeFor = (req) => process.env.OPENCHAMBER_RUNTIME === 'desktop'
+  ? 'desktop'
+  : `web:${req.socket.localPort}`;
+
 export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode = () => false, nativeConnections }) {
   app.get('/api/quota/providers', async (_req, res) => {
     if (isExternalOpenCode()) {
@@ -93,6 +97,22 @@ export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode
     res.json({ configured: false });
   });
 
+  // This route never delegates to the live provider dispatcher, including on
+  // a cache miss. Older servers may reject it; callers must not fall back.
+  app.get('/api/quota/claude/cached', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (isExternalOpenCode()) {
+      return res.json({ providerId: 'claude', providerName: 'Claude', ok: false, configured: false,
+        usage: null, fetchedAt: Date.now(), availability: 'unsupported' });
+    }
+    try {
+      const { readCachedClaudeQuota } = await getQuotaProviders();
+      res.json(await readCachedClaudeQuota(claudeCacheScopeFor(req)));
+    } catch {
+      res.status(500).json({ error: 'Could not read saved Claude usage' });
+    }
+  });
+
   app.get('/api/quota/:providerId', async (req, res) => {
     try {
       const { providerId } = req.params;
@@ -112,9 +132,7 @@ export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode
         });
       }
       const { fetchQuotaForProvider } = await getQuotaProviders();
-      const claudeCacheScope = process.env.OPENCHAMBER_RUNTIME === 'desktop'
-        ? 'desktop'
-        : `web:${req.socket.localPort}`;
+      const claudeCacheScope = claudeCacheScopeFor(req);
       res.json(await fetchQuotaForProvider(providerId, { claudeCacheScope }));
     } catch (error) {
       console.error('Failed to fetch quota:', error);

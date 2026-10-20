@@ -48,7 +48,9 @@ export const UsagePage: React.FC = () => {
   const loadSettings = useQuotaStore((state) => state.loadSettings);
   const fetchAllQuotas = useQuotaStore((state) => state.fetchAllQuotas);
   const invalidateProviderQuota = useQuotaStore((state) => state.invalidateProviderQuota);
-  const isLoading = useQuotaStore((state) => state.isLoading);
+  const isLoading = useQuotaStore((state) => selectedProviderId === 'claude'
+    ? state.isFetchingProvider.claude === true
+    : state.isLoading);
   const lastUpdated = useQuotaStore((state) => state.lastUpdated);
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
   const dropdownProviderIds = useQuotaStore((state) => state.dropdownProviderIds);
@@ -202,7 +204,7 @@ export const UsagePage: React.FC = () => {
         />
       </SettingsSection>
 
-      {!selectedResult && (
+      {!selectedResult && selectedProviderId !== 'claude' && (
         <p className="typography-ui-label text-foreground pb-8">{t('settings.usage.page.state.noData')}</p>
       )}
 

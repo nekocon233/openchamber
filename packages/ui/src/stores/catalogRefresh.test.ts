@@ -45,6 +45,7 @@ describe("the usage task on a credential change", () => {
       // The instance-level load flag stays null on runtimes that never call
       // `ensureLoadedForRuntime`, which is exactly how the VS Code layout loads.
       loadedRuntimeKey: null,
+      loadCachedClaudeQuota: async () => true,
       dropdownProviderIds: QUOTA_PROVIDERS.map((provider) => provider.id),
     });
   });

@@ -8,14 +8,17 @@ const trackers = new Map();
 
 export const isConfigured = (auth) => Boolean(findClaudeCredential(auth));
 
-export const fetchQuota = (cacheScope = 'web') => {
+const trackerFor = (cacheScope) => {
   let tracker = trackers.get(cacheScope);
   if (!tracker) {
     tracker = createClaudeQuotaTracker({ cacheScope, loadCredential: loadClaudeCredential });
     trackers.set(cacheScope, tracker);
   }
-  return tracker.fetchQuota();
+  return tracker;
 };
+
+export const fetchQuota = (cacheScope = 'web') => trackerFor(cacheScope).fetchQuota();
+export const readCachedQuota = (cacheScope = 'web') => trackerFor(cacheScope).readCachedQuota();
 
 /** Clears memory; durable snapshots belong to each runtime scope. */
 export const resetClaudeQuotaCache = () => {

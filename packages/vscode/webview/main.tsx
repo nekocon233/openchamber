@@ -1301,6 +1301,15 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     }
   }
 
+  if (pathname === '/api/quota/claude/cached' && method === 'GET') {
+    try {
+      const data = await sendBridgeMessage('api:quota:cached');
+      return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+    } catch {
+      return new Response(JSON.stringify({ error: 'Could not read saved Claude usage' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
   const quotaMatch = pathname.match(/^\/api\/quota\/([^/]+)$/);
   if (quotaMatch && method === 'GET') {
     const providerId = decodeURIComponent(quotaMatch[1]);

@@ -106,14 +106,15 @@ const refreshProvidersAfterCredentialChange = async (): Promise<void> => {
  * another client, which no OpenChamber screen can see.
  *
  * Automatic trackers already shown are re-read because the event does not name
- * the provider. Claude is manual-only: invalidate its previous account's data
- * and pending read, then wait for an explicit refresh.
+ * the provider. Claude invalidates its previous account's data and pending
+ * read, then restores only a matching saved sample until an explicit refresh.
  */
 const refreshUsageAfterCredentialChange = async (): Promise<void> => {
   // Claude is queried only on manual refresh. Invalidate even a first request
   // still in flight, so it cannot publish the previous credential's usage.
   useQuotaStore.getState().invalidateProviderQuota('claude');
-  const { results, dropdownProviderIds, fetchQuotas } = useQuotaStore.getState();
+  const { results, dropdownProviderIds, fetchQuotas, loadCachedClaudeQuota } = useQuotaStore.getState();
+  const cached = dropdownProviderIds.includes('claude') ? [loadCachedClaudeQuota()] : [];
   // Only the trackers this store already shows. Gating on `results` rather than
   // on the instance-level load flag is what makes this work in the VS Code
   // extension: that layout fetches quotas on open and never calls
@@ -123,11 +124,10 @@ const refreshUsageAfterCredentialChange = async (): Promise<void> => {
   // tracker rather than the user's selection.
   const shown = new Set(results.map((result) => result.providerId));
   const targets = dropdownProviderIds.filter((providerId) => shown.has(providerId));
-  if (targets.length === 0) return;
   // `invalidate` because a credential event means the last sample can belong to
   // the account just left; keeping it would show that account's numbers as the
   // new one's.
-  await fetchQuotas(targets, { invalidate: true });
+  await Promise.all([...cached, ...(targets.length > 0 ? [fetchQuotas(targets, { invalidate: true })] : [])]);
 };
 
 /** The lists a catalog kind invalidates, in the order they are re-read. */

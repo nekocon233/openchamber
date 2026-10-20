@@ -6,6 +6,7 @@ const getProviderAuth = mock();
 const removeProviderAuth = mock();
 const removeProviderConfig = mock();
 const fetchQuotaForProvider = mock();
+const readCachedClaudeQuota = mock(async () => null);
 const listConfiguredQuotaProviders = mock();
 const updateWorkspaceFolders = mock(async (start, deleteCount, ...foldersToAdd) => {
   for (const folder of foldersToAdd) {
@@ -60,6 +61,7 @@ mock.module('./opencodeAuth', () => ({
 mock.module('./quotaProviders', () => ({
   activateQuotaGiftReset,
   fetchQuotaForProvider,
+  readCachedClaudeQuota,
   listConfiguredQuotaProviders,
 }));
 mock.module('./opencodeGoQuota', () => ({ fetchOpenCodeGoUsage: mock() }));
@@ -288,6 +290,9 @@ describe('VS Code system bridge provider status', () => {
       payload: { providerId: 'claude' },
     }, externalContext, deps);
 
+    const cachedResponse = await handleSystemBridgeMessage({ id: 'quota-external-cached', type: 'api:quota:cached' }, externalContext, deps);
+    expect(cachedResponse.data).toMatchObject({ availability: 'unsupported' });
+    expect(readCachedClaudeQuota).not.toHaveBeenCalled();
     expect(providersResponse.data).toEqual({ providers: [], availability: 'unsupported' });
     expect(quotaResponse.data).toMatchObject({ providerId: 'claude', availability: 'unsupported' });
     expect(listConfiguredQuotaProviders).not.toHaveBeenCalled();
@@ -369,4 +374,14 @@ describe('VS Code v2 migration bridge', () => {
     const manager = { installV2: async () => { throw new Error('Installation failed'); } };
     await expect(handleSystemBridgeMessage({ id: 'failed', type: 'api:opencode/install-v2' }, { manager }, deps)).rejects.toThrow('Installation failed');
   });
+});
+
+test('reads cached Claude usage through the host without invoking the provider dispatcher', async () => {
+  readCachedClaudeQuota.mockClear();
+  fetchQuotaForProvider.mockClear();
+  const response = await handleSystemBridgeMessage({ id: 'quota-cached-read', type: 'api:quota:cached' }, { manager: { getDebugInfo: () => ({ mode: 'managed' }) } }, deps);
+  expect(response.success).toBe(true);
+  expect(response.data).toBeNull();
+  expect(readCachedClaudeQuota).toHaveBeenCalledTimes(1);
+  expect(fetchQuotaForProvider).not.toHaveBeenCalled();
 });

@@ -1,14 +1,14 @@
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { z } from 'zod';
 import React from 'react';
-import { create } from 'zustand';
+import { create, type StoreApi } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import type { ProviderResult, QuotaProviderId } from '@/types';
 import { QUOTA_PROVIDERS } from '@/lib/quota';
 import type { DesktopSettings } from '@/lib/desktop';
 import { getDefaultModels } from '@/lib/quota/model-families';
 import { loadDesktopSettings, updateDesktopSettings } from '@/lib/persistence';
-import { fetchQuota } from '@/lib/quota/fetchQuota';
+import { fetchQuota, readCachedClaudeQuota } from '@/lib/quota/fetchQuota';
 import { getRuntimeKey, isTransientRuntimeKey } from '@/lib/runtime-switch';
 import { useConfigStore } from '@/stores/useConfigStore';
 
@@ -23,7 +23,8 @@ let nativeQuotaLoad: Promise<void> | null = null;
 const nativeQuotaId = z.templateLiteral(['kimi-claude:', z.string().uuid()]);
 type NativeQuotaProvider = { id: QuotaProviderId; name: string; revision: number };
 let inFlightRuntimeLoad: Promise<void> | null = null;
-const quotaRequests = new Map<QuotaProviderId, { controller: AbortController; promise: Promise<boolean> }>();
+const quotaRequests = new Map<QuotaProviderId, { controller: AbortController; promise: Promise<boolean>; source: 'live' | 'cached' }>();
+let claudeCacheLoaded = false;
 let quotaAutoRefreshConsumers = 0;
 let quotaAutoRefreshInterval: number | null = null;
 
@@ -41,7 +42,7 @@ interface QuotaStore extends QuotaSettingsState {
   loadNativeProviders: (force?: boolean) => Promise<void>;
   refreshSelectedQuotas: (options?: { manual?: boolean }) => Promise<boolean>;
   results: ProviderResult[];
-  /** Runtime whose automatic bootstrap finished; manual Claude usage may still be unknown. */
+  /** Runtime whose bootstrap finished; Claude may have no saved sample yet. */
   loadedRuntimeKey: string | null;
   selectedProviderId: QuotaProviderId | null;
   isLoading: boolean;
@@ -58,6 +59,7 @@ interface QuotaStore extends QuotaSettingsState {
   /** Explicit single-provider query. Claude callers must be user initiated. */
   fetchProviderQuota: (providerId: QuotaProviderId, invalidate?: boolean) => Promise<boolean>;
   invalidateProviderQuota: (providerId: QuotaProviderId) => void;
+  loadCachedClaudeQuota: () => Promise<boolean>;
   setSelectedProvider: (providerId: QuotaProviderId | null) => void;
   setDisplayMode: (mode: 'usage' | 'remaining') => void;
   setDropdownProviderIds: (providerIds: QuotaProviderId[]) => void;
@@ -67,8 +69,8 @@ interface QuotaStore extends QuotaSettingsState {
   toggleFamilyExpanded: (providerId: string, familyId: string) => void;
   applyDefaultSelections: (providerId: QuotaProviderId, availableModels: string[]) => void;
   /**
-   * Load settings and automatic quotas once per ready instance. Claude waits
-   * for an explicit refresh, including on its first load.
+   * Load settings and automatic quotas once per ready instance. Claude restores
+   * its saved sample; only an explicit refresh queries its provider.
    *
    * Providers report themselves as configured only after the instance can read
    * their credentials, which on a remote instance is not true the moment the UI
@@ -80,6 +82,86 @@ interface QuotaStore extends QuotaSettingsState {
   ensureLoadedForRuntime: () => Promise<void>;
   resetForRuntimeSwitch: () => void;
 }
+
+type QuotaRequest =
+  | { source: 'live'; providerId: QuotaProviderId; invalidate: boolean }
+  | { source: 'cached'; providerId: 'claude' };
+
+const hasLiveQuotaRequests = () => {
+  for (const request of quotaRequests.values()) if (request.source === 'live') return true;
+  return false;
+};
+
+const requestProviderQuota = (request: QuotaRequest, set: StoreApi<QuotaStore>['setState']): Promise<boolean> => {
+  const { providerId, source } = request;
+  const invalidate = request.source === 'live' && request.invalidate;
+  const existing = quotaRequests.get(providerId);
+  // A manual refresh retires cache hydration. Cache reads can join a pending
+  // manual request, but can never overwrite the sample it is producing.
+  if (existing && !invalidate && (source === 'cached' || existing.source === 'live')) return existing.promise;
+  if (existing) { existing.controller.abort(); quotaRequests.delete(providerId); }
+  if (source === 'live' && providerId === 'claude') claudeCacheLoaded = true;
+  const generation = quotaGeneration;
+  const controller = new AbortController();
+  const promise = Promise.resolve().then(async () => {
+    try {
+      const result = source === 'cached'
+        ? await readCachedClaudeQuota({ signal: controller.signal })
+        : await fetchQuota(providerId, { signal: controller.signal });
+      if (generation !== quotaGeneration || quotaRequests.get(providerId)?.controller !== controller) return false;
+      if (source === 'cached') claudeCacheLoaded = true;
+      if (result === null) {
+        set(state => {
+          const refreshErrors = { ...state.refreshErrors };
+          delete refreshErrors[providerId];
+          return { results: state.results.filter(entry => entry.providerId !== providerId), refreshErrors,
+            error: Object.values(refreshErrors)[0] ?? null };
+        });
+        return true;
+      }
+      if (!result.ok && result.configured) {
+        const message = result.error || 'Failed to fetch quota';
+        set(state => {
+          const previous = state.results.find(entry => entry.providerId === providerId);
+          const keepPrevious = previous?.configured && !invalidate && !result.refresh;
+          const results = keepPrevious ? state.results
+            : [...state.results.filter(entry => entry.providerId !== providerId), result];
+          return { results, refreshErrors: { ...state.refreshErrors, [providerId]: message }, error: message };
+        });
+        return true;
+      }
+      set(state => {
+        const refreshErrors = { ...state.refreshErrors };
+        delete refreshErrors[providerId];
+        return {
+          results: [...state.results.filter(entry => entry.providerId !== providerId), result],
+          refreshErrors,
+          error: Object.values(refreshErrors)[0] ?? null,
+          lastUpdated: source === 'cached'
+            ? state.lastUpdated ?? result.refresh?.sampledAt ?? null
+            : Date.now(),
+        };
+      });
+      return true;
+    } catch (error) {
+      if (generation !== quotaGeneration || quotaRequests.get(providerId)?.controller !== controller || controller.signal.aborted) return false;
+      const message = error instanceof Error ? error.message : 'Failed to fetch quota';
+      set(state => ({ refreshErrors: { ...state.refreshErrors, [providerId]: message }, error: message }));
+      return false;
+    } finally {
+      if (quotaRequests.get(providerId)?.controller === controller) quotaRequests.delete(providerId);
+      if (generation === quotaGeneration) {
+        set(state => ({
+          isFetchingProvider: { ...state.isFetchingProvider, [providerId]: quotaRequests.get(providerId)?.source === 'live' },
+          isLoading: hasLiveQuotaRequests(),
+        }));
+      }
+    }
+  });
+  quotaRequests.set(providerId, { controller, promise, source });
+  if (source === 'live') set(state => ({ isLoading: true, isFetchingProvider: { ...state.isFetchingProvider, [providerId]: true } }));
+  return promise;
+};
 
 const parseSettings = (data: DesktopSettings): QuotaSettingsState => {
   const allProviderIds = QUOTA_PROVIDERS.map((provider) => provider.id);
@@ -185,7 +267,7 @@ export const useQuotaStore = create<QuotaStore>()(
                 results: state.results.filter((result) => !invalidated.has(result.providerId)),
                 refreshErrors,
                 isFetchingProvider,
-                isLoading: quotaRequests.size > 0,
+                isLoading: hasLiveQuotaRequests(),
                 selectedProviderId: state.selectedProviderId?.startsWith('kimi-claude:') && !ids.has(state.selectedProviderId) ? null : state.selectedProviderId,
                 dropdownProviderIds: state.dropdownProvidersExplicit
                   ? state.dropdownProviderIds.filter((id) => !id.startsWith('kimi-claude:') || ids.has(id))
@@ -217,9 +299,11 @@ export const useQuotaStore = create<QuotaStore>()(
         const generation = quotaGeneration;
         if (!manual && invalidate && providerIds.includes('claude')) get().invalidateProviderQuota('claude');
         const targets = providerIds.filter(id => manual || id !== 'claude');
+        const cached = !manual && !invalidate && providerIds.includes('claude')
+          ? [get().loadCachedClaudeQuota()] : [];
         try {
           const answered = await Promise.all(
-            targets.map((providerId) => get().fetchProviderQuota(providerId, invalidate))
+            [...targets.map((providerId) => get().fetchProviderQuota(providerId, invalidate)), ...cached]
           );
           if (generation !== quotaGeneration) return false;
           return answered.some(Boolean);
@@ -239,6 +323,7 @@ export const useQuotaStore = create<QuotaStore>()(
       },
 
       invalidateProviderQuota: (providerId) => {
+        if (providerId === 'claude') claudeCacheLoaded = false;
         quotaRequests.get(providerId)?.controller.abort();
         quotaRequests.delete(providerId);
         set(state => {
@@ -249,80 +334,16 @@ export const useQuotaStore = create<QuotaStore>()(
             refreshErrors,
             error: Object.values(refreshErrors)[0] ?? null,
             isFetchingProvider: { ...state.isFetchingProvider, [providerId]: false },
-            isLoading: quotaRequests.size > 0,
+            isLoading: hasLiveQuotaRequests(),
           };
         });
       },
 
-      fetchProviderQuota: async (providerId, invalidate = false) => {
-        // Concurrent callers share one request per provider. `invalidate` is how
-        // a provider-account switch says the shared request, and any sample it
-        // produces, describe the account being switched away from.
-        const existing = quotaRequests.get(providerId);
-        if (existing && !invalidate) return existing.promise;
-        if (existing) {
-          existing.controller.abort();
-          quotaRequests.delete(providerId);
-        }
-        const generation = quotaGeneration;
-        const controller = new AbortController();
-        const promise = Promise.resolve().then(async () => {
-          try {
-            const result = await fetchQuota(providerId, { signal: controller.signal });
-            if (generation !== quotaGeneration || quotaRequests.get(providerId)?.controller !== controller) return false;
-            // A reachable instance can still report that its provider request
-            // failed. Configuration is known, but there is no new usage sample.
-            if (!result.ok && result.configured) {
-              const message = result.error || 'Failed to fetch quota';
-              set(state => {
-                const previous = state.results.find(entry => entry.providerId === providerId);
-                // Preserving the last sample keeps a periodic refresh from
-                // blanking the surface on a blip. After a switch it is wrong:
-                // that sample belongs to the account just left, so keeping it
-                // shows one account's usage as if it were the new account's.
-                // Claude's runtime owns its retained sample, including account
-                // changes detected outside this UI. Accept that entire snapshot.
-                const keepPrevious = previous?.configured && !invalidate && !result.refresh;
-                const results = keepPrevious
-                  ? state.results
-                  : [...state.results.filter(entry => entry.providerId !== providerId), result];
-                return { results, refreshErrors: { ...state.refreshErrors, [providerId]: message }, error: message };
-              });
-              return true;
-            }
-            set((state) => {
-              const refreshErrors = { ...state.refreshErrors };
-              delete refreshErrors[providerId];
-              const results = state.results.filter(entry => entry.providerId !== providerId);
-              results.push(result);
-              return { results, refreshErrors, error: Object.values(refreshErrors)[0] ?? null, lastUpdated: Date.now() };
-            });
-            return true;
-          } catch (error) {
-            if (generation !== quotaGeneration || quotaRequests.get(providerId)?.controller !== controller) return false;
-            // An abort is this store superseding its own request, not the
-            // instance failing. Recording it would report a refresh error right
-            // after a switch, over the sample being replaced.
-            if (controller.signal.aborted) return false;
-            const message = error instanceof Error ? error.message : 'Failed to fetch quota';
-            set(state => ({ refreshErrors: { ...state.refreshErrors, [providerId]: message }, error: message }));
-            return false;
-          } finally {
-            if (quotaRequests.get(providerId)?.controller === controller) quotaRequests.delete(providerId);
-            if (generation === quotaGeneration) {
-              // A superseded request finishes while its replacement still runs;
-              // the provider stays fetching until the replacement settles too.
-              set((state) => ({
-                isFetchingProvider: { ...state.isFetchingProvider, [providerId]: quotaRequests.has(providerId) },
-                isLoading: quotaRequests.size > 0,
-              }));
-            }
-          }
-        });
-        quotaRequests.set(providerId, { controller, promise });
-        set(state => ({ isLoading: true, isFetchingProvider: { ...state.isFetchingProvider, [providerId]: true } }));
-        return promise;
-      },
+      fetchProviderQuota: (providerId, invalidate = false) => requestProviderQuota({ source: 'live', providerId, invalidate }, set),
+
+      loadCachedClaudeQuota: () => claudeCacheLoaded
+        ? Promise.resolve(true)
+        : requestProviderQuota({ source: 'cached', providerId: 'claude' }, set),
 
       ensureLoadedForRuntime: async () => {
         const runtimeKey = getRuntimeKey();
@@ -343,10 +364,6 @@ export const useQuotaStore = create<QuotaStore>()(
           if (generation !== quotaGeneration) return;
           const { dropdownProviderIds, fetchQuotas } = get();
           if (dropdownProviderIds.length === 0) return;
-          if (dropdownProviderIds.every(providerId => providerId === 'claude')) {
-            set({ loadedRuntimeKey: runtimeKey });
-            return;
-          }
           const answered = await fetchQuotas(dropdownProviderIds);
           // Mark the instance loaded only once it actually answered. Claiming it
           // up front meant a load that failed on a cold or briefly unreachable
@@ -360,6 +377,7 @@ export const useQuotaStore = create<QuotaStore>()(
 
       resetForRuntimeSwitch: () => {
         quotaGeneration += 1;
+        claudeCacheLoaded = false;
         nativeQuotaRevision += 1;
         nativeQuotaLoad = null;
         for (const request of quotaRequests.values()) request.controller.abort();

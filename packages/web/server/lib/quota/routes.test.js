@@ -56,3 +56,22 @@ it('passes the serving instance scope and refresh metadata through the quota rou
     claudeCacheScope: expect.stringMatching(/^(web:\d+|desktop)$/),
   });
 });
+
+it('reads only the stored Claude result, including when no sample exists', async () => {
+  const app = express();
+  const readCachedClaudeQuota = vi.fn(async () => null);
+  const fetchQuotaForProvider = vi.fn();
+  registerQuotaRoutes(app, { getQuotaProviders: async () => ({ readCachedClaudeQuota, fetchQuotaForProvider }) });
+  const response = await request(app).get('/api/quota/claude/cached').expect(200);
+  expect(response.body).toBeNull();
+  expect(response.headers['cache-control']).toBe('no-store');
+  expect(readCachedClaudeQuota).toHaveBeenCalledWith(expect.stringMatching(/^(web:\d+|desktop)$/));
+  expect(fetchQuotaForProvider).not.toHaveBeenCalled();
+});
+
+it('does not inspect host credentials for an unsupported external runtime cache', async () => {
+  const { app, getQuotaProviders } = createExternalApp();
+  const response = await request(app).get('/api/quota/claude/cached').expect(200);
+  expect(response.body).toMatchObject({ providerId: 'claude', configured: false, availability: 'unsupported' });
+  expect(getQuotaProviders).not.toHaveBeenCalled();
+});

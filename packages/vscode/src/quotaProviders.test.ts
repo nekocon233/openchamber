@@ -53,7 +53,7 @@ const baseCredentialList = (): CredentialEntry[] => [
 ];
 configureOpenCodeCredentials({ list: async () => baseCredentialList() });
 
-import { activateQuotaGiftReset, fetchClaudeQuota, fetchClinePassQuota, fetchHyperQuota, fetchKiloQuota, fetchKimiQuota, fetchOllamaCloudQuota, fetchQuotaForProvider, fetchXaiQuota, fetchZenmuxQuota, resetClaudeQuotaCache } from './quotaProviders';
+import { activateQuotaGiftReset, fetchClaudeQuota, readCachedClaudeQuota, fetchClinePassQuota, fetchHyperQuota, fetchKiloQuota, fetchKimiQuota, fetchOllamaCloudQuota, fetchQuotaForProvider, fetchXaiQuota, fetchZenmuxQuota, resetClaudeQuotaCache } from './quotaProviders';
 import type { ClaudeCredential } from './claudeAuth';
 
 type MockResponseInit = { ok?: boolean; status?: number };
@@ -994,6 +994,18 @@ describe('Claude quota provider (VS Code parity)', () => {
     assert.equal(count, 1);
     assert.equal(restored.refresh?.sampledAt, first.refresh?.sampledAt);
     assert.equal(restored.refresh?.state, 'cached');
+  });
+
+  test('reads persisted previous usage after its interval expires without querying the provider', async () => {
+    let count = 0;
+    globalThis.fetch = async () => { count++; return Response.json({ five_hour: { utilization: 12 } }); };
+    await fetchClaudeQuota(() => credential);
+    clock += 3 * 86_400_000;
+    resetClaudeQuotaCache();
+    const saved = await readCachedClaudeQuota(() => credential);
+    assert.equal(saved?.usage?.windows['5h']?.usedPercent, 12);
+    assert.equal(saved?.refresh?.state, 'cached');
+    assert.equal(count, 1);
   });
 
   test('does not carry a rate-limit cooldown to a different Claude credential', async () => {

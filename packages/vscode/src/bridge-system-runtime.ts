@@ -8,7 +8,7 @@ import { getProviderAuth } from './opencodeAuth';
 import { OpenCode } from '@opencode/client';
 import { asSessionId, asSessionIdList, asSessionMetadata, asTimestamp, parseJson, type JsonValue, type SessionMetadataOnOpenCode, type SessionStateStore } from './openchamberSessionState';
 import type { OpenCodeManager } from './opencode';
-import { activateQuotaGiftReset, fetchQuotaForProvider, listConfiguredQuotaProviders, type QuotaGiftResetType } from './quotaProviders';
+import { activateQuotaGiftReset, fetchQuotaForProvider, listConfiguredQuotaProviders, readCachedClaudeQuota, type QuotaGiftResetType } from './quotaProviders';
 import { credentialStatus, deleteCredential, importCursorCredential, normalizeCredential, readCredential, validateCredential, writeCredential, type ManagedProvider } from './quotaCredentials';
 import { getSessionActivitySnapshot } from './sessionActivityWatcher';
 import { sessionNotificationSchema } from './sessionNotifications';
@@ -576,6 +576,20 @@ export async function handleSystemBridgeMessage(
         return { id, type, success: false, error: 'Unsupported method' };
       } catch (error) {
         return { id, type, success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+
+    case 'api:quota:cached': {
+      if (isExternalOpenCodeRuntime(ctx)) {
+        return { id, type, success: true, data: {
+          providerId: 'claude', providerName: 'Claude', ok: false, configured: false,
+          usage: null, fetchedAt: Date.now(), availability: 'unsupported',
+        } };
+      }
+      try {
+        return { id, type, success: true, data: await readCachedClaudeQuota() };
+      } catch {
+        return { id, type, success: false, error: 'Could not read saved Claude usage' };
       }
     }
 

@@ -16,5 +16,6 @@ export function createClaudeQuotaTracker(options: {
   fetchImpl?: typeof fetch;
 }): {
   fetchQuota: (loadCredential?: CredentialReader) => Promise<ProviderResult>;
+  readCachedQuota: (loadCredential?: CredentialReader) => Promise<ProviderResult | null>;
   reset: () => void;
 };

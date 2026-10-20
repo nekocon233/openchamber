@@ -112,21 +112,33 @@ line, and failed refreshes show a short error alongside any retained data.
 Claude is manual-only. `fetchQuotas`, `fetchAllQuotas`, and
 `refreshSelectedQuotas` skip it unless the caller passes `manual: true`; the explicit refresh controls do so. The shared
 three-minute timer, initialization, page opening, mobile popovers, and tray
-bootstrap never query Claude, including against older servers without metadata.
+bootstrap never query Claude upstream. They can restore its saved sample through
+the separate cache-only route; unsupported older servers never cause a live fallback.
 There is no Claude retry timer. `refresh.nextAttemptAt` remains response metadata
 for the runtime request budget; the UI does not display it. The runtime still enforces the same
 five-minute budget and retained-data policy.
 
-With only Claude selected, bootstrap completes after settings and metadata load;
-its usage remains unknown until manual refresh. Bootstrap readiness never
-implies that a Claude query has occurred.
+`loadCachedClaudeQuota` restores the current runtime's saved Claude sample once
+through `/api/quota/claude/cached`. The read is local to the owning runtime;
+bootstrap, popovers and the tray may request it without querying Anthropic.
+A cache miss remains unknown usage and does not trigger a live fallback or an
+empty-data message. A failed read preserves existing data and reports its error.
+Only a manual refresh requests new provider data. The last saved success remains
+visible across page reloads and elapsed days; runtime credentials still own
+invalidation.
 
-Credential events invalidate Claude's cached UI sample and abort any pending
-manual read, including a first read with no visible result yet. They do not
-query Claude. Completing sign-in also invalidates the preceding UI sample and
-waits for manual refresh. With no Claude sample, the selected Claude group shows
-an empty-data message so the existing refresh action stays reachable. Other
-providers continue refreshing independently.
+Cache hydration shares the provider request owner with live refresh. A manual
+refresh retires an older cache read; runtime switches and credential invalidation
+abort both. Cache reads never show a provider-refresh spinner, rewrite a sample
+time, or overwrite a newer manual result. The cache-loaded marker resets with
+the runtime or credential. Other providers commit independently while a saved
+read is in flight.
+
+Credential events invalidate Claude's preceding UI sample and abort its pending
+read, including a first manual query. They may restore a matching saved sample
+without querying the provider. With only Claude selected, bootstrap is complete
+once that cache read answers, even when it contains no saved sample. A missing
+sample leaves the refresh surface reachable without a status hint.
 
 Native Kimi sources are discovered from the connected runtime's Claude connection
 metadata, once per load/refresh rather than per render. Their connection revision

@@ -260,6 +260,7 @@ export const fetchQuotaForProvider = (providerId, { claudeCacheScope = 'web' } =
 };
 
 export const fetchClaudeQuota = claude.fetchQuota;
+export const readCachedClaudeQuota = claude.readCachedQuota;
 export const fetchOpenaiQuota = openai.fetchQuota;
 export const fetchGoogleQuota = google.fetchGoogleQuota;
 export const fetchAntigravityQuota = antigravity.fetchQuota;
