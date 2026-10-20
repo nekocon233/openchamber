@@ -92,8 +92,6 @@ export function createSessionWorkRuntime({
   /** `(sessionID, decide, { directory }) => { metadata, changed }`, decided against the record at write time. */
   updateMetadata,
   isSessionArchived = async () => false,
-  /** Roots of managed Chats: plain conversations, never work. */
-  chatRoots = [],
   /**
    * `native-agents/runtime.js`: native CLI sessions read and write their work
    * state and metadata through it. Absent, those sessions are served by the
@@ -104,12 +102,6 @@ export function createSessionWorkRuntime({
   lineage = null,
   now = Date.now,
 }) {
-  const resolvedChatRoots = chatRoots.filter(Boolean).map((root) => path.resolve(root));
-  const isChatDirectory = (directory) => {
-    if (!directory) return false;
-    const resolved = path.resolve(directory);
-    return resolvedChatRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`));
-  };
   let stopped = false;
   const seenMessages = new Set();
   // Sessions where this process wrote a hint, so a new turn can retire it
@@ -146,15 +138,13 @@ export function createSessionWorkRuntime({
 
   /**
    * The session record when it is one this feature serves: a top-level,
-   * unarchived project session that is not a review, a `/btw` side question
-   * or a scheduled task's run. Chats
-   * are plain conversations and never in work. Null otherwise.
+   * unarchived session that is not a review, a `/btw` side question
+   * or a scheduled task's run. Null otherwise.
    */
   const eligibleSession = async (client, sessionId, signal) => {
     const session = await client.session.get({ sessionID: sessionId }, { signal });
     if (session?.id === sessionId) lineage?.remember(sessionId, session.parentID ?? null);
     if (session?.id !== sessionId || session.parentID) return null;
-    if (isChatDirectory(session.location?.directory ?? session.directory)) return null;
     if (notWorkSessionSchema.safeParse(session.metadata).success) return null;
     if (await isSessionArchived(sessionId)) return null;
     return session;
@@ -176,7 +166,6 @@ export function createSessionWorkRuntime({
     const session = await nativeSessions.getSession(sessionId, directory);
     if (session?.id === sessionId) lineage?.remember(sessionId, session.parentID ?? null);
     if (session?.id !== sessionId || session.parentID) return null;
-    if (isChatDirectory(session.directory)) return null;
     if (notWorkSessionSchema.safeParse(session.metadata).success) return null;
     if (session.time?.archived) return null;
     return session;

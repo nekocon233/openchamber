@@ -436,11 +436,10 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     return items.map((item) => ({ ...item, blockingBadgeSessionScopes: badgeScopesBySessionId.get(item.node.session.id) }));
   }, [collection.childrenMap, collection.orderedSessions, collection.rootSessions, ownership.bySessionId, spaceLabelById, timelineMode, topology.availableWorktreesByProject, topology.gitBranches, topology.projectRootBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
 
-  // Pinned sessions and sessions in work: top-level, unarchived project
-  // sessions (Chats are plain conversations and keep their pins in Chats), in
-  // the shared lifecycle order. A pinned session in work is listed in Pinned
-  // only. Both stay in their projects too; the row model gets the id set for
-  // search, which lists each of them once, in its zone.
+  // Top-level, unarchived sessions in the shared lifecycle order. Chats keep
+  // their pins in Chats and can also be in work. Pinned project sessions use
+  // Pinned while it is shown. Every session stays in its original group too;
+  // search lists it once, in its zone.
   const sessionWorkEnabled = useUIStore((state) => state.sessionWorkEnabled);
   const showWorkSection = useSessionDisplayStore((state) => state.showWorkSection);
   const showPinnedSection = useSessionDisplayStore((state) => state.showPinnedSection);
@@ -458,8 +457,8 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     const pinned: Session[] = [];
     const work: Session[] = [];
     for (const session of collection.orderedSessions) {
-      if (session.parentID || session.time?.archived || isChatDirectoryPath(session.directory)) continue;
-      if (showPinnedSection && isSessionPinned(collection.pinnedSessionIds, session.directory, session.id)) pinned.push(session);
+      if (session.parentID || session.time?.archived) continue;
+      if (showPinnedSection && !isChatDirectoryPath(session.directory) && isSessionPinned(collection.pinnedSessionIds, session.directory, session.id)) pinned.push(session);
       else if (showWork && isSessionInWork(session)) work.push(session);
     }
     if (pinned.length > 1) {

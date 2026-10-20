@@ -372,11 +372,9 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const showQuickArchiveAction = !archivedBucket && !mobileVariant;
   const sessionWorkEnabled = useUIStore((state) => state.sessionWorkEnabled);
   const sessionRecapEnabled = useUIStore((state) => state.sessionRecapEnabled);
-  // Track / Done belongs to top-level project sessions: Chats are plain
-  // conversations, never work. Touch layouts keep their actions permanently
-  // visible, where an icon on every row would be noise: there it lives in the
-  // session menu only.
-  const canTrackWork = sessionWorkEnabled && !archivedBucket && !node.session.parentID && !isChatDirectoryPath(node.session.directory);
+  // Track / Done belongs to top-level sessions. Touch layouts keep it in the
+  // session menu alongside their permanently visible actions.
+  const canTrackWork = sessionWorkEnabled && !archivedBucket && !node.session.parentID;
   const showWorkAction = canTrackWork && !alwaysShowActions;
   // Hover-revealed actions besides the menu: work, quick archive, and in VS
   // Code open-in-editor.
@@ -1694,6 +1692,10 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           ? 'font-semibold text-foreground'
           : isStreaming ? 'text-foreground' : 'text-muted-foreground'}
       branchLabel={tooltipBranchLabel}
+      metaLineLead={isWorkZoneContext && isChatDirectoryPath(session.directory) ? <>
+        <Icon name="chat-4" className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="min-w-0 truncate typography-micro text-muted-foreground/50">{t('mobile.sessions.section.chats')}</span>
+      </> : undefined}
       spaceMark={branchInSpace ? t('sessions.sidebar.group.space') : null}
       statusDot={stateInSlot ? null : liveStateMark}
       pinnedMarker={isPinnedSession && !isSessionActionPending && !hidePinnedMarker ? pinnedMarkerContent : null}

@@ -1,5 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
+import { opencodeClient } from '@/lib/opencode/client';
+import { warmChatsRootDirectory } from '@/lib/chatDirectories';
 import type { WorktreeMetadata } from '@/types/worktree';
 import { createSessionOwnershipIndex } from '../sessions/sessionOwnership';
 import { deriveTimelineActivityItems } from './activitySections';
@@ -33,6 +35,19 @@ const resolveLocations = (
 };
 
 describe('resolveSidebarSessionLocations', () => {
+  test('a managed chat inside a registered project keeps no project or branch', async () => {
+    const home = spyOn(opencodeClient, 'getFilesystemHomeInfo').mockResolvedValue({ home: '/home/user', chatsRoot: '/repo/managed-chats' });
+    try {
+      await warmChatsRootDirectory();
+      const chat = session('chat', '/repo/managed-chats/day/session');
+      const locations = resolveLocations([chat, session('project', '/repo')], new Map(), new Map([['/repo', 'main']]));
+      expect(locations.has(chat.id)).toBe(false);
+      expect(locations.get('project')?.projectId).toBe('repo');
+    } finally {
+      home.mockRestore();
+    }
+  });
+
   test('keeps a restored missing-worktree session in Timeline with its actual request directory', () => {
     const restored = session('restored', '/worktrees/deleted');
     const ownership = createSessionOwnershipIndex(

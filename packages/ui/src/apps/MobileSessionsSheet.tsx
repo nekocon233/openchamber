@@ -51,6 +51,7 @@ import { toast } from '@/components/ui';
 import { getProjectLabel, normalizePath } from './mobilePaths';
 import { SessionSearchInput } from '@/components/session/SessionSearchInput';
 import { CHAT_DRAFT_PROJECT_ID, isChatDirectoryPath } from '@/lib/chatDirectories';
+import { buildMobileTimelineEntries } from './mobileTimelineEntries';
 import { getDescendantIds, partitionSidebarSessions } from '@/components/session/sidebar/list/sessionCollection';
 import { rankByLatestActivity, sortProjectsByOrder } from '@/components/session/sidebar/list/projectSort';
 import { collectSessionSubtreeIds, runSessionSubtreeAction, type SessionSubtreeAction } from '@/components/session/sidebar/sessions/sessionSubtreeActions';
@@ -1146,15 +1147,14 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
   // Sessions in work, with their subsessions, get their own section under
   // Chats and stay in their projects too, like the desktop sidebar. With the
-  // section hidden from the display panel they show in their projects only.
-  // Chats are plain conversations and never in work. Ownership and search
-  // still see every session.
+  // section hidden from the display panel they stay in their original group.
+  // Ownership and search still see every session, including Chats.
   const sessionWorkEnabled = useUIStore((state) => state.sessionWorkEnabled);
   const workSessionIds = React.useMemo(() => {
     const ids = new Set<string>();
     if (!sessionWorkEnabled || !showWorkSection) return ids;
     for (const session of sessions) {
-      if (getParentId(session) || isChatDirectoryPath(getSessionDirectory(session)) || !isSessionInWork(session)) continue;
+      if (getParentId(session) || !isSessionInWork(session)) continue;
       ids.add(session.id);
       for (const id of getDescendantIds(childrenBySessionId, session.id)) ids.add(id);
     }
@@ -1174,10 +1174,6 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     }
     return ids;
   }, [childrenBySessionId, pinnedSessionIds, sessions, showPinnedSection]);
-  const sectionChatSessions = React.useMemo(
-    () => (workSessionIds.size > 0 ? chatSessions.filter((session) => !workSessionIds.has(session.id)) : chatSessions),
-    [chatSessions, workSessionIds],
-  );
   const spaceList = useSidebarSpaces();
   const spaces = React.useMemo(() => new Map(spaceList.map((space) => [space.id, space])), [spaceList]);
   const spaceLabelById = React.useMemo(
@@ -1224,8 +1220,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     path: '',
     worktree: null,
     space: null,
-    sessions: orderSessionsByLifecycleScopes(sectionChatSessions, pinnedSessionIds, sessionOrderRanks),
-  }), [pinnedSessionIds, sectionChatSessions, sessionOrderRanks]);
+    sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks),
+  }), [pinnedSessionIds, chatSessions, sessionOrderRanks]);
   // Pins are keyed by runtime, directory and id, so the timeline's
   // "pinned chats always show" rule needs the plain ids of the pinned ones.
   const pinnedChatIds = React.useMemo(() => new Set(
@@ -1277,8 +1273,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     return sessions.filter((session) => visibleIds.has(session.id));
   }, [chatSessions, pinnedBucket.sessions, projectSessions, sessions, showChatsSection, workBucket.sessions]);
   const chatRootCount = React.useMemo(
-    () => sectionChatSessions.filter((session) => !getParentId(session)).length,
-    [sectionChatSessions],
+    () => chatSessions.filter((session) => !getParentId(session)).length,
+    [chatSessions],
   );
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -1715,7 +1711,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
 
   /** Track / Done for a top-level row while the feature is on. */
   const workActionFor = (session: Session): MobileSessionWorkAction | undefined => {
-    if (!sessionWorkEnabled || getParentId(session) || isChatDirectoryPath(getSessionDirectory(session))) return undefined;
+    if (!sessionWorkEnabled || getParentId(session)) return undefined;
     // The session's own state, not the zone's: hiding the zone must not
     // change what its row offers next to Track and Done.
     const inWork = isSessionInWork(session);
@@ -1958,17 +1954,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   // run row at the first lane's position, the same collapse the grouped tree
   // and the desktop timeline make.
   const toTimelineEntries = React.useCallback((roots: readonly Session[]): TimelineEntry[] => {
-    const listedRuns = new Set<string>();
-    return roots.flatMap((session): TimelineEntry[] => {
-      const context = timelineContextById.get(session.id);
-      if (!context) return [];
-      const runKey = runIndex.runKeyBySessionId.get(session.id);
-      const run = runKey ? runIndex.runs.get(runKey) : undefined;
-      if (!run) return [{ kind: 'session', session, project: context.project, branch: context.branch, inSpace: context.inSpace }];
-      if (listedRuns.has(run.key)) return [];
-      listedRuns.add(run.key);
-      return [{ kind: 'run', run, laneNodes: runLaneNodesByKey.get(run.key) ?? EMPTY_SESSION_NODES, project: context.project }];
-    });
+    return buildMobileTimelineEntries(roots, timelineContextById, runIndex, runLaneNodesByKey);
   }, [runIndex, runLaneNodesByKey, timelineContextById]);
 
   const timelineEntriesByProject = React.useMemo(() => {
@@ -1980,6 +1966,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       sessionOrderRanks,
     );
     for (const entry of toTimelineEntries(roots)) {
+      if (!entry.project) continue;
       const list = byProject.get(entry.project.id);
       if (list) list.push(entry);
       else byProject.set(entry.project.id, [entry]);

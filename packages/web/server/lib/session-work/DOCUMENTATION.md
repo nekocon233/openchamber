@@ -55,12 +55,12 @@ also exists in VS Code.
 - A hint is current while its time `>= session.time.idle` (the assist's
   freshness rule). This runtime also deletes a hint it wrote when the next
   turn starts; the rule covers hints written by another process.
-- Only top-level, unarchived project sessions that are not review sessions,
+- Only top-level, unarchived sessions that are not review sessions,
   `/btw` side questions or scheduled task runs (`openchamber.kind` `review` /
   `btw` / `scheduled`) open or are asked about. A run's marker is set when
   the scheduled-tasks runtime creates the session; a user fork drops it
-  (`fork-inheritance.js`, `sessionForkInheritance.ts`), so the fork counts. Managed Chats (under the
-  `chatRoots` the server passes in) are plain conversations and never in work.
+  (`fork-inheritance.js`, `sessionForkInheritance.ts`), so the fork counts.
+  Managed Chats follow the same rules as project sessions, including native CLI chats.
 - A known subsession costs nothing: `../session-lineage.js` remembers which
   sessions have a parent (from `session.created` events and from any record
   read anyway), and a known one is skipped before any read or Jev call.
@@ -120,7 +120,8 @@ the wording or thresholds without re-running this measurement.
   provider, independent of In work.
 
 Both are read at every use. A session in work also stays under its project
-group and folders: In work is an extra view of it, not a move.
+group or Chats and its folders. Existing chats enter work on their next sent
+message or through Track; historical messages are not backfilled.
 
 ## Runtime parity
 

@@ -33,7 +33,8 @@ export type TimelineProject = MobileProjectIconProject & { label: string };
 export type TimelineEntry = {
   kind: 'session';
   session: Session;
-  project: TimelineProject;
+  /** Managed chats have no project. */
+  project: TimelineProject | null;
   /** Worktree branch for worktree sessions, project root branch otherwise.
       Null when no branch is known; the second line then holds only state. */
   branch: string | null;
@@ -288,7 +289,11 @@ const MobileTimelineRow: React.FC<{
             {/* Branch on the left; goal and waiting requests close the line,
                 the same state cluster the desktop timeline row ends with. */}
             {compact ? null : <span className={TIMELINE_META_LINE_CLASS}>
-              {showProject ? <TimelineRowProject project={project} /> : null}
+              {showProject && project ? <TimelineRowProject project={project} /> : null}
+              {!project ? <>
+                <Icon name="chat-4" className="size-3 shrink-0" aria-hidden="true" />
+                <span className="truncate typography-micro">{t('mobile.sessions.section.chats')}</span>
+              </> : null}
               {branch ? (
                 <>
                   {inSpace

@@ -52,6 +52,46 @@ const session = (id: string): Session => ({
 });
 
 describe('SessionTreeItem public behavior', () => {
+  test('updates work actions for metadata-only changes and skips equivalent row rebuilds', async () => {
+    const dom = installHookTestDom();
+    const root = createRoot(dom.container);
+    const noop = () => undefined;
+    const ids = new Set<string>();
+    const current = { ...session('chat'), metadata: { openchamber: { work: { state: 'open' } } } };
+    const props: SessionTreeItemProps = {
+      node: { session: current, children: [], worktree: null },
+      pinnedSessionIds: ids, expandedParents: ids, hasSessionSearchQuery: false, normalizedSessionSearchQuery: '',
+      notifyOnSubtasks: false, editingId: null, editingRowKey: null, editTitle: '', openSidebarMenuKey: null,
+      setEditingId: noop, setEditingRowKey: noop, setEditTitle: noop, toggleParent: noop, setOpenSidebarMenuKey: noop,
+      allowReselect: false, resetSessionSearch: noop, deleteSessionConfirm: null, setDeleteSessionConfirm: noop,
+      startFolderRename: noop, startSessionWorktreeMenuLoad: noopStartSessionWorktreeMenuLoad,
+      mobileVariant: false, alwaysShowActions: false, renderContext: 'tree-chat',
+    };
+    const render = () => act(async () => root.render(<I18nProvider><SessionTreeItem {...props} /></I18nProvider>));
+    try {
+      await render();
+      expect(renderedRows).toHaveLength(1);
+      for (let index = 0; index < 10; index += 1) {
+        props.node = { ...props.node, session: { ...props.node.session }, children: [] };
+        await render();
+      }
+      expect(renderedRows).toHaveLength(1);
+
+      props.node = { ...props.node, session: { ...current, metadata: { openchamber: { work: { state: 'done' } } } } };
+      await render();
+      expect(renderedRows).toHaveLength(2);
+      expect(renderedRows.at(-1)?.node.session.metadata).toEqual(props.node.session.metadata);
+
+      props.node = { ...props.node, session: { ...props.node.session, time: { ...current.time, idle: 2 } } };
+      await render();
+      expect(renderedRows).toHaveLength(3);
+    } finally {
+      await act(async () => root.unmount());
+      renderedRows.length = 0;
+      dom.restore();
+    }
+  });
+
   test('keeps duplicate row state parent-owned while targeting one rename occurrence', async () => {
     const dom = installHookTestDom();
     const root = createRoot(dom.container);

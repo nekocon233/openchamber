@@ -244,15 +244,16 @@ Sessions in work (`metadata.openchamber.work.state === 'open'`, see
 `work` activity zone under Chats and above the projects, in both
 view modes, while `sessionWorkEnabled` is on and the display menu's In work
 toggle (`showWorkSection`, `sidebarShowWorkSection`, per surface, on by
-default) shows it. With the zone hidden its sessions stay in their projects.
+default) shows it. With the zone hidden its sessions stay in their original groups.
 `list/SessionProjectCollection.tsx` selects them from the ordered collection
-(top-level, unarchived, not managed Chats, shared lifecycle order) and passes
+(top-level, unarchived, including managed Chats, shared lifecycle order) and passes
 `workItems` and `workSessionIds` to the row model. A session in work also stays
-in its project group and folders, in both views, so it appears in two places.
-Search lists it once, in the work block. Chats are never in work
-and offer no Track action. An empty zone is not rendered. In List, rows use
+in its project group or Chats and its folders, in both views, so it appears in two places.
+Search lists it once, in the work block. Chats offer the same Track / Done
+actions and keep their pins in Chats even while in work. An empty zone is not rendered. In List, rows use
 `renderContext: 'timeline-mixed-work'`: two lines, the project's icon before the
-branch. In Tree they use `'work-compact'` by default: one line like a Chats
+branch; chats show the chat icon and localized Chats label with no branch or
+configuration directory. In Tree they use `'work-compact'` by default: one line like a Chats
 row, the PR or issue as a coloured mark without its number (its tooltip lists
 the links), the branch, project and model in the whole-row tooltip. The display
 menu's Detailed rows toggle (`detailedZoneRows`, `sidebarDetailedZoneRows`, per
@@ -284,9 +285,9 @@ while Jev's done hint is current (`isDoneSuggested`); the composer shows the
 same hint as a top row (`components/chat/SessionDoneHintRow.tsx`). The
 whole-row tooltip shows the current recap, in both views. The mobile
 sheet (`apps/MobileSessionsSheet.tsx`) mirrors it: an "In work" section under
-Chats lists the sessions in work, which stay in their project buckets and
-the timeline as well, and Track / Done is a swipe action on top-level
-rows. Mobile swipe actions run left to right by how often they are used on a
+Chats lists the sessions in work, which also stay in their project buckets or
+Chats. Project sessions remain in the timeline as well. Track / Done is a
+swipe action on top-level rows. Mobile swipe actions run left to right by how often they are used on a
 phone, because a short drag exposes the leftmost first: archive, pin (top-level
 rows), Track / Done (top-level rows, feature on), delete, rename; AI rename sits
 inside the rename editor. Top-level rows also show a pin marker beside the
@@ -314,8 +315,8 @@ and the rows follow the same render context. Tree's one-line Pinned rows keep
 their active subtree and can expand it; List, detailed zone rows and search stay
 flat. In work rows expand in both views, including detailed zone rows; Pinned
 does not. Its rows show no pin marker,
-because the header already says they are pinned; In work rows show it only
-while the zone is hidden, since otherwise no pinned session reaches In work. Pins are the device-local
+because the header already says they are pinned; In work rows show it for
+chats and, while the Pinned zone is hidden, for project sessions. Pins are the device-local
 `useSessionPinnedStore`, so the zone differs between devices. The phone sheet
 mirrors the section toggles: its display menu offers Show chats section, Show
 pinned section and, in Tree, Detailed rows. `MobileTimelineRows` renders both
@@ -325,6 +326,13 @@ Detailed and List rows keep their second line, with In work's subsession
 chevron in a separate gutter so titles share the other rows' text column. VS Code
 shows no section toggles, so it has no Pinned zone and its In work rows stay on
 one line.
+
+The phone's `apps/mobileTimelineEntries.ts` projects ordinary sessions with
+a nullable project so managed chats survive without project ownership. Run
+entries still require a project. Chats retain their real session directory
+for selection and mutations; their detailed row shows the localized Chats
+label instead of a fabricated project. Normal browsing keeps both copies,
+and mobile search deduplicates through the existing visible-session ID set.
 
 ## Timeline view
 
@@ -483,7 +491,9 @@ matching and ordering. Search does not fetch sessions or broaden list membership
   `renderExtras` object onto each row, so identity comparison would never
   match. Sessions and secondary metadata compare by value; a scroll therefore
   renders only rows entering the viewport, and a model rebuild only rows whose
-  session changed.
+  session changed. Both row boundaries also compare session metadata by
+  reference and `time.idle`, so Track / Done and hint changes reach every copy
+  without requiring a new title or update timestamp.
 - The sidebar model flattens parent/child sessions into occurrence-keyed rows.
   `SessionTreeItem` renders one row with `renderChildren={false}`; it must never
   recursively mount descendants in the shared scroller. One preorder ID pool

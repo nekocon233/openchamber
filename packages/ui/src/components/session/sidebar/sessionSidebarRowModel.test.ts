@@ -80,6 +80,39 @@ const args = (sections: ProjectSection[]): SessionSidebarRowModelArgs => ({
 });
 
 describe('buildSessionSidebarRowModel', () => {
+  test('a chat in work stays in Chats and its folder, and search counts it once', () => {
+    const chat = node('ses_chat');
+    chat.session = { ...chat.session, directory: '/chats/day/chat', metadata: { openchamber: { work: { state: 'open' } } } };
+    const chats = group([chat], { id: 'managed-chats', directory: '/chats', folderScopeKey: '/chats' });
+    for (const timelineMode of [false, true]) {
+      const input = args([]);
+      input.viewMode = timelineMode ? 'timeline' : 'projects';
+      input.chatGroup = chats;
+      input.workItems = [timelineItem(chat.session.id, { node: chat, projectId: null, groupDirectory: chat.session.directory, secondaryMeta: null })];
+      input.zoneSessionIds = new Set([chat.session.id]);
+      input.foldersMap = { '/chats': [{ id: 'folder', name: 'Saved chats', sessionIds: [chat.session.id], createdAt: 1 }] };
+      const rows = buildSessionSidebarRowModel(input).rows;
+      const occurrences = rows.filter((row) => row.kind === 'session' && row.node.session.id === chat.session.id);
+      expect(occurrences).toHaveLength(2);
+      expect(new Set(occurrences.map((row) => row.key)).size).toBe(2);
+      expect(rows.some((row) => row.kind === 'folder-header')).toBe(true);
+
+      input.mode = 'search';
+      input.normalizedQuery = chat.session.id;
+      input.groupSearchDataByGroup.set(chats, {
+        filteredNodes: [chat], matchedSessionCount: 1, folderNameMatchCount: 0, groupMatches: false, hasMatch: true,
+      });
+      const search = buildSessionSidebarRowModel(input);
+      expect(search.searchMatchCount).toBe(1);
+      expect(search.rows.filter((row) => row.kind === 'session')).toHaveLength(1);
+
+      input.mode = 'normal';
+      input.workItems = [];
+      input.zoneSessionIds = new Set();
+      expect(buildSessionSidebarRowModel(input).rows.filter((row) => row.kind === 'session')).toHaveLength(1);
+    }
+  });
+
   test('keeps the Chats section ahead of Pinned and gives each session copy independent expansion', () => {
     const parent = node('parent', [node('child')]);
     const input = args([project([group([parent])])]);

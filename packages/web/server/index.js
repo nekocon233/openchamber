@@ -1125,8 +1125,8 @@ const routingRuntime = createRoutingRuntime({
   broadcastGlobalUiEvent: broadcastOpenChamberUiEvent,
 });
 
-// "In work": Jev opens a session when real work starts in it and hints when a
-// turn looks like the end of it. The same turn-end call gates session assist.
+// "In work": sending a message opens a session; Jev hints when a turn looks
+// finished. The same turn-end call gates session assist.
 const sessionWorkRuntime = createSessionWorkRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
@@ -1135,7 +1135,6 @@ const sessionWorkRuntime = createSessionWorkRuntime({
   readMetadata: (sessionID, directory) => sessionMetadataStore.get(sessionID, { directory }),
   updateMetadata: updateSessionMetadataWith,
   isSessionArchived: (sessionID) => openChamberSessionService.archiveStore.isArchived(sessionID),
-  chatRoots: [path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR],
   // A native CLI session keeps its work state in the native registry; that
   // runtime is declared further down, and is only ever reached by an event,
   // after startup.

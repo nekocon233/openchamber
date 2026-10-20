@@ -51,7 +51,6 @@ const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = 
     jev,
     readMetadata: async (id) => records.get(id) ?? {},
     updateMetadata,
-    chatRoots: ['/home/me/.config/openchamber/chats'],
     lineage,
     nativeSessions,
     now: () => time++,
@@ -82,6 +81,34 @@ describe('session work decisions', () => {
 });
 
 describe('session work runtime: a message was sent', () => {
+  it('opens chats, keeps them open after a turn, and reopens only for a message sent after Done', async () => {
+    const directory = '/home/me/.config/openchamber/chats/2026-10-20/hello';
+    stubOpenCode({ session: { location: { directory } } });
+    const { runtime, jev, records, updateMetadata } = makeRuntime({ endpoint: null });
+    const message = (id, created) => {
+      const event = sent(id);
+      return { ...event, properties: { ...event.properties, directory, info: { ...event.properties.info, time: { created } } } };
+    };
+
+    runtime.processPayload(message('msg_chat', 50));
+    runtime.processPayload(message('msg_chat', 50));
+    await settle(() => updateMetadata.mock.calls.length > 0);
+    expect(updateMetadata).toHaveBeenCalledTimes(1);
+    expect(records.get('ses_1')).toMatchObject({ openchamber: { work: { state: 'open', openedBy: 'auto' } } });
+    await runtime.evaluateTurnEnd({ sessionId: 'ses_1', directory, assist: { recap: false, suggestion: false } });
+    expect(records.get('ses_1').openchamber.work.state).toBe('open');
+    expect(jev.ask).not.toHaveBeenCalled();
+
+    records.set('ses_1', { openchamber: { work: { state: 'done', doneAt: 80 } } });
+    runtime.processPayload(message('msg_old', 60));
+    await settle(() => updateMetadata.mock.calls.length > 1);
+    expect(records.get('ses_1').openchamber.work.state).toBe('done');
+
+    runtime.processPayload(message('msg_newer', 90));
+    await settle(() => records.get('ses_1').openchamber.work.state === 'open');
+    expect(records.get('ses_1').openchamber.work.state).toBe('open');
+  });
+
   it('opens the session on a sent message without asking Jev', async () => {
     stubOpenCode();
     const { runtime, jev, records } = makeRuntime();
@@ -162,14 +189,13 @@ describe('session work runtime: a message was sent', () => {
     expect(learning.isChild('ses_1')).toBe(true);
   });
 
-  it('opens nothing with In work off, or in a child, review, /btw, scheduled, or chat session', async () => {
+  it('opens nothing with In work off, or in a child, review, /btw, or scheduled session', async () => {
     for (const setup of [
       { runtime: { settings: { enabled: false } } },
       { session: { parentID: 'ses_parent' } },
       { session: { metadata: { openchamber: { kind: 'review', originalSessionID: 'ses_0' } } } },
       { session: { metadata: { openchamber: { kind: 'btw', originalSessionID: 'ses_0' } } } },
       { session: { metadata: { openchamber: { kind: 'scheduled' } } } },
-      { session: { location: { directory: '/home/me/.config/openchamber/chats/2026-09-27/hello' } } },
     ]) {
       stubOpenCode({ session: setup.session });
       const { runtime, updateMetadata } = makeRuntime(setup.runtime);
@@ -226,10 +252,19 @@ describe('session work runtime: a native CLI session', () => {
     expect(closed.setSessionWork).not.toHaveBeenCalled();
   });
 
-  it('opens nothing for a child, a chat, a review, or an archived session', async () => {
+  it('opens a native chat in its own registry', async () => {
+    const directory = '/home/me/.config/openchamber/chats/2026-10-20/native';
+    const stub = nativeStub({ session: { directory } });
+    const { runtime } = makeRuntime({ nativeSessions: stub.handle });
+    const event = sentToNative();
+    runtime.processPayload({ ...event, properties: { ...event.properties, directory } });
+    await settle(() => stub.setSessionWork.mock.calls.length > 0);
+    expect(stub.setSessionWork).toHaveBeenCalledWith('ncl_1', directory, expect.objectContaining({ state: 'open' }));
+  });
+
+  it('opens nothing for a child, a review, or an archived session', async () => {
     for (const session of [
       { parentID: 'ncl_parent' },
-      { directory: '/home/me/.config/openchamber/chats/2026-09-27/hello' },
       { metadata: { openchamber: { kind: 'review', originalSessionID: 'ncl_0' } } },
       { time: { archived: 10 } },
     ]) {

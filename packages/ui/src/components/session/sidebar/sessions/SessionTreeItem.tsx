@@ -252,6 +252,8 @@ const isSameSessionForRow = (prev: SessionNode, next: SessionNode): boolean => (
   && prev.session.time?.created === next.session.time?.created
   && prev.session.time?.updated === next.session.time?.updated
   && prev.session.time?.archived === next.session.time?.archived
+  && prev.session.time?.idle === next.session.time?.idle
+  && prev.session.metadata === next.session.metadata
   && sameMultiRunIdentity(prev.session, next.session)
   && normalizePath(prev.worktree?.path ?? null) === normalizePath(next.worktree?.path ?? null)
   && prev.worktree?.branch === next.worktree?.branch

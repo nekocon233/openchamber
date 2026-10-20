@@ -10,7 +10,7 @@ const mobileAppSource = readFileSync(join(__dirname, 'MobileApp.tsx'), 'utf8');
 describe('MobileSessionsSheet session structure', () => {
   test('partitions managed chats and derives the Pinned and In work zones', () => {
     expect(source).toContain('partitionSidebarSessions(sessions, false)');
-    expect(source).toContain('sessions: orderSessionsByLifecycleScopes(sectionChatSessions, pinnedSessionIds, sessionOrderRanks)');
+    expect(source).toContain('sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks)');
     expect(source).toContain('const pinnedZoneSessionIds = React.useMemo');
     expect(source).toContain('isSessionPinned(pinnedSessionIds, directory || null, session.id)');
     expect(source).toContain('const workSessionIds = React.useMemo');

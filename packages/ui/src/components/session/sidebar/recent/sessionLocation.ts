@@ -1,4 +1,5 @@
 import type { Session } from '@/lib/opencode/model';
+import { isChatDirectoryPath } from '@/lib/chatDirectories';
 import type { WorktreeMetadata } from '@/types/worktree';
 import type { DirectoryOwner } from '../sessions/sessionOwnership';
 import { formatDirectoryName } from '@/lib/utils';
@@ -73,7 +74,7 @@ export const resolveSidebarSessionLocations = ({
   const worktreeByPath = buildWorktreeByPathIndex(availableWorktreesByProject, projects);
   for (const session of sessions) {
     const directory = normalizePath(session.directory ?? null);
-    if (!directory) continue;
+    if (!directory || isChatDirectoryPath(directory)) continue;
     const indexedOwner = ownerBySessionId.get(session.id) ?? null;
     const indexedOwnerId = indexedOwner?.projectId ?? null;
     let owner: SidebarSessionLocationProject | null = indexedOwnerId
