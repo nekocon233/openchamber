@@ -275,9 +275,15 @@ Codex gotchas:
 - A single-session read returns the CLI's own `cwd`. A directory supplied by
   a client is only a lookup hint, so `/resume <thread-id>` cannot move another
   project's session into the currently selected project.
-- History comes from `thread/turns/list { itemsView: 'full' }`; reading it
-  does not resume the thread.
-- That RPC omits usage, item lifecycle times and user-input calls.
+- History reads turn metadata through `thread/turns/list` with
+  `itemsView: 'notLoaded'`, then exhausts `thread/items/list` for each turn
+  in pages of 100 items. Both reads preserve chronological order without
+  resuming the thread. Item pages must belong to the requested turn; a failed
+  page fails the read rather than returning an incomplete conversation.
+  This keeps long histories out of a single response while retaining the
+  JSON-RPC connection's 32 MiB message limit. Automatic title generation
+  uses the same item pagination for its first turn.
+- Those RPCs omit usage and user-input calls.
   `codex/history-details.js` streams supplemental metadata from the app-server
   supplied rollout, verifies the thread identity and joins only retained
   turns. It records each `item_completed` event's `started_at_ms` and

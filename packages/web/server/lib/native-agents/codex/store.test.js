@@ -25,6 +25,25 @@ const thread = (id, extra = {}) => ({
   ...extra,
 });
 
+const historyHandlers = (turns) => ({
+  'thread/turns/list': async ({ itemsView, cursor, limit }) => {
+    const start = Number(cursor ?? 0);
+    const data = turns.slice(start, start + limit);
+    return {
+      data: data.map(turn => ({ ...turn, items: itemsView === 'full' ? turn.items : [] })),
+      nextCursor: start + limit < turns.length ? String(start + limit) : null,
+    };
+  },
+  'thread/items/list': async ({ turnId, cursor, limit }) => {
+    const items = turns.find(turn => turn.id === turnId).items;
+    const start = Number(cursor ?? 0);
+    return {
+      data: items.slice(start, start + limit).map(item => ({ turnId, item })),
+      nextCursor: start + limit < items.length ? String(start + limit) : null,
+    };
+  },
+});
+
 const directories = [];
 afterEach(() => {
   for (const dir of directories.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -47,6 +66,99 @@ const createHarness = (handlers) => {
 };
 
 describe('Codex session store', () => {
+  it('loads a history larger than the RPC limit without requesting it in one response', async () => {
+    const output = 'x'.repeat(5500);
+    const turns = Array.from({ length: 22 }, (_, index) => ({
+      id: `turn-${index}`, status: 'completed', startedAt: index + 1, completedAt: index + 2,
+      items: [
+        { type: 'userMessage', id: `user-${index}`, content: [{ type: 'text', text: `prompt ${index}` }] },
+        ...Array.from({ length: 298 }, (_, item) => ({
+          type: 'commandExecution', id: `command-${index}-${item}`, command: 'true',
+          status: 'completed', exitCode: 0, aggregatedOutput: output,
+        })),
+        { type: 'agentMessage', id: `answer-${index}`, text: `done ${index}` },
+      ],
+    }));
+    const limit = 32 * 1024 * 1024;
+    expect(Buffer.byteLength(JSON.stringify(turns))).toBeGreaterThan(limit);
+    const handlers = historyHandlers(turns);
+    let largestResponse = 0;
+    const checkedResponse = async (method, params) => {
+      const response = await handlers[method](params);
+      const bytes = Buffer.byteLength(JSON.stringify(response));
+      if (bytes > limit) throw new JsonRpcError('Codex app-server message exceeds the size limit', -32700);
+      largestResponse = Math.max(largestResponse, bytes);
+      return response;
+    };
+    const { store } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID) }),
+      'thread/turns/list': params => checkedResponse('thread/turns/list', params),
+      'thread/items/list': params => checkedResponse('thread/items/list', params),
+    });
+
+    const history = await store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY);
+    expect(history.records.filter(record => record.info.role === 'user')).toHaveLength(22);
+    const tools = history.records.flatMap(record => record.parts).filter(part => part.type === 'tool');
+    expect(tools.map(part => part.callID)).toEqual(turns.flatMap(turn => turn.items
+      .filter(item => item.type === 'commandExecution').map(item => item.id)));
+    expect(tools.every(part => part.state.output === output)).toBe(true);
+    expect(largestResponse).toBeLessThan(1024 * 1024);
+  });
+
+  it('exhausts turn metadata pages and finds the latest plan in paginated items', async () => {
+    const turns = Array.from({ length: 101 }, (_, index) => ({
+      id: `turn-${index}`, status: 'completed',
+      items: [{ type: 'plan', id: `plan-${index}`, text: `Plan ${index}` }],
+    }));
+    const { store, calls } = createHarness(historyHandlers(turns));
+    expect(await store.latestPlan(`ncx_${THREAD_ID}`)).toEqual({ text: 'Plan 100', truncated: false, turnId: 'turn-100' });
+    expect(calls.filter(call => call.method === 'thread/turns/list')).toHaveLength(2);
+  });
+
+  it('returns an authoritative empty history without reading items', async () => {
+    const { store, calls } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID) }),
+      ...historyHandlers([]),
+    });
+    expect((await store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY)).records).toEqual([]);
+    expect(calls.some(call => call.method === 'thread/items/list')).toBe(false);
+  });
+
+  it('propagates a later item-page failure instead of returning partial history', async () => {
+    const failure = new JsonRpcError('page unavailable', -32000);
+    const { store } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID) }),
+      'thread/turns/list': async () => ({ data: [{ id: 'turn-1', items: [] }], nextCursor: null }),
+      'thread/items/list': async ({ cursor }) => {
+        if (cursor === 'opaque-next') throw failure;
+        return { data: [{ turnId: 'turn-1', item: { type: 'agentMessage', id: 'reply', text: 'partial' } }], nextCursor: 'opaque-next' };
+      },
+    });
+    await expect(store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY)).rejects.toBe(failure);
+  });
+
+  it('rejects item pages from another turn', async () => {
+    const { store } = createHarness({
+      'thread/turns/list': async () => ({ data: [{ id: 'turn-1', items: [] }], nextCursor: null }),
+      'thread/items/list': async () => ({ data: [{ turnId: 'other-turn', item: {} }], nextCursor: null }),
+    });
+    await expect(store.latestPlan(`ncx_${THREAD_ID}`)).rejects.toThrow('another turn');
+  });
+
+  it('stops requesting item pages after cancellation', async () => {
+    const controller = new AbortController();
+    const { store, calls } = createHarness({
+      'thread/read': async () => ({ thread: thread(THREAD_ID) }),
+      'thread/turns/list': async () => ({ data: [{ id: 'turn-1', items: [] }], nextCursor: null }),
+      'thread/items/list': async () => {
+        controller.abort();
+        return { data: [], nextCursor: 'more-items' };
+      },
+    });
+    await expect(store.loadStatistics(`ncx_${THREAD_ID}`, DIRECTORY, { signal: controller.signal })).rejects.toThrow('aborted');
+    expect(calls.filter(call => call.method === 'thread/items/list')).toHaveLength(1);
+  });
+
   it('exhausts statistics listing beyond the sidebar page cap', async () => {
     const { store } = createHarness({
       'thread/list': async ({ archived, cursor }) => {
@@ -63,7 +175,7 @@ describe('Codex session store', () => {
     for (const turn of turns.data) { turn.startedAt = null; turn.completedAt = null; }
     const { store } = createHarness({
       'thread/read': async () => ({ thread: thread(THREAD_ID) }),
-      'thread/turns/list': async () => turns,
+      ...historyHandlers(turns.data),
     });
     const snapshot = await store.loadStatistics(`ncx_${THREAD_ID}`, DIRECTORY);
     expect(snapshot.records.length).toBeGreaterThan(0);
@@ -75,11 +187,11 @@ describe('Codex session store', () => {
     command.commandActions = [{ type: 'search', path: null }];
     const { store, calls } = createHarness({
       'thread/read': async () => ({ thread: thread(THREAD_ID) }),
-      'thread/turns/list': async () => turns,
+      ...historyHandlers(turns.data),
     });
     const snapshot = await store.loadStatistics(`ncx_${THREAD_ID}`, DIRECTORY);
     expect(snapshot.records.some((record) => record.info.role === 'assistant')).toBe(true);
-    expect(calls.every((call) => ['thread/read', 'thread/turns/list'].includes(call.method))).toBe(true);
+    expect(calls.every((call) => ['thread/read', 'thread/turns/list', 'thread/items/list'].includes(call.method))).toBe(true);
     expect(snapshot.records.flatMap((record) => record.parts).filter((part) => part.type === 'tool')
       .every((part) => !part.state.output && !part.state.time.end)).toBe(true);
   });
@@ -122,7 +234,7 @@ describe('Codex session store', () => {
     });
     const { store } = createHarness({
       'thread/read': async ({ threadId }) => ({ thread: thread(threadId, threadId === CHILD_THREAD ? { parentThreadId: THREAD_ID } : {}) }),
-      'thread/turns/list': async () => ({ data: turns, nextCursor: null }),
+      ...historyHandlers(turns),
     });
     const history = await store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY);
     expect(history.records.map((record) => record.info.role)).toEqual(['user', 'assistant']);
@@ -146,16 +258,13 @@ describe('Codex session store', () => {
 
     const { store } = createHarness({
       'thread/read': async () => ({ thread: thread(THREAD_ID, { path: rollout }) }),
-      'thread/turns/list': async () => ({
-        data: [{
-          id: 'turn-1', status: 'completed', startedAt: 1, completedAt: 2,
-          items: [
-            { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
-            { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
-          ],
-        }],
-        nextCursor: null,
-      }),
+      ...historyHandlers([{
+        id: 'turn-1', status: 'completed', startedAt: 1, completedAt: 2,
+        items: [
+          { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
+          { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
+        ],
+      }]),
     });
     const history = await store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY);
     const assistant = history.records.find((record) => record.info.role === 'assistant');
@@ -167,16 +276,13 @@ describe('Codex session store', () => {
   it('keeps projected history usable when the rollout cannot be read', async () => {
     const { store } = createHarness({
       'thread/read': async () => ({ thread: thread(THREAD_ID, { path: '/nonexistent/rollout.jsonl' }) }),
-      'thread/turns/list': async () => ({
-        data: [{
-          id: 'turn-1', status: 'completed', startedAt: 1, completedAt: 2,
-          items: [
-            { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
-            { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
-          ],
-        }],
-        nextCursor: null,
-      }),
+      ...historyHandlers([{
+        id: 'turn-1', status: 'completed', startedAt: 1, completedAt: 2,
+        items: [
+          { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'run' }] },
+          { type: 'commandExecution', id: 'exec-1', command: 'ls', status: 'completed' },
+        ],
+      }]),
     });
     const history = await store.loadHistory(`ncx_${THREAD_ID}`, DIRECTORY);
     const assistant = history.records.find((record) => record.info.role === 'assistant');
@@ -192,7 +298,7 @@ describe('Codex session store', () => {
       { id: 'turn-2', status: 'completed', items: [user('item-2'), reply('r-2'), user('item-3', 'ncx_u_6c1f2d63-3a2a-4d5b-8e9f-1b2c3d4e5f60'), reply('r-3')] },
       { id: 'turn-3', status: 'completed', items: [user('item-4'), reply('r-4')] },
     ];
-    const { store } = createHarness({ 'thread/turns/list': async () => ({ data: turns, nextCursor: null }) });
+    const { store } = createHarness(historyHandlers(turns));
     const sessionId = `ncx_${THREAD_ID}`;
     const typedElsewhere = (itemId) => `ncx_u_${THREAD_ID.replaceAll('-', '')}_${itemId}`;
 

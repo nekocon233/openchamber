@@ -29,6 +29,7 @@ const FORK_SUFFIX = ' (fork)';
 const LIST_PAGE_SIZE = 100;
 const MAX_LIST_PAGES = 20;
 const TURN_PAGE_SIZE = 100;
+const ITEM_PAGE_SIZE = 100;
 const MISSING_THREAD_MESSAGE = /^(thread not loaded|invalid thread id)/;
 const NO_ROLLOUT_MESSAGE = /^no rollout found/;
 const FORKED_SOURCE_MESSAGE = /forked history still references it/;
@@ -71,10 +72,14 @@ const turnsPageSchema = z.object({
   data: z.array(z.unknown()),
   nextCursor: z.string().nullish(),
 }).passthrough();
+const itemsPageSchema = z.object({
+  data: z.array(z.object({ turnId: z.string(), item: z.unknown() })),
+  nextCursor: z.string().nullish(),
+}).passthrough();
 const titleTurnSchema = z.object({ id: z.string(), status: z.string(), items: z.array(z.unknown()) });
 // A turn read for its items alone: the plan reader accepts any turn, where the
 // title reader needs a completed one.
-const turnItemsSchema = z.object({ id: z.string(), items: z.array(z.unknown()) });
+const turnItemsSchema = z.object({ id: z.string(), items: z.array(z.unknown()) }).passthrough();
 const statisticsItemSchema = z.object({
   type: z.string(), id: z.string(), clientId: z.string().nullish(),
   content: z.array(z.unknown()).optional(), command: z.string().optional(),
@@ -191,27 +196,51 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     }
   };
 
-  const readAllTurns = async (threadId, statistics = false) => {
+  const readTurnItems = async (threadId, turnId, signal) => {
+    const items = [];
+    let cursor = null;
+    do {
+      signal?.throwIfAborted();
+      const page = itemsPageSchema.parse(await appServer.request('thread/items/list', {
+        threadId, turnId, sortDirection: 'asc', limit: ITEM_PAGE_SIZE, cursor,
+      }));
+      for (const entry of page.data) {
+        if (entry.turnId !== turnId) throw new Error('Codex returned an item from another turn');
+        items.push(entry.item);
+      }
+      cursor = page.nextCursor ?? null;
+    } while (cursor !== null);
+    return items;
+  };
+
+  const readAllTurns = async (threadId, statistics = false, signal) => {
     const turns = [];
     let cursor = null;
     do {
+      signal?.throwIfAborted();
       const page = turnsPageSchema.parse(await appServer.request('thread/turns/list', {
         threadId,
-        itemsView: 'full',
+        itemsView: 'notLoaded',
         sortDirection: 'asc',
         limit: TURN_PAGE_SIZE,
         cursor,
       }));
-      turns.push(...(statistics ? page.data.map((raw) => {
-        const turn = statisticsTurnSchema.parse(raw);
-        return { ...turn, items: turn.items.map((item) => {
+      for (const raw of page.data) {
+        const turn = turnItemsSchema.parse(raw);
+        turn.items = await readTurnItems(threadId, turn.id, signal);
+        if (!statistics) {
+          turns.push(turn);
+          continue;
+        }
+        const snapshot = statisticsTurnSchema.parse(turn);
+        turns.push({ ...snapshot, items: snapshot.items.map((item) => {
           const summary = { ...item, text: '', summary: [], changes: [], arguments: {}, aggregatedOutput: '',
             commandActions: item.commandActions?.map((action) => ({ type: action.type, path: action.path ?? undefined })),
           };
           if (item.type !== 'userMessage') summary.content = [];
           return summary;
-        }) };
-      }) : page.data));
+        }) });
+      }
       cursor = page.nextCursor ?? null;
     } while (cursor !== null);
     return turns;
@@ -257,7 +286,7 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     const thread = await readThread(decoded.threadId);
     if (!thread) return (await unconfirmedEntry(sessionId)) ? { records: [], childSessions: [] } : null;
     const [turns, sendRecords, details] = await Promise.all([
-      readAllTurns(decoded.threadId, statistics), registry.sendRecords(sessionId),
+      readAllTurns(decoded.threadId, statistics, signal), registry.sendRecords(sessionId),
       readCodexHistoryDetails(thread.path, decoded.threadId).catch(() => null),
     ]);
     signal?.throwIfAborted();
@@ -376,11 +405,13 @@ export const createCodexSessionStore = ({ appServer, registry, readGlobalInstruc
     if (!thread || thread.name || thread.parentThreadId || ARCHIVED_ROLLOUT.test(thread.path ?? '')
       || !await sameDirectory(thread.cwd, directory)) return null;
     const page = turnsPageSchema.parse(await appServer.request('thread/turns/list', {
-      threadId, sortDirection: 'asc', limit: 1, itemsView,
+      threadId, sortDirection: 'asc', limit: 1, itemsView: 'notLoaded',
     }));
     if (!page.data.length) return null;
     const turn = titleTurnSchema.parse(page.data[0]);
-    return turn.id === turnId && turn.status === 'completed' ? turn : null;
+    if (turn.id !== turnId || turn.status !== 'completed') return null;
+    if (itemsView === 'full') turn.items = await readTurnItems(threadId, turn.id);
+    return turn;
   };
 
   // The check shares ordering with manual renames, including one that was

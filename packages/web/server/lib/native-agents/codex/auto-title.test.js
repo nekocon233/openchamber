@@ -30,6 +30,7 @@ const fixture = ({ generateText = async () => ({ text: '修复登录超时' }), 
     if (state.readError && method !== 'thread/name/set') throw state.readError;
     if (method === 'thread/read') return { thread: { ...state.thread } };
     if (method === 'thread/turns/list') return { data: state.turn ? [{ ...state.turn, items: params.itemsView === 'full' ? state.turn.items : [] }] : [], nextCursor: null };
+    if (method === 'thread/items/list') return { data: state.turn.items.map(item => ({ turnId: state.turn.id, item })), nextCursor: null };
     if (method === 'thread/name/set') {
       await beforeWrite(params.name);
       state.thread.name = params.name;
@@ -78,7 +79,7 @@ describe('automatic Codex titles', () => {
     expect((await store.getSession(SESSION, DIRECTORY)).title).toBe('修复登录超时');
     expect(published).toEqual(['修复登录超时']);
     expect(calls.filter((call) => call.method === 'thread/turns/list').map((call) => call.params)).toEqual([
-      { threadId: THREAD, sortDirection: 'asc', limit: 1, itemsView: 'full' },
+      { threadId: THREAD, sortDirection: 'asc', limit: 1, itemsView: 'notLoaded' },
       { threadId: THREAD, sortDirection: 'asc', limit: 1, itemsView: 'notLoaded' },
     ]);
     expect(await run()).toBe(false);

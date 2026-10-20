@@ -17,7 +17,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (thread.cwd) fs.appendFileSync(path.join(thread.cwd, 'requests.jsonl'), `${JSON.stringify({ method, params })}\n`);
   const reply = (result) => send({ id, result });
   if (method === 'thread/start' || method === 'thread/read') return reply({ thread });
-  if (method === 'thread/turns/list') return reply({ data: turns, nextCursor: null });
+  if (method === 'thread/turns/list') return reply({
+    data: turns.map(turn => ({ ...turn, items: params.itemsView === 'full' ? turn.items : [] })), nextCursor: null,
+  });
+  if (method === 'thread/items/list') return reply({
+    data: turns.find(turn => turn.id === params.turnId).items.map(item => ({ turnId: params.turnId, item })), nextCursor: null,
+  });
   if (method === 'thread/name/set') thread.name = params.name;
   if (method === 'thread/archive') thread.path = '/archived_sessions/test.jsonl';
   if (method === 'thread/revert') turns = turns.slice(0, turns.findIndex(turn => turn.id === params.beforeTurnId));
