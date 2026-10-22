@@ -4,7 +4,7 @@ import { opencodeClient } from '@/lib/opencode/client';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionWorktreeStore } from './session-worktree-store';
-import { expandSlashCommandGoalObjective, resolveSendSelection, routeMessage, useSessionUIStore } from './session-ui-store';
+import { expandSlashCommandGoalObjective, materializeOpenDraftSession, resolveSendSelection, routeMessage, useSessionUIStore } from './session-ui-store';
 import { ChildStoreManager } from './child-store';
 import { setSyncRefs } from './sync-refs';
 import { setActionRefs, setOptimisticRefs } from './session-actions';
@@ -1529,6 +1529,40 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
     useProjectsStore.setState({ projects: [], activeProjectId: null });
     useSessionDisplayStore.setState({ singleProjectId: null });
   });
+
+  for (const showChatsSection of [false, true]) {
+    test(`creating a managed chat preserves Chats visibility when it is ${showChatsSection ? 'shown' : 'hidden'}`, async () => {
+      const originalVisibility = useSessionDisplayStore.getState().showChatsSection;
+      const directory = '/home/user/.config/openchamber/chats/2026-10-22/session-visibility';
+      try {
+        useSessionDisplayStore.getState().setShowChatsSection(showChatsSection);
+        useSessionUIStore.setState({
+          currentSessionId: null,
+          currentSessionDirectory: null,
+          newSessionDraft: {
+            draftId: 1,
+            open: true,
+            target: 'chat',
+            preparedChatDirectory: directory,
+            directoryOverride: null,
+            selectedProjectId: null,
+            parentID: null,
+          },
+        });
+
+        const created = await materializeOpenDraftSession({ providerID: 'provider-a', modelID: 'model-a' });
+
+        expect(created?.sessionId).toBe('session-materialized');
+        expect(created?.directory).toBe(directory);
+        expect(createSessionCalls).toEqual([directory]);
+        expect(useSessionUIStore.getState().currentSessionId).toBe('session-materialized');
+        expect(useSessionUIStore.getState().newSessionDraft.open).toBe(false);
+        expect(useSessionDisplayStore.getState().showChatsSection).toBe(showChatsSection);
+      } finally {
+        useSessionDisplayStore.getState().setShowChatsSection(originalVisibility);
+      }
+    });
+  }
 
   test('draft send snapshots the draft; switching to another project mid-flight still targets the materialized session', async () => {
     useProjectsStore.setState({

@@ -1263,17 +1263,6 @@ export function materializeOpenDraftSession(selection: {
     // worktree path through symlinks or platform-specific casing.
     const createdDirectory = normalizePath(created.directory ?? draftDirectoryOverride ?? null)
 
-    // A chat started while the Chats section is hidden would be listed nowhere
-    // in the sidebar, so starting one brings the section back.
-    if (isChatDraft && !useSessionDisplayStore.getState().showChatsSection) {
-      useSessionDisplayStore.getState().setShowChatsSection(true)
-      void import("@/lib/persistence")
-        .then(({ updateDesktopSettings }) => updateDesktopSettings({ sidebarShowChatsSection: true }))
-        .catch((error) => {
-          console.warn("Failed to save the shown Chats section:", error)
-        })
-    }
-
     persistDraftTarget({
       projectId: draftProjectId,
       directory: createdDirectory,
