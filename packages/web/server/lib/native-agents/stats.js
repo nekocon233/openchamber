@@ -49,16 +49,36 @@ const untilAborted = (work, signal) => new Promise((resolve, reject) => {
   Promise.resolve(work).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
 });
 
-/** No more than four histories are resident, including across backends. */
+/** Rotate queued backends while keeping no more than four histories resident. */
 export const createStatisticsLimiter = (limit = 4) => {
   let active = 0;
-  const waiting = [];
-  return async (work, signal) => {
+  const waiting = new Map();
+  const release = () => {
+    const first = waiting.entries().next();
+    if (first.done) { active -= 1; return; }
+    const [backend, queue] = first.value;
+    const next = queue.shift();
+    waiting.delete(backend);
+    if (queue.length) waiting.set(backend, queue);
+    next();
+  };
+  return async (work, signal, backend = 'default') => {
     signal?.throwIfAborted();
-    if (active >= limit) await new Promise((resolve) => waiting.push(resolve));
+    if (active >= limit) await new Promise((resolve, reject) => {
+      const queue = waiting.get(backend) ?? [];
+      const start = () => { signal?.removeEventListener('abort', cancel); resolve(); };
+      const cancel = () => {
+        queue.splice(queue.indexOf(start), 1);
+        if (!queue.length) waiting.delete(backend);
+        reject(signal.reason);
+      };
+      queue.push(start);
+      waiting.set(backend, queue);
+      signal?.addEventListener('abort', cancel, { once: true });
+    });
     else active += 1;
     try { signal?.throwIfAborted(); return await work(); }
-    finally { const next = waiting.shift(); if (next) next(); else active -= 1; }
+    finally { release(); }
   };
 };
 
@@ -169,14 +189,15 @@ export const createStatisticsAccumulator = (query) => {
 };
 
 /** Independent sources and independent sessions retain their successful results. */
-export const readNativeStatistics = async ({ query, backends, signal, scopeDirectories = [], sourceTimeoutMs = 25_000 }) => {
+export const readNativeStatistics = async ({ query, backends, signal, scopeDirectories = [], sourceTimeoutMs }) => {
   const limit = createStatisticsLimiter();
   const withinScope = (directory) => !query.directory || scopeDirectories.some((root) => {
     const relative = path.relative(root, directory);
     return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
   });
   const results = await Promise.all(Object.entries(backends).map(async ([backend, store]) => {
-    const sourceSignal = AbortSignal.any([AbortSignal.timeout(sourceTimeoutMs), ...(signal ? [signal] : [])]);
+    const timeoutMs = sourceTimeoutMs ?? (backend === 'codex' ? 60_000 : 25_000);
+    const sourceSignal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
     try {
       signal?.throwIfAborted();
       const roots = await untilAborted(store.listStatisticsSessions(sourceSignal), sourceSignal);
@@ -188,7 +209,7 @@ export const readNativeStatistics = async ({ query, backends, signal, scopeDirec
         visited.add(session.id);
         let snapshot;
         try {
-          snapshot = await untilAborted(limit(() => store.loadStatistics(session.id, session.directory, { signal: sourceSignal, tools: query.tools, nativeId: session.nativeId }), sourceSignal), sourceSignal);
+          snapshot = await untilAborted(limit(() => store.loadStatistics(session.id, session.directory, { signal: sourceSignal, tools: query.tools, nativeId: session.nativeId }), sourceSignal, backend), sourceSignal);
           if (!snapshot) throw new Error('Session history is unavailable');
           accumulator.add(session, snapshot);
         } catch (error) {

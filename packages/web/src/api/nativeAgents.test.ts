@@ -22,6 +22,11 @@ const stalled: Respond = (_url, signal) => new Promise((_resolve, reject) => {
   signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
 });
 
+const unavailableStatistics = () => {
+  const source = { status: 'unavailable', message: 'CLI unavailable', code: 'NATIVE_CLI_MISSING' };
+  return { backends: { claude: source, codex: source, deepseek: source } };
+};
+
 afterEach(() => {
   requests.length = 0;
   vi.useRealTimers();
@@ -30,14 +35,57 @@ afterEach(() => {
 
 describe('web native agents API', () => {
   it('sends a fixed native statistics window and rejects malformed reports', async () => {
-    const unavailable = { status: 'unavailable', message: 'CLI unavailable', code: 'NATIVE_CLI_MISSING' };
-    stubFetch(async () => Response.json({ backends: { claude: unavailable, codex: unavailable, deepseek: unavailable } }));
+    stubFetch(async () => Response.json(unavailableStatistics()));
     const result = await createWebNativeAgentsAPI().stats({ from: 100, to: 200, timezone: 'Asia/Taipei', directory: '/work/project with spaces', tools: 'none' });
     expect(result.backends.claude.status).toBe('unavailable');
     expect(requests[0]?.pathname).toBe('/api/native/stats');
     expect(Object.fromEntries(requests[0]!.searchParams)).toEqual({ from: '100', to: '200', timezone: 'Asia/Taipei', directory: '/work/project with spaces', tools: 'none' });
     stubFetch(async () => Response.json({ backends: {} }));
     await expect(createWebNativeAgentsAPI().stats({ to: 200, timezone: 'UTC', tools: 'detail' })).rejects.toThrow();
+  });
+
+  it('accepts statistics that take longer than the ordinary native read deadline', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    stubFetch(async (_url, signal) => {
+      if (signal) signals.push(signal);
+      await new Promise((resolve) => setTimeout(resolve, 44_000));
+      signal?.throwIfAborted();
+      return Response.json(unavailableStatistics());
+    });
+    const read = createWebNativeAgentsAPI().stats({ to: 200, timezone: 'UTC', tools: 'none' });
+    const answer = expect(read).resolves.toEqual(unavailableStatistics());
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(signals[0]?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(14_000);
+    await answer;
+  });
+
+  it('ends a stalled statistics read after 75 seconds', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    stubFetch((url, signal) => {
+      if (signal) signals.push(signal);
+      return stalled(url, signal);
+    });
+    const read = createWebNativeAgentsAPI().stats({ to: 200, timezone: 'UTC', tools: 'detail' });
+    const rejected = expect(read).rejects.toMatchObject({ name: 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(74_999);
+    expect(signals[0]?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+  });
+
+  it('cancels a statistics read immediately when the caller aborts', async () => {
+    vi.useFakeTimers();
+    stubFetch(stalled);
+    const controller = new AbortController();
+    const read = createWebNativeAgentsAPI().stats({ to: 200, timezone: 'UTC', tools: 'none' }, { signal: controller.signal });
+    const rejected = expect(read).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
   });
   it('starts one-click DeepSeek setup with no credentials or executable arguments', async () => {
     const bodies: string[] = [];

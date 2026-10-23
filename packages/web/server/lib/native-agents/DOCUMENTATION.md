@@ -92,12 +92,17 @@ calendar bucket; activity dates and streaks continue to count model steps.
 Statistics use chat's source visibility and retained-chain rules, including
 terminal sessions, registered SDK sessions, archives and children. The bounded
 send registry is not an accounting source. Reads do not populate chat caches,
-recover edit diffs, resume threads, send prompts or publish chat events. At
-most four histories are read concurrently across backends. Request cancellation
-stops queued work. DeepSeek closes its temporary snapshot stream, then pages
-at that watermark without entering or evicting the chat follower cache.
-Each source has a 25-second deadline, shorter than the web client's read
-deadline. A stalled history cannot discard other completed histories.
+recover edit diffs, resume threads, send prompts or publish chat events. Each
+request reads at most four histories concurrently across backends. Queued
+backends take turns as slots become free. Request cancellation or a source
+deadline removes its queued work immediately; running
+reads keep their slots until they finish. DeepSeek closes its temporary snapshot
+stream, then pages at that watermark without entering or evicting the chat
+follower cache.
+Codex has a 60-second source deadline to read full retained histories; other
+sources keep a 25-second deadline. The web client's statistics request allows
+75 seconds, including response transfer; ordinary native reads keep their
+30-second deadline. A stalled history cannot discard other completed histories.
 
 Steps count retained assistant records, excluding compact summaries. Claude
 blocks sharing an API message id form one record; Codex uses assistant segments;

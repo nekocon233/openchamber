@@ -38,6 +38,8 @@ import { deepseekConfigurationSchema, deepseekConfigurationSaveSchema, deepseekS
 // Matches the OpenCode read deadline: a half-open socket must not hold a
 // bootstrap or history read forever.
 const NATIVE_READ_TIMEOUT_MS = 30_000;
+// Statistics allow the backend's 60-second Codex scan plus response transfer.
+const NATIVE_STATS_TIMEOUT_MS = 75_000;
 
 const errorBodySchema = z.object({ error: z.string().optional(), code: z.string().optional() }).passthrough();
 
@@ -81,15 +83,16 @@ const readParsed = async <T>(
   query: Record<string, string>,
   schema: z.ZodType<T>,
   signal?: AbortSignal,
+  timeoutMs = NATIVE_READ_TIMEOUT_MS,
 ): Promise<T> => {
   const controller = new AbortController();
   const abortFromCaller = () => controller.abort(signal?.reason);
   if (signal?.aborted) abortFromCaller();
   else signal?.addEventListener('abort', abortFromCaller, { once: true });
   const deadline = setTimeout(() => controller.abort(new DOMException(
-    `Native session request timed out after ${NATIVE_READ_TIMEOUT_MS}ms`,
+    `Native session request timed out after ${timeoutMs}ms`,
     'TimeoutError',
-  )), NATIVE_READ_TIMEOUT_MS);
+  )), timeoutMs);
   try {
     const response = await runtimeFetch(path, { query, signal: controller.signal });
     if (!response.ok) throw await failure(response);
@@ -125,7 +128,7 @@ const sessionPath = (sessionId: string) => `/api/native/sessions/${encodeURIComp
 const questionPath = (requestId: string) => `/api/native/questions/${encodeURIComponent(requestId)}`;
 
 export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
-  stats: (query, options) => readParsed('/api/native/stats', Object.fromEntries(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])), nativeStatisticsSchema, options?.signal),
+  stats: (query, options) => readParsed('/api/native/stats', Object.fromEntries(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])), nativeStatisticsSchema, options?.signal, NATIVE_STATS_TIMEOUT_MS),
   supported: true,
   memoryStatus: (directory, options) => readParsed('/api/native/memory', directory ? { directory } : {}, nativeMemoryStatusSchema, options?.signal),
   connectMemory: (backend) => writeParsed(`/api/native/memory/${backend}/connect`, nativeMemoryConnectionSchema),

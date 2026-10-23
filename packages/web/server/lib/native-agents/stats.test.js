@@ -1,6 +1,6 @@
 import express from 'express';
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registerNativeAgentRoutes } from './routes.js';
 import { createStatisticsAccumulator, createStatisticsLimiter, readNativeStatistics, statisticsQuery } from './stats.js';
@@ -109,13 +109,95 @@ describe('native statistics accounting', () => {
     const limit = createStatisticsLimiter();
     let active = 0;
     let peak = 0;
-    await Promise.all(Array.from({ length: 20 }, () => limit(async () => {
+    await Promise.all(Array.from({ length: 20 }, (_, index) => limit(async () => {
       active += 1; peak = Math.max(peak, active);
       await new Promise((resolve) => setTimeout(resolve, 1)); active -= 1;
-    })));
+    }, undefined, ['claude', 'codex', 'deepseek'][index % 3])));
     expect(peak).toBe(4);
     const controller = new AbortController(); controller.abort();
     await expect(limit(() => { throw new Error('must not run'); }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('gives each queued backend a turn before draining another backend', async () => {
+    const limit = createStatisticsLimiter(1);
+    const gate = Promise.withResolvers();
+    const running = limit(() => gate.promise, undefined, 'claude');
+    const started = [];
+    const queued = ['claude', 'codex', 'deepseek'].flatMap((backend) => Array.from({ length: 3 }, () => (
+      limit(async () => { started.push(backend); }, undefined, backend)
+    )));
+    gate.resolve();
+    await Promise.all([running, ...queued]);
+    for (let offset = 0; offset < started.length; offset += 3) {
+      expect(started.slice(offset, offset + 3).sort()).toEqual(['claude', 'codex', 'deepseek']);
+    }
+  });
+
+  it('lets Codex and DeepSeek read before the rest of a queued Claude batch', async () => {
+    const gate = Promise.withResolvers();
+    const occupied = Promise.withResolvers();
+    const started = [];
+    const store = (backend, length) => ({
+      listStatisticsSessions: async () => Array.from({ length }, (_, index) => session(`${backend}-${index}`)),
+      loadStatistics: async (id) => {
+        started.push(backend);
+        if (started.length === 4) occupied.resolve();
+        if (backend === 'claude' && Number(id.split('-')[1]) < 4) await gate.promise;
+        return { records: [assistant(id)] };
+      },
+    });
+    const read = readNativeStatistics({ query, backends: {
+      claude: store('claude', 12), codex: store('codex', 1), deepseek: store('deepseek', 1),
+    } });
+    await occupied.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(started).toEqual(['claude', 'claude', 'claude', 'claude']);
+    gate.resolve();
+    const result = await read;
+    expect(started.slice(4, 8)).toEqual(expect.arrayContaining(['codex', 'deepseek']));
+    expect(result.backends.claude.stats.steps).toBe(12);
+    expect(result.backends.codex.stats.steps).toBe(1);
+    expect(result.backends.deepseek.stats.steps).toBe(1);
+  });
+
+  it('rejects cancelled queued work before the occupied slot is released', async () => {
+    const limit = createStatisticsLimiter(1);
+    const gate = Promise.withResolvers();
+    const running = limit(() => gate.promise, undefined, 'claude');
+    const controller = new AbortController();
+    const cancelledWork = vi.fn();
+    const cancelled = limit(cancelledWork, controller.signal, 'codex');
+    const rejected = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    const following = limit(async () => 'next', undefined, 'deepseek');
+    controller.abort();
+    await rejected;
+    expect(cancelledWork).not.toHaveBeenCalled();
+    gate.resolve();
+    await running;
+    await expect(following).resolves.toBe('next');
+  }, 2000);
+
+  it('cancels queued histories when the statistics request is aborted', async () => {
+    const controller = new AbortController();
+    const gate = Promise.withResolvers();
+    const started = Promise.withResolvers();
+    const activeLoads = [];
+    const read = readNativeStatistics({ query, signal: controller.signal, backends: { codex: {
+      listStatisticsSessions: async () => Array.from({ length: 8 }, (_, index) => session(`root-${index}`)),
+      loadStatistics: async () => {
+        const work = gate.promise.then(() => ({ records: [] }));
+        activeLoads.push(work);
+        if (activeLoads.length === 4) started.resolve();
+        return work;
+      },
+    } } });
+    const rejected = expect(read).rejects.toMatchObject({ name: 'AbortError' });
+    await started.promise;
+    controller.abort();
+    await rejected;
+    gate.resolve();
+    await Promise.all(activeLoads);
+    expect(activeLoads).toHaveLength(4);
   });
 
   it('rejects invalid ranges and timezones at the route boundary', async () => {
@@ -127,5 +209,49 @@ describe('native statistics accounting', () => {
     const response = await request(app).get('/api/native/stats').query(query);
     expect(response.status).toBe(200);
     expect(response.body.requested).toEqual(query);
+  });
+});
+
+describe('native statistics source deadlines', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((milliseconds) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('Statistics deadline reached', 'TimeoutError')), milliseconds);
+      return controller.signal;
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('finishes a 44-second Codex scan while other sources retain their 25-second deadline', async () => {
+    const store = {
+      listStatisticsSessions: async () => [session('root')],
+      loadStatistics: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 44_000));
+        return { records: [assistant('a', at('18'), { tokens: usage })] };
+      },
+    };
+    const read = readNativeStatistics({ query, backends: { claude: store, codex: store, deepseek: store } });
+    await vi.advanceTimersByTimeAsync(44_000);
+    const result = await read;
+    expect(result.backends.codex).toMatchObject({ status: 'ok', stats: { steps: 1, tokens: { total: 40 }, coverage: { failedSessions: 0 } } });
+    for (const backend of ['claude', 'deepseek']) {
+      expect(result.backends[backend]).toMatchObject({ status: 'partial', stats: { steps: 0, coverage: { failedSessions: 1 } } });
+    }
+  });
+
+  it('retains completed Codex histories when its 60-second deadline expires', async () => {
+    let finished = false;
+    const read = readNativeStatistics({ query, backends: { codex: {
+      listStatisticsSessions: async () => [session('good'), session('stalled')],
+      loadStatistics: async (id) => id === 'good' ? { records: [assistant('a')] } : new Promise(() => {}),
+    } } }).then((result) => { finished = true; return result; });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await read).backends.codex).toMatchObject({ status: 'partial', stats: { steps: 1, coverage: { failedSessions: 1 } } });
   });
 });
