@@ -23,3 +23,19 @@ export const listModelVariantIds = (variants: ModelVariantSource): string[] => {
 /** Names of the thinking levels a model exposes, empty when it has none. */
 export const modelVariantNames = (model: { readonly variants?: ModelVariantSource } | undefined): string[] =>
   listModelVariantIds(model?.variants);
+
+/**
+ * The thinking level a model runs at when nothing names one: the highest level
+ * it lists. Levels are listed lowest first, the order the effort picker cycles
+ * in. A `<level>-fast` id is that same level on Codex's Fast tier, which is a
+ * service tier and not a higher level, so it never outranks its plain twin.
+ */
+export const highestModelVariant = (variantIds: readonly string[]): string | undefined => {
+  const fastSuffix = '-fast';
+  let highest: string | undefined;
+  for (const id of variantIds) {
+    if (id.endsWith(fastSuffix) && variantIds.includes(id.slice(0, -fastSuffix.length))) continue;
+    highest = id;
+  }
+  return highest;
+};

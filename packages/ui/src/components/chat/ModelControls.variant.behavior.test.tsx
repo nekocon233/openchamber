@@ -145,7 +145,14 @@ const useConfigStore = create<ConfigState>((set, get) => ({
   getCurrentProvider: () => get().providers.find((entry) => entry.id === get().currentProviderId),
   getCurrentAgent: () => get().agents.find((entry) => entry.name === get().currentAgentName) ?? agent,
   getVisibleAgents: () => get().agents,
-  getCurrentModelVariants: () => model.variants?.map((variant) => variant.id) ?? [],
+  getCurrentModelVariants: () => {
+    // The catalog in state wins, so a test can give the model no levels; a
+    // discovery gap still shows the fixture's, as before.
+    const entry = get().providers
+      .find((provider) => provider.id === get().currentProviderId)
+      ?.models.find((candidate) => candidate.id === get().currentModelId);
+    return (entry?.variants ?? model.variants)?.map((variant) => variant.id) ?? [];
+  },
   getModelMetadata: () => undefined,
 }));
 
@@ -772,6 +779,102 @@ describe('ModelControls effort restore', () => {
       expect(variantWrites).not.toContain(null);
       expect(useSelectionStore.getState().savedVariant).toBe(undefined);
       expect(useConfigStore.getState().currentVariantSelection.override).toBe(undefined);
+      // Nothing configured names a level: the model runs at its highest one,
+      // as an inherited value rather than a recorded pick.
+      expect(useConfigStore.getState().currentVariant).toBe('high');
+      expect(useConfigStore.getState().currentVariantSelection.inherited).toBe('high');
+      expect(variantWrites).not.toContain('high');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('a draft runs the model at its highest level when nothing names one', async () => {
+    useSessionUIStore.setState({ currentSessionId: null });
+
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useConfigStore.getState().currentVariant).toBe('high');
+      expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: undefined, inherited: 'high' });
+      expect(variantWrites).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('a configured default level outranks the highest level', async () => {
+    useSessionUIStore.setState({ currentSessionId: null });
+    useConfigStore.setState({ settingsDefaultVariant: 'low' });
+
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useConfigStore.getState().currentVariant).toBe('low');
+      expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: undefined, inherited: 'low' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('an explicit Default stays Default instead of falling back to the highest level', async () => {
+    useSelectionStore.setState({ savedVariant: null });
+
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useConfigStore.getState().currentVariant).toBeUndefined();
+      expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: null, inherited: 'high' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('a configured level the model does not offer does not fall back to the highest level', async () => {
+    useSessionUIStore.setState({ currentSessionId: null });
+    useConfigStore.setState({ settingsDefaultVariant: 'ultra' });
+
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useConfigStore.getState().currentVariant).toBeUndefined();
+      expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: undefined, inherited: undefined });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('a model without thinking levels keeps no level', async () => {
+    useConfigStore.setState({
+      providers: [{ ...provider, models: [{ ...model, variants: [] }] }],
+      currentVariant: undefined,
+      currentVariantSelection: { override: undefined, inherited: undefined },
+    });
+
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useConfigStore.getState().currentVariant).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('the mobile model row shows and applies the highest level when nothing names one', async () => {
+    useUIStore.setState({ isMobile: true, isModelSelectorOpen: true });
+    useSessionUIStore.setState({ currentSessionId: SESSION_ID });
+
+    const { dom, cleanup } = await renderModelControls({ mobilePanel: 'model', onMobilePanelChange: () => {} });
+    try {
+      const effortLabel = Array.from(dom.container.querySelectorAll('button'))
+        .find((button) => button.getAttribute('aria-label') === 'Show thinking modes');
+      expect(effortLabel?.textContent).toContain('High');
+
+      // The row's own button is the one without an aria-label; the footer
+      // trigger shows the same model name and is not the picker row.
+      const modelRow = effortLabel?.parentElement
+        ? Array.from(effortLabel.parentElement.querySelectorAll('button')).find((button) => !button.getAttribute('aria-label'))
+        : undefined;
+      expect(modelRow).toBeDefined();
+      await act(async () => modelRow?.click());
+
+      expect(variantWrites).toContain('high');
+      expect(useConfigStore.getState().currentVariant).toBe('high');
     } finally {
       await cleanup();
     }

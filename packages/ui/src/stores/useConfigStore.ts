@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
+import { highestModelVariant, listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
 import type { StoreApi, UseBoundStore } from "zustand";
@@ -235,6 +235,15 @@ const modelHasVariant = (model: Model | undefined, variant: string | null | unde
     typeof variant === "string" && listModelVariantIds(model?.variants).includes(variant)
 );
 
+/**
+ * The level a model runs at when nothing names one: its highest listed level.
+ * Only the branch where no configured level exists uses it; a configured level
+ * the model does not offer stays unset, as before.
+ */
+const defaultModelVariant = (model: Model | undefined): string | undefined => (
+    highestModelVariant(listModelVariantIds(model?.variants))
+);
+
 const hasProviderModel = (
     providers: ProviderWithModelList[],
     providerId: string,
@@ -299,28 +308,39 @@ const resolveProviderModelSelection = ({
 
     const preserveManual = preserveCurrent && !isStaleAutoSelection(currentProviderId, currentModelId);
     if (currentProviderId && currentModelId && (preserveManual || hasProviderModel(providers, currentProviderId, currentModelId))) {
+        const model = findProviderModel(providers, currentProviderId, currentModelId);
         return {
             providerId: currentProviderId,
             modelId: currentModelId,
-            variant: preserveCurrent ? currentVariant : resolveVariant(currentProviderId, currentModelId, currentVariant),
+            variant: preserveCurrent
+                ? currentVariant
+                : currentVariant !== undefined
+                    ? resolveVariant(currentProviderId, currentModelId, currentVariant)
+                    : defaultModelVariant(model),
         };
     }
 
     if (settingsDefaultModel) {
         const parsed = parseModelString(settingsDefaultModel);
         if (parsed) {
+            const model = findProviderModel(providers, parsed.providerId, parsed.modelId);
             return {
                 providerId: parsed.providerId,
                 modelId: parsed.modelId,
-                variant: hasProviderModel(providers, parsed.providerId, parsed.modelId)
-                    ? resolveVariant(parsed.providerId, parsed.modelId, settingsDefaultVariant)
-                    : settingsDefaultVariant,
+                variant: settingsDefaultVariant !== undefined
+                    ? (model ? resolveVariant(parsed.providerId, parsed.modelId, settingsDefaultVariant) : settingsDefaultVariant)
+                    : defaultModelVariant(model),
             };
         }
     }
 
     if (!allowFallback) return null;
-    return resolveLastSelectedModel(fallbackPrefs) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
+    const fallback = resolveLastSelectedModel(fallbackPrefs) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
+    if (!fallback) return null;
+    return {
+        ...fallback,
+        variant: defaultModelVariant(findProviderModel(providers, fallback.providerId, fallback.modelId)),
+    };
 };
 
 /** What the automatic pick reads from the user's model preferences. */
@@ -472,11 +492,13 @@ const resolveDefaultAgentModelSelection = ({
             providerId = parsed.providerId;
             modelId = parsed.modelId;
             // A project default carries its own variant; the settings variant
-            // belongs to the settings model and must not leak onto it.
+            // belongs to the settings model and must not leak onto it. With
+            // nothing configured the model runs at its highest level.
             const configuredVariant = projectDefaultModel ? projectDefaultVariant : settingsDefaultVariant;
-            variant = hasProviderModel(providers, providerId, modelId)
-                ? resolveVariant(providerId, modelId, configuredVariant)
-                : configuredVariant;
+            const configuredModel = findProviderModel(providers, providerId, modelId);
+            variant = configuredVariant !== undefined
+                ? (configuredModel ? resolveVariant(providerId, modelId, configuredVariant) : configuredVariant)
+                : defaultModelVariant(configuredModel);
         }
     }
 
@@ -489,9 +511,11 @@ const resolveDefaultAgentModelSelection = ({
         && resolvedAgent.model?.id) {
         providerId = resolvedAgent.model.providerID;
         modelId = resolvedAgent.model.id;
-        variant = hasProviderModel(providers, providerId, modelId)
-            ? resolveVariant(providerId, modelId, resolvedAgent.model.variant)
-            : resolvedAgent.model.variant;
+        variant = resolvedAgent.model.variant !== undefined
+            ? (hasProviderModel(providers, providerId, modelId)
+                ? resolveVariant(providerId, modelId, resolvedAgent.model.variant)
+                : resolvedAgent.model.variant)
+            : defaultModelVariant(findProviderModel(providers, providerId, modelId));
     }
 
     // OpenCode's global default model — used when neither our settings nor the agent pin a model.
@@ -500,9 +524,11 @@ const resolveDefaultAgentModelSelection = ({
         if (parsed) {
             providerId = parsed.providerID;
             modelId = parsed.modelID;
-            variant = hasProviderModel(providers, providerId, modelId)
-                ? resolveVariant(providerId, modelId, parsed.variant)
-                : parsed.variant;
+            variant = parsed.variant !== undefined
+                ? (hasProviderModel(providers, providerId, modelId)
+                    ? resolveVariant(providerId, modelId, parsed.variant)
+                    : parsed.variant)
+                : defaultModelVariant(findProviderModel(providers, providerId, modelId));
         }
     }
 
@@ -510,6 +536,9 @@ const resolveDefaultAgentModelSelection = ({
         const fallback = resolveLastSelectedModel(fallbackPrefs) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
         providerId = fallback?.providerId;
         modelId = fallback?.modelId;
+        variant = providerId && modelId
+            ? defaultModelVariant(findProviderModel(providers, providerId, modelId))
+            : undefined;
     }
 
     return { agentName: resolvedAgent?.name, providerId, modelId, variant };
@@ -2431,9 +2460,9 @@ export const useConfigStore = create<ConfigStore>()(
                                     const settingsProvider = previousProviders.find((p) => p.id === parsed.providerId);
                                     const model = findCatalogModel(settingsProvider?.models, parsed.modelId);
                                     if (model) {
-                                        const currentVariant = modelHasVariant(model, state.settingsDefaultVariant)
-                                            ? state.settingsDefaultVariant
-                                            : undefined;
+                                        const currentVariant = state.settingsDefaultVariant !== undefined
+                                            ? (modelHasVariant(model, state.settingsDefaultVariant) ? state.settingsDefaultVariant : undefined)
+                                            : defaultModelVariant(model);
 
                                         nextState.currentProviderId = parsed.providerId;
                                         nextState.currentModelId = parsed.modelId;
@@ -3335,7 +3364,12 @@ export const useConfigStore = create<ConfigStore>()(
                                 && (!model || modelHasVariant(model, candidate))
                             );
 
-                            const inherited = [agentVariant, settingsDefaultVariant].find(isAvailable);
+                            // With neither the agent nor the settings naming a
+                            // level, the model runs at its highest one.
+                            const inherited = [agentVariant, settingsDefaultVariant].find(isAvailable)
+                                ?? (agentVariant === undefined && settingsDefaultVariant === undefined
+                                    ? defaultModelVariant(model)
+                                    : undefined);
 
                             const savedVariant = currentSessionId
                                 ? useSelectionStore.getState().getAgentModelVariantForSession(

@@ -1099,6 +1099,82 @@ describe('useConfigStore provider persistence', () => {
     expect(useConfigStore.getState().currentVariant).toBe('medium');
   });
 
+  test('setAgent lands on the highest level when nothing configured names one', () => {
+    const sessionId = 'ses_agent_highest_default';
+    useSessionUIStore.setState({ currentSessionId: sessionId });
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [provider('openai', 'gpt-5.5', ['low', 'medium', 'high'])],
+      agents: [testAgent('plan', { model: { providerID: 'openai', modelID: 'gpt-5.5' } })],
+      settingsDefaultModel: 'openai/gpt-5.5',
+      settingsDefaultAgent: 'build',
+      currentProviderId: 'openai',
+      currentModelId: 'gpt-5.5',
+      currentVariant: undefined,
+      currentVariantSelection: { override: undefined, inherited: undefined },
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().setAgent('plan');
+
+    const state = useConfigStore.getState();
+    expect(state.currentVariant).toBe('high');
+    expect(state.currentVariantSelection).toEqual({ override: undefined, inherited: 'high' });
+    // The fallback is a selection default, not a settings write.
+    expect(state.settingsDefaultModel).toBe('openai/gpt-5.5');
+    expect(state.settingsDefaultVariant).toBeUndefined();
+    expect(state.settingsDefaultAgent).toBe('build');
+  });
+
+  test('a configured level the model does not offer still wins over the highest level', () => {
+    useSessionUIStore.setState({ currentSessionId: 'ses_agent_unsupported_variant' });
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [provider('openai', 'gpt-5.5', ['low', 'high'])],
+      agents: [testAgent('plan', {
+        model: { providerID: 'openai', modelID: 'gpt-5.5' },
+        variant: 'ultra',
+      })],
+      settingsDefaultVariant: undefined,
+      currentProviderId: 'openai',
+      currentModelId: 'gpt-5.5',
+      currentVariant: undefined,
+      currentVariantSelection: { override: undefined, inherited: undefined },
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().setAgent('plan');
+
+    const state = useConfigStore.getState();
+    expect(state.currentVariant).toBeUndefined();
+    expect(state.currentVariantSelection).toEqual({ override: undefined, inherited: undefined });
+  });
+
+  test('default selection lands on the highest level when nothing configured names one', () => {
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [provider('sidecar', 'chosen', ['low', 'medium', 'high'])],
+      agents: [testAgent('build')],
+      settingsDefaultModel: 'sidecar/chosen',
+      currentProviderId: '',
+      currentModelId: '',
+      currentVariant: undefined,
+      currentVariantSelection: { override: undefined, inherited: undefined },
+      selectionSource: 'auto',
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().applyDefaultModelAgentSelection();
+
+    const state = useConfigStore.getState();
+    expect(state.currentProviderId).toBe('sidecar');
+    expect(state.currentModelId).toBe('chosen');
+    expect(state.currentVariant).toBe('high');
+    expect(state.currentVariantSelection).toEqual({ override: undefined, inherited: 'high' });
+    expect(state.settingsDefaultModel).toBe('sidecar/chosen');
+    expect(state.settingsDefaultVariant).toBeUndefined();
+  });
+
   test('an explicit Default effort sends no variant instead of the settings default', () => {
     useConfigStore.setState({
       activeDirectoryKey: DIRECTORY,

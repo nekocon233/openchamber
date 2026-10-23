@@ -106,6 +106,21 @@ describe('DeepSeek Harness Web adapter', () => {
     expect(await fixture('stream-count')).toBe(1);
   });
 
+  it('reopens live history after a socket disconnect without replacing its process or transcript', async () => {
+    const { backend, directory, fixture } = await setup();
+    const id = encodeDeepseekSessionId('session-existing');
+    const before = await backend.loadMessages(id, directory, { limit: 50 });
+    const pid = await fixture('process-id');
+    await fixture('disconnect');
+    await expect.poll(async () => {
+      await backend.loadMessages(id, directory, { limit: 50 });
+      return fixture('stream-count');
+    }).toBe(1);
+    const after = await backend.loadMessages(id, directory, { limit: 50 });
+    expect(after).toEqual(before);
+    expect(await fixture('process-id')).toBe(pid);
+  });
+
   it('restores current plan/model selections from sequenced projections and ignores older frames', async () => {
     const { backend, directory, fixture } = await setup();
     const id = encodeDeepseekSessionId('session-existing');

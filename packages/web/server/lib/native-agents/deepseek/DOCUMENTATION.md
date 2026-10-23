@@ -43,8 +43,21 @@ This path is unit-tested; console visibility and packaging need a Windows host.
 Enterprise mode refuses startup and every request. A policy change observed
 with an existing process closes it. Process loss rejects requests and stream
 openings, withdraws questions and settles local activity. Only a later request
-starts another process. Shutdown terminates the owned process tree alongside
-the other CLIs. An external writer produces `NATIVE_DEEPSEEK_WRITER_HELD`;
+starts another process. The event WebSocket has a separate lifetime. Losing it
+or ending its `$events` stream rejects its streams, withdraws questions and
+invalidates live observations, while the owned process and in-flight HTTP
+prompt admission remain alive.
+Demand reconnects through one shared connection attempt, reusing the private
+cookie and origin. Reuse requires both an open socket and its `$events` ready
+frame. Old connection callbacks cannot affect a newer connection.
+
+A missing first frame retires the entire event connection and triggers one
+bounded reconnect attempt. A missing upgrade or ready frame ends that attempt
+without another automatic retry; later demand may try again. The failed read
+still reports failure, and the next read establishes fresh history and global
+subscriptions. Prompt submissions are never replayed by connection recovery.
+Shutdown terminates the owned process tree alongside the other CLIs.
+An external writer produces `NATIVE_DEEPSEEK_WRITER_HELD`;
 the adapter never takes over that writer.
 
 ## Identity, history and live state

@@ -902,8 +902,10 @@ picking one inserts it as typed, and `/btw` opens the btw composer.
 Codex's built-ins come from `lib/native-agents/codex-commands.ts`, and
 `composer/submit/codexCommands.ts` executes them. Model, effort, Fast and plan
 commands write the same config and session selections as the existing pickers.
-Fast uses the native catalog's default effort when the composer has no explicit
-effort. Session actions retain their existing owners. Inspections and reviews
+Fast toggles the effort the composer carries: an explicit pick, otherwise the
+inherited level, which is the model's highest when nothing names one. The native
+catalog's `defaultEffort` applies only when no level resolves at all. Session
+actions retain their existing owners. Inspections and reviews
 use `nativeAgents.codexCommand`; no optimistic user message is created for a
 control command. The composer clears only the command text and retains its
 attachments and context. Failure restores the originating draft, and a result

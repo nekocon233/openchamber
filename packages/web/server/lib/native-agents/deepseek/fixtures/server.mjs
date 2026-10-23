@@ -30,6 +30,9 @@ const saveFile = (bytes, name) => {
 };
 let failAnswer = false;
 let nextListDelay = 0;
+let delayPromptResponse = 0;
+let suppressReady = false;
+let suppressUpgrade = false;
 const deliver = (endpoint, value, nativeId) => {
   for (const entry of streams) if (entry.endpoint === endpoint && (!nativeId || entry.args.request?.address.sessionId === nativeId)) {
     entry.socket.send(JSON.stringify({ type: 'item', streamId: entry.id, value }));
@@ -151,7 +154,8 @@ const server = http.createServer(async (req, res) => {
       session.running = true;
       emit('api-session/status', [session.id, true]);
       if (args.request.content[0]?.text === 'drop-response') { res.destroy(); break; }
-      respond({ accepted: true });
+      if (delayPromptResponse) setTimeout(() => respond({ accepted: true }), delayPromptResponse);
+      else respond({ accepted: true });
       break;
     }
     case 'session/cancel':
@@ -184,6 +188,27 @@ const server = http.createServer(async (req, res) => {
       else { answers.push(args.answer); respond(true); }
       break;
     case 'fixture/answers': respond(answers); break;
+    case 'fixture/process-id': respond(process.pid); break;
+    case 'fixture/end-events':
+      for (const entry of streams) if (entry.endpoint === '$events') {
+        entry.socket.send(JSON.stringify({ type: 'end', streamId: entry.id }));
+        streams.delete(entry);
+      }
+      respond(true);
+      break;
+    case 'fixture/disconnect':
+      await Promise.all(Array.from(sockets.clients, (socket) => new Promise((resolve) => {
+        socket.once('close', resolve);
+        socket.close();
+      })));
+      respond(true);
+      break;
+    case 'fixture/connection-options':
+      delayPromptResponse = args.delayPromptResponse ?? 0;
+      suppressReady = args.suppressReady ?? false;
+      suppressUpgrade = args.suppressUpgrade ?? false;
+      respond(true);
+      break;
     case 'fixture/configuration': respond({ ...providerSettings, settingsWrites, keyWrites, hasKey: storedKey !== null }); break;
     case 'fixture/settings-options':
       if (args.settingsWritable !== undefined) settingsWritable = args.settingsWritable;
@@ -247,6 +272,7 @@ server.on('upgrade', (req, socket, head) => {
     socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
     return;
   }
+  if (suppressUpgrade) return;
   sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit('connection', ws));
 });
 sockets.on('connection', (socket) => {
@@ -255,6 +281,7 @@ sockets.on('connection', (socket) => {
     if (request.type === 'cancel') { for (const entry of streams) if (entry.id === request.streamId) streams.delete(entry); return; }
     const entry = { id: request.streamId, endpoint: request.endpoint, args: request.payload.args, socket };
     streams.add(entry);
+    if (entry.endpoint === 'fixture/no-first' || entry.endpoint === '$events' && suppressReady) return;
     let value;
     if (entry.endpoint === '$events') value = { type: 'ready', clientId: randomUUID(), host: { home: directory } };
     if (entry.endpoint === 'workspace/follow') value = { type: 'baseline', value: { items: [], archivedSessionIds: archived, pinnedSessionIds: [] } };

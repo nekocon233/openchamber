@@ -45,47 +45,73 @@ export const createDeepseekTransport = ({
     if (paused) throw failure('DeepSeek Harness session maintenance is in progress. Retry shortly.', 'NATIVE_DEEPSEEK_MAINTENANCE_BUSY', 409);
   };
 
-  const closeContext = async (context, error) => {
+  const closeConnection = (context, connection, error) => {
+    if (connection.closed) return connection.closed;
+    // Mark this generation closed before terminate can synchronously emit close.
+    connection.closed = Promise.resolve().then(async () => {
+      connection.ready.reject(error);
+      for (const stream of connection.streams.values()) { stream.first.reject(error); stream.done.reject(error); }
+      connection.streams.clear();
+      connection.socket.terminate();
+      if (connection.connected && context.connection === connection) await onDisconnect(error);
+    });
+    return connection.closed;
+  };
+
+  const closeContext = (context, error) => {
     if (context.closed) return context.closed;
-    context.closed = (async () => {
-      if (active === context) active = null;
+    if (active === context) active = null;
+    context.closed = Promise.resolve().then(async () => {
       context.controller.abort(error);
       context.ready.reject(error);
       for (const pending of context.maintenanceRequests.values()) pending.reject(error);
       context.maintenanceRequests.clear();
       context.maintenanceReady.reject(error);
-      for (const stream of context.streams.values()) { stream.first.reject(error); stream.done.reject(error); }
-      context.streams.clear();
-      context.socket?.terminate();
       for (const reader of context.readers) reader.close();
-      try { if (context.connected) await onDisconnect(error); }
+      try { if (context.connection) await closeConnection(context, context.connection, error); }
       finally { await terminateCliProcess(context.child); }
-    })();
+    });
     closing = context.closed;
     return context.closed;
   };
 
-  const openIn = (context, endpoint, args, onItem) => {
+  const sendFrame = (context, connection, frame) => {
+    const error = failure('DeepSeek Harness connection failed');
+    try {
+      if (connection.closed || connection.socket.readyState !== WebSocket.OPEN) throw error;
+      connection.socket.send(JSON.stringify(frame), (cause) => {
+        if (cause) void closeConnection(context, connection, error);
+      });
+    } catch { void closeConnection(context, connection, error); }
+  };
+
+  const openIn = (context, connection, endpoint, args, onItem) => {
+    if (context.closed || connection.closed || connection.socket.readyState !== WebSocket.OPEN) {
+      const error = failure('DeepSeek Harness connection closed');
+      void closeConnection(context, connection, error);
+      throw error;
+    }
     const streamId = randomUUID();
     const done = deferred();
     const first = deferred();
-    const stream = { done, first, chain: Promise.resolve() };
-    context.streams.set(streamId, stream);
+    const stream = { done, first, onItem, chain: Promise.resolve() };
+    connection.streams.set(streamId, stream);
     const timer = setTimeout(() => {
+      if (connection.closed) return;
       const error = failure('DeepSeek Harness stream opening timed out');
-      context.streams.delete(streamId);
-      first.reject(error);
-      done.reject(error);
-      if (context.socket.readyState === WebSocket.OPEN) context.socket.send(JSON.stringify({ type: 'cancel', streamId }));
+      // A quiet physical connection can still report OPEN. Retire all of its
+      // streams and try one fresh carrier, keeping HTTP admission and DSH alive.
+      void closeConnection(context, connection, error).then(() => {
+        if (connection.connected && active === context && !context.closed) return connect(context);
+      }).catch(() => {});
     }, requestTimeoutMs);
     first.promise.finally(() => clearTimeout(timer)).catch(() => {});
-    context.socket.send(JSON.stringify({ type: 'open', streamId, endpoint, payload: { args } }));
-    stream.onItem = onItem;
+    sendFrame(context, connection, { type: 'open', streamId, endpoint, payload: { args } });
     return {
       first: first.promise, done: done.promise,
       cancel: () => {
-        context.streams.delete(streamId);
-        if (context.socket.readyState === WebSocket.OPEN) context.socket.send(JSON.stringify({ type: 'cancel', streamId }));
+        connection.streams.delete(streamId);
+        if (!connection.closed) sendFrame(context, connection, { type: 'cancel', streamId });
         first.reject(failure('DeepSeek Harness stream was closed'));
         done.resolve();
       },
@@ -137,6 +163,83 @@ export const createDeepseekTransport = ({
     }
   };
 
+  const connect = async (context) => {
+    allowed();
+    if (context.closed) throw failure('DeepSeek Harness exited');
+    const previous = context.connection;
+    if (previous?.connected && !previous.closed && previous.socket.readyState === WebSocket.OPEN) return previous;
+    if (context.connecting) return context.connecting;
+    const current = (async () => {
+      if (previous) await closeConnection(context, previous, failure('DeepSeek Harness connection closed'));
+      allowed();
+      if (context.closed) throw failure('DeepSeek Harness exited');
+      const connection = { ready: deferred(), streams: new Map(), connected: false, closed: null };
+      const socket = new WebSocketClass(`${context.base.replace('http:', 'ws:')}/api/remote.mux`, {
+        headers: { Cookie: context.cookie, Origin: context.base },
+      });
+      connection.socket = socket;
+      context.connection = connection;
+      const timer = setTimeout(() => {
+        void closeConnection(context, connection, failure('DeepSeek Harness connection timed out'));
+      }, requestTimeoutMs);
+      connection.ready.promise.finally(() => clearTimeout(timer)).catch(() => {});
+      socket.on('error', () => { void closeConnection(context, connection, failure('DeepSeek Harness connection failed')); });
+      socket.on('close', () => { void closeConnection(context, connection, failure('DeepSeek Harness connection closed')); });
+      socket.on('message', (bytes) => {
+        if (connection.closed) return;
+        try {
+          const frame = streamMessage.parse(JSON.parse(bytes.toString()));
+          const stream = connection.streams.get(frame.streamId);
+          if (!stream) return;
+          if (frame.type === 'item') {
+            stream.chain = stream.chain.then(() => {
+              if (!connection.closed) return stream.onItem(frame.value);
+            }).then(() => stream.first.resolve(frame.value));
+            stream.chain.catch((cause) => {
+              const error = cause instanceof z.ZodError ? failure('DeepSeek Harness returned an incompatible session event', 'NATIVE_DEEPSEEK_PROTOCOL') : cause;
+              stream.first.reject(error);
+              stream.done.reject(error);
+              connection.streams.delete(frame.streamId);
+            });
+          } else {
+            connection.streams.delete(frame.streamId);
+            stream.chain.then(() => {
+              if (frame.type === 'error') {
+                const error = failure(frame.error.message);
+                stream.first.reject(error);
+                stream.done.reject(error);
+              } else {
+                stream.first.reject(failure('DeepSeek Harness stream ended before its opening'));
+                stream.done.resolve();
+              }
+            }).catch(stream.done.reject);
+          }
+        } catch {
+          void closeConnection(context, connection, failure('DeepSeek Harness returned an incompatible stream'));
+        }
+      });
+      socket.once('open', () => {
+        if (connection.closed) return;
+        const events = openIn(context, connection, '$events', {}, (raw) => {
+          const event = remoteEvent.parse(raw);
+          if (event.type === 'ready') {
+            connection.clientId = event.clientId;
+            connection.connected = true;
+            connection.ready.resolve(connection);
+          } else onEvent(event);
+        });
+        events.done.then(
+          () => { void closeConnection(context, connection, failure('DeepSeek Harness connection closed')); },
+          (error) => { void closeConnection(context, connection, error); },
+        );
+      });
+      return connection.ready.promise;
+    })();
+    context.connecting = current;
+    try { return await current; }
+    finally { if (context.connecting === current) context.connecting = null; }
+  };
+
   const authenticate = async (context, url) => {
     if (context.authenticating) return;
     context.authenticating = true;
@@ -149,58 +252,17 @@ export const createDeepseekTransport = ({
     const cookies = response.headers.getSetCookie();
     if (response.status !== 303 || cookies.length === 0) throw failure('DeepSeek Harness authentication failed');
     context.cookie = cookies.map((cookie) => cookie.split(';', 1)[0]).join('; ');
-    const socket = new WebSocketClass(`${context.base.replace('http:', 'ws:')}/api/remote.mux`, {
-      headers: { Cookie: context.cookie, Origin: context.base },
-    });
-    context.socket = socket;
-    socket.on('error', () => { void closeContext(context, failure('DeepSeek Harness connection failed')); });
-    socket.on('close', () => { void closeContext(context, failure('DeepSeek Harness connection closed')); });
-    socket.on('message', (bytes) => {
-      try {
-        const frame = streamMessage.parse(JSON.parse(bytes.toString()));
-        const stream = context.streams.get(frame.streamId);
-        if (!stream) return;
-        if (frame.type === 'item') {
-          stream.chain = stream.chain.then(() => stream.onItem(frame.value)).then(() => stream.first.resolve(frame.value));
-          stream.chain.catch((cause) => {
-            const error = cause instanceof z.ZodError ? failure('DeepSeek Harness returned an incompatible session event', 'NATIVE_DEEPSEEK_PROTOCOL') : cause;
-            stream.first.reject(error);
-            stream.done.reject(error);
-            context.streams.delete(frame.streamId);
-          });
-        } else {
-          context.streams.delete(frame.streamId);
-          stream.chain.then(() => {
-            if (frame.type === 'error') {
-              const error = failure(frame.error.message);
-              stream.first.reject(error);
-              stream.done.reject(error);
-            } else {
-              stream.first.reject(failure('DeepSeek Harness stream ended before its opening'));
-              stream.done.resolve();
-            }
-          }).catch(stream.done.reject);
-        }
-      } catch {
-        void closeContext(context, failure('DeepSeek Harness returned an incompatible stream'));
-      }
-    });
-    socket.once('open', () => {
-      const events = openIn(context, '$events', {}, (raw) => {
-        const event = remoteEvent.parse(raw);
-        if (event.type === 'ready') {
-          context.clientId = event.clientId;
-          context.connected = true;
-          context.ready.resolve(context);
-        } else onEvent(event);
-      });
-      events.done.catch((error) => { void closeContext(context, error); });
-    });
+    await connect(context);
+    context.ready.resolve(context);
   };
 
   const start = async () => {
     allowed();
-    if (active?.connected && !active.closed) return active;
+    if (active && !active.closed) {
+      const context = await active.ready.promise;
+      await connect(context);
+      return context;
+    }
     if (starting) return starting;
     starting = (async () => {
       await closing;
@@ -219,7 +281,7 @@ export const createDeepseekTransport = ({
         options.stdio = ['pipe', 'pipe', 'pipe', 'pipe'];
       }
       const child = spawnProcess(launch.executable, launch.args, options);
-      const context = { child, ready: deferred(), controller: new AbortController(), readers: [], streams: new Map(), connected: false, support, maintenanceReady: deferred(), maintenanceRequests: new Map() };
+      const context = { child, ready: deferred(), controller: new AbortController(), readers: [], connection: null, connecting: null, support, maintenanceReady: deferred(), maintenanceRequests: new Map() };
       active = context;
       if (support) {
         const reader = createInterface({ input: child.stdio[3] });
@@ -317,10 +379,14 @@ export const createDeepseekTransport = ({
         return result.value;
       } finally { body.destroy(); }
     },
-    async open(endpoint, args, onItem) { return openIn(await start(), endpoint, args, onItem); },
+    async open(endpoint, args, onItem) {
+      const context = await start();
+      return openIn(context, await connect(context), endpoint, args, onItem);
+    },
     async answer(eventId, outcome, signal) {
       const context = await start();
-      return requestIn(context, '$events/result', { clientId: context.clientId, eventId, outcome },
+      const connection = await connect(context);
+      return requestIn(context, '$events/result', { clientId: connection.clientId, eventId, outcome },
         // The published endpoint acknowledges an accepted event result.
         z.json().optional(), signal);
     },

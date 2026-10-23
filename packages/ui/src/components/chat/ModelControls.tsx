@@ -66,7 +66,7 @@ import {
     shouldPreserveManualModelOverride,
 } from '@/lib/messages/userModelChoice';
 import type { BtwSelection } from '@/stores/useBtwStore';
-import { listModelVariantIds, type ModelVariantSource } from '@/lib/modelVariants';
+import { highestModelVariant, listModelVariantIds, type ModelVariantSource } from '@/lib/modelVariants';
 
 type IconComponent = IconName;
 
@@ -899,10 +899,20 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             agent?.model?.providerID === providerId
             && agent.model.id === modelId
         ) ? agent.model?.variant : undefined;
+        // Only these two name a level. `currentInherited` is a previously
+        // resolved value, so a stale one must not pass for a configured level.
+        const configured = [agentVariant, settingsDefaultVariant];
         const candidates = currentSessionId
-            ? [agentVariant, settingsDefaultVariant, currentInherited]
-            : [currentInherited, agentVariant, settingsDefaultVariant];
-        return candidates.find((candidate) => candidate !== undefined && variantOptions.includes(candidate));
+            ? [...configured, currentInherited]
+            : [currentInherited, ...configured];
+        const resolved = candidates.find((candidate) => candidate !== undefined && variantOptions.includes(candidate));
+        if (resolved !== undefined) return resolved;
+        // Nothing configured names a level: run the model at its highest one.
+        // A configured level the model does not list keeps the old result
+        // (no level) instead of being replaced with a different one.
+        return configured.some((candidate) => candidate !== undefined)
+            ? undefined
+            : highestModelVariant(variantOptions);
     }, [agents, currentAgentName, currentModelId, currentProviderId, currentSessionId, currentVariantSelection, effectiveCurrentVariant, getModelVariantOptions, settingsDefaultVariant, uiAgentName]);
 
     /**
@@ -1992,8 +2002,15 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const variantOptions = getModelVariantOptions(providerId, modelId);
             const hasVariants = variantOptions.length > 0;
             const resolvedVariant = resolveModelVariantSelection(providerId, modelId);
-            // Both an explicit "Default" and no choice at all read as "Default".
-            const variantLabel = hasVariants ? formatEffortLabel(resolvedVariant ?? undefined) : null;
+            // The row shows, and applies, the level the model runs at: the
+            // recorded choice, otherwise the main composer's highest level.
+            // A controlled selection (BTW, pinned column, parallel lane) keeps
+            // its own semantics.
+            const rowVariant = !selection && resolvedVariant === undefined
+                ? highestModelVariant(variantOptions)
+                : resolvedVariant;
+            // Both an explicit "Default" and no level at all read as "Default".
+            const variantLabel = hasVariants ? formatEffortLabel(rowVariant ?? undefined) : null;
             const isExpanded = expandedMobileModelKey === rowKey;
             const inlineVariantOptions = [undefined, ...variantOptions].slice(0, MAX_INLINE_MOBILE_VARIANT_OPTIONS);
             const hasVariantOverflow = inlineVariantOptions.length < variantOptions.length + 1;
@@ -2021,7 +2038,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                     <div className="flex items-center gap-2 px-2 py-1.5">
                         <button
                             type="button"
-                            onClick={() => handleMobileModelApply(providerId, modelId, resolvedVariant)}
+                            onClick={() => handleMobileModelApply(providerId, modelId, rowVariant)}
                             className={cn(
                                 'flex flex-1 min-w-0 items-start gap-2 text-start',
                                 'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-lg'
@@ -2110,7 +2127,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         <div className="border-t border-border/30 p-2">
                             <div className="flex flex-wrap gap-2">
                                 {inlineVariantOptions.map((variantOption) => {
-                                    const isVariantSelected = variantOption === resolvedVariant || (!variantOption && !resolvedVariant);
+                                    const isVariantSelected = variantOption === rowVariant || (!variantOption && !rowVariant);
                                     return (
                                         <button
                                             key={`${rowKey}-variant-${variantOption ?? 'default'}`}
@@ -2292,7 +2309,13 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const targetVariants = getModelVariantOptions(targetProviderId, targetModelId);
         if (targetVariants.length === 0) return null;
 
-        const selectedVariant = resolveModelVariantSelection(targetProviderId, targetModelId);
+        const recordedVariant = resolveModelVariantSelection(targetProviderId, targetModelId);
+        // The panel shows the level the model runs at: the recorded choice,
+        // otherwise the main composer's highest level. A controlled selection
+        // keeps its own semantics.
+        const selectedVariant = !selection && recordedVariant === undefined
+            ? highestModelVariant(targetVariants)
+            : recordedVariant;
         const isDefault = !selectedVariant;
 
         const handleBack = () => {
@@ -2536,7 +2559,12 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const mapKey = buildModelRefKey(providerID, modelID);
             const hasPendingVariant = pendingThinkingVariants.has(mapKey);
             const currentPending = pendingThinkingVariants.get(mapKey);
-            const activeModelVariant = hasPendingVariant ? currentPending : (currentProviderId === providerID && currentModelId === modelID ? currentVariant : undefined);
+            // An unadjusted row starts its cycle at the level it would run at.
+            const activeModelVariant = hasPendingVariant
+                ? currentPending
+                : (currentProviderId === providerID && currentModelId === modelID
+                    ? currentVariant
+                    : (!selection ? highestModelVariant(variantKeys) : undefined));
 
             const variantsWithDefault: Array<string | undefined> = [undefined, ...variantKeys];
             const currentVariantIndex = variantsWithDefault.indexOf(activeModelVariant);
@@ -2616,14 +2644,20 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         };
 
         const renderThinkingSlot = (entry: ModelPickerEntry, { isHighlighted, isSelected }: { isHighlighted: boolean; isSelected: boolean }) => {
-            const hasThinkingVariants = getModelVariantOptions(entry.providerID, entry.modelID).length > 0;
+            const entryVariants = getModelVariantOptions(entry.providerID, entry.modelID);
+            const hasThinkingVariants = entryVariants.length > 0;
             const mapKey = buildModelRefKey(entry.providerID, entry.modelID);
             const wasAdjusted = adjustedThinkingModels.has(mapKey);
             if (!hasThinkingVariants || (!isHighlighted && !isSelected)) return null;
 
             const hasPendingVariant = pendingThinkingVariants.has(mapKey);
             const pendingVariant = pendingThinkingVariants.get(mapKey);
-            const effectiveVariant = hasPendingVariant ? pendingVariant : (isSelected ? currentVariant : undefined);
+            // A row previews the level the model would run at: the main
+            // composer's highest level when nothing names one. A controlled
+            // selection keeps its own Default.
+            const effectiveVariant = hasPendingVariant
+                ? pendingVariant
+                : (isSelected ? currentVariant : (!selection ? highestModelVariant(entryVariants) : undefined));
             const displayLabel = effectiveVariant
                 ? effectiveVariant.charAt(0).toUpperCase() + effectiveVariant.slice(1)
                 : 'Default';
