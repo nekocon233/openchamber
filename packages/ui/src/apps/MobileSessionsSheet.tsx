@@ -63,6 +63,7 @@ import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { matchesRankQuery, rankByQuery } from '@/lib/search/fuzzySearch';
 import { updateDesktopSettings } from '@/lib/persistence';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { cn } from '@/lib/utils';
 import {
   listProjectWorktrees,
@@ -1015,6 +1016,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   React.useEffect(() => {
     if (!open || projects.length === 0) return;
     let cancelled = false;
+    const runtimeKey = getRuntimeKey();
     const run = async () => {
       const entries = await Promise.all(
         projects.map(async (project) => {
@@ -1030,7 +1032,13 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
           return [path, worktrees, isGitRepo] as const;
         }),
       );
-      if (cancelled) return;
+      if (cancelled || getRuntimeKey() !== runtimeKey) return;
+      const knownDirectories = new Set([...useSessionUIStore.getState().availableWorktreesByProject.values()]
+        .flatMap((worktrees) => worktrees.map((worktree) => normalizePath(worktree.path))));
+      const addedDirectories = entries.flatMap((entry) => entry?.[1] ?? [])
+        .map((worktree) => worktree.path)
+        .filter((directory) => !knownDirectories.has(normalizePath(directory)));
+      void useGlobalSessionsStore.getState().refreshNativeSessionsForDirectories(addedDirectories);
       setWorktreesByProject((previous) => {
         const discoveredWorktreesByProject = new Map<string, WorktreeMetadata[]>();
         for (const entry of entries) {

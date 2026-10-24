@@ -40,7 +40,7 @@ import { isNativeSessionId } from '@/lib/native-agents/ids';
 // uses none of it, so the panel leaves them out there rather than misreport.
 const OPENCODE_CONTEXT_SECTIONS = new Set<WorkStatusSectionId>(['mcp', 'pinned', 'contextSources']);
 
-export type WorkStatusPresentation = 'inline' | 'overlay' | 'sheet';
+type WorkStatusPresentation = 'inline' | 'overlay' | 'sheet';
 
 type Props = {
   /** Null on a new-session draft: repository readouts still apply. */

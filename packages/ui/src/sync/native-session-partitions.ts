@@ -57,23 +57,27 @@ const directoryOf = (session: Session) => normalizePath(session.directory) ?? ''
  * The native sessions to hold after reading `partitions`: fresh roots of the
  * backends that answered, the previous sessions of the backends that did not,
  * native sessions of directories that were not read, and subagent sessions
- * whose parent is still held.
+ * whose parent is still held. Preserved IDs keep their current record or
+ * absence when a mutation happened while the read was in flight.
  */
 export const resolveNativeSessions = (
   existing: readonly Session[],
   partitions: ReadonlyMap<string, NativePartitionSnapshot>,
+  preservedIds?: ReadonlySet<string>,
 ): Session[] => {
   const byId = new Map<string, Session>();
   for (const session of existing) {
     if (!isNativeSessionId(session.id) || session.parentID) continue;
     const backend = nativeBackendOfSessionId(session.id);
     const partition = partitions.get(directoryOf(session));
-    if (!backend || (partition && partition[backend] !== null)) continue;
+    if (!backend || (partition && partition[backend] !== null && !preservedIds?.has(session.id))) continue;
     byId.set(session.id, session);
   }
   for (const partition of partitions.values()) {
     for (const backend of BACKENDS) {
-      for (const session of partition[backend] ?? []) byId.set(session.id, session);
+      for (const session of partition[backend] ?? []) {
+        if (!preservedIds?.has(session.id)) byId.set(session.id, session);
+      }
     }
   }
   // Subagents can nest, so keep adding children until no parent is new.

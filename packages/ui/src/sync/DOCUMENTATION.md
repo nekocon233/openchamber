@@ -681,11 +681,20 @@ what the stores hold for native sessions and never blocks OpenCode's:
   keeps its previous sessions and the subagent sessions under them. Both kinds
   merge through the same `mergeBootstrapSessions`.
 - Global session list. `useGlobalSessionsStore` lists native sessions for every
-  project directory and every directory that already holds a native session,
+  project directory, every known worktree and every directory that already holds a native session,
   with the same per-backend rule. A complete load adds the managed chat
   directories the server reports (`nativeAgents.chatDirectories`), so a native
   chat created on another device appears too. When that read fails, the chats
   already held are still listed through their own directories.
+- Worktree discovery. Mobile connection and drawer discovery supplement newly
+  found worktrees through the global store's `refreshNativeSessionsForDirectories`.
+  It reads only native partitions, never OpenCode directory lists or bootstrap.
+  Per-backend failures retain current records. Mutations made during the read,
+  including deletion tombstones and the children of a retained parent, take
+  precedence. The discovered changes are recorded as mutations too, so an older
+  global snapshot cannot erase them. A native-only read establishes no global
+  completeness; runtime changes reject its late results. Web and Electron full
+  lists share worktree coverage; VS Code keeps native sessions unsupported.
 - History. `SessionMessageLoader` reads native pages through
   `nativeAgents.loadMessages` with the server's message-id cursor and holds the
   subagent sessions a page links to in the directory store. A settled native

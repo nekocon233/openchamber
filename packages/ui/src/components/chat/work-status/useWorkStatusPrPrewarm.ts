@@ -17,7 +17,7 @@ import {
  * TTL, concurrency gate and in-flight de-duplication, so repeated opens do
  * not multiply requests, and closing only releases the registration.
  */
-export const useWorkStatusPrPrewarm = ({
+const useWorkStatusPrPrewarm = ({
   enabled,
   directory,
   branch,

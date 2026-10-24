@@ -20,9 +20,10 @@ import { useSpacesStore, type SpaceMark } from '@/lib/spaces/spaces-store';
 import { ensureChatsRootDirectory, getChatsRoot } from '@/lib/chatDirectories';
 import { countSyncPerformance } from '@/sync/performance-diagnostics';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
-import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { isNativeSessionId, nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import { fetchNativePartitions, resolveNativeSessions } from '@/sync/native-session-partitions';
 import { useProjectsStore } from '@/stores/useProjectsStore';
+import { useSessionUIStore } from '@/sync/session-ui-store';
 import {
   applyGlobalSessionStructureMutations,
   buildGlobalSessionStructure,
@@ -63,6 +64,7 @@ type GlobalSessionsState = {
   rehydrateManagedChatSessions: () => void;
   loadSessions: (fallbackActive?: Session[]) => Promise<LoadResult>;
   refreshSessionsForDirectories: (directories: Iterable<string>, fallbackActive?: Session[]) => Promise<LoadResult>;
+  refreshNativeSessionsForDirectories: (directories: Iterable<string>) => Promise<void>;
   applySnapshot: (activeSessions: Session[], archivedSessions: Session[], status?: GlobalSessionsStatus) => void;
   applySessionMutations: (mutations: readonly GlobalSessionMutation[]) => void;
   upsertSession: (session: Session) => void;
@@ -340,10 +342,12 @@ const loadNativeSessions = async (
   return resolveNativeSessions([...state.activeSessions, ...state.archivedSessions], partitions);
 };
 
-// Projects are where native sessions are looked for: a project whose only
-// sessions came from the terminal has no OpenCode session to point at it.
+// A project or linked worktree with only native sessions has no OpenCode
+// session to point at its directory.
 const nativeSessionDirectories = (state: Pick<GlobalSessionsState, 'activeSessions' | 'archivedSessions'>): string[] => [
   ...useProjectsStore.getState().projects.map((project) => project.path),
+  ...[...useSessionUIStore.getState().availableWorktreesByProject.values()]
+    .flatMap((worktrees) => worktrees.map((worktree) => worktree.path)),
   ...[...state.activeSessions, ...state.archivedSessions]
     .filter((session) => isNativeSessionId(session.id))
     .map((session) => session.directory),
@@ -979,6 +983,53 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
       return session && !session.time?.archived ? [session] : [];
     }));
     return { activeSessions: state.activeSessions, archivedSessions: state.archivedSessions };
+  },
+
+  // Worktree discovery can finish after the global list. Read the native
+  // partitions without starting OpenCode locations for unopened worktrees.
+  refreshNativeSessionsForDirectories: async (directories) => {
+    const nativeAgents = getRegisteredRuntimeAPIs()?.nativeAgents;
+    if (!nativeAgents?.supported) return;
+    const directorySet = normalizeDirectorySet(directories);
+    if (directorySet.size === 0) return;
+    const generation = loadGeneration;
+    const baselineRevision = get().mutationRevision;
+    try {
+      await ensureChatsRootDirectory();
+    } catch {
+      return;
+    }
+    if (generation !== loadGeneration) return;
+    get().rehydrateManagedChatSessions();
+    const partitions = await fetchNativePartitions(nativeAgents, directorySet);
+    if (generation !== loadGeneration) return;
+
+    set((state) => {
+      const preservedIds = new Set<string>();
+      for (const [id, revision] of state.mutationRevisionBySessionId) {
+        if (revision > baselineRevision) preservedIds.add(id);
+      }
+      const existing = [...state.activeSessions, ...state.archivedSessions];
+      const sessions = resolveNativeSessions(existing, partitions, preservedIds);
+      const retainedIds = new Set(sessions.map((session) => session.id));
+      const mutations: GlobalSessionMutation[] = [];
+      for (const session of sessions) {
+        if (session !== state.entityById.get(session.id)) mutations.push({ type: 'upsert', session });
+      }
+      for (const session of existing) {
+        const backend = nativeBackendOfSessionId(session.id);
+        const partition = partitions.get(normalizePath(session.directory) ?? '');
+        if (backend && partition && partition[backend] !== null && !retainedIds.has(session.id) && !preservedIds.has(session.id)) {
+          mutations.push({ type: 'remove', sessionId: session.id });
+        }
+      }
+      // Recording the discovered changes also protects them from an older
+      // full load that is still in flight.
+      return mutations.length > 0 ? applySessionMutations(state, mutations) : state;
+    });
+    raiseSessionOrderingBaselines(get().activeSessions.filter((session) => (
+      isNativeSessionId(session.id) && directorySet.has(normalizePath(session.directory) ?? '')
+    )));
   },
 
   upsertSession: (session) => {

@@ -42,7 +42,7 @@ import { readTabletLayout, useOrientation, useTabletLayout } from '@/lib/device'
 import { useHardwareKeyboard } from '@/lib/hardwareKeyboard';
 import { useI18n } from '@/lib/i18n';
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
-import { getRuntimeApiBaseUrl, subscribeRuntimeEndpointChanged, switchRuntimeEndpoint, MOBILE_DISCONNECTED_RUNTIME_KEY } from '@/lib/runtime-switch';
+import { getRuntimeApiBaseUrl, getRuntimeKey, subscribeRuntimeEndpointChanged, switchRuntimeEndpoint, MOBILE_DISCONNECTED_RUNTIME_KEY } from '@/lib/runtime-switch';
 import { subscribeActiveRelayTunnelStatus } from '@/lib/relay/runtime-tunnel';
 import { isRelayLimitReached } from '@/lib/relay/tunnel-client';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
@@ -1277,6 +1277,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   React.useEffect(() => {
     if (!isConnected || projects.length === 0) return;
     let cancelled = false;
+    const runtimeKey = getRuntimeKey();
 
     const run = async () => {
       const worktreesByProject = new Map(useSessionUIStore.getState().availableWorktreesByProject);
@@ -1301,18 +1302,23 @@ function MobileAppContent({ apis }: MobileAppProps) {
         }),
       );
 
-      if (cancelled) return;
+      if (cancelled || getRuntimeKey() !== runtimeKey) return;
 
       const partitionedWorktreesByProject = partitionWorktreesByRegisteredProject(projects, worktreesByProject);
 
       // Skip update if nothing changed — see worktreeMapsEqual JSDoc.
       const currentByProject = useSessionUIStore.getState().availableWorktreesByProject;
+      const knownDirectories = new Set([...currentByProject.values()].flatMap((worktrees) => worktrees.map((worktree) => normalizePath(worktree.path))));
       if (!worktreeMapsEqual(partitionedWorktreesByProject, currentByProject)) {
         useSessionUIStore.setState({
           availableWorktrees: [...partitionedWorktreesByProject.values()].flat(),
           availableWorktreesByProject: partitionedWorktreesByProject,
         });
       }
+      const addedDirectories = [...partitionedWorktreesByProject.values()]
+        .flatMap((worktrees) => worktrees.map((worktree) => worktree.path))
+        .filter((directory) => !knownDirectories.has(normalizePath(directory)));
+      void useGlobalSessionsStore.getState().refreshNativeSessionsForDirectories(addedDirectories);
     };
 
     void run();
