@@ -11,17 +11,17 @@ import {
 } from './browserPushRegistration';
 
 const settle = async (): Promise<void> => {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
 };
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 };
 
 const createSubscription = (endpoint: string, applicationServerKey: ArrayBuffer | null = null): PushSubscription => ({
@@ -58,13 +58,19 @@ const createDependencies = (options?: {
 }) => {
   let runtimeKey = options?.runtimeKey ?? 'runtime-a';
   let runtimeChanged: (() => void) | null = null;
-  const subscription: PushSubscription | null = options && 'subscription' in options
+  let transportReady: (() => void) | null = null;
+  let subscription: PushSubscription | null = options && 'subscription' in options
     ? options.subscription ?? null
     : createSubscription('https://push.example/current');
   const subscribe = options?.subscribe ?? mock(async () => ({ ok: true as const }));
+  let localSubscribeCalls = 0;
   const pushManager = {
     getSubscription: mock(async () => subscription),
-    subscribe: mock(async () => subscription as PushSubscription),
+    subscribe: mock(async () => {
+      localSubscribeCalls += 1;
+      if (!subscription) throw new Error('No browser subscription fixture');
+      return subscription;
+    }),
   };
   const deps: BrowserPushRegistrationDependencies = {
     getRuntimeKey: () => runtimeKey,
@@ -82,19 +88,189 @@ const createDependencies = (options?: {
         runtimeChanged = null;
       };
     },
+    subscribeTransportReady: (callback) => {
+      transportReady = callback;
+      return () => {
+        transportReady = null;
+      };
+    },
   };
 
   return {
     deps,
     pushManager,
+    getLocalSubscribeCalls: () => localSubscribeCalls,
     setRuntimeKey: (value: string) => {
       runtimeKey = value;
     },
     switchRuntime: () => runtimeChanged?.(),
+    notifyTransportReady: () => transportReady?.(),
+    setSubscription: (value: PushSubscription | null) => {
+      subscription = value;
+    },
   };
 };
 
 describe('browser push registration reconciliation', () => {
+  test('registers again after the same server reconnects and waits for its acknowledgement', async () => {
+    const reconnected = deferred<{ ok: true }>();
+    let attempts = 0;
+    const subscribe = async () => ++attempts === 1 ? { ok: true as const } : reconnected.promise;
+    const setup = createDependencies({ subscribe });
+    const stop = startBrowserPushSubscriptionReconciliation(setup.deps);
+    try {
+      await settle();
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(true);
+
+      setup.notifyTransportReady();
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(false);
+      await settle();
+      expect(attempts).toBe(2);
+      expect(setup.getLocalSubscribeCalls()).toBe(0);
+      expect(getBrowserPushRegistrationState().status).toBe('reconciling');
+
+      reconnected.resolve({ ok: true });
+      await settle();
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  test('recovers a failed registration on the next transport-ready event', async () => {
+    let available = false;
+    let subscribeCalls = 0;
+    const subscribe = async () => {
+      subscribeCalls += 1;
+      return available ? { ok: true as const } : null;
+    };
+    const setup = createDependencies({ subscribe });
+    const stop = startBrowserPushSubscriptionReconciliation(setup.deps);
+    try {
+      await settle();
+      expect(getBrowserPushRegistrationState().status).toBe('failed');
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(false);
+
+      available = true;
+      setup.notifyTransportReady();
+      await settle();
+      expect(subscribeCalls).toBe(2);
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(true);
+      expect(setup.getLocalSubscribeCalls()).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test('coalesces reconnect signals while rejecting an old connection acknowledgement', async () => {
+    const oldConnection = deferred<{ ok: true }>();
+    const currentConnection = deferred<{ ok: true }>();
+    let attempts = 0;
+    const subscribe = async () => ++attempts === 1 ? oldConnection.promise : currentConnection.promise;
+    const setup = createDependencies({ subscribe });
+    const stop = startBrowserPushSubscriptionReconciliation(setup.deps);
+    try {
+      await settle();
+      setup.notifyTransportReady();
+      setup.notifyTransportReady();
+      setup.notifyTransportReady();
+      await settle();
+      expect(attempts).toBe(1);
+
+      oldConnection.resolve({ ok: true });
+      await settle();
+      expect(attempts).toBe(2);
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(false);
+
+      currentConnection.resolve({ ok: true });
+      await settle();
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(true);
+      expect(setup.getLocalSubscribeCalls()).toBe(0);
+    } finally {
+      stop();
+    }
+  });
+
+  test('does not enable push on reconnect when the user has no subscription or has disabled it', async () => {
+    let subscribeCalls = 0;
+    const subscribe = async () => {
+      subscribeCalls += 1;
+      return { ok: true as const };
+    };
+    const setup = createDependencies({ subscription: null, subscribe });
+    markBrowserPushSubscriptionRemoved(setup.deps);
+    const stop = startBrowserPushSubscriptionReconciliation(setup.deps);
+    try {
+      await settle();
+      setup.notifyTransportReady();
+      await settle();
+      expect(subscribeCalls).toBe(0);
+      expect(setup.getLocalSubscribeCalls()).toBe(0);
+
+      setup.setSubscription(createSubscription('https://push.example/enabled'));
+      setup.notifyTransportReady();
+      await settle();
+      expect(subscribeCalls).toBe(1);
+
+      setup.setSubscription(null);
+      markBrowserPushSubscriptionRemoved(setup.deps);
+      setup.notifyTransportReady();
+      await settle();
+      expect(subscribeCalls).toBe(1);
+      expect(setup.getLocalSubscribeCalls()).toBe(0);
+      expect(getBrowserPushRegistrationState().status).toBe('missing');
+    } finally {
+      stop();
+    }
+  });
+
+  test('retires queued reconnects and late acknowledgements when stopped', async () => {
+    const pending = deferred<{ ok: true }>();
+    let subscribeCalls = 0;
+    const subscribe = async () => {
+      subscribeCalls += 1;
+      return pending.promise;
+    };
+    const setup = createDependencies({ subscribe });
+    const stop = startBrowserPushSubscriptionReconciliation(setup.deps);
+    await settle();
+    setup.notifyTransportReady();
+    stop();
+    setup.notifyTransportReady();
+    setup.switchRuntime();
+    pending.resolve({ ok: true });
+    await settle();
+    expect(subscribeCalls).toBe(1);
+    expect(getBrowserPushRegistrationState().status).toBe('idle');
+  });
+
+  test('ignores an old VAPID failure after another runtime has registered', async () => {
+    const oldKey = deferred<{ publicKey: string } | null>();
+    const subscribe = mock(async () => ({ ok: true as const }));
+    const setup = createDependencies({ subscribe });
+    setup.deps.getPushAPI = () => ({
+      getVapidPublicKey: () => setup.deps.getRuntimeKey() === 'runtime-a'
+        ? oldKey.promise
+        : Promise.resolve(null),
+      subscribe,
+    });
+    const stop = startBrowserPushSubscriptionReconciliation(setup.deps);
+    try {
+      await settle();
+      setup.setRuntimeKey('runtime-b');
+      setup.switchRuntime();
+      await settle();
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(true);
+
+      oldKey.reject(new Error('Old server stopped'));
+      await settle();
+      expect(getBrowserPushRegistrationState().runtimeKey).toBe('runtime-b');
+      expect(isBrowserPushRegistrationConfirmed(null, setup.deps)).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
   test('registers the existing subscription on startup and again for the switched runtime', async () => {
     const calls: Array<{ runtimeKey: string; payload: PushSubscribePayload }> = [];
     const setup = createDependencies({
@@ -210,6 +386,7 @@ describe('browser push registration reconciliation', () => {
       getOrigin: () => 'https://app.example',
       getPlatform: () => 'web',
       subscribeRuntimeChanged: () => () => {},
+      subscribeTransportReady: () => () => {},
     };
 
     const result = await reconcileBrowserPushSubscription(deps);
@@ -261,6 +438,7 @@ describe('browser push registration reconciliation', () => {
         getPlatform: () => 'web',
         getStorage: () => storage,
         subscribeRuntimeChanged: () => () => {},
+        subscribeTransportReady: () => () => {},
       };
 
       expect(await reconcileBrowserPushSubscription(deps)).toBe(true);
@@ -304,6 +482,7 @@ describe('browser push registration reconciliation', () => {
       getOrigin: () => 'https://app.example',
       getPlatform: () => 'web',
       subscribeRuntimeChanged: () => () => {},
+      subscribeTransportReady: () => () => {},
     };
 
     expect(await reconcileBrowserPushSubscription(deps)).toBe(true);
@@ -351,6 +530,7 @@ describe('browser push registration reconciliation', () => {
       getPlatform: () => 'web',
       getStorage: () => storage,
       subscribeRuntimeChanged: () => () => {},
+      subscribeTransportReady: () => () => {},
     });
 
     expect(await reconcileBrowserPushSubscription(createReloadedDependencies())).toBe(true);
@@ -401,6 +581,7 @@ describe('browser push registration reconciliation', () => {
       getPlatform: () => 'web',
       getStorage: () => storage,
       subscribeRuntimeChanged: () => () => {},
+      subscribeTransportReady: () => () => {},
     });
 
     expect(await reconcileBrowserPushSubscription(createReloadedDependencies())).toBe(true);
@@ -446,6 +627,7 @@ describe('browser push registration reconciliation', () => {
       getPlatform: () => 'web',
       getStorage: () => storage,
       subscribeRuntimeChanged: () => () => {},
+      subscribeTransportReady: () => () => {},
     };
 
     expect(await reconcileBrowserPushSubscription(deps)).toBe(true);

@@ -23,6 +23,7 @@ export type BrowserPushRegistrationDependencies = {
   getPlatform(): string;
   getStorage?(): BrowserPushProvenanceStorage | null;
   subscribeRuntimeChanged(callback: () => void): () => void;
+  subscribeTransportReady(callback: () => void): () => void;
 };
 
 const defaultDependencies: BrowserPushRegistrationDependencies = {
@@ -40,6 +41,22 @@ const defaultDependencies: BrowserPushRegistrationDependencies = {
   getPlatform: getClientPlatform,
   getStorage: () => typeof window === 'undefined' ? null : getSafeStorage(),
   subscribeRuntimeChanged: (callback) => subscribeRuntimeEndpointChanged(callback),
+  subscribeTransportReady: (callback) => {
+    let disposed = false;
+    let unsubscribe: (() => void) | null = null;
+    // Foreground notifications also read this module's registration status.
+    // Load the control transport only when subscription recovery starts.
+    void import('@/lib/openchamberEvents').then(({ subscribeOpenchamberEvents }) => {
+      if (disposed) return;
+      unsubscribe = subscribeOpenchamberEvents((event) => {
+        if (event.type === 'event-stream-ready') callback();
+      });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  },
 };
 
 let reconciliationGeneration = 0;
@@ -350,6 +367,7 @@ export const reconcileBrowserPushSubscription = async (
   try {
     subscription = await registration.pushManager.getSubscription();
   } catch {
+    if (generation !== reconciliationGeneration || deps.getRuntimeKey() !== runtimeKey) return false;
     setRegistrationState({ runtimeKey, endpoint: null, status: 'failed' });
     return false;
   }
@@ -398,6 +416,7 @@ export const reconcileBrowserPushSubscription = async (
     } else if (applicationServerKey && applicationServerKeysMatch(subscription, applicationServerKey, deps) === false) {
       const removed = await subscription.unsubscribe();
       if (!removed) {
+        if (generation !== reconciliationGeneration || deps.getRuntimeKey() !== runtimeKey) return false;
         setRegistrationState({ runtimeKey, endpoint: subscription.endpoint || null, status: 'failed' });
         return false;
       }
@@ -429,6 +448,7 @@ export const reconcileBrowserPushSubscription = async (
       rememberSubscriptionApplicationServerKey(subscription, publicKey, runtimeKey, deps);
     }
   } catch {
+    if (generation !== reconciliationGeneration || deps.getRuntimeKey() !== runtimeKey) return false;
     setRegistrationState({ runtimeKey, endpoint: subscription?.endpoint || null, status: 'failed' });
     return false;
   }
@@ -484,23 +504,37 @@ export const startBrowserPushSubscriptionReconciliation = (
   deps: BrowserPushRegistrationDependencies = defaultDependencies,
 ): (() => void) => {
   let disposed = false;
+  let inFlight: { runtimeKey: string; reconcileAgain: boolean } | null = null;
   activeReconciliationWatchers += 1;
   const reconcile = () => {
     if (disposed) return;
-    void reconcileBrowserPushSubscription(deps);
+    invalidateBrowserPushRegistration(deps);
+    const runtimeKey = deps.getRuntimeKey();
+    if (inFlight?.runtimeKey === runtimeKey) {
+      inFlight.reconcileAgain = true;
+      return;
+    }
+
+    // Ready signals during a request schedule one follow-up for this runtime.
+    // Switching runtimes starts recovery immediately.
+    const operation = { runtimeKey, reconcileAgain: false };
+    inFlight = operation;
+    void reconcileBrowserPushSubscription(deps).finally(() => {
+      if (disposed || inFlight !== operation) return;
+      inFlight = null;
+      if (operation.reconcileAgain) reconcile();
+    });
   };
 
-  invalidateBrowserPushRegistration(deps);
+  const unsubscribeRuntimeChanged = deps.subscribeRuntimeChanged(reconcile);
+  const unsubscribeTransportReady = deps.subscribeTransportReady(reconcile);
   reconcile();
-  const unsubscribe = deps.subscribeRuntimeChanged(() => {
-    invalidateBrowserPushRegistration(deps);
-    reconcile();
-  });
 
   return () => {
     disposed = true;
     activeReconciliationWatchers = Math.max(0, activeReconciliationWatchers - 1);
-    unsubscribe();
+    unsubscribeRuntimeChanged();
+    unsubscribeTransportReady();
     invalidateBrowserPushRegistration(deps);
   };
 };
