@@ -1,4 +1,5 @@
 import { settingsDict } from './tr.settings';
+import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
@@ -288,6 +289,7 @@ export const dict = {
   ...mcpGridI18n.tr,
   ...pluginsGridI18n.tr,
   ...integrationsCatalogI18n['tr'],
+  ...unifiedConversationsI18n['tr'],
   'terminalView.actions.attachSelection': 'Seçili çıktıyı ekle',
   'terminalView.actions.copySelection': 'Seçili çıktıyı kopyala',
   'terminalView.toast.selectionCopied': 'Çıktı kopyalandı',

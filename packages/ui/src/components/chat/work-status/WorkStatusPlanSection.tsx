@@ -1,6 +1,6 @@
 import React from 'react';
 import { useI18n } from '@/lib/i18n';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
 import { useSessionNativePlan } from '@/sync/session-native-plan';
 import { SimpleMarkdownRenderer } from '../MarkdownRenderer';
 import { WorkStatusCollapsibleSection, WorkStatusRow } from './WorkStatusPrimitives';
@@ -10,7 +10,8 @@ const SECTION_ID = 'taskPlan';
 
 export function WorkStatusPlanSection({ sessionId, directory }: { sessionId: string | null; directory: string | null }) {
   const { t } = useI18n();
-  const enabled = Boolean(sessionId && directory && nativeBackendOfSessionId(sessionId) === 'codex');
+  const backend = useNativeSessionBackend(sessionId, directory);
+  const enabled = Boolean(sessionId && directory && backend === 'codex');
   const state = useSessionNativePlan(sessionId, directory, { enabled, visible: false });
   const held = 'plan' in state ? state.plan : null;
   const document = held?.state === 'ready' ? held : null;

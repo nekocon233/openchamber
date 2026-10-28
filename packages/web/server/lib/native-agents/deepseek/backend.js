@@ -786,6 +786,9 @@ export const createDeepseekBackend = ({
       })));
     },
     async listRootSessions(directory) {
+      // A create may be registering a conversation owner before its public
+      // announcement. Its source must not appear as an independent root.
+      await operations.get('new-session')?.catch(() => undefined);
       const list = await listAll();
       return Promise.all(list.filter((summary) => summary.origin !== 'subagent' && summary.cwd && sameDirectory(summary.cwd, directory))
         .map(async (summary) => recordOf(summary, await registry.getSession(logicalId(summary.sessionId)))));
@@ -802,19 +805,29 @@ export const createDeepseekBackend = ({
       bind(id, entry.deepseekHistory ?? initialDeepseekHistory(id, entry.nativeId));
       return entry;
     },
-    createSession(directory, title) {
+    createSession(directory, title, beforePublish = async () => undefined) {
       return serial('new-session', async () => {
       await ensureGlobals();
+      internalForks += 1;
+      try {
       const created = await transport.request('session/create', { request: { cwd: directory } }, wire.sessionCreated);
       const id = encodeDeepseekSessionId(created.sessionId);
       const entry = { backend: 'deepseek', nativeId: created.sessionId, directory, origin: 'openchamber', createdAt: now(), confirmedAt: now() };
       if (title) entry.title = title;
       await registry.registerSession(id, entry);
       bind(id, initialDeepseekHistory(id, created.sessionId));
+      await beforePublish(buildSessionRecord({ id, backend: 'deepseek', directory, title: title ?? 'DeepSeek Harness', created: entry.createdAt, updated: entry.createdAt }));
       if (title) await transport.request('session/rename', { request: { sessionId: created.sessionId, title } }, z.object({ title: z.string(), seq: z.number() }));
       await listAll();
       const summary = summaries.get(id);
       return summary ? recordOf(summary, await registry.getSession(id)) : buildSessionRecord({ id, backend: 'deepseek', directory, title: title ?? 'DeepSeek Harness', created: now(), updated: now() });
+      } finally {
+        internalForks -= 1;
+        if (!internalForks) {
+          for (const summary of deferredAdded.values()) updateSummary(summary);
+          deferredAdded.clear();
+        }
+      }
       });
     },
     prompt(id, request, signal) {
@@ -1052,6 +1065,9 @@ export const createDeepseekBackend = ({
       await listAll();
       return backend.getSession(forkedId, source.directory);
       });
+    },
+    stop(id, directory) {
+      return serial(id, () => stopAndWait(id, directory));
     },
     async abort(id) {
       const source = await resolve(id);

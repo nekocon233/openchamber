@@ -649,6 +649,28 @@ Initial loads use smaller requests on constrained VS Code/mobile surfaces and pu
 
 ## Native CLI sessions
 
+Unified native conversations use `ncv_` IDs and the server's separate `unified`
+listing partition. They are the default for new native-model drafts when the
+server advertises `unifiedSessions`; single-CLI creation remains the fallback
+for older servers. Failed manifests preserve their held IDs independently of
+readable conversations. The owning server contract is
+`packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
+
+Their Session model and agent describe the next send; server metadata identifies
+the executing backend and native source. Selection revisions, record revisions
+and history revisions have separate authority. Task controls use that source
+metadata. A source change retires the old task reads, checklist identity and
+plan/step observations before reading the new source. Background membership
+continues to come from live activity events and complete snapshots.
+
+Unified follow-ups retain captured configuration in the existing host queue.
+Before claiming queued work, the composer confirms server readiness. Delivery
+uses `preserveSelection` so an older queued choice cannot overwrite a newer
+next-model choice. Native transcript echoes keep the logical optimistic ID.
+History pages use opaque cursors; `historyUnavailable` stops initial automatic
+extension while retaining a readable recent window. A new history revision
+invalidates discarded records and in-flight reads as for DeepSeek branches.
+
 Native Claude Code (`ncl_`), Codex (`ncx_`) and DeepSeek Harness (`ndh_`) sessions come from the
 OpenChamber server through `RuntimeAPIs.nativeAgents`, never from OpenCode.
 The server contract is in `packages/web/server/lib/native-agents/DOCUMENTATION.md`.
@@ -813,9 +835,9 @@ with a native branch (`sync/native-send.ts`):
   through OpenCode, and the CLI itself holds a prompt that arrives mid-turn.
 - The agent is `build` or `plan`; the picker offers only those two for a
   native session or a draft with a CLI's model picked.
-- Picking a CLI's model in a new-session draft makes the created session a
-  native one (`materializeOpenDraftSession` passes the backend through
-  `createSession`). Native sessions skip the draft's permission policy: the
+- Picking a CLI's model in a new-session draft creates a unified native
+  conversation when supported (`materializeOpenDraftSession` passes the backend
+  and selection through `createSession`). Native sessions skip the draft's permission policy: the
   CLI approves every tool itself.
 - Native tool names (`Bash`, `Task`, `apply_patch`) map to the shared
   shell, subagent, and patch semantics without changing the native CLI protocol.
@@ -922,8 +944,9 @@ from an old runtime or session cannot open a dialog in the current one.
 Native command discovery is scoped to runtime, directory, backend and adapter;
 aborted or superseded results cannot replace the current list.
 
-A session keeps its kind. The model picker offers a native session only its
-own CLI and an OpenCode session no native CLI; a draft offers every provider
+A session keeps its kind. Unified conversations offer every native CLI;
+single-CLI sessions offer their own backend and OpenCode sessions no native CLI.
+A draft offers every provider
 (`isProviderPickableForSession`). When the selected model does not fit the
 session, `modelForSessionKind` supplies one at once without saving it as the
 session's choice, so the history restore still wins: a native session gets its

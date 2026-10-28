@@ -62,6 +62,12 @@ the adapter never takes over that writer.
 
 ## Identity, history and live state
 
+Session creation defers native-added announcements until the owning runtime's
+`beforePublish` callback has durably registered any unified-conversation owner.
+Root listing waits for that creation boundary, preventing internal execution
+sources from appearing as separate sidebar conversations. The callback changes
+no native protocol or credential behavior.
+
 Sessions initially use `ndh_<sha256(native id)>`. Opaque DSH identities resolve
 from the header list or registry. A managed rewind keeps that logical id while
 `deepseekHistory` in the registry binds it to an active native fork. Other
@@ -135,6 +141,12 @@ and commits the revert. Compaction commands use the same branch commit path.
 A definite send failure restores the original binding and pending revert; an
 unknown admission retains the new binding and original request id for history
 reconciliation, refusing redo or an unrelated send until confirmed.
+
+Unified-conversation mutations use the backend's serialized `stop` operation
+before restoring files. It adopts a cold session before cancellation, waits
+for native execution and transcript delivery to settle, then drains turn
+snapshot and memory work. The shared Claude/Codex `whenIdle` interface does
+not apply to DeepSeek.
 
 Identity segments keep inherited user/assistant/part ids stable while assigning
 new branch output a different namespace. `session.revert.committed` carries the

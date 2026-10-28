@@ -20,7 +20,7 @@ import { useSpacesStore, type SpaceMark } from '@/lib/spaces/spaces-store';
 import { ensureChatsRootDirectory, getChatsRoot } from '@/lib/chatDirectories';
 import { countSyncPerformance } from '@/sync/performance-diagnostics';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
-import { isNativeSessionId, nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { isNativeSessionId, nativePartitionOfSessionId } from '@/lib/native-agents/ids';
 import { fetchNativePartitions, resolveNativeSessions } from '@/sync/native-session-partitions';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -1017,7 +1017,7 @@ export const useGlobalSessionsStore = create<GlobalSessionsState>((set, get) => 
         if (session !== state.entityById.get(session.id)) mutations.push({ type: 'upsert', session });
       }
       for (const session of existing) {
-        const backend = nativeBackendOfSessionId(session.id);
+        const backend = nativePartitionOfSessionId(session.id);
         const partition = partitions.get(normalizePath(session.directory) ?? '');
         if (backend && partition && partition[backend] !== null && !retainedIds.has(session.id) && !preservedIds.has(session.id)) {
           mutations.push({ type: 'remove', sessionId: session.id });

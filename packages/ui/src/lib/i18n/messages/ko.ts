@@ -1,5 +1,6 @@
 import type { I18nKey } from './en';
 import { settingsDict } from './ko.settings';
+import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
@@ -350,6 +351,7 @@ export const dict: Record<I18nKey, string> = {
   ...mcpGridI18n.ko,
   ...pluginsGridI18n.ko,
   ...integrationsCatalogI18n['ko'],
+  ...unifiedConversationsI18n['ko'],
   'terminalView.actions.attachSelection': '선택한 출력 첨부',
   'terminalView.actions.copySelection': '선택한 출력 복사',
   'terminalView.toast.selectionCopied': '출력을 복사했습니다',

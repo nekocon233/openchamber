@@ -1,5 +1,5 @@
 import { parseModelIdentifier } from '@/lib/modelIdentifier';
-import { isNativeProviderId, nativeBackendOfProviderId, nativeBackendOfSessionId, nativeProviderIdOf } from './ids';
+import { isNativeProviderId, isUnifiedNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, nativeProviderIdOf } from './ids';
 
 type PickerProvider = { id: string; models: Array<{ id: string }> };
 
@@ -15,6 +15,11 @@ export const modelForSessionKind = ({ sessionId, selectedProviderId, providers, 
   providers: readonly PickerProvider[];
   defaultModel: string | undefined;
 }): { providerId: string; modelId: string } | null => {
+  if (isUnifiedNativeSessionId(sessionId)) {
+    if (isNativeProviderId(selectedProviderId)) return null;
+    const provider = providers.find((entry) => isNativeProviderId(entry.id) && entry.models.length > 0);
+    return provider ? { providerId: provider.id, modelId: provider.models[0].id } : null;
+  }
   const sessionBackend = nativeBackendOfSessionId(sessionId);
   const selectedBackend = selectedProviderId ? nativeBackendOfProviderId(selectedProviderId) : null;
   if (sessionBackend === selectedBackend) return null;

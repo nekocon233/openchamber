@@ -1,5 +1,6 @@
 import type { I18nKey } from './en';
 import { settingsDict } from './pl.settings';
+import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
@@ -350,6 +351,7 @@ export const dict: Record<I18nKey, string> = {
   ...mcpGridI18n.pl,
   ...pluginsGridI18n.pl,
   ...integrationsCatalogI18n['pl'],
+  ...unifiedConversationsI18n['pl'],
   'terminalView.actions.attachSelection': 'Dołącz zaznaczone dane wyjściowe',
   'terminalView.actions.copySelection': 'Kopiuj zaznaczone dane wyjściowe',
   'terminalView.toast.selectionCopied': 'Skopiowano dane wyjściowe',

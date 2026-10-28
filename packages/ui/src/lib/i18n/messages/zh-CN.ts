@@ -1,5 +1,6 @@
 import type { I18nKey } from './en';
 import { settingsDict } from './zh-CN.settings';
+import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
@@ -350,6 +351,7 @@ export const dict: Record<I18nKey, string> = {
   ...mcpGridI18n['zh-CN'],
   ...pluginsGridI18n['zh-CN'],
   ...integrationsCatalogI18n['zh-CN'],
+  ...unifiedConversationsI18n['zh-CN'],
   'terminalView.actions.attachSelection': '附加所选输出',
   'terminalView.actions.copySelection': '复制所选输出',
   'terminalView.toast.selectionCopied': '已复制输出',

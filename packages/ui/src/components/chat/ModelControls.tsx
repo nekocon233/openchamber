@@ -43,8 +43,13 @@ import {
     NATIVE_AGENT_NAMES,
     nativeBackendOfProviderId,
     nativeBackendOfSessionId,
+    isUnifiedNativeSessionId,
 } from '@/lib/native-agents/ids';
 import { modelForSessionKind } from '@/lib/native-agents/session-model';
+import { useUnifiedNativeState } from '@/lib/native-agents/useNativeSession';
+import { hasPendingNativeConversationSelection, selectNativeConversationModel } from '@/sync/session-actions';
+import { toast } from '@/components/ui';
+import { useEnterpriseMode } from '@/stores/useEnterprisePolicyStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionMessagesSelector, useSessionRenderable, useSessionSelector } from '@/sync/sync-context';
 import type { State } from '@/sync/types';
@@ -509,10 +514,32 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     const [isAgentSelectorOpen, setIsAgentSelectorOpen] = React.useState(false);
     const { favoriteModelsList: allFavoriteModels, recentModelsList: allRecentModels } = useModelLists();
     const pickerSessionId = selection ? controlledSessionId : currentSessionId;
-    const pickerBackend = pickerSessionId ? nativeBackendOfSessionId(pickerSessionId) : null;
+    const enterpriseMode = useEnterpriseMode();
+    const unifiedBlocked = Boolean(pickerSessionId && isUnifiedNativeSessionId(pickerSessionId) && enterpriseMode);
+    const pickerBackend = pickerSessionId
+        ? nativeBackendOfSessionId(pickerSessionId) ?? (isUnifiedNativeSessionId(pickerSessionId) ? nativeBackendOfProviderId(currentProviderId) : null)
+        : null;
+    const unifiedState = useUnifiedNativeState(pickerSessionId ?? null, pickerSessionId ? getDirectoryForSession(pickerSessionId) : undefined);
+    const persistUnifiedSelection = React.useCallback(() => {
+        if (!pickerSessionId || !isUnifiedNativeSessionId(pickerSessionId)) return;
+        const directory = getDirectoryForSession(pickerSessionId);
+        if (!directory) return;
+        const config = useConfigStore.getState();
+        const saved = useSelectionStore.getState().getSessionModelSelection(pickerSessionId);
+        const providerID = selection ? saved?.providerId ?? selection.model?.providerId : config.currentProviderId;
+        const modelID = selection ? saved?.modelId ?? selection.model?.modelId : config.currentModelId;
+        const agent = selection?.agent ?? config.currentAgentName;
+        if (!providerID || !modelID) return;
+        const variant = selection
+            ? useSelectionStore.getState().getAgentModelVariantForSession(pickerSessionId, agent || 'build', providerID, modelID) ?? selection.variant ?? undefined
+            : config.currentVariant;
+        void selectNativeConversationModel(pickerSessionId, directory, {
+            model: { providerID, modelID }, agent: agent === 'plan' ? 'plan' : 'build', variant: variant ?? undefined,
+        }).catch(() => toast.error(t('chat.unified.selectionFailed')));
+    }, [getDirectoryForSession, pickerSessionId, selection, t]);
     const isProviderPickable = React.useCallback(
-        (providerId: string) => isProviderPickableForSession(pickerSessionId, providerId),
-        [pickerSessionId],
+        (providerId: string) => !unifiedBlocked && isProviderPickableForSession(pickerSessionId, providerId),
+        [pickerSessionId, unifiedBlocked],
     );
     const pickableProviders = React.useMemo(
         () => providers.filter((provider) => isProviderPickable(provider.id)),
@@ -1039,19 +1066,22 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     // stays as it is; a model switch is followed by the restore below.
     React.useEffect(() => {
         if (!currentSessionId || !contextHydrated || !sessionRecordAgent) return;
+        if (isUnifiedNativeSessionId(currentSessionId) && currentSessionDirectory && hasPendingNativeConversationSelection(currentSessionId, currentSessionDirectory)) return;
         if (!useSelectionStore.getState().followSessionAgent(currentSessionId, sessionRecordAgent)) return;
         if (useConfigStore.getState().currentAgentName === sessionRecordAgent) return;
         // The model this session last used with that agent is not what it
         // runs on now, so the agent-change effect must not bring it back.
         prevAgentNameRef.current = sessionRecordAgent;
         setAgent(sessionRecordAgent, { keepModel: true });
-    }, [contextHydrated, currentSessionId, sessionRecordAgent, setAgent]);
+    }, [contextHydrated, currentSessionId, currentSessionDirectory, sessionRecordAgent, setAgent]);
 
     React.useEffect(() => {
         if (!currentSessionId) {
             latestLoadedUserChoiceRestoreRef.current = null;
             return;
         }
+
+        if (isUnifiedNativeSessionId(currentSessionId) && currentSessionDirectory && hasPendingNativeConversationSelection(currentSessionId, currentSessionDirectory)) return;
 
         // The session record needs no loaded transcript; a message-derived
         // choice does, so a partial snapshot is never treated as authoritative.
@@ -1174,6 +1204,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
     }, [
         currentSessionId,
+        currentSessionDirectory,
         currentAgentName,
         contextHydrated,
         providers,
@@ -1522,8 +1553,9 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             // Picked in the effort menu, so no effort means the user picked
             // "Default" — a choice, recorded as `null`.
             commitVariantSelectionForModel(currentProviderId, currentModelId, variant ?? null);
+            persistUnifiedSelection();
         }
-    }, [commitVariantSelectionForModel, currentModelId, currentProviderId]);
+    }, [commitVariantSelectionForModel, currentModelId, currentProviderId, persistUnifiedSelection]);
 
     const handleAgentChange = React.useCallback((agentName: string, options?: { closeModelSelector?: boolean }) => {
         if (selection) {
@@ -1531,6 +1563,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             // The pick belongs to the controlled session only; the app-wide
             // agent stays the main chat's.
             saveSessionAgentSelection(controlledSessionId, agentName);
+            persistUnifiedSelection();
             addRecentAgent(agentName);
             if (options?.closeModelSelector ?? true) {
                 setAgentMenuOpen(false);
@@ -1547,6 +1580,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             if (currentSessionId) {
                 saveSessionAgentSelection(currentSessionId, agentName);
             }
+            persistUnifiedSelection();
             if (isCompact) {
                 closeMobilePanel();
             }
@@ -1564,6 +1598,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         setAgent,
         setAgentMenuOpen,
         selection,
+        persistUnifiedSelection,
     ]);
 
     const handleCycleAgentFromModelPicker = React.useCallback((direction: 1 | -1) => {
@@ -1624,6 +1659,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 setLastSelectedModel(providerId, modelId);
             }
             setAgentMenuOpen(false);
+            persistUnifiedSelection();
             if (isCompact) {
                 closeMobilePanel();
             }
@@ -3279,6 +3315,12 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     return (
         <>
             <div className={inlineClassName}>
+                {unifiedBlocked ? <span role="status" className="me-2 min-w-0 truncate typography-micro text-muted-foreground">{t('chat.unified.enterprise')}</span> : null}
+                {unifiedState && (unifiedState.preparing || (!unifiedState.switchReady && unifiedState.backend !== nativeBackendOfProviderId(currentProviderId))) ? (
+                    <span role="status" aria-live="polite" className="me-2 min-w-0 max-w-48 truncate typography-micro text-muted-foreground">
+                        {t(unifiedState.preparing ? 'chat.unified.preparing' : 'chat.unified.waiting')}
+                    </span>
+                ) : null}
                 <div
                     className={cn(
                         'flex items-center min-w-0 flex-1',

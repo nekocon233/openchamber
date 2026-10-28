@@ -5,7 +5,7 @@ import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { NativeAgentsAPI } from '@/lib/api/types';
 import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { nativeSessionBackend } from './native-session-source';
 import type { NativeExecutionTask, NativeTaskSnapshot } from '@/lib/native-agents/task-schemas';
 import type { SessionBackgroundTask } from '@/lib/opencode/events';
 import { normalizePath } from '@/lib/pathNormalization';
@@ -255,7 +255,7 @@ export const applySessionNativeTaskDetailsEvent = (
 const loadDetails = (entry: DetailEntry, api: NativeAgentsAPI | undefined): Promise<NativeTaskDetailState> => {
   if (entry.deleted || entry.runtimeKey !== getRuntimeKey()) return Promise.resolve(IDLE);
   if (entry.pending) return entry.pending;
-  if (!api?.supported || nativeBackendOfSessionId(entry.sessionId) !== 'claude') {
+  if (!api?.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude') {
     publishDetail(entry, UNSUPPORTED);
     releaseDetail(entry);
     return Promise.resolve(entry.state);
@@ -362,7 +362,7 @@ export const useSessionNativeTaskDetails = (
       releaseDetail(entry);
     };
   }, [entry, nativeAgents, enabled, visible]);
-  if (entry && (!nativeAgents.supported || nativeBackendOfSessionId(entry.sessionId) !== 'claude')) return UNSUPPORTED;
+  if (entry && (!nativeAgents.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude')) return UNSUPPORTED;
   return state;
 };
 
@@ -379,6 +379,20 @@ export const clearSessionNativeTaskDetails = (sessionId: string, directory: stri
   stopDetailTimer(entry);
   publishDetail(entry, IDLE);
   releaseDetail(entry);
+};
+
+export const resetSessionNativeTaskSource = (sessionId: string, directory: string, runtimeKey: string): void => {
+  const entry = details.get(JSON.stringify([runtimeKey, normalizePath(directory) ?? directory, sessionId]));
+  if (!entry || entry.deleted || runtimeKey !== getRuntimeKey()) return;
+  entry.mutation += 1;
+  entry.pending = null;
+  entry.controller?.abort();
+  entry.controller = null;
+  stopDetailTimer(entry);
+  publishDetail(entry, IDLE);
+  entry.serverRevision = null;
+  entry.lastReadAt = 0;
+  if (entry.consumers > 0) void loadDetails(entry, entry.api ?? undefined);
 };
 
 export const markSessionNativeTaskDetailsStale = (): void => {

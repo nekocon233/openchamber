@@ -2253,7 +2253,7 @@ export type NativeCompactRequest = {
  */
 export type NativeSessionPatch = { title?: string; archived?: boolean; metadata?: SessionMetadataRecord };
 
-/** A prompt for a native session. The message id is the one the CLI records. */
+/** Native prompts retain client identity; unified conversations map it to their source CLI. */
 export type NativePromptRequest = {
   directory: string;
   messageID: string;
@@ -2261,9 +2261,17 @@ export type NativePromptRequest = {
   model: { providerID: string; modelID: string };
   variant?: string;
   agent: 'build' | 'plan';
+  /** Queued sends keep the model selected for later messages. */
+  preserveSelection?: boolean;
   /** A feature's instructions (the btw boundary): the CLI reads them, the conversation does not show them. */
   instructions?: string;
 };
+
+export type NativeSessionSelection = Pick<NativePromptRequest, 'model' | 'variant' | 'agent'>;
+export type NativeSessionCreate = { backend: NativeBackend; directory: string; title?: string } & (
+  | { kind?: 'single' }
+  | { kind: 'unified'; selection: NativeSessionSelection }
+);
 
 /**
  * Native CLI sessions, read and driven by the OpenChamber
@@ -2314,7 +2322,7 @@ export interface NativeAgentsAPI {
   /** Directories of managed chats holding native sessions; no project names them. */
   chatDirectories(options?: NativeReadOptions): Promise<string[]>;
   getSession(sessionId: string, directory: string, options?: NativeReadOptions): Promise<Session>;
-  /** Newest page first; `before` is the oldest message id of the previous page. */
+  /** Newest page first; pass the returned cursor as `before`. */
   loadMessages(sessionId: string, directory: string, page: { limit: number; before?: string }): Promise<NativeMessagePage>;
   statuses(directory: string, options?: NativeReadOptions): Promise<NativeStatusSnapshot>;
   /** Every native session, in any directory, whose CLI still runs background tasks. */
@@ -2331,8 +2339,9 @@ export interface NativeAgentsAPI {
   /** Requests one task to stop; the CLI's events confirm its final state. */
   stopTask(sessionId: string, taskId: string, directory: string, generation: string): Promise<void>;
   questions(directory: string, options?: NativeReadOptions): Promise<NativeQuestionList>;
-  /** A new session in the backend's CLI. */
-  createSession(input: { backend: NativeBackend; directory: string; title?: string }): Promise<Session>;
+  /** A single-CLI session or a unified conversation with its initial selection. */
+  createSession(input: NativeSessionCreate): Promise<Session>;
+  selectModel(sessionId: string, directory: string, selection: NativeSessionSelection, expectedRevision: number): Promise<Session>;
   /** Resolves once the CLI accepted the prompt; the turn streams as events. */
   prompt(sessionId: string, request: NativePromptRequest): Promise<void>;
   /** Stops the running turn; false when none was running. */

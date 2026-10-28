@@ -4,7 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 // them apart from OpenCode sessions without a lookup. The UI mirrors these
 // rules in packages/ui/src/lib/native-agents/ids.ts.
 //
-// Session ids round-trip to the CLI's own id:
+// Single-CLI session ids round-trip to the CLI's own id. Unified ncv_<uuid>
+// conversations resolve their native sources through conversation manifests:
 //   Claude Code  ncl_<session uuid>             (subagent: ncl_<uuid>_t_<tool_use id>)
 //   Codex        ncx_<thread id>                (subagent threads use their own thread id)
 // Message and part ids are derived deterministically from native keys, so a
@@ -27,12 +28,13 @@ const CLAUDE_CHILD_SEPARATOR = '_t_';
 // Charset and length accepted by every OpenChamber route that carries a
 // session id (the message-queue pattern is the strictest).
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{4,128}$/;
-const NATIVE_SESSION_ID_PATTERN = /^(?:nc[lx]|ndh)_/;
+const NATIVE_SESSION_ID_PATTERN = /^(?:nc[lxv]|ndh)_/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOOL_USE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** @param {string} sessionId */
 export const isNativeSessionId = (sessionId) => NATIVE_SESSION_ID_PATTERN.test(sessionId);
+export const isUnifiedNativeSessionId = (sessionId) => /^ncv_[0-9a-f-]{36}$/.test(sessionId);
 
 /**
  * @param {string} sessionId
@@ -183,6 +185,7 @@ export const isNativeClientUserMessageId = (messageId) => (
 
 /** A new id for a prompt OpenChamber's server sends to a native session itself. */
 export const newNativeClientUserMessageId = (sessionId) => {
+  if (isUnifiedNativeSessionId(sessionId)) return `ncv_u_${randomUUID()}`;
   const backend = nativeBackendOfSessionId(sessionId);
   if (!backend) throw new Error(`Not a native session: ${sessionId}`);
   if (backend === NATIVE_BACKEND_DEEPSEEK) return `ndh_u_${sessionId.slice(4, 28)}_${randomUUID()}`;

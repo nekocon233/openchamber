@@ -63,6 +63,7 @@ const sessionEntrySchema = z.object({
   confirmedAt: z.number().optional(),
   archivedAt: z.number().optional(),
   title: z.string().optional(),
+  conversationId: z.string().regex(/^ncv_[0-9a-f-]{36}$/).optional(),
   deepseekHistory: deepseekHistorySchema.optional(),
   deepseekDeletion: z.object({ root: z.string().min(1) }).optional(),
   // Malformed metadata is dropped; it never costs the session its entry.
@@ -284,7 +285,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
       });
     },
 
-    /** @param {{ archivedAt?: number | null, title?: string, metadata?: Record<string, unknown> | null, claudeChecklistSource?: { configDir: string, listId: string } | null }} patch */
+    /** @param {{ archivedAt?: number | null, title?: string, conversationId?: string, metadata?: Record<string, unknown> | null, claudeChecklistSource?: { configDir: string, listId: string } | null }} patch */
     updateSession(sessionId, patch) {
       return mutate((next) => {
         const existing = next.sessions.get(sessionId);
@@ -293,6 +294,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
         if (patch.archivedAt === null) delete updated.archivedAt;
         else if (patch.archivedAt !== undefined) updated.archivedAt = patch.archivedAt;
         if (patch.title !== undefined) updated.title = patch.title;
+        if (patch.conversationId !== undefined) updated.conversationId = patch.conversationId;
         if (patch.claudeChecklistSource === null) delete updated.claudeChecklistSource;
         else if (patch.claudeChecklistSource !== undefined) updated.claudeChecklistSource = checklistSourceSchema.parse(patch.claudeChecklistSource);
         if (patch.metadata === null) delete updated.metadata;

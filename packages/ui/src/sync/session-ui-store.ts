@@ -292,6 +292,7 @@ export async function routeMessage(params: {
   additionalParts?: Array<{ text: string; synthetic?: boolean; metadata?: ContextPartMetadata; files?: Array<{ type: "file"; mime: string; url: string; filename: string }>; systemContext?: 'session-knowledge' | 'feature-instructions' }>
   appendSubmissions?: () => void
   delivery?: 'steer' | 'queue'
+  preserveModelSelection?: boolean
   messageId?: string
   expectedRuntime?: ExpectedRuntimeContext
   skills?: SkillMentions
@@ -481,6 +482,7 @@ async function routeNativeMessage(params: Parameters<typeof routeMessage>[0]): P
       // A recorded null is an explicit "Default", which the CLI request leaves unset.
       variant: params.variant ?? undefined,
       agent: params.agent,
+      preserveSelection: params.preserveModelSelection,
     })),
   })
   return 'prompt'
@@ -493,6 +495,7 @@ type CapturedSendTarget = {
 }
 
 type SendMessageOptions = {
+  preserveModelSelection?: boolean
   /** Explicit composer intent; automated continuations must not restore archives. */
   userInitiated?: boolean
   target?: CapturedSendTarget
@@ -2095,7 +2098,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         : { armed: false, objectiveOverride: null }
       const goalArmed = goalArm.armed
       // Codex reports no token usage, so a token budget could never end its goal.
-      const nativeBackend = sid ? nativeBackendOfSessionId(sid) : nativeBackendOfProviderId(providerID)
+      const nativeBackend = (sid ? nativeBackendOfSessionId(sid) : null) ?? nativeBackendOfProviderId(providerID)
       const goalTokenBudget = (): number | null => {
         const uiState = useUIStore.getState()
         return uiState.sessionGoalDefaultBudgetEnabled && nativeBackend !== "codex" ? uiState.sessionGoalDefaultBudget : null
@@ -2196,6 +2199,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           files,
           appendSubmissions,
           delivery: options?.delivery,
+          preserveModelSelection: options?.preserveModelSelection,
           messageId: options?.messageId,
           expectedRuntime: options?.expectedRuntime,
           skills: options?.skills,
@@ -2312,6 +2316,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         files,
         appendSubmissions,
         delivery: options?.delivery,
+        preserveModelSelection: options?.preserveModelSelection,
         messageId: options?.messageId,
         expectedRuntime: options?.expectedRuntime,
         skills: options?.skills,

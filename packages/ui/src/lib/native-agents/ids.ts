@@ -2,7 +2,13 @@
 // every layer can tell them from OpenCode sessions by id alone. The server
 // defines the same rules in packages/web/server/lib/native-agents/ids.js.
 
+import { z } from 'zod';
+import type { Session } from '@/lib/opencode/model';
+
 export type NativeBackend = 'claude' | 'codex' | 'deepseek';
+export type NativeSessionPartition = NativeBackend | 'unified';
+
+export const isUnifiedNativeSessionId = (sessionId: string): boolean => /^ncv_[0-9a-f-]{36}$/.test(sessionId);
 
 export const NATIVE_PROVIDER_CLAUDE = 'claude-native';
 export const NATIVE_PROVIDER_CODEX = 'codex-native';
@@ -14,7 +20,29 @@ const SESSION_PREFIX = {
   deepseek: 'ndh_',
 } satisfies Record<NativeBackend, string>;
 
-export const isNativeSessionId = (sessionId: string): boolean => /^(?:nc[lx]|ndh)_/.test(sessionId);
+export const isNativeSessionId = (sessionId: string): boolean => /^(?:nc[lxv]|ndh)_/.test(sessionId);
+
+const unifiedStateSchema = z.object({ openchamber: z.object({ native: z.object({
+  kind: z.literal('unified'),
+  backend: z.enum(['claude', 'codex', 'deepseek']),
+  revision: z.number().int().nonnegative(),
+  recordRevision: z.number().int().nonnegative().default(0),
+  historyRevision: z.number().int().nonnegative(),
+  sourceSessionID: z.string().nullable(),
+  switchReady: z.boolean(),
+  preparing: z.boolean(),
+}) }) });
+
+/** Server-owned execution state, independent of the next model selected by the user. */
+export const unifiedNativeSessionState = (metadata: Session['metadata']) => unifiedStateSchema.safeParse(metadata).data?.openchamber.native;
+
+export const nativeBackendOfSession = (session: Pick<Session, 'id' | 'metadata'> | undefined): NativeBackend | null => (
+  session ? nativeBackendOfSessionId(session.id) ?? unifiedNativeSessionState(session.metadata)?.backend ?? null : null
+);
+
+export const nativePartitionOfSessionId = (sessionId: string): NativeSessionPartition | null => (
+  isUnifiedNativeSessionId(sessionId) ? 'unified' : nativeBackendOfSessionId(sessionId)
+);
 
 export const nativeBackendOfSessionId = (sessionId: string): NativeBackend | null => {
   if (sessionId.startsWith(SESSION_PREFIX.claude)) return 'claude';
@@ -37,13 +65,13 @@ export const nativeProviderIdOf = (backend: NativeBackend): string => (
 );
 
 /**
- * Whether the model picker offers a provider for a session. A session keeps
- * its CLI: a native session offers only its own CLI and an OpenCode session no
- * native one. A new session (null) offers every provider, because the model
- * picked decides which kind it becomes.
+ * Unified conversations offer all native CLIs. Single-CLI sessions offer their
+ * own backend, and OpenCode sessions offer OpenCode providers. A draft offers
+ * every provider because the selected model determines its session kind.
  */
 export const isProviderPickableForSession = (sessionId: string | null, providerId: string): boolean => {
   if (!sessionId) return true;
+  if (isUnifiedNativeSessionId(sessionId)) return isNativeProviderId(providerId);
   const backend = nativeBackendOfSessionId(sessionId);
   return backend ? nativeBackendOfProviderId(providerId) === backend : !isNativeProviderId(providerId);
 };
@@ -73,6 +101,8 @@ export const createNativeUserMessageId = (backend: NativeBackend, sessionId?: st
   }
   return `${SESSION_PREFIX[backend]}u_${randomUuid()}`;
 };
+
+export const createUnifiedUserMessageId = (): string => `ncv_u_${randomUuid()}`;
 
 const USER_MESSAGE_ID = /^(?:nc[lx]_u_|ndh_u_[0-9a-f]{24}_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

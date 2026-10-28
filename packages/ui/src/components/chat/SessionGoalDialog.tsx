@@ -20,7 +20,7 @@ import { clearSessionGoal, setSessionGoal } from '@/lib/sessionGoalActions';
 import { useI18n } from '@/lib/i18n';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { useUIStore } from '@/stores/useUIStore';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
 
 interface SessionGoalDialogProps {
   open: boolean;
@@ -101,7 +101,7 @@ function SessionGoalDialogBody({ mobile, onOpenChange, sessionId, directory }: S
   const savedObjective = goal?.objectiveFile ? (objectiveContent ?? '') : (goal?.objective ?? '');
   const objectiveChanged = trimmedObjective !== savedObjective;
   // Codex reports no token usage, so a token budget could never end its goal.
-  const budgetSupported = nativeBackendOfSessionId(sessionId) !== 'codex';
+  const budgetSupported = useNativeSessionBackend(sessionId, directory) !== 'codex';
   const budgetValue = budgetEnabled && budgetSupported ? tokenBudget : null;
   const budgetChanged = budgetValue !== (goal?.tokenBudget ?? null);
   // A completed goal is read-only: remove it and arm a new one instead of

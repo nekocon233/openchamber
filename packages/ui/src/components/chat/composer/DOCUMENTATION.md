@@ -692,6 +692,14 @@ transcript fetching or Small Model generation.
 
 ## Follow-up delivery
 
+Unified native `ncv_` conversations use this same queue and claim lifecycle.
+They confirm the server's whole-execution readiness before draining, including
+background tasks and native questions. A cross-backend follow-up always waits;
+its captured model runs after the current source settles. Its prompt carries
+`preserveSelection`, keeping any later composer choice intact. Single-CLI
+sessions retain their native immediate follow-up path. Server behavior is owned
+by `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
+
 Follow-up queueing applies only to normal prompts in an existing session. While
 the authoritative phase snapshot is `busy` or `retry`, choosing the queue
 follow-up behavior stores the prompt in OpenChamber's host-authoritative

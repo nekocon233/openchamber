@@ -1,6 +1,5 @@
 import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCallbackResultSchema, cliproxyapiCancelResultSchema, cliproxyapiImportResultSchema, cliproxyapiLoginSchema, cliproxyapiModelsSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
-import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeDeepseekCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch } from '@openchamber/ui/lib/api/types';
-import type { NativeBackend } from '@openchamber/ui/lib/native-agents/ids';
+import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeDeepseekCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch, NativeSessionCreate, NativeSessionSelection } from '@openchamber/ui/lib/api/types';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
 import {
   nativeAbortResultSchema,
@@ -51,7 +50,8 @@ type NativeWriteBody =
   | ClaudeConnectionWrite
   | CodexConnectionWrite
   | DeepseekConfigurationWrite
-  | { backend: NativeBackend; directory: string; title?: string }
+  | NativeSessionCreate
+  | { directory: string; selection: NativeSessionSelection; expectedRevision: number }
   | NativePromptRequest
   | NativeCompactRequest
   | NativeCodexCommandRequest
@@ -259,6 +259,9 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     options?.signal,
   ),
   createSession: (input) => writeParsed('/api/native/sessions', nativeSessionSchema, input),
+  selectModel: (sessionId, directory, selection, expectedRevision) => sendParsed(`${sessionPath(sessionId)}/selection`, nativeSessionSchema, {
+    method: 'PATCH', body: { directory, selection, expectedRevision },
+  }),
   prompt: async (sessionId, request) => {
     await writeParsed(`${sessionPath(sessionId)}/prompt`, nativePromptAcceptedSchema, request);
   },

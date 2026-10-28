@@ -108,6 +108,7 @@ type FetchedPage = {
   cursor: string | undefined
   complete: boolean
   metadataComplete?: boolean
+  historyUnavailable?: boolean
   historyRevision?: number
 }
 
@@ -1034,7 +1035,7 @@ export class SessionMessageLoader {
     let window = firstPage
     const visited = new Set<string>()
     let branchRestarts = 0
-    while (!window.complete && !goal.isSatisfied(window)) {
+    while (!window.complete && !window.historyUnavailable && !goal.isSatisfied(window)) {
       const held = window.session.length
       const turns = countUserMessages(window.session)
       const remaining = getInitialWindowMaxRecords() - held
@@ -1063,6 +1064,8 @@ export class SessionMessageLoader {
         cursor: older.cursor,
         complete: older.complete,
         historyRevision: window.historyRevision,
+        historyUnavailable: older.historyUnavailable,
+        metadataComplete: window.metadataComplete === false || older.metadataComplete === false ? false : undefined,
       }
     }
     return window
@@ -1150,7 +1153,7 @@ export class SessionMessageLoader {
       const partsByMessageID = new Map(page.records.map((record) => [record.info.id, filterIdentifiedParts(record.parts)] as const))
       recordCount = session.length
       finishPagePerformance("complete", { retryCount: Math.max(0, attempts - 1), recordCount })
-      return { session, partsByMessageID, cursor: page.cursor ?? undefined, complete: page.complete, metadataComplete: page.metadataComplete, historyRevision: page.historyRevision }
+      return { session, partsByMessageID, cursor: page.cursor ?? undefined, complete: page.complete, metadataComplete: page.metadataComplete, historyRevision: page.historyRevision, historyUnavailable: page.historyUnavailable }
     } catch (error) {
       finishPagePerformance("error", { retryCount: Math.max(0, attempts - 1), recordCount })
       throw error

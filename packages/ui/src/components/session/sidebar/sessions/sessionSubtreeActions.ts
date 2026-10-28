@@ -5,7 +5,7 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 import { takeSessionActionFailure } from '@/sync/session-action-failures';
 import { describeSessionActionError } from './sessionActionError';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { nativeBackendOfSessionId, isUnifiedNativeSessionId } from '@/lib/native-agents/ids';
 import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useSessionUIStore, type SessionUIState } from '@/sync/session-ui-store';
 import { buildActiveSessionNode, getDescendantIds } from '../list/sessionCollection';
@@ -46,7 +46,7 @@ export const collectSessionSubtreeIds = (
   knownDescendantIds: readonly string[],
   includeArchived: boolean,
 ): string[] => {
-  if (nativeBackendOfSessionId(rootId) === 'claude') return [];
+  if (nativeBackendOfSessionId(rootId) === 'claude' || isUnifiedNativeSessionId(rootId)) return [];
   const global = useGlobalSessionsStore.getState();
   const childrenByParentId = new Map<string, Session[]>();
   for (const session of [...global.activeSessions, ...global.archivedSessions]) {

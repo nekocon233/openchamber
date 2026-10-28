@@ -1,4 +1,5 @@
 import { settingsDict } from './fr.settings';
+import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
@@ -349,6 +350,7 @@ export const dict = {
   ...mcpGridI18n.fr,
   ...pluginsGridI18n.fr,
   ...integrationsCatalogI18n['fr'],
+  ...unifiedConversationsI18n['fr'],
   'terminalView.actions.attachSelection': 'Joindre la sortie sélectionnée',
   'terminalView.actions.copySelection': 'Copier la sortie sélectionnée',
   'terminalView.toast.selectionCopied': 'Sortie copiée',

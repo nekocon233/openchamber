@@ -67,6 +67,7 @@ import { createNativeRegistry } from './registry.js';
 import { createNativeReverts } from './revert.js';
 import { createSnapshotStore } from './snapshots.js';
 import { readNativeStatistics } from './stats.js';
+import { createNativeConversations } from './conversations/runtime.js';
 
 const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const STOP_TIMEOUT_MS = 10_000;
@@ -187,7 +188,11 @@ export const createNativeAgentsRuntime = ({
   const claudeConnections = createClaudeConnections({ dataDir });
   const cliproxyapi = createCliproxyapiService({ dataDir, connections: claudeConnections, fetchImpl, binaryManager: cliproxyapiBinaryManager, buildEnv: buildChildEnv, now });
   const reverts = createNativeReverts({ registry, snapshots });
-  const publisher = createNativeEventPublisher({ publishNativeEvent, now });
+  let conversations;
+  const publisher = createNativeEventPublisher({
+    publishNativeEvent: (event) => conversations ? conversations.publish(event) : publishNativeEvent(event),
+    now,
+  });
   const interactions = createNativeInteractions({ dataDir, now });
   const questions = createQuestionRegistry({
     publish: (directory, payload) => publisher.emit(directory, payload.type, payload.properties),
@@ -210,7 +215,9 @@ export const createNativeAgentsRuntime = ({
   });
   const planDecisions = createCodexPlanDecisions({
     questions,
-    prompt: (sessionId, request, signal) => prompt(sessionId, request, signal),
+    prompt: (sessionId, request, signal) => conversations
+      ? conversations.automaticPrompt(sessionId, request, signal)
+      : prompt(sessionId, request, signal),
     failed: (plan, error) => publisher.error(plan.directory, plan.sessionId, unknownError(error.message)),
   });
 
@@ -581,11 +588,11 @@ export const createNativeAgentsRuntime = ({
   /**
    * A new session in its CLI. Claude Code creates the transcript with the
    * first turn; Codex starts the thread now.
-   * @param {{ backend: 'claude' | 'codex', directory: string, title?: string }} input
+   * @param {{ backend: 'claude' | 'codex' | 'deepseek', directory: string, title?: string }} input
    */
-  const createSession = async ({ backend, directory, title }) => {
+  const createSession = async ({ backend, directory, title }, { beforePublish = async () => undefined } = {}) => {
     if (backend === NATIVE_BACKEND_DEEPSEEK) {
-      const session = await deepseek.createSession(directory, title);
+      const session = await deepseek.createSession(directory, title, beforePublish);
       publisher.session(session.directory, session, { created: true });
       return session;
     }
@@ -615,6 +622,7 @@ export const createNativeAgentsRuntime = ({
     if (title !== undefined) entry.title = title;
     await registry.registerSession(sessionId, entry);
     const record = unconfirmedSessionRecord({ sessionId, ...entry });
+    await beforePublish(record);
     publisher.session(directory, record, { created: true });
     return record;
   };
@@ -628,7 +636,7 @@ export const createNativeAgentsRuntime = ({
     else appServer.markStale();
   };
 
-  return {
+  const native = {
     memorySharing: memory,
     statistics: (query, options) => readNativeStatistics({ query, backends: { claude, codex, deepseek }, ...options }),
     claudeConnections,
@@ -1234,4 +1242,17 @@ export const createNativeAgentsRuntime = ({
       }
     },
   };
+  conversations = createNativeConversations({
+    dataDir, native, registry, reverts, publishNativeEvent, smallModels: getSmallModelService, managedChatsRoots, now,
+    retireSource: async (sessionId) => {
+      if (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE) await claudeLive.closeSession(sessionId);
+    },
+    stopSource: async (sessionId) => {
+      if (decode(sessionId).backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.stop(sessionId);
+      await native.abort(sessionId);
+      await stopTurn(sessionId);
+      if (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE) await claudeLive.closeSession(sessionId);
+    },
+  });
+  return conversations.api;
 };

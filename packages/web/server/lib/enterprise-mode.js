@@ -28,6 +28,9 @@ import { z } from 'zod';
  *
  * Each feature that could send conversation content anywhere else checks it
  * at its own server boundary:
+ * - Unified native conversations refuse creation, prompts, compaction and
+ *   continuing question replies. Their context can cross between independently
+ *   configured CLI providers (`native-agents/conversations/runtime.js`).
  * - DeepSeek Harness sessions, one-click setup and provider configuration are refused
  *   before launching or sending to the native DSH runtime, whose providers are
  *   configured outside OpenCode

@@ -7,7 +7,8 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
 import { useSessionGoalArmStore } from '@/stores/useSessionGoalArmStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { isNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, unifiedNativeSessionState } from '@/lib/native-agents/ids';
+import { useUnifiedNativeState } from '@/lib/native-agents/useNativeSession';
 import {
     createMessageQueueTarget,
     getMessageQueueKey,
@@ -119,7 +120,7 @@ import { useGuestsStore } from '@/lib/guests/store';
 import { isGuestActive } from '@/lib/guests/capabilities';
 import { routeGuestSlashCommand } from './composer/submit/guestCommands';
 import { CODEX_COMPOSER_COMMANDS, parseCodexComposerCommand } from '@/lib/native-agents/codex-commands';
-import { NativeAgentsRequestError } from '@/lib/native-agents/errors';
+import { NativeAgentsRequestError, nativeSessionActionErrorKey } from '@/lib/native-agents/errors';
 import { executeCodexComposerCommand } from './composer/submit/codexCommands';
 import { CodexCommandOutput, type CodexCommandOutputState } from './CodexCommandOutput';
 import { pluginModeFromId } from '@/lib/surfaces/modes';
@@ -653,10 +654,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
     // A native CLI session, or a draft that becomes one on send. The CLI runs
     // its own slash commands and has no shell mode.
+    const unifiedState = useUnifiedNativeState(currentSessionId, currentSessionDirectoryForSync ?? currentDirectory);
     const nativeTargetBackend = currentSessionId
         ? nativeBackendOfSessionId(currentSessionId)
+            ?? (isUnifiedNativeSessionId(currentSessionId) ? nativeBackendOfProviderId(currentProviderId ?? '') ?? unifiedState?.backend ?? null : null)
         : newSessionDraftOpen && currentProviderId ? nativeBackendOfProviderId(currentProviderId) : null;
-    const isNativeTarget = nativeTargetBackend !== null;
+    const isNativeTarget = nativeTargetBackend !== null || Boolean(currentSessionId && isNativeSessionId(currentSessionId));
     const getModelMetadata = useConfigStore((state) => state.getModelMetadata);
     // Subscribe to both sources read by getModelMetadata so async metadata and provider updates are observed.
     useConfigStore((state) => state.modelsMetadata);
@@ -1413,6 +1416,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     sessionId: messageQueueTarget.sessionId,
                     directory: messageQueueTarget.directory,
                     messageId: queuedItem.messageId,
+                    preserveModelSelection: true,
                     expectedRuntime,
                 },
             );
@@ -1497,12 +1501,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         ));
         if (!next) return;
         queuedDrainInFlightRef.current = { itemId: next.id };
-        void sendQueuedMessage(next.id, 'auto').finally(() => {
+        const drain = async () => {
+            if (isUnifiedNativeSessionId(messageQueueTarget.sessionId)) {
+                const session = await nativeAgents.getSession(messageQueueTarget.sessionId, messageQueueTarget.directory);
+                if (unifiedNativeSessionState(session.metadata)?.switchReady !== true) return;
+            }
+            await sendQueuedMessage(next.id, 'auto');
+        };
+        void drain().catch(() => undefined).finally(() => {
             if (queuedDrainInFlightRef.current?.itemId === next.id) {
                 queuedDrainInFlightRef.current = null;
             }
         });
-    }, [autoReviewRunning, currentSessionPhase, hasPendingBlockingRequests, messageQueueTarget, queueLeaseEpoch, queuedMessages, sendQueuedMessage]);
+    }, [autoReviewRunning, currentSessionPhase, hasPendingBlockingRequests, messageQueueTarget, queueLeaseEpoch, queuedMessages, sendQueuedMessage, unifiedState?.switchReady, nativeAgents]);
 
     const handleOpenMobilePanel = React.useCallback((panel: MobileControlsPanel) => {
         if (!isMobile) {
@@ -1625,6 +1636,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, []);
 
     const getSubmitErrorMessage = (error: unknown, fallback: string) => {
+        if (error instanceof NativeAgentsRequestError) {
+            const key = nativeSessionActionErrorKey(error, currentSessionId);
+            if (key) return t(key);
+        }
         if (error instanceof NativeAgentsRequestError && error.code === 'NATIVE_CODEX_COMMAND_UNSUPPORTED') {
             return t('chat.codexCommand.unsupported');
         }
@@ -1966,6 +1981,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         }
 
         let authoritativeSessionPhase: 'idle' | 'busy' | 'retry' | null | undefined;
+        if (submissionSessionId && isUnifiedNativeSessionId(submissionSessionId) && !isBtwActive && inputMode === 'normal') {
+            const directory = useSessionUIStore.getState().getDirectoryForSession(submissionSessionId) || currentDirectory;
+            try {
+                if (!directory) throw new Error('The conversation directory is unavailable');
+                const session = await nativeAgents.getSession(submissionSessionId, directory);
+                if (!isSubmissionContextCurrent()) return;
+                const state = unifiedNativeSessionState(session.metadata);
+                authoritativeSessionPhase = state?.switchReady ? 'idle' : 'busy';
+            } catch {
+                restoreExplicitInput();
+                toast.error(t('chat.chatInput.toast.sessionStatusUnavailable'));
+                return;
+            }
+        }
         // A native CLI takes a prompt whether or not a turn runs, so there is
         // no OpenCode status to confirm first.
         if (
@@ -2161,9 +2190,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         } else if (deliveryDecision === 'follow-up') {
             delivery = followUpBehavior;
         }
-        // The host queue delivers through OpenCode. A native CLI queues a
-        // prompt that arrives mid-turn itself, so it goes out right away.
-        if (delivery === 'queue' && submissionSessionId && isNativeSessionId(submissionSessionId)) {
+        // Unified conversations wait for the whole source execution. Single-CLI
+        // sessions retain their native mid-turn follow-up behavior.
+        if (submissionSessionId && isUnifiedNativeSessionId(submissionSessionId)
+            && (authoritativeSessionPhase !== 'idle' || options?.forceQueue === true)) {
+            delivery = 'queue';
+        } else if (delivery === 'queue' && submissionSessionId && isNativeSessionId(submissionSessionId) && !isUnifiedNativeSessionId(submissionSessionId)) {
             delivery = 'steer';
         }
 
@@ -2694,6 +2726,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             if (restoreSubmittedInputAfterError(error)) return;
             console.error('Message send failed:', rawMessage || error);
             restoreComposerText();
+
+            if (error instanceof NativeAgentsRequestError) {
+                const key = nativeSessionActionErrorKey(error, currentSessionId);
+                if (key) { toast.error(t(key)); return; }
+            }
 
             if (normalized.includes('payload too large') || normalized.includes('413') || normalized.includes('entity too large')) {
                 toast.error(t('chat.chatInput.toast.attachmentsTooLarge'));

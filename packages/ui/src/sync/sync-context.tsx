@@ -77,26 +77,30 @@ import {
   clearSessionNativeTaskDetails,
   markSessionNativeTaskDetailsStale,
   refreshSessionNativeTaskDetails,
+  resetSessionNativeTaskSource,
 } from "./session-background-tasks"
 import {
   applySessionNativeChecklistEvent,
   clearSessionNativeChecklist,
   markSessionNativeChecklistsStale,
   refreshSessionNativeChecklists,
+  resetSessionNativeChecklistSource,
 } from "./session-native-checklist"
 import {
   clearSessionNativePlan,
   markSessionNativePlansStale,
   refreshSessionNativePlan,
   refreshSessionNativePlans,
+  resetSessionNativePlanSource,
 } from "./session-native-plan"
 import {
   applySessionNativeTodosEvent,
   clearSessionNativeTodos,
   markSessionNativeTodosStale,
   refreshSessionNativeTodos,
+  resetSessionNativeTodosSource,
 } from "./session-native-todos"
-import { isNativeSessionId, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
+import { isNativeSessionId, nativeBackendOfSessionId, isUnifiedNativeSessionId, unifiedNativeSessionState } from "@/lib/native-agents/ids"
 import { messagesBefore } from "./message-ordering"
 import { opencodeClient } from "@/lib/opencode/client"
 import { usePermissionStore } from "@/stores/permissionStore"
@@ -2217,7 +2221,7 @@ export function handleEvent(
     // no event for it, so a settled turn is when an open one re-reads.
     if (payload.type === "session.idle") {
       const idleSessionID = syncEventSessionID(payload)
-      if (idleSessionID && nativeBackendOfSessionId(idleSessionID) === "codex") {
+      if (idleSessionID && (nativeBackendOfSessionId(idleSessionID) === "codex" || isUnifiedNativeSessionId(idleSessionID))) {
         refreshSessionNativePlan(idleSessionID, directory)
       }
       // The live projection may have left usage or completion unknown. Re-read
@@ -2406,7 +2410,7 @@ export function handleEvent(
   const directoryBeforePatch = payload.type === "session.patched" && payload.properties.patch.directory !== undefined
     ? current.session.find((session) => session.id === payload.properties.sessionID)?.directory
     : undefined
-  const nativeBranchChanged = payload.type === 'session.patched' && payload.properties.sessionID.startsWith('ndh_')
+  const nativeBranchChanged = payload.type === 'session.patched' && (payload.properties.sessionID.startsWith('ndh_') || isUnifiedNativeSessionId(payload.properties.sessionID))
     && (nativeHistoryRevision(payload.properties.patch.metadata) ?? 0) > (nativeHistoryRevision(current.session.find((session) => session.id === payload.properties.sessionID)?.metadata) ?? 0)
   let sessionMove: SessionMove | null = null
   const draft: State = { ...current }
@@ -2498,6 +2502,20 @@ export function handleEvent(
   }
   if (reducerChanged && (payload.type === "session.patched" || payload.type === "session.deleted")) {
     recordDirectoryRecoveryEvent(store, payload)
+  }
+  if (reducerChanged && payload.type === 'session.patched' && isUnifiedNativeSessionId(payload.properties.sessionID)) {
+    const sessionId = payload.properties.sessionID
+    const previous = unifiedNativeSessionState(current.session.find((session) => session.id === sessionId)?.metadata)
+    const next = unifiedNativeSessionState(payload.properties.patch.metadata)
+    if (previous && next && previous.sourceSessionID !== next.sourceSessionID) {
+      const runtimeKey = getRuntimeKey()
+      queueMicrotask(() => {
+        resetSessionNativeChecklistSource(sessionId, resolvedDirectory, runtimeKey)
+        resetSessionNativePlanSource(sessionId, resolvedDirectory, runtimeKey)
+        resetSessionNativeTodosSource(sessionId, resolvedDirectory, runtimeKey)
+        resetSessionNativeTaskSource(sessionId, resolvedDirectory, runtimeKey)
+      })
+    }
   }
 
   const updatedPart = reducerChanged && toolPartRef

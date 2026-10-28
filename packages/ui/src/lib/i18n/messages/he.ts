@@ -1,4 +1,5 @@
 import { settingsDict } from './he.settings';
+import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
@@ -3796,6 +3797,7 @@ export const dict = {
   ...mcpGridI18n.he,
   ...pluginsGridI18n.he,
   ...integrationsCatalogI18n['he'],
+  ...unifiedConversationsI18n['he'],
   'settings.usage.page.state.claudeSignedOutTitle': 'לא מחובר ל-Claude Code',
   'settings.usage.page.state.claudeSignInCommand': 'יש להריץ את הפקודה הזו במסוף:',
   'settings.openchamber.visual.field.confirmFileTreeMove': 'אישור לפני העברת קבצים',

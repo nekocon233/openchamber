@@ -17,7 +17,8 @@ import { toJsonRecord } from "@/lib/opencode/json"
 import { mergeSessionDirectoryMetadata, resolveGlobalSessionDirectory, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { waitForOpenCodeStartup } from "./opencode-startup-gate"
-import { registerSessionDirectory } from "./sync-refs"
+import { registerSessionDirectory, getDirectoryState } from "./sync-refs"
+import { shouldSkipStaleSessionEvent } from "./session-event-freshness"
 import { useGlobalSessionStatusStore } from "./global-session-status"
 import { recordSendFailure } from "./send-failure-log"
 import { getStaleRunningToolMessageID, materializeSessionSnapshots } from './materialization';
@@ -65,9 +66,9 @@ import { deleteChatDirectory } from "@/lib/chatDirectories"
 import { createChatDraftIdentity } from "@/lib/chatDraftPersistence"
 import { cancelSessionTitleGeneration } from "./session-title-generation"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
-import type { NativeCompactRequest, NativePromptRequest } from "@/lib/api/types"
+import type { NativeCompactRequest, NativePromptRequest, NativeSessionSelection } from "@/lib/api/types"
 import { NativeAgentsRequestError, NativeAgentsUnsupportedError } from "@/lib/native-agents/errors"
-import { isNativeSessionId, type NativeBackend } from "@/lib/native-agents/ids"
+import { isNativeSessionId, nativeBackendOfProviderId, unifiedNativeSessionState, type NativeBackend } from "@/lib/native-agents/ids"
 import { nativeAgentOf } from "./native-send"
 import { nativeQuestionAnswers } from "@/lib/native-agents/forms"
 
@@ -1155,15 +1156,59 @@ const requireNativeDirectory = (directory: string | null | undefined): string =>
 const NATIVE_QUESTION_GONE = "NATIVE_QUESTION_NOT_FOUND"
 
 /** A new session in a CLI's own store; the server announces it. */
-export async function createNativeSession(backend: NativeBackend, directory: string | null, title: string | undefined): Promise<Session> {
+export async function createNativeSession(backend: NativeBackend, directory: string | null, title: string | undefined, selection?: SessionCreateSelection): Promise<Session> {
   const nativeAgents = requireNativeAgents()
   const nativeDirectory = requireNativeDirectory(directory)
+  if (selection?.model && (await nativeAgents.capabilities()).unifiedSessions) {
+    return nativeAgents.createSession({
+      kind: 'unified', backend, directory: nativeDirectory, title,
+      selection: {
+        model: { providerID: selection.model.providerID, modelID: selection.model.id },
+        agent: selection.agent === 'plan' ? 'plan' : 'build',
+        variant: selection.model.variant ?? undefined,
+      },
+    })
+  }
   return nativeAgents.createSession(title === undefined ? { backend, directory: nativeDirectory } : { backend, directory: nativeDirectory, title })
 }
 
 /** Hands a prompt to a native session's CLI; the turn streams in as events. */
 export function promptNativeSession(sessionId: string, request: NativePromptRequest): Promise<void> {
   return requireNativeAgents().prompt(sessionId, request)
+}
+
+const nativeSelectionWrites = new Map<string, Promise<Session>>()
+
+export const hasPendingNativeConversationSelection = (sessionId: string, directory: string): boolean => (
+  nativeSelectionWrites.has(JSON.stringify([getRuntimeKey(), directory, sessionId]))
+)
+
+/** Persist a next-turn selection without changing the executing native source. */
+export function selectNativeConversationModel(sessionId: string, directory: string, selection: NativeSessionSelection): Promise<Session> {
+  const runtimeContext = captureSessionActionRuntime()
+  const key = JSON.stringify([runtimeContext.runtimeKey, directory, sessionId])
+  const previous = nativeSelectionWrites.get(key)
+  const run = (previous?.catch(() => undefined) ?? Promise.resolve()).then(async () => {
+    assertSessionActionRuntimeCurrent(runtimeContext)
+    const api = requireNativeAgents()
+    const current = await api.getSession(sessionId, directory)
+    assertSessionActionRuntimeCurrent(runtimeContext)
+    const state = unifiedNativeSessionState(current.metadata)
+    if (!state) throw new NativeAgentsUnsupportedError()
+    if (current.model?.providerID === selection.model.providerID && current.model.id === selection.model.modelID
+      && current.model.variant === selection.variant && current.agent === selection.agent) return current
+    const updated = await api.selectModel(sessionId, directory, selection, state.revision)
+    assertSessionActionRuntimeCurrent(runtimeContext)
+    const global = useGlobalSessionsStore.getState().entityById.get(updated.id)
+    if (!global || !shouldSkipStaleSessionEvent(global, updated)) useGlobalSessionsStore.getState().upsertSession(updated)
+    registerSessionDirectory(updated.id, updated.directory)
+    const held = getDirectoryState(updated.directory)?.session.find((session) => session.id === updated.id)
+    if (!held || !shouldSkipStaleSessionEvent(held, updated)) mirrorSessionIntoLiveStores(updated, updated.directory)
+    return updated
+  })
+  nativeSelectionWrites.set(key, run)
+  run.finally(() => { if (nativeSelectionWrites.get(key) === run) nativeSelectionWrites.delete(key) }).catch(() => undefined)
+  return run
 }
 
 // Rename, archive and restore reach a native session's CLI through the
@@ -1213,8 +1258,9 @@ export async function createSession(
     // opencodeClient.getDirectory() value and group the session under the
     // wrong project (closes #1637, #2270).
     const effectiveDirectory = directoryOverride ?? dir()
-    const session = nativeBackend
-      ? await createNativeSession(nativeBackend, effectiveDirectory ?? null, title)
+    const selectedBackend = nativeBackend ?? (selection?.model ? nativeBackendOfProviderId(selection.model.providerID) : null)
+    const session = selectedBackend
+      ? await createNativeSession(selectedBackend, effectiveDirectory ?? null, title, selection)
       : await opencodeClient.createSession({ title, metadata, model: selection?.model, agent: selection?.agent }, effectiveDirectory)
     assertSessionActionRuntimeCurrent(runtimeContext)
 

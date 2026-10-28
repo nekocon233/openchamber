@@ -3,12 +3,12 @@ import type { NativeAgentsAPI, NativeCodexCommandResult } from '@/lib/api/types'
 import type { useI18n } from '@/lib/i18n';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { CODEX_COMMAND_USAGE, codexFastVariant, codexReviewTarget, type CodexComposerCommand } from '@/lib/native-agents/codex-commands';
-import { NATIVE_PROVIDER_CODEX } from '@/lib/native-agents/ids';
+import { NATIVE_PROVIDER_CODEX, isUnifiedNativeSessionId } from '@/lib/native-agents/ids';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { forkNativeSession } from '@/sync/session-actions';
+import { forkNativeSession, selectNativeConversationModel } from '@/sync/session-actions';
 import { getSyncMessages, getSyncParts } from '@/sync/sync-refs';
 
 type CommandOutput = Extract<NativeCodexCommandResult, { kind: 'output' }>;
@@ -44,7 +44,7 @@ export const executeCodexComposerCommand = async (
     return sessionId;
   };
   const noArguments = () => { if (argument) throw invalid(); };
-  const setSelection = (nextModel: string, nextVariant: string | undefined, nextAgent = agent) => {
+  const setSelection = async (nextModel: string, nextVariant: string | undefined, nextAgent = agent) => {
     if (!isCurrent()) return;
     const config = useConfigStore.getState();
     if (config.currentProviderId !== initialSelection.currentProviderId
@@ -62,6 +62,9 @@ export const executeCodexComposerCommand = async (
       selections.saveSessionModelSelection(sessionId, NATIVE_PROVIDER_CODEX, nextModel);
       selections.saveAgentModelForSession(sessionId, nextAgent, NATIVE_PROVIDER_CODEX, nextModel);
       selections.saveAgentModelVariantForSession(sessionId, nextAgent, NATIVE_PROVIDER_CODEX, nextModel, nextVariant ?? null);
+      if (isUnifiedNativeSessionId(sessionId)) await selectNativeConversationModel(sessionId, directory, {
+        model: { providerID: NATIVE_PROVIDER_CODEX, modelID: nextModel }, variant: nextVariant, agent: nextAgent === 'plan' ? 'plan' : 'build',
+      });
     }
   };
 
@@ -76,7 +79,7 @@ export const executeCodexComposerCommand = async (
       if (!nextModel) throw invalid();
       const nextVariant = name === 'reasoning' ? requestedModel : effort;
       if (nextVariant && !listModelVariantIds(nextModel.variants).includes(nextVariant)) throw invalid();
-      setSelection(nextModel.id, nextVariant);
+      await setSelection(nextModel.id, nextVariant);
       break;
     }
     case 'fast': {
@@ -89,11 +92,11 @@ export const executeCodexComposerCommand = async (
       }
       const next = codexFastVariant(listModelVariantIds(current?.variants), effort, argument);
       if (next === null) throw invalid();
-      setSelection(model, next);
+      await setSelection(model, next);
       break;
     }
     case 'plan':
-      setSelection(model, variant, 'plan');
+      await setSelection(model, variant, 'plan');
       if (argument) return { kind: 'prompt', text: argument, agent: 'plan' };
       break;
     case 'new':

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n } from '@/lib/i18n';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { isNativeSessionId } from '@/lib/native-agents/ids';
 import { getRuntimeEndpointGeneration, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -28,7 +28,7 @@ export function NativeTasksPane({ onClose }: { onClose?: () => void }) {
   const tab = useNativeTasksUIStore((state) => state.tab);
 
   const eligible = Boolean(currentSessionId && directory
-    && nativeBackendOfSessionId(currentSessionId) !== null
+    && isNativeSessionId(currentSessionId)
     && nativeAgents.supported);
 
   if (!eligible || !currentSessionId || !directory) {

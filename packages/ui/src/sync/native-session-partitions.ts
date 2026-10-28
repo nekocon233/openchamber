@@ -1,7 +1,7 @@
 import type { Session } from '@/lib/opencode/model';
 
 import type { NativeAgentsAPI, NativeSessionList } from '@/lib/api/types';
-import { isNativeSessionId, nativeBackendOfSessionId, type NativeBackend } from '@/lib/native-agents/ids';
+import { isNativeSessionId, nativePartitionOfSessionId, type NativeBackend, type NativeSessionPartition } from '@/lib/native-agents/ids';
 import { normalizePath } from '@/lib/pathNormalization';
 
 // Native CLI sessions come from their own backends, next to OpenCode's list.
@@ -11,19 +11,21 @@ import { normalizePath } from '@/lib/pathNormalization';
 // the backends (they arrive with their parent's history), so they are kept
 // until their parent goes away.
 
-const BACKENDS: NativeBackend[] = ['claude', 'codex', 'deepseek'];
+const PARTITIONS: NativeSessionPartition[] = ['claude', 'codex', 'deepseek', 'unified'];
 const NATIVE_LIST_CONCURRENCY = 4;
 
 /** Fresh root sessions per backend; null marks a backend that could not be read. */
-type NativePartitionSnapshot = Record<NativeBackend, Session[] | null>;
+type NativePartitionSnapshot = Record<NativeBackend, Session[] | null> & { unified?: Session[] | null; unavailable?: readonly string[] };
 
 const snapshotOf = (list: NativeSessionList): NativePartitionSnapshot => ({
   claude: list.backends.claude.status === 'ok' ? list.backends.claude.sessions : null,
   codex: list.backends.codex.status === 'ok' ? list.backends.codex.sessions : null,
   deepseek: list.backends.deepseek?.status === 'ok' ? list.backends.deepseek.sessions : null,
+  unified: list.unified?.status === 'ok' ? list.unified.sessions : null,
+  unavailable: list.unified?.unavailable,
 });
 
-const FAILED_SNAPSHOT: NativePartitionSnapshot = { claude: null, codex: null, deepseek: null };
+const FAILED_SNAPSHOT: NativePartitionSnapshot = { claude: null, codex: null, deepseek: null, unified: null };
 
 /** Reads one directory; a request failure fails every backend of it. */
 export const fetchNativePartition = async (api: NativeAgentsAPI, directory: string): Promise<NativePartitionSnapshot> => {
@@ -68,13 +70,13 @@ export const resolveNativeSessions = (
   const byId = new Map<string, Session>();
   for (const session of existing) {
     if (!isNativeSessionId(session.id) || session.parentID) continue;
-    const backend = nativeBackendOfSessionId(session.id);
+    const backend = nativePartitionOfSessionId(session.id);
     const partition = partitions.get(directoryOf(session));
-    if (!backend || (partition && partition[backend] !== null && !preservedIds?.has(session.id))) continue;
+    if (!backend || (partition && partition[backend] != null && !preservedIds?.has(session.id) && !partition.unavailable?.includes(session.id))) continue;
     byId.set(session.id, session);
   }
   for (const partition of partitions.values()) {
-    for (const backend of BACKENDS) {
+    for (const backend of PARTITIONS) {
       for (const session of partition[backend] ?? []) {
         if (!preservedIds?.has(session.id)) byId.set(session.id, session);
       }

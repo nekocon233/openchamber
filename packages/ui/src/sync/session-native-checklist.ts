@@ -4,7 +4,7 @@ import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { NativeAgentsAPI } from '@/lib/api/types';
 import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { nativeSessionBackend } from './native-session-source';
 import type { NativeChecklistItem, NativeChecklistSnapshot } from '@/lib/native-agents/task-schemas';
 import { normalizePath } from '@/lib/pathNormalization';
 import { getRuntimeEndpointGeneration, getRuntimeKey, subscribeRuntimeEndpointChanged, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
@@ -194,7 +194,7 @@ const readSnapshot = (entry: Entry, api: NativeAgentsAPI): Promise<NativeCheckli
 const load = (entry: Entry, api: NativeAgentsAPI | undefined): Promise<NativeChecklistState> => {
   if (entry.deleted || entry.runtimeKey !== getRuntimeKey()) return Promise.resolve(IDLE);
   if (entry.pending) return entry.pending;
-  if (!api?.supported || nativeBackendOfSessionId(entry.sessionId) !== 'claude') {
+  if (!api?.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude') {
     commit(entry, { state: 'unavailable', reason: 'unsupported' });
     release(entry);
     return Promise.resolve(entry.state);
@@ -301,7 +301,7 @@ export const useSessionNativeChecklist = (
       release(entry);
     };
   }, [entry, nativeAgents, enabled, visible]);
-  if (entry && (!nativeAgents.supported || nativeBackendOfSessionId(entry.sessionId) !== 'claude')) return UNSUPPORTED;
+  if (entry && (!nativeAgents.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude')) return UNSUPPORTED;
   return state;
 };
 
@@ -321,6 +321,15 @@ export const clearSessionNativeChecklist = (sessionId: string, directory: string
   stopTimer(entry);
   publish(entry, IDLE);
   release(entry);
+};
+
+export const resetSessionNativeChecklistSource = (sessionId: string, directory: string, runtimeKey: string): void => {
+  const entry = entries.get(keyOf(runtimeKey, normalizePath(directory) ?? directory, sessionId));
+  if (!entry || entry.deleted || runtimeKey !== getRuntimeKey()) return;
+  clearSessionNativeChecklist(sessionId, directory, runtimeKey);
+  entry.deleted = false;
+  entry.lastReadAt = 0;
+  if (entry.consumers > 0) void load(entry, entry.api ?? undefined);
 };
 
 /** Connection loss is stale data, not a successful empty list. */

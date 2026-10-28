@@ -175,6 +175,7 @@ export const nativeMessagePageSchema = z.object({
   childSessions: z.array(nativeSessionSchema),
   metadataComplete: z.boolean().optional(),
   historyRevision: z.number().int().nonnegative().optional(),
+  historyUnavailable: z.boolean().optional(),
 });
 
 const sessionPartitionSchema = z.discriminatedUnion('status', [
@@ -184,6 +185,7 @@ const sessionPartitionSchema = z.discriminatedUnion('status', [
 
 export const nativeSessionListSchema = z.object({
   backends: z.object({ claude: sessionPartitionSchema, codex: sessionPartitionSchema, deepseek: sessionPartitionSchema.optional() }),
+  unified: sessionPartitionSchema.and(z.object({ unavailable: z.array(z.string()).optional() })).optional(),
 });
 
 
@@ -212,6 +214,7 @@ export const nativeCatalogSchema = z.object({
 
 export const nativeCapabilitiesSchema = z.object({
   supported: z.literal(true),
+  unifiedSessions: z.boolean().optional(),
   backends: z.object({
     claude: z.object({
       cli: z.boolean(),

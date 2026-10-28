@@ -11,6 +11,7 @@ import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
 import { deepseekConfigurationWrite } from './deepseek/configuration.js';
 import { statisticsQuery } from './stats.js';
+import { conversationSelectionSchema } from './conversations/store.js';
 
 const directoryQuery = z.object({ directory: z.string().min(1) }).passthrough();
 const taskOperationInput = z.object({ directory: z.string().min(1), generation: z.string().min(1).max(128) }).strict();
@@ -20,7 +21,14 @@ const createSessionBody = z.object({
   backend: z.enum(['claude', 'codex', 'deepseek']),
   directory: z.string().min(1),
   title: z.string().min(1).max(200).optional(),
+  kind: z.enum(['single', 'unified']).optional(),
+  selection: conversationSelectionSchema.optional(),
 }).passthrough();
+const conversationSelectionBody = z.object({
+  directory: z.string().min(1),
+  selection: conversationSelectionSchema,
+  expectedRevision: z.number().int().nonnegative(),
+}).strict();
 const promptBody = z.object({
   directory: z.string().min(1),
   messageID: z.string().min(1),
@@ -31,6 +39,7 @@ const promptBody = z.object({
   model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }),
   variant: z.string().min(1).optional(),
   agent: z.enum(['build', 'plan']),
+  preserveSelection: z.boolean().optional(),
   // A feature's instructions (the btw boundary); the CLI reads them, the
   // conversation does not show them.
   instructions: z.string().trim().min(1).max(8000).optional(),
@@ -279,8 +288,14 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
       variant: body.variant,
       agent: body.agent,
       instructions: body.instructions,
+      preserveSelection: body.preserveSelection,
     });
     return { accepted: true };
+  }));
+
+  app.patch('/api/native/sessions/:sessionId/selection', handle((req) => {
+    const body = conversationSelectionBody.parse(req.body);
+    return runtime.selectModel(req.params.sessionId, body.directory, body.selection, body.expectedRevision);
   }));
 
   app.post('/api/native/sessions/:sessionId/abort', handle(async (req) => ({ aborted: await runtime.abort(req.params.sessionId) })));

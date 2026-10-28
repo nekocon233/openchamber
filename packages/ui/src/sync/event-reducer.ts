@@ -15,6 +15,7 @@ import { dropSessionCaches } from "./session-cache"
 import { syncDebug } from "./debug"
 import { shouldSkipStaleSessionEvent } from "./session-event-freshness"
 import { nativeHistoryRevision, withNativeHistoryRevision } from "@/lib/native-agents/history"
+import { isUnifiedNativeSessionId } from "@/lib/native-agents/ids"
 import {
   compareMessagesChronologically,
   findMessageIndex,
@@ -371,7 +372,7 @@ export function applyDirectoryEvent(
 
       // A reconnect may miss the range-commit event. A new DSH branch cannot
       // inherit cached messages from the discarded branch's tail.
-      if (sessionID.startsWith('ndh_') && (nativeHistoryRevision(next.metadata) ?? 0) > (nativeHistoryRevision(sessions[result.index].metadata) ?? 0)) {
+      if ((sessionID.startsWith('ndh_') || isUnifiedNativeSessionId(sessionID)) && (nativeHistoryRevision(next.metadata) ?? 0) > (nativeHistoryRevision(sessions[result.index].metadata) ?? 0)) {
         for (const message of draft.message[sessionID] ?? []) delete draft.part[message.id]
         draft.message[sessionID] = []
       }

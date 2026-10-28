@@ -2,7 +2,7 @@ import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
 import { useI18n, type I18nKey } from '@/lib/i18n';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
 import { loadSessionNativeChecklist, useSessionNativeChecklist } from '@/sync/session-native-checklist';
 import { loadSessionNativeTaskDetails, useSessionNativeTaskDetails } from '@/sync/session-background-tasks';
 import { NativeCodexTodos } from './NativeCodexTodos';
@@ -125,7 +125,8 @@ export function NativeTasksBody({ scope, onClose }: { scope: Scope; onClose?: ()
   const { t } = useI18n();
   // The store records the reader's choice, not the backend: a tab the current
   // backend has no view for falls back to that backend's first one.
-  const tabs = TABS[nativeBackendOfSessionId(scope.sessionId) ?? ''] ?? [];
+  const backend = useNativeSessionBackend(scope.sessionId, scope.directory);
+  const tabs = TABS[backend ?? ''] ?? [];
   const tab = tabs.includes(scope.tab) ? scope.tab : tabs[0];
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col" data-native-tasks-body>

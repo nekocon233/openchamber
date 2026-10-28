@@ -1,6 +1,6 @@
 import type { NativePromptPart, NativePromptRequest } from "@/lib/api/types"
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
-import { createNativeUserMessageId, isNativeUserMessageIdFor, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
+import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
 
 // A native session receives what the user wrote and attached. OpenChamber's
 // own context (pinned knowledge, goal and response-style reminders, skill
@@ -60,6 +60,7 @@ export const nativePromptRequest = (send: {
   modelID: string
   variant?: string
   agent?: string
+  preserveSelection?: boolean
 }): NativePromptRequest => ({
   directory: send.directory,
   messageID: send.messageID,
@@ -67,6 +68,7 @@ export const nativePromptRequest = (send: {
   model: { providerID: send.providerID, modelID: send.modelID },
   variant: send.variant,
   agent: nativeAgentOf(send.agent),
+  preserveSelection: send.preserveSelection,
   instructions: nativePromptInstructions(send.additionalParts),
 })
 
@@ -75,6 +77,7 @@ export const nativePromptRequest = (send: {
  * record it, else a new one.
  */
 export const nativeSendMessageId = (sessionId: string, requested: string | undefined): string => {
+  if (isUnifiedNativeSessionId(sessionId)) return requested ?? createUnifiedUserMessageId()
   const backend = nativeBackendOfSessionId(sessionId)
   if (!backend) throw new Error(`Not a native session: ${sessionId}`)
   return requested !== undefined && isNativeUserMessageIdFor(backend, requested)

@@ -71,6 +71,7 @@ export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): Na
   stopTask: unsupported,
   questions: unsupported,
   createSession: unsupported,
+  selectModel: unsupported,
   prompt: unsupported,
   abort: unsupported,
   compact: unsupported,

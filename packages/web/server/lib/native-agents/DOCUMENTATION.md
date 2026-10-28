@@ -28,6 +28,12 @@ and the plan a Codex thread wrote.
 
 ## Wiring
 
+New native-model UI drafts default to unified `ncv_` conversations when the
+server advertises support. They reference native execution segments and can
+switch CLI backends. Read `conversations/DOCUMENTATION.md` for their selection,
+handoff, history, admission and cleanup contracts. The single-CLI IDs and
+physical-source behavior below remain the native adapter contract.
+
 - `server/index.js` creates the runtime with the data directory, the CLI
   resolver (`executables.js`), the child environment (`process.js`), the
   OpenChamber version, `publishNativeEvent` (the global hub) and the reader of
@@ -48,7 +54,7 @@ and the plan a Codex thread wrote.
 ## Ids
 
 `ids.js` owns the namespace and `packages/ui/src/lib/native-agents/ids.ts`
-mirrors it. A session id round-trips to the CLI's own id, so a session opened
+mirrors it. A single-CLI session id round-trips to the CLI's own id, so a session opened
 here resumes in the terminal by that id:
 
 | Id | Claude Code | Codex |
@@ -121,6 +127,10 @@ rewrite no transcript or usage record and create no persistent statistics DB.
 `{ backends: { claude, codex, deepseek } }`, each `{ status: 'ok', sessions }` or
 `{ status: 'error', message }`. One backend failing never hides the other,
 and the UI keeps its previous sessions for a failed backend.
+
+The optional top-level `unified` partition lists logical conversations;
+`unavailable` IDs preserve previously held records whose manifests cannot be
+read. Its internal native sources are excluded from the backend root lists.
 
 - Claude: `listSessions({ includeProgrammatic: false })`, which matches the
   terminal's `/resume` picker, plus sessions the registry holds. SDK-created
@@ -986,6 +996,11 @@ thread and is not reconciled across sessions.
 
 ## Registry
 
+Native source entries may carry a private `conversationId` for unified
+ownership. Logical conversation manifests and their admission journals live
+under `native-agents/conversations/`; their file snapshots use the logical ID
+in the existing turn/revert maps.
+
 `<data dir>/native-agents/registry.json` holds only what the CLIs cannot
 tell us: which sessions OpenChamber created or adopted (so they stay listed),
 an archive flag for Claude (which has no archive), the model, effort and
@@ -1312,6 +1327,11 @@ the CLIs installed on their connected server. VS Code retains the explicit
 
 ## Routes (`/api/native`)
 
+`capabilities().unifiedSessions` advertises logical conversations. `POST /sessions`
+accepts `kind: 'unified'` with an initial `selection`; requests without that kind
+retain single-CLI creation. Unified message cursors are opaque. Their prompt
+`preserveSelection` flag keeps queued configuration separate from the next pick.
+
 Normal authenticated OpenChamber routes. Every read takes the session's
 `directory`.
 
@@ -1331,6 +1351,7 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 | `GET /sessions/:id/tasks/:taskId/output?directory=&generation=` | Bounded task output or explicit unavailable reason; no path parameter |
 | `POST /sessions/:id/tasks/:taskId/stop` | `{ directory, generation }`: stops only the owned current task; `{ accepted: true }` |
 | `POST /sessions` | `{ backend, directory, title? }`: a new session, announced with `session.created` |
+| `PATCH /sessions/:id/selection` | Unified-only `{ directory, selection, expectedRevision }`: saves the next model, effort and agent without interrupting work |
 | `POST /sessions/:id/prompt` | `{ directory, messageID, parts, model, variant?, agent, instructions? }`; answers once the CLI took it. A model of the other CLI is `409 NATIVE_BACKEND_MISMATCH` |
 | `GET /commands?backend=&directory=` | `{ commands: [{ name, description, argumentHint }] }` (see Compaction, commands and todos) |
 | `POST /codex/command` | A Codex inspection or review command; output entries or an accepted review |

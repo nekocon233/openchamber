@@ -1,6 +1,6 @@
 import React from 'react';
 import { useI18n, type I18nKey } from '@/lib/i18n';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
 import type { NativeExecutionTask } from '@/lib/native-agents/task-schemas';
 import { useSessionNativeTaskDetails } from '@/sync/session-background-tasks';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
@@ -30,7 +30,8 @@ const TASK_STATUS_TONES = {
 
 export function WorkStatusBackgroundTasksSection({ sessionId, directory }: { sessionId: string | null; directory: string | null }) {
   const { t } = useI18n();
-  const enabled = Boolean(sessionId && directory && nativeBackendOfSessionId(sessionId) === 'claude');
+  const backend = useNativeSessionBackend(sessionId, directory);
+  const enabled = Boolean(sessionId && directory && backend === 'claude');
   const state = useSessionNativeTaskDetails(sessionId, directory, { enabled, visible: false });
   const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;

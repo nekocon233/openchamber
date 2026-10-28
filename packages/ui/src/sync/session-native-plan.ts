@@ -10,7 +10,7 @@ import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { NativeAgentsAPI } from '@/lib/api/types';
 import { NativeAgentsUnsupportedError } from '@/lib/native-agents/errors';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { nativeSessionBackend } from './native-session-source';
 import type { NativePlanSnapshot } from '@/lib/native-agents/task-schemas';
 import { normalizePath } from '@/lib/pathNormalization';
 import { getRuntimeEndpointGeneration, getRuntimeKey, subscribeRuntimeEndpointChanged, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
@@ -124,7 +124,7 @@ const commit = (entry: Entry, snapshot: NativePlanSnapshot): void => {
 const load = (entry: Entry, api: NativeAgentsAPI | undefined): Promise<NativePlanState> => {
   if (entry.deleted || entry.runtimeKey !== getRuntimeKey()) return Promise.resolve(IDLE);
   if (entry.pending) return entry.pending;
-  if (!api?.supported || nativeBackendOfSessionId(entry.sessionId) !== 'codex') {
+  if (!api?.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'codex') {
     commit(entry, { state: 'unavailable', reason: 'unsupported' });
     release(entry);
     return Promise.resolve(entry.state);
@@ -209,7 +209,7 @@ export const useSessionNativePlan = (
       release(entry);
     };
   }, [entry, nativeAgents, enabled, visible]);
-  if (entry && (!nativeAgents.supported || nativeBackendOfSessionId(entry.sessionId) !== 'codex')) return UNSUPPORTED;
+  if (entry && (!nativeAgents.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'codex')) return UNSUPPORTED;
   return state;
 };
 
@@ -224,6 +224,14 @@ export const clearSessionNativePlan = (sessionId: string, directory: string, run
   reads.delete(entry.key);
   publish(entry, IDLE);
   release(entry);
+};
+
+export const resetSessionNativePlanSource = (sessionId: string, directory: string, runtimeKey: string): void => {
+  const entry = entries.get(keyOf(runtimeKey, normalizePath(directory) ?? directory, sessionId));
+  if (!entry || entry.deleted || runtimeKey !== getRuntimeKey()) return;
+  clearSessionNativePlan(sessionId, directory, runtimeKey);
+  entry.deleted = false;
+  if (entry.consumers > 0) void load(entry, entry.api ?? undefined);
 };
 
 /** Connection loss is stale data, not a thread without a plan. */

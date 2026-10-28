@@ -1,5 +1,6 @@
 import type { I18nKey } from './en';
 import { settingsDict } from './uk.settings';
+import { unifiedConversationsI18n } from './unified-conversations.i18n';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
@@ -360,6 +361,7 @@ export const dict: Record<I18nKey, string> = {
   ...mcpGridI18n.uk,
   ...pluginsGridI18n.uk,
   ...integrationsCatalogI18n['uk'],
+  ...unifiedConversationsI18n['uk'],
   'terminalView.actions.attachSelection': 'Прикріпити вибраний вивід',
   'terminalView.actions.copySelection': 'Скопіювати вибраний вивід',
   'terminalView.toast.selectionCopied': 'Вивід скопійовано',

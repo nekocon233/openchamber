@@ -1,4 +1,4 @@
-import { isNativeSessionId, nativeBackendOfSessionId } from './ids';
+import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfSessionId } from './ids';
 import { z } from 'zod';
 import type { Session } from '@/lib/opencode/model';
 
@@ -17,6 +17,7 @@ type SessionActionSupport = { share: boolean; moveToWorktree: boolean; revert: b
 export const sessionActionSupport = (sessionId: string, metadata?: Session['metadata']): SessionActionSupport => {
   const native = isNativeSessionId(sessionId);
   const deepseek = nativeBackendOfSessionId(sessionId) === 'deepseek';
-  const actions = deepseek ? deepseekActions.safeParse(metadata).data?.openchamber.native.actions : null;
-  return { share: !native, moveToWorktree: !native, revert: deepseek ? actions?.revert === true : true, delete: deepseek ? actions?.delete === true : true };
+  const guarded = deepseek || isUnifiedNativeSessionId(sessionId);
+  const actions = guarded ? deepseekActions.safeParse(metadata).data?.openchamber.native.actions : null;
+  return { share: !native, moveToWorktree: !native, revert: guarded ? actions?.revert === true : true, delete: guarded ? actions?.delete === true : true };
 };

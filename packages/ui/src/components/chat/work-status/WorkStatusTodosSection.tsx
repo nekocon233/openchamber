@@ -1,6 +1,6 @@
 import React from 'react';
 import { useI18n } from '@/lib/i18n';
-import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
+import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
 import { useSessionNativeTodos } from '@/sync/session-native-todos';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
@@ -17,7 +17,8 @@ const STEP_STATUS_TONES = { pending: 'muted', in_progress: 'info', completed: 's
 
 export function WorkStatusTodosSection({ sessionId, directory }: { sessionId: string | null; directory: string | null }) {
   const { t } = useI18n();
-  const enabled = Boolean(sessionId && directory && nativeBackendOfSessionId(sessionId) === 'codex');
+  const backend = useNativeSessionBackend(sessionId, directory);
+  const enabled = Boolean(sessionId && directory && backend === 'codex');
   const state = useSessionNativeTodos(sessionId, directory, { enabled, visible: false });
   const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;
