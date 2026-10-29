@@ -2,12 +2,14 @@ import { parseModelIdentifier } from '@/lib/modelIdentifier';
 import { modelVariantNames } from '@/lib/modelVariants';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useSelectionStore } from '@/sync/selection-store';
+import { useSessionUIStore } from '@/sync/session-ui-store';
 
 /**
- * The model, agent and variant a session the app starts on its own sends with:
- * the defaults from Settings, falling back to what the user picked last. Used
- * where no composer is involved, such as an extension starting a session or the
- * Memory panel's tidy-up.
+ * What a send carries. `captureDefaultSendSelection` answers for a session the
+ * app starts on its own, where no composer is involved, such as an extension
+ * starting one or the Memory panel's tidy-up. `resolveSessionSendSelection`
+ * answers for a message sent into a session that already exists, where the
+ * session's own agent and model outrank the app-wide selection.
  */
 const resolveDefaultAgentName = (): string | undefined => {
   const configState = useConfigStore.getState();
@@ -65,4 +67,64 @@ export const captureDefaultSendSelection = () => {
     return null;
   }
   return { providerID, modelID, agentName, variant: resolveDefaultVariant(providerID, modelID) };
+};
+
+type SessionSendSelection = {
+  providerID: string;
+  modelID: string;
+  agent?: string;
+  variant?: string;
+};
+
+/**
+ * The model, agent and effort a send into an existing session should carry: the
+ * agent and model the session was set up with, then the model its last user
+ * message ran on, then the app-wide selection. A surface that sends outside
+ * that session's composer (a project todo sent to the current conversation)
+ * would otherwise switch the session to whatever the app has selected.
+ */
+export const resolveSessionSendSelection = (sessionId: string): SessionSendSelection | null => {
+  const selection = useSelectionStore.getState();
+  const configState = useConfigStore.getState();
+  const lastChoice = useSessionUIStore.getState().getLastUserChoice(sessionId);
+
+  const agent = selection.getSessionAgentSelection(sessionId)
+    || lastChoice?.agent
+    || configState.currentAgentName
+    || undefined;
+  const agentModel = agent ? selection.getAgentModelForSession(sessionId, agent) : null;
+  const sessionModel = selection.getSessionModelSelection(sessionId);
+  const lastChoiceModel = lastChoice?.providerID && lastChoice.modelID
+    ? { providerId: lastChoice.providerID, modelId: lastChoice.modelID }
+    : null;
+  const model = agentModel
+    || sessionModel
+    || lastChoiceModel
+    || (configState.currentProviderId && configState.currentModelId
+      ? { providerId: configState.currentProviderId, modelId: configState.currentModelId }
+      : null);
+  if (!model?.providerId || !model.modelId) {
+    return null;
+  }
+
+  // Variants are model-specific, so only one recorded for this model counts.
+  const agentVariant = agent
+    ? selection.getAgentModelVariantForSession(sessionId, agent, model.providerId, model.modelId)
+    : undefined;
+  const lastChoiceVariant = lastChoiceModel
+    && lastChoiceModel.providerId === model.providerId
+    && lastChoiceModel.modelId === model.modelId
+    ? lastChoice?.variant
+    : undefined;
+  const configVariant = configState.currentProviderId === model.providerId
+    && configState.currentModelId === model.modelId
+    ? configState.currentVariant
+    : undefined;
+
+  return {
+    providerID: model.providerId,
+    modelID: model.modelId,
+    agent,
+    variant: agentVariant || lastChoiceVariant || configVariant || undefined,
+  };
 };

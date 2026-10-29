@@ -774,7 +774,7 @@ one app-wide composer state is split per column:
 - **Pending text and context.** `setPendingInputText` and
   `setPendingSyntheticParts` take a target. Null is the main chat's composer,
   which every app-wide source writes to (plugins, git dialogs, file
-  selections, todo sends); a session id addresses the pinned composer on that
+  selections); a session id addresses the pinned composer on that
   session, which is what text quoted inside that chat and the composer's own
   restores use. A composer consumes only what is addressed to it. The main
   chat's composer also waits until its deferred column shows the live

@@ -23,7 +23,7 @@ drawer.
 | `KnowledgeActions.tsx` | the row actions: pin toggle, the ⋯ menu, hover reveal |
 | `pendingKnowledgeDeletes.ts` | deletes that wait out an undo window |
 | `knowledgeFormat.ts` | note title from the first line, entry dates |
-| `useProjectTodoSend.ts` | sending a todo to a current/new/worktree session |
+| `useProjectTodoSend.ts` | sending a todo into the current conversation, a new session, or a new worktree session |
 
 ## Layout
 
@@ -107,6 +107,25 @@ them always. A pinned entry keeps its filled pin visible.
 The pin attaches a note or plan to the current session's context, and a pinned
 note says so in its footer. The icon alone read as "pin to the top of the
 list".
+
+The send control on a todo opens three targets: the current session, a new
+session, and a new worktree session. The two "new" targets create the session,
+pick its model, agent and effort in `TodoSendDialog`, and send the todo with the
+`plan.todo` magic prompt, which asks for a plan before any implementation.
+
+"Send to current session" writes the todo into the conversation as a user
+message right away, the way pressing send in the composer does. The send carries
+the session's own agent and model, and the app-wide selection only when the
+session has none of its own (`resolveSessionSendSelection` in
+`lib/defaultSendSelection.ts`); a todo sent from the panel cannot quietly switch
+a configured session to another model. When the conversation is working, the
+message goes into the running turn (`delivery: 'steer'`), and an open permission
+or question is superseded first, as a composer send supersedes it. A failed send
+reports the error and leaves the todo in the list.
+
+An earlier version wrapped the todo in a Markdown code fence and appended it to
+the composer, so the toast said "sent" while the user still had to press send a
+second time.
 
 ## Delete with undo
 

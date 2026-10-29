@@ -93,7 +93,7 @@ export const TodosSection: React.FC<{
    * todo when `change` names it, otherwise the whole list.
    */
   onPersistTodos: (next: ProjectTodoItem[], change?: ProjectTodoChange) => void;
-  onSendToCurrentSession: (todoText: string) => void;
+  onSendToCurrentSession: (todoId: string, todoText: string) => void;
   onSendToNewSession: (todoId: string, todoText: string) => void;
   onSendToNewWorktreeSession: (todoId: string, todoText: string) => void;
 }> = ({
@@ -283,7 +283,7 @@ export const TodosSection: React.FC<{
                                 </button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="w-56">
-                                <DropdownMenuItem onClick={() => onSendToCurrentSession(todo.text)}>
+                                <DropdownMenuItem onClick={() => onSendToCurrentSession(todo.id, todo.text)}>
                                   {t('rightSidebar.contextNotesTodo.todo.sendMenu.currentSession')}
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => onSendToNewSession(todo.id, todo.text)}>

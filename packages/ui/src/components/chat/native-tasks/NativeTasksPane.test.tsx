@@ -7,7 +7,6 @@ import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeAgentsAPI, SettingsAPI } from '@/lib/api/types';
 import { I18nProvider } from '@/lib/i18n';
 import { useI18nStore } from '@/lib/i18n/store';
-import { SyncProvider } from '@/sync/sync-context';
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from '@/lib/native-agents/test-utils/runtime';
 import type { NativeChecklistSnapshot, NativeExecutionTask, NativeTaskOutput, NativeTaskSnapshot } from '@/lib/native-agents/task-schemas';
 import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';

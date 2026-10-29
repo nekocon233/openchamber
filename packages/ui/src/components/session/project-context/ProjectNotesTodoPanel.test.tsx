@@ -102,6 +102,9 @@ const { resolveProjectContextId } = await import('@/lib/projectContextApi');
 const { subscribeOpenchamberEvents } = await import('@/lib/openchamberEvents');
 const { useProjectContextStore } = await import('@/stores/useProjectContextStore');
 const { useUIStore } = await import('@/stores/useUIStore');
+const { useInputStore } = await import('@/sync/input-store');
+const { useSelectionStore } = await import('@/sync/selection-store');
+const { useGlobalSessionStatusStore } = await import('@/sync/global-session-status');
 const { useSessionUIStore } = await import('@/sync/session-ui-store');
 const { ProjectNotesTodoPanel } = await import('./ProjectNotesTodoPanel');
 const { EditorView } = await import('@codemirror/view');
@@ -416,4 +419,93 @@ test('going back from an open note returns to where the list was', async () => {
 
   expect(scroller.scrollTop).toBe(120);
   expect(browser.document.activeElement?.getAttribute('data-knowledge-entry-id')).toBe('second-note');
+});
+
+type SendMessage = ReturnType<typeof useSessionUIStore.getState>['sendMessage'];
+type SentMessage = { content: string; options: Parameters<SendMessage>[9] };
+
+/** Swaps the store's send for a recorder, and puts the real one back on exit. */
+const captureTodoSends = () => {
+  const original = useSessionUIStore.getState().sendMessage;
+  const sent: SentMessage[] = [];
+  const recorder: SendMessage = async (content, _providerID, _modelID, _agent, _attachments, _agentMentionName, _additionalParts, _variant, _inputMode, options) => {
+    sent.push({ content, options });
+  };
+  useSessionUIStore.setState({ sendMessage: recorder });
+  return {
+    sent,
+    restore: () => useSessionUIStore.setState({ sendMessage: original }),
+  };
+};
+
+const chooseTodoSendToCurrentSession = async () => {
+  const todoTab = Array.from(host.querySelectorAll<HTMLButtonElement>('nav button'))
+    .find(button => button.textContent?.startsWith('Todo'));
+  if (!todoTab) throw new Error('Todo tab missing');
+  await act(async () => todoTab.click());
+
+  const trigger = host.querySelector<HTMLButtonElement>('li button[aria-label^="Send "]');
+  if (!trigger) throw new Error('Send menu trigger missing');
+  await act(async () => trigger.click());
+
+  const item = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .find(entry => entry.textContent?.startsWith('Send to current session'));
+  if (!item) throw new Error('Send to current session item missing');
+  // The send resolves behind the click, so its state updates stay inside act.
+  await act(async () => {
+    item.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+};
+
+const todoSendSession = () => {
+  useSessionUIStore.setState({ currentSessionId: 'ses_todo', currentSessionDirectory: '/fixture/chats' });
+  useSelectionStore.setState({
+    sessionModelSelections: new Map([['ses_todo', { providerId: 'provider-1', modelId: 'model-1' }]]),
+  });
+};
+
+test('sending a todo to the current session sends it as it is, not into the composer', async () => {
+  serverContext = { ...serverContext, todos: [{ id: 'mine', text: 'Mine', completed: false, createdAt: 1 }] };
+  const originalSelection = useSelectionStore.getState().sessionModelSelections;
+  const sends = captureTodoSends();
+  try {
+    todoSendSession();
+    await mount();
+    await chooseTodoSendToCurrentSession();
+
+    expect(sends.sent).toHaveLength(1);
+    expect(sends.sent[0].content).toBe('Mine');
+    expect(sends.sent[0].options?.sessionId).toBe('ses_todo');
+    expect(sends.sent[0].options?.delivery).toBeUndefined();
+    expect(useInputStore.getState().pendingInputText).toBeNull();
+  } finally {
+    await act(async () => {
+      sends.restore();
+      useSelectionStore.setState({ sessionModelSelections: originalSelection });
+      useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null });
+    });
+  }
+});
+
+test('a todo sent while the session is working steers into the running turn', async () => {
+  serverContext = { ...serverContext, todos: [{ id: 'mine', text: 'Mine', completed: false, createdAt: 1 }] };
+  const originalSelection = useSelectionStore.getState().sessionModelSelections;
+  const sends = captureTodoSends();
+  try {
+    todoSendSession();
+    useGlobalSessionStatusStore.setState({ resolvedStatusById: new Map([['ses_todo', 'busy']]) });
+    await mount();
+    await chooseTodoSendToCurrentSession();
+
+    expect(sends.sent).toHaveLength(1);
+    expect(sends.sent[0].options?.delivery).toBe('steer');
+  } finally {
+    await act(async () => {
+      sends.restore();
+      useGlobalSessionStatusStore.setState({ resolvedStatusById: new Map() });
+      useSelectionStore.setState({ sessionModelSelections: originalSelection });
+      useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null });
+    });
+  }
 });
