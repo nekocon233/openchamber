@@ -9,6 +9,10 @@ describe('provider logo aliases', () => {
         expect(source).toContain('const candidates = [prefixAlias,');
     });
 
+    test('aliases Antigravity to the bundled Google logo', () => {
+        expect(source).toContain("['antigravity-native', 'google']");
+    });
+
     test('aliases the copilot provider id to the bundled github-copilot logo', () => {
         expect(source).toContain("['copilot', 'github-copilot']");
     });

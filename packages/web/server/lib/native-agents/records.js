@@ -11,7 +11,7 @@
 /**
  * @param {object} input
  * @param {string} input.id
- * @param {'claude' | 'codex' | 'deepseek'} input.backend
+ * @param {'claude' | 'codex' | 'deepseek' | 'antigravity'} input.backend
  * @param {string} input.directory
  * @param {string} input.title
  * @param {number} input.created
@@ -38,13 +38,13 @@ export const buildSessionRecord = ({ id, backend, directory, title, created, upd
 /**
  * The session record of a session OpenChamber created that the CLI has not
  * confirmed yet, so it may have no transcript.
- * @param {{ sessionId: string, backend: 'claude' | 'codex', directory: string, createdAt: number, title?: string, archivedAt?: number }} entry
+ * @param {{ sessionId: string, backend: 'claude' | 'codex' | 'antigravity', directory: string, createdAt: number, title?: string, archivedAt?: number }} entry
  */
 export const unconfirmedSessionRecord = (entry) => buildSessionRecord({
   id: entry.sessionId,
   backend: entry.backend,
   directory: entry.directory,
-  title: entry.title ?? (entry.backend === 'claude' ? 'New Claude Code session' : 'New Codex session'),
+  title: entry.title ?? ({ claude: 'New Claude Code session', codex: 'New Codex session', antigravity: 'New Antigravity session' })[entry.backend],
   created: entry.createdAt,
   updated: entry.createdAt,
   archived: entry.archivedAt ?? null,

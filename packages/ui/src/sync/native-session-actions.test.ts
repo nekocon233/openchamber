@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { type Session } from "@/lib/opencode/model"
 
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
-import type { NativeCompactRequest, NativeSessionPatch } from "@/lib/api/types"
+import type { NativeCompactRequest, NativeSessionCreate, NativeSessionPatch } from "@/lib/api/types"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from "@/lib/native-agents/test-utils/runtime"
 import { useConfigStore } from "@/stores/useConfigStore"
@@ -13,6 +13,7 @@ import {
   archiveSession,
   archiveSessions,
   compactNativeSession,
+  createNativeSession,
   deleteSession,
   patchSessionMetadata,
   setActionRefs,
@@ -38,6 +39,8 @@ const nativeSession = (id: string, patch: Partial<Session> = {}): Session => ({
 let updates: Array<{ sessionId: string; directory: string; patch: NativeSessionPatch }> = []
 let deletes: string[] = []
 let compactions: Array<{ sessionId: string; request: NativeCompactRequest }> = []
+let createRequests: NativeSessionCreate[] = []
+let capabilityReads = 0
 let deleteFailure: NativeAgentsRequestError | null = null
 let openChamberRequests: string[] = []
 let openCodeRequests: string[] = []
@@ -55,6 +58,8 @@ beforeEach(() => {
   updates = []
   deletes = []
   compactions = []
+  createRequests = []
+  capabilityReads = 0
   deleteFailure = null
   openChamberRequests = []
   openCodeRequests = []
@@ -79,6 +84,19 @@ beforeEach(() => {
     compact: async (sessionId, request) => {
       compactions.push({ sessionId, request })
     },
+    capabilities: async () => {
+      capabilityReads += 1
+      return {
+        supported: true,
+        unifiedSessions: true,
+        backends: { claude: { cli: true }, codex: { cli: true } },
+        registry: { reset: false },
+      }
+    },
+    createSession: async (input) => {
+      createRequests.push(input)
+      return nativeSession(input.backend === 'antigravity' ? 'nag_created' : 'ncv_created')
+    },
   }), { sidebarState: localSidebarState }))
   // Native sessions must never reach OpenCode or its batch routes; any request is recorded and refused.
   opencodeClient.getSession = async (sessionId) => {
@@ -97,6 +115,27 @@ afterEach(() => {
   opencodeClient.getSession = originalGetSession;
   registerRuntimeAPIs(null)
   childStores.disposeAll()
+})
+
+describe('native session creation', () => {
+  test('Antigravity bypasses the unified default and always creates a single-CLI session', async () => {
+    await createNativeSession('antigravity', DIRECTORY, undefined, {
+      model: { providerID: 'antigravity-native', id: 'gemini-3-pro' }, agent: 'plan',
+    })
+    expect(capabilityReads).toBe(0)
+    expect(createRequests).toEqual([{ backend: 'antigravity', directory: DIRECTORY }])
+  })
+
+  test('other native providers keep the unified creation path', async () => {
+    await createNativeSession('codex', DIRECTORY, 'Work', {
+      model: { providerID: 'codex-native', id: 'gpt-5.5', variant: 'high' }, agent: 'plan',
+    })
+    expect(capabilityReads).toBe(1)
+    expect(createRequests).toEqual([{
+      kind: 'unified', backend: 'codex', directory: DIRECTORY, title: 'Work',
+      selection: { model: { providerID: 'codex-native', modelID: 'gpt-5.5' }, agent: 'plan', variant: 'high' },
+    }])
+  })
 })
 
 describe("native session management actions", () => {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { FormRequest } from '@/lib/opencode/model';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
 import type { QuestionInfo, QuestionRequest } from '@/types/question';
+import { nativeBackendOfSessionId } from './ids';
 
 type FormField = FormRequest['fields'][number];
 type Translate = (key: I18nKey, params?: I18nParams) => string;
@@ -23,6 +24,8 @@ const fieldForQuestion = (question: QuestionInfo, index: number): FormField => {
 
 /** Native questions use the shared form state, dock and reply lifecycle. */
 export const projectNativeQuestion = (question: QuestionRequest): FormRequest | null => {
+  // Antigravity has no question or plan-approval protocol.
+  if (nativeBackendOfSessionId(question.sessionID) === 'antigravity') return null;
   const [first, ...rest] = question.questions.map(fieldForQuestion);
   if (!first) return null;
   return {

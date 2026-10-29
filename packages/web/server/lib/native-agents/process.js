@@ -104,3 +104,9 @@ const signalTree = (pid, signal) => {
     }
   }
 };
+
+/** Sends one lifecycle signal to the CLI process tree. */
+export const signalCliProcess = (child, signal) => {
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
+  signalTree(child.pid, signal);
+};

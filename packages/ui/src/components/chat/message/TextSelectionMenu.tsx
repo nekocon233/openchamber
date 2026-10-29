@@ -16,6 +16,7 @@ import { summarizeSelectionForNotes } from '@/lib/smallModel';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { isVSCodeRuntime } from '@/lib/desktop';
+import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import { useI18n } from '@/lib/i18n';
 import { getTypeToCommentText } from '@/lib/typeToComment';
 import { useCommentImagePaste } from '@/components/comments/useCommentImagePaste';
@@ -132,6 +133,7 @@ const TextSelectionMenuImpl: React.FC<TextSelectionMenuProps> = ({ containerRef,
   const isMenuVisibleRef = React.useRef(false);
   const activeAddToChatCleanupRef = React.useRef<(() => void) | null>(null);
   const currentSessionId = useChatSessionSelection().sessionId;
+  const canAskOpenChamber = Boolean(currentSessionId && nativeBackendOfSessionId(currentSessionId) !== 'antigravity');
   const { focusInput: focusColumnInput, pinned: columnPinned } = useChatColumnActions();
   const newSessionDraftOpen = useSessionUIStore((state) => state.newSessionDraft?.open);
   const addContextDraft = useInlineCommentDraftStore((state) => state.addDraft);
@@ -816,7 +818,7 @@ const TextSelectionMenuImpl: React.FC<TextSelectionMenuProps> = ({ containerRef,
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            {currentSessionId ? (
+            {canAskOpenChamber ? (
               <button
                 onClick={handleAskOpenChamber}
                 className={cn(
@@ -896,7 +898,7 @@ const TextSelectionMenuImpl: React.FC<TextSelectionMenuProps> = ({ containerRef,
             {t('chat.textSelection.actions.comment')}
           </button>
 
-          {currentSessionId ? (
+          {canAskOpenChamber ? (
             <>
               <div className="mx-0.5 h-5 w-px shrink-0 bg-[var(--interactive-border)]" />
               <button

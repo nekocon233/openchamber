@@ -4,6 +4,7 @@
 // a file referenced by path is named in the prompt for the agent to read. An
 // attachment the CLI cannot take is refused rather than dropped.
 
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { invalidRequestError } from './errors.js';
@@ -50,7 +51,9 @@ const pathOf = (url) => {
 };
 
 const unsupported = (cli, part) => invalidRequestError(
-  `${cli} cannot take ${part.filename ?? 'this attachment'} (${part.mime}). Send images${cli === 'Claude Code' ? ', PDFs' : ''} or text files.`,
+  cli === 'Antigravity'
+    ? `Antigravity cannot take ${part.filename ?? 'this attachment'} (${part.mime}). Send text files or file references.`
+    : `${cli} cannot take ${part.filename ?? 'this attachment'} (${part.mime}). Send images${cli === 'Claude Code' ? ', PDFs' : ''} or text files.`,
 );
 
 /**
@@ -113,3 +116,41 @@ export const codexPromptInput = (parts) => {
   if (input.length === 0) throw invalidRequestError('A prompt needs text or an attachment');
   return input;
 };
+
+/** agy's streaming stdin accepts text only, so every attachment becomes a text reference. */
+export const antigravityPromptText = (parts) => {
+  const blocks = [];
+  for (const part of parts) {
+    if (part.type === 'text') {
+      if (part.text !== '') blocks.push(part.text);
+      continue;
+    }
+    const path = pathOf(part.url);
+    if (path !== null) {
+      if (part.mime.startsWith('image/')) throw unsupported('Antigravity', part);
+      blocks.push(`Attached file: ${path}`);
+      continue;
+    }
+    const data = decodeDataUrl(part.url);
+    if (data?.mime.startsWith('text/')) {
+      blocks.push(fileTextBlock(part.filename ?? 'file', Buffer.from(data.base64, 'base64').toString('utf8')));
+    } else {
+      throw unsupported('Antigravity', part);
+    }
+  }
+  if (blocks.length === 0) throw invalidRequestError('A prompt needs text or an attachment');
+  return blocks.join('\n\n');
+};
+
+/** Removes model-facing OpenChamber blocks before display or identity hashing. */
+export const antigravityVisiblePromptText = (text) => {
+  const request = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(text)?.[1] ?? text;
+  return request
+    .replace(/<openchamber-instructions>[\s\S]*?<\/openchamber-instructions>/g, '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+};
+
+export const antigravityPromptFingerprint = (text) => createHash('sha256')
+  .update(antigravityVisiblePromptText(text))
+  .digest('hex');

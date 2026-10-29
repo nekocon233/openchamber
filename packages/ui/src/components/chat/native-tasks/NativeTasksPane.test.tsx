@@ -7,6 +7,7 @@ import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeAgentsAPI, SettingsAPI } from '@/lib/api/types';
 import { I18nProvider } from '@/lib/i18n';
 import { useI18nStore } from '@/lib/i18n/store';
+import { SyncProvider } from '@/sync/sync-context';
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from '@/lib/native-agents/test-utils/runtime';
 import type { NativeChecklistSnapshot, NativeExecutionTask, NativeTaskOutput, NativeTaskSnapshot } from '@/lib/native-agents/task-schemas';
 import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
@@ -170,6 +171,12 @@ describe('native tasks context surface', () => {
   test('a Codex session without a plan says so instead of reporting a failure', async () => {
     await render({ session: 'ncx_fixture' });
     expect(document.body.textContent).toContain('Codex has not written a plan for this session');
+  });
+
+  test('Antigravity reports task views as unsupported without mounting their readers', async () => {
+    await render({ session: 'nag_fixture' });
+    expect(document.body.textContent).toContain('This server or CLI does not support this task view.');
+    expect(document.querySelector('[data-native-tasks-body]')).toBeNull();
   });
 
   test('a session that is not a native CLI one explains the empty surface instead of loading', async () => {

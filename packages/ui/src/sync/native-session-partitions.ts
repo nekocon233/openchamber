@@ -11,7 +11,7 @@ import { normalizePath } from '@/lib/pathNormalization';
 // the backends (they arrive with their parent's history), so they are kept
 // until their parent goes away.
 
-const PARTITIONS: NativeSessionPartition[] = ['claude', 'codex', 'deepseek', 'unified'];
+const PARTITIONS: NativeSessionPartition[] = ['claude', 'codex', 'deepseek', 'antigravity', 'unified'];
 const NATIVE_LIST_CONCURRENCY = 4;
 
 /** Fresh root sessions per backend; null marks a backend that could not be read. */
@@ -21,11 +21,12 @@ const snapshotOf = (list: NativeSessionList): NativePartitionSnapshot => ({
   claude: list.backends.claude.status === 'ok' ? list.backends.claude.sessions : null,
   codex: list.backends.codex.status === 'ok' ? list.backends.codex.sessions : null,
   deepseek: list.backends.deepseek?.status === 'ok' ? list.backends.deepseek.sessions : null,
+  antigravity: list.backends.antigravity?.status === 'ok' ? list.backends.antigravity.sessions : null,
   unified: list.unified?.status === 'ok' ? list.unified.sessions : null,
   unavailable: list.unified?.unavailable,
 });
 
-const FAILED_SNAPSHOT: NativePartitionSnapshot = { claude: null, codex: null, deepseek: null, unified: null };
+const FAILED_SNAPSHOT: NativePartitionSnapshot = { claude: null, codex: null, deepseek: null, antigravity: null, unified: null };
 
 /** Reads one directory; a request failure fails every backend of it. */
 export const fetchNativePartition = async (api: NativeAgentsAPI, directory: string): Promise<NativePartitionSnapshot> => {

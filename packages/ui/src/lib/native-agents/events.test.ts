@@ -72,6 +72,14 @@ describe('native records in the shared v2 domain', () => {
     }
   });
 
+  test('does not project Antigravity questions because its adapter has no question protocol', () => {
+    const antigravityQuestion = {
+      ...question, kind: undefined, sessionID: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+    };
+    expect(projectNativeQuestion(antigravityQuestion)).toBeNull();
+    expect(translateNativeEvent({ type: 'question.asked', properties: antigravityQuestion })).toBeNull();
+  });
+
   test('translated plan choices retain the native wire answers', () => {
     const form = projectNativeQuestion(question);
     if (!form) throw new Error('Missing native plan form');

@@ -64,8 +64,8 @@ describe('Codex plan decisions through the native runtime', () => {
     const { runtime, directory, session, question, sends, registry, idle, captures, restored, events } = await createHarness();
     expect(await runtime.statuses(directory)).toEqual({});
     expect(await runtime.questions(directory)).toEqual([question]);
-    runtime.replyQuestion(question.id, [['build']]);
-    expect(() => runtime.replyQuestion(question.id, [['build']])).toThrow('No pending native question');
+    await runtime.replyQuestion(question.id, [['build']]);
+    await expect(runtime.replyQuestion(question.id, [['build']])).rejects.toThrow('No pending native question');
     await idle();
     const starts = sends();
     expect(starts).toHaveLength(2);
@@ -103,7 +103,7 @@ describe('Codex plan decisions through the native runtime', () => {
 
   it('keeps a manually submitted matching prompt visible', async () => {
     const { runtime, directory, session, question, prompt, idle } = await createHarness();
-    runtime.replyQuestion(question.id, [['build']]);
+    await runtime.replyQuestion(question.id, [['build']]);
     await idle();
     await prompt('Implement the plan.', 'build');
     await idle();
@@ -145,14 +145,14 @@ describe('Codex plan decisions through the native runtime', () => {
     else await runtime.shutdown();
     expect(await runtime.questions(directory)).toEqual([]);
     expect(runtime.hasPendingPlanDecision(session.id)).toBe(false);
-    expect(() => runtime.replyQuestion(question.id, [['build']])).toThrow('No pending native question');
+    await expect(runtime.replyQuestion(question.id, [['build']])).rejects.toThrow('No pending native question');
     expect(sends()).toHaveLength(action === 'prompt' ? 2 : 1);
   });
 
   it('reports execution-start failure and leaves the recorded session in plan mode', async () => {
     const { runtime, directory, session, question, events, sends, idle } = await createHarness();
     fs.writeFileSync(path.join(directory, 'fail-build'), '');
-    runtime.replyQuestion(question.id, [['build']]);
+    await runtime.replyQuestion(question.id, [['build']]);
     await idle();
     expect(events.filter(event => event.payload.type === 'session.error')).toHaveLength(1);
     expect(events.find(event => event.payload.type === 'session.error').payload.properties.error.data.message).toBe('Scripted execution start failed');

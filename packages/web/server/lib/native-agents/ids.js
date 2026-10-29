@@ -14,21 +14,24 @@ import { createHash, randomUUID } from 'node:crypto';
 export const NATIVE_BACKEND_CLAUDE = 'claude';
 export const NATIVE_BACKEND_CODEX = 'codex';
 export const NATIVE_BACKEND_DEEPSEEK = 'deepseek';
+export const NATIVE_BACKEND_ANTIGRAVITY = 'antigravity';
 
 export const NATIVE_PROVIDER_CLAUDE = 'claude-native';
 export const NATIVE_PROVIDER_CODEX = 'codex-native';
 export const NATIVE_PROVIDER_DEEPSEEK = 'deepseek-native';
+export const NATIVE_PROVIDER_ANTIGRAVITY = 'antigravity-native';
 
 const CLAUDE_SESSION_PREFIX = 'ncl_';
 const CODEX_SESSION_PREFIX = 'ncx_';
 const DEEPSEEK_SESSION_PREFIX = 'ndh_';
+const ANTIGRAVITY_SESSION_PREFIX = 'nag_';
 const CODEX_PLAN_APPROVAL_PREFIX = 'ncx_u_plan_';
 const CLAUDE_CHILD_SEPARATOR = '_t_';
 
 // Charset and length accepted by every OpenChamber route that carries a
 // session id (the message-queue pattern is the strictest).
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{4,128}$/;
-const NATIVE_SESSION_ID_PATTERN = /^(?:nc[lxv]|ndh)_/;
+const NATIVE_SESSION_ID_PATTERN = /^(?:nc[lxv]|ndh|nag)_/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOOL_USE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -44,6 +47,7 @@ export const nativeBackendOfSessionId = (sessionId) => {
   if (sessionId.startsWith(CLAUDE_SESSION_PREFIX)) return NATIVE_BACKEND_CLAUDE;
   if (sessionId.startsWith(CODEX_SESSION_PREFIX)) return NATIVE_BACKEND_CODEX;
   if (sessionId.startsWith(DEEPSEEK_SESSION_PREFIX)) return NATIVE_BACKEND_DEEPSEEK;
+  if (sessionId.startsWith(ANTIGRAVITY_SESSION_PREFIX)) return NATIVE_BACKEND_ANTIGRAVITY;
   return null;
 };
 
@@ -52,6 +56,7 @@ export const nativeBackendOfProviderId = (providerId) => {
   if (providerId === NATIVE_PROVIDER_CLAUDE) return NATIVE_BACKEND_CLAUDE;
   if (providerId === NATIVE_PROVIDER_CODEX) return NATIVE_BACKEND_CODEX;
   if (providerId === NATIVE_PROVIDER_DEEPSEEK) return NATIVE_BACKEND_DEEPSEEK;
+  if (providerId === NATIVE_PROVIDER_ANTIGRAVITY) return NATIVE_BACKEND_ANTIGRAVITY;
   return null;
 };
 
@@ -84,6 +89,12 @@ export const encodeCodexSessionId = (threadId) => {
   return assertSessionId(`${CODEX_SESSION_PREFIX}${threadId}`);
 };
 
+/** Antigravity conversation ids use the same UUID route shape. */
+export const encodeAntigravitySessionId = (conversationId) => {
+  if (!UUID_PATTERN.test(conversationId)) throw new Error(`Not an Antigravity conversation uuid: ${conversationId}`);
+  return assertSessionId(`${ANTIGRAVITY_SESSION_PREFIX}${conversationId}`);
+};
+
 // DSH identities are opaque and may exceed the route's length or charset.
 // The registry retains the original identity; hashing keeps every route bounded.
 export const encodeDeepseekSessionId = (nativeId) => assertSessionId(
@@ -93,7 +104,8 @@ export const encodeDeepseekSessionId = (nativeId) => assertSessionId(
 /**
  * @typedef {{ backend: 'claude', sessionUuid: string, toolUseId: string | null }
  *   | { backend: 'codex', threadId: string }
- *   | { backend: 'deepseek', key: string }} NativeSessionRef
+ *   | { backend: 'deepseek', key: string }
+ *   | { backend: 'antigravity', conversationId: string }} NativeSessionRef
  */
 
 /**
@@ -122,6 +134,11 @@ export const decodeNativeSessionId = (sessionId) => {
     const threadId = sessionId.slice(CODEX_SESSION_PREFIX.length);
     if (!UUID_PATTERN.test(threadId)) return null;
     return { backend: NATIVE_BACKEND_CODEX, threadId };
+  }
+  if (sessionId.startsWith(ANTIGRAVITY_SESSION_PREFIX)) {
+    const conversationId = sessionId.slice(ANTIGRAVITY_SESSION_PREFIX.length);
+    if (!UUID_PATTERN.test(conversationId)) return null;
+    return { backend: NATIVE_BACKEND_ANTIGRAVITY, conversationId };
   }
   return null;
 };
@@ -179,7 +196,7 @@ export const isCodexPlanApprovalMessageId = (messageId) => (
 
 /** A client-generated user message id OpenChamber sends with a native prompt. */
 export const isNativeClientUserMessageId = (messageId) => (
-  /^(?:nc[lx]_u_|ndh_u_[0-9a-f]{24}_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)
+  /^(?:nc[lx]_u_|nag_u_|ndh_u_[0-9a-f]{24}_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)
   || isCodexPlanApprovalMessageId(messageId)
 );
 
@@ -189,7 +206,7 @@ export const newNativeClientUserMessageId = (sessionId) => {
   const backend = nativeBackendOfSessionId(sessionId);
   if (!backend) throw new Error(`Not a native session: ${sessionId}`);
   if (backend === NATIVE_BACKEND_DEEPSEEK) return `ndh_u_${sessionId.slice(4, 28)}_${randomUUID()}`;
-  const prefix = { claude: CLAUDE_SESSION_PREFIX, codex: CODEX_SESSION_PREFIX, deepseek: DEEPSEEK_SESSION_PREFIX }[backend];
+  const prefix = { claude: CLAUDE_SESSION_PREFIX, codex: CODEX_SESSION_PREFIX, deepseek: DEEPSEEK_SESSION_PREFIX, antigravity: ANTIGRAVITY_SESSION_PREFIX }[backend];
   return `${prefix}u_${randomUUID()}`;
 };
 

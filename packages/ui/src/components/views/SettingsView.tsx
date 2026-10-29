@@ -15,7 +15,7 @@ import { useSnippetsStore } from '@/stores/useSnippetsStore';
 import { projectSettingsTabForSearchTarget, useProjectSettingsTabStore } from '@/components/sections/projects/projectSettingsTabs';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useSkillsCatalogStore } from '@/stores/useSkillsCatalogStore';
-import { NATIVE_PROVIDER_CLAUDE, NATIVE_PROVIDER_CODEX, NATIVE_PROVIDER_DEEPSEEK } from '@/lib/native-agents/ids';
+import { NATIVE_PROVIDER_ANTIGRAVITY, NATIVE_PROVIDER_CLAUDE, NATIVE_PROVIDER_CODEX, NATIVE_PROVIDER_DEEPSEEK } from '@/lib/native-agents/ids';
 import { Tooltip, TooltipTrigger } from '@/components/ui/tooltip';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
@@ -482,6 +482,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onClose, forceMobile
     }
     if (result.id === 'providers.deepseek-harness') {
       useUIStore.getState().setSettingsProvidersOpenRequested(NATIVE_PROVIDER_DEEPSEEK);
+    }
+    if (result.id === 'providers.antigravity') {
+      useUIStore.getState().setSettingsProvidersOpenRequested(NATIVE_PROVIDER_ANTIGRAVITY);
     }
 
     if (result.id === 'providers.connect') {

@@ -66,6 +66,19 @@ describe('loadNativeProviders', () => {
     expect(codex?.models.find((entry) => entry.id === 'gpt-5.3-codex-spark')?.variants.map((entry) => entry.id)).toEqual(['low', 'high']);
   });
 
+  test('lists Antigravity CLI with text-only model input', async () => {
+    useRuntime(async () => ({
+      backends: {
+        claude: { status: 'ok', models: [] },
+        codex: { status: 'ok', models: [] },
+        antigravity: { status: 'ok', models: [{ ...model('gemini-3-pro'), input: { image: false, pdf: false } }] },
+      },
+    }));
+    const antigravity = (await loadNativeProviders()).find((provider) => provider.id === 'antigravity-native');
+    expect(antigravity?.name).toBe('Antigravity CLI');
+    expect(antigravity?.models[0].capabilities.input).toEqual(['text']);
+  });
+
   test('a failing backend keeps what an earlier read found and is not re-read right away', async () => {
     let codexWorks = true;
     const runtime = useRuntime(async () => ({

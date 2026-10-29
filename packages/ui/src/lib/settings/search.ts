@@ -32,6 +32,11 @@ interface SettingsSearchAvailabilityContext extends SettingsRuntimeContext {
 
 const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
+    id: 'providers.antigravity', page: 'providers',
+    titleKey: 'settings.antigravity.title', descriptionKey: 'settings.antigravity.description',
+    keywords: ['antigravity', 'agy', 'gemini', 'google', 'cli', 'install', 'sign in'], isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
     id: 'providers.deepseek-harness', page: 'providers',
     titleKey: 'settings.deepseekHarness.title', descriptionKey: 'settings.deepseekHarness.description',
     keywords: ['deepseek', 'harness', 'dsh', 'cli', 'api key', 'endpoint', 'models', 'remote', 'one click', 'install', 'setup'], isAvailable: (ctx) => !ctx.isVSCode,

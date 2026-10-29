@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   decodeNativeSessionId,
+  encodeAntigravitySessionId,
   encodeClaudeChildSessionId,
   encodeClaudeSessionId,
   encodeCodexSessionId,
@@ -29,6 +30,17 @@ describe('native session ids', () => {
     expect(isNativeClientUserMessageId(messageId)).toBe(true);
     expect(messageId.startsWith(`ndh_u_${id.slice(4, 28)}_`)).toBe(true);
   });
+  it('round-trips Antigravity conversation and client message ids', () => {
+    const id = encodeAntigravitySessionId(CLAUDE_UUID);
+    expect(decodeNativeSessionId(id)).toEqual({ backend: 'antigravity', conversationId: CLAUDE_UUID });
+    expect(nativeBackendOfProviderId('antigravity-native')).toBe('antigravity');
+    expect(nativeBackendOfSessionId(id)).toBe('antigravity');
+    expect(isNativeSessionId(id)).toBe(true);
+    const messageId = newNativeClientUserMessageId(id);
+    expect(messageId.startsWith('nag_u_')).toBe(true);
+    expect(isNativeClientUserMessageId(messageId)).toBe(true);
+  });
+
   it('round-trips Claude, Claude subagent and Codex ids', () => {
     expect(decodeNativeSessionId(encodeClaudeSessionId(CLAUDE_UUID))).toEqual({
       backend: 'claude', sessionUuid: CLAUDE_UUID, toolUseId: null,

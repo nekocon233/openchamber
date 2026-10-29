@@ -35,6 +35,7 @@ const LOGO_ALIAS = new Map<string, string>([
     ['claude', 'anthropic'],
     ['claude-native', 'anthropic'],
     ['deepseek-native', 'deepseek'],
+    ['antigravity-native', 'google'],
     ['cline-pass', 'cline'],
     ['gemini', 'google'],
     ['evroc-ai', 'evroc'],

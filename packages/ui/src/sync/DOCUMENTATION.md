@@ -652,7 +652,8 @@ Initial loads use smaller requests on constrained VS Code/mobile surfaces and pu
 Unified native conversations use `ncv_` IDs and the server's separate `unified`
 listing partition. They are the default for new native-model drafts when the
 server advertises `unifiedSessions`; single-CLI creation remains the fallback
-for older servers. Failed manifests preserve their held IDs independently of
+for older servers. Antigravity always bypasses that default and creates a
+single `nag_` session. Existing unified conversations cannot select it. Failed manifests preserve their held IDs independently of
 readable conversations. The owning server contract is
 `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
 
@@ -671,8 +672,11 @@ History pages use opaque cursors; `historyUnavailable` stops initial automatic
 extension while retaining a readable recent window. A new history revision
 invalidates discarded records and in-flight reads as for DeepSeek branches.
 
-Native Claude Code (`ncl_`), Codex (`ncx_`) and DeepSeek Harness (`ndh_`) sessions come from the
-OpenChamber server through `RuntimeAPIs.nativeAgents`, never from OpenCode.
+Native Claude Code (`ncl_`), Codex (`ncx_`), DeepSeek Harness (`ndh_`) and
+Antigravity (`nag_`) sessions come from the OpenChamber server through
+`RuntimeAPIs.nativeAgents`, never from OpenCode. Antigravity's partition is
+optional so an older server can omit it; omission preserves held `nag_` records
+and leaves that partition's completeness unknown.
 The server contract is in `packages/web/server/lib/native-agents/DOCUMENTATION.md`.
 `lib/native-agents/ids.ts` tells the backends apart by prefix, and every native
 branch keys on it.
@@ -689,8 +693,8 @@ revision precedes native timestamps when rejecting stale session patches.
 Native message pages carry an optional `historyRevision`; the loader replaces
 an obsolete confirmed window even if every commit/metadata event was missed,
 and restarts a mixed initial window rather than merging different branches.
-Server-advertised native action flags gate undo and permanent deletion across
-desktop, timeline, bulk and mobile controls.
+Server-advertised native action flags gate undo, permanent deletion and message
+forks across desktop, timeline, bulk and mobile controls.
 The host contract is in
 `packages/web/server/lib/native-agents/deepseek/DOCUMENTATION.md`.
 
@@ -831,10 +835,14 @@ with a native branch (`sync/native-send.ts`):
   `NATIVE_SESSION_BUSY`, ...) fails the send at once, whatever its status. A
   send whose answer was lost is confirmed from the native history, which
   OpenCode cannot read for a native id.
-- A follow-up that would be queued goes out at once: the host queue delivers
-  through OpenCode, and the CLI itself holds a prompt that arrives mid-turn.
+- A follow-up that would be queued goes out at once for Claude, Codex and
+  DeepSeek: the host queue delivers through OpenCode, and the CLI itself holds a
+  prompt that arrives mid-turn. Antigravity has no mid-turn steering, so its
+  busy follow-ups stay in the host queue until the session is idle.
 - The agent is `build` or `plan`; the picker offers only those two for a
-  native session or a draft with a CLI's model picked.
+  native session or a draft with a CLI's model picked. Antigravity offers and
+  sends build only. Its composer has no native slash commands, plan/questions
+  or task views.
 - Picking a CLI's model in a new-session draft creates a unified native
   conversation when supported (`materializeOpenDraftSession` passes the backend
   and selection through `createSession`). Native sessions skip the draft's permission policy: the
@@ -883,7 +891,11 @@ Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
 
 Rename, archive, restore and delete keep their flows with the remote step
 swapped for the native API (`updateSessionRemotely`, `deleteSessionRemotely`);
-a native `404` on delete counts as already deleted, as for OpenCode. Native
+a native `404` on delete counts as already deleted, as for OpenCode. Antigravity
+supports rename, archive and restore. Revert, fork, compaction and permanent
+deletion are closed by default and hidden, with no fallback to another
+backend's action support. Its models declare text input only, and it has no
+Small Model, quota or terminal memory-hook integration. Native
 sessions archive one by one, never through the OpenCode batch route. The review
 and btw link cleanup before a delete or archive reads a native session through
 the native API, since the server keeps its links. A Claude Code session's

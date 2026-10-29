@@ -129,7 +129,11 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     reviewTransferDirection = null,
 }) => {
     const { t } = useI18n();
-    const canRevert = useGlobalSessionsStore((state) => sessionActionSupport(message.info.sessionID, state.entityById.get(message.info.sessionID)?.metadata).revert);
+    const actionSupport = useGlobalSessionsStore(
+        useShallow((state) => sessionActionSupport(message.info.sessionID, state.entityById.get(message.info.sessionID)?.metadata))
+    );
+    const canRevert = actionSupport.revert;
+    const canFork = actionSupport.fork;
     const { isMobile, isTablet, hasTouchInput } = useDeviceInfo();
     const alwaysShowMessageActions = isMobile || isTablet;
     // Pins ride along OpenCode prompts as OpenChamber context; a native CLI
@@ -702,7 +706,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 showReasoningTraces={showReasoningTraces}
                                                 agentMention={agentMention}
                                                 onRevert={canRevert ? handleRevert : undefined}
-                                                onFork={isUser ? handleFork : undefined}
+                                                onFork={isUser && canFork ? handleFork : undefined}
                                                 contextPinned={isPinnedIntoContext}
                                                 contextPinPending={pinPending}
                                                 onToggleContextPin={canPinIntoContext && messageCreatedAt ? handleToggleContextPin : undefined}
@@ -737,7 +741,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                         showReasoningTraces={showReasoningTraces}
                                         agentMention={agentMention}
                                         onRevert={canRevert ? handleRevert : undefined}
-                                        onFork={isUser ? handleFork : undefined}
+                                        onFork={isUser && canFork ? handleFork : undefined}
                                         contextPinned={isPinnedIntoContext}
                                         contextPinPending={pinPending}
                                         onToggleContextPin={canPinIntoContext && messageCreatedAt ? handleToggleContextPin : undefined}

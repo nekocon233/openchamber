@@ -55,7 +55,7 @@ const checklistProjectionSchema = z.object({
 });
 
 const sessionEntrySchema = z.object({
-  backend: z.enum(['claude', 'codex', 'deepseek']),
+  backend: z.enum(['claude', 'codex', 'deepseek', 'antigravity']),
   nativeId: z.string().min(1),
   directory: z.string().min(1),
   origin: z.enum(['openchamber', 'adopted']),
@@ -79,6 +79,12 @@ const sendRecordSchema = z.object({
   variant: z.string().optional(),
   agent: z.string().min(1),
   sentAt: z.number(),
+  // agy owns the conversation step, OpenChamber owns the client message id.
+  // The binding survives reloads without copying any prompt text.
+  antigravity: z.object({
+    stepIndex: z.number().int().nonnegative().optional(),
+    fingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  }).optional(),
 });
 
 // The work tree before an OpenChamber prompt, and after the turn that answered it.
@@ -241,7 +247,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
       return state.sessions.get(sessionId) ?? null;
     },
 
-    /** @param {{ backend?: 'claude' | 'codex' | 'deepseek', directory?: string }} [filter] */
+    /** @param {{ backend?: 'claude' | 'codex' | 'deepseek' | 'antigravity', directory?: string }} [filter] */
     async listSessions(filter = {}) {
       await load();
       return Array.from(state.sessions, ([sessionId, entry]) => ({ sessionId, ...entry }))
@@ -252,7 +258,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
     /**
      * Sessions OpenChamber created that no finished turn has confirmed yet.
      * The CLI may have no transcript for them, so they exist here alone.
-     * @param {{ backend?: 'claude' | 'codex' | 'deepseek', directory?: string, sessionId?: string }} [filter]
+     * @param {{ backend?: 'claude' | 'codex' | 'deepseek' | 'antigravity', directory?: string, sessionId?: string }} [filter]
      */
     async unconfirmedSessions(filter = {}) {
       await load();
@@ -409,8 +415,33 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
     recordSend(sessionId, record) {
       const parsed = sendRecordSchema.parse(record);
       return mutate((next) => {
-        const records = (next.sends.get(sessionId) ?? []).filter((existing) => existing.messageId !== parsed.messageId);
-        records.push(parsed);
+        const previous = next.sends.get(sessionId) ?? [];
+        const existing = previous.find((record) => record.messageId === parsed.messageId);
+        const antigravity = existing?.antigravity || parsed.antigravity
+          ? { ...existing?.antigravity, ...parsed.antigravity }
+          : undefined;
+        const records = previous.filter((existing) => existing.messageId !== parsed.messageId);
+        records.push({ ...parsed, ...(antigravity ? { antigravity } : {}) });
+        next.sends.set(sessionId, records.slice(-MAX_SENDS_PER_SESSION));
+      });
+    },
+
+    /** Binds an agy user-input step to the client message accepted for that turn. */
+    bindAntigravityMessage(sessionId, messageId, stepIndex, record = null) {
+      if (!Number.isInteger(stepIndex) || stepIndex < 0) throw new Error('Invalid Antigravity step index');
+      return mutate((next) => {
+        const records = [...(next.sends.get(sessionId) ?? [])];
+        const index = records.findIndex((existing) => existing.messageId === messageId);
+        if (index === -1 && !record) throw new Error('Antigravity send is not registered');
+        const existing = index === -1 ? sendRecordSchema.parse(record) : records[index];
+        const currentStep = existing.antigravity?.stepIndex;
+        if (currentStep !== undefined && currentStep !== stepIndex) throw new Error('Antigravity message is already bound to another step');
+        const updated = {
+          ...existing,
+          antigravity: { ...existing.antigravity, stepIndex },
+        };
+        if (index === -1) records.push(updated);
+        else records[index] = updated;
         next.sends.set(sessionId, records.slice(-MAX_SENDS_PER_SESSION));
       });
     },

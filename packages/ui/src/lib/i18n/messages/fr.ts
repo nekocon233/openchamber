@@ -147,6 +147,7 @@ export const dict = {
 
 
 
+  "settings.antigravity.title": "Antigravity CLI",
   "settings.claudeConnections.title": "Connexions Claude Code",
   "settings.claudeConnections.description": "Choisissez une connexion dans le sélecteur de modèles du chat. Elle est enregistrée sur ce serveur OpenChamber ; les paramètres du terminal restent inchangés.",
   "settings.claudeConnections.connections": "Connexions enregistrées",

@@ -672,11 +672,12 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         }
     }, [focusColumnInput, isAgentSelectorOpen, isCompact, selection]);
 
-    // A native CLI runs as a build agent or in plan mode, nothing else; a
-    // draft with a CLI's model picked is about to become such a session.
+    // Native CLIs run as build or in plan mode where supported. Antigravity's
+    // first adapter has no plan protocol, so its drafts and sessions get build only.
     const agentBackend = pickerBackend ?? (currentProviderId ? nativeBackendOfProviderId(currentProviderId) : null);
     const selectableDesktopAgents = React.useMemo(() => {
         const primary = agents.filter((agent) => isPrimaryMode(agent.mode));
+        if (agentBackend === 'antigravity') return primary.filter((agent) => agent.name === 'build');
         return agentBackend ? primary.filter((agent) => NATIVE_AGENT_NAMES.has(agent.name)) : primary;
     }, [agentBackend, agents]);
 

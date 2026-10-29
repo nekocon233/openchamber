@@ -30,7 +30,7 @@ export const useNativeCommands = (backend: NativeBackend | null, directory: stri
   } | null>(null);
 
   React.useEffect(() => {
-    if (!backend || !directory || !nativeAgents.supported) {
+    if (!backend || backend === 'antigravity' || !directory || !nativeAgents.supported) {
       return;
     }
     const controller = new AbortController();
@@ -49,7 +49,7 @@ export const useNativeCommands = (backend: NativeBackend | null, directory: stri
     return () => controller.abort();
   }, [backend, directory, sessionId, nativeAgents, runtimeKey]);
 
-  if (!backend || !directory || !nativeAgents.supported) return EMPTY;
+  if (!backend || backend === 'antigravity' || !directory || !nativeAgents.supported) return EMPTY;
   return loaded?.backend === backend && loaded.directory === directory && loaded.sessionId === sessionId && loaded.runtimeKey === runtimeKey && loaded.api === nativeAgents
     ? loaded.result
     : LOADING;

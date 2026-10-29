@@ -45,7 +45,9 @@ standalone `native-memory-cli.mjs` outside ASAR and supplies its server-only pat
 
 DeepSeek participation is limited to OpenChamber-managed sessions on the
 connected server. Hook enrollment and connection readiness still describe only
-Claude Code and Codex; no DSH terminal profile is modified.
+Claude Code and Codex; no DSH terminal profile is modified. Antigravity sessions
+currently receive no managed memory context or handoff capture and have no
+terminal hook enrollment.
 
 ## Native terminal hooks
 

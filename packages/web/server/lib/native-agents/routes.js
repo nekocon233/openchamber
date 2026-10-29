@@ -16,9 +16,9 @@ import { conversationSelectionSchema } from './conversations/store.js';
 const directoryQuery = z.object({ directory: z.string().min(1) }).passthrough();
 const taskOperationInput = z.object({ directory: z.string().min(1), generation: z.string().min(1).max(128) }).strict();
 const taskIdParam = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
-const commandsQuery = z.object({ backend: z.enum(['claude', 'codex', 'deepseek']), directory: z.string().min(1), sessionId: z.string().min(1).optional() }).passthrough();
+const commandsQuery = z.object({ backend: z.enum(['claude', 'codex', 'deepseek', 'antigravity']), directory: z.string().min(1), sessionId: z.string().min(1).optional() }).passthrough();
 const createSessionBody = z.object({
-  backend: z.enum(['claude', 'codex', 'deepseek']),
+  backend: z.enum(['claude', 'codex', 'deepseek', 'antigravity']),
   directory: z.string().min(1),
   title: z.string().min(1).max(200).optional(),
   kind: z.enum(['single', 'unified']).optional(),

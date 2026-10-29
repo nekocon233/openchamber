@@ -45,6 +45,21 @@ describe('native command discovery ownership', () => {
     expect(latest).toMatchObject({ status: 'ready', commands: list('next-runtime').commands });
   });
 
+  test('does not ask Antigravity for unsupported slash commands', async () => {
+    let reads = 0;
+    const apis = createTestRuntimeAPIs(createTestNativeAgentsAPI({
+      commands: async () => { reads += 1; return list('unexpected'); },
+    }));
+    let latest: ReturnType<typeof useNativeCommands> = { status: 'loading' };
+    function Probe() {
+      latest = useNativeCommands('antigravity', '/work/a');
+      return null;
+    }
+    await act(() => root.render(<RuntimeAPIContext.Provider value={apis}><Probe /></RuntimeAPIContext.Provider>));
+    expect(reads).toBe(0);
+    expect(latest).toEqual({ status: 'ready', commands: [] });
+  });
+
   test('keeps an inactive result referentially stable and makes no discovery requests', async () => {
     const results: Array<ReturnType<typeof useNativeCommands>> = [];
     const apis = createTestRuntimeAPIs(createTestNativeAgentsAPI({}));

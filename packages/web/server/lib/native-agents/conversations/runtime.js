@@ -394,6 +394,11 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     async createSession(input) {
       await load();
       if (input.kind !== 'unified') return native.createSession(input);
+      if (input.backend === 'antigravity') {
+        throw new NativeAgentError('Antigravity does not support unified native conversations', {
+          status: 409, code: 'NATIVE_ANTIGRAVITY_UNIFIED_UNSUPPORTED',
+        });
+      }
       checkPolicy();
       if (stopping) throw sessionBusyError();
       const selection = conversationSelectionSchema.parse(input.selection);

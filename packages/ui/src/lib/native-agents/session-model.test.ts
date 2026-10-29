@@ -8,6 +8,7 @@ const providers = [
   { id: 'openai', models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }] },
   { id: 'claude-native', models: [{ id: 'opus' }, { id: 'haiku' }] },
   { id: 'codex-native', models: [{ id: 'gpt-5.5' }] },
+  { id: 'antigravity-native', models: [{ id: 'gemini-3-pro' }] },
 ];
 
 describe('modelForSessionKind', () => {
@@ -21,6 +22,13 @@ describe('modelForSessionKind', () => {
       .toEqual({ providerId: 'claude-native', modelId: 'opus' });
     expect(modelForSessionKind({ sessionId: CLAUDE_SESSION, selectedProviderId: 'codex-native', providers, defaultModel: undefined }))
       .toEqual({ providerId: 'claude-native', modelId: 'opus' });
+  });
+
+  test('moves a unified session away from Antigravity, which has no unified manifest', () => {
+    expect(modelForSessionKind({
+      sessionId: 'ncv_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+      selectedProviderId: 'antigravity-native', providers, defaultModel: undefined,
+    })).toEqual({ providerId: 'claude-native', modelId: 'opus' });
   });
 
   test('moves an OpenCode session off a native model, preferring the default from settings', () => {

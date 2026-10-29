@@ -61,6 +61,20 @@ describe('i18n dictionaries', () => {
       }
     }
   });
+  test('Antigravity setup and warnings are translated in every locale', () => {
+    for (const [locale, dictionary] of Object.entries(localeDictionaries)) {
+      for (const key of [
+        'settings.antigravity.description',
+        'settings.antigravity.setup.description',
+        'settings.antigravity.warnings.subscription',
+        'settings.antigravity.warnings.fullAccess',
+      ] as const) {
+        expect(dictionary[key]).toBeTruthy();
+        if (locale !== 'en') expect(dictionary[key]).not.toBe(enDict[key]);
+      }
+    }
+  });
+
   test('all locales stay in key parity with english', () => {
     const englishKeys = Object.keys(enDict).sort();
 

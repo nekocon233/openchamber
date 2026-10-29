@@ -43,6 +43,17 @@ describe('settings search', () => {
     }
   });
 
+  test('finds Antigravity settings on native-agent runtimes, never in VS Code', () => {
+    for (const query of ['antigravity', 'agy']) {
+      for (const context of [runtimeCtx, { ...runtimeCtx, isDesktop: true }, { ...runtimeCtx, isMobile: true }, { ...runtimeCtx, isVSCode: true }]) {
+        const results = buildSettingsSearchResults({
+          query, runtimeCtx: context, t, getPageTitle: (page) => page,
+        });
+        expect(results.some((result) => result.id === 'providers.antigravity')).toBe(!context.isVSCode);
+      }
+    }
+  });
+
   test('finds the Claude Code integration by name and package, never in VS Code', () => {
     for (const query of ['claude', '@openchamber/opencode-claude']) {
       for (const isVSCode of [false, true]) {

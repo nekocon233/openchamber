@@ -1,7 +1,7 @@
 import React from 'react';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n } from '@/lib/i18n';
-import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { isNativeSessionId, nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import { getRuntimeEndpointGeneration, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -27,12 +27,14 @@ export function NativeTasksPane({ onClose }: { onClose?: () => void }) {
   const runtimeGeneration = React.useSyncExternalStore(subscribeRuntimeEndpointChanged, getRuntimeEndpointGeneration, getRuntimeEndpointGeneration);
   const tab = useNativeTasksUIStore((state) => state.tab);
 
+  const unsupportedBackend = currentSessionId ? nativeBackendOfSessionId(currentSessionId) === 'antigravity' : false;
   const eligible = Boolean(currentSessionId && directory
     && isNativeSessionId(currentSessionId)
+    && !unsupportedBackend
     && nativeAgents.supported);
 
   if (!eligible || !currentSessionId || !directory) {
-    const reason = !nativeAgents.supported
+    const reason = !nativeAgents.supported || unsupportedBackend
       ? t('chat.nativeTasks.unsupported')
       : t('chat.nativeTasks.notNative');
     return (

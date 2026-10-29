@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Lets OpenChamber act as a frontend for the user's own Claude Code, Codex and
-DeepSeek Harness CLIs. The CLI's session store is the only source of truth: this module reads
+Lets OpenChamber act as a frontend for the user's own Claude Code, Codex,
+DeepSeek Harness and Antigravity CLIs. The CLI's session store is the only source of truth: this module reads
 it, projects it into the Session, Message and Part records the shared UI
 already renders, and never keeps a copy of the conversation. Native sessions
 sit next to OpenCode sessions in the same projects and sidebar, but OpenCode
@@ -13,8 +13,9 @@ OpenChamber retains lossless selections made through its own question UI as
 integration metadata. Question text, tools and replies still come from the CLI.
 DeepSeek's process authentication, Web protocol, event-position cursors,
 remote provider configuration and operation limits are owned by
-`deepseek/DOCUMENTATION.md`. Read it when changing
-that adapter or its shared UI contracts.
+`deepseek/DOCUMENTATION.md`. Antigravity's headless protocol, native SQLite and
+transcript access, client-message bindings and deliberately limited operations
+are owned by `antigravity/DOCUMENTATION.md`. Read the owning document when changing either adapter or its shared UI contracts.
 Shared long-term memory and project handoffs are owned by
 `../agent-memory/DOCUMENTATION.md`, not by the native transcript stores.
 
@@ -57,11 +58,11 @@ physical-source behavior below remain the native adapter contract.
 mirrors it. A single-CLI session id round-trips to the CLI's own id, so a session opened
 here resumes in the terminal by that id:
 
-| Id | Claude Code | Codex |
-|---|---|---|
-| Session | `ncl_<session uuid>` | `ncx_<thread id>` |
-| Subagent session | `ncl_<uuid>_t_<tool_use id>` | `ncx_<child thread id>` |
-| User message | `ncl_u_<entry uuid>` | the `ncx_u_<uuid>` or automatic plan-approval `ncx_u_plan_<uuid>` id OpenChamber sent, else `ncx_u_<turn key>_<item id>` |
+| Id | Claude Code | Codex | Antigravity |
+|---|---|---|---|
+| Session | `ncl_<session uuid>` | `ncx_<thread id>` | `nag_<conversation uuid>` |
+| Subagent session | `ncl_<uuid>_t_<tool_use id>` | `ncx_<child thread id>` | Not exposed in the first adapter |
+| User message | `ncl_u_<entry uuid>` | the `ncx_u_<uuid>` or automatic plan-approval `ncx_u_plan_<uuid>` id OpenChamber sent, else `ncx_u_<turn key>_<item id>` | The bound `nag_u_<uuid>`, else a deterministic ID from the native step |
 | Assistant message | `ncl_a_<sha16(session id)>_<API message id>` | `ncx_a_<turn key>_<turn or user item id>` |
 
 Part ids derive from the same native keys (content block index, `tool_use`
@@ -72,6 +73,11 @@ history reload name the same record, and every id passes the
 The server alone creates `ncx_u_plan_<uuid>` for approved plans. The UI's
 normal-send ID validator remains restricted to ordinary client IDs, so a
 manually sent prompt never reuses an automatic approval's provenance.
+
+agy does not retain OpenChamber's client message ID. Registry send records bind
+it to the native user-input step, with the prompt fingerprint used only for
+interrupted-admission recovery. These bindings are metadata, never a second
+transcript.
 
 ## Historical statistics
 
@@ -121,10 +127,13 @@ Web, Electron, hosted mobile and Capacitor use this endpoint. VS Code retains
 its explicit unsupported native API and shows OpenCode statistics only. Reads
 rewrite no transcript or usage record and create no persistent statistics DB.
 
+Antigravity histories are not included in the first statistics implementation.
+Their absence is unsupported coverage, not zero usage.
+
 ## Listing
 
 `GET /api/native/sessions?directory=` reports each backend separately:
-`{ backends: { claude, codex, deepseek } }`, each `{ status: 'ok', sessions }` or
+`{ backends: { claude, codex, deepseek, antigravity } }`, each `{ status: 'ok', sessions }` or
 `{ status: 'error', message }`. One backend failing never hides the other,
 and the UI keeps its previous sessions for a failed backend.
 
@@ -146,6 +155,9 @@ read. Its internal native sources are excluded from the backend root lists.
   logical ids can bind to active native forks after rewind; registry history
   metadata hides their internal predecessors. Older
   servers omit `deepseek`; that is unsupported, not an empty success.
+- Antigravity lists root rows from its read-only `conversation_summaries.db`
+  for the requested workspace. Registry-only sessions that have not produced a
+  transcript remain listed; a missing confirmed index is an error.
 - `GET /api/native/chat-directories` returns `{ directories }`: the
   directories of registry sessions below a managed chats root, matched by
   the root's configured and real path. Each managed chat has a directory of
@@ -159,9 +171,8 @@ read. Its internal native sources are excluded from the backend root lists.
 the id of the oldest message of the previous page; `cursor` is the next page's
 `before`, `null` on the last page.
 
-The projectors (`claude/projector.js`, `codex/projector.js`, and
-`codex/items.js`) are pure and golden-tested against sanitized recordings of
-real CLI runs in `*/fixtures/`. They satisfy the contract the UI renderer
+The projectors (`claude/projector.js`, `codex/projector.js`,
+`codex/items.js` and `antigravity/projector.js`) are pure and tested against sanitized CLI recordings or deterministic protocol fixtures in `*/fixtures/`. They satisfy the contract the UI renderer
 depends on:
 
 - Messages order by `time.created`, which the projectors keep strictly
@@ -603,7 +614,19 @@ prompt with a conversation's first request, so an existing Claude session
 picks up an edit only after it compacts. A missing, empty or unreadable file
 adds nothing. No other OpenChamber context reaches the CLIs.
 
+Antigravity (`antigravity/backend.js`) keeps one persistent headless process per
+active session. It accepts one turn at a time, queues follow-ups in the existing
+client queue, resumes the native conversation after idle or model changes, and
+uses native steps for live/history identity. Native SQLite and transcript reads
+remain authoritative. Its process, sticky-error and client-message binding
+contracts are detailed in `antigravity/DOCUMENTATION.md`. It has no plan mode,
+interactive questions, Small Model, quota or terminal memory integration.
+
 ## Reverts and forks
+
+Antigravity does not support revert, fork, manual compaction, unified `ncv_`
+creation or native deletion. Those routes return explicit errors rather than
+falling through to Codex. Archive and title overrides use the registry.
 
 DeepSeek uses the same pending/file restore contract, then creates a native fork
 on commit while preserving its logical session identity. Its versioned cursor,
@@ -1294,7 +1317,7 @@ the CLIs installed on their connected server. VS Code retains the explicit
 
 ## Child processes
 
-- `executables.js` finds `claude`, `codex`, `dsh`, Node and npm on the login
+- `executables.js` finds `claude`, `codex`, `dsh`, `agy`, Node and npm on the login
   shell's PATH, then in the installers' default locations. A miss is looked up again on the next
   call, so a CLI installed while the server runs is picked up.
 - On Windows, npm installs a CLI as a `.cmd` shim, which Node cannot start
@@ -1337,7 +1360,7 @@ Normal authenticated OpenChamber routes. Every read takes the session's
 
 | Route | Answer |
 |---|---|
-| `GET /capabilities` | `{ supported: true, backends: { claude: { cli, tasks: { checklist, background, output, stop } }, codex: { cli, tasks: { plan, todos } } }, registry }`; task flags describe host implementation, query snapshots describe current observations |
+| `GET /capabilities` | `{ supported: true, backends: { claude: { cli, tasks: { checklist, background, output, stop } }, codex: { cli, tasks: { plan, todos } }, antigravity: { cli, actions: { revert: false, delete: false, fork: false, compact: false } } }, registry }`; task flags describe host implementation, query snapshots describe current observations |
 | `GET /catalog` | Models per backend; Codex from `model/list`, reported per backend like listing |
 | `GET /sessions?directory=` | Root sessions per backend (see Listing) |
 | `GET /sessions/status?directory=` | Sessions with a running turn, as busy; every other session is idle |
@@ -1398,6 +1421,11 @@ New upstream item types such as image generation, subagent activity, hook
 prompts, function-call output and sleep have no dedicated transcript renderer.
 Unknown items are skipped without fabricating empty messages. These are
 remaining capabilities, not substitutes for the supported tool-call records.
+
+Antigravity currently covers independent chat sessions, native history and
+interruption. Its unsupported operations and authentication partition are
+explicit; it does not participate in unified conversations, native statistics,
+Small Model, quota or terminal memory enrollment.
 
 Shared global preferences, project knowledge and terminal handoffs are owned by
 `../agent-memory/DOCUMENTATION.md`. Enrollment is opt-in and local to the server

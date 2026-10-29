@@ -963,6 +963,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const availableCommands = useCommandsStore((s) => selectCommandsForDirectory(s, currentDirectory));
     const availableSkills = useSkillsStore((s) => selectSkillsForDirectory(s, currentDirectory));
     const knownSlashNames = React.useMemo(() => {
+        if (nativeTargetBackend === 'antigravity') return new Set<string>();
         if (nativeTargetBackend === 'codex') {
             const names = new Set<string>(CODEX_COMPOSER_COMMANDS.map((command) => command.name));
             for (const name of ['undo', 'redo', 'timeline', 'compact', 'btw']) names.add(name);
@@ -1822,7 +1823,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         let commandPlan = inputSnapshot.hasContent
             ? planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, Boolean(currentSessionId))
             : null;
-        if (commandPlan && isNativeTarget && !isNativeLocalCommand(commandPlan.command.name)) commandPlan = null;
+        if (commandPlan && (nativeTargetBackend === 'antigravity' || (isNativeTarget && !isNativeLocalCommand(commandPlan.command.name)))) commandPlan = null;
         if (commandPlan?.kind === 'prompt') {
             const magicCommand = findMagicPromptCommand(commandPlan.command.name);
             const commandIsAvailable = commandPlan.command.name === 'btw'
@@ -2023,7 +2024,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         // A native CLI compacts with its own command, which shows as the
         // compaction marker; nothing goes out as a message.
-        const nativeCompaction = isNativeTarget && currentSessionId && !isBtwActive && inputMode === 'normal'
+        const nativeCompaction = isNativeTarget && nativeTargetBackend !== 'antigravity' && currentSessionId && !isBtwActive && inputMode === 'normal'
             ? nativeCompactCommand(inputSnapshot.message)
             : null;
         if (nativeCompaction && currentSessionId) {
@@ -2190,9 +2191,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         } else if (deliveryDecision === 'follow-up') {
             delivery = followUpBehavior;
         }
-        // Unified conversations wait for the whole source execution. Single-CLI
-        // sessions retain their native mid-turn follow-up behavior.
-        if (submissionSessionId && isUnifiedNativeSessionId(submissionSessionId)
+        // Unified conversations wait for the whole source execution. Antigravity
+        // also queues because its adapter accepts one turn at a time. Other
+        // single-CLI sessions retain their native immediate follow-up behavior.
+        if (submissionSessionId && (isUnifiedNativeSessionId(submissionSessionId) || nativeBackendOfSessionId(submissionSessionId) === 'antigravity')
             && (authoritativeSessionPhase !== 'idle' || options?.forceQueue === true)) {
             delivery = 'queue';
         } else if (delivery === 'queue' && submissionSessionId && isNativeSessionId(submissionSessionId) && !isUnifiedNativeSessionId(submissionSessionId)) {
@@ -2356,7 +2358,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Local slash commands, normal mode only. A native session keeps only
         // the ones that act on OpenChamber's view of it; the rest are the CLI's.
         const typedCommand = inputMode === 'normal' ? parseSlashCommand(primaryText) : null;
-        const parsedCommand = typedCommand && (!isNativeTarget || isNativeLocalCommand(typedCommand.name))
+        const parsedCommand = typedCommand && nativeTargetBackend !== 'antigravity' && (!isNativeTarget || isNativeLocalCommand(typedCommand.name))
             ? typedCommand
             : null;
         if (parsedCommand) {

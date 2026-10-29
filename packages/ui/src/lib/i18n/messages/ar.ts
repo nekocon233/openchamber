@@ -4091,6 +4091,7 @@ export const dict = {
   'settings.cliproxyapi.keyRejected': 'رفضت البوابة مفتاح الإدارة المحفوظ. احفظه مرة أخرى.',
   'settings.cliproxyapi.failed': 'فشل الطلب إلى البوابة.',
 
+  'settings.antigravity.title': 'Antigravity CLI',
   'settings.claudeConnections.title': 'Claude Code connections',
   'settings.claudeConnections.url': 'API endpoint',
   'settings.codexConnections.addCustom': 'Add custom connection',

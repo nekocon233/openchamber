@@ -10,6 +10,7 @@ const PROVIDER_NAMES = {
   claude: 'Claude Code CLI',
   codex: 'Codex CLI',
   deepseek: 'DeepSeek Harness',
+  antigravity: 'Antigravity CLI',
 } satisfies Record<NativeBackend, string>;
 
 // Effort levels are the picker's variants for these models. A model with

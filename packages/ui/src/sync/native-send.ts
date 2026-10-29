@@ -1,6 +1,6 @@
 import type { NativePromptPart, NativePromptRequest } from "@/lib/api/types"
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
-import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
+import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfProviderId, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
 
 // A native session receives what the user wrote and attached. OpenChamber's
 // own context (pinned knowledge, goal and response-style reminders, skill
@@ -67,7 +67,7 @@ export const nativePromptRequest = (send: {
   parts: nativePromptParts(send.content, send.files, send.additionalParts),
   model: { providerID: send.providerID, modelID: send.modelID },
   variant: send.variant,
-  agent: nativeAgentOf(send.agent),
+  agent: nativeBackendOfProviderId(send.providerID) === 'antigravity' ? 'build' : nativeAgentOf(send.agent),
   preserveSelection: send.preserveSelection,
   instructions: nativePromptInstructions(send.additionalParts),
 })

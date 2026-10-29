@@ -21,7 +21,7 @@ import { CODEX_COMMAND_USAGE, CODEX_COMPOSER_COMMANDS } from '@/lib/native-agent
 type CommandSource = 'openchamber' | 'opencode' | 'extension' | 'native';
 
 // Product names, shown as the badge of a native CLI's own commands.
-const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex', deepseek: 'DeepSeek Harness' } satisfies Record<NativeBackend, string>;
+const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex', deepseek: 'DeepSeek Harness', antigravity: 'Antigravity CLI' } satisfies Record<NativeBackend, string>;
 
 export interface CommandInfo {
   id: string;
@@ -240,6 +240,7 @@ export const CommandAutocomplete = React.forwardRef<CommandAutocompleteHandle, C
   // lists, minus the names those shadow.
   const nativeCommandLists = React.useMemo(() => {
     if (!nativeBackend) return null;
+    if (nativeBackend === 'antigravity') return { localCommands: [], cliCommands: [] };
     const cliName = CLI_NAMES[nativeBackend];
     const localCommands: CommandInfo[] = [
       ...(nativeBackend === 'codex' ? CODEX_COMPOSER_COMMANDS.map((command): CommandInfo => ({

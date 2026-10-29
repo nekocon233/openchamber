@@ -148,6 +148,7 @@ export const dict: Record<I18nKey, string> = {
 
 
 
+  "settings.antigravity.title": "Antigravity CLI",
   "settings.claudeConnections.title": "Połączenia Claude Code",
   "settings.claudeConnections.description": "Wybierz połączenie na liście modeli czatu. Ustawienia są zapisane na tym serwerze OpenChamber; ustawienia terminala pozostają bez zmian.",
   "settings.claudeConnections.connections": "Zapisane połączenia",

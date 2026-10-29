@@ -4091,6 +4091,7 @@ export const dict = {
   'settings.cliproxyapi.keyRejected': 'השער דחה את מפתח הניהול השמור. שמור אותו שוב.',
   'settings.cliproxyapi.failed': 'הבקשה לשער נכשלה.',
 
+  'settings.antigravity.title': 'Antigravity CLI',
   'settings.claudeConnections.title': 'Claude Code connections',
   'settings.claudeConnections.url': 'API endpoint',
   'settings.codexConnections.addCustom': 'Add custom connection',

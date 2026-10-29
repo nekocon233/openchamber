@@ -177,6 +177,22 @@ describe("routeMessage for native sessions", () => {
     expect(openCodeRequests).toEqual([])
   })
 
+  test("Antigravity always sends build with a nag message id", async () => {
+    const sessionId = 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188'
+    const route = await routeMessage({
+      sessionId,
+      directory: DIRECTORY,
+      content: 'Fix the tests',
+      providerID: 'antigravity-native',
+      modelID: 'gemini-3-pro',
+      agent: 'plan',
+    })
+    expect(route).toBe('prompt')
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0].request.agent).toBe('build')
+    expect(prompts[0].request.messageID.startsWith('nag_u_')).toBe(true)
+  })
+
   test("a native text and attachment echo replace their optimistic parts", async () => {
     await routeMessage({ sessionId: SESSION, directory: DIRECTORY, content: "Look at this", providerID: "claude-native", modelID: "opus", files: [
       { type: "file", mime: "image/png", url: "data:image/png;base64,AAAA", filename: "shot.png" },

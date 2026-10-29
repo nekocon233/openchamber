@@ -105,6 +105,15 @@ describe('ChatInput follow-up queue integration', () => {
     expect(drainSource).toContain("releaseQueuedMessage(messageQueueTarget, messageId, claim.claimId, 'staged', claim.context)");
   });
 
+  test('queues busy Antigravity follow-ups instead of converting them to native steering', () => {
+    const deliveryStart = source.indexOf("let delivery: 'steer' | 'queue' | undefined;");
+    const historyStart = source.indexOf('const historySubmissions =', deliveryStart);
+    const branch = source.slice(deliveryStart, historyStart);
+    expect(branch).toContain("nativeBackendOfSessionId(submissionSessionId) === 'antigravity'");
+    expect(branch).toContain("delivery = 'queue';");
+    expect(branch).toContain("} else if (delivery === 'queue'");
+  });
+
   test('restores extended queue payload when editing an item back into the composer', () => {
     const editStart = source.indexOf('const handleQueuedMessageEdit = React.useCallback');
     const editEnd = source.indexOf('const [queueLeaseEpoch', editStart);

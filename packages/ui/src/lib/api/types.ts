@@ -2268,10 +2268,9 @@ export type NativePromptRequest = {
 };
 
 export type NativeSessionSelection = Pick<NativePromptRequest, 'model' | 'variant' | 'agent'>;
-export type NativeSessionCreate = { backend: NativeBackend; directory: string; title?: string } & (
-  | { kind?: 'single' }
-  | { kind: 'unified'; selection: NativeSessionSelection }
-);
+export type NativeSessionCreate =
+  | { backend: NativeBackend; directory: string; title?: string; kind?: 'single' }
+  | { backend: 'claude' | 'codex' | 'deepseek'; directory: string; title?: string; kind: 'unified'; selection: NativeSessionSelection };
 
 /**
  * Native CLI sessions, read and driven by the OpenChamber
@@ -2280,8 +2279,8 @@ export type NativeSessionCreate = { backend: NativeBackend; directory: string; t
 export interface NativeAgentsAPI {
   stats(query: NativeStatisticsQuery, options?: NativeReadOptions): Promise<NativeStatistics>;
   memoryStatus(directory?: string, options?: NativeReadOptions): Promise<NativeMemoryStatus>;
-  connectMemory(backend: Exclude<NativeBackend, 'deepseek'>): Promise<NativeMemoryConnection>;
-  disconnectMemory(backend: Exclude<NativeBackend, 'deepseek'>): Promise<NativeMemoryConnection>;
+  connectMemory(backend: 'claude' | 'codex'): Promise<NativeMemoryConnection>;
+  disconnectMemory(backend: 'claude' | 'codex'): Promise<NativeMemoryConnection>;
   importMemory(sourceId: string, directory: string): Promise<void>;
   /** False for runtimes without an OpenChamber server, currently VS Code. */
   supported: boolean;
@@ -2313,8 +2312,8 @@ export interface NativeAgentsAPI {
   saveDeepseekConfiguration(input: DeepseekConfigurationWrite): Promise<DeepseekConfigurationSave>;
   deepseekSetupStatus(options?: NativeReadOptions): Promise<DeepseekSetupStatus>;
   setupDeepseek(): Promise<DeepseekSetupStatus>;
-  /** Claude's slash commands or Codex's enabled skills in a directory. */
-  commands(backend: NativeBackend, directory: string, options?: NativeReadOptions & { sessionId?: string }): Promise<NativeCommandList>;
+  /** Claude's slash commands, Codex's enabled skills or DeepSeek's command list. */
+  commands(backend: 'claude' | 'codex' | 'deepseek', directory: string, options?: NativeReadOptions & { sessionId?: string }): Promise<NativeCommandList>;
   codexCommand(request: NativeCodexCommandRequest): Promise<NativeCodexCommandResult>;
   deepseekCommand(request: NativeDeepseekCommandRequest): Promise<NativeCommandResult>;
   /** Root sessions of a directory, reported per backend. */

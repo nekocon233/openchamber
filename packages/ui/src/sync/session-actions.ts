@@ -1159,7 +1159,9 @@ const NATIVE_QUESTION_GONE = "NATIVE_QUESTION_NOT_FOUND"
 export async function createNativeSession(backend: NativeBackend, directory: string | null, title: string | undefined, selection?: SessionCreateSelection): Promise<Session> {
   const nativeAgents = requireNativeAgents()
   const nativeDirectory = requireNativeDirectory(directory)
-  if (selection?.model && (await nativeAgents.capabilities()).unifiedSessions) {
+  // Antigravity supports independent native sessions only. Do not let the
+  // server's unified default turn an agy draft into an ncv_ conversation.
+  if (backend !== 'antigravity' && selection?.model && (await nativeAgents.capabilities()).unifiedSessions) {
     return nativeAgents.createSession({
       kind: 'unified', backend, directory: nativeDirectory, title,
       selection: {

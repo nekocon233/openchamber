@@ -102,8 +102,9 @@ test('asks again when the provider catalog changes and keeps the answer when a r
     await act(async () => { root.render(<Harness />); });
     expect(providerIds).toEqual([]);
 
-    // The catalog arrives, and the picker learns about the provider.
-    answers.push(callable(['openai']));
+    // The catalog arrives, and the picker learns about the provider. Antigravity
+    // is a session backend, never a Small Model provider.
+    answers.push(callable(['openai', 'antigravity-native']));
     await replaceCatalog('openai');
     expect(smallModelRequests).toBe(2);
     expect(providerIds).toEqual(['openai']);

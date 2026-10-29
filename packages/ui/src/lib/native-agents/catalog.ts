@@ -9,7 +9,7 @@ import { buildNativeProvider, type NativeProvider } from './providers';
 // at most once a minute.
 
 const RETRY_AFTER_FAILURE_MS = 60_000;
-const BACKENDS: NativeBackend[] = ['claude', 'codex', 'deepseek'];
+const BACKENDS: NativeBackend[] = ['claude', 'codex', 'deepseek', 'antigravity'];
 
 type CatalogState = {
   providers: Map<NativeBackend, NativeProvider>;

@@ -39,6 +39,10 @@ const fallbackLocations = (cli, home, platform) => {
   const binary = platform === 'win32' ? `${cli}.exe` : cli;
   const locations = [path.join(home, '.local', 'bin', binary)];
   if (cli === 'claude') locations.push(path.join(home, '.claude', 'local', binary));
+  if (cli === 'agy' && platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
+    locations.push(path.join(localAppData, 'agy', 'bin', binary));
+  }
   return locations;
 };
 
@@ -49,7 +53,7 @@ const fallbackLocations = (cli, home, platform) => {
  * @param {() => string} options.buildSearchPath
  * @param {string} [options.home]
  * @param {NodeJS.Platform} [options.platform]
- * @returns {(cli: 'claude' | 'codex' | 'dsh' | 'node' | 'npm') => Promise<string | null>}
+ * @returns {(cli: 'claude' | 'codex' | 'dsh' | 'agy' | 'node' | 'npm') => Promise<string | null>}
  */
 export const createCliResolver = ({ searchPathFor, isExecutable, buildSearchPath, home = os.homedir(), platform = process.platform }) => {
   const found = new Map();

@@ -184,7 +184,13 @@ const sessionPartitionSchema = z.discriminatedUnion('status', [
 ]);
 
 export const nativeSessionListSchema = z.object({
-  backends: z.object({ claude: sessionPartitionSchema, codex: sessionPartitionSchema, deepseek: sessionPartitionSchema.optional() }),
+  backends: z.object({
+    claude: sessionPartitionSchema,
+    codex: sessionPartitionSchema,
+    deepseek: sessionPartitionSchema.optional(),
+    // Older servers have no Antigravity adapter or partition.
+    antigravity: sessionPartitionSchema.optional(),
+  }),
   unified: sessionPartitionSchema.and(z.object({ unavailable: z.array(z.string()).optional() })).optional(),
 });
 
@@ -205,11 +211,21 @@ export type NativeModelDescriptor = z.infer<typeof nativeModelSchema>;
 
 const catalogPartitionSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('ok'), models: z.array(nativeModelSchema) }),
-  z.object({ status: z.literal('error'), message: z.string() }),
+  z.object({
+    status: z.literal('error'),
+    message: z.string(),
+    // Antigravity uses this to distinguish sign-in from other catalog failures.
+    reason: z.literal('unauthenticated').optional(),
+  }),
 ]);
 
 export const nativeCatalogSchema = z.object({
-  backends: z.object({ claude: catalogPartitionSchema, codex: catalogPartitionSchema, deepseek: catalogPartitionSchema.optional() }),
+  backends: z.object({
+    claude: catalogPartitionSchema,
+    codex: catalogPartitionSchema,
+    deepseek: catalogPartitionSchema.optional(),
+    antigravity: catalogPartitionSchema.optional(),
+  }),
 });
 
 export const nativeCapabilitiesSchema = z.object({
@@ -236,6 +252,9 @@ export const nativeCapabilitiesSchema = z.object({
       cli: z.boolean(), blockedByEnterprise: z.boolean(),
       actions: z.object({ revert: z.boolean(), delete: z.boolean(), fork: z.boolean() }),
     }).optional(),
+    // Antigravity deliberately advertises no task, question or action
+    // capabilities. Unknown fields stay out of the trusted UI contract.
+    antigravity: z.object({ cli: z.boolean() }).optional(),
   }),
   registry: z.object({ reset: z.boolean(), resetAt: z.number().optional() }),
 });

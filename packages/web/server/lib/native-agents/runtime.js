@@ -16,6 +16,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { codexVariantSettings } from './catalog.js';
+import { createAntigravityBackend } from './antigravity/backend.js';
 import { compactLaunchOverride, createClaudeConnections } from './claude/connections.js';
 import { createCliproxyapiBinaryManager } from './cliproxyapi/binary-manager.js';
 import { createCliproxyapiService } from './cliproxyapi/service.js';
@@ -54,11 +55,12 @@ import {
   NATIVE_BACKEND_CLAUDE,
   NATIVE_BACKEND_CODEX,
   NATIVE_BACKEND_DEEPSEEK,
+  NATIVE_BACKEND_ANTIGRAVITY,
   NATIVE_PROVIDER_CLAUDE,
   NATIVE_PROVIDER_CODEX,
   nativeBackendOfProviderId,
 } from './ids.js';
-import { claudePromptBlocks, withInstructions } from './prompt-parts.js';
+import { antigravityPromptFingerprint, antigravityPromptText, claudePromptBlocks, withInstructions } from './prompt-parts.js';
 import { createNativeEventPublisher } from './publisher.js';
 import { createQuestionRegistry } from './questions.js';
 import { createNativeInteractions } from './interactions.js';
@@ -82,11 +84,20 @@ const threadResponseSchema = z.object({
 
 const errorMessage = (error) => (error instanceof Error ? error.message : String(error));
 
+const antigravityUnsupported = (operation) => new NativeAgentError(
+  `Antigravity does not support ${operation} in OpenChamber`,
+  { code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED', status: 409 },
+);
+
 const settled = async (promise) => {
   try {
     return { status: 'ok', value: await promise };
   } catch (error) {
-    return { status: 'error', message: errorMessage(error) };
+    return {
+      status: 'error',
+      message: errorMessage(error),
+      ...(error?.code === 'NATIVE_ANTIGRAVITY_UNAUTHENTICATED' ? { reason: 'unauthenticated' } : {}),
+    };
   }
 };
 
@@ -141,7 +152,7 @@ const untilRewound = (records, pending) => {
 /**
  * @param {object} options
  * @param {string} options.dataDir OpenChamber data directory
- * @param {(cli: 'claude' | 'codex' | 'dsh' | 'node') => Promise<string | null>} options.resolveExecutable
+ * @param {(cli: 'claude' | 'codex' | 'dsh' | 'agy' | 'node') => Promise<string | null>} options.resolveExecutable
  * @param {() => Record<string, string>} options.buildChildEnv
  * @param {string} options.clientVersion OpenChamber version reported to the CLIs
  * @param {(event: { directory: string, payload: object }) => void} options.publishNativeEvent
@@ -255,7 +266,9 @@ export const createNativeAgentsRuntime = ({
     const createdAt = now();
     return registry.registerSession(sessionId, {
       backend: decoded.backend,
-      nativeId: decoded.backend === NATIVE_BACKEND_CLAUDE ? decoded.sessionUuid : decoded.threadId,
+      nativeId: decoded.backend === NATIVE_BACKEND_CLAUDE
+        ? decoded.sessionUuid
+        : decoded.backend === NATIVE_BACKEND_ANTIGRAVITY ? decoded.conversationId : decoded.threadId,
       directory,
       origin: 'adopted',
       createdAt,
@@ -414,6 +427,10 @@ export const createNativeAgentsRuntime = ({
     decorateSession: decorate,
   });
   const deepseekSetup = createDeepseekSetup({ installation: deepseekInstallation, configuration: deepseek.configuration });
+  const antigravity = createAntigravityBackend({
+    resolveExecutable: () => resolveExecutable('agy'), buildEnv: buildChildEnv,
+    registry, publisher, readGlobalInstructions, decorateSession: decorate, now,
+  });
 
   const decode = (sessionId) => {
     const decoded = decodeNativeSessionId(sessionId);
@@ -429,8 +446,8 @@ export const createNativeAgentsRuntime = ({
     }
     return decoded;
   };
-  const storeFor = (sessionId) => ({ claude, codex, deepseek })[decode(sessionId).backend];
-  const liveFor = (sessionId) => ({ claude: claudeLive, codex: codexLive, deepseek })[decode(sessionId).backend];
+  const storeFor = (sessionId) => ({ claude, codex, deepseek, antigravity })[decode(sessionId).backend];
+  const liveFor = (sessionId) => ({ claude: claudeLive, codex: codexLive, deepseek, antigravity })[decode(sessionId).backend];
 
   // Runs the step that hands a prompt to the CLI. A pending revert counts as
   // committed from the start, so a history read meanwhile already leaves the
@@ -549,6 +566,17 @@ export const createNativeAgentsRuntime = ({
       await registry.recordSend(sessionId, { ...sendRecordOf(request), messageId: request.messageID, providerID: request.model.providerID, sentAt: now() });
       return;
     }
+    if (backend === NATIVE_BACKEND_ANTIGRAVITY) {
+      signal?.throwIfAborted();
+      const parts = withInstructions(request.parts, request.instructions);
+      const send = {
+        ...sendRecordOf(request),
+        antigravity: { fingerprint: antigravityPromptFingerprint(antigravityPromptText(parts)) },
+      };
+      await antigravity.prompt(sessionId, { ...request, parts }, signal);
+      await registry.recordSend(sessionId, { ...send, messageId: request.messageID, providerID: request.model.providerID, sentAt: now() });
+      return;
+    }
     if (signal) signal.throwIfAborted();
     else planDecisions.cancel(sessionId);
     const send = sendRecordOf(request);
@@ -588,13 +616,19 @@ export const createNativeAgentsRuntime = ({
   /**
    * A new session in its CLI. Claude Code creates the transcript with the
    * first turn; Codex starts the thread now.
-   * @param {{ backend: 'claude' | 'codex' | 'deepseek', directory: string, title?: string }} input
+   * @param {{ backend: 'claude' | 'codex' | 'deepseek' | 'antigravity', directory: string, title?: string }} input
    */
   const createSession = async ({ backend, directory, title }, { beforePublish = async () => undefined } = {}) => {
     if (backend === NATIVE_BACKEND_DEEPSEEK) {
       const session = await deepseek.createSession(directory, title, beforePublish);
       publisher.session(session.directory, session, { created: true });
       return session;
+    }
+    if (backend === NATIVE_BACKEND_ANTIGRAVITY) {
+      const record = await antigravity.createSession({ directory, title });
+      await beforePublish(record);
+      publisher.session(directory, record, { created: true });
+      return record;
     }
     let sessionId;
     let nativeId;
@@ -658,13 +692,16 @@ export const createNativeAgentsRuntime = ({
     deepseekSetup,
 
     async capabilities() {
-      const [claudeCli, codexCli, deepseekCli] = await Promise.all([resolveExecutable('claude'), resolveExecutable('codex'), deepseekInstallation.resolve()]);
+      const [claudeCli, codexCli, deepseekCli, agyCli] = await Promise.all([
+        resolveExecutable('claude'), resolveExecutable('codex'), deepseekInstallation.resolve(), resolveExecutable('agy'),
+      ]);
       return {
         supported: true,
         backends: {
           [NATIVE_BACKEND_CLAUDE]: { cli: claudeCli !== null, tasks: { checklist: true, background: true, output: true, stop: true } },
           [NATIVE_BACKEND_CODEX]: { cli: codexCli !== null, tasks: { plan: true, todos: true } },
           [NATIVE_BACKEND_DEEPSEEK]: { cli: deepseekCli !== null, blockedByEnterprise: isEnterpriseMode(), actions: { revert: true, delete: deepseekCli !== null && await deepseekPackage(deepseekCli) !== null && await resolveExecutable('node') !== null, fork: true } },
+          [NATIVE_BACKEND_ANTIGRAVITY]: { cli: agyCli !== null, blockedByEnterprise: false, actions: { revert: false, delete: false, fork: false, compact: false } },
         },
         registry: registry.status(),
       };
@@ -672,10 +709,11 @@ export const createNativeAgentsRuntime = ({
 
     /** Models per backend; a backend whose catalog cannot be read says why. */
     async catalog() {
-      const [codexList, claudeList, deepseekList] = await Promise.all([
+      const [codexList, claudeList, deepseekList, antigravityList] = await Promise.all([
         settled((async () => [...await codexCatalog(), ...await codexConnections.catalog()])()),
         settled(claudeConnections.catalog()),
         settled(deepseek.catalog()),
+        settled(antigravity.catalog()),
       ]);
       return {
         backends: {
@@ -684,6 +722,7 @@ export const createNativeAgentsRuntime = ({
           [NATIVE_BACKEND_CODEX]: codexList.status === 'ok'
             ? { status: 'ok', models: codexList.value }
             : codexList,
+          [NATIVE_BACKEND_ANTIGRAVITY]: antigravityList.status === 'ok' ? { status: 'ok', models: antigravityList.value } : antigravityList,
         },
       };
     },
@@ -694,10 +733,11 @@ export const createNativeAgentsRuntime = ({
      * @param {string} directory
      */
     async listSessions(directory) {
-      const [claudeSessions, codexSessions, deepseekSessions] = await Promise.all([
+      const [claudeSessions, codexSessions, deepseekSessions, antigravitySessions] = await Promise.all([
         settled(claude.listRootSessions(directory)),
         settled(codex.listRootSessions(directory)),
         settled(deepseek.listRootSessions(directory)),
+        settled(antigravity.listRootSessions(directory)),
       ]);
       const partition = async (result) => (result.status === 'ok'
         ? { status: 'ok', sessions: await Promise.all(result.value.map(decorate)) }
@@ -707,6 +747,7 @@ export const createNativeAgentsRuntime = ({
           [NATIVE_BACKEND_CLAUDE]: await partition(claudeSessions),
           [NATIVE_BACKEND_CODEX]: await partition(codexSessions),
           [NATIVE_BACKEND_DEEPSEEK]: await partition(deepseekSessions),
+          [NATIVE_BACKEND_ANTIGRAVITY]: await partition(antigravitySessions),
         },
       };
     },
@@ -761,6 +802,7 @@ export const createNativeAgentsRuntime = ({
     async compact(sessionId, request) {
       const { backend } = decodeOwnSession(sessionId);
       assertSessionBackend(backend, request.model.providerID);
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('compaction');
       if (backend === NATIVE_BACKEND_DEEPSEEK) {
         await deepseek.executeCommand(sessionId, request.directory, request.instructions ? `/compact ${request.instructions}` : '/compact');
         return;
@@ -783,6 +825,7 @@ export const createNativeAgentsRuntime = ({
      * @param {string} directory
      */
     async commands(backend, directory, sessionId) {
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) return { commands: [] };
       if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.commands(sessionId, directory);
       if (backend === NATIVE_BACKEND_CODEX) return codexCommands.list(directory);
       const cached = claudeCommands.get(directory);
@@ -861,28 +904,39 @@ export const createNativeAgentsRuntime = ({
         return publishSession(sessionId, directory);
       }
       if (backend === NATIVE_BACKEND_CODEX && (patch.title !== undefined || patch.archived !== undefined)) await codexTitles.cancel(sessionId);
-      if (patch.archived === true) await stopTurn(sessionId);
-      if (backend === NATIVE_BACKEND_CLAUDE) {
-        const { sessionUuid } = decoded;
-        const hasTranscript = await claude.hasTranscript(sessionUuid, directory);
-        if (patch.title !== undefined) {
-          if (hasTranscript) await claude.rename(sessionId, directory, patch.title);
-          else await registry.updateSession(sessionId, { title: patch.title });
-        }
-        if (patch.archived !== undefined) {
-          const createdAt = now();
-          const adopted = { backend, nativeId: sessionUuid, directory, origin: 'adopted', createdAt };
-          if (hasTranscript) adopted.confirmedAt = createdAt;
-          await registry.registerSession(sessionId, adopted);
-          await registry.updateSession(sessionId, { archivedAt: patch.archived ? createdAt : null });
-          // Its subagent sessions follow it.
-          for (const child of (await claude.loadHistory(sessionId, directory))?.childSessions ?? []) {
-            publisher.session(directory, child, { created: false });
-          }
-        }
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) {
+        if (patch.archived === true) await stopTurn(sessionId);
+        const createdAt = now();
+        await registry.registerSession(sessionId, {
+          backend, nativeId: decoded.conversationId, directory,
+          origin: 'adopted', createdAt, confirmedAt: createdAt,
+        });
+        if (patch.title !== undefined) await registry.updateSession(sessionId, { title: patch.title });
+        if (patch.archived !== undefined) await registry.updateSession(sessionId, { archivedAt: patch.archived ? createdAt : null });
       } else {
-        if (patch.title !== undefined) await codex.rename(sessionId, patch.title);
-        if (patch.archived !== undefined) await codex.setArchived(sessionId, patch.archived);
+        if (patch.archived === true) await stopTurn(sessionId);
+        if (backend === NATIVE_BACKEND_CLAUDE) {
+          const { sessionUuid } = decoded;
+          const hasTranscript = await claude.hasTranscript(sessionUuid, directory);
+          if (patch.title !== undefined) {
+            if (hasTranscript) await claude.rename(sessionId, directory, patch.title);
+            else await registry.updateSession(sessionId, { title: patch.title });
+          }
+          if (patch.archived !== undefined) {
+            const createdAt = now();
+            const adopted = { backend, nativeId: sessionUuid, directory, origin: 'adopted', createdAt };
+            if (hasTranscript) adopted.confirmedAt = createdAt;
+            await registry.registerSession(sessionId, adopted);
+            await registry.updateSession(sessionId, { archivedAt: patch.archived ? createdAt : null });
+            // Its subagent sessions follow it.
+            for (const child of (await claude.loadHistory(sessionId, directory))?.childSessions ?? []) {
+              publisher.session(directory, child, { created: false });
+            }
+          }
+        } else {
+          if (patch.title !== undefined) await codex.rename(sessionId, patch.title);
+          if (patch.archived !== undefined) await codex.setArchived(sessionId, patch.archived);
+        }
       }
       if (patch.metadata !== undefined) {
         await adoptSession(sessionId, directory);
@@ -939,6 +993,7 @@ export const createNativeAgentsRuntime = ({
      */
     async deleteSession(sessionId, directory) {
       const { backend } = decodeOwnSession(sessionId);
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('deletion');
       if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.deleteSession(sessionId, directory);
       if (backend === NATIVE_BACKEND_CODEX) await codexTitles.cancel(sessionId);
       const session = await storeFor(sessionId).getSession(sessionId, directory);
@@ -979,6 +1034,7 @@ export const createNativeAgentsRuntime = ({
      */
     async revert(sessionId, messageId, directory) {
       const { backend } = decode(sessionId);
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('revert');
       if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.revert(sessionId, messageId, directory);
       if (backend === NATIVE_BACKEND_CODEX) await codexTitles.cancel(sessionId);
       await stopTurn(sessionId);
@@ -1000,7 +1056,9 @@ export const createNativeAgentsRuntime = ({
 
     /** Puts back what a pending revert restored; returns the session either way. */
     async unrevert(sessionId, directory) {
-      if (decode(sessionId).backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.unrevert(sessionId, directory);
+      const { backend } = decode(sessionId);
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('unrevert');
+      if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.unrevert(sessionId, directory);
       planDecisions.cancel(sessionId);
       await reverts.unrevert(sessionId);
       const session = await publishSession(sessionId, directory);
@@ -1019,6 +1077,7 @@ export const createNativeAgentsRuntime = ({
      */
     async fork(sessionId, messageId, directory) {
       const { backend } = decode(sessionId);
+      if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('fork');
       if (backend === NATIVE_BACKEND_DEEPSEEK) {
         const session = await deepseek.fork(sessionId, messageId, directory);
         publisher.session(session.directory, session, { created: true });
@@ -1098,7 +1157,12 @@ export const createNativeAgentsRuntime = ({
 
     /** Sessions of a directory with a running turn; every other session is idle. */
     async statuses(directory) {
-      const busy = [...claudeLive.busySessionIds(directory), ...codexLive.busySessionIds(directory), ...deepseek.busySessionIds(directory)];
+      const busy = [
+        ...claudeLive.busySessionIds(directory),
+        ...codexLive.busySessionIds(directory),
+        ...deepseek.busySessionIds(directory),
+        ...antigravity.busySessionIds(directory),
+      ];
       return Object.fromEntries(busy.map((sessionId) => [sessionId, { type: 'busy' }]));
     },
 
@@ -1227,6 +1291,7 @@ export const createNativeAgentsRuntime = ({
 
     async shutdown() {
       const stoppingDeepseek = Promise.all([deepseekSetup.shutdown(), deepseek.shutdown(), deepseekMaintenance.shutdown()]);
+      const stoppingAntigravity = antigravity.shutdown();
       try {
         planDecisions.clear();
         await codexTitles.stop();
@@ -1238,7 +1303,7 @@ export const createNativeAgentsRuntime = ({
         await cliproxyapi.shutdown().catch(() => undefined);
         await appServer.stop();
       } finally {
-        await stoppingDeepseek;
+        await Promise.all([stoppingDeepseek, stoppingAntigravity]);
       }
     },
   };

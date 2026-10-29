@@ -169,6 +169,23 @@ runs only while setup is active, stops on unmount or runtime changes, and
 retains an unconfirmed result on network failure. Completed setup reloads the
 configuration and model picker; an existing DSH credential is preserved.
 
+### Antigravity CLI
+
+Selecting `antigravity-native` opens `AntigravityPage.tsx`. The page reads the
+existing native capabilities and catalog: a missing `cli` flag means the CLI is
+absent, an error partition with `reason: "unauthenticated"` means sign-in is
+required, a non-empty model catalog is ready, and every other read failure is an
+error with its diagnostic retained. An older server with no Antigravity
+partition produces the error state because its support is unknown. The page offers a
+reload action and shows the official Unix and Windows installation commands
+plus the interactive `agy` sign-in flow. It never installs the CLI or accepts
+credentials.
+
+The personal Google AI subscription policy warning and the headless full-access
+warning stay visible in every state. The card, `providers.antigravity` search
+entry and page are absent in VS Code. Web, desktop, hosted mobile and Capacitor
+show the status of their connected OpenChamber server.
+
 ### Claude Code connections
 
 Selecting `claude-native` opens `providers/ClaudeConnectionsPage.tsx` instead

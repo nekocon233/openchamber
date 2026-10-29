@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
+import { NATIVE_PROVIDER_ANTIGRAVITY } from '@/lib/native-agents/ids';
 
 /**
  * Provider ids the Small Model and Changes Walkthrough pickers may offer, from
- * `GET /api/small-model`. `undefined` until the server has answered.
+ * `GET /api/small-model`. Antigravity is excluded because its native adapter
+ * does not implement the Small Model protocol. `undefined` until the server answers.
  *
  * Asked again whenever the provider catalog changes. A panel that mounts while
  * OpenCode is still starting gets an empty answer, and asking once per mount
@@ -39,7 +41,9 @@ export function useCallableModelProviders(enabled = true): string[] | undefined 
         // and the string filter below reject anything else.
         const payload = (await response.json().catch(() => null)) as { authenticatedProviders?: unknown } | null;
         if (!cancelled && Array.isArray(payload?.authenticatedProviders)) {
-          setProviderIds(payload.authenticatedProviders.filter((id): id is string => typeof id === 'string'));
+          setProviderIds(payload.authenticatedProviders
+            .filter((id): id is string => typeof id === 'string')
+            .filter((id) => id !== NATIVE_PROVIDER_ANTIGRAVITY));
         }
       } catch {
         // Transport failure: keep whatever we knew.

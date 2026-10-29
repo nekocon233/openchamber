@@ -3,7 +3,8 @@
 ## Ownership
 
 This module presents Claude Code, Codex and DeepSeek Harness execution as one
-`ncv_<uuid>` conversation. Read this document when changing cross-backend
+`ncv_<uuid>` conversation. Antigravity is deliberately outside this contract;
+creation rejects it before a manifest is written. Read this document when changing cross-backend
 selection, history projection, handoff preparation or shared-source cleanup.
 The parent native runtime owns CLI processes, authentication, protocols and
 raw transcripts.

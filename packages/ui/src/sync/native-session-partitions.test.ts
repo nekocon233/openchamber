@@ -32,16 +32,29 @@ describe('resolveNativeSessions', () => {
   test('preserves DeepSeek on failure while applying successful empty results for other backends', () => {
     const deepseek = session('ndh_old', '/p');
     const resolved = resolveNativeSessions([claudeOld, codexOld, deepseek], new Map([
-      ['/p', { claude: [], codex: [], deepseek: null }],
+      ['/p', { claude: [], codex: [], deepseek: null, antigravity: null }],
     ]));
     expect(resolved.map((entry) => entry.id)).toEqual(['ndh_old']);
+  });
+
+  test('preserves Antigravity when an older server omits its partition and replaces it when answered', () => {
+    const old = session('nag_old', '/p');
+    const fresh = session('nag_new', '/p');
+    const retained = resolveNativeSessions([old], new Map([
+      ['/p', { claude: [], codex: [], deepseek: [], antigravity: null }],
+    ]));
+    expect(retained.map((entry) => entry.id)).toEqual(['nag_old']);
+    const replaced = resolveNativeSessions([old], new Map([
+      ['/p', { claude: [], codex: [], deepseek: [], antigravity: [fresh] }],
+    ]));
+    expect(replaced.map((entry) => entry.id)).toEqual(['nag_new']);
   });
 
   test('replaces a backend that answered and keeps one that failed', () => {
     const fresh = session('ncl_new', '/p');
     const resolved = resolveNativeSessions(
       [claudeOld, codexOld, elsewhere, openCode],
-      new Map([['/p', { claude: [fresh], codex: null, deepseek: null }]]),
+      new Map([['/p', { claude: [fresh], codex: null, deepseek: null, antigravity: null }]]),
     );
     expect(resolved.map((entry) => entry.id).sort()).toEqual(['ncl_elsewhere', 'ncl_new', 'ncx_old']);
   });
@@ -49,11 +62,11 @@ describe('resolveNativeSessions', () => {
   test('keeps subagent sessions, nested ones too, while their parent is held', () => {
     const kept = resolveNativeSessions(
       [grandchild, child, claudeOld],
-      new Map([['/p', { claude: [claudeOld], codex: [], deepseek: [] }]]),
+      new Map([['/p', { claude: [claudeOld], codex: [], deepseek: [], antigravity: [] }]]),
     );
     expect(kept.map((entry) => entry.id).sort()).toEqual(['ncl_old', 'ncl_old_t_toolu_1', 'ncl_old_t_toolu_2']);
 
-    const orphaned = resolveNativeSessions([grandchild, child, claudeOld], new Map([['/p', { claude: [], codex: [], deepseek: [] }]]));
+    const orphaned = resolveNativeSessions([grandchild, child, claudeOld], new Map([['/p', { claude: [], codex: [], deepseek: [], antigravity: [] }]]));
     expect(orphaned).toEqual([]);
   });
 });
@@ -64,7 +77,7 @@ describe('fetchNativePartition', () => {
     const ok = await fetchNativePartition(apiListing(async () => ({
       backends: { claude: { status: 'ok', sessions: [fresh] }, codex: { status: 'error', message: 'codex missing' } },
     })), '/p');
-    expect(ok).toEqual({ claude: [fresh], codex: null, deepseek: null });
+    expect(ok).toMatchObject({ claude: [fresh], codex: null, deepseek: null, antigravity: null });
 
     const originalWarn = console.warn;
     console.warn = () => {};
@@ -72,7 +85,7 @@ describe('fetchNativePartition', () => {
       const failed = await fetchNativePartition(apiListing(async () => {
         throw new Error('offline');
       }), '/p');
-      expect(failed).toEqual({ claude: null, codex: null, deepseek: null });
+      expect(failed).toEqual({ claude: null, codex: null, deepseek: null, antigravity: null, unified: null });
     } finally {
       console.warn = originalWarn;
     }

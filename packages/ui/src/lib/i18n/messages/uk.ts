@@ -148,6 +148,7 @@ export const dict: Record<I18nKey, string> = {
 
 
 
+  "settings.antigravity.title": "Antigravity CLI",
   "settings.claudeConnections.title": "З’єднання Claude Code",
   "settings.claudeConnections.description": "Виберіть з’єднання у списку моделей чату. Налаштування зберігаються на цьому сервері OpenChamber; налаштування термінала не змінюються.",
   "settings.claudeConnections.connections": "Збережені з’єднання",

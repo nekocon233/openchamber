@@ -567,6 +567,8 @@ and the send path reading the same grammar.
   the command, a failed send puts the text into the fork's composer. A failed prompt command restores everything it consumed: text,
   confirmed mentions, files, comment drafts, and pending synthetic context.
   Native sessions also run the commands `isNativeLocalCommand` names.
+  Antigravity has no local or CLI slash-command list in this version, and its
+  composer offers build only. Compact, revert, fork and BTW stay unavailable.
   Codex built-ins are dispatched first by `submit/codexCommands.ts`; settings
   commands update the existing selections, inspections use the native API,
   and `/plan <prompt>` sends its argument with an explicit plan-mode selection.
@@ -696,9 +698,10 @@ Unified native `ncv_` conversations use this same queue and claim lifecycle.
 They confirm the server's whole-execution readiness before draining, including
 background tasks and native questions. A cross-backend follow-up always waits;
 its captured model runs after the current source settles. Its prompt carries
-`preserveSelection`, keeping any later composer choice intact. Single-CLI
-sessions retain their native immediate follow-up path. Server behavior is owned
-by `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
+`preserveSelection`, keeping any later composer choice intact. Claude, Codex
+and DeepSeek single-CLI sessions retain their native immediate follow-up path.
+Antigravity accepts one turn at a time, so its follow-ups use this queue until
+idle. Server behavior is owned by `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
 
 Follow-up queueing applies only to normal prompts in an existing session. While
 the authoritative phase snapshot is `busy` or `retry`, choosing the queue

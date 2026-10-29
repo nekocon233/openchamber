@@ -170,6 +170,22 @@ describe('native session registry', () => {
     expect(await registry.getSession(SESSION)).toMatchObject({ origin: 'openchamber', createdAt: 1 });
   });
 
+  it('persists Antigravity step bindings without losing them when the send is recorded again', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const sessionId = 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
+    const messageId = 'nag_u_00112233-4455-4677-8899-aabbccddeeff';
+    const send = {
+      messageId, providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'build', sentAt: 1,
+      antigravity: { fingerprint: 'a'.repeat(64) },
+    };
+    const first = createNativeRegistry({ filePath });
+    await first.bindAntigravityMessage(sessionId, messageId, 7, send);
+    await first.recordSend(sessionId, send);
+    const second = createNativeRegistry({ filePath });
+    expect((await second.sendRecords(sessionId)).get(messageId).antigravity).toEqual({ fingerprint: 'a'.repeat(64), stepIndex: 7 });
+    await expect(second.bindAntigravityMessage(sessionId, messageId, 8)).rejects.toThrow('already bound');
+  });
+
   it('moves an unreadable file aside and reports the reset instead of overwriting it', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const dir = makeDir();

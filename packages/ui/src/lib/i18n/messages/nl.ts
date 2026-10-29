@@ -4069,6 +4069,7 @@ export const dict = {
   'settings.cliproxyapi.keyRejected': 'De gateway weigerde de opgeslagen beheersleutel. Sla hem opnieuw op.',
   'settings.cliproxyapi.failed': 'Het verzoek aan de gateway is mislukt.',
 
+  'settings.antigravity.title': 'Antigravity CLI',
   'settings.claudeConnections.title': 'Claude Code connections',
   'settings.claudeConnections.url': 'API endpoint',
   'settings.codexConnections.addCustom': 'Add custom connection',
