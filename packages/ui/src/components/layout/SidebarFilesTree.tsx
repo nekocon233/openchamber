@@ -1487,13 +1487,40 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
   const moveDropTargetLabel = moveDropTarget ? getDropTargetLabel(root, moveDropTarget) : '';
   const pendingMoveName = pendingMove ? pendingMove.source.path.slice(pendingMove.source.path.lastIndexOf('/') + 1) : '';
   const toolbarButtonClassName = cn('p-0 flex-shrink-0', inPanelHeader ? 'w-7' : 'size-6');
+  const searchField = (
+    <div className={cn('relative', inPanelHeader ? 'min-w-16 flex-1' : 'min-w-0 px-2 py-2')}>
+      {!inPanelHeader ? <Icon name="search" className="pointer-events-none absolute inset-s-4 top-4 h-4 w-4 text-muted-foreground" /> : null}
+      <Input
+        ref={searchInputRef}
+        value={searchQuery}
+        onChange={(event) => setSearchQuery(event.target.value)}
+        placeholder={t('sidebarFilesTree.search.placeholder')}
+        aria-label={t('sidebarFilesTree.search.placeholder')}
+        inputSize={inPanelHeader ? 'compact' : 'default'}
+        className={cn('typography-meta', inPanelHeader ? 'ps-2 pe-9 md:pe-7' : 'ps-8 pe-8')}
+      />
+      {searchQuery.trim().length > 0 ? (
+        <button
+          type="button"
+          aria-label={t('sidebarFilesTree.search.clearAria')}
+          className={cn('absolute inline-flex items-center justify-center text-muted-foreground hover:text-foreground', inPanelHeader ? 'inset-e-0 top-1/2 h-7 w-7 -translate-y-1/2' : 'inset-e-4 top-4 h-4 w-4')}
+          onClick={() => {
+            setSearchQuery('');
+            searchInputRef.current?.focus();
+          }}
+        >
+          <Icon name="close" className="h-4 w-4" />
+        </button>
+      ) : null}
+    </div>
+  );
 
   return (
     <section ref={treeSectionRef} className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex flex-col border-b border-border/40">
         <ContextPanelHeaderToolbar>
         <div className={cn('flex min-w-0 items-center justify-end gap-1', inPanelHeader ? 'flex-1 self-center' : 'h-8 shrink-0 border-t border-border/40 px-2')}>
-        {inPanelHeader ? <span className="min-w-0 flex-1 truncate ps-1.5 typography-ui-label text-foreground">{t('contextPanel.mode.files')}</span> : null}
+        {inPanelHeader ? <span className="min-w-0 truncate ps-1.5 typography-ui-label text-foreground">{t('contextPanel.mode.files')}</span> : null}
+        {inPanelHeader ? searchField : null}
         {/* New file, new folder and upload share one "+" menu, so the band
             keeps four buttons and fits even the narrowest tree. */}
         {canCreateFile || canCreateFolder || canUpload ? (
@@ -1566,30 +1593,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
         </Tooltip>
         </div>
         </ContextPanelHeaderToolbar>
-        <div className="relative min-w-0 px-2 py-2">
-          <Icon name="search" className="pointer-events-none absolute inset-s-4 top-4 h-4 w-4 text-muted-foreground" />
-          <Input
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder={t('sidebarFilesTree.search.placeholder')}
-            className="h-8 ps-8 pe-8 typography-meta"
-          />
-          {searchQuery.trim().length > 0 ? (
-            <button
-              type="button"
-              aria-label={t('sidebarFilesTree.search.clearAria')}
-              className="absolute inset-e-4 top-4 inline-flex h-4 w-4 items-center justify-center text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                setSearchQuery('');
-                searchInputRef.current?.focus();
-              }}
-            >
-              <Icon name="close" className="h-4 w-4" />
-            </button>
-          ) : null}
-        </div>
-      </div>
+      {!inPanelHeader ? <div className="border-b border-border/40">{searchField}</div> : null}
 
       <div className="relative flex-1 min-h-0">
         <ScrollableOverlay

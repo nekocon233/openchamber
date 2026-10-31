@@ -52,9 +52,10 @@ paths through the unsaved-changes guard; closing Changes preserves its side
 list. No editor chunk or file read is needed for the initial empty host or a
 workspace containing only Changes.
 
-In editor layout, the directory's Files title and add/upload, gitignored,
-refresh and collapse actions share the context panel's single header row via
-`ContextPanelHeaderToolbar`. Search stays above the tree in the body. Only the
+In editor layout, the directory's Files title, search field and add/upload,
+gitignored, refresh and collapse actions share the context panel's single header
+row via `ContextPanelHeaderToolbar`. Search uses the compact 28px input and grows
+between the title and actions; the body starts with the tree. Only the
 active file surface receives its zone's header slot, so switching tools or
 moving the directory cannot leave controls in another surface's header.
 Classic file-tab headers retain the tree's inline action row; the mobile file

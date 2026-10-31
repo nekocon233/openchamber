@@ -212,8 +212,9 @@ back whenever no toolbar is mounted, so empty and loading states stay named.
 Git moves only its first row: identity, pull request and upstream state stay
 in the body below.
 
-The directory in editor layout uses that same slot for its Files title and
-existing file actions. Its search field remains in the body. The classic
+The directory in editor layout uses that same slot for its Files title, compact
+search field and existing file actions. The search grows between the label and
+actions without adding a row above the tree. The classic
 multi-instance file strip keeps its own header and inline directory toolbar.
 
 No new header buttons: the rail, `openContextSurface`, the composer +
