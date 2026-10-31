@@ -12,12 +12,12 @@ import { selectNativeTasksTab, selectTaskStopScope, type NativeTasksTab } from '
 
 type Scope = { sessionId: string; directory: string; runtimeGeneration: number; tab: NativeTasksTab };
 
-// Each CLI's own views: a checklist and background tasks belong to Claude Code,
-// a plan document and its step list to Codex. A backend that grows a view adds
-// it here and a label below.
+// Checklists belong to Claude Code and DeepSeek; Codex owns a plan and steps.
+// Each backend lists only the views its server adapter implements.
 const TABS: Record<string, readonly NativeTasksTab[]> = {
   claude: ['checklist', 'background'],
   codex: ['plan', 'todos'],
+  deepseek: ['checklist'],
   antigravity: ['background'],
 };
 const TAB_LABELS: Record<NativeTasksTab, I18nKey> = {

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { createJSONStorage } from 'zustand/middleware';
+import { sanitizeWorkStatusSectionOrder } from '@/components/chat/work-status/sections';
 import { useUIStore } from './useUIStore';
 
 const originalOptions = useUIStore.persist.getOptions();
@@ -30,10 +32,38 @@ describe('work-status dropdown hydration', () => {
       expect(state.workStatusExpandedSections).toEqual({ mcp: true });
       expect(state.workStatusScrollTop).toBe(42);
       expect(state.workStatusHiddenSections).toEqual(['telemetry']);
-      expect(state.workStatusSectionOrder).toEqual(['mcp', 'session']);
+      expect(state.workStatusSectionOrder).toEqual(sanitizeWorkStatusSectionOrder(['mcp', 'session']));
       state.setWorkStatusOverlayOpen(true);
       expect(useUIStore.getState().workStatusOverlayOpen).toBe(true);
       expect(originalOptions.partialize?.(useUIStore.getState())).not.toHaveProperty('workStatusOverlayOpen');
+    });
+  }
+
+  for (const version of [26, 27]) {
+    test(`unifies legacy task preferences on hydration from version ${version} and round-trips them`, async () => {
+      let saved = JSON.stringify({ version, state: {
+        ...useUIStore.getInitialState(),
+        workStatusExpandedSections: { taskTodos: false, mcp: true },
+        workStatusHiddenSections: ['taskTodos', 'telemetry'], workStatusHiddenSectionsExplicit: true,
+        workStatusSectionOrder: ['mcp', 'taskTodos', 'repository', 'taskChecklist'],
+      } });
+      useUIStore.persist.setOptions({ storage: createJSONStorage(() => ({
+        getItem: () => saved,
+        setItem: (_key, value) => { saved = value; },
+        removeItem: () => undefined,
+      })) });
+      await useUIStore.persist.rehydrate();
+      const state = useUIStore.getState();
+      expect(state.workStatusExpandedSections).toEqual({ taskChecklist: false, mcp: true });
+      expect(state.workStatusHiddenSections).toEqual(['taskChecklist', 'telemetry']);
+      expect(state.workStatusSectionOrder.slice(0, 3)).toEqual(['mcp', 'taskChecklist', 'repository']);
+      expect(state.workStatusSectionOrder).not.toContain('taskTodos');
+      state.setWorkStatusSectionVisible('taskChecklist', true);
+      state.setWorkStatusSectionExpanded('taskChecklist', true);
+      await useUIStore.persist.rehydrate();
+      expect(useUIStore.getState().workStatusHiddenSections).toEqual(['telemetry']);
+      expect(useUIStore.getState().workStatusExpandedSections).toEqual({ taskChecklist: true, mcp: true });
+      expect(useUIStore.getState().workStatusSectionOrder).toEqual(state.workStatusSectionOrder);
     });
   }
 });

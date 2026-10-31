@@ -20,6 +20,15 @@ Unaddressable interactive requests are declined rather than left waiting.
 `transport.js` owns the process, authentication and stream mux. `protocol.js`
 parses the wire contracts. `projector.js` folds live/history records.
 `backend.js` owns session operations, stream lifetimes and question delivery.
+`checklist.js` projects committed `todo/write` events into the shared read-only
+checklist contract. The latest whole list remains visible across turns,
+including after DSH resets its per-turn `todos` projection to null. An explicit
+empty write clears it; no write is unknown, and malformed data or failed reads
+remain errors. The reader pages backwards under one fixed sequence watermark,
+honors pending rewinds and rejects a changed branch or mutation during reads.
+Item identities follow native content, while list identities follow the native
+source. Live writes publish `session.checklist.updated` through the existing
+conversation bridge. Invalid lists report an error without publishing emptiness.
 `configuration.js` owns the remote provider editor and its partial-save contract.
 `installation.js` owns managed npm installation and executable discovery;
 `setup.js` owns the user-triggered setup job. `history.js` owns branch identity

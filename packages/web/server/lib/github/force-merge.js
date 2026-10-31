@@ -10,7 +10,7 @@ const targetSchema = z.object({
 const preflightSchema = z.object({ node: z.object({
   __typename: z.literal('PullRequest'), id: text, number: z.number().int().positive(),
   state: z.enum(['OPEN', 'CLOSED', 'MERGED']), isDraft: z.boolean(),
-  mergeable: z.enum(['MERGEABLE', 'CONFLICTING', 'UNKNOWN']), viewerCanMergeAsAdmin: z.boolean(),
+  mergeable: z.enum(['MERGEABLE', 'CONFLICTING', 'UNKNOWN']),
   headRefOid: sha, headRefName: text, baseRefName: text, repository,
 }) });
 const resultSchema = z.object({ mergePullRequest: z.object({ pullRequest: z.object({ id: text, merged: z.literal(true) }) }) });
@@ -35,11 +35,11 @@ export class ForceMergePreflightError extends Error {
   }
 }
 
-const query = `query ForceMergePermission($id: ID!) {
+const query = `query ForceMergeTarget($id: ID!) {
   node(id: $id) {
     __typename
     ... on PullRequest {
-      id number state isDraft mergeable viewerCanMergeAsAdmin
+      id number state isDraft mergeable
       headRefOid headRefName baseRefName repository { name owner { login } }
     }
   }
@@ -58,7 +58,7 @@ export async function forceMergePullRequest({ octokit, nodeId, target, method })
   try { response = await octokit.graphql(query, { id: nodeId }); }
   catch (error) {
     const auth = preflightAuthErrorSchema.safeParse(error).data;
-    const failure = new ForceMergePreflightError('Could not verify GitHub administrator merge permission. Refresh and try again.',
+    const failure = new ForceMergePreflightError('Could not verify the GitHub pull request. Refresh and try again.',
       'SOURCE_CONTROL_MUTATION_PRECHECK_FAILED', auth?.status ?? 502);
     if (auth?.sourceControlIdentity) failure.sourceControlIdentity = auth.sourceControlIdentity;
     if (auth?.sourceControlPersistedAccount !== undefined) failure.sourceControlPersistedAccount = auth.sourceControlPersistedAccount;
@@ -66,7 +66,7 @@ export async function forceMergePullRequest({ octokit, nodeId, target, method })
     throw failure;
   }
   const parsed = preflightSchema.safeParse(response);
-  if (!parsed.success) throw new ForceMergePreflightError('GitHub returned an invalid administrator merge permission response');
+  if (!parsed.success) throw new ForceMergePreflightError('GitHub returned an invalid pull request preflight response');
   const pull = parsed.data.node;
   const expected = parsedTarget.data;
   if (pull.id !== nodeId || pull.number !== expected.number
@@ -75,8 +75,8 @@ export async function forceMergePullRequest({ octokit, nodeId, target, method })
     || pull.headRefName !== expected.head || pull.baseRefName !== expected.base || pull.headRefOid !== expected.headSha) {
     throw new ForceMergePreflightError('The pull request changed. Refresh before merging.', 'SOURCE_CONTROL_MUTATION_TARGET_CHANGED', 409);
   }
-  if (!pull.viewerCanMergeAsAdmin) {
-    throw new ForceMergePreflightError('This GitHub account cannot bypass merge requirements.', 'SOURCE_CONTROL_MUTATION_REJECTED', 403);
+  if (pull.state === 'MERGED') {
+    throw new ForceMergePreflightError('This pull request is already merged. Refresh the pull request.', 'SOURCE_CONTROL_MUTATION_TARGET_CHANGED', 409);
   }
   if (pull.state !== 'OPEN' || pull.isDraft || pull.mergeable !== 'MERGEABLE') {
     throw new ForceMergePreflightError('Administrator merge requires an open, ready pull request without merge conflicts.', 'SOURCE_CONTROL_MUTATION_REJECTED', 409);

@@ -24,7 +24,6 @@ export const WORK_STATUS_SECTION_IDS = [
   'pinned',
   'contextSources',
   'taskPlan',
-  'taskTodos',
 ] as const;
 
 export type WorkStatusSectionId = (typeof WORK_STATUS_SECTION_IDS)[number];
@@ -41,7 +40,6 @@ export const WORK_STATUS_SECTION_LABEL_KEYS = {
   pinned: 'chat.workStatus.section.pinned',
   contextSources: 'chat.workStatus.section.contextBreakdown',
   taskPlan: 'chat.nativeTasks.plan',
-  taskTodos: 'chat.nativeTasks.todos',
 } as const satisfies Record<WorkStatusSectionId, I18nKey>;
 
 /**
@@ -68,9 +66,21 @@ const storedSectionIdSchema = z.union([
 ]);
 
 const readStoredSectionId = (value: unknown): WorkStatusPanelSectionId | null => {
-  const parsed = storedSectionIdSchema.safeParse(value);
+  const parsed = storedSectionIdSchema.safeParse(value === 'taskTodos' ? 'taskChecklist' : value);
   return parsed.success ? parsed.data : null;
 };
+
+/** Preserve the canonical expansion choice, or inherit the former Codex section's choice. */
+export const workStatusExpandedSectionsSchema = z.record(z.string(), z.boolean().optional().catch(undefined)).catch({}).transform((parsed) => {
+  const expanded: Record<string, boolean> = {};
+  for (const [id, entry] of Object.entries(parsed)) {
+    if (id !== 'taskTodos' && entry !== undefined) expanded[id] = entry;
+  }
+  if (expanded.taskChecklist === undefined && parsed.taskTodos !== undefined) {
+    expanded.taskChecklist = parsed.taskTodos;
+  }
+  return expanded;
+});
 
 /** Preserve chosen positions, discard obsolete ids, and append newly added built-in sections. */
 export const sanitizeWorkStatusSectionOrder = (value: readonly string[] | null | undefined): WorkStatusPanelSectionId[] => {

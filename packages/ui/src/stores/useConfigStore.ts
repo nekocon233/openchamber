@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { configuredVariantForModel, highestModelVariant, listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
+import { configuredVariantForModel, preferredModelVariant, listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
 import type { StoreApi, UseBoundStore } from "zustand";
@@ -236,12 +236,12 @@ const modelHasVariant = (model: Model | undefined, variant: string | null | unde
 );
 
 /**
- * A saved native slug names its own level; otherwise use the highest listed level.
+ * A saved native slug names its own level; otherwise use the preferred default level.
  * Only the branch where no configured level exists uses it; a configured level
  * the model does not offer stays unset, as before.
  */
 const defaultModelVariant = (model: Model | undefined, modelId: string): string | undefined => (
-    nativeModelAliasVariant(model, modelId) ?? highestModelVariant(listModelVariantIds(model?.variants))
+    nativeModelAliasVariant(model, modelId) ?? preferredModelVariant(listModelVariantIds(model?.variants))
 );
 
 const hasProviderModel = (
@@ -493,7 +493,7 @@ const resolveDefaultAgentModelSelection = ({
             modelId = parsed.modelId;
             // A project default carries its own variant; the settings variant
             // belongs to the settings model and must not leak onto it. With
-            // nothing configured the model runs at its highest level.
+            // nothing configured the model runs at its preferred default.
             const configuredVariant = projectDefaultModel ? projectDefaultVariant : settingsDefaultVariant;
             const configuredModel = findProviderModel(providers, providerId, modelId);
             variant = configuredVariant !== undefined
@@ -3365,7 +3365,7 @@ export const useConfigStore = create<ConfigStore>()(
                             );
 
                             // With neither the agent nor the settings naming a
-                            // level, the model runs at its highest one.
+                            // level, the model uses its preferred default.
                             const settingsVariant = configuredVariantForModel({ defaultModel: settingsDefaultModel, defaultVariant: settingsDefaultVariant, providerId, modelId, model });
                             const inherited = [agentVariant, settingsVariant].find(isAvailable)
                                 ?? (agentVariant === undefined && settingsVariant === undefined

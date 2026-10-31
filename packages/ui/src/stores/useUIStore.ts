@@ -38,7 +38,12 @@ import {
   type ContextZoneView,
   type MovedZoneViews,
 } from '@/lib/workspace/zones';
-import { sanitizeWorkStatusSectionOrder, type WorkStatusPanelSectionId } from '@/components/chat/work-status/sections';
+import {
+  workStatusExpandedSectionsSchema,
+  sanitizeWorkStatusHiddenSections,
+  sanitizeWorkStatusSectionOrder,
+  type WorkStatusPanelSectionId,
+} from '@/components/chat/work-status/sections';
 import { validEditorSplitRatio } from '@/lib/workspace/editorSplit';
 import { getEditorDiffTabState, type EditorDiffTabState } from '@/lib/workspace/editorTabs';
 import type { WorkspaceLayout } from '@/lib/workspace/sidebarGeometry';
@@ -3371,7 +3376,7 @@ export const useUIStore = create<UIStore>()(
       {
         name: 'ui-store',
         storage: createDeferredSafeJSONStorage(),
-        version: 26,
+        version: 27,
         merge: (persistedState, currentState) => {
           const merged = Object.assign({}, currentState, persistedState, {
             workStatusOverlayOpen: false,
@@ -3382,6 +3387,9 @@ export const useUIStore = create<UIStore>()(
           const placement = zonePlacementSchema.parse(merged.contextSurfaceZones);
           return {
             ...merged,
+            workStatusExpandedSections: workStatusExpandedSectionsSchema.parse(merged.workStatusExpandedSections),
+            workStatusHiddenSections: sanitizeWorkStatusHiddenSections(merged.workStatusHiddenSections, merged.workStatusHiddenSectionsExplicit),
+            workStatusSectionOrder: sanitizeWorkStatusSectionOrder(merged.workStatusSectionOrder),
             contextSurfaceZones: placement,
             contextPanelByDirectory: reconcileContextPanelPlacement(
               sanitizeContextPanelByDirectory(merged.contextPanelByDirectory), placement, getDefaultContextZone(merged.workspaceLayout),
@@ -3393,6 +3401,8 @@ export const useUIStore = create<UIStore>()(
             return persistedState;
           }
           const state = persistedState as Record<string, unknown>;
+
+          // v26 -> v27: merge normalizes taskTodos into the shared taskChecklist preferences.
 
           // v25 -> v26: work status is a transient dropdown in every desktop layout.
           if (version < 26) {

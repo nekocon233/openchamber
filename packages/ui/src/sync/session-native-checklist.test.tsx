@@ -72,6 +72,22 @@ beforeEach(() => {
   publications.clear();
   api = createTestNativeAgentsAPI({ capabilities: async () => capabilities, checklist: async () => snapshot(1) });
 });
+
+for (const supported of [true, false]) test(`DeepSeek checklist capability controls reads: ${supported}`, async () => {
+  const session = `ndh_${'b'.repeat(64)}`;
+  const deepseek: NonNullable<NativeCapabilities['backends']['deepseek']> = { cli: true, blockedByEnterprise: false, actions: { revert: true, delete: true, fork: true } };
+  if (supported) deepseek.tasks = { checklist: true };
+  let calls = 0;
+  api = createTestNativeAgentsAPI({
+    capabilities: async () => ({ ...capabilities, backends: { ...capabilities.backends, deepseek } }),
+    checklist: async () => { calls += 1; return { ...snapshot(1), source: 'history' }; },
+  });
+  await render(<Probe session={session} />);
+  await pause();
+  if (supported) expect(heldSnapshot(session).source).toBe('history');
+  else expect(held(session).status).toBe('unsupported');
+  expect(calls).toBe(supported ? 1 : 0);
+});
 afterEach(async () => {
   await act(() => root.unmount());
   switchRuntimeEndpoint({ apiBaseUrl: 'http://checklist.test', runtimeKey: 'checklist' });

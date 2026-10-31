@@ -12,6 +12,13 @@ const capabilities = () => ({
 });
 
 describe('Antigravity native boundary schemas', () => {
+  test('preserves the optional DeepSeek checklist capability across host versions', () => {
+    const deepseek = { cli: true, blockedByEnterprise: false, actions: { revert: true, delete: true, fork: true } };
+    const base = capabilities();
+    expect(nativeCapabilitiesSchema.parse({ ...base, backends: { ...base.backends, deepseek } }).backends.deepseek?.tasks).toBeUndefined();
+    expect(nativeCapabilitiesSchema.parse({ ...base, backends: { ...base.backends, deepseek: { ...deepseek, tasks: { checklist: true } } } }).backends.deepseek?.tasks).toEqual({ checklist: true });
+  });
+
   test('accepts an optional Antigravity capability without opening unsupported actions', () => {
     const parsed = nativeCapabilitiesSchema.parse({
       ...capabilities(),

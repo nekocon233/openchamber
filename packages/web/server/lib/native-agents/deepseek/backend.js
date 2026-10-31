@@ -13,6 +13,7 @@ import * as wire from './protocol.js';
 import { createDeepseekTransport } from './transport.js';
 import { createDeepseekConfiguration } from './configuration.js';
 import { appendDeepseekBranch, initialDeepseekHistory, deepseekIdentityScope, deepseekHistoryCursor, deepseekCursorPosition } from './history.js';
+import { deepseekChecklistSnapshot, readDeepseekChecklist } from './checklist.js';
 
 const controlFrame = z.discriminatedUnion('type', [
   z.object({ type: z.literal('baseline'), value: z.object({ projections: z.record(z.string(), z.object({ asOfSeq: z.number(), values: wire.jsonObject })) }) }),
@@ -40,6 +41,7 @@ export const createDeepseekBackend = ({
   const summaries = new Map();
   const histories = new Map();
   let bindingRevision = 0;
+  let checklistRevision = 0;
   const deletionIntents = new Map();
   let stopping = false;
   const mutations = new Map();
@@ -522,6 +524,16 @@ export const createDeepseekBackend = ({
 
   const applyLive = (state, id, event) => {
     applyProjected(id, state.directory, state.projection, event, { live: true });
+    if (event.type === 'todo/write' && !progressSuppressed.has(id)) {
+      try {
+        publisher.checklist(state.directory, id, deepseekChecklistSnapshot({
+          nativeId: state.nativeId, event, revision: ++checklistRevision, observedAt: now(),
+        }));
+      } catch (error) {
+        if (!(error instanceof NativeAgentError) || error.code !== 'NATIVE_DEEPSEEK_INVALID_CHECKLIST') throw error;
+        publisher.error(state.directory, id, unknownError(error.message));
+      }
+    }
     const turn = turnIdentity.safeParse(event.data).data?.turn;
     if (turn !== undefined) state.currentTurn = turn;
     if (event.type === 'user/message' && managedTurns.get(id)?.has(event.data.source?.rpcId) && state.currentTurn !== null) {
@@ -700,6 +712,34 @@ export const createDeepseekBackend = ({
 
   const backend = {
     configuration,
+    async checklist(id, directory) {
+      await resolve(id, directory);
+      const state = await follow(id, directory);
+      const revision = histories.get(id)?.revision ?? 0;
+      const mutation = mutations.get(id) ?? 0;
+      const assertCurrent = () => {
+        if ((histories.get(id)?.active ?? state.nativeId) !== state.nativeId
+          || (histories.get(id)?.revision ?? 0) !== revision || (mutations.get(id) ?? 0) !== mutation) {
+          throw new NativeAgentError('Session history changed while reading tasks. Reload and retry.', { status: 409, code: 'NATIVE_HISTORY_CHANGED' });
+        }
+      };
+      const pending = await reverts?.pending(id);
+      const throughSeq = pending?.deepseek?.nativeId === state.nativeId ? Math.min(state.cursor, pending.deepseek.seq - 1) : state.cursor;
+      assertCurrent();
+      const snapshot = await readDeepseekChecklist({
+        nativeId: state.nativeId, events: [...state.events], hasMore: state.hasMore, throughSeq, observedAt: now(),
+        loadOlder: async (beforeSeq) => {
+          const page = await transport.request('session/page', { request: {
+            address: { kind: 'session', sessionId: state.nativeId }, throughSeq, beforeSeq,
+            maxMessages: 500, turnWindow: { minMessages: 100, minTurns: 2 },
+          } }, wire.historyPage);
+          assertCurrent();
+          return { events: page.records.map((record) => record.event), hasMore: page.hasMore };
+        },
+      });
+      assertCurrent();
+      return snapshot.state === 'ready' ? { ...snapshot, revision: ++checklistRevision } : snapshot;
+    },
     async listStatisticsSessions(signal) {
       await loadBindings();
       const list = await transport.request('session/list', { _request: {} }, wire.sessionList, signal);

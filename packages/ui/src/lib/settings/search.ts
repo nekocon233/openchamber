@@ -46,7 +46,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'chat.work-status.section.taskChecklist',
     page: 'chat',
     titleKey: 'chat.nativeTasks.cliChecklist',
-    keywords: ['claude', 'cli', 'checklist', 'tasks', 'work status'],
+    keywords: ['claude', 'deepseek', 'codex', 'cli', 'todo', 'checklist', 'steps', 'tasks', 'work status'],
     isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
   },
   {
@@ -61,13 +61,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'chat',
     titleKey: 'chat.nativeTasks.plan',
     keywords: ['codex', 'plan', 'work status'],
-    isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
-  },
-  {
-    id: 'chat.work-status.section.taskTodos',
-    page: 'chat',
-    titleKey: 'chat.nativeTasks.todos',
-    keywords: ['codex', 'todo', 'checklist', 'work status'],
     isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
   },
   {

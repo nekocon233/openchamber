@@ -109,7 +109,7 @@ describe('Antigravity application decisions', () => {
     await h.questions.reply(question.id, [['build']]);
     expect(h.deliveries[0].request).toMatchObject({
       agent: 'build', variant: 'high', model: { providerID: 'antigravity-native', modelID: PLAN.send.modelID },
-      parts: [{ type: 'text', text: 'Implement the plan.' }], instructions: expect.stringContaining(PLAN.plan),
+      parts: [], instructions: expect.stringContaining(PLAN.plan),
     });
     expect(() => h.questions.reply(question.id, [['build']])).toThrow('No pending native question');
     await h.engine.propose(PLAN);

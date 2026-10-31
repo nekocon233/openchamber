@@ -252,6 +252,7 @@ export const nativeCapabilitiesSchema = z.object({
     }),
     deepseek: z.object({
       cli: z.boolean(), blockedByEnterprise: z.boolean(),
+      tasks: z.object({ checklist: z.boolean() }).optional(),
       actions: z.object({ revert: z.boolean(), delete: z.boolean(), fork: z.boolean() }),
     }).optional(),
     // Antigravity can read saved command tasks; it has no task-control protocol.

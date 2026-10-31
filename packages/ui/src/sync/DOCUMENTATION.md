@@ -784,7 +784,10 @@ what the stores hold for native sessions and never blocks OpenCode's:
   items as unconfirmed. Only a complete read replaces the entire list.
   A new list identity starts a separate collection. Sessions with a confirmed
   shared list identity receive each other's updates and share overlapping reads.
-  The server sends the plan the list still shows, so a list that gained a task
+  DeepSeek uses this same owner with its own advertised checklist capability
+  and committed native `todo/write` list. Source changes on a unified
+  conversation reset the reader before loading its new executing backend.
+  Claude sends the plan the list still shows, so a list that gained a task
   arrives without the finished tasks before it, and the UI never filters
   completed items itself.
 - Native plan. `session-native-plan.ts` owns the plan a Codex thread wrote,
@@ -993,7 +996,7 @@ Codex's built-ins come from `lib/native-agents/codex-commands.ts`, and
 `composer/submit/codexCommands.ts` executes them. Model, effort, Fast and plan
 commands write the same config and session selections as the existing pickers.
 Fast toggles the effort the composer carries: an explicit pick, otherwise the
-inherited level, which is the model's highest when nothing names one. The native
+inherited level, which prefers max when supported and otherwise the highest listed level. The native
 catalog's `defaultEffort` applies only when no level resolves at all. Session
 actions retain their existing owners. Inspections and reviews
 use `nativeAgents.codexCommand`; no optimistic user message is created for a

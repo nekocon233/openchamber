@@ -119,6 +119,27 @@ describe('settings registry', () => {
     }
   });
 
+  test('older server task preferences normalize into one setting and remain canonical on save', () => {
+    const initial = useUIStore.getState();
+    try {
+      const parsed = parseSettingsDocument({
+        workStatusHiddenSections: ['taskTodos', 'mcp', 'taskChecklist'], workStatusHiddenSectionsExplicit: true,
+        workStatusSectionOrder: ['taskTodos', 'repository', 'taskChecklist'],
+      });
+      if (!parsed) throw new Error('Expected valid legacy task preferences');
+      applySettingsToStores(parsed);
+      expect(useUIStore.getState().workStatusHiddenSections).toEqual(['taskChecklist', 'mcp']);
+      expect(useUIStore.getState().workStatusSectionOrder.slice(0, 2)).toEqual(['taskChecklist', 'repository']);
+      const saved = readAutoSaveSnapshot();
+      expect(saved.workStatusHiddenSections).not.toContain('taskTodos');
+      expect(saved.workStatusSectionOrder).not.toContain('taskTodos');
+      applySettingsToStores({});
+      expect(useUIStore.getState().workStatusHiddenSections).toEqual(['taskChecklist', 'mcp']);
+    } finally {
+      useUIStore.setState(initial, true);
+    }
+  });
+
   test('every key lives in exactly one table', () => {
     const all = [...SETTINGS_KEYS, ...LOCAL_DEVICE_KEYS, ...DESKTOP_SHELL_KEYS];
     expect(new Set(all).size).toBe(all.length);

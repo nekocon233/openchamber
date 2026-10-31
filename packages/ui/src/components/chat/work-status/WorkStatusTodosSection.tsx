@@ -6,7 +6,7 @@ import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './
 import { useReportWorkStatusPresence } from './presenceContext';
 import { useWorkStatusNavigation } from './useWorkStatusNavigation';
 
-const SECTION_ID = 'taskTodos';
+const SECTION_ID = 'taskChecklist';
 
 const STEP_STATUS_KEYS = {
   pending: 'chat.nativeTasks.status.pending',
@@ -41,7 +41,7 @@ export function WorkStatusTodosSection({ sessionId, directory }: { sessionId: st
           : snapshot?.state === 'unknown' ? t('chat.nativeTasks.todosUnknown')
             : t('chat.nativeTasks.todosEmpty');
   return (
-    <WorkStatusCollapsibleSection id={SECTION_ID} title={t('chat.nativeTasks.todos')} icon="list-check-2" defaultExpanded summary={summary}>
+    <WorkStatusCollapsibleSection id={SECTION_ID} title={t('chat.nativeTasks.cliChecklist')} icon="list-check-2" defaultExpanded summary={summary}>
       <div className="max-h-56 overflow-y-auto">
         {steps.length === 0 ? <WorkStatusRow muted label={empty} /> : steps.map((step) => (
           <WorkStatusRow

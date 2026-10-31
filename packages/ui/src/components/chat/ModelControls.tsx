@@ -71,7 +71,7 @@ import {
     shouldPreserveManualModelOverride,
 } from '@/lib/messages/userModelChoice';
 import type { BtwSelection } from '@/stores/useBtwStore';
-import { configuredVariantForModel, highestModelVariant, listModelVariantIds } from '@/lib/modelVariants';
+import { configuredVariantForModel, preferredModelVariant, listModelVariantIds } from '@/lib/modelVariants';
 
 type IconComponent = IconName;
 
@@ -938,12 +938,12 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             : [currentInherited, ...configured];
         const resolved = candidates.find((candidate) => candidate !== undefined && variantOptions.includes(candidate));
         if (resolved !== undefined) return resolved;
-        // Nothing configured names a level: run the model at its highest one.
+        // Nothing configured names a level: use max when supported.
         // A configured level the model does not list keeps the old result
         // (no level) instead of being replaced with a different one.
         return configured.some((candidate) => candidate !== undefined)
             ? undefined
-            : highestModelVariant(variantOptions);
+            : preferredModelVariant(variantOptions);
     }, [agents, currentAgentName, currentModelId, currentProviderId, currentSessionId, currentVariantSelection, effectiveCurrentVariant, getModelVariantOptions, providers, settingsDefaultModel, settingsDefaultVariant, uiAgentName]);
 
     /**
@@ -2044,11 +2044,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const hasVariants = variantOptions.length > 0;
             const resolvedVariant = resolveModelVariantSelection(providerId, modelId);
             // The row shows, and applies, the level the model runs at: the
-            // recorded choice, otherwise the main composer's highest level.
+            // recorded choice, otherwise the main composer's preferred level.
             // A controlled selection (BTW, pinned column, parallel lane) keeps
             // its own semantics.
             const rowVariant = !selection && resolvedVariant === undefined
-                ? highestModelVariant(variantOptions)
+                ? preferredModelVariant(variantOptions)
                 : resolvedVariant;
             // Both an explicit "Default" and no level at all read as "Default".
             const variantLabel = hasVariants ? formatEffortLabel(rowVariant ?? undefined) : null;
@@ -2352,10 +2352,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
         const recordedVariant = resolveModelVariantSelection(targetProviderId, targetModelId);
         // The panel shows the level the model runs at: the recorded choice,
-        // otherwise the main composer's highest level. A controlled selection
+        // otherwise the main composer's preferred level. A controlled selection
         // keeps its own semantics.
         const selectedVariant = !selection && recordedVariant === undefined
-            ? highestModelVariant(targetVariants)
+            ? preferredModelVariant(targetVariants)
             : recordedVariant;
         const isDefault = !selectedVariant;
 
@@ -2605,7 +2605,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 ? currentPending
                 : (currentProviderId === providerID && currentModelId === modelID
                     ? currentVariant
-                    : (!selection ? highestModelVariant(variantKeys) : undefined));
+                    : (!selection ? preferredModelVariant(variantKeys) : undefined));
 
             const variantsWithDefault: Array<string | undefined> = [undefined, ...variantKeys];
             const currentVariantIndex = variantsWithDefault.indexOf(activeModelVariant);
@@ -2694,11 +2694,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             const hasPendingVariant = pendingThinkingVariants.has(mapKey);
             const pendingVariant = pendingThinkingVariants.get(mapKey);
             // A row previews the level the model would run at: the main
-            // composer's highest level when nothing names one. A controlled
+            // composer's preferred level when nothing names one. A controlled
             // selection keeps its own Default.
             const effectiveVariant = hasPendingVariant
                 ? pendingVariant
-                : (isSelected ? currentVariant : (!selection ? highestModelVariant(entryVariants) : undefined));
+                : (isSelected ? currentVariant : (!selection ? preferredModelVariant(entryVariants) : undefined));
             const displayLabel = effectiveVariant
                 ? effectiveVariant.charAt(0).toUpperCase() + effectiveVariant.slice(1)
                 : 'Default';

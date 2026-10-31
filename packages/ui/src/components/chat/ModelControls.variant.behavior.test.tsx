@@ -814,6 +814,26 @@ describe('ModelControls effort restore', () => {
   });
 
   for (const isMobile of [false, true]) {
+    test(`GPT inherits max instead of ultra and preserves explicit effort (mobile: ${isMobile})`, async () => {
+      useUIStore.setState({ isMobile });
+      const gpt = { ...model, variants: ['low', 'high', 'max', 'ultra'].map((id) => ({ id, settings: { reasoningEffort: id } })) };
+      useConfigStore.setState({ providers: [{ ...provider, models: [gpt] }] });
+      const { dom, cleanup } = await renderModelControls(isMobile ? { mobilePanel: 'variant', onMobilePanelChange: () => {} } : {});
+      try {
+        expect(useConfigStore.getState().currentVariant).toBe('max');
+        expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: undefined, inherited: 'max' });
+        expect(dom.container.querySelector('.model-controls__variant-trigger')?.textContent?.toLowerCase()).toContain('max');
+        expect(variantWrites).not.toContain('max');
+        const ultra = Array.from(dom.container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Ultra');
+        expect(ultra).toBeDefined();
+        await act(async () => ultra?.click());
+        expect(useConfigStore.getState().currentVariant).toBe('ultra');
+        expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: 'ultra', inherited: 'max' });
+      } finally { await cleanup(); }
+    });
+  }
+
+  for (const isMobile of [false, true]) {
     test(`a saved Antigravity slug restores its family and effort (mobile: ${isMobile})`, async () => {
       const providerID = 'antigravity-native';
       const modelID = 'gemini-test-low';

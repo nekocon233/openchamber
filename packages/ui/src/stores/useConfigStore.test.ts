@@ -1099,12 +1099,12 @@ describe('useConfigStore provider persistence', () => {
     expect(useConfigStore.getState().currentVariant).toBe('medium');
   });
 
-  test('setAgent lands on the highest level when nothing configured names one', () => {
+  test('setAgent inherits max even when the model offers ultra', () => {
     const sessionId = 'ses_agent_highest_default';
     useSessionUIStore.setState({ currentSessionId: sessionId });
     useConfigStore.setState({
       activeDirectoryKey: DIRECTORY,
-      providers: [provider('openai', 'gpt-5.5', ['low', 'medium', 'high'])],
+      providers: [provider('openai', 'gpt-5.5', ['low', 'medium', 'high', 'max', 'ultra'])],
       agents: [testAgent('plan', { model: { providerID: 'openai', modelID: 'gpt-5.5' } })],
       settingsDefaultModel: 'openai/gpt-5.5',
       settingsDefaultAgent: 'build',
@@ -1118,8 +1118,8 @@ describe('useConfigStore provider persistence', () => {
     useConfigStore.getState().setAgent('plan');
 
     const state = useConfigStore.getState();
-    expect(state.currentVariant).toBe('high');
-    expect(state.currentVariantSelection).toEqual({ override: undefined, inherited: 'high' });
+    expect(state.currentVariant).toBe('max');
+    expect(state.currentVariantSelection).toEqual({ override: undefined, inherited: 'max' });
     // The fallback is a selection default, not a settings write.
     expect(state.settingsDefaultModel).toBe('openai/gpt-5.5');
     expect(state.settingsDefaultVariant).toBeUndefined();

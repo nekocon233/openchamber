@@ -828,6 +828,16 @@ forwarded as prompts. Commands without an OpenChamber handler, including
 `/permissions`, also report unsupported; native sessions still use the fixed
 approval policy documented above.
 
+### DeepSeek checklists
+
+DeepSeek advertises `tasks.checklist` and implements the existing checklist
+endpoint from committed DSH `todo/write` events. It returns the last list across
+turn boundaries, with a complete empty snapshot only for an explicit empty
+write. Missing observations are `source_unknown`; failed reads never clear a
+held list. The UI uses the same checklist panel and work-status rows as Claude.
+Unified conversations read the active execution segment, so a Claude-to-DeepSeek
+handoff shows DeepSeek's own task updates without replacing the source list.
+
 ### Claude checklists
 
 Claude Code offers its task-tracking tools only to the models it recognizes,

@@ -117,7 +117,7 @@ describe('Antigravity decisions through the native runtime', () => {
     expect(toolParts(page).find((part) => part.tool === 'ask_question')?.state.output).toContain('User Skipped');
   });
 
-  it('approves a plan with one recorded Build prompt and restores its answer after a runtime restart', async () => {
+  it('approves a plan through hidden instructions and restores its answer after a runtime restart', async () => {
     const harness = await setup();
     const { session, directory, requests, idle, history } = harness;
     const question = await harness.waiting('decision-plan');
@@ -129,7 +129,7 @@ describe('Antigravity decisions through the native runtime', () => {
     expect(requests()).toHaveLength(2);
     expect(requests()[1]).toMatchObject({
       conversationId: session.id.slice(4), resumed: session.id.slice(4), mode: 'accept-edits', model: 'gemini-test', effort: 'high',
-      visible: 'Implement the plan.',
+      visible: '',
     });
     expect(requests()[1].text).toContain('# Fixture implementation plan');
     await harness.restart();
@@ -137,7 +137,7 @@ describe('Antigravity decisions through the native runtime', () => {
     const users = page.records.filter((record) => record.info.role === 'user');
     expect(users.map((record) => record.info.agent)).toEqual(['plan', 'build']);
     expect(users[1].info.model).toMatchObject({ providerID: 'antigravity-native', modelID: 'gemini-test', variant: 'high' });
-    expect(users[1].parts.filter((part) => part.type === 'text').map((part) => part.text)).toEqual(['Implement the plan.']);
+    expect(users[1].parts).toEqual([]);
     expect(toolParts(page).find((part) => part.tool === 'question' && part.state.metadata?.nativeQuestionKind === 'antigravity-plan-exit')?.state.metadata)
       .toMatchObject({ questionAnswers: [['build']], questionStatus: 'answered' });
     expect(await harness.runtime.questions(directory)).toEqual([]);

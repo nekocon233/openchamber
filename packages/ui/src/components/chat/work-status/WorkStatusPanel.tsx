@@ -32,6 +32,7 @@ import { useWorkStatusExtensionSections } from './useWorkStatusExtensionSections
 import { WorkStatusPresenceProvider } from './presence';
 import { Icon } from '@/components/icon/Icon';
 import { isNativeSessionId } from '@/lib/native-agents/ids';
+import { useNativeSessionBackend } from '@/lib/native-agents/useNativeSession';
 
 // What these list is OpenCode's (its MCP servers and skills) or context
 // OpenChamber adds to OpenCode prompts (pins, memory). A native CLI session
@@ -76,6 +77,7 @@ const WORK_STATUS_PANEL_WIDTH = 300;
 export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, repositoryEnabled = true, presentation = 'overlay', prewarmPrStatus = false }) => {
   const { t, direction } = useI18n();
   const nativeSession = sessionId !== null && isNativeSessionId(sessionId);
+  const nativeBackend = useNativeSessionBackend(sessionId, directory);
   const isOverlay = presentation === 'overlay';
   const isSheet = presentation === 'sheet';
   // The card's fade and lift follow the side columns' animation setting.
@@ -203,13 +205,14 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
     usage: <WorkStatusUsageSection />,
     telemetry: <WorkStatusTelemetrySection sessionId={sessionId} directory={directory} />,
     subagents: <WorkStatusSubagentsSection sessionId={sessionId} directory={directory} />,
-    taskChecklist: <WorkStatusChecklistSection sessionId={sessionId} directory={directory} />,
+    taskChecklist: nativeBackend === 'codex'
+      ? <WorkStatusTodosSection sessionId={sessionId} directory={directory} />
+      : <WorkStatusChecklistSection sessionId={sessionId} directory={directory} />,
     taskBackground: <WorkStatusBackgroundTasksSection sessionId={sessionId} directory={directory} />,
     mcp: <WorkStatusMcpSection directory={directory} />,
     pinned: <WorkStatusPinnedSection sessionId={sessionId} directory={directory} />,
     contextSources: <WorkStatusContextSection sessionId={sessionId} directory={directory} />,
     taskPlan: <WorkStatusPlanSection sessionId={sessionId} directory={directory} />,
-    taskTodos: <WorkStatusTodosSection sessionId={sessionId} directory={directory} />,
   } satisfies Record<Exclude<WorkStatusSectionId, 'session' | 'repository'>, React.ReactNode>;
 
   const sections = (

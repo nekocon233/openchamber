@@ -144,8 +144,7 @@ describe('native task sections in the work status panel', () => {
     await render(CLAUDE);
     expect(text()).toContain('Review changes');
     expect(text()).toContain('Build task-1');
-    // Both CLIs' lists are called "Checklist" in English; the Codex views and
-    // their content are what must be absent here.
+    expect(document.querySelectorAll('[data-work-status-section="taskChecklist"]')).toHaveLength(1);
     expect(text()).not.toContain('Plan document');
     expect(text()).not.toContain('Read notes');
     expect(text()).not.toContain('Ship it');
@@ -156,6 +155,8 @@ describe('native task sections in the work status panel', () => {
     expect(text()).toContain('Plan document');
     expect(text()).toContain('Ship it');
     expect(text()).toContain('Read notes');
+    expect(document.querySelectorAll('[data-work-status-section="taskChecklist"]')).toHaveLength(1);
+    expect(document.querySelector('[data-work-status-section="taskTodos"]')).toBeNull();
     expect(text()).not.toContain('Review changes');
     expect(text()).not.toContain('Build task-1');
     expect(text()).not.toContain('Background tasks');
@@ -180,7 +181,7 @@ describe('native task sections in the work status panel', () => {
       codexTodos: async () => ({ state: 'unknown', generation: null, revision: 0, todos: [] }),
     });
     await render(CLAUDE);
-    expect(text()).toContain('has not recorded any checklist items');
+    expect(text()).toContain('No checklist items have been recorded for this session.');
     expect(text()).toContain('Waiting for CLI task information');
   });
 

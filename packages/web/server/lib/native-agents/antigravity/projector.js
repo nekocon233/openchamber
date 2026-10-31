@@ -79,11 +79,15 @@ export const resolveAntigravityBindings = async ({ sessionId, entries, registry 
     if (entry.type !== 'USER_INPUT' || bindings.has(entry.step_index)) continue;
     const claimed = new Set([...bindings.values()].map((send) => send.messageId));
     const fingerprint = antigravityPromptFingerprint(entry.content ?? '');
-    const candidate = [...sends.values()].find((send) => (
-      send.antigravity?.fingerprint === fingerprint
-      && send.antigravity.stepIndex === undefined
+    const visible = antigravityVisiblePromptText(entry.content ?? '');
+    const planText = visible === '/plan' ? '' : visible.startsWith('/plan ') ? visible.slice(6) : null;
+    const planFingerprint = planText !== null ? antigravityPromptFingerprint(planText) : null;
+    const candidates = [...sends.values()].filter((send) => (
+      send.antigravity?.stepIndex === undefined
       && !claimed.has(send.messageId)
     ));
+    const candidate = candidates.find((send) => send.antigravity?.fingerprint === fingerprint)
+      ?? candidates.find((send) => send.agent === 'plan' && planFingerprint !== null && send.antigravity?.fingerprint === planFingerprint);
     if (!candidate) continue;
     await registry.bindAntigravityMessage(sessionId, candidate.messageId, entry.step_index);
     bindings.set(entry.step_index, {
@@ -206,7 +210,7 @@ export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entr
       lastAssistant = null;
       records.push(userRecord({
         sessionId, id, created: created(entry), send,
-        text: antigravityVisiblePromptText(entry.content ?? ''),
+        text: antigravityVisiblePromptText(entry.content ?? '', send?.agent === 'plan' ? send.antigravity?.fingerprint : undefined),
       }));
       continue;
     }
@@ -427,6 +431,13 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
           && !(part.state.status === 'error' && part.state.error === MISSING_TOOL_RESULT);
         const known = new Set(historical.parts.map((part) => part.id));
         let changed = false;
+        // Some generation frames omit usage even though the completed native
+        // step has it. Keep measured live timing and counters already received.
+        if (live.info.role === 'assistant' && historical.info.role === 'assistant'
+          && live.info.tokens === undefined && historical.info.tokens !== undefined) {
+          live.info.tokens = structuredClone(historical.info.tokens);
+          changed = true;
+        }
         const parts = historical.parts.map((part) => {
           const held = liveParts.get(part.id);
           if (recovered(part)) {
@@ -501,6 +512,7 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
       const mapped = mapAgyTool(call);
       const exit = call.name === 'run_command' ? commandExitCode(info.output) : null;
       const failed = step.state === 'ERROR' || info.error !== null || (exit !== null && exit !== 0);
+      const start = previous?.state.time.start ?? created(time);
       const result = step.state === 'ACTIVE' || step.state === 'RUNNING'
         ? null
         : failed
@@ -513,7 +525,7 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
         id, sessionID: sessionId, messageID: assistant.info.id,
         callID: toolCallId(nativeId, step.step_index),
         tool: step.step_type === 'subagent' ? 'task' : mapped.tool,
-        input: mapped.input, title: mapped.title, start: previous?.state.time.start ?? created(time),
+        input: mapped.input, title: mapped.title, start,
         metadata, result,
       });
       const index = assistant.parts.findIndex((candidate) => candidate.id === id);

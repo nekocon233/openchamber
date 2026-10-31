@@ -142,13 +142,20 @@ export const antigravityPromptText = (parts) => {
   return blocks.join('\n\n');
 };
 
-/** Removes model-facing OpenChamber blocks before display or identity hashing. */
-export const antigravityVisiblePromptText = (text) => {
+/**
+ * Removes model-facing blocks and a Plan prefix proven by the original send.
+ * @param {string} text
+ * @param {string} [expectedPlanFingerprint] Only supplied for a registered Plan send.
+ */
+export const antigravityVisiblePromptText = (text, expectedPlanFingerprint) => {
   const request = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(text)?.[1] ?? text;
-  return request
+  const visible = request
     .replace(/<openchamber-instructions>[\s\S]*?<\/openchamber-instructions>/g, '')
     .replace(/\r\n/g, '\n')
     .trim();
+  if (expectedPlanFingerprint === undefined) return visible;
+  const original = visible === '/plan' ? '' : visible.startsWith('/plan ') ? visible.slice(6) : null;
+  return original !== null && antigravityPromptFingerprint(original) === expectedPlanFingerprint ? original : visible;
 };
 
 export const antigravityPromptFingerprint = (text) => createHash('sha256')

@@ -100,6 +100,12 @@ progress messages. A truncated final step keeps the live result instead.
 At turn completion, history fills records and tool parts absent from the
 stream, including skipped `ask_question` calls. Their native outcomes remain
 unchanged; separate application question/plan parts carry human decisions.
+Saved per-message token counters also fill live records whose generation
+frames omitted usage. Existing live counters and text timing remain intact;
+absent saved usage stays unknown. Only changed records are republished, so
+the loaded-turn average can recover without a page reload. A tool first seen
+in a completed frame allocates its start before its end to keep its interval
+valid for turn timing.
 Complete saved arguments also fill partial tool frames (denials can carry only
 a path), without replacing a known live error. Truncated saved arguments cannot
 replace live input. Completed checkpoints supply their full summary and settle
@@ -208,6 +214,13 @@ matching is only a recovery path after interrupted admission. External terminal
 prompts receive deterministic native step IDs. Registry writes remain serial
 and atomic, and rebinding one message to another step is refused.
 
+The CLI can prepend `/plan` to saved user input in Plan mode. Display removes
+one such prefix only for a registered Plan send whose original fingerprint
+matches the remaining text. Typed prefixes, external prompts and mismatches
+remain intact. Interrupted admission recovery tries the exact fingerprint
+first, then a Plan-only prefix match. The saved transcript and native mode
+are unchanged.
+
 The registry also owns archive and title overrides. Deletion is not simulated:
 hiding a native conversation in OpenChamber while leaving it in agy would make
 `deleted: true` false, so deletion remains unsupported.
@@ -229,7 +242,9 @@ stores source call ID, user step, revision, request ID and open/dispatching/sett
 state without copying the plan or question body. Reconnect reads only already
 marked sessions; opening history can recover a legacy proposal. The source is
 revalidated before every reply. Exact `build` approval sends a new Build prompt
-with the approved plan bound in hidden instructions; `plan` closes the card
+with the approved plan bound in hidden instructions and no visible user text.
+The continuation retains its user record for Build selection and assistant
+parentage, without adding an automatic message bubble. `plan` closes the card
 without a new prompt. Custom plan feedback starts a Plan prompt. Ordinary
 answers retain the original agent, model and effort. Manual prompts, Stop and
 archive invalidate the old decision. Goal continuations wait for pending

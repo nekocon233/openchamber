@@ -49,7 +49,7 @@ describe('GitHub administrator direct merge', () => {
   });
 
   it.each([
-    { viewerCanMergeAsAdmin: false }, { state: 'CLOSED' }, { state: 'MERGED' }, { isDraft: true },
+    { state: 'CLOSED' }, { state: 'MERGED' }, { isDraft: true },
     { mergeable: 'CONFLICTING' }, { mergeable: 'UNKNOWN' },
   ])('refuses an unauthorized or unready pull without a provider write: %o', async (changed) => {
     const h = fixture();
@@ -58,14 +58,37 @@ describe('GitHub administrator direct merge', () => {
     expect(h.calls).toHaveLength(1);
   });
 
-  it('treats query transport errors and malformed permissions as definitely before dispatch', async () => {
+  it('treats query transport errors and malformed target data as definitely before dispatch', async () => {
     const h = fixture();
     h.state.queryError = new Error('Response lost');
     await expect(h.merge()).rejects.toBeInstanceOf(ForceMergePreflightError);
     h.state.queryError = null;
-    h.state.node = { ...h.state.node, viewerCanMergeAsAdmin: null };
+    h.state.node = { ...h.state.node, mergeable: null };
     await expect(h.merge()).rejects.toBeInstanceOf(ForceMergePreflightError);
     expect(h.calls.every((call) => call.query.startsWith('query'))).toBe(true);
+  });
+
+  it('lets GitHub authorize the direct merge when the bypass hint is false', async () => {
+    const h = fixture();
+    h.state.node.viewerCanMergeAsAdmin = false;
+    expect(await h.merge()).toEqual({ merged: true });
+    expect(h.calls).toHaveLength(2);
+    expect(h.calls[1].variables.input.expectedHeadOid).toBe(HEAD);
+  });
+
+  it('still returns GitHub authorization refusals after the direct attempt', async () => {
+    const h = fixture();
+    h.state.node.viewerCanMergeAsAdmin = false;
+    h.state.mutationError = { errors: [{ type: 'FORBIDDEN', message: 'Repository rules prohibit this merge' }], data: { mergePullRequest: null } };
+    await expect(h.merge()).rejects.toMatchObject({ status: 422, code: 'SOURCE_CONTROL_MUTATION_REJECTED', message: 'Repository rules prohibit this merge' });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('reports an already merged pull without an administrator-permission error', async () => {
+    const h = fixture();
+    h.state.node = { ...h.state.node, state: 'MERGED', mergeable: 'UNKNOWN', viewerCanMergeAsAdmin: false };
+    await expect(h.merge()).rejects.toMatchObject({ code: 'SOURCE_CONTROL_MUTATION_TARGET_CHANGED', status: 409, message: expect.stringContaining('already merged') });
+    expect(h.calls).toHaveLength(1);
   });
 
   it.each([401, 403])('preserves explicit preflight authentication status %s and exact account metadata', async (status) => {

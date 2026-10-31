@@ -45,12 +45,13 @@ export const configuredVariantForModel = ({ defaultModel, defaultVariant, provid
 };
 
 /**
- * The thinking level a model runs at when nothing names one: the highest level
- * it lists. Levels are listed lowest first, the order the effort picker cycles
- * in. A `<level>-fast` id is that same level on Codex's Fast tier, which is a
- * service tier and not a higher level, so it never outranks its plain twin.
+ * The inherited thinking level when nothing names one: max when supported,
+ * otherwise the highest listed level. A `<level>-fast` id is the same effort
+ * on Codex's Fast tier and never outranks its plain twin.
  */
-export const highestModelVariant = (variantIds: readonly string[]): string | undefined => {
+export const preferredModelVariant = (variantIds: readonly string[]): string | undefined => {
+  if (variantIds.includes('max')) return 'max';
+  if (variantIds.includes('max-fast')) return 'max-fast';
   const fastSuffix = '-fast';
   let highest: string | undefined;
   for (const id of variantIds) {

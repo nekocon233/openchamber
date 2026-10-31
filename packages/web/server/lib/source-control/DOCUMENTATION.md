@@ -32,8 +32,8 @@ GitHub administrator merge uses the existing `change-request-merge` kind with
 `force: true` in its input digest. Omitted or false force retains the ordinary
 digest, so existing mutation records replay unchanged. The capability is
 explicit and provider-specific; GitLab rejects force merge as unsupported.
-Administrator permission and expected-head validation belong to the GitHub
-executor, regardless of client visibility. Uncertain dispatched writes keep
+GitHub authorizes administrator merge with the acting credential; the executor
+validates the confirmed target and expected head regardless of client visibility. Uncertain dispatched writes keep
 the same sticky unknown-outcome and read-only reconciliation contract.
 
 - `binding-service.js` accepts remote names and account/credential references, normalizes provider instances before uniqueness checks and persistence, then resolves endpoint metadata and provider repository coordinates from current server-side Git state. A provider instance must match the selected remote host and applicable HTTP port; supplied repository coordinates must equal the path-derived coordinates. Client-provided URLs are never authoritative. Provider reads check the binding revision, the bound provider's own readiness and that its primary remote still exists, so a remote added or removed beside it does not interrupt change-request status. A repository with no binding (revision 0) or whose binding names no account for a host is read with the account the client is signed in to on that host, as before bindings existed: the context must name a remote that really points at the instance, and whether the account exists is the provider route's to decide. Mutation contexts pass the same checks plus the binding's saved config revision, then validate an idempotency key and an exact, copied target shape before provider code receives them. Stale revision or config/remote errors carry the current authoritative repository, revision, and redacted binding record. Account reconciliation uses the same normalization and also matches equivalent instance spellings in previously stored records.

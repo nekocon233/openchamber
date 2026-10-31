@@ -1,14 +1,70 @@
 import { describe, expect, it } from 'vitest';
-import { createAntigravityLiveProjection, projectAntigravityHistory } from './projector.js';
+import { createAntigravityLiveProjection, projectAntigravityHistory, resolveAntigravityBindings } from './projector.js';
 import { parseAgyTranscript } from './protocol.js';
 import { createNativeEventPublisher } from '../publisher.js';
+import { antigravityPromptFingerprint } from '../prompt-parts.js';
 
 const NATIVE_ID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
-const project = (steps) => projectAntigravityHistory({
-  sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo', bindings: new Map(),
+const project = (steps, bindings = new Map()) => projectAntigravityHistory({
+  sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo', bindings,
   entries: parseAgyTranscript(`${steps.map((step) => JSON.stringify({ status: 'DONE', created_at: '2026-10-31T02:00:00Z', ...step })).join('\n')}\n`).entries,
 });
 const completion = (nativeId, exit) => `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=${nativeId}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task id "${nativeId}/task-2" finished with result:\nCommand exited with code ${exit}.\n\nCommand output:\nBuild result\nLog: file:///untrusted/task-2.log\n</SYSTEM_MESSAGE>`;
+
+describe('Antigravity native plan prefix', () => {
+  it.each([
+    ['plan', 'Review the code', '/plan Review the code', 'Review the code'],
+    ['plan', '/plan Review the code', '/plan /plan Review the code', '/plan Review the code'],
+    ['plan', '/plan Review the code', '/plan Review the code', '/plan Review the code'],
+    ['build', '/plan Review the code', '/plan Review the code', '/plan Review the code'],
+    ['plan', 'A different prompt', '/plan Review the code', '/plan Review the code'],
+    ['plan', '', '/plan', ''],
+  ])('projects %s mode original %j and stored %j as %j', (agent, original, stored, expected) => {
+    const send = { messageId: 'client-message', providerID: 'antigravity-native', modelID: 'gemini-test', agent,
+      antigravity: { stepIndex: 0, fingerprint: antigravityPromptFingerprint(original) } };
+    const records = project([{ step_index: 0, type: 'USER_INPUT', content: stored }], new Map([[0, send]]));
+    expect(records[0].info).toMatchObject({ id: send.messageId, agent });
+    expect(records[0].parts.map((part) => part.text).join('')).toBe(expected);
+  });
+
+  it('preserves an external prompt without matching send authority', () => {
+    expect(project([{ step_index: 0, type: 'USER_INPUT', content: '/plan Review the code' }])[0].parts[0].text).toBe('/plan Review the code');
+  });
+
+  it('recovers a Plan admission whose native history added the prefix', async () => {
+    const send = { messageId: 'client-message', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan',
+      antigravity: { fingerprint: antigravityPromptFingerprint('Review the code') } };
+    const calls = [];
+    const { bindings } = await resolveAntigravityBindings({ sessionId: `nag_${NATIVE_ID}`,
+      entries: [{ step_index: 0, type: 'USER_INPUT', content: '/plan Review the code' }],
+      registry: { sendRecords: async () => new Map([[send.messageId, send]]), bindAntigravityMessage: async (...args) => { calls.push(args); } },
+    });
+    expect(bindings.get(0)?.messageId).toBe(send.messageId);
+    expect(calls).toEqual([[`nag_${NATIVE_ID}`, send.messageId, 0]]);
+  });
+
+  it('does not apply Plan prefix recovery to a Build send', async () => {
+    const send = { messageId: 'client-message', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'build',
+      antigravity: { fingerprint: antigravityPromptFingerprint('Review the code') } };
+    const calls = [];
+    const { bindings } = await resolveAntigravityBindings({ sessionId: `nag_${NATIVE_ID}`,
+      entries: [{ step_index: 0, type: 'USER_INPUT', content: '/plan Review the code' }],
+      registry: { sendRecords: async () => new Map([[send.messageId, send]]), bindAntigravityMessage: async (...args) => { calls.push(args); } },
+    });
+    expect(bindings.size).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('prefers a literal submitted prefix over a transformed Plan candidate', async () => {
+    const planned = { messageId: 'planned', agent: 'plan', antigravity: { fingerprint: antigravityPromptFingerprint('Review the code') } };
+    const literal = { messageId: 'literal', agent: 'build', antigravity: { fingerprint: antigravityPromptFingerprint('/plan Review the code') } };
+    const { bindings } = await resolveAntigravityBindings({ sessionId: `nag_${NATIVE_ID}`,
+      entries: [{ step_index: 0, type: 'USER_INPUT', content: '/plan Review the code' }],
+      registry: { sendRecords: async () => new Map([[planned.messageId, planned], [literal.messageId, literal]]), bindAntigravityMessage: async () => {} },
+    });
+    expect(bindings.get(0)?.messageId).toBe(literal.messageId);
+  });
+});
 
 describe('Antigravity saved tool outcomes', () => {
   it('scopes a saved permission denial to its turn and accepts a later native final response', () => {
@@ -74,6 +130,68 @@ describe('Antigravity saved tool outcomes', () => {
 });
 
 describe('Antigravity final response reconciliation', () => {
+  it.each([0, 40])('recovers missing saved usage while preserving live timing and known output %s', async (output) => {
+    const events = [];
+    const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) }),
+      request: { messageID: `nag_u_${NATIVE_ID.replaceAll('-', '')}_0`, sentAt: 1000, model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Working' }, 2000, async () => {});
+    await projection.applyStep({ step_index: 3, step_type: 'agent_response', state: 'ACTIVE', text_delta: 'Final' }, 3000, async () => {});
+    await projection.applyStep({ step_index: 3, step_type: 'agent_response', state: 'DONE', text_delta: ' answer',
+      usage: { input_tokens: 20, output_tokens: output, thinking_tokens: 0, cache_read_tokens: 0 },
+    }, 4000, async () => {});
+    projection.finish({ outcome: 'success', response: 'Final answer', error: '', time: 5000 });
+    const assistants = projection.records().filter((record) => record.info.role === 'assistant');
+    expect(assistants[0].info.tokens).toBeUndefined();
+    const original = structuredClone(assistants);
+    const history = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Work' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', content: 'Working', input_tokens: 100, output_tokens: 30, thinking_tokens: 10, cache_read_tokens: 50 },
+      { step_index: 3, type: 'PLANNER_RESPONSE', content: 'Final answer', input_tokens: 250, output_tokens: 140, thinking_tokens: 5, cache_read_tokens: 150 },
+    ]);
+    const before = events.length;
+    projection.restoreMissingHistory(history);
+    expect(assistants[0].info.tokens).toMatchObject({ input: 100, output: 30, reasoning: 10, cache: { read: 50, write: 0 } });
+    expect(assistants[1].info.tokens).toEqual(original[1].info.tokens);
+    expect(assistants.map((record) => record.info.time)).toEqual(original.map((record) => record.info.time));
+    expect(assistants.map((record) => record.parts)).toEqual(original.map((record) => record.parts));
+    expect(events.slice(before).map((event) => event.payload.type)).toEqual(['message.updated']);
+    const settled = events.length;
+    projection.restoreMissingHistory(history);
+    expect(events).toHaveLength(settled);
+  });
+
+  it('keeps usage unknown when neither stream nor saved history reports it', async () => {
+    const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),
+      request: { messageID: `nag_u_${NATIVE_ID.replaceAll('-', '')}_0`, sentAt: 1000, model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Done' }, 2000, async () => {});
+    projection.finish({ outcome: 'success', response: 'Done', error: '', time: 3000 });
+    projection.restoreMissingHistory(project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Work' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', content: 'Done' },
+    ]));
+    expect(projection.records().find((record) => record.info.role === 'assistant').info.tokens).toBeUndefined();
+  });
+
+  it('keeps a tool first observed at completion inside a valid time interval', async () => {
+    const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
+      publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),
+      request: { messageID: 'user', sentAt: 1000, model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build', parts: [] },
+    });
+    await projection.applyStep({ step_index: 2, step_type: 'tool', state: 'DONE', tool_name: 'read_file',
+      tool_info: { name: 'read_file', parameters: { Path: '/repo/file' }, output: 'Done', error: null },
+    }, 2000, async () => {});
+    projection.finish({ outcome: 'success', response: 'Done', error: '', time: 3000 });
+    const record = projection.records().find((candidate) => candidate.parts.some((part) => part.type === 'tool'));
+    const tool = record.parts.find((part) => part.type === 'tool');
+    expect(tool.state.time.start).toBeGreaterThanOrEqual(record.info.time.created);
+    expect(tool.state.time.end).toBeGreaterThanOrEqual(tool.state.time.start);
+    expect(tool.state.time.end).toBeLessThanOrEqual(record.info.time.completed);
+  });
+
   it('recovers a completed compaction summary instead of retaining a running stream placeholder', async () => {
     const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
       publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),

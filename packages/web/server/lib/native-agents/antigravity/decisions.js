@@ -38,7 +38,7 @@ const continuation = (proposal, answers, messageID) => {
   const request = {
     directory: proposal.directory,
     messageID,
-    parts: [{ type: 'text', text: approved ? 'Implement the plan.' : plan ? answers[0][0] : [
+    parts: approved ? [] : [{ type: 'text', text: plan ? answers[0][0] : [
       'My answers to your questions, in order:',
       ...proposal.questions.map((question, index) => `${index + 1}. ${question.question}\n${answers[index].map((answer) => `- ${answer}`).join('\n')}`),
     ].join('\n\n') }],

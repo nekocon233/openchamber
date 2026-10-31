@@ -18,7 +18,7 @@ const ITEM_STATUS_TONES = { pending: 'muted', in_progress: 'info', completed: 's
 export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId: string | null; directory: string | null }) {
   const { t } = useI18n();
   const backend = useNativeSessionBackend(sessionId, directory);
-  const enabled = Boolean(sessionId && directory && backend === 'claude');
+  const enabled = Boolean(sessionId && directory && (backend === 'claude' || backend === 'deepseek'));
   const state = useSessionNativeChecklist(sessionId, directory, { enabled, visible: false });
   const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;

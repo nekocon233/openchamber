@@ -157,7 +157,7 @@ const serveForceMerge = () => {
     }
     if (url.pathname !== '/graphql') throw new Error(`Unexpected fixture request ${url.pathname}`);
     const body = JSON.parse(init.body);
-    if (body.query.startsWith('query ForceMergePermission')) {
+    if (body.query.startsWith('query ForceMergeTarget')) {
       state.reads.push('graphql');
       if (state.queryFailure) throw new Error('Fixture permission query disconnected');
       if (state.queryStatus) return jsonResponse({ message: 'Fixture permission query refused' }, state.queryStatus);
@@ -730,7 +730,7 @@ describe('canonical GitHub mutations', () => {
   });
 
   it.each([
-    ['no administrator permission', { viewerCanMergeAsAdmin: false }, 403],
+    ['already merged', { viewerCanMergeAsAdmin: false, state: 'MERGED' }, 409],
     ['head changed during preflight', { headRefOid: 'b'.repeat(40) }, 409],
     ['draft', { isDraft: true }, 409],
     ['merge conflict', { mergeable: 'CONFLICTING' }, 409],

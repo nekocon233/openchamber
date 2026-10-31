@@ -22,6 +22,7 @@ export type NativeChecklistState =
 const IDLE: NativeChecklistState = { status: 'idle' };
 const UNSUPPORTED: NativeChecklistState = { status: 'unsupported' };
 const REFRESH_MS = 45_000;
+const supportsChecklist = (backend: ReturnType<typeof nativeSessionBackend>) => backend === 'claude' || backend === 'deepseek';
 
 type Entry = {
   key: string;
@@ -182,7 +183,9 @@ const readSnapshot = (entry: Entry, api: NativeAgentsAPI): Promise<NativeCheckli
   const promise = (async (): Promise<NativeChecklistSnapshot> => {
     const capabilities = await api.capabilities();
     if (controller.signal.aborted) throw new DOMException('Read cancelled', 'AbortError');
-    if (!capabilities.backends.claude.tasks?.checklist) return { state: 'unavailable', reason: 'unsupported' };
+    const backend = nativeSessionBackend(entry.sessionId, entry.directory);
+    const supported = backend === 'deepseek' ? capabilities.backends.deepseek?.tasks?.checklist : capabilities.backends.claude.tasks?.checklist;
+    if (!supported) return { state: 'unavailable', reason: 'unsupported' };
     return api.checklist(entry.sessionId, entry.directory, { signal: controller.signal });
   })().finally(() => {
     if (reads.get(key)?.promise === promise) reads.delete(key);
@@ -194,7 +197,7 @@ const readSnapshot = (entry: Entry, api: NativeAgentsAPI): Promise<NativeCheckli
 const load = (entry: Entry, api: NativeAgentsAPI | undefined): Promise<NativeChecklistState> => {
   if (entry.deleted || entry.runtimeKey !== getRuntimeKey()) return Promise.resolve(IDLE);
   if (entry.pending) return entry.pending;
-  if (!api?.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude') {
+  if (!api?.supported || !supportsChecklist(nativeSessionBackend(entry.sessionId, entry.directory))) {
     commit(entry, { state: 'unavailable', reason: 'unsupported' });
     release(entry);
     return Promise.resolve(entry.state);
@@ -301,7 +304,7 @@ export const useSessionNativeChecklist = (
       release(entry);
     };
   }, [entry, nativeAgents, enabled, visible]);
-  if (entry && (!nativeAgents.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude')) return UNSUPPORTED;
+  if (entry && (!nativeAgents.supported || !supportsChecklist(nativeSessionBackend(entry.sessionId, entry.directory)))) return UNSUPPORTED;
   return state;
 };
 

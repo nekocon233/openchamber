@@ -7,6 +7,7 @@ import {
   getWorkStatusPanelPresentation,
   isWorkStatusSectionVisible,
   resolveWorkStatusSectionOrder,
+  workStatusExpandedSectionsSchema,
   sanitizeWorkStatusHiddenSections,
   sanitizeWorkStatusSectionOrder,
 } from './sections';
@@ -34,9 +35,25 @@ describe('section registry', () => {
     }
   });
 
+  test('all native task backends search the same checklist setting', () => {
+    for (const backend of ['claude', 'codex', 'deepseek']) {
+      const results = buildSettingsSearchResults({
+        query: `${backend} checklist`,
+        runtimeCtx: {
+          isVSCode: false, isWeb: true, isDesktop: false, isMobile: false,
+          isHostLocalOrigin: true, isDesktopLocalOrigin: false,
+          isMac: false, isWindows: false, isLinux: false, routingAvailable: false,
+          enterpriseMode: false, jevBlockedByEnterprise: false,
+        },
+        t: (key) => key, getPageTitle: (page) => page,
+      });
+      expect(results.map((result) => result.id)).toEqual(['chat.work-status.section.taskChecklist']);
+    }
+  });
+
   test('preserves chosen positions and appends missing sections once', () => {
     const order = sanitizeWorkStatusSectionOrder(['pinned', 'repository', 'pinned', 'obsolete', 'session']);
-    expect(order).toEqual(['pinned', 'repository', 'session', 'usage', 'telemetry', 'subagents', 'taskChecklist', 'taskBackground', 'mcp', 'contextSources', 'taskPlan', 'taskTodos']);
+    expect(order).toEqual(['pinned', 'repository', 'session', 'usage', 'telemetry', 'subagents', 'taskChecklist', 'taskBackground', 'mcp', 'contextSources', 'taskPlan']);
     expect(sanitizeWorkStatusSectionOrder(JSON.parse(JSON.stringify(order)))).toEqual(order);
   });
 
@@ -45,6 +62,24 @@ describe('section registry', () => {
     // user cannot switch, or a switch for nothing.
     expect(Object.keys(WORK_STATUS_SECTION_LABEL_KEYS).sort())
       .toEqual([...WORK_STATUS_SECTION_IDS].sort());
+  });
+
+  test('legacy Codex tasks share one position and visibility preference with the checklist', () => {
+    const order = sanitizeWorkStatusSectionOrder(['mcp', 'taskTodos', 'repository', 'taskChecklist']);
+    expect(order.slice(0, 3)).toEqual(['mcp', 'taskChecklist', 'repository']);
+    expect(order.filter((id) => id === 'taskChecklist')).toHaveLength(1);
+    expect(order).not.toContain('taskTodos');
+    expect(sanitizeWorkStatusHiddenSections(['taskTodos', 'mcp', 'taskChecklist'])).toEqual(['taskChecklist', 'mcp']);
+    expect(sanitizeWorkStatusSectionOrder(JSON.parse(JSON.stringify(order)))).toEqual(order);
+  });
+
+  test('expansion inherits the old Codex choice only without a canonical choice', () => {
+    expect(workStatusExpandedSectionsSchema.parse({ taskTodos: false, mcp: true })).toEqual({ taskChecklist: false, mcp: true });
+    expect(workStatusExpandedSectionsSchema.parse({ taskTodos: true, taskChecklist: false })).toEqual({ taskChecklist: false });
+    expect(workStatusExpandedSectionsSchema.parse({ taskTodos: false, taskChecklist: true })).toEqual({ taskChecklist: true });
+    expect(workStatusExpandedSectionsSchema.parse({ taskTodos: false, taskChecklist: 'bad', 'ext:graph': true }))
+      .toEqual({ taskChecklist: false, 'ext:graph': true });
+    expect(workStatusExpandedSectionsSchema.parse(undefined)).toEqual({});
   });
 });
 

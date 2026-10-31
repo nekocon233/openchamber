@@ -41,6 +41,33 @@ const setup = async (messages = 2, options = {}) => {
 };
 
 describe('DeepSeek Harness Web adapter', () => {
+  it('reads and streams committed task lists across turns and reconnects', async () => {
+    const { backend, directory, fixture, events } = await setup();
+    const id = encodeDeepseekSessionId('session-existing');
+    expect(await backend.checklist(id, directory)).toEqual({ state: 'unavailable', reason: 'source_unknown' });
+    await fixture('append', { sessionId: 'session-existing', type: 'todo/write', data: { todos: [
+      { content: 'Carry the plan', status: 'in_progress' },
+    ] } });
+    await expect.poll(() => events.filter((event) => event.payload.type === 'session.checklist.updated').length).toBe(1);
+    const first = await backend.checklist(id, directory);
+    expect(first).toMatchObject({ state: 'ready', source: 'history', items: [{ subject: 'Carry the plan', status: 'in_progress' }] });
+    await fixture('append', { sessionId: 'session-existing', type: 'turn/start', data: { turn: 3 } });
+    expect((await backend.checklist(id, directory)).items).toEqual(first.items);
+    await expect(backend.checklist(id, `${directory}/another`)).rejects.toMatchObject({ code: 'NATIVE_INVALID_REQUEST' });
+    await fixture('disconnect');
+    await expect.poll(async () => (await backend.checklist(id, directory)).items).toEqual(first.items);
+    await fixture('append', { sessionId: 'session-existing', type: 'todo/write', data: { todos: [] } });
+    await expect.poll(async () => (await backend.checklist(id, directory)).items).toEqual([]);
+  });
+
+  it('recovers a list older than the initial history window', async () => {
+    const { backend, directory, fixture } = await setup();
+    const id = encodeDeepseekSessionId('session-existing');
+    await fixture('append', { sessionId: 'session-existing', type: 'todo/write', data: { todos: [{ content: 'Retained task', status: 'completed' }] } });
+    for (let turn = 0; turn < 120; turn += 1) await fixture('append', { sessionId: 'session-existing', type: 'turn/start', data: { turn } });
+    expect(await backend.checklist(id, directory)).toMatchObject({ state: 'ready', items: [{ subject: 'Retained task', status: 'completed' }] });
+  });
+
   it('reads all statistics pages without publishing or retaining chat followers', async () => {
     const { backend, directory, events, fixture } = await setup(260);
     const sessions = await backend.listStatisticsSessions();

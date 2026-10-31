@@ -83,6 +83,8 @@ describe('section arrangement dialog', () => {
     const target = document.querySelector<HTMLElement>('[data-settings-item="chat.work-status.section.taskChecklist"]');
     expect(target?.getAttribute('data-settings-search-highlight')).toBe('true');
     expect(target?.textContent).toContain('Checklist');
+    expect(rows().filter((row) => row.textContent?.trim() === 'Checklist')).toHaveLength(1);
+    expect(document.querySelector('[data-settings-item="chat.work-status.section.taskTodos"]')).toBeNull();
     await act(async () => target?.click());
     expect(useUIStore.getState().workStatusHiddenSections).toEqual(['taskChecklist']);
   });

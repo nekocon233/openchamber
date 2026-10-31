@@ -135,14 +135,14 @@ describe('native tasks context surface', () => {
   test('the pane shows a read-only checklist for the current session and follows locale switches', async () => {
     await render();
     expect(document.querySelector('[data-native-tasks-body]')).not.toBeNull();
-    expect(document.body.textContent).toContain('Read-only Claude Code checklist');
+    expect(document.body.textContent).toContain('Read-only session checklist');
     expect(document.body.textContent).toContain('Owner: reviewer');
     expect(document.body.textContent).toContain('Waiting on: 2');
     expect(document.body.textContent).toContain('Blocks: 3');
     expect(document.querySelector('input, textarea, [role="checkbox"]')).toBeNull();
     const chinese = (await import('@/lib/i18n/messages/zh-CN')).dict;
     await act(async () => useI18nStore.setState({ locale: 'zh-CN', dictionary: chinese, loadingLocale: null }));
-    expect(document.body.textContent).toContain('只读待办清单');
+    expect(document.body.textContent).toContain('只读任务清单');
     expect(document.body.textContent).toContain('负责人：reviewer');
     expect(document.querySelector('[data-native-tasks-body]')).not.toBeNull();
   });
@@ -211,6 +211,21 @@ describe('native tasks context surface', () => {
     expect(document.body.textContent).not.toContain('Checklist');
   });
 
+  test('DeepSeek exposes the retained checklist in both the pane and Work status', async () => {
+    const id = `ndh_${'b'.repeat(64)}`;
+    setup({ capabilities: async () => ({ supported: true, registry: { reset: false }, backends: {
+      claude: { cli: true }, codex: { cli: true },
+      deepseek: { cli: true, blockedByEnterprise: false, tasks: { checklist: true }, actions: { revert: true, delete: true, fork: true } },
+    } }), checklist: async () => ({ ...checklist(), source: 'history' }) });
+    await render({ session: id, summaries: true });
+    expect(document.body.textContent).toContain('Review changes');
+    expect(document.querySelector('[data-native-tasks-body]')?.textContent).toContain('Checklist');
+    expect(document.querySelectorAll('[data-native-checklist-id]')).toHaveLength(1);
+    expect(document.querySelector('[data-native-tasks-body]')?.textContent).not.toContain('Background tasks');
+    await act(async () => { applySessionNativeChecklistEvent(id, directory, { ...checklist(2), source: 'history', items: [] }, getRuntimeKey()); });
+    expect(document.querySelectorAll('[data-native-checklist-id]')).toHaveLength(0);
+  });
+
   test('a session that is not a native CLI one explains the empty surface instead of loading', async () => {
     await render({ session: 'ses_fixture' });
     expect(document.body.textContent).toContain('Tasks are available for native CLI sessions');
@@ -261,9 +276,9 @@ describe('native tasks context surface', () => {
     setup({ checklist: () => read.promise });
     await render();
     expect(document.body.textContent).toContain('Loading...');
-    expect(document.body.textContent).not.toContain('has not recorded');
+    expect(document.body.textContent).not.toContain('No checklist items');
     await act(async () => read.resolve({ ...checklist(), items: [] }));
-    expect(document.body.textContent).toContain('has not recorded any checklist items');
+    expect(document.body.textContent).toContain('No checklist items have been recorded');
     await act(async () => applySessionNativeChecklistEvent(sessionId, directory, checklist(2), getRuntimeKey()));
     await act(async () => applySessionNativeChecklistEvent(sessionId, directory, { ...checklist(3), complete: false, unreadable: 1, items: [] }, getRuntimeKey()));
     expect(document.body.textContent).toContain('Some checklist entries could not be read');
@@ -272,7 +287,7 @@ describe('native tasks context surface', () => {
     await click('Refresh');
     expect(document.body.textContent).toContain('may be out of date');
     expect(document.body.textContent).toContain('Review changes');
-    expect(document.body.textContent).not.toContain('has not recorded any checklist items');
+    expect(document.body.textContent).not.toContain('No checklist items have been recorded');
   });
 
   test('first read failure, unsupported capability and unknown checklist location are explicit', async () => {
