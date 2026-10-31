@@ -165,9 +165,55 @@ verbatim, a reply spoken in full) do not consult it; they silence the 404 on
 
 ### UI state stores
 
+Work status opens as a transient desktop dropdown (`workStatusOverlayOpen`),
+never a layout column. Hydration starts it closed. Version 26 discards the old
+panel enablement, visibility and fit fields while preserving section visibility,
+order, expansion and scroll preferences. The settings registry no longer
+synchronizes the retired enablement flag.
+
 Sidebar visibility and its persisted width are independent. Opening or closing
 the sidebar never writes a width; only resizing changes the saved choice.
 The initial width is separate from the component's minimum resize width.
+
+`workspaceLayout` defaults to `classic` and persists as a profile preference
+on web and desktop. Unplaced context surfaces default left in `editor` and
+right in `classic`, across every project. The `file` placement controls the
+directory panel in editor layout; document opens and selection update the
+resident editor without changing the active tool. Layout transitions, repeated
+applies and hydration preserve
+manual placements and widths. Version 25 stores explicit right choices too;
+older omitted choices follow the layout. Visible panels move atomically with
+the layout, with the most recently touched visible tab winning a collision.
+Closed surfaces stay closed. Invalid local values load as `classic`;
+missing local values preserve the current choice. Invalid remote values are
+rejected by the settings registry.
+
+`editorChatSplitRatio` is device-local, starts at 0.5 and accepts finite values
+strictly between 0 and 1. Missing stored values preserve the current ratio;
+malformed ones reset to 0.5. The layout clamps displayed widths to the editor
+and chat minimums without overwriting the saved ratio. Pointer drags persist
+on release. The selected document remains in `useFilesViewTabsStore`; file tab
+metadata stays in `contextPanelByDirectory`. Classic file visibility and tree
+side settings keep their values when the workspace layout changes.
+
+Each directory's `editorDiffTab` records the Changes document as `closed`,
+`background` or `active`, independently of the tool zone. Ordinary document
+selection stays in `useFilesViewTabsStore.selectedPath`; opening a file puts
+an open Changes document in the background. `setEditorDiffTabState` selects
+or closes that document without changing the zone or deleting its diff record.
+Rail opens and explicit diff links select the document as well as the list;
+background scope updates leave both selections alone. Closing the selected
+file can return to the most recently used Changes document. Removing the diff
+record makes its document unavailable. Hydration and entering editor layout
+initialize old records once from the visible Changes panel, then preserve the
+independent selection. Malformed document states load as closed.
+
+`editorToolPanelWidth` is the device-local width shared by all side tool panels
+in editor layout, including the directory and extensions. It starts at 320 px
+and uses the panel width bounds. Invalid writes are ignored; malformed stored
+values reset to 320 px and missing values preserve the current choice. Resizing
+saves only this field, preserving classic per-mode widths, tree width and bottom
+panel heights. All projects use the same shared value.
 
 `useCommitSelectionStore.ts` shares the selected commit between desktop/mobile
 Changes and walkthrough. Choices are session-only and keyed by runtime, directory, and
@@ -302,6 +348,12 @@ Do not reintroduce direct settings writes for shared sidebar structure, or whole
 
 Ordinary loads still reuse a loaded entry. Visible-owner synchronization is owned by `lib/projectContextSync.ts`, as described in the panel's `DOCUMENTATION.md`. Forced loads wait for admitted local writes, so a notification sent before this client's save response cannot lose a peer change behind an in-flight flag. A write still pending when a forced read returns earns another read after it settles, including after rollback. Only a resolved write advances its field revision; a rejected attempt cannot hide authoritative peer data. Concurrent loads share one promise; refresh demand received during a read earns one trailing authoritative read. Runtime reset retires those promises and their generation, so an older success or failure cannot populate or alter a same-id entry on the new host.
 
+Todo writes also capture runtime identity and generation before queueing. A
+queued write cannot dispatch after that owner retires, and an old response or
+rollback cannot alter the new cache. A missing todo refreshes its owner;
+an edit returns false because its text was not saved. Completion and deletion
+keep their existing already-removed success behavior.
+
 `useRoutingStore.ts` projects the server's Jev routing state (whether the Auto
 model may be offered, the config Settings → Routing edits, the last decision
 per session, permissions the safety net is holding). Nothing is persisted; a
@@ -382,6 +434,21 @@ Session defaults belong to the active runtime. Switching instances clears the in
 Persisted config (`config-store`) holds selections only. The provider and agent catalogs and their `*Loaded` flags stay in memory, both top level and per directory. VS Code gives every OpenChamber webview one origin, so each localStorage write reaches every webview in every window as a `StorageEvent` carrying the old and the new value. With the catalogs included, one write was tens of megabytes, and the shared webview renderer ran out of memory. A cold start therefore paints the pickers once `initializeApp` / `activateDirectory` load the catalogs; an empty hydrated snapshot reports not-loaded, never an authoritative empty list. The last live catalogs are kept instead in IndexedDB (`configCatalogCache.ts`, which fires no `StorageEvent`), keyed by runtime and config directory, bounded to 24 directories, with a schema version; a record that fails its shape check or names another schema is deleted on read. Records hold only what the pickers and composer show, built field by field from an allowlist and read through strict schemas: provider, model and variant `settings`/`headers`/`body`, an agent's request (apart from its numeric `temperature`/`topP`) and its system prompt are never written, because they carry API keys and authorization headers. At startup and on a directory switch the cached catalog fills a directory whose live catalog has not loaded, without setting `*Loaded`: the composer pickers render from it, Settings pickers and recovery loops keep waiting for a live load. Only live loads write the cache, 3 s after they apply and only when no catalog event for that directory arrived since the load began (the re-read the event triggers writes instead), so a starting location's partial first answer is never stored; an empty answer is written only by a re-read. A location OpenCode is still starting answers empty, then partial, so the first live answer for a directory shown from the cache is held back when it lists fewer models or agents than the cache, and re-read once after 2.5 s; that re-read replaces the cache whatever it holds. Older blobs that still carry catalogs hydrate as before. The slim format is persist version 1: a build without it has no `migrate` for version 1 and skips the blob, so it gets a cold start instead of reading `snapshot.agents` on a snapshot that has none. The persist middleware writes after every `set()`, including one whose updater returns the same state, so selection setters (`setProvider`, `setModel`, `setAgent` and the model it resolves) check for an unchanged selection before calling `set()`.
 
 Configured project and global model identifiers remain selected through provider discovery gaps. A draft can display its configured identifier before model metadata arrives. Catalog absence never selects Big Pickle in its place. An unknown settings document defers fallback selection; a successful document with no configured model permits the normal OpenCode fallback. Before that fallback comes the model last picked in a chat composer (`lastSelectedModel`, a synced profile setting written only by the composer's model picker and the favorite-model shortcuts, never by other model pickers or session restores), so a new session starts where the user last chose when nothing configured names a model. Like a configured identifier it survives catalog gaps; a model hidden since is skipped, and so is an Auto pick the server cannot honour. The fallback itself (Big Pickle, else the first model) skips models hidden in the picker, on the client and in the server's session routes; a configured project, settings, agent, or OpenCode model is honoured even when hidden, and with every model hidden the unfiltered pick stands. Saved thinking preferences stay in settings; an OpenCode config `model` carries its effort as a `#variant` suffix, and a discovered model's supported variants determine the effective thinking level. When no configured or recorded source names a level, the model runs at the highest level it lists (max on the models that offer it; Codex's `<level>-fast` ids are the Fast service tier and never outrank their plain level). That fallback is an inherited value: it never becomes a recorded picker choice and is never written back to settings. A configured level the selected model does not list stays unset instead of being replaced with a different level.
+
+The settings effort belongs to `settingsDefaultModel`. Selecting another model
+does not inherit or reject against that effort; its own pinned, saved or
+highest available level applies. Catalog-confirmed aliases count as the same
+model. A legacy effort configured without a default model keeps its existing
+global inheritance. An unsupported effort explicitly configured for the
+selected model still stays unset. Composer resolution, agent switches and
+automatic sends use this same scope rule.
+
+Native model catalogs may carry `nativeAliases` for older concrete effort
+slugs. `findCatalogModel` resolves those only after exact catalog and API ids.
+An alias supplies its implied effort when no configured or recorded effort
+names one, so a saved Antigravity low slug stays low after its catalog is
+grouped into families. The stored id stays valid; choosing another effort uses
+the existing variant override, including explicit Default.
 
 Project defaults include `defaultAgent`, `defaultModel`, and `defaultVariant`.
 The project agent precedes the global agent, then OpenCode's default and the
@@ -505,6 +572,26 @@ Invariants to preserve when editing:
   response still clears an omitted run.
 
 ## Git / PR Stores
+
+`usePullRequestSelectionStore.ts` keeps optional return targets for PR-to-Changes
+navigation, keyed by runtime and diff directory. A target includes the exact PR,
+bound read context, originating workspace directory and project/branch tab.
+Returning queues a request under that workspace and consumes the diff target.
+The PR view consumes the request after restoring its selection. These two maps
+are in memory only and each holds at most 100 entries. Repeated navigation
+replaces the old target; stale objects cannot consume a newer request.
+
+`usePendingReviewDraftStore.ts` persists unsent GitHub review summaries, comment
+edits and uncertain mutation attempts under runtime, complete bound read context
+and PR keys. GitHub owns saved review comments. Explicit empty text overrides a
+remote prefill. Local text is limited to 256 entries, 65,536 characters per
+entry and 1,000,000 characters total. Uncertain attempts are limited to 128 and
+1,000,000 characters total; new entries fail visibly at capacity without
+evicting an existing draft or retry key. The same semantic comment keeps its
+original request payload when a refresh discovers the newly created review ID.
+Only confirmed success or definite rejection clears its attempt. The per-PR
+busy flag serializes writes in the current UI and is not persisted.
+
 
 The Git and PR stores are the most important stores to understand before editing this directory.
 
@@ -704,7 +791,7 @@ Native CLI providers (`claude-native`, `codex-native`) join the provider list
 after OpenCode's, from `lib/native-agents/catalog.ts`. That catalog is read once
 per runtime, and a CLI whose read fails keeps the provider an earlier read
 found. `refreshNativeProviders` invalidates that runtime's catalog after a
-Claude connection mutation and replaces only native providers in the active
+Claude connection mutation or a `native-model` catalog event and replaces only native providers in the active
 mirror and every loaded directory. It leaves model selections intact. A read
 started before invalidation adopts the new catalog instead of committing an
 old response; runtime switches reject old store updates. Automatic fallback never picks a native provider, because the model

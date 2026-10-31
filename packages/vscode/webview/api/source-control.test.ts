@@ -92,10 +92,15 @@ describe('createVSCodeSourceControlAPI', () => {
     const capabilities = await api.capabilities(identity);
     assert.equal(capabilities.authentication, false);
     assert.equal(capabilities.changeRequests, false);
+    assert.equal(capabilities.forceMergeChangeRequests, false);
     const status = await api.authStatus(identity);
     assert.equal(status.status, 'unsupported');
     await assert.rejects(api.issuesList(readContext, { page: 1 }), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
     await assert.rejects(api.changeRequestsList(readContext, { page: 1 }), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
+    await assert.rejects(api.changeRequestMerge({ ...readContext, idempotencyKey: 'force-merge',
+      target: { project: { owner: 'team', name: 'repo' }, number: 5, head: 'feature', base: 'main', headSha: 'abc123' },
+      method: 'squash', force: true,
+    }), new RegExp(VSCODE_SOURCE_CONTROL_UNSUPPORTED_MESSAGE));
     assert.equal(messages.length, 0);
   });
 });

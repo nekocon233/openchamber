@@ -1,6 +1,12 @@
 # OpenCode Module Documentation
 
 ## Purpose
+
+Feature route composition injects the shared Git network executor into GitHub PR
+diff readers. The source-control provider resolves immutable snapshot coordinates;
+the executor revalidates through the binding service. Walkthrough and PR context
+routes therefore use the same managed transfer for a GitHub diff size refusal.
+This adds no OpenCode API calls or locations.
 This module provides OpenCode server integration utilities for the web server runtime, including configuration management and provider authentication.
 
 ## Entrypoints and structure

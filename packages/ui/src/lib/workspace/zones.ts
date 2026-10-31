@@ -1,19 +1,21 @@
 import { z } from 'zod';
 import { isContextPanelMode, type ContextPanelMode } from '@/lib/surfaces/modes';
+import type { WorkspaceLayout } from './sidebarGeometry';
 
 /**
  * Where a context surface opens around the chat. The chat is always the
  * centre and takes the remaining space; every other surface lives in one of
- * three zones. `right` is the context panel everyone has today, so it is the
- * default and is never stored.
+ * three zones. The layout supplies the default; manual placements override it.
  */
 export type ContextZone = 'left' | 'right' | 'bottom';
-type MovedContextZone = Exclude<ContextZone, 'right'>;
+export type DefaultContextZone = 'left' | 'right';
 
 export const CONTEXT_ZONES: readonly ContextZone[] = ['left', 'right', 'bottom'];
 
-/** Surface mode -> zone, for surfaces moved off the right. Per device. */
-export type ContextZonePlacement = Partial<Record<ContextPanelMode, MovedContextZone>>;
+/** Explicit surface placements, per device. Missing modes follow the layout. */
+export type ContextZonePlacement = Partial<Record<ContextPanelMode, ContextZone>>;
+
+export const getDefaultContextZone = (layout: WorkspaceLayout): DefaultContextZone => layout === 'editor' ? 'left' : 'right';
 
 /** What one zone shows: open or not, expanded over the chat, and its tab. */
 export type ContextZoneView = {
@@ -39,8 +41,8 @@ export type ZonedPanel<T extends ZonedTab = ZonedTab> = ContextZoneView & {
   zones: MovedZoneViews;
 };
 
-export const zoneOfMode = (placement: ContextZonePlacement, mode: ContextPanelMode): ContextZone =>
-  placement[mode] ?? 'right';
+export const zoneOfMode = (placement: ContextZonePlacement, mode: ContextPanelMode, defaultZone: DefaultContextZone): ContextZone =>
+  placement[mode] ?? defaultZone;
 
 export const getZoneView = (panel: ZonedPanel, zone: ContextZone): ContextZoneView => (
   zone === 'right'
@@ -54,8 +56,8 @@ export const withZoneView = <P extends ZonedPanel>(panel: P, zone: ContextZone, 
     : { ...panel, zones: { ...panel.zones, [zone]: { ...panel.zones[zone], ...patch } } }
 );
 
-const tabsInZone = <T extends ZonedTab>(tabs: readonly T[], placement: ContextZonePlacement, zone: ContextZone): T[] =>
-  tabs.filter((tab) => zoneOfMode(placement, tab.mode) === zone);
+const tabsInZone = <T extends ZonedTab>(tabs: readonly T[], placement: ContextZonePlacement, zone: ContextZone, defaultZone: DefaultContextZone): T[] =>
+  tabs.filter((tab) => zoneOfMode(placement, tab.mode, defaultZone) === zone);
 
 /**
  * The zone's tab: the one it names when that tab is still open and placed in
@@ -67,8 +69,9 @@ export const resolveZoneActiveTabId = (
   placement: ContextZonePlacement,
   zone: ContextZone,
   activeTabId: string | null,
+  defaultZone: DefaultContextZone,
 ): string | null => {
-  const zoneTabs = tabsInZone(tabs, placement, zone);
+  const zoneTabs = tabsInZone(tabs, placement, zone, defaultZone);
   if (activeTabId && zoneTabs.some((tab) => tab.id === activeTabId)) return activeTabId;
   return zoneTabs.at(-1)?.id ?? null;
 };
@@ -77,23 +80,24 @@ export const resolveZoneActiveTab = <T extends ZonedTab>(
   panel: ZonedPanel<T>,
   placement: ContextZonePlacement,
   zone: ContextZone,
+  defaultZone: DefaultContextZone,
 ): T | null => {
-  const id = resolveZoneActiveTabId(panel.tabs, placement, zone, getZoneView(panel, zone).activeTabId);
+  const id = resolveZoneActiveTabId(panel.tabs, placement, zone, getZoneView(panel, zone).activeTabId, defaultZone);
   return id ? panel.tabs.find((tab) => tab.id === id) ?? null : null;
 };
 
 /** The zone is on screen: open, with a tab of its own to show. */
-export const isZoneShown = (panel: ZonedPanel | undefined, placement: ContextZonePlacement, zone: ContextZone): boolean => (
-  Boolean(panel && getZoneView(panel, zone).isOpen && resolveZoneActiveTab(panel, placement, zone))
+export const isZoneShown = (panel: ZonedPanel | undefined, placement: ContextZonePlacement, zone: ContextZone, defaultZone: DefaultContextZone): boolean => (
+  Boolean(panel && getZoneView(panel, zone).isOpen && resolveZoneActiveTab(panel, placement, zone, defaultZone))
 );
 
 /** Every surface on screen right now, one per shown zone. */
-export const shownContextModes = (panel: ZonedPanel | undefined, placement: ContextZonePlacement): Set<ContextPanelMode> => {
+export const shownContextModes = (panel: ZonedPanel | undefined, placement: ContextZonePlacement, defaultZone: DefaultContextZone): Set<ContextPanelMode> => {
   const modes = new Set<ContextPanelMode>();
   if (!panel) return modes;
   for (const zone of CONTEXT_ZONES) {
     if (!getZoneView(panel, zone).isOpen) continue;
-    const tab = resolveZoneActiveTab(panel, placement, zone);
+    const tab = resolveZoneActiveTab(panel, placement, zone, defaultZone);
     if (tab) modes.add(tab.mode);
   }
   return modes;
@@ -103,11 +107,11 @@ export const shownContextModes = (panel: ZonedPanel | undefined, placement: Cont
  * Re-resolves every zone against the tabs and the placement: each zone names
  * one of its own tabs, and a zone left without tabs closes.
  */
-export const settleZones = <P extends ZonedPanel>(panel: P, placement: ContextZonePlacement): P => {
+export const settleZones = <P extends ZonedPanel>(panel: P, placement: ContextZonePlacement, defaultZone: DefaultContextZone): P => {
   let next = panel;
   for (const zone of CONTEXT_ZONES) {
     const view = getZoneView(next, zone);
-    const activeTabId = resolveZoneActiveTabId(next.tabs, placement, zone, view.activeTabId);
+    const activeTabId = resolveZoneActiveTabId(next.tabs, placement, zone, view.activeTabId, defaultZone);
     const isOpen = view.isOpen && activeTabId !== null;
     const expanded = view.expanded && isOpen;
     if (activeTabId !== view.activeTabId || isOpen !== view.isOpen || expanded !== view.expanded) {
@@ -129,6 +133,7 @@ export const carrySurfaceToZone = <P extends ZonedPanel>(
   from: ContextZone,
   to: ContextZone,
   placementAfter: ContextZonePlacement,
+  defaultZone: DefaultContextZone,
 ): P => {
   if (from === to) return panel;
   const source = getZoneView(panel, from);
@@ -139,18 +144,54 @@ export const carrySurfaceToZone = <P extends ZonedPanel>(
     next = withZoneView(next, from, { isOpen: false, expanded: false });
     next = withZoneView(next, to, { isOpen: true, expanded: false, activeTabId: sourceTab.id });
   }
-  return settleZones(next, placementAfter);
+  return settleZones(next, placementAfter, defaultZone);
 };
 
-const movedZoneSchema = z.enum(['left', 'bottom']);
+/**
+ * Rehomes the visible tabs after a layout change, hydration or a placement
+ * snapshot. A collision keeps the most recently touched visible tab; ties
+ * keep the destination's tab. Closed surfaces stay closed and tabs stay intact.
+ */
+export const reconcileZonePlacement = <P extends ZonedPanel>(
+  panel: P,
+  placement: ContextZonePlacement,
+  defaultZone: DefaultContextZone,
+): P => {
+  const visible = new Map<ContextZone, { tab: ZonedTab; from: ContextZone; expanded: boolean }>();
+  for (const from of CONTEXT_ZONES) {
+    const view = getZoneView(panel, from);
+    if (!view.isOpen) continue;
+    const tab = panel.tabs.find((entry) => entry.id === view.activeTabId);
+    if (!tab) continue;
+    const to = zoneOfMode(placement, tab.mode, defaultZone);
+    const prior = visible.get(to);
+    if (!prior || tab.touchedAt > prior.tab.touchedAt || (tab.touchedAt === prior.tab.touchedAt && from === to)) {
+      visible.set(to, { tab, from, expanded: view.expanded });
+    }
+  }
+  let next = panel;
+  for (const zone of CONTEXT_ZONES) {
+    const view = getZoneView(next, zone);
+    const candidate = visible.get(zone);
+    const isOpen = Boolean(candidate);
+    const activeTabId = candidate?.tab.id ?? view.activeTabId;
+    const expanded = Boolean(candidate && candidate.from === zone && candidate.expanded);
+    if (isOpen !== view.isOpen || activeTabId !== view.activeTabId || expanded !== view.expanded) {
+      next = withZoneView(next, zone, { isOpen, activeTabId, expanded });
+    }
+  }
+  return settleZones(next, placement, defaultZone);
+};
+
+const explicitZoneSchema = z.enum(['left', 'right', 'bottom']);
 
 /**
- * Stored placement: known surfaces placed in a moved zone. `right` is the
- * default and is dropped, as is anything malformed.
+ * Stored manual placements, including right. Unknown modes and malformed
+ * values are dropped; a missing mode follows the current layout's default.
  */
 export const zonePlacementSchema = z.record(z.string(), z.unknown()).catch({}).transform((record) => (
   Object.fromEntries(Object.entries(record).flatMap(([mode, zone]) => {
-    const parsed = movedZoneSchema.safeParse(zone);
+    const parsed = explicitZoneSchema.safeParse(zone);
     return isContextPanelMode(mode) && parsed.success ? [[mode, parsed.data]] : [];
   }))
 ));

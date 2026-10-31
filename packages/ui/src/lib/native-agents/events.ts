@@ -21,6 +21,7 @@ const questionIdentity = sessionIdentity.extend({ requestID: z.string().min(1) }
 // Native CLI frames have their own protocol. Parse their complete payload
 // before admitting records into the shared session state.
 const nativeEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('catalog.updated'), properties: z.object({ kind: z.literal('native-model') }) }),
   z.object({ type: z.literal('session.created'), properties: z.object({ info: nativeSessionSchema }) }),
   z.object({ type: z.literal('session.updated'), properties: z.object({ info: nativeSessionSchema }) }),
   z.object({ type: z.literal('session.deleted'), properties: sessionIdentity }),

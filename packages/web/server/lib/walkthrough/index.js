@@ -461,7 +461,7 @@ async function runGeneration({ directory, source, repoRoot, key, force, explicit
     );
   }
 
-  const { digest, files, idByAlias, fileCount, hunkCount, generatedFileCount } = await loadCurrentDiff(directory, source, deps, readContext);
+  const { digest, files, idByAlias, fileCount, hunkCount, generatedFileCount } = await loadCurrentDiff(directory, source, { ...deps, signal }, readContext);
   setStage(repoRoot, key, 'asking', readContext);
   if (hunkCount === 0) {
     if (files.length > 0 && generatedFileCount === files.length) {

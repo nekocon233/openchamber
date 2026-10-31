@@ -57,6 +57,7 @@ const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
 const { registerRuntimeAPIs } = await import('@/contexts/runtimeAPIRegistry');
 const { createTestNativeAgentsAPI, createTestRuntimeAPIs } = await import('@/lib/native-agents/test-utils/runtime');
 const { ClaudeConnectionsPage } = await import('./ClaudeConnectionsPage');
+const { useConfigStore } = await import('@/stores/useConfigStore');
 
 const connection = (patch: Partial<ClaudeConnection> = {}): ClaudeConnection => ({
   id: 'connection-1', revision: 1, hasKey: true, kind: 'anthropic', name: 'kimi',
@@ -75,6 +76,7 @@ const status = (patch: Partial<CliproxyapiStatus> = {}): CliproxyapiStatus => ({
   installedVersion: '8.0.31', runningVersion: null,
   install: { supported: true, prepared: true, target: 'darwin-arm64', version: '8.0.31', path: '/managed/cli-proxy-api', error: null },
   managementEnabled: false, keyRejected: false, accounts: [], clientKeys: [],
+  loginProviders: ['codex', 'antigravity'], opusFailover: { enabled: false, ready: false },
   lastError: null, restarting: false, connection: null,
   ...patch,
 });
@@ -104,6 +106,45 @@ afterEach(async () => {
 });
 
 describe('Claude connections page', () => {
+  test('refreshes the actual model catalog after gateway logout while keeping the unavailable selection', async () => {
+    const original = useConfigStore.getState();
+    let signedOut = false;
+    let catalogReads = 0;
+    const descriptor = (id: string) => ({
+      id, name: id, contextWindow: 200_000, outputLimit: 32_000,
+      efforts: [], defaultEffort: null, fast: false, input: { image: false, pdf: false },
+    });
+    try {
+      await render({
+        listClaudeConnections: async () => [connection()],
+        cliproxyapiStatus: async () => status({ accounts: signedOut ? [] : [{
+          provider: 'codex', name: 'codex.json', email: 'fixture@example.test', planType: null,
+          activeUntil: null, status: 'active', disabled: false,
+        }] }),
+        removeCliproxyapiAccount: async () => { signedOut = true; },
+        catalog: async () => {
+          catalogReads += 1;
+          return { backends: {
+            claude: { status: 'ok', models: (signedOut ? ['claude-kept'] : ['gpt-removed', 'claude-kept']).map(descriptor) },
+            codex: { status: 'ok', models: [descriptor('codex-separate-login')] },
+          } };
+        },
+      });
+      await act(async () => { await useConfigStore.getState().refreshNativeProviders(); });
+      useConfigStore.setState({ currentProviderId: 'claude-native', currentModelId: 'gpt-removed' });
+      const models = () => useConfigStore.getState().providers.find((provider) => provider.id === 'claude-native')?.models.map((model) => model.id);
+      expect(models()).toEqual(['gpt-removed', 'claude-kept']);
+      await act(async () => { button('Sign out')?.click(); });
+      await act(async () => { button('Sign out')?.click(); });
+      expect(models()).toEqual(['claude-kept']);
+      expect(useConfigStore.getState().providers.find((provider) => provider.id === 'codex-native')?.models[0].id).toBe('codex-separate-login');
+      expect(useConfigStore.getState().currentModelId).toBe('gpt-removed');
+      expect(catalogReads).toBe(2);
+    } finally {
+      useConfigStore.setState({ providers: original.providers, currentProviderId: original.currentProviderId, currentModelId: original.currentModelId });
+    }
+  });
+
   test('shows the gateway as its sign-in row instead of an editable connection', async () => {
     const api = {
       listClaudeConnections: async () => [connection(), connection({ id: 'connection-2', name: 'CLIProxyAPI' })],

@@ -263,9 +263,6 @@ export const createSettingsHelpers = (dependencies) => {
       const normalized = normalizeDirectoryPath(candidate.opencodeBinary).trim();
       result.opencodeBinary = normalized;
     }
-    if (typeof candidate.workStatusPanelEnabled === 'boolean') {
-      result.workStatusPanelEnabled = candidate.workStatusPanelEnabled;
-    }
     if (Array.isArray(candidate.workStatusHiddenSections)) {
       // Ids are validated on the client, which owns the section list; here we
       // only guarantee the shape, so a malformed payload cannot land on disk.
@@ -477,6 +474,9 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (candidate.fileTreeSide === 'left' || candidate.fileTreeSide === 'right') {
       result.fileTreeSide = candidate.fileTreeSide;
+    }
+    if (candidate.workspaceLayout === 'classic' || candidate.workspaceLayout === 'editor') {
+      result.workspaceLayout = candidate.workspaceLayout;
     }
     if (typeof candidate.diffWrapLines === 'boolean') {
       result.diffWrapLines = candidate.diffWrapLines;

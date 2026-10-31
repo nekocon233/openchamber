@@ -21,6 +21,21 @@ Repository bindings intentionally keep provider accounts, parent Git transport c
 - `mutation-executor.js` also drives provider audit lifecycle around the existing durable claim. Exact in-process duplicates and durable replays use `provider:<idempotencyKey>` and therefore reuse the same audit record, while `transportReference` remains `null` because provider API calls do not use Git transport. The executor rejects an audited execution before claim when the route omits verified provider identity. Two credentials for the same provider user therefore share actor identity in receipts and audits, but their exact credential and binding authority still produce different mutation digests. Audit persistence does not replace or relax mutation claim, digest conflict, reconciliation, sticky unknown-outcome, or replay behavior.
 
 Provider replay and reconciliation after restart reuse the runtime snapshot from the existing audit record. Strict audit planning still checks the other immutable fields. Terminal replay does not rewrite audit history. An unfinished audit can complete from the durable mutation receipt without repeating provider work.
+
+GitHub pending-review actions use `change-request-pending-review` in both stores.
+The record retains the PR target, authority and input digest with an empty
+success result. Comment text and summary text never enter mutation or audit
+storage. An interrupted dispatch stays outcome-unknown; recovery never repeats
+the provider mutation.
+
+GitHub administrator merge uses the existing `change-request-merge` kind with
+`force: true` in its input digest. Omitted or false force retains the ordinary
+digest, so existing mutation records replay unchanged. The capability is
+explicit and provider-specific; GitLab rejects force merge as unsupported.
+Administrator permission and expected-head validation belong to the GitHub
+executor, regardless of client visibility. Uncertain dispatched writes keep
+the same sticky unknown-outcome and read-only reconciliation contract.
+
 - `binding-service.js` accepts remote names and account/credential references, normalizes provider instances before uniqueness checks and persistence, then resolves endpoint metadata and provider repository coordinates from current server-side Git state. A provider instance must match the selected remote host and applicable HTTP port; supplied repository coordinates must equal the path-derived coordinates. Client-provided URLs are never authoritative. Provider reads check the binding revision, the bound provider's own readiness and that its primary remote still exists, so a remote added or removed beside it does not interrupt change-request status. A repository with no binding (revision 0) or whose binding names no account for a host is read with the account the client is signed in to on that host, as before bindings existed: the context must name a remote that really points at the instance, and whether the account exists is the provider route's to decide. Mutation contexts pass the same checks plus the binding's saved config revision, then validate an idempotency key and an exact, copied target shape before provider code receives them. Stale revision or config/remote errors carry the current authoritative repository, revision, and redacted binding record. Account reconciliation uses the same normalization and also matches equivalent instance spellings in previously stored records.
 - `url-redaction.js` removes URL credentials, query data, and fragments from endpoint display URLs before repository context crosses the server boundary. Endpoint fingerprints remain derived from normalized transport authority rather than the shortened display, so hidden query or fragment changes still change authority.
 - `status-cache.js` keeps the last-known change request status per exact trusted read context (instance, account, credential revision, repository, binding revision, directory, branch, remote), bounded and TTL-fresh. A provider route answers a fresh repeat from it, answers a transient provider failure with the last-known status, drops a repository's entries after a mutation and an account's entries after invalidation. GitLab uses it; GitHub keeps its own equivalent in `github/routes.js` for now.
@@ -90,6 +105,14 @@ Contributor worktree creation submits only exact read context, target project id
 Contributor-fork provenance adds a separate worktree-scoped authority check. It never turns the PR-head fetch remote into a push destination implicitly. System transport is forbidden for contributor transfers, and managed push planning requires a one-use exact destination selection issued against the current repository binding and provenance revision. The contributor source may appear as an explicit chooser candidate when the current binding independently grants managed push authority for that exact endpoint. Candidate ownership labels come from provenance plus current provider/account binding authority, never from a remote name.
 
 Provider account references authorize provider API calls. Git credential references authorize Git transport. Commit identity references configure local authorship. They are not interchangeable, and none is a raw token, password, key, URL, or filesystem path. Credential resolvers may dereference an opaque credential ID only inside the server process and only for the endpoint authorized by the current binding. `ocgit:v1` HTTPS references remain readable for migrated bindings, but every explicit managed HTTPS save writes a revision-pinned `ocgit:v2` reference.
+
+Large GitHub PR reads use the internal `pr-snapshot` operation. Like contributor
+transfer, the server resolves the exact provider account and creates a
+revision-pinned HTTPS credential reference for the provider-authorized target.
+The operation revalidates the read context before transfer and computes the diff
+inside a disposable bare repository. Its audit record uses the existing Git
+network lifecycle with the new `pr-snapshot` kind; patch data never enters the
+audit or operation store. The kind is unavailable to the HTTP operation planner.
 
 Raw Git endpoints stay behind the source-control and Git execution boundary. Existing-repository operations accept a remote name plus redacted display URL and fingerprint from the authoritative binding response; they never trust a client-provided fetch or push URL. HTTP/HTTPS display forms contain no userinfo, query, or fragment. SSH URL forms may retain a non-secret username but no password, query, or fragment; strict SCP forms remain valid. The network service rejects unsafe authoritative URLs before plan registration or argv construction, then passes only a validated server-resolved endpoint to Git after revalidation. Clone is the explicit parent-endpoint exception because a new checkout has no repository identity or binding. Its auxiliary grants still contain no raw discovered child or LFS URL. The Git module owns its protocol allowlist, keeps endpoints out of public operation state, and redacts failures.
 

@@ -14,6 +14,7 @@ const KINDS = [
   'change-request-ready',
   'change-request-comment',
   'change-request-review',
+  'change-request-pending-review',
   'issue-comment',
   'change-request-state',
   'issue-state',

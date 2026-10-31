@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
+import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { useMultiRunTitle } from '@/lib/multirun/useMultiRuns';
@@ -12,21 +13,20 @@ import { useSession } from '@/sync/sync-context';
 
 import { SpaceAccessButton } from '@/components/session/spaces/SpaceAccessButton';
 
-import { MobileSessionMetadataButton } from './MobileSessionMetadata';
 import { MobileSessionSwitcher } from './MobileSessionSwitcher';
 
 export const MobileHeader: React.FC<{
   onOpenSessions: () => void;
   /** Opens the right workspace drawer (Changes / Files / Terminal / Notes / Tasks / MCP). */
   onOpenWorkspace: () => void;
-  /** Opens the work-status sheet from the metadata popover. */
+  /** Opens the work-status sheet directly from the header. */
   onOpenWorkStatus: () => void;
+  workStatusOpen: boolean;
   /** Tablet: size the title trigger to its text instead of the free width, so
       a wide header doesn't turn the switcher into a full-width tap target. */
   compactTitle?: boolean;
-}> = ({ onOpenSessions, onOpenWorkspace, onOpenWorkStatus, compactTitle = false }) => {
+}> = ({ onOpenSessions, onOpenWorkspace, onOpenWorkStatus, workStatusOpen, compactTitle = false }) => {
   const { t } = useI18n();
-  const [metadataOpen, setMetadataOpen] = React.useState(false);
   const [switcherOpen, setSwitcherOpen] = React.useState(false);
   const titleRef = React.useRef<HTMLButtonElement>(null);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
@@ -36,7 +36,6 @@ export const MobileHeader: React.FC<{
   );
   const effectiveDirectory = currentSessionDirectory || currentDirectory;
   const currentSession = useSession(currentSessionId, effectiveDirectory || undefined);
-  const isNewSessionDraftOpen = useSessionUIStore((state) => Boolean(state.newSessionDraft?.open));
   // Uncommitted changes in the active project or worktree: the workspace
   // button gets a dot instead of a changed-files bar above the composer.
   const isGitRepo = useIsGitRepo(effectiveDirectory || null);
@@ -47,8 +46,7 @@ export const MobileHeader: React.FC<{
   });
 
   // An open run overview covers the chat, so the header names the run and
-  // drops the session-only metadata button rather than describe a session
-  // that is not on screen.
+  // hides the session-only work-status button.
   const runOverviewKey = useUIStore((state) => state.runOverviewKey);
   const runTitle = useMultiRunTitle(runOverviewKey);
   const sessionTitle = currentSession?.title?.trim();
@@ -59,31 +57,16 @@ export const MobileHeader: React.FC<{
     || (currentSessionId ? t('mobile.sessions.untitled') : t('sessions.switcher.draftTitle'));
 
   React.useEffect(() => {
-    setMetadataOpen(false);
     setSwitcherOpen(false);
   }, [currentSessionId, effectiveDirectory]);
 
   const handleOpenSessions = React.useCallback(() => {
-    setMetadataOpen(false);
     setSwitcherOpen(false);
     onOpenSessions();
   }, [onOpenSessions]);
 
-  // The two header popovers are mutually exclusive.
-  const handleMetadataOpenChange = React.useCallback((value: boolean | ((open: boolean) => boolean)) => {
-    setMetadataOpen((current) => {
-      const next = typeof value === 'function' ? value(current) : value;
-      if (next) setSwitcherOpen(false);
-      return next;
-    });
-  }, []);
-
   const toggleSwitcher = React.useCallback(() => {
-    setSwitcherOpen((current) => {
-      const next = !current;
-      if (next) setMetadataOpen(false);
-      return next;
-    });
+    setSwitcherOpen((current) => !current);
   }, []);
 
   return (
@@ -135,17 +118,6 @@ export const MobileHeader: React.FC<{
               controls stay pinned to the right edge. */}
           {compactTitle ? <div className="min-w-0 flex-1" /> : null}
 
-          {runOverviewKey ? null : (
-            <MobileSessionMetadataButton
-              open={metadataOpen}
-              onOpenChange={handleMetadataOpenChange}
-              onOpenWorkStatus={onOpenWorkStatus}
-              currentSessionId={currentSessionId}
-              effectiveDirectory={effectiveDirectory}
-              isNewSessionDraftOpen={isNewSessionDraftOpen}
-            />
-          )}
-
           <SpaceAccessButton
             directory={effectiveDirectory}
             className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -159,7 +131,6 @@ export const MobileHeader: React.FC<{
               ? t('mobile.header.openWorkspaceWithChangesAria')
               : t('mobile.header.openWorkspaceAria')}
             onClick={() => {
-              setMetadataOpen(false);
               setSwitcherOpen(false);
               onOpenWorkspace();
             }}
@@ -173,6 +144,24 @@ export const MobileHeader: React.FC<{
               />
             ) : null}
           </button>
+          {runOverviewKey ? null : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0 rounded-full text-muted-foreground touch-manipulation aria-pressed:bg-interactive-selection aria-pressed:text-interactive-selection-foreground"
+              data-mobile-work-status-trigger=""
+              aria-label={t('mobile.header.metadata.openWorkStatusAria')}
+              aria-haspopup="dialog"
+              aria-expanded={workStatusOpen}
+              aria-pressed={workStatusOpen}
+              onClick={() => {
+                setSwitcherOpen(false);
+                onOpenWorkStatus();
+              }}
+            >
+              <Icon name="list-indefinite" className="size-5" />
+            </Button>
+          )}
         </div>
       </header>
       <MobileSessionSwitcher

@@ -4,7 +4,7 @@ import type { IconName } from '@/components/icon/icons';
 import { ContextMenuItem } from '@/components/ui/context-menu';
 import { useI18n } from '@/lib/i18n';
 import type { ContextPanelMode } from '@/lib/surfaces/modes';
-import { zoneOfMode, type ContextZone } from '@/lib/workspace/zones';
+import { getDefaultContextZone, zoneOfMode, type ContextZone } from '@/lib/workspace/zones';
 import { useUIStore } from '@/stores/useUIStore';
 
 const ZONE_MOVES = [
@@ -19,7 +19,7 @@ const ZONE_MOVES = [
  */
 export const ZoneMoveMenuItems: React.FC<{ mode: ContextPanelMode }> = ({ mode }) => {
   const { t } = useI18n();
-  const current = useUIStore((state) => zoneOfMode(state.contextSurfaceZones, mode));
+  const current = useUIStore((state) => zoneOfMode(state.contextSurfaceZones, mode, getDefaultContextZone(state.workspaceLayout)));
   const moveContextSurfaceToZone = useUIStore((state) => state.moveContextSurfaceToZone);
   return (
     <>

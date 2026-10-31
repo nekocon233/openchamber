@@ -22,3 +22,13 @@ test('a successful empty diff is distinct from a malformed response', () => {
   expect(parsePullRequestDiff('')).toEqual([]);
   expect(() => parsePullRequestDiff('<html>login</html>')).toThrow();
 });
+
+test('a complete large PR snapshot keeps files beyond both GitHub API limits', () => {
+  const patches = Array.from({ length: 3001 }, (_, index) => (
+    `diff --git a/file-${index}.txt b/file-${index}.txt\nnew file mode 100644\n--- /dev/null\n+++ b/file-${index}.txt\n@@ -0,0 +1 @@\n+published\n`
+  ));
+  const files = parsePullRequestDiff(patches.join(''));
+  expect(files).toHaveLength(3001);
+  expect(files[300]).toMatchObject({ path: 'file-300.txt', status: 'A', insertions: 1, deletions: 0 });
+  expect(files[3000]).toMatchObject({ path: 'file-3000.txt', patch: patches[3000] });
+});

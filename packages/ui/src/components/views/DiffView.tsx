@@ -1,10 +1,12 @@
 import React from 'react';
+import { MovablePane } from '@/components/layout/MovablePane';
 
 import { useUIStore, type PendingDiffScope } from '@/stores/useUIStore';
 import { useCommitComparison } from '@/hooks/useCommitComparison';
 import { usePullRequestComparison } from '@/hooks/usePullRequestComparison';
 import { PullRequestComparisonSelector } from '@/components/views/git/PullRequestComparisonSelector';
 import { useGitComparison, type GitComparisonSource } from '@/hooks/useGitComparison';
+import { usePendingReview, type PendingReviewController } from '@/components/sourceBoard/usePendingReview';
 import { CommitComparisonSelector } from '@/components/views/git/CommitComparisonSelector';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useNestedGitDirectory } from '@/hooks/useNestedGitDirectory';
@@ -72,6 +74,7 @@ import { WALKTHROUGH_ACTION_CLASS } from '@/components/views/walkthrough/walkthr
 import type { WalkthroughTarget } from '@/lib/walkthrough/types';
 import { useWalkthroughStore } from '@/stores/useWalkthroughStore';
 import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
+import { PullRequestBackButton } from './git/PullRequestBackButton';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSessionMessages } from '@/sync/sync-context';
 import { opencodeClient } from '@/lib/opencode/client';
@@ -110,6 +113,7 @@ type DiffData = {
     patch?: string;
     fileDiff?: FileDiffMetadata;
     contextMode?: DiffContextMode;
+    reviewHeadSha?: string;
     /** Set for a live working or staged diff of a submodule; its patch alone can be empty. */
     submodule?: GitSubmoduleState | null;
 };
@@ -553,6 +557,7 @@ const InlineImageDiffViewer = React.memo<InlineImageDiffViewerProps>(({
 });
 
 interface InlineDiffViewerProps {
+  review?: PendingReviewController;
   filePath: string;
   diff: DiffData;
   staged: boolean;
@@ -566,6 +571,7 @@ interface InlineDiffViewerProps {
 }
 
 const InlineDiffViewer = React.memo<InlineDiffViewerProps>(({
+  review,
   filePath,
   diff,
   staged,
@@ -616,12 +622,15 @@ const InlineDiffViewer = React.memo<InlineDiffViewerProps>(({
         onExpandContextRequest={onExpandContextRequest}
         pendingContextExpansion={pendingContextExpansion}
         contextLoading={contextLoading}
+        review={review}
+        reviewHeadSha={diff.reviewHeadSha}
       />
     </div>
   );
 });
 
 interface MultiFileDiffEntryProps {
+    review?: PendingReviewController;
     visible?: boolean;
     directory: string;
     file: FileEntry;
@@ -663,6 +672,7 @@ interface MultiFileDiffEntryProps {
 }
 
 export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
+    review,
     visible = true,
     directory,
     file,
@@ -1161,6 +1171,7 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
                     {isMounted && diffData && (forceRenderLarge || (file.insertions + file.deletions) <= LARGE_DIFF_CHANGED_LINES) ? (
                         <>
                             <InlineDiffViewer
+                                review={review}
                                 filePath={file.path}
                                 diff={diffData}
                                 staged={staged}
@@ -1182,6 +1193,8 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
 });
 
 interface DiffViewProps {
+    /** In editor layout navigation remains in its tool zone while details occupy a document tab. */
+    fileListHost?: { host: HTMLElement | null; visible: boolean; onSelect: () => void };
     visible?: boolean;
     hideStackedFileSidebar?: boolean;
     stackedDefaultCollapsedAll?: boolean;
@@ -1199,6 +1212,7 @@ interface DiffViewProps {
 }
 
 export const DiffView: React.FC<DiffViewProps> = ({
+    fileListHost,
     visible = true,
     hideStackedFileSidebar = false,
     stackedDefaultCollapsedAll = false,
@@ -1210,6 +1224,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     flushContent = false,
 }) => {
     const { t } = useI18n();
+    const dataVisible = visible || Boolean(fileListHost?.visible);
     const inPanelHeader = useInContextPanelHeader();
     const toolbarRef = React.useRef<HTMLDivElement | null>(null);
     useDiffToolbarFit(toolbarRef);
@@ -1218,7 +1233,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const runtimeKey = useGitStore((state) => state.runtimeKey);
     // Diffs belong to the repository being diffed: when the root is not
     // itself a repository, operate on the resolved nested repository instead.
-    const { rootIsGitRepo, gitDirectory: nestedGitDirectory, nestedRepos: nestedRepoOptions } = useNestedGitDirectory(rootDirectory ?? null, { enabled: visible, recheckOnOpen: true });
+    const { rootIsGitRepo, gitDirectory: nestedGitDirectory, nestedRepos: nestedRepoOptions } = useNestedGitDirectory(rootDirectory ?? null, { enabled: dataVisible, recheckOnOpen: true });
     const effectiveDirectory = nestedGitDirectory ?? rootDirectory;
     // The binding follows the repository actually being diffed.
     const binding = useRepositoryBinding(effectiveDirectory, sourceControl);
@@ -1331,7 +1346,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const [lastTurnDiffs, setLastTurnDiffs] = React.useState<TurnSnapshotDiff[]>([]);
     const lastMessageId = sessionMessages.length > 0 ? sessionMessages[sessionMessages.length - 1].id : '';
     React.useEffect(() => {
-        if (activeDiffScope !== 'turn' || !currentSessionId || !visible) return;
+        if (activeDiffScope !== 'turn' || !currentSessionId || !dataVisible) return;
         let cancelled = false;
         void opencodeClient.getSessionTurnDiff(currentSessionId, { directory: rootDirectory ?? undefined })
             .then((files) => {
@@ -1352,7 +1367,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         return () => {
             cancelled = true;
         };
-    }, [activeDiffScope, currentSessionId, lastMessageId, rootDirectory, visible]);
+    }, [activeDiffScope, currentSessionId, lastMessageId, rootDirectory, dataVisible]);
 
     const lastTurnDiffData = React.useMemo(() => {
         const map = new Map<string, DiffData>();
@@ -1390,14 +1405,14 @@ export const DiffView: React.FC<DiffViewProps> = ({
         : null;
     // A pull request opened from the issues and PRs board.
     const requestedPr = usePullRequestSelectionStore((state) => (effectiveDirectory ? state.diffRequests.get(effectiveDirectory) : undefined));
-    const prComparison = usePullRequestComparison(effectiveDirectory ?? null, currentBranch, pullRequestContext, visible && activeDiffScope === 'pr' && !isVSCodeRuntime(), requestedPr);
+    const prComparison = usePullRequestComparison(effectiveDirectory ?? null, currentBranch, pullRequestContext, dataVisible && activeDiffScope === 'pr' && !isVSCodeRuntime(), requestedPr);
     const selectedPr = prComparison.selectedSource;
     // Taken once the branch is known: the selection it landed in is the real one.
     React.useEffect(() => {
         if (!effectiveDirectory || !requestedPr || !status || selectedPr !== requestedPr) return;
         usePullRequestSelectionStore.getState().settleDiffRequest(effectiveDirectory, requestedPr);
     }, [effectiveDirectory, requestedPr, selectedPr, status]);
-    const commitComparison = useCommitComparison(effectiveDirectory ?? null, currentBranch, visible && activeDiffScope === 'commit' && !isVSCodeRuntime());
+    const commitComparison = useCommitComparison(effectiveDirectory ?? null, currentBranch, dataVisible && activeDiffScope === 'commit' && !isVSCodeRuntime());
     const selectedCommitHash = commitComparison.selectedCommit?.hash ?? null;
     React.useEffect(() => {
         if ((activeDiffScope === 'commit' || activeDiffScope === 'pr') && isVSCodeRuntime()) {
@@ -1422,7 +1437,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     }, [effectiveDirectory, fetchBranches, git]);
     const branchMetadataExhausted = useBoundedDirectoryRetry(
         effectiveDirectory ?? null,
-        visible && isGitRepo !== false,
+        dataVisible && isGitRepo !== false,
         isLoadingBranches,
         Boolean(branches),
         startBranchMetadataFetch,
@@ -1442,7 +1457,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const { base: qualifiedBranchBase, source: branchBaseSource, resolved: isBranchBaseResolved, revision: branchRevision } = useBranchComparisonBase(
         effectiveDirectory ?? null,
         currentBranch,
-        visible && !isVSCodeRuntime() && isGitRepo !== false,
+        dataVisible && !isVSCodeRuntime() && isGitRepo !== false,
         { branches, remoteNames, primaryRemote: binding.contexts[0]?.primaryRemote, readContext: binding.contexts[0] ?? null },
     );
     const showBranchOption = !isVSCodeRuntime() && isBranchScopeAvailable(currentBranch, qualifiedBranchBase);
@@ -1500,7 +1515,14 @@ export const DiffView: React.FC<DiffViewProps> = ({
         }
         return null;
     }, [activeDiffScope, qualifiedBranchBase, currentBranch, selectedCommitHash, selectedPr]);
-    const comparison = useGitComparison(effectiveDirectory ?? null, comparisonSource, visible && !isVSCodeRuntime(), activeDiffScope === 'branch' ? branchRevision : '', prComparison.readContext, prComparison.provider);
+    const comparison = useGitComparison(effectiveDirectory ?? null, comparisonSource, dataVisible && !isVSCodeRuntime(), activeDiffScope === 'branch' ? branchRevision : '', prComparison.readContext, prComparison.provider);
+    const reviewPull = React.useMemo(() => {
+        if (comparisonSource?.kind !== 'pr') return null;
+        const matches = prComparison.prs.filter(pull => pull.number === comparisonSource.number);
+        const repo = comparisonSource.sourceRepo ?? (matches.length === 1 ? { owner: matches[0].project.owner, repo: matches[0].project.name } : null);
+        return repo ? { ...repo, number: comparisonSource.number } : null;
+    }, [comparisonSource, prComparison.prs]);
+    const pendingReview = usePendingReview(prComparison.readContext, reviewPull, dataVisible && activeDiffScope === 'pr');
     const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile } = comparison;
     const commitFiles = activeDiffScope === 'commit' ? comparison.files : null;
     const commitFilesError = activeDiffScope === 'commit' ? comparison.error : null;
@@ -1522,7 +1544,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         async (filePath: string, fullContext = false): Promise<ComparisonDiffResult> => {
             try {
                 const response = await loadComparisonDiff(filePath, fullContext ? FULL_CONTEXT_DIFF_LINES : DEFAULT_CONTEXT_DIFF_LINES);
-                return { status: 'ready', data: createTextDiffDataFromPatch(filePath, response.diff, fullContext ? 'full' : 'patch') };
+                return { status: 'ready', data: { ...createTextDiffDataFromPatch(filePath, response.diff, fullContext ? 'full' : 'patch'), reviewHeadSha: response.reviewHeadSha } };
             } catch (error) {
                 return { status: 'error', message: error instanceof Error ? error.message : t('diffView.state.failedToLoadDiff') };
             }
@@ -1535,12 +1557,12 @@ export const DiffView: React.FC<DiffViewProps> = ({
     const fetchComparisonFullFileEntry = React.useCallback(
         async (filePath: string): Promise<ComparisonDiffResult> => {
             try {
-                const { original, modified } = await loadComparisonFullFile(filePath);
+                const { original, modified, reviewHeadSha } = await loadComparisonFullFile(filePath);
                 // Complete-file metadata, like the git-backed full patches: the
                 // viewer keeps the highlighted partial diff on screen until this
                 // one is highlighted, then replays the requested expansion.
                 const fileDiff = parseDiffFromFile({ name: filePath, contents: original }, { name: filePath, contents: modified });
-                return { status: 'ready', data: { original, modified, fileDiff, contextMode: 'full' } };
+                return { status: 'ready', data: { original, modified, fileDiff, contextMode: 'full', reviewHeadSha } };
             } catch (error) {
                 return { status: 'error', message: error instanceof Error ? error.message : t('diffView.state.failedToLoadDiff') };
             }
@@ -1782,18 +1804,18 @@ export const DiffView: React.FC<DiffViewProps> = ({
 
     // Ensure git status on mount
     React.useEffect(() => {
-        if (visible && effectiveDirectory) {
+        if (dataVisible && effectiveDirectory) {
             setActiveDirectory(effectiveDirectory);
             void ensureStatus(effectiveDirectory, git);
         }
-    }, [effectiveDirectory, setActiveDirectory, ensureStatus, git, visible]);
+    }, [effectiveDirectory, setActiveDirectory, ensureStatus, git, dataVisible]);
 
     const refreshScope = JSON.stringify([runtimeKey, effectiveDirectory]);
     const deferredRefreshRef = React.useRef({ scope: refreshScope, paths: new Set<string>(), dirty: false, unscoped: false });
-    const wasVisibleRef = React.useRef(visible);
+    const wasVisibleRef = React.useRef(dataVisible);
     React.useEffect(() => {
-        const resumed = visible && !wasVisibleRef.current;
-        wasVisibleRef.current = visible;
+        const resumed = dataVisible && !wasVisibleRef.current;
+        wasVisibleRef.current = dataVisible;
         if (deferredRefreshRef.current.scope !== refreshScope) {
             deferredRefreshRef.current = { scope: refreshScope, paths: new Set(), dirty: false, unscoped: false };
         }
@@ -1804,7 +1826,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         // every live diff's; either way the entry refetches in place.
         const refresh = (paths: string[], unscoped: boolean) => {
             if (paths.length) {
-                pendingScrollAnchorRestoreRef.current = captureScrollAnchor() ?? lastScrollAnchorRef.current;
+                pendingScrollAnchorRestoreRef.current = visible ? captureScrollAnchor() ?? lastScrollAnchorRef.current : lastScrollAnchorRef.current;
                 clearDiffCache(effectiveDirectory, paths);
                 setFileDiffRefreshNonce((previous) => {
                     const next = new Map(previous);
@@ -1820,7 +1842,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
             void fetchStatus(effectiveDirectory, git, { silent: true });
         };
         const deferred = deferredRefreshRef.current;
-        if (visible && (resumed || deferred.dirty)) {
+        if (dataVisible && (resumed || deferred.dirty)) {
             refresh([...deferred.paths], deferred.unscoped);
             deferred.paths.clear();
             deferred.dirty = false;
@@ -1830,7 +1852,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
             if (normalizePath(hint.directory) !== normalizePath(effectiveDirectory)) return;
             const paths = hint.paths ?? [];
             const unscoped = paths.length === 0;
-            if (!visible) {
+            if (!dataVisible) {
                 deferred.dirty = true;
                 deferred.unscoped ||= unscoped;
                 for (const path of paths) deferred.paths.add(path);
@@ -1838,11 +1860,11 @@ export const DiffView: React.FC<DiffViewProps> = ({
             }
             refresh(paths, unscoped);
         });
-    }, [captureScrollAnchor, clearDiffCache, effectiveDirectory, fetchStatus, git, refreshScope, visible]);
+    }, [captureScrollAnchor, clearDiffCache, effectiveDirectory, fetchStatus, git, refreshScope, dataVisible, visible]);
 
     React.useLayoutEffect(() => {
         const anchor = pendingScrollAnchorRestoreRef.current;
-        if (!anchor) return;
+        if (!visible || !anchor) return;
         pendingScrollAnchorRestoreRef.current = null;
 
         const scrollRoot = diffScrollRef.current;
@@ -1858,7 +1880,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
             scrollRoot.scrollHeight - scrollRoot.clientHeight,
         );
         lastScrollAnchorRef.current = anchor;
-    }, [fileDiffRefreshNonce]);
+    }, [fileDiffRefreshNonce, visible]);
 
     // Handle pending diff file from external navigation
     React.useEffect(() => {
@@ -2111,7 +2133,9 @@ export const DiffView: React.FC<DiffViewProps> = ({
         }
     }, [expandStackedFile, expandedFiles, treeSelectedPath]);
 
+    const revealDetails = fileListHost?.onSelect;
     const handleSelectFileAndScroll = React.useCallback((value: string) => {
+        revealDetails?.();
         cancelPendingScrollAlignment();
 
         if (isTreeMode) {
@@ -2129,8 +2153,8 @@ export const DiffView: React.FC<DiffViewProps> = ({
         pendingScrollTargetRef.current = value;
         expandStackedFile(value);
         setScrollRequestNonce((nonce) => nonce + 1);
-        scrollToFile(value);
-    }, [cancelPendingScrollAlignment, expandStackedFile, isTreeMode, scrollToFile]);
+        if (visible) scrollToFile(value);
+    }, [cancelPendingScrollAlignment, expandStackedFile, isTreeMode, revealDetails, scrollToFile, visible]);
 
     // Step review to the adjacent changed file (alt+arrow): selects, expands
     // a collapsed section, and scrolls to it. Window-level because the diff
@@ -2243,6 +2267,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         if (!effectiveDirectory) return null;
         const renderEntry = (file: FileEntry, isSingleFile = false) => (
             <MultiFileDiffEntry
+                review={activeDiffScope === 'pr' && pendingReview.key ? pendingReview : undefined}
                 visible={visible}
                 key={`${getRuntimeKey()}:${effectiveDirectory}:${file.path}`}
                 directory={effectiveDirectory}
@@ -2288,7 +2313,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
 
         return (
             <div ref={fileTreeLayoutRef} className={cn('flex min-w-0 flex-1 min-h-0 h-full', flushContent ? 'gap-0' : 'gap-3 px-3 pb-3 pt-2')}>
-                {isTreeMode && (
+                {isTreeMode && !fileListHost && (
                     <>
                         {/* Clamped by CSS too: a width stored in a wide panel must not swallow a narrow one. */}
                         <section
@@ -2317,7 +2342,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
                         />
                     </>
                 )}
-                {showFileSidebar && !isTreeMode && (
+                {showFileSidebar && !isTreeMode && !fileListHost && (
                     <section className="hidden lg:flex w-72 flex-col rounded-xl border border-border/60 bg-background/70 overflow-hidden">
                         <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40">
                             <span className="typography-ui-header font-semibold text-foreground">{t('diffView.section.files')}</span>
@@ -2351,7 +2376,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
         );
     };
 
-    const renderContent = () => {
+    const renderContent = (fileListOnly = false) => {
 
         if (!effectiveDirectory) {
             return (
@@ -2474,10 +2499,23 @@ export const DiffView: React.FC<DiffViewProps> = ({
             );
         }
 
+        if (fileListOnly) {
+            const listProps = { changedFiles, selectedFile: displayFile, onSelectFile: handleSelectFileAndScroll };
+            return isTreeMode ? <FileTree {...listProps} /> : <FileList {...listProps} />;
+        }
         return renderStackedDiffView();
     };
 
     return (
+        <>
+        {fileListHost && <MovablePane host={fileListHost.host}>
+            <section data-editor-diff-list="" className={cn('absolute inset-0 flex flex-col overflow-hidden bg-background', !fileListHost.visible && 'hidden')}>
+                {activeDiffScope === 'pr' && <div className="empty:hidden shrink-0 px-2 py-1">
+                    <PullRequestBackButton directory={effectiveDirectory ?? null} source={selectedPr} context={prComparison.readContext} />
+                </div>}
+                {renderContent(true)}
+            </section>
+        </MovablePane>}
         <div className="flex h-full flex-col overflow-hidden bg-background">
             <ContextPanelHeaderToolbar>
             <div ref={toolbarRef} className={cn('flex min-w-0 items-center gap-2', inPanelHeader ? 'flex-1 py-1 pe-1' : 'px-3 py-2 bg-background')}>
@@ -2683,6 +2721,9 @@ export const DiffView: React.FC<DiffViewProps> = ({
                 )}
             </div>
             </ContextPanelHeaderToolbar>
+            {activeDiffScope === 'pr' && !fileListHost?.visible && <div className="empty:hidden shrink-0 px-2 py-1">
+                <PullRequestBackButton directory={effectiveDirectory ?? null} source={selectedPr} context={prComparison.readContext} />
+            </div>}
 
             <ReviewFlowDialog
                 open={reviewDialogOpen}
@@ -2694,5 +2735,6 @@ export const DiffView: React.FC<DiffViewProps> = ({
 
             {renderContent()}
         </div>
+        </>
     );
 };

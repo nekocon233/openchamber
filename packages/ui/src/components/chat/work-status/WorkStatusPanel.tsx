@@ -4,8 +4,6 @@ import { cn } from '@/lib/utils';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/useUIStore';
-import { WORK_STATUS_PANEL_WIDTH } from './useWorkStatusVisibility';
-import { setWorkStatusReserved } from '@/components/layout/rightSlot';
 import { LAYOUT_ANIMATION_EASING } from '@/lib/layoutAnimation';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
 import { WorkStatusGoalRow } from './WorkStatusGoalRow';
@@ -40,7 +38,7 @@ import { isNativeSessionId } from '@/lib/native-agents/ids';
 // uses none of it, so the panel leaves them out there rather than misreport.
 const OPENCODE_CONTEXT_SECTIONS = new Set<WorkStatusSectionId>(['mcp', 'pinned', 'contextSources']);
 
-type WorkStatusPresentation = 'inline' | 'overlay' | 'sheet';
+type WorkStatusPresentation = 'overlay' | 'sheet';
 
 type Props = {
   /** Null on a new-session draft: repository readouts still apply. */
@@ -51,28 +49,15 @@ type Props = {
   /** Whether the panel should currently be shown. */
   visible: boolean;
   /**
-   * Inline only: the right slot keeps the card's column (see
-   * `components/layout/rightSlot.ts`). True while the context panel covers
-   * the card too, so closing the panel goes straight back to the card.
-   */
-  reserved?: boolean;
-  /**
-   * Inline sits beside the transcript, overlay floats over it, and sheet
-   * renders as the body of a mobile bottom sheet with no width or scroll of
-   * its own.
+   * Overlay floats over the transcript. The mobile sheet owns its width and scroll.
    */
   presentation?: WorkStatusPresentation;
   /** Mobile sheet only: warm the branch's change-request summary on open. */
   prewarmPrStatus?: boolean;
 };
 
-/**
- * The inline card lives in the right slot with the context panel, and the
- * slot animates the width (`components/layout/rightSlot.ts`): the card itself
- * keeps its width and only fades, on the slot's duration and curve, while the
- * context panel fades in over it. The overlay fades and lifts.
- */
 const PANEL_TRANSITION_EASING = LAYOUT_ANIMATION_EASING;
+const WORK_STATUS_PANEL_WIDTH = 300;
 
 /**
  * Work-status panel: a card inside the chat column reporting the state of the
@@ -88,10 +73,9 @@ const PANEL_TRANSITION_EASING = LAYOUT_ANIMATION_EASING;
  * eat a visible slice of every row's trailing value, and the shadows already
  * say there is more to see.
  */
-export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, reserved = false, repositoryEnabled = true, presentation = 'inline', prewarmPrStatus = false }) => {
+export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible, repositoryEnabled = true, presentation = 'overlay', prewarmPrStatus = false }) => {
   const { t, direction } = useI18n();
   const nativeSession = sessionId !== null && isNativeSessionId(sessionId);
-  const isInline = presentation === 'inline';
   const isOverlay = presentation === 'overlay';
   const isSheet = presentation === 'sheet';
   // The card's fade and lift follow the side columns' animation setting.
@@ -117,7 +101,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   const frameRef = React.useRef<number | null>(null);
 
   // Restoring the offset has to happen the moment the scroller attaches, and
-  // the panel unmounts whenever the context panel opens. Reading the stored
+  // the content unmounts when the dropdown closes. Reading the stored
   // value through a ref keeps this a mount-time restore rather than a
   // subscription that would fight the user mid-scroll.
   // Content is dropped only after the collapse finishes, so the card animates
@@ -144,23 +128,13 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       setContentMounted(true);
       // Optimistic again, as on first mount: the sections left the presence
       // count when they unmounted, and reading that as "nothing to show"
-      // would give the card's column back for the frames before they report.
+      // would hide the dropdown for the frames before they report.
       setRenderedSections((count) => Math.max(count, 1));
       return undefined;
     }
     const timer = window.setTimeout(() => setContentMounted(false), panelTransitionMs);
     return () => window.clearTimeout(timer);
   }, [panelTransitionMs, visible]);
-
-  // Tells the right slot whether to keep the card's column. A card whose
-  // sections all reported nothing gives it back, as its collapse did before.
-  const empty = contentMounted && renderedSections === 0 && !allSectionsHidden;
-  const wantsColumn = isInline && reserved && !empty;
-  React.useLayoutEffect(() => {
-    if (!isInline) return undefined;
-    setWorkStatusReserved(wantsColumn);
-    return () => setWorkStatusReserved(false);
-  }, [isInline, wantsColumn]);
 
   const restore = React.useCallback((node: HTMLElement | null) => {
     if (!node) return;
@@ -210,7 +184,10 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       setOverlayOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOverlayOpen(false);
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      setOverlayOpen(false);
+      document.querySelector<HTMLElement>('[data-work-status-toggle]')?.focus();
     };
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown);
@@ -260,6 +237,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   return (
     <aside
       ref={overlayRef}
+      id={isOverlay ? 'work-status-panel' : undefined}
       aria-label={t('chat.workStatus.ariaLabel')}
       aria-hidden={isSheet ? undefined : !interactive}
       // The card stays mounted while hidden so it can animate its own collapse,
@@ -272,10 +250,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
         // `self-start` keeps the card at content height instead of stretching
         // to the row; `max-h` then caps it so a long panel scrolls rather than
         // overflowing the chat.
-        // A left margin as well as a right one: flush against the transcript
-        // the card's own shadow had no room and was clipped down that edge.
-        (isInline || isOverlay) && 'relative flex shrink-0 flex-col self-start overflow-hidden',
-        isInline && ['my-4 ms-2 me-4', 'max-h-[calc(100%-2rem)]'],
+        isOverlay && 'flex shrink-0 flex-col self-start overflow-hidden',
         // Out of the flow entirely, anchored to the chat column's top-right so
         // it reads as a dropdown from the header button. As a flex child it
         // took part in the layout and pushed the transcript, which is the one
@@ -290,30 +265,20 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
         // so the settings button stays discoverable — going transparent made the
         // only recovery path unreachable.
         'motion-reduce:transition-none',
-        // Beside the chat: the layout panels' ring (`oc-panel-edge`, shared
-        // with the context panel card). Over the chat it is a dropdown and
-        // takes the dropdown's full edge (`data-edge-floating`).
         !isSheet && 'oc-panel-edge rounded-xl',
-        isInline && 'bg-[var(--surface-muted)]/40',
       )}
       // Hidden, the overlay's edge fades out alongside the glass fade: see
       // the opacity note below.
       data-edge-hidden={isOverlay && !interactive ? '' : undefined}
       data-edge-floating={isOverlay ? '' : undefined}
       style={isSheet ? undefined : {
-        // Neither form animates its width: inline, the right slot around the
-        // card does; the overlay takes no space from the chat. Inline, the
-        // card only fades. The overlay lifts like the dropdown it reads as and
-        // never fades this element: an ancestor below full opacity cuts the
-        // glass layer off from what is behind it, so the card showed clear,
-        // unblurred, for the whole fade and frosted only at the end. The glass
-        // layer fades itself; the edge fades with it.
+        // The glass fades independently so its backdrop remains visible during the lift.
         width: WORK_STATUS_PANEL_WIDTH,
-        opacity: isOverlay || interactive ? 1 : 0,
-        transform: isOverlay ? (visible ? 'translateY(0) scale(1)' : 'translateY(-6px) scale(0.98)') : undefined,
+        maxWidth: 'calc(100% - 1.5rem)',
+        transform: visible ? 'translateY(0) scale(1)' : 'translateY(-6px) scale(0.98)',
         // The overlay sits at the chat's end corner: top right, or top left in RTL.
         transformOrigin: direction === 'rtl' ? 'top left' : 'top right',
-        transitionProperty: isOverlay ? 'transform, box-shadow' : 'opacity',
+        transitionProperty: 'transform',
         transitionDuration: `${panelTransitionMs}ms`,
         transitionTimingFunction: PANEL_TRANSITION_EASING,
         pointerEvents: interactive ? undefined : 'none',

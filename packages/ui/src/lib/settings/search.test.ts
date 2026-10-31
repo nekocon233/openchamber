@@ -20,6 +20,21 @@ const runtimeCtx = {
 };
 
 describe('settings search', () => {
+  test('the file tree side preference is available only in classic layout', () => {
+    for (const workspaceLayout of ['classic', 'editor'] as const) {
+      const results = buildSettingsSearchResults({ query: 'file tree side', runtimeCtx: { ...runtimeCtx, workspaceLayout }, t, getPageTitle: (page) => page });
+      expect(results.some((item) => item.id === 'appearance.file-tree-side')).toBe(workspaceLayout === 'classic');
+    }
+  });
+  test('workspace layout is searchable on desktop web and Electron only', () => {
+    for (const context of [runtimeCtx, { ...runtimeCtx, isDesktop: true }, { ...runtimeCtx, isVSCode: true }, { ...runtimeCtx, isMobile: true }]) {
+      const results = buildSettingsSearchResults({ query: 'workspace layout', runtimeCtx: context, t, getPageTitle: (page) => page });
+      const result = results.find((item) => item.id === 'appearance.workspace-layout');
+      expect(Boolean(result)).toBe(!context.isMobile && !context.isVSCode);
+      if (result) expect(result.page).toBe('general');
+    }
+  });
+
   test('finds double-paste on every shared Settings surface', () => {
     for (const query of ['double paste', 'ctrl v', 'cmd v']) {
       for (const context of [runtimeCtx, { ...runtimeCtx, isDesktop: true }, { ...runtimeCtx, isVSCode: true }, { ...runtimeCtx, isMobile: true }]) {

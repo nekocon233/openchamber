@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import type { QueuedMessage } from '@/stores/messageQueueStore';
 import {
     resolveFollowUpDeliveryDecision,
+    resolveNativeFollowUpDelivery,
     selectFollowUpDraft,
     shouldStageFollowUpAsDraft,
 } from './followUpDrafts';
@@ -14,6 +15,62 @@ const activeFollowUp = {
     sessionPhase: 'busy' as const,
     autoReviewRunning: false,
 };
+
+describe('native follow-up delivery', () => {
+    const sessionId = 'ncv_da191fca-62c9-4acb-875a-8847578e36ca';
+    const state = {
+        kind: 'unified' as const, backend: 'codex' as const, revision: 1, recordRevision: 1,
+        historyRevision: 0, sourceSessionID: 'ncx_source', switchReady: false, preparing: false,
+    };
+    const busy = {
+        sessionId, providerID: 'codex-native', sessionPhase: 'busy' as const,
+        delivery: 'queue' as const, unifiedState: state,
+    };
+
+    test('steers a running Codex source even though the whole execution is not switch-ready', () => {
+        expect(resolveNativeFollowUpDelivery(busy)).toBe('steer');
+        expect(resolveNativeFollowUpDelivery({ ...busy, delivery: 'steer' })).toBe('steer');
+        expect(resolveNativeFollowUpDelivery({ ...busy, sessionPhase: 'retry' })).toBe('steer');
+    });
+
+    test('keeps Claude and DeepSeek follow-ups on their current native source', () => {
+        for (const backend of ['claude', 'deepseek'] as const) {
+            expect(resolveNativeFollowUpDelivery({
+                ...busy, providerID: `${backend}-native`, unifiedState: { ...state, backend },
+            })).toBe('steer');
+        }
+    });
+
+    test('queues a different backend even when the requested preference is steer', () => {
+        expect(resolveNativeFollowUpDelivery({ ...busy, providerID: 'claude-native', delivery: 'steer' })).toBe('queue');
+    });
+
+    test('does not steer while source ownership is unknown or handoff is preparing', () => {
+        expect(resolveNativeFollowUpDelivery({ ...busy, unifiedState: undefined })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...busy, unifiedState: { ...state, sourceSessionID: null } })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...busy, unifiedState: { ...state, preparing: true } })).toBe('queue');
+    });
+
+    test('preserves explicit queueing and sends idle handoffs normally', () => {
+        expect(resolveNativeFollowUpDelivery({ ...busy, forceQueue: true })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...busy, providerID: 'claude-native', sessionPhase: 'idle', delivery: undefined })).toBeUndefined();
+    });
+
+    test('sends idle Antigravity prompts directly and queues only busy or explicitly queued prompts', () => {
+        const agy = { sessionId: 'nag_e6166e67-797f-41d1-bda4-984fbfcf2a2e', providerID: 'antigravity-native' };
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined })).toBeUndefined();
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'busy', delivery: 'steer' })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...agy, sessionPhase: 'idle', delivery: undefined, forceQueue: true })).toBe('queue');
+    });
+
+    test('retains the independent CLI and OpenCode delivery paths', () => {
+        for (const id of ['ncx_source', 'ncl_source', 'ndh_source']) {
+            expect(resolveNativeFollowUpDelivery({ ...busy, sessionId: id, unifiedState: undefined })).toBe('steer');
+        }
+        expect(resolveNativeFollowUpDelivery({ ...busy, sessionId: 'ses_opencode' })).toBe('queue');
+        expect(resolveNativeFollowUpDelivery({ ...busy, sessionId: null, delivery: undefined })).toBeUndefined();
+    });
+});
 
 describe('shouldStageFollowUpAsDraft', () => {
     test('stages normal follow-ups while the session is active', () => {

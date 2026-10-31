@@ -211,6 +211,33 @@ when the move made it.
 
 Public snapshots contain `operationId`, `runtimeIdentity`, transport verification and optional verified actor, the redacted target, completed steps, state, and a stable redacted terminal error when applicable. A manual checkout-hydration plan retains the established parent-source transport shape for client compatibility, but that field proves only the selected source authority and is not child-transfer attribution. The internal automatic checkout-hydration operation uses `null` for operation-level transport because its child transfers use independent auxiliary grants; callers receive its bounded hydration result rather than the operation snapshot. Hydration audit records ignore parent transport metadata and use only exact child grant references. URL display endpoints contain no userinfo, query, or fragment; strict SCP displays remain supported. Endpoint fingerprints still cover the normalized transport authority, including query and fragment data when present in repository configuration, without exposing that data. Raw endpoints, repository and temporary paths, credential IDs, and pinned SHAs stay in the process-local internal plan. The default registry holds at most 256 records, expires unstarted plans after 15 minutes, retains terminal records for one hour, and evicts only terminal records for capacity. Restarting the server drops that process-local registry, but `network-operation-storage.js` keeps a bounded durable copy of each public snapshot, without the optional verified actor, in `git-network-operations.json` under `OPENCHAMBER_DATA_DIR`. After a restart the same-ID read returns the persisted terminal snapshot; a `planned` record recovers as `cancelled`, a `running` record recovers as `outcome-unknown` with a restart message and never expires, and other terminal records expire after the configured durable retention window.
 
+### Temporary PR snapshots
+
+`readPullRequestSnapshot` is a server-only operation for GitHub diff size refusals
+and file-list limits. Its provider dependency resolves the exact bound account,
+target repository and head/base/merge-base SHAs. The immutable source is checked
+against current binding authority before credential resolution and immediately
+before transfer. Later pushes cannot change the fetched commit IDs.
+
+The executor creates a private temporary bare repository, fetches the head and
+merge-base commits at depth 1 through managed HTTPS, then reads the patch and
+NUL-delimited file metadata from those two trees. `pull-request-snapshot.js`
+assembles the complete snapshot. Repository-related Git environment overrides
+are stripped before any temporary-repository command. Checkout, hooks, textconv,
+external diff, recursive submodules and LFS hydration never run. The user's
+checkout, index, refs, remotes and `FETCH_HEAD` stay untouched.
+
+The operation shares the five-minute deadline, process-tree cancellation,
+credential broker and redaction rules of other managed transfers. Patch and
+metadata reads require complete output, capped at 20 MiB with
+`PR_DIFF_TOO_LARGE`; the ordinary diagnostic-output truncation is not used for
+diffs. Temporary repositories use ownership-checked quarantine cleanup under a
+fresh cleanup deadline. Cleanup failure is a failed read, even if Git produced a
+patch. Only the waiting caller holds patch contents. Public operation storage
+and audit records carry the `pr-snapshot` kind and redacted target/status, with no
+patch, commit contents or temporary paths. HTTP clients cannot plan this kind or
+choose a transfer URL; the provider reader is its only entry point.
+
 ### Exact-ref transport authority
 
 Push, fetch, pull, remote-branch deletion, and sync accept only full refs. Sources are `refs/heads/*` or `refs/tags/*`; push destinations are heads or tags, deletion destinations are heads, fetch destinations are remote refs, heads, or tags, and pull destinations are heads. Sync narrows its fetch destination to `refs/remotes/*`, names its checked-out pull destination, and requires that destination to equal the exact push source. Planning accepts authoritative HTTPS, `ssh://`, and strict SCP endpoints only, under the same endpoint rule as Clone. An `ssh://` endpoint may name its login user; HTTPS userinfo, any password, and query or fragment data fail before plan registration or Git argv construction. The SSH user stays in the internal raw endpoint: display URLs and fingerprints drop it, and URL display endpoints with userinfo fail. Planning validates the repository ID, binding and config revisions, remote, redacted endpoint fingerprint and display URL, transport mode, and opaque credential reference against source-control authority before resolving refs. Execution repeats authority validation before any subprocess or credential resolution and again immediately before each transfer Git process starts. It also compares a server-internal transport revision derived from effective system, global, local, worktree, and included Git configuration. The revision covers credential helpers and URL-scoped credential settings, SSH commands, URL rewrites, HTTP settings, and remote proxies. Values and origin paths never enter public plans or errors.

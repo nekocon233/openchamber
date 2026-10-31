@@ -26,6 +26,7 @@ import type { NativeStatistics, NativeStatisticsQuery } from '@/lib/native-agent
 import type { DeepseekConfiguration, DeepseekConfigurationWrite, DeepseekConfigurationSave, DeepseekSetupStatus } from '@/lib/native-agents/deepseek';
 import type { NativeChecklistSnapshot, NativePlanSnapshot, NativeTaskOutput, NativeTaskSnapshot, NativeTodosSnapshot } from '@/lib/native-agents/task-schemas';
 import type { GitIdentityProfile, GitIdentitySummary } from './git-identity';
+import type { GitHubPendingReviewInput, GitHubPendingReviewState } from '../source-control/pendingReview';
 import type {
   ChangeRequest,
   ChangeRequestContext,
@@ -1835,6 +1836,8 @@ export type RepositoryReferenceFilter = { state: RepositoryReferenceState; peopl
 
 export type GitHubReferencesOptions = {
   kind: GitHubReferenceKind;
+  /** The bound repository alone, or its fork network (the default). */
+  scope?: 'repository' | 'network';
   state?: RepositoryReferenceState;
   people?: RepositoryReferencePeople;
   /** Search text, or a pasted link or number, which names one item of either kind. */
@@ -1973,6 +1976,8 @@ export type GitHubReferencesResult =
       connected: true;
       /** Null when the project has no GitHub remote. */
       repo: GitHubRepoRef | null;
+      /** Echoed by servers that support single-repository browsing. */
+      scope?: 'repository' | 'network';
       items: GitHubReference[];
       cursor: string | null;
       hasMore: boolean;
@@ -2067,6 +2072,8 @@ export interface SourceControlAPI {
   changeRequestReplyToThread(payload: ThreadReplyInput): Promise<SourceControlMutationReceipt<SourceControlEmptyMutationResult>>;
   changeRequestResolveThread(payload: ThreadResolveInput): Promise<SourceControlMutationReceipt<SourceControlEmptyMutationResult>>;
   changeRequestReview(payload: ReviewChangeRequestInput): Promise<SourceControlMutationReceipt<SourceControlReviewMutationResult>>;
+  githubPendingReview(context: SourceControlReadContext, pull: GitHubPullRequestRef): Promise<GitHubPendingReviewState>;
+  githubPendingReviewAction(payload: GitHubPendingReviewInput): Promise<SourceControlMutationReceipt<SourceControlEmptyMutationResult>>;
   issueComment(payload: CommentInput): Promise<SourceControlMutationReceipt<SourceControlEmptyMutationResult>>;
   changeRequestSetState(payload: SetStateInput): Promise<SourceControlMutationReceipt<SourceControlStateMutationResult>>;
   issueSetState(payload: SetStateInput): Promise<SourceControlMutationReceipt<SourceControlStateMutationResult>>;
@@ -2291,7 +2298,9 @@ export interface NativeAgentsAPI {
   startCliproxyapiGateway(): Promise<CliproxyapiStatus>;
   stopCliproxyapiGateway(): Promise<CliproxyapiStatus>;
   setCliproxyapiProxy(input: { upstreamProxy: string | null }): Promise<CliproxyapiStatus>;
-  beginCliproxyapiLogin(): Promise<CliproxyapiLogin>;
+  beginCliproxyapiLogin(provider?: 'codex' | 'antigravity' | 'claude'): Promise<CliproxyapiLogin>;
+  setCliproxyapiOpusRoute(enabled: boolean): Promise<CliproxyapiStatus>;
+  setCliproxyapiSonnetRoute(enabled: boolean): Promise<CliproxyapiStatus>;
   cliproxyapiLoginStatus(state: string): Promise<CliproxyapiLoginStatus>;
   cancelCliproxyapiLogin(state: string): Promise<boolean>;
   /** Hands the browser callback the user pasted back to the gateway, which finishes the sign-in in the background. */

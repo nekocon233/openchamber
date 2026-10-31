@@ -2,8 +2,9 @@ import React from 'react';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { getContextSurfaceDefaultWidth } from '@/lib/surfaces/registry';
 import { planZoneFit } from '@/lib/workspace/zoneFit';
-import { getZoneView, isZoneShown, resolveZoneActiveTab } from '@/lib/workspace/zones';
+import { getDefaultContextZone, getZoneView, isZoneShown, resolveZoneActiveTab } from '@/lib/workspace/zones';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
+import { getSidebarWidth } from '@/lib/workspace/sidebarGeometry';
 
 type Side = 'left' | 'right';
 type UIState = ReturnType<typeof useUIStore.getState>;
@@ -30,13 +31,13 @@ export const ZoneFitArbiter: React.FC = () => {
     const sidesShown = (state: UIState) => {
       const panel = state.contextPanelByDirectory[directoryKey];
       return {
-        left: isZoneShown(panel, state.contextSurfaceZones, 'left'),
-        right: isZoneShown(panel, state.contextSurfaceZones, 'right'),
+        left: isZoneShown(panel, state.contextSurfaceZones, 'left', getDefaultContextZone(state.workspaceLayout)),
+        right: isZoneShown(panel, state.contextSurfaceZones, 'right', getDefaultContextZone(state.workspaceLayout)),
       };
     };
     const shownWidth = (state: UIState, side: Side, shown: boolean): number => {
       const panel = state.contextPanelByDirectory[directoryKey];
-      const tab = shown && panel ? resolveZoneActiveTab(panel, state.contextSurfaceZones, side) : null;
+      const tab = shown && panel ? resolveZoneActiveTab(panel, state.contextSurfaceZones, side, getDefaultContextZone(state.workspaceLayout)) : null;
       if (!tab) return 0;
       return panel?.widthByMode[tab.mode] ?? getContextSurfaceDefaultWidth(tab.mode);
     };
@@ -60,13 +61,16 @@ export const ZoneFitArbiter: React.FC = () => {
     }
 
     const makeRoom = (state: UIState, opening: Side, shown: Record<Side, boolean>) => {
-      const rowWidth = document.querySelector<HTMLElement>('[data-workspace-row]')?.clientWidth;
+      const row = document.querySelector<HTMLElement>('[data-workspace-row]');
+      const rowWidth = row?.clientWidth;
       if (!rowWidth) return;
       const plan = planZoneFit({
-        rowWidth,
+        // A layout setter notifies before React moves the sidebar. Account
+        // for the row being measured, which may still be the previous layout.
+        rowWidth: rowWidth - (state.isSidebarOpen && row.querySelector('[data-left-sidebar]') ? getSidebarWidth(state.sidebarWidth) : 0),
         leftWidth: shownWidth(state, 'left', shown.left),
         rightWidth: shownWidth(state, 'right', shown.right),
-        sidebarWidth: state.isSidebarOpen ? state.sidebarWidth : null,
+        sidebarWidth: state.isSidebarOpen ? getSidebarWidth(state.sidebarWidth) : null,
         opening,
       });
       if (plan.displace) {
@@ -126,6 +130,10 @@ export const ZoneFitArbiter: React.FC = () => {
       // Closes first, so a give-back never lands after a fold it would undo.
       for (const side of closed) giveBack(side);
       for (const side of opened) makeRoom(state, side, shown);
+      if (opened.length === 0 && state.workspaceLayout !== prevState.workspaceLayout) {
+        const side = getDefaultContextZone(state.workspaceLayout);
+        if (shown[side]) makeRoom(state, side, shown);
+      }
     });
   }, [directoryKey]);
 

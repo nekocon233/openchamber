@@ -59,6 +59,20 @@ afterEach(async () => {
 });
 
 describe('MovablePane', () => {
+  test('a fixed editor host preserves the same DOM through classic and resident placement', async () => {
+    await act(async () => root.render(<MovablePane host={bodies.right}><Surface /></MovablePane>));
+    const input = bodies.right.querySelector('input');
+    if (!input) throw new Error('Expected editor');
+    input.value = 'unsaved';
+    await act(async () => root.render(<MovablePane host={bodies.left}><Surface /></MovablePane>));
+    expect(bodies.left.querySelector('input')).toBe(input);
+    expect(input.value).toBe('unsaved');
+    await act(async () => root.render(<MovablePane host={null}><Surface /></MovablePane>));
+    expect(input.isConnected).toBe(false);
+    await act(async () => root.render(<MovablePane host={bodies.right}><Surface /></MovablePane>));
+    expect(bodies.right.querySelector('input')).toBe(input);
+    expect(mounts).toBe(1);
+  });
   test('moving to another zone keeps the same component and its uncommitted edit', async () => {
     await render('right');
     const input = bodies.right.querySelector('input');

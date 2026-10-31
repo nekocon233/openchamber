@@ -267,6 +267,7 @@ const SourceBoardBody: React.FC<{
     onClose?: () => void;
 }> = ({ tab, project, directory, linearTeamId, mapping, projects, scopePicker, kinds, initialRepositoryKind, onSelectKind, layout, onLeave, onClose }) => {
     const isMobile = layout === 'mobile';
+    const desktopBoardOpen = useUIStore(state => state.isSourceBoardOpen);
     const { t } = useI18n();
     const { sourceControl } = useRuntimeAPIs();
     const source = tab === 'linear' ? 'linear' : 'github';
@@ -486,6 +487,7 @@ const SourceBoardBody: React.FC<{
             // Keyed by the item: a draft never carries over to another one.
             reply={previewItem?.source === 'github' && context ? (
                 <SourceBoardReply
+                    active={layout === 'mobile' || desktopBoardOpen}
                     key={referencePickerItemKey(previewItem)}
                     reference={previewItem.reference}
                     context={context}

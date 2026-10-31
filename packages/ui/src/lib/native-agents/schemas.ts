@@ -202,6 +202,8 @@ const nativeModelSchema = z.object({
   outputLimit: z.number().nullable(),
   efforts: z.array(z.string()),
   defaultEffort: z.string().nullable(),
+  // Concrete native slugs retained for selections made before family grouping.
+  aliases: z.array(z.object({ id: z.string().min(1), variant: z.string().min(1).optional() })).optional(),
   // Whether the model offers Codex's Fast tier; a server from before it has no field.
   fast: z.boolean().catch(false),
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
@@ -252,9 +254,11 @@ export const nativeCapabilitiesSchema = z.object({
       cli: z.boolean(), blockedByEnterprise: z.boolean(),
       actions: z.object({ revert: z.boolean(), delete: z.boolean(), fork: z.boolean() }),
     }).optional(),
-    // Antigravity deliberately advertises no task, question or action
-    // capabilities. Unknown fields stay out of the trusted UI contract.
-    antigravity: z.object({ cli: z.boolean() }).optional(),
+    // Antigravity can read saved command tasks; it has no task-control protocol.
+    antigravity: z.object({
+      cli: z.boolean(),
+      tasks: z.object({ background: z.boolean(), output: z.boolean(), stop: z.literal(false) }).optional(),
+    }).optional(),
   }),
   registry: z.object({ reset: z.boolean(), resetAt: z.number().optional() }),
 });
@@ -307,7 +311,7 @@ export const nativeQuestionRejectedSchema = z.object({ rejected: z.literal(true)
 export const nativeQuestionSchema = z.object({
   id: z.string().min(1),
   sessionID: nativeSessionIdSchema,
-  kind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit']).optional(),
+  kind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit', 'antigravity-plan-exit']).optional(),
   questions: z.array(z.object({
     question: z.string(),
     header: z.string(),

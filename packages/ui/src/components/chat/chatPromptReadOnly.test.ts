@@ -16,6 +16,9 @@ const session = (parentID?: string): Session => ({
 });
 
 describe('resolveChatPromptReadOnly', () => {
+    test('keeps Antigravity children read-only even when other subagents allow prompts', () => {
+        expect(resolveChatPromptReadOnly({ ...session('parent'), id: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188' }, true, false)).toBe(true);
+    });
     test('allows prompting a subagent without requiring its parent record', () => {
         expect(resolveChatPromptReadOnly(session('parent'), true, true)).toBe(false);
     });

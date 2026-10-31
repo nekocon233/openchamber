@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': 'Çalışma alanı düzeni',
+  'settings.openchamber.visual.option.workspaceLayout.classic': 'Klasik',
+  'settings.openchamber.visual.option.workspaceLayout.editor': 'Düzenleyici',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "Sunucudaki dsh API anahtarını, uç noktasını ve modellerini bağlı herhangi bir cihazdan yapılandırın.",
   'settings.deepseekHarness.ready': "dsh CLI bulundu.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': 'Google hesabınızla oturum açın. Uzak bir sunucu için URL ve yetkilendirme kodu talimatlarını izleyin.',
   'settings.antigravity.warnings.title': "Antigravity'yi kullanmadan önce",
   'settings.antigravity.warnings.subscription': 'Google, kişisel Google AI aboneliklerinin üçüncü taraf uygulamalarında kullanımını desteklemez. Burada kullanmak hesabınızın kısıtlanmasına veya kapatılmasına yol açabilir.',
-  'settings.antigravity.warnings.fullAccess': "OpenChamber, agy'yi tam erişimle başlatır. Headless araçlar ve kabuk komutları her biri için ayrı ayrı onay istemeden çalışır.",
+  'settings.antigravity.warnings.fullAccess': 'Build, araç işlemlerini otomatik onaylar. Plan; dosya değişikliklerini, kabuk komutlarını, MCP araçlarını ve tarayıcı işlemlerini engeller.',
   'chat.deepseekCommand.failed': "DeepSeek Harness komutu çalıştırılamadı.",
   'chat.deepseekCommand.needsSession': "Bu komutu çalıştırmadan önce bir mesaj göndererek DeepSeek Harness oturumu oluşturun.",
   'settings.themeImport.selectAll': 'Tümünü seç',

@@ -88,6 +88,92 @@ const credentialFor = (account) => ({
 
 const jsonResponse = (value, status = 200) => Response.json(value, { status });
 
+const servePendingReview = ({ loseResponse = false } = {}) => {
+  const headSha = 'a'.repeat(40);
+  let review = null;
+  const comments = [];
+  const writes = [];
+  vi.stubGlobal('fetch', vi.fn(async (input, init) => {
+    const url = new URL(input);
+    if (url.pathname === '/repos/acme/app/pulls/7') return jsonResponse(pullRequest({ user: { id: 8, login: 'author' }, head: { ...pullRequest().head, sha: headSha } }));
+    if (url.pathname !== '/graphql') throw new Error(`Unexpected request: ${url.pathname}`);
+    const { query, variables } = JSON.parse(init.body);
+    const page = (nodes) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+    if (query.includes('query PendingReviewComments(')) return jsonResponse({ data: { node: {
+      ...review, pullRequest: { id: 'PR_node' }, comments: page(comments.map(comment => ({
+        id: comment.node_id, body: comment.body, path: comment.path, author: { databaseId: comment.user.id }, pullRequestReview: { id: review.id },
+      }))),
+    } } });
+    if (query.includes('query PendingReviewThreads(')) return jsonResponse({ data: { node: {
+      id: 'PR_node', reviewThreads: page(comments.map(comment => ({
+        id: `THREAD_${comment.node_id}`, path: comment.path, diffSide: comment.side,
+        line: comment.line, startLine: comment.start_line, originalLine: comment.original_line,
+        originalStartLine: comment.original_start_line, isOutdated: false, comments: page([{ id: comment.node_id }]),
+      }))),
+    } } });
+    if (!variables.input) return jsonResponse({ data: { viewer: { databaseId: 7 }, repository: { pullRequest: {
+      id: 'PR_node', number: 7, state: 'OPEN', headRefOid: headSha, author: { databaseId: 8 },
+      reviews: { nodes: review ? [review] : [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } } } });
+    const name = /\{\s+(\w+)\(input:/.exec(query)[1];
+    writes.push({ name, input: variables.input });
+    if (name === 'addPullRequestReview' || name === 'addPullRequestReviewThread') {
+      review ??= { id: 'REVIEW_node', databaseId: 9, body: '', state: 'PENDING', author: { databaseId: 7 }, commit: { oid: headSha } };
+      const thread = name === 'addPullRequestReview' ? variables.input.threads[0] : variables.input;
+      comments.push({ node_id: `COMMENT_${comments.length + 1}`, pull_request_review_id: 9, body: thread.body, path: thread.path,
+        side: thread.side, line: thread.line, original_line: thread.line, start_line: thread.startLine ?? null, original_start_line: thread.startLine ?? null, user: { id: 7 } });
+    }
+    if (name === 'submitPullRequestReview') review = null;
+    if (loseResponse && writes.length === 1) throw new Error('Response lost after dispatch');
+    return jsonResponse({ data: { [name]: { clientMutationId: variables.input.clientMutationId } } });
+  }));
+  return { headSha, writes, comments };
+};
+
+const forceMergeHead = 'a'.repeat(40);
+const forceMergeBody = (accountId, extra = {}) => ({
+  ...context(accountId, { target: { project: { owner: 'acme', name: 'app' }, number: 7, head: 'feature', base: 'main', headSha: forceMergeHead } }),
+  method: 'squash', force: true, ...extra,
+});
+const serveForceMerge = () => {
+  const state = {
+    node: { __typename: 'PullRequest', id: 'PR_node', number: 7, state: 'OPEN', isDraft: false,
+      mergeable: 'MERGEABLE', viewerCanMergeAsAdmin: true, headRefOid: forceMergeHead, headRefName: 'feature', baseRefName: 'main',
+      repository: { name: 'app', owner: { login: 'acme' } } },
+    result: { mergePullRequest: { pullRequest: { id: 'PR_node', merged: true } } },
+    queryFailure: false, queryStatus: null, mutationFailure: null, waitForMerge: null,
+    reads: [], writes: [], credentials: [],
+  };
+  vi.stubGlobal('fetch', vi.fn(async (input, init) => {
+    const url = new URL(input);
+    state.credentials.push(new Headers(init.headers).get('authorization'));
+    if (url.pathname === '/repos/acme/app/pulls/7') {
+      state.reads.push('rest');
+      return jsonResponse(pullRequest({ draft: false, head: { ...pullRequest().head, sha: forceMergeHead } }));
+    }
+    if (url.pathname === '/repos/acme/app/pulls/7/merge') {
+      state.writes.push(JSON.parse(init.body));
+      return jsonResponse({ merged: true });
+    }
+    if (url.pathname !== '/graphql') throw new Error(`Unexpected fixture request ${url.pathname}`);
+    const body = JSON.parse(init.body);
+    if (body.query.startsWith('query ForceMergePermission')) {
+      state.reads.push('graphql');
+      if (state.queryFailure) throw new Error('Fixture permission query disconnected');
+      if (state.queryStatus) return jsonResponse({ message: 'Fixture permission query refused' }, state.queryStatus);
+      return jsonResponse({ data: { node: state.node } });
+    }
+    state.writes.push(body);
+    if (state.waitForMerge) await state.waitForMerge;
+    if (state.mutationFailure === 'network') throw new Error('Fixture merge response lost');
+    if (state.mutationFailure === 'refused') return jsonResponse({ errors: [{ message: 'Branch rules prohibit administrator merge', type: 'UNPROCESSABLE' }], data: { mergePullRequest: null } });
+    if (state.mutationFailure === 'null-bubbling') return jsonResponse({ errors: [{ message: 'A response field failed', type: 'INTERNAL' }], data: { mergePullRequest: null } });
+    if (state.mutationFailure === 'partial') return jsonResponse({ errors: [{ message: 'A response field failed' }], data: state.result });
+    return jsonResponse({ data: state.result });
+  }));
+  return state;
+};
+
 const makeApp = ({ store = makeStore(), validateMutationContext, resolveRepo, resolveNetwork, resolveStatus } = {}) => {
   const app = express();
   app.use(express.json());
@@ -107,6 +193,58 @@ const makeApp = ({ store = makeStore(), validateMutationContext, resolveRepo, re
 
 let directory;
 let previousDataDirectory;
+
+describe('pending review routes', () => {
+  it('returns a failed read for GitHub GraphQL errors carried by HTTP 200', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'review-token', user: { id: 7, login: 'reviewer' } });
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ errors: [{ message: 'Unavailable', type: 'FORBIDDEN' }] })));
+    const { app } = makeApp();
+    const read = await request(app).get('/api/source-control/github/pr/review/pending')
+      .query({ ...context(account.accountId), owner: 'acme', repo: 'app', number: 7 }).expect(502);
+    expect(read.body.error).toBe('Could not load the pending review');
+    expect(read.body).not.toHaveProperty('review');
+  });
+
+  it('starts one private review, adds comments, and publishes one changes-requested verdict', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'review-token', user: { id: 7, login: 'reviewer' } });
+    const fake = servePendingReview();
+    const { app } = makeApp();
+    const base = context(account.accountId, { target: { project: { owner: 'acme', name: 'app' }, number: 7, headSha: fake.headSha } });
+    const first = { ...base, action: { kind: 'comment', path: 'a.ts', side: 'RIGHT', line: 3, body: 'private review note' } };
+    await request(app).post('/api/source-control/github/pr/review/pending').send(first).expect(200);
+    await request(app).post('/api/source-control/github/pr/review/pending').send(first).expect(200);
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.writes[0].input.event).toBeUndefined();
+    await request(app).post('/api/source-control/github/pr/review/pending').send({ ...base, idempotencyKey: 'second-note',
+      action: { kind: 'comment', reviewId: 'REVIEW_node', path: 'b.ts', side: 'LEFT', line: 6, body: 'second private note' } }).expect(200);
+    const read = await request(app).get('/api/source-control/github/pr/review/pending')
+      .query({ ...context(account.accountId), owner: 'acme', repo: 'app', number: 7 }).expect(200);
+    expect(read.headers['cache-control']).toBe('no-store');
+    expect(read.body.review.comments).toHaveLength(2);
+    await request(app).post('/api/source-control/github/pr/review/pending').send({ ...base, idempotencyKey: 'submit-review',
+      action: { kind: 'submit', reviewId: 'REVIEW_node', version: read.body.review.version, verdict: 'request-changes', body: 'Please address both notes' } }).expect(200);
+    expect(fake.writes.map(write => write.name)).toEqual(['addPullRequestReview', 'addPullRequestReviewThread', 'submitPullRequestReview']);
+    expect(fake.writes[2].input.event).toBe('REQUEST_CHANGES');
+  });
+
+  it('keeps a lost-response write uncertain instead of posting the note twice', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'review-token', user: { id: 7, login: 'reviewer' } });
+    const fake = servePendingReview({ loseResponse: true });
+    const { createMutationStore } = await import('../source-control/mutation-storage.js');
+    const filePath = path.join(directory, 'pending-review-mutations.json');
+    const { app } = makeApp({ store: createMutationStore({ filePath }) });
+    const payload = { ...context(account.accountId, { target: { project: { owner: 'acme', name: 'app' }, number: 7, headSha: fake.headSha } }),
+      action: { kind: 'comment', path: 'a.ts', side: 'RIGHT', line: 3, body: 'private review note' } };
+    await request(app).post('/api/source-control/github/pr/review/pending').send(payload).expect(409);
+    await request(app).post('/api/source-control/github/pr/review/pending').send(payload).expect(409);
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.comments).toHaveLength(1);
+    const persisted = await fs.readFile(filePath, 'utf8');
+    expect(persisted).toContain('change-request-pending-review');
+    expect(persisted).not.toContain('private review note');
+    expect(persisted).not.toContain('review-token');
+  });
+});
 
 beforeEach(async () => {
   // The auth store resolves its directory at import, so the isolated data
@@ -503,6 +641,159 @@ describe('canonical GitHub mutations', () => {
       { method: 'GET', body: null },
       { method: 'PUT', body: { merge_method: 'merge', sha: 'abc123' } },
     ]);
+  });
+
+  it('performs administrator merge with the exact acting account, fresh node and expected head', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    await auth.setGitHubAuth({ accessToken: 'token-two', user: { id: 2, login: 'another-actor' } });
+    const fake = serveForceMerge();
+    const { app } = makeApp();
+    const response = await request(app).post('/api/source-control/github/pr/merge').send(forceMergeBody(account.accountId)).expect(200);
+    expect(response.body.result).toEqual({ merged: true });
+    expect(fake.reads).toEqual(['rest', 'graphql']);
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.writes[0]).toMatchObject({
+      query: expect.stringContaining('mergePullRequest(input: $input)'),
+      variables: { input: { pullRequestId: 'PR_node', mergeMethod: 'SQUASH', expectedHeadOid: forceMergeHead } },
+    });
+    expect(fake.credentials.every((value) => value === 'token token-one')).toBe(true);
+  });
+
+  it('replays a completed administrator merge after permissions and PR state change', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    const { app } = makeApp();
+    const payload = forceMergeBody(account.accountId);
+    await request(app).post('/api/source-control/github/pr/merge').send(payload).expect(200);
+    fake.node = { ...fake.node, viewerCanMergeAsAdmin: false, state: 'MERGED' };
+    const replay = await request(app).post('/api/source-control/github/pr/merge').send(payload).expect(200);
+    expect(replay.body).toMatchObject({ replayed: true, result: { merged: true } });
+    expect(fake.reads).toEqual(['rest', 'graphql']);
+    expect(fake.writes).toHaveLength(1);
+  });
+
+  it('joins concurrent administrator merges with the same key instead of dispatching twice', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    let release;
+    fake.waitForMerge = new Promise((resolve) => { release = resolve; });
+    const { app } = makeApp();
+    const payload = forceMergeBody(account.accountId);
+    const first = request(app).post('/api/source-control/github/pr/merge').send(payload).then((response) => response);
+    await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
+    const second = request(app).post('/api/source-control/github/pr/merge').send(payload).then((response) => response);
+    release();
+    const responses = await Promise.all([first, second]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.reads.filter((kind) => kind === 'graphql')).toHaveLength(1);
+  });
+
+  it('reconciles an interrupted administrator merge after restart without checking later permissions or writing again', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const actor = { provider: 'github', instance: 'github.com', accountId: account.accountId };
+    const target = { repositoryId: 'repo-one', bindingRevision: 3, primaryRemote: 'origin',
+      project: { id: 'acme/app', owner: 'acme', name: 'app' }, number: 7, head: 'feature', base: 'main', headSha: forceMergeHead };
+    const store = makeStore([{ key: 'request-one', kind: 'change-request-merge', actor, target, state: 'running',
+      inputDigest: digestMutationInput({ kind: 'merge', actor, credential: credentialFor(account), target, method: 'squash', force: true }) }]);
+    const fetch = vi.fn(async () => jsonResponse(pullRequest({ draft: false, state: 'closed', merged: true,
+      merged_at: '2026-01-01T00:00:00Z', head: { ...pullRequest().head, sha: forceMergeHead } })));
+    vi.stubGlobal('fetch', fetch);
+    const { app } = makeApp({ store });
+    const response = await request(app).post('/api/source-control/github/pr/merge').send(forceMergeBody(account.accountId)).expect(200);
+    expect(response.body).toMatchObject({ replayed: true, result: { merged: true } });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0][1].method).toBe('GET');
+  });
+
+  it('keeps omitted and false force on the original ordinary merge digest', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    const { app } = makeApp();
+    const payload = forceMergeBody(account.accountId);
+    delete payload.force;
+    await request(app).post('/api/source-control/github/pr/merge').send(payload).expect(200);
+    const replay = await request(app).post('/api/source-control/github/pr/merge').send({ ...payload, force: false }).expect(200);
+    expect(replay.body.replayed).toBe(true);
+    expect(fake.writes).toEqual([{ merge_method: 'squash', sha: forceMergeHead }]);
+    await request(app).post('/api/source-control/github/pr/merge').send({ ...payload, force: true }).expect(409);
+    expect(fake.writes).toHaveLength(1);
+  });
+
+  it.each([null, 'true', 1, [], {}])('rejects an invalid force flag %o before provider access', async (force) => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    const { app } = makeApp();
+    await request(app).post('/api/source-control/github/pr/merge').send(forceMergeBody(account.accountId, { force })).expect(400);
+    expect(fake.reads).toEqual([]);
+    expect(fake.writes).toEqual([]);
+  });
+
+  it.each([
+    ['no administrator permission', { viewerCanMergeAsAdmin: false }, 403],
+    ['head changed during preflight', { headRefOid: 'b'.repeat(40) }, 409],
+    ['draft', { isDraft: true }, 409],
+    ['merge conflict', { mergeable: 'CONFLICTING' }, 409],
+  ])('records %s as definitely not dispatched', async (_label, changed, status) => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    fake.node = { ...fake.node, ...changed };
+    const { app, store } = makeApp();
+    await request(app).post('/api/source-control/github/pr/merge').send(forceMergeBody(account.accountId)).expect(status);
+    expect(store.records.get('request-one').state).toBe('failed');
+    expect(fake.writes).toEqual([]);
+  });
+
+  it('records a failed permission query as unwritten and replays that failure without another query', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    fake.queryFailure = true;
+    const { app, store } = makeApp();
+    const payload = forceMergeBody(account.accountId);
+    await request(app).post('/api/source-control/github/pr/merge').send(payload).expect(502);
+    await request(app).post('/api/source-control/github/pr/merge').send(payload).expect(502);
+    expect(store.records.get('request-one')).toMatchObject({ state: 'failed', result: { failureCode: 'SOURCE_CONTROL_MUTATION_PRECHECK_FAILED' } });
+    expect(fake.reads).toEqual(['rest', 'graphql']);
+    expect(fake.writes).toEqual([]);
+  });
+
+  it.each([401, 403])('retains preflight %s and only invalidates the exact account on 401', async (status) => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const other = await auth.setGitHubAuth({ accessToken: 'token-two', user: { id: 2, login: 'another-actor' } });
+    const fake = serveForceMerge();
+    fake.queryStatus = status;
+    const { app, store } = makeApp();
+    await request(app).post('/api/source-control/github/pr/merge').send(forceMergeBody(account.accountId)).expect(status);
+    expect(store.records.get('request-one').state).toBe('failed');
+    expect(fake.writes).toEqual([]);
+    const accounts = await auth.getGitHubAuthAccounts();
+    expect(accounts.find((entry) => entry.id === account.accountId).status).toBe(status === 401 ? 'invalid' : 'valid');
+    expect(accounts.find((entry) => entry.id === other.accountId).status).toBe('valid');
+  });
+
+  it('reports an explicit administrator merge refusal as a definite rejection', async () => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    fake.mutationFailure = 'refused';
+    const { app, store } = makeApp();
+    const response = await request(app).post('/api/source-control/github/pr/merge').send(forceMergeBody(account.accountId)).expect(422);
+    expect(response.body).toMatchObject({ error: 'Branch rules prohibit administrator merge', code: 'SOURCE_CONTROL_MUTATION_REJECTED' });
+    expect(store.records.get('request-one').state).toBe('failed');
+    expect(fake.writes).toHaveLength(1);
+  });
+
+  it.each(['network', 'partial', 'invalid', 'null-bubbling'])('retains a %s administrator merge outcome without repeating dispatch', async (failure) => {
+    const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+    const fake = serveForceMerge();
+    fake.mutationFailure = failure;
+    if (failure === 'invalid') fake.result = {};
+    const { app, store } = makeApp();
+    const payload = forceMergeBody(account.accountId);
+    const response = await request(app).post('/api/source-control/github/pr/merge').send(payload).expect(409);
+    expect(response.body.code).toBe('SOURCE_CONTROL_MUTATION_OUTCOME_UNKNOWN');
+    await request(app).post('/api/source-control/github/pr/merge').send(payload).expect(409);
+    expect(store.records.get('request-one').state).toBe('outcome-unknown');
+    expect(fake.writes).toHaveLength(1);
   });
 
   it.each([

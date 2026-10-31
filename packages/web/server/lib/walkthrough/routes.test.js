@@ -40,7 +40,7 @@ describe('walkthrough routes', () => {
     async getPullRequestDiff(directory, number, readContext, options) {
       lastArgs = { directory, number, readContext, options };
       if (number === 99) throw Object.assign(new Error('GitHub unavailable'), { statusCode: 503 });
-      return { patch: number === 1 ? '' : 'diff --git a/a.ts b/a.ts\n' };
+      return { patch: number === 1 ? '' : 'diff --git a/a.ts b/a.ts\n', meta: { headSha: 'a'.repeat(40) } };
     },
     async getPullRequestFileContents(directory, number, readContext, { sourceRepo, ...file }) {
       lastArgs = { directory, number, readContext, sourceRepo, file };
@@ -154,6 +154,8 @@ describe('walkthrough routes', () => {
     const before = generateCalls;
     const response = await prDiff(source);
     expect(response.headers.get('content-type')).toContain('text/plain');
+    expect(response.headers.get('x-openchamber-pr-head-sha')).toBe('a'.repeat(40));
+    expect(response.headers.get('access-control-expose-headers')).toContain('X-OpenChamber-PR-Head-Sha');
     expect(await response.text()).toBe('diff --git a/a.ts b/a.ts\n');
     // The account and repository come from the validated binding context; the
     // named repository travels only as something to check against it.
@@ -161,10 +163,33 @@ describe('walkthrough routes', () => {
       directory: '/repo',
       number: 42,
       readContext: expect.objectContaining({ accountId: PR_CONTEXT.accountId, primaryRemote: PR_CONTEXT.primaryRemote }),
-      options: { allowEmpty: true, sourceRepo: source.sourceRepo },
+      options: { allowEmpty: true, sourceRepo: source.sourceRepo, signal: expect.any(AbortSignal), includeRevision: true },
     });
     expect(validateReadContext).toHaveBeenCalledWith(expect.objectContaining({ directory: '/repo', accountId: PR_CONTEXT.accountId }));
     expect(generateCalls).toBe(before);
+  });
+
+  it('cancels a diff read when its HTTP client disconnects', async () => {
+    let reading;
+    let stopped;
+    const started = new Promise(resolve => { reading = resolve; });
+    const cancelled = new Promise(resolve => { stopped = resolve; });
+    const read = vi.spyOn(service, 'getPullRequestDiff').mockImplementationOnce(async (_directory, _number, _context, { signal }) => {
+      reading();
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => {
+        stopped();
+        reject(new Error('Client disconnected'));
+      }, { once: true }));
+    });
+    const controller = new AbortController();
+    try {
+      const query = new URLSearchParams({ directory: '/repo', source: JSON.stringify(PR_SOURCE), ...PR_CONTEXT });
+      const pending = fetch(`${base}/api/walkthrough/pr-diff?${query}`, { signal: controller.signal });
+      await started;
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      await cancelled;
+    } finally { read.mockRestore(); }
   });
 
   it('reads no pull request diff without a validated binding context', async () => {
@@ -207,6 +232,9 @@ describe('walkthrough routes', () => {
     });
     expect((await request({ path: 'a.ts', status: 'M', source: JSON.stringify({ kind: 'branch', baseRef: 'main', headRef: 'x' }) })).status).toBe(400);
     expect((await request({ status: 'M' })).status).toBe(400);
+    expect((await request({ path: 'a.ts', status: 'M', headSha: 'invalid' })).status).toBe(400);
+    expect((await request({ path: 'a.ts', status: 'M', headSha: 'a'.repeat(40) })).status).toBe(200);
+    expect(lastArgs.file.expectedHeadSha).toBe('a'.repeat(40));
     const huge = await request({ path: 'huge.bin', status: 'M' });
     expect(huge.status).toBe(413);
     expect(await huge.json()).toMatchObject({ code: 'file-too-large' });

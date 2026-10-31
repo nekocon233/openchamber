@@ -4075,6 +4075,9 @@ const fetchQuotaForProviderUncoalesced = async (providerId: string): Promise<Pro
       return fetchZenmuxQuota();
     case 'xai':
       return fetchXaiQuota();
+    case 'antigravity-cli':
+      return { ...buildResult({ providerId, providerName: 'Antigravity CLI', ok: false, configured: false,
+        error: 'Native CLI quota is unavailable in VS Code' }), availability: 'unsupported' };
     default:
       return buildResult({
         providerId,

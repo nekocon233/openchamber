@@ -425,6 +425,35 @@ describe('saveTodos', () => {
     expect(entry().error).toBe('Todo not found');
   });
 
+  test('a missing todo edit is not reported as saved and refreshes the list', async () => {
+    const mine = { id: 'mine', text: 'mine', completed: false, createdAt: 1 };
+    await store().saveTodos(PROJECT, [mine]);
+    handlers.writeTodo = async () => null;
+    handlers.fetch = async () => emptyPayload();
+    expect(await store().saveTodos(PROJECT, [{ ...mine, text: 'edited' }], { kind: 'edit', id: 'mine', text: 'edited' })).toBe(false);
+    await store().load(PROJECT);
+    expect(entry().todos).toEqual([]);
+  });
+
+  test('runtime reset rejects queued edits and late results cannot replace the new cache', async () => {
+    const mine = { id: 'mine', text: 'mine', completed: false, createdAt: 1 };
+    await store().saveTodos(PROJECT, [mine]);
+    const gate = deferred<ContextPayload>();
+    const sent: ProjectTodoChange[] = [];
+    handlers.writeTodo = change => { sent.push(change); return gate.promise; };
+    const first = store().saveTodos(PROJECT, [{ ...mine, text: 'first' }], { kind: 'edit', id: 'mine', text: 'first' });
+    await Promise.resolve();
+    const queued = store().saveTodos(PROJECT, [{ ...mine, text: 'queued' }], { kind: 'edit', id: 'mine', text: 'queued' });
+    store().reset();
+    handlers.fetch = async () => ({ ...emptyPayload(), todos: [{ ...mine, text: 'New runtime' }] });
+    await store().load(PROJECT);
+    gate.resolve({ ...emptyPayload(), todos: [{ ...mine, text: 'first' }] });
+    expect(await first).toBe(false);
+    expect(await queued).toBe(false);
+    expect(sent).toEqual([{ kind: 'edit', id: 'mine', text: 'first' }]);
+    expect(entry().todos[0].text).toBe('New runtime');
+  });
+
   test('ignores a project without a resolvable path', async () => {
     expect(await store().saveTodos({ id: 'x', path: '' }, [])).toBe(false);
     expect(calls.saveTodos).toBe(0);

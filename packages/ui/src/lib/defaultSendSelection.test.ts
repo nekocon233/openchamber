@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
-import { resolveSessionSendSelection } from './defaultSendSelection';
+import { captureDefaultSendSelection, resolveSessionSendSelection } from './defaultSendSelection';
+import { buildNativeProvider } from '@/lib/native-agents/providers';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useSelectionStore } from '@/sync/selection-store';
 
@@ -18,6 +19,7 @@ const resetSelections = () => {
     currentModelId: '',
     currentAgentName: undefined,
     currentVariant: undefined,
+    settingsDefaultModel: undefined, settingsDefaultVariant: undefined,
   });
 };
 
@@ -25,6 +27,16 @@ beforeEach(resetSelections);
 afterEach(resetSelections);
 
 describe('resolveSessionSendSelection', () => {
+  test('a fallback native send keeps its own effort when the settings model is unavailable', () => {
+    useConfigStore.setState({
+      providers: [buildNativeProvider('antigravity', [{ id: 'gemini-test', name: 'Gemini Test', efforts: ['low', 'high'],
+        defaultEffort: null, contextWindow: null, outputLimit: null, fast: false, input: { image: false, pdf: false } }])],
+      settingsDefaultModel: 'codex-native/gpt-test', settingsDefaultVariant: 'low',
+      currentProviderId: 'antigravity-native', currentModelId: 'gemini-test', currentVariant: 'high',
+    });
+    expect(captureDefaultSendSelection()).toMatchObject({ providerID: 'antigravity-native', modelID: 'gemini-test', variant: 'high' });
+  });
+
   test('sends on the model saved for the session, not the app-wide selection', () => {
     useConfigStore.setState({ currentProviderId: 'app-provider', currentModelId: 'app-model' });
     useSelectionStore.setState({

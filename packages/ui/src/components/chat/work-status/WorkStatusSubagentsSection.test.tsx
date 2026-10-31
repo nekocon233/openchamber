@@ -108,6 +108,18 @@ describe('subagent status rows', () => {
     expect(row().getAttribute('aria-label')).toContain('Failed');
   });
 
+  test('keeps Antigravity activity unknown until the current process confirms it', async () => {
+    const agy = { ...child, id: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+      metadata: { openchamber: { native: { backend: 'antigravity', activityKnown: false } } } };
+    await publish({ session: [parent, agy], sessionStatusReady: true, session_status: { [agy.id]: { type: 'idle' } } });
+    expect(icon()).toBe('#oc-time');
+    expect(rowContent().textContent).toContain('Status unknown');
+    await publish({ session: [parent, { ...agy, metadata: { openchamber: { native: { backend: 'antigravity', activityKnown: true } } } }], session_status: { [agy.id]: { type: 'busy' } } });
+    expect(icon()).toBe('#oc-record-circle');
+    await publish({ session_status: { [agy.id]: { type: 'idle' } } });
+    expect(icon()).toBe('#oc-checkbox-circle');
+  });
+
   test('keeps permission and question blockers ahead of the running timer', async () => {
     await act(async () => useSessionActivityTimingStore.setState({ startedAt: new Map([['child', Date.now() - 83000]]) }));
     await publish({

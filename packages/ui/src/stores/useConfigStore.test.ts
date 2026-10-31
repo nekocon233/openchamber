@@ -1175,6 +1175,30 @@ describe('useConfigStore provider persistence', () => {
     expect(state.settingsDefaultVariant).toBeUndefined();
   });
 
+  test('a saved native effort slug keeps its effort while resolving to the grouped catalog model', () => {
+    const native = provider('antigravity-native', 'gemini-test', ['low', 'high']);
+    native.models = native.models.map((model) => ({
+      ...model, id: 'gemini-test', nativeAliases: [{ id: 'gemini-test-low', variant: 'low' }],
+    }));
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY, providers: [native], agents: [testAgent('build')],
+      settingsDefaultModel: 'antigravity-native/gemini-test-low', settingsDefaultVariant: undefined,
+      currentProviderId: '', currentModelId: '', currentVariant: undefined,
+      currentVariantSelection: { override: undefined, inherited: undefined },
+      selectionSource: 'auto', directoryScoped: {},
+    });
+    useConfigStore.getState().applyDefaultModelAgentSelection();
+    expect(useConfigStore.getState().getCurrentModel()?.id).toBe('gemini-test');
+    expect(useConfigStore.getState().currentModelId).toBe('gemini-test-low');
+    expect(useConfigStore.getState().currentVariant).toBe('low');
+    expect(useConfigStore.getState().getCurrentModelVariants()).toEqual(['low', 'high']);
+    useConfigStore.getState().setCurrentVariantOverride('high', 'low');
+    expect(useConfigStore.getState().currentModelId).toBe('gemini-test-low');
+    expect(useConfigStore.getState().currentVariant).toBe('high');
+    useConfigStore.getState().setCurrentVariantOverride(null, 'low');
+    expect(useConfigStore.getState().currentVariant).toBeUndefined();
+  });
+
   test('an explicit Default effort sends no variant instead of the settings default', () => {
     useConfigStore.setState({
       activeDirectoryKey: DIRECTORY,
@@ -1263,6 +1287,25 @@ describe('useConfigStore provider persistence', () => {
     expect(state.currentProviderId).toBe('openai');
     expect(state.currentModelId).toBe('gpt-5.5');
     expect(state.currentVariant).toBe('high');
+  });
+
+  test('setAgent resolves Gemini high independently of the Codex settings effort', () => {
+    const sessionId = 'nag_gemini_default_effort';
+    useSessionUIStore.setState({ currentSessionId: sessionId });
+    useSelectionStore.getState().saveAgentModelForSession(sessionId, 'plan', 'antigravity-native', 'gemini-test');
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [provider('antigravity-native', 'gemini-test', ['low', 'medium', 'high'])],
+      agents: [testAgent('plan')],
+      settingsDefaultModel: 'codex-native/gpt-6.1-sol', settingsDefaultVariant: 'max',
+      currentProviderId: 'codex-native', currentModelId: 'gpt-6.1-sol',
+      currentVariant: 'max', currentVariantSelection: { override: undefined, inherited: 'max' },
+      directoryScoped: {},
+    });
+    useConfigStore.getState().setAgent('plan');
+    expect(useConfigStore.getState().currentModelId).toBe('gemini-test');
+    expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: undefined, inherited: 'high' });
+    expect(useConfigStore.getState().currentVariant).toBe('high');
   });
 
   test('[issue-2404] setAgent keeps session model override over agent default model', () => {

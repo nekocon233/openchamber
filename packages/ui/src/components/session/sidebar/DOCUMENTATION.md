@@ -453,8 +453,16 @@ is mounted only while open and keyed by its open count, so every open, including
 a handover while it is already on screen, starts with the query it was given
 (empty for a plain open) and no directory filter.
 
+Desktop app actions live at the bottom of the existing context toolbar, outside
+its sortable and scrolling tool list. `layout/AppActions` owns Settings, Usage,
+Shortcuts and About, and the update dialog; an available update takes About's
+place. They stay reachable with the sessions sidebar closed and with no project
+selected. The desktop instance switcher stays below the session list. The legacy
+mobile sidebar reuses the horizontal actions; the hosted and Capacitor mobile
+shells retain their own footer and VS Code keeps its existing controls.
+
 The header's page buttons (Issues and PRs, Scheduled tasks, Archive, extension
-pages, Usage in the footer) are toggles: pressed while their page is open, and
+pages) and Usage in the toolbar are toggles: pressed while their page is open, and
 the next click closes it.
 
 Sidebar queries beginning with `ses_` match only the full session ID,
@@ -473,6 +481,22 @@ exact-ID rule to its own archived list. Other queries keep each view's existing
 matching and ordering. Search does not fetch sessions or broaden list membership.
 
 ## Loading rules
+
+The conversation header's Open sessions dropdown (`layout/ChatSessionActions`)
+and New session button precede Work status in the header's end-side action group
+in Classic and Editor. Work status is the last conversation action.
+The dropdown aligns to its trigger's end edge.
+Native app-menu and window controls remain
+in the global titlebar; mobile and VS Code keep their own headers.
+
+The Open sessions dropdown mounts the same `SessionSidebar` with
+its project grouping, search, and virtual list. `allowReselect` makes choosing
+the already active session close the picker too. The dropdown unmounts its
+content on close, so it adds no hidden enrichment or search listeners. The
+permanent sidebar remains the owner of the shared New worktree dialog;
+`renderSharedDialogs={false}` prevents the dropdown from mounting a second
+copy of that globally controlled dialog.
+Hovering over the dropdown does not trigger the classic sidebar's edge peek.
 
 - Publish bootstrap demand only for the current directory and the selected session's directory. Known project roots and worktrees are topology, not demand: rows and sessions come from the global session list, activity from the global status index and the host status seed. Every directory-scoped read makes OpenCode create and initialize a location, so demanding the whole topology created one per project at startup.
 - Directory demand and refresh requests preserve path case after separator and drive-letter normalization. Case-insensitive sidebar membership keys stay inside the collection projection; sending those keys as paths creates duplicate directory stores and can address a different directory on case-sensitive filesystems.

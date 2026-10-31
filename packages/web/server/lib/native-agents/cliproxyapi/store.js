@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { NativeAgentError } from '../errors.js';
 import { DEFAULT_CLIPROXYAPI_BASE_URL } from './client.js';
+import { claudeRoutesSchema, legacyOpusRouteSchema } from './claude-family-route.js';
 
 /** A proxy may carry credentials; it may not carry a path, query or fragment. */
 export const upstreamProxySchema = z.string().url().max(2048).refine((value) => {
@@ -23,7 +24,16 @@ const documentSchema = z.object({
   /** Exactly the keys written to the gateway's `access.api-keys`. */
   clientKeys: z.array(z.string().min(1)),
   installedVersion: z.string().min(1).nullable(),
-});
+  claudeRoutes: claudeRoutesSchema.nullable().optional(),
+  opusRoute: legacyOpusRouteSchema.nullable().optional(),
+}).transform(({ opusRoute, claudeRoutes, ...document }) => ({
+  ...document,
+  claudeRoutes: claudeRoutes !== undefined ? claudeRoutes : opusRoute ? {
+    connectionId: opusRoute.connectionId,
+    opus: { modelId: opusRoute.modelId, claude: opusRoute.claude, antigravity: opusRoute.antigravity }, sonnet: null,
+    priorities: opusRoute.priorities, previousRebind: opusRoute.previousRebind,
+  } : null,
+}));
 
 const legacySchema = z.object({
   version: z.literal(1),
@@ -83,6 +93,7 @@ export const createCliproxyapiStore = ({ dataDir, now = Date.now, homedir = os.h
       managementKey: randomBytes(32).toString('hex'),
       clientKeys: [],
       installedVersion: null,
+      claudeRoutes: null,
     };
   };
 

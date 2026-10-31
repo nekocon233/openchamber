@@ -1,3 +1,6 @@
+import { parseModelIdentifier } from '@/lib/modelIdentifier';
+import type { Model } from '@/lib/opencode/model';
+
 /**
  * Variant ("thinking level") ids of a catalog model.
  *
@@ -23,6 +26,23 @@ export const listModelVariantIds = (variants: ModelVariantSource): string[] => {
 /** Names of the thinking levels a model exposes, empty when it has none. */
 export const modelVariantNames = (model: { readonly variants?: ModelVariantSource } | undefined): string[] =>
   listModelVariantIds(model?.variants);
+
+/** A configured effort belongs to its model, including confirmed native aliases. */
+export const configuredVariantForModel = ({ defaultModel, defaultVariant, providerId, modelId, model }: {
+  defaultModel: string | undefined;
+  defaultVariant: string | undefined;
+  providerId: string;
+  modelId: string;
+  model: Pick<Model, 'id' | 'modelID' | 'nativeAliases'> | undefined;
+}): string | undefined => {
+  if (!defaultModel) return defaultVariant;
+  const configured = parseModelIdentifier(defaultModel);
+  if (!configured || configured.providerId !== providerId) return undefined;
+  return configured.modelId === modelId || (model && (
+    configured.modelId === model.id || configured.modelId === model.modelID
+    || model.nativeAliases?.some((alias) => alias.id === configured.modelId)
+  )) ? defaultVariant : undefined;
+};
 
 /**
  * The thinking level a model runs at when nothing names one: the highest level

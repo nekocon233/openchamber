@@ -22,6 +22,16 @@ const session = (id, directory, updated, extra = {}) => ({
 })
 
 describe('live aggregate', () => {
+  it('observes Antigravity activity changes without changing timestamps or unrelated metadata', () => {
+    const unknown = session('nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188', '/a', 10, {
+      parentID: 'nag_parent', metadata: { openchamber: { native: { backend: 'antigravity', activityKnown: false } } },
+    })
+    const known = { ...unknown, metadata: { openchamber: { native: { backend: 'antigravity', activityKnown: true } } } }
+    expect(areSessionListsEquivalent([unknown], [known])).toBe(false)
+    expect(areSessionListsEquivalent([known], [unknown])).toBe(false)
+    expect(areSessionListsEquivalent([unknown], [structuredClone(unknown)])).toBe(true)
+    expect(areSessionListsEquivalent([unknown], [{ ...unknown, metadata: { ...unknown.metadata, unrelated: 'value' } }])).toBe(true)
+  })
   it('detects model identity changes without a timestamp change', () => {
     const original = session('ses-1', '/a', 10, { model: { providerID: 'openai', id: 'gpt-6-astra' } })
     const withoutModel = session('ses-1', '/a', 10)

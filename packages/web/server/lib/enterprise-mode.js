@@ -41,6 +41,10 @@ import { z } from 'zod';
  *   server is refused, as is probing a custom provider's model endpoint
  *   (`opencode/routes.js`). OpenCode's `provider.use`
  *   policy is the real lock; this closes the way in through the app.
+ *   The managed CLIProxyAPI service also refuses OAuth login and callback
+ *   completion, model imports and connection writes, including automatic Antigravity
+ *   family upgrades and unified Claude-to-Antigravity Opus/Sonnet routing. Unified
+ *   gateway launches also refuse the mode before sending conversation content.
  *   Signing in to a remote MCP server from the OpenCode config uses the same
  *   routes and stays allowed.
  * - Jev classification is off, unless the administrator pinned their own

@@ -9,6 +9,14 @@ const task = {
 };
 
 describe('native task contracts', () => {
+  test('keeps historical Antigravity tasks read-only and never treats history as running', () => {
+    const saved = { state: 'history', generation: 'agy-history:conversation', revision: 10, tasks: [task], omitted: 0 };
+    expect(nativeTaskSnapshotSchema.parse(saved)).toMatchObject({ state: 'history', tasks: [{ status: 'completed', active: false }] });
+    for (const change of [{ active: true }, { canStop: true }, { status: 'running' }]) {
+      expect(nativeTaskSnapshotSchema.safeParse({ ...saved, tasks: [{ ...task, ...change }] }).success).toBe(false);
+    }
+  });
+
   test('accepts older hosts without claiming they support the task interfaces', () => {
     const capabilities = nativeCapabilitiesSchema.parse({
       supported: true, backends: { claude: { cli: true }, codex: { cli: false } }, registry: { reset: false },

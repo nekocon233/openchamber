@@ -7,7 +7,7 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
 import { useSessionGoalArmStore } from '@/stores/useSessionGoalArmStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, unifiedNativeSessionState } from '@/lib/native-agents/ids';
+import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, unifiedNativeSessionState, NATIVE_AGENT_NAMES } from '@/lib/native-agents/ids';
 import { useUnifiedNativeState } from '@/lib/native-agents/useNativeSession';
 import {
     createMessageQueueTarget,
@@ -205,7 +205,7 @@ import {
     filterMissingInlineAttachments,
 } from './composer/attachments/inlineMentionAttachments';
 import { buildOutgoingMessage, expandCommentSnippets, selectComposerQueue } from './composer/submit/buildOutgoingMessage';
-import { resolveFollowUpDeliveryDecision } from './lib/followUpDrafts';
+import { resolveFollowUpDeliveryDecision, resolveNativeFollowUpDelivery } from './lib/followUpDrafts';
 import {
     buildCommandVariables,
     canRunCommand,
@@ -1357,6 +1357,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         const run = state.runsByOriginalSessionID[currentSessionId];
         return run?.status === 'running' && run.runtimeKey === getRuntimeKey();
     }, [currentSessionId]));
+    const followUpDelivery = autoReviewRunning ? 'queue' : resolveNativeFollowUpDelivery({
+        delivery: 'queue',
+        sessionId: isBtwActive ? btwSessionId : currentSessionId,
+        providerID: (isBtwActive ? effectiveBtwSelection.model?.providerId : currentProviderId) ?? '',
+        sessionPhase: 'busy',
+        unifiedState: isBtwActive ? undefined : unifiedState,
+    }) ?? 'queue';
 
     React.useEffect(() => {
         queuedMessageSendInFlightRef.current = null;
@@ -1982,14 +1989,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         }
 
         let authoritativeSessionPhase: 'idle' | 'busy' | 'retry' | null | undefined;
+        let authoritativeUnifiedState: ReturnType<typeof unifiedNativeSessionState>;
         if (submissionSessionId && isUnifiedNativeSessionId(submissionSessionId) && !isBtwActive && inputMode === 'normal') {
             const directory = useSessionUIStore.getState().getDirectoryForSession(submissionSessionId) || currentDirectory;
             try {
                 if (!directory) throw new Error('The conversation directory is unavailable');
                 const session = await nativeAgents.getSession(submissionSessionId, directory);
                 if (!isSubmissionContextCurrent()) return;
-                const state = unifiedNativeSessionState(session.metadata);
-                authoritativeSessionPhase = state?.switchReady ? 'idle' : 'busy';
+                authoritativeUnifiedState = unifiedNativeSessionState(session.metadata);
+                authoritativeSessionPhase = authoritativeUnifiedState?.switchReady ? 'idle' : 'busy';
             } catch {
                 restoreExplicitInput();
                 toast.error(t('chat.chatInput.toast.sessionStatusUnavailable'));
@@ -2191,15 +2199,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         } else if (deliveryDecision === 'follow-up') {
             delivery = followUpBehavior;
         }
-        // Unified conversations wait for the whole source execution. Antigravity
-        // also queues because its adapter accepts one turn at a time. Other
-        // single-CLI sessions retain their native immediate follow-up behavior.
-        if (submissionSessionId && (isUnifiedNativeSessionId(submissionSessionId) || nativeBackendOfSessionId(submissionSessionId) === 'antigravity')
-            && (authoritativeSessionPhase !== 'idle' || options?.forceQueue === true)) {
-            delivery = 'queue';
-        } else if (delivery === 'queue' && submissionSessionId && isNativeSessionId(submissionSessionId) && !isUnifiedNativeSessionId(submissionSessionId)) {
-            delivery = 'steer';
-        }
+        delivery = resolveNativeFollowUpDelivery({
+            delivery,
+            sessionId: isBtwActive ? null : submissionSessionId,
+            providerID: providerIdToSend,
+            sessionPhase: authoritativeSessionPhase ?? currentSessionPhase,
+            forceQueue: options?.forceQueue,
+            unifiedState: authoritativeUnifiedState,
+        });
 
         const historySubmissions = buildChatInputHistorySubmissions({
             inputMode,
@@ -3066,7 +3073,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Auto hides the agent control, so the shortcut must not change a
         // choice the user cannot see.
         if (isAutoModel(currentProviderId, currentModelId)) return;
-        const nextAgentName = getCycledPrimaryAgentName(agents, currentAgentName, direction, useUIStore.getState().favoriteAgents);
+        const cyclableAgents = isNativeTarget ? agents.filter((agent) => NATIVE_AGENT_NAMES.has(agent.name)) : agents;
+        const nextAgentName = getCycledPrimaryAgentName(cyclableAgents, currentAgentName, direction, useUIStore.getState().favoriteAgents);
         if (!nextAgentName) return;
 
         // A pinned column's agent is its own session's choice only.
@@ -3075,7 +3083,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         if (currentSessionId) {
             saveSessionAgentSelection(currentSessionId, nextAgentName);
         }
-    }, [agents, columnPinned, currentAgentName, currentModelId, currentProviderId, currentSessionId, setAgent, saveSessionAgentSelection]);
+    }, [agents, columnPinned, currentAgentName, currentModelId, currentProviderId, currentSessionId, isNativeTarget, setAgent, saveSessionAgentSelection]);
 
     // Height the failed-dictation salvage text needs. Its overlay sits
     // absolutely over the composer, so the composer must be able to grow for
@@ -4636,6 +4644,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     />
                 ) : isMobile && !mobileComposerExpanded && !isBtwActive ? (
                     <MobilePillComposer
+                        followUpDelivery={followUpDelivery}
                         message={message}
                         sessionId={currentSessionId}
                         newSessionDraftOpen={newSessionDraftOpen}
@@ -4853,6 +4862,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         </div>
                     </div>
                     <ComposerFooter
+                        followUpDelivery={followUpDelivery}
                         isMobile={isMobile}
                         isVSCode={isVSCode}
                         sessionId={currentSessionId}

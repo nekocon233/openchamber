@@ -13,7 +13,7 @@ describe("catalogRefreshTasks", () => {
   });
 
   test("a single-catalog rebuild re-reads only that list", () => {
-    for (const kind of ["agent", "command", "skill", "plugin", "provider", "websearch"] as const) {
+    for (const kind of ["agent", "command", "skill", "plugin", "provider", "websearch", "native-model"] as const) {
       expect(catalogRefreshTasks(kind)).toHaveLength(1);
     }
   });

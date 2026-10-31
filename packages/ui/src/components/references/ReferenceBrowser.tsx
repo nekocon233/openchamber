@@ -34,7 +34,7 @@ import {
     referencePickerItemKey,
     type ReferencePickerItem,
 } from './referencePickerItems';
-import { readyValue, type ReferenceBrowser } from './useReferenceBrowser';
+import type { ReferenceBrowser } from './useReferenceBrowser';
 
 /** Issues and pull requests (merge requests on GitLab); GitHub only. */
 export const ReferenceBrowserTabs: React.FC<{ browser: ReferenceBrowser }> = ({ browser }) => {
@@ -144,7 +144,7 @@ export const ReferenceBrowserSearch: React.FC<{
     const shortPlaceholder = t(source === 'linear' ? 'references.picker.search.mobile.linear' : isGitLab ? 'references.picker.search.mobile.gitlab' : 'references.picker.search.mobile.github');
 
     return (
-        <div className={cn('flex items-center gap-2', !isMobile && 'min-w-[14rem] flex-1')}>
+        <div className={cn('flex min-w-0 items-center gap-2', !isMobile && 'flex-1', !isMobile && browser.mode !== 'project-pulls' && 'min-w-[14rem]')}>
             <div className="relative min-w-0 flex-1">
                 <Icon name="search" className="pointer-events-none absolute inset-s-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -179,7 +179,7 @@ export const ReferenceBrowserSearch: React.FC<{
                     ) : null}
                 </div>
             </div>
-            <ReferenceFilterMenu browser={browser} />
+            {browser.mode !== 'project-pulls' ? <ReferenceFilterMenu browser={browser} /> : null}
         </div>
     );
 };
@@ -276,7 +276,8 @@ export const ReferenceBrowserList: React.FC<{
                     <ReferencePickerRow
                         key={key}
                         item={item}
-                        pullStatus={item.source === 'github' ? readyValue(browser.pullStatusOf(item.reference)) : null}
+                        pullStatus={item.source === 'github' ? browser.pullStatusOf(item.reference) : null}
+                        showChecks={browser.mode === 'project-pulls' && !browser.isGitLab}
                         highlighted={!isMobile && key === browser.effectiveHighlightKey}
                         checked={selection?.checked ?? null}
                         diffIncluded={selection?.diffIncluded ?? false}

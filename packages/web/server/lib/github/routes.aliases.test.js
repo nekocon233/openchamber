@@ -96,6 +96,7 @@ describe('GitHub source-control route aliases', () => {
       changeRequests: true,
       draftChangeRequests: true,
       mergeChangeRequests: true,
+      forceMergeChangeRequests: true,
       mergeMethods: ['merge', 'squash', 'rebase'],
       ci: true,
     });

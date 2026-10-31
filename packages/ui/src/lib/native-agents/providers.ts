@@ -42,6 +42,7 @@ const buildNativeModel = (providerID: string, model: NativeModelDescriptor): Mod
   headers: {},
   time: { released: 0 },
   variants: variantsOf(model),
+  nativeAliases: model.aliases,
 });
 
 /** An OpenCode-shaped provider for a native CLI, so the model picker lists it like any other. */

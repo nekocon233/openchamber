@@ -19,7 +19,8 @@ const textOf = ({ info, parts }) => {
 
 /** Summarization stays on the source or explicitly selected destination model. */
 export const prepareConversationContext = async ({ manifest, entries, target, catalog, smallModels, signal, saveCheckpoint }) => {
-  const targetModel = catalog.models.find((model) => model.id === target.model.modelID);
+  const targetModel = catalog.models.find((model) => model.id === target.model.modelID)
+    ?? catalog.models.find((model) => model.aliases?.some((alias) => alias.id === target.model.modelID));
   if (!targetModel) throw new NativeAgentError('The selected model is unavailable. Choose an available model and retry.', {
     status: 409, code: 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE',
   });

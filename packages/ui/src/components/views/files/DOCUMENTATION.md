@@ -30,6 +30,36 @@ Hidden surfaces retain drafts, loaded content and scroll state. They stop
 directory and file metadata polling; reopening checks freshness once before
 normal polling resumes. Autosave is independent of visibility.
 
+In editor workspace layout the directory and document have separate hosts.
+The Files rail button toggles the directory; selecting a document leaves the
+current tool visible. `FileEditorPane` owns the resident strip, reuses the
+context panel's file-tab records and reads the selected document from
+`useFilesViewTabsStore`. A layout switch moves the same editor DOM, preserving
+its draft and undo. The empty host stays visible before any file opens and
+after the last closes. The editor ignores the classic hide-editor preference.
+
+The resident strip calls `FileEditorHandle.requestCloseFiles` before removing
+tabs. Batch closes wait for the selected document's unsaved-changes prompt too.
+`onCloseFile` commits the accepted close to the host. A failed save keeps the
+prompt and tabs intact. Closing an inactive document leaves selection alone;
+closing the selected document chooses the most recently used remaining file.
+The resident editor stays active while tools switch; a hidden directory stops
+its polling independently. Its strip also hosts one Changes document, with
+an independent open/active state in the UI store. Selecting Changes hides and
+detaches the file editor while retaining its draft, undo and selected path.
+Returning to a file reattaches it. Mixed tab closes send only ordinary file
+paths through the unsaved-changes guard; closing Changes preserves its side
+list. No editor chunk or file read is needed for the initial empty host or a
+workspace containing only Changes.
+
+In editor layout, the directory's Files title and add/upload, gitignored,
+refresh and collapse actions share the context panel's single header row via
+`ContextPanelHeaderToolbar`. Search stays above the tree in the body. Only the
+active file surface receives its zone's header slot, so switching tools or
+moving the directory cannot leave controls in another surface's header.
+Classic file-tab headers retain the tree's inline action row; the mobile file
+drawer keeps its own toolbar.
+
 Background polling never supersedes an in-flight directory read. Explicit
 refresh after file mutations does. Each directory failure remains local and
 preserves its previous successful snapshot.

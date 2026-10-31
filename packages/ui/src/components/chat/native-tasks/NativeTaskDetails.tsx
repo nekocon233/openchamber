@@ -38,7 +38,7 @@ function TaskOutput({ scope, taskId }: { scope: NativeTaskScope; taskId: string 
         <>
           {state.output.truncated ? <p className="text-[var(--status-warning-text)]">{t('chat.nativeTasks.output.truncated')}</p> : null}
           {state.output.text === '' ? <p>{t('chat.nativeTasks.output.empty')}</p> : (
-            <pre className="oc-surface-code max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--syntax-background)] p-3 text-xs">{state.output.text}</pre>
+            <pre dir="ltr" className="oc-surface-code max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--syntax-background)] p-3 text-start text-xs">{state.output.text}</pre>
           )}
         </>
       ) : null}
@@ -92,10 +92,10 @@ export function NativeTaskRow({ task, scope, onClose }: { task: NativeExecutionT
       {expanded ? (
         <div id={detailId} className="space-y-3 px-3 pt-3 text-sm text-muted-foreground">
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 break-words">
-            <dt>{t('chat.nativeTasks.detail.id')}</dt><dd>{task.id}</dd>
-            <dt>{t('chat.nativeTasks.detail.type')}</dt><dd>{task.type}</dd>
-            {task.toolUseId !== undefined ? <><dt>{t('chat.nativeTasks.detail.toolUse')}</dt><dd>{task.toolUseId}</dd></> : null}
-            {task.lastToolName !== undefined ? <><dt>{t('chat.nativeTasks.detail.lastTool')}</dt><dd>{task.lastToolName}</dd></> : null}
+            <dt>{t('chat.nativeTasks.detail.id')}</dt><dd dir="ltr">{task.id}</dd>
+            <dt>{t('chat.nativeTasks.detail.type')}</dt><dd dir="ltr">{task.type}</dd>
+            {task.toolUseId !== undefined ? <><dt>{t('chat.nativeTasks.detail.toolUse')}</dt><dd dir="ltr">{task.toolUseId}</dd></> : null}
+            {task.lastToolName !== undefined ? <><dt>{t('chat.nativeTasks.detail.lastTool')}</dt><dd dir="ltr">{task.lastToolName}</dd></> : null}
             {task.startedAt !== undefined ? <><dt>{t('chat.nativeTasks.detail.started')}</dt><dd>{timestamp(task.startedAt)}</dd></> : null}
             {task.endedAt !== undefined ? <><dt>{t('chat.nativeTasks.detail.ended')}</dt><dd>{timestamp(task.endedAt)}</dd></> : null}
             {task.usage ? <>

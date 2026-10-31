@@ -14,8 +14,8 @@ const message = (id: string, parts: ToolPart[]) => ({ info: {
     providerID: 'provider', modelID: 'model', agent: 'plan',
 } satisfies AssistantMessage, parts });
 const plan = (id: string) => tool(id, 'plan_exit', { plan: `# ${id}` });
-const question = (id: string, callID: string) => tool(id, 'question', { questions: [{ question: '# Plan', options: [] }] }, {
-    nativeQuestionKind: 'claude-plan-exit', nativePlanCallID: callID, questionAnswers: [['plan']], questionStatus: 'answered',
+const question = (id: string, callID: string, kind = 'claude-plan-exit') => tool(id, 'question', { questions: [{ question: '# Plan', options: [] }] }, {
+    nativeQuestionKind: kind, nativePlanCallID: callID, questionAnswers: [['plan']], questionStatus: 'answered',
 });
 const user = (id: string) => ({ info: { id, role: 'user' as const, sessionID: 'session', time: { created: 1 } }, parts: [] });
 
@@ -25,15 +25,17 @@ test('uses the last proposal within each turn independently', () => {
     expect(turns[0].finalPlan?.callID).toBe('latest');
 });
 
-test('restored questions reuse the original plan identity and render it once', () => {
+for (const kind of ['claude-plan-exit', 'antigravity-plan-exit']) {
+test(`restored ${kind} questions reuse the original plan identity and render it once`, () => {
     const original = plan('call');
-    const answered = question('answer', original.callID);
+    const answered = question('answer', original.callID, kind);
     const result = findFinalPlan([message('message', [original, answered])]);
     expect(result?.part).toBe(answered);
     expect(result?.callID).toBe(original.callID);
     expect([...result!.sourcePartIDs]).toEqual(['answer', 'call']);
     expect(filterVisibleParts([original, answered]).map((part) => part.id)).toEqual(['answer']);
 });
+}
 
 test('a late answer to an older call cannot replace the newer final proposal', () => {
     const original = plan('old');

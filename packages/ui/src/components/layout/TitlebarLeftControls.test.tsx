@@ -6,6 +6,7 @@ import { I18nProvider } from '@/lib/i18n';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useUIStore } from '@/stores/useUIStore';
 import { TitlebarLeftControls } from './TitlebarLeftControls';
+import { ChatSessionActions } from './ChatSessionActions';
 
 let browser: Window;
 let root: Root;
@@ -14,6 +15,7 @@ const descriptors = new Map<string, PropertyDescriptor | undefined>();
 const OVERLAY_SELECTOR = 'div.app-region-no-drag.absolute.inset-s-0.top-0';
 
 beforeEach(() => {
+  useUIStore.getState().setWorkspaceLayout('classic');
   browser = new Window({ url: 'http://localhost' });
   for (const [key, value] of Object.entries({
     window: browser,
@@ -42,17 +44,30 @@ afterEach(async () => {
   }
 });
 
-async function renderControls() {
+async function renderControls(children: React.ReactNode = <TitlebarLeftControls />) {
   await act(async () => root.render(
     <I18nProvider>
       <TooltipProvider>
-        <TitlebarLeftControls />
+        {children}
       </TooltipProvider>
     </I18nProvider>,
   ));
 }
 
 describe('TitlebarLeftControls', () => {
+  test('session actions belong to the conversation header in both layouts', async () => {
+    for (const layout of ['classic', 'editor'] as const) {
+      await act(async () => useUIStore.getState().setWorkspaceLayout(layout));
+      await renderControls(<><TitlebarLeftControls /><ChatSessionActions /></>);
+      expect(document.querySelector(`${OVERLAY_SELECTOR} [data-session-picker-trigger]`)).toBeNull();
+      expect(document.querySelector(`${OVERLAY_SELECTOR} [data-new-session-trigger]`)).toBeNull();
+      const group = document.querySelector('[data-chat-session-actions]');
+      expect(group?.querySelectorAll('button')).toHaveLength(2);
+      expect(group?.querySelector('[data-session-picker-trigger]')?.getAttribute('aria-pressed')).toBe('false');
+      expect(group?.querySelector('[data-session-picker-trigger]')?.getAttribute('aria-haspopup')).toBe('dialog');
+    }
+  });
+
   test('caps the overlay to the sidebar width when the sidebar is open', async () => {
     useUIStore.getState().setSidebarOpen(true);
     await renderControls();
@@ -71,21 +86,15 @@ describe('TitlebarLeftControls', () => {
     expect(overlay!.style.maxWidth).toBe('');
   });
 
-  test('lets the labelled New session button shrink so its label truncates', async () => {
+  test('keeps the same compact session buttons when the sidebar opens and closes', async () => {
     useUIStore.getState().setSidebarOpen(true);
-    await renderControls();
-
-    const button = document.querySelector<HTMLButtonElement>('button.w-auto');
-    expect(button).not.toBeNull();
-    expect(button!.classList.contains('shrink-0')).toBe(false);
-    expect(button!.classList.contains('min-w-0')).toBe(true);
-
-    const label = button!.querySelector<HTMLSpanElement>('span');
-    expect(label).not.toBeNull();
-    expect(label!.classList.contains('truncate')).toBe(true);
-
-    const icon = button!.querySelector<SVGElement>('svg');
-    expect(icon).not.toBeNull();
-    expect(icon!.classList.contains('shrink-0')).toBe(true);
+    await renderControls(<ChatSessionActions />);
+    const picker = document.querySelector('[data-session-picker-trigger]');
+    const create = document.querySelector('[data-new-session-trigger]');
+    expect(picker).not.toBeNull();
+    expect(create?.getAttribute('aria-label')).toBe('New session');
+    await act(async () => useUIStore.getState().setSidebarOpen(false));
+    expect(document.querySelector('[data-session-picker-trigger]')).toBe(picker);
+    expect(document.querySelector('[data-new-session-trigger]')).toBe(create);
   });
 });

@@ -110,6 +110,17 @@ describe('todo item routes', () => {
     await request(app).post(`${BASE}/todos`).send({ id: 3, text: 'C' }).expect(400);
   }));
 
+  it('edits text without changing completion, order, timestamps or peer todos', () => withRuntime(async ({ runtime, app }) => {
+    await request(app).post(`${BASE}/todos`).send({ id: 'mine', text: 'Original' }).expect(201);
+    await request(app).patch(`${BASE}/todos/mine`).send({ completed: true }).expect(200);
+    await runtime.createTodo('path_dGVzdA', { text: 'Agent addition' });
+    const before = (await request(app).get(BASE).expect(200)).body;
+    const edited = await request(app).patch(`${BASE}/todos/mine`).send({ text: 'Updated\ncontext' }).expect(200);
+    expect(edited.body.todos).toEqual(before.todos.map(todo => todo.id === 'mine' ? { ...todo, text: 'Updated\ncontext' } : todo));
+    await request(app).patch(`${BASE}/todos/mine`).send({ text: '   ' }).expect(400);
+    expect((await request(app).get(BASE).expect(200)).body.todos).toEqual(edited.body.todos);
+  }));
+
   it('answers a missing todo with 404 and malformed input with 400, writing nothing', () => withRuntime(async ({ app }) => {
     await request(app).delete(`${BASE}/todos/gone`).expect(404);
     await request(app).patch(`${BASE}/todos/gone`).send({ completed: true }).expect(404);

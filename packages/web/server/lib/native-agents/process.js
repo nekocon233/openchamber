@@ -21,7 +21,7 @@ const PARENT_CLAUDE_SESSION_ENV = new Set(['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT
 export const buildCliChildEnv = (baseEnv, searchPath) => {
   const env = {};
   for (const [name, value] of Object.entries(baseEnv)) {
-    if (value === undefined || OPENCHAMBER_ENV.test(name) || PARENT_CLAUDE_SESSION_ENV.has(name)) continue;
+    if (value === undefined || name === 'NODE_ENV' || OPENCHAMBER_ENV.test(name) || PARENT_CLAUDE_SESSION_ENV.has(name)) continue;
     env[name] = value;
   }
   env.PATH = searchPath;

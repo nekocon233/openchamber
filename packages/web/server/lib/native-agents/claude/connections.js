@@ -7,6 +7,7 @@ import { claudeLaunchModel, claudeModels } from '../catalog.js';
 import { NativeAgentError } from '../errors.js';
 import { fetchKimiQuota, isKimiCodingEndpoint } from '../../quota/providers/kimi.js';
 import { buildResult } from '../../quota/utils/index.js';
+import { antigravityModelVersion } from '../cliproxyapi/family-following.js';
 
 const effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
 // Claude Code 2.1.301 caps the request increment of custom models at 128k,
@@ -22,8 +23,12 @@ const connectionModelSchema = z.object({
   outputLimit: z.number().int().min(1).max(1_000_000),
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
   efforts: z.array(effort).max(5),
-});
+  followFamily: z.enum(['antigravity-opus', 'antigravity-sonnet']).optional(),
+}).refine((model) => !model.followFamily || antigravityModelVersion(model.modelID)?.family === model.followFamily,
+  'Family following requires a matching versioned Antigravity model');
 export { connectionModelSchema };
+const connectionModelsSchema = z.array(connectionModelSchema).min(1).max(50)
+  .refine((models) => new Set(models.map((model) => model.id)).size === models.length);
 const endpointURLSchema = z.string().url().max(2048).refine((value) => {
   const url = new URL(value);
   return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
@@ -34,11 +39,14 @@ export const connectionWriteSchema = z.object({
   baseURL: endpointURLSchema,
   auth: z.enum(['api-key', 'bearer']),
   apiKey: z.string().trim().min(1).max(8192).optional(),
-  models: z.array(connectionModelSchema).min(1).max(50).refine((models) => new Set(models.map((model) => model.id)).size === models.length),
+  models: connectionModelsSchema,
 });
 const storedConnectionSchema = connectionWriteSchema.extend({
   id: z.string().uuid(),
   revision: z.number().int().positive(),
+  // Manual connection edits invalidate every query; automatic model updates
+  // change only the launch key of the model whose binding changed.
+  launchRevision: z.number().int().positive().optional(),
   apiKey: z.string().min(1),
 });
 const documentSchema = z.object({ version: z.literal(1), connections: z.array(storedConnectionSchema) });
@@ -47,7 +55,7 @@ const unavailable = () => new NativeAgentError('The Claude Code connection or mo
   status: 404, code: 'NATIVE_CONNECTION_UNAVAILABLE',
 });
 const quotaProviderIdOf = (connection) => isKimiCodingEndpoint(connection.baseURL) ? `kimi-claude:${connection.id}` : null;
-const publicConnection = ({ apiKey, ...connection }) => ({ ...connection, hasKey: Boolean(apiKey), quotaProviderId: quotaProviderIdOf(connection) });
+const publicConnection = ({ apiKey, launchRevision: _launchRevision, ...connection }) => ({ ...connection, hasKey: Boolean(apiKey), quotaProviderId: quotaProviderIdOf(connection) });
 const catalogModels = (connection) => connection.models.map((model) => ({
   ...model,
   id: `connection:${connection.id}:${model.id}`,
@@ -116,6 +124,7 @@ export const createClaudeConnections = ({ dataDir, fetchKimiUsage = fetchKimiQuo
     const next = writes.then(async () => {
       const connections = await read();
       const result = change(connections);
+      if (result === false) return false;
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
       const temporary = `${file}.${randomUUID()}.tmp`;
       try {
@@ -163,7 +172,8 @@ export const createClaudeConnections = ({ dataDir, fetchKimiUsage = fetchKimiQuo
         const previous = connections[index];
         const apiKey = body.apiKey ?? previous?.apiKey;
         if (!apiKey) throw new NativeAgentError('An API key is required', { status: 400, code: 'NATIVE_CONNECTION_KEY_REQUIRED' });
-        const connection = { ...body, apiKey, id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1 };
+        const revision = (previous?.revision ?? 0) + 1;
+        const connection = { ...body, apiKey, id: previous?.id ?? randomUUID(), revision, launchRevision: revision };
         if (index === -1) connections.push(connection);
         else connections[index] = connection;
         return publicConnection(connection);
@@ -175,6 +185,35 @@ export const createClaudeConnections = ({ dataDir, fetchKimiUsage = fetchKimiQuo
         if (index === -1) throw unavailable();
         connections.splice(index, 1);
         return { deleted: true };
+      });
+    },
+    /** A discovery started before a user edit cannot overwrite that newer connection. */
+    refreshModelBindings(id, revision, models) {
+      const parsed = connectionModelsSchema.parse(models);
+      return mutate((connections) => {
+        const index = connections.findIndex((connection) => connection.id === id);
+        const previous = connections[index];
+        if (!previous || previous.revision !== revision) return false;
+        if (previous.models.length !== parsed.length || previous.models.some((model, position) => model.id !== parsed[position].id)) {
+          throw new NativeAgentError('A model refresh must preserve saved model identities', { status: 409, code: 'NATIVE_CONNECTION_MODEL_IDS_CHANGED' });
+        }
+        if (JSON.stringify(previous.models) === JSON.stringify(parsed)) return false;
+        connections[index] = { ...previous, models: parsed, revision: previous.revision + 1, launchRevision: previous.launchRevision ?? previous.revision };
+        return true;
+      });
+    },
+    /** Prune a managed gateway after a complete authoritative model read. */
+    retainModels(baseURL, modelIDs, followedFamilies = []) {
+      const available = new Set(modelIDs);
+      const families = new Set(followedFamilies);
+      return mutate((connections) => {
+        const index = connections.findIndex((connection) => connection.baseURL === baseURL);
+        if (index === -1) return;
+        const previous = connections[index];
+        const models = previous.models.filter((model) => available.has(model.modelID) || families.has(model.followFamily));
+        if (models.length === previous.models.length) return;
+        if (models.length === 0) connections.splice(index, 1);
+        else connections[index] = { ...previous, models, revision: previous.revision + 1 };
       });
     },
     async catalog() {
@@ -192,7 +231,8 @@ export const createClaudeConnections = ({ dataDir, fetchKimiUsage = fetchKimiQuo
         // Flag settings override user/project env; clear competing credentials and
         // backend selectors so they cannot redirect this connection.
         const env = claudeConnectionEnvironment(connection, model);
-        return { key: `${connection.id}:${connection.revision}:${model.id}`, model: model.modelID, env, descriptor: catalogModels(connection)[index] };
+        const key = `${connection.id}:${connection.launchRevision ?? connection.revision}:${model.id}:${model.modelID}:${model.contextWindow}:${model.outputLimit}`;
+        return { key, model: model.modelID, env, descriptor: catalogModels(connection)[index] };
       }
       throw unavailable();
     },

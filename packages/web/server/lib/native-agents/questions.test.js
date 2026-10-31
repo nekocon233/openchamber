@@ -9,6 +9,29 @@ const deferred = () => {
 const input = { directory: '/workspace', sessionID: 'ndh_test', questions: [{ question: 'Choose', header: 'Choice', options: [{ label: 'A', description: '' }] }] };
 
 describe('native question delivery acknowledgement', () => {
+  it('restores an owner request id and withdraws it without a user rejection', async () => {
+    const events = [];
+    let settled = 0;
+    const registry = createQuestionRegistry({ publish: (_directory, event) => events.push(event), onSettled: () => { settled += 1; } });
+    const question = registry.ask({ ...input, id: 'ncq_saved' });
+    expect(registry.list('/workspace')[0].id).toBe('ncq_saved');
+    expect(() => registry.ask({ ...input, id: 'ncq_saved' })).toThrow('already pending');
+    expect(registry.withdraw('ncq_saved')).toBe(true);
+    expect(await question).toEqual({ status: 'rejected', reason: 'interrupted' });
+    expect(events.map((event) => event.type)).toEqual(['question.asked']);
+    expect(settled).toBe(0);
+    expect(registry.withdraw('ncq_saved')).toBe(false);
+  });
+
+  it('publishes a settled selection when its owner withdraws an uncertain dispatch', async () => {
+    const events = [];
+    const registry = createQuestionRegistry({ publish: (_directory, event) => events.push(event), onSettled: () => { throw new Error('owner persists this answer'); } });
+    const question = registry.ask({ ...input, id: 'ncq_unknown' });
+    registry.withdraw('ncq_unknown', { status: 'replied', answers: [['A']] });
+    await question;
+    expect(events.at(-1)).toEqual({ type: 'question.replied', properties: { sessionID: input.sessionID, requestID: 'ncq_unknown', answers: [['A']] } });
+    expect(registry.list('/workspace')).toEqual([]);
+  });
   it('waits for delivery before settling and refuses a duplicate reply', async () => {
     const events = [];
     const delivered = deferred();

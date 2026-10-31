@@ -1120,7 +1120,7 @@ describe('updateDesktopSettings', () => {
     expect(useUIStore.getState().workStatusHiddenSections).toEqual(['telemetry']);
     expect(useUIStore.getState().workStatusHiddenSectionsExplicit).toBe(true);
     // An unrelated partial save response must not re-enable a hidden section.
-    await updateDesktopSettings({ workStatusPanelEnabled: useUIStore.getState().workStatusPanelEnabled });
+    await updateDesktopSettings({ layoutAnimations: useUIStore.getState().layoutAnimations });
     expect(useUIStore.getState().workStatusHiddenSections).toEqual(['telemetry']);
   });
 

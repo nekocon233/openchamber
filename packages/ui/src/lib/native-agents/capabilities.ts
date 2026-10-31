@@ -6,6 +6,13 @@ const guardedActions = z.object({ openchamber: z.object({ native: z.object({
   actions: z.object({ revert: z.boolean(), delete: z.boolean(), fork: z.boolean().optional() }),
 }) }) });
 
+const activityMetadata = z.object({ openchamber: z.object({ native: z.object({ activityKnown: z.boolean() }) }) });
+
+/** A directory's idle snapshot cannot prove that an unobserved agy child finished. */
+export const hasUnknownAntigravityActivity = (session: Session): boolean =>
+  Boolean(session.parentID) && nativeBackendOfSessionId(session.id) === 'antigravity'
+  && activityMetadata.safeParse(session.metadata).data?.openchamber.native.activityKnown !== true;
+
 /** Session actions that depend on OpenCode or a native backend owning the operation. */
 type SessionActionSupport = { share: boolean; moveToWorktree: boolean; revert: boolean; delete: boolean; fork: boolean };
 

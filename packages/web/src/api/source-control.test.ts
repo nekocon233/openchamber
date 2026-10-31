@@ -65,6 +65,47 @@ afterEach(() => {
 });
 
 describe('createWebSourceControlAPI', () => {
+  it('advertises force merge only for explicit GitHub support and keeps old servers unsupported', async () => {
+    const api = createWebSourceControlAPI({ fetch: runtimeFetchMock });
+    const capability = {
+      identity: { provider: 'github', instance: 'github.com' }, authentication: true,
+      authenticationMethods: { device: { available: true }, pat: { available: true }, cli: { available: false } },
+      multipleAccounts: true, projects: true, issues: true, changeRequests: true, draftChangeRequests: true,
+      mergeChangeRequests: true, mergeMethods: ['merge', 'squash'], ci: true,
+    };
+    runtimeFetchMock.mockResolvedValueOnce(Response.json(capability));
+    expect((await api.capabilities(identity)).forceMergeChangeRequests).toBe(false);
+    runtimeFetchMock.mockResolvedValueOnce(Response.json({ ...capability, forceMergeChangeRequests: true }));
+    expect((await api.capabilities(identity)).forceMergeChangeRequests).toBe(true);
+    runtimeFetchMock.mockResolvedValueOnce(Response.json({ ...capability, forceMergeChangeRequests: 'true' }));
+    expect((await api.capabilities(identity)).forceMergeChangeRequests).toBe(false);
+    runtimeFetchMock.mockResolvedValueOnce(Response.json({ ...capability,
+      identity: { provider: 'gitlab', instance: 'https://gitlab.example.com' }, forceMergeChangeRequests: true,
+    }));
+    expect((await api.capabilities({ provider: 'gitlab', instance: 'https://gitlab.example.com' })).forceMergeChangeRequests).toBe(false);
+  });
+
+  it('carries explicit force intent with exact mutation authority and omits false for ordinary merges', async () => {
+    const api = createWebSourceControlAPI({ fetch: runtimeFetchMock });
+    runtimeFetchMock.mockImplementation(async () => Response.json(mutationReceipt({ merged: true })));
+    await api.changeRequestMerge({ ...mutationContext, method: 'squash', force: true });
+    expect(runtimeFetchMock).toHaveBeenNthCalledWith(1, '/api/source-control/github/pr/merge', expect.objectContaining({
+      body: JSON.stringify({ ...mutationContext, instance: 'github.com', method: 'squash', force: true }),
+    }));
+    await api.changeRequestMerge({ ...mutationContext, method: 'squash', force: false });
+    expect(runtimeFetchMock).toHaveBeenNthCalledWith(2, '/api/source-control/github/pr/merge', expect.objectContaining({
+      body: JSON.stringify({ ...mutationContext, instance: 'github.com', method: 'squash' }),
+    }));
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a GitLab force merge before transport', async () => {
+    const api = createWebSourceControlAPI({ fetch: runtimeFetchMock });
+    await expect(api.changeRequestMerge({ ...mutationContext, provider: 'gitlab',
+      instance: 'https://gitlab.example.com', method: 'merge', force: true,
+    })).rejects.toMatchObject({ code: 'SOURCE_CONTROL_FORCE_MERGE_UNSUPPORTED' });
+    expect(runtimeFetchMock).not.toHaveBeenCalled();
+  });
   it('rejects failed and malformed transport configuration responses without retry or an applied empty binding', async () => {
     const intent = { directory: '/repo', expectedRepositoryId: 'repo_one', expectedRevision: 0,
       expectedConfigRevision: 'config_one', expectedFetchFingerprint: 'fetch', expectedPushFingerprint: 'push',

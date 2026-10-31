@@ -18,7 +18,7 @@ import * as React from 'react';
 const FRESH_MS = 60_000;
 
 export type ListPage<T> =
-    | { kind: 'page'; items: T[]; cursor: string | null; hasMore: boolean }
+    | { kind: 'page'; items: T[]; cursor: string | null; hasMore: boolean; total?: number }
     /** The source answered but cannot list: not connected, or no repo. */
     | { kind: 'unavailable'; reason: 'disconnected' | 'no-repo' };
 
@@ -28,6 +28,7 @@ export type CachedList<T> = {
     unavailable: 'disconnected' | 'no-repo' | null;
     items: T[];
     hasMore: boolean;
+    total?: number;
     refreshing: boolean;
     loadingMore: boolean;
     /** The last failure, first page or a later one; cleared by the next success. */
@@ -133,18 +134,28 @@ export type ListCache<T> = {
 /** `now` is the clock freshness is measured on; tests pass their own. */
 export function createListCache<T>(limit = 40, now: () => number = Date.now): ListCache<T> {
     const store = new KeyedStore<ListRecord<T>>(limit);
+    const pendingReads = new Map<string, Promise<void>>();
+    let generationSequence = 0;
+    let clearEpoch = 0;
 
     const update = (key: string, record: ListRecord<T>, patch: Partial<ListRecord<T>>) => {
         store.set(key, { ...record, ...patch });
     };
 
     const ensure: ListCache<T>['ensure'] = (key, fetchPage, options) => {
+        const running = pendingReads.get(key);
+        if (options?.force && running) {
+            const epoch = clearEpoch;
+            // The caller may have invalidated the server cache. Finish the old
+            // response before asking again, so its in-flight answer is not reused.
+            return running.then(() => epoch === clearEpoch ? ensure(key, fetchPage, options) : undefined);
+        }
         const existing = store.get(key);
         if (existing && (existing.refreshing || (!options?.force && now() - existing.fetchedAt < FRESH_MS))) {
             if (existing.fetchPage !== fetchPage) update(key, existing, { fetchPage });
             return Promise.resolve();
         }
-        const generation = (existing?.generation ?? 0) + 1;
+        const generation = ++generationSequence;
         store.set(key, existing
             ? { ...existing, refreshing: true, loadingMore: false, generation, fetchPage }
             : {
@@ -160,7 +171,7 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
                 generation,
                 fetchPage,
             });
-        return settle(fetchPage(null)).then((outcome) => {
+        const pending = settle(fetchPage(null)).then((outcome) => {
             const current = store.get(key);
             if (!current || current.generation !== generation) return;
             if (!outcome.ok) {
@@ -178,6 +189,7 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
                     unavailable: page.reason,
                     items: [],
                     cursor: null,
+                    total: undefined,
                     hasMore: false,
                     refreshing: false,
                     error: null,
@@ -189,6 +201,7 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
                 status: 'ready',
                 unavailable: null,
                 items: page.items,
+                total: page.total,
                 cursor: page.cursor,
                 hasMore: page.hasMore,
                 refreshing: false,
@@ -196,6 +209,9 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
                 fetchedAt: now(),
             });
         });
+        pendingReads.set(key, pending);
+        void pending.finally(() => { if (pendingReads.get(key) === pending) pendingReads.delete(key); });
+        return pending;
     };
 
     const loadMore: ListCache<T>['loadMore'] = (key) => {
@@ -217,6 +233,7 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
             }
             update(key, current, {
                 items: [...current.items, ...page.items],
+                total: page.total,
                 cursor: page.cursor,
                 hasMore: page.hasMore,
                 loadingMore: false,
@@ -230,7 +247,7 @@ export function createListCache<T>(limit = 40, now: () => number = Date.now): Li
         loadMore,
         read: (key) => store.get(key) ?? null,
         subscribe: (key, listener) => store.subscribe(key, listener),
-        clear: () => store.clear(),
+        clear: () => { clearEpoch += 1; pendingReads.clear(); store.clear(); },
     };
 }
 
@@ -357,6 +374,7 @@ export function useCachedList<T>(
     cache: ListCache<T>,
     key: string | null,
     fetchPage: PageFetcher<T>,
+    active = true,
 ): CachedList<T> & { loadMore: () => void; retry: () => Promise<void> } {
     const subscribe = React.useCallback(
         (listener: Listener) => (key ? cache.subscribe(key, listener) : noSubscription()),
@@ -366,16 +384,16 @@ export function useCachedList<T>(
     const revalidation = useReferenceRevalidation();
 
     React.useEffect(() => {
-        if (key) void cache.ensure(key, fetchPage);
-    }, [cache, fetchPage, key, revalidation]);
+        if (key && active) void cache.ensure(key, fetchPage);
+    }, [active, cache, fetchPage, key, revalidation]);
 
     const loadMore = React.useCallback(() => {
-        if (key) cache.loadMore(key);
-    }, [cache, key]);
+        if (key && active) cache.loadMore(key);
+    }, [active, cache, key]);
     /** Settles once the list is read again. */
     const retry = React.useCallback(
-        () => (key ? cache.ensure(key, fetchPage, { force: true }) : Promise.resolve()),
-        [cache, fetchPage, key],
+        () => (key && active ? cache.ensure(key, fetchPage, { force: true }) : Promise.resolve()),
+        [active, cache, fetchPage, key],
     );
 
     return {

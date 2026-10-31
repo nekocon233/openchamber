@@ -141,7 +141,7 @@ member's latest reply and worktree changes once per finished turn
 reply or zero changes. Web, desktop and VS Code mount it over the chat; mobile
 mounts it in `MobileApp` with its own back button and without "Add a model",
 in one card column; while it is open the mobile header names the run and hides
-the session metadata button.
+the work-status button.
 
 ## Mobile lists
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { createPortal } from 'react-dom';
+import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import type { Message, Part, Session } from '@/lib/opencode/model';
 import { getLastConversationRecord, isIncompleteAssistantTurn } from '@/lib/opencode/model';
 import { keepCommandSubagentReports } from '@/lib/opencode/subagent-run';
@@ -98,9 +98,7 @@ import { isVSCodeRuntime } from '@/lib/desktop';
 import { eventMatchesShortcut, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import { ChatSearchBar } from './search/ChatSearchBar';
 import { WorkStatusPanel } from './work-status/WorkStatusPanel';
-import { useWorkStatusVisibility } from './work-status/useWorkStatusVisibility';
 import { useShownSessionSelection } from './useShownSessionSelection';
-import { useRightSlotStore } from '@/components/layout/rightSlot';
 import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { resolveChatPromptReadOnly } from './chatPromptReadOnly';
 import { PermissionDock } from './PermissionDock';
@@ -1052,60 +1050,20 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
     // composer enters the same fullscreen-input mode via its drag handle.
     const isDesktopExpandedInput = isExpandedInput;
     const useCompactDraftLayout = isMobile || isVSCode || chatSurfaceMode === 'mini-chat';
-    // Work-status panel: a borderless column to the right of the transcript.
-    // It yields to the context panel and to a narrow chat; `rowRef` goes on the
-    // row that holds both columns, so its width never depends on the panel's
-    // own visibility.
-    const { rowRef: workStatusRowRef, visible: workStatusVisible, fits: workStatusFits, roomy: workStatusRoomy } = useWorkStatusVisibility({
-        isMobile,
-        isVSCode,
-    });
-    const attachColumnRoot = React.useCallback((node: HTMLDivElement | null) => {
-        columnRootRef.current = node;
-        workStatusRowRef(node);
-    }, [workStatusRowRef]);
-    // Surfaces that never host the panel skip it entirely; the rest keep it
-    // mounted so its visibility can animate rather than snap.
-    // A pinned column leaves the panel, and the app-wide flags below, to the
-    // main chat.
-    const workStatusPanelMountable = !isMobile
+    // Only the main desktop chat hosts this dropdown. Mobile owns its sheet.
+    const workStatusOverlayMountable = !isMobile
         && !isVSCode
         && !pinned
         && chatSurfaceMode !== 'mini-chat';
-    const showWorkStatusPanel = workStatusPanelMountable && workStatusVisible;
-    // The inline card renders in the right slot beside the chat, which owns
-    // the one width animation for the card and the context panel together
-    // (components/layout/rightSlot.ts).
-    const workStatusHost = useRightSlotStore((state) => state.workStatusHost);
-
-    // Offered over the chat when there is no room beside it. The panel is still
-    // switched on; only the layout refuses it.
-    const workStatusPanelEnabled = useUIStore((state) => state.workStatusPanelEnabled);
     const workStatusOverlayOpen = useUIStore((state) => state.workStatusOverlayOpen);
-    const setWorkStatusPanelFits = useUIStore((state) => state.setWorkStatusPanelFits);
-    // Mounted whenever it could be shown, not only while it is: an element
-    // that appears and disappears with the condition has nothing to animate.
-    const workStatusOverlayMountable = workStatusPanelMountable
-        && workStatusPanelEnabled
-        && !workStatusFits;
-    // The slot keeps the card's column while the context panel covers it.
-    const workStatusReserved = workStatusPanelMountable && workStatusPanelEnabled && workStatusRoomy;
-    const showWorkStatusOverlay = workStatusOverlayMountable && workStatusOverlayOpen;
+    const setWorkStatusOverlayOpen = useUIStore((state) => state.setWorkStatusOverlayOpen);
+    const showWorkStatusOverlay = workStatusOverlayMountable && active && workStatusOverlayOpen;
 
     React.useEffect(() => {
-        if (pinned) return;
-        setWorkStatusPanelFits(workStatusPanelMountable && workStatusFits);
-        return () => setWorkStatusPanelFits(false);
-    }, [pinned, setWorkStatusPanelFits, workStatusFits, workStatusPanelMountable]);
-
-    // Published so the header can drop the readouts the panel already carries.
-    // Cleared on unmount: a chat that goes away is not showing anything.
-    const setWorkStatusPanelVisible = useUIStore((state) => state.setWorkStatusPanelVisible);
-    React.useEffect(() => {
-        if (pinned) return;
-        setWorkStatusPanelVisible(showWorkStatusPanel);
-        return () => setWorkStatusPanelVisible(false);
-    }, [pinned, setWorkStatusPanelVisible, showWorkStatusPanel]);
+        if (!workStatusOverlayMountable) return;
+        setWorkStatusOverlayOpen(false);
+        return () => setWorkStatusOverlayOpen(false);
+    }, [active, currentSessionId, workStatusDirectory, setWorkStatusOverlayOpen, workStatusOverlayMountable]);
     const messageListRef = React.useRef<MessageListHandle | null>(null);
 
     const currentSession = useSession(currentSessionId, effectiveSessionDirectory);
@@ -1760,7 +1718,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
 
 	return (
 		<div
-			ref={attachColumnRoot}
+			ref={columnRootRef}
 			// App-wide handlers (double Escape to stop) find the pinned
 			// column's session and whether it runs here.
 			data-chat-column={pinned ? 'pinned' : 'main'}
@@ -1906,7 +1864,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
                             text={spaceArchive
                                 ? t('spaces.archive.readOnlyBanner', { name: spaceArchive.name })
                                 : t('chat.container.readOnlySubagentPromptBanner')}
-                            onStop={!spaceArchive && currentSessionId && sessionStatusForCurrent.type !== 'idle'
+                            onStop={!spaceArchive && currentSessionId && !(currentSession?.parentID && nativeBackendOfSessionId(currentSessionId) === 'antigravity') && sessionStatusForCurrent.type !== 'idle'
                                 ? () => void abortCurrentOperation(currentSessionId)
                                 : undefined}
                             stopLabel={t('chat.chatInput.actions.stopGeneratingAria')}
@@ -1951,19 +1909,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         </ChatColumnExpandedInputContext.Provider>
         </ChatColumnActionsContext.Provider>
         </ChatColumnSessionContext.Provider>
-        {/* Kept mounted while it could ever show, so it can fade out and back
-            in; `visible` drives that, and `reserved` keeps its column in the
-            right slot while the context panel covers it. */}
-        {workStatusPanelMountable && workStatusHost ? createPortal(
-            <WorkStatusPanel
-                visible={showWorkStatusPanel}
-                reserved={workStatusReserved}
-                sessionId={currentSessionId ?? null}
-                directory={workStatusDirectory ?? null}
-                repositoryEnabled={!isManagedChatContext}
-            />,
-            workStatusHost,
-        ) : null}
         </div>
     );
 };

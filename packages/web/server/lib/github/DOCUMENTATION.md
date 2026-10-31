@@ -18,6 +18,9 @@
 - `packages/web/server/lib/github/pr-summaries.js`: batched live state for PRs already known by number.
 - `packages/web/server/lib/github/reference-search.js`: issue and PR pages for the reference picker.
 - `packages/web/server/lib/github/checks-summary.js`: the one checks summarizer shared by every PR route.
+- `packages/web/server/lib/github/pull-diff.js`: published PR patches, complete file pagination and immutable coordinates for a local Git snapshot when GitHub refuses a large diff.
+- `packages/web/server/lib/github/pending-reviews.js`: the authenticated account's pending review, comment ownership and revision checks, and one provider write for each review action.
+- `packages/web/server/lib/github/force-merge.js`: administrator-merge permission and target checks, plus the GraphQL merge pinned to the confirmed head commit.
 
 ## Public exports
 
@@ -71,6 +74,7 @@
 - Canonical reads use the exact account and primary remote returned by validation. A GitHub `401` invalidates only that account. `403` and network failures remain read errors and do not change account state.
 - Route, PR discovery, and repository metadata caches use an opaque digest of both account ID and credential. Canonical status cache keys also include the trusted repository ID and binding revision, so path replacement and rebinding cannot reuse a warm response. Exact accounts and repository bindings are resolved before cache reads, and bound repository validation always precedes fork metadata cache reads.
 - Canonical PR create, update, merge, and ready routes validate the complete mutation context before credential, Git, cache, or provider access. They use only the validated account and trusted primary remote, require the target and source to belong to the provider-reported fork network, and return durable mutation receipts. Retired `/api/github/pr/*` mutations never enter this flow.
+- `/capabilities` advertises `forceMergeChangeRequests: true`. `/pr/merge` accepts an optional boolean `force`; only `true` selects administrator merge. Missing and `false` retain ordinary REST merge and its existing input digest. Administrator merge re-reads the exact PR through the same account and requires `viewerCanMergeAsAdmin`, an open non-draft PR, a mergeable head, and matching repository, number, branches and head SHA. It calls GraphQL `mergePullRequest` with the selected merge method and `expectedHeadOid`, matching the direct administrator-merge operation used by GitHub CLI. GitHub still enforces conflicts and rules the actor cannot bypass. Permission and target reads run only for a new execution; durable terminal replay and read-only restart reconciliation keep their existing behavior. Known GraphQL refusals are definite failures; malformed, partial or uncertain mutation responses remain sticky `outcome-unknown` and never trigger another write.
 - Comments and reviews take the same path: `/pr/comment` (a pull request's conversation, through the issues comments API), `/pr/review` (`approve` or `request-changes` for the target's `headSha`, the commit the user read, so a push since refuses it as a changed target; requesting changes needs text, which GitHub posts as the review body) and `/issues/comment` (refuses a number GitHub reports as a pull request). Record kinds are `change-request-comment`, `change-request-review` and `issue-comment`. A comment or review interrupted after dispatch stays `outcome-unknown`: nothing but its private text would tell a lost write from one never sent, and that text is not persisted. A `403`/`404`/`422` refusal answers with GitHub's own reason (`SOURCE_CONTROL_MUTATION_REJECTED`), such as a review of the user's own pull request; it is not stored.
 - Review threads: `/pr/thread/reply` (`threadId`, `body`) answers one through GraphQL `addPullRequestReviewThreadReply`, and `/pr/thread/resolve` (`threadId`, `resolved`) resolves or reopens it through `resolveReviewThread` / `unresolveReviewThread`. A thread id is global on GitHub, so before writing the server reads the node and refuses (`SOURCE_CONTROL_MUTATION_TARGET_INVALID`) a thread that is not on the target pull request. GraphQL refusals arrive as errors with status 200 and are reported as `422` with GitHub's reason. Record kinds are `change-request-thread-reply` (reconciles as `outcome-unknown`, like a comment) and `change-request-thread-resolve` (reconciles by reading the thread's state). The board's detail read (`reference-search.js`) returns each review thread as the comment that opened it, with `thread: { id, resolved, canResolve, canReply, replies }`, where `canResolve` is the viewer's permission for the change the thread can take next.
 - `/pr/state` and `/issues/state` close or reopen (`state: 'open' | 'closed'`; record kinds `change-request-state`, `issue-state`). The issue route refuses a pull request number. Restart reconciliation reads the item: the asked state is success, the other open/closed state a definite not-applied failure. A merged pull request reads `closed` and GitHub refuses to reopen it with its own reason.
@@ -82,6 +86,35 @@
 - Auth removal requires the exact credential `accountId`. Missing authority returns `400` without consulting or removing the current account. Source-control binding reconciliation completes before that exact auth record is removed.
 
 ## PR integration overview
+
+`GET /api/source-control/github/pr/review/pending` returns only the exact
+account's pending review and its paginated comments, with `Cache-Control:
+no-store`. The server verifies the GraphQL viewer against the trusted provider
+user ID and checks each comment's review and author. A failed read remains an
+error, including GraphQL errors returned with HTTP 200.
+
+Comments are read through the pending review's GraphQL connection. Their IDs
+are matched to the PR's review threads, which own diff side, current/original
+line ranges and outdated state. The REST review-comments collection omits these
+coordinates, and the pull-wide REST collection omits pending comments. Review
+comments, threads and thread comments are paginated; thread reads stop once all
+pending comment IDs are matched. Missing locations, inconsistent paths or
+incomplete cursors fail the whole read without publishing partial review state.
+An empty review does not load threads. The public response and mutation digest
+shape stay unchanged.
+
+`POST` on that path uses the canonical mutation executor and the
+`change-request-pending-review` record kind. The first comment creates one
+PENDING review and its thread atomically at the displayed commit. Later comments
+join that review. Edit, delete, discard and submit require the current review's
+ID and content digest. The server verifies ownership before every global-node
+mutation, refuses stale PR heads, and refuses comments on a pending review for
+an earlier commit. Submission publishes all its comments with COMMENT, APPROVE
+or REQUEST_CHANGES; the last requires a summary. Own-PR approval and changes
+requests are rejected. Each action dispatches one provider write. A lost write
+response remains outcome-unknown and is never sent again by the executor.
+Durable records retain digests and an empty success result, never review text.
+
 
 - Provider-neutral UI status reads first resolve the authoritative repository binding, then send its immutable read context to `GET /api/source-control/github/pr/status`.
 - The canonical route validates that context before exact-account credential lookup. `/api/github/pr/status` is retired and returns `SOURCE_CONTROL_CONTEXT_REQUIRED`.
@@ -102,6 +135,23 @@
 - Malformed optional check-run or combined-status collections are never summarized as zero checks. A valid fallback may still supply CI; otherwise CI remains unavailable. Failed or malformed workflow-job detail remains non-authoritative and may leave the check run without job details.
 
 ## Consumers of PR data
+
+PR comparison, walkthrough and context attachments share `readGitHubPullPatch`.
+The ordinary path reads GitHub's diff media type. Only a `406` or `422` with
+`PullRequest / diff / too_large` starts the internal `pr-snapshot` Git operation.
+The provider resolves the target inside the bound repository network, reads its
+head/base SHAs and their merge base, and supplies the target repository's HTTPS
+endpoint. Fork heads are read through the target repository, including PRs whose
+source fork was deleted. The Git executor uses the exact bound account and
+revalidates the binding before credentials and transfer. There is no automatic
+retry for auth, rate-limit, malformed-data or unrelated provider failures.
+
+`/pulls/context` paginates files in groups of 100. A local snapshot supplies both
+its diff and its complete file list, bypassing GitHub's 3,000-file list ceiling.
+Context-only reads also use that snapshot when the API cannot supply every file.
+A native diff or multi-page file read checks the head/base again before returning;
+a changed revision or incomplete page sequence fails instead of publishing mixed
+or partial results. Diff output above 20 MiB returns `413 PR_DIFF_TOO_LARGE`.
 
 PR list/search failures propagate as errors instead of successful empty lists.
 Comparison pickers use these responses to offer retry rather than claiming the
@@ -135,12 +185,28 @@ that page, so callers cannot mistake a partial page for a complete one.
 
 - `fetchPrSummaries` (`pr-summaries.js`) reads the live state of PRs and issues already known by number, up to `100` `{ owner, repo, number }` in total, for the tracked-items service (`../tracked-items/`), which calls it with the account a branch's repository is bound to or, for linked items, the current github.com account. It has no route of its own. It answers `{ summaries, issueSummaries }`. An issue reads `open`, `completed`, or `not_planned` (GitHub's `NOT_PLANNED` and `DUPLICATE` close reasons); a PR number asked as an issue is simply absent.
 - It sends one GraphQL document per `25` PRs, one after another. Each alias reads state, draft, title, head sha, `mergeable`, `mergeStateStatus` (lowercased, same values as REST `mergeable_state`) and up to `100` check contexts of the head commit. GitHub prices such a document at one point of the GraphQL budget (measured), which is separate from the REST limit.
-- Checks go through the same summarizers as the REST routes (`checks-summary.js`), so sidebar, chat and Git view count the same runs. Do not switch to the rollup's `state` or `checkRunCountsByState`: both still count a failed run that a later re-run superseded, which paints a green PR as failing. A closed/merged PR gets `checks: null`.
+- Checks go through the same summarizers as the REST routes (`checks-summary.js`), so sidebar, chat and Git view count the same runs. Do not switch to the rollup's `state` or `checkRunCountsByState`: both still count a failed run that a later re-run superseded, which paints a green PR as failing. A closed/merged PR gets `checks: null` by default. `includeClosedChecks: true` retains its head-commit checks for the reference-list status route; tracked-items callers keep the default.
 - A PR GitHub cannot resolve (deleted, lost access) is left out of `summaries`: absence means unknown, never closed. Partial GraphQL answers keep the resolved aliases.
 - A GraphQL `RATE_LIMITED` error (HTTP 200) records the shared rate-limit cooldown like a REST 403/429; while the cooldown runs the tracked-items reader does not call GitHub.
 - It never discovers PRs; branch-to-PR resolution stays with `GET /api/source-control/github/pr/status`.
 
 ## Reference picker lists
+
+- `GET /api/source-control/github/references` also accepts `scope=repository|network`.
+  Omission preserves the network behavior. Repository scope resolves only the
+  validated binding's primary remote, without looking up fork metadata. Invalid
+  scopes and repository-changing `repo:`, `org:` or `user:` query qualifiers
+  return `400`. Number and URL lookups in this scope return only the requested
+  kind from that repository. Connected responses echo `scope`, allowing new
+  clients to reject unscoped answers from a server awaiting restart. Older
+  network clients can ignore this additive field.
+- For repository PRs with no text and `people=any`, `listRepositoryPullRequests`
+  reads `repository.pullRequests` in pages of 30, ordered by `UPDATED_AT DESC`.
+  The connection cursor traverses beyond the search API's 1,000-result limit;
+  state `all` leaves states unrestricted, and `closed` includes merged PRs as
+  GitHub search does. It returns the existing items/cursor/hasMore/total shape.
+  An unreadable repository or malformed page fails the read. Text and people
+  searches keep the search path and its total, used by the PR panel's limit notice.
 
 - `GET /api/source-control/github/references?<read context>&kind=issue|pull&state=&people=&query=&cursor=` takes the same bound read context as every canonical read and answers one page (30) of the project's issues or PRs across its repo network, read with that context's account (origin plus fork parent/source): `{ connected, repo, items, cursor, hasMore, total }`. `repo: null` means the project has no GitHub remote.
 - One GraphQL `search` document per page, newest activity first. `state` (`open`, the default, `closed`, `merged`, `all`) and `people` (`any`, the default, `assigned` → `assignee:@me`, `created` → `author:@me`, `reviewRequested` → `review-requested:@me`) combine; an issue list reads `merged` as closed and ignores review requests. User text is appended as is, so GitHub qualifiers work; state and sort are added only when the text sets none.
@@ -149,6 +215,10 @@ that page, so callers cannot mistake a partial page for a complete one.
 - `GET /api/source-control/github/references/detail?<read context>&owner=&repo=&number=` answers what the preview adds for one item: the newest 50 comments, oldest first, plus for a PR its reviews (a review's text or verdict, and each line comment with `path`/`line`), its newest 50 commits with `commitTotal`, size and review decision. Its checks come from `references/status`, the same answer that colours it. The repo must be in the project's network. These fields stay off the page query: on a 30-PR page size, review decision and checks together ran past GitHub's 10 s search timeout (measured 2026-10-01), while one item answers in about a second.
 - `GET /api/source-control/github/references/status?<read context>&pulls=owner/repo#n,...` answers what colours the PRs a picker page shows, at most 30: `{ connected, statuses: [{ owner, repo, number, checks, mergeable, mergeableState }] }` from `fetchPrSummaries`, the sidebar's summaries, so the picker and the sidebar colour a PR the same way. Every repo must be in the project's network. A PR GitHub could not resolve is left out. Mergeability is most of its cost (30 PRs: about 2 s with checks only, 4 to 7 s with mergeability, measured 2026-10-06), so it is a request after the page, not part of it.
 - Failures are errors, never an empty page; GraphQL `RATE_LIMITED` records the shared cooldown and answers `503`. The client cache lives in `packages/ui/src/components/references/`.
+- The status route includes checks for closed and merged PRs so the project PR
+  list can display historical results. It summarizes the check contexts already
+  returned by the batch, with no additional GitHub calls. An empty successful
+  summary has `total: 0`; an unresolved PR remains absent.
 - Attaching still reads full context through the canonical `issues/get` + `issues/comments` and `pulls/context`.
 
 ## Shared client state model

@@ -74,20 +74,36 @@ test('a failed first load is an error, never an empty success', async () => {
     expect(cache.read('k')).toMatchObject({ status: 'error', items: [], error: 'offline' });
 });
 
-test('an older answer cannot overwrite a newer one', async () => {
+test('a forced refresh waits for an older read, then completes one fresh read', async () => {
     const cache = createListCache<string>();
     const first = deferred<ListPage<string>>();
     cache.ensure('k', () => first.promise);
     const second = deferred<ListPage<string>>();
-    // A forced retry while the first request is still out waits for it.
-    cache.ensure('k', () => second.promise, { force: true });
+    let freshReads = 0;
+    const refreshed = cache.ensure('k', () => { freshReads += 1; return second.promise; }, { force: true });
+    expect(freshReads).toBe(0);
     first.resolve(page(['first']));
     await flush();
-    cache.ensure('k', () => second.promise, { force: true });
+    expect(freshReads).toBe(1);
+    expect(cache.read('k')).toMatchObject({ items: ['first'], refreshing: true });
     second.resolve(page(['second']));
-    await flush();
+    await refreshed;
 
-    expect(cache.read('k')?.items).toEqual(['second']);
+    expect(cache.read('k')).toMatchObject({ items: ['second'], refreshing: false });
+});
+
+test('clearing a list retires both its old response and a queued forced refresh', async () => {
+    const cache = createListCache<string>();
+    const old = deferred<ListPage<string>>();
+    cache.ensure('k', () => old.promise);
+    let queuedReads = 0;
+    const queued = cache.ensure('k', async () => { queuedReads += 1; return page(['obsolete']); }, { force: true });
+    cache.clear();
+    await cache.ensure('k', async () => page(['current']));
+    old.resolve(page(['old']));
+    await queued;
+    expect(queuedReads).toBe(0);
+    expect(cache.read('k')?.items).toEqual(['current']);
 });
 
 test('later pages append, and a refresh drops a page still in flight', async () => {

@@ -177,6 +177,7 @@ const GeneralSectionContent: React.FC = () => {
             <OpenChamberVisualSettings visibleSettings={[
                 'fileEditorKeymap',
                 ...(!isVSCode ? ['fileTreeSide' as const] : []),
+                ...(!isVSCode ? ['workspaceLayout' as const] : []),
                 ...(!isVSCode ? ['sessionTabs' as const] : []),
                 'autoSaveEnabled',
                 ...(!isVSCode ? ['confirmFileTreeMove' as const] : []),

@@ -1,4 +1,5 @@
 import React from 'react';
+import { useI18n } from '@/lib/i18n';
 import type { Part } from '@/lib/opencode/model';
 import { MarkdownRenderer } from '../../MarkdownRenderer';
 import type { StreamPhase, ToolPopupContent } from '../types';
@@ -65,6 +66,7 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
 
     streamPerfObserve('ui.assistant_text_part.display_len', displayTextContent.length);
 
+    const { t } = useI18n();
     const isRenderableTextPart = part.type === 'text' || part.type === 'reasoning';
     if (!isRenderableTextPart) {
         return null;
@@ -77,7 +79,8 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
         return null;
     }
 
-    const generatedResult = !isStreaming && isFinalized ? parseGeneratedJsonResult(displayTextContent) : null;
+    const truncated = part.type === 'text' && part.metadata?.nativeOutputTruncated === true;
+    const generatedResult = !truncated && !isStreaming && isFinalized ? parseGeneratedJsonResult(displayTextContent) : null;
     if (generatedResult) {
         return (
             <div
@@ -107,6 +110,7 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
                 enableFileReferences={isFinalized}
                 onShowPopup={onShowPopup}
             />
+            {truncated ? <p role="status" className="typography-meta text-muted-foreground">{t('chat.nativeTranscriptTruncated')}</p> : null}
         </div>
     );
 };

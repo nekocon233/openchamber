@@ -1,6 +1,7 @@
 import type { Session, SessionStatus } from '@/lib/opencode/model'
 import type { State } from './types'
 import { countSyncPerformance } from './performance-diagnostics'
+import { hasUnknownAntigravityActivity } from '@/lib/native-agents/capabilities'
 
 type LiveStateSlice = Pick<State, 'session' | 'session_status'>
 
@@ -29,6 +30,7 @@ const areSessionsEquivalent = (left: Session, right: Session): boolean => {
     && (left.parentID ?? '') === (right.parentID ?? '')
     && left.model?.id === right.model?.id
     && left.model?.providerID === right.model?.providerID
+    && (left.metadata === right.metadata || hasUnknownAntigravityActivity(left) === hasUnknownAntigravityActivity(right))
 }
 
 const getStatusPriority = (status: SessionStatus | undefined): number => {

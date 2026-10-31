@@ -25,9 +25,8 @@ export type UsageProviderGroup = {
 /**
  * Quota windows grouped by provider, shaped for the compact usage list.
  *
- * Shared by the mobile session-metadata popover and the work-status panel so
- * the two cannot drift on which providers appear, how model rows are filtered,
- * or what counts as a provider-level status.
+ * Used by desktop and mobile work status to select providers, filter model
+ * rows and report provider-level status.
  *
  * Include selected, configured providers and first-load failures whose
  * configuration is still unknown. Confirmed unconfigured providers stay hidden.
@@ -64,13 +63,15 @@ export const useUsageProviderGroups = (): UsageProviderGroup[] => {
         for (const [modelName, modelUsage] of visibleModelEntries) {
           const entries = Object.entries(modelUsage.windows ?? {});
           if (entries.length === 0) continue;
-          const [label, window] = entries[0];
-          rows.push({
-            key: `model-${modelName}-${label}`,
-            label: formatWindowLabel(label),
-            subtitle: getDisplayModelName(modelName),
-            window,
-          });
+          const visibleWindows = providerMeta.id === 'antigravity-cli' ? entries : entries.slice(0, 1);
+          for (const [label, window] of visibleWindows) {
+            rows.push({
+              key: `model-${modelName}-${label}`,
+              label: formatWindowLabel(label),
+              subtitle: getDisplayModelName(modelName),
+              window,
+            });
+          }
         }
 
         const refreshError = refreshErrors[providerMeta.id];

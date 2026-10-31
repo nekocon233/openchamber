@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': '작업 공간 레이아웃',
+  'settings.openchamber.visual.option.workspaceLayout.classic': '기본형',
+  'settings.openchamber.visual.option.workspaceLayout.editor': '편집기형',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "연결된 모든 기기에서 서버의 dsh API 키, 엔드포인트, 모델을 설정합니다.",
   'settings.deepseekHarness.ready': "dsh CLI를 찾았습니다.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': 'Google 계정으로 로그인하세요. 원격 서버의 경우 URL과 인증 코드 안내를 따르세요.',
   'settings.antigravity.warnings.title': 'Antigravity를 사용하기 전에',
   'settings.antigravity.warnings.subscription': 'Google은 개인 Google AI 구독을 제3자 애플리케이션에 사용하는 것을 지원하지 않습니다. 여기에서 개인 구독을 사용하면 계정이 제한되거나 해지될 수 있습니다.',
-  'settings.antigravity.warnings.fullAccess': 'OpenChamber는 전체 접근 권한으로 agy를 시작합니다. 헤드리스 도구와 셸 명령은 항목별 승인 없이 실행됩니다.',
+  'settings.antigravity.warnings.fullAccess': 'Build는 도구 작업을 자동으로 승인합니다. Plan은 파일 변경, 셸 명령, MCP 도구 및 브라우저 작업을 차단합니다.',
   'chat.deepseekCommand.failed': "DeepSeek Harness 명령을 실행하지 못했습니다.",
   'chat.deepseekCommand.needsSession': "이 명령을 실행하기 전에 메시지를 보내 DeepSeek Harness 세션을 만드세요.",
   'settings.sourceControl.ssh.title': 'SSH 키',

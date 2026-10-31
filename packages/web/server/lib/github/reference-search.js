@@ -55,12 +55,7 @@ const COMMON_FIELDS = `
   repository { name owner { login } }
 `;
 
-const REFERENCE_FRAGMENTS = `
-fragment IssueReference on Issue {
-  ${COMMON_FIELDS}
-  state
-  stateReason
-}
+const PULL_REFERENCE_FRAGMENT = `
 fragment PullReference on PullRequest {
   ${COMMON_FIELDS}
   state
@@ -70,6 +65,15 @@ fragment PullReference on PullRequest {
   headRefOid
   headRepository { name url sshUrl owner { login } }
 }
+`;
+
+const REFERENCE_FRAGMENTS = `
+fragment IssueReference on Issue {
+  ${COMMON_FIELDS}
+  state
+  stateReason
+}
+${PULL_REFERENCE_FRAGMENT}
 `;
 
 // The newest comments and reviews; `totalCount` says how many there are.
@@ -154,6 +158,19 @@ query ReferenceSearch($q: String!, $first: Int!, $after: String) {
   }
 }
 ${REFERENCE_FRAGMENTS}
+`;
+
+const REPOSITORY_PULLS_QUERY = `
+query RepositoryPulls($owner: String!, $repo: String!, $states: [PullRequestState!], $first: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(states: $states, orderBy: {field: UPDATED_AT, direction: DESC}, first: $first, after: $after) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { __typename ...PullReference }
+    }
+  }
+}
+${PULL_REFERENCE_FRAGMENT}
 `;
 
 const userSchema = z.object({ login: z.string(), avatarUrl: z.string().nullable().optional() }).nullable();
@@ -462,6 +479,12 @@ export function readPullStatusRefs(value) {
 const stateSchema = z.enum(['open', 'closed', 'merged', 'all']).catch('open');
 const peopleSchema = z.enum(['any', 'assigned', 'created', 'reviewRequested']).catch('any');
 const kindSchema = z.enum(['issue', 'pull']).nullable().catch(null);
+const scopeSchema = z.enum(['repository', 'network']).nullable().catch(null);
+
+/** Omitted scope keeps the reference picker's existing fork-network lookup. */
+export function readReferenceScope(value) {
+  return scopeSchema.parse(value === undefined ? 'network' : value);
+}
 
 /** A list's state; anything else reads as `open`. */
 export function readReferenceState(value) {
@@ -485,6 +508,35 @@ const searchResultSchema = z.object({
     nodes: z.array(z.unknown()),
   }),
 });
+
+const repositoryPullsSchema = z.object({
+  repository: z.object({
+    pullRequests: z.object({
+      totalCount: z.number().int().nonnegative(),
+      pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }),
+      nodes: z.array(pullNodeSchema),
+    }),
+  }),
+});
+
+/** A repository connection can traverse every PR, beyond the search API's 1,000-result limit. */
+export async function listRepositoryPullRequests({ octokit, repo, state, cursor }) {
+  const states = { open: ['OPEN'], closed: ['CLOSED', 'MERGED'], merged: ['MERGED'], all: null };
+  const data = repositoryPullsSchema.parse(await octokit.graphql(REPOSITORY_PULLS_QUERY, {
+    owner: repo.owner,
+    repo: repo.repo,
+    states: states[state],
+    first: REFERENCE_PAGE_SIZE,
+    after: cursor || null,
+  }));
+  const page = data.repository.pullRequests;
+  const items = page.nodes.map((node) => {
+    const item = toReference(node, [{ ...repo, source: 'origin' }]);
+    if (!item) throw new Error('GitHub returned a pull request outside the bound repository');
+    return item;
+  });
+  return { items, cursor: page.pageInfo.endCursor, hasMore: page.pageInfo.hasNextPage, total: page.totalCount };
+}
 
 /**
  * The item a pasted link or number names: a number for every searched repo,
@@ -562,7 +614,7 @@ async function runPartialQuery(octokit, query, variables) {
  * first. A lookup answers every repo that has the number, both kinds; a
  * search answers one kind, newest activity first.
  */
-export async function searchGitHubReferences({ octokit, repos, kind, state, people, text, cursor }) {
+export async function searchGitHubReferences({ octokit, repos, kind, state, people, text, cursor, scope = 'network' }) {
   const lookup = parseReferenceLookup(text, repos);
   if (lookup) {
     if (lookup.repos.length === 0) {
@@ -572,7 +624,7 @@ export async function searchGitHubReferences({ octokit, repos, kind, state, peop
     const data = await runPartialQuery(octokit, query, variables);
     const items = lookup.repos
       .map((_entry, index) => toReference(data?.[`a${index}`]?.issueOrPullRequest, repos))
-      .filter((item) => item !== null);
+      .filter((item) => item !== null && (scope !== 'repository' || item.kind === kind));
     return { items, cursor: null, hasMore: false, total: items.length };
   }
 

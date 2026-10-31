@@ -1,6 +1,8 @@
 import type { NativePromptPart, NativePromptRequest } from "@/lib/api/types"
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfProviderId, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
+import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
+import { formatMessage, useI18nStore } from "@/lib/i18n"
 
 // A native session receives what the user wrote and attached. OpenChamber's
 // own context (pinned knowledge, goal and response-style reminders, skill
@@ -61,16 +63,21 @@ export const nativePromptRequest = (send: {
   variant?: string
   agent?: string
   preserveSelection?: boolean
-}): NativePromptRequest => ({
-  directory: send.directory,
-  messageID: send.messageID,
-  parts: nativePromptParts(send.content, send.files, send.additionalParts),
-  model: { providerID: send.providerID, modelID: send.modelID },
-  variant: send.variant,
-  agent: nativeBackendOfProviderId(send.providerID) === 'antigravity' ? 'build' : nativeAgentOf(send.agent),
-  preserveSelection: send.preserveSelection,
-  instructions: nativePromptInstructions(send.additionalParts),
-})
+}): NativePromptRequest => {
+  if (nativeBackendOfProviderId(send.providerID) === 'antigravity' && send.agent !== undefined && send.agent !== 'build' && send.agent !== 'plan') {
+    throw new NativeAgentsRequestError(formatMessage(useI18nStore.getState().dictionary, 'chat.modelControls.nativeAgentUnsupported'), 400, 'NATIVE_INVALID_REQUEST')
+  }
+  return {
+    directory: send.directory,
+    messageID: send.messageID,
+    parts: nativePromptParts(send.content, send.files, send.additionalParts),
+    model: { providerID: send.providerID, modelID: send.modelID },
+    variant: send.variant,
+    agent: nativeAgentOf(send.agent),
+    preserveSelection: send.preserveSelection,
+    instructions: nativePromptInstructions(send.additionalParts),
+  }
+}
 
 /**
  * The id of a message sent to a native session: the caller's when the CLI can

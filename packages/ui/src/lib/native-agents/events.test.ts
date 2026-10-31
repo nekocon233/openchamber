@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { translateNativeEvent } from './events';
 import { localizeNativeForm, nativeQuestionAnswers, projectNativeQuestion } from './forms';
 import { nativeMessagePageSchema, nativeQuestionListSchema } from './schemas';
+import { buildFormAnswer, initialFormValues, missingRequiredKeys } from '@/components/chat/formCardState';
 
 const sessionID = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const question = {
@@ -12,6 +13,12 @@ const question = {
 };
 
 describe('native records in the shared v2 domain', () => {
+  test('accepts native model catalog invalidation without admitting OpenCode catalog kinds', () => {
+    const event = { type: 'catalog.updated', properties: { kind: 'native-model' } };
+    expect(translateNativeEvent(event)).toEqual(event);
+    expect(translateNativeEvent({ type: 'catalog.updated', properties: { kind: 'model' } })).toBeNull();
+  });
+
   test('a complete session update clears a previous archive and revert', () => {
     const event = translateNativeEvent({ type: 'session.updated', properties: { info: {
       id: sessionID, projectID: '', directory: '/repo', title: 'Work',
@@ -72,12 +79,30 @@ describe('native records in the shared v2 domain', () => {
     }
   });
 
-  test('does not project Antigravity questions because its adapter has no question protocol', () => {
+  test('Antigravity questions preserve choices, multiple answers and custom text through live and snapshot forms', () => {
     const antigravityQuestion = {
       ...question, kind: undefined, sessionID: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+      questions: [{ header: 'Scope', question: 'Which files should change?', multiple: true, options: [
+        { label: 'Source', description: 'Update the source' }, { label: 'Tests', description: 'Update coverage' },
+      ] }, { header: 'Details', question: 'What else should change?', options: [] }],
     };
-    expect(projectNativeQuestion(antigravityQuestion)).toBeNull();
-    expect(translateNativeEvent({ type: 'question.asked', properties: antigravityQuestion })).toBeNull();
+    const [restored] = nativeQuestionListSchema.parse([antigravityQuestion]);
+    const form = projectNativeQuestion(restored);
+    expect(translateNativeEvent({ type: 'question.asked', properties: antigravityQuestion }))
+      .toEqual({ type: 'form.created', properties: { form } });
+    if (!form) throw new Error('Missing Antigravity question form');
+    expect(form).toMatchObject({ title: 'Scope', metadata: { openchamberNativeQuestionKind: 'question' }, fields: [
+      { key: 'question-0', type: 'multiselect', title: 'Scope', description: 'Which files should change?', custom: true,
+        options: [{ value: 'Source' }, { value: 'Tests' }] },
+      { key: 'question-1', type: 'string', title: 'Details', custom: true, options: [] },
+    ] });
+    expect(localizeNativeForm(form, (key) => `translated:${key}`)).toBe(form);
+    expect(nativeQuestionAnswers({ 'question-1': 'Keep the existing API.', 'question-0': ['Tests', 'Source'] }))
+      .toEqual([['Tests', 'Source'], ['Keep the existing API.']]);
+    for (const type of ['question.replied', 'question.rejected']) {
+      expect(translateNativeEvent({ type, properties: { sessionID: restored.sessionID, requestID: restored.id } }))
+        .toEqual({ type: 'form.settled', properties: { sessionID: restored.sessionID, formID: restored.id } });
+    }
   });
 
   test('translated plan choices retain the native wire answers', () => {
@@ -93,15 +118,35 @@ describe('native records in the shared v2 domain', () => {
     expect(() => nativeQuestionAnswers({ 'question-1': 'build' })).toThrow('incomplete');
   });
 
-  test('Codex plan decisions survive snapshot parsing and use the same translated form as live events', () => {
-    const codexQuestion = {
-      ...question, sessionID: 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00', kind: 'codex-plan-exit',
-    };
-    const [restored] = nativeQuestionListSchema.parse([codexQuestion]);
+  test('ordinary Antigravity questions with empty headers use localized field labels', () => {
+    const form = projectNativeQuestion({
+      id: 'ncq_empty_headers', sessionID: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+      questions: [
+        { header: '', question: 'Which files should change?', options: [{ label: 'Source', description: '' }] },
+        { header: '', question: 'How should the tests run?', options: [{ label: 'Unit tests', description: '' }] },
+      ],
+    });
+    if (!form) throw new Error('Missing Antigravity question form');
+    const localized = localizeNativeForm(form, (key, params) => `localized:${key}:${params?.index ?? ''}`);
+    expect(localized.title).toBe('');
+    expect(localized.fields.map((field) => field.title)).toEqual([
+      'localized:chat.questionCard.questionFallback:1', 'localized:chat.questionCard.questionFallback:2',
+    ]);
+    expect(form.fields.map((field) => field.title)).toEqual(['', '']);
+    expect(localized.fields[0]).toMatchObject({ description: 'Which files should change?', options: [{ value: 'Source', label: 'Source' }] });
+  });
+
+  for (const decision of [
+    { backend: 'Codex', sessionID: 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00', kind: 'codex-plan-exit' },
+    { backend: 'Antigravity', sessionID: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188', kind: 'antigravity-plan-exit' },
+  ]) {
+  test(`${decision.backend} plan decisions survive snapshot parsing and use the same translated form as live events`, () => {
+    const planQuestion = { ...question, sessionID: decision.sessionID, kind: decision.kind };
+    const [restored] = nativeQuestionListSchema.parse([planQuestion]);
     const form = projectNativeQuestion(restored);
-    expect(translateNativeEvent({ type: 'question.asked', properties: codexQuestion }))
+    expect(translateNativeEvent({ type: 'question.asked', properties: planQuestion }))
       .toEqual({ type: 'form.created', properties: { form } });
-    if (!form) throw new Error('Missing Codex plan form');
+    if (!form) throw new Error(`Missing ${decision.backend} plan form`);
     const translated = localizeNativeForm(form, (key) => `localized:${key}`);
     const field = translated.fields[0];
     if (field.type !== 'string') throw new Error('Expected a single-choice field');
@@ -113,10 +158,17 @@ describe('native records in the shared v2 domain', () => {
       'localized:chat.questionCard.planExitApprove', 'localized:chat.questionCard.planExitKeepPlanning',
     ]);
     expect(field.custom).toBe(true);
+    const values = initialFormValues(translated.fields);
+    expect(missingRequiredKeys(translated.fields, values)).toEqual(['question-0']);
+    const feedback = 'Revise the plan before changing files.\nKeep the existing API.';
+    values['question-0'] = { ...values['question-0'], custom: true, text: feedback };
+    expect(missingRequiredKeys(translated.fields, values)).toEqual([]);
+    expect(nativeQuestionAnswers(buildFormAnswer(translated.fields, values))).toEqual([[feedback]]);
     expect(translateNativeEvent({ type: 'question.replied', properties: {
       sessionID: restored.sessionID, requestID: restored.id,
     } })).toEqual({ type: 'form.settled', properties: { sessionID: restored.sessionID, formID: restored.id } });
   });
+  }
 
   test('preserves plan-approval provenance through live events and history parsing', () => {
     const codexSession = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';

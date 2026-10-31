@@ -42,11 +42,14 @@ const NO_REFERENCES: GitHubReference[] = [];
 const NO_ITEMS: ReadonlyMap<string, ReferencePickerItem> = new Map();
 const SEARCH_DEBOUNCE_MS = 300;
 const DETAIL_DEBOUNCE_MS = 250;
+const PROJECT_PULL_FILTER: RepositoryReferenceFilter = { state: 'open', people: 'reviewRequested' };
 
 export const IDLE_PULL_STATUS: CachedValue<GitHubPullStatus | null> = { status: 'idle' };
-export const readyValue = <T,>(state: CachedValue<T | null>): T | null => (state.status === 'ready' ? state.value : null);
 
 export type ReferenceBrowserOptions = {
+    /** Project PRs have independent filters, a single repository, and an explicit detail selection. */
+    mode?: 'references' | 'project-pulls';
+    active?: boolean;
     source: ReferencePickerSource;
     /** The project GitHub or GitLab items come from. */
     directory: string | null;
@@ -62,6 +65,8 @@ export type ReferenceBrowserOptions = {
 };
 
 export function useReferenceBrowser({
+    mode = 'references',
+    active = true,
     source,
     directory,
     isMobile,
@@ -70,8 +75,9 @@ export function useReferenceBrowser({
     retainedItems = NO_ITEMS,
     pinnedItem = null,
 }: ReferenceBrowserOptions) {
-    const [githubKind, setGitHubKind] = React.useState<GitHubReferenceKind>(initialGitHubKind ?? lastGitHubKind);
-    const [githubFilter, setGitHubFilter] = React.useState<RepositoryReferenceFilter>(lastGitHubFilter.get(initialGitHubKind ?? lastGitHubKind) ?? DEFAULT_REPOSITORY_FILTER);
+    const projectPulls = mode === 'project-pulls';
+    const [githubKind, setGitHubKind] = React.useState<GitHubReferenceKind>(projectPulls ? 'pull' : initialGitHubKind ?? lastGitHubKind);
+    const [githubFilter, setGitHubFilter] = React.useState<RepositoryReferenceFilter>(projectPulls ? PROJECT_PULL_FILTER : lastGitHubFilter.get(initialGitHubKind ?? lastGitHubKind) ?? DEFAULT_REPOSITORY_FILTER);
     const [linearFilter, setLinearFilter] = React.useState<LinearReferenceFilter>(lastLinearFilter);
     const [query, setQueryState] = React.useState('');
     const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
@@ -88,13 +94,15 @@ export function useReferenceBrowser({
 
     const githubList = useGitHubReferenceList({
         enabled: source === 'github' && githubStatus === 'ready',
+        active,
+        scope: projectPulls ? 'repository' : 'network',
         directory,
         kind: githubKind,
         filter: githubFilter,
         query: debouncedQuery,
     });
     const linearList = useLinearReferenceList({
-        enabled: source === 'linear' && linearStatus === 'ready',
+        enabled: active && source === 'linear' && linearStatus === 'ready',
         filter: linearFilter,
         query: debouncedQuery,
         teamId: linearTeamId,
@@ -102,21 +110,25 @@ export function useReferenceBrowser({
     // The other GitHub tab loads in the background, so switching to it is instant.
     const otherGitHubKind: GitHubReferenceKind = githubKind === 'issue' ? 'pull' : 'issue';
     useGitHubReferenceList({
-        enabled: source === 'github' && githubStatus === 'ready',
+        enabled: active && !projectPulls && source === 'github' && githubStatus === 'ready',
         directory,
         kind: otherGitHubKind,
         filter: lastGitHubFilter.get(otherGitHubKind) ?? DEFAULT_REPOSITORY_FILTER,
         query: '',
     });
     const list = source === 'github' ? githubList : linearList;
-    // Failed checks and conflicts colour open PRs once their statuses arrive.
-    const pullStatusOf = useGitHubPullStatuses(directory, source === 'github' ? githubList.items : NO_REFERENCES);
+    // Direct lookups and advanced search can return another state. Project
+    // browsing keeps its open-only contract before rows or checks consume it.
+    const githubItems = React.useMemo(() => projectPulls
+        ? githubList.items.filter(reference => reference.kind === 'pull' && reference.state === 'open')
+        : githubList.items, [githubList.items, projectPulls]);
+    const pullStatusOf = useGitHubPullStatuses(directory, active && source === 'github' ? githubItems : NO_REFERENCES);
 
     const items = React.useMemo<ReferencePickerItem[]>(() => (
         source === 'github'
-            ? githubList.items.map((reference) => ({ source: 'github', reference }))
+            ? githubItems.map((reference) => ({ source: 'github', reference }))
             : linearList.items.map((issue) => ({ source: 'linear', issue }))
-    ), [githubList.items, linearList.items, source]);
+    ), [githubItems, linearList.items, source]);
 
     // An item opened from the preview (a Linear parent or sub-issue): it can be
     // highlighted while the list does not hold it, like a pinned one.
@@ -136,18 +148,19 @@ export function useReferenceBrowser({
             ?? (key === openedKey ? openedItem : null)
         : null);
     const highlightedItem = findItem(effectiveHighlightKey);
-    const previewKey = isMobile ? mobilePreviewKey : effectiveHighlightKey;
+    const previewKey = isMobile || projectPulls ? mobilePreviewKey : effectiveHighlightKey;
     const previewItem = findItem(previewKey);
 
     // Details are asked for the row the highlight rests on, not every row an
     // arrow key passes over; one already fetched shows at once.
     const settledPreviewItem = useDebouncedValue(previewItem, DETAIL_DEBOUNCE_MS);
-    const previewSettled = Boolean(settledPreviewItem && previewItem
+    const previewSettled = Boolean(active && settledPreviewItem && previewItem
         && referencePickerItemKey(settledPreviewItem) === referencePickerItemKey(previewItem));
     const { detail: linearDetail } = useLinearIssueDetail(previewItem?.source === 'linear' ? previewItem.issue.id : null, previewSettled);
     const { detail: githubDetail, refresh: refreshGithubDetail } = useGitHubReferenceDetail(directory, previewItem?.source === 'github' ? previewItem.reference : null, previewSettled);
 
     const selectGitHubKind = (kind: GitHubReferenceKind) => {
+        if (projectPulls) return;
         lastGitHubKind = kind;
         setGitHubKind(kind);
         setGitHubFilter(lastGitHubFilter.get(kind) ?? DEFAULT_REPOSITORY_FILTER);
@@ -156,7 +169,11 @@ export function useReferenceBrowser({
     /** Changes the state or whose items, keeping the other. */
     const selectGitHubFilter = (patch: Partial<RepositoryReferenceFilter>) => {
         const filter = { ...githubFilter, ...patch };
-        lastGitHubFilter.set(githubKind, filter);
+        if (projectPulls) {
+            filter.state = 'open';
+            if (filter.people === 'assigned') filter.people = 'any';
+        }
+        if (!projectPulls) lastGitHubFilter.set(githubKind, filter);
         setGitHubFilter(filter);
         setHighlightedKey(null);
     };
@@ -192,7 +209,10 @@ export function useReferenceBrowser({
 
     /** A row click: highlights on desktop, opens the preview in place on mobile. */
     const showItem = (key: string) => {
-        if (isMobile) {
+        // A resumed list may refresh its first page while a later-page PR is still being read.
+        if (projectPulls) setOpenedItem(findItem(key));
+        if (isMobile || projectPulls) {
+            setHighlightedKey(key);
             setMobilePreviewKey(key);
             return;
         }
@@ -203,10 +223,15 @@ export function useReferenceBrowser({
     /** Previews an item the list may not hold, such as a Linear issue's parent or sub-issue. */
     const openItem = (item: ReferencePickerItem) => {
         setOpenedItem(item);
-        showItem(referencePickerItemKey(item));
+        const key = referencePickerItemKey(item);
+        if (projectPulls) {
+            setHighlightedKey(key);
+            setMobilePreviewKey(key);
+        } else showItem(key);
     };
 
     return {
+        mode,
         source,
         directory,
         isMobile,

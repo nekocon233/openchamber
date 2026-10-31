@@ -27,6 +27,7 @@ const QUOTA_PROVIDER_ALIASES = new Map<string, string>([
   ['claude-code', 'claude'],
   ['claude-native', 'claude'],
   ['codex-native', 'codex'],
+  ['antigravity-native', 'antigravity-cli'],
   ['gemini', 'google'],
   ['kilocode', 'kilo'],
   ['kilo-code', 'kilo'],
@@ -65,7 +66,13 @@ export const pickUsageHeadline = (
   // Provider-level rows only: a model-scoped row describes one model, not the
   // provider the composer is pointed at.
   const providerRows = group.rows.filter((row) => !row.subtitle);
-  const rows = providerRows.length > 0 ? providerRows : group.rows;
+  let rows = providerRows.length > 0 ? providerRows : group.rows;
+  if (quotaProviderId === 'antigravity-cli') {
+    const family = modelId?.startsWith('gemini-') ? 'Gemini'
+      : modelId?.startsWith('claude-') || modelId?.startsWith('gpt-') ? 'Claude / GPT' : null;
+    rows = rows.filter((row) => family !== null && row.subtitle === family);
+    if (rows.length === 0) return null;
+  }
 
   let best: UsageLimitRow | null = null;
   let bestSeconds = Number.POSITIVE_INFINITY;

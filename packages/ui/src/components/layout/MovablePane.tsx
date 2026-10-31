@@ -17,18 +17,24 @@ type HostParent = HTMLElement & { moveBefore?: (node: Node, child: Node | null) 
  * The element is `display: contents`, so the pane's own wrapper is laid out
  * by the zone body as if it were a direct child.
  */
-export const MovablePane: React.FC<{ zone: ContextZone; children: React.ReactNode }> = ({ zone, children }) => {
+export const MovablePane: React.FC<{
+  zone?: ContextZone;
+  /** A fixed workspace host, outside the movable tool zones. */
+  host?: HTMLElement | null;
+  children: React.ReactNode;
+}> = ({ zone, host: fixedHost, children }) => {
   const [node] = React.useState(() => {
     const element = document.createElement('div');
     element.style.display = 'contents';
     return element;
   });
-  const host = useZoneHostsStore((state) => state.body[zone]);
+  const zoneHost = useZoneHostsStore((state) => zone ? state.body[zone] : null);
+  const host = zone ? zoneHost : fixedHost;
 
   React.useLayoutEffect(() => {
     // The frame registers its body from a ref, earlier in the same commit, so
     // a pane lands in its final zone on first attach.
-    const parent: HostParent | null = host ?? useZoneHostsStore.getState().body[zone];
+    const parent: HostParent | null = host ?? (zone ? useZoneHostsStore.getState().body[zone] : null);
     if (!parent) {
       node.remove();
       return;

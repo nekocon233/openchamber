@@ -30,6 +30,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { GitignoredToggleButton } from './GitignoredToggleButton';
+import { ContextPanelHeaderToolbar } from './contextPanelHeaderSlot';
+import { useInContextPanelHeader } from './contextPanelHeaderSlotContext';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
@@ -628,6 +630,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
   visibleRef.current = visible;
   const { t } = useI18n();
   const { files, runtime } = useRuntimeAPIs();
+  const inPanelHeader = useInContextPanelHeader();
   const isBrowserClient = isBrowserClientRuntime(runtime.platform);
   const currentDirectory = useEffectiveDirectory() ?? '';
   const root = normalizePath(currentDirectory.trim());
@@ -1483,13 +1486,14 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
   const dropTargetLabel = dropIndicatorTarget ? getDropTargetLabel(root, dropIndicatorTarget) : '';
   const moveDropTargetLabel = moveDropTarget ? getDropTargetLabel(root, moveDropTarget) : '';
   const pendingMoveName = pendingMove ? pendingMove.source.path.slice(pendingMove.source.path.lastIndexOf('/') + 1) : '';
+  const toolbarButtonClassName = cn('p-0 flex-shrink-0', inPanelHeader ? 'w-7' : 'size-6');
 
   return (
     <section ref={treeSectionRef} className="flex h-full min-h-0 flex-col overflow-hidden">
-      {/* The action band matches the file editor's docked toolbar (40px,
-          24px buttons) so the two read as one row across the panel. */}
       <div className="flex flex-col border-b border-border/40">
-        <div className="flex h-8 shrink-0 items-center justify-end gap-1 border-t border-border/40 px-2">
+        <ContextPanelHeaderToolbar>
+        <div className={cn('flex min-w-0 items-center justify-end gap-1', inPanelHeader ? 'flex-1 self-center' : 'h-8 shrink-0 border-t border-border/40 px-2')}>
+        {inPanelHeader ? <span className="min-w-0 flex-1 truncate ps-1.5 typography-ui-label text-foreground">{t('contextPanel.mode.files')}</span> : null}
         {/* New file, new folder and upload share one "+" menu, so the band
             keeps four buttons and fits even the narrowest tree. */}
         {canCreateFile || canCreateFolder || canUpload ? (
@@ -1501,7 +1505,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="size-6 p-0 flex-shrink-0"
+                      className={toolbarButtonClassName}
                       aria-label={t('sidebarFilesTree.actions.addMenuTitle')}
                     >
                       <Icon name={isUploading ? 'loader-4' : 'add'} className={cn('h-4 w-4', isUploading && 'animate-spin')} />
@@ -1530,11 +1534,11 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
-        <GitignoredToggleButton className="size-6" />
+        <GitignoredToggleButton className={inPanelHeader ? 'w-7' : 'size-6'} />
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="inline-flex flex-shrink-0">
-              <Button variant="ghost" size="sm" onClick={() => void refreshRoot()} className="size-6 p-0 flex-shrink-0" title={t('sidebarFilesTree.actions.refreshTitle')} aria-label={t('sidebarFilesTree.actions.refreshTitle')}>
+              <Button variant="ghost" size="sm" onClick={() => void refreshRoot()} className={toolbarButtonClassName} title={t('sidebarFilesTree.actions.refreshTitle')} aria-label={t('sidebarFilesTree.actions.refreshTitle')}>
                 <Icon name="refresh" className="h-4 w-4" />
               </Button>
             </span>
@@ -1550,7 +1554,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
                 onClick={() => {
                   if (root) collapseAllExpandedPaths(root);
                 }}
-                className="size-6 p-0 flex-shrink-0"
+                className={toolbarButtonClassName}
                 title={t('sidebarFilesTree.actions.collapseAllTitle')}
                 aria-label={t('sidebarFilesTree.actions.collapseAllTitle')}
               >
@@ -1561,6 +1565,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
           <TooltipContent side="bottom" sideOffset={6}>{t('sidebarFilesTree.actions.collapseAllTitle')}</TooltipContent>
         </Tooltip>
         </div>
+        </ContextPanelHeaderToolbar>
         <div className="relative min-w-0 px-2 py-2">
           <Icon name="search" className="pointer-events-none absolute inset-s-4 top-4 h-4 w-4 text-muted-foreground" />
           <Input

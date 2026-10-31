@@ -40,6 +40,7 @@ export const createVSCodeSourceControlAPI = (): SourceControlAPI => ({
     changeRequests: false,
     draftChangeRequests: false,
     mergeChangeRequests: false,
+    forceMergeChangeRequests: false,
     ci: false,
   }),
   authStatus: async (identity: SourceControlIdentity): Promise<SourceControlAuthStatus> => ({
@@ -61,6 +62,8 @@ export const createVSCodeSourceControlAPI = (): SourceControlAPI => ({
   changeRequestMerge: unsupported,
   changeRequestComment: unsupported,
   changeRequestReview: unsupported,
+  githubPendingReview: unsupported,
+  githubPendingReviewAction: unsupported,
   issueComment: unsupported,
   changeRequestSetState: unsupported,
   issueSetState: unsupported,

@@ -1,7 +1,8 @@
 import { create } from 'zustand';
+import { isRightToLeft } from '@/lib/i18n';
 import type { ContextPanelMode } from '@/lib/surfaces/modes';
 import { computeZoneDropTargets, hitTestZoneDropTargets, type ZoneDropTargets, type ZonePoint, type ZoneRect } from '@/lib/workspace/zoneDropTargets';
-import { shownContextModes, type ContextZone } from '@/lib/workspace/zones';
+import { getDefaultContextZone, shownContextModes, type ContextZone } from '@/lib/workspace/zones';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
 
 /**
@@ -53,7 +54,9 @@ export const beginZoneDrag = (drag: Omit<ActiveZoneDrag, 'targets' | 'frames'>):
   if (!row || !chatColumn) return false;
   // The bottom zone's aside, card and gutters: the whole band it holds.
   const bottomZone = document.querySelector('[data-context-zone="bottom"][data-context-panel-open="true"]');
-  const targets = computeZoneDropTargets(row, chatColumn, rectOf(bottomZone));
+  const editor = document.querySelector<HTMLElement>('[data-workspace-editor]');
+  const editorColumn = editor && editor.clientWidth > 0 ? rectOf(editor) : null;
+  const targets = computeZoneDropTargets(row, chatColumn, rectOf(bottomZone), isRightToLeft(document.documentElement), editorColumn);
   const frames = {
     left: openZoneCard('left') ?? insetLikeCard(targets.left),
     right: openZoneCard('right') ?? insetLikeCard(targets.right),
@@ -88,7 +91,7 @@ export const finishZoneDrag = (directory: string | null | undefined): boolean =>
   const directoryKey = directory ? normalizeContextPanelDirectoryKey(directory) : '';
   if (directoryKey) {
     const after = useUIStore.getState();
-    if (!shownContextModes(after.contextPanelByDirectory[directoryKey], after.contextSurfaceZones).has(drag.mode)) {
+    if (!shownContextModes(after.contextPanelByDirectory[directoryKey], after.contextSurfaceZones, getDefaultContextZone(after.workspaceLayout)).has(drag.mode)) {
       after.openContextSurface(directoryKey, drag.mode);
     }
   }

@@ -20,11 +20,11 @@ describe('Antigravity native boundary schemas', () => {
         antigravity: {
           cli: true,
           actions: { revert: true, delete: true, fork: true },
-          tasks: { plan: true, todos: true },
+          tasks: { background: true, output: true, stop: false, plan: true, todos: true },
         },
       },
     });
-    expect(parsed.backends.antigravity).toEqual({ cli: true });
+    expect(parsed.backends.antigravity).toEqual({ cli: true, tasks: { background: true, output: true, stop: false } });
     expect(nativeCapabilitiesSchema.parse(capabilities()).backends.antigravity).toBeUndefined();
   });
 
@@ -38,11 +38,14 @@ describe('Antigravity native boundary schemas', () => {
           models: [{
             id: 'gemini-3-pro', name: 'Gemini 3 Pro', contextWindow: null, outputLimit: null,
             efforts: [], defaultEffort: null, fast: false, input: { image: false, pdf: false },
+            aliases: [{ id: 'gemini-3-pro-low', variant: 'low' }],
           }],
         },
       },
     });
-    expect(parsed.backends.antigravity).toMatchObject({ status: 'ok' });
+    expect(parsed.backends.antigravity).toMatchObject({ status: 'ok', models: [
+      { aliases: [{ id: 'gemini-3-pro-low', variant: 'low' }] },
+    ] });
     const unauthenticated = nativeCatalogSchema.parse({
       backends: {
         claude: { status: 'ok', models: [] },

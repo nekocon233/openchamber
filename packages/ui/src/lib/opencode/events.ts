@@ -93,6 +93,8 @@ export type CatalogKind =
   | "plugin"
   | "provider"
   | "model"
+  /** The host changed native CLI models; no OpenCode catalog needs a read. */
+  | "native-model"
   | "credential"
   | "project"
   /** Web search providers or the default choice changed (`websearch.updated`). */

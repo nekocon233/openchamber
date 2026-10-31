@@ -1,5 +1,9 @@
 import React from 'react';
 import { Header } from './Header';
+import { EditorWorkspaceFit } from './EditorWorkspaceFit';
+import { useWorkspaceOverlay } from './editorWorkspaceSizing';
+import { EditorWorkspaceColumns } from './EditorWorkspaceColumns';
+import { setChatHeaderHost } from './workspaceHosts';
 import { Sidebar } from './Sidebar';
 import { SidebarTopBar } from './SidebarTopBar';
 import { useSidebarPeek } from './useSidebarPeek';
@@ -32,7 +36,8 @@ import { useDeviceInfo } from '@/lib/device';
 import { cn } from '@/lib/utils';
 import { useOnDemandComponent } from '@/hooks/useOnDemandComponent';
 import { useSessionListSync } from '@/components/session/sidebar/list/useSessionListSync';
-import { setChatCovered } from './rightSlot';
+import { setChatCovered } from './chatCoverage';
+import { useIsEditorWorkspaceLayout } from './workspaceLayout';
 
 import { ChatView } from '@/components/views/ChatView';
 
@@ -70,35 +75,42 @@ const OnDemand: React.FC<{
 };
 
 /**
- * The session sidebar, the only part of the layout that follows its open
- * state: toggling it re-renders this, never the chat, the header row or the
- * context panel beside it.
+ * The session sidebar follows its own visibility. Toggling it keeps
+ * MainLayout and the chat mounted; editor layout's panel width limits
+ * subscribe to the sidebar's occupied width separately.
  */
-const LeftSidebar = React.memo<{ isMobile: boolean }>(({ isMobile }) => {
+const SessionsSidebar = React.memo<{ isMobile: boolean; editor?: boolean }>(({ isMobile, editor = false }) => {
     const isSidebarOpen = useUIStore((state) => state.isSidebarOpen);
-    const peek = useSidebarPeek({ enabled: !isSidebarOpen && !isMobile, layoutAnimationMs: useLayoutAnimationMs() });
+    const floating = useWorkspaceOverlay((state) => state.panel === 'sessions');
+    const peek = useSidebarPeek({ enabled: !isSidebarOpen && !isMobile && !editor, layoutAnimationMs: useLayoutAnimationMs() });
     return (
         <Sidebar
             isOpen={isSidebarOpen}
             isMobile={isMobile}
+            overlay={editor && floating}
             className="border-border"
-            topBar={<SidebarTopBar />}
+            topBar={editor ? undefined : <SidebarTopBar />}
             peek={peek}
         >
             <SessionSidebar isVisible={isSidebarOpen || peek.state !== false} />
         </Sidebar>
     );
 });
-LeftSidebar.displayName = 'LeftSidebar';
+SessionsSidebar.displayName = 'SessionsSidebar';
 
 /**
  * Desktop-surface layout: the chat owns the main area, and every other
  * surface (git, diff, files, terminal, ...) opens via the rail in one of the
- * zones around it (`lib/workspace/zones.ts`): right by default, or left or
- * under the chat where the user moved it. Phone-sized viewports run the separate MobileApp shell — a viewport
+ * zones around it (`lib/workspace/zones.ts`). Classic keeps sessions at the
+ * window start and the rail at its end. Editor puts sessions first, then the
+ * rail, left zone, resident editor, framed chat and right zone under a
+ * full-width header. The editor and chat keep their own columns while tools
+ * and sessions fold into overlays when the window is narrow.
+ * Phone-sized viewports run the separate MobileApp shell; a viewport
  * crossing the threshold reloads into it (see watchHostedSurfaceViewport).
  */
 export const MainLayout: React.FC = () => {
+    const editorLayout = useIsEditorWorkspaceLayout();
     useSessionListSync({ isVSCode: false });
     useTerminalSessionKeepalive();
     // The grant dialog of isolated spaces; the main layout is never VS Code's (decision 16).
@@ -139,8 +151,7 @@ export const MainLayout: React.FC = () => {
     // fully hidden (not just covered) so none of its floating chrome bleeds
     // through, and selecting a session or draft anywhere closes the surface.
     const isSurfacePageOpen = isScheduledTasksPageOpen || isArchivePageOpen || isIntegrationsCatalogOpen || isUsageStatsPageOpen || isSourceBoardOpen || Boolean(worktreesPageProjectId) || isSpacesPageOpen || isRunOverviewOpen || Boolean(guestPage);
-    // The work-status card sits in the right slot, outside the hidden chat,
-    // so the slot is told to hide it with the chat.
+    // The bottom tool zone follows the chat when a full-page surface covers it.
     React.useLayoutEffect(() => {
         setChatCovered(isSurfacePageOpen);
     }, [isSurfacePageOpen]);
@@ -194,27 +205,29 @@ export const MainLayout: React.FC = () => {
                     </>
                 ) : null}
 
-                {/* Persistent top-left controls (toggle + project actions) that
-                    stay put while the sidebar/header animate beneath them. */}
+                {/* Native start-side controls and the session entry points. */}
                 <TitlebarLeftControls />
-                {/* Full-height Sidebar beside [Header above (chat | RightSidebar)] */}
+                {/* Classic's session column spans the header; editor's sits below it. */}
                 <div className="flex flex-1 overflow-hidden" data-page-scroll-lock="true">
-                    <LeftSidebar isMobile={isMobile} />
+                    {!editorLayout && <SessionsSidebar isMobile={isMobile} />}
                     <div className="relative flex flex-1 min-w-0 flex-col overflow-hidden bg-background" data-page-scroll-lock="true">
                         <Header />
-                        <div className="relative flex flex-1 min-h-0 overflow-hidden bg-background" data-page-scroll-lock="true">
+                        <div className="relative flex flex-1 min-h-0 overflow-hidden bg-background" data-page-scroll-lock="true" data-workspace-frame="true">
+                            {editorLayout && <SessionsSidebar isMobile={isMobile} editor />}
+                            {editorLayout && <div data-page-scroll-lock="true" data-workspace-rail="true" className="shrink-0">
+                                <ErrorBoundary><ContextPanelRail atStart /></ErrorBoundary>
+                            </div>}
                             <div className="relative flex flex-1 min-w-0 flex-col overflow-hidden bg-background" data-page-scroll-lock="true">
                                 <div className="relative flex flex-1 min-h-0 overflow-hidden" data-page-scroll-lock="true" data-workspace-row="true">
-                                    {/* The left zone: surfaces the user moved beside the
-                                        sidebar. Empty and closed, it takes no width. */}
+                                    {/* The left zone takes no width while closed. */}
                                     <ContextPanel zone="left" />
-                                    {/* Holds the chat and the right zone together, so its
-                                        width does not move when the right zone opens. The
-                                        work-status panel measures this rather than the chat,
-                                        which the right zone animates. */}
+                                    <EditorWorkspaceColumns enabled={editorLayout}>
+                                    {/* The chat and right tool zone share the remaining width. */}
                                     <div className="relative flex flex-1 min-h-0 min-w-0 overflow-hidden" data-page-scroll-lock="true" data-chat-area="true">
                                         {/* The chat column, with the bottom zone under the chat. */}
                                         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-workspace-chat="true">
+                                        <div className={cn('relative flex min-h-0 flex-1 flex-col overflow-hidden', editorLayout && 'oc-panel-edge mx-0.5 mb-1 rounded-[10px] bg-background')} data-chat-frame={editorLayout || undefined}>
+                                        <div ref={setChatHeaderHost} className={cn('flex min-h-10 shrink-0 items-center border-b border-border px-2', !editorLayout && 'hidden')} />
                                         <main className="min-h-0 flex-1 overflow-hidden bg-background relative" data-page-scroll-lock="true">
                                             <div className={cn('absolute inset-0', isSurfacePageOpen && 'invisible')}>
                                                 <ErrorBoundary><ChatView active={!isSettingsDialogOpen && !isSurfacePageOpen} /></ErrorBoundary>
@@ -236,6 +249,7 @@ export const MainLayout: React.FC = () => {
                                                     onDismiss={() => useUIStore.getState().setOpenGuestPage(null)} /></ErrorBoundary>
                                             </div>}
                                         </main>
+                                        </div>
                                         <ContextPanel zone="bottom" />
                                         </div>
                                         <ContextPanel zone="right" />
@@ -243,13 +257,15 @@ export const MainLayout: React.FC = () => {
                                             zones register, behind their layout animation. */}
                                         <ContextSurfacePanes />
                                         <ZoneDropOverlay />
-                                        <ZoneFitArbiter />
+                                        {!editorLayout && <ZoneFitArbiter />}
                                     </div>
+                                    </EditorWorkspaceColumns>
+                                    {editorLayout && <EditorWorkspaceFit />}
                                 </div>
                             </div>
-                            <div data-page-scroll-lock="true">
+                            {!editorLayout && <div data-page-scroll-lock="true">
                                 <ErrorBoundary><ContextPanelRail /></ErrorBoundary>
-                            </div>
+                            </div>}
                             <ErrorBoundary><GuestHosts /></ErrorBoundary>
                         </div>
                     </div>

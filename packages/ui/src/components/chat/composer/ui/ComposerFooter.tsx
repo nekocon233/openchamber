@@ -52,6 +52,7 @@ interface ComposerFooterProps {
 
     canSend: boolean;
     canAbort: boolean;
+    followUpDelivery: 'steer' | 'queue';
     hasContent: boolean;
     isExpandedInput: boolean;
     permissionMode: PermissionMode;
@@ -128,6 +129,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
         stopIconSizeClass,
         canSend,
         canAbort,
+        followUpDelivery,
         hasContent,
         isExpandedInput,
         permissionMode,
@@ -243,6 +245,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
                                     <Icon name="mic" className={cn(iconSizeClass, 'text-current')} />
                                 </button> : null}
                                 <ComposerActionButtons
+                                    followUpDelivery={followUpDelivery}
                                     isMobile={isMobile}
                                     footerIconButtonClass={footerIconButtonClass}
                                     sendIconSizeClass={sendIconSizeClass}
@@ -323,6 +326,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
                             // already shows how many runs start, and submitting the form
                             // launches them (ChatInput routes the submit to the run).
                             <ComposerActionButtons
+                                followUpDelivery={followUpDelivery}
                                 isMobile={isMobile}
                                 footerIconButtonClass={footerIconButtonClass}
                                 sendIconSizeClass={sendIconSizeClass}
@@ -338,6 +342,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
                                 sendLabel={t('chat.parallel.runAria', { count: parallelRun.runCount })}
                             />
                         ) : <ComposerActionButtons
+                            followUpDelivery={followUpDelivery}
                             isMobile={isMobile}
                             footerIconButtonClass={footerIconButtonClass}
                             sendIconSizeClass={sendIconSizeClass}

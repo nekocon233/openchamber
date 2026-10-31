@@ -12,7 +12,7 @@ drawer.
 | `KnowledgeSearchBar.tsx` | the floating search bar |
 | `NotesSection.tsx` | note list, per-note title/preview, the open note, pin, delete |
 | `NoteEditor.tsx` | the note editor: Markdown that reads formatted while you type |
-| `TodosSection.tsx` | todo list, add/toggle/delete/clear, drag reorder |
+| `TodosSection.tsx` | todo list, add/edit/toggle/delete/clear, drag reorder |
 | `PlansSection.tsx` | plan list, create, import, pin, share, delete, open |
 | `MemorySection.tsx` | agent memory list, project/global scope switch, new/changed badges, edit, forget, the Tidy up button |
 | `memoryTidy.ts` | starting the tidy-up session: the store as prompt text, the default model, the send |
@@ -82,7 +82,7 @@ Notes, todos and plans add through the same `KnowledgeComposer`: one line that
 grows with its text, Enter to add, the add button at its end. Notes follow the
 chat composer: Shift+Enter starts a new line on desktop, and on a phone, whose
 keyboard has no Shift+Enter, Return starts a new line and the add button adds.
-Todos and plan titles are one line, and pasted line breaks become spaces. The length counter appears
+The new-todo composer and plan titles are one line, and pasted line breaks become spaces. The length counter appears
 only near the limit. An empty, always-open 3000-character box used to take a
 third of the panel above notes that are read far more often than written.
 
@@ -104,12 +104,28 @@ Every row has the same actions in the same place: at most one direct control
 delete). On desktop they appear on hover or keyboard focus; touch layouts show
 them always. A pinned entry keeps its filled pin visible.
 
+A todo's menu includes Edit todo. Its row opens a multiline field with Save
+and Cancel; Ctrl/Cmd+Enter saves, Escape cancels, and IME composition keeps its
+normal key behavior. Blank text cannot be saved. The draft stays local through
+peer refreshes and save failure. A successful edit replaces only that item's
+text through PATCH, retaining its completion, position, id and creation time.
+While editing, the row stays visible even if the query stops matching its new
+text. The editor is keyed by runtime and project, so changing owner cannot
+apply its draft to another project's same-id todo. A todo removed elsewhere is
+refreshed away and is never recreated by Save.
+
+Editing disables reordering and that row's completion control. Mouse drag uses a
+distance threshold, touch uses a hold threshold, and variable-height rows
+translate without scaling while reordered. Writes are disabled while an edit
+saves, and clearing completed items waits until the editor closes.
+
 The pin attaches a note or plan to the current session's context, and a pinned
 note says so in its footer. The icon alone read as "pin to the top of the
 list".
 
-The send control on a todo opens three targets: the current session, a new
-session, and a new worktree session. The two "new" targets create the session,
+The send control on a todo sends directly to the current conversation. The
+row's More menu also offers a new session and a new worktree session. Those
+two targets create the session,
 pick its model, agent and effort in `TodoSendDialog`, and send the todo with the
 `plan.todo` magic prompt, which asks for a plan before any implementation.
 
@@ -122,6 +138,15 @@ a configured session to another model. When the conversation is working, the
 message goes into the running turn (`delivery: 'steer'`), and an open permission
 or question is superseded first, as a composer send supersedes it. A failed send
 reports the error and leaves the todo in the list.
+
+An empty main chat uses its open new-session draft. Sending captures the draft
+target and current model, agent and effort, then uses the composer's existing
+materialization/send path. Existing conversations keep their own selection.
+A pinned chat uses its own conversation and cannot borrow the main chat's
+draft. Target, directory and runtime identity are captured before asynchronous
+permission handling; double clicks share one pending send. The draft's created
+session ID supplies the scroll target, and a failed first prompt leaves that
+created conversation available for retry.
 
 An earlier version wrapped the todo in a Markdown code fence and appended it to
 the composer, so the toast said "sent" while the user still had to press send a
@@ -154,7 +179,7 @@ Escape goes back too.
 
 Notes and memories used to expand inside the list instead. Every open and close
 pushed every card below it down and back up, and an expanded 3000-character note
-turned the list into a wall of text. Nothing in a list changes height now.
+turned the list into a wall of text. Note and memory cards keep a fixed height.
 
 A note card has a header line with the title and the row actions, a rendered
 Markdown preview of the rest that fades out where it is cut, and a footer with
@@ -353,7 +378,7 @@ its own. `NotesSection` and `PlansSection` call the store directly. Todos still
 route through the container only because the container already holds the list it
 sorts for display.
 
-Adding, checking, unchecking and deleting a todo send that one item
+Adding, editing, checking, unchecking and deleting a todo send that one item
 (`ProjectTodoChange`), while the panel shows the whole next list at once. Agents
 add todos through their own tool, and a whole-list write from a panel that has
 not refreshed yet would erase what an agent just added. Reordering and "clear

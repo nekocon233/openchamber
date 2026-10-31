@@ -41,6 +41,7 @@ for (const [name, value] of Object.entries({
   HTMLInputElement: browser.HTMLInputElement,
   HTMLTextAreaElement: browser.HTMLTextAreaElement,
   PointerEvent: browser.PointerEvent,
+  Event: browser.Event,
   ResizeObserver: browser.ResizeObserver,
   MutationObserver: browser.MutationObserver,
   EventSource: TestEventSource,
@@ -60,6 +61,7 @@ const peerNote: ProjectNote = {
 };
 let serverContext = emptyContext();
 let readFailed = false;
+let todoWriteFailed = false;
 let readContext = async (): Promise<Response> => Response.json(serverContext);
 let reads = 0;
 const noteWrites: string[] = [];
@@ -71,8 +73,9 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
     const todoId = url.pathname.match(/\/todos\/([^/]+)$/)?.[1];
     if (todoId && init?.method === 'PATCH') {
       todoWrites.push(`${todoId} ${String(init.body)}`);
-      const { completed } = z.object({ completed: z.boolean() }).parse(JSON.parse(String(init.body)));
-      serverContext = { ...serverContext, todos: serverContext.todos.map(todo => todo.id === todoId ? { ...todo, completed } : todo) };
+      if (todoWriteFailed) return Response.json({ error: 'offline' }, { status: 503 });
+      const patch = z.object({ completed: z.boolean().optional(), text: z.string().optional() }).parse(JSON.parse(String(init.body)));
+      serverContext = { ...serverContext, todos: serverContext.todos.map(todo => todo.id === todoId ? { ...todo, ...patch } : todo) };
       return Response.json(serverContext);
     }
     if (init?.method === 'PATCH') {
@@ -143,11 +146,11 @@ const sdk = OpenCode.make({
   baseUrl: 'http://runtime.test',
   fetch: async () => new Response('[]', { headers: { 'Content-Type': 'application/json' } }),
 });
-const render = async (visible = true) => {
+const render = async (visible = true, owner = project) => {
   await act(async () => root?.render(
     <RuntimeAPIContext.Provider value={runtimeApis}>
       <SyncProvider sdk={sdk} directory="">
-        <I18nProvider><ProjectNotesTodoPanel projectRef={project} visible={visible} /></I18nProvider>
+        <I18nProvider><ProjectNotesTodoPanel projectRef={owner} visible={visible} /></I18nProvider>
       </SyncProvider>
     </RuntimeAPIContext.Provider>,
   ));
@@ -180,6 +183,7 @@ beforeEach(() => {
   TestEventSource.instances = [];
   serverContext = emptyContext();
   readFailed = false;
+  todoWriteFailed = false;
   readContext = async () => Response.json(serverContext);
   reads = 0;
   noteWrites.length = 0;
@@ -422,6 +426,81 @@ test('going back from an open note returns to where the list was', async () => {
 });
 
 type SendMessage = ReturnType<typeof useSessionUIStore.getState>['sendMessage'];
+
+const startTodoEdit = async (index = 0) => {
+  const tab = Array.from(host.querySelectorAll<HTMLButtonElement>('nav button')).find(button => button.textContent?.startsWith('Todo'));
+  if (!tab) throw new Error('Todo tab missing');
+  await act(async () => tab.click());
+  const menu = host.querySelectorAll<HTMLButtonElement>('li button[aria-label="More actions"]')[index];
+  if (!menu) throw new Error('Todo menu missing');
+  await act(async () => menu.click());
+  const edit = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent === 'Edit todo');
+  if (!edit) throw new Error('Edit action missing');
+  await act(async () => edit.click());
+};
+const todoEditor = () => {
+  const field = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Todo text"]');
+  if (!field) throw new Error('Todo editor missing');
+  return field;
+};
+const typeTodo = async (text: string) => act(async () => {
+  const setter = Object.getOwnPropertyDescriptor(browser.HTMLTextAreaElement.prototype, 'value')?.set;
+  if (!setter) throw new Error('Textarea setter missing');
+  setter.call(todoEditor(), text);
+  todoEditor().dispatchEvent(new Event('input', { bubbles: true }));
+});
+const todoButton = (label: string) => {
+  const button = Array.from(host.querySelectorAll<HTMLButtonElement>('form button')).find(item => item.textContent === label);
+  if (!button) throw new Error(`Todo ${label} button missing`);
+  return button;
+};
+
+test('edits one completed todo while preserving peer additions and metadata', async () => {
+  const todo = { id: 'edit-me', text: 'Original todo', completed: true, createdAt: 3 };
+  serverContext = { ...serverContext, todos: [todo] };
+  await mount(); await startTodoEdit();
+  await typeTodo('Updated todo\nwith more context');
+  serverContext = { ...serverContext, todos: [{ id: 'peer', text: 'Peer addition', completed: false, createdAt: 4 }, todo] };
+  await act(async () => todoButton('Save').click()); await settle();
+  expect(todoWrites).toEqual(['edit-me {"text":"Updated todo\\nwith more context"}']);
+  expect(serverContext.todos).toEqual([{ id: 'peer', text: 'Peer addition', completed: false, createdAt: 4 }, { ...todo, text: 'Updated todo\nwith more context' }]);
+  expect(host.querySelector('textarea[aria-label="Todo text"]')).toBeNull();
+  expect(host.textContent).toContain('Peer addition');
+});
+
+test('cancel and empty edits write nothing; a failed save keeps the draft for retry', async () => {
+  serverContext = { ...serverContext, todos: [{ id: 'edit-me', text: 'Original todo', completed: false, createdAt: 3 }] };
+  await mount(); await startTodoEdit();
+  await typeTodo('   '); expect(todoButton('Save').disabled).toBe(true);
+  await typeTodo('Discard this'); await act(async () => todoButton('Cancel').click());
+  expect(todoWrites).toHaveLength(0);
+  await startTodoEdit(); expect(todoEditor().value).toBe('Original todo');
+  await typeTodo('Keep this draft');
+  todoWriteFailed = true;
+  await act(async () => todoButton('Save').click()); await settle();
+  expect(todoEditor().value).toBe('Keep this draft');
+  expect(todoEditor().disabled).toBe(false);
+  expect(useProjectContextStore.getState().getEntry(project).todos[0].text).toBe('Original todo');
+  todoWriteFailed = false;
+  await act(async () => todoButton('Save').click()); await settle();
+  expect(serverContext.todos[0].text).toBe('Keep this draft');
+  expect(host.querySelector('textarea[aria-label="Todo text"]')).toBeNull();
+});
+
+test('peer refreshes preserve typing and switching project discards the old editor scope', async () => {
+  const todo = { id: 'same-id', text: 'Original todo', completed: false, createdAt: 3 };
+  serverContext = { ...serverContext, todos: [todo] };
+  await mount(); await startTodoEdit(); await typeTodo('Local unsaved draft');
+  serverContext = { ...serverContext, todos: [{ ...todo, text: 'Peer update', completed: true }] };
+  await announce();
+  expect(todoEditor().value).toBe('Local unsaved draft');
+  serverContext = { ...serverContext, todos: [{ ...todo, text: 'Other project' }] };
+  await render(true, { id: 'other', path: '/fixture/other' });
+  expect(host.querySelector('textarea[aria-label="Todo text"]')).toBeNull();
+  expect(host.textContent).toContain('Other project');
+  expect(todoWrites).toHaveLength(0);
+});
+
 type SentMessage = { content: string; options: Parameters<SendMessage>[9] };
 
 /** Swaps the store's send for a recorder, and puts the real one back on exit. */
@@ -438,24 +517,20 @@ const captureTodoSends = () => {
   };
 };
 
-const chooseTodoSendToCurrentSession = async () => {
+const clickTodoSend = async () => {
   const todoTab = Array.from(host.querySelectorAll<HTMLButtonElement>('nav button'))
     .find(button => button.textContent?.startsWith('Todo'));
   if (!todoTab) throw new Error('Todo tab missing');
   await act(async () => todoTab.click());
 
   const trigger = host.querySelector<HTMLButtonElement>('li button[aria-label^="Send "]');
-  if (!trigger) throw new Error('Send menu trigger missing');
-  await act(async () => trigger.click());
-
-  const item = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
-    .find(entry => entry.textContent?.startsWith('Send to current session'));
-  if (!item) throw new Error('Send to current session item missing');
+  if (!trigger) throw new Error('Send button missing');
   // The send resolves behind the click, so its state updates stay inside act.
   await act(async () => {
-    item.click();
+    trigger.click();
     await new Promise(resolve => setTimeout(resolve, 0));
   });
+  expect(document.querySelector('[role="menu"]')).toBeNull();
 };
 
 const todoSendSession = () => {
@@ -472,11 +547,12 @@ test('sending a todo to the current session sends it as it is, not into the comp
   try {
     todoSendSession();
     await mount();
-    await chooseTodoSendToCurrentSession();
+    await clickTodoSend();
 
     expect(sends.sent).toHaveLength(1);
     expect(sends.sent[0].content).toBe('Mine');
-    expect(sends.sent[0].options?.sessionId).toBe('ses_todo');
+    expect(sends.sent[0].options?.target?.sessionId).toBe('ses_todo');
+    expect(sends.sent[0].options?.target?.directory).toBe('/fixture/chats');
     expect(sends.sent[0].options?.delivery).toBeUndefined();
     expect(useInputStore.getState().pendingInputText).toBeNull();
   } finally {
@@ -496,7 +572,7 @@ test('a todo sent while the session is working steers into the running turn', as
     todoSendSession();
     useGlobalSessionStatusStore.setState({ resolvedStatusById: new Map([['ses_todo', 'busy']]) });
     await mount();
-    await chooseTodoSendToCurrentSession();
+    await clickTodoSend();
 
     expect(sends.sent).toHaveLength(1);
     expect(sends.sent[0].options?.delivery).toBe('steer');

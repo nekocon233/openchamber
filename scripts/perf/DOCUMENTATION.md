@@ -624,6 +624,11 @@ first click closes it, which is one reason the warm-up exists. The other is
 the first panel open, which loads the surface's code: a warm-up toggle is
 recorded and printed, never pooled.
 
+Builds whose titlebar opens the session dropdown use `--method key` to measure
+the sidebar. The click locator excludes `data-session-picker-trigger`, so it
+cannot mistake the dropdown for a sidebar toggle. Click measurements remain
+available for older builds that still expose a sidebar toggle button.
+
 ```bash
 bun run profile:toggle -- --url http://127.0.0.1:4799 --output tmp/toggle/before
 bun run profile:toggle -- --url http://127.0.0.1:4799 --title "perf: short A" --method key

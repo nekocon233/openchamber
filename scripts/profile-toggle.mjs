@@ -426,7 +426,7 @@ const clickAt = async (client, { x, y }) => {
 /** The toggle button for `kind`, located by its icon, with its rail position. */
 const locateControl = (client, kind, surface) => evaluateValue(client, `(() => {
   const button = ${kind === "sidebar"
-    ? `document.querySelector("[data-sidebar-toggle]") ?? [...document.querySelectorAll("button")].find((element) => element.querySelector('use[href="#oc-layout-left"]') && !element.closest("[data-context-panel]"))`
+    ? `document.querySelector("[data-sidebar-toggle]") ?? [...document.querySelectorAll("button")].find((element) => !element.hasAttribute("data-session-picker-trigger") && element.querySelector('use[href="#oc-layout-left"]') && !element.closest("[data-context-panel]"))`
     : `document.querySelector('[data-context-surface="${SURFACE_IDS[surface]}"]') ?? document.querySelector('nav button[aria-pressed]:has(use[href="#oc-${SURFACE_ICONS[surface]}"])')`}
   if (!button) return null
   const rect = button.getBoundingClientRect()

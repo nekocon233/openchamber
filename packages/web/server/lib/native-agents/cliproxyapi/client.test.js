@@ -13,6 +13,7 @@ const gateway = (respond) => {
 };
 
 const credential = {
+  provider: 'codex',
   id: 'codex-d016f257-user@example.com-pro.json',
   name: 'codex-d016f257-user@example.com-pro.json',
   email: 'user@example.com',
@@ -23,6 +24,18 @@ const credential = {
 };
 
 describe('CLIProxyAPI client', () => {
+  it('honors a caller deadline in addition to the management request timeout', async () => {
+    const controller = new AbortController();
+    const client = createCliproxyapiClient({ baseURL: 'http://127.0.0.1:8317', managementKey: 'test-key', signal: controller.signal,
+      fetchImpl: async (url, options) => new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      }),
+    });
+    const pending = client.models('test-client-key');
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
+  });
+
   it('probes reachability without a key and treats any answer as running', async () => {
     const { calls, client } = gateway(() => json({ error: 'missing api key' }, 401));
     expect(await client.reachable()).toBe(true);
@@ -50,10 +63,12 @@ describe('CLIProxyAPI client', () => {
     expect(await client.accounts()).toEqual([{
       name: 'codex-d016f257-user@example.com-pro.json',
       email: 'user@example.com',
+      priority: null,
       planType: 'pro',
       activeUntil: '2026-11-11T18:14:58+00:00',
       status: 'active',
       disabled: false,
+      provider: 'codex',
     }]);
   });
 
@@ -69,6 +84,16 @@ describe('CLIProxyAPI client', () => {
     expect((await documented.client.beginLogin()).url).toBe('https://auth.openai.com/codex/device');
     const broken = gateway(() => json({ status: 'ok', state: 'abc123' }));
     await expect(broken.client.beginLogin()).rejects.toMatchObject({ code: 'CLIPROXYAPI_UNEXPECTED_RESPONSE' });
+  });
+
+  it('uses the requested OAuth provider and retains mixed account identities', async () => {
+    const { calls, client } = gateway((url) => url.includes('auth-url')
+      ? json({ state: 'ag-login', url: 'https://accounts.google.com/o/oauth2/auth' })
+      : json({ files: [credential, { ...credential, provider: 'antigravity', name: 'ag.json' }] }));
+    await client.beginLogin('antigravity');
+    expect(new URL(calls[0].url).pathname).toBe('/v8/management/oauth/auth-url');
+    expect(new URL(calls[0].url).searchParams.get('provider')).toBe('antigravity');
+    expect((await client.accounts()).map((entry) => entry.provider)).toEqual(['codex', 'antigravity']);
   });
 
   it('maps sign-in status and keeps an unknown state pending', async () => {

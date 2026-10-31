@@ -66,6 +66,30 @@ describe('findLatestUserModelChoice', () => {
         : { status, input: {}, time: { start: 2 } },
   })
 
+  test('Antigravity restores build only from a submitted Build prompt, preserving planning questions and feedback', () => {
+    const model = { providerID: 'antigravity-native', modelID: 'gemini-3.8-flash' }
+    const messages = [
+      userMessage('u1', model, 'plan'),
+      { ...nativeAssistant(), providerID: model.providerID, modelID: model.modelID },
+    ]
+    const partsFor = (id: string): Part[] => id === 'a-plan'
+      ? [planTool('completed'), {
+        id: 'answered-plan', sessionID: 'ses_1', messageID: id, type: 'tool', tool: 'question', callID: 'approval',
+        state: { status: 'completed', input: { questions: [{ question: 'Plan a fix' }] }, output: '',
+          time: { start: 2, end: 3 }, metadata: {
+            nativeQuestionKind: 'antigravity-plan-exit', nativePlanCallID: 'exit-plan', questionAnswers: [['build']], questionStatus: 'answered',
+          } },
+      }]
+      : [textPart(`p-${id}`, id, id)]
+    expect(findLatestUserModelChoice(messages, partsFor)).toMatchObject({ id: 'u1', agent: 'plan', ...model })
+    messages.push(userMessage('answer', model, 'plan'))
+    expect(findLatestUserModelChoice(messages, partsFor)).toMatchObject({ id: 'answer', agent: 'plan', ...model })
+    messages.push(userMessage('implement', model, 'build'))
+    expect(findLatestUserModelChoice(messages, partsFor)).toMatchObject({ id: 'implement', agent: 'build', ...model })
+    messages.push(userMessage('revise', model, 'plan'))
+    expect(findLatestUserModelChoice(messages, partsFor)).toMatchObject({ id: 'revise', agent: 'plan', ...model })
+  })
+
   test('restores build after a successful Claude plan exit without changing the model', () => {
     const messages = [userMessage('u1', { providerID: 'claude-native', modelID: 'opus' }, 'plan'), nativeAssistant()]
     const choice = findLatestUserModelChoice(messages, (id) => id === 'u1' ? [textPart('p-user', 'u1', 'Plan a fix')] : [planTool('completed')])

@@ -20,6 +20,7 @@ type ComposerActionButtonsProps = {
     stopIconSizeClass: string;
     canSend: boolean;
     canAbort: boolean;
+    followUpDelivery: 'steer' | 'queue';
     hasContent: boolean;
     currentSessionId: string | null;
     newSessionDraftOpen: boolean;
@@ -38,6 +39,7 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
         stopIconSizeClass,
         canSend,
         canAbort,
+        followUpDelivery,
         hasContent,
         currentSessionId,
         newSessionDraftOpen,
@@ -89,16 +91,17 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
                         if (isMobile) {
                             event.preventDefault();
                         }
-                        onQueueMessage();
+                        if (followUpDelivery === 'steer') onPrimaryAction();
+                        else onQueueMessage();
                     }}
                     className={cn(
                         footerIconButtonClass,
                         'absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-1',
                         canSendFollowUp ? 'text-primary hover:text-primary' : 'opacity-30'
                     )}
-                    aria-label={t('chat.chatInput.actions.queueMessageAria')}
+                    aria-label={t(followUpDelivery === 'steer' ? 'chat.chatInput.actions.sendMessageAria' : 'chat.chatInput.actions.queueMessageAria')}
                 >
-                    <Icon name="send-plane-2" className={cn(sendIconSizeClass, '-rotate-90 rtl:rotate-90')} />
+                    <Icon name="send-plane-2" className={cn(sendIconSizeClass, followUpDelivery === 'queue' && '-rotate-90 rtl:rotate-90')} />
                 </button>
             ) : null}
             <button
@@ -121,6 +124,7 @@ export const ComposerActionButtons = React.memo(function ComposerActionButtons(p
     && prev.stopIconSizeClass === next.stopIconSizeClass
     && prev.canSend === next.canSend
     && prev.canAbort === next.canAbort
+    && prev.followUpDelivery === next.followUpDelivery
     && prev.hasContent === next.hasContent
     && prev.currentSessionId === next.currentSessionId
     && prev.newSessionDraftOpen === next.newSessionDraftOpen

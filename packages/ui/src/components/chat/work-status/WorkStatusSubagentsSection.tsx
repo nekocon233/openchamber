@@ -13,6 +13,7 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { normalizePath } from '@/lib/pathNormalization';
+import { hasUnknownAntigravityActivity } from '@/lib/native-agents/capabilities';
 import { WorkStatusCollapsibleSection, WorkStatusRow, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
 import { formatCost } from './subagentCost';
@@ -128,19 +129,20 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
     const asked = (forms[child.id]?.length ?? 0) > 0;
     const status = statuses[child.id]?.type;
     const observed = observedById.get(child.id);
-    const busy = status === 'busy' || status === 'retry' || (!status && observed === 'busy');
-    const failed = !busy && observed === 'failed';
+    const unknown = hasUnknownAntigravityActivity(child);
+    const busy = !unknown && (status === 'busy' || status === 'retry' || (!status && observed === 'busy'));
+    const failed = !unknown && !busy && observed === 'failed';
     // The snapshot only speaks for its own directory. Paths are compared
     // normalized: OpenCode may report a child's directory with a trailing
     // slash or Windows separators the panel's directory does not have.
     const snapshotCovers = statusReady === true && !statusInvalidated?.[child.id]
       && panelDirectory !== null && normalizePath(child.directory) === panelDirectory;
-    const done = !failed && !busy && (status === 'idle' || (!status && (snapshotCovers || observed === 'settled')));
+    const done = !unknown && !failed && !busy && (status === 'idle' || (!status && (snapshotCovers || observed === 'settled')));
     const finished = !blocked && !asked && (done || failed);
     // Blockers first, then running rows, then rows whose status is not known
     // yet, then finished ones: an unknown row must not push a working one down.
     const rank = blocked || asked ? 0 : busy ? 1 : finished ? 3 : 2;
-    return { child, blocked, asked, busy, failed, done, rank };
+    return { child, blocked, asked, busy, failed, done, unknown, rank };
   });
   // Newest first by creation within each rank, never by last activity: an
   // activity order reshuffled the rows on every step, moving them under the
@@ -159,11 +161,11 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
       summary={busyChildren > 0 ? `${busyChildren}/${children.length}` : children.length}
     >
       <div className="max-h-56 overflow-y-auto">
-        {rows.map(({ child, blocked, asked, busy, failed, done }) => {
+        {rows.map(({ child, blocked, asked, busy, failed, done, unknown }) => {
           const label = child.title?.trim() || t('chat.workStatus.subagent.untitled');
           let icon: IconName = 'time';
           let iconColor: string | undefined;
-          let statusLabel = '';
+          let statusLabel = t('chat.workStatus.subagent.unknown');
           if (blocked || asked) {
             icon = 'alert';
             iconColor = 'var(--status-warning)';
@@ -207,7 +209,8 @@ export const WorkStatusSubagentsSection: React.FC<Props> = ({ sessionId, directo
                     <WorkStatusValue tone="warning">{t('chat.workStatus.subagent.needsPermission')}</WorkStatusValue>
                   ) : asked ? (
                     <WorkStatusValue tone="warning">{t('chat.workStatus.subagent.askedQuestion')}</WorkStatusValue>
-                  ) : busy ? <SubagentDuration sessionId={child.id} /> : null}
+                  ) : busy ? <SubagentDuration sessionId={child.id} />
+                    : unknown ? <WorkStatusValue>{statusLabel}</WorkStatusValue> : null}
                   {childCost > 0 ? <WorkStatusValue tone="muted">{formatCost(childCost)}</WorkStatusValue> : null}
                 </>
               )}

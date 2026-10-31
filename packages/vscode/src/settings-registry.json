@@ -328,9 +328,6 @@
     "workStatusSectionOrder": {
       "scope": "profile"
     },
-    "workStatusPanelEnabled": {
-      "scope": "profile"
-    },
     "workStatusHiddenSections": {
       "scope": "profile"
     },
@@ -449,6 +446,13 @@
       "scope": "profile"
     },
     "fileTreeSide": {
+      "scope": "profile",
+      "surfaces": [
+        "web",
+        "desktop"
+      ]
+    },
+    "workspaceLayout": {
       "scope": "profile",
       "surfaces": [
         "web",
@@ -765,6 +769,14 @@
         "mobile",
         "web"
       ]
+    },
+    "editorChatSplitRatio": {
+      "scope": "device",
+      "local": true
+    },
+    "editorToolPanelWidth": {
+      "scope": "device",
+      "local": true
     },
     "theme": {
       "scope": "device",

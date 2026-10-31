@@ -370,6 +370,19 @@ describe('GitLab routes', () => {
     expect(setup.calls[call]).toHaveBeenCalledOnce();
   });
 
+  it('rejects force merge instead of silently performing an ordinary merge', async () => {
+    const setup = canonicalMutationOptions();
+    const app = appWith(setup.options);
+    const body = mutationBody({ method: 'squash', force: true,
+      target: { project: { owner: 'team', name: 'repo' }, number: 5, head: 'feature', base: 'main' },
+    });
+    const response = await request(app).post('/api/source-control/gitlab/pr/merge').send(body).expect(501);
+    expect(response.body.code).toBe('SOURCE_CONTROL_FORCE_MERGE_UNSUPPORTED');
+    expect(setup.calls.merge).not.toHaveBeenCalled();
+    await request(app).post('/api/source-control/gitlab/pr/merge').send({ ...body, force: 'true' }).expect(400);
+    expect(setup.calls.merge).not.toHaveBeenCalled();
+  });
+
   it('deduplicates one provider write, replays completion, and conflicts on changed private input', async () => {
     const setup = canonicalMutationOptions();
     let release;
@@ -1029,7 +1042,7 @@ describe('GitLab routes', () => {
     expect(response.body.authenticationMethods).toMatchObject({ device: { available: true }, pat: { available: true }, cli: { available: false, reason: 'cli-unavailable' } });
     expect(response.body).toMatchObject({
       projects: true, issues: true, changeRequests: true, draftChangeRequests: true,
-      mergeChangeRequests: true, mergeMethods: ['merge', 'squash'], ci: true,
+      mergeChangeRequests: true, forceMergeChangeRequests: false, mergeMethods: ['merge', 'squash'], ci: true,
     });
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       `${origin}/api/v4/version`, `${origin}/oauth/authorize_device`, `${origin}/api/v4/user`,

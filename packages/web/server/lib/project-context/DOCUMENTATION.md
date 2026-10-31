@@ -182,7 +182,7 @@ Clients re-read authoritative context for the visible owner. This is a commit no
 - **A note body can be clamped but never blanked.** An empty body is rejected
   rather than stored, since a note with nothing in it is indistinguishable from
   a delete the user did not ask for.
-- **Panel item writes touch one todo.** The panel sends a check, uncheck,
+- **Panel item writes touch one todo.** The panel sends a text edit, check, uncheck,
   add or delete as one item route, applied to the list as it is on disk, so a
   todo an agent added since the panel's last read survives it. Only a reorder
   or "clear completed" sends the whole list.

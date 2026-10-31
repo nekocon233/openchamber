@@ -5,7 +5,7 @@
 import { z } from 'zod';
 
 import { connectionWriteSchema } from './claude/connections.js';
-import { cliproxyapiCallbackSchema, cliproxyapiConnectionSchema, cliproxyapiImportSchema, cliproxyapiProxySchema } from './cliproxyapi/service.js';
+import { cliproxyapiCallbackSchema, cliproxyapiConnectionSchema, cliproxyapiImportSchema, cliproxyapiProxySchema, cliproxyapiLoginInputSchema, cliproxyapiFamilyInputSchema } from './cliproxyapi/service.js';
 import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
@@ -180,7 +180,7 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.post(`${cliproxyapi}/start`, handle(() => runtime.cliproxyapi.start()));
   app.post(`${cliproxyapi}/stop`, handle(() => runtime.cliproxyapi.stop()));
   app.post(`${cliproxyapi}/proxy`, handle((req) => runtime.cliproxyapi.setUpstreamProxy(cliproxyapiProxySchema.parse(req.body))));
-  app.post(`${cliproxyapi}/login`, handle(() => runtime.cliproxyapi.beginLogin()));
+  app.post(`${cliproxyapi}/login`, handle((req) => runtime.cliproxyapi.beginLogin(cliproxyapiLoginInputSchema.parse(req.body ?? {}))));
   app.get(`${cliproxyapi}/login/:state`, handle((req) => runtime.cliproxyapi.loginStatus(loginStateParam.parse(req.params.state))));
   app.post(`${cliproxyapi}/login/:state/callback`, handle((req) => runtime.cliproxyapi.submitLoginCallback(
     loginStateParam.parse(req.params.state),
@@ -194,6 +194,8 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.get(`${cliproxyapi}/models`, handle(() => runtime.cliproxyapi.listModels()));
   app.post(`${cliproxyapi}/import`, handle((req) => runtime.cliproxyapi.importModels(cliproxyapiImportSchema.parse(req.body ?? {}))));
   app.post(`${cliproxyapi}/connection`, handle((req) => runtime.cliproxyapi.saveConnection(cliproxyapiConnectionSchema.parse(req.body))));
+  app.post(`${cliproxyapi}/opus-route`, handle((req) => runtime.cliproxyapi.setOpusRoute(cliproxyapiFamilyInputSchema.parse(req.body))));
+  app.post(`${cliproxyapi}/sonnet-route`, handle((req) => runtime.cliproxyapi.setSonnetRoute(cliproxyapiFamilyInputSchema.parse(req.body))));
 
   app.get('/api/native/catalog', handle(() => runtime.catalog()));
   app.get('/api/native/deepseek/configuration', handle(() => runtime.deepseekConfiguration.read()));

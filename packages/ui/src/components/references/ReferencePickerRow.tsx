@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import type { GitHubChecksSummary, GitHubIssueLabel, GitHubPullStatus, LinearIssueLabel, LinearSubIssueProgress } from '@/lib/api/types';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import type { CachedValue } from './referenceCache';
 
 import {
     githubStateLook,
@@ -95,10 +96,53 @@ export const ChecksGlyph: React.FC<{ checks: GitHubChecksSummary | null }> = ({ 
     return null;
 };
 
+const PullChecks: React.FC<{ status: CachedValue<GitHubPullStatus | null> }> = ({ status }) => {
+    const { t } = useI18n();
+    let icon: React.ComponentProps<typeof Icon>['name'] = 'question';
+    let tone = REFERENCE_META_TEXT;
+    let label: string;
+    if (status.status === 'idle' || status.status === 'loading') {
+        icon = 'time';
+        label = t('references.picker.row.checks.loading');
+    } else if (status.status === 'error') {
+        icon = 'error-warning';
+        label = t('references.picker.row.checks.loadFailed');
+    } else {
+        const checks = status.value?.checks;
+        if (!checks) {
+            label = t('references.picker.row.checks.unavailable');
+        } else if (checks.total === 0) {
+            icon = 'subtract';
+            label = t('references.picker.row.checks.empty');
+        } else if (checks.state === 'success') {
+            icon = 'checkbox-circle';
+            tone = 'text-[var(--status-success)]';
+            label = t('references.picker.row.checks.passed', { count: checks.success, total: checks.total });
+        } else if (checks.state === 'failure') {
+            icon = 'close-circle';
+            tone = 'text-[var(--status-error)]';
+            label = t('references.picker.row.checks.failed', { count: checks.failure, total: checks.total });
+        } else if (checks.state === 'pending') {
+            icon = 'time';
+            tone = 'text-[var(--status-warning)]';
+            label = t(checks.queued === checks.pending ? 'references.picker.row.checks.queued' : 'references.picker.row.checks.pending', { count: checks.pending, total: checks.total });
+        } else {
+            label = t('references.picker.row.checks.unknown');
+        }
+    }
+    return (
+        <div className={cn('mt-1 flex min-w-0 items-center gap-1 typography-micro tabular-nums', tone)}>
+            <Icon name={icon} className="size-3.5 shrink-0" />
+            <span className="break-words">{label}</span>
+        </div>
+    );
+};
+
 type RowProps = {
     item: ReferencePickerItem;
-    /** An open PR's checks and mergeability, once they have arrived. */
-    pullStatus: GitHubPullStatus | null;
+    pullStatus: CachedValue<GitHubPullStatus | null> | null;
+    /** The project PR list also shows each PR's checks as text. */
+    showChecks: boolean;
     highlighted: boolean;
     /** Null in single-choice mode, where rows have no checkbox. */
     checked: boolean | null;
@@ -112,6 +156,7 @@ type RowProps = {
 export const ReferencePickerRow = React.memo(function ReferencePickerRow({
     item,
     pullStatus,
+    showChecks,
     highlighted,
     checked,
     diffIncluded,
@@ -121,15 +166,18 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
     onActivate,
 }: RowProps) {
     const { t } = useI18n();
-    const look = item.source === 'github' ? githubStateLook(item.reference, pullStatus) : linearStateLook(item.issue);
+    const look = item.source === 'github' ? githubStateLook(item.reference, pullStatus?.status === 'ready' ? pullStatus.value : null) : linearStateLook(item.issue);
     const title = item.source === 'github' ? item.reference.title : item.issue.title;
     const id = item.source === 'github' ? referenceNumberLabel(item.reference) : item.issue.identifier;
     const updated = relativeTimeOf(item.source === 'github' ? item.reference.updatedAt : item.issue.updatedAt, now);
     const labels = toLabels(item.source === 'github' ? item.reference.labels : item.issue.labels);
     const rowRef = React.useRef<HTMLDivElement>(null);
+    const wasHighlighted = React.useRef(false);
 
     React.useEffect(() => {
-        if (highlighted) rowRef.current?.scrollIntoView({ block: 'nearest' });
+        // Activity reconnects effects on return; only a new selection should move the list.
+        if (highlighted && !wasHighlighted.current) rowRef.current?.scrollIntoView({ block: 'nearest' });
+        wasHighlighted.current = highlighted;
     }, [highlighted]);
 
     return (
@@ -197,6 +245,7 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                         <ReferenceLabelChips labels={labels} max={2} />
                     ) : null}
                 </div>
+                {showChecks && pullStatus ? <PullChecks status={pullStatus} /> : null}
             </div>
         </div>
     );

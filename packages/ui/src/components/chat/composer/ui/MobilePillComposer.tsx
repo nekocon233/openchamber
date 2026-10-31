@@ -8,7 +8,7 @@
  * effect.
  *
  * With content, the inner end slot sends while the session is idle. While it
- * is running, abort keeps that slot and a queue action appears just before it,
+ * is running, abort keeps that slot and a follow-up action appears just before it,
  * inside the pill.
  */
 
@@ -31,6 +31,7 @@ export interface MobilePillComposerProps {
     hasContent: boolean;
     isVSCode: boolean;
     canAbort: boolean;
+    followUpDelivery: 'steer' | 'queue';
     footerIconButtonClass: string;
     iconSizeClass: string;
     sendIconSizeClass: string;
@@ -43,7 +44,7 @@ export interface MobilePillComposerProps {
     bottomRow?: React.ReactNode;
     onExpand: () => void;
     onPrimaryAction: () => void;
-    /** While a turn runs, the trailing action queues, as the expanded composer does. */
+    /** Explicit staging when the target cannot accept native steering. */
     onQueueMessage: () => void;
     onPickLocalFiles: () => void;
     onOpenGitHubPicker: () => void;
@@ -65,6 +66,7 @@ export function MobilePillComposer(props: MobilePillComposerProps) {
         hasContent,
         isVSCode,
         canAbort,
+        followUpDelivery,
         footerIconButtonClass,
         iconSizeClass,
         sendIconSizeClass,
@@ -85,7 +87,7 @@ export function MobilePillComposer(props: MobilePillComposerProps) {
         onAbort,
     } = props;
     const canPrimaryAction = hasContent && Boolean(currentSessionId || newSessionDraftOpen);
-    const showQueueAction = canPrimaryAction && canAbort;
+    const showFollowUpAction = canPrimaryAction && canAbort;
     const dictationEnabled = useConfigStore((state) => state.dictationEnabled);
     const [dictationSupported] = useState(() => !isVSCodeRuntime() && isDictationCaptureSupported());
     const showDictation = dictationEnabled && dictationSupported;
@@ -160,17 +162,16 @@ export function MobilePillComposer(props: MobilePillComposerProps) {
                         <Icon name="mic" className={cn(iconSizeClass, 'text-current')} />
                     </button>
                 ) : null}
-                {/* While a turn runs, a draft can only be queued: the same
-                    rotated icon and label the expanded composer uses. */}
-                {showQueueAction ? (
+                {/* Match the expanded composer's native send or queue action. */}
+                {showFollowUpAction ? (
                     <button
                         type="button"
                         className={cn(footerIconButtonClass, 'text-primary hover:text-primary')}
-                        onClick={onQueueMessage}
-                        title={t('chat.chatInput.actions.queueMessageAria')}
-                        aria-label={t('chat.chatInput.actions.queueMessageAria')}
+                        onClick={followUpDelivery === 'steer' ? onPrimaryAction : onQueueMessage}
+                        title={t(followUpDelivery === 'steer' ? 'chat.chatInput.actions.sendMessageAria' : 'chat.chatInput.actions.queueMessageAria')}
+                        aria-label={t(followUpDelivery === 'steer' ? 'chat.chatInput.actions.sendMessageAria' : 'chat.chatInput.actions.queueMessageAria')}
                     >
-                        <Icon name="send-plane-2" className={cn(sendIconSizeClass, '-rotate-90 rtl:rotate-90')} />
+                        <Icon name="send-plane-2" className={cn(sendIconSizeClass, followUpDelivery === 'queue' && '-rotate-90 rtl:rotate-90')} />
                     </button>
                 ) : null}
                 {/* Same visibility rule as the full composer's stop control:

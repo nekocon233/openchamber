@@ -4,36 +4,50 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'stream';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCliproxyapiService } from './service.js';
 import { gatewayConfigPath } from './config.js';
 import { createCliproxyapiStore } from './store.js';
 
 const MANAGEMENT = '/v0/management/auth-files';
 const directories = [];
-afterEach(async () => { for (const directory of directories.splice(0)) await fs.rm(directory, { recursive: true, force: true }); });
+afterEach(async () => { vi.unstubAllEnvs(); for (const directory of directories.splice(0)) await fs.rm(directory, { recursive: true, force: true }); });
 
-const credential = { name: 'codex-user@example.com-pro.json', email: 'user@example.com', status: 'active', disabled: false, id_token: { plan_type: 'pro' } };
+const credential = { provider: 'codex', name: 'codex-user@example.com-pro.json', email: 'user@example.com', status: 'active', disabled: false, id_token: { plan_type: 'pro' } };
 
 const fixture = async ({ adoptableKey = 'adopted-client-key', seedKeys = null, enabled = false, listening = false } = {}) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cliproxyapi-service-'));
   directories.push(dataDir);
-  const state = { listening, spawned: [], terminated: [], clientKeys: ['gateway-key'], configWrites: [], accounts: [credential], existingConnection: null, callbackBodies: [] };
+  const state = { listening, spawned: [], terminated: [], clientKeys: ['gateway-key'], configWrites: [], accounts: [credential], existingConnection: null, callbackBodies: [], models: ['gpt-6.1-sol', 'gpt-image-2'], definitions: [], accountModels: [], loginProviders: [], storedModels: [], definitionFailure: false, modelsAfterRemoval: null, modelsFailure: false, modelReads: 0, retainedModels: [] };
   const fetchImpl = async (url, options = {}) => {
     const target = String(url);
     if (!state.listening) throw new Error('connect ECONNREFUSED 127.0.0.1');
+    if (target.includes('/v8/management/oauth/auth-url')) {
+      const provider = new URL(target).searchParams.get('provider');
+      state.loginProviders.push(provider);
+      return new Response(JSON.stringify({ state: provider === 'antigravity' ? 'ag123' : 'abc123', url: 'https://login.example.test/' }), { status: 200 });
+    }
+    if (target.includes('/v8/management/credentials/models')) return new Response(JSON.stringify({ models: state.accountModels.map((id) => ({ id })) }));
+    if (target.includes('/v8/management/routing/model-definitions')) return new Response(JSON.stringify({ models: state.definitions }), { status: state.definitionFailure ? 502 : 200 });
+    if (target.includes('/v8/management/oauth/session')) return new Response(JSON.stringify({ status: 'ok' }));
     if (target.includes('/v0/management/oauth-callback')) {
       state.callbackBodies.push(JSON.parse(options.body));
       return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
     }
     if (target.includes(MANAGEMENT)) {
-      if (options.method === 'DELETE') return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+      if (options.method === 'DELETE') {
+        state.accounts = state.accounts.filter((account) => account.name !== new URL(target).searchParams.get('name'));
+        if (state.modelsAfterRemoval !== null) state.models = state.modelsAfterRemoval;
+        return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+      }
       return new Response(JSON.stringify({ files: state.accounts }), { status: 200, headers: { 'content-type': 'application/json', 'x-cpa-version': '8.0.31' } });
     }
     if (target.endsWith('/v0/management/api-keys')) return new Response(JSON.stringify({ 'api-keys': state.clientKeys }), { status: 200 });
     if (target.endsWith('/v1/models')) {
       if (options.headers?.Authorization === undefined) return new Response(JSON.stringify({ error: 'missing api key' }), { status: 401 });
-      return new Response(JSON.stringify({ data: [{ id: 'gpt-6.1-sol' }, { id: 'gpt-image-2' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      state.modelReads += 1;
+      if (state.modelsFailure) return new Response('{}', { status: 502 });
+      return new Response(JSON.stringify({ data: state.models.map((id) => ({ id })) }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     if (target.includes('/v8/management/config')) {
       state.clientKeys = JSON.parse(options.body).access['api-keys'];
@@ -45,10 +59,19 @@ const fixture = async ({ adoptableKey = 'adopted-client-key', seedKeys = null, e
   const connections = {
     credentialKeyFor: async () => adoptableKey,
     connectionFor: async () => state.existingConnection,
+    list: async () => state.existingConnection ? [{ ...state.existingConnection, models: state.storedModels }] : [],
+    retainModels: async (baseURL, served) => {
+      state.retainedModels.push({ baseURL, served });
+      state.storedModels = state.storedModels.filter((model) => served.includes(model.modelID));
+      if (state.storedModels.length === 0) state.existingConnection = null;
+    },
     save: async (id, input) => {
       saved.push({ id, input });
+      state.storedModels = input.models;
       const { apiKey, ...rest } = input;
-      return { id: id ?? randomUUID(), revision: 1, hasKey: apiKey.length > 0, quotaProviderId: null, ...rest };
+      const savedId = id ?? randomUUID();
+      state.existingConnection = { id: savedId, name: input.name };
+      return { id: savedId, revision: 1, hasKey: apiKey.length > 0, quotaProviderId: null, ...rest };
     },
   };
   const spawnProcess = () => {
@@ -93,6 +116,14 @@ const model = () => ({
 });
 
 describe('CLIProxyAPI managed gateway service', () => {
+  it('refuses provider entry under enterprise policy before contacting the gateway', async () => {
+    const { service, state, saved } = await fixture({ listening: true });
+    vi.stubEnv('OPENCHAMBER_ENTERPRISE_MODE', '1');
+    await expect(service.beginLogin({ provider: 'antigravity' })).rejects.toMatchObject({ status: 403, code: 'enterprise_mode' });
+    await expect(service.importModels()).rejects.toMatchObject({ status: 403, code: 'enterprise_mode' });
+    expect(state.loginProviders).toEqual([]);
+    expect(saved).toEqual([]);
+  });
   it('reports a stopped gateway with its pinned version and no accounts', async () => {
     const { service } = await fixture();
     expect(await service.status()).toMatchObject({
@@ -169,6 +200,60 @@ describe('CLIProxyAPI managed gateway service', () => {
     await expect(service.removeAccount('codex-user@example.com-pro.json')).resolves.toBeUndefined();
   });
 
+  it('prunes revoked models after logout while preserving available models and their identities', async () => {
+    const { service, state } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    const claude = { ...model(), modelID: 'claude-sonnet-test' };
+    const unknown = { ...model(), modelID: 'configured-model-without-metadata' };
+    await service.saveConnection({ name: 'Gateway', models: [model(), claude, unknown] });
+    state.accounts.push({ ...credential, name: 'antigravity.json', provider: 'antigravity' });
+    state.modelsAfterRemoval = [claude.modelID, unknown.modelID];
+    await service.removeAccount(credential.name);
+    expect(state.accounts.map((account) => account.provider)).toEqual(['antigravity']);
+    expect(state.storedModels).toEqual([claude, unknown]);
+    expect(state.modelReads).toBe(1);
+    expect(state.retainedModels).toEqual([{ baseURL: 'http://127.0.0.1:8317', served: state.modelsAfterRemoval }]);
+  });
+
+  it('retains models still served by another account of the same provider', async () => {
+    const { service, state } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    const configured = model();
+    await service.saveConnection({ name: 'Gateway', models: [configured] });
+    state.accounts.push({ ...credential, name: 'second-codex.json' });
+    state.modelsAfterRemoval = [configured.modelID];
+    await service.removeAccount(credential.name);
+    expect(state.storedModels).toEqual([configured]);
+  });
+
+  it('removes the empty gateway connection after the final account signs out, including under enterprise policy', async () => {
+    const { service, state } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    await service.saveConnection({ name: 'Gateway', models: [model()] });
+    state.modelsAfterRemoval = [];
+    vi.stubEnv('OPENCHAMBER_ENTERPRISE_MODE', '1');
+    await service.removeAccount(credential.name);
+    expect(state.accounts).toEqual([]);
+    expect(state.storedModels).toEqual([]);
+    expect(state.existingConnection).toBeNull();
+  });
+
+  it('reports a failed post-logout model read without treating it as an empty catalog', async () => {
+    const { service, state } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    const configured = model();
+    await service.saveConnection({ name: 'Gateway', models: [configured] });
+    state.modelsFailure = true;
+    await expect(service.removeAccount(credential.name)).rejects.toMatchObject({ code: 'CLIPROXYAPI_REQUEST_FAILED' });
+    expect(state.accounts).toEqual([]);
+    expect(state.storedModels).toEqual([configured]);
+    expect(state.retainedModels).toEqual([]);
+  });
+
+  it('serializes a pending import before logout so it cannot restore signed-out models', async () => {
+    const { service, state } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    state.modelsAfterRemoval = [];
+    await Promise.all([service.importModels(), service.removeAccount(credential.name)]);
+    expect(state.storedModels).toEqual([]);
+    expect(state.existingConnection).toBeNull();
+  });
+
   it('lists only the gateway models this computer has metadata for', async () => {
     const { service } = await fixture({ seedKeys: ['gateway-key'], listening: true });
     expect(await service.listModels()).toEqual({
@@ -184,6 +269,14 @@ describe('CLIProxyAPI managed gateway service', () => {
     expect(result.connection).not.toHaveProperty('apiKey');
     expect(saved[0].id).toBeNull();
     expect(saved[0].input.models[0]).toMatchObject({ modelID: 'gpt-6.1-sol', name: 'GPT-6.1-Sol', contextWindow: 872000 });
+  });
+
+  it('serializes concurrent imports without creating another connection or changing model ids', async () => {
+    const { service, saved } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    const [first, second] = await Promise.all([service.importModels(), service.importModels()]);
+    expect(second.connection.id).toBe(first.connection.id);
+    expect(second.connection.models.map((row) => row.id)).toEqual(first.connection.models.map((row) => row.id));
+    expect(saved[1].id).toBe(first.connection.id);
   });
 
   it('replaces the models of the connection that already points at the gateway', async () => {
@@ -215,6 +308,7 @@ describe('CLIProxyAPI managed gateway service', () => {
 
   it('hands the code inside a pasted callback address to the gateway', async () => {
     const { state, service } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    await service.beginLogin();
     await expect(service.submitLoginCallback('abc123', { url: 'http://localhost:1455/auth/callback?code=a%2Fb%2Bc&state=abc123' }))
       .resolves.toEqual({ accepted: true });
     expect(state.callbackBodies).toEqual([{ provider: 'codex', state: 'abc123', code: 'a/b+c' }]);
@@ -238,8 +332,41 @@ describe('CLIProxyAPI managed gateway service', () => {
   });
 
   it('reads a stopped gateway as unreachable when a callback is submitted', async () => {
-    const { service } = await fixture();
+    const { service, state } = await fixture({ listening: true });
+    await service.beginLogin();
+    state.listening = false;
     await expect(service.submitLoginCallback('abc123', { url: 'http://localhost:1455/auth/callback?code=x&state=abc123' }))
       .rejects.toMatchObject({ code: 'CLIPROXYAPI_NOT_REACHABLE' });
+  });
+
+  it('binds a callback to the provider that started it and retires cancelled attempts', async () => {
+    const { state, service } = await fixture({ listening: true });
+    await service.beginLogin({ provider: 'antigravity' });
+    await service.beginLogin({ provider: 'codex' });
+    await service.submitLoginCallback('ag123', { url: 'http://localhost:51121/oauth-callback?state=ag123&code=google-code' });
+    expect(state.callbackBodies).toEqual([{ provider: 'antigravity', state: 'ag123', code: 'google-code' }]);
+    await service.cancelLogin('abc123');
+    await expect(service.submitLoginCallback('abc123', { url: 'http://localhost:1455/auth/callback?state=abc123&code=late' })).rejects.toMatchObject({ code: 'CLIPROXYAPI_LOGIN_CALLBACK_REJECTED' });
+    expect(state.callbackBodies).toHaveLength(1);
+  });
+
+  it('imports Antigravity Claude metadata while retaining GPT selections and repeated model identities', async () => {
+    const { state, service, saved } = await fixture({ seedKeys: ['gateway-key'], listening: true });
+    const gpt = model();
+    state.existingConnection = { id: randomUUID(), name: 'Gateway' };
+    state.storedModels = [gpt];
+    state.accounts.push({ ...credential, name: 'ag.json', provider: 'antigravity' });
+    state.models.push('claude-opus-5-5-high', 'claude-unverified');
+    state.accountModels = ['claude-opus-5-5-high', 'claude-unverified'];
+    state.definitions = [{ id: 'claude-opus-5-5-high', display_name: 'Claude Opus 5.5 (High)', context_length: 1000000,
+      max_completion_tokens: 128000, supportedInputModalities: ['text', 'image'], thinking: { min: 1024, max: 64000 } }];
+    expect(await service.importModels()).toMatchObject({ imported: 2, skipped: 2 });
+    expect(saved[0].input.models[0].id).toBe(gpt.id);
+    expect(saved[0].input.models[1]).toMatchObject({ modelID: 'claude-opus-5-5-high', contextWindow: 1000000, outputLimit: 128000, input: { image: true }, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] });
+    await service.importModels();
+    expect(saved[1].input.models.map((row) => row.id)).toEqual(saved[0].input.models.map((row) => row.id));
+    state.definitionFailure = true;
+    await expect(service.importModels()).rejects.toMatchObject({ code: 'CLIPROXYAPI_REQUEST_FAILED' });
+    expect(saved).toHaveLength(2);
   });
 });

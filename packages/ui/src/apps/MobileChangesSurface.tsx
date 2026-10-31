@@ -46,6 +46,7 @@ import { useCommitComparison } from '@/hooks/useCommitComparison';
 import { usePullRequestComparison } from '@/hooks/usePullRequestComparison';
 import { PullRequestComparisonSelector } from '@/components/views/git/PullRequestComparisonSelector';
 import { useGitComparison, type GitComparisonFile, type GitComparisonSource } from '@/hooks/useGitComparison';
+import { usePendingReview, type PendingReviewController } from '@/components/sourceBoard/usePendingReview';
 import { useGitBaseBranchStore } from '@/stores/useGitBaseBranchStore';
 import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { useUIStore } from '@/stores/useUIStore';
@@ -99,6 +100,7 @@ interface ChangesNavigation {
   route: ChangesRoute;
 }
 interface MobileDiffData {
+  reviewHeadSha?: string;
   original: string;
   modified: string;
   isBinary?: boolean;
@@ -354,14 +356,21 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
   }, [branchComparison.base, currentBranch, mode, selectedCommitHash, selectedPr]);
   const comparisonRevision = mode === 'branch' ? branchComparison.revision : '';
   const comparison = useGitComparison(currentDirectory || null, comparisonSource, visible && isGitRepo === true, comparisonRevision, prComparison.readContext, prComparison.provider);
+  const reviewPull = React.useMemo(() => {
+    if (comparisonSource?.kind !== 'pr') return null;
+    const matches = prComparison.prs.filter(pull => pull.number === comparisonSource.number);
+    const repo = comparisonSource.sourceRepo ?? (matches.length === 1 ? { owner: matches[0].project.owner, repo: matches[0].project.name } : null);
+    return repo ? { ...repo, number: comparisonSource.number } : null;
+  }, [comparisonSource, prComparison.prs]);
+  const pendingReview = usePendingReview(prComparison.readContext, reviewPull, visible && mode === 'pr');
   const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile } = comparison;
   const comparisonFiles = React.useMemo(() => comparison.files ? [...comparison.files].sort((a, b) => a.path.localeCompare(b.path)) : null, [comparison.files]);
   const activeComparisonPath = route.type === 'comparison' && route.sourceKey === comparison.key ? route.path : null;
   const [comparisonRetry, setComparisonRetry] = React.useState(0);
   const fetchComparisonDiff = React.useCallback(async (path: string): Promise<ComparisonDiff> => {
     try {
-      const { diff: patch } = await loadComparisonDiff(path);
-      const diff: MobileDiffData = { original: '', modified: '', isBinary: isBinaryPatch(patch) };
+      const { diff: patch, reviewHeadSha } = await loadComparisonDiff(path);
+      const diff: MobileDiffData = { original: '', modified: '', isBinary: isBinaryPatch(patch), reviewHeadSha };
       if (!diff.isBinary) diff.fileDiff = fileDiffFromPatch(path, patch);
       return { status: 'ready', diff };
     } catch (error) {
@@ -399,8 +408,8 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     // is built from both sides of the file as GitHub has them.
     const loadFullDiff = async (): Promise<MobileDiffData> => {
       if (mode === 'pr') {
-        const { original, modified } = await loadComparisonFullFile(path);
-        return { original, modified, fileDiff: parseDiffFromFile({ name: path, contents: original }, { name: path, contents: modified }) };
+        const { original, modified, reviewHeadSha } = await loadComparisonFullFile(path);
+        return { original, modified, reviewHeadSha, fileDiff: parseDiffFromFile({ name: path, contents: original }, { name: path, contents: modified }) };
       }
       const { diff: patch } = await loadComparisonDiff(path, FULL_CONTEXT_DIFF_LINES);
       return { original: '', modified: '', fileDiff: fileDiffFromPatch(path, patch) };
@@ -1031,6 +1040,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     return (
       <MobileDiffDetail
         path={activeComparisonPath}
+        review={mode === 'pr' && pendingReview.key ? pendingReview : undefined}
         subtitle={[modeLabel, sourceLabel].filter(Boolean).join(' · ')}
         diff={activeFullComparisonDiff ?? (activeComparisonDiff.status === 'ready' ? activeComparisonDiff.diff : null)}
         fileExists={!comparison.files || comparison.files.some((file) => file.path === activeComparisonPath)}
@@ -1341,6 +1351,7 @@ const MobileChangesState: React.FC<{
 );
 
 const MobileDiffDetail: React.FC<{
+  review?: PendingReviewController;
   path: string;
   subtitle?: string;
   diff: MobileDiffData | null;
@@ -1353,7 +1364,7 @@ const MobileDiffDetail: React.FC<{
   onExpandContextRequest?: (request: ContextExpansionRequest) => void;
   pendingContextExpansion?: ContextExpansionRequest | null;
   contextLoading?: boolean;
-}> = ({ path, subtitle, diff, staged = false, fileExists, unavailableReason = null, error, onBack, onRetry, onExpandContextRequest, pendingContextExpansion, contextLoading }) => {
+}> = ({ path, subtitle, diff, staged = false, fileExists, unavailableReason = null, error, onBack, onRetry, onExpandContextRequest, pendingContextExpansion, contextLoading, review }) => {
   const { t } = useI18n();
   const language = React.useMemo(() => getLanguageFromExtension(path) || 'text', [path]);
   const hideWhitespace = useUIStore((state) => state.diffHideWhitespace);
@@ -1431,6 +1442,8 @@ const MobileDiffDetail: React.FC<{
               onExpandContextRequest={onExpandContextRequest}
               pendingContextExpansion={pendingContextExpansion}
               contextLoading={contextLoading}
+              review={review}
+              reviewHeadSha={diff.reviewHeadSha}
             />
           </ScrollShadow>
         )}

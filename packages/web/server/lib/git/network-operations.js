@@ -8,7 +8,8 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { createGitCredentialBroker, GIT_CREDENTIAL_NONCE_ENV } from './credential-broker.js';
 import { helperShellCommand } from './helper-launch.js';
-import { gitLfsCredentialEndpointAliases, normalizeGitRemoteEndpoint, parseGitCredentialReference } from './credential-resolver.js';
+import { createHttpsCredentialReference, gitLfsCredentialEndpointAliases, normalizeGitRemoteEndpoint, parseGitCredentialReference } from './credential-resolver.js';
+import { MAX_PULL_REQUEST_PATCH_BYTES, readPullRequestSnapshot } from './pull-request-snapshot.js';
 import { createNetworkOperationPlanner } from './network-operation-plan.js';
 import { createNetworkOperationRegistry } from './network-operation-registry.js';
 import { createGitRedactor, redactGitText } from './redaction.js';
@@ -358,6 +359,8 @@ export function createNetworkOperations({
   inspectMergeState,
   enumerateManagedConfigKeys,
   resolveChangeRequestSource,
+  resolvePullRequestSnapshotSource,
+  validatePullRequestReadContext,
   validateGitAuxiliaryContext,
   idFactory,
   auditStore,
@@ -408,6 +411,7 @@ export function createNetworkOperations({
     maxOutputBytes = outputLimitBytes,
     rawOutput = false,
     requireCompleteOutput = false,
+    outputLimitError,
   }) => {
     if (transfer) await controls?.markTransferStarted(transferRole);
     return new Promise((resolve, reject) => {
@@ -460,7 +464,7 @@ export function createNetworkOperations({
         stdout: rawOutput ? Buffer.concat(stdout) : Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
       };
-      if (outputExceeded) reject(operationError('LFS_DISCOVERY_LIMIT_EXCEEDED', 'Checkout discovery output exceeds its byte limit', 409,
+      if (outputExceeded) reject(outputLimitError ? outputLimitError() : operationError('LFS_DISCOVERY_LIMIT_EXCEEDED', 'Checkout discovery output exceeds its byte limit', 409,
         { cancelled: result.cancelled, timedOut: result.timedOut }));
       else if (error || inputError) reject(Object.assign(error || inputError, result));
       else resolve(result);
@@ -657,6 +661,17 @@ export function createNetworkOperations({
       throw operationError('STALE_CONFIG', 'Checked out branch changed after pull planning', 409);
     }
   };
+
+  const revalidatePullSnapshot = async (plan, controls, deadline) => {
+    const expected = plan.source.context;
+    const current = await awaitPhase(() => validatePullRequestReadContext(expected), controls, deadline);
+    if (current.repositoryId !== expected.repositoryId || current.bindingRevision !== expected.bindingRevision
+      || current.provider !== expected.provider || current.accountId !== expected.accountId
+      || current.instance !== expected.instance || current.primaryRemote !== expected.primaryRemote
+      || current.directory !== expected.directory) {
+      throw operationError('STALE_CONFIG', 'Repository binding changed; refresh and try again', 409);
+    }
+  };
   const hasMergeState = inspectMergeState ?? (async (directory) => {
     const dotGit = pathImpl.join(directory, '.git');
     let gitDirectory = dotGit;
@@ -680,7 +695,7 @@ export function createNetworkOperations({
     return false;
   });
 
-  const transport = async (plan, controls, deadline) => {
+  const transport = async (plan, controls, deadline, environment) => {
     const anonymous = plan.transportMode === 'anonymous';
     if (anonymous && (plan.credentialId !== undefined || !['fetch', 'pull', 'clone'].includes(plan.target.operation))) {
       throw operationError('INVALID_REQUEST', 'Anonymous Git transport is read-only and credential-free', 400);
@@ -705,7 +720,7 @@ export function createNetworkOperations({
       if (error?.cancelled || error?.timedOut || error?.code === 'CANCELLED' || error?.code === 'TIMEOUT') throw error;
       throw operationError('AUTHENTICATION_REQUIRED', 'Managed Git credential is unavailable', 409);
     }
-    const env = await managedGitEnvironment();
+    const env = environment ?? await managedGitEnvironment();
     if (anonymous || credential.transport === 'https') {
       // Git's Curl transport also consults netrc outside Git configuration;
       // an ambient ~/.netrc entry must not authenticate as another account
@@ -733,7 +748,8 @@ export function createNetworkOperations({
       if (anonymous && configuredKeys.some((key) => /^url\./i.test(key))) {
         throw operationError('RUNTIME_UNSUPPORTED', 'Anonymous transport does not support repository URL rewrites', 501);
       }
-      if (plan.target.operation === 'contributor-fetch') await revalidateContributorSource(plan, controls, deadline);
+      if (plan.target.operation === 'pr-snapshot') await revalidatePullSnapshot(plan, controls, deadline);
+      else if (plan.target.operation === 'contributor-fetch') await revalidateContributorSource(plan, controls, deadline);
       else if (plan.target.operation !== 'clone') await revalidate(plan, controls, deadline);
       const endpointHttpConfig = `http.${plan.rawEndpoint}`;
       configArgs.push(
@@ -2224,6 +2240,104 @@ export function createNetworkOperations({
     },
   }, { ...controls, updateTransportMetadata: () => {} }, deadline);
 
+  // Only the waiting reader owns patch data; registry and audit records never hold it.
+  const pullSnapshots = new Map();
+  const executePullSnapshot = async (plan, controls, deadline) => {
+    let temporaryDirectory;
+    let temporaryIdentity;
+    let birthtimeHolds = false;
+    let context;
+    let snapshot;
+    let result;
+    const isolate = (env) => {
+      const output = { ...env, GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_LFS_SKIP_SMUDGE: '1', GIT_ATTR_NOSYSTEM: '1' };
+      for (const name of Object.keys(output)) {
+        if (/^GIT_(?:DIR|COMMON_DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|SHALLOW_FILE|NAMESPACE|REPLACE_REF_BASE|GRAFT_FILE|TEMPLATE_DIR|EXEC_PATH|ATTR_SOURCE|PREFIX)$/i.test(name)) delete output[name];
+      }
+      return output;
+    };
+    try {
+      await revalidatePullSnapshot(plan, controls, deadline);
+      await controls.markStepCompleted('validated');
+      await awaitMutation(() => fsImpl.mkdtemp(pathImpl.join(os.tmpdir(), `openchamber-pr-${plan.operationId}-`)), controls, deadline, async (directory) => {
+        temporaryDirectory = directory;
+        birthtimeHolds = await birthtimeHoldsStill(fsImpl, pathImpl, directory);
+        temporaryIdentity = directoryIdentity(await fsImpl.lstat(directory), birthtimeHolds);
+      });
+      await awaitMutation(() => fsImpl.chmod(temporaryDirectory, 0o700), controls, deadline);
+      const temporaryPlan = { ...plan, directory: temporaryDirectory };
+      const localContext = {
+        env: { ...isolate(await managedGitEnvironment()), GIT_ALLOW_PROTOCOL: '' },
+        configArgs: ['-c', `core.hooksPath=${platform === 'win32' ? 'NUL' : '/dev/null'}`, '-c', 'core.quotePath=false', '-c', 'core.attributesFile='],
+        secrets: [],
+      };
+      await commandResult(temporaryPlan, controls, ['init', '--bare', '--template=', '.'], localContext, deadline);
+      context = await transport(temporaryPlan, controls, deadline, { ...localContext.env, GIT_ALLOW_PROTOCOL: 'https' });
+      context.env = { ...isolate(context.env), GIT_ALLOW_PROTOCOL: 'https' };
+      await controls.markStepCompleted('authenticated');
+      await revalidatePullSnapshot(plan, controls, deadline);
+      const revisions = [...new Set([plan.source.mergeBaseSha, plan.source.headSha])];
+      await commandResult(temporaryPlan, controls, [
+        'fetch', '--depth=1', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--', plan.rawEndpoint, ...revisions,
+      ], context, deadline, { transfer: true });
+      await controls.markStepCompleted('transferred');
+      if (await safeRevoke(context, plan.operationId)) throw operationError('UNKNOWN', 'Pull request credential cleanup failed');
+      context = undefined;
+      for (const revision of revisions) {
+        const resolved = await commandResult(temporaryPlan, controls, ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`], localContext, deadline);
+        if (resolved.stdout.trim() !== revision) throw operationError('STALE_CONFIG', 'Fetched pull request commit did not match', 409);
+      }
+      snapshot = await readPullRequestSnapshot({
+        headSha: plan.source.headSha, mergeBaseSha: plan.source.mergeBaseSha,
+        git: async (args) => {
+          // Git may fail after writing part of a patch. That output belongs in
+          // neither the public operation error nor its audit record.
+          try {
+            const output = await run({
+              cwd: temporaryDirectory, args: [...localContext.configArgs, ...args], env: localContext.env, controls, deadline,
+              maxOutputBytes: MAX_PULL_REQUEST_PATCH_BYTES, requireCompleteOutput: true,
+              outputLimitError: () => operationError('PR_DIFF_TOO_LARGE', 'Pull request diff exceeds the 20 MiB limit', 413),
+            });
+            if (output.code !== 0 || output.timedOut || output.cancelled) {
+              throw operationError('UNKNOWN', 'Pull request diff could not be read', 502,
+                { timedOut: output.timedOut, cancelled: output.cancelled });
+            }
+            return output.stdout;
+          } catch (error) {
+            if (error.code === 'PR_DIFF_TOO_LARGE') throw error;
+            throw operationError('UNKNOWN', 'Pull request diff could not be read', 502,
+              { timedOut: Boolean(error.timedOut), cancelled: Boolean(error.cancelled) });
+          }
+        },
+      });
+      result = { state: 'succeeded' };
+    } catch (error) {
+      if (error.cancelled || error.timedOut || controls.isCancellationRequested()) result = cancellationResult(plan, controls, error);
+      else if (error.code === 'STALE_CONFIG' || error.code?.startsWith('SOURCE_CONTROL_BINDING_')) {
+        result = terminal('conflicted', 'STALE_CONFIG', 'Pull request or repository binding changed; refresh and try again');
+      } else if (error.code === 'PR_DIFF_TOO_LARGE') result = terminal('failed', error.code, error.message);
+      else {
+        const code = ['AUTHENTICATION_REQUIRED', 'AUTHENTICATION_FAILED', 'TRANSPORT_FAILED', 'RUNTIME_UNSUPPORTED'].includes(error.code) ? error.code : 'UNKNOWN';
+        result = terminal('failed', code, createGitRedactor({ secrets: [...(context?.secrets ?? []), temporaryDirectory, plan.directory].filter(Boolean) }).error(error, 'Pull request diff could not be read'));
+      }
+    } finally {
+      let cleanupFailed = await safeRevoke(context, plan.operationId);
+      if (temporaryDirectory) {
+        try {
+          const cleanup = await awaitPhase(() => quarantineAndClean(temporaryDirectory, plan.operationId, async (moved) => {
+            const stats = await fsImpl.lstat(moved);
+            return stats.isDirectory() && directoryIdentity(stats, birthtimeHolds) === temporaryIdentity;
+          }), undefined, Date.now() + CLEANUP_TIMEOUT_MS);
+          cleanupFailed ||= cleanup.failed || !cleanup.removed;
+          if (!cleanupFailed) await controls.markStepCompleted('cleaned-up');
+        } catch { cleanupFailed = true; }
+      }
+      if (cleanupFailed) result = terminal('failed', 'UNKNOWN', 'Pull request temporary repository cleanup failed');
+    }
+    if (result?.state === 'succeeded') pullSnapshots.set(plan.operationId, snapshot);
+    return result;
+  };
+
   const executeContributorFetch = async (plan, controls, deadline = Date.now() + timeoutMs) => {
     let context;
     try {
@@ -2341,6 +2455,7 @@ export function createNetworkOperations({
       }
       return result;
     })();
+    if (plan.target.operation === 'pr-snapshot') return executePullSnapshot(plan, controls, deadline);
     if (plan.target.operation === 'contributor-fetch') return executeContributorFetch(plan, controls, deadline);
     if (plan.target.operation === 'clone') return executeClone(plan, controls, deadline);
     if (plan.target.operation === 'sync') return executeSync(plan, controls, deadline);
@@ -2544,6 +2659,63 @@ export function createNetworkOperations({
   return Object.freeze({
     plan,
     issueContributorDestination: planner.issueContributorDestination,
+    async readPullRequestSnapshot({ signal, ...sourceRequest }) {
+      const deadline = Date.now() + timeoutMs;
+      signal?.throwIfAborted();
+      if (!(resolvePullRequestSnapshotSource instanceof Function) || !(validatePullRequestReadContext instanceof Function)
+        || !(resolveSourceControlAccount instanceof Function)) {
+        throw operationError('RUNTIME_UNSUPPORTED', 'Local pull request reads are unavailable', 501);
+      }
+      const source = await awaitPhase(() => resolvePullRequestSnapshotSource(sourceRequest), undefined, deadline);
+      const account = await awaitPhase(() => resolveSourceControlAccount(source.context), undefined, deadline);
+      if (account?.credentialId !== source.context.accountId || account?.status !== 'valid'
+        || !Number.isSafeInteger(account.credentialRevision) || account.credentialRevision < 1 || !account.providerUserId) {
+        throw operationError('AUTHENTICATION_REQUIRED', 'Pull request Git credential is unavailable', 401);
+      }
+      const credentialId = createHttpsCredentialReference({
+        provider: source.context.provider, instance: source.context.instance, credentialId: account.credentialId,
+        credentialRevision: account.credentialRevision, providerUserId: account.providerUserId,
+      });
+      signal?.throwIfAborted();
+      const operationId = `git_${crypto.randomUUID()}`;
+      const publicPlan = {
+        operationId, runtimeIdentity, transport: publicTransportForContributor(),
+        target: { operation: 'pr-snapshot', repositoryId: source.context.repositoryId, number: source.number,
+          remote: { name: source.context.primaryRemote, endpoint: { displayUrl: source.endpoint, fingerprint: fingerprintRemoteUrl(source.endpoint) } } },
+        completedSteps: [], state: 'planned',
+      };
+      const internalPlan = {
+        ...publicPlan, directory: source.context.directory, source,
+        rawEndpoint: source.endpoint, transportMode: 'managed', credentialId,
+      };
+      await registerWithAudit({ internalPlan, publicPlan });
+      const cancel = () => { void Promise.resolve(operationRegistry.cancel(operationId)).catch(() => {}); };
+      signal?.addEventListener('abort', cancel, { once: true });
+      try {
+        if (signal?.aborted) {
+          await operationRegistry.cancel(operationId);
+          throw operationError('CANCELLED', 'Pull request read was cancelled', 499);
+        }
+        let result;
+        try { result = await executeOperation(operationId, deadline); }
+        catch (error) {
+          if (signal?.aborted && error.code === 'GIT_NETWORK_OPERATION_NOT_STARTABLE') {
+            throw operationError('CANCELLED', 'Pull request read was cancelled', 499);
+          }
+          throw error;
+        }
+        if (result.state !== 'succeeded') {
+          const status = result.error?.code === 'PR_DIFF_TOO_LARGE' ? 413 : result.state === 'cancelled' ? 408 : result.state === 'conflicted' ? 409 : 502;
+          throw operationError(result.error?.code ?? 'UNKNOWN', result.error?.message ?? 'Pull request diff could not be read', status);
+        }
+        const snapshot = pullSnapshots.get(operationId);
+        if (!snapshot) throw operationError('UNKNOWN', 'Pull request snapshot is unavailable');
+        return snapshot;
+      } finally {
+        signal?.removeEventListener('abort', cancel);
+        pullSnapshots.delete(operationId);
+      }
+    },
     async transferContributorHead({ directory, sourceRequest, source, credentialId, destinationRef }) {
       const operationId = `git_${crypto.randomUUID()}`;
       const publicPlan = Object.freeze({

@@ -19,6 +19,7 @@ import type {
     GitHubReferenceDetail,
     RepositoryReferenceFilter,
     GitHubReferenceKind,
+    GitHubReferencesOptions,
     LinearAPI,
     LinearIssue,
     LinearIssueSummary,
@@ -27,6 +28,7 @@ import type {
     SourceControlReadContext,
 } from '@/lib/api/types';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { useI18n } from '@/lib/i18n';
 import { GITHUB_SOURCE_CONTROL_IDENTITY, resolveSourceControlIdentity } from '@/lib/source-control/identity';
 import { getSourceControlAuthKey, useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import { useRepositoryBinding } from '@/lib/source-control/repository-binding';
@@ -217,29 +219,37 @@ const readContextCacheKey = (context: SourceControlReadContext): unknown[] => [
 
 export function useGitHubReferenceList(options: {
     enabled: boolean;
+    active?: boolean;
+    scope?: GitHubReferencesOptions['scope'];
     directory: string | null;
     kind: GitHubReferenceKind;
     filter: RepositoryReferenceFilter;
     query: string;
 }) {
     const { sourceControl } = useRuntimeAPIs();
-    const { enabled, directory, kind, filter, query } = options;
+    const { t } = useI18n();
+    const { enabled, directory, kind, filter, query, active = true, scope: repositoryScope = 'network' } = options;
     const { state, people } = filter;
+    const runtimeKey = getRuntimeKey();
     const context = useGitHubReadContext(enabled ? directory : null);
     const text = query.trim();
     const scope = context && context !== 'missing' ? readContextCacheKey(context) : 'missing';
     const key = enabled && directory && context
-        ? JSON.stringify([getRuntimeKey(), scope, directory, kind, filter.state, filter.people, text])
+        ? JSON.stringify([runtimeKey, scope, directory, repositoryScope, kind, filter.state, filter.people, text])
         : null;
     const fetchPage = React.useCallback(async (cursor: string | null): Promise<ListPage<GitHubReference>> => {
+        if (getRuntimeKey() !== runtimeKey) throw new Error(t('references.picker.error.runtimeChanged'));
         if (!context || context === 'missing') return { kind: 'unavailable', reason: 'no-repo' };
         if (context.provider === 'gitlab') return fetchGitLabReferencePage(sourceControl, context, kind, { state, people }, text, cursor);
-        const result = await sourceControl.githubReferences(context, { kind, state, people, query: text, cursor });
+        const result = await sourceControl.githubReferences(context, { kind, scope: repositoryScope, state, people, query: text, cursor });
         if (!result.connected) return { kind: 'unavailable', reason: 'disconnected' };
+        if (repositoryScope === 'repository' && result.scope !== 'repository') {
+            throw new Error(t('gitView.pullRequest.serverRestartRequired'));
+        }
         if (!result.repo) return { kind: 'unavailable', reason: 'no-repo' };
-        return { kind: 'page', items: result.items, cursor: result.cursor, hasMore: result.hasMore };
-    }, [context, kind, people, sourceControl, state, text]);
-    return useCachedList(githubLists, key, fetchPage);
+        return { kind: 'page', items: result.items, cursor: result.cursor, hasMore: result.hasMore, total: result.total };
+    }, [context, kind, people, repositoryScope, runtimeKey, sourceControl, state, t, text]);
+    return useCachedList(githubLists, key, fetchPage, active);
 }
 
 export function useLinearReferenceList(options: {
@@ -250,13 +260,16 @@ export function useLinearReferenceList(options: {
     teamId?: string | null;
 }) {
     const { linear } = useRuntimeAPIs();
+    const { t } = useI18n();
+    const runtimeKey = getRuntimeKey();
     const workspace = useLinearAuthStore((state) => state.status?.organization?.id ?? '');
     const { enabled, filter, query } = options;
     const teamId = options.teamId ?? null;
     const text = query.trim();
     const { status, people, priority } = filter;
-    const key = enabled && linear ? JSON.stringify([getRuntimeKey(), workspace, status, people, priority, text, teamId]) : null;
+    const key = enabled && linear ? JSON.stringify([runtimeKey, workspace, status, people, priority, text, teamId]) : null;
     const fetchPage = React.useCallback(async (cursor: string | null): Promise<ListPage<LinearIssueSummary>> => {
+        if (getRuntimeKey() !== runtimeKey) throw new Error(t('references.picker.error.runtimeChanged'));
         if (!linear) return { kind: 'unavailable', reason: 'disconnected' };
         const result = await linear.issuesList({
             query: text || undefined,
@@ -268,7 +281,7 @@ export function useLinearReferenceList(options: {
         });
         if (result.connected === false) return { kind: 'unavailable', reason: 'disconnected' };
         return { kind: 'page', items: result.issues ?? [], cursor: result.cursor ?? null, hasMore: Boolean(result.hasMore) };
-    }, [linear, people, priority, status, teamId, text]);
+    }, [linear, people, priority, runtimeKey, status, t, teamId, text]);
     return useCachedList(linearLists, key, fetchPage);
 }
 
@@ -318,9 +331,9 @@ const IDLE: CachedValue<GitHubPullStatus | null> = { status: 'idle' };
 /** Forgets every PR's checks and mergeability, so the lists showing them ask again: the board's refresh. */
 export const forgetGitHubPullStatuses = (): void => githubPullStatuses.clear();
 
-/** An open PR, draft or not: its preview shows checks, and a ready one is coloured by them. */
-const needsPullStatus = (reference: GitHubReference): reference is GitHubPullReference => (
-    reference.kind === 'pull' && reference.state === 'open'
+/** Project lists include historical checks; other readers colour open PRs. */
+const needsPullStatus = (reference: GitHubReference, includeClosed: boolean): reference is GitHubPullReference => (
+    reference.kind === 'pull' && (includeClosed || reference.state === 'open')
 );
 
 const samePull = (status: GitHubPullStatus, pull: GitHubPullReference) => (
@@ -330,12 +343,11 @@ const samePull = (status: GitHubPullStatus, pull: GitHubPullReference) => (
 );
 
 /**
- * Checks and mergeability of the open PRs a list shows, asked after the list
- * in batches of a page, so they colour like the sidebar. GitHub only: a GitLab
- * project's items, issues and closed PRs ask nothing and answer `idle`. A ready
- * null is a PR GitHub could not resolve.
+ * Checks and mergeability of listed PRs, in batches of ten after the list.
+ * Closed PRs are opt-in for the project list. GitLab and issues ask nothing
+ * and answer `idle`. A ready null is a PR GitHub could not resolve.
  */
-export function useGitHubPullStatuses(directory: string | null, references: readonly GitHubReference[]) {
+export function useGitHubPullStatuses(directory: string | null, references: readonly GitHubReference[], includeClosed = false) {
     const { sourceControl } = useRuntimeAPIs();
     const context = useGitHubReadContext(directory);
     const github = context && context !== 'missing' && context.provider === 'github' ? context : null;
@@ -344,23 +356,33 @@ export function useGitHubPullStatuses(directory: string | null, references: read
         (pull: GitHubPullReference) => `${scope}|${pull.sourceRepo.owner}/${pull.sourceRepo.repo}#${pull.number}@${pull.headSha}`,
         [scope],
     );
-    const pulls = React.useMemo(() => (scope ? references.filter(needsPullStatus) : []), [references, scope]);
+    const pulls = React.useMemo(() => (scope ? references.filter((reference): reference is GitHubPullReference => needsPullStatus(reference, includeClosed)) : []), [references, scope, includeClosed]);
     const keys = React.useMemo(() => pulls.map(keyOf), [keyOf, pulls]);
 
-    // Through the store, not an effect: React reads the version again once it
-    // has subscribed, so an answer that lands between a render and its
-    // subscription (a list shown from the cache while its statuses are on the
-    // way) still shows instead of leaving the row and preview loading.
     const subscribe = React.useCallback((listener: () => void) => {
         const stops = keys.map((key) => githubPullStatuses.subscribe(key, listener));
         return () => stops.forEach((stop) => stop());
     }, [keys]);
-    const version = React.useSyncExternalStore(subscribe, githubPullStatuses.version, githubPullStatuses.version);
+    // Expose the values as a snapshot so memoized consumers observe completed
+    // reads. A stable lookup into the mutable cache hides changes from them.
+    const getSnapshot = React.useMemo(() => {
+        let version = -1;
+        let snapshot = new Map<string, CachedValue<GitHubPullStatus | null>>();
+        return () => {
+            const nextVersion = githubPullStatuses.version();
+            if (nextVersion !== version) {
+                version = nextVersion;
+                snapshot = new Map(keys.map((key) => [key, githubPullStatuses.read(key) ?? IDLE]));
+            }
+            return snapshot;
+        };
+    }, [keys]);
+    const statuses = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const hasIdleStatuses = [...statuses.values()].some((status) => status.status === 'idle');
     const revalidation = useReferenceRevalidation();
 
-    // Runs again on every change and revalidation too, so statuses forgotten
-    // by a refresh or gone old are asked again; fresh and pending ones are
-    // skipped by `ensureMany`.
+    // Clearing a status or revalidating asks again. A completed or failed read
+    // must not trigger another request; a failure waits for a refresh or return.
     React.useEffect(() => {
         if (!github || pulls.length === 0) return;
         const byKey = new Map(pulls.map((pull) => [keyOf(pull), pull]));
@@ -377,11 +399,13 @@ export function useGitHubPullStatuses(directory: string | null, references: read
             }
             return answers;
         }, PULL_STATUS_BATCH);
-    }, [github, keyOf, keys, pulls, revalidation, sourceControl, version]);
+    }, [github, hasIdleStatuses, keyOf, keys, pulls, revalidation, sourceControl]);
 
     return (reference: GitHubReference): CachedValue<GitHubPullStatus | null> => {
-        if (!scope || !needsPullStatus(reference)) return IDLE;
-        return githubPullStatuses.read(keyOf(reference)) ?? IDLE;
+        if (!scope || !needsPullStatus(reference, includeClosed)) return IDLE;
+        const key = keyOf(reference);
+        // An opened preview may outlive the page that contained its PR.
+        return statuses.get(key) ?? githubPullStatuses.read(key) ?? IDLE;
     };
 }
 

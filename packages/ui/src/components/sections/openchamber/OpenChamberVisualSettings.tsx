@@ -302,7 +302,7 @@ const normalizeUserMessageRenderingMode = (mode: unknown): 'markdown' | 'plain' 
     return mode === 'markdown' ? 'markdown' : 'plain';
 };
 
-type VisibleSetting = 'sessionAssist' | 'sessionGoal' | 'theme' | 'windowControlsPosition' | 'pwaInstallName' | 'pwaOrientation' | 'mobileKeyboardMode' | 'timeFormat' | 'weekStart' | 'fontSize' | 'terminalFontSize' | 'terminalShell' | 'terminalLoginShell' | 'editorFontSize' | 'spacing' | 'scrollbars' | 'inputBarOffset' | 'mermaidRendering' | 'userMessageRendering' | 'chatRenderMode' | 'messageTransport' | 'activityRenderMode' | 'conciseTranscript' | 'transcriptFileChangesOnly' | 'collapsibleUserMessages' | 'stickyUserHeader' | 'promptNavigatorEnabled' | 'wideChatLayout' | 'codeBlockLineWrap' | 'tableCellWrap' | 'copyMessagesAsPlainText' | 'splitAssistantMessageActions' | 'subagentReadOnlyBanner' | 'diffLayout' | 'mobileStatusBar' | 'dotfiles' | 'fileViewerPreview' | 'reasoning' | 'showToolFileIcons' | 'showTurnChangedFiles' | 'followUpBehavior' | 'inputHistoryScope' | 'inputHistoryLimit' | 'messageSearch' | 'terminalQuickKeys' | 'fileEditorKeymap' | 'persistDraft' | 'inputSpellcheck' | 'largeTextPaste' | 'enterToSend' | 'reportUsage' | 'autoSaveEnabled' | 'confirmFileTreeMove' | 'sessionTabs' | 'animatedActivityIndicators' | 'layoutAnimations' | 'openLinksInBrowserPanel' | 'openTrackerLinksOnBoard' | 'fileTreeSide';
+type VisibleSetting = 'sessionAssist' | 'sessionGoal' | 'theme' | 'windowControlsPosition' | 'pwaInstallName' | 'pwaOrientation' | 'mobileKeyboardMode' | 'timeFormat' | 'weekStart' | 'fontSize' | 'terminalFontSize' | 'terminalShell' | 'terminalLoginShell' | 'editorFontSize' | 'spacing' | 'scrollbars' | 'inputBarOffset' | 'mermaidRendering' | 'userMessageRendering' | 'chatRenderMode' | 'messageTransport' | 'activityRenderMode' | 'conciseTranscript' | 'transcriptFileChangesOnly' | 'collapsibleUserMessages' | 'stickyUserHeader' | 'promptNavigatorEnabled' | 'wideChatLayout' | 'codeBlockLineWrap' | 'tableCellWrap' | 'copyMessagesAsPlainText' | 'splitAssistantMessageActions' | 'subagentReadOnlyBanner' | 'diffLayout' | 'mobileStatusBar' | 'dotfiles' | 'fileViewerPreview' | 'reasoning' | 'showToolFileIcons' | 'showTurnChangedFiles' | 'followUpBehavior' | 'inputHistoryScope' | 'inputHistoryLimit' | 'messageSearch' | 'terminalQuickKeys' | 'fileEditorKeymap' | 'persistDraft' | 'inputSpellcheck' | 'largeTextPaste' | 'enterToSend' | 'reportUsage' | 'autoSaveEnabled' | 'confirmFileTreeMove' | 'sessionTabs' | 'animatedActivityIndicators' | 'layoutAnimations' | 'openLinksInBrowserPanel' | 'openTrackerLinksOnBoard' | 'fileTreeSide' | 'workspaceLayout';
 
 const WINDOW_CONTROLS_POSITION_OPTIONS: Array<{ id: DesktopWindowControlsPosition; labelKey: string }> = [
     { id: 'left', labelKey: 'settings.openchamber.desktopNetwork.option.windowControlsLeft' },
@@ -364,6 +364,8 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
     const setConfirmFileTreeMove = useUIStore(state => state.setConfirmFileTreeMove);
     const layoutAnimations = useUIStore(state => state.layoutAnimations);
     const fileTreeSide = useUIStore(state => state.fileTreeSide);
+    const workspaceLayout = useUIStore(state => state.workspaceLayout);
+    const setWorkspaceLayout = useUIStore(state => state.setWorkspaceLayout);
     const setFileTreeSide = useUIStore(state => state.setFileTreeSide);
     const setLayoutAnimations = useUIStore(state => state.setLayoutAnimations);
     const openLinksInBrowserPanel = useUIStore(state => state.openLinksInBrowserPanel);
@@ -684,7 +686,7 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
         ? hasLocalizationSettings
         : (shouldShow('theme') || showWindowControlsPositionSetting || shouldShow('pwaInstallName') || shouldShow('pwaOrientation') || shouldShow('timeFormat') || shouldShow('weekStart'));
     const hasLayoutSettings = shouldShow('fontSize') || shouldShow('terminalFontSize') || shouldShow('editorFontSize') || shouldShow('spacing') || (shouldShow('scrollbars') && !hasThemeSettings) || (shouldShow('inputBarOffset') && isMobile);
-    const hasNavigationSettings = (shouldShow('terminalQuickKeys') && !isMobile) || ((shouldShow('terminalShell') || shouldShow('terminalLoginShell')) && !isVSCode) || shouldShow('fileEditorKeymap') || shouldShow('autoSaveEnabled') || (shouldShow('confirmFileTreeMove') && !isVSCode && !isMobile) || (shouldShow('layoutAnimations') && !isVSCode && !isMobile) || (shouldShow('openLinksInBrowserPanel') && isDesktopShell() && !isMobile) || (shouldShow('openTrackerLinksOnBoard') && !isVSCode) || (shouldShow('fileTreeSide') && !isVSCode && !isMobile) || (shouldShow('sessionTabs') && !isVSCode && !isMobile);
+    const hasNavigationSettings = (shouldShow('terminalQuickKeys') && !isMobile) || ((shouldShow('terminalShell') || shouldShow('terminalLoginShell')) && !isVSCode) || shouldShow('fileEditorKeymap') || shouldShow('autoSaveEnabled') || (shouldShow('confirmFileTreeMove') && !isVSCode && !isMobile) || (shouldShow('layoutAnimations') && !isVSCode && !isMobile) || (shouldShow('openLinksInBrowserPanel') && isDesktopShell() && !isMobile) || (shouldShow('openTrackerLinksOnBoard') && !isVSCode) || (shouldShow('workspaceLayout') && !isVSCode && !isMobile) || (shouldShow('fileTreeSide') && !isVSCode && !isMobile && workspaceLayout === 'classic') || (shouldShow('sessionTabs') && !isVSCode && !isMobile);
     const hasBehaviorSettings = shouldShow('mermaidRendering')
         || (shouldShow('sessionGoal') && !isVSCode)
         || shouldShow('userMessageRendering')
@@ -1549,7 +1551,7 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
                                 </SettingsRadioGroup>
                             </SettingsControlGroup>
                         )}
-                        {shouldShow('fileTreeSide') && !isVSCode && !isMobile && (
+                        {shouldShow('fileTreeSide') && !isVSCode && !isMobile && workspaceLayout === 'classic' && (
                             <SettingsControlGroup
                                 title={t('settings.openchamber.visual.field.fileTreeSide')}
                                 settingsItem="appearance.file-tree-side"
@@ -1562,6 +1564,24 @@ export const OpenChamberVisualSettings: React.FC<OpenChamberVisualSettingsProps>
                                             onSelect={() => setFileTreeSide(side)}
                                             label={t(`settings.openchamber.visual.option.fileTreeSide.${side}`)}
                                             ariaLabel={t(`settings.openchamber.visual.option.fileTreeSide.${side}`)}
+                                        />
+                                    ))}
+                                </SettingsRadioGroup>
+                            </SettingsControlGroup>
+                        )}
+                        {shouldShow('workspaceLayout') && !isVSCode && !isMobile && (
+                            <SettingsControlGroup
+                                title={t('settings.openchamber.visual.field.workspaceLayout')}
+                                settingsItem="appearance.workspace-layout"
+                            >
+                                <SettingsRadioGroup aria-label={t('settings.openchamber.visual.field.workspaceLayout')}>
+                                    {(['classic', 'editor'] as const).map((layout) => (
+                                        <SettingsRadioOption
+                                            key={layout}
+                                            selected={workspaceLayout === layout}
+                                            onSelect={() => setWorkspaceLayout(layout)}
+                                            label={t(`settings.openchamber.visual.option.workspaceLayout.${layout}`)}
+                                            ariaLabel={t(`settings.openchamber.visual.option.workspaceLayout.${layout}`)}
                                         />
                                     ))}
                                 </SettingsRadioGroup>

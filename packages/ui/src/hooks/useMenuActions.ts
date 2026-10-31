@@ -5,7 +5,7 @@ import { getSyncSessions } from '@/sync/sync-refs';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
-import { getZoneView, resolveZoneActiveTabId, shownContextModes, zoneOfMode } from '@/lib/workspace/zones';
+import { getDefaultContextZone, getZoneView, resolveZoneActiveTabId, shownContextModes, zoneOfMode } from '@/lib/workspace/zones';
 import { useUpdateStore } from '@/stores/useUpdateStore';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { sessionEvents } from '@/lib/sessionEvents';
@@ -220,14 +220,20 @@ export const useMenuActions = (
           // The right zone only: it is the panel this menu item always meant.
           const panelState = uiState.contextPanelByDirectory[directoryKey];
           const rightTabId = panelState
-            ? resolveZoneActiveTabId(panelState.tabs, uiState.contextSurfaceZones, 'right', getZoneView(panelState, 'right').activeTabId)
+            ? resolveZoneActiveTabId(panelState.tabs, uiState.contextSurfaceZones, 'right', getZoneView(panelState, 'right').activeTabId, getDefaultContextZone(uiState.workspaceLayout))
             : null;
           if (panelState?.isOpen) {
             uiState.closeContextPanel(directoryKey);
           } else if (rightTabId) {
-            uiState.setActiveContextPanelTab(directoryKey, rightTabId);
+            const rightTab = panelState?.tabs.find((tab) => tab.id === rightTabId);
+            if (uiState.workspaceLayout === 'editor' && rightTab?.mode === 'file') {
+              uiState.openContextSurface(directoryKey, 'file');
+            } else {
+              uiState.setActiveContextPanelTab(directoryKey, rightTabId);
+            }
           } else {
-            uiState.openContextSurface(directoryKey, 'git');
+            uiState.moveContextSurfaceToZone('git', 'right');
+            uiState.openContextPanelTab(directoryKey, { mode: 'git' });
           }
           break;
         }
@@ -259,10 +265,10 @@ export const useMenuActions = (
           const key = normalizeContextPanelDirectoryKey(directory);
           const uiState = useUIStore.getState();
           const panel = uiState.contextPanelByDirectory[key];
-          if (!shownContextModes(panel, uiState.contextSurfaceZones).has('terminal')) {
+          if (!shownContextModes(panel, uiState.contextSurfaceZones, getDefaultContextZone(uiState.workspaceLayout)).has('terminal')) {
             uiState.openContextSurface(key, 'terminal');
           }
-          uiState.toggleContextPanelExpanded(key, zoneOfMode(uiState.contextSurfaceZones, 'terminal'));
+          uiState.toggleContextPanelExpanded(key, zoneOfMode(uiState.contextSurfaceZones, 'terminal', getDefaultContextZone(uiState.workspaceLayout)));
           break;
         }
 

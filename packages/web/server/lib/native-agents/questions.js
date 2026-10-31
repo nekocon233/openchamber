@@ -1,7 +1,7 @@
 // Questions native sessions wait on: Claude's AskUserQuestion and Codex's
-// requestUserInput, plus the decision after a completed Codex plan. Tool
-// questions end with their turn; codex/plan-decisions.js owns the longer
-// lifetime of plan decisions. Nothing is persisted. Replies and rejections
+// requestUserInput, plus application decisions after completed native turns.
+// Owners of post-turn decisions handle persistence and delivery; this registry
+// holds the live callbacks. Replies and rejections
 // publish the same `question.*` events the native UI already consumes.
 
 import { randomUUID } from 'node:crypto';
@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { NativeAgentError } from './errors.js';
 
 /** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean }} QuestionInfo */
-/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
+/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit' | 'antigravity-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
 /** @typedef {{ status: 'replied', answers: string[][] } | { status: 'rejected', reason?: 'interrupted' }} QuestionOutcome */
 
 const questionNotFoundError = (requestId) => new NativeAgentError(
@@ -54,14 +54,15 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
     /**
      * Publishes a question and resolves once it is answered or rejected. An
      * abort signal rejects it, as does ending the session's turn.
-     * @param {{ directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void> }} input
+     * @param {{ id?: string, directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit' | 'antigravity-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void> }} input
      * @returns {Promise<QuestionOutcome>}
      */
-    ask({ directory, sessionID, questions, kind, tool, signal, onReply }) {
+    ask({ id, directory, sessionID, questions, kind, tool, signal, onReply }) {
       /** @type {QuestionRequest} */
       const request = {
-        id: `ncq_${randomUUID()}`, sessionID, questions,
+        id: id ?? `ncq_${randomUUID()}`, sessionID, questions,
       };
+      if (pending.has(request.id)) throw new NativeAgentError('This native question is already pending', { status: 409, code: 'NATIVE_QUESTION_REPLY_PENDING' });
       if (kind !== undefined) request.kind = kind;
       if (tool !== undefined) request.tool = tool;
       return new Promise((resolve) => {
@@ -106,6 +107,21 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
     /** @param {string} requestId */
     reject(requestId) {
       return settle(requestId, { status: 'rejected' });
+    },
+
+    /** Removes an owner-managed callback; shutdown omits an outcome/event. */
+    withdraw(requestId, outcome) {
+      const entry = pending.get(requestId);
+      if (!entry) return false;
+      pending.delete(requestId);
+      entry.settle({ status: 'rejected', reason: 'interrupted' });
+      if (outcome) publish(entry.directory, {
+        type: outcome.status === 'replied' ? 'question.replied' : 'question.rejected',
+        properties: outcome.status === 'replied'
+          ? { sessionID: entry.request.sessionID, requestID: requestId, answers: outcome.answers }
+          : { sessionID: entry.request.sessionID, requestID: requestId },
+      });
+      return true;
     },
 
     /** Rejects every question a session is waiting on, when its turn ends. */

@@ -9,6 +9,7 @@ import { opencodeClient } from '@/lib/opencode/client';
 import { useInputStore } from '@/sync/input-store';
 import { SyncProvider } from '@/sync/sync-context';
 import { useUIStore } from '@/stores/useUIStore';
+import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 
 const directory = '/workspace/shortcut-test';
@@ -85,6 +86,31 @@ function createComposer(parent: HTMLElement) {
   parent.append(chatInput);
   return composer;
 }
+
+test('terminal expansion follows the layout default and a manual bottom placement', async () => {
+  const ui = useUIStore.getState();
+  const originalDirectory = useDirectoryStore.getState();
+  useDirectoryStore.setState({ currentDirectory: directory });
+  useUIStore.setState({ workspaceLayout: 'editor', contextSurfaceZones: {}, contextPanelByDirectory: {}, shortcutOverrides: {} });
+  try {
+    await withShortcutsMounted(async () => {
+      const press = async () => {
+        await act(async () => {
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'J', code: 'KeyJ', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+        });
+      };
+      await press();
+      expect(useUIStore.getState().contextPanelByDirectory[directory]?.zones.left).toMatchObject({ isOpen: true, expanded: true });
+      expect(useUIStore.getState().contextPanelByDirectory[directory]?.isOpen).toBe(false);
+      await act(async () => useUIStore.getState().moveContextSurfaceToZone('terminal', 'bottom'));
+      await press();
+      expect(useUIStore.getState().contextPanelByDirectory[directory]?.zones.bottom).toMatchObject({ isOpen: true, expanded: true });
+    });
+  } finally {
+    useUIStore.setState(ui, true);
+    useDirectoryStore.setState(originalDirectory, true);
+  }
+});
 
 test('Ctrl+L adds a selection outside chat and yields to a sequence without one', async () => {
   const previousOverrides = useUIStore.getState().shortcutOverrides;

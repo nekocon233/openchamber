@@ -20,11 +20,8 @@ import type { UsageWindow } from '@/types';
 /**
  * Provider rate limits.
  *
- * The mobile popover renders these as filled cards; that language does not
- * survive here — the fills and their padding fight the panel's flat rows and
- * cost roughly twice the height. Only the data is shared
- * (`useUsageProviderGroups`); the presentation is the panel's own row
- * vocabulary, with each provider as a quiet sub-heading.
+ * Desktop and mobile share the provider grouping from `useUsageProviderGroups`
+ * and present quota windows as rows under each provider's heading.
  *
  * Sits above Subagents and MCP: a spent quota stops the work outright, so it
  * belongs with the readouts that hold for the whole session rather than with

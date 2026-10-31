@@ -56,6 +56,15 @@ const nativeExecutionTaskSchema = z.object({
 
 export const nativeTaskSnapshotSchema = z.discriminatedUnion('state', [
   z.object({
+    state: z.literal('history'),
+    generation: identity,
+    revision,
+    tasks: z.array(nativeExecutionTaskSchema),
+    omitted: z.number().int().nonnegative(),
+  }).refine((snapshot) => snapshot.tasks.every((task) => !task.active && !task.canStop && !['running', 'pending', 'paused'].includes(task.status)), {
+    message: 'Saved task history cannot establish live activity or task control',
+  }),
+  z.object({
     state: z.literal('unknown'),
     generation: identity,
     revision,

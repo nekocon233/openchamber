@@ -3325,6 +3325,9 @@ export function SyncProvider(props: {
     }
     const unsubscribeQueueEvents = subscribeMessageQueueSync(runtimeKey)
     const resyncAfterStreamGap = (reason: SessionMaterializationReason) => {
+      // Native catalogs are runtime-wide and may have changed while disconnected.
+      // Refresh once here; directory reloads otherwise reuse the old effort list.
+      void useConfigStore.getState().refreshNativeProviders()
       // Cached transcripts may have missed events too; each revalidates its
       // tail the next time it is opened. Mark first so the active sessions'
       // tail refreshes below count as that revalidation.

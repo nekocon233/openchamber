@@ -1,6 +1,6 @@
-import type { parsePullRequestDiff, PullRequestSource } from './pullRequestDiff';
+import type { PullRequestDiffSnapshot, PullRequestSource } from './pullRequestDiff';
 
-type Snapshot = ReturnType<typeof parsePullRequestDiff>;
+type Snapshot = PullRequestDiffSnapshot;
 interface Entry {
   scope: string;
   pending: Promise<Snapshot>;
@@ -22,7 +22,7 @@ export class PullRequestSnapshotCache {
     entry.pending = entry.pending.then((files) => {
       if (this.entries.get(key) !== entry) return files;
       entry.files = files;
-      entry.bytes = files.reduce((sum, file) => sum + 2 * (file.patch.length + file.path.length), 0);
+      entry.bytes = files.files.reduce((sum, file) => sum + 2 * (file.patch.length + file.path.length), 0);
       // Eviction only drops completed cache ownership, never a mounted diff or
       // in-flight request. Keep one oversized PR intact rather than truncating it.
       let bytes = [...this.entries.values()].reduce((sum, value) => sum + value.bytes, 0);

@@ -677,6 +677,35 @@ Antigravity (`nag_`) sessions come from the OpenChamber server through
 `RuntimeAPIs.nativeAgents`, never from OpenCode. Antigravity's partition is
 optional so an older server can omit it; omission preserves held `nag_` records
 and leaves that partition's completeness unknown.
+Antigravity child metadata with `activityKnown: false` keeps its activity
+unknown. Live-session list equality includes this field even when timestamps
+are unchanged, so a native activity update reaches the work-status rows.
+Antigravity's catalog lists one entry per model family with its published
+efforts. Optional native catalog `aliases` become domain-model `nativeAliases`;
+old servers may omit them. The model controls resolve saved concrete slugs to
+the family name and effort choices without rewriting session history or stored
+selections. New picks use the family id and the existing separate variant.
+After an established stream reconnects or changes transport, the config store
+refreshes the runtime-wide native catalog once, outside directory resyncs.
+This picks up connection effort changes made while disconnected. Failed backend
+partitions retain their prior catalog, and selected models and effort overrides
+remain intact. Initial connection uses ordinary catalog loading; idle streams
+do not poll the model list.
+Claude connection rows may opt into `antigravity-opus` or `antigravity-sonnet`
+through `followFamily`. Connection read/write schemas preserve that optional
+field. The host resolves the latest verified release at catalog or launch time
+and updates its name to the bound version, such as `Opus 5.5 (agy)`. The
+selectable connection/model UUID stays unchanged; existing model and effort
+selections continue to refer to the same row.
+Successful automatic updates emit a global native `catalog.updated` event
+with `kind: 'native-model'`. The ordinary catalog event batch refreshes only
+native providers, replacing names in the active mirror and loaded directories
+without starting OpenCode locations. Reconnect recovery covers missed events.
+Unified Opus and Sonnet retain their own gateway model UUIDs and optional-effort
+aliases for legacy `opus`, `sonnet` and `[1m]` selections. An alias without `variant` changes
+only model identity; it never overrides a saved effort. Its row reports the
+common source capabilities and names both versions when they differ. Native
+provider refresh replaces names and choices without changing the selected id.
 The server contract is in `packages/web/server/lib/native-agents/DOCUMENTATION.md`.
 `lib/native-agents/ids.ts` tells the backends apart by prefix, and every native
 branch keys on it.
@@ -780,6 +809,13 @@ what the stores hold for native sessions and never blocks OpenCode's:
 - Forms. `lib/native-agents/forms.ts` projects native questions into the shared
   form contract. Bootstrap and reconnect preserve held native forms when their
   source fails; replies and cancellation still use the native question API.
+  AGY completed-turn questions and `antigravity-plan-exit` decisions use these
+  same forms, including custom and multi-select answers. Plan controls retain
+  the exact `build`/`plan` wire values and localize their labels. History keeps
+  native skipped results separate from application answers. The selected agent
+  changes to Build only when the server publishes the new approved Build user
+  prompt. A failed reply retains its form; an uncertain dispatch withdraws it
+  through the authoritative question event and is never replayed automatically.
 - Session records. `syncSession` and reconnect repair read a native
   session through `readNativeSession`, never OpenCode's `session.get`.
 
@@ -837,16 +873,27 @@ with a native branch (`sync/native-send.ts`):
   OpenCode cannot read for a native id.
 - A follow-up that would be queued goes out at once for Claude, Codex and
   DeepSeek: the host queue delivers through OpenCode, and the CLI itself holds a
-  prompt that arrives mid-turn. Antigravity has no mid-turn steering, so its
+  prompt that arrives mid-turn. Unified conversations retain this path when fresh
+  server metadata confirms the same executing backend and no handoff is preparing;
+  cross-backend and explicitly queued follow-ups still wait for whole-execution
+  readiness. Antigravity has no mid-turn steering, so its
   busy follow-ups stay in the host queue until the session is idle.
+  Its idle prompts use the live phase directly when no separate status probe ran.
 - The agent is `build` or `plan`; the picker offers only those two for a
-  native session or a draft with a CLI's model picked. Antigravity offers and
-  sends build only. Its composer has no native slash commands, plan/questions
-  or task views.
+  native session or a draft with a CLI's model picked, including Antigravity.
+  The send path preserves Plan, and native agent cycling uses the same choices
+  as the picker. A stale/custom OpenCode agent name is refused for Antigravity,
+  never converted to Build. Antigravity changes its native process mode before sending;
+  Plan blocks mutating tools rather than silently sending Build. Its composer
+  has no native slash-command or interactive-question reply channel.
+  Its background-task view reads saved native outcomes through a `history`
+  snapshot, never infers active membership from those records, and offers no
+  per-task stop. Turn-completion events, reconnect and explicit refresh update
+  that view; it does not poll at idle.
 - Picking a CLI's model in a new-session draft creates a unified native
   conversation when supported (`materializeOpenDraftSession` passes the backend
   and selection through `createSession`). Native sessions skip the draft's permission policy: the
-  CLI approves every tool itself.
+  CLI owns execution permissions, including Antigravity's restricted Plan mode.
 - Native tool names (`Bash`, `Task`, `apply_patch`) map to the shared
   shell, subagent, and patch semantics without changing the native CLI protocol.
 - Abort, question replies and rejections go to the native API.

@@ -1,5 +1,6 @@
 import type { Session } from '@/lib/opencode/model';
 import { isReviewSession } from '@/lib/sessionReviewMetadata';
+import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 
 export const resolveChatPromptReadOnly = (
     session: Session | null | undefined,
@@ -14,6 +15,7 @@ export const resolveChatPromptReadOnly = (
     }
 
     if (session?.parentID) {
+        if (nativeBackendOfSessionId(session.id) === 'antigravity') return true;
         return !allowPromptingSubagentSessions;
     }
 

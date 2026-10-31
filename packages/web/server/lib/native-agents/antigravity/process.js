@@ -6,14 +6,25 @@ import { createInterface } from 'node:readline';
 import { spawnCliProcess, signalCliProcess } from '../process.js';
 import { encodeAgyPrompt, parseAgyStreamFrame } from './protocol.js';
 
-export const agyProcessArgs = ({ cwd, model = null, conversationId = null }) => [
+// Plan's native prefix alone is not a permission boundary. Session-only deny
+// rules prevent edits and command/MCP/browser side effects without changing
+// the user's saved CLI settings. Native file/search tools remain available.
+const PLAN_SETTINGS = {
+  agentMode: 'plan',
+  toolPermission: 'request-review',
+  permissions: { deny: ['write_file(*)', 'command(*)', 'mcp(*)', 'execute_url(*)'] },
+};
+
+export const agyProcessArgs = ({ cwd, model = null, conversationId = null, agent = 'build', effort = null }) => [
   '--input-format', 'stream-json',
   '--output-format', 'stream-json',
   '--add-dir', cwd,
-  '--disable-slash-commands',
+  agent === 'plan' ? '--disable-slash-commands=false' : '--disable-slash-commands',
   '--print-timeout', '0',
-  '--dangerously-skip-permissions',
+  ...(agent ? ['--mode', agent === 'plan' ? 'plan' : 'accept-edits'] : []),
+  ...(agent === 'plan' ? ['--settings', JSON.stringify(PLAN_SETTINGS)] : agent === 'build' ? ['--dangerously-skip-permissions'] : []),
   ...(model ? ['--model', model] : []),
+  ...(effort ? ['--effort', effort] : []),
   ...(conversationId ? ['--conversation', conversationId] : []),
 ];
 

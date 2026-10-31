@@ -3,6 +3,7 @@ import { markGitHubAuthAccountInvalid } from '../github/auth.js';
 import { getOctokitForAccountId } from '../github/octokit.js';
 import { resolveGitHubRepoFromDirectory } from '../github/repo/index.js';
 import { resolveRepoNetwork } from '../github/repo/fork-detection.js';
+import { readGitHubPullPatch } from '../github/pull-diff.js';
 
 const sameRepository = (left, right) => left.owner.toLowerCase() === right.owner.toLowerCase()
   && left.repo.toLowerCase() === right.repo.toLowerCase();
@@ -108,15 +109,15 @@ async function readGitLab(reader, input) {
 async function readGitHubPullRequestDiff(directory, number, readContext, options) {
   const { octokit, repo: target } = await resolvePullRequestRepo(directory, number, readContext, options);
 
-  const response = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
-    owner: target.owner,
-    repo: target.repo,
-    pull_number: number,
-    headers: { accept: 'application/vnd.github.v3.diff' },
+  const result = await readGitHubPullPatch({
+    octokit, repo: target, number, signal: options.signal, includeRevision: options.includeRevision,
+    readSnapshot: options.readGitHubPullRequestSnapshot ? () => options.readGitHubPullRequestSnapshot({
+      context: readContext, repo: target, number, signal: options.signal,
+    }) : undefined,
   });
-
-  assert.match(response.data, /^(?:diff --git |\s*$)/, 'GitHub returned an invalid pull request diff');
-  return { patch: response.data, meta: { owner: target.owner, repo: target.repo, number } };
+  const meta = { owner: target.owner, repo: target.repo, number };
+  if (result.headSha) meta.headSha = result.headSha;
+  return { patch: result.patch, meta };
 }
 
 /** Above this the full-context view is no longer a readable diff, and the round trip is wasted. */
@@ -132,7 +133,7 @@ const MAX_FULL_FILE_BYTES = 5 * 1024 * 1024;
  * the expanded context. Head commits of a fork PR are reachable through the
  * base repository (`refs/pull/<n>/head`), so every read goes to one repo.
  */
-export async function getPullRequestFileContents(directory, number, readContext, { path, previousPath, status, ...options }) {
+export async function getPullRequestFileContents(directory, number, readContext, { path, previousPath, status, expectedHeadSha, ...options }) {
   if (readContext?.provider === 'gitlab') {
     return readGitLab(options.readGitLabChangeRequestFile, {
       context: readContext, number, sourceRepo: options.sourceRepo ?? null, path, previousPath, status,
@@ -146,6 +147,9 @@ export async function getPullRequestFileContents(directory, number, readContext,
   const baseSha = pull.data?.base?.sha;
   assert.match(String(headSha), /^[0-9a-f]{40}$/, 'GitHub returned an invalid pull request head');
   assert.match(String(baseSha), /^[0-9a-f]{40}$/, 'GitHub returned an invalid pull request base');
+  if (expectedHeadSha && headSha !== expectedHeadSha) {
+    throw Object.assign(new Error('Pull request changed; refresh the diff'), { statusCode: 409, code: 'STALE_CONFIG' });
+  }
   const compare = await octokit.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
     owner: repo.owner, repo: repo.repo, basehead: `${baseSha}...${headSha}`,
   });

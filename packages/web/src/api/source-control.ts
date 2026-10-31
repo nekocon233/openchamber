@@ -80,6 +80,7 @@ import { runtimeFetch } from '@openchamber/ui/lib/runtime-fetch';
 import type { RuntimeFetchOptions } from '@openchamber/ui/lib/runtime-fetch';
 import { isSafeRepositoryEndpoint, parseBindingResponse, resolveBindingReadiness } from '../../server/lib/source-control/binding-contract.js';
 import { fetchGitHubPullStatuses, fetchGitHubReferenceDetail, fetchGitHubReferences } from './github-references';
+import { githubPendingReviewStateSchema, type GitHubPendingReviewAction } from '@openchamber/ui/lib/source-control/pendingReview';
 
 interface ErrorResponse {
   error?: string;
@@ -197,7 +198,7 @@ type PostBody =
   | { disabled: boolean }
   | CreateBody
   | UpdateBody
-  | (MutationBody<SourceControlExistingMutationTarget> & { method: 'merge' | 'squash' | 'rebase' })
+  | (MutationBody<SourceControlExistingMutationTarget> & { method: 'merge' | 'squash' | 'rebase'; force?: boolean })
   | (MutationBody<SourceControlExistingMutationTarget> & { body: string })
   | (MutationBody<SourceControlExistingMutationTarget> & { threadId: string; body: string })
   | (MutationBody<SourceControlExistingMutationTarget> & { threadId: string; resolved: boolean })
@@ -205,6 +206,7 @@ type PostBody =
   | (MutationBody<SourceControlExistingMutationTarget> & { labels: string[] })
   | (MutationBody<SourceControlExistingMutationTarget> & { reviewers: string[] })
   | (MutationBody<SourceControlExistingMutationTarget> & { verdict: ReviewChangeRequestInput['verdict']; body?: string })
+  | (MutationBody<SourceControlExistingMutationTarget> & { action: GitHubPendingReviewAction })
   | MutationBody;
 
 interface WebSourceControlAPIOptions {
@@ -1464,8 +1466,9 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
     },
     capabilities: async (identity): Promise<SourceControlCapabilities> => {
       const payload = await request<SourceControlCapabilities & ErrorResponse>(fetch, identity, '/capabilities');
+      const normalized = normalizeIdentity(payload.identity);
       return {
-        identity: normalizeIdentity(payload.identity),
+        identity: normalized,
         authentication: payload.authentication,
         authenticationMethods: payload.authenticationMethods,
         multipleAccounts: payload.multipleAccounts,
@@ -1474,6 +1477,7 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
         changeRequests: payload.changeRequests,
         draftChangeRequests: payload.draftChangeRequests,
         mergeChangeRequests: payload.mergeChangeRequests,
+        forceMergeChangeRequests: normalized.provider === 'github' && payload.forceMergeChangeRequests === true,
         mergeMethods: payload.mergeMethods ? [...payload.mergeMethods] : undefined,
         ci: payload.ci,
       };
@@ -1596,9 +1600,17 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
     },
     changeRequestMerge: async (payload: MergeChangeRequestInput) => {
       const identity = normalizeIdentity(payload);
-      const result = await post<MutationReceiptDTO>(fetch, identity, '/pr/merge', {
+      if (payload.force !== undefined && payload.force !== true && payload.force !== false) {
+        throw new SourceControlRequestError('Force merge must be a boolean', 'INVALID_SOURCE_CONTROL_MUTATION_CONTEXT');
+      }
+      if (payload.force === true && identity.provider !== 'github') {
+        throw new SourceControlRequestError('Force merge is not supported by this provider', 'SOURCE_CONTROL_FORCE_MERGE_UNSUPPORTED');
+      }
+      const body: MergeChangeRequestInput = {
         ...mutationBody(payload, identity, 'existing'), method: payload.method,
-      });
+      };
+      if (payload.force === true) body.force = true;
+      const result = await post<MutationReceiptDTO>(fetch, identity, '/pr/merge', body);
       return parseMutationReceipt(result, payload, identity, parseMergeMutationResult);
     },
     changeRequestReady: async (payload: ReadyChangeRequestInput) => {
@@ -1642,6 +1654,21 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
       if (payload.body !== undefined) body.body = payload.body;
       const result = await post<MutationReceiptDTO>(fetch, identity, '/pr/review', body);
       return parseMutationReceipt(result, payload, identity, parseReviewMutationResult);
+    },
+    githubPendingReview: async (context, pull) => {
+      const identity = normalizeIdentity(context);
+      if (identity.provider !== 'github') throw new Error('Pending reviews require GitHub');
+      const query = boundReadQuery(context);
+      query.set('owner', pull.owner); query.set('repo', pull.repo); query.set('number', String(pull.number));
+      return githubPendingReviewStateSchema.parse(await request(fetch, identity, '/pr/review/pending', {}, query));
+    },
+    githubPendingReviewAction: async (payload) => {
+      const identity = normalizeIdentity(payload);
+      if (identity.provider !== 'github') throw new Error('Pending reviews require GitHub');
+      const result = await post<MutationReceiptDTO>(fetch, identity, '/pr/review/pending', {
+        ...mutationBody(payload, identity, 'existing'), action: payload.action,
+      });
+      return parseMutationReceipt(result, payload, identity, parseEmptyMutationResult);
     },
     changeRequestSetState: async (payload: SetStateInput) => {
       const identity = normalizeIdentity(payload);

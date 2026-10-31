@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': 'Układ obszaru roboczego',
+  'settings.openchamber.visual.option.workspaceLayout.classic': 'Klasyczny',
+  'settings.openchamber.visual.option.workspaceLayout.editor': 'Edytor',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "Konfiguruj klucz API, punkt końcowy i modele dsh na serwerze z dowolnego połączonego urządzenia.",
   'settings.deepseekHarness.ready': "Wykryto interfejs CLI dsh.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': 'Zaloguj się za pomocą konta Google. W przypadku serwera zdalnego postępuj zgodnie z instrukcjami dotyczącymi adresu URL i kodu autoryzacji.',
   'settings.antigravity.warnings.title': 'Przed użyciem Antigravity',
   'settings.antigravity.warnings.subscription': 'Google nie obsługuje osobistych subskrypcji Google AI w aplikacjach innych firm. Korzystanie z nich tutaj może spowodować ograniczenie lub zamknięcie Twojego konta.',
-  'settings.antigravity.warnings.fullAccess': 'OpenChamber uruchamia agy z pełnym dostępem. Narzędzia i polecenia powłoki w trybie headless działają bez pytania o zgodę na każde z nich.',
+  'settings.antigravity.warnings.fullAccess': 'Build automatycznie zatwierdza działania narzędzi. Plan blokuje zmiany plików, polecenia powłoki, narzędzia MCP i działania przeglądarki.',
   'chat.deepseekCommand.failed': "Nie udało się wykonać polecenia DeepSeek Harness.",
   'chat.deepseekCommand.needsSession': "Wyślij wiadomość, aby utworzyć sesję DeepSeek Harness przed wykonaniem tego polecenia.",
   'settings.sourceControl.ssh.title': 'Klucze SSH',

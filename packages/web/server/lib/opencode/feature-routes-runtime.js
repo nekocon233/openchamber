@@ -125,18 +125,21 @@ export const createFeatureRoutesRuntime = (dependencies) => {
         ...service,
         // Forward only the request options by name: the remaining slots are
         // dependency overrides and must not be reachable from a route.
-        getPullRequestDiff: (directory, number, readContext, { allowEmpty, sourceRepo } = {}) => pullRequest.getPullRequestDiff(
+        getPullRequestDiff: (directory, number, readContext, { allowEmpty, sourceRepo, signal, includeRevision } = {}) => pullRequest.getPullRequestDiff(
           directory,
           number,
           readContext,
           {
             allowEmpty,
             sourceRepo,
+            signal,
+            includeRevision,
             onAccountUnavailable: walkthroughBindingService?.accountUnavailable,
             readGitLabChangeRequestPatch: walkthroughBindingService?.readGitLabChangeRequestPatch,
+            readGitHubPullRequestSnapshot: (input) => networkOperations.readPullRequestSnapshot(input),
           },
         ),
-        getPullRequestFileContents: (directory, number, readContext, { path, previousPath, status, sourceRepo }) => pullRequest.getPullRequestFileContents(
+        getPullRequestFileContents: (directory, number, readContext, { path, previousPath, status, sourceRepo, expectedHeadSha }) => pullRequest.getPullRequestFileContents(
           directory,
           number,
           readContext,
@@ -144,6 +147,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
             path,
             previousPath,
             status,
+            expectedHeadSha,
             sourceRepo,
             onAccountUnavailable: walkthroughBindingService?.accountUnavailable,
             readGitLabChangeRequestFile: walkthroughBindingService?.readGitLabChangeRequestFile,
@@ -418,6 +422,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       getQuotaProviders,
       isExternalOpenCode,
       nativeConnections: nativeAgentsRuntime?.claudeConnections,
+      nativeAntigravity: nativeAgentsRuntime?.antigravityQuota,
     });
     registerSmallModelRoutes(app, { getSmallModelService });
     registerSessionGoalRoutes(app);
@@ -501,6 +506,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
         return inspection.requirements.find((entry) => entry.kind === kind && entry.path === checkoutPath) ?? null;
       },
       github: {
+        readPullRequestSnapshot: (input) => networkOperations.readPullRequestSnapshot(input),
         // A worktree made from a fork PR has no upstream; its provenance says
         // which remote the branch came from, so PR status can find the PR.
         readContributorProvenance: contributorProvenance.read,
@@ -656,6 +662,8 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       validateGitAuxiliaryContext: walkthroughBindingService.validateGitAuxiliaryContext,
       contributorProvenance,
       resolveChangeRequestSource: walkthroughBindingService.resolveChangeRequestSource,
+      resolvePullRequestSnapshotSource: walkthroughBindingService.resolveGitHubPullRequestSnapshot,
+      validatePullRequestReadContext: walkthroughBindingService.validateReadContext,
       credentialResolver: gitCredentialResolver,
       runtimeIdentity: gitRuntimeIdentity,
       auditStore: sourceControlAuditStore,

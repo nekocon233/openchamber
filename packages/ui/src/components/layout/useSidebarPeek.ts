@@ -155,8 +155,9 @@ export const useSidebarPeek = ({ enabled, layoutAnimationMs }: { enabled: boolea
       dwellTimerRef.current = null;
     };
     const handlePointerMove = (event: PointerEvent) => {
+      const overSessionPicker = event.target instanceof Element && event.target.closest('[data-session-picker]');
       // A drag passing the edge (a file, a selection) is not a peek.
-      if (event.pointerType !== 'mouse' || event.buttons !== 0 || !isOnStartEdge(event)) {
+      if (event.pointerType !== 'mouse' || event.buttons !== 0 || !isOnStartEdge(event) || overSessionPicker) {
         cancelDwell();
         return;
       }

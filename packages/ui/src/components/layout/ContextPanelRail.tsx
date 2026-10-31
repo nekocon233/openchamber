@@ -1,4 +1,5 @@
 import React from 'react';
+import { useDefaultContextZone } from './workspaceLayout';
 import {
   DndContext,
   MouseSensor,
@@ -43,13 +44,14 @@ import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUISto
 import { useGuestSurfaces } from '@/hooks/useGuestSurfaces';
 import { useGuestBadgeStore } from '@/lib/guests/badge-store';
 import { isPluginContextPanelMode, pluginIdFromMode } from '@/lib/surfaces/modes';
-import { shownContextModes, zoneOfMode } from '@/lib/workspace/zones';
+import { getDefaultContextZone, shownContextModes, zoneOfMode } from '@/lib/workspace/zones';
 import { ContextRailSurfacesDialog } from './ContextRailSurfacesDialog';
 import { ContextRailTooltipDetails, ContextUsageRingIcon } from './ContextRailUsage';
 import { ZoneMoveMenuItems } from './ZoneMoveMenuItems';
 import { startZoneDragGesture, type ZoneDragGesture } from './zoneDrag';
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
+import { AppActions } from './AppActions';
 
 const RAIL_TOOLTIP_DELAY_MS = 150;
 // Hold the surface-switch modifier for this long before revealing the order
@@ -71,6 +73,7 @@ type RailItemProps = {
   badgeDescription?: string | null;
   orderNumber?: number | null;
   showOrderNumber?: boolean;
+  workspaceSide: 'left' | 'right';
   onSelect: (surface: ContextSurfaceDescriptor) => void;
 };
 
@@ -89,6 +92,7 @@ const ContextPanelRailItem: React.FC<RailItemProps> = ({
   badgeDescription,
   orderNumber,
   showOrderNumber,
+  workspaceSide,
   onSelect,
 }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -163,7 +167,7 @@ const ContextPanelRailItem: React.FC<RailItemProps> = ({
             ) : null}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="left" sideOffset={8}>
+        <TooltipContent side={workspaceSide} sideOffset={8}>
           <div className="flex flex-col gap-0.5">
             <span>{label}</span>
             <span className="typography-micro text-muted-foreground">{description}</span>
@@ -183,19 +187,20 @@ const ContextPanelRailItem: React.FC<RailItemProps> = ({
   );
 };
 
-export const ContextPanelRail: React.FC = () => {
-  const { t } = useI18n();
+export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = false }) => {
+  const { t, direction } = useI18n();
+  const workspaceSide = atStart !== (direction === 'rtl') ? 'right' : 'left';
   const effectiveDirectory = useEffectiveDirectory();
   const directoryKey = effectiveDirectory ? normalizeContextPanelDirectoryKey(effectiveDirectory) : '';
 
   const panelState = useUIStore((state) => (directoryKey ? state.contextPanelByDirectory[directoryKey] : undefined));
-  const workStatusPanelVisible = useUIStore((state) => state.workStatusPanelVisible);
   const contextRailOrder = useUIStore((state) => state.contextRailOrder);
   const contextRailHiddenSurfaces = useUIStore((state) => state.contextRailHiddenSurfaces);
   const setContextRailOrder = useUIStore((state) => state.setContextRailOrder);
   const openContextSurface = useUIStore((state) => state.openContextSurface);
   const closeContextZone = useUIStore((state) => state.closeContextZone);
   const contextSurfaceZones = useUIStore((state) => state.contextSurfaceZones);
+  const defaultZone = useDefaultContextZone();
   const shortcutOverrides = useUIStore((state) => state.shortcutOverrides);
   const githubAuthChecked = (useSourceControlAuthEntry(GITHUB_SOURCE_CONTROL_IDENTITY)?.hasChecked ?? false);
   // Change requests come from GitHub or GitLab, whichever the project lives on,
@@ -292,12 +297,13 @@ export const ContextPanelRail: React.FC = () => {
   const tabs = panelState?.tabs ?? EMPTY_TABS;
   // One surface per open zone is on screen; each lights its rail icon.
   const shownModes = React.useMemo(
-    () => shownContextModes(panelState, contextSurfaceZones),
-    [contextSurfaceZones, panelState],
+    () => shownContextModes(panelState, contextSurfaceZones, defaultZone),
+    [contextSurfaceZones, defaultZone, panelState],
   );
   const changedFilesCount = gitStatus?.files.length ?? 0;
 
   const surfaces = React.useMemo(() => {
+    if (!directoryKey) return [];
     return getVisibleContextRailSurfaces({
       railOrder: contextRailOrder,
       hiddenSurfaces: contextRailHiddenSurfaces,
@@ -307,7 +313,7 @@ export const ContextPanelRail: React.FC = () => {
       sourceControlConnected,
       extras: guestSurfaces,
     }).map((surface) => (surface.id === 'pr' && repositoryProvider === 'gitlab' ? { ...surface, icon: 'gitlab' as const } : surface));
-  }, [contextRailHiddenSurfaces, contextRailOrder, guestSurfaces, repositoryProvider, screenWidth, sourceControlConnected, tabs]);
+  }, [contextRailHiddenSurfaces, contextRailOrder, directoryKey, guestSurfaces, repositoryProvider, screenWidth, sourceControlConnected, tabs]);
 
   // A surface whose integration disconnected closes rather than lingering as
   // an active panel with no rail icon.
@@ -315,8 +321,8 @@ export const ContextPanelRail: React.FC = () => {
     if (!directoryKey || !githubAuthChecked || sourceControlConnected || !shownModes.has('pr')) {
       return;
     }
-    closeContextZone(directoryKey, zoneOfMode(contextSurfaceZones, 'pr'));
-  }, [closeContextZone, contextSurfaceZones, directoryKey, githubAuthChecked, shownModes, sourceControlConnected]);
+    closeContextZone(directoryKey, zoneOfMode(contextSurfaceZones, 'pr', defaultZone));
+  }, [closeContextZone, contextSurfaceZones, defaultZone, directoryKey, githubAuthChecked, shownModes, sourceControlConnected]);
 
   const [isSurfacesDialogOpen, setIsSurfacesDialogOpen] = React.useState(false);
 
@@ -326,15 +332,15 @@ export const ContextPanelRail: React.FC = () => {
   const zoneGestureRef = React.useRef<ZoneDragGesture | null>(null);
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
     const surface = surfaces.find((entry) => entry.id === event.active.id);
-    const railLeft = railRef.current?.getBoundingClientRect().left;
-    if (!surface || railLeft === undefined) return;
+    const railRect = railRef.current?.getBoundingClientRect();
+    if (!surface || !railRect) return;
     zoneGestureRef.current?.cancel();
     zoneGestureRef.current = startZoneDragGesture({
       mode: surface.mode,
       label: surface.label ?? t(changeRequestCopy(surface.labelKey, repositoryProvider)),
-      from: zoneOfMode(useUIStore.getState().contextSurfaceZones, surface.mode),
-    }, (point) => point.x < railLeft - 16);
-  }, [repositoryProvider, surfaces, t]);
+      from: zoneOfMode(useUIStore.getState().contextSurfaceZones, surface.mode, getDefaultContextZone(useUIStore.getState().workspaceLayout)),
+    }, (point) => workspaceSide === 'right' ? point.x > railRect.right + 16 : point.x < railRect.left - 16);
+  }, [repositoryProvider, surfaces, t, workspaceSide]);
   const handleDragCancel = React.useCallback(() => {
     zoneGestureRef.current?.cancel();
     zoneGestureRef.current = null;
@@ -363,25 +369,21 @@ export const ContextPanelRail: React.FC = () => {
     setContextRailOrder(arrayMove(orderedIds, fromIndex, toIndex));
   }, [directoryKey, guestSurfaces, setContextRailOrder]);
 
-  if (!directoryKey) {
-    return null;
-  }
-
   return (
     <nav
       ref={railRef}
       aria-label={t('contextRail.aria.rail')}
-      className="flex h-full w-11 flex-shrink-0 flex-col items-center gap-2 bg-background py-2"
+      className="flex h-full min-h-0 w-11 flex-shrink-0 flex-col items-center gap-2 bg-background py-2"
     >
+      <div data-context-tools="" className="oc-hide-scrollbar flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto py-1">
+      {directoryKey ? <>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
         <SortableContext items={surfaces.map((surface) => surface.id)} strategy={verticalListSortingStrategy}>
           {surfaces.map((surface, index) => {
             const label = surface.label ?? t(changeRequestCopy(surface.labelKey, repositoryProvider));
             // Git shows a numeric badge instead of the old activity dot.
             // Other surfaces never inherit git's changed-files signal.
-            // The work-status panel reports the same count in words a few
-            // pixels away; two live counts for one fact is one too many.
-            const gitChangedCount = surface.id === 'git' && !workStatusPanelVisible ? changedFilesCount : 0;
+            const gitChangedCount = surface.id === 'git' ? changedFilesCount : 0;
             // A guest sets its own count through `host.setBadge`; opening
             // that panel clears it, so the active surface never shows one.
             const guestBadgeCount = isPluginContextPanelMode(surface.mode) && !shownModes.has(surface.mode)
@@ -416,6 +418,7 @@ export const ContextPanelRail: React.FC = () => {
                   : null}
                 orderNumber={index + 1}
                 showOrderNumber={revealNumbers}
+                workspaceSide={workspaceSide}
                 onSelect={(selected) => {
                   if (isPluginContextPanelMode(selected.mode)) clearGuestBadge(pluginIdFromMode(selected.mode));
                   openContextSurface(directoryKey, selected.mode);
@@ -438,10 +441,13 @@ export const ContextPanelRail: React.FC = () => {
             <Icon name="equalizer-2" className="h-[18px] w-[18px]" />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="left" sideOffset={8}>
+        <TooltipContent side={workspaceSide} sideOffset={8}>
           {t('contextRail.configure.open')}
         </TooltipContent>
       </Tooltip>
+      </> : null}
+      </div>
+      <AppActions tooltipSide={workspaceSide} />
       <ContextRailSurfacesDialog open={isSurfacesDialogOpen} onOpenChange={setIsSurfacesDialogOpen} />
     </nav>
   );

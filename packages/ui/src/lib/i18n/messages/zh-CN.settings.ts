@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': '工作区布局',
+  'settings.openchamber.visual.option.workspaceLayout.classic': '经典布局',
+  'settings.openchamber.visual.option.workspaceLayout.editor': '编辑器布局',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "可从远程浏览器或手机配置服务器上的 dsh API 密钥、接口地址和模型。",
   'settings.deepseekHarness.ready': "已找到 dsh CLI。",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': '使用你的 Google 账号登录。对于远程服务器，请按照 URL 和授权码提示操作。',
   'settings.antigravity.warnings.title': '使用 Antigravity 前',
   'settings.antigravity.warnings.subscription': 'Google 不支持将个人 Google AI 订阅用于第三方应用。在此处使用个人订阅可能导致账号受限或被封停。',
-  'settings.antigravity.warnings.fullAccess': 'OpenChamber 以完全访问权限启动 agy。无头模式下的工具和 shell 命令不会逐条请求批准。',
+  'settings.antigravity.warnings.fullAccess': 'Build 自动批准工具操作。Plan 禁止修改文件、运行命令、调用 MCP 工具和执行浏览器操作。',
   'chat.deepseekCommand.failed': "无法执行 DeepSeek Harness 命令。",
   'chat.deepseekCommand.needsSession': "请先发送消息创建 DeepSeek Harness 会话，再执行此命令。",
   'settings.sourceControl.ssh.title': 'SSH 密钥',

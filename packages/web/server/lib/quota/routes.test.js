@@ -17,6 +17,16 @@ const createExternalApp = () => {
 };
 
 describe('external OpenCode quota ownership', () => {
+  it('reads a server-owned Antigravity CLI quota independently of external OpenCode', async () => {
+    const app = express();
+    const result = { providerId: 'antigravity-cli', providerName: 'Antigravity CLI', ok: true, configured: true, usage: { windows: {} }, fetchedAt: 1 };
+    const getQuotaProviders = vi.fn();
+    const nativeAntigravity = vi.fn(async () => result);
+    registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode: () => true, nativeAntigravity });
+    expect((await request(app).get('/api/quota/antigravity-cli').expect(200)).body).toEqual(result);
+    expect(nativeAntigravity).toHaveBeenCalledOnce();
+    expect(getQuotaProviders).not.toHaveBeenCalled();
+  });
   it('does not inspect host credentials while listing providers', async () => {
     const { app, getQuotaProviders } = createExternalApp();
 

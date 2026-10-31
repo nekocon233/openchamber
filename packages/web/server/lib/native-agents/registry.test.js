@@ -27,6 +27,36 @@ afterEach(() => {
 });
 
 describe('native session registry', () => {
+  it('round-trips AGY decision delivery and completion without storing question text', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const registry = createNativeRegistry({ filePath });
+    const id = 'nag_80ee3811-32f6-4c89-9770-ebd76509d824';
+    const decision = { callID: 'call', userStep: 4, revision: 'revision', requestId: 'ncq_saved', phase: 'open' };
+    expect(registry.hasPendingAntigravityInteraction(id)).toBe(true);
+    await registry.registerSession(id, { ...entry, backend: 'antigravity', nativeId: id.slice(4) });
+    expect(registry.hasPendingAntigravityInteraction(id)).toBe(false);
+    await registry.updateSession(id, { antigravityInteraction: decision });
+    await registry.recordSend(id, { messageId: 'nag_u_test', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan', variant: 'high', sentAt: 1, antigravity: { stepIndex: 4, completion: { outcome: 'success', time: 2 } } });
+    const reopened = createNativeRegistry({ filePath });
+    expect((await reopened.getSession(id)).antigravityInteraction).toEqual(decision);
+    expect(reopened.hasPendingAntigravityInteraction(id)).toBe(true);
+    expect((await reopened.sendRecords(id)).get('nag_u_test').antigravity).toEqual({ stepIndex: 4, completion: { outcome: 'success', time: 2 } });
+    await reopened.updateSession(id, { antigravityInteraction: { ...decision, phase: 'settled' } });
+    expect(reopened.hasPendingAntigravityInteraction(id)).toBe(false);
+    await reopened.updateSession(id, { antigravityInteraction: null });
+    expect((await reopened.getSession(id)).antigravityInteraction).toBeUndefined();
+  });
+
+  it('does not reinterpret a malformed AGY completion as a legacy send', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const registry = createNativeRegistry({ filePath });
+    await registry.registerSession(SESSION, entry);
+    await registry.recordSend(SESSION, { messageId: 'nag_u_invalid', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan', sentAt: 1, antigravity: { stepIndex: 0, completion: { outcome: 'success', time: 2 } } });
+    const saved = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    saved.sends[SESSION][0].antigravity.completion = { outcome: 'broken' };
+    fs.writeFileSync(filePath, JSON.stringify(saved));
+    expect((await createNativeRegistry({ filePath }).sendRecords(SESSION)).has('nag_u_invalid')).toBe(false);
+  });
   it('treats a missing file as an empty registry', async () => {
     const registry = createNativeRegistry({ filePath: path.join(makeDir(), 'registry.json') });
     expect(await registry.listSessions()).toEqual([]);
@@ -68,6 +98,19 @@ describe('native session registry', () => {
     const loaded = await createNativeRegistry({ filePath }).getSession(SESSION);
     expect(loaded).toMatchObject(entry);
     expect(loaded.claudeChecklistSource).toBeUndefined();
+  });
+
+  it('retains bounded Antigravity denials without losing the native message binding', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const registry = createNativeRegistry({ filePath });
+    const send = { messageId: 'nag_u_x', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan', sentAt: 2 };
+    await registry.recordSend(SESSION, { ...send, antigravity: { stepIndex: 4 } });
+    await registry.recordSend(SESSION, { ...send, antigravity: { denial: { actions: ['read_file'], time: 3 } } });
+    expect((await createNativeRegistry({ filePath }).sendRecords(SESSION)).get(send.messageId).antigravity).toEqual({ stepIndex: 4, denial: { actions: ['read_file'], time: 3 } });
+    const document = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    document.sends[SESSION][0].antigravity.denial = { actions: ['x'.repeat(257)], time: 3 };
+    fs.writeFileSync(filePath, JSON.stringify(document));
+    expect((await createNativeRegistry({ filePath }).sendRecords(SESSION)).get(send.messageId).antigravity).toEqual({ stepIndex: 4 });
   });
 
   it('persists turn snapshots and a pending revert, and forgets them with the session', async () => {

@@ -218,6 +218,14 @@ describe('getPullRequestFileContents', () => {
       .toEqual({ original: `old.ts@${MERGE_BASE}`, modified: `new.ts@${HEAD}` });
   });
 
+  it('refuses full-file contents from a newer commit than the displayed diff', async () => {
+    await expect(read({ owner: 'o', repo: 'r' }, { path: 'a.ts', status: 'M', expectedHeadSha: 'd'.repeat(40) }))
+      .rejects.toMatchObject({ code: 'STALE_CONFIG', statusCode: 409 });
+    expect(request).toHaveBeenCalledTimes(1);
+    await expect(read({ owner: 'o', repo: 'r' }, { path: 'a.ts', status: 'M', expectedHeadSha: HEAD }))
+      .resolves.toEqual({ original: `a.ts@${MERGE_BASE}`, modified: `a.ts@${HEAD}` });
+  });
+
   it('rejects oversized files and malformed GitHub metadata', async () => {
     request.mockImplementationOnce(async () => ({ data: { head: { sha: 'nope' }, base: { sha: BASE_TIP } } }));
     await expect(read({ owner: 'o', repo: 'r' }, { path: 'a.ts', status: 'M' })).rejects.toThrow(/invalid pull request head/);

@@ -692,7 +692,12 @@ const Dialogs: React.FC<DialogsProps> = ({
     );
 };
 
+export interface FileEditorHandle {
+  requestCloseFiles: (paths: readonly string[]) => void;
+}
+
 interface FilesViewProps {
+  editorRef?: React.Ref<FileEditorHandle>;
   visible?: boolean;
   mode?: 'full' | 'editor-only';
   /**
@@ -816,7 +821,8 @@ const useAssetAuthRefresh = (
   return { readyKey, nonce };
 };
 
-export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = true, onCloseFile }) => {
+export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = true, onCloseFile, editorRef }) => {
+  const pendingClosePathsRef = React.useRef<readonly string[] | null>(null);
   const { t } = useI18n();
   const { files, runtime, git } = useRuntimeAPIs();
   const { currentTheme, availableThemes, lightThemeId, darkThemeId } = useThemeSystem();
@@ -2530,7 +2536,9 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   // prompt was answered), moving to `nextFile` when it was the one on screen.
   const closeOpenFile = React.useCallback((path: string, nextFile: FileNode | null) => {
     if (onCloseFile) {
-      onCloseFile(path);
+      const paths = pendingClosePathsRef.current ?? [path];
+      pendingClosePathsRef.current = null;
+      for (const closedPath of paths) onCloseFile(closedPath);
       return;
     }
 
@@ -2631,6 +2639,18 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
     closeOpenFile(path, nextFile);
   }, [closeOpenFile, getNextOpenFile, isDirty, openFiles, selectedFile?.path]);
+
+  React.useImperativeHandle(editorRef, () => ({
+    requestCloseFiles: (paths) => {
+      pendingClosePathsRef.current = null;
+      if (selectedFile && paths.includes(selectedFile.path) && isDirty) {
+        pendingClosePathsRef.current = paths;
+        handleCloseFile(selectedFile.path);
+        return;
+      }
+      for (const path of paths) handleCloseFile(path);
+    },
+  }), [handleCloseFile, isDirty, selectedFile]);
 
   // While a file is open here, Cmd/Ctrl+W closes its tab (asking first when
   // it has unsaved edits) instead of the whole window.

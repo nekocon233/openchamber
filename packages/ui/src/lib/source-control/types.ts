@@ -260,6 +260,8 @@ export interface SourceControlCapabilities {
   changeRequests: boolean;
   draftChangeRequests: boolean;
   mergeChangeRequests: boolean;
+  /** Supports an explicit administrator merge attempt; the provider still authorizes the actor. */
+  forceMergeChangeRequests?: boolean;
   mergeMethods?: Array<'merge' | 'squash' | 'rebase'>;
   ci: boolean;
 }
@@ -580,6 +582,7 @@ export interface UpdateChangeRequestInput extends SourceControlMutationContext<S
 
 export interface MergeChangeRequestInput extends SourceControlMutationContext<SourceControlExistingMutationTarget> {
   method: 'merge' | 'squash' | 'rebase';
+  force?: boolean;
 }
 
 export type ReadyChangeRequestInput = SourceControlMutationContext<SourceControlExistingMutationTarget>;

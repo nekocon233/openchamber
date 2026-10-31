@@ -49,7 +49,7 @@ const scriptedTurnEnd = (apiMessageId) => [
   { type: 'result', subtype: 'success', is_error: false, result: 'Done.', terminal_reason: 'completed', queued_turn_count: 0 },
 ];
 
-const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}), cliproxyapiBinaryManager = undefined } = {}) => {
+const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}), cliproxyapiBinaryManager = undefined, fetchImpl } = {}) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-native-runtime-'));
   directories.push(dataDir);
   const info = { sessionId: SESSION_UUID, summary: 'Terminal work', lastModified: 2000, fileSize: 10, createdAt: 1000 };
@@ -116,7 +116,7 @@ const createRuntime = ({ childFrames = [], snapshotGit, childEnv = () => ({}), c
     publishNativeEvent: (event) => events.push(event),
     loadSdk: async () => sdk,
     // No gateway in tests: the local integration reports it as unreachable.
-    fetchImpl: async () => { throw new Error('no gateway in tests'); },
+    fetchImpl: fetchImpl ?? (async () => { throw new Error('no gateway in tests'); }),
     cliproxyapiBinaryManager,
   });
   return Object.assign(runtime, { dataDir, events, turns, queries });
@@ -215,6 +215,53 @@ describe('native live overlay', () => {
 });
 
 describe('native agents runtime', () => {
+  it('upgrades a followed family for the next idle turn without changing the running query or selected id', async () => {
+    let available = 'claude-opus-5-5-high';
+    const runtime = createRuntime({ snapshotGit: async () => '', fetchImpl: async (url) => {
+      const endpoint = new URL(url).pathname;
+      if (endpoint === '/v1/models') return Response.json({ data: [{ id: available }] });
+      if (endpoint === '/v0/management/auth-files') return Response.json({ files: [{ name: 'fixture-ag.json', provider: 'antigravity', disabled: false }] });
+      if (endpoint === '/v8/management/credentials/models') return Response.json({ models: [{ id: available }] });
+      if (endpoint.startsWith('/v8/management/routing/model-definitions')) return Response.json({ models: [{
+        id: available, context_length: 1000000, max_completion_tokens: 128000,
+        supportedInputModalities: ['text', 'image'], thinking: { min: 1024, max: 64000 },
+      }] });
+      throw new Error('Unexpected fixture request');
+    } });
+    await runtime.cliproxyapi.store.update((document) => ({ ...document, enabled: true, clientKeys: ['fixture-key'] }));
+    const modelUUID = '9c1e4f27-3a4b-4d5e-8f60-1b2c3d4e5f60';
+    const connection = await runtime.claudeConnections.save(null, {
+      name: 'Gateway', baseURL: 'http://127.0.0.1:8317', auth: 'api-key', apiKey: 'fixture-key',
+      models: [{ id: modelUUID, name: 'Opus 5.5 (agy)', modelID: available, followFamily: 'antigravity-opus',
+        contextWindow: 1000000, outputLimit: 128000, input: { image: true, pdf: false }, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }],
+    });
+    const session = await runtime.createSession({ backend: 'claude', directory: DIRECTORY });
+    const model = { providerID: 'claude-native', modelID: `connection:${connection.id}:${modelUUID}` };
+    try {
+      await runtime.prompt(session.id, { ...promptRequest('ncl_u_11111111-2f1f-4c3a-9d8e-0a7b6c5d4e3f'), model, variant: 'max' });
+      await waitFor(() => runtime.turns.started === 1);
+      expect(runtime.events.filter((event) => event.payload.type === 'catalog.updated')).toEqual([]);
+      available = 'claude-opus-5-6-high';
+      const catalog = await runtime.catalog();
+      expect(catalog.backends.claude.models.find((entry) => entry.id === model.modelID)).toMatchObject({ name: 'Opus 5.6 (agy)', modelID: available });
+      expect(runtime.events.filter((event) => event.payload.type === 'catalog.updated')).toEqual([
+        { directory: 'global', payload: { id: expect.any(String), type: 'catalog.updated', properties: { kind: 'native-model' } } },
+      ]);
+      await runtime.catalog();
+      expect(runtime.events.filter((event) => event.payload.type === 'catalog.updated')).toHaveLength(1);
+      expect(runtime.queries[0]).toMatchObject({ model: 'claude-opus-5-5-high', effort: 'max' });
+      const second = { ...promptRequest('ncl_u_22222222-2f1f-4c3a-9d8e-0a7b6c5d4e3f'), model, variant: 'low' };
+      await expect(runtime.prompt(session.id, second)).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_BUSY' });
+      expect(runtime.queries).toHaveLength(1);
+      runtime.turns.finish.resolve();
+      await waitFor(async () => Object.keys(await runtime.statuses(DIRECTORY)).length === 0);
+      await runtime.prompt(session.id, { ...second, messageID: 'ncl_u_33333333-2f1f-4c3a-9d8e-0a7b6c5d4e3f' });
+      await waitFor(() => runtime.turns.started === 2);
+      expect(runtime.queries).toHaveLength(2);
+      expect(runtime.queries[1]).toMatchObject({ model: available, effort: 'low' });
+    } finally { runtime.turns.finish.resolve(); await runtime.shutdown(); }
+  });
+
   it('passes a connection model\'s effort through and rejects one the model does not offer', async () => {
     const runtime = createRuntime({ snapshotGit: async () => '' });
     const modelUUID = '9c1e4f27-3a4b-4d5e-8f60-1b2c3d4e5f60';

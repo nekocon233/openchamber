@@ -9,7 +9,7 @@ import { buildToolPart } from './records.js';
 import { withMemoryFileLock } from '../agent-memory/file-lock.js';
 
 const answer = z.object({
-  id: z.string(), callID: z.string(), kind: z.enum(['claude-plan-exit', 'codex-plan-exit']).optional(),
+  id: z.string(), callID: z.string(), kind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'antigravity-plan-exit']).optional(),
   answers: z.array(z.array(z.string())), status: z.enum(['answered', 'dismissed', 'interrupted']), settledAt: z.number(),
 });
 const document = z.object({ version: z.literal(1), answers: z.array(answer) });
@@ -42,6 +42,7 @@ export const createNativeInteractions = ({ dataDir, now = Date.now }) => {
           answers: outcome.status === 'replied' ? outcome.answers : [],
           status: outcome.status === 'replied' ? 'answered' : outcome.reason ?? 'dismissed', settledAt: now(),
         });
+        if (value.status === 'interrupted' && answers.some((entry) => entry.id === value.id && entry.status === 'answered')) return;
         await write(request.sessionID, [...answers.filter((entry) => entry.id !== value.id), value]);
       });
     },

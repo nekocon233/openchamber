@@ -35,15 +35,53 @@ project.
 
 ## Lists and the cache
 
+- The PR side panel uses `useReferenceBrowser` in `project-pulls` mode. It lists
+  open PRs only, with Awaiting my review, Created by me, and All categories in
+  that order. Awaiting my review is the initial selection. Category filters stay separate from
+  the picker and board; the panel does not preload issues or expose their state
+  filter. It asks for `scope=repository`; existing
+  callers keep `network`. Scope joins the list cache key. A hidden panel reads
+  its cached list without fetching or revalidating; an explicit selection
+  opens details, so the first row does not fetch a preview by itself. The
+  selected PR is also retained as the opened item: revalidating the first page
+  cannot discard a later-page preview or its unsent reply.
+- Each GitHub row in the project PR list shows its check result and count.
+  Closed or merged results from a direct lookup or advanced query are excluded
+  by the browser state owner before rows and checks consume them. Status batches supply these
+  results without loading each PR's detail. Loading, failed reads, unavailable
+  results and a successful empty check list have separate labels. Queued checks
+  are distinguished when all pending checks are queued. Other list consumers
+  continue reading statuses only for open PRs and retain their compact rows.
+- PR status readers expose a value snapshot to memoized rows. A completed
+  request updates that snapshot without fetching again. A failed batch stays
+  failed until a list refresh, revalidation or return retries it; successful
+  batches remain cached.
+- Repository PR pages without search or a people filter use GitHub's repository
+  connection and can traverse every matching open PR. Searches use the existing
+  search API. Lists retain the returned total so the panel can explain its
+  1,000-result search limit and ask for a narrower search. A query cannot expand
+  the repository scope, and a PR number never resolves to an issue in this mode.
+- Repository pages must echo `scope=repository`. A server that predates that
+  contract produces a translated restart notice instead of displaying its
+  unscoped results. Existing network readers accept responses without the echo.
+
 - A list is cached per key `[runtime, account or Linear workspace, project, kind, filter, search text]`. Switching tabs or filters, or reopening the picker, shows the cached list at once; one older than 60 s refreshes in the background and is replaced when the answer lands. `revalidateReferences` makes every mounted list, preview and PR status check its age again.
 - A failed first load is an `error` state with Retry. A failed refresh keeps the shown items and shows the error above them. Failure never becomes an empty list.
 - Every first-page request bumps the key's generation; an answer or a later page from an older generation is dropped.
+- A forced refresh that arrives during a first-page read waits for that read,
+  then performs a fresh one. Clearing the cache retires queued refreshes and
+  old responses. Deferred page readers check their runtime before dispatch.
 - Keys someone is subscribed to are never evicted; the 40-entry bound is a soft target.
 - GitHub pages come from `GET /api/source-control/github/references` (server: `packages/web/server/lib/github/DOCUMENTATION.md`), read with the project's GitHub read context (`useGitHubReadContext`): the account its binding names, or the current github.com account for a repository nobody bound. List and preview cache keys carry that account. Linear lists use `linear.issuesList` with the filter's status, whose issues (`assignee=me` or `created`) and priority, combined; picking in the filter menu keeps it open.
 
-- An open PR turns orange on failed checks, checks still running, or a conflict, as in the sidebar. A page does not carry that (mergeability alone made a 30-PR page about three times slower), so once the list shows, `useGitHubPullStatuses` asks `references/status` for the open PRs it lists, ten per request and all at once (a whole page in one query takes GitHub about ten seconds, at the edge of the request timeout), and the rows and the preview recolour when it lands. The preview's Checks line does not wait for that batch: the previewed PR's own detail carries its checks (GitHub's head-commit `statusCheckRollup`, summarized like the batch; GitLab's pipeline). On the board the totals open `SourceBoardChecksDialog`, which reads the PR's runs, steps and failed annotations through `useChangeRequestContextStore` (the PR panel's cache) when it opens, and again while runs are still going. `components/views/git/CheckRunList.tsx` draws the runs for both. Statuses are cached per PR and head commit. Until a status arrives, or when it fails, a PR reads as open. GitLab projects ask nothing and keep their state colour.
+- An open PR turns orange on failed checks, checks still running, or a conflict, as in the sidebar. A page does not carry that (mergeability alone made a 30-PR page about three times slower), so once the list shows, `useGitHubPullStatuses` asks `references/status` for the open PRs it lists, ten per request and all at once (a whole page in one query takes GitHub about ten seconds, at the edge of the request timeout), and the rows and the preview recolour when it lands. The preview's Checks line does not wait for that batch: the previewed PR's own detail carries its checks (GitHub's head-commit `statusCheckRollup`, summarized like the batch; GitLab's pipeline). On the board the totals open `SourceBoardChecksDialog`, which reads the PR's runs, steps and failed annotations through `useChangeRequestContextStore` (the PR panel's cache) when it opens, and again while runs are still going. `components/views/git/CheckRunList.tsx` draws the runs for both. Statuses are cached per PR and head commit. Until a status arrives, or when it fails, an open PR keeps its open colour. GitLab projects ask nothing and keep their state colour.
 
 ## Preview and attach
+
+- A pinned preview records its scroll position while visible and restores it
+  when its Activity boundary reconnects. Hidden scroll events cannot replace
+  that position, so moving another project's inactive pane between zone hosts
+  does not lose its reading progress.
 
 - The preview shows the list item at once and asks for the rest of the item the highlight rests on (250 ms after it stops moving): GitHub comments, and a PR's size, review and newest commits, from `references/detail` with the same read context (a GitLab merge request's pipeline, commits and verdicts come with its detail, read with `includeTimeline`); a Linear issue's description and comments from `linear.issueGet`. Both land in value caches: going back to an item shows what was already read at once, without waiting out the 250 ms, and attaching a previewed Linear issue reuses the answer.
 - A PR's thread is its activity (`referenceTimeline.ts`): comments, review verdicts and commits by time, commits in a row grouped, so a review reads next to the commits it answered. Comments made at the same moment as a commit come first. Each commit names its author: the host account with its avatar on GitHub, the name git recorded on GitLab.
@@ -149,6 +187,10 @@ preview's footer holds actions instead of what the agent gets.
   and then reads the item's detail and the list again, so a change made on the
   host's own site shows without waiting out the cache. VS Code has no board and
   answers the call as unsupported.
+- The project PR list refresh button uses the same provider-cache invalidation
+  before its forced list read. It stays busy through both operations and keeps
+  the displayed list on failure. Review-requested membership comes from the
+  provider's fresh result; approval alone does not close a PR in the All list.
 - The side panel and its rail stay beside the board. A board under 960 px
   wide shows the kinds by icon and drops the list column: a trigger left of the search names the previewed
   item (`#12`, `!12`, `ENG-7`) and opens the list as a dropdown over the
@@ -185,6 +227,17 @@ preview's footer holds actions instead of what the agent gets.
   as inline drafts (`pr-comment`, `pr-check`), the way the PR panel always
   did. They go to the session in view or a new session's draft; with neither
   open, a toast says so.
+- Pending GitHub review (`sourceBoard/usePendingReview.ts`,
+  `PendingReviewSection.tsx`): Changes and the PR reply share one read per
+  runtime, bound account/repository context and PR. The section lists saved
+  inline comments, allows edits and deletion, and submits them with a summary
+  as Comment, Approve or Request changes. Discard requires confirmation.
+  Saved comments come from GitHub; unsent summary and edit text remain local
+  under that same scope. Active views revalidate on return and after a write,
+  with no polling. Read failures keep the last complete review and disable
+  submission until a fresh read succeeds. Uncertain writes retain their
+  original payload and idempotency key for an explicit retry, even when the
+  first comment's response was lost and a refresh discovers the new review ID.
 - The PR panel (`views/git/BranchPullRequestPreview.tsx`) shows the checked-out
   branch's open PR with this same preview: no new-session or worktree actions,
   since the branch is already here. `PullRequestSection` keeps the create form

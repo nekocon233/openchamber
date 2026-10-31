@@ -100,6 +100,8 @@ export const createCliproxyapiGateway = ({
       const spawned = spawnProcess(prepared.path, ['-config', configPath], {
         cwd: path.dirname(prepared.path),
         env: gatewayChildEnv(buildEnv()),
+        // An unread stdout pipe can block the gateway's shared logger and HTTP handlers.
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
       child = spawned;
       let stderrTail = '';

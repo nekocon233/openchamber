@@ -185,6 +185,8 @@ Taken voor kleine modellen, zoals sessietitels, samenvattingen, commitberichten 
 
 OpenCode bepaalt welke modelproviders überhaupt gebruikt mogen worden, niet OpenChamber. Leg dit vast met [OpenCode-beleid](https://opencode.ai/v2/docs/policies/). Weiger eerst alle providers en sta daarna de goedgekeurde providers toe.
 
+De bedrijfsmodus blokkeert ook aanmelden bij CLIProxyAPI, het importeren van modellen en het wijzigen van verbindingen. Automatische upgrades binnen Antigravity-modelfamilies zijn ook uitgeschakeld. Ook automatische Opus/Sonnet-terugval van Claude naar Antigravity is uitgeschakeld.
+
 ```jsonc
 {
   "experimental": {

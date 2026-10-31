@@ -186,6 +186,24 @@ test('a running subagent without the progress join resolves its child session fr
   });
 });
 
+test('an Antigravity task names each child and offers no unsupported stop or inferred single join', async () => {
+  const running: ToolPartData = {
+    ...parent, sessionID: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+    state: { status: 'running', input: {}, time: { start: 100 }, metadata: { nativeSubagents: [
+      { sessionID: 'nag_01a0d2a6-b55b-7162-a837-c62053537e00', title: 'Inspect API', agent: 'explore' },
+      { sessionID: 'nag_01a0d2a6-b55b-7162-a837-c62053537e01', title: 'Inspect UI', agent: 'explore' },
+    ] } },
+  };
+  await withHarness(running, true, async (_store, container) => {
+    expect(container.textContent).toContain('Inspect API');
+    expect(container.textContent).toContain('Inspect UI');
+    expect(container.querySelector('button[aria-label="Open Inspect API subtask"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Open Inspect UI subtask"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop subagent"]')).toBeNull();
+    expect(openButton(container)).toBeNull();
+  });
+});
+
 test('a resumed subagent opens its explicit child even when that child predates the call', async () => {
   const running: ToolPartData = {
     ...parent,

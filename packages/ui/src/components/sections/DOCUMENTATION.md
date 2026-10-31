@@ -4,6 +4,12 @@ One directory per Settings page. `shared/` holds the page chrome and controls
 every page is built from; see `.agents/skills/settings-ui-patterns/SKILL.md` for
 which primitive to reach for.
 
+General's Navigation section offers Workspace layout beside File tree side.
+The Classic and Editor choices apply to desktop web, PWA and Electron;
+the control and its `appearance.workspace-layout` search entry are hidden
+in VS Code and both mobile shells. The profile setting uses the shared
+settings autosave path.
+
 General's Navigation section offers the chat Issue/PR destination as a radio
 group, using `SettingsControlGroup`, `SettingsRadioGroup` and
 `SettingsRadioOption`. It retains the `openTrackerLinksOnBoard` profile setting
@@ -204,8 +210,8 @@ connections never fall back to a different service. Failed reads retain the
 previous list, and stale reads cannot replace a newer mutation or another
 runtime's state.
 
-`CliProxyApiSection` is the ChatGPT sign-in row inside the Claude Code
-connection list, named after the gateway connection it writes; the page hides
+`CliProxyApiSection` holds ChatGPT and Antigravity sign-in rows inside the Claude
+Code connection list. The ChatGPT row is named after the gateway connection it writes; the page hides
 that connection from the ordinary list and keeps the row in place even before
 the connection exists. The CLIProxyAPI gateway behind it is a service
 OpenChamber runs itself, and the row keeps that out of the way: the sign-in
@@ -216,7 +222,13 @@ listener, and on success writes the Claude Code connection so the models appear
 in the picker; a failure after the account is stored stays a notice rather than
 a failed sign-in. The first signed-in account shares the row: its email and a
 sign-out button replace the sign-in button until that account is signed out,
-which brings the button back. Further accounts sit under the row with their own
+which brings the button back. Signing out also refreshes the native model
+catalog and the page's connection list after the server prunes models no
+remaining gateway account serves. The refresh is awaited, scoped to the
+current runtime, and still runs after a partial failure so a removed credential
+does not remain displayed as signed in. Failed cleanup keeps its error visible;
+an unavailable selected model never silently switches to another service.
+Further accounts sit under the row with their own
 sign-out, the row itself offers no edit or delete, and a failed attempt shows
 the gateway's own reason under the translated failure line. The gateway's own
 controls stay out of sight until something is wrong (an unsupported target, a
@@ -224,7 +236,15 @@ crash, a rejected management key, a disabled management API): only then does an
 Advanced disclosure appear with the supervised process and Start and Stop, the
 upstream proxy (changing it restarts the gateway), and the connection block
 that imports the gateway's models or edits a single model row by hand.
-`providers.cliproxyapi` prepares the same page and highlights the section.
+`providers.cliproxyapi` prepares the same page and highlights the section;
+its search keywords include Antigravity. Provider identity places each account
+under the correct sign-in row regardless of gateway order. Antigravity appears
+only when the server advertises it in `loginProviders`. A login attempt owns its
+provider; switching runtimes stops the flow before another mutation can land on
+the new server. Antigravity requires its own gateway login even when agy is
+already signed in. The gateway imports available Claude models with its declared
+limits, retaining existing model selections. Enterprise policy disables provider
+entry controls and independently refuses their server operations.
 
 ### Codex connections
 

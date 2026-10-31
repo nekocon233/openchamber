@@ -21,6 +21,7 @@ export interface SettingsSearchResult extends SettingsSearchItem {
 
 interface SettingsSearchAvailabilityContext extends SettingsRuntimeContext {
   isMobile: boolean;
+  workspaceLayout?: 'classic' | 'editor';
   isDesktopLocalOrigin: boolean;
   // macOS desktop shell — for controls that only render on darwin (e.g. dock badge).
   isMac: boolean;
@@ -73,7 +74,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'providers.cliproxyapi',
     page: 'providers',
     titleKey: 'settings.cliproxyapi.title',
-    keywords: ['cliproxyapi', 'chatgpt', 'gpt', 'codex', 'claude code', 'gateway', 'oauth'],
+    keywords: ['cliproxyapi', 'chatgpt', 'gpt', 'codex', 'claude code', 'gateway', 'oauth', 'antigravity', 'opus', 'sonnet', 'fallback', 'failover', 'quota', 'subscription'],
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
@@ -259,6 +260,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'general',
     titleKey: 'settings.openchamber.visual.field.fileTreeSide',
     keywords: ['files', 'tree', 'explorer', 'left', 'right', 'side', 'editor'],
+    isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode && ctx.workspaceLayout !== 'editor',
+  },
+  {
+    id: 'appearance.workspace-layout',
+    page: 'general',
+    titleKey: 'settings.openchamber.visual.field.workspaceLayout',
+    keywords: ['workspace', 'layout', 'classic', 'editor', 'vscode', 'rail', 'sidebar', 'files'],
     isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
   },
   {

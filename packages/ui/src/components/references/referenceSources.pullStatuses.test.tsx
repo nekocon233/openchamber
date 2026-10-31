@@ -35,6 +35,7 @@ test('a list that mounts while its statuses are already on the way shows them wh
 
   const answers: Array<() => void> = [];
   const asked: string[] = [];
+  let failLastBatch = false;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
@@ -51,6 +52,9 @@ test('a list that mounts while its statuses are already on the way shows them wh
         asked.push(url.searchParams.get('pulls') ?? '');
         // Held until the test lets it answer, like a slow GitHub.
         await new Promise<void>((resolve) => { answers.push(resolve); });
+        if (failLastBatch && url.searchParams.get('pulls')?.startsWith('acme/app#21')) {
+          return Response.json({ error: 'Checks unavailable' }, { status: 503 });
+        }
         return Response.json({ connected: true, statuses: (url.searchParams.get('pulls') ?? '').split(',').map((entry) => ({
           owner: 'acme', repo: 'app', number: Number(entry.split('#')[1]),
           checks: { state: 'success', total: 3, success: 3, failure: 0, pending: 0 }, mergeable: true, mergeableState: 'clean',
@@ -65,16 +69,20 @@ test('a list that mounts while its statuses are already on the way shows them wh
     const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
     const { createWebAPIs } = await import('../../../../web/src/api/index');
     const { getSourceControlAuthKey, useSourceControlAuthStore } = await import('@/stores/useSourceControlAuthStore');
-    const { useGitHubPullStatuses } = await import('./referenceSources');
+    const { forgetGitHubPullStatuses, useGitHubPullStatuses } = await import('./referenceSources');
+    const { revalidateReferences } = await import('./referenceCache');
     useSourceControlAuthStore.setState({
       entries: { [getSourceControlAuthKey({ provider: 'github', instance: 'github.com' })]: { status: CONNECTED, isLoading: false, hasChecked: true } },
     });
     const apis = createWebAPIs();
-    const pulls = [pull(1), pull(2)];
+    const pulls = Array.from({ length: 23 }, (_, index) => pull(index + 1));
+    pulls[0].state = 'merged';
+    pulls[1].state = 'closed';
     const Probe: React.FC = () => {
-      const statusOf = useGitHubPullStatuses('/repo', pulls);
+      const statusOf = useGitHubPullStatuses('/repo', pulls, true);
       const status = statusOf(pulls[0]);
-      return <span id="status">{status.status === 'ready' ? `ready:${status.value?.checks?.total}` : status.status}</span>;
+      return <><span id="status">{status.status === 'ready' ? `ready:${status.value?.checks?.total}` : status.status}</span>
+        <span id="last-status">{statusOf(pulls[22]).status}</span></>;
     };
     // Lets the held answer go while the probe renders: it lands after that
     // render but before React runs the probe's effects.
@@ -90,7 +98,8 @@ test('a list that mounts while its statuses are already on the way shows them wh
     for (let tries = 0; tries < 50 && answers.length === 0; tries += 1) {
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
     }
-    expect(asked).toEqual(['acme/app#1,acme/app#2']);
+    expect(asked.map((batch) => batch.split(',').length)).toEqual([10, 10, 3]);
+    expect(asked.flatMap((batch) => batch.split(','))).toEqual(pulls.map((item) => `acme/app#${item.number}`));
     await act(async () => { first.unmount(); });
 
     // The board opens on the same list while that answer is still on its way.
@@ -101,8 +110,30 @@ test('a list that mounts while its statuses are already on the way shows them wh
     root.render(tree(<><Probe /><ReleaseDuringRender /></>));
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(asked).toHaveLength(1);
+    expect(asked).toHaveLength(3);
     expect(container.querySelector('#status')?.textContent).toBe('ready:3');
+    expect(container.querySelector('#last-status')?.textContent).toBe('ready');
+
+    failLastBatch = true;
+    forgetGitHubPullStatuses();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(asked).toHaveLength(6);
+    for (const answer of answers.splice(0)) answer();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(container.querySelector('#last-status')?.textContent).toBe('error');
+    expect(container.querySelector('#status')?.textContent).toBe('ready:3');
+    expect(asked).toHaveLength(6);
+
+    // Refresh retries the failed batch once and reuses successful results.
+    failLastBatch = false;
+    revalidateReferences();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(asked).toHaveLength(7);
+    expect(asked[6]).toBe('acme/app#21,acme/app#22,acme/app#23');
+    for (const answer of answers.splice(0)) answer();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(container.querySelector('#last-status')?.textContent).toBe('ready');
+    expect(asked).toHaveLength(7);
     root.unmount();
   } finally {
     globalThis.fetch = originalFetch;

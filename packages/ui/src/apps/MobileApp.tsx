@@ -607,6 +607,7 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
             onOpenSessions={() => (isTabletLayout ? toggleSidebar() : setSessionsSheetOpen(true))}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
             onOpenWorkStatus={openWorkStatus}
+            workStatusOpen={workStatusOpen}
             compactTitle={isTabletLayout}
           />
           <main ref={chatMainRef} className="relative min-h-0 flex-1 overflow-hidden" data-page-scroll-lock="true">

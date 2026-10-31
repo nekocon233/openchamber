@@ -51,6 +51,17 @@ describe('resolveQuotaProviderId', () => {
 });
 
 describe('pickUsageHeadline', () => {
+  test('matches the native Antigravity family without borrowing Claude subscription quota', () => {
+    const groups = [group('antigravity-cli', [
+      { key: 'gw', label: 'Weekly', subtitle: 'Gemini', seconds: 7 * 24 * HOUR },
+      { key: 'gh', label: 'Gemini 5h', subtitle: 'Gemini', seconds: 5 * HOUR },
+      { key: 'ch', label: 'Claude 5h', subtitle: 'Claude / GPT', seconds: 5 * HOUR },
+    ])];
+    expect(pickUsageHeadline(groups, 'antigravity-native', 'gemini-4-argon-high')?.row.key).toBe('gh');
+    expect(pickUsageHeadline(groups, 'antigravity-native', 'claude-opus-5-5-high')?.row.key).toBe('ch');
+    expect(pickUsageHeadline(groups, 'antigravity-native', 'unknown-model')).toBeNull();
+    expect(pickUsageHeadline(groups, 'claude-native', 'connection:gateway:claude')).toBeNull();
+  });
   const groups = [
     group('codex', [{ key: 'w', label: 'Weekly Limit', seconds: 7 * 24 * HOUR }]),
     group('opencode-go', [

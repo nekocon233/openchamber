@@ -1,15 +1,18 @@
 import React from 'react';
+import { useDefaultContextZone, useIsEditorWorkspaceLayout } from './workspaceLayout';
+import { FileEditorPane } from './FileEditorPane';
 
 import { TerminalView } from '@/components/views/TerminalView';
+import { PullRequestView } from '@/components/views/PullRequestView';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import { BrowserPane } from '@/components/browser/BrowserPane';
 import { ChatView } from '@/components/views/ChatView';
-import { Icon } from '@/components/icon/Icon';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
 import { isRightToLeft, useI18n } from '@/lib/i18n';
 import { resolveProjectContextId } from '@/lib/projectContextApi';
 import { cn } from '@/lib/utils';
+import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { registerBrowserOpener, registerSleepingBrowserTab, setShownBrowserTab } from '@/lib/browser/controlClient';
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
 import { useGuestsStore } from '@/lib/guests/store';
@@ -23,6 +26,7 @@ import {
   type ContextZone,
 } from '@/lib/workspace/zones';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
+import { getEditorDiffTabState } from '@/lib/workspace/editorTabs';
 import { clampContextEditorTreeWidth, normalizeContextPanelDirectoryKey, useUIStore, type PendingDiffScope } from '@/stores/useUIStore';
 import { markSessionViewed } from '@/sync/notification-store';
 import { setExternallyViewedSession } from '@/sync/sync-context';
@@ -34,7 +38,7 @@ import { closeZoneOnEscape } from './zoneEscape';
 import { startZoneDragGesture } from './zoneDrag';
 import { ZoneSurfaceDragContext } from './zoneSurfaceDragContext';
 import { useZoneHostsStore } from './zoneHosts';
-import { useRightSlotStore } from './rightSlot';
+import { useChatCoverageStore } from './chatCoverage';
 import { useOpenUntilSettled } from './useOpenUntilSettled';
 
 // Heavy views stay on-demand (same as MainLayout): importing DiffView/FilesView
@@ -42,7 +46,6 @@ import { useOpenUntilSettled } from './useOpenUntilSettled';
 // into the eager startup graph even when no such tab is open.
 const WalkthroughView = lazyWithChunkRecovery(() => import('@/components/views/walkthrough/WalkthroughView').then((m) => ({ default: m.WalkthroughView })));
 const DiffView = lazyWithChunkRecovery(() => import('@/components/views/DiffView').then((m) => ({ default: m.DiffView })));
-const FilesView = lazyWithChunkRecovery(() => import('@/components/views/FilesView').then((m) => ({ default: m.FilesView })));
 const PluginPane = React.lazy(() => import('./PluginPane').then((module) => ({ default: module.PluginPane })));
 const GuestSurfacePane = React.lazy(() => import('./GuestSurfacePane').then((module) => ({ default: module.GuestSurfacePane })));
 
@@ -96,6 +99,7 @@ type PanelBrowserTab = {
 // its side.
 const EditorTreeColumn: React.FC<{ visible: boolean; active: boolean; fill?: boolean; side: 'left' | 'right' }> = ({ visible, active, fill = false, side }) => {
   const { t } = useI18n();
+  const editorLayout = useIsEditorWorkspaceLayout();
   const width = useUIStore((state) => state.contextEditorTreeWidth);
   const setWidth = useUIStore((state) => state.setContextEditorTreeWidth);
   const [isResizing, setIsResizing] = React.useState(false);
@@ -173,7 +177,7 @@ const EditorTreeColumn: React.FC<{ visible: boolean; active: boolean; fill?: boo
         fill && (side === 'left' ? 'me-auto' : 'ms-auto'),
       )}
       style={{
-        width: `${isResizing ? (liveWidthRef.current ?? appliedWidth) : appliedWidth}px`,
+        width: editorLayout ? '100%' : `${isResizing ? (liveWidthRef.current ?? appliedWidth) : appliedWidth}px`,
         maxWidth: fill ? '100%' : undefined,
         ['--oc-editor-tree-width' as string]: `${isResizing ? (liveWidthRef.current ?? width) : width}px`,
         overflowX: 'clip',
@@ -209,7 +213,7 @@ const EditorTreeColumn: React.FC<{ visible: boolean; active: boolean; fill?: boo
           isResizing && 'pointer-events-none',
           !visible && 'pointer-events-none select-none opacity-0'
         )}
-        style={{ width: 'var(--oc-editor-tree-width)', maxWidth: fill ? '100%' : undefined }}
+        style={{ width: editorLayout ? '100%' : 'var(--oc-editor-tree-width)', maxWidth: fill ? '100%' : undefined }}
         aria-hidden={!visible}
       >
         <SidebarFilesTree visible={visible && active} />
@@ -225,19 +229,21 @@ const EditorTreeColumn: React.FC<{ visible: boolean; active: boolean; fill?: boo
  */
 const ZonePane: React.FC<{
   zone: ContextZone;
+  host?: HTMLElement | null;
   isOpen: boolean;
   directoryKey: string;
   className?: string;
   children: React.ReactNode;
-}> = ({ zone, isOpen, directoryKey, className, children }) => {
+}> = ({ zone, host, isOpen, directoryKey, className, children }) => {
   const closeContextZone = useUIStore((state) => state.closeContextZone);
   const handleKeyDownCapture = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     closeZoneOnEscape(event, isOpen, () => {
       if (directoryKey) closeContextZone(directoryKey, zone);
-    }, event.currentTarget.closest('[data-context-zone]'));
-  }, [closeContextZone, directoryKey, isOpen, zone]);
+    }, host === undefined ? event.currentTarget.closest('[data-context-zone]')
+      : useZoneHostsStore.getState().body[zone]?.closest('[data-context-zone]') ?? null);
+  }, [closeContextZone, directoryKey, host, isOpen, zone]);
   return (
-    <MovablePane zone={zone}>
+    <MovablePane zone={host === undefined ? zone : undefined} host={host}>
       <div className={className} onKeyDownCapture={handleKeyDownCapture}>
         {children}
       </div>
@@ -256,6 +262,9 @@ const ZonePane: React.FC<{
  * to run before the panes attach and the settle step queues behind them.
  */
 export const ContextSurfacePanes: React.FC = () => {
+  const editorLayout = useIsEditorWorkspaceLayout();
+  const [classicEditorHost, setClassicEditorHost] = React.useState<HTMLDivElement | null>(null);
+  const [editorDiffHost, setEditorDiffHost] = React.useState<HTMLDivElement | null>(null);
   const { t } = useI18n();
   const effectiveDirectory = useEffectiveDirectory() ?? '';
   const directoryKey = React.useMemo(
@@ -264,9 +273,9 @@ export const ContextSurfacePanes: React.FC = () => {
   );
   const panelState = useUIStore((state) => (directoryKey ? state.contextPanelByDirectory[directoryKey] : undefined));
   const placement = useUIStore((state) => state.contextSurfaceZones);
+  const defaultZone = useDefaultContextZone();
   const contextPanelByDirectory = useUIStore((state) => state.contextPanelByDirectory);
   const closeContextPanelTab = useUIStore((state) => state.closeContextPanelTab);
-  const closeContextFile = useUIStore((state) => state.closeContextFile);
   const openContextPanelTab = useUIStore((state) => state.openContextPanelTab);
   const openAgentBrowserTab = useUIStore((state) => state.openAgentBrowserTab);
   const openContextFile = useUIStore((state) => state.openContextFile);
@@ -280,17 +289,17 @@ export const ContextSurfacePanes: React.FC = () => {
 
   // A page covering the chat (Archive, Usage, ...) covers the bottom zone
   // under it too; its frame closes then (ContextPanel), and so must its panes.
-  const chatCovered = useRightSlotStore((state) => state.chatCovered);
+  const chatCovered = useChatCoverageStore((state) => state.covered);
 
   // What each zone shows. A zone is open only with a tab of its own.
   const zones = React.useMemo(() => {
     const viewOf = (zone: ContextZone) => {
-      const activeTab = panelState ? resolveZoneActiveTab(panelState, placement, zone) : null;
+      const activeTab = panelState ? resolveZoneActiveTab(panelState, placement, zone, defaultZone) : null;
       const covered = zone === 'bottom' && chatCovered;
       return { activeTab, isOpen: Boolean(panelState && getZoneView(panelState, zone).isOpen && activeTab) && !covered };
     };
     return { left: viewOf('left'), right: viewOf('right'), bottom: viewOf('bottom') };
-  }, [chatCovered, panelState, placement]);
+  }, [chatCovered, defaultZone, panelState, placement]);
 
   // A closing zone's content leaves the document (the editor's `detached`)
   // only once its animation has settled. The zone frame runs the same hook
@@ -305,15 +314,46 @@ export const ContextSurfacePanes: React.FC = () => {
 
   // The zone each keep-alive surface lives in, and what that zone shows.
   const zoneFor = (mode: Parameters<typeof zoneOfMode>[1]) => {
-    const zone = zoneOfMode(placement, mode);
+    const zone = zoneOfMode(placement, mode, defaultZone);
     return { zone, ...zones[zone] };
   };
   const fileZone = zoneFor('file');
   const chatZone = zoneFor('chat');
   const browserZone = zoneFor('browser');
   const diffZone = zoneFor('diff');
+  const diffListHost = useZoneHostsStore((state) => state.body[diffZone.zone]);
+  const editorDiffState = getEditorDiffTabState(panelState, placement, defaultZone);
+  const revealEditorDiff = React.useCallback(() => {
+    useUIStore.getState().setEditorDiffTabState(directoryKey, 'active');
+  }, [directoryKey]);
   const terminalZone = zoneFor('terminal');
   const walkthroughZone = zoneFor('walkthrough');
+  const pullRequestZone = zoneFor('pr');
+  const pullRequestVisible = pullRequestZone.isOpen && pullRequestZone.activeTab?.mode === 'pr';
+  const runtimeKey = React.useSyncExternalStore(subscribeRuntimeEndpointChanged, getRuntimeKey, getRuntimeKey);
+  const activePullRequestKey = pullRequestVisible && pullRequestZone.activeTab
+    ? JSON.stringify([directoryKey, pullRequestZone.activeTab.id])
+    : null;
+  const [visitedPullRequests, setVisitedPullRequests] = React.useState(() => ({ runtimeKey, keys: new Set<string>() }));
+  const openPullRequestTabs = React.useMemo(() => Object.entries(contextPanelByDirectory)
+    .flatMap(([directory, panel]) => panel.tabs
+      .filter((tab) => tab.mode === 'pr')
+      .map((tab) => ({ directory, key: JSON.stringify([directory, tab.id]) })))
+    .sort((a, b) => a.key.localeCompare(b.key)), [contextPanelByDirectory]);
+
+  // Only a PR window the person has visited stays loaded. Saved tabs in other
+  // projects do not start repository reads until opened; closing a tab releases it.
+  React.useEffect(() => {
+    setVisitedPullRequests((previous) => {
+      const keys = new Set(openPullRequestTabs
+        .filter((tab) => tab.key === activePullRequestKey || (previous.runtimeKey === runtimeKey && previous.keys.has(tab.key)))
+        .map((tab) => tab.key));
+      if (previous.runtimeKey === runtimeKey && previous.keys.size === keys.size && [...keys].every((key) => previous.keys.has(key))) return previous;
+      return { runtimeKey, keys };
+    });
+  }, [activePullRequestKey, openPullRequestTabs, runtimeKey]);
+  const retainedPullRequestTabs = openPullRequestTabs.filter((tab) => tab.key === activePullRequestKey
+    || (visitedPullRequests.runtimeKey === runtimeKey && visitedPullRequests.keys.has(tab.key)));
 
   // A browser tab loads its page only once it is needed: shown in an open
   // zone, opened by the agent, or woken by an agent action. Tabs restored
@@ -369,11 +409,11 @@ export const ContextSurfacePanes: React.FC = () => {
 
   const fileActiveTab = fileZone.activeTab;
   React.useEffect(() => {
-    if (!directoryKey || fileActiveTab?.mode !== 'file' || !fileActiveTab.targetPath) {
+    if (editorLayout || !directoryKey || fileActiveTab?.mode !== 'file' || !fileActiveTab.targetPath) {
       return;
     }
     setSelectedFilePath(directoryKey, fileActiveTab.targetPath, { allowOutsideRoot: true });
-  }, [directoryKey, fileActiveTab, setSelectedFilePath]);
+  }, [directoryKey, editorLayout, fileActiveTab, setSelectedFilePath]);
 
   const hasOpenEditorFile = React.useMemo(
     () => tabs.some((tab) => tab.mode === 'file' && tab.targetPath),
@@ -382,14 +422,8 @@ export const ContextSurfacePanes: React.FC = () => {
   const hasFileTabs = React.useMemo(() => tabs.some((tab) => tab.mode === 'file'), [tabs]);
   // The editor column is shown for an open file unless the user hid it; the
   // tree never hides alongside it, so a hidden tree forces the editor back.
-  const showsEditor = hasOpenEditorFile && (contextEditorVisible || !contextEditorTreeVisible);
+  const showsEditor = !editorLayout && hasOpenEditorFile && (contextEditorVisible || !contextEditorTreeVisible);
   const isFileTabActive = fileZone.activeTab?.mode === 'file';
-
-  // The editor's Cmd/Ctrl+W and its unsaved-changes prompt close the file's
-  // tab here, so the strip and the next file follow as with the close button.
-  const handleCloseEditorFile = React.useCallback((filePath: string) => {
-    if (directoryKey) closeContextFile(directoryKey, filePath);
-  }, [closeContextFile, directoryKey]);
 
   const chatActiveTab = chatZone.isOpen && chatZone.activeTab?.mode === 'chat' ? chatZone.activeTab : null;
   const activeChatSessionID = chatActiveTab ? getSessionIDFromDedupeKey(chatActiveTab.dedupeKey) : null;
@@ -434,7 +468,7 @@ export const ContextSurfacePanes: React.FC = () => {
     };
   }, [activeChatDirectory, activeChatSessionID]);
 
-  const diffActiveTab = diffZone.activeTab;
+  const diffActiveTab = tabs.find((tab) => tab.mode === 'diff');
   const handleDiffScopeChange = React.useCallback((nextScope: PendingDiffScope) => {
     if (!directoryKey || diffActiveTab?.mode !== 'diff') {
       return;
@@ -445,7 +479,7 @@ export const ContextSurfacePanes: React.FC = () => {
       targetPath: diffActiveTab.targetPath,
       stagedDiff: nextScope === 'staged',
       diffScope: nextScope,
-    });
+    }, { reveal: false });
   }, [diffActiveTab, directoryKey, openContextPanelTab]);
 
   const visibleBrowserTabId = browserZone.isOpen && browserZone.activeTab?.mode === 'browser' ? browserZone.activeTab.id : null;
@@ -531,23 +565,13 @@ export const ContextSurfacePanes: React.FC = () => {
           directoryKey={directoryKey}
           className={cn('absolute inset-0 flex', fileTreeSide === 'left' && 'flex-row-reverse', isFileTabActive ? 'flex' : 'hidden')}
         >
-          {hasOpenEditorFile || !contextEditorTreeVisible ? (
-            // Hidden rather than unmounted so a hidden editor keeps its state.
-            <div className={cn('h-full min-w-0 flex-1', hasOpenEditorFile && !showsEditor && 'hidden')}>
-              {hasOpenEditorFile ? (
-                <React.Suspense fallback={null}><FilesView mode="editor-only" visible={!contentHidden(fileZone.zone) && isFileTabActive && showsEditor} onCloseFile={handleCloseEditorFile} /></React.Suspense>
-              ) : (
-                <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-                  <Icon name="file-code" className="h-12 w-12 text-muted-foreground/50" />
-                  <div className="typography-ui-header text-foreground">{t('contextPanel.editorEmpty.title')}</div>
-                  <div className="max-w-sm typography-micro text-muted-foreground">{t('contextPanel.editorEmpty.description')}</div>
-                </div>
-              )}
-            </div>
-          ) : null}
-          <EditorTreeColumn visible={contextEditorTreeVisible} active={fileZone.isOpen && isFileTabActive} fill={!showsEditor} side={fileTreeSide} />
+          <div ref={setClassicEditorHost} className={cn('h-full min-w-0 flex-1', (editorLayout || (hasOpenEditorFile && !showsEditor) || (!hasOpenEditorFile && contextEditorTreeVisible)) && 'hidden')} />
+          <ContextPanelHeaderSlotProvider value={editorLayout ? headerSlotFor(fileZone.zone, isFileTabActive) : null}>
+            <EditorTreeColumn visible={editorLayout || contextEditorTreeVisible} active={fileZone.isOpen && isFileTabActive} fill={!showsEditor} side={editorLayout ? 'left' : fileTreeSide} />
+          </ContextPanelHeaderSlotProvider>
         </ZonePane>
       ) : null}
+      <FileEditorPane directoryKey={directoryKey} classicHost={classicEditorHost} classicVisible={!contentHidden(fileZone.zone) && isFileTabActive && showsEditor} onDiffHostChange={setEditorDiffHost} />
       {chatActiveTab && activeChatSessionID && activeChatPinnedSession ? (
         // The chat renders in this app, pinned to its session: it shares
         // the app's connection, stores and theme, and opens like a session
@@ -595,18 +619,21 @@ export const ContextSurfacePanes: React.FC = () => {
       })}
       {diffTabs.map((tab) => {
         const active = diffZone.activeTab?.id === tab.id;
+        const detailVisible = editorLayout ? editorDiffState === 'active' : diffZone.isOpen && active;
         return (
           <ZonePane
             key={tab.id}
             zone={diffZone.zone}
+            host={editorLayout ? editorDiffHost : undefined}
             isOpen={diffZone.isOpen}
             directoryKey={directoryKey}
-            className={cn('absolute inset-0', !active && 'hidden')}
+            className={cn('absolute inset-0', !(editorLayout ? detailVisible : active) && 'hidden')}
           >
             <React.Suspense fallback={null}>
-              <ContextPanelHeaderSlotProvider value={headerSlotFor(diffZone.zone, active)}>
+              <ContextPanelHeaderSlotProvider value={editorLayout ? null : headerSlotFor(diffZone.zone, active)}>
                 <DiffView
-                  visible={diffZone.isOpen && active}
+                  visible={detailVisible}
+                  fileListHost={editorLayout ? { host: diffListHost, visible: diffZone.isOpen && active, onSelect: revealEditorDiff } : undefined}
                   hideStackedFileSidebar
                   stackedDefaultCollapsedAll
                   pinSelectedFileHeaderToTopOnNavigate
@@ -639,6 +666,20 @@ export const ContextSurfacePanes: React.FC = () => {
           </ContextPanelHeaderSlotProvider>
         </ZonePane>
       ) : null}
+      {retainedPullRequestTabs.map((tab) => {
+        const shown = tab.key === activePullRequestKey;
+        return (
+          <ZonePane
+            key={`${runtimeKey}\u0000${tab.key}`}
+            zone={pullRequestZone.zone}
+            isOpen={shown}
+            directoryKey={tab.directory}
+            className={cn('absolute inset-0', !shown && 'hidden')}
+          >
+            <PullRequestView directory={tab.directory} visible={shown} />
+          </ZonePane>
+        );
+      })}
       {hasWalkthroughTab ? (
         <ZonePane
           zone={walkthroughZone.zone}

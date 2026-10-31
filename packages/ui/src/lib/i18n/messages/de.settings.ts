@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': 'Arbeitsbereichslayout',
+  'settings.openchamber.visual.option.workspaceLayout.classic': 'Klassisch',
+  'settings.openchamber.visual.option.workspaceLayout.editor': 'Editor',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "Konfigurieren Sie API-Schlüssel, Endpunkt und Modelle des dsh auf dem Server von jedem verbundenen Gerät.",
   'settings.deepseekHarness.ready': "dsh-CLI gefunden.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': 'Melde dich mit deinem Google-Konto an. Folge bei einem Remote-Server den Anweisungen zur URL und zum Autorisierungscode.',
   'settings.antigravity.warnings.title': 'Vor der Verwendung von Antigravity',
   'settings.antigravity.warnings.subscription': 'Google unterstützt persönliche Google-AI-Abonnements nicht für Drittanbieteranwendungen. Die Verwendung hier kann dein Konto einschränken oder zur Kündigung führen.',
-  'settings.antigravity.warnings.fullAccess': 'OpenChamber startet agy mit vollständigem Zugriff. Headless-Tools und Shell-Befehle werden ausgeführt, ohne einzeln um Genehmigung zu fragen.',
+  'settings.antigravity.warnings.fullAccess': 'Build genehmigt Werkzeugaktionen automatisch. Plan blockiert Dateiänderungen, Shell-Befehle, MCP-Werkzeuge und Browseraktionen.',
   'chat.deepseekCommand.failed': "Der DeepSeek-Harness-Befehl konnte nicht ausgeführt werden.",
   'chat.deepseekCommand.needsSession': "Sende eine Nachricht, um vor diesem Befehl eine DeepSeek-Harness-Sitzung zu erstellen.",
   'settings.sourceControl.ssh.title': 'SSH-Schlüssel',

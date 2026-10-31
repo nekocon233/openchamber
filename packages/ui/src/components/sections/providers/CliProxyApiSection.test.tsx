@@ -60,10 +60,11 @@ const status = (patch: Partial<CliproxyapiStatus> = {}): CliproxyapiStatus => ({
   installedVersion: '8.0.31', runningVersion: null,
   install: { supported: true, prepared: true, target: 'darwin-arm64', version: '8.0.31', path: '/managed/cli-proxy-api', error: null },
   managementEnabled: false, keyRejected: false, accounts: [], clientKeys: [],
+  loginProviders: ['codex', 'antigravity'], opusFailover: { enabled: false, ready: false },
   lastError: null, restarting: false, connection: null,
   ...patch,
 });
-const account = { name: 'codex-a.json', email: 'a@example.com', planType: 'pro', activeUntil: null, status: 'active', disabled: false };
+const account = { provider: 'codex', name: 'codex-a.json', email: 'a@example.com', planType: 'pro', activeUntil: null, status: 'active', disabled: false };
 
 let root: ReturnType<typeof createRoot> | null = null;
 let container: HTMLElement | null = null;
@@ -100,6 +101,85 @@ afterEach(async () => {
 });
 
 describe('CLIProxyAPI section', () => {
+  test('saves Sonnet fallback independently and hides its control on an older Opus-only server', async () => {
+    let current = status({ loginProviders: ['claude', 'antigravity'], opusFailover: { enabled: true, ready: true },
+      sonnetFailover: { enabled: false, ready: false } });
+    const choices: boolean[] = [];
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => current,
+      setCliproxyapiSonnetRoute: async (enabled) => {
+        choices.push(enabled);
+        current = { ...current, sonnetFailover: { enabled, ready: true } };
+        return current;
+      },
+    });
+    await render(api, <CliProxyApiSection />);
+    await act(async () => { container?.querySelector<HTMLElement>('[data-settings-item="providers.cliproxyapi-sonnet"]')?.click(); });
+    expect(choices).toEqual([true]);
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi-opus"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi-sonnet"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(container?.textContent).toContain('Automatic Sonnet fallback');
+    await act(async () => root?.unmount()); root = null;
+    current = status({ loginProviders: ['claude', 'antigravity'] });
+    await render(api, <CliProxyApiSection />);
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi-sonnet"]')).toBeNull();
+  });
+
+  test('offers Claude subscription login and saves the Opus fallback choice without losing existing accounts', async () => {
+    const providers: string[] = [];
+    const choices: boolean[] = [];
+    const current = status({ accounts: [account], loginProviders: ['codex', 'antigravity', 'claude'] });
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => current,
+      startCliproxyapiGateway: async () => current,
+      setCliproxyapiOpusRoute: async (enabled) => {
+        choices.push(enabled);
+        return { ...current, opusFailover: { enabled, ready: false } };
+      },
+      beginCliproxyapiLogin: async (provider) => { providers.push(provider ?? 'codex'); return { state: 'claude123', url: 'https://claude.ai/oauth/authorize' }; },
+      cancelCliproxyapiLogin: async () => true,
+    });
+    await render(api, <CliProxyApiSection />);
+    const checkbox = container?.querySelector('[data-settings-item="providers.cliproxyapi-opus"]');
+    expect(checkbox).not.toBeNull();
+    await act(async () => { checkbox?.dispatchEvent(new Event('click', { bubbles: true })); });
+    expect(choices).toEqual([true]);
+    expect(container?.textContent).toContain('Sign in with Claude and Antigravity');
+    await act(async () => { button('Sign in with Claude')?.click(); });
+    expect(providers).toEqual(['claude']);
+    expect(container?.textContent).toContain(account.email);
+  });
+
+  test('starts an Antigravity login while retaining the signed-in ChatGPT account', async () => {
+    const providers: string[] = [];
+    const current = status({ accounts: [account], ready: true, running: true, enabled: true, managementEnabled: true });
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => current,
+      startCliproxyapiGateway: async () => current,
+      beginCliproxyapiLogin: async (provider) => { providers.push(provider ?? 'codex'); return { state: 'ag123', url: 'https://accounts.google.com/o/oauth2/auth' }; },
+      cancelCliproxyapiLogin: async () => true,
+    });
+    await render(api, <CliProxyApiSection />);
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi"]')?.textContent).toContain(account.email);
+    await act(async () => { button('Sign in with Antigravity')?.click(); });
+    expect(providers).toEqual(['antigravity']);
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi"]')?.textContent).toContain(account.email);
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi-antigravity"]')?.textContent).toContain('Finish the sign-in in your browser.');
+  });
+
+  test('groups accounts by their reported provider regardless of gateway order', async () => {
+    const agy = { ...account, provider: 'antigravity', name: 'ag.json', email: 'google@example.com' };
+    await render(createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status({ accounts: [agy, account] }) }), <CliProxyApiSection />);
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi"]')?.textContent).toContain(account.email);
+    expect(container?.querySelector('[data-settings-item="providers.cliproxyapi-antigravity"]')?.textContent).toContain(agy.email);
+    expect(button('Sign in with Antigravity')).toBeUndefined();
+  });
+
+  test('does not offer an Antigravity login on an older server', async () => {
+    await render(createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status({ loginProviders: ['codex'] }) }), <CliProxyApiSection />);
+    expect(button('Sign in with Antigravity')).toBeUndefined();
+    expect(button('Sign in a ChatGPT account')).toBeDefined();
+  });
   test('keeps the gateway controls hidden while nothing is wrong', async () => {
     const api = createTestNativeAgentsAPI({ cliproxyapiStatus: async () => status() });
     await render(api, <CliProxyApiSection />);
@@ -131,16 +211,52 @@ describe('CLIProxyAPI section', () => {
 
   test('brings the sign-in button back after signing out', async () => {
     let accounts = [account];
+    let refreshes = 0;
     const api = createTestNativeAgentsAPI({
       cliproxyapiStatus: async () => status({ accounts }),
       removeCliproxyapiAccount: async () => { accounts = []; },
     });
-    await render(api, <CliProxyApiSection />);
+    await render(api, <CliProxyApiSection onConnectionsChanged={async () => { refreshes += 1; }} />);
     expect(button('Sign in a ChatGPT account')).toBeUndefined();
     await act(async () => { button('Sign out')?.click(); });
     await act(async () => { button('Sign out')?.click(); });
     expect(button('Sign in a ChatGPT account')).toBeDefined();
     expect(text()).not.toContain('a@example.com');
+    expect(refreshes).toBe(1);
+  });
+
+  test('refreshes accounts and models after a partial sign-out failure without hiding the error', async () => {
+    let accounts = [account];
+    let refreshes = 0;
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ accounts }),
+      removeCliproxyapiAccount: async () => {
+        accounts = [];
+        throw new NativeAgentsRequestError('Model discovery failed after logout', 502, 'CLIPROXYAPI_REQUEST_FAILED');
+      },
+    });
+    await render(api, <CliProxyApiSection onConnectionsChanged={async () => { refreshes += 1; }} />);
+    await act(async () => { button('Sign out')?.click(); });
+    await act(async () => { button('Sign out')?.click(); });
+    expect(button('Sign in a ChatGPT account')).toBeDefined();
+    expect(refreshes).toBe(1);
+    expect(container?.querySelector('[role="alert"]')).not.toBeNull();
+  });
+
+  test('does not refresh a page that unmounted while sign-out was pending', async () => {
+    let complete: () => void = () => {};
+    let refreshes = 0;
+    const pending = new Promise<void>((resolve) => { complete = resolve; });
+    const api = createTestNativeAgentsAPI({
+      cliproxyapiStatus: async () => status({ accounts: [account] }),
+      removeCliproxyapiAccount: async () => pending,
+    });
+    await render(api, <CliProxyApiSection onConnectionsChanged={async () => { refreshes += 1; }} />);
+    await act(async () => { button('Sign out')?.click(); });
+    await act(async () => { button('Sign out')?.click(); });
+    await act(async () => { root?.unmount(); });
+    await act(async () => { complete(); });
+    expect(refreshes).toBe(0);
   });
 
   test('names a target this computer cannot run', async () => {
@@ -217,13 +333,13 @@ describe('CLIProxyAPI section', () => {
         };
       },
     });
-    await render(api, <CliProxyApiSection onConnectionSaved={(connection) => reported.push(connection.id)} />);
+    await render(api, <CliProxyApiSection onConnectionsChanged={async () => { reported.push('refreshed'); }} />);
     await act(async () => { button('Advanced')?.click(); });
     await act(async () => { button('Import gateway models')?.click(); });
     expect(imports).toBe(1);
     expect(text()).toContain('Imported 9 models');
     expect(text()).toContain('skipped 5');
-    expect(reported).toEqual(['connection-1']);
+    expect(reported).toEqual(['refreshed']);
   });
 
   test('cancels a pending attempt when the page is left', async () => {
@@ -254,14 +370,14 @@ describe('CLIProxyAPI section', () => {
         };
       },
     });
-    await render(api, <CliProxyApiSection onConnectionSaved={(connection) => reported.push(connection.id)} />);
+    await render(api, <CliProxyApiSection onConnectionsChanged={async () => { reported.push('refreshed'); }} />);
     await act(async () => { button('Advanced')?.click(); });
     await act(async () => { button('Create connection')?.click(); });
     expect(drafts[0]).toMatchObject({ connectionId: null, name: 'CLIProxyAPI' });
     expect(drafts[0].models[0]).toMatchObject({
       modelID: 'gpt-6.1-sol', contextWindow: 872000, outputLimit: 128000, input: { image: true, pdf: false },
     });
-    expect(reported).toEqual(['connection-1']);
+    expect(reported).toEqual(['refreshed']);
   });
 
   test('submits a pasted callback address and finishes the sign-in', async () => {
@@ -327,7 +443,10 @@ describe('CLIProxyAPI section', () => {
     const calls: string[] = [];
     let polls = 0;
     const api = createTestNativeAgentsAPI({
-      cliproxyapiStatus: async () => status({ accounts: polls === 0 ? [] : [account] }),
+      cliproxyapiStatus: async () => {
+        if (polls > 0) await new Promise((resolve) => setTimeout(resolve, 25));
+        return status({ accounts: polls === 0 ? [] : [account] });
+      },
       startCliproxyapiGateway: async () => { calls.push('start'); return status({ ready: true, running: true, enabled: true, managementEnabled: true }); },
       beginCliproxyapiLogin: async () => { calls.push('login'); return { state: 'abc123', url: 'https://auth.openai.com/codex/device' }; },
       cliproxyapiLoginStatus: async () => (polls++ === 0 ? { status: 'pending', message: null } : { status: 'connected', message: null }),
@@ -343,12 +462,12 @@ describe('CLIProxyAPI section', () => {
         };
       },
     });
-    await render(api, <CliProxyApiSection onConnectionSaved={(connection) => calls.push(`saved:${connection.id}`)} />);
+    await render(api, <CliProxyApiSection onConnectionsChanged={async () => { calls.push('refreshed'); }} />);
     await act(async () => { button('Sign in a ChatGPT account')?.click(); });
     expect(calls).toEqual(['start', 'login']);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)); });
-    expect(calls).toEqual(['start', 'login', 'import', 'saved:connection-1']);
+    expect(calls).toEqual(['start', 'login', 'import', 'refreshed']);
     expect(text()).toContain('Imported 9 models');
     expect(text()).toContain('a@example.com');
   }, 15_000);

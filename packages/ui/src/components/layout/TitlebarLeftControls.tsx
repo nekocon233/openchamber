@@ -2,14 +2,12 @@ import React from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Icon } from '@/components/icon/Icon';
 import { cn } from '@/lib/utils';
-import { useUIStore } from '@/stores/useUIStore';
-import { useSessionUIStore } from '@/sync/session-ui-store';
 import { getInlineStartSide, useI18n } from '@/lib/i18n';
 import { WindowsWindowControls } from '@/components/desktop/WindowsWindowControls';
-import { formatShortcutForDisplay, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import { invokeDesktop } from '@/lib/desktop';
 import { useDesktopWindowControlsLayout } from '@/hooks/useDesktopWindowControlsLayout';
 import { publishTitlebarControlsWidth } from './titlebarControlsWidth';
+import { useTitlebarControlsOverSidebar } from './workspaceLayout';
 
 // Like the icon rail: muted at rest, full strength on hover or while what it
 // controls is on, and no hover fill.
@@ -17,8 +15,7 @@ const ICON_BUTTON_CLASS =
   'app-region-no-drag inline-flex h-6 w-6 items-center justify-center gap-2 rounded-md typography-ui-label font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors';
 
 /**
- * Persistent titlebar controls at the start of the line (app menu on frameless
- * chrome + sidebar toggle): top left, or top right in a right-to-left locale.
+ * Native window controls and the app menu stay at the start of the titlebar.
  *
  * Rendered exactly once as an absolutely-positioned overlay above both the
  * sidebar and the header, so the buttons never migrate / re-mount between the
@@ -31,18 +28,9 @@ const ICON_BUTTON_CLASS =
  */
 export const TitlebarLeftControls: React.FC = () => {
   const { t, locale, direction } = useI18n();
-  const toggleSidebar = useUIStore((state) => state.toggleSidebar);
-  const isSidebarOpen = useUIStore((state) => state.isSidebarOpen);
-  const shortcutOverrides = useUIStore((state) => state.shortcutOverrides);
+  const titlebarControlsOverSidebar = useTitlebarControlsOverSidebar();
   const clusterRef = React.useRef<HTMLDivElement | null>(null);
 
-  const toggleShortcut = formatShortcutForDisplay(getEffectiveShortcutCombo('toggle_sidebar', shortcutOverrides));
-  // Starting a session shares the titlebar row with the sidebar toggle, so it
-  // stays in one place whether the sidebar is open or collapsed.
-  const handleNewSession = React.useCallback(() => {
-    useUIStore.getState().closeMainSurfaces();
-    useSessionUIStore.getState().openNewSessionDraft();
-  }, []);
   const { usesFramelessChrome, side: windowControlsSide } = useDesktopWindowControlsLayout();
 
   const handleOpenWindowsAppMenu = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
@@ -90,17 +78,16 @@ export const TitlebarLeftControls: React.FC = () => {
     // and remain drag regions everywhere else, so window dragging still works
     // in the empty parts of the strip.
     <div
-      className="app-region-no-drag absolute inset-s-0 top-0 z-30 flex select-none items-center pe-2"
+      className={cn(
+        'app-region-no-drag absolute inset-s-0 top-0 z-30 flex select-none items-center pe-2',
+      )}
       style={{
         height: 'var(--oc-header-height, 3rem)',
         paddingInlineStart: 'var(--oc-titlebar-start-inset, 0.75rem)',
         // The overlay floats above the sidebar rather than inside it, so it is
-        // sized by its own content: the icon buttons and the "New session" label
-        // are rem-sized and grow with Interface Font Size, while the sidebar and
-        // the macOS window-controls clearance are fixed pixels. Left uncapped the
-        // cluster runs past the sidebar edge and paints over the chat pane, so
-        // cap it here and let the label truncate.
-        maxWidth: isSidebarOpen ? 'var(--oc-left-sidebar-width, 100%)' : undefined,
+        // sized by its own content. Keep the native control cluster within
+        // the sidebar when that column owns the titlebar area.
+        maxWidth: titlebarControlsOverSidebar ? 'var(--oc-left-sidebar-width, 100%)' : undefined,
       }}
     >
       <div ref={clusterRef} className="flex min-w-0 items-center gap-2">
@@ -126,52 +113,6 @@ export const TitlebarLeftControls: React.FC = () => {
           </Tooltip>
         ) : null}
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={toggleSidebar}
-              data-sidebar-toggle=""
-              aria-label={t('header.actions.openSessionsAria')}
-              aria-pressed={isSidebarOpen}
-              className={cn(ICON_BUTTON_CLASS, 'shrink-0', isSidebarOpen && 'text-foreground')}
-            >
-              <Icon name="layout-left" className="h-4 w-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>{t('header.actions.openSessionsWithShortcut', { shortcut: toggleShortcut })}</p>
-          </TooltipContent>
-        </Tooltip>
-
-        {/* Labelled while the sidebar is open; collapses to an icon with a
-            tooltip so the cluster stays compact over the header otherwise. */}
-        {isSidebarOpen ? (
-          <button
-            type="button"
-            onClick={handleNewSession}
-            className={cn(ICON_BUTTON_CLASS, '-ms-1 w-auto min-w-0 px-1.5 font-normal')}
-          >
-            <Icon name="chat-new" className="h-4 w-4 shrink-0" />
-            <span className="truncate">{t('sessions.sidebar.header.actions.newSession')}</span>
-          </button>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={handleNewSession}
-                aria-label={t('sessions.sidebar.header.actions.newSession')}
-                className={cn(ICON_BUTTON_CLASS, '-ms-1 shrink-0')}
-              >
-                <Icon name="chat-new" className="h-4 w-4" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{t('sessions.sidebar.header.actions.newSession')}</p>
-            </TooltipContent>
-          </Tooltip>
-        )}
       </div>
     </div>
   );

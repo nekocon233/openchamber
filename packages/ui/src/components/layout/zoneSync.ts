@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { isContextPanelMode } from '@/lib/surfaces/modes';
-import { zonePlacementSchema, zoneOfMode, type ContextZonePlacement } from '@/lib/workspace/zones';
+import { zonePlacementSchema, type ContextZonePlacement } from '@/lib/workspace/zones';
 import { useUIStore } from '@/stores/useUIStore';
 
 const UI_STORE_KEY = 'ui-store';
@@ -34,14 +33,7 @@ export const followZonePlacementOfOtherWindows = (): (() => void) => {
     if (event.key !== UI_STORE_KEY) return;
     const incoming = readPersistedZonePlacement(event.newValue);
     if (!incoming) return;
-    const current = useUIStore.getState().contextSurfaceZones;
-    const modes = new Set([...Object.keys(current), ...Object.keys(incoming)].filter(isContextPanelMode));
-    for (const mode of modes) {
-      const zone = zoneOfMode(incoming, mode);
-      if (zone !== zoneOfMode(useUIStore.getState().contextSurfaceZones, mode)) {
-        useUIStore.getState().moveContextSurfaceToZone(mode, zone);
-      }
-    }
+    useUIStore.getState().setContextSurfaceZones(incoming);
   };
   window.addEventListener('storage', onStorage);
   return () => window.removeEventListener('storage', onStorage);

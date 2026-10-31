@@ -3,7 +3,7 @@ import { PullRequestSnapshotCache } from './pullRequestSnapshotCache';
 import type { PullRequestSource } from './pullRequestDiff';
 
 const source: PullRequestSource = { kind: 'pr', number: 42 };
-const snapshot = [{ path: 'a.ts', previousPath: undefined, status: 'M', insertions: 1, deletions: 1, patch: 'published' }];
+const snapshot = { headSha: 'a'.repeat(40), files: [{ path: 'a.ts', previousPath: undefined, status: 'M', insertions: 1, deletions: 1, patch: 'published' }] };
 
 test('returning to a PR reuses its snapshot, while explicit refresh fetches again', async () => {
   const cache = new PullRequestSnapshotCache();
@@ -29,7 +29,7 @@ test('push invalidates only its scope and an older response cannot repopulate it
   const other = cache.load('runtime/other', source, async () => snapshot);
   await other;
   cache.invalidate('runtime/repo');
-  const newer = [{ ...snapshot[0], patch: 'newer' }];
+  const newer = { headSha: 'b'.repeat(40), files: [{ ...snapshot.files[0], patch: 'newer' }] };
   await cache.load('runtime/repo', source, async () => newer);
   resolveOld(snapshot);
   await old;
@@ -40,8 +40,8 @@ test('push invalidates only its scope and an older response cannot repopulate it
 test('failed reads can be retried and successful empty snapshots remain cached', async () => {
   const cache = new PullRequestSnapshotCache();
   await expect(cache.load('repo', source, async () => { throw new Error('offline'); })).rejects.toThrow('offline');
-  expect(await cache.load('repo', source, async () => [])).toEqual([]);
-  expect(await cache.load('repo', source, async () => { throw new Error('Unexpected fetch'); })).toEqual([]);
+  expect(await cache.load('repo', source, async () => ({ files: [], headSha: null }))).toEqual({ files: [], headSha: null });
+  expect(await cache.load('repo', source, async () => { throw new Error('Unexpected fetch'); })).toEqual({ files: [], headSha: null });
 });
 
 test('bounds completed snapshots without evicting an in-flight request', async () => {

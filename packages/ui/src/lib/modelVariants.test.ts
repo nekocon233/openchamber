@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { highestModelVariant, listModelVariantIds, modelVariantNames } from './modelVariants';
+import { configuredVariantForModel, highestModelVariant, listModelVariantIds, modelVariantNames } from './modelVariants';
 
 describe('listModelVariantIds', () => {
   test('reads ids from the OpenCode 2 array, not array indices', () => {
@@ -37,5 +37,18 @@ describe('highestModelVariant', () => {
     expect(highestModelVariant(['low', 'max', 'ultra', 'low-fast', 'max-fast', 'ultra-fast'])).toBe('ultra');
     // Without a plain twin the id is its own level, not a duplicate.
     expect(highestModelVariant(['low', 'high-fast'])).toBe('high-fast');
+  });
+});
+
+describe('configuredVariantForModel', () => {
+  test('keeps defaults with their model and recognizes confirmed aliases', () => {
+    const target = { providerId: 'antigravity-native', modelId: 'gemini-test', model: {
+      id: 'gemini-test', modelID: 'gemini-test', nativeAliases: [{ id: 'gemini-test-low', variant: 'low' }],
+    } };
+    expect(configuredVariantForModel({ ...target, defaultModel: 'codex-native/gpt-test', defaultVariant: 'max' })).toBeUndefined();
+    expect(configuredVariantForModel({ ...target, defaultModel: 'antigravity-native/other', defaultVariant: 'low' })).toBeUndefined();
+    expect(configuredVariantForModel({ ...target, defaultModel: 'antigravity-native/gemini-test-low', defaultVariant: 'low' })).toBe('low');
+    expect(configuredVariantForModel({ ...target, defaultModel: undefined, defaultVariant: 'low' })).toBe('low');
+    expect(configuredVariantForModel({ ...target, defaultModel: 'antigravity-native/gemini-test', defaultVariant: 'max' })).toBe('max');
   });
 });

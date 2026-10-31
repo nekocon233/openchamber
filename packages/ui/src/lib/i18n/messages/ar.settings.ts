@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': 'تخطيط مساحة العمل',
+  'settings.openchamber.visual.option.workspaceLayout.classic': 'تقليدي',
+  'settings.openchamber.visual.option.workspaceLayout.editor': 'محرر',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "اضبط مفتاح API وعنوان الخدمة ونماذج dsh على الخادم من أي جهاز متصل.",
   'settings.deepseekHarness.ready': "تم العثور على واجهة dsh لسطر الأوامر.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': 'سجّل الدخول بحساب Google الخاص بك. بالنسبة إلى خادم بعيد، اتبع تعليمات عنوان URL ورمز التفويض.',
   'settings.antigravity.warnings.title': 'قبل استخدام Antigravity',
   'settings.antigravity.warnings.subscription': 'لا يدعم Google استخدام اشتراكات Google AI الشخصية في تطبيقات الجهات الخارجية. قد يؤدي استخدامها هنا إلى تقييد حسابك أو إنهائه.',
-  'settings.antigravity.warnings.fullAccess': 'يبدأ OpenChamber تشغيل agy بصلاحية وصول كاملة. تعمل الأدوات وأوامر shell في الوضع بلا واجهة دون طلب الموافقة على كل عنصر على حدة.',
+  'settings.antigravity.warnings.fullAccess': 'يوافق وضع Build على عمليات الأدوات تلقائيًا. يمنع وضع Plan تعديل الملفات وأوامر الطرفية وأدوات MCP وإجراءات المتصفح.',
   'chat.deepseekCommand.failed': "تعذر تشغيل أمر DeepSeek Harness.",
   'chat.deepseekCommand.needsSession': "أرسل رسالة لإنشاء جلسة DeepSeek Harness قبل تشغيل هذا الأمر.",
   'settings.sourceControl.ssh.title': 'مفاتيح SSH',

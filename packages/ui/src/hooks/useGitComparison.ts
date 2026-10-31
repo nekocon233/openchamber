@@ -27,7 +27,7 @@ export interface GitComparisonFile {
 
 type ComparisonFiles =
   | { key: string; status: 'loading' }
-  | { key: string; status: 'ready'; files: GitComparisonFile[]; revision: number; refreshing: boolean }
+  | { key: string; status: 'ready'; files: GitComparisonFile[]; headSha: string | null; revision: number; refreshing: boolean }
   | { key: string; status: 'error'; message: string };
 
 /** File-list authority shared by the stacked desktop view and mobile drill-down. */
@@ -69,9 +69,12 @@ export function useGitComparison(
     setResult((previous) => previous?.key === key && previous.status === 'ready' ? { ...previous, refreshing: true } : { key, status: 'loading' });
     try {
       let files: GitComparisonFile[];
+      let headSha: string | null = null;
       if (target.kind === 'pr') {
         if (!context) throw new Error(t(changeRequestCopy('session.githubPrPicker.empty.notConnected', provider)));
-        files = await prCache.load(pushScope, target, () => fetchPullRequestDiff(directory, target, context), force, targetAuthority);
+        const snapshot = await prCache.load(pushScope, target, () => fetchPullRequestDiff(directory, target, context), force, targetAuthority);
+        files = snapshot.files;
+        headSha = snapshot.headSha;
       } else if (target.kind === 'branch') {
         files = (await getGitRangeFiles(directory, { base: target.baseRef, head: target.headRef, includeWorkingTree: true }))
           .map((file) => ({ ...file, insertions: 0, deletions: 0 }));
@@ -80,9 +83,9 @@ export function useGitComparison(
           .map((file) => ({ path: file.path, status: file.changeType, previousPath: file.previousPath, insertions: file.insertions, deletions: file.deletions }));
       }
       if (generation.current !== request || getRuntimeKey() !== runtime) return;
-      setResult((previous) => previous?.key === key && previous.status === 'ready' && previous.files === files
+      setResult((previous) => previous?.key === key && previous.status === 'ready' && previous.files === files && previous.headSha === headSha
         ? { ...previous, refreshing: false }
-        : { key, status: 'ready', files, revision: request, refreshing: false });
+        : { key, status: 'ready', files, headSha, revision: request, refreshing: false });
     } catch (error) {
       if (generation.current !== request || getRuntimeKey() !== runtime) return;
       setResult({ key, status: 'error', message: error instanceof Error ? error.message : t('diffView.state.failedToLoadDiff') });
@@ -97,28 +100,29 @@ export function useGitComparison(
 
   const current = result?.key === key ? result : null;
   const files = current?.status === 'ready' ? current.files : null;
+  const headSha = current?.status === 'ready' ? current.headSha : null;
   const filesByPath = useMemo(() => new Map((files ?? []).map((file) => [file.path, file])), [files]);
-  const fetchDiff = useCallback(async (filePath: string, contextLines = 3): Promise<GitDiffResponse> => {
+  const fetchDiff = useCallback(async (filePath: string, contextLines = 3): Promise<GitDiffResponse & { reviewHeadSha?: string }> => {
     const { key: targetKey, source: target, enabled: active } = sourceRef.current;
     const file = filesByPath.get(filePath);
     if (!directory || targetKey !== key || !target || !file || !enabled || !active) throw new Error(t('diffView.state.failedToLoadDiff'));
     if (target.kind === 'pr') {
       if (file.patch === undefined) throw new Error(t('diffView.state.failedToLoadDiff'));
-      return { diff: file.patch };
+      return { diff: file.patch, reviewHeadSha: headSha ?? undefined };
     }
     return target.kind === 'branch'
       ? getGitRangeDiff(directory, { base: target.baseRef, head: target.headRef, path: filePath, contextLines, includeWorkingTree: true })
       : getGitCommitDiff(directory, { hash: target.hash, path: filePath, previousPath: file.previousPath, contextLines });
-  }, [directory, enabled, filesByPath, key, t]);
+  }, [directory, enabled, filesByPath, headSha, key, t]);
 
   // PR patches come from GitHub at fixed context, so expanding one file means
   // reading both of its sides from GitHub rather than asking git for more lines.
-  const fetchFullFile = useCallback(async (filePath: string): Promise<{ original: string; modified: string }> => {
+  const fetchFullFile = useCallback(async (filePath: string): Promise<{ original: string; modified: string; reviewHeadSha?: string }> => {
     const { key: targetKey, source: target, enabled: active, readContext: context } = sourceRef.current;
     const file = filesByPath.get(filePath);
     if (!directory || targetKey !== key || target?.kind !== 'pr' || !context || !file || !enabled || !active) throw new Error(t('diffView.state.failedToLoadDiff'));
-    return fetchPullRequestFile(directory, target, context, { path: file.path, previousPath: file.previousPath, status: file.status });
-  }, [directory, enabled, filesByPath, key, t]);
+    return fetchPullRequestFile(directory, target, context, { path: file.path, previousPath: file.previousPath, status: file.status, headSha });
+  }, [directory, enabled, filesByPath, headSha, key, t]);
 
   return {
     key,

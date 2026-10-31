@@ -49,7 +49,10 @@ export type Agent = Omit<AgentInfo, "name"> & { name: string; displayName: strin
 export type Command = CommandInfo
 export type Skill = SkillInfo
 export type Provider = ProviderInfo
-export type Model = ModelInfo
+export type Model = ModelInfo & {
+  /** Legacy native model ids and their optional effort overrides. */
+  nativeAliases?: Array<{ id: string; variant?: string }>
+}
 export type McpServerStatus = McpServer
 /** Version-control facts about a directory the UI shows (current and default branch). */
 export type Vcs = { branch?: string; defaultBranch?: string }
@@ -106,12 +109,19 @@ export function isSameModelRef(current: ModelRef, next: ModelRef): boolean {
  * entries such as `gpt-6-luna-fast`, whose `modelID` is `gpt-6-luna`, so an
  * exact `id` match wins and `modelID` only answers ids nothing is keyed by.
  */
-export function findCatalogModel<T extends { id: string; modelID: string }>(
+export function findCatalogModel<T extends { id: string; modelID: string; nativeAliases?: Model['nativeAliases'] }>(
   models: readonly T[] | undefined,
   id: string,
 ): T | undefined {
   if (!models || !id) return undefined
-  return models.find((model) => model.id === id) ?? models.find((model) => model.modelID === id)
+  return models.find((model) => model.id === id)
+    ?? models.find((model) => model.modelID === id)
+    ?? models.find((model) => model.nativeAliases?.some((alias) => alias.id === id))
+}
+
+/** The effort encoded in an older native model id, before a separate effort pick. */
+export function nativeModelAliasVariant(model: Model | undefined, id: string): string | undefined {
+  return model?.nativeAliases?.find((alias) => alias.id === id)?.variant
 }
 
 /** Free-form JSON attached to sessions, messages, and prompts. */

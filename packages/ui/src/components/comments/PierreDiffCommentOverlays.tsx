@@ -4,6 +4,10 @@ import type { SelectedLineRange } from '@pierre/diffs';
 import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
 import { InlineCommentCard } from './InlineCommentCard';
 import { InlineCommentInput } from './InlineCommentInput';
+import type { InlineCommentInputProps } from './InlineCommentInput';
+import type { GitHubPendingReviewComment } from '@/lib/source-control/pendingReview';
+import { SimpleMarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { useI18n } from '@/lib/i18n';
 import { toPierreAnnotationId } from './PierreDiffCommentUtils';
 
 interface PierreDiffCommentOverlaysProps {
@@ -18,6 +22,8 @@ interface PierreDiffCommentOverlaysProps {
   onCancel: () => void;
   onEdit: (draft: InlineCommentDraft) => void;
   onDelete: (draft: InlineCommentDraft) => void;
+  reviewComments?: readonly GitHubPendingReviewComment[];
+  reviewAction?: InlineCommentInputProps['reviewAction'];
 }
 
 function parseCssWidth(value: string): number | null {
@@ -43,6 +49,7 @@ function clampMaxWidth(value: number | null | undefined): number | undefined {
 }
 
 export function PierreDiffCommentOverlays(props: PierreDiffCommentOverlaysProps) {
+  const { t, direction } = useI18n();
   const {
     diffRootRef,
     drafts,
@@ -55,6 +62,8 @@ export function PierreDiffCommentOverlays(props: PierreDiffCommentOverlaysProps)
     onCancel,
     onEdit,
     onDelete,
+    reviewComments,
+    reviewAction,
   } = props;
 
   const [retryTick, setRetryTick] = React.useState(0);
@@ -70,8 +79,9 @@ export function PierreDiffCommentOverlays(props: PierreDiffCommentOverlaysProps)
     if (selectionAnnotationId) {
       ids.push(selectionAnnotationId);
     }
+    for (const comment of reviewComments ?? []) if (comment.line !== null) ids.push(toPierreAnnotationId({ type: 'review', comment }));
     return ids;
-  }, [drafts, editingDraftId, selectionAnnotationId]);
+  }, [drafts, editingDraftId, selectionAnnotationId, reviewComments]);
 
   const resolveTarget = React.useCallback((annotationId: string): HTMLElement | null => {
     const wrapper = diffRootRef.current;
@@ -80,7 +90,7 @@ export function PierreDiffCommentOverlays(props: PierreDiffCommentOverlaysProps)
     const host = wrapper.querySelector('diffs-container');
     if (!(host instanceof HTMLElement)) return null;
 
-    const lightDomTarget = host.querySelector(`[data-annotation-id="${annotationId}"]`);
+    const lightDomTarget = host.querySelector(`[data-annotation-id="${CSS.escape(annotationId)}"]`);
     if (lightDomTarget instanceof HTMLElement) {
       return lightDomTarget;
     }
@@ -88,7 +98,7 @@ export function PierreDiffCommentOverlays(props: PierreDiffCommentOverlaysProps)
     const shadowRoot = host.shadowRoot;
     if (!shadowRoot) return null;
 
-    return shadowRoot.querySelector(`[data-annotation-id="${annotationId}"]`) as HTMLElement | null;
+    return shadowRoot.querySelector<HTMLElement>(`[data-annotation-id="${CSS.escape(annotationId)}"]`);
   }, [diffRootRef]);
 
   React.useEffect(() => {
@@ -181,6 +191,17 @@ export function PierreDiffCommentOverlays(props: PierreDiffCommentOverlaysProps)
 
   return (
     <>
+      {(reviewComments ?? []).map(comment => {
+        const annotationId = toPierreAnnotationId({ type: 'review', comment });
+        const target = resolveTarget(annotationId);
+        if (!target || comment.line === null) return null;
+        return createPortal(<div dir={direction} className="px-3 py-2 font-sans" style={{ maxWidth: resolveTargetMaxWidth(target) }}>
+          <div className="rounded-md border border-border bg-surface-elevated p-3">
+            <div className="mb-1 typography-micro text-muted-foreground">{t('pendingReview.draft')}</div>
+            <SimpleMarkdownRenderer content={comment.body} enableFileReferences={false} />
+          </div>
+        </div>, target, annotationId);
+      })}
       {drafts.map((draft) => {
         const id = toPierreAnnotationId({ type: draft.id === editingDraftId ? 'edit' : 'saved', draft });
         const target = resolveTarget(id);
@@ -237,6 +258,7 @@ export function PierreDiffCommentOverlays(props: PierreDiffCommentOverlaysProps)
             onCancel={onCancel}
             maxWidth={targetMaxWidth}
             bandColor={resolveSelectedLineColor()}
+            reviewAction={reviewAction}
           />,
           target,
           selectionAnnotationId

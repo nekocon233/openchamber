@@ -185,6 +185,8 @@ environment:
 
 애초에 어떤 모델 제공자를 쓸 수 있는지는 OpenChamber가 아니라 OpenCode가 정합니다. [OpenCode 정책](https://opencode.ai/v2/docs/policies/)으로 고정하세요. 모든 제공자를 거부한 다음 승인한 제공자만 허용합니다.
 
+기업 모드에서는 CLIProxyAPI 로그인, 모델 가져오기 및 연결 변경도 차단됩니다. Antigravity 모델 계열 내 자동 업그레이드도 비활성화됩니다. Claude에서 Antigravity로의 Opus/Sonnet 자동 전환도 비활성화됩니다.
+
 ```jsonc
 {
   "experimental": {

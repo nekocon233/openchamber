@@ -410,7 +410,6 @@ export const SETTINGS_REGISTRY = {
     parse: mapParser(parseStringList, sanitizeWorkStatusSectionOrder),
     ui: uiStore('workStatusSectionOrder', (value) => useUIStore.getState().setWorkStatusSectionOrder(value)),
   }),
-  workStatusPanelEnabled: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('workStatusPanelEnabled', (v) => useUIStore.getState().setWorkStatusPanelEnabled(v)) }),
   workStatusHiddenSections: field({
     scope: 'profile',
     parse: parseWorkStatusHiddenSections,
@@ -483,6 +482,7 @@ export const SETTINGS_REGISTRY = {
   autoSaveEnabled: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('autoSaveEnabled', (v) => useUIStore.getState().setAutoSaveEnabled(v)) }),
   confirmFileTreeMove: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('confirmFileTreeMove', (v) => useUIStore.getState().setConfirmFileTreeMove(v)) }),
   fileTreeSide: field({ scope: 'profile', surfaces: ['web', 'desktop'], parse: parseOneOf(['left', 'right']), ui: uiStore('fileTreeSide', (v) => useUIStore.getState().setFileTreeSide(v)) }),
+  workspaceLayout: field({ scope: 'profile', surfaces: ['web', 'desktop'], parse: parseOneOf(['classic', 'editor']), ui: uiStore('workspaceLayout', (v) => useUIStore.getState().setWorkspaceLayout(v)) }),
   layoutAnimations: field({ scope: 'profile', surfaces: ['web', 'desktop'], parse: parseBoolean, ui: uiStore('layoutAnimations', (v) => useUIStore.getState().setLayoutAnimations(v)) }),
   openLinksInBrowserPanel: field({ scope: 'profile', surfaces: ['desktop'], parse: parseBoolean, ui: uiStore('openLinksInBrowserPanel', (v) => useUIStore.getState().setOpenLinksInBrowserPanel(v)) }),
   openTrackerLinksOnBoard: field({ scope: 'profile', surfaces: ['web', 'desktop', 'mobile'], parse: parseBoolean, ui: uiStore('openTrackerLinksOnBoard', (v) => useUIStore.getState().setOpenTrackerLinksOnBoard(v)) }),
@@ -666,6 +666,8 @@ export type DesktopSettings = { -readonly [K in SettingsKey]?: FieldValue<(typeo
  * the `draftStarters` field and is therefore not here.
  */
 export const LOCAL_DEVICE_KEYS = [
+  'editorChatSplitRatio',
+  'editorToolPanelWidth',
   'theme',
   'isSidebarOpen',
   'sidebarWidth',

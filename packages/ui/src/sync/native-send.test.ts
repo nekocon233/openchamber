@@ -51,6 +51,7 @@ let promptFailure: ((request: NativePromptRequest) => Error) | null = null
 let nativeHistory: unknown[] = []
 let aborts: string[] = []
 let replies: Array<{ requestId: string; answers: string[][] }> = []
+let replyFailure: Error | null = null
 let rejectGone = false
 let openCodeRequests: string[] = []
 let optimisticAdds: OptimisticAddInput[] = []
@@ -64,6 +65,7 @@ beforeEach(() => {
   useSessionGoalArmStore.setState({ armed: false, objectiveOverride: null })
   aborts = []
   replies = []
+  replyFailure = null
   rejectGone = false
   openCodeRequests = []
   optimisticAdds = []
@@ -87,6 +89,7 @@ beforeEach(() => {
     },
     replyQuestion: async (requestId, answers) => {
       replies.push({ requestId, answers })
+      if (replyFailure) throw replyFailure
     },
     rejectQuestion: async () => {
       if (rejectGone) throw new NativeAgentsRequestError("No pending native question", 404, "NATIVE_QUESTION_NOT_FOUND")
@@ -148,6 +151,19 @@ describe("native prompt parts", () => {
 })
 
 describe("routeMessage for native sessions", () => {
+  test('an unsupported Antigravity agent cannot silently become build', async () => {
+    await expect(routeMessage({
+      sessionId: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+      directory: DIRECTORY,
+      content: 'Inspect only',
+      providerID: 'antigravity-native',
+      modelID: 'gemini-3.8-flash-medium',
+      agent: 'Plan - Gemini',
+    })).rejects.toBeInstanceOf(NativeAgentsRequestError)
+    expect(prompts).toHaveLength(0)
+    expect(openCodeRequests).toEqual([])
+  })
+
   test("sends slash commands as typed, with the optimistic message's id", async () => {
     const route = await routeMessage({
       sessionId: SESSION,
@@ -177,7 +193,7 @@ describe("routeMessage for native sessions", () => {
     expect(openCodeRequests).toEqual([])
   })
 
-  test("Antigravity always sends build with a nag message id", async () => {
+  test("Antigravity preserves the chosen plan mode with a nag message id", async () => {
     const sessionId = 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188'
     const route = await routeMessage({
       sessionId,
@@ -189,7 +205,7 @@ describe("routeMessage for native sessions", () => {
     })
     expect(route).toBe('prompt')
     expect(prompts).toHaveLength(1)
-    expect(prompts[0].request.agent).toBe('build')
+    expect(prompts[0].request.agent).toBe('plan')
     expect(prompts[0].request.messageID.startsWith('nag_u_')).toBe(true)
   })
 
@@ -310,5 +326,29 @@ describe("session actions for native sessions", () => {
     const failure = await cancelForm(SESSION, "ncq_2").then(() => null, (error: Error) => error)
     expect(failure).toMatchObject({ code: "NATIVE_QUESTION_NOT_FOUND" })
     expect(store?.getState().form[SESSION] ?? []).toEqual([])
+  })
+
+  test("keep an Antigravity plan question after failed delivery so the same answer can be retried", async () => {
+    const sessionID = 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188'
+    const request = projectNativeQuestion({
+      id: 'ncq_agy_plan', sessionID, kind: 'antigravity-plan-exit',
+      questions: [{ header: 'Plan', question: 'Review the plan', options: [
+        { label: 'build', description: '' }, { label: 'plan', description: '' },
+      ] }],
+    })
+    if (!request) throw new Error('Missing Antigravity plan form')
+    const store = childStores.getChild(DIRECTORY)
+    store?.setState({ form: { [sessionID]: [request] } })
+    replyFailure = new NativeAgentsRequestError('Failed to start the next turn', 503, 'NATIVE_CLI_MISSING')
+    await expect(replyToForm(sessionID, request.id, { 'question-0': 'build' })).rejects.toThrow('Failed to start the next turn')
+    expect(store?.getState().form[sessionID]).toEqual([request])
+    expect(prompts).toEqual([])
+    replyFailure = null
+    await replyToForm(sessionID, request.id, { 'question-0': 'build' })
+    expect(store?.getState().form[sessionID] ?? []).toEqual([])
+    expect(replies).toEqual([
+      { requestId: request.id, answers: [['build']] }, { requestId: request.id, answers: [['build']] },
+    ])
+    expect(openCodeRequests).toEqual([])
   })
 })

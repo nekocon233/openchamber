@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { CODEX_OUTPUT_LIMIT } from '../catalog.js';
+import { antigravityModelVersion } from './family-following.js';
 
 // The Codex CLI keeps this cache fresh from the account the gateway serves, and
 // it is the only place with real context windows, modalities and effort levels
@@ -21,6 +22,55 @@ const metadataSchema = z.object({
 
 /** The efforts a Claude Code connection can offer, in the order the editor lists them. */
 const CONNECTION_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+const gatewayDefinition = z.object({
+  id: z.string().min(1),
+  display_name: z.string().nullish(),
+  context_length: z.number().int().min(1024).max(10_000_000),
+  max_completion_tokens: z.number().int().min(1).max(1_000_000),
+  supportedInputModalities: z.array(z.string()).default([]),
+  thinking: z.object({
+    levels: z.array(z.string()).default([]),
+    min: z.number().int().nonnegative().optional(),
+    max: z.number().int().nonnegative().optional(),
+  }).nullish(),
+});
+
+const gatewayEfforts = (model, channel) => {
+  const declared = model.thinking?.levels ?? [];
+  if (declared.length > 0) return CONNECTION_EFFORTS.filter((effort) => declared.includes(effort));
+  if (channel !== 'antigravity' || !model.id.startsWith('claude-')) return [];
+  const min = model.thinking?.min ?? 0;
+  const max = model.thinking?.max ?? 0;
+  if (max === 0 || min > max || model.max_completion_tokens <= min) return [];
+  // CLIProxyAPI 8.x explicitly converts these effort aliases to budgets and
+  // clamps them to the target's limits. They are gateway controls, not new agy
+  // model variants. See internal/thinking/convert.go and validate.go upstream.
+  return [...CONNECTION_EFFORTS];
+};
+
+/** Parse channel metadata independently per model; incomplete definitions stay
+ * in the caller's unknown list instead of acquiring guessed limits. */
+export const parseGatewayModelMetadata = (payload, channel = null) => {
+  const document = z.object({ models: z.array(z.json()) }).parse(payload);
+  const metadata = new Map();
+  for (const candidate of document.models) {
+    const parsed = gatewayDefinition.safeParse(candidate);
+    if (!parsed.success) continue;
+    const model = parsed.data;
+    const descriptor = {
+      name: model.display_name?.trim() || model.id,
+      contextWindow: model.context_length, outputLimit: model.max_completion_tokens,
+      image: model.supportedInputModalities.includes('image'),
+      pdf: model.supportedInputModalities.includes('pdf'),
+      efforts: gatewayEfforts(model, channel),
+    };
+    const family = channel === 'antigravity' ? antigravityModelVersion(model.id)?.family : null;
+    if (family) descriptor.followFamily = family;
+    metadata.set(model.id, descriptor);
+  }
+  return metadata;
+};
 
 export const codexHomeFrom = (env = process.env) => {
   const configured = env.CODEX_HOME?.trim() ?? '';

@@ -24,4 +24,14 @@ describe("findCatalogModel", () => {
     expect(findCatalogModel(undefined, "gpt-6-luna")).toBeUndefined()
     expect(findCatalogModel([luna], "")).toBeUndefined()
   })
+
+  test("resolves saved native effort slugs without adding picker rows or guessing suffixes", () => {
+    const family = { id: 'gemini-test', modelID: 'gemini-test', nativeAliases: [{ id: 'gemini-test-low', variant: 'low' }] }
+    const models = [family]
+    expect(findCatalogModel(models, 'gemini-test-low')).toBe(family)
+    expect(findCatalogModel(models, 'gemini-test-max')).toBeUndefined()
+    const exact = { id: 'gemini-test-low', modelID: 'gemini-test-low' }
+    expect(findCatalogModel([family, exact], exact.id)).toBe(exact)
+    expect(models).toHaveLength(1)
+  })
 })

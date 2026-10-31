@@ -81,6 +81,27 @@ afterEach(async () => {
 afterAll(() => dom.restore());
 
 describe('native task detail owner', () => {
+  test('saved Antigravity tasks refresh from events without scheduling idle polls or claiming activity', async () => {
+    const session = 'nag_saved-tasks';
+    const saved: NativeTaskSnapshot = {
+      state: 'history', generation: 'agy-history:fixture', revision: 1, omitted: 0,
+      tasks: [{ id: 'native/task-2', type: 'bash', description: 'Saved command', active: false, ambient: false, status: 'unknown', canStop: false, outputAvailable: false }],
+    };
+    api.capabilities = async () => ({ ...capabilities, backends: { ...capabilities.backends, antigravity: { cli: true, tasks: { background: true, output: true, stop: false } } } });
+    let reads = 0;
+    api.sessionTasks = async () => { reads += 1; return saved; };
+    const timers = spyOn(globalThis, 'setTimeout');
+    try {
+      await render(<Probe session={session} visible />);
+      expect(reads).toBe(1);
+      expect(heldSnapshot(session).state).toBe('history');
+      expect(timers.mock.calls.filter((call) => call[1] === 45_000)).toHaveLength(0);
+      await event({ ...saved, revision: 2, tasks: saved.tasks.map((task) => ({ ...task, status: 'completed' })) }, session);
+      expect(heldSnapshot(session).tasks[0].status).toBe('completed');
+      expect(useSessionBackgroundTasksStore.getState().tasksBySession.has(session)).toBe(false);
+    } finally { timers.mockRestore(); }
+  });
+
   test('initial loading, unknown membership, successful empty, failure and inactive remain distinct', async () => {
     const first = deferred<NativeTaskSnapshot>();
     api.sessionTasks = () => first.promise;

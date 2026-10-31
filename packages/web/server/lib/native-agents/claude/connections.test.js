@@ -18,6 +18,40 @@ const input = (name = 'Kimi') => ({
 afterEach(async () => { for (const directory of directories.splice(0)) await fs.rm(directory, { recursive: true, force: true }); });
 
 describe('Claude connections', () => {
+  it('rejects mismatched family rules before writing a connection', async () => {
+    const { store } = await fixture();
+    const draft = input();
+    expect(() => store.save(null, { ...draft, models: [{ ...draft.models[0], followFamily: 'antigravity-opus' }] })).toThrow('matching versioned Antigravity model');
+    expect(() => store.save(null, { ...draft, models: [{ ...draft.models[0], modelID: 'claude-opus-5-6-preview', followFamily: 'antigravity-opus' }] })).toThrow('matching versioned Antigravity model');
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('atomically prunes only the managed endpoint, retaining keys and selectable identities across restart', async () => {
+    const { dataDir, store } = await fixture();
+    const ordinary = await store.save(null, input());
+    const baseURL = 'http://127.0.0.1:8317';
+    const kept = { ...input().models[0], modelID: 'claude-sonnet-test' };
+    const dropped = { ...input().models[0], modelID: 'gpt-test' };
+    const gateway = await store.save(null, { ...input('Gateway'), baseURL, models: [kept, dropped] });
+    const removedID = `connection:${gateway.id}:${dropped.id}`;
+    const keptID = `connection:${gateway.id}:${kept.id}`;
+    await Promise.all([
+      store.save(gateway.id, { ...input('Renamed'), baseURL, models: [kept, dropped], apiKey: 'new-test-key' }),
+      store.retainModels(baseURL, [kept.modelID]),
+    ]);
+    const restarted = createClaudeConnections({ dataDir });
+    const rows = await restarted.list();
+    expect(rows.find((row) => row.id === ordinary.id)).toEqual(ordinary);
+    expect(rows.find((row) => row.id === gateway.id)).toMatchObject({ name: 'Renamed', revision: 3, models: [kept] });
+    expect((await restarted.resolve(keptID)).env.ANTHROPIC_API_KEY).toBe('new-test-key');
+    await expect(restarted.resolve(removedID)).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_UNAVAILABLE' });
+    await restarted.retainModels(baseURL, [kept.modelID]);
+    expect((await restarted.list()).find((row) => row.id === gateway.id).revision).toBe(3);
+    await restarted.retainModels(baseURL, []);
+    expect(await restarted.list()).toEqual([ordinary]);
+    await expect(restarted.resolve(keptID)).rejects.toMatchObject({ code: 'NATIVE_CONNECTION_UNAVAILABLE' });
+  });
+
   it('round-trips connections without exposing keys and preserves omitted keys', async () => {
     const { dataDir, store } = await fixture();
     expect(await store.list()).toEqual([]);

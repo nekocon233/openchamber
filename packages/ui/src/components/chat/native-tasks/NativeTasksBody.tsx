@@ -18,6 +18,7 @@ type Scope = { sessionId: string; directory: string; runtimeGeneration: number; 
 const TABS: Record<string, readonly NativeTasksTab[]> = {
   claude: ['checklist', 'background'],
   codex: ['plan', 'todos'],
+  antigravity: ['background'],
 };
 const TAB_LABELS: Record<NativeTasksTab, I18nKey> = {
   checklist: 'chat.nativeTasks.checklist',
@@ -68,7 +69,7 @@ function Checklist({ scope }: { scope: Scope }) {
   );
 }
 
-function BackgroundTasks({ scope, onClose }: { scope: Scope; onClose?: () => void }) {
+function BackgroundTasks({ scope, onClose, historical }: { scope: Scope; onClose?: () => void; historical: boolean }) {
   const { t } = useI18n();
   const state = useSessionNativeTaskDetails(scope.sessionId, scope.directory, { visible: true });
   const snapshot = 'snapshot' in state ? state.snapshot : null;
@@ -84,7 +85,7 @@ function BackgroundTasks({ scope, onClose }: { scope: Scope; onClose?: () => voi
   return (
     <section className="space-y-3" aria-label={t('chat.nativeTasks.background')}>
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm text-muted-foreground">{t('chat.nativeTasks.queryScope')}</p>
+        <p className="text-sm text-muted-foreground">{t(historical ? 'chat.nativeTasks.savedTasks' : 'chat.nativeTasks.queryScope')}</p>
         <Button variant="outline" size="sm" disabled={state.status === 'loading' || state.status === 'unsupported'} onClick={() => void loadSessionNativeTaskDetails(scope.sessionId, scope.directory)}>
           <Icon name="refresh" className="size-4" />{t('chat.nativeTasks.refresh')}
         </Button>
@@ -96,17 +97,17 @@ function BackgroundTasks({ scope, onClose }: { scope: Scope; onClose?: () => voi
       {snapshot?.state === 'inactive' ? <p role="status">{t('chat.nativeTasks.inactive')}</p> : null}
       {snapshot?.state === 'unknown' ? (
         <>
-          <p role="status">{t('chat.nativeTasks.waiting')}</p>
+          <p role="status">{t(historical ? 'chat.nativeTasks.partial' : 'chat.nativeTasks.waiting')}</p>
           <ul>{snapshot.tasks.map((task) => <NativeTaskRow key={`${snapshot.generation}:${task.id}`} task={task} scope={{ ...scope, generation: snapshot.generation }} onClose={onClose} />)}</ul>
         </>
       ) : null}
-      {snapshot?.state === 'active' ? (
+      {snapshot?.state === 'active' || snapshot?.state === 'history' ? (
         <>
           {snapshot.tasks.length === 0 && state.status === 'ready' ? <p>{t('chat.nativeTasks.backgroundEmpty')}</p> : null}
           {snapshot.omitted > 0 ? <p className="text-sm text-muted-foreground">{t('chat.nativeTasks.omitted', { count: snapshot.omitted })}</p> : null}
           {([
             { id: 'active', title: t('chat.nativeTasks.active'), tasks: active },
-            { id: 'recent', title: t('chat.nativeTasks.recent'), tasks: recent },
+            { id: 'recent', title: snapshot.state === 'history' ? t('chat.nativeTasks.savedCount', { count: recent.length }) : t('chat.nativeTasks.recent'), tasks: recent },
           ]).map((group) => group.tasks.length ? (
             <section key={group.id}>
               <h3 className="text-sm font-medium">{group.title}</h3>
@@ -139,7 +140,7 @@ export function NativeTasksBody({ scope, onClose }: { scope: Scope; onClose?: ()
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {tab === 'checklist' ? <Checklist scope={scope} /> : null}
-        {tab === 'background' ? <BackgroundTasks scope={scope} onClose={onClose} /> : null}
+        {tab === 'background' ? <BackgroundTasks scope={scope} onClose={onClose} historical={backend === 'antigravity'} /> : null}
         {tab === 'plan' ? <NativePlanDocument scope={scope} /> : null}
         {tab === 'todos' ? <NativeCodexTodos scope={scope} /> : null}
       </div>

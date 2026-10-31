@@ -17,6 +17,7 @@ import { z } from 'zod';
 
 import { codexVariantSettings } from './catalog.js';
 import { createAntigravityBackend } from './antigravity/backend.js';
+import { createAntigravityDecisions } from './antigravity/decisions.js';
 import { compactLaunchOverride, createClaudeConnections } from './claude/connections.js';
 import { createCliproxyapiBinaryManager } from './cliproxyapi/binary-manager.js';
 import { createCliproxyapiService } from './cliproxyapi/service.js';
@@ -60,7 +61,7 @@ import {
   NATIVE_PROVIDER_CODEX,
   nativeBackendOfProviderId,
 } from './ids.js';
-import { antigravityPromptFingerprint, antigravityPromptText, claudePromptBlocks, withInstructions } from './prompt-parts.js';
+import { claudePromptBlocks, withInstructions } from './prompt-parts.js';
 import { createNativeEventPublisher } from './publisher.js';
 import { createQuestionRegistry } from './questions.js';
 import { createNativeInteractions } from './interactions.js';
@@ -197,12 +198,15 @@ export const createNativeAgentsRuntime = ({
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
   const claudeConnections = createClaudeConnections({ dataDir });
-  const cliproxyapi = createCliproxyapiService({ dataDir, connections: claudeConnections, fetchImpl, binaryManager: cliproxyapiBinaryManager, buildEnv: buildChildEnv, now });
   const reverts = createNativeReverts({ registry, snapshots });
   let conversations;
   const publisher = createNativeEventPublisher({
     publishNativeEvent: (event) => conversations ? conversations.publish(event) : publishNativeEvent(event),
     now,
+  });
+  const cliproxyapi = createCliproxyapiService({
+    dataDir, connections: claudeConnections, fetchImpl, binaryManager: cliproxyapiBinaryManager, buildEnv: buildChildEnv, now,
+    onModelsUpdated: () => publisher.emit('global', 'catalog.updated', { kind: 'native-model' }),
   });
   const interactions = createNativeInteractions({ dataDir, now });
   const questions = createQuestionRegistry({
@@ -211,7 +215,10 @@ export const createNativeAgentsRuntime = ({
       await interactions.record(request, outcome);
       if (!request.tool) return;
       try {
-        const history = await storeFor(request.sessionID).loadHistory(request.sessionID, directory);
+        const decoded = decodeNativeSessionId(request.sessionID);
+        const history = decoded?.backend === NATIVE_BACKEND_ANTIGRAVITY
+          ? await antigravity.store.loadHistory(request.sessionID, decoded.conversationId, directory)
+          : await storeFor(request.sessionID).loadHistory(request.sessionID, directory);
         const records = await interactions.attach(request.sessionID, overlay(history?.records ?? [], liveFor(request.sessionID).liveRecords(request.sessionID)));
         for (const record of records) for (const part of record.parts) {
           if (part.type === 'tool' && part.tool === 'question' && (part.callID === request.tool.callID || part.callID === request.id)) {
@@ -416,7 +423,7 @@ export const createNativeAgentsRuntime = ({
     loadSdk,
     launchableExecutable: () => launchableClaudeExecutable(() => resolveExecutable('claude')),
     buildEnv: buildChildEnv,
-    connections: claudeConnections,
+    connections: { hasCredentials: claudeConnections.hasCredentials, resolve: cliproxyapi.resolveConnection },
   });
   const deepseekMaintenance = createDeepseekMaintenance({ dataDir, resolveNodeExecutable: () => resolveExecutable('node'), buildEnv: buildChildEnv });
   const deepseek = createDeepseekBackend({
@@ -430,6 +437,23 @@ export const createNativeAgentsRuntime = ({
   const antigravity = createAntigravityBackend({
     resolveExecutable: () => resolveExecutable('agy'), buildEnv: buildChildEnv,
     registry, publisher, readGlobalInstructions, decorateSession: decorate, now,
+    onInteraction: async (proposal) => {
+      if (!await registry.getSession(proposal.sessionId)) await adoptSession(proposal.sessionId, proposal.directory);
+      await antigravityDecisions.propose(proposal);
+    },
+  });
+  const antigravityDecisions = createAntigravityDecisions({
+    registry, questions, interactions,
+    loadProposal: async (sessionId, directory) => {
+      const decoded = decodeNativeSessionId(sessionId);
+      if (decoded?.backend !== NATIVE_BACKEND_ANTIGRAVITY) return null;
+      if (antigravity.busySessionIds(directory).includes(sessionId)) return null;
+      const history = await antigravity.store.loadHistory(sessionId, decoded.conversationId, directory);
+      if (!history || history.interactionSourceComplete === false) throw new NativeAgentError('Antigravity interaction history is unavailable or incomplete. Reload the conversation before replying.', { code: 'NATIVE_ANTIGRAVITY_HISTORY_UNAVAILABLE', status: 502 });
+      return history.interactionProposal ?? null;
+    },
+    prompt: (sessionId, request, signal) => prompt(sessionId, request, signal),
+    failed: (proposal, error) => publisher.error(proposal.directory, proposal.sessionId, unknownError(error.message)),
   });
 
   const decode = (sessionId) => {
@@ -489,7 +513,7 @@ export const createNativeAgentsRuntime = ({
   // prompt, such as /compact, shows no user message: its effect does.
   const sendToClaude = async (sessionId, request, send, { visible, launchOverride = null }) => {
     const { directory, messageID } = request;
-    let launch = await claudeConnections.resolve(request.model.modelID, request.variant ?? null);
+    let launch = await cliproxyapi.resolveConnection(request.model.modelID, request.variant ?? null);
     if (launchOverride) launch = launchOverride(launch);
     if (launch.descriptor && request.variant !== undefined && !launch.descriptor.efforts.includes(request.variant)) {
       throw invalidRequestError('This model does not support the selected reasoning effort');
@@ -530,6 +554,7 @@ export const createNativeAgentsRuntime = ({
   // Stops a running turn and waits until the CLI has settled it.
   const stopTurn = async (sessionId) => {
     planDecisions.cancel(sessionId);
+    await antigravityDecisions.cancel(sessionId);
     const live = liveFor(sessionId);
     await live.abort(sessionId);
     let timer = null;
@@ -568,13 +593,9 @@ export const createNativeAgentsRuntime = ({
     }
     if (backend === NATIVE_BACKEND_ANTIGRAVITY) {
       signal?.throwIfAborted();
+      await antigravityDecisions.beforePrompt(sessionId, request.messageID);
       const parts = withInstructions(request.parts, request.instructions);
-      const send = {
-        ...sendRecordOf(request),
-        antigravity: { fingerprint: antigravityPromptFingerprint(antigravityPromptText(parts)) },
-      };
       await antigravity.prompt(sessionId, { ...request, parts }, signal);
-      await registry.recordSend(sessionId, { ...send, messageId: request.messageID, providerID: request.model.providerID, sentAt: now() });
       return;
     }
     if (signal) signal.throwIfAborted();
@@ -688,6 +709,7 @@ export const createNativeAgentsRuntime = ({
     },
 
     cliproxyapi,
+    antigravityQuota: () => antigravity.quota(),
     deepseekConfiguration: deepseek.configuration,
     deepseekSetup,
 
@@ -701,7 +723,7 @@ export const createNativeAgentsRuntime = ({
           [NATIVE_BACKEND_CLAUDE]: { cli: claudeCli !== null, tasks: { checklist: true, background: true, output: true, stop: true } },
           [NATIVE_BACKEND_CODEX]: { cli: codexCli !== null, tasks: { plan: true, todos: true } },
           [NATIVE_BACKEND_DEEPSEEK]: { cli: deepseekCli !== null, blockedByEnterprise: isEnterpriseMode(), actions: { revert: true, delete: deepseekCli !== null && await deepseekPackage(deepseekCli) !== null && await resolveExecutable('node') !== null, fork: true } },
-          [NATIVE_BACKEND_ANTIGRAVITY]: { cli: agyCli !== null, blockedByEnterprise: false, actions: { revert: false, delete: false, fork: false, compact: false } },
+          [NATIVE_BACKEND_ANTIGRAVITY]: { cli: agyCli !== null, blockedByEnterprise: false, tasks: { background: true, output: true, stop: false }, actions: { revert: false, delete: false, fork: false, compact: false } },
         },
         registry: registry.status(),
       };
@@ -711,7 +733,7 @@ export const createNativeAgentsRuntime = ({
     async catalog() {
       const [codexList, claudeList, deepseekList, antigravityList] = await Promise.all([
         settled((async () => [...await codexCatalog(), ...await codexConnections.catalog()])()),
-        settled(claudeConnections.catalog()),
+        settled(cliproxyapi.catalog()),
         settled(deepseek.catalog()),
         settled(antigravity.catalog()),
       ]);
@@ -879,8 +901,9 @@ export const createNativeAgentsRuntime = ({
      */
     async abort(sessionId) {
       const cancelledPlan = planDecisions.cancel(sessionId);
+      const cancelledAntigravity = await antigravityDecisions.cancel(sessionId);
       if (await liveFor(sessionId).abort(sessionId)) return true;
-      return cancelledPlan || (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && claudeLive.stopBackgroundTasks(sessionId));
+      return cancelledPlan || cancelledAntigravity || (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && claudeLive.stopBackgroundTasks(sessionId));
     },
 
     /**
@@ -905,6 +928,9 @@ export const createNativeAgentsRuntime = ({
       }
       if (backend === NATIVE_BACKEND_CODEX && (patch.title !== undefined || patch.archived !== undefined)) await codexTitles.cancel(sessionId);
       if (backend === NATIVE_BACKEND_ANTIGRAVITY) {
+        const record = antigravity.childSession(sessionId) ?? await antigravity.getSession(sessionId, directory);
+        if (!record) throw sessionNotFoundError(sessionId);
+        if (record.parentID) throw invalidRequestError('Antigravity subagent sessions belong to their parent session');
         if (patch.archived === true) await stopTurn(sessionId);
         const createdAt = now();
         await registry.registerSession(sessionId, {
@@ -1235,12 +1261,14 @@ export const createNativeAgentsRuntime = ({
 
     async sessionTasks(sessionId, directory) {
       const decoded = decode(sessionId);
+      if (decoded.backend === NATIVE_BACKEND_ANTIGRAVITY) return antigravity.sessionTasks(sessionId, directory);
       if (decoded.backend !== NATIVE_BACKEND_CLAUDE || decoded.toolUseId) return { state: 'unsupported', generation: null, revision: 0, tasks: [], omitted: 0 };
       return claudeLive.sessionTasks(sessionId, directory);
     },
 
     async taskOutput(sessionId, directory, taskId, generation) {
       const decoded = decodeOwnSession(sessionId);
+      if (decoded.backend === NATIVE_BACKEND_ANTIGRAVITY) return antigravity.taskOutput(sessionId, directory, taskId, generation);
       if (decoded.backend !== NATIVE_BACKEND_CLAUDE) return { state: 'unavailable', reason: 'not_recorded' };
       return claudeLive.taskOutput(sessionId, directory, taskId, generation);
     },
@@ -1253,12 +1281,14 @@ export const createNativeAgentsRuntime = ({
 
     /** Questions native sessions of a directory are waiting on. */
     async questions(directory) {
+      await antigravityDecisions.restore(directory);
       return questions.list(directory);
     },
 
     /** An automatic goal continuation must not supersede a plan decision. */
     hasPendingPlanDecision(sessionId) {
-      return planDecisions.has(sessionId) || deepseek.hasPendingPlanDecision(sessionId);
+      return planDecisions.has(sessionId) || deepseek.hasPendingPlanDecision(sessionId)
+        || decode(sessionId).backend === NATIVE_BACKEND_ANTIGRAVITY && (antigravityDecisions.has(sessionId) || registry.hasPendingAntigravityInteraction(sessionId));
     },
 
     /**
@@ -1290,6 +1320,7 @@ export const createNativeAgentsRuntime = ({
     },
 
     async shutdown() {
+      await antigravityDecisions.shutdown();
       const stoppingDeepseek = Promise.all([deepseekSetup.shutdown(), deepseek.shutdown(), deepseekMaintenance.shutdown()]);
       const stoppingAntigravity = antigravity.shutdown();
       try {

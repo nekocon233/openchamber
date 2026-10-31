@@ -75,10 +75,16 @@ const frame = z.discriminatedUnion('event', [
 
 export const parseAgyStreamFrame = (line) => frame.parse(JSON.parse(line));
 
+export const agyPermissionError = (actions) => `Antigravity stopped because these tools require permission: ${actions.join(', ')}. Interactive permission approvals are unavailable in this session. Review the CLI permissions, then send another message to continue.`;
+
 export const encodeAgyPrompt = (text) => `${JSON.stringify({
   event: 'user',
   message: { content: text },
 })}\n`;
+
+export const agySubagentReferences = (info) => (info?.subagents ?? []).filter(
+  (agent) => z.string().uuid().safeParse(agent.conversation_id).success,
+);
 
 const transcriptToolCall = z.object({
   name: z.string().min(1),
@@ -95,6 +101,13 @@ const transcriptStep = z.object({
   created_at: z.string().optional(),
   tool_calls: z.array(transcriptToolCall).default([]),
   usage: usage.optional(),
+  input_tokens: z.number().nonnegative().optional(),
+  output_tokens: z.number().nonnegative().optional(),
+  thinking_tokens: z.number().nonnegative().optional(),
+  cache_read_tokens: z.number().nonnegative().optional(),
+  total_tokens: z.number().nonnegative().optional(),
+  truncated_fields: z.array(z.string()).default([]),
+  subagent_info: subagentInfo.nullable().optional(),
 }).passthrough();
 
 const KNOWN_TRANSCRIPT_TYPES = new Set([
@@ -107,8 +120,9 @@ const KNOWN_TRANSCRIPT_TYPES = new Set([
   'CHECKPOINT',
 ]);
 
-/** Only newline-terminated records are complete while agy is appending. */
-export const parseAgyTranscript = (text) => {
+/** Preview logs encode each argument as JSON text; full logs retain native
+ * values. Only newline-terminated records are complete while agy appends. */
+export const parseAgyTranscript = (text, { encodedArguments = true } = {}) => {
   const byStep = new Map();
   let malformed = 0;
   const unknownTypes = new Set();
@@ -122,6 +136,17 @@ export const parseAgyTranscript = (text) => {
       continue;
     }
     if (!KNOWN_TRANSCRIPT_TYPES.has(decoded.type)) unknownTypes.add(decoded.type);
+    decoded.tool_calls = decoded.tool_calls.map((call) => ({ ...call, argumentsEncoded: encodedArguments }));
+    // Current agy transcripts store usage alongside the step; older versions
+    // and live frames nest it. Never substitute the process-cumulative result.
+    if (!decoded.usage) {
+      const flatUsage = usage.safeParse({
+        input_tokens: decoded.input_tokens, output_tokens: decoded.output_tokens,
+        thinking_tokens: decoded.thinking_tokens, cache_read_tokens: decoded.cache_read_tokens,
+        total_tokens: decoded.total_tokens,
+      });
+      if (flatUsage.success) decoded.usage = flatUsage.data;
+    }
     byStep.set(decoded.step_index, decoded);
   }
   return {
@@ -132,21 +157,21 @@ export const parseAgyTranscript = (text) => {
 };
 
 /** agy JSON-encodes tool argument values and adds narration beside them. */
-export const decodeAgyToolArguments = (args) => {
-  const parameters = {};
+export const decodeAgyToolArguments = (args, encoded = true) => {
+  const parameters = [];
   let title;
   for (const [key, raw] of Object.entries(args)) {
     let value = raw;
-    if (typeof raw === 'string') {
+    if (encoded && typeof raw === 'string') {
       try { value = JSON.parse(raw); } catch { value = raw; }
     }
     if (key === 'toolSummary' || key === 'toolAction') {
       if (typeof value === 'string' && title === undefined) title = value;
     } else {
-      parameters[key] = value;
+      parameters.push([key, value]);
     }
   }
-  return { parameters, title };
+  return { parameters: Object.fromEntries(parameters), title };
 };
 
 export const agyTime = (value, fallback) => {

@@ -389,6 +389,33 @@ describe('web native agents API', () => {
     expect(JSON.parse(bodies[0] ?? '')).toEqual({ url: 'http://localhost:1455/auth/callback?code=x&state=abc123' });
   });
 
+  it('starts Claude OAuth and configures unified Opus through authenticated native routes', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test');
+      requests.push(url);
+      bodies.push(String(init?.body));
+      if (url.pathname.endsWith('/login')) return Response.json({ state: 'claude-state', url: 'https://claude.ai/oauth/authorize' });
+      return Response.json({ configured: true, enabled: true, running: true, ready: true,
+        baseURL: 'http://127.0.0.1:8317', port: 8317, authDir: '/auth', upstreamProxy: null,
+        installedVersion: '8.0.31', runningVersion: '8.0.31',
+        install: { supported: true, prepared: true, target: 'linux-x64', version: '8.0.31', path: '/gateway', error: null },
+        managementEnabled: true, keyRejected: false, accounts: [], clientKeys: [],
+        loginProviders: ['claude', 'antigravity'], opusFailover: { enabled: true, ready: false }, sonnetFailover: { enabled: true, ready: false },
+        lastError: null, restarting: false, connection: null });
+    });
+    const api = createWebNativeAgentsAPI();
+    await api.beginCliproxyapiLogin('claude');
+    const status = await api.setCliproxyapiOpusRoute(true);
+    const sonnet = await api.setCliproxyapiSonnetRoute(true);
+    expect(JSON.parse(bodies[0])).toEqual({ provider: 'claude' });
+    expect(JSON.parse(bodies[1])).toEqual({ enabled: true });
+    expect(JSON.parse(bodies[2])).toEqual({ enabled: true });
+    expect(requests[2]?.pathname).toBe('/api/native/claude/cliproxyapi/sonnet-route');
+    expect(status.opusFailover).toEqual({ enabled: true, ready: false });
+    expect(sonnet.sonnetFailover).toEqual({ enabled: true, ready: false });
+  });
+
   it("ends a read when the caller's signal aborts", async () => {
     stubFetch(stalled);
     const controller = new AbortController();

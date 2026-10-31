@@ -9,9 +9,8 @@ import { useI18n } from '@/lib/i18n';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
 /**
- * The mobile host for the work-status panel. The desktop card reserves a
- * column and floats over the transcript; on a phone the same sections render
- * as the body of a bottom sheet, with the sheet owning scroll and animation.
+ * The mobile host for work status. The same sections render in a bottom sheet,
+ * which owns scrolling and animation independently of the desktop dropdown.
  */
 export const MobileWorkStatusSheet: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const { t } = useI18n();

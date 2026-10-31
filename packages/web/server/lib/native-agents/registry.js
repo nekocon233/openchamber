@@ -70,6 +70,16 @@ const sessionEntrySchema = z.object({
   metadata: metadataSchema.optional().catch(undefined),
   // Captured launch source only. Never exposed in a session/API record.
   claudeChecklistSource: checklistSourceSchema.optional().catch(undefined),
+  // Native transcripts own question and plan text; only delivery identity is
+  // retained here so a server restart cannot replay an accepted answer.
+  antigravityInteraction: z.object({
+    callID: z.string().min(1),
+    userStep: z.number().int().nonnegative(),
+    revision: z.string().min(1),
+    requestId: z.string().min(1),
+    phase: z.enum(['open', 'dispatching', 'settled']),
+    replyMessageId: z.string().min(1).optional(),
+  }).optional().catch(undefined),
 });
 
 const sendRecordSchema = z.object({
@@ -84,6 +94,15 @@ const sendRecordSchema = z.object({
   antigravity: z.object({
     stepIndex: z.number().int().nonnegative().optional(),
     fingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    // The CLI does not save headless permission denials in its transcript.
+    denial: z.object({
+      actions: z.array(z.string().min(1).max(256)).min(1).max(32),
+      time: z.number().nonnegative(),
+    }).optional().catch(undefined),
+    completion: z.object({
+      outcome: z.enum(['success', 'error', 'aborted']),
+      time: z.number().nonnegative(),
+    }).optional(),
   }).optional(),
 });
 
@@ -247,6 +266,13 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
       return state.sessions.get(sessionId) ?? null;
     },
 
+    /** Goal continuations wait until durable AGY decisions are known. */
+    hasPendingAntigravityInteraction(sessionId) {
+      if (state === null) return true;
+      const phase = state.sessions.get(sessionId)?.antigravityInteraction?.phase;
+      return phase === 'open' || phase === 'dispatching';
+    },
+
     /** @param {{ backend?: 'claude' | 'codex' | 'deepseek' | 'antigravity', directory?: string }} [filter] */
     async listSessions(filter = {}) {
       await load();
@@ -303,6 +329,8 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
         if (patch.conversationId !== undefined) updated.conversationId = patch.conversationId;
         if (patch.claudeChecklistSource === null) delete updated.claudeChecklistSource;
         else if (patch.claudeChecklistSource !== undefined) updated.claudeChecklistSource = checklistSourceSchema.parse(patch.claudeChecklistSource);
+        if (patch.antigravityInteraction === null) delete updated.antigravityInteraction;
+        else if (patch.antigravityInteraction !== undefined) updated.antigravityInteraction = patch.antigravityInteraction;
         if (patch.metadata === null) delete updated.metadata;
         else if (patch.metadata !== undefined) updated.metadata = patch.metadata;
         next.sessions.set(sessionId, sessionEntrySchema.parse(updated));

@@ -1,11 +1,13 @@
 import { EventEmitter } from 'events';
 import fs from 'node:fs/promises';
+import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCliproxyapiGateway } from './gateway.js';
 import { gatewayConfigPath } from './config.js';
+import { spawnCliProcess } from '../process.js';
 
 const MANAGEMENT = '/v0/management/auth-files';
 const directories = [];
@@ -78,6 +80,50 @@ const fixture = async ({ enabled = false, listening = false, bindsPort = true, p
 };
 
 describe('CLIProxyAPI gateway process', () => {
+  it('completes HTTP responses after a real child writes more than a pipe buffer of stdout', async () => {
+    const dataDir = await tempDirectory();
+    const reservation = createServer();
+    await new Promise((resolve) => reservation.listen(0, '127.0.0.1', resolve));
+    const { port } = reservation.address();
+    await new Promise((resolve, reject) => reservation.close((error) => error ? reject(error) : resolve()));
+    const script = path.join(dataDir, 'noisy-gateway.mjs');
+    await fs.writeFile(script, `
+      import { createServer } from 'node:http';
+      createServer(async (request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        response.setHeader('X-Cpa-Version', '8.0.31');
+        if (request.url === '/flood') {
+          const bytes = 2 * 1024 * 1024;
+          await new Promise((resolve, reject) => process.stdout.write(Buffer.alloc(bytes, 120), (error) => error ? reject(error) : resolve()));
+          response.end(JSON.stringify({ bytes }));
+          return;
+        }
+        if (request.url === '/v1/models') response.statusCode = 401;
+        response.end(JSON.stringify({ files: [] }));
+      }).listen(Number(process.env.OPENCHAMBER_TEST_GATEWAY_PORT), '127.0.0.1');
+    `);
+    let document = { version: 2, enabled: false, port, authDir: dataDir, upstreamProxy: null,
+      managementKey: 'fixture-management', clientKeys: ['fixture-client'], installedVersion: null };
+    const gateway = createCliproxyapiGateway({
+      dataDir,
+      store: {
+        read: async () => document,
+        update: async (change) => { document = change(document); return document; },
+      },
+      binaryManager: { prepare: async () => ({ path: process.execPath, version: '8.0.31' }) },
+      buildEnv: () => ({ ...process.env, OPENCHAMBER_TEST_GATEWAY_PORT: String(port) }),
+      spawnProcess: (executable, _args, options) => spawnCliProcess(executable, [script], options),
+    });
+    try {
+      await gateway.start();
+      const response = await fetch(`http://127.0.0.1:${port}/flood`, { signal: AbortSignal.timeout(1500) });
+      expect(await response.json()).toEqual({ bytes: 2 * 1024 * 1024 });
+      expect(gateway.isRunning()).toBe(true);
+    } finally {
+      await gateway.stop();
+    }
+  });
+
   it('writes the config, spawns the managed binary, and reports the running version', async () => {
     const { dataDir, state, calls, gateway } = await fixture();
     const started = await gateway.start();

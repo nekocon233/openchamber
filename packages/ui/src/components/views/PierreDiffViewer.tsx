@@ -37,6 +37,9 @@ import { cn } from '@/lib/utils';
 import { hideWhitespaceChanges } from '@/lib/diff/hideWhitespaceChanges';
 import type { PatchHunkAnchor } from '@/lib/diff/patchFileDiff';
 import { getDiffLinesText } from '@/lib/diff/selectedDiffLines';
+import type { PendingReviewController } from '@/components/sourceBoard/usePendingReview';
+import type { GitHubPendingReviewAction } from '@/lib/source-control/pendingReview';
+import { toast } from '@/components/ui';
 import { PIERRE_DIFF_TINT_CSS } from '@/lib/shiki/pierreDiffTint';
 
 /**
@@ -80,6 +83,8 @@ interface PierreDiffViewerProps {
   wrapLines?: boolean;
   layout?: 'fill' | 'inline';
   enableComments?: boolean;
+  review?: PendingReviewController;
+  reviewHeadSha?: string;
   /**
    * Shows lines that changed only by whitespace as unchanged. Hunk actions are
    * dropped meanwhile: they act on the whole hunk, whitespace included.
@@ -778,13 +783,15 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
   wrapLines,
   layout = 'fill',
   enableComments = true,
+  review,
+  reviewHeadSha,
   hunkActions,
   onExpandContextRequest,
   pendingContextExpansion = null,
   contextLoading = false,
 }) => {
   const themeContext = useOptionalThemeSystem();
-  const { t } = useI18n();
+  const { t, direction } = useI18n();
   const showLinesBelowLabel = t('diffView.actions.showLinesBelow');
   const requestTrailingExpansionRef = useRef<() => void>(() => {});
 
@@ -829,6 +836,31 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
     startEdit,
     deleteDraft,
   } = diffCommentController;
+  const reviewComments = useMemo(() => reviewHeadSha && review?.data?.review?.headSha === reviewHeadSha
+    ? review.data.review.comments.filter(comment => comment.path === fileName) : [], [reviewHeadSha, review?.data?.review, fileName]);
+  const selectedRevision = useRef<{ selection: SelectedLineRange | null; headSha?: string; key: string | null }>({ selection: null, key: null });
+  const [savingReview, setSavingReview] = React.useState(false);
+  // Once typing starts, retain the version those words refer to through a refresh.
+  if (!selection || !commentText || !selectedRevision.current.selection) selectedRevision.current = { selection, headSha: reviewHeadSha, key: review?.key ?? null };
+  const saveReviewComment = async (text: string, range?: SelectedLineRange) => {
+    const chosen = range ?? selection;
+    const captured = selectedRevision.current;
+    if (!review || !fileName || !chosen || !reviewHeadSha || captured.headSha !== reviewHeadSha || captured.key !== review.key) {
+      toast.error(t('pendingReview.staleDiff')); return;
+    }
+    if (chosen.endSide && chosen.side && chosen.endSide !== chosen.side) { toast.error(t('pendingReview.sameSide')); return; }
+    const start = Math.min(chosen.start, chosen.end), end = Math.max(chosen.start, chosen.end);
+    const action: GitHubPendingReviewAction = { kind: 'comment', path: fileName, body: text, side: chosen.side === 'deletions' ? 'LEFT' : 'RIGHT', line: end };
+    if (start !== end) action.startLine = start;
+    if (review.data?.review) action.reviewId = review.data.review.id;
+    setSavingReview(true);
+    try {
+      if (await review.mutate(action, reviewHeadSha)) {
+        if (selectedRevision.current === captured) cancel();
+        toast.success(t('pendingReview.saved'));
+      }
+    } finally { setSavingReview(false); }
+  };
 
   const selectionRef = useRef<SelectedLineRange | null>(null);
   const editingDraftIdRef = useRef<string | null>(null);
@@ -889,6 +921,7 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
 
   const renderAnnotation = useCallback((annotation: DiffLineAnnotation<DiffAnnotation>) => {
     const div = document.createElement('div');
+    div.dir = direction;
     div.style.position = 'relative';
 
     if (annotation.metadata.type === 'hunk-action') {
@@ -917,7 +950,7 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
     div.dataset.annotationSide = annotation.side;
     div.dataset.annotationLine = String(annotation.lineNumber);
     return div;
-  }, [showLinesBelowLabel]);
+  }, [direction, showLinesBelowLabel]);
 
   const captureHunkTargets = useCallback<NonNullable<FileDiffOptions<DiffAnnotation, undefined>['onPostRender']>>((node, instance, phase) => {
     const targets = new Map<number, HTMLElement>();
@@ -1350,6 +1383,7 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
       drafts: fileDrafts,
       editingDraftId,
       selection,
+      reviewComments,
     }) : [];
     for (const anchor of hunkAnchors) {
       annotations.push({ side: anchor.side, lineNumber: anchor.lineNumber, metadata: { type: 'hunk-action', index: anchor.index } });
@@ -1357,7 +1391,7 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
     const trailingExpand = expandOnDemand && fileDiff ? getTrailingExpandAnnotation(fileDiff) : null;
     if (trailingExpand) annotations.push(trailingExpand);
     return annotations;
-  }, [editingDraftId, enableComments, expandOnDemand, fileDiff, fileDrafts, hunkAnchors, selection]);
+  }, [editingDraftId, enableComments, expandOnDemand, fileDiff, fileDrafts, hunkAnchors, selection, reviewComments]);
 
   const lineAnnotationsRef = useRef(lineAnnotations);
 
@@ -1730,6 +1764,18 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
         startEdit(draft);
       }}
       onDelete={deleteDraft}
+      reviewComments={reviewComments}
+      reviewAction={review?.key ? {
+        label: t(review.data?.review ? 'pendingReview.add' : 'pendingReview.start'),
+        busy: savingReview,
+        disabled: review.busy || review.loading || Boolean(review.readError) || !review.data?.open || !reviewHeadSha
+          || selectedRevision.current.headSha !== reviewHeadSha || selectedRevision.current.key !== review.key
+          || review.data.headSha !== reviewHeadSha || Boolean(review.data.review && review.data.review.headSha !== reviewHeadSha),
+        message: review.error ?? (review.readError ? t('pendingReview.loadFailed') : !reviewHeadSha ? t('pendingReview.noRevision')
+          : review.data?.headSha !== reviewHeadSha ? t('pendingReview.staleDiff')
+          : review.data.review && review.data.review.headSha !== reviewHeadSha ? t('pendingReview.older') : null),
+        onSave: (text, range) => { void saveReviewComment(text, range); },
+      } : undefined}
     />
   ) : null;
 
@@ -1750,7 +1796,7 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
             data-diff-virtual-content
           >
             <div ref={diffRootRef} className="size-full relative">
-              <div ref={diffContainerRef} className="size-full" />
+              <div ref={diffContainerRef} dir="ltr" className="size-full" />
             </div>
           </ScrollableOverlay>
           {commentOverlays}
@@ -1764,7 +1810,7 @@ const PierreDiffViewerBody: React.FC<Omit<PierreDiffViewerProps, 'hideWhitespace
   return (
     <div className={cn("relative", "w-full")}>
       <div ref={diffRootRef} className="pierre-diff-wrapper w-full overflow-x-auto overflow-y-visible relative">
-      <div ref={diffContainerRef} className="w-full" />
+      <div ref={diffContainerRef} dir="ltr" className="w-full" />
     </div>
     {commentOverlays}
     {hunkActionPortals}

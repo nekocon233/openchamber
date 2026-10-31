@@ -1,6 +1,6 @@
 import { OPENCODE_TOOLS } from '@/lib/opencode/tools';
 import React from 'react';
-import type { Model } from '@/lib/opencode/model';
+import { findCatalogModel, nativeModelAliasVariant, type Model } from '@/lib/opencode/model';
 import { useChatColumnActions } from './chatColumnSession';
 import { MobileModelButton } from './MobileModelButton';
 import type { EditPermissionMode } from '@/stores/types/sessionTypes';
@@ -71,7 +71,7 @@ import {
     shouldPreserveManualModelOverride,
 } from '@/lib/messages/userModelChoice';
 import type { BtwSelection } from '@/stores/useBtwStore';
-import { highestModelVariant, listModelVariantIds, type ModelVariantSource } from '@/lib/modelVariants';
+import { configuredVariantForModel, highestModelVariant, listModelVariantIds } from '@/lib/modelVariants';
 
 type IconComponent = IconName;
 
@@ -411,6 +411,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     if (selection) currentVariant = selection.variant ?? undefined;
     const currentAgentName = useConfigStore((state) => selection ? selection.agent : state.currentAgentName);
     const settingsDefaultVariant = useConfigStore((state) => state.settingsDefaultVariant);
+    const settingsDefaultModel = useConfigStore((state) => state.settingsDefaultModel);
     const settingsDefaultAgent = useConfigStore((state) => state.settingsDefaultAgent);
     const defaultsLoaded = useConfigStore((state) => state.settingsDefaultsLoaded);
     const agentsResolved = useConfigStore((state) => state.agentsLoaded);
@@ -672,12 +673,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         }
     }, [focusColumnInput, isAgentSelectorOpen, isCompact, selection]);
 
-    // Native CLIs run as build or in plan mode where supported. Antigravity's
-    // first adapter has no plan protocol, so its drafts and sessions get build only.
+    // Native CLIs run as build or plan; custom OpenCode agents do not apply.
     const agentBackend = pickerBackend ?? (currentProviderId ? nativeBackendOfProviderId(currentProviderId) : null);
     const selectableDesktopAgents = React.useMemo(() => {
         const primary = agents.filter((agent) => isPrimaryMode(agent.mode));
-        if (agentBackend === 'antigravity') return primary.filter((agent) => agent.name === 'build');
         return agentBackend ? primary.filter((agent) => NATIVE_AGENT_NAMES.has(agent.name)) : primary;
     }, [agentBackend, agents]);
 
@@ -736,7 +735,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     );
 
     const currentModelForMetadata = currentModelId
-        ? models.find((model: ProviderModel) => model.id === currentModelId)
+        ? findCatalogModel(models, currentModelId)
         : undefined;
     // Display only: a directory OpenCode is still starting lists part of its
     // catalog for a second or two, so the name and efforts another catalog
@@ -746,6 +745,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         currentModelForMetadata ? undefined : selectKnownCatalogModel(state, currentProviderId, currentModelId)
     ));
     const displayCurrentModel = currentModelForMetadata ?? knownCurrentModel;
+    const currentCatalogModelId = displayCurrentModel?.id ?? currentModelId;
+    if (selection && selection.variant === undefined) {
+        currentVariant = nativeModelAliasVariant(currentModelForMetadata, currentModelId);
+    }
     const currentMetadata = currentProviderId && currentModelId && currentModelForMetadata
         ? mergeModelMetadataWithLiveModel(currentProviderId, currentModelForMetadata, getModelMetadata(currentProviderId, currentModelId))
         : currentProviderId && currentModelId
@@ -783,7 +786,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     // inherited effort over the user's pick — the picker flickered. Keyed on
     // the content so identity only changes when the variants do.
     const rawAvailableVariants = selection
-        ? listModelVariantIds(currentProvider?.models.find((model) => model.id === currentModelId)?.variants)
+        ? listModelVariantIds(findCatalogModel(currentProvider?.models, currentModelId)?.variants)
         : getCurrentModelVariants();
     const availableVariantsKey = rawAvailableVariants.join('\u0000');
     const availableVariants = React.useMemo(
@@ -875,7 +878,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             }
 
             const providerModels = Array.isArray(provider?.models) ? provider.models : [];
-            const modelExists = isAuto || providerModels.find((m: ProviderModel) => m.id === modelId);
+            const modelExists = isAuto || findCatalogModel(providerModels, modelId);
             if (!modelExists) {
                 return 'model-missing';
             }
@@ -903,9 +906,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
     const getModelVariantOptions = React.useCallback((providerId: string, modelId: string) => {
         const provider = providers.find((entry) => entry.id === providerId);
-        // SAFETY: the catalog model's `variants` is v2's `{ id, settings }[]`
-        // (or the v1 keyed object on an older record); only the ids are read.
-        const model = provider?.models.find((entry) => entry.id === modelId) as { variants?: ModelVariantSource } | undefined;
+        const model = findCatalogModel(provider?.models, modelId);
         return listModelVariantIds(model?.variants);
     }, [providers]);
 
@@ -927,9 +928,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             agent?.model?.providerID === providerId
             && agent.model.id === modelId
         ) ? agent.model?.variant : undefined;
-        // Only these two name a level. `currentInherited` is a previously
+        // Configured levels and legacy native slugs name a level. `currentInherited` is a previously
         // resolved value, so a stale one must not pass for a configured level.
-        const configured = [agentVariant, settingsDefaultVariant];
+        const model = findCatalogModel(providers.find((provider) => provider.id === providerId)?.models, modelId);
+        const settingsVariant = configuredVariantForModel({ defaultModel: settingsDefaultModel, defaultVariant: settingsDefaultVariant, providerId, modelId, model });
+        const configured = [agentVariant, settingsVariant, nativeModelAliasVariant(model, modelId)];
         const candidates = currentSessionId
             ? [...configured, currentInherited]
             : [currentInherited, ...configured];
@@ -941,7 +944,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         return configured.some((candidate) => candidate !== undefined)
             ? undefined
             : highestModelVariant(variantOptions);
-    }, [agents, currentAgentName, currentModelId, currentProviderId, currentSessionId, currentVariantSelection, effectiveCurrentVariant, getModelVariantOptions, settingsDefaultVariant, uiAgentName]);
+    }, [agents, currentAgentName, currentModelId, currentProviderId, currentSessionId, currentVariantSelection, effectiveCurrentVariant, getModelVariantOptions, providers, settingsDefaultModel, settingsDefaultVariant, uiAgentName]);
 
     /**
      * The session's recorded choice for this model, in the selection store's
@@ -969,7 +972,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             }
         }
 
-        if (currentProviderId === providerId && currentModelId === modelId && currentVariant && variantOptions.includes(currentVariant)) {
+        if (currentProviderId === providerId && (currentModelId === modelId || currentCatalogModelId === modelId) && currentVariant && variantOptions.includes(currentVariant)) {
             return currentVariant;
         }
 
@@ -977,6 +980,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     }, [
         currentAgentName,
         currentModelId,
+        currentCatalogModelId,
         currentProviderId,
         currentSessionId,
         currentVariant,
@@ -2032,7 +2036,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const renderMobileModelRow = (entry: ModelPickerEntry, showProviderLogo: boolean) => {
             const { model, providerID: providerId, modelID: modelId } = entry;
             const rowKey = buildModelRefKey(providerId, modelId);
-            const isSelected = providerId === currentProviderId && modelId === currentModelId;
+            const isSelected = providerId === currentProviderId && modelId === currentCatalogModelId;
             const metadata = entry.kind === 'auto'
                 ? undefined
                 : mergeModelMetadataWithLiveModel(providerId, entry.model, getModelMetadata(providerId, modelId));
@@ -2586,7 +2590,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
             const { providerID, modelID } = selectedItem;
             const canonicalProvider = useConfigStore.getState().providers.find((provider) => provider.id === providerID);
-            const canonicalModel = canonicalProvider?.models.find((model) => model.id === modelID) as { variants?: ModelVariantSource } | undefined;
+            const canonicalModel = findCatalogModel(canonicalProvider?.models, modelID);
             const variantKeys = canonicalModel?.variants ? listModelVariantIds(canonicalModel.variants) : getModelVariantOptions(providerID, modelID);
             if (variantKeys.length === 0) return false;
 
@@ -2797,7 +2801,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 onSearchQueryChange={setDesktopModelQuery}
                                 onSelect={handleSharedModelSelect}
                                 labels={modelPickerLabels}
-                                selectedModel={currentProviderId && currentModelId ? { providerID: currentProviderId, modelID: currentModelId } : null}
+                                selectedModel={currentProviderId && currentModelId ? { providerID: currentProviderId, modelID: currentCatalogModelId } : null}
                                 leadingEntry={autoEntry}
                                 leadingAction={onRunInParallel ? {
                                     label: t('chat.modelControls.runInParallel'),

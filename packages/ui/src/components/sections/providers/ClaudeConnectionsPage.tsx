@@ -72,16 +72,6 @@ export const ClaudeConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }>
     }
   }, [nativeAgents, runtimeKey]);
   React.useEffect(() => { void load(); }, [load]);
-  /** Reloads just the gateway's connection id, after a sign-in wrote one. */
-  const refreshGatewayConnection = React.useCallback(async () => {
-    try {
-      const gateway = await nativeAgents.cliproxyapiStatus();
-      if (mounted.current && getRuntimeKey() === runtimeKey) setGatewayConnectionId(gateway.connection?.id ?? null);
-    } catch {
-      // Keep the previous id; the next full load reconciles it.
-    }
-  }, [nativeAgents, runtimeKey]);
-
   const refreshModels = async (quotaProviderId: ClaudeConnection['quotaProviderId'] = null) => {
     if (getRuntimeKey() !== runtimeKey) return;
     await useQuotaStore.getState().loadNativeProviders(true);
@@ -164,9 +154,9 @@ export const ClaudeConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }>
             </SettingsFieldRow>
           )
         ))}
-        <CliProxyApiSection onConnectionSaved={(connection) => {
-          void refreshModels(connection.quotaProviderId);
-          void refreshGatewayConnection();
+        <CliProxyApiSection onConnectionsChanged={async () => {
+          await refreshModels();
+          if (current()) await load();
         }} />
         {!draft ? <Button disabled={busy || loading} onClick={begin}>{t('settings.claudeConnections.addCustom')}</Button> : null}
       </SettingsSection>

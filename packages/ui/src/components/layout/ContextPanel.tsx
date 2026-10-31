@@ -1,11 +1,13 @@
 import React from 'react';
+import { useWorkspaceOverlay } from './editorWorkspaceSizing';
+import { EDITOR_MIN_WIDTH } from '@/lib/workspace/editorSplit';
+import { useDefaultContextZone, useIsEditorWorkspaceLayout } from './workspaceLayout';
 
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import { DiffViewIcon } from '@/components/icons/DiffIcon';
 import { Button } from '@/components/ui/button';
 import { ContextMenuItem, ContextMenuSeparator } from '@/components/ui/context-menu';
 import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
-import { PullRequestView } from '@/components/views/PullRequestView';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 
 // Heavy views stay on-demand (same as MainLayout): importing GitView or the
@@ -35,11 +37,10 @@ import { isPluginContextPanelMode, pluginIdFromMode } from '@/lib/surfaces/modes
 import { getContextSurfaceDefaultWidth } from '@/lib/surfaces/registry';
 import { beginLayoutAnimation, cancelWhenLayoutSettled, LAYOUT_ANIMATION_EASING, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
-import { WORK_STATUS_COLUMN_WIDTH } from '@/components/chat/work-status/useWorkStatusVisibility';
-import { setWorkStatusHost, useRightSlotStore } from './rightSlot';
+import { useChatCoverageStore } from './chatCoverage';
 import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
 import { ContextPanelHeaderSlotProvider } from './contextPanelHeaderSlot';
-import { CLOSED_ZONE_VIEW, getZoneView, isZoneShown, resolveZoneActiveTab, type ContextZone } from '@/lib/workspace/zones';
+import { getDefaultContextZone, CLOSED_ZONE_VIEW, getZoneView, isZoneShown, resolveZoneActiveTab, type ContextZone } from '@/lib/workspace/zones';
 import { closeZoneOnEscape } from './zoneEscape';
 import { ZoneMoveMenuItems } from './ZoneMoveMenuItems';
 import { beginZoneDrag, cancelZoneDrag, finishZoneDrag, startZoneDragGesture, updateZoneDrag } from './zoneDrag';
@@ -311,7 +312,7 @@ const HEADER_DRAG_EXCLUDED = 'button, a, input, textarea, select, label, [role="
 // rest stay alive in ContextSurfacePanes. The native tasks pane follows the
 // open session, so it is remounted with it.
 const isRemountedSurface = (mode: ContextPanelMode): boolean => (
-  mode === 'context' || mode === 'git' || mode === 'pr' || mode === 'notes' || mode === 'tasks'
+  mode === 'context' || mode === 'git' || mode === 'notes' || mode === 'tasks'
 );
 
 const CONTEXT_PANEL_DEFAULT_HEIGHT = 320;
@@ -331,6 +332,11 @@ const ZONE_GEOMETRY = {
     axis: 'x',
     gutter: 'mb-2 ms-2 me-1.5',
     gutterSize: '0.875rem',
+    editor: {
+      gutter: 'mb-1 ms-0.5 me-1',
+      gutterSize: '0.375rem',
+      handle: 'absolute bottom-1 inset-s-0 top-0 z-50 w-1.5 cursor-col-resize',
+    },
     expanded: 'absolute inset-y-0 inset-e-0 z-20 min-w-0',
     handle: 'absolute bottom-2 inset-s-1 top-0 z-50 w-2 cursor-col-resize',
     sizeVariable: '--oc-context-panel-width',
@@ -339,6 +345,11 @@ const ZONE_GEOMETRY = {
     axis: 'x',
     gutter: 'mb-2 ms-1.5 me-2',
     gutterSize: '0.875rem',
+    editor: {
+      gutter: 'mb-1 ms-1 me-0.5',
+      gutterSize: '0.375rem',
+      handle: 'absolute bottom-1 inset-e-0 top-0 z-50 w-1.5 cursor-col-resize',
+    },
     expanded: 'absolute inset-y-0 inset-s-0 z-20 min-w-0',
     handle: 'absolute bottom-2 inset-e-1 top-0 z-50 w-2 cursor-col-resize',
     sizeVariable: '--oc-context-panel-width',
@@ -347,6 +358,11 @@ const ZONE_GEOMETRY = {
     axis: 'y',
     gutter: 'mb-2 mt-2',
     gutterSize: '1rem',
+    editor: {
+      gutter: 'mb-1',
+      gutterSize: '0.25rem',
+      handle: 'absolute inset-x-0 top-0 z-50 h-1.5 cursor-row-resize',
+    },
     expanded: 'absolute inset-x-0 bottom-0 z-20 min-h-0',
     handle: 'absolute inset-x-0 top-1 z-50 h-2 cursor-row-resize',
     sizeVariable: '--oc-context-panel-height',
@@ -388,6 +404,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
 
   const panelState = useUIStore((state) => (directoryKey ? state.contextPanelByDirectory[directoryKey] : undefined));
   const placement = useUIStore((state) => state.contextSurfaceZones);
+  const defaultZone = useDefaultContextZone();
   const closeContextZone = useUIStore((state) => state.closeContextZone);
   const closeContextPanelTab = useUIStore((state) => state.closeContextPanelTab);
   const pinContextPanelTab = useUIStore((state) => state.pinContextPanelTab);
@@ -400,6 +417,13 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
   const contextEditorTreeWidth = useUIStore((state) => state.contextEditorTreeWidth);
   const setContextEditorTreeWidth = useUIStore((state) => state.setContextEditorTreeWidth);
   const toggleContextEditorTree = useUIStore((state) => state.toggleContextEditorTree);
+  const editorLayout = useIsEditorWorkspaceLayout();
+  const spacing = editorLayout ? geometry.editor : geometry;
+  const sharedToolWidth = useUIStore((state) => state.editorToolPanelWidth);
+  const setSharedToolWidth = useUIStore((state) => state.setEditorToolPanelWidth);
+  const usesSharedWidth = editorLayout && !isVertical;
+  const overlayPanel = useWorkspaceOverlay((state) => state.panel);
+  const floating = editorLayout && overlayPanel === zone;
   const contextEditorVisible = useUIStore((state) => state.contextEditorVisible);
   const toggleContextEditor = useUIStore((state) => state.toggleContextEditor);
   const fileTreeSide = useUIStore((state) => state.fileTreeSide);
@@ -416,10 +440,9 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
 
   const tabs = React.useMemo(() => panelState?.tabs ?? [], [panelState?.tabs]);
   // This zone's tab: one of its own surfaces, never one placed elsewhere.
-  const activeTab = panelState ? resolveZoneActiveTab(panelState, placement, zone) : null;
+  const activeTab = panelState ? resolveZoneActiveTab(panelState, placement, zone, defaultZone) : null;
   const zoneView = panelState ? getZoneView(panelState, zone) : CLOSED_ZONE_VIEW;
-  const workStatusReserved = useRightSlotStore((state) => state.workStatusReserved);
-  const chatCovered = useRightSlotStore((state) => state.chatCovered);
+  const chatCovered = useChatCoverageStore((state) => state.covered);
   // The bottom zone belongs to the chat column: a page covering the chat
   // covers it too.
   const coveredByPage = zone === 'bottom' && chatCovered;
@@ -430,19 +453,19 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
   );
   // The editor column is shown for an open file unless the user hid it; the
   // tree never hides alongside it, so a hidden tree forces the editor back.
-  const showsEditor = hasOpenEditorFile && (contextEditorVisible || !contextEditorTreeVisible);
+  const showsEditor = !editorLayout && hasOpenEditorFile && (contextEditorVisible || !contextEditorTreeVisible);
   const activeModeForWidth = activeTab?.mode ?? null;
   // A side zone without an editor shrinks to the tree; the bottom zone keeps
   // its full width either way.
   const isTreeOnly = !isVertical && activeModeForWidth === 'file' && !showsEditor;
-  const isExpanded = Boolean(isOpen && zoneView.expanded && !isTreeOnly);
-  // A fixed size in px: the one the user resized this surface to, else the
-  // surface's default. It does not follow the chat area, so a sidebar toggle
-  // or a window resize leaves it alone unless the chat would get too small.
+  const isExpanded = Boolean(isOpen && zoneView.expanded && !isTreeOnly && !floating);
+  // Editor layout shares one tool-column width across modes and projects.
+  // Classic retains each surface's width; bottom zones retain their heights.
+  // Window constraints clamp the visible size without rewriting the preference.
   const manualSize = activeModeForWidth
     ? (isVertical ? panelState?.heightByMode?.[activeModeForWidth] : panelState?.widthByMode?.[activeModeForWidth])
     : undefined;
-  const desiredSize = isTreeOnly
+  const desiredSize = usesSharedWidth ? sharedToolWidth : isTreeOnly
     ? contextEditorTreeWidth
     : isVertical
       ? clampHeight(manualSize ?? CONTEXT_PANEL_DEFAULT_HEIGHT, Number.POSITIVE_INFINITY)
@@ -468,35 +491,36 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
   const otherSideWidth = useUIStore((state) => {
     if (!otherSide || !directoryKey) return 0;
     const panel = state.contextPanelByDirectory[directoryKey];
-    const tab = panel && isZoneShown(panel, state.contextSurfaceZones, otherSide)
-      ? resolveZoneActiveTab(panel, state.contextSurfaceZones, otherSide)
+    const tab = panel && isZoneShown(panel, state.contextSurfaceZones, otherSide, getDefaultContextZone(state.workspaceLayout))
+      ? resolveZoneActiveTab(panel, state.contextSurfaceZones, otherSide, getDefaultContextZone(state.workspaceLayout))
       : null;
     if (!panel || !tab) return 0;
+    if (state.workspaceLayout === 'editor') return state.editorToolPanelWidth;
     const editorShown = panel.tabs.some((entry) => entry.mode === 'file' && entry.targetPath)
       && (state.contextEditorVisible || !state.contextEditorTreeVisible);
     if (tab.mode === 'file' && !editorShown) return state.contextEditorTreeWidth;
     return panel.widthByMode[tab.mode] ?? getContextSurfaceDefaultWidth(tab.mode);
   });
-  // The closed right zone still holds the work-status card's column.
-  const otherSideReserved = otherSide === 'right' && workStatusReserved && !chatCovered && otherSideWidth === 0
-    ? WORK_STATUS_COLUMN_WIDTH
-    : otherSideWidth;
+  const otherSideReserved = editorLayout && overlayPanel === otherSide ? 0 : otherSideWidth;
+  const editorReserved = editorLayout && !isVertical && !floating ? EDITOR_MIN_WIDTH : 0;
+  const editorReservedRef = React.useRef(editorReserved);
+  editorReservedRef.current = editorReserved;
   const [measuredArea, setMeasuredArea] = React.useState<number | null>(null);
   const measuredAreaSizeRef = React.useRef<number | null>(null);
   const otherSideRef = React.useRef(otherSideReserved);
   otherSideRef.current = otherSideReserved;
   const areaDecidesRef = React.useRef<(measured: number) => boolean>(() => false);
-  areaDecidesRef.current = (measured) => isExpanded || (!isTreeOnly && measured - otherSideRef.current - chatMinimum < desiredSize);
+  areaDecidesRef.current = (measured) => isExpanded || ((usesSharedWidth || !isTreeOnly) && measured - otherSideRef.current - editorReservedRef.current - chatMinimum < desiredSize);
   const applyAreaSize = React.useCallback(() => {
     const measured = measuredAreaSizeRef.current;
     setMeasuredArea(measured !== null && areaDecidesRef.current(measured) ? measured : null);
   }, []);
-  // What the zone shares with the chat: the row less the other side.
-  const areaSize = measuredArea !== null ? measuredArea - otherSideReserved : null;
+  // Side zones share the row with the editor and chat; navigation sits outside it.
+  const areaSize = measuredArea !== null ? measuredArea - otherSideReserved - editorReserved : null;
   // Expanded, the left zone covers the whole row; the right one covers the
   // chat area beside the left zone, as before zones.
   const expandedArea = zone === 'left' ? measuredArea : areaSize;
-  const size = isTreeOnly ? desiredSize : clampSize(desiredSize, areaSize);
+  const size = floating || (isTreeOnly && !usesSharedWidth) ? desiredSize : clampSize(desiredSize, areaSize);
   // Titles are for this zone's chat tab strip only; a zone that is closed or
   // shows another surface subscribes to none.
   const showsChatTabs = isOpen && activeTab?.mode === 'chat';
@@ -542,14 +566,14 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
       observer.disconnect();
       cancelWhenLayoutSettled(applyAreaSize);
     };
-  }, [applyAreaSize, isVertical]);
+  }, [applyAreaSize, defaultZone, isVertical]);
 
   // Expanding, a surface wanting another size, or the other side opening or
   // closing may make the area matter. Applied in this commit, not after the
   // animation: these change what the zone animates to.
   React.useLayoutEffect(() => {
     applyAreaSize();
-  }, [applyAreaSize, desiredSize, isExpanded, otherSideReserved]);
+  }, [applyAreaSize, desiredSize, isExpanded, otherSideReserved, editorReserved]);
 
   React.useEffect(() => {
     if (!isOpen || wasOpenRef.current) {
@@ -591,9 +615,9 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
 
   const clampSizeForDrag = React.useCallback((nextSize: number) => {
     const available = resizeAvailableSizeRef.current;
-    const clamped = isTreeOnly ? clampContextEditorTreeWidth(nextSize) : clampSize(nextSize, available);
+    const clamped = isTreeOnly && !usesSharedWidth ? clampContextEditorTreeWidth(nextSize) : clampSize(nextSize, available);
     return available === null ? clamped : Math.min(clamped, Math.max(1, available));
-  }, [clampSize, isTreeOnly]);
+  }, [clampSize, isTreeOnly, usesSharedWidth]);
 
   const handleResizeStart = React.useCallback((event: React.PointerEvent) => {
     if (!isOpen || isExpanded || !directoryKey) {
@@ -606,10 +630,10 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
     startSizeRef.current = size;
     resizingSizeRef.current = size;
     // Measure once per drag; no layout reads happen during pointermove.
-    // The same area the ceiling uses: the row less the other side.
+    // The same area the ceiling uses: the row less the other side and sessions.
     const available = isVertical
       ? panelRef.current?.parentElement?.clientHeight
-      : (panelRef.current?.closest<HTMLElement>('[data-workspace-row]')?.clientWidth ?? 0) - otherSideRef.current;
+      : (panelRef.current?.closest<HTMLElement>('[data-workspace-row]')?.clientWidth ?? 0) - otherSideRef.current - editorReservedRef.current;
     resizeAvailableSizeRef.current = available && available > 0 ? available : null;
     document.documentElement.style.cursor = isVertical ? 'row-resize' : 'col-resize';
     event.preventDefault();
@@ -626,7 +650,9 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
       resizeFollowTimerRef.current = null;
     }
     document.documentElement.style.cursor = '';
-    if (isTreeOnly) {
+    if (usesSharedWidth) {
+      setSharedToolWidth(finalSize);
+    } else if (isTreeOnly) {
       setContextEditorTreeWidth(finalSize);
     } else if (directoryKey && activeModeForWidth) {
       if (isVertical) setContextPanelHeight(directoryKey, activeModeForWidth, finalSize);
@@ -634,7 +660,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
     }
     setIsResizing(false);
     activeResizePointerIDRef.current = null;
-  }, [activeModeForWidth, clampSizeForDrag, directoryKey, isTreeOnly, isVertical, setContextEditorTreeWidth, setContextPanelHeight, setContextPanelWidth, size]);
+  }, [activeModeForWidth, clampSizeForDrag, directoryKey, isTreeOnly, isVertical, setContextEditorTreeWidth, setContextPanelHeight, setContextPanelWidth, setSharedToolWidth, size, usesSharedWidth]);
 
   // Window-level drag listeners: tracking the pointer via the thin handle and
   // pointer capture is unreliable (capture can fail over iframes and a missed
@@ -716,7 +742,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
   // The rail switches between surfaces (modes); the in-panel strip only lists
   // instances of the active multi-instance surface (open files, split chats,
   // browser targets).
-  const isMultiInstanceMode = activeTab?.mode === 'file' || activeTab?.mode === 'chat' || activeTab?.mode === 'browser';
+  const isMultiInstanceMode = (!editorLayout && activeTab?.mode === 'file') || activeTab?.mode === 'chat' || activeTab?.mode === 'browser';
   const activeModeTabs = React.useMemo(
     () => (activeTab ? tabs.filter((tab) => tab.mode === activeTab.mode) : []),
     [activeTab, tabs],
@@ -740,8 +766,6 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
         ? <ContextPanelHeaderSlotProvider value={headerSlotEl}><ContextPanelContent /></ContextPanelHeaderSlotProvider>
         : activeTab?.mode === 'git'
             ? <React.Suspense fallback={null}><ContextPanelHeaderSlotProvider value={headerSlotEl}><GitView isActive={isOpen} /></ContextPanelHeaderSlotProvider></React.Suspense>
-            : activeTab?.mode === 'pr'
-                ? <PullRequestView />
             : activeTab?.mode === 'notes'
                 ? <ContextPanelHeaderSlotProvider value={headerSlotEl}><ProjectContextPanel visible={isOpen} /></ContextPanelHeaderSlotProvider>
             : activeTab?.mode === 'tasks'
@@ -929,7 +953,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
         ) : null}
         {/* Each icon toggles the column on its side: the editor and the tree
             swap sides with the file tree side setting, the icons stay put. */}
-        {isFileTabActive ? (['left', 'right'] as const).map((side) => {
+        {isFileTabActive && !editorLayout ? (['left', 'right'] as const).map((side) => {
           const isTree = side === fileTreeSide;
           if (!isTree && !hasOpenEditorFile) return null;
           const label = isTree ? t('contextRail.editorTree.toggle') : t('contextRail.editor.toggle');
@@ -949,7 +973,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
             </Button>
           );
         }) : null}
-        {!isTreeOnly ? (
+        {!isTreeOnly && !floating ? (
           <Button
             type="button"
             variant="ghost"
@@ -977,16 +1001,10 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
     </header>
   );
 
-  // The right zone is the right slot: this aside holds the context panel and
-  // the inline work-status card (rendered into the host below by
-  // ChatContainer), and animates one width for both (rightSlot.ts). Closed,
-  // it keeps the card's column when the card wants it and the chat is on
-  // screen; open, it is the panel's width. Every value stays interpolable
-  // across open/close (no instant min/max jumps).
-  const workStatusColumn = zone === 'right' && workStatusReserved && !chatCovered;
+  // Closed zones occupy no space; expanded zones retain a spacer while floating.
   const expandedSize = expandedArea !== null ? `${expandedArea}px` : '100%';
   const slotSize = !isOpen
-    ? (workStatusColumn ? `${WORK_STATUS_COLUMN_WIDTH}px` : '0px')
+    ? '0px'
     : isExpanded
       // px, not '100%': px↔% size changes do not interpolate, which
       // would make the expand/collapse snap instead of animating.
@@ -995,15 +1013,15 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
 
   // The bottom card spans the chat column. Next to a card on either side it
   // gives up its own gutter on that side, so neighbours stand one gutter apart.
-  const leftZoneShown = zone === 'bottom' && isZoneShown(panelState, placement, 'left');
-  const rightSlotFilled = zone === 'bottom' && ((workStatusReserved && !chatCovered) || isZoneShown(panelState, placement, 'right'));
+  const leftZoneShown = zone === 'bottom' && isZoneShown(panelState, placement, 'left', defaultZone);
+  const rightSlotFilled = zone === 'bottom' && isZoneShown(panelState, placement, 'right', defaultZone);
 
   // What the user changed, as opposed to the zone following the window: a
-  // toggle, expanding, the card's column, another surface's or a dragged
+  // toggle, expanding, another surface's or a dragged
   // size. Only these animate as an announced layout animation; the chat area
   // resizing (a window drag, a clamp) is tracked without one, so the work
   // that waits for an animation's end is not held back for the whole drag.
-  const animationKey = `${isOpen}|${isExpanded}|${workStatusColumn}|${isOpen ? desiredSize : ''}`;
+  const animationKey = `${isOpen}|${isExpanded}|${isOpen ? desiredSize : ''}`;
   const animationKeyRef = React.useRef(animationKey);
   // A surface page covering or uncovering the chat moves the slot while the
   // chat is not on screen: that change snaps.
@@ -1035,7 +1053,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
   // stayed blank until the session was reopened.
   const overlaid = useOpenUntilSettled(isExpanded);
   const dockedSize = !isOpen
-    ? (workStatusColumn ? `${WORK_STATUS_COLUMN_WIDTH}px` : '0px')
+    ? '0px'
     : `${size}px`;
 
   const panelStyle: React.CSSProperties = {
@@ -1050,9 +1068,9 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
   // Less the gutters the aside reserves for the card. px in the expanded
   // state too: px↔% size changes cannot interpolate, so the header controls
   // would snap instead of riding the animation.
-  const cardSize = isExpanded
-    ? (expandedArea !== null ? `calc(${expandedArea}px - ${geometry.gutterSize})` : '100%')
-    : `calc(var(${geometry.sizeVariable}) - ${geometry.gutterSize})`;
+  const cardSize = floating ? `calc(100% - ${spacing.gutterSize})` : isExpanded
+    ? (expandedArea !== null ? `calc(${expandedArea}px - ${spacing.gutterSize})` : '100%')
+    : `calc(var(${geometry.sizeVariable}) - ${spacing.gutterSize})`;
 
   return (
     <>
@@ -1066,6 +1084,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
     <aside
       ref={panelRef}
       data-context-panel="true"
+      data-workspace-overlay={floating || undefined}
       data-context-zone={zone}
       data-right-slot={zone === 'right' ? '' : undefined}
       data-context-panel-open={isOpen ? 'true' : 'false'}
@@ -1088,7 +1107,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
         // Anchored to its window edge while expanded: `inset-0` would teleport
         // the far edge instantly (position does not transition), so only the
         // size animates and the zone grows toward the chat from where it docks.
-        overlaid
+        floating ? (zone === 'left' ? 'absolute inset-s-0 inset-y-0 z-40 shadow-xl' : 'absolute inset-e-0 inset-y-0 z-40 shadow-xl') : overlaid
           ? geometry.expanded
           : isVertical ? 'relative w-full flex-shrink-0' : 'relative h-full flex-shrink-0',
         isVertical ? 'transition-[height]' : 'transition-[width]',
@@ -1097,17 +1116,12 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
       onKeyDownCapture={handlePanelKeyDownCapture}
       style={panelStyle}
     >
-      {/* The inline work-status card's host, right-anchored under the panel:
-          the card fades out while the panel fades in over it, and back. */}
-      {zone === 'right' ? (
-        <div ref={setWorkStatusHost} className={cn('absolute inset-y-0 inset-e-0 z-0 flex', chatCovered && 'invisible')} />
-      ) : null}
-      {isOpen && !isExpanded && (
+      {isOpen && !isExpanded && !floating && (
         // In the gutter facing the chat, along the card's edge. Nothing paints
         // on hover or drag: the cursor says it is draggable, and the card edge
         // itself moves on release.
         <div
-          className={geometry.handle}
+          className={spacing.handle}
           onPointerDown={handleResizeStart}
           role="separator"
           aria-orientation={isVertical ? 'horizontal' : 'vertical'}
@@ -1121,10 +1135,9 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
           // The gutter sets the card apart from the chat and leaves its shadow
           // room on every side the aside clips; the resize handle sits in the
           // one facing the chat.
-          geometry.gutter,
-          zone === 'bottom' && (leftZoneShown ? 'ms-0' : 'ms-2'),
-          zone === 'bottom' && (rightSlotFilled ? 'me-0' : 'me-1.5'),
-          isVertical ? null : 'h-[calc(100%-0.5rem)]',
+          spacing.gutter,
+          zone === 'bottom' && (editorLayout ? 'mx-0.5' : cn(leftZoneShown ? 'ms-0' : 'ms-2', rightSlotFilled ? 'me-0' : 'me-1.5')),
+          !isVertical && (editorLayout ? 'h-[calc(100%-0.25rem)]' : 'h-[calc(100%-0.5rem)]'),
           // A framed card, inset from the chat: its own border and radius rather
           // than a divider running the length of the window.
           // The dropdown's hairline ring (`oc-panel-edge`), shared with the
@@ -1137,7 +1150,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
         )}
         style={{
           ...(isVertical
-            ? { height: cardSize, width: `calc(100% - ${(leftZoneShown ? 0 : 0.5) + (rightSlotFilled ? 0 : 0.375)}rem)` }
+            ? { height: cardSize, width: `calc(100% - ${editorLayout ? 0.25 : (leftZoneShown ? 0 : 0.5) + (rightSlotFilled ? 0 : 0.375)}rem)` }
             : { width: cardSize }),
           transitionDuration: `${layoutAnimationMs}ms`,
           transitionTimingFunction: LAYOUT_ANIMATION_EASING,

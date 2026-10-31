@@ -255,7 +255,8 @@ export const applySessionNativeTaskDetailsEvent = (
 const loadDetails = (entry: DetailEntry, api: NativeAgentsAPI | undefined): Promise<NativeTaskDetailState> => {
   if (entry.deleted || entry.runtimeKey !== getRuntimeKey()) return Promise.resolve(IDLE);
   if (entry.pending) return entry.pending;
-  if (!api?.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude') {
+  const backend = nativeSessionBackend(entry.sessionId, entry.directory);
+  if (!api?.supported || (backend !== 'claude' && backend !== 'antigravity')) {
     publishDetail(entry, UNSUPPORTED);
     releaseDetail(entry);
     return Promise.resolve(entry.state);
@@ -272,7 +273,7 @@ const loadDetails = (entry: DetailEntry, api: NativeAgentsAPI | undefined): Prom
     try {
       const capabilities = await api.capabilities();
       if (!current() || controller.signal.aborted) return entry.state;
-      if (!capabilities.backends.claude.tasks?.background) {
+      if (!capabilities.backends[backend]?.tasks?.background) {
         publishDetail(entry, UNSUPPORTED);
         return entry.state;
       }
@@ -312,6 +313,9 @@ const stopDetailTimer = (entry: DetailEntry): void => {
   entry.timer = null;
 };
 const scheduleDetails = (entry: DetailEntry): void => {
+  // Saved Antigravity tasks refresh on turn completion, reconnect or request;
+  // they do not claim a live task-control channel and must not poll at idle.
+  if (nativeSessionBackend(entry.sessionId, entry.directory) === 'antigravity') return;
   if (entry.timer || entry.deleted || entry.visible === 0 || entry.state.status === 'unsupported' || globalThis.document?.visibilityState === 'hidden') return;
   entry.timer = setTimeout(() => {
     entry.timer = null;
@@ -362,7 +366,8 @@ export const useSessionNativeTaskDetails = (
       releaseDetail(entry);
     };
   }, [entry, nativeAgents, enabled, visible]);
-  if (entry && (!nativeAgents.supported || nativeSessionBackend(entry.sessionId, entry.directory) !== 'claude')) return UNSUPPORTED;
+  const backend = entry ? nativeSessionBackend(entry.sessionId, entry.directory) : null;
+  if (entry && (!nativeAgents.supported || (backend !== 'claude' && backend !== 'antigravity'))) return UNSUPPORTED;
   return state;
 };
 

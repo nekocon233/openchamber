@@ -43,6 +43,8 @@ export const createTestNativeAgentsAPI = (methods: Partial<NativeAgentsAPI>): Na
   removeCliproxyapiAccount: unsupported,
   saveCliproxyapiConnection: unsupported,
   cliproxyapiModels: unsupported,
+  setCliproxyapiOpusRoute: unsupported,
+  setCliproxyapiSonnetRoute: unsupported,
   importCliproxyapiModels: unsupported,
   listClaudeConnections: unsupported,
   saveClaudeConnection: unsupported,

@@ -7,13 +7,10 @@ import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { beginLayoutAnimation, LAYOUT_ANIMATION_EASING, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
 import type { SidebarPeek } from './useSidebarPeek';
-
-const SIDEBAR_CONTENT_WIDTH = 280;
-// Wide enough for the toolbar's eight icons and a labelled titlebar button.
-const SIDEBAR_MIN_WIDTH = 264;
-const SIDEBAR_MAX_WIDTH = 500;
+import { clampSidebarWidth, getSidebarWidth } from '@/lib/workspace/sidebarGeometry';
 
 interface SidebarProps {
+    overlay?: boolean;
     isOpen: boolean;
     isMobile: boolean;
     children: React.ReactNode;
@@ -24,20 +21,16 @@ interface SidebarProps {
     peek?: SidebarPeek;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, className, topBar, peek }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, className, topBar, peek, overlay = false }) => {
     const { t, direction } = useI18n();
     const sidebarWidth = useUIStore((state) => state.sidebarWidth);
     const setSidebarWidth = useUIStore((state) => state.setSidebarWidth);
     const [isResizing, setIsResizing] = React.useState(false);
     const startXRef = React.useRef(0);
-    const startWidthRef = React.useRef(sidebarWidth || SIDEBAR_CONTENT_WIDTH);
+    const startWidthRef = React.useRef(getSidebarWidth(sidebarWidth));
     const resizingWidthRef = React.useRef<number | null>(null);
     const activeResizePointerIDRef = React.useRef<number | null>(null);
     const sidebarRef = React.useRef<HTMLDivElement | null>(null);
-
-    const clampSidebarWidth = React.useCallback((value: number) => {
-        return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value));
-    }, []);
 
     const applyLiveWidth = React.useCallback((nextWidth: number) => {
         const sidebar = sidebarRef.current;
@@ -68,10 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
         }
     }, [isResizing]);
 
-    const openWidth = Math.min(
-        SIDEBAR_MAX_WIDTH,
-        Math.max(SIDEBAR_MIN_WIDTH, sidebarWidth || SIDEBAR_CONTENT_WIDTH)
-    );
+    const openWidth = getSidebarWidth(sidebarWidth);
     const appliedWidth = isOpen ? openWidth : 0;
     const currentWidth = isResizing ? (resizingWidthRef.current ?? appliedWidth) : appliedWidth;
     const publishedWidth = isResizing ? currentWidth : openWidth;
@@ -138,7 +128,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
             return;
         }
 
-        // The handle is on the sidebar's end edge: in RTL dragging left widens it.
         const delta = (event.clientX - startXRef.current) * (direction === 'rtl' ? -1 : 1);
         const nextWidth = clampSidebarWidth(startWidthRef.current + delta);
         if (resizingWidthRef.current === nextWidth) {
@@ -186,8 +175,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
         <div
             ref={sidebarRef}
             data-left-sidebar=""
+            data-workspace-overlay={overlay || undefined}
             className={cn(
-                'relative flex h-full border-e border-border',
+                'flex h-full border-e border-border',
+                overlay ? 'absolute inset-s-0 inset-y-0 z-40 shadow-xl' : 'relative',
                 !peeking && 'overflow-hidden',
                 // In the class, not the inline style: an inline transition
                 // outranked `motion-reduce:transition-none`, so the sidebar
@@ -209,14 +200,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
         >
             {isOpen && (
                 <div
-                    className="pointer-events-none absolute inset-0 z-30 shadow-[inset_-2px_0_10px_-2px_rgb(0_0_0_/_0.06)] rtl:shadow-[inset_2px_0_10px_-2px_rgb(0_0_0_/_0.06)]"
+                    className={cn(
+                        'pointer-events-none absolute inset-0 z-30',
+                        'shadow-[inset_-2px_0_10px_-2px_rgb(0_0_0_/_0.06)] rtl:shadow-[inset_2px_0_10px_-2px_rgb(0_0_0_/_0.06)]',
+                    )}
                     aria-hidden="true"
                 />
             )}
             {isOpen && (
                 <div
                     className={cn(
-                        'absolute inset-e-0 top-0 z-20 h-full w-[3px] cursor-col-resize hover:bg-[var(--interactive-border)]/80 transition-colors',
+                        'absolute top-0 z-20 h-full w-[3px] cursor-col-resize hover:bg-[var(--interactive-border)]/80 transition-colors',
+                        'inset-e-0',
                         isResizing && 'bg-[var(--interactive-border)]'
                     )}
                     onPointerDown={handlePointerDown}

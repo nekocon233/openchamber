@@ -13,6 +13,8 @@ export interface ModelFamily {
  *       "antigravity/claude-sonnet" -> "claude-sonnet"
  */
 export function getDisplayModelName(modelName: string): string {
+  if (modelName === 'gemini') return 'Gemini';
+  if (modelName === 'claude-gpt') return 'Claude / GPT';
   // Handle prefixes like "gemini/", "antigravity/"
   const slashIndex = modelName.indexOf('/');
   if (slashIndex !== -1) {

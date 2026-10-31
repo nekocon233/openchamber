@@ -481,7 +481,7 @@ export function registerGitLabRoutes(app, options = {}) {
         identity: { provider: 'gitlab', instance: origin }, authentication: probe.confirmed && (probe.device.available || probe.pat.available || cli.available),
         authenticationMethods: { device: probe.device, pat: probe.pat, cli }, multipleAccounts: true,
         projects: true, issues: true, changeRequests: true, draftChangeRequests: true,
-        mergeChangeRequests: true, mergeMethods: ['merge', 'squash'], ci: true,
+        mergeChangeRequests: true, forceMergeChangeRequests: false, mergeMethods: ['merge', 'squash'], ci: true,
       });
     } catch (error) {
       const kind = classifyGitLabFailure(error);
@@ -779,6 +779,14 @@ export function registerGitLabRoutes(app, options = {}) {
     try {
       const body = req.body ?? {};
       return res.json(await executeMutation(body, 'change-request-merge', (input, context) => {
+        if (input.force !== undefined && input.force !== true && input.force !== false) {
+          throw invalidMutationContext('force must be a boolean');
+        }
+        if (input.force === true) {
+          throw Object.assign(new Error('GitLab does not support force merge'), {
+            code: 'SOURCE_CONTROL_FORCE_MERGE_UNSUPPORTED', status: 501,
+          });
+        }
         if (!context.target.number || !['merge', 'squash'].includes(input.method)) {
           throw invalidMutationContext('target number and merge method are required');
         }

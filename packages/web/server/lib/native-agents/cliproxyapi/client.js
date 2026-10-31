@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { NativeAgentError } from '../errors.js';
+import { parseGatewayModelMetadata } from './models.js';
 
 /** CLIProxyAPI's documented default; a stored key may point elsewhere. */
 export const DEFAULT_CLIPROXYAPI_BASE_URL = 'http://127.0.0.1:8317';
@@ -30,10 +31,13 @@ const callbackRejected = (message) => new NativeAgentError(message, {
 });
 
 const authFileSchema = z.object({
+  priority: z.number().int().nullish(),
   name: z.string().min(1).nullish(),
   id: z.string().min(1).nullish(),
   email: z.string().nullish(),
   account_type: z.string().nullish(),
+  provider: z.string().nullish(),
+  type: z.string().nullish(),
   status: z.string().nullish(),
   disabled: z.boolean().nullish(),
   id_token: z.object({
@@ -64,9 +68,11 @@ const account = (file) => ({
   activeUntil: file.id_token?.chatgpt_subscription_active_until ?? null,
   status: file.status ?? null,
   disabled: file.disabled === true,
+  provider: file.provider ?? file.type ?? null,
+  priority: file.priority ?? null,
 });
 
-export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fetch }) => {
+export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fetch, signal = null }) => {
   const origin = baseURL.replace(/\/+$/, '');
 
   const send = (path, { method = 'GET', body, auth = true, apiKey = null } = {}) => {
@@ -80,7 +86,7 @@ export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fe
       body: body === undefined ? undefined : JSON.stringify(body),
       // A redirect could hand an authenticated management call to another host.
       redirect: 'error',
-      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CALL_TIMEOUT_MS)]) : AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
   };
 
@@ -150,8 +156,8 @@ export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fe
     async setClientKeys(keys) {
       await managed('/v8/management/config', { method: 'PATCH', body: { access: { 'api-keys': keys } } });
     },
-    async beginLogin() {
-      const response = await managed('/v0/management/codex-auth-url?is_webui=true');
+    async beginLogin(provider = 'codex') {
+      const response = await managed(`/v8/management/oauth/auth-url?provider=${encodeURIComponent(provider)}&is_webui=true`);
       const parsed = authUrlSchema.safeParse(await response.json().catch(() => null));
       const url = parsed.success ? parsed.data.url ?? parsed.data.auth_url : undefined;
       if (!parsed.success || url === undefined) throw unexpected();
@@ -171,12 +177,12 @@ export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fe
      * gateway sends for an expired state as a missing management surface, and
      * that body is exactly the explanation the caller wants to show.
      */
-    async submitLoginCallback(state, code) {
+    async submitLoginCallback(state, code, provider = 'codex') {
       let response;
       try {
         response = await send('/v0/management/oauth-callback', {
           method: 'POST',
-          body: { provider: 'codex', state, code },
+          body: { provider, state, code },
         });
       } catch {
         throw notReachable();
@@ -201,6 +207,37 @@ export const createCliproxyapiClient = ({ baseURL, managementKey, fetchImpl = fe
       if (response.status === 401 || response.status === 403) throw keyRejected();
       if (!response.ok) throw new NativeAgentError(`CLIProxyAPI answered ${response.status}`, { status: 502, code: 'CLIPROXYAPI_REQUEST_FAILED' });
       return true;
+    },
+    async modelMetadata(channel) {
+      const response = await managed(`/v8/management/routing/model-definitions/${encodeURIComponent(channel)}`);
+      return parseGatewayModelMetadata(await response.json(), channel);
+    },
+    async modelAliases() {
+      const response = await send('/v8/management/config/oauth/model-alias');
+      if (response.status === 404) return {};
+      if (!response.ok) throw unexpected();
+      return z.record(z.string(), z.array(z.object({ name: z.string(), alias: z.string(), fork: z.boolean().optional(),
+        'display-name': z.string().optional(), 'force-mapping': z.boolean().optional() }))).parse(await response.json());
+    },
+    async affinityRebind() {
+      const response = await send('/v8/management/config/routing/session-affinity-rebind-on');
+      if (response.status === 404) return 'any';
+      if (!response.ok) throw unexpected();
+      return z.enum(['any', 'quota']).parse(await response.json());
+    },
+    async setFamilyAliases(aliases, rebind) {
+      await managed('/v8/management/config', { method: 'PATCH', body: {
+        oauth: { 'model-alias': aliases }, routing: { 'session-affinity-rebind-on': rebind },
+      } });
+    },
+    async setAccountPriority(name, priority) {
+      await managed('/v8/management/credentials/fields', { method: 'PATCH', body: { name, priority } });
+    },
+    async accountModelIds(name) {
+      const response = await managed(`/v8/management/credentials/models?name=${encodeURIComponent(name)}`);
+      const parsed = z.object({ models: z.array(z.object({ id: z.string().min(1) })) }).safeParse(await response.json());
+      if (!parsed.success) throw unexpected();
+      return parsed.data.models.map((model) => model.id);
     },
   };
 };

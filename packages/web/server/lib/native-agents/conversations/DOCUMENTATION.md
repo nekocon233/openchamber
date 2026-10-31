@@ -82,6 +82,7 @@ results, and attachment references through server-generated hidden instructions.
 It leaves native reasoning and tool protocol execution with the source CLI.
 The public client instruction limit does not constrain this server-built context.
 
+Legacy model-id aliases, including unified Opus, resolve to the same catalog row.
 The target catalog supplies context limits; an unknown window uses the existing
 64k estimate and character-budget convention. A long history keeps recent whole
 turns and summarizes earlier material in bounded chunks. Summary calls select

@@ -1,8 +1,7 @@
 # Work-status panel
 
-A card rendered to the right of the transcript, in the right slot it shares
-with the context panel. It reports the state of the current session, its branch, its quotas and its
-subagents.
+A dropdown over the desktop transcript. It reports the current session, its
+branch, quotas and subagents. Mobile renders the same sections in a bottom sheet.
 
 ## Structure
 
@@ -20,64 +19,40 @@ Sections render nothing when they have no rows, so the panel collapses upward
 instead of reserving empty space. Turn stats keeps its header for a
 selected session even without metrics, so a saved collapsed state can reopen.
 
-## What it is not
+## Placement and visibility
 
-It is **not** a context-panel surface. It is not registered in
-`lib/surfaces/registry.ts`, has no rail icon, no tab, no persisted width and no
-resizer. It is a card inside the chat column — rounded, with the dropdown's
-hairline ring (`oc-panel-edge`, shared with the context panel card), a faint
-fill and its own margin — rather than a docked pane flush against the window
-edge. Opened over the transcript it is a dropdown and takes the dropdown's
-full edge, lit top and tight shadows included (`data-edge-floating`).
-When it overlays the transcript, it uses the shared `oc-glass-panel` surface;
-the inline card keeps its lighter, non-blurred fill instead.
+`ChatContainer` hosts one `WorkStatusPanel` with `presentation="overlay"` in
+its main desktop chat. It stays out of document flow at the chat's top end,
+using the shared `oc-glass-panel` and floating `oc-panel-edge` surface. Its
+300 px width is capped to the chat width, and its content scrolls within the
+available height. Opening it never changes the chat or tool-zone dimensions.
+It is not a context-panel surface and has no rail tab, resizer or reserved column.
 
-## Placement
+The header toggles the transient `workStatusOverlayOpen` state. Every load
+starts closed; clicking outside, pressing Escape, switching sessions or leaving
+the chat closes it. Escape returns focus to the header toggle. Section menus
+and the section-settings dialog keep their own interactions. The header's
+project/branch line and the Git rail count stay visible while the dropdown is
+open, so the surrounding layout stays stable.
 
-`ChatContainer` owns the card's state, but the inline card renders through a
-portal into the right slot (`components/layout/rightSlot.ts`): the context
-panel's `aside` in `MainLayout`, which holds a right-anchored host for the card
-under the panel's content. The slot animates one width for both, from the
-card's column (`WORK_STATUS_COLUMN_WIDTH`, the card and its margins) to the
-panel's width and back, while the card fades out and the panel fades in over
-it. The chat column therefore narrows or widens once, in one direction.
-
-The card tells the slot whether it wants its column through `reserved`:
-switched on, room beside the chat (`roomy`, see below), and something to
-show. It stays reserved while the context panel covers it, so closing the
-panel goes straight back to the card's column instead of to nothing first.
-
-The overlay form stays inside the chat column in `ChatContainer`.
-
-## Visibility
-
-`useWorkStatusVisibility` hides the panel when any of these hold:
-
-- the user switched it off;
-- the runtime is VS Code, or the mobile shell, where the inline and overlay
-  forms do not exist and the same sections render in the mobile sheet instead;
-- the context panel is open for the directory the app is effectively on —
-  looked up through `useEffectiveDirectory` and `normalizeContextPanelDirectoryKey`,
-  the same key the rail and the panel use. It is deliberately **not** the
-  directory this panel reports about: a managed Chat reports about none, and
-  that empty key answered "closed" for a context panel that was plainly open;
-- the row cannot fit `WORK_STATUS_MIN_CHAT_WIDTH` of transcript alongside
-  `WORK_STATUS_PANEL_WIDTH` of panel. Only that threshold decision is state
-  (`roomy`); the width itself is not, because it changes on every frame of a
-  sidebar animation and storing it re-rendered the whole chat each frame.
-
-`ChatContainer` additionally suppresses it in mini-chat. It remains available
-on a new-session draft: when the draft targets a
-project or pending worktree, the panel uses that directory for project, MCP,
-and usage readouts before a session exists.
+Pinned chat columns, mini-chat and VS Code do not mount the dropdown. A new
+project-session draft uses its target directory, including a pending worktree.
+Managed Chat drafts pass no project directory. Sections only subscribe while
+the panel is visible or completing its closing animation.
 
 ### Mobile sheet
 
-The mobile shell has no right slot and no desktop header, so the panel travels
-as a bottom sheet. `MobileSessionMetadata`'s popover carries a Work status row;
-the row closes the popover and opens `apps/MobileWorkStatusSheet.tsx`, which
-wraps the same `WorkStatusPanel` in `MobileOverlayPanel` with
-`presentation="sheet"`.
+The mobile shell shows a dedicated Work status button at the end of
+`MobileHeader`, including hosted PWA and Capacitor. One tap closes the header's
+session-switcher popover and opens `apps/MobileWorkStatusSheet.tsx`.
+The header reflects `MobileApp`'s transient `workStatusOpen` state. The run
+overview hides the work-status control.
+
+The sheet wraps the same `WorkStatusPanel` in `MobileOverlayPanel` with
+`presentation="sheet"`. The mobile header has no separate context gauge or
+session-metadata popup. Context and quota readouts remain in the work-status
+sheet. This applies to hosted mobile, PWA and Capacitor; desktop keeps its own
+header controls.
 
 Sheet presentation changes only the host:
 
@@ -111,30 +86,6 @@ also passes no fallback directory to the panel, so an active project's branch
 cannot leak into the draft while directory-independent sections remain
 available.
 
-`rowRef` is a **callback ref, not an object ref**. An object ref gives no signal
-when the node attaches, so the measuring effect read `.current`, found nothing
-whenever the row mounted after the effect first ran, and only recovered on the
-next unrelated dependency change — in practice, opening and closing the context
-panel. `useWorkStatusVisibility.test.ts` covers a row that attaches late.
-
-### Why the chat area is measured, not the chat column
-
-**The width test must observe something the panel cannot resize.** The chat
-column's width is an *output* of the visibility decision: hiding the panel
-widens the chat, which would re-satisfy a chat-width test and re-show the
-panel, which narrows the chat again — an infinite oscillation.
-
-It measures the **chat area** — the container holding the chat and the context
-panel together, marked `data-chat-area` in `MainLayout`. Measuring the chat row
-instead reported a width still catching up while the context panel animated
-closed, so the panel reappeared only once that number crossed the threshold:
-the chat widened and then narrowed again. The chat area does not move when the
-context panel opens. `useWorkStatusVisibility.test.ts` pins both properties.
-
-The context-panel check mirrors `ContextPanel`'s own derivation: `isOpen` alone
-is not enough, because a panel with no resolvable active tab renders nothing
-and therefore displaces nothing.
-
 ## Data sources
 
 Most sections read shared caches, warming their owning loader when needed.
@@ -149,7 +100,7 @@ native task summaries request their session snapshot once and follow live events
 | PR + checks | `useFreshestSourceControlVisualSummaryForBranch` | **read-only**; follows the freshest bound-identity entry for the branch |
 | Subagents | child sessions from `useAllLiveSessions` (`parentID`) + `useAllSessionStatuses`; per-row cost from `computeRollup`'s `perChildCost` (each child's own subtree total, so nested subagent-of-subagent cost rolls up under its immediate parent row) | |
 | Subagent blockers | directory `permission` / `question` maps | one subscription covers every child |
-| Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | grouping shared with the mobile popover; presentation is not |
+| Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | same provider grouping in desktop and mobile work status |
 | Linked threads | `lib/linkedIssues.ts` over session metadata | written by the flows that attach an issue or PR |
 | Turn stats | `telemetry.ts` over loaded message records | expanded idle sections follow completed records; busy or retrying sections retain the previous turn or recover it from a snapshot on opening or history publication; response speed describes that turn, while cache and speed average the completed history through it; the header falls back to average speed when response timing is unavailable; without a complete previous turn, the existing waiting row remains; either rate above 5,000 tok/s is unknown |
 | Goal | `useSessionGoal` | respects the Settings toggle |
@@ -171,6 +122,14 @@ that edge would fire on every open and override a reader who collapsed them.
 every one after it.
 
 ### Native task surface
+
+Antigravity exposes saved background commands in the same task pane and
+background section. These `history` snapshots show recorded outcomes and
+bounded output, with unknown status when completion was not retained. They
+do not establish live activity or expose per-task Stop. The native adapter
+publishes an updated snapshot when a turn settles; manual refresh and reconnect
+also reload it, with no idle polling.
+Task identifiers and command output retain left-to-right order in RTL layouts.
 
 Native tasks live in the context panel's `tasks` rail surface
 (`lib/surfaces/registry.ts`, mode `tasks`), rendered by
@@ -226,6 +185,15 @@ clears on session/runtime or query changes. Acceptance means waiting for CLI
 confirmation, not a locally invented terminal result. Failure remains on the
 affected task and can be retried.
 The existing whole-session Stop action is unchanged.
+
+### Antigravity quota and activity
+
+`antigravity-native` resolves to the distinct `antigravity-cli` quota source.
+The expanded list shows both reported windows per family; the headline selects
+the current Gemini or Claude/GPT family. A gateway connection never borrows the
+Antigravity CLI account's quota. Child metadata with `activityKnown: false`
+keeps its activity unknown even when the directory snapshot is idle. Live native
+events confirm activity; historical child records do not.
 
 ### Subagent rows
 
@@ -532,53 +500,35 @@ did not show. "All hidden" and "Show all" count only sections that can
 actually be shown. Extension rows carry an "Extension" label and no settings
 search anchor (they are dynamic entities).
 
-## Switching it off
+## Visibility preferences
 
-A persisted preference (`workStatusPanelEnabled`) drives a header toggle, and a
-dialog behind the equalizer icon switches individual sections off. Hidden
-sections are stored rather than visible ones. Every section, including Turn
-stats, is enabled by default. UI-store v21 migration and server-list hydration
-remove the old automatic telemetry hiding unless `workStatusHiddenSectionsExplicit`
-records a user-chosen list. Explicit hiding and other hidden sections survive.
-The marker and list travel together through autosave, sanitization, and server
-settings; an empty list enables everything. Complete settings
-snapshots own this preference; unrelated partial save echoes leave it unchanged.
+The header's dropdown state is transient. UI-store v26 removes the old inline
+panel enablement and width-fit fields. Existing hidden-section, order, expanded
+section and scroll preferences survive. Old server `workStatusPanelEnabled`
+values are ignored and cannot reopen a layout panel.
 
-`workStatusPanelVisible` is separate and transient: the switch can be on while
-layout still refuses the panel. The header's project/branch line and the git
-rail read it to drop the readouts the panel already carries, and it is deliberately not persisted — it
-describes the current frame, not a preference.
+The equalizer dialog controls individual sections. Hidden sections are stored
+rather than visible ones. Every section is enabled by default. UI-store v21
+migration and server hydration remove automatic telemetry hiding unless
+`workStatusHiddenSectionsExplicit` records a user-chosen list. The marker and
+list travel together through autosave and server settings; an empty list enables
+everything. Unrelated partial save echoes leave the choice unchanged.
 
 ## Appearing and disappearing
 
-The card keeps its width and only fades, on the slot's duration and curve
-(`LAYOUT_ANIMATION_MS` through `useLayoutAnimationMs`, ease-out; zero when the `layoutAnimations` setting is off); the slot animates the width. It stays
-mounted wherever it could ever show, so the fade has something to animate;
-its content is dropped once the fade finishes. A card whose sections all
-reported nothing gives its column back. When it is shown again the presence
-count starts optimistic, as on first mount, so the column is not given back
-for the frames before the sections report.
+The dropdown lifts with a transform while its glass layer fades, using
+`useLayoutAnimationMs` and the shared ease-out curve. Its content stays mounted
+through closing and then unmounts to stop subscriptions. A reopened panel starts
+its section-presence count optimistically until the sections report.
 
-An empty card is a border around a settings icon, which reads as a fault. Each
-section decides for itself that it has nothing to say, so they report through
-`presenceContext.ts` and the panel collapses when none rendered. Deriving that
-at the panel level would mean duplicating every data source the sections read.
+Sections report whether they render content through `presenceContext.ts`. If
+all enabled sections have no data, the panel hides. When the user hides every
+section, it instead shows the localized empty state and section controls so
+sections can be re-enabled.
 
-There is one deliberate exception: when the user hides every section, the card
-stays visible with a localized empty state and section controls. Collapsing that
-state would also hide the only recovery path. A panel with enabled sections but
-no data still follows the presence reports and collapses as before.
-
-The scroll offset resets on session change: restoring one session's offset into
-another's shorter panel lands somewhere arbitrary.
-
-The Subagents section opens itself when subagents appear where there were none,
-on that edge only: re-expanding on every count change would fight a user who
-just collapsed it.
-
-Its expanded list is capped at eight rows and scrolls independently, so a
-session with many subagents does not crowd every section below it out of the
-panel.
+Scroll resets on session change and survives closing and reopening in the same
+session. Subagents expand only when children appear where there were none; the
+expanded list is capped at eight rows and scrolls independently.
 
 ## Collapsed Usage headline
 
@@ -754,7 +704,7 @@ Git context surface being opened first.
 Expanded sections (`workStatusExpandedSections`, keyed by a stable section id)
 and the scroll offset (`workStatusScrollTop`) live in the persisted
 `useUIStore`. Component state would not do: the content unmounts every time the
-context panel opens, which would silently discard the user's arrangement.
+dropdown closes, which would silently discard the user's arrangement.
 
 The scroll offset is restored in the scroller's callback ref, at the moment it
 attaches, and read through `useUIStore.getState()` rather than a subscription —

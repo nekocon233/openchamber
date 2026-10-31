@@ -1,5 +1,60 @@
 # Retained context views
 
+## Project pull requests
+
+On GitHub projects, `PullRequestView` opens on Project PRs, with Current branch
+as a second tab for the existing branch preview and creation flow. Project PRs
+uses the bound primary repository alone, across all branches, and only lists
+open PRs ordered by latest update. Its category tabs are Awaiting my review,
+Created by me, and All, using the bound GitHub account. Awaiting my review is selected initially;
+the existing search applies within that category. It needs no checkout branch or comparison base. GitLab keeps
+its existing branch view; VS Code reports repository browsing as unsupported.
+The hosted and native mobile navigation stays unchanged.
+
+PR previews share `SourceBoardActions` with the board. On GitHub, a host that
+advertises administrator merge adds a separate Force merge button beside the
+ordinary merge control, with the same selected method and a destructive
+confirmation. The [source-control contract](../../lib/source-control/DOCUMENTATION.md#pull-request-merge-actions)
+owns capability gating, target changes and pending-operation behavior.
+
+Selecting a PR replaces the list with its preview in the same panel. Back
+restores the query, filters and scroll position; the two tabs retain the list
+state too. Every detail and action names the selected item's repository and
+number. `ContextSurfacePanes` retains every visited PR tab by runtime and
+workspace directory in its `MovablePane`. Switching conversations or projects,
+changing tools, closing and reopening the zone, or moving it to another zone
+preserves each project's selected tab, filters, preview, scroll position and
+unsent reply. Saved PR tabs that have not been visited in this runtime stay
+unmounted, so opening one project does not fetch the others.
+
+`PullRequestView` takes its owning workspace directory explicitly. The list
+uses that workspace's selected Git repository, and the current-branch view
+resolves its metadata from the owning workspace. Worktree metadata from another
+conversation cannot supply its base branch. React
+Activity boundaries hide the window and each of its two tabs without dropping
+their component or DOM state; their effects and subscriptions disconnect while
+hidden. The repository binding observer stays outside those boundaries so its
+authority remains current and hiding the last reader cannot clear the view's
+identity. The list and preview record scrolling before hiding or moving, and the
+list keeps a selected PR
+even if a refreshed first page no longer contains it. Switching projects changes
+visibility, while cached data follows normal revalidation. Removing a PR tab
+releases only that view. A runtime switch clears the visited set; changing an
+account or binding resets the affected view's authority.
+This retention lasts for the open workspace; it does not persist PR content
+or reply drafts across a browser reload.
+
+Changes opened from a PR panel keeps a return target for that PR, its original
+project workspace and tab. Classic shows Back to PR above the changed files;
+editor layout shows it above the Changes file list, or above the document content
+when that list is closed. Returning restores the exact project PR preview even
+when it is absent from the loaded page. The existing query, category, list
+position and reply draft stay in the retained PR pane. The comparison's
+repository/account context and PR identity must still match the return target.
+Nested repositories keep the workspace destination separate from the repository
+whose diff is read. A new request without a PR origin clears the old return
+target. Mobile keeps its existing navigation.
+
 ## Usage statistics
 
 Stats combines official OpenCode reports through `opencode/session-stats.ts`
@@ -65,6 +120,16 @@ paths and requests fresh status. Completed range diffs remain cached while
 pending reservations are cancelled and retried on resume. Hidden tabs never
 consume another tab's pending navigation request.
 
+Editor layout gives the same retained `DiffView` two hosts: `fileListHost`
+places navigation in its tool zone, while the view and comparison toolbar
+move into the resident Changes document through `MovablePane`. A list click
+reveals that document and navigates to the file. `visible` describes details;
+repository discovery, status and comparison listings also run while the list
+is visible. Per-file patch reads, viewport measurement, scroll restoration and
+detail shortcuts run only while details are visible. Closing either host does
+not close the other or remount the shared comparison. Classic and mobile
+callers omit `fileListHost` and keep the combined view.
+
 A Changes tab opened without a scope (the context rail, multirun) stores
 `diffScope: null`, and `DiffView` opens it on Branch whenever the Branch scope
 is offered, else on the working tree. The Branch scope is offered whenever the
@@ -120,6 +185,13 @@ or unpushed commits. `lib/diff/pullRequestDiff.ts` splits the response once;
 invalidate the view's patch cache atomically, including edits with unchanged
 file names and line counts. Opening a file adds no network request.
 
+GitHub diff size refusals are handled by the server's temporary Git snapshot
+reader. The comparison request allows the five-minute server operation plus five
+seconds for cleanup and response delivery. Its successful text format is
+unchanged, so large PRs use the same parser, file list and retained snapshots.
+Oversized output or an incomplete read remains an error rather than a shortened
+file list.
+
 PR comparisons retain completed snapshots across panel and mode switches.
 `pullRequestSnapshotCache.ts` belongs to the retained view and deduplicates
 in-flight reads. The bound context is part of each snapshot's identity, so a
@@ -144,6 +216,20 @@ expander asks `useGitComparison.fetchFullFile`, which reads both sides of that
 file from GitHub through `/api/walkthrough/pr-file` (merge base and PR head),
 never from disk, so local edits and unfetched fork commits cannot leak in or
 block it. Existing inline comment controls still attach selected code to chat.
+For a GitHub PR, the same input also offers Start a review or Add to review.
+Saved pending comments appear beneath their code lines; the PR reply panel
+owns editing and final submission. `PierreDiffViewer` receives the shared
+pending-review controller from desktop or mobile Changes.
+The code container stays left to right; annotation controls follow the UI locale.
+
+Each PR snapshot carries the server's `X-OpenChamber-PR-Head-Sha` as `headSha`.
+Per-file patches and full-file reads retain that revision. The editor captures
+it when typing starts and refuses a review comment after the displayed revision
+or PR scope changes. A full-file read supplies the expected head to the server.
+An old server that omits the header can still display its diff, but cannot
+authorize inline review comments. A review tied to an earlier commit remains
+available for submission or discard before commenting on the new version.
+
 Changes hands its PR source to walkthrough; walkthrough's Changes action opens
 PR mode with the shared selection. Picking a PR never generates a walkthrough.
 

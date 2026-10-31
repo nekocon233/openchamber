@@ -185,6 +185,8 @@ environment:
 
 そもそもどのモデルプロバイダーを使えるかを決めるのは、OpenChamber ではなく OpenCode です。[OpenCode ポリシー](https://opencode.ai/v2/docs/policies/)で固定してください。すべてのプロバイダーを拒否し、そのうえで承認したものを許可します。
 
+エンタープライズモードでは、CLIProxyAPI へのログイン、モデルのインポート、接続の変更も無効になります。 Antigravity のモデル系列内での自動アップグレードも無効になります。 Claude から Antigravity への Opus/Sonnet の自動切り替えも無効になります。
+
 ```jsonc
 {
   "experimental": {

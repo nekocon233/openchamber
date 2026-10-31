@@ -195,10 +195,15 @@ describe('settings helpers', () => {
     const saved = helpers.mergePersistedSettings({}, changes);
     const reloaded = helpers.formatSettingsResponse(JSON.parse(JSON.stringify(saved)));
     expect(reloaded.workStatusSectionOrder).toEqual(['mcp', 'session']);
-    const next = helpers.mergePersistedSettings(reloaded, helpers.sanitizeSettingsUpdate({ workStatusPanelEnabled: false }));
+    const next = helpers.mergePersistedSettings(reloaded, helpers.sanitizeSettingsUpdate({ layoutAnimations: false }));
     expect(helpers.formatSettingsResponse(next).workStatusSectionOrder).toEqual(['mcp', 'session']);
     expect(helpers.sanitizeSettingsUpdate({ workStatusSectionOrder: 'bad' }).workStatusSectionOrder).toBeUndefined();
     expect(helpers.sanitizeSettingsUpdate({ workStatusSectionOrder: [] }).workStatusSectionOrder).toEqual([]);
+  });
+  it('ignores the retired inline work-status preference while retaining section choices', () => {
+    const helpers = createTestHelpers();
+    expect(helpers.sanitizeSettingsUpdate({ workStatusPanelEnabled: true, workStatusHiddenSections: ['mcp'] }))
+      .toEqual({ workStatusHiddenSections: ['mcp'] });
   });
   it('round-trips telemetry opt-in with the hidden list and preserves it across unrelated writes', () => {
     const helpers = createTestHelpers();
@@ -209,7 +214,7 @@ describe('settings helpers', () => {
     const reloaded = helpers.formatSettingsResponse(JSON.parse(JSON.stringify(saved)));
     expect(reloaded.workStatusHiddenSections).toEqual([]);
     expect(reloaded.workStatusHiddenSectionsExplicit).toBe(true);
-    const next = helpers.mergePersistedSettings(reloaded, helpers.sanitizeSettingsUpdate({ workStatusPanelEnabled: false }));
+    const next = helpers.mergePersistedSettings(reloaded, helpers.sanitizeSettingsUpdate({ layoutAnimations: false }));
     expect(helpers.formatSettingsResponse(next).workStatusHiddenSectionsExplicit).toBe(true);
     expect(helpers.sanitizeSettingsUpdate({ workStatusHiddenSectionsExplicit: 'true' }).workStatusHiddenSectionsExplicit).toBeUndefined();
   });
@@ -909,6 +914,16 @@ describe('settings helpers', () => {
 });
 
 describe('settings registry gate', () => {
+  it('accepts both workspace layouts and rejects malformed values', () => {
+    const helpers = createTestHelpers();
+    for (const workspaceLayout of ['classic', 'editor']) {
+      expect(helpers.sanitizeSettingsUpdate({ workspaceLayout })).toEqual({ workspaceLayout });
+    }
+    for (const workspaceLayout of ['invalid', '', null, true, 1]) {
+      expect(helpers.sanitizeSettingsUpdate({ workspaceLayout })).toEqual({});
+    }
+  });
+
   const registryPath = join(dirname(testFilePath), 'settings-registry.json');
   const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
   const persistableKeys = Object.entries(registry.fields)
@@ -937,14 +952,14 @@ describe('settings registry gate', () => {
     frpcProxyType: 'tcp', frpcServerAddress: 'frps.example.com', frpcServerPort: 7000, frpcRemotePort: 18080,
     frpcPublicUrl: 'https://public.example.com:18080', frpcCustomDomain: 'vhost.example.com', frpcPublicHostname: 'public.example.com',
     sidebarProjectDisplayMode: 'all', sidebarViewMode: 'timeline', sidebarProjectSortOrder: 'manual', sidebarWorktreeSortOrder: 'recent', sidebarShowRecentSection: true,
-    workStatusPanelEnabled: true, workStatusHiddenSections: ['mcp'], workStatusHiddenSectionsExplicit: true, workStatusSectionOrder: ['mcp', 'session'],
+    workStatusHiddenSections: ['mcp'], workStatusHiddenSectionsExplicit: true, workStatusSectionOrder: ['mcp', 'session'],
     showReasoningTraces: true, streamingAutoFollowEnabled: true, collapsibleThinkingBlocks: true, expandReasoningWhileStreaming: true, showTextJustificationActivity: true,
     chatRenderMode: 'live', activityRenderMode: 'summary', mermaidRenderingMode: 'svg', userMessageRenderingMode: 'markdown', collapsibleUserMessages: true,
     stickyUserHeader: true, promptNavigatorEnabled: true, wideChatLayoutEnabled: true, showSplitAssistantMessageActions: true, showToolFileIcons: true,
     codeBlockLineWrap: true, tableCellWrap: true, copyMessagesAsPlainText: true, showTurnChangedFiles: true, showExpandedBashTools: true, showExpandedEditTools: true, conciseTranscript: false, transcriptFileChangesOnly: false, toolJsonViewMode: 'raw',
     timeFormatPreference: '24h', weekStartPreference: 'monday', messageStreamTransport: 'ws', diffLayoutPreference: 'inline', diffWrapLines: true, diffHideWhitespace: true,
     gitChangesViewMode: 'tree', gitmojiEnabled: true, defaultFileViewerPreview: true, directoryShowHidden: true, filesViewShowGitignored: true,
-    fileEditorKeymap: 'vim', fileEditorVimMappings: 'inoremap jk <Esc>', autoSaveEnabled: true, confirmFileTreeMove: false, layoutAnimations: false, openLinksInBrowserPanel: true, openTrackerLinksOnBoard: true, fileTreeSide: 'left', autoCreateWorktree: true, sessionTabsEnabled: true,
+    fileEditorKeymap: 'vim', fileEditorVimMappings: 'inoremap jk <Esc>', autoSaveEnabled: true, confirmFileTreeMove: false, layoutAnimations: false, openLinksInBrowserPanel: true, openTrackerLinksOnBoard: true, fileTreeSide: 'left', workspaceLayout: 'editor', autoCreateWorktree: true, sessionTabsEnabled: true,
     allowPromptingSubagentSessions: true, inputSpellcheckEnabled: true, enterToSend: true, enterToSendConfigured: true, persistChatDraft: true,
     largeTextPasteBehavior: 'attach', followUpBehavior: 'steer', queueModeEnabled: true, inputHistoryScope: 'global', inputHistoryLimit: 40,
     draftStarters: [{ type: 'command', name: 'plan-feature' }], draftStartersVisible: true, draftStartersCraftGoalAdded: true, draftStartersScheduleTaskAdded: true,

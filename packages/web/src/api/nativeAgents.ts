@@ -43,6 +43,7 @@ const NATIVE_STATS_TIMEOUT_MS = 75_000;
 const errorBodySchema = z.object({ error: z.string().optional(), code: z.string().optional() }).passthrough();
 
 type NativeWriteBody =
+  | { enabled: boolean }
   | { sourceId: string; directory: string }
   | { upstreamProxy: string | null }
   | { url: string }
@@ -62,7 +63,7 @@ type NativeWriteBody =
   | ({ directory: string } & NativeSessionPatch);
 
 type NativeWrite =
-  | { method: 'POST' | 'PATCH'; body?: NativeWriteBody }
+  | { method: 'POST' | 'PATCH'; body?: NativeWriteBody | { provider: 'codex' | 'antigravity' | 'claude' } }
   | { method: 'DELETE'; query: Record<string, string> };
 
 const failure = async (response: Response): Promise<NativeAgentsRequestError> => {
@@ -140,7 +141,9 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   startCliproxyapiGateway: () => sendParsed('/api/native/claude/cliproxyapi/start', cliproxyapiStatusSchema, { method: 'POST' }),
   stopCliproxyapiGateway: () => sendParsed('/api/native/claude/cliproxyapi/stop', cliproxyapiStatusSchema, { method: 'POST' }),
   setCliproxyapiProxy: (input) => sendParsed('/api/native/claude/cliproxyapi/proxy', cliproxyapiStatusSchema, { method: 'POST', body: input }),
-  beginCliproxyapiLogin: () => sendParsed('/api/native/claude/cliproxyapi/login', cliproxyapiLoginSchema, { method: 'POST' }),
+  beginCliproxyapiLogin: (provider = 'codex') => sendParsed('/api/native/claude/cliproxyapi/login', cliproxyapiLoginSchema, { method: 'POST', body: { provider } }),
+  setCliproxyapiOpusRoute: (enabled) => sendParsed('/api/native/claude/cliproxyapi/opus-route', cliproxyapiStatusSchema, { method: 'POST', body: { enabled } }),
+  setCliproxyapiSonnetRoute: (enabled) => sendParsed('/api/native/claude/cliproxyapi/sonnet-route', cliproxyapiStatusSchema, { method: 'POST', body: { enabled } }),
   cliproxyapiLoginStatus: (state) => readParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, {}, cliproxyapiLoginStatusSchema),
   cancelCliproxyapiLogin: async (state) => (await sendParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, cliproxyapiCancelResultSchema, { method: 'DELETE', query: {} })).cancelled,
   submitCliproxyapiLoginCallback: async (state, url) => {

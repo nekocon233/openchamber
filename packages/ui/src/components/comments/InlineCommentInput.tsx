@@ -5,6 +5,7 @@ import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
 import { formatShortcutForDisplay } from '@/lib/shortcuts';
+import { Button } from '@/components/ui/button';
 import { useCommentImagePaste } from './useCommentImagePaste';
 import { useCommentSnippetPicker } from './useCommentSnippetPicker';
 
@@ -20,6 +21,13 @@ export interface InlineCommentInputProps {
   maxWidth?: number;
   /** Fill of the selected lines the comment belongs to, when the host knows it. */
   bandColor?: string;
+  reviewAction?: {
+    label: string;
+    disabled: boolean;
+    busy: boolean;
+    message?: string | null;
+    onSave: InlineCommentInputProps['onSave'];
+  };
 }
 
 const MAX_FIELD_HEIGHT_PX = 120;
@@ -47,8 +55,9 @@ export function InlineCommentInput({
   className,
   maxWidth,
   bandColor,
+  reviewAction,
 }: InlineCommentInputProps) {
-  const { t } = useI18n();
+  const { t, direction } = useI18n();
   const { isMobile } = useDeviceInfo();
   const [text, setText] = React.useState(initialText);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -173,6 +182,7 @@ export function InlineCommentInput({
         backgroundColor: bandColor,
       }}
       data-comment-input="true"
+      dir={direction}
       onPointerDown={(e) => e.stopPropagation()}
       onTouchStart={(e) => e.stopPropagation()}
     >
@@ -216,6 +226,15 @@ export function InlineCommentInput({
           <Icon name="attachment-2" className="h-4 w-4" />
         </button>
       </div>
+      {reviewAction ? <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        {reviewAction.message ? <span className="min-w-0 flex-1 typography-meta text-muted-foreground">{reviewAction.message}</span> : null}
+        <Button size={isMobile ? 'default' : 'sm'} disabled={reviewAction.disabled || !text.trim()} onPointerDown={event => event.stopPropagation()} onClick={event => {
+          event.stopPropagation(); reviewAction.onSave(text, normalizeRange(stableRangeRef.current));
+        }}>
+          {reviewAction.busy ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : <Icon name="git-pull-request" className="size-3.5" />}
+          {reviewAction.label}
+        </Button>
+      </div> : null}
     </div>
   );
 }

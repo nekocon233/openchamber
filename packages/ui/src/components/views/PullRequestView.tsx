@@ -1,11 +1,11 @@
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useNestedGitDirectory } from '@/hooks/useNestedGitDirectory';
 import { useDetectedWorktreeMetadata } from '@/hooks/useDetectedWorktreeRoot';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSessionWorktreeStore } from '@/sync/session-worktree-store';
+import { getAttachedSessionDirectory } from '@/sync/session-worktree-contract';
 import { useGitStatus, useGitBranches, useGitStore, useIsGitRepo } from '@/stores/useGitStore';
 import { useShallow } from 'zustand/react/shallow';
 import { getRootBranch } from '@/lib/worktrees/worktreeStatus';
@@ -20,6 +20,91 @@ import { NestedRepoResolutionStates } from './git/NestedRepoResolutionStates';
 import { NestedRepoPicker } from './git/NestedRepoPicker';
 import { deriveBaseBranch } from './git/baseBranch';
 import { useRepositoryBinding } from '@/lib/source-control/repository-binding';
+import { sourceControlReadContextParts, hasSameSourceControlReadContext } from '@/lib/source-control/identity';
+import type { SourceControlReadContext } from '@/lib/source-control/types';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
+import { ProjectPullRequestList } from './git/ProjectPullRequestList';
+import { pullRequestNavigationKey, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
+
+const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string; context: SourceControlReadContext | null }> = ({ directory, workspaceDirectory, context }) => {
+  const { t } = useI18n();
+  const [tab, setTab] = React.useState<'project' | 'branch'>('project');
+  const runtimeKey = useGitStore(state => state.runtimeKey);
+  const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(runtimeKey, workspaceDirectory)));
+  React.useEffect(() => {
+    if (!returning || !context) return;
+    if (!hasSameSourceControlReadContext(returning.context, context)) {
+      usePullRequestSelectionStore.getState().settleReturnRequest(returning);
+      return;
+    }
+    setTab(returning.tab);
+    if (returning.tab === 'branch') usePullRequestSelectionStore.getState().settleReturnRequest(returning);
+  }, [context, returning]);
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-border/60 px-4 py-2">
+        <SortableTabsStrip
+          items={[
+            { id: 'project', label: t('gitView.pullRequest.tab.project') },
+            { id: 'branch', label: t('gitView.pullRequest.tab.branch') },
+          ]}
+          activeId={tab}
+          onSelect={(id) => setTab(id === 'branch' ? 'branch' : 'project')}
+          variant="active-pill"
+          layoutMode="fit"
+        />
+      </div>
+      <React.Activity mode={tab === 'project' ? 'visible' : 'hidden'}>
+        <ProjectPullRequestList directory={directory} workspaceDirectory={workspaceDirectory} active />
+      </React.Activity>
+      <React.Activity mode={tab === 'branch' ? 'visible' : 'hidden'}>
+        <CurrentBranchPullRequestView directory={workspaceDirectory} />
+      </React.Activity>
+    </div>
+  );
+};
+
+/** Repository browsing stays available even when the checkout cannot create a PR. */
+export const PullRequestView: React.FC<{ directory: string; visible?: boolean }> = ({ directory, visible = true }) => {
+  const { sourceControl } = useRuntimeAPIs();
+  const { rootIsGitRepo, gitDirectory, nestedRepos } = useNestedGitDirectory(directory, { enabled: visible });
+  const isGitRepo = useIsGitRepo(gitDirectory ?? null);
+  const binding = useRepositoryBinding(gitDirectory, sourceControl);
+  const host = useRepositoryHost(gitDirectory ?? directory);
+  const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(getRuntimeKey(), directory)));
+  React.useEffect(() => {
+    if (host?.provider === 'gitlab' && returning) usePullRequestSelectionStore.getState().settleReturnRequest(returning);
+  }, [host?.provider, returning]);
+  const context = binding.contexts.find((candidate) => candidate.provider === 'github');
+  const scopeKey = JSON.stringify([getRuntimeKey(), gitDirectory ?? directory, context ? sourceControlReadContextParts(context) : null]);
+  const selectNestedRepo = useGitStore((state) => state.selectNestedRepo);
+
+  if (!directory || (rootIsGitRepo === false && isGitRepo !== true)) {
+    return <React.Activity mode={visible ? 'visible' : 'hidden'}><CurrentBranchPullRequestView directory={directory} /></React.Activity>;
+  }
+  // Keep the binding owner outside Activity: its last subscription releasing
+  // clears read contexts, which would otherwise replace the retained view's key.
+  return (
+    <React.Activity mode={visible ? 'visible' : 'hidden'}>
+      <div className="flex h-full min-h-0 flex-col" data-pull-request-directory={directory}>
+        {rootIsGitRepo === false && Array.isArray(nestedRepos) && nestedRepos.length > 0 ? (
+          <div className="shrink-0 border-b border-border/60 px-4 py-2">
+            <NestedRepoPicker
+              repositories={nestedRepos}
+              selectedRepository={gitDirectory ?? null}
+              onSelectRepository={(repository) => selectNestedRepo(directory, repository)}
+              repositoryRoot={directory}
+            />
+          </div>
+        ) : null}
+        {host?.provider === 'gitlab'
+          ? <CurrentBranchPullRequestView directory={directory} />
+          : <PullRequestTabs key={scopeKey} directory={gitDirectory ?? directory} workspaceDirectory={directory} context={context ?? null} />}
+      </div>
+    </React.Activity>
+  );
+};
 
 // Remotes rarely change; remembering the last fetched list per directory lets
 // a remount pick the same PR-status key immediately instead of flashing
@@ -30,10 +115,9 @@ import { useRepositoryBinding } from '@/lib/source-control/repository-binding';
  * GitView does (branch, base branch, remotes) from the shared git stores and
  * renders the pull-request workflow full-size in the context panel.
  */
-export const PullRequestView: React.FC = () => {
+const CurrentBranchPullRequestView: React.FC<{ directory: string }> = ({ directory: currentDirectory }) => {
   const { t } = useI18n();
   const { git, sourceControl } = useRuntimeAPIs();
-  const currentDirectory = useEffectiveDirectory();
   // When the root is not itself a repository, the pull-request workflow
   // operates on the resolved nested repository instead.
   const { rootIsGitRepo, gitDirectory, nestedRepos } = useNestedGitDirectory(currentDirectory ?? null);
@@ -42,14 +126,12 @@ export const PullRequestView: React.FC = () => {
   const isGitRepo = useIsGitRepo(gitDirectory ?? null);
   // The binding follows the repository actually in view.
   const binding = useRepositoryBinding(gitDirectory, sourceControl);
-  const { ensureAll, ensureNestedRepos, selectNestedRepo } = useGitStore(useShallow((state) => ({
+  const { ensureAll, ensureNestedRepos } = useGitStore(useShallow((state) => ({
     ensureAll: state.ensureAll,
     ensureNestedRepos: state.ensureNestedRepos,
-    selectNestedRepo: state.selectNestedRepo,
   })));
 
   const currentSessionId = useSessionUIStore((s) => s.currentSessionId);
-  const newSessionDraft = useSessionUIStore((s) => s.newSessionDraft);
   const worktreeMap = useSessionUIStore((s) => s.worktreeMetadata);
   const availableWorktrees = useSessionUIStore((s) => s.availableWorktrees);
 
@@ -76,21 +158,17 @@ export const PullRequestView: React.FC = () => {
   }, [availableWorktrees, normalizedCurrentDirectory, worktreeMap]);
 
   const storeWorktreeMetadata = React.useMemo(() => {
-    if (currentSessionId) {
-      return worktreeMap.get(currentSessionId) ?? inferredWorktreeMetadata;
-    }
-
-    if (newSessionDraft?.open) {
-      return inferredWorktreeMetadata;
-    }
-
-    return undefined;
-  }, [currentSessionId, inferredWorktreeMetadata, newSessionDraft?.open, worktreeMap]);
+    const sessionMetadata = currentSessionId ? worktreeMap.get(currentSessionId) : undefined;
+    return sessionMetadata && normalizePath(sessionMetadata.path) === normalizedCurrentDirectory
+      ? sessionMetadata
+      : inferredWorktreeMetadata;
+  }, [currentSessionId, inferredWorktreeMetadata, normalizedCurrentDirectory, worktreeMap]);
 
   const worktreeAttachment = useSessionWorktreeStore((s) =>
     currentSessionId ? s.getAttachment(currentSessionId) : undefined
   );
-  const authoritativeProjectRoot = worktreeAttachment && !worktreeAttachment.degraded && !worktreeAttachment.legacy
+  const authoritativeProjectRoot = worktreeAttachment && getAttachedSessionDirectory(worktreeAttachment) === normalizedCurrentDirectory
+    && !worktreeAttachment.degraded && !worktreeAttachment.legacy
     ? worktreeAttachment.worktreeRoot ?? undefined
     : undefined;
 
@@ -213,25 +291,8 @@ export const PullRequestView: React.FC = () => {
     );
   }
 
-  // Repository switcher for non-repo roots with discovered nested
-  // repositories; the pick is shared per root across git surfaces.
-  const showRepositoryPicker =
-    rootIsGitRepo === false && Array.isArray(nestedRepos) && nestedRepos.length > 0;
-
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {showRepositoryPicker ? (
-        <div className="flex shrink-0 items-center border-b border-border/60 px-4 py-2">
-          <NestedRepoPicker
-            repositories={nestedRepos}
-            selectedRepository={gitDirectory ?? null}
-            onSelectRepository={(repository) => {
-              if (currentDirectory) selectNestedRepo(currentDirectory, repository);
-            }}
-            repositoryRoot={currentDirectory ?? undefined}
-          />
-        </div>
-      ) : null}
       <ScrollableOverlay
         as={ScrollShadow}
         outerClassName="h-full min-h-0 flex-1"

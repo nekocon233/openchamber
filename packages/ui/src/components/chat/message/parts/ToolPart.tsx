@@ -1,5 +1,7 @@
 
 import React from 'react';
+import { z } from 'zod';
+import { nativeBackendOfSessionId } from '@/lib/native-agents/ids';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { cn } from '@/lib/utils';
@@ -1070,7 +1072,7 @@ const useSubagentChildSessionId = (part: ToolPartType, directory: string): strin
             ?? readTaskSessionIdFromOutput(state.status === 'running' ? undefined : state.output)
             ?? readTaskSessionIdFromRecord({ sessionID: state.input.sessionID });
     }, [state]);
-    const inferred = useRunningTaskChildSessionId(!authoritative && state.status === 'running' ? part : undefined, directory);
+    const inferred = useRunningTaskChildSessionId(!authoritative && state.status === 'running' && nativeBackendOfSessionId(part.sessionID) !== 'antigravity' ? part : undefined, directory);
     return authoritative ?? inferred;
 };
 
@@ -1079,7 +1081,8 @@ const OpenSubtaskButton: React.FC<{
     sessionId: string;
     agent: string | undefined;
     isMobile: boolean;
-}> = ({ sessionId, agent, isMobile }) => {
+    showLabel?: boolean;
+}> = ({ sessionId, agent, isMobile, showLabel = false }) => {
     const { t } = useI18n();
     const currentDirectory = useEffectiveDirectory();
     const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
@@ -1112,6 +1115,14 @@ const OpenSubtaskButton: React.FC<{
             readOnly: true,
         });
     };
+
+    if (showLabel) return (
+        <Button type="button" variant="ghost" size="xs" className="min-w-0 max-w-full justify-start"
+            onPointerDown={(event) => event.stopPropagation()} onClick={handleOpen} title={label} aria-label={label}>
+            <Icon name="external-link" className="size-3 shrink-0" />
+            <span dir="auto" className="truncate">{agentLabel}</span>
+        </Button>
+    );
 
     return (
         <button
@@ -2143,10 +2154,16 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
     // (see resolveRunningTaskChildSessionId); recover it from the child
     // session records until the authoritative id arrives.
     const inferredTaskSessionId = useRunningTaskChildSessionId(
-        isTaskTool && !authoritativeTaskSessionId && state.status === 'running' ? part : undefined,
+        isTaskTool && !authoritativeTaskSessionId && state.status === 'running' && nativeBackendOfSessionId(part.sessionID) !== 'antigravity' ? part : undefined,
         currentDirectory,
     );
     const taskSessionId = authoritativeTaskSessionId ?? inferredTaskSessionId ?? subagentSessionId;
+    const nativeDetails = React.useMemo(() => nativeBackendOfSessionId(part.sessionID) === 'antigravity'
+        ? z.object({
+            nativeOutputTruncated: z.boolean().optional(),
+            nativeSubagents: z.array(z.object({ sessionID: z.string(), title: z.string(), agent: z.string() })).optional(),
+        }).safeParse(metadata).data
+        : undefined, [metadata, part.sessionID]);
 
     // The file changes a command's CLI recorded; null for every other call.
     const recordedChanges = React.useMemo(() => recordedFileChanges(part.tool, metadata), [metadata, part.tool]);
@@ -2648,6 +2665,17 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
             {}
             {taskDetails}
 
+            {isExpanded && nativeDetails?.nativeOutputTruncated ? (
+                <p role="status" className="typography-meta text-muted-foreground">{t('chat.toolPart.nativeOutputTruncated')}</p>
+            ) : null}
+            {isExpanded && (nativeDetails?.nativeSubagents?.length ?? 0) > 1 ? (
+                <div className="flex min-w-0 flex-col items-start gap-1">
+                    {nativeDetails?.nativeSubagents?.map((child) => (
+                        <OpenSubtaskButton key={child.sessionID} sessionId={child.sessionID} agent={child.title} isMobile={isMobile} showLabel />
+                    ))}
+                </div>
+            ) : null}
+
             {expandedDetails}
         </div>
     );
@@ -2812,7 +2840,7 @@ const SubagentToolPartContent: React.FC<ToolPartProps> = (props) => {
         // "in background" describes a call still running; a finished one is just finished.
         label: stopped ? 'stopped' : backgroundPhase?.kind === 'running' ? 'background' : undefined,
         durationUnknown: backgroundPhase?.kind === 'unknown',
-        stop: isRunning && childSessionID && !stopping
+        stop: isRunning && childSessionID && !stopping && nativeBackendOfSessionId(props.part.sessionID) !== 'antigravity'
             ? { onStop: stop, ariaLabel: t('chat.toolPart.subagent.stop') }
             : undefined,
     };

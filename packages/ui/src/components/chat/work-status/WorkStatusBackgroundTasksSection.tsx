@@ -31,7 +31,7 @@ const TASK_STATUS_TONES = {
 export function WorkStatusBackgroundTasksSection({ sessionId, directory }: { sessionId: string | null; directory: string | null }) {
   const { t } = useI18n();
   const backend = useNativeSessionBackend(sessionId, directory);
-  const enabled = Boolean(sessionId && directory && backend === 'claude');
+  const enabled = Boolean(sessionId && directory && (backend === 'claude' || backend === 'antigravity'));
   const state = useSessionNativeTaskDetails(sessionId, directory, { enabled, visible: false });
   const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;
@@ -41,7 +41,8 @@ export function WorkStatusBackgroundTasksSection({ sessionId, directory }: { ses
   const summary = state.status === 'unsupported' ? t('chat.nativeTasks.summary.unsupported')
     : state.status === 'error' ? t('chat.nativeTasks.summary.unavailable')
       : state.status === 'stale' ? t('chat.nativeTasks.summary.partial')
-        : snapshot?.state === 'unknown' ? t('chat.nativeTasks.waiting')
+        : snapshot?.state === 'history' ? t('chat.nativeTasks.savedCount', { count: tasks.length })
+          : snapshot?.state === 'unknown' ? t(backend === 'antigravity' ? 'chat.nativeTasks.summary.partial' : 'chat.nativeTasks.waiting')
           : snapshot?.state === 'inactive' ? t('chat.nativeTasks.inactive')
             : snapshot ? t('chat.nativeTasks.summary.background', { active: tasks.filter((task) => task.active && !task.ambient).length, total: tasks.length })
               : t('common.loading');

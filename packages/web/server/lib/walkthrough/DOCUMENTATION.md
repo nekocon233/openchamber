@@ -117,14 +117,27 @@ request. The PR panel forwards the project of the pull request it shows.
 `GET /api/walkthrough/pr-diff` accepts `directory`, a JSON `source` restricted
 to PRs, and the same bound read-context fields as the other walkthrough routes.
 It validates that context against the binding and reads with its exact account;
-without one it reads nothing. It returns GitHub's complete published diff as
-text, with no model readiness checks or generation. A GitLab context returns
+without one it reads nothing. It returns the complete published diff as text,
+with no model readiness checks or generation. GitHub's explicit large-diff
+refusal uses the shared GitHub reader and an isolated temporary Git snapshot at
+the fixed PR head and merge base. This path supports more than 300 or 3,000 files
+without clipping the patch; it has a five-minute transfer deadline and a 20 MiB
+complete-output limit. Closing the HTTP request cancels its read. A generation
+job passes its own cancellation signal, so its established disconnect and
+explicit-cancel behavior remains intact. A GitLab context returns
 the merge request's diff, rebuilt by `gitlab/resources.js` into the same git
 patch shape from GitLab's per-file hunks (GitLab diffs against the merge base,
 like GitHub). Successful empty patches return 200; auth,
 GitHub and malformed-response failures remain errors. Walkthrough generation
 keeps its existing empty-diff refusal. UI comparison behavior is documented in
 `packages/ui/src/components/views/DOCUMENTATION.md`.
+
+The diff route requests revision metadata and exposes
+`X-OpenChamber-PR-Head-Sha` to browser clients, including cross-origin mobile
+clients. Native GitHub diffs verify the PR head and base before and after the
+patch read; the local snapshot already owns fixed revisions. A changing native
+diff fails with `409 STALE_CONFIG` instead of assigning comments to an
+unverified commit.
 
 `GET /api/walkthrough/pr-file` takes the same `directory` and PR `source` plus
 `path`, optional `previousPath`, and `status`, and returns `{ original, modified }`
@@ -133,6 +146,11 @@ head side at the PR head. This is how the comparison view expands collapsed
 context for a PR: its patch arrives at fixed context and its commits may not be
 on disk, so the working tree is never read. Files above 5 MB answer `413`
 (`code: 'file-too-large'`).
+
+An optional `headSha` pins a full-file read to the displayed GitHub snapshot.
+Invalid SHA input returns 400; a different current PR head returns
+`409 STALE_CONFIG` before contents are fetched. Callers without this parameter
+retain the existing read behavior.
 
 ## No truncation
 

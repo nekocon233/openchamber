@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
+import { OpenCode } from '@opencode/client';
+import { SyncProvider } from '@/sync/sync-context';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeAgentsAPI, SettingsAPI } from '@/lib/api/types';
@@ -22,6 +24,15 @@ let WorkStatusChecklistSection: typeof import('../work-status/WorkStatusChecklis
 let WorkStatusBackgroundTasksSection: typeof import('../work-status/WorkStatusBackgroundTasksSection').WorkStatusBackgroundTasksSection;
 
 const directory = '/fixture/tasks';
+const sdk = OpenCode.make({
+  baseUrl: 'https://native-tasks.test',
+  fetch: async (request) => {
+    const pathname = new URL(request instanceof Request ? request.url : request.toString()).pathname;
+    return pathname.endsWith('/event')
+      ? new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } })
+      : Response.json(pathname.endsWith('/session/active') ? {} : { data: [] });
+  },
+});
 const sessionId = 'ncl_task-fixture';
 const checklist = (revision = 1): Extract<NativeChecklistSnapshot, { state: 'ready' }> => ({
   state: 'ready', identity: 'fixture-list', source: 'files', revision, observedAt: 1,
@@ -71,10 +82,10 @@ const render = async ({ session = sessionId, summaries = false, pane = true }: {
   const apis = runtime(api);
   selectSession(session);
   await act(async () => root.render(
-    <RuntimeAPIContext.Provider value={apis}><I18nProvider>
+    <RuntimeAPIContext.Provider value={apis}><I18nProvider><SyncProvider sdk={sdk} directory="">
       {pane ? <NativeTasksPane /> : null}
       {summaries ? <><WorkStatusChecklistSection sessionId={session} directory={directory} /><WorkStatusBackgroundTasksSection sessionId={session} directory={directory} /></> : null}
-    </I18nProvider></RuntimeAPIContext.Provider>,
+    </SyncProvider></I18nProvider></RuntimeAPIContext.Provider>,
   ));
 };
 const showBackground = async () => { await click('Background tasks'); };
@@ -93,6 +104,7 @@ beforeEach(async () => {
     localStorage: win.localStorage, getComputedStyle: win.getComputedStyle.bind(win),
     requestAnimationFrame: win.requestAnimationFrame.bind(win), cancelAnimationFrame: win.cancelAnimationFrame.bind(win),
     IS_REACT_ACT_ENVIRONMENT: true,
+    fetch: async () => Response.json({ home: '/fixture', data: [] }),
   };
   const previous = Object.keys(values).map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
   for (const [name, value] of Object.entries(values)) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
@@ -172,15 +184,36 @@ describe('native tasks context surface', () => {
     expect(document.body.textContent).toContain('Codex has not written a plan for this session');
   });
 
-  test('Antigravity reports task views as unsupported without mounting their readers', async () => {
+  test('an older Antigravity host reports missing task support without reading tasks', async () => {
+    let reads = 0;
+    setup({ sessionTasks: async () => { reads += 1; return snapshot(); } });
     await render({ session: 'nag_fixture' });
     expect(document.body.textContent).toContain('This server or CLI does not support this task view.');
-    expect(document.querySelector('[data-native-tasks-body]')).toBeNull();
+    expect(reads).toBe(0);
+  });
+
+  test('Antigravity displays saved outcomes and unknown tasks without stop controls', async () => {
+    setup({
+      capabilities: async () => {
+        const base = await capabilities();
+        return { ...base, backends: { ...base.backends, antigravity: { cli: true, tasks: { background: true, output: true, stop: false } } } };
+      },
+      sessionTasks: async () => ({ state: 'history', generation: 'agy-history:fixture', revision: 1, omitted: 0, tasks: [
+        task('saved', { active: false, status: 'completed', canStop: false }),
+        task('unobserved', { active: false, status: 'unknown', canStop: false, outputAvailable: false }),
+      ] }),
+    });
+    await render({ session: 'nag_fixture' });
+    expect(document.body.textContent).toContain('Saved tasks and output');
+    expect(document.body.textContent).toContain('Build saved');
+    expect(document.body.textContent).toContain('Build unobserved');
+    expect(document.querySelector('button[aria-label^="Stop"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('Checklist');
   });
 
   test('a session that is not a native CLI one explains the empty surface instead of loading', async () => {
     await render({ session: 'ses_fixture' });
-    expect(document.body.textContent).toContain('Tasks are available for Claude Code and Codex sessions');
+    expect(document.body.textContent).toContain('Tasks are available for native CLI sessions');
     expect(document.querySelector('[data-native-tasks-body]')).toBeNull();
   });
 
@@ -210,12 +243,12 @@ describe('native tasks context surface', () => {
     useNativeTasksUIStore.setState({ tab: 'background' });
     selectSession();
     await act(async () => root.render(
-      <RuntimeAPIContext.Provider value={runtime(api)}><I18nProvider>
+      <RuntimeAPIContext.Provider value={runtime(api)}><I18nProvider><SyncProvider sdk={sdk} directory="">
         <NativeTasksBody
           scope={{ sessionId, directory, runtimeGeneration: 1, tab: 'background' }}
           onClose={() => { closes += 1; }}
         />
-      </I18nProvider></RuntimeAPIContext.Provider>,
+      </SyncProvider></I18nProvider></RuntimeAPIContext.Provider>,
     ));
     await click('Build task-1Running');
     await click('Open child session');
@@ -281,6 +314,7 @@ describe('native tasks context surface', () => {
     expect(calls).toBe(1);
     expect(document.body.textContent).toContain('256 KiB');
     expect(document.body.textContent).toContain('first output');
+    expect(document.querySelector('pre')?.getAttribute('dir')).toBe('ltr');
     api.taskOutput = async () => { throw new Error('fixture output failure'); };
     await click('Refresh output');
     expect(document.body.textContent).toContain('Could not read output');

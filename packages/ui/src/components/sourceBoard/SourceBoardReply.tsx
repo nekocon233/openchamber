@@ -12,6 +12,8 @@ import { isIMECompositionEvent } from '@/lib/ime';
 import { formatShortcutForDisplay } from '@/lib/shortcuts';
 import type { ReviewChangeRequestInput, ReviewVerdict } from '@/lib/source-control/types';
 import { newMutationKey } from './mutationKey';
+import { usePendingReview } from './usePendingReview';
+import { PendingReviewSection } from './PendingReviewSection';
 
 type Busy = 'comment' | 'thread' | ReviewVerdict | null;
 
@@ -29,7 +31,8 @@ export const SourceBoardReply: React.FC<{
      * was read.
      */
     onRefresh: () => void;
-}> = ({ reference, context, onRefresh }) => {
+    active?: boolean;
+}> = ({ reference, context, onRefresh, active = true }) => {
     const { t } = useI18n();
     const { sourceControl } = useRuntimeAPIs();
     const [text, setText] = React.useState('');
@@ -38,6 +41,8 @@ export const SourceBoardReply: React.FC<{
     const label = referenceNumberLabel(reference);
     const project = { owner: reference.sourceRepo.owner, name: reference.sourceRepo.repo };
     const openPull = reference.kind === 'pull' && reference.state === 'open' ? reference : null;
+    const pendingReview = usePendingReview(context, reference.kind === 'pull' && reference.provider !== 'gitlab'
+        ? { owner: reference.sourceRepo.owner, repo: reference.sourceRepo.repo, number: reference.number } : null, active);
     // GitLab threads any merge request comment; GitHub's only start from a line in a review.
     const canStartThread = reference.kind === 'pull' && reference.provider === 'gitlab';
     const body = text.trim() ? text : null;
@@ -117,6 +122,8 @@ export const SourceBoardReply: React.FC<{
     const busyIcon = (kind: Busy) => (busy === kind ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : null);
 
     return (
+      <>
+        <PendingReviewSection controller={pendingReview} onSubmitted={onRefresh} />
         <section className="flex flex-col gap-2 border-t border-border/60 pt-4" aria-label={t('sourceBoard.reply.label')}>
             <Textarea
                 value={text}
@@ -128,20 +135,20 @@ export const SourceBoardReply: React.FC<{
                 rows={3}
             />
             <div className="flex flex-wrap items-center justify-end gap-2">
-                {openPull ? (
+                {openPull && !pendingReview.data?.review ? (
                     <>
                         <Button
                             size="sm"
                             variant="outline"
                             onClick={() => void review('request-changes')}
-                            disabled={busy !== null || !body}
+                            disabled={busy !== null || !body || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}
                             // Disabled buttons show no tooltip; the hint is for the enabled one too.
                             title={t('sourceBoard.reply.requestChangesHint')}
                         >
                             {busyIcon('request-changes') ?? <Icon name="file-edit" className="size-3.5" />}
                             {t('sourceBoard.reply.requestChanges')}
                         </Button>
-                        <Button size="sm" variant="outline" onClick={() => void review('approve')} disabled={busy !== null}>
+                        <Button size="sm" variant="outline" onClick={() => void review('approve')} disabled={busy !== null || (context.provider === 'github' && (pendingReview.loading || Boolean(pendingReview.readError)))}>
                             {busyIcon('approve') ?? <Icon name="check" className="size-3.5" />}
                             {t('sourceBoard.reply.approve')}
                         </Button>
@@ -170,5 +177,6 @@ export const SourceBoardReply: React.FC<{
                 </Button>
             </div>
         </section>
+      </>
     );
 };

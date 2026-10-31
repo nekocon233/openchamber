@@ -8,6 +8,7 @@ const claudeConnectionModelSchema = z.object({
   outputLimit: z.number().int().min(1).max(1_000_000),
   input: z.object({ image: z.boolean(), pdf: z.boolean() }),
   efforts: z.array(z.enum(['low', 'medium', 'high', 'xhigh', 'max'])).max(5),
+  followFamily: z.enum(['antigravity-opus', 'antigravity-sonnet']).optional(),
 });
 export const claudeConnectionWriteSchema = z.object({
   kind: z.literal('anthropic').default('anthropic'),
@@ -63,7 +64,7 @@ export type CodexConnection = z.infer<typeof codexConnectionSchema>;
 export type CodexConnectionWrite = z.infer<typeof codexConnectionWriteSchema>;
 export type CodexConnectionModel = z.infer<typeof codexConnectionModelSchema>;
 
-// The local CLIProxyAPI gateway. OpenChamber manages its ChatGPT/Codex accounts
+// The local CLIProxyAPI gateway. OpenChamber manages its Codex and Antigravity accounts
 // through the gateway's own management API and writes an ordinary Claude Code
 // connection that points at it.
 const cliproxyapiAccountSchema = z.object({
@@ -73,6 +74,7 @@ const cliproxyapiAccountSchema = z.object({
   activeUntil: z.string().nullable(),
   status: z.string().nullable(),
   disabled: z.boolean(),
+  provider: z.string().nullable().default(null),
 });
 const cliproxyapiInstallSchema = z.object({
   supported: z.boolean(),
@@ -97,6 +99,9 @@ export const cliproxyapiStatusSchema = z.object({
   managementEnabled: z.boolean(),
   keyRejected: z.boolean(),
   accounts: z.array(cliproxyapiAccountSchema),
+  loginProviders: z.array(z.enum(['codex', 'antigravity', 'claude'])).default(['codex']),
+  opusFailover: z.object({ enabled: z.boolean(), ready: z.boolean() }).default({ enabled: false, ready: false }),
+  sonnetFailover: z.object({ enabled: z.boolean(), ready: z.boolean() }).optional(),
   /** Existing gateway keys as their length and last four characters, never their value. */
   clientKeys: z.array(z.object({ hint: z.string(), length: z.number().int().nonnegative() })),
   lastError: z.string().nullable(),
@@ -139,6 +144,7 @@ export type CliproxyapiStatus = z.infer<typeof cliproxyapiStatusSchema>;
 export type CliproxyapiModels = z.infer<typeof cliproxyapiModelsSchema>;
 export type CliproxyapiImportResult = z.infer<typeof cliproxyapiImportResultSchema>;
 export type CliproxyapiLogin = z.infer<typeof cliproxyapiLoginSchema>;
+export type CliproxyapiOAuthProvider = 'codex' | 'antigravity' | 'claude';
 export type CliproxyapiLoginStatus = z.infer<typeof cliproxyapiLoginStatusSchema>;
 export type CliproxyapiConnectionWrite = z.infer<typeof cliproxyapiConnectionSchema>;
 

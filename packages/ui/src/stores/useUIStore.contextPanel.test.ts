@@ -1182,7 +1182,7 @@ describe('useUIStore workspace zones', () => {
     expect(useUIStore.getState().contextSurfaceZones).toEqual({ git: 'left' });
 
     store.moveContextSurfaceToZone('git', 'right');
-    expect(useUIStore.getState().contextSurfaceZones).toEqual({});
+    expect(useUIStore.getState().contextSurfaceZones).toEqual({ git: 'right' });
     expect(panel('/a')?.isOpen).toBe(true);
     expect(panel('/a')?.zones.left.isOpen).toBe(false);
   });

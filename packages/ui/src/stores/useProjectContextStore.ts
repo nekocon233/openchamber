@@ -246,6 +246,9 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
     saveTodos: async (project, todos, change) => {
       const projectId = resolveProjectContextId(project);
       if (!projectId) return false;
+      const requestGeneration = generation;
+      const runtime = getRuntimeKey();
+      const isCurrent = () => requestGeneration === generation && runtime === getRuntimeKey();
 
       const previous = currentEntry(projectId).todos;
       patchEntry(projectId, { todos, error: null });
@@ -255,18 +258,22 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
       let refreshAfterWrite = false;
 
       try {
-        const committed = await enqueueWrite(projectId, 'todos', () => (
-          change ? writeProjectTodo(project, change) : saveProjectTodos(project, todos)
-        ));
+        const committed = await enqueueWrite(projectId, 'todos', () => {
+          if (!isCurrent()) throw new Error('Project context runtime changed');
+          return change ? writeProjectTodo(project, change) : saveProjectTodos(project, todos);
+        });
+        if (!isCurrent()) return false;
         if (committed) {
           patchEntry(projectId, { todos: committed.todos, loaded: true });
         } else {
-          // Someone, usually an agent, removed the todo first: nothing failed,
-          // the list on screen is just behind.
+          // Someone removed the todo first. Refresh this owner; an edit has
+          // not been saved, while completion/deletion needs no further write.
           refreshAfterWrite = true;
+          if (change?.kind === 'edit') return false;
         }
         return true;
       } catch (error) {
+        if (!isCurrent()) return false;
         patchEntry(projectId, {
           todos: previous,
           error: errorMessage(error, 'Failed to save project todos'),
@@ -274,7 +281,7 @@ export const useProjectContextStore = create<ProjectContextStore>((set, get) => 
         return false;
       } finally {
         flags.todos = false;
-        if (refreshAfterWrite) void get().load(project, { force: true });
+        if (refreshAfterWrite && isCurrent()) void get().load(project, { force: true });
       }
     },
 

@@ -12,7 +12,7 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { MobilePillComposer } from './MobilePillComposer';
 import { PromptSuggestion } from './PromptSuggestion';
 
-const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; dictationEnabled?: boolean; suggestion?: string }) => {
+const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: boolean; canAbort?: boolean; followUpDelivery?: 'steer' | 'queue'; dictationEnabled?: boolean; suggestion?: string }) => {
     const win = new Window({ url: 'http://localhost' });
     Object.defineProperty(win.navigator, 'mediaDevices', {
         value: { getUserMedia: () => Promise.resolve() },
@@ -46,6 +46,7 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
                 hasContent={options.hasContent}
                 isVSCode={false}
                 canAbort={options.canAbort ?? false}
+                followUpDelivery={options.followUpDelivery ?? 'queue'}
                 footerIconButtonClass="icon-button"
                 iconSizeClass="icon-size"
                 sendIconSizeClass="send-icon-size"
@@ -68,8 +69,7 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
         </I18nProvider>
         </ThemeSystemProvider>
         </SyncProvider>));
-        if (options.hasContent && options.canAbort) {
-            // While a turn runs the draft can only be queued, never sent past it.
+        if (options.hasContent && options.canAbort && options.followUpDelivery !== 'steer') {
             const queue = container.querySelector<HTMLButtonElement>('[aria-label="Stage message"]');
             expect(queue).not.toBeNull();
             await act(async () => { queue?.click(); });
@@ -110,6 +110,13 @@ const renderPill = async (options: { hasContent: boolean; newSessionDraftOpen: b
 };
 
 describe('MobilePillComposer', () => {
+    test('sends a native follow-up immediately while keeping the stop action available', async () => {
+        const markup = await renderPill({ hasContent: true, newSessionDraftOpen: false, canAbort: true, followUpDelivery: 'steer' });
+        expect(markup).toContain('aria-label="Send message"');
+        expect(markup).toContain('aria-label="Stop generating"');
+        expect(markup).not.toContain('aria-label="Stage message"');
+    });
+
     test('keeps suggestion actions in the top row and tapping the empty prompt only expands', async () => {
         const markup = await renderPill({ hasContent: false, newSessionDraftOpen: false, suggestion: 'Run the tests' });
         expect(markup).toContain('Run the tests');

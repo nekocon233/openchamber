@@ -7,6 +7,7 @@ import { useI18n } from '@/lib/i18n';
 import { resolveProjectContextId, type ProjectRef, type ProjectTodoChange, type ProjectTodoItem } from '@/lib/projectContextApi';
 import { observeProjectContext } from '@/lib/projectContextSync';
 import { cn } from '@/lib/utils';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { selectProjectMemoryForPath, useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { countHighlightedMemories, memoryViewKey } from '@/lib/agentMemoryBadges';
 import { EMPTY_PROJECT_CONTEXT_ENTRY, useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -351,17 +352,14 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
   }, [activeTab, counts, setStoredTab, trimmedQuery]);
 
   const handlePersistTodos = React.useCallback(
-    (nextTodos: ProjectTodoItem[], change?: ProjectTodoChange) => {
-      if (!projectRef) {
-        return;
-      }
+    async (nextTodos: ProjectTodoItem[], change?: ProjectTodoChange): Promise<boolean> => {
+      if (!projectRef) return false;
+      const runtime = getRuntimeKey();
       // The store owns per-project write serialization and rollback; the panel
       // only decides what to persist and how to report a failure.
-      void saveTodos(projectRef, nextTodos, change).then((saved) => {
-        if (!saved) {
-          toast.error(t('rightSidebar.contextNotesTodo.toast.saveNotesFailed'));
-        }
-      });
+      const saved = await saveTodos(projectRef, nextTodos, change);
+      if (!saved && runtime === getRuntimeKey()) toast.error(t('rightSidebar.contextNotesTodo.todo.saveFailed'));
+      return saved;
     },
     [projectRef, saveTodos, t]
   );
@@ -550,6 +548,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
           // width instead of rows stretched edge to edge.
           <div className={cn(wide && 'mx-auto max-w-3xl')}>
             <TodosSection
+              key={`${getRuntimeKey()}:${projectContextId}`}
               todos={todos}
               query={query}
               disabled={isLoading}

@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': 'פריסת סביבת העבודה',
+  'settings.openchamber.visual.option.workspaceLayout.classic': 'קלאסית',
+  'settings.openchamber.visual.option.workspaceLayout.editor': 'עורך',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "הגדירו את מפתח ה-API, הכתובת והמודלים של dsh בשרת מכל מכשיר מחובר.",
   'settings.deepseekHarness.ready': "ממשק שורת הפקודה dsh זוהה.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': 'התחברו עם חשבון Google שלכם. בשרת מרוחק, פעלו לפי ההוראות לכתובת ה-URL ולקוד ההרשאה.',
   'settings.antigravity.warnings.title': 'לפני השימוש ב-Antigravity',
   'settings.antigravity.warnings.subscription': 'Google אינה תומכת במנויים אישיים של Google AI לשימוש ביישומי צד שלישי. שימוש בהם כאן עלול להגביל או לסיים את החשבון שלך.',
-  'settings.antigravity.warnings.fullAccess': 'OpenChamber מפעיל את agy עם גישה מלאה. כלים ופקודות shell במצב headless פועלים מבלי לבקש אישור לכל פעולה בנפרד.',
+  'settings.antigravity.warnings.fullAccess': 'מצב Build מאשר פעולות כלים באופן אוטומטי. מצב Plan חוסם שינויים בקבצים, פקודות מעטפת, כלי MCP ופעולות בדפדפן.',
   'chat.deepseekCommand.failed': "לא ניתן היה להריץ את פקודת DeepSeek Harness.",
   'chat.deepseekCommand.needsSession': "יש לשלוח הודעה כדי ליצור שיחת DeepSeek Harness לפני הרצת הפקודה.",
   'settings.sourceControl.ssh.title': 'מפתחות SSH',

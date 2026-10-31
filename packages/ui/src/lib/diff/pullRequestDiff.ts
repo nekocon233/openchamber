@@ -6,6 +6,10 @@ import { buildTargetQuery } from '@/lib/walkthrough/api';
 import type { WalkthroughSource } from '@/lib/walkthrough/types';
 
 export type PullRequestSource = Extract<WalkthroughSource, { kind: 'pr' }>;
+export interface PullRequestDiffSnapshot {
+  files: ReturnType<typeof parsePullRequestDiff>;
+  headSha: string | null;
+}
 
 /** Keep each file's original patch bytes, including binary and metadata-only changes. */
 export function parsePullRequestDiff(patch: string) {
@@ -33,14 +37,16 @@ async function throwPullRequestError(response: Response, fallback: string): Prom
   throw new Error(error.success ? error.data.error : `${fallback} (${response.status})`);
 }
 
-export async function fetchPullRequestDiff(directory: string, source: PullRequestSource, context: Readonly<SourceControlReadContext>) {
+export async function fetchPullRequestDiff(directory: string, source: PullRequestSource, context: Readonly<SourceControlReadContext>): Promise<PullRequestDiffSnapshot> {
   const response = await runtimeFetch('/api/walkthrough/pr-diff', {
     query: buildTargetQuery(directory, { source, context }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(5 * 60_000 + 5_000),
   });
   if (!response.ok) await throwPullRequestError(response, 'Failed to load pull request diff');
   if (!response.headers.get('content-type')?.includes('text/plain')) throw new Error('Pull request comparison is unavailable on this server');
-  return parsePullRequestDiff(await response.text());
+  const revision = response.headers.get('X-OpenChamber-PR-Head-Sha');
+  const headSha = revision ? z.string().regex(/^[0-9a-f]{40}$/i).parse(revision) : null;
+  return { files: parsePullRequestDiff(await response.text()), headSha };
 }
 
 const pullRequestFileSchema = z.object({ original: z.string(), modified: z.string() });
@@ -50,7 +56,7 @@ export async function fetchPullRequestFile(
   directory: string,
   source: PullRequestSource,
   context: Readonly<SourceControlReadContext>,
-  file: { path: string; previousPath?: string; status: string },
+  file: { path: string; previousPath?: string; status: string; headSha?: string | null },
 ) {
   const response = await runtimeFetch('/api/walkthrough/pr-file', {
     query: {
@@ -58,11 +64,12 @@ export async function fetchPullRequestFile(
       path: file.path,
       previousPath: file.previousPath ?? '',
       status: file.status,
+      headSha: file.headSha ?? '',
     },
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) await throwPullRequestError(response, 'Failed to load pull request file');
   const parsed = pullRequestFileSchema.safeParse(await response.json().catch(() => null));
   if (!parsed.success) throw new Error('Pull request file contents are unavailable on this server');
-  return parsed.data;
+  return { ...parsed.data, reviewHeadSha: file.headSha ?? undefined };
 }

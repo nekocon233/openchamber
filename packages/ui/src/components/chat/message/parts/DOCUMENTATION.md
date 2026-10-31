@@ -425,3 +425,17 @@ Why: only navigation tools use the compact static path; all other tools need obs
 - Reasoning: `ReasoningPart.tsx`
 - Status/placeholders: `WorkingPlaceholder.tsx`, `SessionActiveSpinner.tsx`, `MigratingPart.tsx`, `BusyDots.tsx`
 - Utility renderers: `VirtualizedCodeBlock.tsx`, `MinDurationShineText.tsx`
+
+## Antigravity transcript details
+
+The native adapter marks shortened saved assistant text and tool output with
+`nativeOutputTruncated`. Those parts display a localized notice while retaining
+the available content. Automatic compaction keeps its separate compaction row.
+Task metadata can name multiple `nativeSubagents`; expanded task rows offer a
+link to each child. Antigravity children are read-only and expose no independent
+stop action. Their root session still owns interruption.
+
+Native read/edit/write/command arguments use the same file and command keys as
+the other CLIs. Complete saved arguments can fill a partial live frame, while
+known permission errors remain errors. Input replacement text is the native
+call's recorded text; the adapter does not invent full-file diff hunks.

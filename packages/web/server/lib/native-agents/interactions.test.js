@@ -17,6 +17,19 @@ const record = (tool, callID) => ({
 });
 
 describe('native interaction answers', () => {
+  it('retains an AGY human answer when a later cancellation interrupts delivery', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-interactions-'));
+    roots.push(root);
+    const store = createNativeInteractions({ dataDir: root });
+    const owner = 'nag_80ee3811-32f6-4c89-9770-ebd76509d824';
+    const request = { id: 'agy-answer', sessionID: owner, kind: 'antigravity-plan-exit', tool: { callID: 'agy-plan' } };
+    await store.record(request, { status: 'replied', answers: [['build']] });
+    await store.record(request, { status: 'rejected', reason: 'interrupted' });
+    const [restored] = await createNativeInteractions({ dataDir: root }).attach(owner, [record('plan_exit', 'agy-plan')]);
+    expect(restored.parts[1].state.metadata).toMatchObject({
+      questionAnswers: [['build']], questionStatus: 'answered', nativeQuestionKind: 'antigravity-plan-exit',
+    });
+  });
   it('preserves lossless answers across owner reloads and only copies retained calls into a fork', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-interactions-'));
     roots.push(root);

@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { create } from 'zustand';
-import type { Model } from '@/lib/opencode/model';
+import { findCatalogModel, type Model } from '@/lib/opencode/model';
 import { ThemeSystemContext, type ThemeContextValue } from '@/contexts/theme-system-context';
 import { getThemeById } from '@/lib/theme/themes';
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { useRoutingStore } from '@/stores/useRoutingStore';
+import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
+import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from '@/lib/native-agents/test-utils/runtime';
 
 /**
  * Restoring a session must not invent an effort choice.
@@ -83,6 +85,7 @@ type ConfigState = {
   currentVariantSelection: { override: VariantChoice; inherited: string | undefined };
   currentAgentName: string | undefined;
   settingsDefaultVariant: string | undefined;
+  settingsDefaultModel: string | undefined;
   settingsDefaultAgent: string | undefined;
   selectionSource: 'auto' | 'manual';
   setProvider: (providerId: string) => void;
@@ -111,6 +114,7 @@ const useConfigStore = create<ConfigState>((set, get) => ({
   currentVariantSelection: { override: undefined, inherited: undefined },
   currentAgentName: AGENT,
   settingsDefaultVariant: undefined,
+  settingsDefaultModel: undefined,
   settingsDefaultAgent: undefined,
   selectionSource: 'auto',
   setProvider: (providerId) => set({ currentProviderId: providerId }),
@@ -148,9 +152,8 @@ const useConfigStore = create<ConfigState>((set, get) => ({
   getCurrentModelVariants: () => {
     // The catalog in state wins, so a test can give the model no levels; a
     // discovery gap still shows the fixture's, as before.
-    const entry = get().providers
-      .find((provider) => provider.id === get().currentProviderId)
-      ?.models.find((candidate) => candidate.id === get().currentModelId);
+    const entry = findCatalogModel(get().providers
+      .find((provider) => provider.id === get().currentProviderId)?.models, get().currentModelId);
     return (entry?.variants ?? model.variants)?.map((variant) => variant.id) ?? [];
   },
   getModelMetadata: () => undefined,
@@ -277,7 +280,13 @@ mock.module('@/stores/useConfigStore', () => ({
     state.agents.find((agent) => agent.name === name) ?? knownElsewhere.agents.find((agent) => agent.name === name),
 }));
 mock.module('@/sync/selection-store', () => ({ useSelectionStore }));
-mock.module('@/sync/session-ui-store', () => ({ useSessionUIStore }));
+mock.module('@/sync/session-ui-store', () => ({
+  useSessionUIStore,
+  clearPendingDraftPermissionPolicy: () => undefined,
+  setPendingDraftPermissionPolicy: () => undefined,
+  supersedePendingDraftPermissionPolicy: () => undefined,
+  resolveSendSelection: () => { throw new Error('Sending is outside the model-controls fixture'); },
+}));
 mock.module('@/stores/useUIStore', () => ({ useUIStore }));
 mock.module('@/stores/contextStore', () => ({
   useContextStore: <T,>(selector: (state: { hasHydrated: boolean }) => T): T => selector({ hasHydrated: true }),
@@ -329,7 +338,6 @@ mock.module('@/components/model-picker/ModelPickerList', () => ({
     <button onClick={() => onSelect({ providerID: PROVIDER_ID, modelID: MODEL_ID, model })}>{MODEL_ID}</button>
   ),
 }));
-mock.module('@/hooks/useRuntimeAPIs', () => ({ useIsVSCodeRuntime: () => false }));
 mock.module('@/hooks/useModelLists', () => ({ useModelLists: () => ({ favoriteModelsList: [], recentModelsList: [] }) }));
 mock.module('@/hooks/useIsTextTruncated', () => ({ useIsTextTruncated: () => false }));
 mock.module('@/lib/device', () => ({ useDeviceInfo: () => ({ isTouch: false }) }));
@@ -416,11 +424,13 @@ const renderModelControls = async (props: React.ComponentProps<typeof ModelContr
     reloadCustomThemes: async () => undefined, importTheme: async () => theme, deleteImportedTheme: async () => undefined,
   };
   await act(async () => root.render(
-    <ThemeSystemContext.Provider value={themeContext}>
-      <I18nProvider>
-        <ModelControls {...props} />
-      </I18nProvider>
-    </ThemeSystemContext.Provider>,
+    <RuntimeAPIContext.Provider value={createTestRuntimeAPIs(createTestNativeAgentsAPI({ supported: false }))}>
+      <ThemeSystemContext.Provider value={themeContext}>
+        <I18nProvider>
+          <ModelControls {...props} />
+        </I18nProvider>
+      </ThemeSystemContext.Provider>
+    </RuntimeAPIContext.Provider>,
   ));
   return {
     dom,
@@ -461,6 +471,7 @@ describe('ModelControls effort restore', () => {
       currentVariant: undefined,
       currentVariantSelection: { override: undefined, inherited: undefined },
       settingsDefaultVariant: undefined,
+      settingsDefaultModel: undefined,
       selectionSource: 'auto',
     });
   });
@@ -802,6 +813,38 @@ describe('ModelControls effort restore', () => {
     }
   });
 
+  for (const isMobile of [false, true]) {
+    test(`a saved Antigravity slug restores its family and effort (mobile: ${isMobile})`, async () => {
+      const providerID = 'antigravity-native';
+      const modelID = 'gemini-test-low';
+      useUIStore.setState({ isMobile });
+      useSessionUIStore.setState({ currentSessionId: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188' });
+      const nativeModel = { ...model, id: 'gemini-test', modelID: 'gemini-test', providerID, name: 'Gemini Test',
+        nativeAliases: [{ id: modelID, variant: 'low' }, { id: 'gemini-test-high', variant: 'high' }] };
+      useConfigStore.setState({ providers: [{ id: providerID, name: 'Antigravity CLI', models: [nativeModel] }],
+        currentProviderId: providerID, currentModelId: modelID });
+      latestUserChoice = { id: 'old-agy-prompt', agent: AGENT, providerID, modelID };
+
+      const { dom, cleanup } = await renderModelControls(isMobile ? { mobilePanel: 'variant', onMobilePanelChange: () => {} } : {});
+      try {
+        expect(dom.container.querySelector('.model-controls__model-trigger')?.textContent).toContain('Gemini Test');
+        expect(dom.container.querySelector('.model-controls__model-trigger')?.textContent).not.toContain('(Low)');
+        expect(useConfigStore.getState().currentModelId).toBe(modelID);
+        expect(useConfigStore.getState().currentVariant).toBe('low');
+        expect(dom.container.querySelector('.model-controls__variant-trigger')?.textContent?.toLowerCase()).toContain('low');
+        expect(variantWrites).not.toContain(null);
+        const high = Array.from(dom.container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'High');
+        expect(high).toBeDefined();
+        await act(async () => high?.click());
+        expect(useConfigStore.getState().currentModelId).toBe(modelID);
+        expect(dom.container.querySelector('.model-controls__variant-trigger')?.textContent?.toLowerCase()).toContain('high');
+        expect(useSelectionStore.getState().savedVariant).toBe('high');
+      } finally {
+        await cleanup();
+      }
+    });
+  }
+
   test('a configured default level outranks the highest level', async () => {
     useSessionUIStore.setState({ currentSessionId: null });
     useConfigStore.setState({ settingsDefaultVariant: 'low' });
@@ -814,6 +857,33 @@ describe('ModelControls effort restore', () => {
       await cleanup();
     }
   });
+
+  for (const isMobile of [false, true]) {
+    test(`Gemini inherits high while the settings model uses Codex max (mobile: ${isMobile})`, async () => {
+      const providerID = 'antigravity-native';
+      const modelID = 'gemini-test';
+      useUIStore.setState({ isMobile });
+      useSessionUIStore.setState({ currentSessionId: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188' });
+      const nativeModel = { ...model, id: modelID, modelID, providerID, name: 'Gemini Test' };
+      useConfigStore.setState({
+        providers: [{ id: providerID, name: 'Antigravity CLI', models: [nativeModel] }],
+        currentProviderId: providerID, currentModelId: modelID,
+        settingsDefaultModel: 'codex-native/gpt-6.1-sol', settingsDefaultVariant: 'max',
+      });
+      latestUserChoice = { id: 'agy-prompt', agent: AGENT, providerID, modelID };
+      const { dom, cleanup } = await renderModelControls(isMobile ? { mobilePanel: 'variant', onMobilePanelChange: () => {} } : {});
+      try {
+        expect(useConfigStore.getState().currentVariant).toBe('high');
+        expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: undefined, inherited: 'high' });
+        expect(dom.container.querySelector('.model-controls__variant-trigger')?.textContent?.toLowerCase()).toContain('high');
+        expect(variantWrites).not.toContain('high');
+        const low = Array.from(dom.container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Low');
+        await act(async () => low?.click());
+        expect(useConfigStore.getState().currentVariant).toBe('low');
+        expect(useSelectionStore.getState().savedVariant).toBe('low');
+      } finally { await cleanup(); }
+    });
+  }
 
   test('an explicit Default stays Default instead of falling back to the highest level', async () => {
     useSelectionStore.setState({ savedVariant: null });

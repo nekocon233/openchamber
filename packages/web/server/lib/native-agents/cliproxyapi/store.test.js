@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCliproxyapiStore } from './store.js';
 
@@ -23,6 +24,25 @@ const write = async (dataDir, document) => {
 };
 
 describe('CLIProxyAPI store', () => {
+  it('migrates the saved Opus route into shared family state without changing identity or credentials', async () => {
+    const { dataDir, store } = await fixture();
+    const original = await store.read();
+    const legacy = { connectionId: randomUUID(), modelId: randomUUID(), claude: null, antigravity: null,
+      priorities: [{ name: 'fixture.json', priority: 3 }], previousRebind: 'any' };
+    await write(dataDir, { ...original, claudeRoutes: undefined, opusRoute: legacy });
+    const migrated = await store.read();
+    expect(migrated.claudeRoutes).toEqual({ connectionId: legacy.connectionId,
+      opus: { modelId: legacy.modelId, claude: null, antigravity: null }, sonnet: null,
+      priorities: legacy.priorities, previousRebind: 'any' });
+    expect(migrated.managementKey).toBe(original.managementKey);
+    await store.update((document) => document);
+    const persisted = JSON.parse(await fs.readFile(store.file, 'utf8'));
+    expect(persisted).not.toHaveProperty('opusRoute');
+    expect(persisted.claudeRoutes.opus.modelId).toBe(legacy.modelId);
+    await write(dataDir, { ...original, claudeRoutes: null, opusRoute: legacy });
+    expect((await store.read()).claudeRoutes).toBeNull();
+  });
+
   it('answers with defaults without writing anything', async () => {
     const { dataDir, store } = await fixture();
     const document = await store.read();

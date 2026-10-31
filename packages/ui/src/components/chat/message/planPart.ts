@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Part, ToolPart } from '@/lib/opencode/model';
 
 const questionMetadata = z.object({
-    nativeQuestionKind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit']),
+    nativeQuestionKind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit', 'antigravity-plan-exit']),
     nativePlanCallID: z.string().min(1).optional(),
 });
 const planInput = z.object({ plan: z.string().trim().min(1) });

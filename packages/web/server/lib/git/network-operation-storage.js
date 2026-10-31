@@ -21,11 +21,11 @@ const ERROR_CODES = new Set([
   'INVALID_REQUEST', 'NOT_FOUND', 'STALE_REPOSITORY', 'STALE_BINDING', 'STALE_CONFIG',
   'REMOTE_CHANGED', 'AUTHENTICATION_REQUIRED', 'AUTHENTICATION_FAILED', 'TRANSPORT_FAILED',
   'CONFLICT', 'CANCELLED', 'TIMEOUT', 'OUTCOME_UNKNOWN', 'RUNTIME_UNSUPPORTED', 'UNKNOWN',
-  'GIT_LFS_CLIENT_MISSING', 'CHECKOUT_TOO_LARGE',
+  'GIT_LFS_CLIENT_MISSING', 'CHECKOUT_TOO_LARGE', 'PR_DIFF_TOO_LARGE',
 ]);
 const FAILURE_ERROR_CODES = new Set([
   'INVALID_REQUEST', 'AUTHENTICATION_REQUIRED', 'AUTHENTICATION_FAILED', 'TRANSPORT_FAILED',
-  'RUNTIME_UNSUPPORTED', 'GIT_LFS_CLIENT_MISSING', 'CHECKOUT_TOO_LARGE', 'UNKNOWN',
+  'RUNTIME_UNSUPPORTED', 'GIT_LFS_CLIENT_MISSING', 'CHECKOUT_TOO_LARGE', 'PR_DIFF_TOO_LARGE', 'UNKNOWN',
 ]);
 const STATE_ERROR_CODES = Object.freeze({
   partial: FAILURE_ERROR_CODES,
@@ -56,6 +56,7 @@ const SAFE_ERROR_MESSAGES = Object.freeze({
   UNKNOWN: 'Git operation failed; inspect repository state before retrying',
   GIT_LFS_CLIENT_MISSING: 'Git LFS is required but unavailable',
   CHECKOUT_TOO_LARGE: 'Checkout has too many files to inspect',
+  PR_DIFF_TOO_LARGE: 'Pull request diff exceeds the 20 MiB limit',
 });
 
 const exactKeys = (value, required, optional = []) => {
@@ -257,6 +258,10 @@ const isTarget = (value) => {
   if (value.operation === 'contributor-fetch') {
     return exactKeys(value, ['operation', 'remote', 'sourceRef', 'destinationRef'])
       && isRemote(value.remote) && isRef(value.sourceRef) && isRef(value.destinationRef);
+  }
+  if (value.operation === 'pr-snapshot') {
+    return exactKeys(value, ['operation', 'repositoryId', 'number', 'remote'])
+      && isIdentifier(value.repositoryId) && Number.isSafeInteger(value.number) && value.number > 0 && isRemote(value.remote);
   }
   if (!['fetch', 'pull', 'push', 'delete-remote-branch'].includes(value.operation)) return false;
   const remoteFetch = value.operation === 'fetch' && value.fetchScope === 'remote';

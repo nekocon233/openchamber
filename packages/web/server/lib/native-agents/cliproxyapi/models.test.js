@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { codexHomeFrom, readCodexModelMetadata } from './models.js';
+import { codexHomeFrom, readCodexModelMetadata, parseGatewayModelMetadata } from './models.js';
 
 const directories = [];
 const fixture = async (document = null) => {
@@ -16,6 +16,37 @@ afterEach(async () => { for (const directory of directories.splice(0)) await fs.
 const cache = (models) => JSON.stringify({ client_version: '0.163.0', etag: 'x', fetched_at: '2026-10-16T09:00:00Z', identity: {}, models });
 
 describe('Codex model metadata for gateway imports', () => {
+  it('exposes documented gateway effort aliases for Antigravity Claude budget models', () => {
+    const definition = { id: 'claude-opus-5-5-high', context_length: 1000000, max_completion_tokens: 128000, thinking: { min: 1024, max: 64000 } };
+    expect(parseGatewayModelMetadata({ models: [definition] }, 'antigravity').get(definition.id).efforts)
+      .toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(parseGatewayModelMetadata({ models: [definition] }, 'claude').get(definition.id).efforts).toEqual([]);
+    expect(parseGatewayModelMetadata({ models: [definition] }).get(definition.id).efforts).toEqual([]);
+    expect(parseGatewayModelMetadata({ models: [{ ...definition, id: 'gemini-budget-model' }] }, 'antigravity').get('gemini-budget-model').efforts).toEqual([]);
+  });
+
+  it('keeps explicit effort declarations ahead of gateway budget aliases', () => {
+    const definition = { id: 'claude-explicit', context_length: 200000, max_completion_tokens: 128000, thinking: { min: 1024, max: 64000, levels: ['medium', 'high'] } };
+    expect(parseGatewayModelMetadata({ models: [definition] }, 'antigravity').get(definition.id).efforts).toEqual(['medium', 'high']);
+  });
+
+  it('does not advertise aliases without a usable thinking budget', () => {
+    for (const thinking of [undefined, {}, { min: 0, max: 0 }, { min: 64000, max: 1024 }, { min: 128000, max: 128000 }]) {
+      const definition = { id: 'claude-budget', context_length: 200000, max_completion_tokens: 128000, thinking };
+      if (thinking === undefined) delete definition.thinking;
+      expect(parseGatewayModelMetadata({ models: [definition] }, 'antigravity').get(definition.id).efforts).toEqual([]);
+    }
+  });
+
+  it('uses declared gateway limits and refuses incomplete model definitions', () => {
+    const metadata = parseGatewayModelMetadata({ models: [
+      { id: 'claude-complete', context_length: 200000, max_completion_tokens: 64000, thinking: { levels: ['high', 'low', 'unsupported'] } },
+      { id: 'claude-missing', context_length: 200000 },
+      { id: 'claude-invalid', context_length: -1, max_completion_tokens: 64000 },
+    ] });
+    expect([...metadata.keys()]).toEqual(['claude-complete']);
+    expect(metadata.get('claude-complete')).toMatchObject({ contextWindow: 200000, outputLimit: 64000, efforts: ['low', 'high'], image: false });
+  });
   it('reads the fields a connection row needs', async () => {
     const codexHome = await fixture(cache([{
       slug: 'gpt-6.1-sol',

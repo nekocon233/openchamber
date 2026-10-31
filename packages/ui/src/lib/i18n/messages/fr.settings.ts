@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': 'Disposition de l\'espace de travail',
+  'settings.openchamber.visual.option.workspaceLayout.classic': 'Classique',
+  'settings.openchamber.visual.option.workspaceLayout.editor': 'Éditeur',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "Configurez la clé API, le point de terminaison et les modèles de dsh sur le serveur depuis tout appareil connecté.",
   'settings.deepseekHarness.ready': "CLI dsh détectée.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': "Connectez-vous avec votre compte Google. Pour un serveur distant, suivez les instructions concernant l'URL et le code d'autorisation.",
   'settings.antigravity.warnings.title': "Avant d'utiliser Antigravity",
   'settings.antigravity.warnings.subscription': 'Google ne prend pas en charge les abonnements personnels Google AI pour les applications tierces. Leur utilisation ici peut restreindre ou résilier votre compte.',
-  'settings.antigravity.warnings.fullAccess': "OpenChamber démarre agy avec un accès complet. Les outils et commandes shell en mode headless s'exécutent sans demander d'approbation individuelle.",
+  'settings.antigravity.warnings.fullAccess': 'Build approuve automatiquement les actions des outils. Plan bloque les modifications de fichiers, les commandes shell, les outils MCP et les actions du navigateur.',
   'chat.deepseekCommand.failed': "Impossible d'exécuter la commande DeepSeek Harness.",
   'chat.deepseekCommand.needsSession': "Envoyez un message pour créer une session DeepSeek Harness avant d'exécuter cette commande.",
   'settings.sourceControl.ssh.title': 'Clés SSH',

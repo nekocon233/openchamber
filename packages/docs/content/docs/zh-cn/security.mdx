@@ -185,6 +185,8 @@ environment:
 
 到底能使用哪些模型提供商，由 OpenCode 决定，而不是 OpenChamber。用 [OpenCode 策略](https://opencode.ai/v2/docs/policies/)锁定它：先拒绝所有提供商，再允许你批准的那些。
 
+企业模式也会阻止 CLIProxyAPI 登录、模型导入和连接修改。 Antigravity 模型系列的自动升级也会停用。 同时禁用从 Claude 自动切换到 Antigravity 的统一 Opus/Sonnet 路由。
+
 ```jsonc
 {
   "experimental": {

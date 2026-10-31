@@ -695,13 +695,27 @@ transcript fetching or Small Model generation.
 ## Follow-up delivery
 
 Unified native `ncv_` conversations use this same queue and claim lifecycle.
-They confirm the server's whole-execution readiness before draining, including
+Fresh server execution metadata routes follow-ups to the current native source
+immediately when the selected backend matches and no handoff is preparing.
+Whole-execution readiness is a switching boundary, not a same-backend steering
+boundary. An explicit queue action still queues. They confirm the server's
+whole-execution readiness before draining queued work, including
 background tasks and native questions. A cross-backend follow-up always waits;
 its captured model runs after the current source settles. Its prompt carries
 `preserveSelection`, keeping any later composer choice intact. Claude, Codex
 and DeepSeek single-CLI sessions retain their native immediate follow-up path.
-Antigravity accepts one turn at a time, so its follow-ups use this queue until
-idle. Server behavior is owned by `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
+Antigravity accepts one turn at a time, so busy follow-ups use this queue until
+idle; idle prompts send normally. It uses the live session phase when no separate
+status probe ran, never treating an absent probe as busy. `lib/followUpDrafts.ts`
+owns native delivery decisions. Server behavior is owned by
+`packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
+
+The busy follow-up button in both the expanded footer and collapsed mobile pill
+uses that same native decision. A steerable source shows Send and invokes the
+ordinary submission path; a blocked handoff or Antigravity turn shows the queue
+action. The fresh pre-send check still wins if execution changed after render.
+The stop control remains independent. OpenCode's existing queue button is
+unchanged, and queued messages retain their own explicit actions.
 
 Follow-up queueing applies only to normal prompts in an existing session. While
 the authoritative phase snapshot is `busy` or `retry`, choosing the queue

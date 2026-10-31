@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { FormRequest } from '@/lib/opencode/model';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
 import type { QuestionInfo, QuestionRequest } from '@/types/question';
-import { nativeBackendOfSessionId } from './ids';
 
 type FormField = FormRequest['fields'][number];
 type Translate = (key: I18nKey, params?: I18nParams) => string;
@@ -24,8 +23,6 @@ const fieldForQuestion = (question: QuestionInfo, index: number): FormField => {
 
 /** Native questions use the shared form state, dock and reply lifecycle. */
 export const projectNativeQuestion = (question: QuestionRequest): FormRequest | null => {
-  // Antigravity has no question or plan-approval protocol.
-  if (nativeBackendOfSessionId(question.sessionID) === 'antigravity') return null;
   const [first, ...rest] = question.questions.map(fieldForQuestion);
   if (!first) return null;
   return {
@@ -37,10 +34,16 @@ export const projectNativeQuestion = (question: QuestionRequest): FormRequest | 
   };
 };
 
-/** Localize the plan decision while retaining the CLI's exact answer values. */
+/** Localize native field labels and plan choices while retaining the CLI's answer values. */
 export const localizeNativeForm = (form: FormRequest, t: Translate): FormRequest => {
   const kind = form.metadata?.openchamberNativeQuestionKind;
-  if (kind !== 'claude-plan-exit' && kind !== 'codex-plan-exit' && kind !== 'deepseek-plan-exit') return form;
+  if (kind === 'question' && form.fields.some((field) => !field.title?.trim())) {
+    const [first, ...rest] = form.fields.map((field, index): FormField => field.title?.trim() ? field : {
+      ...field, title: t('chat.questionCard.questionFallback', { index: String(index + 1) }),
+    });
+    return { ...form, fields: [first, ...rest] };
+  }
+  if (kind !== 'claude-plan-exit' && kind !== 'codex-plan-exit' && kind !== 'deepseek-plan-exit' && kind !== 'antigravity-plan-exit') return form;
   const [first, ...rest] = form.fields.map((field): FormField => {
     if (field.type !== 'string' && field.type !== 'multiselect') return field;
     const options = field.options?.map((option) => ({
@@ -49,7 +52,7 @@ export const localizeNativeForm = (form: FormRequest, t: Translate): FormRequest
         : option.value === 'plan' ? t('chat.questionCard.planExitKeepPlanning') : option.label,
     }));
     const description = [t('chat.questionCard.planExitQuestion'), field.description].filter(Boolean).join('\n\n');
-    const title = kind === 'codex-plan-exit' ? t('chat.questionCard.planExitTitle') : field.title;
+    const title = kind === 'codex-plan-exit' || kind === 'antigravity-plan-exit' ? t('chat.questionCard.planExitTitle') : field.title;
     return field.type === 'multiselect'
       ? { ...field, title, description, options: options ?? [] }
       : { ...field, title, description, options };

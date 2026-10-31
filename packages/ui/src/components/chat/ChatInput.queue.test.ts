@@ -105,13 +105,14 @@ describe('ChatInput follow-up queue integration', () => {
     expect(drainSource).toContain("releaseQueuedMessage(messageQueueTarget, messageId, claim.claimId, 'staged', claim.context)");
   });
 
-  test('queues busy Antigravity follow-ups instead of converting them to native steering', () => {
+  test('resolves native delivery from the fresh execution state and the observed phase', () => {
     const deliveryStart = source.indexOf("let delivery: 'steer' | 'queue' | undefined;");
     const historyStart = source.indexOf('const historySubmissions =', deliveryStart);
     const branch = source.slice(deliveryStart, historyStart);
-    expect(branch).toContain("nativeBackendOfSessionId(submissionSessionId) === 'antigravity'");
-    expect(branch).toContain("delivery = 'queue';");
-    expect(branch).toContain("} else if (delivery === 'queue'");
+    expect(branch).toContain('delivery = resolveNativeFollowUpDelivery({');
+    expect(branch).toContain('unifiedState: authoritativeUnifiedState');
+    expect(branch).toContain('sessionPhase: authoritativeSessionPhase ?? currentSessionPhase');
+    expect(branch).toContain('providerID: providerIdToSend');
   });
 
   test('restores extended queue payload when editing an item back into the composer', () => {

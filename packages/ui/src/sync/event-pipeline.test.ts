@@ -97,6 +97,13 @@ async function collect(events: StreamPayload[], expected: number): Promise<{ dir
 }
 
 describe("createEventPipeline", () => {
+  test("delivers native model invalidation on the global stream", async () => {
+    const update = { type: "catalog.updated", properties: { kind: "native-model" } } as const
+    const { directory, events } = await collect([update], 1)
+    expect(directory).toBe("global")
+    expect(events).toEqual([update])
+  })
+
   test("translates wire events, routes them by location, and delivers one ordered batch", async () => {
     const { directory, events } = await collect([textEnded("a"), textDelta("b"), textEnded("ab")], 3)
     expect(directory).toBe("/repo")

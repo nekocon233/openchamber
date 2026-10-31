@@ -59,6 +59,17 @@ asked, `/api/quota/providers` answers 500 instead of an empty list.
 | `zenmux` | ZenMux | `providers/zenmux.js` | Optional Platform API key stored under `~/.config/openchamber/quota/zenmux.json` (`platformApiKey`). The OpenCode chat key is not used. |
 | `xai` | xAI | `providers/xai.js` | `xai` OAuth entry in OpenCode `auth.json` |
 
+## Native Antigravity quota
+
+The authenticated `/api/quota/antigravity-cli` route delegates to the native
+Antigravity adapter on the connected server, independently of OpenCode ownership.
+It reads `agy --print /usage`, with a ten-second timeout and coalesced concurrent
+requests. `usage.models.gemini` and `usage.models.claude-gpt` each retain their
+reported `5h` and `weekly` windows. This source never reads OAuth credentials and
+is separate from the `antigravity` OpenCode-plugin tracker and gateway accounts.
+The UI uses the normal quota refresh owner and preserves prior values on failure.
+VS Code explicitly returns `availability: 'unsupported'` for this native source.
+
 ## Internal-only provider module
 - `providers/openai.js` exists for logic parity/reuse but is intentionally not registered for dispatcher ID routing.
 

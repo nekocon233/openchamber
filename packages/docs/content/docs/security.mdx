@@ -185,6 +185,8 @@ Small-model tasks (session titles, recaps, commit messages, the diff walkthrough
 
 Which model providers may be used at all is decided by OpenCode, not OpenChamber. Lock it with [OpenCode policies](https://opencode.ai/v2/docs/policies/): deny every provider, then allow the ones you approved.
 
+Enterprise mode also blocks CLIProxyAPI sign-in, model imports, and connection changes. Automatic upgrades within Antigravity model families are also disabled. Unified Claude-to-Antigravity Opus/Sonnet fallback is also disabled.
+
 ```jsonc
 {
   "experimental": {

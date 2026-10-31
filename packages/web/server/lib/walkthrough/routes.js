@@ -98,6 +98,9 @@ export function registerWalkthroughRoutes(app, { getWalkthroughService, validate
   // The comparison view needs the complete published patch, without model
   // readiness checks, generated-file filtering, or local working-tree reads.
   app.get('/api/walkthrough/pr-diff', async (req, res) => {
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', onClose);
     try {
       const query = new URL(req.originalUrl, 'http://localhost').searchParams;
       const directory = query.get('directory')?.trim() ?? '';
@@ -109,13 +112,21 @@ export function registerWalkthroughRoutes(app, { getWalkthroughService, validate
       // repository is only checked against it.
       const readContext = await validatePullRequestContext(source, Object.fromEntries(query), directory);
       const { getPullRequestDiff } = await getWalkthroughService();
-      const { patch } = await getPullRequestDiff(readContext?.directory ?? directory, source.number, readContext, {
+      const { patch, meta } = await getPullRequestDiff(readContext?.directory ?? directory, source.number, readContext, {
         allowEmpty: true,
         sourceRepo: source.sourceRepo ?? null,
+        signal: controller.signal,
+        includeRevision: true,
       });
+      if (meta?.headSha) {
+        res.set('X-OpenChamber-PR-Head-Sha', meta.headSha);
+        res.append('Access-Control-Expose-Headers', 'X-OpenChamber-PR-Head-Sha');
+      }
       res.type('text/plain').send(patch);
     } catch (error) {
-      respondWithError(res, error, 'Failed to load pull request diff');
+      if (!controller.signal.aborted) respondWithError(res, error, 'Failed to load pull request diff');
+    } finally {
+      res.removeListener('close', onClose);
     }
   });
 
@@ -132,12 +143,15 @@ export function registerWalkthroughRoutes(app, { getWalkthroughService, validate
       if (!path) return res.status(400).json({ error: 'path parameter is required' });
       const previousPath = query.get('previousPath')?.trim() || undefined;
       const status = query.get('status') ?? 'M';
+      const expectedHeadSha = query.get('headSha') || undefined;
+      if (expectedHeadSha && !/^[0-9a-f]{40}$/i.test(expectedHeadSha)) return res.status(400).json({ error: 'Invalid pull request revision' });
       const readContext = await validatePullRequestContext(source, Object.fromEntries(query), directory);
       const { getPullRequestFileContents } = await getWalkthroughService();
       res.json(await getPullRequestFileContents(readContext?.directory ?? directory, source.number, readContext, {
         path,
         previousPath,
         status,
+        expectedHeadSha,
         sourceRepo: source.sourceRepo ?? null,
       }));
     } catch (error) {

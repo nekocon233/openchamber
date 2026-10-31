@@ -1,7 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import { planZoneFit } from './zoneFit';
+import { clampSidebarWidth, getSidebarWidth } from './sidebarGeometry';
 
 describe('planZoneFit', () => {
+  test('legacy and oversized sidebar widths use the same limits as the column', () => {
+    // Dragging to zero reaches the minimum; a saved zero uses the initial width.
+    expect(clampSidebarWidth(0)).toBe(264);
+    for (const [saved, width] of [[168, 264], [0, 280], [420, 420], [800, 500]]) {
+      expect(getSidebarWidth(saved)).toBe(width);
+    }
+  });
+
   test('a zone that fits beside the chat changes nothing', () => {
     expect(planZoneFit({ rowWidth: 1600, leftWidth: 480, rightWidth: 540, sidebarWidth: 280, opening: 'left' }))
       .toEqual({ collapseSidebar: false, displace: null });

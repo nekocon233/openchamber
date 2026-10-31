@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
+import { OpenCode } from '@opencode/client';
+import { SyncProvider } from '@/sync/sync-context';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import type { NativeAgentsAPI, SettingsAPI } from '@/lib/api/types';
@@ -18,6 +20,11 @@ let WorkStatusPlanSection: typeof import('./WorkStatusPlanSection').WorkStatusPl
 let WorkStatusTodosSection: typeof import('./WorkStatusTodosSection').WorkStatusTodosSection;
 
 const directory = '/fixture/work-status';
+const sdk = OpenCode.make({ baseUrl: 'https://work-status.test', fetch: async (request) => {
+  const pathname = new URL(request instanceof Request ? request.url : request.toString()).pathname;
+  return pathname.endsWith('/event') ? new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } })
+    : Response.json(pathname.endsWith('/session/active') ? {} : { data: [] });
+} });
 const CLAUDE = 'ncl_sections';
 const CODEX = 'ncx_sections';
 const capabilities: NativeAgentsAPI['capabilities'] = async () => ({
@@ -64,7 +71,7 @@ const render = async (sessionId: string, sections = true) => {
   const apis = runtime(api);
   await act(async () => root.render(
     <RuntimeAPIContext.Provider value={apis}>
-      <I18nProvider>
+      <I18nProvider><SyncProvider sdk={sdk} directory="">
         {sections ? (
           <>
             <WorkStatusChecklistSection sessionId={sessionId} directory={directory} />
@@ -73,7 +80,7 @@ const render = async (sessionId: string, sections = true) => {
             <WorkStatusTodosSection sessionId={sessionId} directory={directory} />
           </>
         ) : null}
-      </I18nProvider>
+      </SyncProvider></I18nProvider>
     </RuntimeAPIContext.Provider>,
   ));
   await act(async () => { await Promise.resolve(); });
@@ -94,6 +101,7 @@ beforeEach(async () => {
     localStorage: win.localStorage, getComputedStyle: win.getComputedStyle.bind(win),
     requestAnimationFrame: win.requestAnimationFrame.bind(win), cancelAnimationFrame: win.cancelAnimationFrame.bind(win),
     IS_REACT_ACT_ENVIRONMENT: true,
+    fetch: async () => Response.json({ home: '/fixture', data: [] }),
   };
   const previous = Object.keys(values).map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
   for (const [name, value] of Object.entries(values)) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
@@ -116,6 +124,22 @@ afterEach(async () => {
 });
 
 describe('native task sections in the work status panel', () => {
+  test('Antigravity summaries count saved tasks without claiming active membership', async () => {
+    setup({
+      capabilities: async () => {
+        const base = await capabilities();
+        return { ...base, backends: { ...base.backends, antigravity: { cli: true, tasks: { background: true, output: true, stop: false } } } };
+      },
+      sessionTasks: async () => ({ state: 'history', generation: 'agy-history:fixture', revision: 1, omitted: 0, tasks: [
+        { id: 'native/task-2', type: 'bash', description: 'Saved native task', active: false, ambient: false, status: 'unknown', canStop: false, outputAvailable: false },
+      ] }),
+    });
+    await render('nag_sections');
+    expect(text()).toContain('Saved tasks: 1');
+    expect(text()).toContain('Saved native task');
+    expect(text()).toContain('Unknown');
+  });
+
   test('a Claude session shows its checklist and background tasks, not the Codex views', async () => {
     await render(CLAUDE);
     expect(text()).toContain('Review changes');

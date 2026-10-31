@@ -1,3 +1,5 @@
+import { createPortal } from 'react-dom';
+import { useWorkspaceHosts } from './workspaceHosts';
 import { takeSessionActionFailure } from '@/sync/session-action-failures';
 import { describeSessionActionError } from '@/components/session/sidebar/sessions/sessionActionError';
 import React, { useEffect } from 'react';
@@ -68,7 +70,9 @@ import { Button } from '@/components/ui/button';
 import { useMultiRunTitle } from '@/lib/multirun/useMultiRuns';
 import { buildSessionTreeMoveMessages, requestSessionTreeMove, useIsSessionWorktreeMovePending } from '@/lib/worktrees/sessionWorktreeMove';
 import { titlebarControlsWidthReaderRef } from './titlebarControlsWidth';
+import { useIsEditorWorkspaceLayout, useTitlebarControlsOverSidebar } from './workspaceLayout';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
+import { ChatSessionActions } from './ChatSessionActions';
 
 // Like the icon rail: muted at rest, full strength on hover, while its menu is
 // open or while what it controls is on, and no hover fill.
@@ -97,6 +101,9 @@ export const Header: React.FC = () => {
   streamPerfCount('ui.header.render');
   const { t, direction } = useI18n();
   const isSidebarOpen = useUIStore((state) => state.isSidebarOpen);
+  const titlebarControlsOverSidebar = useTitlebarControlsOverSidebar();
+  const editorLayout = useIsEditorWorkspaceLayout();
+  const chatHeaderHost = useWorkspaceHosts((state) => state.chatHeader);
   // The spacers move with the sidebar, so they follow its animation setting.
   const layoutAnimationMs = useLayoutAnimationMs();
   const sessionTabsEnabled = useUIStore((state) => state.sessionTabsEnabled);
@@ -203,31 +210,12 @@ export const Header: React.FC = () => {
   }, []);
 
   const isVSCode = React.useMemo(() => isVSCodeRuntime(), []);
-  // While the work-status panel is on screen it already reports the project
-  // and the branch — three paces away in the same window. The meta row under
-  // the title yields to it rather than saying the same thing twice, and
-  // returns the moment the panel is switched off or squeezed out.
-  const workStatusPanelVisible = useUIStore((state) => state.workStatusPanelVisible);
-  const workStatusPanelEnabled = useUIStore((state) => state.workStatusPanelEnabled);
-  const setWorkStatusPanelEnabled = useUIStore((state) => state.setWorkStatusPanelEnabled);
-  const workStatusPanelFits = useUIStore((state) => state.workStatusPanelFits);
   const workStatusOverlayOpen = useUIStore((state) => state.workStatusOverlayOpen);
   const setWorkStatusOverlayOpen = useUIStore((state) => state.setWorkStatusOverlayOpen);
 
-  // Two meanings for one button. With room beside the chat it switches the
-  // panel on and off. Without room it cannot be shown inline at all, so it
-  // reads as off and opens the panel over the chat instead — the stored
-  // preference is left alone, so the panel comes back on its own once the
-  // window is wide enough again.
-  const workStatusPanelShownInline = workStatusPanelEnabled && workStatusPanelFits;
-  const workStatusToggleActive = workStatusPanelShownInline || workStatusOverlayOpen;
   const handleWorkStatusToggle = React.useCallback(() => {
-    if (workStatusPanelEnabled && !workStatusPanelFits) {
-      setWorkStatusOverlayOpen(!workStatusOverlayOpen);
-      return;
-    }
-    setWorkStatusPanelEnabled(!workStatusPanelEnabled);
-  }, [setWorkStatusOverlayOpen, setWorkStatusPanelEnabled, workStatusOverlayOpen, workStatusPanelEnabled, workStatusPanelFits]);
+    setWorkStatusOverlayOpen(!workStatusOverlayOpen);
+  }, [setWorkStatusOverlayOpen, workStatusOverlayOpen]);
 
   useQuotaAutoRefresh();
 
@@ -390,7 +378,7 @@ export const Header: React.FC = () => {
 
   // Whether the title carries a second line under it. Hoisted because the
   // session menu's vertical alignment depends on the same answer.
-  const showHeaderMetaRow = !isChatContext && !workStatusPanelVisible
+  const showHeaderMetaRow = !isChatContext
     && Boolean(activeProjectLabel || currentBranchLabel || (!isNewSessionDraftOpen && worktreeBadgeKind));
 
 
@@ -759,10 +747,10 @@ export const Header: React.FC = () => {
   // a no-drag carve under the control cluster. Both animate so the session title
   // slides in/out in lockstep with the sidebar. When the sidebar is open the
   // overlay is over the sidebar, so the header only keeps normal content padding.
-  const headerInsetSpacerWidth = isSidebarOpen ? '0.75rem' : 'var(--oc-titlebar-start-inset, 0.75rem)';
-  const headerControlsSpacerWidth = isSidebarOpen
+  const headerInsetSpacerWidth = titlebarControlsOverSidebar ? '0.75rem' : 'var(--oc-titlebar-start-inset, 0.75rem)';
+  const headerControlsSpacerWidth = titlebarControlsOverSidebar
     ? '0px'
-    : 'calc(var(--oc-titlebar-controls-width, 5.5rem) + 0.5rem)';
+    : 'calc(var(--oc-titlebar-controls-width, 0px) + 0.5rem)';
 
   useEffect(() => {
     if (!isDesktopApp || !isMacPlatform) {
@@ -1044,40 +1032,8 @@ export const Header: React.FC = () => {
     );
   }, [copySessionIdFor, currentSession, currentSessionOpenDirectory, exportCurrentSession, hasElectronDesktopIPC, hasProjects, isChatContext, isCurrentSessionActive, isCurrentSessionMovingToWorktree, isVSCode, moveCurrentSessionToWorktree, openSessionInMiniChat, renderGuestSessionActionItems, sessionDirectory, t]);
 
-  const renderDesktop = () => (
-    <div
-      onMouseDown={handleDragStart}
-      className={cn(
-        'app-region-drag relative flex h-12 select-none items-center',
-        // 10 px puts the last 24 px button's centre 22 px from the window edge,
-        // on the axis of the 44 px icon rail below it.
-        endEdgeOwnedByInWindowControls ? 'pe-0' : 'pe-2.5',
-        macosHeaderSizeClass
-      )}
-      style={headerChromeStyle}
-      role="tablist"
-      aria-label={t('header.navigation.mainAria')}
-    >
-      {/* Drag region for the window-controls inset before the overlay buttons;
-          stays a window drag area. */}
-      <div
-        aria-hidden
-        className="shrink-0 self-stretch transition-[width] ease-out motion-reduce:transition-none"
-        style={{ width: headerInsetSpacerWidth, transitionDuration: `${layoutAnimationMs}ms` }}
-      />
-      {/* No-drag carve under the persistent TitlebarLeftControls overlay so its
-          buttons stay clickable. Width animates with the sidebar so the session
-          title slides in lockstep instead of snapping. */}
-      <div
-        ref={titlebarControlsWidthReaderRef}
-        aria-hidden
-        className="app-region-no-drag shrink-0 self-stretch transition-[width] ease-out motion-reduce:transition-none"
-        style={{ width: headerControlsSpacerWidth, transitionDuration: `${layoutAnimationMs}ms` }}
-      />
-      {/* Sidebar toggle + project actions live in the persistent
-          TitlebarLeftControls overlay; the spacers above reserve its footprint
-          while the sidebar is closed. */}
-      <div className="flex min-w-0 flex-1 items-center">
+  const renderConversationHeader = () => (
+      <div className={cn('flex min-w-0 flex-1 items-center', editorLayout && 'app-region-no-drag')}>
         {activeSurfaceHeader ? (
           <>
           <Tooltip>
@@ -1156,12 +1112,12 @@ export const Header: React.FC = () => {
                     <Icon name="close" className="size-4" />
                   </button>
                 </form>
-              ) : isNewSessionDraftOpen ? null : (
+              ) : isNewSessionDraftOpen ? (editorLayout ? <span className="truncate typography-ui-label">{t('sessions.switcher.draftTitle')}</span> : null) : (
                 <span dir="auto" className="oc-ui-start-align truncate typography-ui-label text-[14px] font-normal leading-tight text-foreground max-w-full">
                   {currentSessionTitle}
                 </span>
               )}
-              {showHeaderMetaRow ? (
+              {showHeaderMetaRow && !editorLayout ? (
                 // A draft has no title of its own, so its project and branch
                 // are the title: title-sized, not a caption under nothing.
                 <span className={cn(
@@ -1336,40 +1292,81 @@ export const Header: React.FC = () => {
               </TooltipContent>
             </Tooltip>
           ) : null}
+          {!editorLayout ? desktopSidebarActions : null}
+          {!isVSCode ? <ChatSessionActions /> : null}
           {!isVSCode ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   data-work-status-toggle="true"
-                  aria-pressed={workStatusToggleActive}
+                  aria-pressed={workStatusOverlayOpen}
+                  aria-expanded={workStatusOverlayOpen}
+                  aria-controls="work-status-panel"
                   aria-label={t('header.workStatusPanel.toggleAria')}
                   onClick={handleWorkStatusToggle}
                   className={cn(
                     DESKTOP_HEADER_ICON_BUTTON_CLASS,
                     // On is full strength, off rests muted like any header button.
-                    workStatusToggleActive && 'text-foreground',
+                    workStatusOverlayOpen && 'text-foreground',
                   )}
                 >
                   <Icon name="list-indefinite" className="h-4 w-4" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {workStatusPanelEnabled && !workStatusPanelFits
-                  ? (workStatusOverlayOpen
-                    ? t('header.workStatusPanel.hide')
-                    : t('header.workStatusPanel.showOverlay'))
-                  : workStatusPanelEnabled
-                    ? t('header.workStatusPanel.hide')
-                    : t('header.workStatusPanel.show')}
+                {t(workStatusOverlayOpen ? 'header.workStatusPanel.hide' : 'header.workStatusPanel.show')}
               </TooltipContent>
             </Tooltip>
           ) : null}
 
-          {desktopSidebarActions}
-          <WindowsWindowControls visible={endEdgeOwnedByInWindowControls} position={windowControlsSide} />
+          {!editorLayout && (
+            <WindowsWindowControls visible={endEdgeOwnedByInWindowControls} position={windowControlsSide} />
+          )}
         </div>
       </div>
+  );
+
+  const renderDesktop = () => (
+    <div
+      onMouseDown={handleDragStart}
+      className={cn(
+        'app-region-drag relative flex h-12 select-none items-center',
+        // 10 px puts the last 24 px button's centre 22 px from the window edge,
+        // aligned with the rail in classic layout. Editor keeps the same padding.
+        endEdgeOwnedByInWindowControls ? 'pe-0' : 'pe-2.5',
+        macosHeaderSizeClass
+      )}
+      style={headerChromeStyle}
+      role="tablist"
+      aria-label={t('header.navigation.mainAria')}
+    >
+      {/* Drag region for the window-controls inset before the overlay buttons;
+          stays a window drag area. */}
+      <div
+        aria-hidden
+        className="shrink-0 self-stretch transition-[width] ease-out motion-reduce:transition-none"
+        style={{ width: headerInsetSpacerWidth, transitionDuration: `${layoutAnimationMs}ms` }}
+      />
+      {/* No-drag carve under the persistent TitlebarLeftControls overlay so its
+          buttons stay clickable. Width animates with the sidebar so the session
+          title slides in lockstep instead of snapping. */}
+      <div
+        ref={titlebarControlsWidthReaderRef}
+        aria-hidden
+        className="app-region-no-drag shrink-0 self-stretch transition-[width] ease-out motion-reduce:transition-none"
+        style={{ width: headerControlsSpacerWidth, transitionDuration: `${layoutAnimationMs}ms` }}
+      />
+      {/* Native controls stay in the titlebar; conversation actions travel
+          with the chat header in editor layout. */}
+      {editorLayout ? <>
+        <div className="flex min-w-0 flex-1 items-center gap-2 px-1 typography-ui-label">
+          <span className="truncate">{activeProjectLabel}</span>
+          {currentBranchLabel && <span className="inline-flex min-w-0 items-center gap-1 text-muted-foreground"><Icon name="git-branch" className="size-3.5 shrink-0" /><span className="truncate">{currentBranchLabel}</span></span>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">{desktopSidebarActions}<WindowsWindowControls visible={endEdgeOwnedByInWindowControls} position={windowControlsSide} /></div>
+        {chatHeaderHost && createPortal(renderConversationHeader(), chatHeaderHost)}
+      </> : renderConversationHeader()}
     </div>
   );
 

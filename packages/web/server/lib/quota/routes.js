@@ -34,7 +34,7 @@ const claudeCacheScopeFor = (req) => process.env.OPENCHAMBER_RUNTIME === 'deskto
   ? 'desktop'
   : `web:${req.socket.localPort}`;
 
-export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode = () => false, nativeConnections }) {
+export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode = () => false, nativeConnections, nativeAntigravity }) {
   app.get('/api/quota/providers', async (_req, res) => {
     if (isExternalOpenCode()) {
       return res.json({ providers: [], availability: 'unsupported' });
@@ -117,6 +117,9 @@ export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode
     try {
       const { providerId } = req.params;
       if (!providerId) return res.status(400).json({ error: 'Provider ID is required' });
+      if (providerId === 'antigravity-cli' && nativeAntigravity) {
+        return res.json(await nativeAntigravity());
+      }
       if (providerId.startsWith('kimi-claude:') && nativeConnections) {
         return res.json(await nativeConnections.quota(providerId));
       }

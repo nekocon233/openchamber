@@ -10,10 +10,30 @@ const { followZonePlacementOfOtherWindows, readPersistedZonePlacement } = await 
 const saved = (state: { contextSurfaceZones?: Record<string, string>; theme?: string }) => JSON.stringify({ version: 24, state });
 
 beforeEach(() => {
-  useUIStore.setState({ contextPanelByDirectory: {}, contextSurfaceZones: {} });
+  useUIStore.setState({ workspaceLayout: 'classic', contextPanelByDirectory: {}, contextSurfaceZones: {} });
 });
 
 describe('zone placement across windows', () => {
+  test('editor windows keep an explicit right placement and treat empty as default left', () => {
+    useUIStore.getState().setWorkspaceLayout('editor');
+    useUIStore.getState().openContextSurface('/repo', 'diff');
+    const stop = followZonePlacementOfOtherWindows();
+    try {
+      const move = saved({ contextSurfaceZones: { diff: 'right', terminal: 'bottom' } });
+      window.dispatchEvent(new StorageEvent('storage', { key: 'ui-store', newValue: move }));
+      const state = useUIStore.getState();
+      expect(state.contextSurfaceZones.diff).toBe('right');
+      expect(state.contextPanelByDirectory['/repo'].isOpen).toBe(true);
+      expect(state.contextPanelByDirectory['/repo'].zones.bottom.isOpen).toBe(false);
+      window.dispatchEvent(new StorageEvent('storage', { key: 'ui-store', newValue: move }));
+      expect(useUIStore.getState()).toBe(state);
+      window.dispatchEvent(new StorageEvent('storage', { key: 'ui-store', newValue: saved({ contextSurfaceZones: {} }) }));
+      expect(useUIStore.getState().contextSurfaceZones).toEqual({});
+      expect(useUIStore.getState().contextPanelByDirectory['/repo'].isOpen).toBe(false);
+      expect(useUIStore.getState().contextPanelByDirectory['/repo'].zones.left.isOpen).toBe(true);
+    } finally { stop(); }
+  });
+
   test('reads only a placement that is there and well formed', () => {
     expect(readPersistedZonePlacement(saved({ contextSurfaceZones: { terminal: 'bottom', git: 'nowhere' } })))
       .toEqual({ terminal: 'bottom' });

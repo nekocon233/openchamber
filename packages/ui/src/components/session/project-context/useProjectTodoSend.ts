@@ -15,6 +15,7 @@ import * as sessionActions from '@/sync/session-actions';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import type { TodoSendExecution } from '../TodoSendDialog';
+import { useChatColumnActions, useChatSessionSelection } from '@/components/chat/chatColumnSession';
 
 type PendingSendTarget = {
   kind: 'session' | 'worktree';
@@ -40,9 +41,10 @@ export const useProjectTodoSend = (options: {
   const [pendingSendTarget, setPendingSendTarget] = React.useState<PendingSendTarget | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [sendingTodoId, setSendingTodoId] = React.useState<string | null>(null);
+  const currentSendPending = React.useRef(false);
 
-  const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
-  const currentSessionDirectory = useSessionUIStore((state) => state.currentSessionDirectory);
+  const { sessionId: currentSessionId, directory: currentSessionDirectory } = useChatSessionSelection();
+  const { pinned } = useChatColumnActions();
   const createSession = useSessionUIStore((state) => state.createSession);
   const initializeNewOpenChamberSession = useSessionUIStore((state) => state.initializeNewOpenChamberSession);
   const sendMessage = useSessionUIStore((state) => state.sendMessage);
@@ -66,28 +68,54 @@ export const useProjectTodoSend = (options: {
    */
   const sendToCurrentSession = React.useCallback(
     async (todoId: string, todoText: string) => {
-      if (!currentSessionId) {
+      if (currentSendPending.current) return;
+      const expectedRuntime = { runtimeKey: getRuntimeKey(), generation: getRuntimeEndpointGeneration() };
+      const sessionState = useSessionUIStore.getState();
+      const draft = !currentSessionId && !pinned && sessionState.newSessionDraft.open
+        ? { ...sessionState.newSessionDraft }
+        : undefined;
+      if (!currentSessionId && !draft) {
         toast.error(t('rightSidebar.contextNotesTodo.toast.noActiveSession'));
         return;
       }
-      const selection = resolveSessionSendSelection(currentSessionId);
-      if (!selection) {
+      const config = useConfigStore.getState();
+      const selection = currentSessionId ? resolveSessionSendSelection(currentSessionId) : {
+        providerID: config.currentProviderId,
+        modelID: config.currentModelId,
+        agent: config.currentAgentName || undefined,
+        variant: config.currentVariant,
+      };
+      if (!selection?.providerID || !selection.modelID) {
         toast.error(t('chat.chatInput.toast.noModelSelected'));
         return;
       }
+      let sentSessionId = currentSessionId;
+      const sendOptions: NonNullable<Parameters<typeof sendMessage>[9]> = {
+        userInitiated: true,
+        expectedRuntime,
+      };
+      if (currentSessionId) {
+        const directory = currentSessionDirectory ?? sessionState.getDirectoryForSession(currentSessionId);
+        if (directory) sendOptions.target = { runtimeKey: expectedRuntime.runtimeKey, sessionId: currentSessionId, directory };
+        else sendOptions.sessionId = currentSessionId;
+      } else {
+        sendOptions.draftSnapshot = draft;
+        sendOptions.onSessionMaterialized = (sessionId) => { sentSessionId = sessionId; };
+      }
 
+      currentSendPending.current = true;
       setSendingTodoId(todoId);
       try {
         routeToChat();
         // A send supersedes a blocking prompt, as in the composer: rejecting it
         // resumes the turn, and the todo then steers into that turn.
-        const [dismissedPermissions, dismissedQuestions] = await Promise.all([
-          sessionActions.dismissOpenPermissionsForSession(currentSessionId),
-          sessionActions.dismissOpenFormsForSession(currentSessionId),
-        ]);
-        const delivery = currentSessionPhase === 'idle' && !dismissedPermissions && !dismissedQuestions
-          ? undefined
-          : 'steer';
+        if (currentSessionId) {
+          const [dismissedPermissions, dismissedQuestions] = await Promise.all([
+            sessionActions.dismissOpenPermissionsForSession(currentSessionId),
+            sessionActions.dismissOpenFormsForSession(currentSessionId),
+          ]);
+          if (currentSessionPhase !== 'idle' || dismissedPermissions || dismissedQuestions) sendOptions.delivery = 'steer';
+        }
         await sendMessage(
           todoText,
           selection.providerID,
@@ -98,17 +126,13 @@ export const useProjectTodoSend = (options: {
           undefined,
           selection.variant,
           'normal',
-          {
-            sessionId: currentSessionId,
-            userInitiated: true,
-            expectedRuntime: { runtimeKey: getRuntimeKey(), generation: getRuntimeEndpointGeneration() },
-            delivery,
-          },
+          sendOptions,
         );
+        if (getRuntimeKey() !== expectedRuntime.runtimeKey || getRuntimeEndpointGeneration() !== expectedRuntime.generation) return;
         // The send started beside the chat, so the new row has to be brought
         // into view; the composer does the same before it submits.
         window.dispatchEvent(new CustomEvent('openchamber:chat-force-scroll-bottom', {
-          detail: { sessionId: currentSessionId },
+          detail: { sessionId: sentSessionId },
         }));
         toast.success(t('rightSidebar.contextNotesTodo.toast.sentToCurrentSession'));
         onActionComplete?.();
@@ -116,10 +140,11 @@ export const useProjectTodoSend = (options: {
         const description = error instanceof Error ? error.message : undefined;
         toast.error(t('rightSidebar.contextNotesTodo.toast.sendTodoFailed'), description ? { description } : undefined);
       } finally {
+        currentSendPending.current = false;
         setSendingTodoId(null);
       }
     },
-    [currentSessionId, currentSessionPhase, onActionComplete, routeToChat, sendMessage, t]
+    [currentSessionDirectory, currentSessionId, currentSessionPhase, onActionComplete, pinned, routeToChat, sendMessage, t]
   );
 
   const sendToNewSession = React.useCallback(

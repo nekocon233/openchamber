@@ -76,6 +76,23 @@ the binding retains its approved endpoints for independent repair. Provider cont
 and cache keys retain the single overall CAS revision, so stale contexts require a
 fresh owner read even when another capability caused the revision change.
 
+## Pull-request merge actions
+
+`SourceBoardActions` owns merge controls for the board, project PR preview and
+branch preview. GitHub hosts that explicitly advertise
+`forceMergeChangeRequests: true` show a separate destructive Force merge button
+beside the ordinary merge control. Missing capability fields grant no support.
+Both actions use the selected merge method; force is a per-request intent and
+never a saved method preference. Force merge requires a known head SHA and an
+open non-draft PR. Confirmation explains the current account's permission limit.
+
+A synchronous lock covers confirmation and dispatch for both merge actions.
+Changing the runtime generation, repository/account context or displayed PR
+target cancels the old confirmation. Late completions cannot publish feedback
+or refresh another target. The server revalidates authority and the confirmed
+head before writing. Web, Electron and mobile use the server adapter. GitLab
+and VS Code advertise no force-merge support and reject explicit force calls.
+
 ## Anonymous transport
 
 Anonymous HTTPS is a transport an identity may carry; identity pickers label it read-only in every locale, without a repeated confirmation modal, and disable it for SSH remotes. A clone URL change re-proposes the identity for the new host. Publish destinations label and disable anonymous grants, and shared request builders reject anonymous push, sync publication and remote deletion before calling the planner. Shared binding and network parsers retain the anonymous tag, never a verified actor or System marker. The connected OpenChamber server remains the authorization owner; clone still reports retained-checkout binding failure as finish-setup rather than success.
@@ -270,7 +287,19 @@ hydration, scoped controls and durable guards. These tests do not prove behavior
 after browser storage is explicitly cleared or a webview is replaced with a new
 storage context.
 
+## Pending GitHub reviews
+
+`pendingReview.ts` defines the validated GitHub pending-review response and
+action contracts used by `SourceControlAPI.githubPendingReview` and
+`githubPendingReviewAction`. Actions carry the complete mutation context and
+the displayed PR head; edit, delete, discard and submit also carry the review
+digest. The web adapter validates responses from the canonical server routes.
+Web, Electron, hosted mobile and Capacitor share that adapter. VS Code returns
+its existing unsupported error for both methods and offers no PR comparison.
+GitLab keeps its existing review flow.
+
 ## Tests
+
 
 `repository-binding.test.ts` covers deferred failure, successful empty, a read
 waiting for a worktree checkout, concurrent

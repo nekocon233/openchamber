@@ -136,6 +136,8 @@ export function catalogRefreshTasks(
   eventDirectories: readonly string[] = [],
 ): Array<() => Promise<void>> {
   switch (kind) {
+    case "native-model":
+      return [() => useConfigStore.getState().refreshNativeProviders()];
     case "agent":
       return [() => refreshAgents(eventDirectories)];
     case "command":

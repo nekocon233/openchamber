@@ -19,23 +19,37 @@ const BOTTOM_TARGET_SHARE = 0.35;
  * card); with nothing there, it is a strip of the chat's edge that stops
  * above the bottom target. No two targets overlap.
  */
-export const computeZoneDropTargets = (row: ZoneRect, chatColumn: ZoneRect, bottomZone: ZoneRect | null = null): ZoneDropTargets => {
+export const computeZoneDropTargets = (
+  row: ZoneRect,
+  chatColumn: ZoneRect,
+  bottomZone: ZoneRect | null = null,
+  isRtl = false,
+  editorColumn: ZoneRect | null = null,
+): ZoneDropTargets => {
+  // The measured row starts after navigation and the rail in both layouts.
+  const rowLeft = row.left;
   const rowRight = row.left + row.width;
   const chatRight = chatColumn.left + chatColumn.width;
+  const coreLeft = editorColumn ? Math.min(chatColumn.left, editorColumn.left) : chatColumn.left;
+  const coreRight = editorColumn ? Math.max(chatRight, editorColumn.left + editorColumn.width) : chatRight;
   const chatBottom = chatColumn.top + chatColumn.height;
   const bottomTop = bottomZone
     ? bottomZone.top
     : chatBottom - Math.min(BOTTOM_TARGET_MAX, chatColumn.height * BOTTOM_TARGET_SHARE);
   // A strip taken from the chat itself stays narrow beside a narrow chat.
-  const strip = Math.min(SIDE_TARGET_MAX, row.width * SIDE_TARGET_SHARE, chatColumn.width / 4);
-  const leftOccupied = chatColumn.left - row.left >= 1;
-  const rightOccupied = rowRight - chatRight >= 1;
+  const strip = Math.min(SIDE_TARGET_MAX, (rowRight - rowLeft) * SIDE_TARGET_SHARE, chatColumn.width / 4);
+  const leftOccupied = coreLeft - rowLeft >= 1;
+  const rightOccupied = rowRight - coreRight >= 1;
   const stripHeight = Math.max(0, bottomTop - row.top);
-  const leftRight = leftOccupied ? chatColumn.left : row.left + strip;
-  const rightLeft = rightOccupied ? chatRight : rowRight - strip;
+  const leftLeft = leftOccupied ? rowLeft : coreLeft;
+  const leftRight = leftOccupied ? coreLeft : coreLeft + strip;
+  const rightLeft = rightOccupied ? coreRight : coreRight - strip;
+  const rightRight = rightOccupied ? rowRight : coreRight;
+  const left = { left: leftLeft, top: row.top, width: leftRight - leftLeft, height: leftOccupied ? row.height : stripHeight };
+  const right = { left: rightLeft, top: row.top, width: rightRight - rightLeft, height: rightOccupied ? row.height : stripHeight };
   return {
-    left: { left: row.left, top: row.top, width: leftRight - row.left, height: leftOccupied ? row.height : stripHeight },
-    right: { left: rightLeft, top: row.top, width: rowRight - rightLeft, height: rightOccupied ? row.height : stripHeight },
+    left: isRtl ? right : left,
+    right: isRtl ? left : right,
     bottom: { left: chatColumn.left, top: bottomTop, width: chatColumn.width, height: Math.max(0, chatBottom - bottomTop) },
   };
 };

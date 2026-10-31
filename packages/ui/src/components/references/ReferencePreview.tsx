@@ -37,6 +37,15 @@ const MARKDOWN_CLASS = '[&_img]:max-w-full [&_img]:h-auto';
  * (mobile): one flow inside the sheet's own scroll.
  */
 const PreviewFrame: React.FC<{ pinned: boolean; footer: React.ReactNode; children: React.ReactNode }> = ({ pinned, footer, children }) => {
+    const scrollRef = React.useRef<HTMLElement>(null);
+    const scrollTop = React.useRef(0);
+    const scrollVisible = React.useRef(false);
+    React.useLayoutEffect(() => {
+        if (pinned && scrollRef.current) scrollRef.current.scrollTop = scrollTop.current;
+        scrollVisible.current = pinned;
+        // Moving a hidden pane can reset its native scroll offset. Keep the reading position until reactivation.
+        return () => { scrollVisible.current = false; };
+    }, [pinned]);
     if (!pinned) {
         return (
             <article className="flex flex-col gap-4">
@@ -47,7 +56,15 @@ const PreviewFrame: React.FC<{ pinned: boolean; footer: React.ReactNode; childre
     }
     return (
         <div className="flex h-full min-h-0 flex-col">
-            <ScrollableOverlay outerClassName="min-h-0 flex-1" className="px-6 py-5" disableHorizontal>
+            <ScrollableOverlay
+                ref={scrollRef}
+                outerClassName="min-h-0 flex-1"
+                className="px-6 py-5"
+                disableHorizontal
+                onScroll={(event) => {
+                    if (scrollVisible.current) scrollTop.current = event.currentTarget.scrollTop;
+                }}
+            >
                 <article className="flex flex-col gap-4">{children}</article>
             </ScrollableOverlay>
             <div className="shrink-0 border-t border-border/60 px-6 py-3">{footer}</div>

@@ -185,6 +185,8 @@ Zadania małego modelu (tytuły sesji, podsumowania, wiadomości commitów, omó
 
 O tym, z jakich dostawców modeli w ogóle można korzystać, decyduje OpenCode, nie OpenChamber. Zablokuj to [politykami OpenCode](https://opencode.ai/v2/docs/policies/): zabroń wszystkich dostawców, a potem zezwól na zatwierdzonych.
 
+Tryb firmowy blokuje również logowanie do CLIProxyAPI, importowanie modeli i zmiany połączeń. Automatyczne aktualizacje w obrębie rodzin modeli Antigravity są również wyłączone. Automatyczne przełączanie Opus/Sonnet z Claude na Antigravity również jest wyłączone.
+
 ```jsonc
 {
   "experimental": {

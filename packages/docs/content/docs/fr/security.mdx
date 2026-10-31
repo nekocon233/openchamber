@@ -185,6 +185,8 @@ Les tâches du petit modèle (titres de session, récapitulatifs, messages de co
 
 Quels fournisseurs de modèles peuvent être utilisés, c’est OpenCode qui le décide, pas OpenChamber. Verrouillez-le avec les [politiques OpenCode](https://opencode.ai/v2/docs/policies/) : interdisez tous les fournisseurs, puis autorisez ceux que vous avez approuvés.
 
+Le mode entreprise bloque aussi la connexion à CLIProxyAPI, l'importation de modèles et les modifications de connexion. Les mises à niveau automatiques au sein des familles de modèles Antigravity sont également désactivées. Le relais automatique d’Opus/Sonnet de Claude vers Antigravity est également désactivé.
+
 ```jsonc
 {
   "experimental": {

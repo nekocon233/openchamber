@@ -185,6 +185,8 @@ Las tareas del modelo pequeño (títulos de sesión, resúmenes, mensajes de com
 
 Qué proveedores de modelos se pueden usar lo decide OpenCode, no OpenChamber. Fíjalo con las [políticas de OpenCode](https://opencode.ai/v2/docs/policies/): deniega todos los proveedores y luego permite los que aprobaste.
 
+El modo empresarial también bloquea el inicio de sesión en CLIProxyAPI, la importación de modelos y los cambios de conexión. También se desactivan las actualizaciones automáticas dentro de las familias de modelos de Antigravity. También se desactiva el cambio automático de Opus/Sonnet de Claude a Antigravity.
+
 ```jsonc
 {
   "experimental": {

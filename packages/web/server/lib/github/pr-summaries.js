@@ -184,7 +184,7 @@ const toMergeable = (mergeable) => {
   return null;
 };
 
-function toSummary(ref, value) {
+function toSummary(ref, value, includeClosedChecks) {
   const parsed = prNodeSchema.safeParse(value);
   if (!parsed.success || parsed.data.number !== ref.number) {
     return null;
@@ -201,9 +201,8 @@ function toSummary(ref, value) {
     headSha: node.headRefOid,
     mergeable: toMergeable(node.mergeable),
     mergeableState: node.mergeStateStatus ? node.mergeStateStatus.toLowerCase() : null,
-    // A closed/merged PR's checks are not actionable; the REST status route
-    // drops them too.
-    checks: state === 'open'
+    // The project list shows historical checks; live tracking only uses open PRs.
+    checks: state === 'open' || includeClosedChecks
       ? summarizeCheckContexts(node.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [])
       : null,
   };
@@ -255,7 +254,7 @@ async function runSummaryQuery(octokit, entries) {
  * Fetch live summaries for known PRs and issues. One GitHub could not resolve
  * is left out of the result: absence means "unknown", never "closed".
  */
-export async function fetchPrSummaries({ octokit, refs, issueRefs = [] }) {
+export async function fetchPrSummaries({ octokit, refs, issueRefs = [], includeClosedChecks = false }) {
   const entries = [
     ...refs.map((ref) => ({ kind: 'pull', ref })),
     ...issueRefs.map((ref) => ({ kind: 'issue', ref })),
@@ -274,7 +273,7 @@ export async function fetchPrSummaries({ octokit, refs, issueRefs = [] }) {
         if (summary) issueSummaries.push(summary);
         return;
       }
-      const summary = toSummary(ref, repository?.pullRequest);
+      const summary = toSummary(ref, repository?.pullRequest, includeClosedChecks);
       if (summary) summaries.push(summary);
     });
   }

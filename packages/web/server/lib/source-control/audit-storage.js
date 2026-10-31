@@ -13,11 +13,12 @@ const STATES = new Set(['planned', 'running', 'succeeded', 'partial', 'conflicte
 const TERMINAL_STATES = new Set(['succeeded', 'partial', 'conflicted', 'failed', 'cancelled']);
 const GIT_OPERATIONS = new Set([
   'push', 'fetch', 'pull', 'delete-remote-branch', 'sync', 'clone',
-  'contributor-fetch', 'checkout-hydration', 'checkout-actions',
+  'contributor-fetch', 'checkout-hydration', 'checkout-actions', 'pr-snapshot',
 ]);
 const PROVIDER_OPERATIONS = new Set([
   'change-request-create', 'change-request-update', 'change-request-merge', 'change-request-ready',
   'change-request-comment', 'change-request-review', 'issue-comment', 'change-request-state', 'issue-state',
+  'change-request-pending-review',
   'change-request-labels', 'issue-labels', 'change-request-reviewers',
   'change-request-thread-reply', 'change-request-thread-resolve', 'change-request-thread-start',
 ]);

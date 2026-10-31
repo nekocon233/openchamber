@@ -4,6 +4,9 @@ import { linearIntegrationI18n } from './linear-integration.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 export const settingsDict = {
+  'settings.openchamber.visual.field.workspaceLayout': 'Компонування робочого простору',
+  'settings.openchamber.visual.option.workspaceLayout.classic': 'Класичне',
+  'settings.openchamber.visual.option.workspaceLayout.editor': 'Редактор',
   'settings.deepseekHarness.title': 'DeepSeek Harness',
   'settings.deepseekHarness.description': "Налаштовуйте ключ API, кінцеву точку та моделі dsh на сервері з будь-якого підключеного пристрою.",
   'settings.deepseekHarness.ready': "Виявлено CLI dsh.",
@@ -47,7 +50,7 @@ export const settingsDict = {
   'settings.antigravity.setup.signIn': 'Увійдіть за допомогою облікового запису Google. Для віддаленого сервера дотримуйтесь вказівок щодо URL-адреси та коду авторизації.',
   'settings.antigravity.warnings.title': 'Перед використанням Antigravity',
   'settings.antigravity.warnings.subscription': 'Google не підтримує особисті підписки Google AI для сторонніх застосунків. Використання такої підписки тут може обмежити або заблокувати ваш обліковий запис.',
-  'settings.antigravity.warnings.fullAccess': 'OpenChamber запускає agy з повним доступом. Інструменти та команди оболонки в headless-режимі виконуються без окремого запиту дозволу для кожної дії.',
+  'settings.antigravity.warnings.fullAccess': 'Build автоматично схвалює дії інструментів. Plan блокує зміни файлів, команди оболонки, інструменти MCP та дії браузера.',
   'chat.deepseekCommand.failed': "Не вдалося виконати команду DeepSeek Harness.",
   'chat.deepseekCommand.needsSession': "Надішліть повідомлення, щоб створити сеанс DeepSeek Harness перед виконанням цієї команди.",
   'settings.sourceControl.ssh.title': 'SSH-ключі',
