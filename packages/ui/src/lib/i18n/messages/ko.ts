@@ -1636,6 +1636,8 @@ export const dict: Record<I18nKey, string> = {
   'contextRail.configure.showAll': '모두 표시',
   'contextRail.configure.noneWarning': '모든 패널이 숨겨져 있습니다.',
   'contextRail.aria.rail': '패널 서피스',
+  'contextRail.sessions.label': '세션',
+  'contextRail.sessions.description': '세션 목록 표시 또는 숨기기',
   'contextPanel.editorEmpty.title': '열린 파일 없음',
   'workspace.resizeEditorChat': "편집기와 채팅 너비 조절",
   'contextPanel.editorEmpty.description': '트리에서 파일을 선택해 편집을 시작하세요.',

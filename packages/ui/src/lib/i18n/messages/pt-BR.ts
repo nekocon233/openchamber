@@ -1624,6 +1624,8 @@ export const dict: Record<I18nKey, string> = {
   "contextRail.configure.showAll": "Mostrar todos",
   "contextRail.configure.noneWarning": "Todos os painéis estão ocultos.",
   "contextRail.aria.rail": "Superfícies do painel",
+  "contextRail.sessions.label": "Sessões",
+  "contextRail.sessions.description": "Mostrar ou ocultar a lista de sessões",
   "contextPanel.editorEmpty.title": "Nenhum arquivo aberto",
   'workspace.resizeEditorChat': "Redimensionar editor e conversa",
   "contextPanel.editorEmpty.description": "Escolha um arquivo na árvore para começar a editar.",

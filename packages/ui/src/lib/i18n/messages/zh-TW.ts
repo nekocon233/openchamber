@@ -1654,6 +1654,8 @@ export const dict: Record<I18nKey, string> = {
   'contextRail.configure.showAll': '全部顯示',
   'contextRail.configure.noneWarning': '所有面板皆已隱藏。',
   'contextRail.aria.rail': '面板介面',
+  'contextRail.sessions.label': '會話',
+  'contextRail.sessions.description': '顯示或隱藏會話清單',
   'contextPanel.editorEmpty.title': '未開啟檔案',
   'workspace.resizeEditorChat': "調整編輯器與對話寬度",
   'contextPanel.editorEmpty.description': '從檔案樹選擇檔案開始編輯。',

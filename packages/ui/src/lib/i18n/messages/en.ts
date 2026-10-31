@@ -1636,6 +1636,8 @@ export const dict = {
   'contextRail.configure.showAll': 'Show all',
   'contextRail.configure.noneWarning': 'All panels are hidden.',
   'contextRail.aria.rail': 'Panel surfaces',
+  'contextRail.sessions.label': 'Sessions',
+  'contextRail.sessions.description': 'Show or hide the session list',
   'contextPanel.editorEmpty.title': 'No file open',
   'workspace.resizeEditorChat': "Resize editor and chat",
   'contextPanel.editorEmpty.description': 'Pick a file from the tree to start editing.',

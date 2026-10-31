@@ -2045,6 +2045,8 @@ export const dict: Record<I18nKey, string> = {
   'contextRail.configure.showAll': 'Pokaż wszystkie',
   'contextRail.configure.noneWarning': 'Wszystkie panele są ukryte.',
   'contextRail.aria.rail': 'Powierzchnie panelu',
+  'contextRail.sessions.label': 'Sesje',
+  'contextRail.sessions.description': 'Pokaż lub ukryj listę sesji',
   'contextPanel.editorEmpty.title': 'Brak otwartego pliku',
   'workspace.resizeEditorChat': "Zmień szerokość edytora i czatu",
   'contextPanel.editorEmpty.description': 'Wybierz plik z drzewa, aby rozpocząć edycję.',

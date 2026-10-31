@@ -1624,6 +1624,8 @@ export const dict: Record<I18nKey, string> = {
   "contextRail.configure.showAll": "Показати всі",
   "contextRail.configure.noneWarning": "Усі панелі приховано.",
   "contextRail.aria.rail": "Поверхні панелі",
+  "contextRail.sessions.label": "Сесії",
+  "contextRail.sessions.description": "Показати або приховати список сесій",
   "contextPanel.editorEmpty.title": "Файл не відкрито",
   'workspace.resizeEditorChat': "Змінити ширину редактора й чату",
   "contextPanel.editorEmpty.description": "Виберіть файл у дереві, щоб почати редагування.",

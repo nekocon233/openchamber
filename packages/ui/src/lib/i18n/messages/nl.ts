@@ -1415,6 +1415,8 @@ export const dict = {
   'contextRail.configure.showAll': 'Alles tonen',
   'contextRail.configure.noneWarning': 'Alle panelen zijn verborgen.',
   'contextRail.aria.rail': 'Panelgebieden',
+  'contextRail.sessions.label': 'Sessies',
+  'contextRail.sessions.description': 'Sessielijst tonen of verbergen',
   'contextPanel.editorEmpty.title': 'Geen bestand geopend',
   'workspace.resizeEditorChat': "Breedte van editor en chat aanpassen",
   'contextPanel.editorEmpty.description': 'Kies een bestand uit de boomstructuur om te gaan bewerken.',

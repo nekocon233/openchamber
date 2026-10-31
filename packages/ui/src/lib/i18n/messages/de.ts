@@ -3638,6 +3638,8 @@ export const dict = {
   'contextRail.configure.showAll': 'Alle anzeigen',
   'contextRail.configure.noneWarning': 'Alle Panels sind ausgeblendet.',
   'contextRail.aria.rail': 'Kontextleiste',
+  'contextRail.sessions.label': 'Sitzungen',
+  'contextRail.sessions.description': 'Sitzungsliste ein- oder ausblenden',
   'contextPanel.editorEmpty.title': 'Kein Kontext ausgewählt',
   'workspace.resizeEditorChat': "Breite von Editor und Chat ändern",
   'contextPanel.editorEmpty.description': 'Wählen Sie etwas aus der Seitenleiste aus, um Kontext anzuzeigen.',

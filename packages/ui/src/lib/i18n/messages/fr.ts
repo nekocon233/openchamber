@@ -1434,6 +1434,8 @@ export const dict = {
   'contextRail.configure.showAll': 'Tout afficher',
   'contextRail.configure.noneWarning': 'Tous les panneaux sont masqués.',
   'contextRail.aria.rail': 'Surfaces du panneau',
+  'contextRail.sessions.label': 'Sessions',
+  'contextRail.sessions.description': 'Afficher ou masquer la liste des sessions',
   'contextPanel.editorEmpty.title': 'Aucun fichier ouvert',
   'workspace.resizeEditorChat': "Redimensionner l’éditeur et la discussion",
   'contextPanel.editorEmpty.description': 'Choisissez un fichier dans l’arborescence pour commencer.',

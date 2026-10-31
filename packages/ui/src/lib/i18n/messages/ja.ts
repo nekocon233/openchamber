@@ -1632,6 +1632,8 @@ export const dict: Record<I18nKey, string> = {
   'contextRail.configure.showAll': 'すべて表示',
   'contextRail.configure.noneWarning': 'すべてのパネルが非表示です。',
   'contextRail.aria.rail': 'パネルサーフェス',
+  'contextRail.sessions.label': 'セッション',
+  'contextRail.sessions.description': 'セッション一覧の表示/非表示',
   'contextPanel.editorEmpty.title': 'ファイルが開かれていません',
   'workspace.resizeEditorChat': "エディターとチャットの幅を調整",
   'contextPanel.editorEmpty.description': 'ツリーからファイルを選んで編集を始めましょう。',

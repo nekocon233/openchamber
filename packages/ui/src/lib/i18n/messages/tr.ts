@@ -1505,6 +1505,8 @@ export const dict = {
   'contextPanel.mode.preview': 'Önizleme',
   'contextPanel.mode.browser': 'Tarayıcı',
   'contextRail.aria.rail': 'Panel yüzeyleri',
+  'contextRail.sessions.label': 'Oturumlar',
+  'contextRail.sessions.description': 'Oturum listesini göster veya gizle',
   'contextPanel.editorEmpty.title': 'Açık dosya yok',
   'workspace.resizeEditorChat': "Düzenleyici ve sohbet genişliğini ayarla",
   'contextPanel.editorEmpty.description': 'Düzenlemeye başlamak için dosya ağacından bir dosya seç.',

@@ -116,7 +116,11 @@ reselecting a session closes it, as do Escape, clicking outside, and the trigger
 This picker owns local open state and does not toggle or persist sidebar width
 or visibility. The existing sidebar shortcut keeps its own behavior. The session list
 has no titlebar strip or window-edge peek in editor layout and resizes from
-its inner edge. The main chat frame cannot close or move into a tool zone.
+its inner edge. The rail's top button (`layout/SessionsRailToggle`) shows and
+hides it: pressed while the column is open, and the one control left at the
+line's start once its width is zero. Classic keeps the rail at the end and gets
+no such button; the hover peek there stays as it was. The main chat frame cannot
+close or move into a tool zone.
 Adjacent editor-layout cards leave a 0.25 rem gap. The bottom tool aligns
 with the chat frame; classic layout keeps its existing gutters.
 

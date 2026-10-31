@@ -1395,6 +1395,8 @@ export const dict = {
   'contextRail.configure.showAll': 'הצג הכול',
   'contextRail.configure.noneWarning': 'כל החלוניות מוסתרות.',
   'contextRail.aria.rail': 'חלוניות',
+  'contextRail.sessions.label': 'הפעלות',
+  'contextRail.sessions.description': 'הצג או הסתר את רשימת ההפעלות',
   'contextPanel.editorEmpty.title': 'אין קובץ פתוח',
   'workspace.resizeEditorChat': "שינוי רוחב העורך והשיחה",
   'contextPanel.editorEmpty.description': 'אפשר לבחור קובץ מהעץ כדי להתחיל לערוך.',

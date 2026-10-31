@@ -52,6 +52,7 @@ import { startZoneDragGesture, type ZoneDragGesture } from './zoneDrag';
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
 import { AppActions } from './AppActions';
+import { SessionsRailToggle } from './SessionsRailToggle';
 
 const RAIL_TOOLTIP_DELAY_MS = 150;
 // Hold the surface-switch modifier for this long before revealing the order
@@ -375,6 +376,10 @@ export const ContextPanelRail: React.FC<{ atStart?: boolean }> = ({ atStart = fa
       aria-label={t('contextRail.aria.rail')}
       className="flex h-full min-h-0 w-11 flex-shrink-0 flex-col items-center gap-2 bg-background py-2"
     >
+      {/* The session column sits on the start side of the rail, so the rail is
+          the one control column left when that column is closed. Classic keeps
+          the rail at the end, where this button would point away from it. */}
+      {atStart ? <SessionsRailToggle tooltipSide={workspaceSide} /> : null}
       <div data-context-tools="" className="oc-hide-scrollbar flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto py-1">
       {directoryKey ? <>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>

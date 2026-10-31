@@ -1395,6 +1395,8 @@ export const dict = {
   'contextRail.configure.showAll': 'إظهار الكل',
   'contextRail.configure.noneWarning': 'كل اللوحات مخفية.',
   'contextRail.aria.rail': 'أسطح اللوحات',
+  'contextRail.sessions.label': 'الجلسات',
+  'contextRail.sessions.description': 'إظهار قائمة الجلسات أو إخفاؤها',
   'contextPanel.editorEmpty.title': 'لا يوجد ملف مفتوح',
   'workspace.resizeEditorChat': "تغيير عرض المحرر والمحادثة",
   'contextPanel.editorEmpty.description': 'اختر ملفًا من الشجرة لبدء التحرير.',
