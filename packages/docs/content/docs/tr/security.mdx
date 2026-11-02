@@ -167,6 +167,7 @@ environment:
 
 - DeepSeek Harness oturumları, tek tıkla kurulum ve sağlayıcı yapılandırması kullanılamaz. Modelleri dsh içinde ayrı yapılandırılır ve OpenCode sağlayıcı politikasının kapsamı dışındadır.
 - Birleşik yerel konuşmalar kurumsal modda oluşturulamaz veya sürdürülemez; bağlam sıkıştırma ve bir turu sürdüren soru yanıtları da buna dahildir. Devirler, OpenCode dışında yapılandırılmış CLI sağlayıcılarına ulaşabilir. Kaydedilmiş konuşmalar listede kalır; kaynakları okuma ve temizleme her CLI'ın mevcut politikasına uyar.
+- Yerel aracı birleşimlerini değiştirmek ve CLI’lar arasında alt aracı çağırmak kullanılamaz; çalışan bir CLI’dan gelen çağrılar da engellenir. Seçilen modeller OpenCode dışında yapılandırılan sağlayıcılara ulaşabilir. Kaydedilmiş birleşimler bu kısıtlamayı aşamaz.
 - Model sağlayıcıları yalnızca OpenCode yapılandırmanızdan gelir. OpenChamber'da sağlayıcı bağlamak, bir sağlayıcıda oturum açmak, anahtar eklemek ya da özel sağlayıcı oluşturmak kapalıdır; var olan hesapları kaldırmak veya aralarında geçiş yapmak çalışmaya devam eder. Bu yalnızca uygulama üzerinden girişi kapatır; asıl kilit aşağıda anlatılan OpenCode politikasıdır. OpenCode yapılandırmanızdaki bir MCP sunucusunda oturum açmak çalışmaya devam eder, çünkü bu bir model sağlayıcısına değil o sunucuya ulaşır.
 - [Sınıflandırma sağlayıcıları (Jev)](/tr/classification-providers/) kapalı kalır; birinin Ayarlar'a yazdığı özel bir uç nokta da buna dahildir. Güvenlik ağı ve Auto sunulmaz, devam eden oturumlarda "tamamlanmış görünüyor" ipucu da çıkmaz. Jev'i kendi altyapınız üzerinden kullanmak için politika dosyasındaki `jev` ile ya da `OPENCHAMBER_JEV_URL` ile bir uç nokta sabitleyin (ayrıca `OPENCHAMBER_JEV_MODEL` ve gerekiyorsa `OPENCHAMBER_JEV_API_KEY`). Bu uç nokta varsayılan olur, yine de kapatılabilir ve başka bir şey seçilemez.
 - OpenAI üzerinden sesli okuma kapalıdır. Özel bir konuşma sentezi ya da transkripsiyon sunucusu aynı makinede çalışmalıdır. Yerel sesler ve yerel dikte modelleri çalışmaya devam eder.
@@ -185,7 +186,7 @@ Küçük model görevleri (oturum başlıkları, özetler, commit mesajları, de
 
 Hangi model sağlayıcılarının kullanılabileceğine OpenChamber değil, OpenCode karar verir. Bunu [OpenCode politikaları](https://opencode.ai/v2/docs/policies/) ile kilitleyin: tüm sağlayıcıları reddedin, sonra onayladıklarınıza izin verin.
 
-Kurumsal mod, CLIProxyAPI oturum açma işlemlerini, model içe aktarmalarını ve bağlantı değişikliklerini de engeller. Antigravity model aileleri içindeki otomatik yükseltmeler de devre dışıdır. Claude’dan Antigravity’ye otomatik Opus/Sonnet geçişi de devre dışıdır.
+Kurumsal mod, sağlayıcı oturum açma işlemlerini ve bağlantı değişikliklerini de engeller.
 
 ```jsonc
 {

@@ -95,8 +95,9 @@ describe('Antigravity application decisions', () => {
         model: { providerID: 'antigravity-native', modelID: 'gemini-model' }, variant: 'high', agent: 'plan',
       },
     });
-    expect(h.deliveries[0].request.parts[0].text).toContain('1. Which checks should run?\n- Unit\n- A custom check');
-    expect(h.deliveries[0].request.parts[0].text).toContain('2. What should stay compatible?');
+    expect(h.deliveries[0].request.parts).toEqual([]);
+    expect(h.deliveries[0].request.instructions).toContain('1. Which checks should run?\n- Unit\n- A custom check');
+    expect(h.deliveries[0].request.instructions).toContain('2. What should stay compatible?');
     expect((await h.registry.getSession(SESSION)).antigravityInteraction.phase).toBe('settled');
     expect(h.engine.has(SESSION)).toBe(false);
     expect(h.questions.list(DIRECTORY)).toEqual([]);
@@ -132,8 +133,7 @@ describe('Antigravity application decisions', () => {
   it('delivers plan feedback as a new Plan message', async () => {
     const h = await harness(PLAN);
     await h.questions.reply(h.questions.list(DIRECTORY)[0].id, [['build after covering malformed input']]);
-    expect(h.deliveries[0].request).toMatchObject({ agent: 'plan', parts: [{ type: 'text', text: 'build after covering malformed input' }] });
-    expect(h.deliveries[0].request.instructions).toBeUndefined();
+    expect(h.deliveries[0].request).toMatchObject({ agent: 'plan', parts: [], instructions: 'build after covering malformed input' });
   });
 
   it('keeps ordinary answers in Build when the source turn used Build', async () => {

@@ -72,6 +72,19 @@ const mutate = (core, sessionId, baseRevision, clientMutationId, operation) => c
 });
 
 describe('follow-up queue core', () => {
+  it('keeps an immutable captured native subagent through persistence and rejects arbitrary endpoints', async () => {
+    const { core } = await createHarness();
+    const sendConfig = { providerID: 'claude-native', modelID: 'opus', subagentModel: { model: { providerID: 'codex-native', modelID: 'gpt-test' }, variant: 'max' } };
+    const added = await mutate(core, 'session-captured', 0, 'capture', { type: 'add', item: createItem('captured', { sendConfig }) });
+    sendConfig.subagentModel.model.modelID = 'later-change';
+    expect(added.snapshot.items[0].sendConfig.subagentModel.model.modelID).toBe('gpt-test');
+    expect((await core.load('session-captured')).items[0].sendConfig.subagentModel.model.modelID).toBe('gpt-test');
+    await expect(mutate(core, 'session-captured', 1, 'bad-endpoint', { type: 'add', item: createItem('bad', {
+      sendConfig: { ...sendConfig, subagentModel: { ...sendConfig.subagentModel, baseURL: 'https://untrusted.invalid' } },
+    }) })).rejects.toBeInstanceOf(FollowUpQueueValidationError);
+    const reset = await mutate(core, 'session-captured', 1, 'default', { type: 'add', item: createItem('default', { sendConfig: { providerID: 'claude-native', modelID: 'opus', subagentModel: null } }) });
+    expect(reset.snapshot.items[1].sendConfig.subagentModel).toBeNull();
+  });
   it('loads legacy executor metadata and preserves durable mutation replay through completion', async () => {
     const { core, rootDirectory } = await createHarness();
     const sessionId = 'session-retired-executor';

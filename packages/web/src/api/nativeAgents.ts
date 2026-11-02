@@ -1,5 +1,5 @@
-import { claudeConnectionListSchema, claudeConnectionSchema, cliproxyapiCallbackResultSchema, cliproxyapiCancelResultSchema, cliproxyapiImportResultSchema, cliproxyapiLoginSchema, cliproxyapiModelsSchema, cliproxyapiLoginStatusSchema, cliproxyapiRemovedSchema, cliproxyapiStatusSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CliproxyapiConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
-import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeDeepseekCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch, NativeSessionCreate, NativeSessionSelection } from '@openchamber/ui/lib/api/types';
+import { claudeConnectionListSchema, claudeConnectionSchema, codexConnectionListSchema, codexConnectionSchema, type ClaudeConnectionWrite, type CodexConnectionWrite } from '@openchamber/ui/lib/native-agents/connections';
+import type { NativeAgentsAPI, NativeCodexCommandRequest, NativeDeepseekCommandRequest, NativeCompactRequest, NativePromptRequest, NativeSessionPatch, NativeSessionCreate, NativeSessionSelection, NativePlanExecutionChoice } from '@openchamber/ui/lib/api/types';
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
 import {
   nativeAbortResultSchema,
@@ -32,7 +32,8 @@ import { runtimeFetch } from '@openchamber/ui/lib/runtime-fetch';
 import { nativeStatisticsSchema } from '@openchamber/ui/lib/native-agents/stats-schemas';
 import { z } from 'zod';
 import { nativeMemoryStatusSchema, nativeMemoryConnectionSchema } from '@openchamber/ui/lib/native-agents/memory-schemas';
-import { deepseekConfigurationSchema, deepseekConfigurationSaveSchema, deepseekSetupStatusSchema, type DeepseekConfigurationWrite } from '@openchamber/ui/lib/native-agents/deepseek';
+import { deepseekSetupStatusSchema } from '@openchamber/ui/lib/native-agents/deepseek';
+import type { NativeAgentConfigurationWrite } from '@openchamber/ui/lib/native-agents/combinations';
 
 // Matches the OpenCode read deadline: a half-open socket must not hold a
 // bootstrap or history read forever.
@@ -43,27 +44,23 @@ const NATIVE_STATS_TIMEOUT_MS = 75_000;
 const errorBodySchema = z.object({ error: z.string().optional(), code: z.string().optional() }).passthrough();
 
 type NativeWriteBody =
-  | { enabled: boolean }
+  | { directory: string; configuration: NativeAgentConfigurationWrite; expectedRevision: number; main?: NativeSessionSelection; expectedSelectionRevision?: number }
   | { sourceId: string; directory: string }
-  | { upstreamProxy: string | null }
-  | { url: string }
-  | CliproxyapiConnectionWrite
   | ClaudeConnectionWrite
   | CodexConnectionWrite
-  | DeepseekConfigurationWrite
   | NativeSessionCreate
   | { directory: string; selection: NativeSessionSelection; expectedRevision: number }
   | NativePromptRequest
   | NativeCompactRequest
   | NativeCodexCommandRequest
   | NativeDeepseekCommandRequest
-  | { answers: string[][] }
+  | { answers: string[][]; execution?: NativePlanExecutionChoice }
   | { directory: string; messageID?: string }
   | { directory: string; generation: string }
   | ({ directory: string } & NativeSessionPatch);
 
 type NativeWrite =
-  | { method: 'POST' | 'PATCH'; body?: NativeWriteBody | { provider: 'codex' | 'antigravity' | 'claude' } }
+  | { method: 'POST' | 'PATCH' | 'PUT'; body?: NativeWriteBody | { provider: 'codex' | 'antigravity' | 'claude' } }
   | { method: 'DELETE'; query: Record<string, string> };
 
 const failure = async (response: Response): Promise<NativeAgentsRequestError> => {
@@ -137,22 +134,6 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   importMemory: async (sourceId, directory) => { await writeParsed('/api/native/memory/import', z.object({ imported: z.literal(true), memoryId: z.string() }), { sourceId, directory }); },
   capabilities: () => readParsed('/api/native/capabilities', {}, nativeCapabilitiesSchema),
   catalog: () => readParsed('/api/native/catalog', {}, nativeCatalogSchema),
-  cliproxyapiStatus: () => readParsed('/api/native/claude/cliproxyapi', {}, cliproxyapiStatusSchema),
-  startCliproxyapiGateway: () => sendParsed('/api/native/claude/cliproxyapi/start', cliproxyapiStatusSchema, { method: 'POST' }),
-  stopCliproxyapiGateway: () => sendParsed('/api/native/claude/cliproxyapi/stop', cliproxyapiStatusSchema, { method: 'POST' }),
-  setCliproxyapiProxy: (input) => sendParsed('/api/native/claude/cliproxyapi/proxy', cliproxyapiStatusSchema, { method: 'POST', body: input }),
-  beginCliproxyapiLogin: (provider = 'codex') => sendParsed('/api/native/claude/cliproxyapi/login', cliproxyapiLoginSchema, { method: 'POST', body: { provider } }),
-  setCliproxyapiOpusRoute: (enabled) => sendParsed('/api/native/claude/cliproxyapi/opus-route', cliproxyapiStatusSchema, { method: 'POST', body: { enabled } }),
-  setCliproxyapiSonnetRoute: (enabled) => sendParsed('/api/native/claude/cliproxyapi/sonnet-route', cliproxyapiStatusSchema, { method: 'POST', body: { enabled } }),
-  cliproxyapiLoginStatus: (state) => readParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, {}, cliproxyapiLoginStatusSchema),
-  cancelCliproxyapiLogin: async (state) => (await sendParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}`, cliproxyapiCancelResultSchema, { method: 'DELETE', query: {} })).cancelled,
-  submitCliproxyapiLoginCallback: async (state, url) => {
-    await sendParsed(`/api/native/claude/cliproxyapi/login/${encodeURIComponent(state)}/callback`, cliproxyapiCallbackResultSchema, { method: 'POST', body: { url } });
-  },
-  removeCliproxyapiAccount: async (name) => { await sendParsed(`/api/native/claude/cliproxyapi/accounts/${encodeURIComponent(name)}`, cliproxyapiRemovedSchema, { method: 'DELETE', query: {} }); },
-  saveCliproxyapiConnection: (input) => sendParsed('/api/native/claude/cliproxyapi/connection', claudeConnectionSchema, { method: 'POST', body: input }),
-  cliproxyapiModels: () => readParsed('/api/native/claude/cliproxyapi/models', {}, cliproxyapiModelsSchema),
-  importCliproxyapiModels: () => sendParsed('/api/native/claude/cliproxyapi/import', cliproxyapiImportResultSchema, { method: 'POST' }),
   listClaudeConnections: () => readParsed('/api/native/claude/connections', {}, claudeConnectionListSchema),
   saveClaudeConnection: (id, body) => sendParsed(
     id ? `/api/native/claude/connections/${encodeURIComponent(id)}` : '/api/native/claude/connections',
@@ -163,8 +144,6 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     await sendParsed(`/api/native/claude/connections/${encodeURIComponent(id)}`, nativeDeleteResultSchema, { method: 'DELETE', query: {} });
   },
   listCodexConnections: () => readParsed('/api/native/codex/connections', {}, codexConnectionListSchema),
-  deepseekConfiguration: () => readParsed('/api/native/deepseek/configuration', {}, deepseekConfigurationSchema),
-  saveDeepseekConfiguration: (body) => sendParsed('/api/native/deepseek/configuration', deepseekConfigurationSaveSchema, { method: 'POST', body }),
   deepseekSetupStatus: (options) => readParsed('/api/native/deepseek/setup', {}, deepseekSetupStatusSchema, options?.signal),
   setupDeepseek: () => sendParsed('/api/native/deepseek/setup', deepseekSetupStatusSchema, { method: 'POST' }),
   saveCodexConnection: (id, body) => sendParsed(
@@ -262,6 +241,9 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
     options?.signal,
   ),
   createSession: (input) => writeParsed('/api/native/sessions', nativeSessionSchema, input),
+  configureAgents: (id, directory, configuration, expectedRevision, main, expectedSelectionRevision) => sendParsed(`${sessionPath(id)}/agents`, nativeSessionSchema, {
+    method: 'PUT', body: { directory, configuration, expectedRevision, main, expectedSelectionRevision },
+  }),
   selectModel: (sessionId, directory, selection, expectedRevision) => sendParsed(`${sessionPath(sessionId)}/selection`, nativeSessionSchema, {
     method: 'PATCH', body: { directory, selection, expectedRevision },
   }),
@@ -272,8 +254,8 @@ export const createWebNativeAgentsAPI = (): NativeAgentsAPI => ({
   compact: async (sessionId, request) => {
     await writeParsed(`${sessionPath(sessionId)}/compact`, nativePromptAcceptedSchema, request);
   },
-  replyQuestion: async (requestId, answers) => {
-    await writeParsed(`${questionPath(requestId)}/reply`, nativeQuestionRepliedSchema, { answers });
+  replyQuestion: async (requestId, answers, execution) => {
+    await writeParsed(`${questionPath(requestId)}/reply`, nativeQuestionRepliedSchema, { answers, execution });
   },
   rejectQuestion: async (requestId) => {
     await writeParsed(`${questionPath(requestId)}/reject`, nativeQuestionRejectedSchema);

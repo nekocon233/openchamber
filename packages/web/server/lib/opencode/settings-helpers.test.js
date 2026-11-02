@@ -84,6 +84,22 @@ const createTestHelpersWithRealSanitizers = () => {
 };
 
 describe('settings helpers', () => {
+  it('round-trips picker ordering separately from favorite membership', () => {
+    const helpers = createTestHelpersWithRealSanitizers();
+    const id = '11111111-1111-4111-8111-111111111111';
+    const order = ['action:' + id, 'model:["claude-native","opus"]'];
+    expect(helpers.sanitizeSettingsUpdate({ favoritePickerOrder: order, agentCombinationOrder: [id, id] })).toEqual({ favoritePickerOrder: order, agentCombinationOrder: [id] });
+    expect(helpers.sanitizeSettingsUpdate({ favoritePickerOrder: [], agentCombinationOrder: [] })).toEqual({ favoritePickerOrder: [], agentCombinationOrder: [] });
+    expect(helpers.sanitizeSettingsUpdate({ agentCombinationOrder: ['invalid'] })).toEqual({});
+  });
+  it('persists combination favorites as bounded unique IDs without changing model favorites', () => {
+    const helpers = createTestHelpers();
+    const id = '11111111-1111-4111-8111-111111111111';
+    expect(helpers.sanitizeSettingsUpdate({ favoriteAgentCombinations: [id, id] })).toEqual({ favoriteAgentCombinations: [id] });
+    expect(helpers.sanitizeSettingsUpdate({ favoriteAgentCombinations: [] })).toEqual({ favoriteAgentCombinations: [] });
+    expect(helpers.sanitizeSettingsUpdate({ favoriteAgentCombinations: ['invalid'] })).toEqual({});
+    expect(helpers.sanitizeSettingsUpdate({ favoriteAgentCombinations: Array(101).fill(id) })).toEqual({});
+  });
   it('sanitizes FRPC TCP and HTTP endpoint settings without accepting a token', () => {
     const helpers = createTestHelpersWithRealSanitizers();
 
@@ -967,7 +983,7 @@ describe('settings registry gate', () => {
     shortcutOverrides: { 'chat.send': 'mod+enter' },
     defaultModel: 'anthropic/claude', defaultVariant: 'high', defaultAgent: 'build', smallModelUseDefault: false, smallModelOverride: 'anthropic/haiku',
     walkthroughModelOverride: 'anthropic/claude', zenModel: 'zen/model',
-    favoriteModels: [{ providerID: 'anthropic', modelID: 'claude' }], hiddenModels: [{ providerID: 'openai', modelID: 'gpt' }], collapsedModelProviders: ['openai'],
+    favoriteModels: [{ providerID: 'anthropic', modelID: 'claude' }], favoriteAgentCombinations: ['11111111-1111-4111-8111-111111111111'], nativeAgentCombinations: [], hiddenModels: [{ providerID: 'openai', modelID: 'gpt' }], collapsedModelProviders: ['openai'],
     recentModels: [{ providerID: 'anthropic', modelID: 'claude' }], lastSelectedModel: 'anthropic/claude', recentAgents: ['build'], favoriteAgents: ['build'], recentEfforts: { 'anthropic/claude': ['high'] }, providerOrder: ['anthropic'],
     sessionRecapEnabled: true, sessionSuggestionEnabled: true, sessionWorkEnabled: true, sessionReviewOfferEnabled: true, sessionGoalEnabled: true, sessionGoalChecker: 'small-model', sessionGoalMaxAutoTurns: 50, sessionGoalDefaultBudgetEnabled: true, sessionGoalDefaultBudget: 5,
     summarizeLastMessage: true, summaryThreshold: 100, summaryLength: 50, maxLastMessageLength: 200, showDeletionDialog: true,

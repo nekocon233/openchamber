@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { NativeAgentsRequestError } from '@openchamber/ui/lib/native-agents/errors';
+import type { NativeAgentConfigurationWrite } from '@openchamber/ui/lib/native-agents/combinations';
+import type { NativeSessionSelection } from '@openchamber/ui/lib/api/types';
 import { createWebNativeAgentsAPI } from './nativeAgents';
 
 type Respond = (url: URL, signal: AbortSignal | undefined) => Promise<Response>;
@@ -34,6 +36,32 @@ afterEach(() => {
 });
 
 describe('web native agents API', () => {
+  it('writes a native combination atomically with both expected revisions', async () => {
+    const bodies: string[] = [];
+    const sessionId = 'ncv_11111111-1111-4111-8111-111111111111';
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
+      expect(init?.method).toBe('PUT');
+      bodies.push(String(init?.body));
+      return Response.json({ id: sessionId, projectID: '', directory: '/work/project', title: 'Combined', time: { created: 1, updated: 2 } });
+    });
+    const configuration: NativeAgentConfigurationWrite = { subagent: { model: { providerID: 'codex-native', modelID: 'gpt-test' }, variant: 'max' }, execution: null };
+    const main: NativeSessionSelection = { model: { providerID: 'claude-native', modelID: 'opus' }, agent: 'plan' };
+    await createWebNativeAgentsAPI().configureAgents(sessionId, '/work/project', configuration, 3, main, 4);
+    expect(requests[0]?.pathname).toBe(`/api/native/sessions/${sessionId}/agents`);
+    expect(JSON.parse(bodies[0] ?? '')).toEqual({ directory: '/work/project', configuration, expectedRevision: 3, main, expectedSelectionRevision: 4 });
+  });
+  it('sends execution selection separately from the unchanged native answer values', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      return Response.json({ replied: true });
+    });
+    const execution = { model: { providerID: 'codex-native', modelID: 'gpt-test' }, variant: 'max', expectedRevision: 3 };
+    await createWebNativeAgentsAPI().replyQuestion('ncq_execution', [['build']], execution);
+    await createWebNativeAgentsAPI().replyQuestion('ncq_legacy', [['plan']]);
+    expect(bodies.map((body) => JSON.parse(body))).toEqual([{ answers: [['build']], execution }, { answers: [['plan']] }]);
+  });
   it('sends a fixed native statistics window and rejects malformed reports', async () => {
     stubFetch(async () => Response.json(unavailableStatistics()));
     const result = await createWebNativeAgentsAPI().stats({ from: 100, to: 200, timezone: 'Asia/Taipei', directory: '/work/project with spaces', tools: 'none' });
@@ -92,29 +120,13 @@ describe('web native agents API', () => {
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
       if (init?.body) bodies.push(String(init.body));
-      return Response.json({ state: init?.method === 'POST' ? 'installing' : 'needs-key' });
+      return Response.json({ state: init?.method === 'POST' ? 'installing' : 'ready' });
     });
     const api = createWebNativeAgentsAPI();
     expect(await api.setupDeepseek()).toEqual({ state: 'installing' });
-    expect(await api.deepseekSetupStatus()).toEqual({ state: 'needs-key' });
+    expect(await api.deepseekSetupStatus()).toEqual({ state: 'ready' });
     expect(requests.map((url) => url.pathname)).toEqual(['/api/native/deepseek/setup', '/api/native/deepseek/setup']);
     expect(bodies).toEqual(['{}']);
-  });
-
-  it('saves DeepSeek configuration on the connected runtime and preserves explicit partial failures', async () => {
-    const configuration = { revision: 2, writable: true, baseURL: 'https://provider.test/anthropic', modelIDs: ['model-a'], credential: { configured: false, writable: true } };
-    const bodies: string[] = [];
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
-      if (init?.body) bodies.push(String(init.body));
-      return Response.json(init?.method === 'POST' ? { status: 'credential-error', configuration } : configuration);
-    });
-    const api = createWebNativeAgentsAPI();
-    expect(await api.deepseekConfiguration()).toEqual(configuration);
-    const input = { revision: 1, baseURL: configuration.baseURL, modelIDs: configuration.modelIDs, apiKey: 'fixture-api-key' };
-    expect(await api.saveDeepseekConfiguration(input)).toEqual({ status: 'credential-error', configuration });
-    expect(requests.map((url) => url.pathname)).toEqual(['/api/native/deepseek/configuration', '/api/native/deepseek/configuration']);
-    expect(JSON.parse(bodies[0])).toEqual(input);
   });
 
   it('uses the DeepSeek command route and includes session identity in command discovery', async () => {
@@ -370,50 +382,6 @@ describe('web native agents API', () => {
   it('reports a refused write with its code', async () => {
     stubFetch(async () => Response.json({ error: 'A native session keeps the CLI it started with', code: 'NATIVE_BACKEND_MISMATCH' }, { status: 409 }));
     await expect(createWebNativeAgentsAPI().abort('ncl_x')).rejects.toMatchObject({ status: 409, code: 'NATIVE_BACKEND_MISMATCH' });
-  });
-
-  it('posts a pasted callback address to the sign-in attempt route', async () => {
-    const bodies: string[] = [];
-    let method = '';
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push(new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test'));
-      bodies.push(String(init?.body));
-      method = String(init?.method);
-      return Response.json({ accepted: true });
-    });
-
-    await createWebNativeAgentsAPI().submitCliproxyapiLoginCallback('abc123', 'http://localhost:1455/auth/callback?code=x&state=abc123');
-
-    expect(requests[0]?.pathname).toBe('/api/native/claude/cliproxyapi/login/abc123/callback');
-    expect(method).toBe('POST');
-    expect(JSON.parse(bodies[0] ?? '')).toEqual({ url: 'http://localhost:1455/auth/callback?code=x&state=abc123' });
-  });
-
-  it('starts Claude OAuth and configures unified Opus through authenticated native routes', async () => {
-    const bodies: string[] = [];
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(input instanceof Request ? input.url : input.toString(), 'http://openchamber.test');
-      requests.push(url);
-      bodies.push(String(init?.body));
-      if (url.pathname.endsWith('/login')) return Response.json({ state: 'claude-state', url: 'https://claude.ai/oauth/authorize' });
-      return Response.json({ configured: true, enabled: true, running: true, ready: true,
-        baseURL: 'http://127.0.0.1:8317', port: 8317, authDir: '/auth', upstreamProxy: null,
-        installedVersion: '8.0.31', runningVersion: '8.0.31',
-        install: { supported: true, prepared: true, target: 'linux-x64', version: '8.0.31', path: '/gateway', error: null },
-        managementEnabled: true, keyRejected: false, accounts: [], clientKeys: [],
-        loginProviders: ['claude', 'antigravity'], opusFailover: { enabled: true, ready: false }, sonnetFailover: { enabled: true, ready: false },
-        lastError: null, restarting: false, connection: null });
-    });
-    const api = createWebNativeAgentsAPI();
-    await api.beginCliproxyapiLogin('claude');
-    const status = await api.setCliproxyapiOpusRoute(true);
-    const sonnet = await api.setCliproxyapiSonnetRoute(true);
-    expect(JSON.parse(bodies[0])).toEqual({ provider: 'claude' });
-    expect(JSON.parse(bodies[1])).toEqual({ enabled: true });
-    expect(JSON.parse(bodies[2])).toEqual({ enabled: true });
-    expect(requests[2]?.pathname).toBe('/api/native/claude/cliproxyapi/sonnet-route');
-    expect(status.opusFailover).toEqual({ enabled: true, ready: false });
-    expect(sonnet.sonnetFailover).toEqual({ enabled: true, ready: false });
   });
 
   it("ends a read when the caller's signal aborts", async () => {

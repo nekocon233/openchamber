@@ -6,6 +6,9 @@ import type { CustomProviderIcon } from '@/lib/customProviderIcons';
 type ModelRef = { providerID: string; modelID: string };
 type ModelPrefsPayload = {
   favoriteModels: ModelRef[];
+  favoriteAgentCombinations: string[];
+  favoritePickerOrder: string[];
+  agentCombinationOrder: string[];
   hiddenModels: ModelRef[];
   collapsedModelProviders: string[];
   recentModels: ModelRef[];
@@ -51,6 +54,9 @@ const snapshotModelPrefs = (): ModelPrefsPayload => {
   const state = useUIStore.getState();
   return {
     favoriteModels: state.favoriteModels,
+    favoriteAgentCombinations: state.favoriteAgentCombinations,
+    favoritePickerOrder: state.favoritePickerOrder,
+    agentCombinationOrder: state.agentCombinationOrder,
     hiddenModels: state.hiddenModels,
     collapsedModelProviders: state.collapsedModelProviders,
     recentModels: state.recentModels,
@@ -63,6 +69,9 @@ const snapshotModelPrefs = (): ModelPrefsPayload => {
 
 const modelPrefsEqual = (a: ModelPrefsPayload, b: ModelPrefsPayload): boolean => (
   refsEqual(a.favoriteModels, b.favoriteModels) &&
+  stringsEqual(a.favoriteAgentCombinations, b.favoriteAgentCombinations) &&
+  stringsEqual(a.favoritePickerOrder, b.favoritePickerOrder) &&
+  stringsEqual(a.agentCombinationOrder, b.agentCombinationOrder) &&
   refsEqual(a.hiddenModels, b.hiddenModels) &&
   stringsEqual(a.collapsedModelProviders, b.collapsedModelProviders) &&
   refsEqual(a.recentModels, b.recentModels) &&
@@ -74,6 +83,9 @@ const modelPrefsEqual = (a: ModelPrefsPayload, b: ModelPrefsPayload): boolean =>
 
 const cloneModelPrefs = (prefs: ModelPrefsPayload): ModelPrefsPayload => ({
   favoriteModels: prefs.favoriteModels.slice(),
+  favoriteAgentCombinations: prefs.favoriteAgentCombinations.slice(),
+  favoritePickerOrder: prefs.favoritePickerOrder.slice(),
+  agentCombinationOrder: prefs.agentCombinationOrder.slice(),
   hiddenModels: prefs.hiddenModels.slice(),
   collapsedModelProviders: prefs.collapsedModelProviders.slice(),
   recentModels: prefs.recentModels.slice(),
@@ -109,6 +121,9 @@ export const startModelPrefsAutoSave = () => {
   const unsubscribe = useUIStore.subscribe((state, prevState) => {
     const next = {
       favoriteModels: state.favoriteModels,
+      favoriteAgentCombinations: state.favoriteAgentCombinations,
+      favoritePickerOrder: state.favoritePickerOrder,
+      agentCombinationOrder: state.agentCombinationOrder,
       hiddenModels: state.hiddenModels,
       collapsedModelProviders: state.collapsedModelProviders,
       recentModels: state.recentModels,
@@ -119,6 +134,9 @@ export const startModelPrefsAutoSave = () => {
     };
     const prev = {
       favoriteModels: prevState.favoriteModels,
+      favoriteAgentCombinations: prevState.favoriteAgentCombinations,
+      favoritePickerOrder: prevState.favoritePickerOrder,
+      agentCombinationOrder: prevState.agentCombinationOrder,
       hiddenModels: prevState.hiddenModels,
       collapsedModelProviders: prevState.collapsedModelProviders,
       recentModels: prevState.recentModels,

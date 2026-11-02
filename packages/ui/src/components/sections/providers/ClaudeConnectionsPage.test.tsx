@@ -2,7 +2,7 @@ import React, { act } from 'react';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
-import type { ClaudeConnection, CliproxyapiStatus } from '@/lib/native-agents/connections';
+import type { ClaudeConnection } from '@/lib/native-agents/connections';
 
 const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
@@ -57,7 +57,6 @@ const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
 const { registerRuntimeAPIs } = await import('@/contexts/runtimeAPIRegistry');
 const { createTestNativeAgentsAPI, createTestRuntimeAPIs } = await import('@/lib/native-agents/test-utils/runtime');
 const { ClaudeConnectionsPage } = await import('./ClaudeConnectionsPage');
-const { useConfigStore } = await import('@/stores/useConfigStore');
 
 const connection = (patch: Partial<ClaudeConnection> = {}): ClaudeConnection => ({
   id: 'connection-1', revision: 1, hasKey: true, kind: 'anthropic', name: 'kimi',
@@ -67,17 +66,6 @@ const connection = (patch: Partial<ClaudeConnection> = {}): ClaudeConnection => 
     contextWindow: 262144, outputLimit: 32000, input: { image: false, pdf: false }, efforts: [],
   }],
   quotaProviderId: null,
-  ...patch,
-});
-
-const status = (patch: Partial<CliproxyapiStatus> = {}): CliproxyapiStatus => ({
-  configured: true, enabled: false, running: false, ready: false,
-  baseURL: 'http://127.0.0.1:8317', port: 8317, authDir: '/auth', upstreamProxy: null,
-  installedVersion: '8.0.31', runningVersion: null,
-  install: { supported: true, prepared: true, target: 'darwin-arm64', version: '8.0.31', path: '/managed/cli-proxy-api', error: null },
-  managementEnabled: false, keyRejected: false, accounts: [], clientKeys: [],
-  loginProviders: ['codex', 'antigravity'], opusFailover: { enabled: false, ready: false },
-  lastError: null, restarting: false, connection: null,
   ...patch,
 });
 
@@ -94,7 +82,6 @@ const render = async (api: Parameters<typeof createTestNativeAgentsAPI>[0], page
   registerRuntimeAPIs(apis);
   await act(async () => root?.render(<RuntimeAPIContext.Provider value={apis}><I18nProvider>{page}</I18nProvider></RuntimeAPIContext.Provider>));
 };
-const text = () => container?.textContent ?? '';
 const buttons = (label: string) => [...(container?.querySelectorAll('button') ?? [])].filter((node) => node.textContent === label);
 const button = (label: string) => buttons(label)[0];
 
@@ -106,73 +93,9 @@ afterEach(async () => {
 });
 
 describe('Claude connections page', () => {
-  test('refreshes the actual model catalog after gateway logout while keeping the unavailable selection', async () => {
-    const original = useConfigStore.getState();
-    let signedOut = false;
-    let catalogReads = 0;
-    const descriptor = (id: string) => ({
-      id, name: id, contextWindow: 200_000, outputLimit: 32_000,
-      efforts: [], defaultEffort: null, fast: false, input: { image: false, pdf: false },
-    });
-    try {
-      await render({
-        listClaudeConnections: async () => [connection()],
-        cliproxyapiStatus: async () => status({ accounts: signedOut ? [] : [{
-          provider: 'codex', name: 'codex.json', email: 'fixture@example.test', planType: null,
-          activeUntil: null, status: 'active', disabled: false,
-        }] }),
-        removeCliproxyapiAccount: async () => { signedOut = true; },
-        catalog: async () => {
-          catalogReads += 1;
-          return { backends: {
-            claude: { status: 'ok', models: (signedOut ? ['claude-kept'] : ['gpt-removed', 'claude-kept']).map(descriptor) },
-            codex: { status: 'ok', models: [descriptor('codex-separate-login')] },
-          } };
-        },
-      });
-      await act(async () => { await useConfigStore.getState().refreshNativeProviders(); });
-      useConfigStore.setState({ currentProviderId: 'claude-native', currentModelId: 'gpt-removed' });
-      const models = () => useConfigStore.getState().providers.find((provider) => provider.id === 'claude-native')?.models.map((model) => model.id);
-      expect(models()).toEqual(['gpt-removed', 'claude-kept']);
-      await act(async () => { button('Sign out')?.click(); });
-      await act(async () => { button('Sign out')?.click(); });
-      expect(models()).toEqual(['claude-kept']);
-      expect(useConfigStore.getState().providers.find((provider) => provider.id === 'codex-native')?.models[0].id).toBe('codex-separate-login');
-      expect(useConfigStore.getState().currentModelId).toBe('gpt-removed');
-      expect(catalogReads).toBe(2);
-    } finally {
-      useConfigStore.setState({ providers: original.providers, currentProviderId: original.currentProviderId, currentModelId: original.currentModelId });
-    }
-  });
-
-  test('shows the gateway as its sign-in row instead of an editable connection', async () => {
-    const api = {
-      listClaudeConnections: async () => [connection(), connection({ id: 'connection-2', name: 'CLIProxyAPI' })],
-      cliproxyapiStatus: async () => status({ connection: { id: 'connection-2', name: 'CLIProxyAPI' } }),
-    };
-    await render(api);
-    expect(text()).toContain('kimi');
-    expect(text()).toContain('CLIProxyAPI');
-    expect(button('Sign in a ChatGPT account')).toBeDefined();
-    // Only the plain connection offers edit and delete; the gateway row never does.
-    expect(buttons('Edit')).toHaveLength(1);
-    expect(buttons('Delete')).toHaveLength(1);
-  });
-
-  test('keeps the sign-in row when no gateway connection exists yet', async () => {
-    const api = {
-      listClaudeConnections: async () => [],
-      cliproxyapiStatus: async () => status(),
-    };
-    await render(api);
-    expect(text()).toContain('CLIProxyAPI');
-    expect(button('Sign in a ChatGPT account')).toBeDefined();
-  });
-
   test('opens the editor for a plain connection', async () => {
     const api = {
       listClaudeConnections: async () => [connection()],
-      cliproxyapiStatus: async () => status(),
     };
     await render(api);
     await act(async () => { button('Edit')?.click(); });
@@ -183,7 +106,6 @@ describe('Claude connections page', () => {
   test("renders the back control the providers page hands it", async () => {
     const api = {
       listClaudeConnections: async () => [],
-      cliproxyapiStatus: async () => status(),
     };
     await render(api, <ClaudeConnectionsPage titleLeading={<button type="button">Back</button>} />);
     expect(button('Back')).toBeDefined();

@@ -169,6 +169,7 @@ const turnErrorOf = (frame, launch) => {
  * @param {NodeJS.Platform} [options.platform]
  */
 export const createClaudeLiveSessions = ({
+  toolConfiguration = () => null,
   loadSdk,
   resolveExecutable,
   buildEnv,
@@ -321,7 +322,7 @@ export const createClaudeLiveSessions = ({
 
   const finishTurn = (live, frame) => {
     const error = turnErrorOf(frame, live.config.launch);
-    const planKept = live.turnStopReason === 'keep-planning';
+    const planKept = live.turnStopReason === 'keep-planning' || live.turnStopReason === 'plan-execution';
     live.turnStopReason = null;
     publishRecords(live, live.projection.finishTurn({ error, planKept }));
     if (error?.name === 'MessageAbortedError') live.subagents.stop(error);
@@ -431,6 +432,10 @@ export const createClaudeLiveSessions = ({
         tool: messageID && context.toolUseID ? { messageID, callID: context.toolUseID } : undefined,
         signal: context.signal,
       });
+      if (outcome.status === 'transferred') {
+        live.turnStopReason = 'plan-execution';
+        return { behavior: 'deny', message: 'The approved plan will continue with the selected execution model.', interrupt: true };
+      }
       if (outcome.status === 'rejected' || context.signal.aborted || live.closing || live.turnStopReason === 'user-stop') {
         return { behavior: 'deny', message: PLAN_DECLINED, interrupt: true };
       }
@@ -558,6 +563,7 @@ export const createClaudeLiveSessions = ({
       childSessionIdForToolUse: (toolUseId) => encodeClaudeChildSessionId(sessionUuid, toolUseId),
       contextWindowFor: (modelID) => live.config.launch?.descriptor?.contextWindow ?? claudeModelContextWindow(modelID),
     });
+    live.toolKey = toolConfiguration(sessionId)?.key ?? '';
     const options = {
       cwd: directory,
       pathToClaudeCodeExecutable: executable,
@@ -579,6 +585,15 @@ export const createClaudeLiveSessions = ({
       },
     };
     if (connection.settings) options.settings = connection.settings;
+    const tools = toolConfiguration(sessionId);
+    if (tools) {
+      options.disallowedTools = ['Agent', 'Task'];
+      if (tools.child) options.disallowedTools.push('ExitPlanMode');
+      if (!tools.child) {
+        options.env.MCP_TOOL_TIMEOUT = '3600000';
+        options.mcpServers = { openchamber_subagents: { command: tools.command, args: tools.args, env: tools.env } };
+      }
+    }
     if (config.model !== null) options.model = config.model;
     if (config.effort !== null) options.effort = config.effort;
     if (resume) options.resume = sessionUuid;
@@ -633,8 +648,9 @@ export const createClaudeLiveSessions = ({
      * @param {{ modelID: string, variant?: string, agent: string }} input.send what the user message shows
      * @param {Rewind | null} [input.rewind] a revert this prompt commits
      */
-    async prompt({ sessionId, directory, messageId, content, sdkContent, config, send, rewind = null }) {
+    async prompt({ sessionId, directory, messageId, content, sdkContent, config, send, rewind = null, signal = null }) {
       return serializePrompt(sessionId, async () => {
+        signal?.throwIfAborted();
         const decoded = decodeNativeSessionId(sessionId);
         if (!decoded || decoded.backend !== 'claude' || decoded.toolUseId !== null) {
           throw invalidRequestError('Prompts go to a Claude Code session, not a subagent');
@@ -642,6 +658,12 @@ export const createClaudeLiveSessions = ({
         const uuid = USER_MESSAGE_ID.exec(messageId)?.[1];
         if (!uuid) throw invalidRequestError(`Not a Claude user message id: ${messageId}`);
         let live = sessions.get(sessionId);
+        const toolKey = toolConfiguration(sessionId)?.key ?? '';
+        if (live && live.toolKey !== toolKey) {
+          if (live.busy || live.backgroundTasks.length) throw new NativeAgentError('Wait for the current turn before applying subagent settings', { status: 409, code: 'NATIVE_SESSION_BUSY' });
+          close(live);
+          live = null;
+        }
         if (live && (live.config.launch?.key ?? 'default') !== (config.launch?.key ?? 'default')) {
           if (live.busy || live.backgroundTasks.length > 0) {
             throw new NativeAgentError('Wait for the current turn and background tasks before switching connections', { status: 409, code: 'NATIVE_CONNECTION_BUSY' });
@@ -654,12 +676,15 @@ export const createClaudeLiveSessions = ({
           close(live);
           live = undefined;
         }
+        let created = false;
         if (live) {
           await applyConfig(live, config);
         } else {
           await exits.get(sessionId);
           live = await start({ sessionId, sessionUuid: decoded.sessionUuid, directory, config, rewind });
+          created = true;
         }
+        if (signal?.aborted) { if (created) close(live); signal.throwIfAborted(); }
         live.lastActive = now();
         live.sends.set(messageId, send);
         if (content !== null) publishRecords(live, live.projection.startUserPrompt(messageId, content));

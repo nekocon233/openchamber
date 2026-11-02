@@ -1024,6 +1024,7 @@ const sessionGoalRuntime = createSessionGoalRuntime({
     statuses: (directory) => nativeAgentsRuntime.statuses(directory),
     loadMessages: (sessionId, directory, page) => nativeAgentsRuntime.loadMessages(sessionId, directory, page),
     updateSession: (sessionId, directory, patch) => nativeAgentsRuntime.updateSession(sessionId, directory, patch),
+    hasPendingPlanDecision: (sessionId) => nativeAgentsRuntime.hasPendingPlanDecision(sessionId),
     prompt: (sessionId, request) => nativeAgentsRuntime.prompt(sessionId, { ...request, messageID: newNativeClientUserMessageId(sessionId) }),
   },
   classifierEndpoint: () => routingRuntime.classifierEndpoint(),
@@ -1141,6 +1142,8 @@ const sessionWorkRuntime = createSessionWorkRuntime({
   nativeSessions: {
     isNativeSessionId,
     getSession: (sessionId, directory) => nativeAgentsRuntime.getSession(sessionId, directory),
+    loadMessages: (sessionId, directory, page) => nativeAgentsRuntime.loadMessages(sessionId, directory, page),
+    updateSession: (sessionId, directory, patch) => nativeAgentsRuntime.updateSession(sessionId, directory, patch),
     setSessionWork: (sessionId, directory, work) => nativeAgentsRuntime.setSessionWork(sessionId, directory, work),
   },
   lineage: sessionLineage,
@@ -1436,10 +1439,6 @@ const nativeAgentsRuntime = createNativeAgentsRuntime({
   managedChatsRoots: [...new Set([path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR])],
 });
 configureNativeSmallModels(nativeAgentsRuntime.smallModels);
-// A gateway the user left running recovers with the server, like a persisted tunnel.
-void nativeAgentsRuntime.cliproxyapi.resume().catch((error) => {
-  console.warn('[native-agents] could not resume the CLIProxyAPI gateway:', error instanceof Error ? error.message : String(error));
-});
 const staticRoutesRuntime = createStaticRoutesRuntime({
   fs,
   path,

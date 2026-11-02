@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nativeAgentModelSchema } from '@/lib/native-agents/combinations';
 import type {
   FollowUpQueueAdditionalPart,
   FollowUpQueueAttachment,
@@ -205,7 +206,7 @@ const parseAdditionalPart = (value: unknown, field: string): FollowUpQueueAdditi
 
 const parseSendConfig = (value: unknown, field: string): FollowUpQueueSendConfig => {
   if (!isRecord(value)) throw new Error(`Invalid follow-up queue ${field}`);
-  assertKeys(value, ['providerID', 'modelID', 'agent', 'variant', 'executionFramework'], field);
+  assertKeys(value, ['providerID', 'modelID', 'agent', 'variant', 'executionFramework', 'subagentModel'], field);
   // Keep legacy outbox payloads intact so replay matches the host's stored fingerprint.
   if (value.executionFramework !== undefined && value.executionFramework !== 'opencode' && value.executionFramework !== 'claude-code') {
     throw new Error(`Invalid follow-up queue ${field}.executionFramework`);
@@ -221,6 +222,7 @@ const parseSendConfig = (value: unknown, field: string): FollowUpQueueSendConfig
     } : {}),
   };
   if (value.executionFramework !== undefined) result.executionFramework = value.executionFramework;
+  if (value.subagentModel !== undefined) result.subagentModel = value.subagentModel === null ? null : nativeAgentModelSchema.parse(value.subagentModel);
   return result;
 };
 
@@ -500,6 +502,7 @@ export const followUpQueueItemsEqual = (left: FollowUpQueueItem, right: FollowUp
   && left.sendConfig?.modelID === right.sendConfig?.modelID
   && left.sendConfig?.agent === right.sendConfig?.agent
   && left.sendConfig?.variant === right.sendConfig?.variant
+  && JSON.stringify(left.sendConfig?.subagentModel) === JSON.stringify(right.sendConfig?.subagentModel)
   && left.claim?.id === right.claim?.id
   && left.claim?.expiresAt === right.claim?.expiresAt
   && attachmentsEqual(left.attachments, right.attachments)

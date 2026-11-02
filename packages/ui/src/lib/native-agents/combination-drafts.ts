@@ -1,0 +1,35 @@
+import { create } from 'zustand';
+import { getRuntimeKey } from '@/lib/runtime-switch';
+import type { NativeAgentConfigurationWrite } from './combinations';
+
+export type AgentCombinationDraftTarget = string | { draftId: number };
+export type AgentCombinationDraftSnapshot = { target: AgentCombinationDraftTarget; configuration: NativeAgentConfigurationWrite };
+const keyOf = (target: AgentCombinationDraftTarget) => JSON.stringify([getRuntimeKey(), target]);
+export const useAgentCombinationDrafts = create<{
+  drafts: Map<string, NativeAgentConfigurationWrite>;
+  set: (target: AgentCombinationDraftTarget, configuration: NativeAgentConfigurationWrite) => void;
+  clear: (target: AgentCombinationDraftTarget, configuration: NativeAgentConfigurationWrite) => void;
+}>((set) => ({
+  drafts: new Map(),
+  clear: (directory, configuration) => set((state) => {
+    const key = keyOf(directory);
+    if (state.drafts.get(key) !== configuration) return state;
+    const drafts = new Map(state.drafts); drafts.delete(key);
+    return { drafts };
+  }),
+  set: (directory, configuration) => set((state) => {
+    const drafts = new Map(state.drafts);
+    drafts.set(keyOf(directory), configuration);
+    if (drafts.size > 50) {
+      const first = drafts.keys().next().value;
+      if (first !== undefined) drafts.delete(first);
+    }
+    return { drafts };
+  }),
+}));
+export const readAgentCombinationDraft = (target: AgentCombinationDraftTarget) => useAgentCombinationDrafts.getState().drafts.get(keyOf(target));
+export const captureAgentCombinationDraft = (target: AgentCombinationDraftTarget): AgentCombinationDraftSnapshot | undefined => {
+  const configuration = readAgentCombinationDraft(target);
+  return configuration ? { target, configuration } : undefined;
+};
+export const agentCombinationDraftKey = keyOf;

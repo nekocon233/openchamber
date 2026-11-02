@@ -17,12 +17,16 @@ API.
 Antigravity uses backend `antigravity`, provider `antigravity-native` and
 `nag_<conversation uuid>` session IDs. It supports independent native sessions,
 dynamic models, Build and Plan, streamed text and tools, native history, model and effort changes,
-interruption and archive. Unified `ncv_` conversations, revert, fork, manual
-compaction and native deletion are unsupported. Native mid-turn question
+interruption and archive. It participates in unified `ncv_` conversations through
+the parent conversation controller. Standalone revert, fork, manual compaction
+and native deletion remain unsupported. Native mid-turn question
 replies, mid-turn steering, Small Model and terminal memory hooks are
 also unsupported. Server routes return `NATIVE_ANTIGRAVITY_UNSUPPORTED` or
-`NATIVE_ANTIGRAVITY_UNIFIED_UNSUPPORTED`; UI capabilities keep those actions
-closed. Automatic compaction records in a native transcript remain readable.
+the corresponding unified unsupported-operation error; UI capabilities keep
+those actions closed. Unified rewind and fork retain logical history prefixes
+and open a new source on the next prompt. Retained Antigravity history prevents
+permanent deletion of the logical conversation; archive remains available.
+Automatic compaction records in a native transcript remain readable.
 
 ## Process and trust
 
@@ -36,18 +40,43 @@ agy --input-format stream-json --output-format stream-json \
 ```
 
 Plan uses `--mode plan --disable-slash-commands=false` so the CLI expands its
-native plan instruction. It never uses `--dangerously-skip-permissions`.
-Session-only `--settings` select `toolPermission: request-review` and deny
-`write_file(*)`, `command(*)`, `mcp(*)` and `execute_url(*)`. Native read/search
-tools remain available; shell commands are blocked even when they would only
-read. These settings do not change the user's saved CLI configuration. Session
-discovery requests no mode or full-access override before the first prompt.
+native plan instruction. Both Build and Plan use
+`--dangerously-skip-permissions` and automatically approve tool actions,
+including file access outside the workspace, file changes, shell commands,
+MCP tools and browser actions. Plan selects the native planning workflow and
+has full tool permissions. Session discovery requests no mode or full-access
+override before the first prompt.
 
-The CLI's plan prefix alone is not a write boundary: its documented permission
-overrides apply across modes. This launch contract is verified on agy 1.4.11.
-An older CLI that rejects these flags fails the request; it never falls back to
-Build. The shared native child environment removes the server's `NODE_ENV`, so
+When a session selects an OpenChamber-managed subagent, `delegation-setup.js`
+registers `openchamber_subagents` in `~/.gemini/config/mcp_config.json` and the
+`openchamber-delegation` hook in `hooks.json`. Both entries contain only helper
+paths and timeouts. Existing JSONC comments and unrelated entries are retained;
+malformed files or reserved-name collisions fail setup before dispatch. If
+the hook write fails, the matching MCP registration is rolled back.
+
+Only an owned CLI's process environment supplies the private callback token.
+With it, PreToolUse denies `invoke_subagent` and `define_subagent`, routing tasks
+through the selected delegate tool. A leaf exposes no delegate tool. Without
+the token, ordinary CLI launches see no managed tools and the hook allows
+native delegation. Account, model routing and permission settings are unchanged.
+Antigravity does not accept these policies in per-session settings, so the
+adapter uses its native managed MCP and hook files.
+
+The installed-CLI conformance suite covers the full-access launch contract.
+An older CLI that rejects these flags fails the request; it never falls back
+to Build. The shared native child environment removes the server's `NODE_ENV`, so
 project tests do not inherit the web server's production mode.
+
+`command.js` starts agy the way the user's interactive shell does when the
+shell defines an `agy` function, for example magpie's wrapper that supplies
+`GEMINI_API_KEY` and `GOOGLE_GEMINI_BASE_URL`. It checks `type -t agy` with
+`bash` or `zsh -ic` and then runs `agy "$@"` through the same shell, passing
+arguments as positional parameters. Model discovery, new sessions and prompts
+use that command. Quota reads use the direct executable and the native backend
+as described in Quota below. Detection failure, a non-function command, fish and
+Windows keep the direct executable. The function is detected once per backend
+lifetime; a changed shell profile is picked up after the server restarts.
+OpenChamber never reads or logs the wrapper's environment.
 
 Headless agy rejects `control_request` and `control_response` messages. There
 is no interactive permission or question reply channel. Skipped native questions
@@ -58,7 +87,7 @@ skipped result. A finished plan uses one single-select question prefixed with
 `<openchamber-plan-v1>\n`, containing the complete plan and the exact `build` /
 `plan` options. Skipping it grants no approval. These instructions also describe native background notifications so
 the agent can avoid status-polling loops. These instructions are not permission
-enforcement; Plan's native deny rules own write protection.
+enforcement; the CLI's full-access launch flags own tool permissions.
 An Ask permission can stop a headless turn with `SUCCESS`, an empty response
 and `denied_actions`. The adapter reports that combination as a permission
 failure, never a user stop or successful completion. A native final response
@@ -85,7 +114,11 @@ parts are refused before starting a replacement CLI, and failed admission
 retains idle-process cleanup. Prompts
 are never replayed automatically. Models, modes and efforts change by closing the idle process
 and resuming the same conversation on the next prompt. Idle processes close
-after five minutes.
+after five minutes. The unified controller also closes an idle source before
+switching backend, so agy does not remain running until that timeout. Startup
+errors before a prompt write are definite refusals that allow unified admission
+to roll back. Errors after a write is attempted remain unknown until history
+confirms delivery.
 
 POSIX interruption sends SIGINT to the process group, then SIGTERM and SIGKILL
 as fallbacks. Windows terminates the tree. Process completion waits for stdio
@@ -117,7 +150,13 @@ the log contains partial assistant text. Unfinished tool frames do not become
 successful empty outputs; a later durable completion can replace that unknown
 result, including on a history read. Prompts are never resent to repair a stream.
 
-`catalog()` checks `agy --version` and reads tab-separated `agy models`.
+`catalog()` checks `agy --version` and reads tab-separated
+`agy --settings '{"customModelsConfig":{"customModels":{}}}' models`.
+This discovery-only override lists official built-in models and hides every
+custom model, including Magpie entries and custom IDs without a namespace.
+agy applies these settings to that invocation only. Saved configuration and
+prompt routing remain unchanged; a previously selected custom ID can still
+resume its native session. No model-family or provider-prefix allowlist is used.
 `catalog.js` groups concrete slugs into one model when both the slug and label
 name the same effort. The descriptor exposes only the listed efforts, in
 low/medium/high/xhigh/max order. A model with only one listed effort has a fixed
@@ -243,8 +282,13 @@ state without copying the plan or question body. Reconnect reads only already
 marked sessions; opening history can recover a legacy proposal. The source is
 revalidated before every reply. Exact `build` approval sends a new Build prompt
 with the approved plan bound in hidden instructions and no visible user text.
-The continuation retains its user record for Build selection and assistant
-parentage, without adding an automatic message bubble. `plan` closes the card
+Question answers and custom plan feedback also travel in hidden instructions;
+their visible selections belong to the question card. Each continuation retains
+its user record for selection and assistant parentage, without adding an automatic
+message bubble. The send registry records reply provenance by the decision's
+exact client message ID, including legacy replies still identified by durable
+decision state. It never hides ordinary messages by matching their text.
+`plan` closes the card
 without a new prompt. Custom plan feedback starts a Plan prompt. Ordinary
 answers retain the original agent, model and effort. Manual prompts, Stop and
 archive invalidate the old decision. Goal continuations wait for pending
@@ -268,19 +312,32 @@ hidden from the transcript projection. Feature instructions use the existing
 `<openchamber-instructions>` block. Unified conversation creation explicitly
 rejects agy; existing unified manifests remain unchanged.
 
+## Execution model on plan approval
+
+A plan approval may transfer to the shared execution owner when the selected
+model differs from the proposal's captured model. The native AGY decision is
+settled without starting its own continuation. The shared owner keeps the human
+choice and delivery identity, then uses normal admission for the selected model.
+The parent native module's Plan execution model selection section owns recovery
+and uncertain-delivery behavior. Native skipped question outcomes remain intact.
+
 ## Quota
 
 `quota.js` serves the distinct `antigravity-cli` source through the existing
-`GET /api/quota/:providerId` route. It runs a separate
-`agy --disable-slash-commands=false --print /usage --print-timeout 10s`
-process and parses the CLI's tab-separated report. This invokes no model and
-never enters a chat's stream. Concurrent readers share one bounded probe.
+`GET /api/quota/:providerId` route. It starts the resolved agy executable
+directly, bypassing shell wrappers that can inject gateway model arguments.
+The command uses `--settings '{"modelProvider":"","model":""}'` with
+`--disable-slash-commands=false --print /usage --print-timeout 10s` to read
+the current CLI login's native quota. These settings apply only to that
+process; saved settings and chat routing are unchanged. The tab-separated
+report invokes no model and never enters a chat's stream. Concurrent readers
+share one bounded probe.
 Malformed output and CLI failures remain errors; the UI retains prior data.
 Gemini and Claude/GPT keep separate five-hour and weekly windows and reset times.
 The original `antigravity` tracker still belongs to the OpenCode plugin account.
-Neither source represents a CLIProxyAPI account, which has its own OAuth login.
 VS Code explicitly reports this native quota as unsupported. The CLI report
-was verified with agy 1.4.11; older CLIs that cannot answer it report the error.
+was verified with agy 1.4.12. CLIs that cannot apply the session settings or
+answer the command report the error without retrying through a gateway.
 
 ## Validation
 
@@ -295,14 +352,14 @@ network calls and do not prove real subscription, Windows, Relay or packaged
 Electron behavior.
 
 The installed-CLI conformance suite is opt-in because it uses the user's login
-and quota. It works only in a new temporary directory, verifies denied writes
+and quota. It uses a new temporary workspace, verifies successful edits
 and commands in Plan, switches to Build, checks `NODE_ENV`, restarts the
 adapter, resumes Plan, and checks saved mode identity and quota. On POSIX it
 also interrupts a real Node command, verifies its delayed write never occurs,
-and continues the same conversation in Plan. The permission-denial check also
-creates and removes a private fixture directory under the user's home: temp
-paths are implicitly readable, so they cannot exercise an out-of-workspace Ask.
-It reads no existing user files:
+and continues the same conversation in Plan. The cross-workspace read check also
+creates and removes a private fixture directory under the user's home. Temp
+paths are implicitly readable, so this private fixture verifies access to a
+path that would otherwise require approval. It reads no existing user files:
 
 ```sh
 OPENCHAMBER_AGY_LIVE_TEST=1 OPENCHAMBER_AGY_LIVE_MODEL=gemini-3.8-flash-medium \

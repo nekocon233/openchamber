@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { NativeAgentCombination } from '@/lib/native-agents/combinations';
 import { configuredVariantForModel, preferredModelVariant, listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
@@ -1197,6 +1198,7 @@ subscribeRuntimeEndpointChanged((detail) => {
         defaultProviders: {},
         opencodeDefaultAgent: undefined,
         opencodeDefaultModel: undefined,
+        nativeAgentCombinations: [],
         settingsDefaultModel: undefined,
         settingsDefaultVariant: undefined,
         settingsDefaultAgent: undefined,
@@ -1445,6 +1447,7 @@ interface ConfigStore {
     isInitialized: boolean;
     modelsMetadata: Map<string, ModelMetadata>;
     // OpenChamber settings-based defaults (take precedence over agent preferences)
+    nativeAgentCombinations: NativeAgentCombination[];
     settingsDefaultModel: string | undefined; // format: "provider/model"
     settingsDefaultsLoaded: boolean;
     settingsDefaultVariant: string | undefined;
@@ -1744,6 +1747,7 @@ export const useConfigStore = create<ConfigStore>()(
                 projectConfigErrors: {},
                 isInitialized: false,
                 modelsMetadata: new Map<string, ModelMetadata>(),
+                nativeAgentCombinations: [],
                 settingsDefaultModel: undefined,
                 settingsDefaultsLoaded: false,
                 settingsDefaultVariant: undefined,

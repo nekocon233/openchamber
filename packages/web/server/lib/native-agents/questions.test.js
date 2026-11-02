@@ -9,6 +9,18 @@ const deferred = () => {
 const input = { directory: '/workspace', sessionID: 'ndh_test', questions: [{ question: 'Choose', header: 'Choice', options: [{ label: 'A', description: '' }] }] };
 
 describe('native question delivery acknowledgement', () => {
+  it('refuses an execution model on an ordinary question and preserves its original answer path', async () => {
+    const registry = createQuestionRegistry({ publish: () => {}, executePlan: () => { throw new Error('Ordinary question reached plan execution'); } });
+    const question = registry.ask(input);
+    const request = registry.list(input.directory)[0];
+    expect(request.canSelectExecutionModel).toBeUndefined();
+    expect(() => registry.reply(request.id, [['A']], { model: { providerID: 'codex-native', modelID: 'selected' } }))
+      .toThrow('An execution model can only accompany a native plan approval');
+    expect(registry.get(request.id)).not.toBeNull();
+    await registry.reply(request.id, [['A']]);
+    expect(await question).toEqual({ status: 'replied', answers: [['A']] });
+  });
+
   it('restores an owner request id and withdraws it without a user rejection', async () => {
     const events = [];
     let settled = 0;

@@ -50,7 +50,7 @@ function Checklist({ scope }: { scope: Scope }) {
       {snapshot ? (
         <ul className="divide-y divide-border">
           {snapshot.items.map((item) => (
-            <li key={item.id} className="space-y-1 py-3" data-native-checklist-id={item.id}>
+            <li key={item.id} className="select-text space-y-1 py-3" data-native-checklist-id={item.id}>
               <div className="flex items-start gap-2">
                 <Icon name={item.status === 'completed' ? 'checkbox-circle' : 'list-check-2'} className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 break-words font-medium">{item.subject}</span>

@@ -27,7 +27,7 @@ import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { isHiddenUserMessage } from './message/hiddenUserMessage';
 import { flattenAssistantTextParts, flattenUserTextParts } from '@/lib/messages/messageText';
 import { isLikelyProviderAuthFailure, PROVIDER_AUTH_FAILURE_MESSAGE } from '@/lib/messages/providerAuthError';
-import { getProviderModelDisplayName } from '@/lib/modelDisplay';
+import { getClaudeModelEffort, getProviderModelDisplayName } from '@/lib/modelDisplay';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { TurnGroupingContext } from './lib/turns/types';
 import { copyMarkdownToClipboard, copyTextToClipboard } from '@/lib/clipboard';
@@ -215,6 +215,12 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
 
     const messageProviderID = message.info.role === 'assistant' ? message.info.providerID : null;
     const messageModelID = message.info.role === 'assistant' ? message.info.modelID : null;
+    // A gateway can fix the response model at a different effort than the send
+    // requested. Its explicit suffix takes priority over captured send metadata.
+    const responseEffort = messageProviderID === 'claude-native' ? getClaudeModelEffort(messageModelID) : undefined;
+    const headerVariantRaw = !isUser
+        ? (responseEffort || (message.info.role === 'assistant' ? message.info.variant?.trim() : undefined) || turnGroupingContext?.assistantVariant)
+        : undefined;
 
     const contextModelSelection = React.useMemo(() => {
         if (isUser || !sessionId) return null;
@@ -250,7 +256,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         const provider = providerID && providers.length > 0
             ? providers.find((p) => p.id === providerID)
             : undefined;
-        return getProviderModelDisplayName(provider, modelID) || undefined;
+        return getProviderModelDisplayName(provider, modelID, {
+            separateEffort: providerID === 'claude-native',
+        }) || undefined;
     }, [isUser, providerID, modelID, providers]);
 
     const modelHasVariants = React.useMemo(() => {
@@ -462,14 +470,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         });
     }, []);
 
-    // v2 keeps the variant on the assistant message that ran with it. Fall
-    // back to the turn's first assistant step so every row of a turn shows the
-    // same label, including one that arrived before the variant was recorded.
-    const headerVariantRaw = !isUser
-        ? ((message.info.role === 'assistant' ? message.info.variant?.trim() : undefined) || turnGroupingContext?.assistantVariant)
-        : undefined;
-
-    const headerVariant = !isUser && modelHasVariants ? (headerVariantRaw ?? 'Default') : undefined;
+    const headerVariant = isUser ? undefined : (headerVariantRaw ?? (modelHasVariants ? 'Default' : undefined));
 
     // Summary body removed — flat rendering means text is always inline.
 

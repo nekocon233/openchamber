@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { FormRequest } from '@/lib/opencode/model';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
 import type { QuestionInfo, QuestionRequest } from '@/types/question';
+import { nativePlanExecutionChoiceSchema } from './schemas';
+import { isNativeSessionId } from './ids';
 
 type FormField = FormRequest['fields'][number];
 type Translate = (key: I18nKey, params?: I18nParams) => string;
@@ -25,14 +27,26 @@ const fieldForQuestion = (question: QuestionInfo, index: number): FormField => {
 export const projectNativeQuestion = (question: QuestionRequest): FormRequest | null => {
   const [first, ...rest] = question.questions.map(fieldForQuestion);
   if (!first) return null;
-  return {
+  const form: FormRequest = {
     id: question.id,
     sessionID: question.sessionID,
     title: question.questions[0].header,
     fields: [first, ...rest],
     metadata: { openchamberNativeQuestionKind: question.kind ?? 'question' },
   };
+  if (question.canSelectExecutionModel) form.metadata = { ...form.metadata, openchamberCanSelectExecutionModel: true };
+  if (question.executionPending) form.metadata = { ...form.metadata, openchamberPlanExecutionPending: question.executionPending };
+  return form;
 };
+
+const nativePlanExecutionMetadata = z.object({
+  openchamberNativeQuestionKind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit', 'antigravity-plan-exit']),
+  openchamberCanSelectExecutionModel: z.literal(true),
+  openchamberPlanExecutionPending: nativePlanExecutionChoiceSchema.optional(),
+});
+
+export const readNativePlanExecution = (form: FormRequest) => isNativeSessionId(form.sessionID)
+  ? nativePlanExecutionMetadata.safeParse(form.metadata).data ?? null : null;
 
 /** Localize native field labels and plan choices while retaining the CLI's answer values. */
 export const localizeNativeForm = (form: FormRequest, t: Translate): FormRequest => {

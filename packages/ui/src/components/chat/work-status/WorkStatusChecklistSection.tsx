@@ -44,6 +44,7 @@ export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId
           <WorkStatusRow
             key={item.id}
             label={item.subject}
+            selectableLabel
             value={<WorkStatusValue tone={ITEM_STATUS_TONES[item.status]}>{t(ITEM_STATUS_KEYS[item.status])}</WorkStatusValue>}
             onClick={() => openTasks('checklist')}
             ariaLabel={t('chat.nativeTasks.openChecklist')}

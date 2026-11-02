@@ -38,7 +38,7 @@ export function NativeCodexTodos({ scope }: { scope: Scope }) {
           {snapshot.todos.map((todo) => (
             <li key={todo.id} className="flex items-start gap-2 py-3" data-native-todo-id={todo.id}>
               <Icon name={todo.status === 'completed' ? 'checkbox-circle' : 'list-check-2'} className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 break-words">{todo.content}</span>
+              <span className="min-w-0 flex-1 select-text break-words">{todo.content}</span>
               <span className="shrink-0 text-xs text-muted-foreground">{t(todo.status === 'in_progress' ? 'chat.nativeTasks.status.running' : todo.status === 'completed' ? 'chat.nativeTasks.status.completed' : 'chat.nativeTasks.status.pending')}</span>
             </li>
           ))}

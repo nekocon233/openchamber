@@ -119,6 +119,9 @@ whose children are already in a store at mount, these load asynchronously, so
 that edge would fire on every open and override a reader who collapsed them.
 `defaultExpanded` decides the first view and the stored section state decides
 every one after it.
+Checklist and todo row text is selectable and copyable in both the summary and
+task pane. Selecting a row label does not open the task pane; an ordinary click
+or keyboard activation still does.
 
 ### Native task surface
 

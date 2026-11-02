@@ -18,9 +18,8 @@ import { z } from 'zod';
 import { codexVariantSettings } from './catalog.js';
 import { createAntigravityBackend } from './antigravity/backend.js';
 import { createAntigravityDecisions } from './antigravity/decisions.js';
+import { resolveAgyCommand } from './antigravity/command.js';
 import { compactLaunchOverride, createClaudeConnections } from './claude/connections.js';
-import { createCliproxyapiBinaryManager } from './cliproxyapi/binary-manager.js';
-import { createCliproxyapiService } from './cliproxyapi/service.js';
 import { createClaudeLiveSessions } from './claude/live.js';
 import { loadClaudeSdk } from './claude/sdk.js';
 import { createClaudeSessionStore } from './claude/store.js';
@@ -65,12 +64,15 @@ import { claudePromptBlocks, withInstructions } from './prompt-parts.js';
 import { createNativeEventPublisher } from './publisher.js';
 import { createQuestionRegistry } from './questions.js';
 import { createNativeInteractions } from './interactions.js';
+import { createNativePlanExecution, planExecutionChoiceSchema } from './plan-execution.js';
 import { unconfirmedSessionRecord, unknownError } from './records.js';
 import { createNativeRegistry } from './registry.js';
 import { createNativeReverts } from './revert.js';
 import { createSnapshotStore } from './snapshots.js';
 import { readNativeStatistics } from './stats.js';
 import { createNativeConversations } from './conversations/runtime.js';
+import { agentConfigurationWriteSchema } from './agent-configuration.js';
+import { createNativeDelegation } from './delegation.js';
 
 const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const STOP_TIMEOUT_MS = 10_000;
@@ -161,8 +163,6 @@ const untilRewound = (records, pending) => {
  * @param {() => Promise<typeof import('../small-model/index.js')>} [options.getSmallModelService]
  * @param {ReturnType<typeof createSnapshotStore>} [options.snapshots]
  * @param {() => number} [options.now]
- * @param {typeof fetch} [options.fetchImpl] transport for the local gateway integration
- * @param {ReturnType<typeof import('./cliproxyapi/binary-manager.js').createCliproxyapiBinaryManager>} [options.cliproxyapiBinaryManager]
  */
 const openChamberNamespace = z.record(z.string(), z.unknown()).catch({});
 
@@ -187,42 +187,58 @@ export const createNativeAgentsRuntime = ({
   getSmallModelService = async () => import('../small-model/index.js'),
   snapshots = createSnapshotStore({ dataDir }),
   loadSdk = loadClaudeSdk,
+  resolveAntigravityCommand = resolveAgyCommand,
   now = Date.now,
   // Roots of OpenChamber's managed chats: each chat gets a directory of its
   // own below one of them, and no project names it.
   managedChatsRoots = [],
   memory = null,
-  fetchImpl = fetch,
-  cliproxyapiBinaryManager = createCliproxyapiBinaryManager({ dataDir }),
   deepseekInstallation = createDeepseekInstallation({ dataDir, resolveExecutable, buildEnv: buildChildEnv }),
 }) => {
   const registry = createNativeRegistry({ filePath: path.join(dataDir, 'native-agents', 'registry.json'), now });
   const claudeConnections = createClaudeConnections({ dataDir });
   const reverts = createNativeReverts({ registry, snapshots });
   let conversations;
+  let planExecution;
+  let delegation;
+  const sourceTools = new Map();
   const publisher = createNativeEventPublisher({
-    publishNativeEvent: (event) => conversations ? conversations.publish(event) : publishNativeEvent(event),
+    publishNativeEvent: (event) => {
+      delegation?.observe(event);
+      return conversations ? conversations.publish(event) : publishNativeEvent(event);
+    },
     now,
-  });
-  const cliproxyapi = createCliproxyapiService({
-    dataDir, connections: claudeConnections, fetchImpl, binaryManager: cliproxyapiBinaryManager, buildEnv: buildChildEnv, now,
-    onModelsUpdated: () => publisher.emit('global', 'catalog.updated', { kind: 'native-model' }),
   });
   const interactions = createNativeInteractions({ dataDir, now });
   const questions = createQuestionRegistry({
     publish: (directory, payload) => publisher.emit(directory, payload.type, payload.properties),
+    executePlan: (...args) => planExecution.execute(...args),
+    canExecutePlan: (request) => {
+      const source = decodeNativeSessionId(request.sessionID);
+      return Boolean(planExecution && source && !registry.isDelegatedSession(request.sessionID) && !(source.backend === NATIVE_BACKEND_CLAUDE && source.toolUseId));
+    },
     onSettled: async (request, outcome, directory) => {
-      await interactions.record(request, outcome);
+      const approved = outcome.status === 'replied' && outcome.answers.length === 1 && outcome.answers[0].length === 1 && outcome.answers[0][0] === 'build';
+      const keepPlanning = outcome.status === 'replied' && outcome.answers.length === 1 && outcome.answers[0].length === 1 && outcome.answers[0][0] === 'plan';
+      if (request.kind?.endsWith('-plan-exit') && approved) delegation?.promote(request.sessionID);
+      await planExecution?.settled(request, outcome);
+      if (!outcome.execution) await interactions.record(request, outcome);
+      if (request.kind?.endsWith('-plan-exit') && (outcome.status === 'rejected' || keepPlanning) && !request.executionPending) {
+        try { await delegation?.cancel((await registry.getSession(request.sessionID))?.conversationId ?? request.sessionID); }
+        catch { publisher.error(directory, request.sessionID, unknownError('Some subagents could not be confirmed stopped. Inspect their tasks before retrying.')); }
+      }
       if (!request.tool) return;
       try {
         const decoded = decodeNativeSessionId(request.sessionID);
         const history = decoded?.backend === NATIVE_BACKEND_ANTIGRAVITY
           ? await antigravity.store.loadHistory(request.sessionID, decoded.conversationId, directory)
-          : await storeFor(request.sessionID).loadHistory(request.sessionID, directory);
+          : decoded?.backend === NATIVE_BACKEND_DEEPSEEK
+            ? await deepseek.loadMessages(request.sessionID, directory, { limit: 200 })
+            : await storeFor(request.sessionID).loadHistory(request.sessionID, directory);
         const records = await interactions.attach(request.sessionID, overlay(history?.records ?? [], liveFor(request.sessionID).liveRecords(request.sessionID)));
         for (const record of records) for (const part of record.parts) {
           if (part.type === 'tool' && part.tool === 'question' && (part.callID === request.tool.callID || part.callID === request.id)) {
-            publisher.part(directory, request.sessionID, part);
+            if (!conversations?.publishInteraction(request.sessionID, part)) publisher.part(directory, request.sessionID, part);
           }
         }
       } catch {
@@ -253,12 +269,15 @@ export const createNativeAgentsRuntime = ({
   // carry it as OpenCode sessions carry theirs. `openchamber.native` is the
   // server's and always wins.
   const withMetadata = async (record) => {
-    const stored = (await registry.getSession(record.id))?.metadata;
-    if (!stored) return record;
+    const entry = await registry.getSession(record.id);
+    const stored = entry?.metadata ?? {};
+    const nativeMetadata = { ...record.metadata.openchamber.native };
+    if (entry?.agentConfiguration) nativeMetadata.agents = entry.agentConfiguration;
+    if (entry?.delegation) record = { ...record, parentID: entry.delegation.parentID };
     const storedNamespace = storedOpenChamber(stored);
     return {
       ...record,
-      metadata: { ...stored, openchamber: { ...storedNamespace, native: record.metadata.openchamber.native } },
+      metadata: { ...record.metadata, ...stored, openchamber: { ...storedOpenChamber(record.metadata ?? {}), ...storedNamespace, native: nativeMetadata } },
     };
   };
 
@@ -372,13 +391,14 @@ export const createNativeAgentsRuntime = ({
     clientVersion,
   });
   codexLive = createCodexLiveThreads({
+    toolConfiguration: (id) => sourceTools.get(id),
     request: (method, params) => appServer.request(method, params),
     readGlobalInstructions,
     publisher,
     questions,
     onTurnFinished,
     onIdle,
-    onPlanReady: (plan) => planDecisions.propose(plan),
+    onPlanReady: (plan) => registry.isDelegatedSession(plan.sessionId) ? undefined : planDecisions.propose(plan),
     onSessionClosed: (sessionId) => {
       memory?.release(sessionId);
       planDecisions.cancel(sessionId);
@@ -402,6 +422,7 @@ export const createNativeAgentsRuntime = ({
     writeProjection: (identity, projection) => registry.setChecklistProjection(identity, projection),
   });
   const claudeLive = createClaudeLiveSessions({
+    toolConfiguration: (id) => sourceTools.get(id),
     loadSdk,
     resolveExecutable: () => resolveExecutable('claude'),
     buildEnv: buildChildEnv,
@@ -423,21 +444,25 @@ export const createNativeAgentsRuntime = ({
     loadSdk,
     launchableExecutable: () => launchableClaudeExecutable(() => resolveExecutable('claude')),
     buildEnv: buildChildEnv,
-    connections: { hasCredentials: claudeConnections.hasCredentials, resolve: cliproxyapi.resolveConnection },
+    connections: { hasCredentials: claudeConnections.hasCredentials, resolve: claudeConnections.resolve },
   });
   const deepseekMaintenance = createDeepseekMaintenance({ dataDir, resolveNodeExecutable: () => resolveExecutable('node'), buildEnv: buildChildEnv });
   const deepseek = createDeepseekBackend({
+    toolConfiguration: (id) => sourceTools.get(id),
     resolveExecutable: () => deepseekInstallation.resolve(), buildEnv: buildChildEnv,
     reverts, memory, maintenance: deepseekMaintenance,
     resolveNodeExecutable: () => resolveExecutable('node'),
     registry, publisher, questions, readGlobalInstructions, now,
     decorateSession: decorate,
   });
-  const deepseekSetup = createDeepseekSetup({ installation: deepseekInstallation, configuration: deepseek.configuration });
+  const deepseekSetup = createDeepseekSetup({ installation: deepseekInstallation });
   const antigravity = createAntigravityBackend({
+    toolConfiguration: (id) => sourceTools.get(id),
     resolveExecutable: () => resolveExecutable('agy'), buildEnv: buildChildEnv,
+    resolveCommand: resolveAntigravityCommand,
     registry, publisher, readGlobalInstructions, decorateSession: decorate, now,
     onInteraction: async (proposal) => {
+      if ((await registry.getSession(proposal.sessionId))?.delegation) return;
       if (!await registry.getSession(proposal.sessionId)) await adoptSession(proposal.sessionId, proposal.directory);
       await antigravityDecisions.propose(proposal);
     },
@@ -452,7 +477,9 @@ export const createNativeAgentsRuntime = ({
       if (!history || history.interactionSourceComplete === false) throw new NativeAgentError('Antigravity interaction history is unavailable or incomplete. Reload the conversation before replying.', { code: 'NATIVE_ANTIGRAVITY_HISTORY_UNAVAILABLE', status: 502 });
       return history.interactionProposal ?? null;
     },
-    prompt: (sessionId, request, signal) => prompt(sessionId, request, signal),
+    prompt: (sessionId, request, signal) => conversations
+      ? conversations.automaticPrompt(sessionId, request, signal)
+      : prompt(sessionId, request, signal),
     failed: (proposal, error) => publisher.error(proposal.directory, proposal.sessionId, unknownError(error.message)),
   });
 
@@ -472,6 +499,9 @@ export const createNativeAgentsRuntime = ({
   };
   const storeFor = (sessionId) => ({ claude, codex, deepseek, antigravity })[decode(sessionId).backend];
   const liveFor = (sessionId) => ({ claude: claudeLive, codex: codexLive, deepseek, antigravity })[decode(sessionId).backend];
+  const assertDelegationRoot = async (sessionId) => {
+    if ((await registry.getSession(sessionId))?.delegation) throw invalidRequestError('Subagent sessions are controlled by their parent conversation');
+  };
 
   // Runs the step that hands a prompt to the CLI. A pending revert counts as
   // committed from the start, so a history read meanwhile already leaves the
@@ -511,9 +541,9 @@ export const createNativeAgentsRuntime = ({
   // Hands a prompt to Claude Code. The query resumes at a pending revert's
   // entry, and the revert ends once the transcript shows the rewind. A hidden
   // prompt, such as /compact, shows no user message: its effect does.
-  const sendToClaude = async (sessionId, request, send, { visible, launchOverride = null }) => {
+  const sendToClaude = async (sessionId, request, send, { visible, launchOverride = null, signal = null }) => {
     const { directory, messageID } = request;
-    let launch = await cliproxyapi.resolveConnection(request.model.modelID, request.variant ?? null);
+    let launch = await claudeConnections.resolve(request.model.modelID, request.variant ?? null);
     if (launchOverride) launch = launchOverride(launch);
     if (launch.descriptor && request.variant !== undefined && !launch.descriptor.efforts.includes(request.variant)) {
       throw invalidRequestError('This model does not support the selected reasoning effort');
@@ -522,7 +552,9 @@ export const createNativeAgentsRuntime = ({
     const pending = await settleClaudeRewind(sessionId, directory);
     await committing(sessionId, directory, pending, async () => {
       await reverts.beforePrompt(sessionId, directory, messageID);
+      signal?.throwIfAborted();
       await claudeLive.prompt({
+        signal,
         sessionId,
         directory,
         messageId: messageID,
@@ -553,6 +585,9 @@ export const createNativeAgentsRuntime = ({
 
   // Stops a running turn and waits until the CLI has settled it.
   const stopTurn = async (sessionId) => {
+    let delegationError;
+    try { await delegation?.cancel((await registry.getSession(sessionId))?.conversationId ?? sessionId); }
+    catch (error) { delegationError = error; }
     planDecisions.cancel(sessionId);
     await antigravityDecisions.cancel(sessionId);
     const live = liveFor(sessionId);
@@ -566,6 +601,7 @@ export const createNativeAgentsRuntime = ({
     } finally {
       clearTimeout(timer);
     }
+    if (delegationError) throw delegationError;
   };
 
   /**
@@ -579,6 +615,8 @@ export const createNativeAgentsRuntime = ({
   const prompt = async (sessionId, request, signal) => {
     const { backend } = decode(sessionId);
     assertSessionBackend(backend, request.model.providerID);
+    await planExecution?.beforePrompt(sessionId, request.messageID);
+    sourceTools.set(sessionId, await delegation?.prepare(sessionId, request) ?? null);
     if (backend === NATIVE_BACKEND_DEEPSEEK) {
       signal?.throwIfAborted();
       const knowledge = memory ? await memory.context({ backend, sessionId, directory: request.directory, delivery: 'managed' }).catch(() => null) : null;
@@ -607,7 +645,7 @@ export const createNativeAgentsRuntime = ({
     const parts = withInstructions(request.parts, [request.instructions, knowledge?.text].filter(Boolean).join('\n\n') || undefined);
     try {
     if (backend === NATIVE_BACKEND_CLAUDE) {
-      await sendToClaude(sessionId, { ...request, parts }, send, { visible: true });
+      await sendToClaude(sessionId, { ...request, parts }, send, { visible: true, signal });
     } else {
       const input = await codexCommands.promptInput(parts, request.directory);
       signal?.throwIfAborted();
@@ -691,7 +729,51 @@ export const createNativeAgentsRuntime = ({
     else appServer.markStale();
   };
 
+  const stopConversationSource = async (sessionId) => {
+    let stopError;
+    try { await native.abort(sessionId); }
+    catch (error) { stopError = error; }
+    try { await stopTurn(sessionId); }
+    finally { await sourceLifecycle[decode(sessionId).backend].retire(sessionId); }
+    if (stopError) throw stopError;
+  };
+  // Codex and DSH keep no idle per-conversation process to retire.
+  const sourceLifecycle = {
+    claude: { retire: (id) => { delegation?.retire(id); return claudeLive.closeSession(id); }, stop: stopConversationSource, delete: true, compact: true },
+    codex: { retire: async (id) => { delegation?.retire(id); }, stop: stopConversationSource, delete: true, compact: true },
+    deepseek: { retire: async (id) => { delegation?.retire(id); }, stop: (id) => deepseek.stop(id), delete: true, compact: true },
+    antigravity: { retire: (id) => { delegation?.retire(id); return antigravity.closeSession(id); }, stop: stopConversationSource, delete: false, compact: false },
+  };
+
   const native = {
+    canDeleteDelegations: (id) => delegation.canDelete(id),
+    canDeleteSource: (backend) => delegation.canDeleteBackend(backend),
+    hasActiveDelegations: (id) => delegation.hasActive(id),
+    hasPendingDelegationTool(id) {
+      if (!delegation.usedInTurn(id)) return false;
+      const records = liveFor(id).liveRecords(id);
+      return records.some((record) => record.parts.some((part) => part.type === 'tool' && part.state.status === 'running' && part.tool !== 'plan_exit'));
+    },
+    cancelDelegations: (id) => delegation.cancel(id),
+    assertDelegatedDeletion: (id) => delegation.assertDeletion(id),
+    removeDelegatedChildren: (id, retained) => delegation.removeChildren(id, retained),
+    async validateAgentConfiguration(configuration, main) {
+      const parsed = agentConfigurationWriteSchema.parse(configuration);
+      if (main) await delegation.validateModel({ model: main.model, variant: main.variant });
+      for (const choice of [parsed.subagent, parsed.execution]) if (choice) await delegation.validateModel(choice);
+      return parsed;
+    },
+    async configureAgents(sessionId, directory, configuration, expectedRevision, main) {
+      if (isEnterpriseMode()) throw new NativeAgentError('Cross-CLI subagents are unavailable in enterprise mode', { status: 403, code: 'enterprise_mode' });
+      if (main) throw invalidRequestError('Apply combinations in a unified native conversation');
+      await adoptSession(sessionId, directory);
+      const session = await native.getSession(sessionId, directory);
+      if (session.parentID) throw invalidRequestError('Subagent settings belong to the parent conversation');
+      const parsed = await native.validateAgentConfiguration(configuration);
+      if (!await registry.setAgentConfiguration(sessionId, parsed, expectedRevision)) throw new NativeAgentError('The subagent selection changed. Reload and retry.', { status: 409, code: 'NATIVE_CONVERSATION_SELECTION_CONFLICT' });
+      return publishSession(sessionId, directory);
+    },
+    delegatedChildren: (parentID) => delegation.children(parentID),
     memorySharing: memory,
     statistics: (query, options) => readNativeStatistics({ query, backends: { claude, codex, deepseek }, ...options }),
     claudeConnections,
@@ -708,14 +790,14 @@ export const createNativeAgentsRuntime = ({
       return result;
     },
 
-    cliproxyapi,
     antigravityQuota: () => antigravity.quota(),
-    deepseekConfiguration: deepseek.configuration,
     deepseekSetup,
 
     async capabilities() {
-      const [claudeCli, codexCli, deepseekCli, agyCli] = await Promise.all([
+      const delegationReady = await delegation.initialize().then(() => true, () => false);
+      const [claudeCli, codexCli, deepseekCli, agyCli, nodeCli] = await Promise.all([
         resolveExecutable('claude'), resolveExecutable('codex'), deepseekInstallation.resolve(), resolveExecutable('agy'),
+        resolveExecutable('node'),
       ]);
       return {
         supported: true,
@@ -726,6 +808,8 @@ export const createNativeAgentsRuntime = ({
           [NATIVE_BACKEND_ANTIGRAVITY]: { cli: agyCli !== null, blockedByEnterprise: false, tasks: { background: true, output: true, stop: false }, actions: { revert: false, delete: false, fork: false, compact: false } },
         },
         registry: registry.status(),
+        agentCombinations: !isEnterpriseMode() && nodeCli !== null && delegationReady,
+        delegationBackends: isEnterpriseMode() || nodeCli === null || !delegationReady ? [] : ['claude', 'codex', 'deepseek', 'antigravity'],
       };
     },
 
@@ -733,7 +817,7 @@ export const createNativeAgentsRuntime = ({
     async catalog() {
       const [codexList, claudeList, deepseekList, antigravityList] = await Promise.all([
         settled((async () => [...await codexCatalog(), ...await codexConnections.catalog()])()),
-        settled(cliproxyapi.catalog()),
+        settled(claudeConnections.catalog()),
         settled(deepseek.catalog()),
         settled(antigravity.catalog()),
       ]);
@@ -761,9 +845,11 @@ export const createNativeAgentsRuntime = ({
         settled(deepseek.listRootSessions(directory)),
         settled(antigravity.listRootSessions(directory)),
       ]);
-      const partition = async (result) => (result.status === 'ok'
-        ? { status: 'ok', sessions: await Promise.all(result.value.map(decorate)) }
-        : result);
+      const partition = async (result) => {
+        if (result.status !== 'ok') return result;
+        const sessions = await Promise.all(result.value.map(decorate));
+        return { status: 'ok', sessions: sessions.filter((session) => !session.parentID) };
+      };
       return {
         backends: {
           [NATIVE_BACKEND_CLAUDE]: await partition(claudeSessions),
@@ -812,7 +898,7 @@ export const createNativeAgentsRuntime = ({
      * @param {string} sessionId
      * @param {PromptRequest} request
      */
-    prompt,
+    async prompt(id, request, signal) { await assertDelegationRoot(id); return prompt(id, request, signal); },
 
     /**
      * Compacts a session's context the way the CLI's own /compact does; it
@@ -822,6 +908,7 @@ export const createNativeAgentsRuntime = ({
      * @param {Omit<PromptRequest, 'messageID' | 'parts'> & { instructions?: string }} request
      */
     async compact(sessionId, request) {
+      await assertDelegationRoot(sessionId);
       const { backend } = decodeOwnSession(sessionId);
       assertSessionBackend(backend, request.model.providerID);
       if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('compaction');
@@ -900,10 +987,17 @@ export const createNativeAgentsRuntime = ({
      * reports no background work.
      */
     async abort(sessionId) {
+      let delegationError;
+      let cancelledDelegation = false;
+      try { cancelledDelegation = await delegation?.cancel((await registry.getSession(sessionId))?.conversationId ?? sessionId) ?? false; }
+      catch (error) { delegationError = error; }
+      const cancelledExecution = await planExecution.cancel(sessionId);
       const cancelledPlan = planDecisions.cancel(sessionId);
       const cancelledAntigravity = await antigravityDecisions.cancel(sessionId);
-      if (await liveFor(sessionId).abort(sessionId)) return true;
-      return cancelledPlan || cancelledAntigravity || (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && claudeLive.stopBackgroundTasks(sessionId));
+      const aborted = await liveFor(sessionId).abort(sessionId);
+      const stoppedBackground = !aborted && decode(sessionId).backend === NATIVE_BACKEND_CLAUDE && await claudeLive.stopBackgroundTasks(sessionId);
+      if (delegationError) throw delegationError;
+      return aborted || cancelledDelegation || cancelledExecution || cancelledPlan || cancelledAntigravity || stoppedBackground;
     },
 
     /**
@@ -915,9 +1009,11 @@ export const createNativeAgentsRuntime = ({
      * @param {{ title?: string, archived?: boolean }} patch
      */
     async updateSession(sessionId, directory, patch) {
+      await assertDelegationRoot(sessionId);
       const decoded = decodeOwnSession(sessionId);
       const { backend } = decoded;
       if (backend === NATIVE_BACKEND_DEEPSEEK) {
+        if (patch.archived === true) await stopTurn(sessionId);
         if (patch.title !== undefined) await deepseek.rename(sessionId, directory, patch.title);
         if (patch.archived !== undefined) await deepseek.setArchived(sessionId, directory, patch.archived);
         if (patch.metadata !== undefined) {
@@ -1017,7 +1113,9 @@ export const createNativeAgentsRuntime = ({
      * and everything OpenChamber kept about it. A running turn is stopped and
      * a Claude process exits first, so nothing writes the session afterwards.
      */
-    async deleteSession(sessionId, directory) {
+    async deleteSession(sessionId, directory, delegated = false) {
+      if (!delegated) await assertDelegationRoot(sessionId);
+      await delegation.assertDeletion(sessionId);
       const { backend } = decodeOwnSession(sessionId);
       if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('deletion');
       if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.deleteSession(sessionId, directory);
@@ -1025,6 +1123,7 @@ export const createNativeAgentsRuntime = ({
       const session = await storeFor(sessionId).getSession(sessionId, directory);
       if (!session) throw sessionNotFoundError(sessionId);
       await stopTurn(sessionId);
+      await delegation.removeChildren(sessionId);
       // Claude subagent transcripts go with their parent's.
       let children = [];
       if (backend === NATIVE_BACKEND_CLAUDE) {
@@ -1059,6 +1158,7 @@ export const createNativeAgentsRuntime = ({
      * @returns {Promise<{ session: object, filesRestored: number, conversationOnly: boolean }>}
      */
     async revert(sessionId, messageId, directory) {
+      await assertDelegationRoot(sessionId);
       const { backend } = decode(sessionId);
       if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('revert');
       if (backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.revert(sessionId, messageId, directory);
@@ -1102,6 +1202,7 @@ export const createNativeAgentsRuntime = ({
      * @param {string} directory
      */
     async fork(sessionId, messageId, directory) {
+      await assertDelegationRoot(sessionId);
       const { backend } = decode(sessionId);
       if (backend === NATIVE_BACKEND_ANTIGRAVITY) throw antigravityUnsupported('fork');
       if (backend === NATIVE_BACKEND_DEEPSEEK) {
@@ -1153,7 +1254,14 @@ export const createNativeAgentsRuntime = ({
      * @param {{ limit: number, before?: string }} page
      */
     async loadMessages(sessionId, directory, { limit, before }) {
-      if (decode(sessionId).backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.loadMessages(sessionId, directory, { limit, before });
+      if (decode(sessionId).backend === NATIVE_BACKEND_DEEPSEEK) {
+        const page = await deepseek.loadMessages(sessionId, directory, { limit, before });
+        const records = await interactions.attach(sessionId, page.records).catch(() => null);
+        const result = { ...page, records: records ?? page.records, metadataComplete: page.metadataComplete !== false && records !== null };
+        try { result.childSessions = [...result.childSessions, ...await delegation.children(sessionId)]; }
+        catch { result.metadataComplete = false; }
+        return result;
+      }
       const history = await storeFor(sessionId).loadHistory(sessionId, directory);
       if (!history && !liveFor(sessionId).childSession(sessionId)) throw sessionNotFoundError(sessionId);
       const pending = await reverts.pending(sessionId);
@@ -1173,6 +1281,10 @@ export const createNativeAgentsRuntime = ({
         childSessions: history?.childSessions ?? [],
       };
       if (history?.metadataComplete === false || decoratedRecords === null) result.metadataComplete = false;
+      try {
+        const children = await delegation.children(sessionId);
+        result.childSessions = [...result.childSessions, ...children.filter((child) => !result.childSessions.some((held) => held.id === child.id))];
+      } catch { result.metadataComplete = false; }
       return result;
     },
 
@@ -1283,12 +1395,13 @@ export const createNativeAgentsRuntime = ({
     /** Questions native sessions of a directory are waiting on. */
     async questions(directory) {
       await antigravityDecisions.restore(directory);
+      await planExecution.restore(directory);
       return questions.list(directory);
     },
 
     /** An automatic goal continuation must not supersede a plan decision. */
     hasPendingPlanDecision(sessionId) {
-      return planDecisions.has(sessionId) || deepseek.hasPendingPlanDecision(sessionId)
+      return registry.hasPendingPlanExecution(sessionId) || planDecisions.has(sessionId) || deepseek.hasPendingPlanDecision(sessionId)
         || decode(sessionId).backend === NATIVE_BACKEND_ANTIGRAVITY && (antigravityDecisions.has(sessionId) || registry.hasPendingAntigravityInteraction(sessionId));
     },
 
@@ -1296,8 +1409,8 @@ export const createNativeAgentsRuntime = ({
      * @param {string} requestId
      * @param {string[][]} answers
      */
-    replyQuestion(requestId, answers) {
-      return questions.reply(requestId, answers);
+    replyQuestion(requestId, answers, execution) {
+      return questions.reply(requestId, answers, execution);
     },
 
     rejectQuestion(requestId) {
@@ -1321,6 +1434,8 @@ export const createNativeAgentsRuntime = ({
     },
 
     async shutdown() {
+      await delegation?.shutdown();
+      await planExecution.shutdown();
       await antigravityDecisions.shutdown();
       const stoppingDeepseek = Promise.all([deepseekSetup.shutdown(), deepseek.shutdown(), deepseekMaintenance.shutdown()]);
       const stoppingAntigravity = antigravity.shutdown();
@@ -1330,26 +1445,91 @@ export const createNativeAgentsRuntime = ({
         codexUtility.handleExit(new Error('Codex runtime is shutting down'));
         claudeUtility.shutdown();
         await claudeLive.shutdown();
-        // The gateway gets its own terminate window before the app-server's.
-        // Shutdown, not stop: a restart must not read as a user stopping it.
-        await cliproxyapi.shutdown().catch(() => undefined);
         await appServer.stop();
       } finally {
         await Promise.all([stoppingDeepseek, stoppingAntigravity]);
       }
     },
   };
+  delegation = createNativeDelegation({ dataDir, registry, native: { ...native, prompt }, createSession, adoptSession,
+    stopChild: (id) => sourceLifecycle[decode(id).backend].stop(id),
+    deleteCapability: async (backend) => {
+      if (backend !== 'deepseek') return backend !== 'antigravity';
+      const executable = await deepseekInstallation.resolve();
+      return Boolean(executable && await deepseekPackage(executable) && await resolveExecutable('node') && deepseek.deletionSupport() !== false);
+    },
+    onActivity: (id, directory) => conversations?.delegationActivity(id, directory),
+    resolveNode: () => resolveExecutable('node'), now });
+  const readPlanHistory = async (sessionId, directory, request = null) => {
+    const records = [];
+    const cursors = new Set();
+    let before;
+    do {
+      const page = await native.loadMessages(sessionId, directory, { limit: 200, before });
+      records.unshift(...page.records);
+      if (page.metadataComplete === false || page.complete === false && !page.cursor) throw new NativeAgentError('The native plan history is incomplete', { status: 502, code: 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE' });
+      if (request && page.records.some((record) => record.parts.some((part) => part.type === 'tool'
+        && (request.tool ? part.callID === request.tool.callID : part.tool === 'plan_exit')))) break;
+      before = page.cursor ?? undefined;
+      if (before && cursors.has(before)) throw new NativeAgentError('Native plan history paging made no progress', { status: 502, code: 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE' });
+      if (before) cursors.add(before);
+    } while (before);
+    return records;
+  };
+  planExecution = createNativePlanExecution({
+    registry, questions, interactions,
+    readHistory: readPlanHistory,
+    sourceSelection: async (sessionId, directory) => {
+      const latest = [...(await registry.sendRecords(sessionId)).values()].at(-1);
+      const session = await native.getSession(sessionId, directory);
+      return planExecutionChoiceSchema.parse({
+        model: { providerID: latest?.providerID ?? session.model?.providerID, modelID: latest?.modelID ?? session.model?.id },
+        variant: latest ? latest.variant : session.model?.variant,
+      });
+    },
+    validate: async (sessionId, directory, requestId, execution, handoff, approves) => {
+      const session = await native.getSession(sessionId, directory);
+      if (session.parentID) throw invalidRequestError('Subagent plans use their parent execution model');
+      const unified = await conversations.validatePlanExecution(sessionId, directory, requestId, execution, handoff, approves);
+      const backend = nativeBackendOfProviderId(execution.model.providerID);
+      if (!backend || !unified && backend !== decode(sessionId).backend) throw invalidRequestError('The execution model does not belong to this session');
+      if (!handoff) return;
+      const partition = (await native.catalog()).backends[backend];
+      const model = partition?.status === 'ok' ? partition.models.find((model) => model.id === execution.model.modelID || model.aliases?.some((alias) => alias.id === execution.model.modelID)) : null;
+      if (!model) throw new NativeAgentError('The selected execution model is unavailable. Select another model and retry.', { status: 409, code: 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE' });
+      const variants = new Set([...model.efforts, ...(model.fast ? model.efforts.map((effort) => `${effort}-fast`) : [])]);
+      if (execution.variant && !variants.has(execution.variant)) throw invalidRequestError('The execution model does not support this thinking effort');
+      if (!unified) {
+        const tasks = await native.backgroundTasks();
+        if (tasks[sessionId]?.tasks.length || questions.list(directory).some((question) => question.sessionID === sessionId && question.id !== requestId)) throw sessionBusyError();
+        for (const [id, status] of Object.entries(await native.statuses(directory))) {
+          if (id !== sessionId && status.type !== 'idle' && liveFor(id).childSession(id)?.parentID === sessionId) throw sessionBusyError();
+        }
+      }
+    },
+    yieldSource: async (sessionId, directory, signal) => {
+      signal.throwIfAborted();
+      const backend = decode(sessionId).backend;
+      if (backend === NATIVE_BACKEND_DEEPSEEK) { await deepseek.stop(sessionId, directory); return; }
+      const live = liveFor(sessionId);
+      let timer;
+      try {
+        await Promise.race([live.whenIdle(sessionId), new Promise((_, reject) => { timer = setTimeout(() => reject(sessionBusyError()), STOP_TIMEOUT_MS); })]);
+      } finally { clearTimeout(timer); }
+      signal.throwIfAborted();
+      await sourceLifecycle[backend].retire(sessionId);
+    },
+    prompt: (sessionId, request, signal, approval) => conversations.automaticPrompt(sessionId, request, signal, approval),
+    confirm: async (sessionId, directory, state) => {
+      const unified = await conversations.planExecutionConfirmed(sessionId, directory, state);
+      if (unified !== null) return unified;
+      return (await readPlanHistory(sessionId, directory)).some((record) => record.info.role === 'user' && record.info.id === state.messageID);
+    },
+    failed: (directory, sessionId, error) => publisher.error(directory, sessionId, unknownError(error instanceof Error ? error.message : 'Could not recover plan execution')),
+  });
   conversations = createNativeConversations({
-    dataDir, native, registry, reverts, publishNativeEvent, smallModels: getSmallModelService, managedChatsRoots, now,
-    retireSource: async (sessionId) => {
-      if (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE) await claudeLive.closeSession(sessionId);
-    },
-    stopSource: async (sessionId) => {
-      if (decode(sessionId).backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.stop(sessionId);
-      await native.abort(sessionId);
-      await stopTurn(sessionId);
-      if (decode(sessionId).backend === NATIVE_BACKEND_CLAUDE) await claudeLive.closeSession(sessionId);
-    },
+    dataDir, native, registry, reverts, publishNativeEvent, sourceLifecycle,
+    smallModels: getSmallModelService, managedChatsRoots, now,
   });
   return conversations.api;
 };

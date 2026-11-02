@@ -12,6 +12,8 @@ export type DisplayProvider = {
 type ModelDisplayOptions = {
   fallbackLabel?: string;
   maxLength?: number;
+  /** Normalize native Claude routing IDs and show their effort separately. */
+  separateEffort?: boolean;
 };
 
 const normalizeString = (value: unknown): string => {
@@ -82,6 +84,13 @@ const stripProviderPrefix = (value: string): string => {
   const slashIndex = withoutAliasMarker.lastIndexOf('/');
   return slashIndex >= 0 ? withoutAliasMarker.slice(slashIndex + 1) : withoutAliasMarker;
 };
+
+const claudeModelMatch = (modelId: string | null | undefined) =>
+  /^(?:auto-)?(claude-(?:opus|sonnet|haiku|fable)-\d+(?:[.-]\d+)*)(?:[-:](low|medium|high|xhigh|max))?$/.exec(stripProviderPrefix(normalizeString(modelId)));
+
+/** The explicit effort reported in a Claude response model ID, when present. */
+export const getClaudeModelEffort = (modelId: string | null | undefined): string | undefined =>
+  claudeModelMatch(modelId)?.[2];
 
 const splitColonSuffix = (value: string): { base: string; suffix: string } => {
   const colonIndex = value.lastIndexOf(':');
@@ -243,7 +252,10 @@ export const getModelDisplayName = (
 
   const modelId = normalizeString(model?.id) || normalizeString(fallbackModelId);
   if (modelId) {
-    return truncate(humanizeModelId(modelId), options.maxLength);
+    const displayId = options.separateEffort
+      ? claudeModelMatch(modelId)?.[1] ?? modelId
+      : modelId;
+    return truncate(humanizeModelId(displayId), options.maxLength);
   }
 
   return options.fallbackLabel ?? '';

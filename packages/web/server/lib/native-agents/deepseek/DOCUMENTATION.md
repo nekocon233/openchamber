@@ -10,8 +10,8 @@ and interactive questions.
 DSH owns configuration, credentials, logs and native mutations. OpenChamber's
 existing native registry stores identities and integration metadata. The
 adapter can install a pinned DSH CLI in an instance-owned directory when an
-authenticated user clicks one-click setup. Clients edit the active DSH
-profile's provider settings through the official configuration API.
+authenticated user clicks one-click setup. The Settings page reads the DSH
+model catalog; provider configuration stays in DSH.
 Shared memory is available for OpenChamber-managed sessions. Independent DSH
 terminal hook enrollment, utility models, scheduled-task execution and native
 child-session browsing/question cards remain unsupported for this backend.
@@ -29,12 +29,25 @@ honors pending rewinds and rejects a changed branch or mutation during reads.
 Item identities follow native content, while list identities follow the native
 source. Live writes publish `session.checklist.updated` through the existing
 conversation bridge. Invalid lists report an error without publishing emptiness.
-`configuration.js` owns the remote provider editor and its partial-save contract.
+`configuration.js` owns the read-only model-window lookup from the
+`llm-deepseek` settings namespace.
 `installation.js` owns managed npm installation and executable discovery;
 `setup.js` owns the user-triggered setup job. `history.js` owns branch identity
 segments and cursor compatibility. `maintenance.js` owns private maintenance
 launches; its plugin observes the owned Host over inherited fd 3, and its Node
 worker owns locked native artifact deletion and transaction recovery.
+
+Cross-CLI delegation uses that inherited fd-3 plugin without adding a public
+listener or editing the user's profile. `configure-delegation` installs a
+session-scoped `openchamber_delegate` tool and restricts the native
+`subagent_fork` and other delegation tools. A child scope cannot delegate or
+open an execution approval. Configuration changes wait for the next prompt.
+The plugin supports the pinned 0.2.0-rc.2 distribution and the installed
+0.2.1-rc.5 plugin API. The latter receives the delegation hook only; its changed
+persistence exports do not qualify it for the older destructive worker.
+Permanent deletion and transaction recovery remain gated to the pinned
+0.2.0-rc.2 codec installation. Unsupported deletion stays visible as unavailable
+and prevents deleting a unified parent that retains such a child.
 
 ## Process and trust
 
@@ -100,11 +113,18 @@ cursor scoped to the session, unlike the older backends' message-id cursors.
 It survives process restart and follower eviction without storing a second
 conversation. Versioned cursors identify their native branch: an ancestor cursor
 works only inside the prefix the active branch retained. Existing unversioned
-cursors refer to the original branch. Pages use the follow watermark and DSH's turn-aligned reads.
+cursors refer to the original branch. Pages use the follow watermark and DSH's
+turn-aligned reads; when a turn exceeds DSH's `maxMessages` window or a page
+starts before the first human `user/message`, `follow` and `loadMessages`
+backfill and align to the turn boundary so assistant steps keep their parent
+user message and request context without synthesizing a mid-turn user record.
 
 Live chunks are ordered by attempt and dense index. A committed assistant is
 staged until the remaining chunks drain, then replaces the live record under
-the same ids. A retry discards the earlier visible prefix. Unknown usage and
+the same ids. A retry discards the earlier visible prefix. `step/end` settles
+its own step's completion timestamp, while `turn/end` settles only open steps
+and attaches turn-level interruption or error state to the final step without
+overwriting earlier completed steps. Unknown usage and
 cost remain absent. Compaction events produce shared compaction records:
 `compaction/summary` carries the checkpoint as content blocks, so the record
 shows its text blocks joined with newlines and never the raw stream output.
@@ -112,6 +132,25 @@ An event this build cannot parse is skipped instead of failing the whole read,
 which keeps the transcript readable and sends possible, and reports one
 `session.error` per session so missing content is never read as complete.
 Feature/global instructions use the existing hidden instruction block.
+
+The last assistant step with visible text carries `finish: 'stop'` when its
+turn completes, and `finish: 'error'` when the turn ends aborted, interrupted
+or failed. The unified conversation recap and next-message suggestion use that
+completed answer; earlier steps are not treated as a final answer.
+
+When hidden context is attached to the first prompt of a blank
+OpenChamber-created session, the adapter sets its native title from visible user text, using the pinned CLI's five-word,
+40-byte UTF-8 fallback limits. Instruction-only and attachment-only prompts use `DeepSeek Harness`.
+DSH's own first-prompt fallback joins all human text blocks before truncating
+them, so naming the session before injecting context prevents hidden memory
+instructions from entering the title. A supplied title or logged native title
+is preserved; later prompts and independently created sessions are unchanged.
+The title uses the native rename API and never rewrites transcript records.
+
+The unified conversation generates its own AI title separately through
+`../conversations/auto-title.js`, from the first completed turn and the configured
+Small Model; the native title above remains the fallback until that summary is
+written.
 
 Only sequenced `plan` and `modelSelection` projections supply the Session's
 next agent and model. Cached hints do not establish them. Projection watermarks
@@ -125,6 +164,10 @@ use DSH's inline image admission. The model catalog advertises no image
 capability it cannot establish from the public catalog.
 Catalog display names use the model's own name. Qualified model IDs retain
 the native provider for routing without prefixing the displayed name.
+When the official `deepseek-official` provider is routable, DeepSeek models
+from other groups are hidden so the picker shows one DeepSeek entry. Gateway
+groups keep their non-DeepSeek models; a profile without the official provider
+is left unchanged.
 The session catalog names no context window, so each model's configured
 window and output cap come from the `llm-deepseek` settings models. A profile
 that cannot answer leaves both null; the UI then uses its default estimate.
@@ -140,6 +183,13 @@ deliver late replies through `userQuestions/answer`. Plan review maps `build`
 back to DSH's explicit approve label rather than inferring it from ordering.
 Question settlement waits for DSH's reply acknowledgement. A delivery failure
 keeps the same question retryable; concurrent replies cannot deliver twice.
+
+An execution-model handoff transfers the application decision without answering
+DSH's approve label. The serialized `stop` path drains the planning source before
+execution starts elsewhere. Its pending-question identity stays held until native
+cancellation, preventing a projection replay from offering it again. The shared
+plan-execution journal and answer metadata own recovery; see the parent native
+module's Plan execution model selection section.
 
 Commands are discovered for an existing session and dispatched through
 `commands/execute`. The permission command is excluded. Undo/redo use the shared
@@ -218,19 +268,17 @@ ESM resources outside ASAR. Main supplies their paths through server-only
 unpackaged desktop use the source modules. Both resources bundle their schema
 parser but resolve native codecs from the installed DSH package at runtime.
 
-## Remote configuration
+## Remote setup
 
 `POST /api/native/deepseek/setup` starts or joins one setup job and immediately
 returns its state. The body must be empty; clients cannot choose packages,
-executables, commands or credentials. The job installs DSH if missing, starts
-the native settings service, and finishes as `ready` when DSH already has a
-credential or `needs-key` when the independent form needs one. It never reads
-Claude Code connections or copies another backend's key, endpoint or models.
-Existing DSH settings remain untouched by setup.
+executables or commands. The job installs DSH if missing and finishes as
+`ready`. It never reads Claude Code connections or copies another backend's
+key, endpoint or models. Existing DSH settings remain untouched by setup.
 
 `GET` on the setup route returns in-memory job state, including a stable
 error code on failure, without starting a process or returning child output.
-The Settings page polls every 2 seconds only during installation or startup.
+The Settings page polls every 2 seconds only during installation.
 Leaving the page stops polling; the server job continues. Reload resumes an
 active job's progress. A failed progress read remains unconfirmed and offers
 reload. Runtime identity and read revisions guard asynchronous responses.
@@ -250,41 +298,18 @@ atomically published. Concurrent requests share one installer; different
 servers may publish a complete prefix first. Failure or ordinary shutdown
 stops the installer process tree and removes staging. A force-killed server
 can leave undiscovered `.install-*` directories for manual cleanup. Completed
-installations survive later configuration failures and are reused on retry.
+installations survive later catalog failures and are reused on retry.
 Server shutdown cancels the setup job alongside the native transport.
 Enterprise mode refuses setup before installation and all later DSH requests.
 
-`GET /api/native/deepseek/configuration` reads the active profile's
-`llm-deepseek` namespace through `settings/describe` and describes its named
-credential through `credentials/describe`. The response contains the endpoint,
-model IDs, settings revision and credential presence/writability. It never
-contains a key, the credential reference, another namespace or a Host path.
-
-`POST` to the same route accepts that revision, an optional replacement API
-key, the endpoint and model IDs. Null endpoint removes the user override and
-retains DSH's default or composition value. Retained models keep their other
-native metadata. `settings/mutate` changes only the endpoint and catalog, with
-the expected revision; `credentials/set` stores a supplied key in DSH's own
-credential store. Omitting the key preserves it. Read-only profiles and
-read-only credential sources are enforced on the server.
-
-Writes from OpenChamber serialize. A stale revision is 409
-`NATIVE_DEEPSEEK_SETTINGS_CONFLICT`. A settings failure leaves the key alone.
-If settings commit but the credential write fails or loses its acknowledgement,
-the result is `status: credential-error` with the committed configuration and
-revision, allowing the form to retry. A credential error message is never
-forwarded because a provider could echo the submitted key. A lost HTTP save
-response requires reloading the configuration before another save. DSH applies
-changes to subsequent model requests without restarting an active session.
-
 Every operation uses the transport's enterprise check before crossing into DSH.
-The settings page disables the provider editor in enterprise mode. All ordinary
-authenticated clients, including remote browsers and Relay clients, can configure
-their connected server; no local-management gate applies. The one-click installer
-requires Node.js and npm on the server. A valid `dsh` installation exposes its
-own configuration API.
+Enterprise mode closes setup and refuses DSH requests. The provider page is
+read-only and lists the models DSH returns. All ordinary authenticated clients,
+including remote browsers and Relay clients, can install the CLI and view those
+models; no local-management gate applies. The one-click installer requires
+Node.js and npm on the server.
 
-Web and Electron use this server adapter and configuration editor. Hosted mobile
+Web and Electron use this server adapter and setup page. Hosted mobile
 and Capacitor reach it through existing HTTP and events, including Relay. The
 DSH socket never reaches those clients. VS Code remains unsupported.
 

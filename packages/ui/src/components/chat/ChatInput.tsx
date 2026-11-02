@@ -1,4 +1,5 @@
 import React from 'react';
+import type { FollowUpQueueSendConfig } from '@/lib/api/types';
 import { formatChangeRequestReference } from '@/lib/source-control/identity';
 import { ComposerDictation } from '@/components/dictation/ComposerDictation';
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -8,6 +9,7 @@ import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
 import { useSessionGoalArmStore } from '@/stores/useSessionGoalArmStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfProviderId, nativeBackendOfSessionId, unifiedNativeSessionState, NATIVE_AGENT_NAMES } from '@/lib/native-agents/ids';
+import { nativeAgentConfigurationOf } from '@/lib/native-agents/combinations';
 import { useUnifiedNativeState } from '@/lib/native-agents/useNativeSession';
 import {
     createMessageQueueTarget,
@@ -963,7 +965,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const availableCommands = useCommandsStore((s) => selectCommandsForDirectory(s, currentDirectory));
     const availableSkills = useSkillsStore((s) => selectSkillsForDirectory(s, currentDirectory));
     const knownSlashNames = React.useMemo(() => {
-        if (nativeTargetBackend === 'antigravity') return new Set<string>();
+        if (nativeTargetBackend === 'antigravity') {
+            const names = new Set<string>();
+            if (currentSessionId && isUnifiedNativeSessionId(currentSessionId)) {
+                for (const name of ['undo', 'redo', 'timeline', 'btw']) names.add(name);
+                if (!isMobile && !isVSCodeRuntime()) names.add('handoff-review');
+            }
+            return names;
+        }
         if (nativeTargetBackend === 'codex') {
             const names = new Set<string>(CODEX_COMPOSER_COMMANDS.map((command) => command.name));
             for (const name of ['undo', 'redo', 'timeline', 'compact', 'btw']) names.add(name);
@@ -976,7 +985,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         if (!isMobile && !isVSCodeRuntime()) names.add('handoff-review');
         for (const command of availableCommands) names.add(command.name.toLowerCase());
         return names;
-    }, [availableCommands, isMobile, nativeTargetBackend]);
+    }, [availableCommands, currentSessionId, isMobile, nativeTargetBackend]);
     const knownSkillNames = React.useMemo(
         () => new Set(availableSkills.map((skill) => skill.name.toLowerCase())),
         [availableSkills],
@@ -1425,6 +1434,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     directory: messageQueueTarget.directory,
                     messageId: queuedItem.messageId,
                     preserveModelSelection: true,
+                    subagentModel: sendConfig.subagentModel,
                     expectedRuntime,
                 },
             );
@@ -1830,7 +1840,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         let commandPlan = inputSnapshot.hasContent
             ? planLocalSlashCommand(inputSnapshot.message, inputMode, hasDrafts, Boolean(currentSessionId))
             : null;
-        if (commandPlan && (nativeTargetBackend === 'antigravity' || (isNativeTarget && !isNativeLocalCommand(commandPlan.command.name)))) commandPlan = null;
+        if (commandPlan && ((nativeTargetBackend === 'antigravity' && (!currentSessionId || !isUnifiedNativeSessionId(currentSessionId))) || (isNativeTarget && !isNativeLocalCommand(commandPlan.command.name)))) commandPlan = null;
         if (commandPlan?.kind === 'prompt') {
             const magicCommand = findMagicPromptCommand(commandPlan.command.name);
             const commandIsAvailable = commandPlan.command.name === 'btw'
@@ -2032,7 +2042,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
         // A native CLI compacts with its own command, which shows as the
         // compaction marker; nothing goes out as a message.
-        const nativeCompaction = isNativeTarget && nativeTargetBackend !== 'antigravity' && currentSessionId && !isBtwActive && inputMode === 'normal'
+        const nativeCompaction = isNativeTarget && currentSessionId && (nativeTargetBackend !== 'antigravity' || isUnifiedNativeSessionId(currentSessionId)) && !isBtwActive && inputMode === 'normal'
             ? nativeCompactCommand(inputSnapshot.message)
             : null;
         if (nativeCompaction && currentSessionId) {
@@ -2365,7 +2375,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Local slash commands, normal mode only. A native session keeps only
         // the ones that act on OpenChamber's view of it; the rest are the CLI's.
         const typedCommand = inputMode === 'normal' ? parseSlashCommand(primaryText) : null;
-        const parsedCommand = typedCommand && nativeTargetBackend !== 'antigravity' && (!isNativeTarget || isNativeLocalCommand(typedCommand.name))
+        const parsedCommand = typedCommand && (nativeTargetBackend !== 'antigravity' || (currentSessionId && isUnifiedNativeSessionId(currentSessionId))) && (!isNativeTarget || isNativeLocalCommand(typedCommand.name))
             ? typedCommand
             : null;
         if (parsedCommand) {
@@ -2547,6 +2557,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 return;
             }
             try {
+                const captureSubagent = isNativeSessionId(messageQueueTarget.sessionId) && (await nativeAgents.capabilities()).agentCombinations === true;
+                const subagentModel = captureSubagent
+                    ? nativeAgentConfigurationOf((await nativeAgents.getSession(messageQueueTarget.sessionId, messageQueueTarget.directory)).metadata)?.subagent ?? null
+                    : undefined;
+                const sendConfig: FollowUpQueueSendConfig = {
+                    providerID: providerIdToSend,
+                    modelID: modelIdToSend,
+                    ...(agentNameToSend ? { agent: agentNameToSend } : {}),
+                    ...(variantToSend ? { variant: variantToSend } : {}),
+                };
+                if (subagentModel !== undefined) sendConfig.subagentModel = subagentModel;
                 await addToQueue(messageQueueTarget, {
                     content: primaryText,
                     attachments: primaryAttachments,
@@ -2562,12 +2583,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     } : {}),
                     ...(agentMentionName ? { agentMentionName } : {}),
                     status: 'staged',
-                    sendConfig: {
-                        providerID: providerIdToSend,
-                        modelID: modelIdToSend,
-                        ...(agentNameToSend ? { agent: agentNameToSend } : {}),
-                        ...(variantToSend ? { variant: variantToSend } : {}),
-                    },
+                    sendConfig,
                 });
                 // The queued message owns the references it was captured with
                 // (they travel in its context parts), so the composer drops
@@ -4972,6 +4988,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             />
             <FormDock
                 sessionId={currentSessionId}
+                providerID={currentProviderId ?? undefined}
+                modelID={currentModelId ?? undefined}
+                variant={currentVariant}
                 directory={currentSessionDirectoryForSync ?? currentDirectory ?? undefined}
                 hidden={newSessionDraftOpen || isBtwActive || isBtwPanelVisible || hasPendingPermission}
             />

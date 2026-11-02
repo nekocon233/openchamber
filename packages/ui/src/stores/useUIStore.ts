@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { favoriteAgentCombinationIdsSchema } from '@/lib/native-agents/combinations';
+import { modelPickerActionKey, modelPickerModelKey, orderPickerItems } from '@/lib/modelPickerOrder';
 import { DEFAULT_SESSION_GOAL_MAX_AUTO_TURNS, isSessionGoalMaxAutoTurns } from '@/lib/sessionGoalTurnLimit';
 import { z } from 'zod';
 import { devtools, persist } from 'zustand/middleware';
@@ -1039,6 +1041,9 @@ interface UIStore {
   mobileKeyboardMode: MobileKeyboardMode;
 
   favoriteModels: Array<{ providerID: string; modelID: string }>;
+  favoriteAgentCombinations: string[];
+  favoritePickerOrder: string[];
+  agentCombinationOrder: string[];
   hiddenModels: Array<{ providerID: string; modelID: string }>;
   providerOrder: string[];
   collapsedModelProviders: string[];
@@ -1319,12 +1324,9 @@ interface UIStore {
   applyTypography: () => void;
   applyPadding: () => void;
   toggleFavoriteModel: (providerID: string, modelID: string) => void;
-  reorderFavoriteModel: (
-    activeProviderID: string,
-    activeModelID: string,
-    overProviderID: string,
-    overModelID: string,
-  ) => void;
+  toggleFavoriteAgentCombination: (id: string) => void;
+  reorderFavoritePickerItem: (active: string, over: string) => void;
+  setAgentCombinationOrder: (ids: string[]) => void;
   setProviderOrder: (orderedProviderIDs: string[]) => void;
   setCustomProviderIcon: (providerID: string, icon: CustomProviderIcon | null) => void;
   toggleHiddenModel: (providerID: string, modelID: string) => void;
@@ -1539,6 +1541,9 @@ export const useUIStore = create<UIStore>()(
         inputBarOffset: 0,
         mobileKeyboardMode: getStoredMobileKeyboardMode(),
         favoriteModels: [],
+        favoriteAgentCombinations: [],
+        favoritePickerOrder: [],
+        agentCombinationOrder: [],
         hiddenModels: [],
         providerOrder: [],
         collapsedModelProviders: [],
@@ -2868,6 +2873,37 @@ export const useUIStore = create<UIStore>()(
           set((state) => state.mobileKeyboardMode === mode ? state : { mobileKeyboardMode: mode });
         },
 
+        toggleFavoriteAgentCombination: (id) => {
+          set((state) => ({ favoriteAgentCombinations: state.favoriteAgentCombinations.includes(id)
+            ? state.favoriteAgentCombinations.filter((entry) => entry !== id)
+            : [id, ...state.favoriteAgentCombinations].slice(0, 100),
+            favoritePickerOrder: state.favoriteAgentCombinations.includes(id)
+              ? state.favoritePickerOrder.filter((key) => key !== modelPickerActionKey(id))
+              : [modelPickerActionKey(id), ...state.favoritePickerOrder.filter((key) => key !== modelPickerActionKey(id))],
+          }));
+        },
+
+        reorderFavoritePickerItem: (active, over) => {
+          set((state) => {
+            const members = [...state.favoriteModels.map(modelPickerModelKey), ...state.favoriteAgentCombinations.map(modelPickerActionKey)];
+            const order = orderPickerItems(members, state.favoritePickerOrder, (key) => key);
+            const from = order.indexOf(active);
+            const to = order.indexOf(over);
+            if (from === -1 || to === -1 || from === to) return state;
+            const [moved] = order.splice(from, 1);
+            order.splice(to, 0, moved);
+            return {
+              favoritePickerOrder: order,
+              favoriteModels: orderPickerItems(state.favoriteModels, order, modelPickerModelKey),
+              favoriteAgentCombinations: orderPickerItems(state.favoriteAgentCombinations, order, modelPickerActionKey),
+            };
+          });
+        },
+        setAgentCombinationOrder: (ids) => {
+          const parsed = favoriteAgentCombinationIdsSchema.safeParse(ids);
+          if (parsed.success) set({ agentCombinationOrder: parsed.data });
+        },
+
         toggleFavoriteModel: (providerID, modelID) => {
           set((state) => {
             const exists = state.favoriteModels.some(
@@ -2880,36 +2916,15 @@ export const useUIStore = create<UIStore>()(
                 favoriteModels: state.favoriteModels.filter(
                   (fav) => !(fav.providerID === providerID && fav.modelID === modelID)
                 ),
+                favoritePickerOrder: state.favoritePickerOrder.filter((key) => key !== modelPickerModelKey({ providerID, modelID })),
               };
             } else {
               // Add to favorites (newest first)
               return {
                 favoriteModels: [{ providerID, modelID }, ...state.favoriteModels],
+                favoritePickerOrder: [modelPickerModelKey({ providerID, modelID }), ...state.favoritePickerOrder.filter((key) => key !== modelPickerModelKey({ providerID, modelID }))],
               };
             }
-          });
-        },
-
-        reorderFavoriteModel: (activeProviderID, activeModelID, overProviderID, overModelID) => {
-          set((state) => {
-            const oldIndex = state.favoriteModels.findIndex(
-              (fav) => fav.providerID === activeProviderID && fav.modelID === activeModelID
-            );
-            const newIndex = state.favoriteModels.findIndex(
-              (fav) => fav.providerID === overProviderID && fav.modelID === overModelID
-            );
-
-            if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) {
-              return state;
-            }
-
-            const nextFavorites = state.favoriteModels.slice();
-            const [moved] = nextFavorites.splice(oldIndex, 1);
-            if (!moved) {
-              return state;
-            }
-            nextFavorites.splice(newIndex, 0, moved);
-            return { favoriteModels: nextFavorites };
           });
         },
 
@@ -3387,6 +3402,9 @@ export const useUIStore = create<UIStore>()(
           const placement = zonePlacementSchema.parse(merged.contextSurfaceZones);
           return {
             ...merged,
+            favoriteAgentCombinations: favoriteAgentCombinationIdsSchema.safeParse(merged.favoriteAgentCombinations).data ?? currentState.favoriteAgentCombinations,
+            favoritePickerOrder: z.array(z.string()).safeParse(merged.favoritePickerOrder).data ?? currentState.favoritePickerOrder,
+            agentCombinationOrder: favoriteAgentCombinationIdsSchema.safeParse(merged.agentCombinationOrder).data ?? currentState.agentCombinationOrder,
             workStatusExpandedSections: workStatusExpandedSectionsSchema.parse(merged.workStatusExpandedSections),
             workStatusHiddenSections: sanitizeWorkStatusHiddenSections(merged.workStatusHiddenSections, merged.workStatusHiddenSectionsExplicit),
             workStatusSectionOrder: sanitizeWorkStatusSectionOrder(merged.workStatusSectionOrder),
@@ -3729,6 +3747,9 @@ export const useUIStore = create<UIStore>()(
           padding: state.padding,
           cornerRadius: state.cornerRadius,
           favoriteModels: state.favoriteModels,
+          favoriteAgentCombinations: state.favoriteAgentCombinations,
+          favoritePickerOrder: state.favoritePickerOrder,
+          agentCombinationOrder: state.agentCombinationOrder,
           hiddenModels: state.hiddenModels,
           providerOrder: state.providerOrder,
           collapsedModelProviders: state.collapsedModelProviders,

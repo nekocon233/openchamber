@@ -20,8 +20,8 @@ In enterprise mode (`../enterprise-mode.js`) no tunnel starts at all: a tunnel p
   the shared pinned-binary manager, plus FRPC's own version check and the
   extractor wrappers its callers import.
 - `packages/web/server/lib/pinned-binary/manager.js`: the generic verified
-  download, cache, lock, extraction and publish lifecycle both the FRPC tunnel
-  client and the managed CLIProxyAPI gateway use.
+  download, cache, lock, extraction and publish lifecycle the FRPC tunnel
+  client uses.
 - `packages/web/server/lib/tunnels/frpc-client.js`: private FRPC config/token lifecycle, host-trust CA resolution, TCP and HTTP-vhost process control, endpoint normalization, and readiness detection.
 - `packages/web/server/lib/tunnels/providers/cloudflare.js`: Cloudflare tunnel provider implementation.
 - `packages/web/server/lib/tunnels/providers/frpc.js`: registered managed FRPC provider implementation.

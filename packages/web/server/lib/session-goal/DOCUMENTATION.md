@@ -263,16 +263,18 @@ ordering used by create and scheduled goals.
 
 ## Native CLI sessions
 
-A Claude Code or Codex session (`packages/web/server/lib/native-agents/`) runs
-the same loop through the native runtime, which `createSessionGoalRuntime`
-takes as `nativeSessions`; `index.js` feeds the loop the native event source as
-well. A tick reads the session, its directory's statuses and its latest
-messages from that runtime, writes the goal into the metadata the runtime
-keeps in its registry, and sends the continuation as a native prompt. The
-differences:
+A native CLI session or unified native conversation (`ncl_`, `ncx_`, `nag_`,
+`ndh_`, `ncv_`) runs the same loop through the native runtime, which
+`createSessionGoalRuntime` takes as `nativeSessions`; `index.js` feeds the loop
+the native event source as well. A tick reads the session, its directory's
+statuses and its latest messages from that runtime, writes the goal into the
+metadata the runtime keeps in its registry, and sends the continuation as a
+native prompt. The differences:
 
-- No child sessions: Claude Code's subagents are part of their parent's turns
-  and Codex reports none, so the live-activity check looks at the parent only.
+- Claude Code's subagents are part of their parent's turns and Codex reports
+  none, so those two look at the parent only. A unified DeepSeek or Antigravity
+  conversation can expose child sessions on the native page; their live
+  statuses also keep the loop from auditing or continuing.
 - The continuation goes out on the model, effort and agent of the session's
   last prompt that names a model, since a reply names the API model rather
   than the one picked. It is an ordinary prompt, so it shows in the CLI's own

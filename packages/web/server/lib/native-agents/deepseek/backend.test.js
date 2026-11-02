@@ -41,6 +41,52 @@ const setup = async (messages = 2, options = {}) => {
 };
 
 describe('DeepSeek Harness Web adapter', () => {
+  it('sets the first title from visible user text before injecting instructions', async () => {
+    const { backend, directory } = await setup();
+    const session = await backend.createSession(directory);
+    const send = async (text) => backend.prompt(session.id, {
+      directory, messageID: newNativeClientUserMessageId(session.id),
+      parts: [{ type: 'text', text }], instructions: 'Private shared memory index',
+      model: { providerID: 'deepseek-native', modelID: 'deepseek-official/test-model' }, agent: 'build',
+    });
+    await send('启动这个服务');
+    await backend.listRootSessions(directory);
+    expect((await backend.getSession(session.id, directory)).title).toBe('启动这个服务');
+    const history = await backend.loadMessages(session.id, directory, { limit: 50 });
+    expect(history.records.find((record) => record.info.role === 'user').parts[0].text).toBe('启动这个服务');
+    await send('开放到局域网');
+    await backend.listRootSessions(directory);
+    expect((await backend.getSession(session.id, directory)).title).toBe('启动这个服务');
+  });
+
+  it('preserves titles supplied on creation or renamed before the first message', async () => {
+    const { backend, directory } = await setup();
+    for (const initial of ['Chosen title', undefined]) {
+      const session = await backend.createSession(directory, initial);
+      if (!initial) await backend.rename(session.id, directory, 'Renamed before sending');
+      await backend.prompt(session.id, {
+        directory, messageID: newNativeClientUserMessageId(session.id), parts: [{ type: 'text', text: 'Different request' }],
+        instructions: 'Private context', model: { providerID: 'deepseek-native', modelID: 'deepseek-official/test-model' }, agent: 'build',
+      });
+      await backend.listRootSessions(directory);
+      expect((await backend.getSession(session.id, directory)).title).toBe(initial ?? 'Renamed before sending');
+    }
+  });
+
+  it('keeps the pinned CLI word and UTF-8 title limits without including hidden parts', async () => {
+    const { backend, directory } = await setup();
+    for (const [text, expected] of [['one two three four five six', 'one two three four five'], ['你好🙂'.repeat(10), '你好🙂'.repeat(4)]]) {
+      const session = await backend.createSession(directory);
+      await backend.prompt(session.id, {
+        directory, messageID: newNativeClientUserMessageId(session.id),
+        parts: [{ type: 'text', text: '<openchamber-instructions>Hidden</openchamber-instructions>' }, { type: 'text', text }],
+        instructions: 'Private context', model: { providerID: 'deepseek-native', modelID: 'deepseek-official/test-model' }, agent: 'build',
+      });
+      await backend.listRootSessions(directory);
+      expect((await backend.getSession(session.id, directory)).title).toBe(expected);
+    }
+  });
+
   it('reads and streams committed task lists across turns and reconnects', async () => {
     const { backend, directory, fixture, events } = await setup();
     const id = encodeDeepseekSessionId('session-existing');
@@ -79,53 +125,6 @@ describe('DeepSeek Harness Web adapter', () => {
     expect(events).toHaveLength(0);
     expect(await fixture('stream-count')).toBe(0);
   });
-  it('configures the server through official settings and credentials without returning a key', async () => {
-    const { backend, fixture } = await setup();
-    const configuration = await backend.configuration.read();
-    expect(configuration).toMatchObject({ revision: 0, modelIDs: ['test-model'], credential: { configured: false, writable: true } });
-    const saved = await backend.configuration.save({ revision: 0, baseURL: 'https://gateway.test/anthropic', modelIDs: ['test-model', 'another-model'], apiKey: 'fixture-api-key' });
-    expect(saved).toMatchObject({ status: 'saved', configuration: { revision: 1, credential: { configured: true } } });
-    expect(JSON.stringify(saved)).not.toContain('fixture-api-key');
-    const state = await fixture('configuration');
-    expect(state.value).toMatchObject({ reasoningEffort: 'high', models: [{ id: 'test-model', name: 'Test model', contextWindow: 1_000_000, maxTokens: 64000, inputModalities: ['text'] }, { id: 'another-model' }] });
-    await backend.configuration.save({ revision: 1, baseURL: null, modelIDs: ['test-model'] });
-    expect(await fixture('configuration')).toMatchObject({ keyWrites: 1, hasKey: true });
-    expect((await backend.configuration.read()).baseURL).toBeNull();
-  });
-
-  it('rejects missing keys, invalid endpoints, concurrent stale writes and read-only credentials before mutation', async () => {
-    const { backend, fixture } = await setup();
-    const input = { revision: 0, baseURL: null, modelIDs: ['test-model'] };
-    await expect(backend.configuration.save(input)).rejects.toMatchObject({ code: 'NATIVE_DEEPSEEK_KEY_REQUIRED' });
-    expect(() => backend.configuration.save({ ...input, apiKey: 'fixture-api-key', baseURL: 'https://user:secret@gateway.test' })).toThrow();
-    const concurrent = await Promise.allSettled([
-      backend.configuration.save({ ...input, apiKey: 'fixture-api-key' }),
-      backend.configuration.save({ ...input, apiKey: 'fixture-second-key' }),
-    ]);
-    expect(concurrent[0].status).toBe('fulfilled');
-    expect(concurrent[1]).toMatchObject({ status: 'rejected', reason: { code: 'NATIVE_DEEPSEEK_SETTINGS_CONFLICT', status: 409 } });
-    expect(await fixture('configuration')).toMatchObject({ settingsWrites: 1, keyWrites: 1 });
-    await fixture('settings-options', { keyWritable: false });
-    await expect(backend.configuration.save({ ...input, revision: 1, apiKey: 'fixture-third-key' })).rejects.toMatchObject({ code: 'NATIVE_DEEPSEEK_SETTINGS_READ_ONLY' });
-    expect(await fixture('configuration')).toMatchObject({ settingsWrites: 1, keyWrites: 1 });
-    await backend.configuration.save({ ...input, revision: 1 });
-    expect((await backend.configuration.read()).credential).toEqual({ configured: true, writable: false });
-  });
-
-  it('returns durable settings after a credential failure and permits a retry with that revision', async () => {
-    const { backend, fixture } = await setup();
-    await fixture('settings-options', { rejectKey: true });
-    const input = { revision: 0, baseURL: 'https://new.test/anthropic', modelIDs: ['test-model'], apiKey: 'fixture-rejected-key' };
-    const result = await backend.configuration.save(input);
-    expect(result).toMatchObject({ status: 'credential-error', configuration: { revision: 1, baseURL: input.baseURL, credential: { configured: false } } });
-    expect(JSON.stringify(result)).not.toContain(input.apiKey);
-    await fixture('settings-options', { rejectKey: false });
-    expect(await backend.configuration.save({ ...input, revision: 1 })).toMatchObject({ status: 'saved', configuration: { credential: { configured: true } } });
-    await fixture('settings-options', { rejectSettings: true });
-    await expect(backend.configuration.save({ ...input, revision: 2, apiKey: 'fixture-unused-key' })).rejects.toMatchObject({ code: 'NATIVE_BACKEND_ERROR' });
-    expect(await fixture('configuration')).toMatchObject({ revision: 2, settingsWrites: 2, keyWrites: 1 });
-  });
-
   it('shares one follower across concurrent history opens', async () => {
     const { backend, directory, fixture } = await setup();
     const id = encodeDeepseekSessionId('session-existing');
@@ -281,6 +280,52 @@ describe('DeepSeek Harness Web adapter', () => {
     expect((await backend.getSession(id, directory)).time.archived).toBeDefined();
     await backend.setArchived(id, directory, false);
     expect((await backend.getSession(id, directory)).time.archived).toBeUndefined();
+  });
+
+  it('keeps a multi-step turn exceeding the follow snapshot window contiguous across pages', async () => {
+    const { backend, directory, fixture } = await setup(0);
+    const id = encodeDeepseekSessionId('session-existing');
+    await fixture('append', { sessionId: 'session-existing', type: 'turn/start', data: { turn: 1 } });
+    await fixture('append', { sessionId: 'session-existing', type: 'user/message', data: {
+      id: 'user-long-turn', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Long multi-step turn' }],
+    } });
+    await fixture('append', { sessionId: 'session-existing', type: 'request/context', data: {
+      provider: 'deepseek-official', model: 'test-model', contextWindow: 131072,
+    } });
+    for (let step = 1; step <= 30; step += 1) {
+      await fixture('append', { sessionId: 'session-existing', type: 'step/start', data: { turn: 1, step } });
+      await fixture('append', { sessionId: 'session-existing', type: 'assistant/message', data: {
+        turn: 1, step, message: {
+          id: `assistant-step-${step}`, role: 'assistant',
+          source: { kind: 'model', provider: 'deepseek-official', model: 'test-model' },
+          content: [{ type: 'tool-call', id: `call-${step}`, name: 'bash', arguments: '{"command":"true"}' }],
+        },
+        usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 80 },
+        stream: [],
+      } });
+      await fixture('append', { sessionId: 'session-existing', type: 'tool/call', data: { turn: 1, step, callId: `call-${step}`, name: 'bash', arguments: '{"command":"true"}' } });
+      await fixture('append', { sessionId: 'session-existing', type: 'tool/result', data: { turn: 1, step, message: { toolCallId: `call-${step}`, content: [{ type: 'text', text: 'ok' }] } } });
+      await fixture('append', { sessionId: 'session-existing', type: 'step/end', data: { turn: 1, step } });
+    }
+    await fixture('append', { sessionId: 'session-existing', type: 'turn/end', data: { turn: 1, reason: { kind: 'complete' } } });
+
+    const pages = [];
+    let cursor;
+    for (;;) {
+      const page = await backend.loadMessages(id, directory, { limit: 20, before: cursor });
+      pages.unshift(page.records);
+      if (page.complete) break;
+      cursor = page.cursor;
+    }
+    const records = pages.flat();
+    const users = records.filter((record) => record.info.role === 'user');
+    const assistants = records.filter((record) => record.info.role === 'assistant');
+    expect(users).toHaveLength(1);
+    expect(assistants).toHaveLength(30);
+    for (const assistant of assistants) {
+      expect(assistant.info.parentID).toBe(users[0].info.id);
+      expect(assistant.info.contextWindow).toBe(131072);
+    }
   });
 
   it('forks an old user message after its history follower has been evicted', async () => {

@@ -7,7 +7,7 @@ import type { SessionBackgroundTask } from '@/lib/opencode/events';
 import type { Message, Part, Session, SessionStatus } from '@/lib/opencode/model';
 import { z } from 'zod';
 
-import { isNativeSessionId } from './ids';
+import { isNativeSessionId, nativeBackendSchema } from './ids';
 
 const metadataSchema = z.record(z.string(), z.json());
 const nativeSessionIdSchema = z.string().min(1).refine(isNativeSessionId);
@@ -231,8 +231,11 @@ export const nativeCatalogSchema = z.object({
 });
 
 export const nativeCapabilitiesSchema = z.object({
+  agentCombinations: z.boolean().optional(),
+  delegationBackends: z.array(nativeBackendSchema).optional(),
   supported: z.literal(true),
   unifiedSessions: z.boolean().optional(),
+  unifiedBackends: z.array(nativeBackendSchema).optional(),
   backends: z.object({
     claude: z.object({
       cli: z.boolean(),
@@ -309,10 +312,18 @@ export const nativeDeleteResultSchema = z.object({ deleted: z.literal(true) });
 export const nativeQuestionRepliedSchema = z.object({ replied: z.literal(true) });
 export const nativeQuestionRejectedSchema = z.object({ rejected: z.literal(true) });
 
+export const nativePlanExecutionChoiceSchema = z.object({
+  model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }),
+  variant: z.string().min(1).optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+});
+
 export const nativeQuestionSchema = z.object({
   id: z.string().min(1),
   sessionID: nativeSessionIdSchema,
   kind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit', 'antigravity-plan-exit']).optional(),
+  canSelectExecutionModel: z.boolean().optional(),
+  executionPending: nativePlanExecutionChoiceSchema.optional(),
   questions: z.array(z.object({
     question: z.string(),
     header: z.string(),

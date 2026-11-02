@@ -208,15 +208,29 @@ describe('session work runtime: a message was sent', () => {
 });
 
 describe('session work runtime: a native CLI session', () => {
+  const nativeTurn = [
+    { info: { id: 'ncl_u_1', role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: 'Implement it' }] },
+    { info: { id: 'ncl_a_1', role: 'assistant', finish: 'stop', time: { created: 2, completed: 3 } }, parts: [{ type: 'text', text: 'Done, try it.' }] },
+  ];
   const nativeStub = ({ session = {}, metadata = {} } = {}) => {
+    const state = { id: 'ncl_1', directory: '/repo', time: {}, ...session, metadata: { ...metadata, ...(session.metadata ?? {}) } };
     const setSessionWork = vi.fn(async () => undefined);
-    const getSession = vi.fn(async () => ({ id: 'ncl_1', directory: '/repo', time: {}, ...session, metadata: { ...metadata, ...(session.metadata ?? {}) } }));
+    const getSession = vi.fn(async () => state);
+    const loadMessages = vi.fn(async () => ({ records: nativeTurn, cursor: null }));
+    const updateSession = vi.fn(async (_sessionId, _directory, patch) => {
+      state.metadata = patch.metadata;
+      return state;
+    });
     return {
       setSessionWork,
       getSession,
+      loadMessages,
+      updateSession,
       handle: {
         isNativeSessionId: (id) => String(id).startsWith('ncl_'),
         getSession,
+        loadMessages,
+        updateSession,
         setSessionWork,
       },
     };
@@ -274,6 +288,29 @@ describe('session work runtime: a native CLI session', () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(stub.setSessionWork).not.toHaveBeenCalled();
     }
+  });
+
+  it('writes the done hint through native metadata and retires it on the next turn', async () => {
+    const stub = nativeStub({ metadata: { openchamber: { work: { state: 'open', openedAt: 1 } } } });
+    const { runtime, updateMetadata, jev } = makeRuntime({
+      nativeSessions: stub.handle,
+      answers: { wrap_up: { noul: 0.93 } },
+    });
+
+    const gate = await runtime.evaluateTurnEnd({ sessionId: 'ncl_1', directory: '/repo', assist: { recap: false, suggestion: false } });
+
+    expect(gate).toBeNull();
+    expect(jev.ask).toHaveBeenCalledTimes(1);
+    expect(updateMetadata).not.toHaveBeenCalled();
+    expect(stub.updateSession).toHaveBeenCalledTimes(1);
+    expect(stub.updateSession.mock.calls[0][2].metadata).toMatchObject({
+      openchamber: { work: { state: 'open', openedAt: 1, suggestDoneAt: expect.any(Number) } },
+    });
+
+    runtime.processPayload({ type: 'session.status', properties: { sessionID: 'ncl_1', status: { type: 'busy' } } });
+    await settle(() => stub.updateSession.mock.calls.length > 1);
+    expect(stub.updateSession.mock.calls.at(-1)[2].metadata.openchamber.work).not.toHaveProperty('suggestDoneAt');
+    expect(updateMetadata).not.toHaveBeenCalled();
   });
 });
 

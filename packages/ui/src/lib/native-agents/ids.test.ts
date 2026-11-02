@@ -9,7 +9,11 @@ import {
   NATIVE_PROVIDER_CLAUDE,
   NATIVE_PROVIDER_CODEX,
   NATIVE_PROVIDER_DEEPSEEK,
+  NATIVE_BACKENDS,
+  nativeProviderIdOf,
+  unifiedNativeSessionState,
 } from './ids';
+import { nativeHistoryRevision } from './history';
 
 const CLAUDE_SESSION = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const CODEX_SESSION = 'ncx_01a0d2a6-b55b-7162-a837-c62053537e00';
@@ -38,13 +42,23 @@ describe('isProviderPickableForSession', () => {
     expect(isProviderPickableForSession(null, 'anthropic')).toBe(true);
   });
 
-  test('keeps Antigravity on its own native session and out of unified conversations', () => {
+  test('keeps standalone Antigravity sessions scoped while offering it in unified conversations', () => {
     expect(isNativeSessionId(ANTIGRAVITY_SESSION)).toBe(true);
     expect(isProviderPickableForSession(ANTIGRAVITY_SESSION, NATIVE_PROVIDER_ANTIGRAVITY)).toBe(true);
     expect(isProviderPickableForSession(ANTIGRAVITY_SESSION, NATIVE_PROVIDER_CODEX)).toBe(false);
-    expect(isProviderPickableForSession(UNIFIED_SESSION, NATIVE_PROVIDER_ANTIGRAVITY)).toBe(false);
+    expect(isProviderPickableForSession(UNIFIED_SESSION, NATIVE_PROVIDER_ANTIGRAVITY)).toBe(true);
     expect(isProviderPickableForSession(UNIFIED_SESSION, NATIVE_PROVIDER_CLAUDE)).toBe(true);
     expect(isProviderPickableForSession(null, NATIVE_PROVIDER_ANTIGRAVITY)).toBe(true);
+  });
+
+  for (const backend of NATIVE_BACKENDS) test(`admits ${backend} models and execution metadata in unified conversations`, () => {
+    expect(isProviderPickableForSession(UNIFIED_SESSION, nativeProviderIdOf(backend))).toBe(true);
+    const metadata = { openchamber: { native: {
+      kind: 'unified', backend, unifiedBackends: NATIVE_BACKENDS,
+      revision: 2, recordRevision: 4, historyRevision: 3, sourceSessionID: null, switchReady: true, preparing: false,
+    } } };
+    expect(unifiedNativeSessionState(metadata)?.backend).toBe(backend);
+    expect(nativeHistoryRevision(metadata)).toBe(3);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { sessionActionSupport } from './capabilities';
+import { sessionActionSupport, supportsUnifiedNativeBackend } from './capabilities';
+import { NATIVE_BACKENDS } from './ids';
 
 describe('native session action support', () => {
   const id = `ndh_${'a'.repeat(64)}`;
@@ -17,5 +18,24 @@ describe('native session action support', () => {
     expect(sessionActionSupport('ses_example')).toEqual({ share: true, moveToWorktree: true, revert: true, delete: true, fork: true });
     expect(sessionActionSupport('ncl_example')).toEqual({ share: false, moveToWorktree: false, revert: true, delete: true, fork: true });
     expect(sessionActionSupport('ncx_example')).toEqual({ share: false, moveToWorktree: false, revert: true, delete: true, fork: true });
+  });
+
+  test('retains unified rewind and fork while refusing deletion when a source cannot delete', () => {
+    const id = 'ncv_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
+    expect(sessionActionSupport(id, { openchamber: { native: { actions: { revert: true, fork: true, delete: false } } } }))
+      .toMatchObject({ revert: true, fork: true, delete: false });
+  });
+});
+
+describe('unified backend negotiation', () => {
+  for (const backend of NATIVE_BACKENDS) test(`offers registered ${backend} when advertised`, () => {
+    expect(supportsUnifiedNativeBackend({ unifiedSessions: true, unifiedBackends: NATIVE_BACKENDS }, backend)).toBe(true);
+    expect(supportsUnifiedNativeBackend({ unifiedSessions: false, unifiedBackends: NATIVE_BACKENDS }, backend)).toBe(false);
+    expect(supportsUnifiedNativeBackend({ unifiedSessions: true, unifiedBackends: [] }, backend)).toBe(false);
+  });
+  test('keeps old servers on their original backend set', () => {
+    expect(supportsUnifiedNativeBackend({ unifiedSessions: true }, 'antigravity')).toBe(false);
+    expect(supportsUnifiedNativeBackend({ unifiedSessions: true }, 'codex')).toBe(true);
+    expect(supportsUnifiedNativeBackend({}, 'claude')).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfSessionId } from './ids';
+import { isNativeSessionId, isUnifiedNativeSessionId, nativeBackendOfSessionId, type NativeBackend } from './ids';
 import { z } from 'zod';
 import type { Session } from '@/lib/opencode/model';
 
@@ -7,6 +7,11 @@ const guardedActions = z.object({ openchamber: z.object({ native: z.object({
 }) }) });
 
 const activityMetadata = z.object({ openchamber: z.object({ native: z.object({ activityKnown: z.boolean() }) }) });
+
+/** Servers predating backend negotiation support the original three CLIs. */
+export const supportsUnifiedNativeBackend = (capabilities: { unifiedSessions?: boolean; unifiedBackends?: NativeBackend[] }, backend: NativeBackend): boolean => (
+  capabilities.unifiedSessions === true && (capabilities.unifiedBackends?.includes(backend) ?? ['claude', 'codex', 'deepseek'].includes(backend))
+);
 
 /** A directory's idle snapshot cannot prove that an unobserved agy child finished. */
 export const hasUnknownAntigravityActivity = (session: Session): boolean =>

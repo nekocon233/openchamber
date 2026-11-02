@@ -122,6 +122,7 @@ const appendAt = (list, index, delta) => {
  * @param {() => number} [options.now]
  */
 export const createCodexLiveThreads = ({
+  toolConfiguration = () => null,
   request,
   // Given to Codex as developer instructions each time a thread loads.
   readGlobalInstructions = async () => null,
@@ -190,13 +191,22 @@ export const createCodexLiveThreads = ({
   // a turn resumes it first.
   const ensureLoaded = async (live) => {
     if (live.loaded) return;
-    const resumed = resumedThread.safeParse(await request('thread/resume', {
+    const tools = toolConfiguration(live.sessionId);
+    const overrides = {};
+    if (tools) {
+      overrides['features.multi_agent'] = false;
+      if (!tools.child) overrides['mcp_servers.openchamber_subagents'] = { command: tools.command, args: tools.args, env: tools.env, tool_timeout_sec: 3600 };
+    }
+    const resume = {
       threadId: live.threadId,
       excludeTurns: true,
       approvalPolicy: APPROVAL_POLICY,
       sandbox: FULL_ACCESS_SANDBOX,
-      developerInstructions: (await readGlobalInstructions()) ?? undefined,
-    }));
+    };
+    const instructions = await readGlobalInstructions();
+    if (instructions) resume.developerInstructions = instructions;
+    if (tools) resume.config = overrides;
+    const resumed = resumedThread.safeParse(await request('thread/resume', resume));
     live.serviceTier = resumed.success ? resumed.data.serviceTier ?? null : null;
     live.modelProvider = resumed.success ? resumed.data.modelProvider ?? null : null;
     live.loaded = true;
@@ -548,6 +558,13 @@ export const createCodexLiveThreads = ({
         throw invalidRequestError(`Not a Codex user message id: ${messageId}`);
       }
       const live = liveThread(sessionId, directory);
+      const toolKey = toolConfiguration(sessionId)?.key ?? '';
+      if ((live.toolKey ?? '') !== toolKey) {
+        if (live.turn) throw invalidRequestError('Wait for the current turn before applying subagent settings');
+        if (live.loaded) await request('thread/unsubscribe', { threadId: live.threadId });
+        live.loaded = false;
+        live.toolKey = toolKey;
+      }
       await ensureLoaded(live);
       await applyProvider(live, config);
       signal?.throwIfAborted();

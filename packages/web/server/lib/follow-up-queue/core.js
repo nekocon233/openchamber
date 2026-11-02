@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { agentModelSchema } from '../native-agents/agent-configuration.js';
 
 import {
   FollowUpQueueConflictError,
@@ -318,7 +319,7 @@ const normalizeAdditionalParts = (value, field) => {
 
 const normalizeSendConfig = (value, field) => {
   const sendConfig = requireRecord(value, field);
-  requireAllowedKeys(sendConfig, new Set(['providerID', 'modelID', 'agent', 'variant', 'executionFramework']), field);
+  requireAllowedKeys(sendConfig, new Set(['providerID', 'modelID', 'agent', 'variant', 'executionFramework', 'subagentModel']), field);
   const normalized = {
     providerID: requireUtf8String(
       sendConfig.providerID,
@@ -340,6 +341,14 @@ const normalizeSendConfig = (value, field) => {
       MAX_SEND_CONFIG_STRING_BYTES,
       { controlFree: true },
     );
+  }
+  if (hasOwn(sendConfig, 'subagentModel')) {
+    if (sendConfig.subagentModel === null) normalized.subagentModel = null;
+    else {
+      const choice = agentModelSchema.safeParse(sendConfig.subagentModel);
+      if (!choice.success) throw new FollowUpQueueValidationError(`${field}.subagentModel is invalid`);
+      normalized.subagentModel = choice.data;
+    }
   }
   if (hasOwn(sendConfig, 'variant')) {
     normalized.variant = requireUtf8String(
@@ -692,7 +701,7 @@ const cloneItem = (item) => {
   if (hasOwn(item, 'agentMentionName')) cloned.agentMentionName = item.agentMentionName;
   cloned.createdAt = item.createdAt;
   cloned.status = item.status;
-  if (hasOwn(item, 'sendConfig')) cloned.sendConfig = { ...item.sendConfig };
+  if (hasOwn(item, 'sendConfig')) cloned.sendConfig = structuredClone(item.sendConfig);
   if (hasOwn(item, 'claim')) cloned.claim = { ...item.claim };
   return cloned;
 };

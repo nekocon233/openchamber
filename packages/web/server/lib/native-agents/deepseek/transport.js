@@ -291,13 +291,14 @@ export const createDeepseekTransport = ({
           z.object({ type: z.literal('ready'), root: z.string().refine(path.isAbsolute), compression: z.enum(['none', 'zstd']) }),
           z.object({ type: z.literal('inspection'), id: z.string(), active: z.array(z.string()), sessions: z.array(z.object({ id: z.string(), parent: z.string().optional(), origin: z.string().optional() })) }),
           z.object({ type: z.literal('error'), id: z.string() }),
+          z.object({ type: z.literal('configured'), id: z.string() }),
         ]);
         reader.on('line', (line) => {
           try {
             if (line.length > 8 * 1024 * 1024) throw new Error('Oversized maintenance frame');
             const value = frame.parse(JSON.parse(line));
             if (value.type === 'ready') {
-              context.maintenanceAvailable = true;
+              context.maintenanceAvailable = support.maintenance !== false;
               context.maintenanceReady.resolve({ ...support, root: value.root, compression: value.compression });
             } else if (value.type === 'unsupported') {
               context.maintenanceAvailable = false;
@@ -306,7 +307,7 @@ export const createDeepseekTransport = ({
               const pending = context.maintenanceRequests.get(value.id);
               context.maintenanceRequests.delete(value.id);
               if (value.type === 'error') pending?.reject(failure('Could not inspect DeepSeek Harness activity'));
-              else pending?.resolve({ active: value.active, sessions: value.sessions });
+              else pending?.resolve(value.type === 'configured' ? { configured: true } : { active: value.active, sessions: value.sessions });
             }
           } catch { void closeContext(context, failure('Incompatible DeepSeek Harness maintenance protocol')); }
         });
@@ -336,6 +337,22 @@ export const createDeepseekTransport = ({
   return {
     assertAllowed: allowed,
     supportsMaintenance: () => active?.maintenanceAvailable === true,
+    maintenanceState: () => active ? active.maintenanceAvailable === true : null,
+    async configureDelegation(sessionId, configuration) {
+      const context = await start();
+      if (!context.support) {
+        if (configuration) throw failure('This DeepSeek Harness version cannot configure cross-CLI subagents');
+        return;
+      }
+      const id = randomUUID();
+      const pending = deferred();
+      context.maintenanceRequests.set(id, pending);
+      const timer = setTimeout(() => pending.reject(failure('DeepSeek subagent configuration timed out')), requestTimeoutMs);
+      try {
+        context.child.stdio[3].write(`${JSON.stringify({ type: 'configure-delegation', id, sessionId, configuration })}\n`);
+        await pending.promise;
+      } finally { clearTimeout(timer); context.maintenanceRequests.delete(id); }
+    },
     async inspectMaintenance() {
       const context = await start();
       const config = await Promise.race([context.maintenanceReady.promise, new Promise((_, reject) => {
@@ -343,7 +360,7 @@ export const createDeepseekTransport = ({
         timer.unref?.();
         context.maintenanceReady.promise.finally(() => clearTimeout(timer)).catch(() => {});
       })]);
-      if (!config) throw failure('This dsh installation does not support permanent deletion', 'NATIVE_DEEPSEEK_ACTION_UNSUPPORTED', 501);
+      if (!config || config.maintenance === false) throw failure('This dsh installation does not support permanent deletion', 'NATIVE_DEEPSEEK_ACTION_UNSUPPORTED', 501);
       const id = randomUUID();
       const pending = deferred();
       context.maintenanceRequests.set(id, pending);

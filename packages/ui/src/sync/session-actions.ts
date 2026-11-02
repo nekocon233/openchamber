@@ -5,10 +5,13 @@
 
 import type { FilePart, FormRequest, JsonValue, Message, Metadata, ModelSelection, Part, PermissionRequest, Session, SyntheticMessage, TextPart, UserMessage } from "@/lib/opencode/model"
 import { compact, partIds } from "@/lib/opencode/model"
+import { nativeAgentConfigurationOf, type NativeAgentConfigurationWrite } from '@/lib/native-agents/combinations'
+import { captureAgentCombinationDraft, useAgentCombinationDrafts, type AgentCombinationDraftSnapshot } from '@/lib/native-agents/combination-drafts'
 import { readSubagentRun } from "@/lib/opencode/subagent-run"
 import { readDispatchedSessionResult } from "@/lib/opencode/dispatched-session"
 import { Binary } from "./binary"
 import { useSessionUIStore } from "./session-ui-store"
+import { useSelectionStore } from "./selection-store"
 import { useInputStore } from "./input-store"
 import type { ChildStoreManager } from "./child-store"
 import { computeSubtreeIds } from "./scoped-blocking-requests"
@@ -66,9 +69,10 @@ import { deleteChatDirectory } from "@/lib/chatDirectories"
 import { createChatDraftIdentity } from "@/lib/chatDraftPersistence"
 import { cancelSessionTitleGeneration } from "./session-title-generation"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
-import type { NativeCompactRequest, NativePromptRequest, NativeSessionSelection } from "@/lib/api/types"
+import type { NativeCompactRequest, NativePromptRequest, NativeSessionSelection, NativeSessionCreate } from "@/lib/api/types"
 import { NativeAgentsRequestError, NativeAgentsUnsupportedError } from "@/lib/native-agents/errors"
 import { isNativeSessionId, nativeBackendOfProviderId, unifiedNativeSessionState, type NativeBackend } from "@/lib/native-agents/ids"
+import { supportsUnifiedNativeBackend } from "@/lib/native-agents/capabilities"
 import { nativeAgentOf } from "./native-send"
 import { nativeQuestionAnswers } from "@/lib/native-agents/forms"
 
@@ -1157,19 +1161,28 @@ const NATIVE_QUESTION_GONE = "NATIVE_QUESTION_NOT_FOUND"
 
 /** A new session in a CLI's own store; the server announces it. */
 export async function createNativeSession(backend: NativeBackend, directory: string | null, title: string | undefined, selection?: SessionCreateSelection): Promise<Session> {
+  const runtime = captureSessionActionRuntime()
   const nativeAgents = requireNativeAgents()
   const nativeDirectory = requireNativeDirectory(directory)
-  // Antigravity supports independent native sessions only. Do not let the
-  // server's unified default turn an agy draft into an ncv_ conversation.
-  if (backend !== 'antigravity' && selection?.model && (await nativeAgents.capabilities()).unifiedSessions) {
-    return nativeAgents.createSession({
+  const combinationDraft = selection?.model ? selection.combinationDraft ?? captureAgentCombinationDraft(nativeDirectory) : undefined
+  const configuration = combinationDraft?.configuration
+  const capabilities = selection?.model ? await nativeAgents.capabilities() : undefined
+  assertSessionActionRuntimeCurrent(runtime)
+  if (configuration && capabilities?.agentCombinations !== true) throw new NativeAgentsUnsupportedError()
+  if (selection?.model && capabilities && supportsUnifiedNativeBackend(capabilities, backend)) {
+    const input: NativeSessionCreate = {
       kind: 'unified', backend, directory: nativeDirectory, title,
       selection: {
         model: { providerID: selection.model.providerID, modelID: selection.model.id },
         agent: selection.agent === 'plan' ? 'plan' : 'build',
         variant: selection.model.variant ?? undefined,
       },
-    })
+    }
+    if (configuration) input.configuration = configuration
+    const session = await nativeAgents.createSession(input)
+    assertSessionActionRuntimeCurrent(runtime)
+    if (combinationDraft) useAgentCombinationDrafts.getState().clear(combinationDraft.target, combinationDraft.configuration)
+    return session
   }
   return nativeAgents.createSession(title === undefined ? { backend, directory: nativeDirectory } : { backend, directory: nativeDirectory, title })
 }
@@ -1185,8 +1198,32 @@ export const hasPendingNativeConversationSelection = (sessionId: string, directo
   nativeSelectionWrites.has(JSON.stringify([getRuntimeKey(), directory, sessionId]))
 )
 
+export function configureNativeAgents(sessionId: string, directory: string, configuration: NativeAgentConfigurationWrite, main?: NativeSessionSelection): Promise<Session> {
+  const runtime = captureSessionActionRuntime()
+  const key = JSON.stringify([runtime.runtimeKey, directory, sessionId])
+  const previous = nativeSelectionWrites.get(key)
+  const run = (previous?.catch(() => undefined) ?? Promise.resolve()).then(async () => {
+    assertSessionActionRuntimeCurrent(runtime)
+    const api = requireNativeAgents()
+    const current = await api.getSession(sessionId, directory)
+    const config = nativeAgentConfigurationOf(current.metadata)
+    const updated = await api.configureAgents(sessionId, directory, configuration, config?.revision ?? 0, main, unifiedNativeSessionState(current.metadata)?.revision)
+    assertSessionActionRuntimeCurrent(runtime)
+    const global = useGlobalSessionsStore.getState().entityById.get(updated.id)
+    if (global && shouldSkipStaleSessionEvent(global, updated)) return global
+    useGlobalSessionsStore.getState().upsertSession(updated)
+    const held = getDirectoryState(directory)?.session.find((session) => session.id === updated.id)
+    if (held && shouldSkipStaleSessionEvent(held, updated)) return held
+    mirrorSessionIntoLiveStores(updated, directory)
+    return updated
+  })
+  nativeSelectionWrites.set(key, run)
+  run.finally(() => { if (nativeSelectionWrites.get(key) === run) nativeSelectionWrites.delete(key) }).catch(() => undefined)
+  return run
+}
+
 /** Persist a next-turn selection without changing the executing native source. */
-export function selectNativeConversationModel(sessionId: string, directory: string, selection: NativeSessionSelection): Promise<Session> {
+export function selectNativeConversationModel(sessionId: string, directory: string, selection: NativeSessionSelection, clearCombination = false): Promise<Session> {
   const runtimeContext = captureSessionActionRuntime()
   const key = JSON.stringify([runtimeContext.runtimeKey, directory, sessionId])
   const previous = nativeSelectionWrites.get(key)
@@ -1197,9 +1234,15 @@ export function selectNativeConversationModel(sessionId: string, directory: stri
     assertSessionActionRuntimeCurrent(runtimeContext)
     const state = unifiedNativeSessionState(current.metadata)
     if (!state) throw new NativeAgentsUnsupportedError()
-    if (current.model?.providerID === selection.model.providerID && current.model.id === selection.model.modelID
-      && current.model.variant === selection.variant && current.agent === selection.agent) return current
-    const updated = await api.selectModel(sessionId, directory, selection, state.revision)
+    const configuration = nativeAgentConfigurationOf(current.metadata)
+    let updated: Session
+    if (clearCombination && configuration?.combination) {
+      updated = await api.configureAgents(sessionId, directory, { subagent: configuration.subagent, execution: configuration.execution }, configuration.revision, selection, state.revision)
+    } else {
+      if (current.model?.providerID === selection.model.providerID && current.model.id === selection.model.modelID
+        && current.model.variant === selection.variant && current.agent === selection.agent) return current
+      updated = await api.selectModel(sessionId, directory, selection, state.revision)
+    }
     assertSessionActionRuntimeCurrent(runtimeContext)
     const global = useGlobalSessionsStore.getState().entityById.get(updated.id)
     if (!global || !shouldSkipStaleSessionEvent(global, updated)) useGlobalSessionsStore.getState().upsertSession(updated)
@@ -1239,7 +1282,7 @@ async function deleteSessionRemotely(sessionId: string, directory: string | null
  * what the first turn will run on pass it here, so the session is created on
  * that selection and the first prompt needs no switch at all.
  */
-export type SessionCreateSelection = { model?: ModelSelection; agent?: string }
+export type SessionCreateSelection = { model?: ModelSelection; agent?: string; combinationDraft?: AgentCombinationDraftSnapshot }
 
 export async function createSession(
   title?: string,
@@ -2966,10 +3009,58 @@ export async function replyToForm(
   sessionId: string,
   formId: string,
   answer: FormAnswer,
+  execution?: import('@/lib/api/types').NativePlanExecutionChoice,
 ): Promise<void> {
   if (!isNativeSessionId(sessionId)) await waitForConnectionOrThrow()
   if (isNativeSessionId(sessionId)) {
-    await settleNativeQuestion(sessionId, formId, () => requireNativeAgents().replyQuestion(formId, nativeQuestionAnswers(answer)))
+    const runtime = execution ? captureSessionActionRuntime() : null
+    const selections = useSelectionStore.getState()
+    const previous = selections.getSessionModelSelection(sessionId)
+    const previousAgent = selections.getSessionAgentSelection(sessionId)
+    const configBefore = useConfigStore.getState()
+    const previousConfig = { provider: configBefore.currentProviderId, model: configBefore.currentModelId, variant: configBefore.currentVariant }
+    const directory = execution ? getRequestReplyDirectory('form', sessionId, formId) : undefined
+    const answers = nativeQuestionAnswers(answer)
+    await settleNativeQuestion(sessionId, formId, () => execution
+      ? requireNativeAgents().replyQuestion(formId, answers, execution)
+      : requireNativeAgents().replyQuestion(formId, answers))
+    if (execution?.expectedRevision !== undefined && directory && runtime && isSessionActionRuntimeCurrent(runtime)) {
+      try {
+        const updated = await requireNativeAgents().getSession(sessionId, directory)
+        if (isSessionActionRuntimeCurrent(runtime)) {
+          const global = useGlobalSessionsStore.getState().entityById.get(updated.id)
+          if (!global || !shouldSkipStaleSessionEvent(global, updated)) useGlobalSessionsStore.getState().upsertSession(updated)
+          const held = getDirectoryState(directory)?.session.find((session) => session.id === updated.id)
+          if (!held || !shouldSkipStaleSessionEvent(held, updated)) mirrorSessionIntoLiveStores(updated, directory)
+        }
+      } catch {
+        // Approval was accepted; live session state can reconcile a failed read.
+      }
+    }
+    if (execution && runtime && isSessionActionRuntimeCurrent(runtime)) {
+      const current = useSelectionStore.getState()
+      const now = current.getSessionModelSelection(sessionId)
+      const source = (directory ? getDirectoryState(directory)?.session.find((session) => session.id === sessionId) : undefined)
+        ?? useGlobalSessionsStore.getState().entityById.get(sessionId)
+      const unified = unifiedNativeSessionState(source?.metadata)
+      const newerChoice = unified && execution.expectedRevision !== undefined && unified.revision > execution.expectedRevision
+        && (source?.model?.providerID !== execution.model.providerID || source.model.id !== execution.model.modelID || source.model.variant !== execution.variant)
+      if (!newerChoice && previous?.providerId === now?.providerId && previous?.modelId === now?.modelId
+        && previousAgent === current.getSessionAgentSelection(sessionId)) {
+        current.saveSessionModelSelection(sessionId, execution.model.providerID, execution.model.modelID)
+        current.saveSessionAgentSelection(sessionId, 'build')
+        current.saveAgentModelForSession(sessionId, 'build', execution.model.providerID, execution.model.modelID)
+        current.saveAgentModelVariantForSession(sessionId, 'build', execution.model.providerID, execution.model.modelID, execution.variant ?? null)
+        const config = useConfigStore.getState()
+        if (useSessionUIStore.getState().currentSessionId === sessionId && config.currentProviderId === previousConfig.provider
+          && config.currentModelId === previousConfig.model && config.currentVariant === previousConfig.variant) {
+          config.setProvider(execution.model.providerID)
+          config.setModel(execution.model.modelID)
+          config.setAgent('build', { keepModel: true })
+          config.setCurrentVariantOverride(execution.variant ?? null, execution.variant)
+        }
+      }
+    }
     return
   }
   const directory = getRequestReplyDirectory("form", sessionId, formId)

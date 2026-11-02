@@ -13,7 +13,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-const setup = async ({ decorateSession = async (session) => session } = {}) => {
+const setup = async ({ decorateSession = async (session) => session, commandPrefix = [], quotaFailure = '' } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-test-'));
   let conversationId = null;
   let unauthenticated = false;
@@ -27,9 +27,11 @@ const setup = async ({ decorateSession = async (session) => session } = {}) => {
   const events = [];
   const registry = createNativeRegistry({ filePath: path.join(root, 'registry.json') });
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
+  const resolveCommand = vi.fn(async () => ({ executable, argsPrefix: commandPrefix }));
   const backend = createAntigravityBackend({
     resolveExecutable: async () => executable,
-    buildEnv: () => ({ ...process.env, AGY_FIXTURE_HOME: home, AGY_FIXTURE_UNAUTHENTICATED: unauthenticated ? '1' : '0', ...(conversationId ? { AGY_FIXTURE_CONVERSATION_ID: conversationId } : {}) }),
+    resolveCommand,
+    buildEnv: () => ({ ...process.env, AGY_FIXTURE_HOME: home, AGY_FIXTURE_QUOTA_FAILURE: quotaFailure, AGY_FIXTURE_UNAUTHENTICATED: unauthenticated ? '1' : '0', ...(conversationId ? { AGY_FIXTURE_CONVERSATION_ID: conversationId } : {}) }),
     registry,
     publisher,
     readGlobalInstructions: async () => 'GLOBAL FIXTURE RULES',
@@ -51,10 +53,44 @@ const setup = async ({ decorateSession = async (session) => session } = {}) => {
     await backend.whenIdle(session.id);
     return messageID;
   };
-  return { backend, directory, events, registry, prompt, setConversationId: (value) => { conversationId = value; }, setUnauthenticated: () => { unauthenticated = true; } };
+  return { backend, directory, home, events, registry, prompt, resolveCommand, setConversationId: (value) => { conversationId = value; }, setUnauthenticated: () => { unauthenticated = true; } };
 };
 
 describe('Antigravity CLI adapter', () => {
+  it('discovers only built-in models while preserving direct custom model prompts', async () => {
+    const { backend, directory, prompt } = await setup();
+    expect((await backend.catalog()).map((model) => model.id)).toEqual(['gemini-test']);
+    const session = await backend.createSession({ directory });
+    await prompt(session, 'mode-probe', 'magpie/antigravity/gemini-test');
+    expect(JSON.parse(backend.liveRecords(session.id).at(-1).parts[0].text).model).toBe('magpie/antigravity/gemini-test');
+  });
+
+  it('retires an idle process and resumes the same saved conversation on a new process', async () => {
+    const { backend, directory, prompt } = await setup();
+    const session = await backend.createSession({ directory });
+    await prompt(session, 'mode-probe');
+    const first = JSON.parse(backend.liveRecords(session.id).at(-1).parts[0].text);
+    await backend.closeSession(session.id);
+    expect(() => process.kill(first.pid, 0)).toThrow();
+    await prompt(session, 'mode-probe');
+    const second = JSON.parse(backend.liveRecords(session.id).at(-1).parts[0].text);
+    expect(second.pid).not.toBe(first.pid);
+    expect(second.resumed).toBe(session.id.slice(4));
+    expect((await backend.loadHistory(session.id, directory)).records.filter((record) => record.info.role === 'user')).toHaveLength(2);
+  });
+
+  it('refuses to retire a running source and reports startup refusals as definite non-delivery', async () => {
+    const { backend, directory } = await setup();
+    const session = await backend.createSession({ directory });
+    const request = { directory, messageID: `nag_u_${randomUUID()}`, parts: [{ type: 'text', text: 'stop-me' }],
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, agent: 'build' };
+    await backend.prompt(session.id, request);
+    await expect(backend.closeSession(session.id)).rejects.toMatchObject({ code: 'NATIVE_SESSION_BUSY' });
+    await backend.abort(session.id);
+    await expect(backend.prompt(session.id, { ...request, model: { ...request.model, modelID: 'invalid-model' } }))
+      .rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_ERROR' });
+  });
+
   it('serializes first admissions after a restart before a process has been restored', async () => {
     const { backend, directory, prompt } = await setup();
     const session = await backend.createSession({ directory });
@@ -221,6 +257,41 @@ describe('Antigravity CLI adapter', () => {
   it('reads quota through an independent CLI report without creating a conversation', async () => {
     const { backend, directory } = await setup();
     expect(await backend.quota()).toMatchObject({ ok: true, configured: true, usage: { models: { gemini: { windows: { weekly: { remainingPercent: 97 } } } } } });
+    expect(await backend.listRootSessions(directory)).toEqual([]);
+  });
+
+  it('reads native quota with gateway settings while discovery and chat keep the shell wrapper', async () => {
+    const gatewayModel = 'magpie/antigravity/gemini-test';
+    const { backend, directory, home, prompt, resolveCommand } = await setup({ commandPrefix: ['--model', gatewayModel] });
+    const settingsFile = path.join(home, 'settings.json');
+    const settings = `${JSON.stringify({ modelProvider: 'gemini', model: gatewayModel })}\n`;
+    fs.writeFileSync(settingsFile, settings);
+
+    expect(await backend.quota()).toMatchObject({
+      ok: true, configured: true,
+      usage: { models: { gemini: { windows: { weekly: { remainingPercent: 97 } } }, 'claude-gpt': { windows: { '5h': { remainingPercent: 75 } } } } },
+    });
+    expect(resolveCommand).not.toHaveBeenCalled();
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(settings);
+    expect(await backend.listRootSessions(directory)).toEqual([]);
+    expect(fs.existsSync(path.join(home, 'brain'))).toBe(false);
+
+    expect(await backend.catalog()).toHaveLength(1);
+    const session = await backend.createSession({ directory });
+    await prompt(session, 'mode-probe');
+    expect(JSON.parse(backend.liveRecords(session.id).at(-1).parts[0].text).model).toBe(gatewayModel);
+    expect(resolveCommand).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(settings);
+  });
+
+  it.each([
+    ['unsupported-settings', 'flag provided but not defined: -settings'],
+    ['unauthenticated', 'Antigravity authentication failed. Run `agy` on the server and sign in, then retry.'],
+    ['empty', 'Antigravity reported no quota data'],
+  ])('reports native quota failure %s without invoking the shell wrapper', async (quotaFailure, error) => {
+    const { backend, directory, resolveCommand } = await setup({ quotaFailure });
+    expect(await backend.quota()).toMatchObject({ ok: false, configured: true, usage: null, error });
+    expect(resolveCommand).not.toHaveBeenCalled();
     expect(await backend.listRootSessions(directory)).toEqual([]);
   });
 

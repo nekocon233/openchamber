@@ -4,20 +4,21 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import { NativeAgentError, sessionNotFoundError } from '../errors.js';
+import { decodeNativeSessionId, nativeBackendSchema, nativeProviderSchema } from '../ids.js';
+import { agentConfigurationSchema } from '../agent-configuration.js';
 
 const conversationId = z.string().regex(/^ncv_[0-9a-f-]{36}$/);
-const backend = z.enum(['claude', 'codex', 'deepseek']);
 export const conversationSelectionSchema = z.object({
-  model: z.object({ providerID: z.enum(['claude-native', 'codex-native', 'deepseek-native']), modelID: z.string().min(1) }),
+  model: z.object({ providerID: nativeProviderSchema, modelID: z.string().min(1) }),
   variant: z.string().min(1).optional(),
   agent: z.enum(['build', 'plan']),
 }).strict();
 
 const segmentSchema = z.object({
   id: z.string().uuid(),
-  sessionId: z.string().regex(/^(?:nc[lx]|ndh)_/),
+  sessionId: z.string().refine((id) => decodeNativeSessionId(id) !== null),
   ownerId: conversationId,
-  backend,
+  backend: nativeBackendSchema,
   createdAt: z.number(),
   timeOffset: z.number().optional(),
   through: z.string().optional(),
@@ -30,7 +31,7 @@ const segmentSchema = z.object({
     fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
     selection: conversationSelectionSchema,
   })),
-});
+}).refine((segment) => decodeNativeSessionId(segment.sessionId)?.backend === segment.backend, 'The native source must match its backend');
 
 const checkpointSchema = z.object({ through: z.string(), revision: z.number(), text: z.string() });
 const rollbackSchema = z.object({
@@ -43,6 +44,7 @@ const manifestSchema = z.object({
   directory: z.string().min(1),
   title: z.string().min(1),
   manualTitle: z.boolean().default(false),
+  generatedTitle: z.literal(true).optional(),
   parentID: conversationId.optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
@@ -52,6 +54,8 @@ const manifestSchema = z.object({
   historyRevision: z.number().int().nonnegative(),
   selection: conversationSelectionSchema,
   metadata: z.record(z.string(), z.json()),
+  agents: agentConfigurationSchema.optional(),
+  delegation: z.object({ parentID: z.string().min(1), jobID: z.string().uuid() }).optional(),
   segments: z.array(segmentSchema),
   active: z.string().uuid().nullable(),
   cut: z.string().optional(),

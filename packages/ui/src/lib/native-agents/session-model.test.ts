@@ -24,11 +24,11 @@ describe('modelForSessionKind', () => {
       .toEqual({ providerId: 'claude-native', modelId: 'opus' });
   });
 
-  test('moves a unified session away from Antigravity, which has no unified manifest', () => {
+  test('keeps Antigravity selected in a unified session', () => {
     expect(modelForSessionKind({
       sessionId: 'ncv_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
       selectedProviderId: 'antigravity-native', providers, defaultModel: undefined,
-    })).toEqual({ providerId: 'claude-native', modelId: 'opus' });
+    })).toBeNull();
   });
 
   test('moves an OpenCode session off a native model, preferring the default from settings', () => {

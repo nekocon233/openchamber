@@ -21,6 +21,7 @@ import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/auto
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
 
 interface ModelSelectorProps {
+    disabled?: boolean;
     providerId: string;
     modelId: string;
     onChange: (providerId: string, modelId: string) => void;
@@ -52,6 +53,7 @@ interface ModelSelectorProps {
 }
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
+    disabled = false,
     providerId,
     modelId,
     onChange,
@@ -72,9 +74,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         ? { kind: 'auto', providerID: AUTO_PROVIDER_ID, modelID: AUTO_MODEL_ID, model: { id: AUTO_MODEL_ID, name: t('chat.modelControls.autoModel') } }
         : null), [autoReady, offerAuto, t]);
     const isAutoSelected = isAutoModel(providerId, modelId);
-    const { isReady, isUnavailable } = useOpenCodeReadiness('models', directory);
+    const { isReady: openCodeReady, isUnavailable } = useOpenCodeReadiness('models', directory);
     const providers: ModelPickerProvider[] = useConfigStore((state) => directory === undefined
         ? state.providers : selectProvidersForDirectory(state, directory));
+    const nativeReady = allowNativeModels && Boolean(allowedProviderIds?.length)
+        && allowedProviderIds?.every(isNativeProviderId)
+        && providers.some((provider) => allowedProviderIds?.includes(provider.id) && (provider.models?.length ?? 0) > 0);
+    const isReady = !disabled && (openCodeReady || nativeReady);
     const loadProviders = useConfigStore((state) => state.loadProviders);
     React.useEffect(() => {
         if (directory !== undefined) void loadProviders({ directory });
@@ -213,7 +219,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
     return (
         <DropdownMenu open={isReady && isDropdownOpen} onOpenChange={isReady ? setIsDropdownOpen : undefined}>
-            <DropdownMenuTrigger asChild nativeButton={false}>
+            <DropdownMenuTrigger asChild nativeButton={false} disabled={!isReady}>
                 <div
                     className={cn(
                         dropdownTriggerVariants(),

@@ -1,4 +1,5 @@
 import type { NativePromptPart, NativePromptRequest } from "@/lib/api/types"
+import type { NativeAgentModel } from '@/lib/native-agents/combinations'
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { createNativeUserMessageId, createUnifiedUserMessageId, isUnifiedNativeSessionId, isNativeUserMessageIdFor, nativeBackendOfProviderId, nativeBackendOfSessionId } from "@/lib/native-agents/ids"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
@@ -53,6 +54,7 @@ export const nativeAgentOf = (agent: string | undefined): NativePromptRequest["a
 
 /** The prompt a native session receives for a composer or feature send. */
 export const nativePromptRequest = (send: {
+  subagentModel?: NativeAgentModel | null
   directory: string
   messageID: string
   content: string
@@ -67,7 +69,7 @@ export const nativePromptRequest = (send: {
   if (nativeBackendOfProviderId(send.providerID) === 'antigravity' && send.agent !== undefined && send.agent !== 'build' && send.agent !== 'plan') {
     throw new NativeAgentsRequestError(formatMessage(useI18nStore.getState().dictionary, 'chat.modelControls.nativeAgentUnsupported'), 400, 'NATIVE_INVALID_REQUEST')
   }
-  return {
+  const request: NativePromptRequest = {
     directory: send.directory,
     messageID: send.messageID,
     parts: nativePromptParts(send.content, send.files, send.additionalParts),
@@ -77,6 +79,8 @@ export const nativePromptRequest = (send: {
     preserveSelection: send.preserveSelection,
     instructions: nativePromptInstructions(send.additionalParts),
   }
+  if (send.subagentModel !== undefined) request.subagentModel = send.subagentModel
+  return request
 }
 
 /**

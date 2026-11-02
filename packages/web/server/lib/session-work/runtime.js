@@ -20,6 +20,7 @@ import path from 'path';
 import { OpenCode } from '@opencode/client';
 import { z } from 'zod';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { mergeMetadataPatch } from '../openchamber-sessions/session-metadata-store.js';
 import { loadAssistContext } from '../session-assist/context.js';
 import { turnsToHistory, excerptHead, excerptHeadTail } from '../routing/history.js';
 import { buildTurnEndRequest, decideAssist, decideReviewReady, decideWrapUp } from './questions.js';
@@ -171,6 +172,19 @@ export function createSessionWorkRuntime({
     return session;
   };
 
+  // The native runtime owns its own metadata store. Read the current metadata,
+  // apply the same JSON merge patch the OpenCode store applies, and write the
+  // full record so assist, goal and work fields written meanwhile survive.
+  const writeMetadataPatch = async (sessionId, directory, change) => {
+    if (!isNativeSession(sessionId)) return updateMetadata(sessionId, change, { directory });
+    const current = (await readSessionMetadata(sessionId, directory)) ?? {};
+    const patch = change(current);
+    if (!patch) return { metadata: current, changed: false };
+    const metadata = mergeMetadataPatch(current, patch);
+    await nativeSessions.updateSession(sessionId, directory, { metadata });
+    return { metadata, changed: true };
+  };
+
   const markSuggested = (sessionId, directory) => {
     suggested.delete(sessionId);
     suggested.set(sessionId, directory);
@@ -205,7 +219,7 @@ export function createSessionWorkRuntime({
     if (!suggested.has(sessionId)) return;
     const directory = suggested.get(sessionId);
     suggested.delete(sessionId);
-    Promise.resolve(updateMetadata(sessionId, clearSuggestionPatch, { directory }))
+    Promise.resolve(writeMetadataPatch(sessionId, directory, clearSuggestionPatch))
       .catch((error) => console.warn('[session-work] could not retire a hint:', errorMessage(error)));
   };
 
@@ -261,17 +275,27 @@ export function createSessionWorkRuntime({
       const endpoint = await classifierEndpoint();
       if (!endpoint) return null;
       const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
-      const client = openCodeClient(directory);
-      const session = await eligibleSession(client, sessionId, signal);
+      const native = isNativeSession(sessionId);
+      const client = native ? null : openCodeClient(directory);
+      const session = native
+        ? await readEligibleNativeSession(sessionId, directory)
+        : await eligibleSession(client, sessionId, signal);
       if (!session || session.revert?.messageID) return null;
-      const work = settings.enabled ? readWork(await readMetadata(sessionId, directory)) : null;
+      const work = settings.enabled ? readWork(await readSessionMetadata(sessionId, directory)) : null;
       const ask = {
         wrapUp: settings.enabled && work?.state === 'open',
         reviewReady: settings.reviewOffer,
         recap: assist.recap,
         nextStep: assist.suggestion,
       };
-      const context = await loadAssistContext({ readPage: readPages(client, sessionId, signal), signal });
+      const readPage = native
+        ? async ({ limit, cursor }) => {
+            signal.throwIfAborted();
+            const page = await nativeSessions.loadMessages(sessionId, directory, { limit, before: cursor });
+            return { records: page.records, cursor: page.cursor };
+          }
+        : readPages(client, sessionId, signal);
+      const context = await loadAssistContext({ readPage, signal, native });
       if (!context) return null;
       const turn = context.turns.at(-1);
       const request = buildTurnEndRequest({
@@ -290,10 +314,10 @@ export function createSessionWorkRuntime({
       if (suggest) {
         // Decided at write time: a turn that started while Jev was answering
         // makes this answer about an older turn.
-        const { changed } = await updateMetadata(
+        const { changed } = await writeMetadataPatch(
           sessionId,
+          directory,
           (metadata) => (turnGeneration(sessionId) === generation ? suggest(metadata, { now: now() }) : null),
-          { directory },
         );
         if (changed) markSuggested(sessionId, directory);
       }

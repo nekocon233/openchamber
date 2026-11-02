@@ -5,7 +5,9 @@
 import { z } from 'zod';
 import type { Session } from '@/lib/opencode/model';
 
-export type NativeBackend = 'claude' | 'codex' | 'deepseek' | 'antigravity';
+export const nativeBackendSchema = z.enum(['claude', 'codex', 'deepseek', 'antigravity']);
+export type NativeBackend = z.infer<typeof nativeBackendSchema>;
+export const NATIVE_BACKENDS = nativeBackendSchema.options;
 export type NativeSessionPartition = NativeBackend | 'unified';
 
 export const isUnifiedNativeSessionId = (sessionId: string): boolean => /^ncv_[0-9a-f-]{36}$/.test(sessionId);
@@ -26,7 +28,8 @@ export const isNativeSessionId = (sessionId: string): boolean => /^(?:nc[lxv]|nd
 
 const unifiedStateSchema = z.object({ openchamber: z.object({ native: z.object({
   kind: z.literal('unified'),
-  backend: z.enum(['claude', 'codex', 'deepseek']),
+  backend: nativeBackendSchema,
+  unifiedBackends: z.array(nativeBackendSchema).optional(),
   revision: z.number().int().nonnegative(),
   recordRevision: z.number().int().nonnegative().default(0),
   historyRevision: z.number().int().nonnegative(),
@@ -69,16 +72,14 @@ export const nativeProviderIdOf = (backend: NativeBackend): string => (
 );
 
 /**
- * Unified conversations offer the CLIs supported by the existing manifest.
+ * Unified conversations offer every native CLI.
  * Single-CLI sessions offer their own backend, and OpenCode sessions offer
  * OpenCode providers. A draft offers every provider because the selected model
  * determines its session kind.
  */
 export const isProviderPickableForSession = (sessionId: string | null, providerId: string): boolean => {
   if (!sessionId) return true;
-  // Antigravity has single-CLI sessions only. Unified manifests predate it and
-  // cannot select or switch to it.
-  if (isUnifiedNativeSessionId(sessionId)) return providerId !== NATIVE_PROVIDER_ANTIGRAVITY && isNativeProviderId(providerId);
+  if (isUnifiedNativeSessionId(sessionId)) return isNativeProviderId(providerId);
   const backend = nativeBackendOfSessionId(sessionId);
   return backend ? nativeBackendOfProviderId(providerId) === backend : !isNativeProviderId(providerId);
 };

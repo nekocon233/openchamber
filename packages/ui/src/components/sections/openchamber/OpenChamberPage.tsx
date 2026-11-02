@@ -6,6 +6,7 @@ import { SessionWorkSettings } from './SessionWorkSettings';
 import { PasskeySettings } from './PasskeySettings';
 import { AppLinkSecuritySettings } from './AppLinkSecuritySettings';
 import { DefaultsSettings } from './DefaultsSettings';
+import { AgentCombinationsSettings } from './AgentCombinationsSettings';
 import { OpenCodeCliSettings } from './OpenCodeCliSettings';
 import { EnvironmentVariablesSettings } from './EnvironmentVariablesSettings';
 import { IsolatedSpacesSettings } from './IsolatedSpacesSettings';
@@ -13,9 +14,10 @@ import { ISOLATED_SPACES_RELEASED } from '@/lib/spaces/release';
 import { OpenChamberToolsSettings } from './OpenChamberToolsSettings';
 import { DesktopNetworkSettings } from './DesktopNetworkSettings';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
+import { SETTINGS_DESCRIPTION_CLASS } from '@/components/sections/shared/SettingsSection';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { useDeviceInfo } from '@/lib/device';
-import { isDesktopLocalOriginActive, isDesktopShell, isHostLocalOriginActive, isVSCodeRuntime, isWebRuntime } from '@/lib/desktop';
+import { isDesktopLocalOriginActive, isDesktopShell, isVSCodeRuntime, isWebRuntime } from '@/lib/desktop';
 import { isCapacitorApp } from '@/lib/platform';
 import { useI18n } from '@/lib/i18n';
 import { subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
@@ -58,6 +60,7 @@ export const OpenChamberPage: React.FC<OpenChamberPageProps> = ({ section }) => 
             <SettingsPageLayout showSaveStatus className="openchamber-page-body space-y-3 sm:space-y-6">
                 <OpenChamberVisualSettings />
                 <DefaultsSettings key={runtimeEndpointEpoch} />
+                {!isVSCode && <AgentCombinationsSettings />}
                 <SessionWorkSettings />
                 {showDesktopNetworkSettings && <DesktopNetworkSettings />}
                 {!isVSCode && <OpenCodeCliSettings />}
@@ -137,7 +140,9 @@ export const OpenChamberPage: React.FC<OpenChamberPageProps> = ({ section }) => 
     return (
         <SettingsPageLayout
             title={pageTitle}
-            description={pageDescription}
+            description={section === 'tunnel' ? (
+                <p data-settings-item="tunnel.overview" className={SETTINGS_DESCRIPTION_CLASS}>{pageDescription}</p>
+            ) : pageDescription}
             showSaveStatus
             className="openchamber-page-body"
         >
@@ -258,6 +263,7 @@ const SessionsSectionContent: React.FC<{ runtimeEndpointEpoch: number }> = ({ ru
     return (
         <>
             <DefaultsSettings key={runtimeEndpointEpoch} />
+            {!isVSCodeRuntime() && <AgentCombinationsSettings />}
             <SessionWorkSettings />
             <SessionRetentionSettings />
             {!isVSCodeRuntime() && <MergedWorktreeCleanupSettings />}
@@ -292,9 +298,4 @@ const SpacesSectionContent: React.FC = () => {
     return <IsolatedSpacesSettings />;
 };
 
-const TunnelSectionContent: React.FC = () => {
-    if (isVSCodeRuntime() || !isHostLocalOriginActive()) {
-        return null;
-    }
-    return wrapLazySection(<TunnelSettings />);
-};
+const TunnelSectionContent: React.FC = () => wrapLazySection(<TunnelSettings />);

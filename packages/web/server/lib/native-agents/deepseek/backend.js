@@ -6,12 +6,13 @@ import { z } from 'zod';
 
 import { NativeAgentError, invalidRequestError, sessionNotFoundError } from '../errors.js';
 import { encodeDeepseekSessionId, isNativeClientUserMessageId } from '../ids.js';
-import { withInstructions } from '../prompt-parts.js';
+import { isInstructionsBlock, withInstructions } from '../prompt-parts.js';
 import { buildSessionRecord, unknownError } from '../records.js';
 import { createDeepseekProjection } from './projector.js';
 import * as wire from './protocol.js';
 import { createDeepseekTransport } from './transport.js';
 import { createDeepseekConfiguration } from './configuration.js';
+import { preferOfficialDeepSeek } from './catalog.js';
 import { appendDeepseekBranch, initialDeepseekHistory, deepseekIdentityScope, deepseekHistoryCursor, deepseekCursorPosition } from './history.js';
 import { deepseekChecklistSnapshot, readDeepseekChecklist } from './checklist.js';
 
@@ -33,6 +34,7 @@ const deepseekUnsupported = () => new NativeAgentError('DeepSeek Harness does no
 });
 
 export const createDeepseekBackend = ({
+  toolConfiguration = () => null,
   resolveExecutable, buildEnv, registry, publisher, questions, readGlobalInstructions, now = Date.now,
   resolveNodeExecutable, reverts = null, memory = null, maintenance = null,
   decorateSession = async (session) => session,
@@ -78,6 +80,16 @@ export const createDeepseekBackend = ({
     const branch = histories.get(id)?.branches.find((branch) => branch.nativeId === source.nativeId);
     return createDeepseekProjection({ sessionId: id, directory: source.directory, publisher: publish ? publisher : null,
       identityScope: branch ? (seq) => deepseekIdentityScope(branch, seq) : () => id });
+  };
+  const isHumanUserEvent = (event) => event.type === 'user/message' && event.data?.source?.kind === 'user';
+  const isAssistantStepEvent = (event) => event.type === 'assistant/message' || event.type === 'tool/call';
+  const isSessionContextEvent = (event) => event.type === 'model/selection' || event.type === 'request/context' || event.type === 'plan/mode';
+  const alignTurnEvents = (events, hasMore) => {
+    if (!hasMore) return events;
+    const firstUserIndex = events.findIndex(isHumanUserEvent);
+    if (firstUserIndex < 0) return events.filter(isSessionContextEvent);
+    if (firstUserIndex === 0) return events;
+    return events.filter((event, index) => index >= firstUserIndex || isSessionContextEvent(event));
   };
   // A DSH event this build cannot read must not make the session unreadable and
   // unsendable. Skip that event, keep every other one, and report it once per
@@ -197,6 +209,7 @@ export const createDeepseekBackend = ({
     if (plan) input.kind = 'deepseek-plan-exit';
     input.onReply = async (outcome) => {
       if (controller.signal.aborted) return;
+      if (outcome.status === 'transferred') return;
       let accepted;
       if (outcome.status === 'replied') {
         await applyPermissions(id, nativeId);
@@ -210,9 +223,13 @@ export const createDeepseekBackend = ({
         throw new NativeAgentError('The DeepSeek Harness question is no longer pending', { status: 404, code: 'NATIVE_QUESTION_NOT_FOUND' });
       }
     };
-    void questions.ask(input).catch(() => {
+    const forget = () => { if (pending.get(identity)?.controller === controller) pending.delete(identity); };
+    void questions.ask(input).then((outcome) => {
+      if (outcome.status !== 'transferred') forget();
+    }, () => {
       publisher.error(summary.cwd, id, unknownError('Could not deliver the answer to DeepSeek Harness'));
-    }).finally(() => { if (pending.get(identity)?.controller === controller) pending.delete(identity); });
+      forget();
+    });
     return true;
   };
 
@@ -441,7 +458,7 @@ export const createDeepseekBackend = ({
   const follow = async (id, directory) => {
     const existing = followers.get(id);
     if (existing) {
-      if (existing.events.length <= 1000 || summaries.get(id)?.running || existing.attemptId || existing.ownedTurns.size || managedTurns.get(id)?.size) { await existing.ready; return existing; }
+      if (existing.events.length <= Math.max(1000, (existing.baselineLength ?? 0) + 500) || summaries.get(id)?.running || existing.attemptId || existing.ownedTurns.size || managedTurns.get(id)?.size) { await existing.ready; return existing; }
       existing.handle?.cancel();
       followers.delete(id);
       publisher.forget(id);
@@ -454,35 +471,14 @@ export const createDeepseekBackend = ({
       const idle = Array.from(followers).find(([sessionId, state]) => !summaries.get(sessionId)?.running && !state.attemptId && !state.ownedTurns.size && !managedTurns.get(sessionId)?.size);
       if (idle) { idle[1].handle?.cancel(); followers.delete(idle[0]); publisher.forget(idle[0]); }
     }
-    const state = { ...source, events: [], staged: [], projection: projectionFor(id, source, true), cursor: -1, hasMore: false, attemptId: null, nextIndex: 0, currentTurn: null, ownedTurns: new Set() };
+    const state = { ...source, events: [], baselineLength: 0, staged: [], projection: projectionFor(id, source, true), cursor: -1, hasMore: false, attemptId: null, nextIndex: 0, currentTurn: null, ownedTurns: new Set() };
     followers.set(id, state);
     state.ready = (async () => {
-      const handle = await transport.open('session/follow', { request: {
-        address: { kind: 'session', sessionId: source.nativeId }, assistantStream: true, maxMessages: 100,
-        turnWindow: { minMessages: 50, minTurns: 2 },
-      } }, (raw) => {
-        const frame = wire.followFrame.parse(raw);
-        if (frame.type === 'snapshot') {
-          if (frame.header.id !== source.nativeId) throw new Error('DeepSeek Harness returned another session');
-          state.events = frame.records.map((record) => record.event);
-          state.createdAt = frame.header.createdAt;
-          state.cursor = frame.cursor;
-          state.hasMore = frame.hasMore;
-          const activeAttempt = frame.assistantStream?.activeAttempt;
-          for (const event of state.events) {
-            const turn = turnIdentity.safeParse(event.data).data?.turn;
-            if (turn !== undefined) state.currentTurn = turn;
-            if (event.type === 'user/message' && managedTurns.get(id)?.has(event.data.source?.rpcId) && state.currentTurn !== null) state.ownedTurns.add(state.currentTurn);
-            if (event.type === 'turn/end') state.ownedTurns.delete(turn);
-            if (activeAttempt && event.seq > activeAttempt.startedAfterSeq && ['assistant/message', 'assistant/attempt'].includes(event.type)) state.staged.push(event);
-            else if (state.staged.length > 0) state.staged.push(event);
-            else applyProjected(id, source.directory, state.projection, event);
-          }
-          state.projection.restoreStream(frame.assistantStream);
-          state.attemptId = frame.assistantStream?.activeAttempt?.attemptId ?? null;
-          state.nextIndex = frame.assistantStream?.activeAttempt?.nextIndex ?? 0;
-          for (const [name, value] of Object.entries(frame.projections.values)) applyProjection(source.nativeId, name, value, frame.projections.asOfSeq);
-        } else if (frame.type === 'event') {
+      let snapshotFrame = null;
+      let initialized = false;
+      const pendingFrames = [];
+      const handleLiveFrame = (frame) => {
+        if (frame.type === 'event') {
           if (frame.event.seq <= state.cursor) return;
           if (frame.event.seq !== state.cursor + 1) throw new Error('DeepSeek Harness history has a sequence gap');
           state.cursor = frame.event.seq;
@@ -506,10 +502,58 @@ export const createDeepseekBackend = ({
             }
           }
         }
+      };
+      const handle = await transport.open('session/follow', { request: {
+        address: { kind: 'session', sessionId: source.nativeId }, assistantStream: true, maxMessages: 100,
+        turnWindow: { minMessages: 50, minTurns: 2 },
+      } }, (raw) => {
+        const frame = wire.followFrame.parse(raw);
+        if (frame.type === 'snapshot') {
+          if (frame.header.id !== source.nativeId) throw new Error('DeepSeek Harness returned another session');
+          snapshotFrame = frame;
+          state.events = frame.records.map((record) => record.event);
+          state.createdAt = frame.header.createdAt;
+          state.cursor = frame.cursor;
+          state.hasMore = frame.hasMore;
+        } else if (!initialized) {
+          pendingFrames.push(frame);
+        } else {
+          handleLiveFrame(frame);
+        }
       });
       state.handle = handle;
       handle.done.catch(() => { if (followers.get(id) === state) followers.delete(id); });
       await handle.first;
+      if (!snapshotFrame) throw new Error('DeepSeek Harness stream opened without a snapshot');
+      const activeAttempt = snapshotFrame.assistantStream?.activeAttempt;
+      while (state.hasMore && !state.events.some(isHumanUserEvent) && (state.events.some(isAssistantStepEvent) || Boolean(activeAttempt))) {
+        const beforeSeq = state.events[0]?.seq;
+        if (beforeSeq === undefined) break;
+        const page = await transport.request('session/page', { request: {
+          address: { kind: 'session', sessionId: source.nativeId }, throughSeq: snapshotFrame.cursor, beforeSeq,
+          maxMessages: 500, turnWindow: { minMessages: 100, minTurns: 2 },
+        } }, wire.historyPage);
+        const older = page.records.map((record) => record.event);
+        if (!older.length || older[0].seq >= beforeSeq) throw new NativeAgentError('DeepSeek Harness history paging made no progress', { code: 'NATIVE_DEEPSEEK_PROTOCOL', status: 502 });
+        state.events = [...older, ...state.events];
+        state.hasMore = page.hasMore;
+      }
+      state.baselineLength = state.events.length;
+      for (const event of alignTurnEvents(state.events, state.hasMore)) {
+        const turn = turnIdentity.safeParse(event.data).data?.turn;
+        if (turn !== undefined) state.currentTurn = turn;
+        if (event.type === 'user/message' && managedTurns.get(id)?.has(event.data.source?.rpcId) && state.currentTurn !== null) state.ownedTurns.add(state.currentTurn);
+        if (event.type === 'turn/end') state.ownedTurns.delete(turn);
+        if (activeAttempt && event.seq > activeAttempt.startedAfterSeq && ['assistant/message', 'assistant/attempt'].includes(event.type)) state.staged.push(event);
+        else if (state.staged.length > 0) state.staged.push(event);
+        else applyProjected(id, source.directory, state.projection, event);
+      }
+      state.projection.restoreStream(snapshotFrame.assistantStream);
+      state.attemptId = activeAttempt?.attemptId ?? null;
+      state.nextIndex = activeAttempt?.nextIndex ?? 0;
+      for (const [name, value] of Object.entries(snapshotFrame.projections.values)) applyProjection(source.nativeId, name, value, snapshotFrame.projections.asOfSeq);
+      initialized = true;
+      for (const frame of pendingFrames.splice(0)) handleLiveFrame(frame);
     })();
     try { await state.ready; return state; }
     catch (error) { if (followers.get(id) === state) followers.delete(id); throw error; }
@@ -586,6 +630,10 @@ export const createDeepseekBackend = ({
     await turnWork.get(id);
     await reverts?.afterTurn(id);
     memory?.release(id);
+    for (const [identity, entry] of pending) if (entry.nativeId === source.nativeId) {
+      entry.controller.abort();
+      pending.delete(identity);
+    }
   };
 
   const rewindTarget = async (id, messageId, directory) => {
@@ -711,7 +759,7 @@ export const createDeepseekBackend = ({
   const configuration = createDeepseekConfiguration({ transport });
 
   const backend = {
-    configuration,
+    deletionSupport: () => transport.maintenanceState?.() ?? null,
     async checklist(id, directory) {
       await resolve(id, directory);
       const state = await follow(id, directory);
@@ -817,7 +865,7 @@ export const createDeepseekBackend = ({
       // settings do, and a profile that cannot answer leaves them null.
       const limits = await configuration.modelLimits().catch(() => new Map());
       const routable = new Set(catalog.routableProviders);
-      return catalog.groups.filter((group) => routable.has(group.id)).flatMap((group) => group.models.map((model) => ({
+      return preferOfficialDeepSeek(catalog.groups.filter((group) => routable.has(group.id))).flatMap((group) => group.models.map((model) => ({
         id: wire.modelId(group.id, model.id), name: model.name,
         contextWindow: limits.get(model.id)?.contextWindow ?? null,
         outputLimit: limits.get(model.id)?.outputLimit ?? null,
@@ -879,6 +927,7 @@ export const createDeepseekBackend = ({
         let admitted = false;
         try {
           const source = await resolve(id, request.directory);
+          if (transport.configureDelegation) await transport.configureDelegation(source.nativeId, toolConfiguration(id));
           const route = wire.modelRoute(request.model.modelID);
           const model = { sessionId: source.nativeId, ...route };
           if (request.variant) model.reasoningEffort = request.variant;
@@ -890,6 +939,21 @@ export const createDeepseekBackend = ({
           const state = await follow(id, source.directory);
           const duplicate = state.events.some((event) => event.type === 'user/message' && event.data.source?.rpcId === request.messageID);
           const instructions = [await readGlobalInstructions(), request.instructions].filter(Boolean).join('\n\n');
+          // DSH's fallback joins every text block in the first human message.
+          // Name an untitled managed session before appending hidden context.
+          // A logged native title, including a manual rename, remains authoritative.
+          if (!duplicate && source.summary.blank && source.entry?.origin === 'openchamber' && !source.entry.title
+            && (instructions || request.parts.some((part) => part.type === 'text' && isInstructionsBlock(part.text)))
+            && !state.events.some((event) => event.type === 'session/title')) {
+            const visible = request.parts.filter((part) => part.type === 'text' && !isInstructionsBlock(part.text)).map((part) => part.text).join('\n');
+            const words = visible.trim().split(/\s+/u).slice(0, 5).join(' ') || 'DeepSeek Harness';
+            let title = '';
+            for (const character of words) {
+              if (Buffer.byteLength(title + character, 'utf8') > 40) break;
+              title += character;
+            }
+            await transport.request('session/rename', { request: { sessionId: source.nativeId, title } }, z.object({ title: z.string(), seq: z.number() }), signal);
+          }
           const content = await partsFor(source.nativeId, withInstructions(request.parts, instructions || undefined), signal);
           signal?.throwIfAborted();
           if (duplicate) {
@@ -1051,21 +1115,34 @@ export const createDeepseekBackend = ({
         if ((current?.active ?? state.nativeId) !== state.nativeId || (current?.revision ?? 0) !== historyRevision) throw new NativeAgentError('Session history changed while loading. Reload and retry.', { status: 409, code: 'NATIVE_HISTORY_CHANGED' });
       };
       assertCurrentHistory();
+      const projectAligned = (events, hasMore) => {
+        const current = projectionFor(id, state);
+        for (const event of alignTurnEvents(events, hasMore)) applyProjected(id, directory, current, event);
+        return current;
+      };
       let events = state.events;
       let hasMore = state.hasMore;
       let projection = state.projection;
+      let beforeSeq = events[0]?.seq;
       if (before) {
-        let beforeSeq;
         try { beforeSeq = deepseekCursorPosition(id, histories.get(id) ?? initialDeepseekHistory(id, state.nativeId), before); }
         catch { throw invalidRequestError('Unknown DeepSeek Harness message cursor'); }
+        events = [];
+        hasMore = true;
+        projection = projectionFor(id, state);
+      }
+      while (hasMore && projection.records().length < limit && beforeSeq !== undefined) {
         const page = await transport.request('session/page', { request: {
           address: { kind: 'session', sessionId: state.nativeId }, throughSeq: state.cursor, beforeSeq,
           maxMessages: Math.min(500, Math.max(100, limit)), turnWindow: { minMessages: Math.min(100, Math.max(50, limit)), minTurns: 2 },
         } }, wire.historyPage);
-        events = page.records.map((record) => record.event);
+        assertCurrentHistory();
+        const older = page.records.map((record) => record.event);
+        if (!older.length || older[0].seq >= beforeSeq) throw new NativeAgentError('DeepSeek Harness history paging made no progress', { code: 'NATIVE_DEEPSEEK_PROTOCOL', status: 502 });
+        events = [...older, ...events];
         hasMore = page.hasMore;
-        projection = projectionFor(id, state);
-        for (const event of events) applyProjected(id, directory, projection, event);
+        beforeSeq = events[0]?.seq;
+        projection = projectAligned(events, hasMore);
       }
       assertCurrentHistory();
       const records = projection.records();

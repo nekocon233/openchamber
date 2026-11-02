@@ -9,24 +9,26 @@ import { isWindowsShim } from '../executables.js';
 import { isEnterpriseMode } from '../../enterprise-mode.js';
 
 const manifest = z.object({ name: z.literal('@deepseek-ai/dsh'), version: z.literal('0.2.0-rc.2') });
+const hookManifest = z.object({ name: z.literal('@deepseek-ai/dsh'), version: z.enum(['0.2.0-rc.2', '0.2.1-rc.5']) });
 const descriptor = z.object({ root: z.string().min(1), compression: z.enum(['none', 'zstd']) });
 const resultSchema = z.object({ ok: z.boolean(), deleted: z.boolean().optional(), code: z.string().optional(), nativeIds: z.array(z.string()).optional() });
 const failure = (code, status = 503) => new NativeAgentError('DeepSeek Harness session maintenance could not complete. Retry after checking the server installation.', { code, status });
 
 /** Resolve the CLI's own packages; no workspace dependency or user profile edit. */
-export const deepseekPackage = async (executable) => {
+export const deepseekPackage = async (executable, forDelegation = false) => {
+  const schema = forDelegation ? hookManifest : manifest;
   let current = await fs.realpath(executable);
   for (let depth = 0; depth < 5; depth += 1) {
     const candidate = path.join(current, 'package.json');
     try {
-      manifest.parse(JSON.parse(await fs.readFile(candidate, 'utf8')));
+      schema.parse(JSON.parse(await fs.readFile(candidate, 'utf8')));
       return candidate;
     } catch { /* A launcher may live in bin/ or lib/. */ }
     current = path.dirname(current);
   }
   try {
     const candidate = createRequire(executable).resolve('@deepseek-ai/dsh/package.json');
-    manifest.parse(JSON.parse(await fs.readFile(candidate, 'utf8')));
+    schema.parse(JSON.parse(await fs.readFile(candidate, 'utf8')));
     return candidate;
   } catch { return null; }
 };
@@ -74,14 +76,15 @@ export const createDeepseekMaintenance = ({
   return {
     async prepare(executable) {
       allowed();
-      const packageFile = await deepseekPackage(executable);
+      const legacyPackage = await deepseekPackage(executable);
+      const packageFile = legacyPackage ?? await deepseekPackage(executable, true);
       if (!packageFile) return null;
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
       // Recover interrupted deletions before DSH can discover their artifacts.
-      await run({ operation: 'recover', packageFile });
+      if (legacyPackage) await run({ operation: 'recover', packageFile });
       const overlay = path.join(directory, 'overlay.json');
       await fs.writeFile(overlay, JSON.stringify([{ insert: [{ id: 'openchamber-maintenance', name: pathToFileURL(pluginPath).href }] }]), { mode: 0o600 });
-      return { packageFile, overlay };
+      return { packageFile, overlay, maintenance: Boolean(legacyPackage) };
     },
     async remove(config, nativeIds) {
       allowed();

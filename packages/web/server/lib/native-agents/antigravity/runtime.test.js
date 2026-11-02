@@ -31,6 +31,7 @@ const setup = async () => {
   const runtime = createNativeAgentsRuntime({
     dataDir: root,
     resolveExecutable: async (cli) => cli === 'agy' ? executable : null,
+    resolveAntigravityCommand: async () => ({ executable, argsPrefix: [] }),
     buildChildEnv: () => ({ ...process.env, AGY_FIXTURE_HOME: fixtureHome, ...(unauthenticated ? { AGY_FIXTURE_UNAUTHENTICATED: '1' } : {}) }),
     clientVersion: 'test',
     publishNativeEvent: (event) => events.push(event),
@@ -116,12 +117,25 @@ describe('Antigravity native runtime', () => {
     });
   });
 
-  it('rejects unified conversations and unsupported native mutations', async () => {
+  it('accepts unified conversations and rejects unsupported standalone mutations', async () => {
     const { runtime, session, directory } = await setup();
-    await expect(runtime.createSession({
+    const conversation = await runtime.createSession({
       kind: 'unified', backend: 'antigravity', directory,
       selection: { model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' }, agent: 'build' },
-    })).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNIFIED_UNSUPPORTED' });
+    });
+    expect(conversation.id).toMatch(/^ncv_/);
+    const messageID = `ncv_u_${randomUUID()}`;
+    await runtime.prompt(conversation.id, {
+      directory, messageID, parts: [{ type: 'text', text: 'unified hello' }],
+      model: { providerID: 'antigravity-native', modelID: 'gemini-test' }, variant: 'high', agent: 'build',
+    });
+    await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
+    const page = await runtime.loadMessages(conversation.id, directory, { limit: 20 });
+    expect(page.records[0].info.id).toBe(messageID);
+    expect(page.records[1].info.parentID).toBe(messageID);
+    expect((await runtime.getSession(conversation.id, directory)).metadata.openchamber.native).toMatchObject({
+      backend: 'antigravity', actions: { revert: true, fork: true, delete: false, compact: false },
+    });
     const selection = { model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' }, agent: 'build' };
     await expect(runtime.compact(session.id, { directory, ...selection })).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });
     await expect(runtime.revert(session.id, 'nag_u_any', directory)).rejects.toMatchObject({ code: 'NATIVE_ANTIGRAVITY_UNSUPPORTED' });

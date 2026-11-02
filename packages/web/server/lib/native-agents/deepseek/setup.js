@@ -2,7 +2,7 @@ import { isEnterpriseMode } from '../../enterprise-mode.js';
 import { NativeAgentError } from '../errors.js';
 
 /** One shared setup job continues when its initiating browser disconnects. */
-export const createDeepseekSetup = ({ installation, configuration, enterpriseMode = isEnterpriseMode }) => {
+export const createDeepseekSetup = ({ installation, enterpriseMode = isEnterpriseMode }) => {
   let state = { state: 'idle' };
   let job = null;
   let jobController = null;
@@ -20,11 +20,7 @@ export const createDeepseekSetup = ({ installation, configuration, enterpriseMod
       proceed();
       await installation.prepare({ signal: AbortSignal.any([controller.signal, jobController.signal]) });
       proceed();
-      state = { state: 'configuring' };
-      const current = await configuration.read();
-      proceed();
-      // An existing credential is authoritative, including an environment key.
-      state = { state: current.credential.configured ? 'ready' : 'needs-key' };
+      state = { state: 'ready' };
     } catch (error) {
       state = { state: 'error', code: error instanceof NativeAgentError ? error.code : 'NATIVE_DEEPSEEK_SETUP_FAILED' };
     }

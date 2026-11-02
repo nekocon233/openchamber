@@ -62,18 +62,24 @@ manual connect/disconnect path, and the import API remains available to server
 clients even though Settings no longer has an import row.
 
 `native-connections.js` adds only its owned command handlers to Claude's user
-settings and Codex's `hooks.json`. Other configuration and hooks survive connect,
-reconnect and disconnect. Invalid configuration fails without replacing it.
-Codex hooks must pass Codex's own trust review. Installed means configured;
-ready means a hook has successfully reached this backend since enrollment.
-Start or resume the CLI after setup and submit a prompt to verify it.
+settings and Codex's `hooks.json`. Claude Code receives `SessionStart`,
+`UserPromptSubmit` and `Stop`; Codex also receives `Interrupt`, because Claude
+Code ignores every hook event it does not know and reports it on each load. An
+event key disappears once no handler remains under it. Other configuration and
+hooks survive connect, reconnect and disconnect. Invalid configuration fails
+without replacing it. Codex hooks must pass Codex's own trust review. Installed
+means configured; ready means a hook has successfully reached this backend since
+enrollment. Start or resume the CLI after setup and submit a prompt to verify it.
 
 `native-hook.js` implements the native JSON stdin/stdout protocol:
 
 - `UserPromptSubmit` reads current shared context.
 - `SessionStart` after compaction restores context for the immediate continuation.
   Initial startup/resume waits for `UserPromptSubmit` to avoid duplicate blocks.
-- `Stop` and `Interrupt` save a handoff. They never request continuation.
+- `Stop` saves a handoff, and Codex's `Interrupt` saves one too. Neither requests
+  continuation. Claude Code has no interrupt hook event, so a terminal Claude
+  turn stopped by the user records no handoff. Managed Claude turns record theirs
+  through the native runtime.
 
 OpenChamber-managed prompts use the same context builder. While their turn is
 owned by OpenChamber, the terminal hook skips duplicate delivery. Idle, failed

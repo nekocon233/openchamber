@@ -5,31 +5,34 @@
 import { z } from 'zod';
 
 import { connectionWriteSchema } from './claude/connections.js';
-import { cliproxyapiCallbackSchema, cliproxyapiConnectionSchema, cliproxyapiImportSchema, cliproxyapiProxySchema, cliproxyapiLoginInputSchema, cliproxyapiFamilyInputSchema } from './cliproxyapi/service.js';
 import { codexConnectionWriteSchema } from './codex/connections.js';
 import { JsonRpcError } from './codex/rpc.js';
 import { NativeAgentError } from './errors.js';
-import { deepseekConfigurationWrite } from './deepseek/configuration.js';
 import { statisticsQuery } from './stats.js';
 import { conversationSelectionSchema } from './conversations/store.js';
+import { nativeBackendSchema } from './ids.js';
+import { planExecutionChoiceSchema } from './plan-execution.js';
+import { agentConfigurationWriteSchema, agentModelSchema } from './agent-configuration.js';
 
 const directoryQuery = z.object({ directory: z.string().min(1) }).passthrough();
 const taskOperationInput = z.object({ directory: z.string().min(1), generation: z.string().min(1).max(128) }).strict();
 const taskIdParam = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
-const commandsQuery = z.object({ backend: z.enum(['claude', 'codex', 'deepseek', 'antigravity']), directory: z.string().min(1), sessionId: z.string().min(1).optional() }).passthrough();
+const commandsQuery = z.object({ backend: nativeBackendSchema, directory: z.string().min(1), sessionId: z.string().min(1).optional() }).passthrough();
 const createSessionBody = z.object({
-  backend: z.enum(['claude', 'codex', 'deepseek', 'antigravity']),
+  backend: nativeBackendSchema,
   directory: z.string().min(1),
   title: z.string().min(1).max(200).optional(),
   kind: z.enum(['single', 'unified']).optional(),
   selection: conversationSelectionSchema.optional(),
-}).passthrough();
+  configuration: agentConfigurationWriteSchema.optional(),
+}).passthrough().refine((input) => !input.configuration || input.kind === 'unified', 'Agent combinations require a unified conversation');
 const conversationSelectionBody = z.object({
   directory: z.string().min(1),
   selection: conversationSelectionSchema,
   expectedRevision: z.number().int().nonnegative(),
 }).strict();
 const promptBody = z.object({
+  subagentModel: agentModelSchema.nullable().optional(),
   directory: z.string().min(1),
   messageID: z.string().min(1),
   parts: z.array(z.discriminatedUnion('type', [
@@ -44,7 +47,7 @@ const promptBody = z.object({
   // conversation does not show them.
   instructions: z.string().trim().min(1).max(8000).optional(),
 }).passthrough();
-const questionReplyBody = z.object({ answers: z.array(z.array(z.string())) }).passthrough();
+const questionReplyBody = z.object({ answers: z.array(z.array(z.string())), execution: planExecutionChoiceSchema.optional() }).passthrough();
 const compactBody = z.object({
   directory: z.string().min(1),
   model: z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }),
@@ -120,6 +123,11 @@ const handle = (work) => async (req, res) => {
  */
 export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementRequest = () => false, statisticsDirectories = async (directory) => [directory] }) => {
   app.get('/api/native/capabilities', handle(() => runtime.capabilities()));
+  app.put('/api/native/sessions/:sessionId/agents', handle((req) => {
+    const input = z.object({ directory: z.string().min(1), configuration: agentConfigurationWriteSchema,
+      expectedRevision: z.number().int().nonnegative(), main: conversationSelectionSchema.optional(), expectedSelectionRevision: z.number().int().nonnegative().optional() }).strict().parse(req.body);
+    return runtime.configureAgents(req.params.sessionId, input.directory, input.configuration, input.expectedRevision, input.main, input.expectedSelectionRevision);
+  }));
   app.get('/api/native/stats', async (req, res) => {
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -169,37 +177,7 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   app.patch(`${codexConnections}/:id`, handle((req) => runtime.saveCodexConnection(z.string().uuid().parse(req.params.id), codexConnectionWriteSchema.parse(req.body))));
   app.delete(`${codexConnections}/:id`, handle((req) => runtime.removeCodexConnection(z.string().uuid().parse(req.params.id))));
 
-  // Any authenticated client may manage the gateway; authentication is the
-  // boundary, not where the request came from.
-  const cliproxyapi = '/api/native/claude/cliproxyapi';
-  const loginStateParam = z.string().regex(/^[A-Za-z0-9._-]{1,128}$/);
-  // Credential file names as the gateway reports them; membership in that list
-  // is what actually authorizes a removal.
-  const accountNameParam = z.string().min(1).max(200).regex(/^[A-Za-z0-9._@+-]+\.json$/);
-  app.get(cliproxyapi, handle(() => runtime.cliproxyapi.status()));
-  app.post(`${cliproxyapi}/start`, handle(() => runtime.cliproxyapi.start()));
-  app.post(`${cliproxyapi}/stop`, handle(() => runtime.cliproxyapi.stop()));
-  app.post(`${cliproxyapi}/proxy`, handle((req) => runtime.cliproxyapi.setUpstreamProxy(cliproxyapiProxySchema.parse(req.body))));
-  app.post(`${cliproxyapi}/login`, handle((req) => runtime.cliproxyapi.beginLogin(cliproxyapiLoginInputSchema.parse(req.body ?? {}))));
-  app.get(`${cliproxyapi}/login/:state`, handle((req) => runtime.cliproxyapi.loginStatus(loginStateParam.parse(req.params.state))));
-  app.post(`${cliproxyapi}/login/:state/callback`, handle((req) => runtime.cliproxyapi.submitLoginCallback(
-    loginStateParam.parse(req.params.state),
-    cliproxyapiCallbackSchema.parse(req.body),
-  )));
-  app.delete(`${cliproxyapi}/login/:state`, handle((req) => runtime.cliproxyapi.cancelLogin(loginStateParam.parse(req.params.state))));
-  app.delete(`${cliproxyapi}/accounts/:name`, handle(async (req) => {
-    await runtime.cliproxyapi.removeAccount(accountNameParam.parse(req.params.name));
-    return { removed: true };
-  }));
-  app.get(`${cliproxyapi}/models`, handle(() => runtime.cliproxyapi.listModels()));
-  app.post(`${cliproxyapi}/import`, handle((req) => runtime.cliproxyapi.importModels(cliproxyapiImportSchema.parse(req.body ?? {}))));
-  app.post(`${cliproxyapi}/connection`, handle((req) => runtime.cliproxyapi.saveConnection(cliproxyapiConnectionSchema.parse(req.body))));
-  app.post(`${cliproxyapi}/opus-route`, handle((req) => runtime.cliproxyapi.setOpusRoute(cliproxyapiFamilyInputSchema.parse(req.body))));
-  app.post(`${cliproxyapi}/sonnet-route`, handle((req) => runtime.cliproxyapi.setSonnetRoute(cliproxyapiFamilyInputSchema.parse(req.body))));
-
   app.get('/api/native/catalog', handle(() => runtime.catalog()));
-  app.get('/api/native/deepseek/configuration', handle(() => runtime.deepseekConfiguration.read()));
-  app.post('/api/native/deepseek/configuration', handle((req) => runtime.deepseekConfiguration.save(deepseekConfigurationWrite.parse(req.body))));
   app.get('/api/native/deepseek/setup', handle(() => runtime.deepseekSetup.status()));
   app.post('/api/native/deepseek/setup', handle((req) => {
     z.object({}).strict().parse(req.body ?? {});
@@ -328,7 +306,9 @@ export const registerNativeAgentRoutes = (app, { runtime, isLocalManagementReque
   }));
 
   app.post('/api/native/questions/:requestId/reply', handle(async (req) => {
-    await runtime.replyQuestion(req.params.requestId, questionReplyBody.parse(req.body).answers);
+    const { answers, execution } = questionReplyBody.parse(req.body);
+    if (execution) await runtime.replyQuestion(req.params.requestId, answers, execution);
+    else await runtime.replyQuestion(req.params.requestId, answers);
     return { replied: true };
   }));
 

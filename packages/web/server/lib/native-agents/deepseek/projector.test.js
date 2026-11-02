@@ -184,4 +184,43 @@ describe('DeepSeek history and live projection', () => {
     expect(record.info.error.name).toBe('MessageAbortedError');
     expect(record.parts.find((part) => part.type === 'tool').state.status).toBe('error');
   });
+
+  it('marks the final text answer complete when the turn finishes', () => {
+    const { projection, append } = setup();
+    append('assistant/message', assistant([{ type: 'text', text: 'Done' }]));
+    append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+    const record = projection.records()[1];
+    expect(record.info.finish).toBe('stop');
+    expect(record.info.time.completed).toBeGreaterThan(0);
+  });
+
+  it('preserves each step completion timestamp and error boundary when a multi-step turn ends', () => {
+    const projection = createDeepseekProjection({ sessionId, directory: '/workspace' });
+    projection.apply({ seq: 0, time: 1_000, type: 'user/message', data: { id: 'user-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'Run two steps' }] } });
+    projection.apply({ seq: 1, time: 2_000, type: 'assistant/message', data: assistant([{ type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{}' }], {
+      step: 1, usage: { inputTokens: 100, outputTokens: 200, cacheReadTokens: 0 },
+    }) });
+    projection.apply({ seq: 2, time: 2_100, type: 'tool/call', data: { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{}' } });
+    projection.apply({ seq: 3, time: 3_000, type: 'tool/result', data: { turn: 1, step: 1, message: { toolCallId: 'call-1', content: [{ type: 'text', text: 'ok' }] } } });
+    projection.apply({ seq: 4, time: 3_010, type: 'step/end', data: { turn: 1, step: 1 } });
+    // A 10-minute pause between Step 1 and Step 2 must not be masked by turn/end
+    // stamping Step 1's completion time to the end of the turn.
+    projection.apply({ seq: 5, time: 604_000, type: 'assistant/message', data: assistant([{ type: 'text', text: 'Done' }], {
+      step: 2, usage: { inputTokens: 150, outputTokens: 200, cacheReadTokens: 0 },
+    }) });
+    projection.apply({ seq: 6, time: 604_010, type: 'step/end', data: { turn: 1, step: 2 } });
+    projection.apply({ seq: 7, time: 604_020, type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } });
+
+    const records = projection.records();
+    expect(records[1].info.time.completed).toBe(3_010);
+    expect(records[1].info.error).toBeUndefined();
+    expect(records[2].info.time.completed).toBe(604_010);
+    expect(records[2].info.error?.name).toBe('MessageAbortedError');
+    expect(records[2].info.finish).toBe('error');
+
+    const stats = getLatestCompletedTurnStats(records);
+    expect(stats.totalToolDurationMs).toBe(900);
+    expect(stats.totalLlmDurationMs).toBe(1_120);
+    expect(Math.round(stats.tokensPerSecond)).toBe(357);
+  });
 });

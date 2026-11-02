@@ -180,12 +180,17 @@ payloads written by an earlier process; the `time.idle` rule retires those.
   `SessionSuggestionChip` is the same idea in chip form; it never sends
   automatically.
 
-Native CLI sessions (`ncl_`, `ncx_`) get assists too. A separate hub
+Native CLI sessions and unified conversations (`ncl_`, `ncx_`, `nag_`, `ndh_`,
+`ncv_`) get assists too. The shared context reader treats a native answer as
+complete only when its record carries `finish: 'stop'`; every native projector,
+including DeepSeek/DSH, sets it on the last text-bearing step of a completed
+turn. A separate hub
 subscription on the native event source feeds only this runtime; goals use their own native subscription, while
 obligatory context and Linear status stay OpenCode-only. Their record and
 history come from the native runtime (`nativeSessions`), and the assist is
-stored with the session's metadata in its registry rather than in OpenCode's;
-the UI's metadata patch reaches it through the native session PATCH. Under the session-provider rule a
+stored with the owning session's metadata: the native registry for a CLI
+session, the conversation manifest for a unified one. The UI's metadata patch
+reaches the owning store. Under the session-provider rule a
 native session's small model must be set explicitly, so without one these
 sessions skip generation as Claude Code plugin sessions do.
 - Sidebar rows (`SessionNodeItem`, both Projects and Timeline) show the current

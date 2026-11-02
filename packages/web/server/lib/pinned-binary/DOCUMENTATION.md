@@ -1,9 +1,8 @@
 # Pinned binary
 
 Downloads and publishes a third-party release binary for the running platform
-and architecture. Two products use it: the FRPC tunnel client
-(`tunnels/frpc-binary-manager.js`) and the managed CLIProxyAPI gateway
-(`native-agents/cliproxyapi/binary-manager.js`). Each of those is a descriptor
+and architecture. The FRPC tunnel client uses it
+(`tunnels/frpc-binary-manager.js`). That is a descriptor
 plus its own asset table; nothing in this module names a product.
 
 ## Contract

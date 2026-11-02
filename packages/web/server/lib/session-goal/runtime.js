@@ -439,15 +439,19 @@ export const createSessionGoalRuntime = ({
     sendContinuation: ({ goal, maxAutoTurns }) => sendContinuation({ sessionId, directory, goal, maxAutoTurns }),
   });
 
-  // A native CLI session (Claude Code, Codex) is read and prompted through the
-  // native runtime, which keeps its metadata in its own registry.
+  // A native CLI session or unified native conversation is read and prompted
+  // through the native runtime, which keeps its metadata in its own registry.
   const nativeSource = (sessionId, directory) => ({
     native: true,
     readSession: () => nativeSessions.getSession(sessionId, directory),
     readStatuses: () => nativeSessions.statuses(directory).catch(() => null),
-    // Claude Code's subagents are part of their parent's turns and Codex
-    // reports none: no child session works on while its parent is idle.
-    hasWorkingChildren: async () => false,
+    // Claude Code's subagents ride its parent's turns and Codex reports none;
+    // a unified DeepSeek or Antigravity conversation can expose working child
+    // sessions, so their live statuses gate the audit and the continuation.
+    hasWorkingChildren: async (statuses) => {
+      const page = await nativeSessions.loadMessages(sessionId, directory, { limit: 1 }).catch(() => null);
+      return (page?.childSessions ?? []).some((child) => isWorkingStatus(statuses?.[child.id], true));
+    },
     readMessages: () => nativeSessions.loadMessages(sessionId, directory, { limit: MESSAGE_FETCH_LIMIT })
       .then((page) => page.records)
       .catch(() => null),

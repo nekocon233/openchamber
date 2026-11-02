@@ -15,6 +15,7 @@ type UnifiedState = ReturnType<typeof unifiedNativeSessionState>;
 const equalState = (left: UnifiedState, right: UnifiedState): boolean => left === right || Boolean(left && right
   && left.backend === right.backend && left.revision === right.revision && left.historyRevision === right.historyRevision
   && left.recordRevision === right.recordRevision
+  && left.unifiedBackends?.join() === right.unifiedBackends?.join()
   && left.sourceSessionID === right.sourceSessionID && left.switchReady === right.switchReady && left.preparing === right.preparing);
 
 export const useUnifiedNativeState = (sessionId: string | null, directory?: string | null): UnifiedState => {

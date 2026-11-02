@@ -27,6 +27,37 @@ afterEach(() => {
 });
 
 describe('native session registry', () => {
+  it('keeps AGY reply provenance after a later question and a restart', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const registry = createNativeRegistry({ filePath });
+    const id = 'nag_80ee3811-32f6-4c89-9770-ebd76509d824';
+    const decision = { callID: 'call', userStep: 4, revision: 'revision', requestId: 'ncq_saved', phase: 'dispatching', replyMessageId: 'nag_u_reply' };
+    await registry.registerSession(id, { ...entry, backend: 'antigravity', nativeId: id.slice(4) });
+    await registry.updateSession(id, { antigravityInteraction: decision });
+    const send = { providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan', sentAt: 1, antigravity: { stepIndex: 5 } };
+    await registry.recordSend(id, { ...send, messageId: decision.replyMessageId });
+    await registry.recordSend(id, { ...send, messageId: 'nag_u_manual', antigravity: { stepIndex: 7 } });
+    await registry.updateSession(id, { antigravityInteraction: { ...decision, callID: 'next', replyMessageId: undefined, phase: 'open' } });
+    const reopened = createNativeRegistry({ filePath });
+    expect((await reopened.sendRecords(id)).get('nag_u_reply').antigravity).toEqual({ stepIndex: 5, interactionReply: true });
+    expect((await reopened.sendRecords(id)).get('nag_u_manual').antigravity).toEqual({ stepIndex: 7 });
+  });
+
+  it('recognizes a legacy AGY reply only by its saved decision message ID', async () => {
+    const filePath = path.join(makeDir(), 'registry.json');
+    const registry = createNativeRegistry({ filePath });
+    const id = 'nag_80ee3811-32f6-4c89-9770-ebd76509d824';
+    await registry.registerSession(id, { ...entry, backend: 'antigravity', nativeId: id.slice(4) });
+    await registry.recordSend(id, { messageId: 'nag_u_legacy', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan', sentAt: 1, antigravity: { stepIndex: 5 } });
+    const document = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    document.sessions[id].antigravityInteraction = { callID: 'call', userStep: 4, revision: 'revision', requestId: 'ncq_saved', phase: 'settled', replyMessageId: 'nag_u_legacy' };
+    fs.writeFileSync(filePath, JSON.stringify(document));
+    const reopened = createNativeRegistry({ filePath });
+    expect((await reopened.sendRecords(id)).get('nag_u_legacy').antigravity.interactionReply).toBe(true);
+    await reopened.updateSession(id, { antigravityInteraction: null });
+    expect((await createNativeRegistry({ filePath }).sendRecords(id)).get('nag_u_legacy').antigravity.interactionReply).toBe(true);
+  });
+
   it('round-trips AGY decision delivery and completion without storing question text', async () => {
     const filePath = path.join(makeDir(), 'registry.json');
     const registry = createNativeRegistry({ filePath });

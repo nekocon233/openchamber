@@ -36,14 +36,7 @@ describe.skipIf(process.platform === 'win32')('DeepSeek native HTTP routing', ()
   it('creates, sends, reads and updates through the shared runtime and enforces operation limits', async () => {
     const { app, directory } = await setup();
     expect((await request(app).get('/api/native/capabilities').expect(200)).body.backends.deepseek).toMatchObject({ cli: true, actions: { revert: true, delete: false, fork: true } });
-    const configuration = (await request(app).get('/api/native/deepseek/configuration').set('X-Forwarded-For', '198.51.100.7').expect(200)).body;
-    expect(configuration).toMatchObject({ revision: 0, credential: { configured: false } });
-    const provider = { revision: 0, baseURL: null, modelIDs: ['test-model'], apiKey: 'fixture-remote-key' };
-    const saved = (await request(app).post('/api/native/deepseek/configuration').set('X-Forwarded-For', '198.51.100.7').send(provider).expect(200)).body;
-    expect(saved).toMatchObject({ status: 'saved', configuration: { revision: 1, credential: { configured: true } } });
-    expect(JSON.stringify(saved)).not.toContain(provider.apiKey);
-    await request(app).post('/api/native/deepseek/configuration').send(provider).expect(409);
-    await request(app).post('/api/native/deepseek/configuration').send({ ...provider, revision: 1, baseURL: 'file:///secret' }).expect(400);
+    await request(app).get('/api/native/deepseek/configuration').expect(404);
     const created = (await request(app).post('/api/native/sessions').send({ backend: 'deepseek', directory, title: 'DSH integration' }).expect(200)).body;
     expect(created.id).toMatch(/^ndh_[a-f0-9]{64}$/);
     const messageID = newNativeClientUserMessageId(created.id);
@@ -65,7 +58,7 @@ describe.skipIf(process.platform === 'win32')('DeepSeek native HTTP routing', ()
     await request(app).post('/api/native/deepseek/command').send({ sessionId: created.id, directory, line: '/plan off' }).expect(200);
   });
 
-  it('opens independent configuration without reading Claude credentials and keeps repeated setup safe', async () => {
+  it('installs the CLI once and reports ready without reading credentials', async () => {
     const { app, dataDir } = await setup();
     await mkdir(path.join(dataDir, 'native-agents'), { recursive: true });
     await writeFile(path.join(dataDir, 'native-agents', 'claude-connections.json'), 'This file must not be read by dsh setup');
@@ -73,15 +66,12 @@ describe.skipIf(process.platform === 'win32')('DeepSeek native HTTP routing', ()
       request(app).post('/api/native/deepseek/setup').send({}).expect(200),
       request(app).post('/api/native/deepseek/setup').send({}).expect(200),
     ]);
-    expect(starts.every((response) => ['installing', 'configuring'].includes(response.body.state))).toBe(true);
-    await expect.poll(async () => (await request(app).get('/api/native/deepseek/setup').expect(200)).body.state).toBe('needs-key');
-    const configuration = (await request(app).get('/api/native/deepseek/configuration').expect(200)).body;
-    expect(configuration).toMatchObject({ revision: 0, credential: { configured: false } });
+    expect(starts.every((response) => ['installing', 'ready'].includes(response.body.state))).toBe(true);
+    await expect.poll(async () => (await request(app).get('/api/native/deepseek/setup').expect(200)).body.state).toBe('ready');
+    await request(app).get('/api/native/deepseek/configuration').expect(404);
     await request(app).post('/api/native/deepseek/setup').send({ executable: '/anything' }).expect(400);
-    await request(app).post('/api/native/deepseek/configuration').send({ revision: 0, baseURL: null, modelIDs: ['own-model'], apiKey: 'fixture-independent-key' }).expect(200);
     await request(app).post('/api/native/deepseek/setup').send({}).expect(200);
     await expect.poll(async () => (await request(app).get('/api/native/deepseek/setup').expect(200)).body.state).toBe('ready');
-    expect((await request(app).get('/api/native/deepseek/configuration').expect(200)).body).toMatchObject({ revision: 1, modelIDs: ['own-model'] });
   });
 
   it('refuses remote setup and progress reads in enterprise mode', async () => {

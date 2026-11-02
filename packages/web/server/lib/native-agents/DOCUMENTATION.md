@@ -19,6 +19,58 @@ are owned by `antigravity/DOCUMENTATION.md`. Read the owning document when chang
 Shared long-term memory and project handoffs are owned by
 `../agent-memory/DOCUMENTATION.md`, not by the native transcript stores.
 
+## Agent combinations and cross-CLI subagents
+
+`agent-configuration.js` defines native model choices and revisioned session
+configuration. A named `nativeAgentCombinations` profile setting captures a
+main model, nullable subagent model and plan execution model, each with its
+thinking effort. Applying a combination copies its choices into the session;
+editing or deleting the saved combination does not change applied sessions.
+There is no global default subagent. A null subagent retains the CLI's own
+delegation behavior. See `conversations/DOCUMENTATION.md` for atomic application.
+
+`delegation.js` owns application-managed delegation between every registered
+native backend. Each parent turn captures its subagent, directory and Plan/Build
+mode. The selected CLI owns a separate child session and its complete native
+transcript. Results return through the delegation tool and child links use the
+existing session/task UI. Plan children report findings or their generated plan
+without opening an execution approval. Only one layer is supported; managed
+children cannot create further delegates or accept independent mutations.
+
+Claude and Codex receive a process-scoped stdio MCP server. DSH receives a
+scoped tool through its owned fd-3 plugin. Antigravity uses a credential-free
+managed MCP/hook registration described in its owning document. Selected
+delegation disables the parent's built-in subagent tools. Leaf launches disable
+delegation. The runtime also rejects nested requests, so a prompt alone cannot
+lift that boundary. The helper requires Node.js and uses only Node built-ins;
+Electron stages it as `native-delegation-mcp.mjs`.
+
+The helper authenticates to an ephemeral IPv4 loopback endpoint using a
+process-only bearer token. The token binds the source session, native message,
+directory and captured model; callers cannot supply endpoints or credentials.
+Authenticated long requests receive JSON whitespace heartbeats. Both HTTP
+status and the final JSON error must be checked. Enterprise mode blocks
+configuration and dispatch at the server boundary, including an already-open
+callback. VS Code explicitly does not support these native operations.
+
+The owner-only `native-agents/delegations.json` journal retains dispatch
+identities, ownership, model and operational phase. It stores no task text,
+answer text, upstream error body or credentials. The native transcript remains
+the answer source. Concurrent retries of a turn's task key share one dispatch;
+uncertain acceptance is inspected through history and never resent silently.
+Unreadable records block dispatch and destructive cleanup without hiding the
+parent's readable history. Server restart does not replay unfinished tasks.
+
+Stops revoke callbacks and abort child admission and running work. A later turn
+receives a fresh callback, forcing cached CLI tool connections to reopen.
+Cleanup attempts continue for sibling tasks, and a cleanup failure still allows
+the parent stop to run. Keep-planning and dismissed plan decisions stop owned
+delegates. Live child foreground/background work keeps the parent busy and
+prevents a plan handoff before the delegation tool has returned. Permanent
+deletion preflights every retained child's backend capability before deleting
+anything; shared-source children remain retained. Antigravity and unsupported
+DSH deletion require archiving the parent instead.
+
 OpenChamber lists and reads the CLIs' sessions, creates sessions, and drives
 turns: prompts, steering, stops, model and effort changes, plan mode and the
 model's questions. Every tool runs without asking. Reverts, forks, rename,
@@ -404,7 +456,7 @@ kept open between turns.
   returns a session-scoped `setMode: bypassPermissions` permission update.
   `plan`, dismissal, abort and query closure leave planning in place and stop
   the turn. A custom answer returns feedback so Claude can revise the plan.
-  Only an explicit single `plan` answer suppresses the resulting aborted
+  An explicit single `plan` answer or a model-execution handoff suppresses the resulting aborted
   assistant-message error, so keeping a plan does not show a stopped notice.
   Tools, subagents and activity still settle as interrupted. This intent is
   scoped to that turn and cleared at every result or query exit. A manual stop
@@ -553,13 +605,13 @@ Codex (`codex/live.js`): turns on the shared app-server.
   The restored row keeps the plan tool's interval, not the approval timestamp:
   an approval can settle long after the assistant completed, and turn
   telemetry must not subtract time outside that step.
-  A failed start publishes a session error without retrying or recording a
-  successful Build prompt.
+  A failed start publishes a session error and keeps the same decision retryable
+  without recording a successful Build prompt.
 - Plan decisions remain cancellable through prompt preparation and thread
   resume. New prompts, stop, compaction, review, reverts, archive/delete,
   thread closure and app-server exit invalidate them. Duplicate replies
-  cannot send again. They live only in the server's memory and are not
-  reconstructed from history after restart. The goal loop checks
+  cannot send again. Ordinary pending decisions live in server memory; model-changing approvals
+  use the durable execution journal described below. The goal loop checks
   `hasPendingPlanDecision` before auditing or continuing an idle native session.
 
 `questions.js` holds native questions in memory. A reply or rejection resolves
@@ -629,11 +681,46 @@ later Build prompt in that conversation. Native skipped/error tool outcomes
 remain intact. See `antigravity/DOCUMENTATION.md` for source validation and
 uncertain-send behavior.
 
+## Plan execution model selection
+
+Native plan requests advertise `canSelectExecutionModel` when their server can
+honor an execution choice. `replyQuestion` accepts an optional `execution`
+containing the native model, effort and, for unified conversations, the expected
+selection revision. Only an exact `build` approval accepts that field. Ordinary
+questions and older clients retain their answer protocol.
+
+`plan-execution.js` owns model-changing approvals. It validates the source and
+target before taking over the question. The internal `transferred` outcome lets
+the proposing CLI yield without approving implementation there. Claude suppresses
+only the handoff's aborted-message notice; DeepSeek cancels and drains its native
+execution. Codex and Antigravity post-turn decisions stop their original
+continuation. The selected model then receives a Build prompt through the normal
+native admission path, including unified context transfer when the backend changes.
+
+The registry's private `planExecution` journal retains the source call, model
+choices, stable delivery identities and `open`, `preparing`, `dispatching` or
+`settled` phase. It stores no question or plan body. Recovery reads the referenced
+native plan and never automatically replays a dispatched approval. A failed
+preparation remains retryable after the old CLI has yielded. Unknown delivery
+locks the chosen model through `executionPending` until native history confirms
+it. A malformed journal becomes `unavailable` and blocks further sends for that
+source without removing the native session.
+
+Background work, children and other questions still block a handoff. Selection
+revisions protect newer composer choices. After acceptance the selected execution
+model becomes the next selection only when its captured revision is unchanged.
+Question settlement and application-owned answer metadata can update the retained
+planning source after the new source starts; ordinary late CLI events remain
+excluded. `interactions.js` restores the actual execution choice with plan answers,
+including DeepSeek plans whose native question was cancelled for the handoff.
+
 ## Reverts and forks
 
-Antigravity does not support revert, fork, manual compaction, unified `ncv_`
-creation or native deletion. Those routes return explicit errors rather than
-falling through to Codex. Archive and title overrides use the registry.
+Standalone Antigravity does not support revert, fork, manual compaction or
+native deletion. Those routes return explicit errors. Unified `ncv_` conversations
+support Antigravity, including logical rewind and fork. Retained Antigravity
+history prevents permanent deletion; archive remains available. Archive and
+title overrides use the registry.
 
 DeepSeek uses the same pending/file restore contract, then creates a native fork
 on commit while preserving its logical session identity. Its versioned cursor,
@@ -1096,24 +1183,6 @@ and names models `connection:<connection UUID>:<model UUID>`. User messages,
 assistant messages and registry send records retain this identity. The default
 CLI models remain available with their existing IDs and inherited settings.
 
-An optional model `followFamily` of `antigravity-opus` or `antigravity-sonnet`
-opts that saved row into managed-gateway upgrades. Older rows remain pinned.
-The UI connection schemas preserve the field through edits. It only operates
-on the configured local gateway endpoint; other connections keep their normal
-resolution. Its latest confirmed concrete `modelID` and capabilities remain
-in the connection file with the same model UUID. The following rule also sets
-the model name to its actual version, such as `Opus 5.5 (agy)` or
-`Sonnet 5.6 (agy)`. Connection names and pinned model names remain user-owned.
-`refreshModelBindings` uses the connection revision to reject a discovery that
-started before a user edit. It cannot add or remove model identities. Failed
-writes leave the prior file intact, and unchanged metadata does not revise or
-rewrite the connection.
-The private optional `launchRevision` preserves the last manual configuration
-generation. Launch keys combine it with the selected model's concrete id and
-budgets, so an Opus upgrade does not replace a Sonnet query. Manual connection
-edits still invalidate all its queries. Older files use `revision` until their
-first automatic update; public connection responses omit `launchRevision`.
-
 A connection resolves to a revisioned launch configuration. The main model,
 family aliases and subagents use its upstream model ID. Credentials, endpoint,
 context/output budgets and competing backend/auth variables are supplied per
@@ -1205,246 +1274,6 @@ report no usage quota, unlike a Kimi Claude Code connection.
 Routes: `GET/POST /api/native/codex/connections` and
 `PATCH/DELETE /api/native/codex/connections/:id`. Responses never carry the key.
 VS Code's native adapter rejects these operations as unsupported.
-## Managed CLIProxyAPI gateway
-
-Claude Code reaches GPT and Antigravity Claude models through a CLIProxyAPI gateway that OpenChamber
-runs itself. The gateway is a pinned third-party binary (MIT, router-for-me),
-downloaded, verified and published by `pinned-binary/manager.js` through the
-descriptor in `cliproxyapi/binary-manager.js`; nothing here installs or expects
-a system copy. An endpoint run elsewhere is still usable, but only as an
-ordinary custom connection on the same settings page.
-
-`cliproxyapi/store.js` is the only source of truth: `enabled`, `port`,
-`authDir`, `upstreamProxy`, `managementKey`, `clientKeys`, `installedVersion`
-in `<data dir>/native-agents/cliproxyapi.json` (owner-only, atomic rename). A
-v1 document, which described a pasted endpoint and key, migrates when it points
-at this machine and is dropped otherwise; either way the connection that used it
-keeps working. The default `authDir` is the upstream default `~/.cli-proxy-api`
-when that directory already holds credentials, so an existing login carries
-over, and otherwise a directory under the data dir. OpenChamber generates the
-management key, so no route carries one, and `clientKeys[0]` is what the
-connection it writes authenticates with; an empty list adopts the key of a
-connection already pointing at the gateway.
-
-`cliproxyapi/config.js` renders the YAML the process reads, and only that:
-`allow-remote: false`, `disable-control-panel: true`, `session-affinity: true`,
-`requests.proxy-url` when a proxy is set, and `oauth.auth-dir`. It is a derived
-artifact, rewritten before every spawn and never read back, because the gateway
-hashes a plaintext `secret-key` at startup and its management API normalizes the
-whole file on write. The child environment drops every proxy variable and sets
-`NO_PROXY` for loopback, so the config file is the only visible source of proxy
-truth (Go ignores the macOS system proxy).
-
-`cliproxyapi/gateway.js` owns the process, shaped like the Codex app-server: one
-single-flight `start()`, readiness defined as the port answering rather than a
-log pattern, a pre-spawn probe that refuses a port someone else owns with
-`CLIPROXYAPI_PORT_IN_USE`, crash backoff capped at 30 s, `stop()` that persists
-`enabled: false` (a person asked for that), and a kill-on-parent-exit handler.
-A stop that is not a person's decision, like a host shutdown or a restart, goes
-through `stop({ persist: false })` and leaves the switch on. `start()`
-regenerates the
-config, prepares the binary, spawns it, waits for the port, and reads the
-running version from the `X-Cpa-Version` header. The server resumes a gateway
-whose store says `enabled` at boot; nothing else starts one.
-
-Gateway stdout is diagnostic output and is discarded at spawn. Stderr remains
-a bounded crash diagnostic. Every child output must have an explicit consumer
-or be ignored: the upstream gateway writes synchronous request logs to stdout
-under a shared logger lock, so an unread pipe can block both inference and
-management responses. Readiness uses HTTP and never depends on those logs.
-
-`cliproxyapi/service.js` composes the store, the gateway and the management
-client into what the provider section drives: `status()`, `start()`, `stop()`,
-`shutdown()` (the host-shutdown stop that keeps the gateway enabled for the
-next boot), `setUpstreamProxy()` (which restarts a running gateway, because the
-config is
-read at startup), `beginLogin({ provider })`, `loginStatus(state)`, `cancelLogin(state)`,
-`submitLoginCallback(state, url)`, `removeAccount(name)` and
-`saveConnection(input)`. `status()` reports
-`{ configured, enabled, running, ready, port, authDir, upstreamProxy,
-installedVersion, runningVersion, install, managementEnabled, keyRejected,
-accounts, clientKeys, lastError, restarting }`; `install` is a stat, never a
-subprocess, so polling stays cheap.
-
-`submitLoginCallback(state, url)` serves a browser that cannot reach the
-gateway's loopback listener: the authorization page ends on
-`http://localhost:1455/auth/callback`, which only resolves on the computer
-running the browser, so the user pastes that address back. The URL is parsed for
-its code and never fetched, its `state` must equal the attempt's, and the code
-goes to the gateway's `POST /v0/management/oauth-callback`, which exchanges it in
-the background while `loginStatus` keeps polling. A gateway that explains a
-refusal in its response body reaches the caller as
-`CLIPROXYAPI_LOGIN_CALLBACK_REJECTED` with that text as the message.
-
-`cliproxyapi/models.js` reads the Codex CLI's own model cache
-(`$CODEX_HOME/models_cache.json`, `~/.codex` otherwise) for the metadata a
-connection row needs: display name, context window, image input and effort
-levels. `listModels()` intersects it with what the gateway serves through
-`GET /v1/models` (which takes a client key, not the management one) and reports
-the rest as `unknown`. `importModels()` writes every known model into the
-gateway's connection, replacing its list and updating the connection that
-already points at this gateway instead of adding a twin. Antigravity Claude models additionally intersect `/v1/models` with enabled
-Antigravity credentials and the gateway's v8 channel definitions. Missing context
-or output limits leave a model unknown. Declared named effort levels take priority.
-For budget-capable Antigravity Claude definitions, imports expose CLIProxyAPI's
-documented `low`/`medium`/`high`/`xhigh`/`max` aliases. The gateway converts them
-to budgets and clamps them to the definition's thinking and output limits;
-OpenChamber does not create a native agy `max` model variant. In the pinned
-8.0.31 build, `max` maps to 128000 before clamping (the current Claude definitions
-cap thinking at 64000). Other channels and models without a usable budget keep
-only their explicit named levels. Reimports preserve model UUIDs, and still-served configured
-rows without newly discovered metadata remain configured. Connection writes and
-imports are serialized so concurrent imports preserve the same identities.
-Account removal shares that queue. After deleting a credential, the service
-reads the gateway's complete served model list once and atomically retains only
-those rows in its managed Claude connection. Models another account still
-serves keep their UUIDs and settings; an empty result removes that connection.
-Followed families also survive when a remaining enabled Antigravity account
-serves a replacement version. Removing the final account still removes its
-rows; automatic checks never recreate a deleted connection.
-Other endpoints and native Codex logins are untouched. A failed read or write
-is reported after logout without interpreting it as an empty model list or
-restoring the credential. Settings re-reads account and model state even after
-that partial failure. Removing existing access remains allowed in enterprise
-mode. The cleanup is triggered by logout, never an idle poll.
-
-For Codex models the output limit is
-`CODEX_OUTPUT_LIMIT`, the same 128k the Codex path uses, and the context window
-is the model's maximum, so an imported row matches what a working connection
-looks like.
-
-Login accepts `codex` (the default for older clients) or `antigravity`.
-`status().loginProviders` advertises both; account records carry their provider.
-OAuth attempts bind their provider to the returned state for ten minutes.
-Callbacks and cancellation validate the bound attempt; expired or restarted
-attempts require a new login. The gateway owns the independent OAuth credential;
-OpenChamber never copies agy's credential. Enterprise policy refuses login,
-callback completion, model import and connection writes at the service boundary.
-
-A model catalog uses the model's configured name; the connection it belongs to is
-identified by its id, not by a prefix on every model.
-
-### Following Antigravity model families
-
-`cliproxyapi/family-following.js` selects a release for explicitly opted-in
-Opus and Sonnet rows. Candidates must be served by the gateway, belong to an
-enabled Antigravity account, and have valid channel metadata. Only versioned
-release slugs qualify; preview, experimental and dated names are excluded.
-Versions compare numerically, so 5.10 follows 5.9. The current effort suffix is
-preferred within a version, then the highest published suffix. A lower version
-never replaces the stored version, and missing metadata leaves that family
-untouched while independently valid families can advance.
-
-Native catalog reads and followed-model launches call
-`refreshFollowedModels`. Concurrent checks share one discovery; later checks
-read again. There is no idle timer, no gateway auto-start and no gateway binary
-upgrade. A stopped gateway, pinned model or other endpoint performs no upgrade
-discovery. Automatic discovery has a shared two-second deadline across its
-requests, so a stalled metadata endpoint does not hold a send indefinitely.
-Lookup failures retain the saved binding and report a diagnostic;
-storage failures remain errors. Enterprise mode skips automatic discovery and
-writes, and policy is checked again immediately before a discovered update is
-committed. Reimports keep a followed row's UUID and rule, derive its name from
-the selected version, and emit one row per followed family instead of importing
-every old and new version.
-Explicitly pinned rows of that family remain separate when their concrete
-model is still served.
-
-Updates change the connection revision and its saved concrete model, versioned
-name and capabilities. A name-only update keeps the launch key unchanged.
-After a successful changed write the runtime emits a global `catalog.updated`
-native event with `kind: 'native-model'`. Unchanged or rejected writes emit
-nothing. Connected clients re-read native providers to replace cached version
-names; stream reconnect performs the same refresh after a missed event.
-Existing queries retain their captured configuration. The next
-idle turn resolves the same selectable id to the new model, closes the old
-query and resumes the conversation. A send crossing the upgrade while its
-query or background tasks are still busy uses the existing
-`NATIVE_CONNECTION_BUSY` protection. Unsupported effort choices remain errors;
-they are not silently reduced. Utility calls use the same resolution, while
-historical transcript and model-name lookups do not trigger discovery.
-
-Routes are `GET /api/native/claude/cliproxyapi` (status),
-`GET /models`, `POST /import`,
-`POST /start`, `POST /stop`, `POST /proxy`, `POST /login`,
-`GET|DELETE /login/:state`, `POST /login/:state/callback`,
-`DELETE /accounts/:name` and `POST /connection`.
-`POST /opus-route` and `POST /sonnet-route` each accept `{ enabled: boolean }`
-and return gateway status. Status advertises OAuth provider `claude` and
-independent `opusFailover` and `sonnetFailover` objects with
-`enabled` (requested) and `ready` (the unified row is configured). Older UI
-clients can ignore these additions. An absent `sonnetFailover` means the host
-does not support that control; it stays hidden on an older Opus-only server.
-
-### Unified Claude family fallback
-
-`cliproxyapi/claude-family-route.js` owns version selection, persisted binding
-schemas, reserved `openchamber-opus` / `openchamber-sonnet` aliases and common
-model capabilities. `claude-family-routing.js` applies the configuration through
-the gateway's v8 API. The optional `claudeRoutes` in the gateway store names one
-connection, separate family model UUIDs and source bindings, and shared original
-account priorities and affinity-rebind setting. Missing state means off.
-The previous `opusRoute` shape migrates on read without changing UUIDs, bindings,
-credentials or original priorities; the next write persists only `claudeRoutes`.
-A present new field, including `null`, takes precedence over the legacy field.
-Enabling without both source logins saves the request but leaves the working
-Antigravity row unchanged. Later catalog reads, imports or launches finish
-setup once both sources have complete, account-verified metadata.
-
-Both families share the same Claude and Antigravity authorizations. Each OAuth
-channel exposes both enabled aliases, retaining their canonical ids
-with `fork: true`. Claude credentials get priority 100 and Antigravity gets 0.
-The existing round-robin selector still governs equal-priority credentials.
-Session affinity remains enabled, with `session-affinity-rebind-on: quota`:
-quota/auth failures rebind; transient failures can use a backup for one request.
-The upstream default one-hour in-memory binding applies; restart or expiry
-permits selecting Claude again. No quota endpoint is polled. The gateway owns
-retry/cooldown, protocol/thinking-signature translation and pre-output stream
-failover. OpenChamber does not replay a CLI turn or restart its tools to switch
-credentials. A delivered partial stream remains an error, not a replay.
-
-Each family follows its own newest verified release on each source without
-downgrading the other. Its picker row displays `Sonnet 5.5` when versions agree,
-or `Sonnet (Claude 5.6 / agy 5.5)` when they differ; Opus uses the same naming
-rule. Each row uses the smaller context and
-output budgets, common input modalities and common effort choices. Versioned
-and dated official release ids qualify; previews do not. The original model
-UUID is retained; legacy `opus`, `sonnet` and their `[1m]` choices resolve to
-their respective row without forcing an effort. Removing an active row or
-changing its endpoint fails legacy sends instead of choosing another service.
-
-Alias edits preserve other aliases. Priority, alias, connection and store writes
-are serialized and recoverable; a connection revision rejects a concurrent edit.
-Failed application restores prior routing and priorities, and reports rollback
-failure separately. Disabling one family restores its latest confirmed
-Antigravity row while the other keeps its alias, priority and affinity policy.
-The final active family restores the original shared priorities and rebind
-setting. Pending-only families do not hold account overrides; later activation
-captures the then-current settings. The generated startup YAML includes saved aliases, so
-a backend restart does not lose the route. Reimports keep the reserved row
-instead of importing another row for each source. Existing historical Tool
-Search portability checks still apply when adopting a direct-login transcript.
-
-Enterprise mode refuses setup, refresh and unified launches; disabling the route
-and restoring its existing Antigravity row remains allowed. Plain direct-login
-Claude stays under its existing policy. Web, Electron, hosted mobile and
-Capacitor use this server contract. VS Code reports native APIs unsupported.
-
-Any authenticated client may call them, including one reaching the server
-through a tunnel or the mobile app: authentication is the boundary, not where
-the request came from. The memory routes keep their own local-management
-requirement, because enrolling a CLI installs an executable hook on the host.
-Errors carry `CLIPROXYAPI_*` codes; `GET /v1/models` is the gateway's own
-authenticated surface and is never proxied by this server.
-
-Downloading needs egress to `github.com` and
-`release-assets.githubusercontent.com` from the server process itself, which
-does not use a proxy. A machine that reaches GitHub only through one can place
-the verified release in
-`<data dir>/native-agents/cliproxyapi/v<version>/<platform>-<arch>/`
-(binary named `cli-proxy-api`, archive next to it) and the manager will verify
-and use it as `source: 'installed'` without any download.
-
 ## Utility text generation
 
 The small-model service accepts an explicit `codex-native/<model>` or
@@ -1528,7 +1357,8 @@ the CLIs installed on their connected server. VS Code retains the explicit
 
 ## Routes (`/api/native`)
 
-`capabilities().unifiedSessions` advertises logical conversations. `POST /sessions`
+`capabilities().unifiedSessions` advertises logical conversations, with the
+complete registered backend set in `unifiedBackends`. `POST /sessions`
 accepts `kind: 'unified'` with an initial `selection`; requests without that kind
 retain single-CLI creation. Unified message cursors are opaque. Their prompt
 `preserveSelection` flag keeps queued configuration separate from the next pick.
@@ -1600,10 +1430,10 @@ prompts, function-call output and sleep have no dedicated transcript renderer.
 Unknown items are skipped without fabricating empty messages. These are
 remaining capabilities, not substitutes for the supported tool-call records.
 
-Antigravity currently covers independent chat sessions, native history and
-interruption. Its unsupported operations and authentication partition are
-explicit; it does not participate in unified conversations, native statistics,
-Small Model or terminal memory enrollment.
+Antigravity covers independent and unified chat sessions, native history and
+interruption. Its unsupported operations and authentication partition remain
+explicit. It does not participate in native statistics, Small Model or terminal
+memory enrollment.
 
 Shared global preferences, project knowledge and terminal handoffs are owned by
 `../agent-memory/DOCUMENTATION.md`. Enrollment is opt-in and local to the server

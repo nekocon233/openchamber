@@ -7,10 +7,12 @@ import { z } from 'zod';
 import { decodeNativeSessionId } from './ids.js';
 import { buildToolPart } from './records.js';
 import { withMemoryFileLock } from '../agent-memory/file-lock.js';
+import { planExecutionChoiceSchema } from './plan-execution.js';
 
 const answer = z.object({
-  id: z.string(), callID: z.string(), kind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'antigravity-plan-exit']).optional(),
+  id: z.string(), callID: z.string(), kind: z.enum(['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit', 'antigravity-plan-exit']).optional(),
   answers: z.array(z.array(z.string())), status: z.enum(['answered', 'dismissed', 'interrupted']), settledAt: z.number(),
+  execution: planExecutionChoiceSchema.pick({ model: true, variant: true }).optional(),
 });
 const document = z.object({ version: z.literal(1), answers: z.array(answer) });
 const missing = z.object({ code: z.literal('ENOENT') });
@@ -39,9 +41,10 @@ export const createNativeInteractions = ({ dataDir, now = Date.now }) => {
         const answers = await read(request.sessionID);
         const value = answer.parse({
           id: request.id, callID: request.tool.callID, kind: request.kind,
-          answers: outcome.status === 'replied' ? outcome.answers : [],
-          status: outcome.status === 'replied' ? 'answered' : outcome.reason ?? 'dismissed', settledAt: now(),
+          answers: outcome.status === 'replied' || outcome.status === 'transferred' ? outcome.answers : [],
+          status: outcome.status === 'replied' || outcome.status === 'transferred' ? 'answered' : outcome.reason ?? 'dismissed', settledAt: now(),
         });
+        if (outcome.execution) value.execution = { model: outcome.execution.model, variant: outcome.execution.variant };
         if (value.status === 'interrupted' && answers.some((entry) => entry.id === value.id && entry.status === 'answered')) return;
         await write(request.sessionID, [...answers.filter((entry) => entry.id !== value.id), value]);
       });
@@ -58,6 +61,7 @@ export const createNativeInteractions = ({ dataDir, now = Date.now }) => {
           if (!value) return [part];
           changed = true;
           const metadata = { ...part.state.metadata, questionAnswers: value.answers, questionStatus: value.status };
+          if (value.execution) metadata.nativePlanExecutionModel = value.execution;
           if (value.kind) {
             metadata.nativeQuestionKind = value.kind;
             metadata.nativePlanCallID = value.callID;

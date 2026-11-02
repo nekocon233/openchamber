@@ -15,6 +15,27 @@ describe('modelDisplay', () => {
     expect(getProviderModelDisplayName(undefined, 'claude-sonnet-4-5')).toBe('Claude Sonnet 4.5');
   });
 
+  test('separates a Claude gateway model suffix from a recorded effort', () => {
+    expect(getProviderModelDisplayName(undefined, 'claude-opus-5-5-high', { separateEffort: true })).toBe('Claude Opus 5.5');
+    expect(getProviderModelDisplayName(undefined, 'claude-sonnet-5-5-low', { separateEffort: true })).toBe('Claude Sonnet 5.5');
+    expect(getProviderModelDisplayName(undefined, 'claude-opus-5-5-high')).toBe('Claude Opus 5.5 High');
+  });
+
+  test('normalizes native Claude routing aliases and colon effort suffixes', () => {
+    for (const id of ['group/auto-claude-opus-5-5:high', 'auto/claude-opus-5-5:high', 'antigravity/claude-opus-5-5-high']) {
+      expect(getProviderModelDisplayName(undefined, id, { separateEffort: true })).toBe('Claude Opus 5.5');
+    }
+    expect(getProviderModelDisplayName(undefined, 'group/auto-claude-sonnet-5-5', { separateEffort: true })).toBe('Claude Sonnet 5.5');
+    expect(getProviderModelDisplayName(undefined, 'group/auto-claude-opus-5-5:high')).toBe('Auto Claude Opus 5.5 (High)');
+  });
+
+  test('keeps catalog names and other model suffixes intact when separating effort', () => {
+    expect(getModelDisplayName({ id: 'custom-high', name: 'Custom High' }, undefined, { separateEffort: true })).toBe('Custom High');
+    expect(getProviderModelDisplayName(undefined, 'gemini-4-argon-high', { separateEffort: true })).toBe('Gemini 4 Argon High');
+    expect(getProviderModelDisplayName(undefined, 'custom-high', { separateEffort: true })).toBe('Custom High');
+    expect(getProviderModelDisplayName(undefined, 'claude-opus-5-5:turbo', { separateEffort: true })).toBe('Claude Opus 5.5 (Turbo)');
+  });
+
   test('uses fallback label only when no model id is available', () => {
     expect(getProviderModelDisplayName(undefined, undefined, { fallbackLabel: 'Select model' })).toBe('Select model');
   });

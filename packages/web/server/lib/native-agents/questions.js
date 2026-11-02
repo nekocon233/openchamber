@@ -9,8 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { NativeAgentError } from './errors.js';
 
 /** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean }} QuestionInfo */
-/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit' | 'antigravity-plan-exit', tool?: { messageID: string, callID: string } }} QuestionRequest */
-/** @typedef {{ status: 'replied', answers: string[][] } | { status: 'rejected', reason?: 'interrupted' }} QuestionOutcome */
+/** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit' | 'antigravity-plan-exit', tool?: { messageID: string, callID: string }, canSelectExecutionModel?: boolean, executionPending?: import('./plan-execution.js').PlanExecutionChoice }} QuestionRequest */
+/** @typedef {{ status: 'replied' | 'transferred', answers: string[][], execution?: import('./plan-execution.js').PlanExecutionChoice } | { status: 'rejected', reason?: 'interrupted' }} QuestionOutcome */
 
 const questionNotFoundError = (requestId) => new NativeAgentError(
   `No pending native question ${requestId}`,
@@ -21,8 +21,8 @@ const questionNotFoundError = (requestId) => new NativeAgentError(
  * @param {object} options
  * @param {(directory: string, payload: { type: string, properties: object }) => void} options.publish
  */
-export const createQuestionRegistry = ({ publish, onSettled = () => undefined }) => {
-  /** @type {Map<string, { request: QuestionRequest, directory: string, phase: 'open' | 'replying', signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void>, settle: (outcome: QuestionOutcome) => void }>} */
+export const createQuestionRegistry = ({ publish, onSettled = () => undefined, executePlan, canExecutePlan = () => true }) => {
+  /** @type {Map<string, { request: QuestionRequest, directory: string, phase: 'open' | 'replying' | 'transferring', transferred: boolean, signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void>, settle: (outcome: QuestionOutcome) => void }>} */
   const pending = new Map();
 
   const settle = (requestId, outcome) => {
@@ -40,11 +40,31 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
       entry.settle(outcome);
       return onSettled(entry.request, outcome, entry.directory);
     };
-    const deliver = entry.onReply;
+    const transfer = async () => {
+      if (entry.transferred) return;
+      await entry.onReply?.({ ...outcome, status: 'transferred' });
+      if (pending.get(requestId) !== entry) throw questionNotFoundError(requestId);
+      entry.transferred = true;
+      entry.phase = 'transferring';
+      entry.settle({ ...outcome, status: 'transferred' });
+      entry.onReply = undefined;
+    };
+    const deliver = outcome.status === 'replied' && (outcome.execution || entry.transferred)
+      ? () => executePlan({ request: entry.request, directory: entry.directory, transferred: entry.transferred === true }, outcome, {
+        transfer, deliver: () => entry.onReply?.(outcome),
+        link: (tool) => { entry.request.tool = tool; },
+        isCurrent: () => pending.get(requestId) === entry,
+        pending: (executionPending) => {
+          if (pending.get(requestId) !== entry) return;
+          entry.request.executionPending = executionPending;
+          publish(entry.directory, { type: 'question.asked', properties: entry.request });
+        },
+      })
+      : entry.onReply;
     if (!deliver || entry.signal?.aborted || outcome.status === 'rejected' && outcome.reason === 'interrupted') return commit();
-    if (entry.phase === 'replying') throw new NativeAgentError('This native question answer is being delivered', { status: 409, code: 'NATIVE_QUESTION_REPLY_PENDING' });
+    if (entry.phase !== 'open') throw new NativeAgentError('This native question answer is being delivered', { status: 409, code: 'NATIVE_QUESTION_REPLY_PENDING' });
     entry.phase = 'replying';
-    return Promise.resolve().then(() => deliver(outcome)).then(commit, (error) => {
+    return Promise.resolve().then(() => deliver(outcome)).then(async (result) => { await commit(); return result; }, (error) => {
       if (pending.get(requestId) === entry) entry.phase = 'open';
       throw error;
     });
@@ -57,7 +77,7 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
      * @param {{ id?: string, directory: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit' | 'antigravity-plan-exit', tool?: { messageID: string, callID: string }, signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void> }} input
      * @returns {Promise<QuestionOutcome>}
      */
-    ask({ id, directory, sessionID, questions, kind, tool, signal, onReply }) {
+    ask({ id, directory, sessionID, questions, kind, tool, signal, onReply, transferred = false, executionPending }) {
       /** @type {QuestionRequest} */
       const request = {
         id: id ?? `ncq_${randomUUID()}`, sessionID, questions,
@@ -65,14 +85,17 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
       if (pending.has(request.id)) throw new NativeAgentError('This native question is already pending', { status: 409, code: 'NATIVE_QUESTION_REPLY_PENDING' });
       if (kind !== undefined) request.kind = kind;
       if (tool !== undefined) request.tool = tool;
+      if (executePlan && kind?.endsWith('-plan-exit') && canExecutePlan(request)) request.canSelectExecutionModel = true;
+      if (executionPending) request.executionPending = executionPending;
       return new Promise((resolve) => {
         const onAbort = () => {
-          if (pending.has(request.id)) void Promise.resolve(settle(request.id, { status: 'rejected', reason: 'interrupted' })).catch(() => {});
+          const entry = pending.get(request.id);
+          if (entry && !entry.transferred) void Promise.resolve(settle(request.id, { status: 'rejected', reason: 'interrupted' })).catch(() => {});
         };
         pending.set(request.id, {
           request,
           directory,
-          phase: 'open', signal, onReply,
+          phase: 'open', signal, onReply, transferred,
           settle: (outcome) => {
             signal?.removeEventListener('abort', onAbort);
             resolve(outcome);
@@ -96,12 +119,26 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
       return pending.get(requestId)?.request.sessionID ?? null;
     },
 
+    get(requestId) {
+      return pending.get(requestId)?.request ?? null;
+    },
+
     /**
      * @param {string} requestId
      * @param {string[][]} answers one list of chosen labels per question
      */
-    reply(requestId, answers) {
-      return settle(requestId, { status: 'replied', answers });
+    reply(requestId, answers, execution) {
+      if (execution) {
+        const request = pending.get(requestId)?.request;
+        if (!request) throw questionNotFoundError(requestId);
+        if (!request.canSelectExecutionModel || answers.length !== 1 || answers[0].length !== 1 || answers[0][0] !== 'build') {
+          throw new NativeAgentError('An execution model can only accompany a native plan approval', { status: 400, code: 'NATIVE_INVALID_REQUEST' });
+        }
+      }
+      /** @type {QuestionOutcome} */
+      const outcome = { status: 'replied', answers };
+      if (execution) outcome.execution = execution;
+      return settle(requestId, outcome);
     },
 
     /** @param {string} requestId */
@@ -127,7 +164,7 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined })
     /** Rejects every question a session is waiting on, when its turn ends. */
     rejectSession(sessionID) {
       for (const [requestId, entry] of pending) {
-        if (entry.request.sessionID === sessionID) void Promise.resolve(settle(requestId, { status: 'rejected', reason: 'interrupted' })).catch(() => {});
+        if (entry.request.sessionID === sessionID && !(entry.transferred && entry.phase !== 'open')) void Promise.resolve(settle(requestId, { status: 'rejected', reason: 'interrupted' })).catch(() => {});
       }
     },
   };

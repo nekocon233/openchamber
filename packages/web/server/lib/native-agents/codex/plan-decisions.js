@@ -29,7 +29,26 @@ export const createCodexPlanDecisions = ({ questions, prompt, failed }) => {
   };
 
   const decide = async (plan, signal) => {
-    const outcome = await questions.ask({
+    const deliver = async (outcome) => {
+      signal.throwIfAborted();
+      if (outcome.status !== 'replied' || outcome.answers.length !== 1 || outcome.answers[0].length !== 1) return;
+      const answer = outcome.answers[0][0];
+      if (answer === 'plan' || !answer.trim()) return;
+      try {
+        await prompt(plan.sessionId, {
+          directory: plan.directory,
+          messageID: answer === 'build' ? newCodexPlanApprovalMessageId() : `ncx_u_${randomUUID()}`,
+          parts: [{ type: 'text', text: answer === 'build' ? 'Implement the plan.' : answer }],
+          model: { providerID: NATIVE_PROVIDER_CODEX, modelID: plan.send.modelID },
+          variant: plan.send.variant,
+          agent: answer === 'build' ? 'build' : 'plan',
+        }, signal);
+      } catch (error) {
+        if (!signal.aborted) failed(plan, error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      }
+    };
+    await questions.ask({
       directory: plan.directory,
       sessionID: plan.sessionId,
       kind: 'codex-plan-exit',
@@ -41,19 +60,8 @@ export const createCodexPlanDecisions = ({ questions, prompt, failed }) => {
         multiple: false,
       }],
       signal,
+      onReply: deliver,
     });
-    signal.throwIfAborted();
-    if (outcome.status !== 'replied' || outcome.answers.length !== 1 || outcome.answers[0].length !== 1) return;
-    const answer = outcome.answers[0][0];
-    if (answer === 'plan' || !answer.trim()) return;
-    await prompt(plan.sessionId, {
-      directory: plan.directory,
-      messageID: answer === 'build' ? newCodexPlanApprovalMessageId() : `ncx_u_${randomUUID()}`,
-      parts: [{ type: 'text', text: answer === 'build' ? 'Implement the plan.' : answer }],
-      model: { providerID: NATIVE_PROVIDER_CODEX, modelID: plan.send.modelID },
-      variant: plan.send.variant,
-      agent: answer === 'build' ? 'build' : 'plan',
-    }, signal);
   };
 
   return {

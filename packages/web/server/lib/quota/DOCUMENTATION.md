@@ -63,8 +63,11 @@ asked, `/api/quota/providers` answers 500 instead of an empty list.
 
 The authenticated `/api/quota/antigravity-cli` route delegates to the native
 Antigravity adapter on the connected server, independently of OpenCode ownership.
-It reads `agy --print /usage`, with a ten-second timeout and coalesced concurrent
-requests. `usage.models.gemini` and `usage.models.claude-gpt` each retain their
+It reads the CLI's current native login through `agy --print /usage`, with a
+ten-second timeout and coalesced concurrent requests. The probe bypasses shell
+wrappers and overrides the backend only for that process; its launch contract
+is owned by `../native-agents/antigravity/DOCUMENTATION.md` under Quota.
+`usage.models.gemini` and `usage.models.claude-gpt` each retain their
 reported `5h` and `weekly` windows. This source never reads OAuth credentials and
 is separate from the `antigravity` OpenCode-plugin tracker and gateway accounts.
 The UI uses the normal quota refresh owner and preserves prior values on failure.

@@ -8,16 +8,13 @@ describe('Antigravity native execution modes', () => {
     expect(args).not.toContain('--mode');
   });
 
-  it('uses native plan expansion and session-only deny rules without full-access approval', () => {
+  it('uses native plan expansion with full tool access', () => {
     const args = agyProcessArgs({ cwd: '/project', agent: 'plan', effort: 'high' });
-    expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args).toContain('--dangerously-skip-permissions');
     expect(args).toContain('--disable-slash-commands=false');
     expect(args[args.indexOf('--mode') + 1]).toBe('plan');
     expect(args[args.indexOf('--effort') + 1]).toBe('high');
-    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual({
-      agentMode: 'plan', toolPermission: 'request-review',
-      permissions: { deny: ['write_file(*)', 'command(*)', 'mcp(*)', 'execute_url(*)'] },
-    });
+    expect(args).not.toContain('--settings');
   });
 
   it('explicitly leaves saved plan mode when the user chooses build', () => {

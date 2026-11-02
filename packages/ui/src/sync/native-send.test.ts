@@ -5,7 +5,8 @@ import { projectNativeQuestion } from '@/lib/native-agents/forms';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
-import type { NativePromptRequest } from "@/lib/api/types"
+import type { NativePromptRequest, NativePlanExecutionChoice } from "@/lib/api/types"
+import { useSelectionStore } from './selection-store';
 import { CONTEXT_METADATA_KEY, type ContextPartMetadata } from "@/lib/messages/contextParts"
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
 import { nativeMessagePageSchema } from "@/lib/native-agents/schemas"
@@ -50,7 +51,7 @@ let prompts: Array<{ sessionId: string; request: NativePromptRequest }> = []
 let promptFailure: ((request: NativePromptRequest) => Error) | null = null
 let nativeHistory: unknown[] = []
 let aborts: string[] = []
-let replies: Array<{ requestId: string; answers: string[][] }> = []
+let replies: Array<{ requestId: string; answers: string[][]; execution?: NativePlanExecutionChoice }> = []
 let replyFailure: Error | null = null
 let rejectGone = false
 let openCodeRequests: string[] = []
@@ -87,8 +88,10 @@ beforeEach(() => {
       aborts.push(sessionId)
       return true
     },
-    replyQuestion: async (requestId, answers) => {
-      replies.push({ requestId, answers })
+    replyQuestion: async (requestId, answers, execution) => {
+      const reply: (typeof replies)[number] = { requestId, answers }
+      if (execution) reply.execution = execution
+      replies.push(reply)
       if (replyFailure) throw replyFailure
     },
     rejectQuestion: async () => {
@@ -151,6 +154,13 @@ describe("native prompt parts", () => {
 })
 
 describe("routeMessage for native sessions", () => {
+  test('forwards a queued native subagent snapshot without replacing an explicit CLI default', async () => {
+    const subagentModel: NonNullable<NativePromptRequest['subagentModel']> = { model: { providerID: 'codex-native', modelID: 'gpt-test' }, variant: 'max' };
+    await routeMessage({ sessionId: SESSION, directory: DIRECTORY, content: 'Queued task', providerID: 'claude-native', modelID: 'opus', agent: 'build', subagentModel });
+    await routeMessage({ sessionId: SESSION, directory: DIRECTORY, content: 'CLI default', providerID: 'claude-native', modelID: 'opus', agent: 'build', subagentModel: null });
+    expect(prompts[0].request.subagentModel).toEqual(subagentModel);
+    expect(prompts[1].request.subagentModel).toBeNull();
+  });
   test('an unsupported Antigravity agent cannot silently become build', async () => {
     await expect(routeMessage({
       sessionId: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
@@ -304,6 +314,28 @@ describe("native send failures", () => {
 })
 
 describe("session actions for native sessions", () => {
+  test('applies an execution model only after approval is accepted and keeps other composers unchanged', async () => {
+    const store = childStores.getChild(DIRECTORY)
+    store?.setState({ form: { [SESSION]: [form('ncq_model')] } })
+    useSessionUIStore.setState({ currentSessionId: null })
+    const selection = useSelectionStore.getState()
+    selection.saveSessionModelSelection(SESSION, 'claude-native', 'opus')
+    selection.saveSessionAgentSelection(SESSION, 'plan')
+    const configBefore = useConfigStore.getState().currentModelId
+    const execution = { model: { providerID: 'claude-native', modelID: 'sonnet' }, variant: 'max' }
+    replyFailure = new NativeAgentsRequestError('offline', 503, 'NATIVE_CLI_MISSING')
+    await expect(replyToForm(SESSION, 'ncq_model', { 'question-0': 'build' }, execution)).rejects.toThrow('offline')
+    expect(useSelectionStore.getState().getSessionModelSelection(SESSION)?.modelId).toBe('opus')
+    replyFailure = null
+    await replyToForm(SESSION, 'ncq_model', { 'question-0': 'build' }, execution)
+    expect(replies.at(-1)?.execution).toEqual(execution)
+    expect(useSelectionStore.getState().getSessionModelSelection(SESSION)).toEqual({ providerId: 'claude-native', modelId: 'sonnet' })
+    expect(useSelectionStore.getState().getSessionAgentSelection(SESSION)).toBe('build')
+    expect(useSelectionStore.getState().getAgentModelVariantForSession(SESSION, 'build', 'claude-native', 'sonnet')).toBe('max')
+    expect(useConfigStore.getState().currentModelId).toBe(configBefore)
+    expect(openCodeRequests).toEqual([])
+  })
+
   test("abort the running turn through the native API", async () => {
     await abortCurrentOperation(SESSION)
     expect(aborts).toEqual([SESSION])

@@ -439,7 +439,7 @@ const toQueuedMessage = (item: FollowUpQueueItem): QueuedMessage => {
         ...(additionalParts ? {
             additionalParts: additionalParts.map(toQueuedAdditionalPart),
         } : {}),
-        ...(item.sendConfig ? { sendConfig: { ...item.sendConfig } } : {}),
+        ...(item.sendConfig ? { sendConfig: structuredClone(item.sendConfig) } : {}),
         ...(item.claim ? { claim: { ...item.claim } } : {}),
     };
 };

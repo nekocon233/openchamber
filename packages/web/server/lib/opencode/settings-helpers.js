@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentCombinationsSchema } from '../native-agents/agent-configuration.js';
 import { createRequire } from 'node:module';
 
 import { isAgentMemoryFeatureAvailable } from '../agent-memory/feature-flag.js';
@@ -514,6 +515,13 @@ export const createSettingsHelpers = (dependencies) => {
     if (Array.isArray(candidate.providerOrder)) {
       result.providerOrder = normalizeStringArray(candidate.providerOrder);
     }
+    if (Array.isArray(candidate.favoritePickerOrder)) {
+      result.favoritePickerOrder = normalizeStringArray(candidate.favoritePickerOrder).slice(0, 164);
+    }
+    if (Object.hasOwn(candidate, 'agentCombinationOrder')) {
+      const ids = z.array(z.string().uuid()).max(100).safeParse(candidate.agentCombinationOrder);
+      if (ids.success) result.agentCombinationOrder = [...new Set(ids.data)];
+    }
     if (typeof candidate.sessionRecapEnabled === 'boolean') {
       result.sessionRecapEnabled = candidate.sessionRecapEnabled;
     }
@@ -741,6 +749,10 @@ export const createSettingsHelpers = (dependencies) => {
       result.typographySizes = typography;
     }
 
+    if (Object.hasOwn(candidate, 'nativeAgentCombinations')) {
+      const combinations = agentCombinationsSchema.safeParse(candidate.nativeAgentCombinations);
+      if (combinations.success) result.nativeAgentCombinations = combinations.data;
+    }
     if (typeof candidate.defaultModel === 'string') {
       const trimmed = candidate.defaultModel.trim();
       result.defaultModel = trimmed.length > 0 ? trimmed : undefined;
@@ -963,6 +975,11 @@ export const createSettingsHelpers = (dependencies) => {
     const favoriteModels = sanitizeModelRefs(candidate.favoriteModels, 64);
     if (favoriteModels) {
       result.favoriteModels = favoriteModels;
+    }
+
+    if (Object.hasOwn(candidate, 'favoriteAgentCombinations')) {
+      const ids = z.array(z.string().uuid()).max(100).safeParse(candidate.favoriteAgentCombinations);
+      if (ids.success) result.favoriteAgentCombinations = [...new Set(ids.data)];
     }
 
     const recentModels = sanitizeModelRefs(candidate.recentModels, 16);

@@ -7,6 +7,47 @@ everything between typing and sending.
 own state and wires these modules together; it should not grow logic that
 belongs to one of them.
 
+`ModelControls` lists saved agent combinations under Combinations in the
+existing desktop model dropdown and mobile model sheet. Rows contain the
+combination name; role choices are edited in Settings. There is no separate
+combination trigger or subagent picker in the composer. `useAgentCombinations`
+applies the main selection and roles through one revisioned server write,
+mirroring the result only on success and preserving a newer local model
+selection. Selection sends no message and keeps Plan/Build mode. Full
+combinations are available for unified native sessions and new drafts.
+Draft combinations are scoped to runtime and draft ID and captured in atomic
+creation. The chat column exposes no session directory before creation, even
+when a project is selected. Project, worktree and managed Chat drafts therefore
+use the same draft identity. Selection does not create a directory.
+The send captures the selected roles before preparing its scratch directory;
+native creation receives that snapshot and consumes it only after success.
+The Combinations section uses the stack icon and follows Recent on desktop
+and mobile, including keyboard navigation and sticky-header order. Shared
+dropdown sections use the existing separator style between Recent and
+Combinations, and between Combinations and the providers below it.
+The trigger shows the captured combination name while a combination is selected;
+only that combination row carries the selection mark. Explicitly choosing an
+individual model clears the combination identity and shows the model name.
+The existing subagent and execution choices remain captured. For a saved
+conversation, clearing identity and choosing the model share one revisioned
+write, including when the individual model is already the main model.
+Combination rows use the main model's `ProviderLogo`, including in Favorites.
+Their stars update the profile's `favoriteAgentCombinations` IDs without
+selecting the row or closing the picker. Favorite combinations appear alongside
+model favorites; the full Combinations group remains below Recent with the same
+filled/unfilled stars. Desktop and the actual mobile sheet share these choices.
+Combination rows reorder within their group; starred combinations also reorder
+among model favorites. Both use `SortablePickerRows` with separate handles,
+mouse distance, touch hold and keyboard sensors. Rows translate without scaling
+and commit order only on drop. Reordering does not apply a model or combination.
+The saved profile orders survive reload and keep the same order on mobile.
+
+ExitPlanMode retains its execution model picker. Its initial choice comes from
+the applied combination, otherwise the current composer model; it contains no
+subagent selector. Approval continues on the execution model and makes it the
+session's next model while retaining the subagent choice. Queued messages
+capture the selected subagent, including explicit CLI defaults, when enqueued.
+
 `ChatContainer.tsx` keeps one `ChatInput` mounted while a new-session draft
 becomes its first session. Draft-only UI first fades for 120ms while the editor
 stays in place. The parent then moves the editor to its final session position
@@ -821,6 +862,14 @@ one app-wide composer state is split per column:
   clears the prompt of the session it leaves, never another column's.
 
 ## Mobile
+
+The visible compact/expanded composer row uses `MobileModelButton`;
+`ModelControls` is a hidden host for its selection sheets. The visible button
+reads the column's session combination name or runtime/directory-scoped draft
+name, with a primitive selector so unrelated metadata does not rerender it.
+An explicit `model` prop keeps controlled buttons on that model's label.
+Regression checks must mount this visible button with the hidden sheet host,
+not only a standalone `ModelControls` at a phone viewport.
 
 `state/useMobileComposerShell.ts` and `state/useMobileViewportPin.ts` are
 mostly not state machines but corrections for specific platform behaviors:

@@ -36,8 +36,9 @@ describe('Codex plan decisions between turns', () => {
       questions: [{ question: PLAN.text, options: [{ label: 'build' }, { label: 'plan' }] }],
     });
     expect(decisions.has(SESSION_ID)).toBe(true);
-    questions.reply(question.id, [['build']]);
-    expect(() => questions.reply(question.id, [['build']])).toThrow('No pending native question');
+    const reply = questions.reply(question.id, [['build']]);
+    expect(() => questions.reply(question.id, [['build']])).toThrow('being delivered');
+    await reply;
     await vi.waitFor(() => expect(decisions.has(SESSION_ID)).toBe(false));
     expect(sent).toEqual([{ sessionId: SESSION_ID, request: {
       directory: DIRECTORY, messageID: expect.stringMatching(/^ncx_u_plan_[0-9a-f-]+$/),
@@ -84,8 +85,9 @@ describe('Codex plan decisions between turns', () => {
 
   it('cancels an answer invalidated before its continuation begins', async () => {
     const { decisions, questions, question, sent, failures } = createHarness();
-    questions.reply(question.id, [['build']]);
+    const reply = questions.reply(question.id, [['build']]);
     decisions.cancel(SESSION_ID);
+    await expect(reply).rejects.toMatchObject({ name: 'AbortError' });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(sent).toEqual([]);
     expect(failures).toEqual([]);
@@ -98,22 +100,25 @@ describe('Codex plan decisions between turns', () => {
       await preparation;
       signal.throwIfAborted();
     });
-    questions.reply(question.id, [['build']]);
+    const reply = questions.reply(question.id, [['build']]);
     await Promise.resolve();
     expect(decisions.has(SESSION_ID)).toBe(true);
     decisions.cancel(SESSION_ID);
     release();
+    await expect(reply).rejects.toMatchObject({ name: 'AbortError' });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(sent).toEqual([]);
     expect(failures).toEqual([]);
   });
 
-  it('reports a failed start once without retrying or retaining a pending decision', async () => {
+  it('reports a failed start once and retains the decision for an explicit retry', async () => {
     const { decisions, questions, question, sent, failures } = createHarness(async () => { throw new Error('Codex unavailable'); });
-    questions.reply(question.id, [['build']]);
-    await vi.waitFor(() => expect(decisions.has(SESSION_ID)).toBe(false));
+    await expect(questions.reply(question.id, [['build']])).rejects.toThrow('Codex unavailable');
+    expect(decisions.has(SESSION_ID)).toBe(true);
+    expect(questions.list(DIRECTORY)).toEqual([question]);
     expect(sent).toEqual([]);
     expect(failures).toEqual([{ plan: PLAN, error: expect.objectContaining({ message: 'Codex unavailable' }) }]);
+    decisions.clear();
   });
 
   it('supersedes an older question without cancelling an unrelated session', async () => {

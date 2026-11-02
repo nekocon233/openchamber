@@ -267,6 +267,7 @@ export const createDeepseekProjection = ({ sessionId, directory, publisher = nul
       }
       const record = ensureAssistant(data.turn, data.step, event.time);
       record.parts.push(partFrom(record, { type: 'tool-call', id: data.callId, name: data.name, arguments: data.arguments }, record.parts.length, event.time, false));
+      if (!positions.has(record.info.id)) positions.set(record.info.id, event.seq);
       if (live) publish(record);
       return;
     }
@@ -284,22 +285,58 @@ export const createDeepseekProjection = ({ sessionId, directory, publisher = nul
       if (live) publish(call.record);
       return;
     }
-    if (event.type === 'step/end' || event.type === 'turn/end') {
-      const data = event.type === 'step/end' ? step.parse(event.data) : turnEnd.parse(event.data);
-      for (const record of records.values()) {
-        const identity = assistantTurns.get(record.info.id);
-        if (record.info.role !== 'assistant' || identity?.turn !== data.turn) continue;
-        if (event.type === 'step/end' && identity.step !== data.step) continue;
-        record.info.time.completed = Math.max(record.info.time.completed ?? 0, event.time);
+    if (event.type === 'step/end') {
+      const data = step.parse(event.data);
+      const record = records.get(assistantId(data.turn, data.step));
+      if (!record || record.info.role !== 'assistant') return;
+      record.info.time.completed = Math.max(record.info.time.completed ?? 0, event.time);
+      for (const part of record.parts) if (part.type === 'text' || part.type === 'reasoning') part.time.end ??= Math.max(part.time.start, event.time);
+      if (live) publish(record);
+      return;
+    }
+    if (event.type === 'turn/end') {
+      const data = turnEnd.parse(event.data);
+      const turnRecords = Array.from(records.values()).filter((record) => record.info.role === 'assistant' && assistantTurns.get(record.info.id)?.turn === data.turn);
+      const lastRecord = turnRecords.at(-1);
+      const answerRecord = turnRecords.findLast((record) => record.parts.some((part) => part.type === 'text' && part.text.trim()));
+      const turnError = ['aborted', 'interrupted'].includes(data.reason.kind)
+        ? stoppedError()
+        : data.reason.kind === 'error'
+          ? unknownError(data.reason.error?.message ?? 'DeepSeek Harness turn failed')
+          : null;
+      for (const record of turnRecords) {
+        let changed = false;
+        let settledPart = false;
         for (const part of record.parts) {
-          if (part.type === 'text' || part.type === 'reasoning') part.time.end ??= event.time;
-          if (event.type === 'turn/end' && part.type === 'tool' && part.state.status === 'running') part.state = {
-            status: 'error', input: part.state.input, error: 'Interrupted', time: { start: part.state.time.start, end: event.time },
-          };
+          if ((part.type === 'text' || part.type === 'reasoning') && part.time.end === undefined) {
+            part.time.end = Math.max(part.time.start, event.time);
+            settledPart = true;
+            changed = true;
+          }
+          if (part.type === 'tool' && part.state.status === 'running') {
+            part.state = {
+              status: 'error', input: part.state.input, error: 'Interrupted', time: { start: part.state.time.start, end: Math.max(part.state.time.start, event.time) },
+            };
+            settledPart = true;
+            changed = true;
+          }
         }
-        if (event.type === 'turn/end' && ['aborted', 'interrupted'].includes(data.reason.kind)) record.info.error = stoppedError();
-        if (event.type === 'turn/end' && data.reason.kind === 'error') record.info.error = unknownError(data.reason.error?.message ?? 'DeepSeek Harness turn failed');
-        if (live) publish(record);
+        if (record.info.time.completed === undefined || settledPart) {
+          record.info.time.completed = Math.max(record.info.time.completed ?? record.info.time.created, event.time);
+          changed = true;
+        }
+        if (turnError && (record === lastRecord || settledPart)) {
+          record.info.error = turnError;
+          changed = true;
+        }
+        if (record === answerRecord) {
+          const finish = turnError ? 'error' : 'stop';
+          if (record.info.finish !== finish) {
+            record.info.finish = finish;
+            changed = true;
+          }
+        }
+        if (changed && live) publish(record);
       }
     }
   };

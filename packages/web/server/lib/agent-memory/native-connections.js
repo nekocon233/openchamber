@@ -5,7 +5,11 @@ import { z } from 'zod';
 import { withMemoryFileLock } from './file-lock.js';
 import { randomUUID } from 'node:crypto';
 
-const events = ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt'];
+// Claude Code warns about every hook event it does not know. Interrupt exists only in Codex.
+const events = {
+  claude: ['SessionStart', 'UserPromptSubmit', 'Stop'],
+  codex: ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt'],
+};
 const hook = z.object({ type: z.string(), command: z.string().optional() }).passthrough();
 const group = z.object({ hooks: z.array(hook) }).passthrough();
 const configSchema = z.object({ hooks: z.record(z.string(), z.array(group)).optional() }).passthrough();
@@ -34,15 +38,17 @@ export const createNativeMemoryConnections = ({ getEnv, hookPath, now = Date.now
     const file = paths()[backend];
     const work = pending.catch(() => {}).then(() => withMemoryFileLock(file, async () => {
       const original = await read(file);
-      const hooks = Object.fromEntries(Object.entries(original.hooks ?? {}).map(([event, groups]) => [event,
-        groups.flatMap((entry) => {
-          const kept = entry.hooks.filter((handler) => !owned(handler, backend));
-          return kept.length === entry.hooks.length ? [entry] : kept.length > 0 ? [{ ...entry, hooks: kept }] : [];
-        }),
-      ]));
+      const hooks = Object.fromEntries(Object.entries(original.hooks ?? {}).flatMap(([event, groups]) => {
+        const kept = groups.flatMap((entry) => {
+          const handlers = entry.hooks.filter((handler) => !owned(handler, backend));
+          return handlers.length === entry.hooks.length ? [entry] : handlers.length > 0 ? [{ ...entry, hooks: handlers }] : [];
+        });
+        // Claude warns on the event key alone, so an emptied event must disappear too.
+        return kept.length > 0 ? [[event, kept]] : [];
+      }));
       if (port !== null) {
         const command = `${quote(executable)} ${quote(hookPath)} --backend ${backend} --port ${port}`;
-        for (const event of events) {
+        for (const event of events[backend]) {
           hooks[event] = [...(hooks[event] ?? []), { hooks: [{ type: 'command', command, timeout: 3 }] }];
         }
       }
@@ -75,7 +81,7 @@ export const createNativeMemoryConnections = ({ getEnv, hookPath, now = Date.now
         try {
         const file = paths()[backend];
         const config = await read(file);
-        const installed = events.every((event) => config.hooks?.[event]?.some((entry) => entry.hooks.some((handler) => owned(handler, backend))));
+        const installed = events[backend].every((event) => config.hooks?.[event]?.some((entry) => entry.hooks.some((handler) => owned(handler, backend))));
         let lastSeen = null;
         try { lastSeen = stamp.parse(JSON.parse(await fs.readFile(`${file}.openchamber-memory-observed.json`, 'utf8'))).lastSeen; }
         catch (error) { if (!missing.safeParse(error).success) throw error; }

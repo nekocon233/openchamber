@@ -5,7 +5,6 @@ import WebSocket from 'ws';
 import { spawnCliProcess } from '../process.js';
 import { createDeepseekTransport } from './transport.js';
 import { accepted, modelCatalog, sessionCreated } from './protocol.js';
-import { createDeepseekConfiguration } from './configuration.js';
 
 const transports = [];
 afterEach(async () => { for (const transport of transports.splice(0)) await transport.shutdown(); });
@@ -37,21 +36,6 @@ const socketProbe = () => {
 };
 
 describe('DeepSeek process and protocol boundary', () => {
-  it('gates remote configuration reads and writes before spawn and on policy changes', async () => {
-    let blocked = true;
-    const { transport, starts } = setup({ enterpriseMode: () => blocked });
-    const configuration = createDeepseekConfiguration({ transport });
-    const input = { revision: 0, baseURL: null, modelIDs: ['test-model'], apiKey: 'fixture-api-key' };
-    await expect(configuration.read()).rejects.toMatchObject({ status: 403, code: 'enterprise_mode' });
-    await expect(configuration.save(input)).rejects.toMatchObject({ status: 403, code: 'enterprise_mode' });
-    expect(starts()).toBe(0);
-    blocked = false;
-    expect(await configuration.save(input)).toMatchObject({ status: 'saved' });
-    blocked = true;
-    await expect(configuration.read()).rejects.toMatchObject({ status: 403, code: 'enterprise_mode' });
-    expect(starts()).toBe(1);
-  });
-
   it('refuses enterprise mode and a missing CLI before spawning', async () => {
     const blocked = setup({ enterpriseMode: () => true });
     await expect(blocked.transport.request('session/modelCatalog', {}, modelCatalog)).rejects.toMatchObject({ status: 403, code: 'enterprise_mode' });

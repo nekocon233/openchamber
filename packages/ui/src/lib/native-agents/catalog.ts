@@ -1,7 +1,8 @@
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { getRuntimeKey } from '@/lib/runtime-switch';
-import type { NativeBackend } from './ids';
+import { NATIVE_BACKENDS, type NativeBackend } from './ids';
 import { buildNativeProvider, type NativeProvider } from './providers';
+import type { NativeModelDescriptor } from './schemas';
 
 // Native CLI models for the model picker. The catalog is the same for every
 // directory, so it is read once per runtime. A backend whose read fails keeps
@@ -9,7 +10,6 @@ import { buildNativeProvider, type NativeProvider } from './providers';
 // at most once a minute.
 
 const RETRY_AFTER_FAILURE_MS = 60_000;
-const BACKENDS: NativeBackend[] = ['claude', 'codex', 'deepseek', 'antigravity'];
 
 type CatalogState = {
   providers: Map<NativeBackend, NativeProvider>;
@@ -20,8 +20,27 @@ type CatalogState = {
 
 const states = new Map<string, CatalogState>();
 
+const OFFICIAL_DEEPSEEK_PREFIX = 'deepseek-official/';
+
+/**
+ * DSH can expose DeepSeek through the official provider and through a gateway.
+ * Keep the official entry and hide duplicated DeepSeek models from other
+ * providers; gateway groups keep their non-DeepSeek models.
+ */
+const preferOfficialDeepSeekModels = (models: NativeModelDescriptor[]): NativeModelDescriptor[] => {
+  if (!models.some((model) => model.id.startsWith(OFFICIAL_DEEPSEEK_PREFIX))) return models;
+  return models.filter((model) => {
+    if (model.id.startsWith(OFFICIAL_DEEPSEEK_PREFIX)) return true;
+    const separator = model.id.indexOf('/');
+    if (separator < 0) return true;
+    let modelID = model.id.slice(separator + 1);
+    try { modelID = decodeURIComponent(modelID); } catch { /* keep the encoded id */ }
+    return !modelID.startsWith('deepseek/');
+  });
+};
+
 const listed = (state: CatalogState): NativeProvider[] => (
-  BACKENDS.flatMap((backend) => {
+  NATIVE_BACKENDS.flatMap((backend) => {
     const provider = state.providers.get(backend);
     return provider ? [provider] : [];
   })
@@ -56,12 +75,13 @@ export const loadNativeProviders = async (): Promise<NativeProvider[]> => {
         return getRuntimeKey() === runtimeKey ? loadNativeProviders() : listed(current);
       }
       let complete = true;
-      for (const backend of BACKENDS) {
+      for (const backend of NATIVE_BACKENDS) {
         const partition = catalog.backends[backend];
         // An older server has no DeepSeek adapter, rather than a failed catalog.
         if (!partition) { current.providers.delete(backend); continue; }
         if (partition.status === 'ok') {
-          if (partition.models.length > 0) current.providers.set(backend, buildNativeProvider(backend, partition.models));
+          const models = backend === 'deepseek' ? preferOfficialDeepSeekModels(partition.models) : partition.models;
+          if (models.length > 0) current.providers.set(backend, buildNativeProvider(backend, models));
           else current.providers.delete(backend);
         } else {
           complete = false;

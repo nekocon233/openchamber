@@ -16,6 +16,8 @@
 
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { create } from "zustand"
+import type { NativeAgentModel } from '@/lib/native-agents/combinations'
+import { captureAgentCombinationDraft } from '@/lib/native-agents/combination-drafts'
 import { isSameModelRef, toModelRef, type Metadata, type ModelRef, type Part, type Session, type TextPart } from "@/lib/opencode/model"
 import type { AttachedFile, SessionWorktreeAttachment } from "@/stores/types/sessionTypes"
 import type { PermissionMode } from "@/stores/utils/permissionAutoAccept"
@@ -293,6 +295,7 @@ export async function routeMessage(params: {
   appendSubmissions?: () => void
   delivery?: 'steer' | 'queue'
   preserveModelSelection?: boolean
+  subagentModel?: NativeAgentModel | null
   messageId?: string
   expectedRuntime?: ExpectedRuntimeContext
   skills?: SkillMentions
@@ -483,6 +486,7 @@ async function routeNativeMessage(params: Parameters<typeof routeMessage>[0]): P
       variant: params.variant ?? undefined,
       agent: params.agent,
       preserveSelection: params.preserveModelSelection,
+      subagentModel: params.subagentModel,
     })),
   })
   return 'prompt'
@@ -495,6 +499,7 @@ type CapturedSendTarget = {
 }
 
 type SendMessageOptions = {
+  subagentModel?: NativeAgentModel | null
   preserveModelSelection?: boolean
   /** Explicit composer intent; automated continuations must not restore archives. */
   userInitiated?: boolean
@@ -1196,6 +1201,7 @@ export function materializeOpenDraftSession(selection: {
   const existing = draftMaterializations.get(materializationKey)
   if (existing) return existing.promise
   if (!draft?.open) return Promise.resolve(null)
+  const combinationDraft = captureAgentCombinationDraft({ draftId: draft.draftId })
 
   const materialization = (async () => {
     // Only an explicit choice is written: without one the server applies its own
@@ -1248,7 +1254,7 @@ export function materializeOpenDraftSession(selection: {
         ? { openchamber: { project_context_pins: draftPins } }
         : undefined,
       "submitted-draft",
-      { model: { providerID: selection.providerID, id: selection.modelID, variant: selection.variant }, agent: trimmedAgent },
+      { model: { providerID: selection.providerID, id: selection.modelID, variant: selection.variant }, agent: trimmedAgent, combinationDraft },
       draft,
       operationRuntime,
       nativeBackend,
@@ -2200,6 +2206,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           appendSubmissions,
           delivery: options?.delivery,
           preserveModelSelection: options?.preserveModelSelection,
+          subagentModel: options?.subagentModel,
           messageId: options?.messageId,
           expectedRuntime: options?.expectedRuntime,
           skills: options?.skills,
@@ -2317,6 +2324,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         appendSubmissions,
         delivery: options?.delivery,
         preserveModelSelection: options?.preserveModelSelection,
+        subagentModel: options?.subagentModel,
         messageId: options?.messageId,
         expectedRuntime: options?.expectedRuntime,
         skills: options?.skills,

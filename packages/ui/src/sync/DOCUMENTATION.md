@@ -4,6 +4,29 @@
 
 This document covers the current client-side session/data architecture in `packages/ui/src/sync` and the rules for updating stores safely.
 
+Native combination writes share the per-session selection queue in
+`session-actions.ts`. They read current configuration and main-selection
+revisions before the request, then reconcile the returned session into the
+directory store and global cache. Older record revisions and results from a
+previous runtime generation cannot replace newer state. Role choices are
+session snapshots, separate from editable profile combinations.
+An explicit individual-model choice can clear combination identity through the
+same selection queue. It reads the latest role configuration and atomically
+preserves those roles while changing the main selection and removing the name.
+This also clears identity when the individual model matches the current main
+model. Automatic execution and ordinary selection reconciliation retain it.
+Native follow-up sends preserve their captured `subagentModel` through the
+queue and prompt builder; null captures CLI defaults and absence retains
+legacy behavior. A draft combination is included in unified creation and is
+consumed only after the create succeeds, without a second configuration write.
+All active draft choices are keyed by draft ID, including project/worktree
+drafts whose directory is not exposed by the chat column yet. The
+draft send captures both target identity and configuration before awaiting
+directory preparation, then passes them through `SessionCreateSelection`.
+Native creation sends the configuration atomically and clears only that exact
+captured entry, preserving a newer edit or another draft. Runtime changes
+invalidate creation before dispatch and before consuming the captured entry.
+
 There are **two distinct session data scopes** in the UI:
 
 1. **Directory-scoped sync stores**
@@ -651,9 +674,11 @@ Initial loads use smaller requests on constrained VS Code/mobile surfaces and pu
 
 Unified native conversations use `ncv_` IDs and the server's separate `unified`
 listing partition. They are the default for new native-model drafts when the
-server advertises `unifiedSessions`; single-CLI creation remains the fallback
-for older servers. Antigravity always bypasses that default and creates a
-single `nag_` session. Existing unified conversations cannot select it. Failed manifests preserve their held IDs independently of
+server advertises `unifiedSessions` and includes the backend in `unifiedBackends`.
+Every registered native backend, including Antigravity, participates. Servers
+predating that list support only the original Claude, Codex and DeepSeek mixed
+sessions; Antigravity keeps standalone creation with those hosts. Existing
+standalone IDs remain unchanged. Failed manifests preserve their held IDs independently of
 readable conversations. The owning server contract is
 `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`.
 
@@ -663,6 +688,12 @@ and history revisions have separate authority. Task controls use that source
 metadata. A source change retires the old task reads, checklist identity and
 plan/step observations before reading the new source. Background membership
 continues to come from live activity events and complete snapshots.
+Execution metadata includes the complete supported backend list for model picker
+negotiation without another capability read. Antigravity questions and approved
+plans continue through unified send admission; native echoes retain the logical
+user-message ID. Unified rewind and fork remain available. Permanent deletion
+is closed while any retained source cannot delete; manual compaction follows
+the executing source.
 
 Unified follow-ups retain captured configuration in the existing host queue.
 Before claiming queued work, the composer confirms server readiness. Delivery
@@ -691,21 +722,7 @@ This picks up connection effort changes made while disconnected. Failed backend
 partitions retain their prior catalog, and selected models and effort overrides
 remain intact. Initial connection uses ordinary catalog loading; idle streams
 do not poll the model list.
-Claude connection rows may opt into `antigravity-opus` or `antigravity-sonnet`
-through `followFamily`. Connection read/write schemas preserve that optional
-field. The host resolves the latest verified release at catalog or launch time
-and updates its name to the bound version, such as `Opus 5.5 (agy)`. The
-selectable connection/model UUID stays unchanged; existing model and effort
-selections continue to refer to the same row.
-Successful automatic updates emit a global native `catalog.updated` event
-with `kind: 'native-model'`. The ordinary catalog event batch refreshes only
-native providers, replacing names in the active mirror and loaded directories
-without starting OpenCode locations. Reconnect recovery covers missed events.
-Unified Opus and Sonnet retain their own gateway model UUIDs and optional-effort
-aliases for legacy `opus`, `sonnet` and `[1m]` selections. An alias without `variant` changes
-only model identity; it never overrides a saved effort. Its row reports the
-common source capabilities and names both versions when they differ. Native
-provider refresh replaces names and choices without changing the selected id.
+Native provider refresh replaces names and choices without changing the selected id.
 The server contract is in `packages/web/server/lib/native-agents/DOCUMENTATION.md`.
 `lib/native-agents/ids.ts` tells the backends apart by prefix, and every native
 branch keys on it.
@@ -887,7 +904,7 @@ with a native branch (`sync/native-send.ts`):
   The send path preserves Plan, and native agent cycling uses the same choices
   as the picker. A stale/custom OpenCode agent name is refused for Antigravity,
   never converted to Build. Antigravity changes its native process mode before sending;
-  Plan blocks mutating tools rather than silently sending Build. Its composer
+  Plan uses the CLI's native planning workflow with full tool access. Its composer
   has no native slash-command or interactive-question reply channel.
   Its background-task view reads saved native outcomes through a `history`
   snapshot, never infers active membership from those records, and offers no
@@ -896,7 +913,7 @@ with a native branch (`sync/native-send.ts`):
 - Picking a CLI's model in a new-session draft creates a unified native
   conversation when supported (`materializeOpenDraftSession` passes the backend
   and selection through `createSession`). Native sessions skip the draft's permission policy: the
-  CLI owns execution permissions, including Antigravity's restricted Plan mode.
+  CLI owns execution permissions. Antigravity launches Build and Plan with full tool access.
 - Native tool names (`Bash`, `Task`, `apply_patch`) map to the shared
   shell, subagent, and patch semantics without changing the native CLI protocol.
 - Abort, question replies and rejections go to the native API.
@@ -915,6 +932,23 @@ with a native branch (`sync/native-send.ts`):
   A proposed plan alone, a declined decision or a failed start never changes
   the selection to Build. Decisions are recovered from the live questions
   endpoint, not inferred from transcript text.
+
+Native plan forms advertise model selection through `canSelectExecutionModel`.
+The dock receives the owning composer's live model and effort; inline cards read
+that session's saved selection. `usePlanExecutionModel` keeps explicit model
+choices as window-local drafts keyed by runtime, session and request, with the
+same 50-request bound as form drafts. Catalog, locale and pending-list rebuilds
+preserve a pick. With no pick, the current composer selection remains the default.
+The shared model picker retains the session's native backend restrictions and
+unified backend negotiation, including enterprise blocking.
+
+The model travels separately from the answer through `replyToForm` and the native
+question API. Only execution submits it. Acknowledgement applies Build, model and
+effort to the owning session; a unified session refresh confirms its authoritative
+next selection. A newer local or server selection wins. Other chat columns and
+runtimes keep their selection. Delivery failure retains the form and draft;
+`executionPending` freezes an unknown delivery's model for history confirmation.
+Ordinary OpenCode forms never gain native execution controls from metadata alone.
 
 Answered native plan questions carry optional `nativePlanCallID` metadata for
 their original call. Tail refreshes retain this identity and the saved answer
@@ -942,9 +976,10 @@ Revert, unrevert and fork keep their OpenCode flow in `session-actions.ts`
 Rename, archive, restore and delete keep their flows with the remote step
 swapped for the native API (`updateSessionRemotely`, `deleteSessionRemotely`);
 a native `404` on delete counts as already deleted, as for OpenCode. Antigravity
-supports rename, archive and restore. Revert, fork, compaction and permanent
-deletion are closed by default and hidden, with no fallback to another
-backend's action support. Its models declare text input only, and it has no
+standalone sessions support rename, archive and restore. Standalone revert,
+fork, compaction and permanent deletion are closed by default and hidden.
+Unified Antigravity sessions use the logical conversation actions described
+above. Its models declare text input only, and it has no
 Small Model, quota or terminal memory-hook integration. Native
 sessions archive one by one, never through the OpenCode batch route. The review
 and btw link cleanup before a delete or archive reads a native session through

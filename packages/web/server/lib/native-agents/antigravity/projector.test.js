@@ -12,6 +12,21 @@ const project = (steps, bindings = new Map()) => projectAntigravityHistory({
 const completion = (nativeId, exit) => `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=${nativeId}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task id "${nativeId}/task-2" finished with result:\nCommand exited with code ${exit}.\n\nCommand output:\nBuild result\nLog: file:///untrusted/task-2.log\n</SYSTEM_MESSAGE>`;
 
 describe('Antigravity native plan prefix', () => {
+  it('keeps reply parentage without duplicating question answers as user bubbles', () => {
+    const send = { messageId: 'reply-message', providerID: 'antigravity-native', modelID: 'gemini-test', variant: 'high', agent: 'plan',
+      antigravity: { stepIndex: 0, interactionReply: true } };
+    const steps = [
+      { step_index: 0, type: 'USER_INPUT', content: 'My answers to your questions, in order:\n1. Which?\n- Unit' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', content: 'I will run unit tests.' },
+    ];
+    const records = project(steps, new Map([[0, send]]));
+    expect(records[0].info).toMatchObject({ id: send.messageId, agent: 'plan', model: { modelID: 'gemini-test', variant: 'high' } });
+    expect(records[0].parts).toEqual([]);
+    expect(records[1].info.parentID).toBe(send.messageId);
+    const manual = project(steps, new Map([[0, { ...send, antigravity: { stepIndex: 0 } }]]));
+    expect(manual[0].parts[0].text).toBe(steps[0].content);
+  });
+
   it.each([
     ['plan', 'Review the code', '/plan Review the code', 'Review the code'],
     ['plan', '/plan Review the code', '/plan /plan Review the code', '/plan Review the code'],

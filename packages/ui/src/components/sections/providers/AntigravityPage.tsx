@@ -10,9 +10,6 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 type Status = 'loading' | 'missing' | 'unauthenticated' | 'ready' | 'error';
 type StatusState = { status: Status; diagnostic: string | null };
 
-const UNIX_INSTALL_COMMAND = 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
-const WINDOWS_INSTALL_COMMAND = 'irm https://antigravity.google/cli/install.ps1 | iex';
-
 export function AntigravityPage({ titleLeading }: { titleLeading?: React.ReactNode }) {
   const { nativeAgents } = useRuntimeAPIs();
   const { t } = useI18n();
@@ -95,27 +92,6 @@ export function AntigravityPage({ titleLeading }: { titleLeading?: React.ReactNo
         <Button variant="outline" disabled={state.status === 'loading'} onClick={() => void load()}>
           {t('settings.antigravity.reload')}
         </Button>
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.antigravity.warnings.title')} contentClassName="space-y-3">
-        <p className="text-sm text-[var(--status-warning-text)]">{t('settings.antigravity.warnings.subscription')}</p>
-        <p className="text-sm text-[var(--status-warning-text)]">{t('settings.antigravity.warnings.fullAccess')}</p>
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.antigravity.setup.title')} contentClassName="space-y-4">
-        <p className="text-sm text-muted-foreground">{t('settings.antigravity.setup.description')}</p>
-        <div className="space-y-2">
-          <p className="text-sm text-foreground">{t('settings.antigravity.setup.installUnix')}</p>
-          <code className="block whitespace-pre-wrap break-all rounded bg-muted/50 px-2 py-1.5 font-mono text-xs text-foreground" dir="ltr">{UNIX_INSTALL_COMMAND}</code>
-        </div>
-        <div className="space-y-2">
-          <p className="text-sm text-foreground">{t('settings.antigravity.setup.installWindows')}</p>
-          <code className="block whitespace-pre-wrap break-all rounded bg-muted/50 px-2 py-1.5 font-mono text-xs text-foreground" dir="ltr">{WINDOWS_INSTALL_COMMAND}</code>
-        </div>
-        <div className="space-y-2">
-          <p className="text-sm text-foreground">{t('settings.antigravity.setup.signIn')}</p>
-          <code className="block rounded bg-muted/50 px-2 py-1.5 font-mono text-xs text-foreground" dir="ltr">agy</code>
-        </div>
       </SettingsSection>
     </SettingsPageLayout>
   );

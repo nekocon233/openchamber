@@ -118,6 +118,9 @@ Editing disables reordering and that row's completion control. Mouse drag uses a
 distance threshold, touch uses a hold threshold, and variable-height rows
 translate without scaling while reordered. Writes are disabled while an edit
 saves, and clearing completed items waits until the editor closes.
+Todo text supports selection and copying. A plain click or Enter/Space toggles
+its expansion; selecting text leaves that expansion unchanged. Only the separate
+handle starts reordering.
 
 The pin attaches a note or plan to the current session's context, and a pinned
 note says so in its footer. The icon alone read as "pin to the top of the

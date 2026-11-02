@@ -592,6 +592,15 @@
     "favoriteModels": {
       "scope": "profile"
     },
+    "favoriteAgentCombinations": {
+      "scope": "profile"
+    },
+    "favoritePickerOrder": {
+      "scope": "profile"
+    },
+    "agentCombinationOrder": {
+      "scope": "profile"
+    },
     "hiddenModels": {
       "scope": "profile"
     },
@@ -618,6 +627,14 @@
     },
     "providerOrder": {
       "scope": "profile"
+    },
+    "nativeAgentCombinations": {
+      "scope": "profile",
+      "surfaces": [
+        "web",
+        "desktop",
+        "mobile"
+      ]
     },
     "sessionRecapEnabled": {
       "scope": "profile"

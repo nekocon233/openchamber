@@ -1,5 +1,4 @@
 import { useQuotaStore } from '@/stores/useQuotaStore';
-import { CliProxyApiSection } from './CliProxyApiSection';
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,7 +33,6 @@ export const ClaudeConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }>
   const { nativeAgents } = useRuntimeAPIs();
   const { t } = useI18n();
   const [connections, setConnections] = React.useState<ClaudeConnection[]>([]);
-  const [gatewayConnectionId, setGatewayConnectionId] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(false);
@@ -55,15 +53,9 @@ export const ClaudeConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }>
     setLoading(true);
     setError(false);
     try {
-      // The gateway's own connection is shown as the sign-in row, not as an
-      // ordinary editable connection, so its id names the row to leave out.
-      const [values, gateway] = await Promise.all([
-        nativeAgents.listClaudeConnections(),
-        nativeAgents.cliproxyapiStatus().catch(() => null),
-      ]);
+      const values = await nativeAgents.listClaudeConnections();
       if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) {
         setConnections(values);
-        setGatewayConnectionId(gateway?.connection?.id ?? null);
       }
     } catch {
       if (mounted.current && getRuntimeKey() === runtimeKey && revision.current === request) setError(true);
@@ -131,7 +123,7 @@ export const ClaudeConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }>
       <SettingsSection title={t('settings.claudeConnections.connections')} divider={false} settingsItem="providers.claude-connections" contentClassName="space-y-4">
         {loading ? <p role="status">{t('common.loading')}</p> : null}
         {error ? <p role="alert" className="text-[var(--status-error-text)]">{t('settings.claudeConnections.failed')} <Button variant="link" disabled={busy} onClick={() => void load()}>{t('settings.claudeConnections.retry')}</Button></p> : null}
-        {connections.filter((connection) => connection.id !== gatewayConnectionId).map((connection) => (
+        {connections.map((connection) => (
           deleting === connection.id ? (
             <SettingsStackedField key={connection.id} label={connection.name} info={connection.baseURL}>
               <div className="space-y-2">
@@ -154,10 +146,6 @@ export const ClaudeConnectionsPage: React.FC<{ titleLeading?: React.ReactNode }>
             </SettingsFieldRow>
           )
         ))}
-        <CliProxyApiSection onConnectionsChanged={async () => {
-          await refreshModels();
-          if (current()) await load();
-        }} />
         {!draft ? <Button disabled={busy || loading} onClick={begin}>{t('settings.claudeConnections.addCustom')}</Button> : null}
       </SettingsSection>
       {draft ? <form onSubmit={(event) => { event.preventDefault(); void save(); }}>

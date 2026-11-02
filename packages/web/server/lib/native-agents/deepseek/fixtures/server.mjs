@@ -135,7 +135,13 @@ const server = http.createServer(async (req, res) => {
       respond({ sessionId: created.id });
       break;
     }
-    case 'session/rename': session.title = args.request.title; respond({ title: session.title, seq: session.events.length }); break;
+    case 'session/rename': {
+      session.title = args.request.title;
+      session.titlePinned = true;
+      append(session, 'session/title', { title: session.title, source: { kind: 'user' }, messageSeqs: [] });
+      respond({ title: session.title, seq: session.events.length - 1 });
+      break;
+    }
     case 'session/selectModel': respond({ selected: { provider: args.request.provider, model: args.request.model } }); break;
     case 'commands/list': respond([{ name: 'plan', description: 'Plan', input: { hint: '[off|message]' } }, { name: 'compact', description: 'Compact' }, { name: 'permission', description: 'Permissions' }]); break;
     case 'fileUploads/upload': respond(saveFile(Buffer.from(args.request.data, 'base64'), args.request.name)); break;
@@ -150,6 +156,18 @@ const server = http.createServer(async (req, res) => {
       session.turn += 1;
       append(session, 'turn/start', { turn: session.turn });
       const content = args.request.content.map((part) => part.type === 'file' ? { type: 'file', attachment: uploads.get(part.receiptId) } : part);
+      // The pinned CLI joins all human text blocks before its 40-byte fallback,
+      // including any model-facing instruction block the host appended.
+      if (!session.titlePinned && session.title === 'New session') {
+        const text = content.filter((part) => part.type === 'text').map((part) => part.text).join('\n').replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
+        let title = '';
+        for (const character of text) {
+          if (Buffer.byteLength(title + character, 'utf8') > 40) break;
+          title += character;
+        }
+        session.title = title;
+        append(session, 'session/title', { title, source: { kind: 'fallback' }, messageSeqs: [] });
+      }
       append(session, 'user/message', { id: randomUUID(), role: 'user', source: { kind: 'user', rpcId: args.request.requestId }, content });
       session.running = true;
       emit('api-session/status', [session.id, true]);

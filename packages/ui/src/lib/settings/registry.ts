@@ -18,6 +18,7 @@
  *   only ever lived in the local store are in `LOCAL_DEVICE_KEYS`.
  */
 import type { ProjectEntry, TerminalShell } from '@/lib/api/types';
+import { favoriteAgentCombinationIdsSchema, nativeAgentCombinationsSchema } from '@/lib/native-agents/combinations';
 import type { DesktopWindowControlsPosition, DesktopWindowControlsStyle } from '@/lib/desktop';
 import { getDirectoryShowHidden, setDirectoryShowHidden } from '@/lib/directoryShowHidden';
 import type { DraftStarterRef } from '@/lib/draftStarters';
@@ -555,8 +556,11 @@ export const SETTINGS_REGISTRY = {
   smallModelOverride: field({ scope: 'profile', parse: parseNonEmptyString }),
   walkthroughModelOverride: field({ scope: 'profile', parse: parseNonEmptyString }),
   zenModel: field({ scope: 'profile', parse: parseNonEmptyTrimmedString }),
-  // The model-prefs auto-save owns these six with its own debounce.
+  // The model-prefs auto-save owns these preferences and its lifecycle flush.
   favoriteModels: field<ModelRef[]>({ scope: 'profile', parse: parseModelRefs(64), ui: uiStore('favoriteModels', setUi('favoriteModels'), { autoSave: false }) }),
+  favoriteAgentCombinations: field({ scope: 'profile', parse: fromSchema(favoriteAgentCombinationIdsSchema), ui: uiStore('favoriteAgentCombinations', setUi('favoriteAgentCombinations'), { autoSave: false }) }),
+  favoritePickerOrder: field({ scope: 'profile', parse: parseStringSet, ui: uiStore('favoritePickerOrder', setUi('favoritePickerOrder'), { autoSave: false }) }),
+  agentCombinationOrder: field({ scope: 'profile', parse: fromSchema(favoriteAgentCombinationIdsSchema), ui: uiStore('agentCombinationOrder', setUi('agentCombinationOrder'), { autoSave: false }) }),
   hiddenModels: field<ModelRef[]>({ scope: 'profile', parse: parseModelRefs(1024), ui: uiStore('hiddenModels', setUi('hiddenModels'), { autoSave: false }) }),
   collapsedModelProviders: field({ scope: 'profile', parse: parseStringSet, ui: uiStore('collapsedModelProviders', setUi('collapsedModelProviders'), { autoSave: false }) }),
   customProviderIcons: field({ scope: 'profile', parse: parseCustomProviderIcons, ui: uiStore('customProviderIcons', setUi('customProviderIcons'), { autoSave: false }) }),
@@ -568,6 +572,7 @@ export const SETTINGS_REGISTRY = {
   providerOrder: field({ scope: 'profile', parse: parseStringSet, ui: uiStore('providerOrder', (v) => useUIStore.getState().setProviderOrder(v)) }),
 
   // ── Sessions and summaries (profile) ──
+  nativeAgentCombinations: field({ scope: 'profile', surfaces: ['web', 'desktop', 'mobile'], parse: fromSchema(nativeAgentCombinationsSchema), ui: configField('nativeAgentCombinations') }),
   sessionRecapEnabled: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('sessionRecapEnabled', (v) => useUIStore.getState().setSessionRecapEnabled(v)) }),
   sessionSuggestionEnabled: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('sessionSuggestionEnabled', (v) => useUIStore.getState().setSessionSuggestionEnabled(v)) }),
   sessionWorkEnabled: field({ scope: 'profile', parse: parseBoolean, ui: uiStore('sessionWorkEnabled', (v) => useUIStore.getState().setSessionWorkEnabled(v)) }),

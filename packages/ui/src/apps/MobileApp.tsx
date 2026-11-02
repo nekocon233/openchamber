@@ -111,6 +111,7 @@ const MOBILE_SETTINGS_PAGES = [
   'sessions',
   'routing',
   'git',
+  'tunnel',
   'magic-prompts',
   'snippets',
   'behavior',

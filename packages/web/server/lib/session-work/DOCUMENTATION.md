@@ -88,6 +88,11 @@ whether a message started work, and every session now counts instead.
   the assist fields the user has on. No applicable question, no call.
 - Jev reads the request's first 1500 characters, the answer's first and last
   500, and three earlier turns cut as routing cuts them.
+- A native session (`ncl_`, `ncx_`, `nag_`, `ndh_`, `ncv_`) reads its page and
+  metadata through the native runtime and writes the hint back with the native
+  session update; OpenCode is not asked. The same turn-generation check drops a
+  hint whose turn was replaced, and a new turn retires it from the native
+  metadata too.
 
 ## Measurement
 

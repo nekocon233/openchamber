@@ -11,6 +11,7 @@ const globals = {
   window: browser, document: browser.document, navigator: browser.navigator,
   localStorage: browser.localStorage, sessionStorage: browser.sessionStorage,
   Node: browser.Node, Element: browser.Element, HTMLElement: browser.HTMLElement,
+  HTMLAnchorElement: browser.HTMLAnchorElement,
   SVGElement: browser.SVGElement, MutationObserver: browser.MutationObserver,
   ResizeObserver: browser.ResizeObserver, IntersectionObserver: browser.IntersectionObserver,
   customElements: browser.customElements, getComputedStyle: browser.getComputedStyle.bind(browser),
@@ -43,6 +44,7 @@ const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
 const { createTestNativeAgentsAPI, createTestRuntimeAPIs } = await import('@/lib/native-agents/test-utils/runtime');
 const { useUIStore } = await import('@/stores/useUIStore');
 const { useGlobalSessionsStore } = await import('@/stores/useGlobalSessionsStore');
+const { useConfigStore } = await import('@/stores/useConfigStore');
 
 const theme = getDefaultTheme(false);
 const unexpectedThemeChange = (): never => { throw new Error('Rendering must not change the theme'); };
@@ -77,11 +79,13 @@ let container: HTMLDivElement;
 let commits = 0;
 const initialGlobalSessions = useGlobalSessionsStore.getState();
 const initialUI = useUIStore.getState();
+const initialProviders = useConfigStore.getState().providers;
 
 beforeEach(() => {
   commits = 0;
   useI18nStore.getState().setLocale('en');
   useUIStore.setState({ userMessageRenderingMode: 'plain', isMobile: false });
+  useConfigStore.setState({ providers: [] });
   useGlobalSessionsStore.setState({ entityById: new Map([[sessionId, session()]]) });
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -93,6 +97,7 @@ afterEach(async () => {
   container.remove();
   useGlobalSessionsStore.setState(initialGlobalSessions, true);
   useUIStore.setState(initialUI, true);
+  useConfigStore.setState({ providers: initialProviders });
 });
 
 afterAll(async () => {
@@ -104,13 +109,16 @@ afterAll(async () => {
   }
 });
 
-const render = () => act(async () => root.render(
+const render = (currentMessage = message) => act(async () => root.render(
   <RuntimeAPIContext.Provider value={apis}>
     <ThemeSystemContext.Provider value={themeContext}>
       <SyncProvider sdk={sdk} directory="/repo">
         <I18nProvider>
           <React.Profiler id="message" onRender={() => { commits += 1; }}>
-            <ChatMessage message={message} />
+            <ChatMessage message={currentMessage} turnGroupingContext={currentMessage.info.role === 'assistant' ? {
+              turnId: 'turn-1', isFirstAssistantInTurn: true, isLastAssistantInTurn: true,
+              isLatestTurn: true, hasTools: false, hasReasoning: false, isWorking: false,
+            } : undefined} />
           </React.Profiler>
         </I18nProvider>
       </SyncProvider>
@@ -154,4 +162,51 @@ test('message actions follow changed server capabilities and close when metadata
   await publish([]);
   expect(hasAction('revert')).toBe(false);
   expect(hasAction('fork')).toBe(false);
+});
+
+const assistantMessage = (variant: string | undefined, modelID = 'claude-opus-5-5-high', providerID = 'claude-native'): React.ComponentProps<typeof ChatMessage>['message'] => ({
+  info: {
+    id: 'assistant-1', sessionID: sessionId, role: 'assistant', agent: 'plan',
+    providerID, modelID, variant,
+    finish: 'stop', time: { created: 1, completed: 2 },
+  },
+  parts: [{ id: 'assistant-part', sessionID: sessionId, messageID: 'assistant-1', type: 'text', text: 'Saved response' }],
+});
+
+test('shows the reply model effort over the submitted effort without a catalog', async () => {
+  await render(assistantMessage('max'));
+  expect(container.querySelector('[data-fact-model]')?.textContent).toBe('Claude Opus 5.5');
+  expect(container.querySelector('.message-footer__facts [data-fact-priority="3"]')?.textContent).toContain('high');
+});
+
+test('shows a Magpie response as its Claude model and fixed effort', async () => {
+  await render(assistantMessage('max', 'group/auto-claude-opus-5-5:high'));
+  expect(container.querySelector('[data-fact-model]')?.textContent).toBe('Claude Opus 5.5');
+  expect(container.querySelector('.message-footer__facts [data-fact-priority="3"]')?.textContent).toContain('high');
+});
+
+test('reads an explicit model effort without send metadata and updates with the same message id', async () => {
+  await render(assistantMessage(undefined));
+  expect(container.querySelector('[data-fact-model]')?.textContent).toBe('Claude Opus 5.5');
+  expect(container.querySelector('.message-footer__facts [data-fact-priority="3"]')?.textContent).toContain('high');
+
+  await render(assistantMessage('max', 'group/auto-claude-opus-5-5:low'));
+  expect(container.querySelector('[data-fact-model]')?.textContent).toBe('Claude Opus 5.5');
+  expect(container.querySelector('.message-footer__facts [data-fact-priority="3"]')?.textContent).toContain('low');
+});
+
+test('keeps other providers on their recorded effort', async () => {
+  await render(assistantMessage('max', 'claude-opus-5-5-high', 'other-provider'));
+  expect(container.querySelector('[data-fact-model]')?.textContent).toBe('Claude Opus 5.5 High');
+  expect(container.querySelector('.message-footer__facts [data-fact-priority="3"]')?.textContent).toContain('max');
+});
+
+test('keeps an unknown effort unknown and updates when the same message records one', async () => {
+  await render(assistantMessage(undefined, 'group/auto-claude-opus-5-5'));
+  expect(container.querySelector('[data-fact-model]')?.textContent).toBe('Claude Opus 5.5');
+  expect(container.querySelector('.message-footer__facts [data-fact-priority="3"]')).toBeNull();
+
+  await render(assistantMessage('max', 'group/auto-claude-opus-5-5'));
+  expect(container.querySelector('[data-fact-model]')?.textContent).toBe('Claude Opus 5.5');
+  expect(container.querySelector('.message-footer__facts [data-fact-priority="3"]')?.textContent).toContain('max');
 });

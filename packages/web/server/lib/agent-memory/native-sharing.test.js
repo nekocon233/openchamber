@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createAgentMemoryRuntime } from './runtime.js';
 import { createNativeMemorySharing } from './native-sharing.js';
@@ -90,6 +91,25 @@ describe('shared native CLI memory', () => {
     const disconnected = JSON.parse(await fs.readFile(file, 'utf8'));
     expect(disconnected.hooks.Stop).toEqual([foreign]);
     expect(disconnected.language).toBe('zh-CN');
+  });
+
+  it('writes only the hook events each CLI accepts and drops an event it no longer installs', async () => {
+    const hookPath = fileURLToPath(new URL('./native-hook.js', import.meta.url));
+    const { root, sharing, a } = await setup({ hookPath });
+    const claudeFile = path.join(root, '.claude', 'settings.json');
+    await fs.mkdir(path.dirname(claudeFile), { recursive: true });
+    const quoted = process.platform === 'win32' ? `"${hookPath}"` : `'${hookPath}'`;
+    const stale = { hooks: [{ type: 'command', command: `${quoted} --backend claude --port 3000` }] };
+    await fs.writeFile(claudeFile, JSON.stringify({ hooks: { Interrupt: [stale] } }));
+    await sharing.connect('claude', 3000);
+    const connected = JSON.parse(await fs.readFile(claudeFile, 'utf8'));
+    expect(Object.keys(connected.hooks).sort()).toEqual(['SessionStart', 'Stop', 'UserPromptSubmit']);
+    expect((await sharing.status(a)).backends.find((row) => row.backend === 'claude').installed).toBe(true);
+    await sharing.connect('codex', 3000);
+    const codex = JSON.parse(await fs.readFile(path.join(root, '.codex', 'hooks.json'), 'utf8'));
+    expect(Object.keys(codex.hooks).sort()).toEqual(['Interrupt', 'SessionStart', 'Stop', 'UserPromptSubmit']);
+    await sharing.disconnect('claude');
+    expect(JSON.parse(await fs.readFile(claudeFile, 'utf8')).hooks).toEqual({});
   });
 
   it('does not double-deliver context to managed turns or mix backend identities', async () => {

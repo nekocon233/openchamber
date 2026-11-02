@@ -21,6 +21,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { deepseekHistorySchema, deepseekRewindSchema } from './deepseek/history.js';
+import { nativeBackendSchema } from './ids.js';
+import { planExecutionStateSchema } from './plan-execution.js';
+import { agentConfigurationSchema } from './agent-configuration.js';
 
 const MAX_SENDS_PER_SESSION = 200;
 const MAX_TURNS_PER_SESSION = 200;
@@ -55,7 +58,7 @@ const checklistProjectionSchema = z.object({
 });
 
 const sessionEntrySchema = z.object({
-  backend: z.enum(['claude', 'codex', 'deepseek', 'antigravity']),
+  backend: nativeBackendSchema,
   nativeId: z.string().min(1),
   directory: z.string().min(1),
   origin: z.enum(['openchamber', 'adopted']),
@@ -80,6 +83,9 @@ const sessionEntrySchema = z.object({
     phase: z.enum(['open', 'dispatching', 'settled']),
     replyMessageId: z.string().min(1).optional(),
   }).optional().catch(undefined),
+  planExecution: planExecutionStateSchema.optional().catch({ phase: 'unavailable' }),
+  agentConfiguration: agentConfigurationSchema.optional().catch({ revision: 0, subagent: null, execution: null, unavailable: true }),
+  delegation: z.object({ parentID: z.string().min(1), jobID: z.string().uuid() }).optional(),
 });
 
 const sendRecordSchema = z.object({
@@ -94,6 +100,7 @@ const sendRecordSchema = z.object({
   antigravity: z.object({
     stepIndex: z.number().int().nonnegative().optional(),
     fingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    interactionReply: z.literal(true).optional(),
     // The CLI does not save headless permission denials in its transcript.
     denial: z.object({
       actions: z.array(z.string().min(1).max(256)).min(1).max(32),
@@ -105,6 +112,12 @@ const sendRecordSchema = z.object({
     }).optional(),
   }).optional(),
 });
+
+// Application replies stay in native history for parentage; the question card
+// owns their visible answers. Never infer this provenance from prompt text.
+const markAntigravityReply = (record, replyMessageId) => record.messageId === replyMessageId && record.antigravity
+  ? { ...record, antigravity: { ...record.antigravity, interactionReply: true } }
+  : record;
 
 // The work tree before an OpenChamber prompt, and after the turn that answered it.
 const turnSnapshotSchema = z.object({
@@ -273,6 +286,12 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
       return phase === 'open' || phase === 'dispatching';
     },
 
+    hasPendingPlanExecution(sessionId) {
+      if (state === null) return true;
+      const phase = state.sessions.get(sessionId)?.planExecution?.phase;
+      return phase !== undefined && phase !== 'settled';
+    },
+
     /** @param {{ backend?: 'claude' | 'codex' | 'deepseek' | 'antigravity', directory?: string }} [filter] */
     async listSessions(filter = {}) {
       await load();
@@ -329,8 +348,16 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
         if (patch.conversationId !== undefined) updated.conversationId = patch.conversationId;
         if (patch.claudeChecklistSource === null) delete updated.claudeChecklistSource;
         else if (patch.claudeChecklistSource !== undefined) updated.claudeChecklistSource = checklistSourceSchema.parse(patch.claudeChecklistSource);
+        if (patch.antigravityInteraction !== undefined && existing.antigravityInteraction?.replyMessageId) {
+          const records = next.sends.get(sessionId);
+          if (records) next.sends.set(sessionId, records.map((record) => markAntigravityReply(record, existing.antigravityInteraction.replyMessageId)));
+        }
         if (patch.antigravityInteraction === null) delete updated.antigravityInteraction;
         else if (patch.antigravityInteraction !== undefined) updated.antigravityInteraction = patch.antigravityInteraction;
+        if (patch.planExecution === null) delete updated.planExecution;
+        else if (patch.planExecution !== undefined) updated.planExecution = patch.planExecution;
+        if (patch.agentConfiguration !== undefined) updated.agentConfiguration = patch.agentConfiguration;
+        if (patch.delegation !== undefined) updated.delegation = patch.delegation;
         if (patch.metadata === null) delete updated.metadata;
         else if (patch.metadata !== undefined) updated.metadata = patch.metadata;
         next.sessions.set(sessionId, sessionEntrySchema.parse(updated));
@@ -346,6 +373,18 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
         next.reverts.delete(sessionId);
       });
     },
+
+    setAgentConfiguration(sessionId, configuration, expectedRevision) {
+      return mutate((next) => {
+        const entry = next.sessions.get(sessionId);
+        if (!entry) throw new Error('Unknown native session');
+        if ((entry.agentConfiguration?.revision ?? 0) !== expectedRevision) return null;
+        const value = agentConfigurationSchema.parse({ ...configuration, revision: expectedRevision + 1 });
+        next.sessions.set(sessionId, { ...entry, agentConfiguration: value });
+        return value;
+      });
+    },
+    isDelegatedSession(sessionId) { return Boolean(state?.sessions.get(sessionId)?.delegation); },
 
     /** One durable branch binding; the original session identity never changes. */
     setDeepseekHistory(sessionId, history) {
@@ -449,7 +488,7 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
           ? { ...existing?.antigravity, ...parsed.antigravity }
           : undefined;
         const records = previous.filter((existing) => existing.messageId !== parsed.messageId);
-        records.push({ ...parsed, ...(antigravity ? { antigravity } : {}) });
+        records.push(markAntigravityReply({ ...parsed, ...(antigravity ? { antigravity } : {}) }, next.sessions.get(sessionId)?.antigravityInteraction?.replyMessageId));
         next.sends.set(sessionId, records.slice(-MAX_SENDS_PER_SESSION));
       });
     },
@@ -464,10 +503,10 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
         const existing = index === -1 ? sendRecordSchema.parse(record) : records[index];
         const currentStep = existing.antigravity?.stepIndex;
         if (currentStep !== undefined && currentStep !== stepIndex) throw new Error('Antigravity message is already bound to another step');
-        const updated = {
+        const updated = markAntigravityReply({
           ...existing,
           antigravity: { ...existing.antigravity, stepIndex },
-        };
+        }, next.sessions.get(sessionId)?.antigravityInteraction?.replyMessageId);
         if (index === -1) records.push(updated);
         else records[index] = updated;
         next.sends.set(sessionId, records.slice(-MAX_SENDS_PER_SESSION));
@@ -480,7 +519,8 @@ export const createNativeRegistry = ({ filePath, now = Date.now }) => {
      */
     async sendRecords(sessionId) {
       await load();
-      return new Map((state.sends.get(sessionId) ?? []).map((record) => [record.messageId, record]));
+      const replyMessageId = state.sessions.get(sessionId)?.antigravityInteraction?.replyMessageId;
+      return new Map((state.sends.get(sessionId) ?? []).map((record) => [record.messageId, markAntigravityReply(record, replyMessageId)]));
     },
   };
 };

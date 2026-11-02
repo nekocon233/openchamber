@@ -38,15 +38,17 @@ const continuation = (proposal, answers, messageID) => {
   const request = {
     directory: proposal.directory,
     messageID,
-    parts: approved ? [] : [{ type: 'text', text: plan ? answers[0][0] : [
-      'My answers to your questions, in order:',
-      ...proposal.questions.map((question, index) => `${index + 1}. ${question.question}\n${answers[index].map((answer) => `- ${answer}`).join('\n')}`),
-    ].join('\n\n') }],
+    parts: [],
+    instructions: approved
+      ? `The user approved this exact plan. Implement it in this conversation:\n\n${proposal.plan ?? proposal.questions[0].question}`
+      : plan ? answers[0][0] : [
+        'My answers to your questions, in order:',
+        ...proposal.questions.map((question, index) => `${index + 1}. ${question.question}\n${answers[index].map((answer) => `- ${answer}`).join('\n')}`),
+      ].join('\n\n'),
     model: { providerID: NATIVE_PROVIDER_ANTIGRAVITY, modelID: proposal.send.modelID },
     variant: proposal.send.variant,
     agent: plan ? approved ? 'build' : 'plan' : proposal.send.agent,
   };
-  if (approved) request.instructions = `The user approved this exact plan. Implement it in this conversation:\n\n${proposal.plan ?? proposal.questions[0].question}`;
   return request;
 };
 
@@ -101,6 +103,11 @@ export const createAntigravityDecisions = ({ registry, questions, interactions, 
       throw staleQuestion();
     }
     if (decision.state.phase !== 'open') throw unknownDispatch();
+    if (outcome.status === 'transferred') {
+      await save(decision, 'settled');
+      forget(decision);
+      return;
+    }
     const answers = outcome.status === 'replied' ? validateAnswers(proposal, outcome.answers) : null;
     const reply = answers ? continuation(proposal, answers, decision.state.replyMessageId ?? newNativeClientUserMessageId(proposal.sessionId)) : null;
     let accepted = false;

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 import { useUIStore } from '@/stores/useUIStore';
+import { modelPickerActionKey, modelPickerModelKey } from '@/lib/modelPickerOrder';
 import {
   AUTO_SAVE_KEYS,
   DESKTOP_SHELL_KEYS,
@@ -22,6 +23,75 @@ import { renderSettingsRegistrySnapshot, SETTINGS_REGISTRY_SNAPSHOT_PATHS } from
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..');
 
 describe('settings registry', () => {
+  test('persists mixed favorite ordering without changing model or combination membership', () => {
+    const original = useUIStore.getState();
+    const id = '11111111-1111-4111-8111-111111111111';
+    const models = [{ providerID: 'claude-native', modelID: 'opus' }, { providerID: 'codex-native', modelID: 'gpt' }];
+    try {
+      useUIStore.setState({ favoriteModels: models, favoriteAgentCombinations: [id], favoritePickerOrder: [], agentCombinationOrder: [] });
+      useUIStore.getState().reorderFavoritePickerItem(modelPickerActionKey(id), modelPickerModelKey(models[0]));
+      const order = [modelPickerActionKey(id), ...models.map(modelPickerModelKey)];
+      expect(useUIStore.getState().favoritePickerOrder).toEqual(order);
+      expect(useUIStore.getState().favoriteModels).toEqual(models);
+      expect(useUIStore.getState().favoriteAgentCombinations).toEqual([id]);
+      const document = parseSettingsDocument(JSON.parse(JSON.stringify({ favoritePickerOrder: order, agentCombinationOrder: [id] })));
+      expect(document).toEqual({ favoritePickerOrder: order, agentCombinationOrder: [id] });
+      if (!document) throw new Error('Expected valid picker order');
+      useUIStore.setState({ favoritePickerOrder: [], agentCombinationOrder: [] });
+      applySettingsToStores(document);
+      expect(useUIStore.getState().favoritePickerOrder).toEqual(order);
+      expect(useUIStore.getState().agentCombinationOrder).toEqual([id]);
+      useUIStore.getState().reorderFavoritePickerItem('missing', order[0]);
+      expect(useUIStore.getState().favoritePickerOrder).toEqual(order);
+      useUIStore.getState().toggleFavoriteAgentCombination(id);
+      expect(useUIStore.getState().favoritePickerOrder).toEqual(models.map(modelPickerModelKey));
+    } finally { useUIStore.setState(original, true); }
+  });
+  test('restores starred combinations from local persistence', async () => {
+    const options = useUIStore.persist.getOptions();
+    const original = useUIStore.getState();
+    const id = '11111111-1111-4111-8111-111111111111';
+    let saved: Parameters<NonNullable<typeof options.storage>['setItem']>[1] = { state: original, version: options.version };
+    try {
+      useUIStore.persist.setOptions({ storage: { getItem: () => saved, setItem: (_name, value) => { saved = value; }, removeItem: () => undefined } });
+      useUIStore.setState({ favoriteAgentCombinations: [] });
+      useUIStore.getState().toggleFavoriteAgentCombination(id);
+      const persisted = saved;
+      useUIStore.setState({ favoriteAgentCombinations: [] });
+      useUIStore.persist.setOptions({ storage: { getItem: () => persisted, setItem: () => undefined, removeItem: () => undefined } });
+      await useUIStore.persist.rehydrate();
+      expect(useUIStore.getState().favoriteAgentCombinations).toEqual([id]);
+    } finally {
+      useUIStore.persist.setOptions(options);
+      useUIStore.setState(original, true);
+    }
+  });
+  test('round-trips combination favorite IDs independently of model favorites', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    expect(parseSettingsDocument({ favoriteAgentCombinations: [id, id] })).toEqual({ favoriteAgentCombinations: [id] });
+    expect(parseSettingsDocument({ favoriteAgentCombinations: [] })).toEqual({ favoriteAgentCombinations: [] });
+    expect(parseSettingsDocument({ favoriteAgentCombinations: ['invalid'] })).toEqual({});
+    expect(AUTO_SAVE_KEYS).not.toContain('favoriteAgentCombinations');
+    const original = useUIStore.getState();
+    try {
+      const models = [{ providerID: 'claude-native', modelID: 'opus' }];
+      useUIStore.setState({ favoriteAgentCombinations: [], favoriteModels: models });
+      useUIStore.getState().toggleFavoriteAgentCombination(id);
+      expect(useUIStore.getState().favoriteAgentCombinations).toEqual([id]);
+      expect(useUIStore.getState().favoriteModels).toEqual(models);
+      useUIStore.getState().toggleFavoriteAgentCombination(id);
+      expect(useUIStore.getState().favoriteAgentCombinations).toEqual([]);
+    } finally { useUIStore.setState(original, true); }
+  });
+  test('round-trips native combination profiles without creating a global subagent default', () => {
+    const choice = { model: { providerID: 'codex-native', modelID: 'gpt-test' }, variant: 'max' };
+    const combination = { id: '11111111-1111-4111-8111-111111111111', name: 'Review team', main: choice, subagent: null, execution: choice };
+    expect(parseSettingsDocument({ nativeAgentCombinations: [combination] })).toEqual({ nativeAgentCombinations: [combination] });
+    expect(parseSettingsDocument({ nativeAgentCombinations: [] })).toEqual({ nativeAgentCombinations: [] });
+    expect(parseSettingsDocument({ nativeAgentCombinations: [combination, combination] })).toEqual({});
+    expect(parseSettingsDocument({ nativeAgentCombinations: [{ ...combination, main: { ...choice, baseURL: 'https://untrusted.invalid' } }] })).toEqual({});
+    expect(AUTO_SAVE_KEYS).not.toContain('nativeAgentCombinations');
+  });
   test('drops retired execution settings while keeping unrelated preferences', () => {
     expect(parseSettingsDocument({
       claudeCodeExecution: true,

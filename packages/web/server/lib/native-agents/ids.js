@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { z } from 'zod';
 
 // Native CLI sessions live in their own id namespace, so every layer can tell
 // them apart from OpenCode sessions without a lookup. The UI mirrors these
@@ -16,10 +17,15 @@ export const NATIVE_BACKEND_CODEX = 'codex';
 export const NATIVE_BACKEND_DEEPSEEK = 'deepseek';
 export const NATIVE_BACKEND_ANTIGRAVITY = 'antigravity';
 
+export const nativeBackendSchema = z.enum([NATIVE_BACKEND_CLAUDE, NATIVE_BACKEND_CODEX, NATIVE_BACKEND_DEEPSEEK, NATIVE_BACKEND_ANTIGRAVITY]);
+export const NATIVE_BACKENDS = nativeBackendSchema.options;
+
 export const NATIVE_PROVIDER_CLAUDE = 'claude-native';
 export const NATIVE_PROVIDER_CODEX = 'codex-native';
 export const NATIVE_PROVIDER_DEEPSEEK = 'deepseek-native';
 export const NATIVE_PROVIDER_ANTIGRAVITY = 'antigravity-native';
+
+export const nativeProviderSchema = z.enum([NATIVE_PROVIDER_CLAUDE, NATIVE_PROVIDER_CODEX, NATIVE_PROVIDER_DEEPSEEK, NATIVE_PROVIDER_ANTIGRAVITY]);
 
 const CLAUDE_SESSION_PREFIX = 'ncl_';
 const CODEX_SESSION_PREFIX = 'ncx_';
@@ -41,7 +47,7 @@ export const isUnifiedNativeSessionId = (sessionId) => /^ncv_[0-9a-f-]{36}$/.tes
 
 /**
  * @param {string} sessionId
- * @returns {'claude' | 'codex' | 'deepseek' | null}
+ * @returns {z.infer<typeof nativeBackendSchema> | null}
  */
 export const nativeBackendOfSessionId = (sessionId) => {
   if (sessionId.startsWith(CLAUDE_SESSION_PREFIX)) return NATIVE_BACKEND_CLAUDE;

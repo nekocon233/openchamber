@@ -1,5 +1,7 @@
 import { OPENCODE_TOOLS } from '@/lib/opencode/tools';
 import React from 'react';
+import { useAgentCombinations } from './useAgentCombinations';
+import { useChatSessionSelection } from './chatColumnSession';
 import { findCatalogModel, nativeModelAliasVariant, type Model } from '@/lib/opencode/model';
 import { useChatColumnActions } from './chatColumnSession';
 import { MobileModelButton } from './MobileModelButton';
@@ -23,7 +25,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Icon } from "@/components/icon/Icon";
 import { ArrowsMerge } from '@/components/icons/ArrowsMerge';
 import type { IconName } from "@/components/icon/icons";
-import { ModelPickerList, type ModelPickerEntry } from '@/components/model-picker/ModelPickerList';
+import { ModelPickerList, type ModelPickerEntry, type ModelPickerAction } from '@/components/model-picker/ModelPickerList';
+import { SortablePickerRows } from '@/components/model-picker/SortablePickerRows';
+import { modelPickerActionKey, modelPickerModelKey, orderPickerItems } from '@/lib/modelPickerOrder';
+import { arrayMove } from '@dnd-kit/sortable';
 import { useIsVSCodeRuntime } from '@/hooks/useRuntimeAPIs';
 import { isDesktopShell } from '@/lib/desktop';
 import { useAgentColors } from '@/hooks/useAgentColors';
@@ -46,6 +51,7 @@ import {
     isUnifiedNativeSessionId,
 } from '@/lib/native-agents/ids';
 import { modelForSessionKind } from '@/lib/native-agents/session-model';
+import { supportsUnifiedNativeBackend } from '@/lib/native-agents/capabilities';
 import { useUnifiedNativeState } from '@/lib/native-agents/useNativeSession';
 import { hasPendingNativeConversationSelection, selectNativeConversationModel } from '@/sync/session-actions';
 import { toast } from '@/components/ui';
@@ -389,6 +395,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     agentSelectable = false,
 }) => {
     const { t } = useI18n();
+    const agentControlsDirectory = useChatSessionSelection().directory;
     const { focusInput: focusColumnInput } = useChatColumnActions();
     const { isReady, isUnavailable } = useOpenCodeReadiness();
     const { isReady: canSelectAgent } = useOpenCodeReadiness('agents');
@@ -491,7 +498,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     ));
 
     const toggleFavoriteModel = useUIStore((state) => state.toggleFavoriteModel);
-    const reorderFavoriteModel = useUIStore((state) => state.reorderFavoriteModel);
+    const favoritePickerOrder = useUIStore((state) => state.favoritePickerOrder);
+    const reorderFavoritePickerItem = useUIStore((state) => state.reorderFavoritePickerItem);
     const providerOrder = useUIStore((state) => state.providerOrder);
     const setProviderOrder = useUIStore((state) => state.setProviderOrder);
     const isFavoriteModel = useUIStore((state) => state.isFavoriteModel);
@@ -514,6 +522,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     // Separate state for agent selector to avoid conflict with model selector
     const [isAgentSelectorOpen, setIsAgentSelectorOpen] = React.useState(false);
     const { favoriteModelsList: allFavoriteModels, recentModelsList: allRecentModels } = useModelLists();
+    const favoriteCombinationIds = useUIStore((state) => state.favoriteAgentCombinations);
+    const toggleFavoriteCombination = useUIStore((state) => state.toggleFavoriteAgentCombination);
     const pickerSessionId = selection ? controlledSessionId : currentSessionId;
     const enterpriseMode = useEnterpriseMode();
     const unifiedBlocked = Boolean(pickerSessionId && isUnifiedNativeSessionId(pickerSessionId) && enterpriseMode);
@@ -521,7 +531,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         ? nativeBackendOfSessionId(pickerSessionId) ?? (isUnifiedNativeSessionId(pickerSessionId) ? nativeBackendOfProviderId(currentProviderId) : null)
         : null;
     const unifiedState = useUnifiedNativeState(pickerSessionId ?? null, pickerSessionId ? getDirectoryForSession(pickerSessionId) : undefined);
-    const persistUnifiedSelection = React.useCallback(() => {
+    const persistUnifiedSelection = React.useCallback((clearCombination = false) => {
         if (!pickerSessionId || !isUnifiedNativeSessionId(pickerSessionId)) return;
         const directory = getDirectoryForSession(pickerSessionId);
         if (!directory) return;
@@ -536,11 +546,16 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             : config.currentVariant;
         void selectNativeConversationModel(pickerSessionId, directory, {
             model: { providerID, modelID }, agent: agent === 'plan' ? 'plan' : 'build', variant: variant ?? undefined,
-        }).catch(() => toast.error(t('chat.unified.selectionFailed')));
+        }, clearCombination).catch(() => toast.error(t('chat.unified.selectionFailed')));
     }, [getDirectoryForSession, pickerSessionId, selection, t]);
     const isProviderPickable = React.useCallback(
-        (providerId: string) => !unifiedBlocked && isProviderPickableForSession(pickerSessionId, providerId),
-        [pickerSessionId, unifiedBlocked],
+        (providerId: string) => {
+            if (unifiedBlocked || !isProviderPickableForSession(pickerSessionId, providerId)) return false;
+            if (!pickerSessionId || !isUnifiedNativeSessionId(pickerSessionId)) return true;
+            const backend = nativeBackendOfProviderId(providerId);
+            return backend !== null && supportsUnifiedNativeBackend({ unifiedSessions: true, unifiedBackends: unifiedState?.unifiedBackends }, backend);
+        },
+        [pickerSessionId, unifiedBlocked, unifiedState?.unifiedBackends],
     );
     const pickableProviders = React.useMemo(
         () => providers.filter((provider) => isProviderPickable(provider.id)),
@@ -1637,7 +1652,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     const handleProviderAndModelChange = (
         providerId: string,
         modelId: string,
-        options?: { applyVariant?: boolean; variant?: string | undefined; agentName?: string | null },
+        options?: { applyVariant?: boolean; variant?: string | undefined; agentName?: string | null; preserveCombination?: boolean },
     ) => {
         try {
             const effectiveAgentName = options?.agentName ?? resolveLiveAgentName() ?? undefined;
@@ -1664,7 +1679,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 setLastSelectedModel(providerId, modelId);
             }
             setAgentMenuOpen(false);
-            persistUnifiedSelection();
+            if (!options?.preserveCombination) agentCombinations.clearDraftSelection();
+            persistUnifiedSelection(!options?.preserveCombination);
             if (isCompact) {
                 closeMobilePanel();
             }
@@ -1683,6 +1699,44 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         );
     };
 
+    const agentCombinations = useAgentCombinations({
+        enabled: !selection,
+        sessionId: pickerSessionId ?? null,
+        directory: agentControlsDirectory,
+        agent: currentAgentName ?? 'build',
+        current: { model: { providerID: currentProviderId, modelID: currentModelId }, variant: currentVariant },
+        onMain: (choice) => handleProviderAndModelChange(choice.model.providerID, choice.model.modelID, { applyVariant: true, variant: choice.variant, preserveCombination: true }),
+    });
+    const favoriteCombinationIdSet = new Set(favoriteCombinationIds);
+    const combinationActions: ModelPickerAction[] = agentCombinations.combinations.map((entry) => ({
+        id: entry.id,
+        label: entry.name,
+        icon: <ProviderLogo providerId={entry.main.model.providerID} className="size-3.5 shrink-0" />,
+        disabled: agentCombinations.disabled,
+        selected: agentCombinations.selectedCombination?.id === entry.id,
+        favorite: favoriteCombinationIdSet.has(entry.id),
+        onToggleFavorite: () => toggleFavoriteCombination(entry.id),
+        onSelect: () => {
+            void agentCombinations.apply(entry).then((applied) => {
+                if (applied) { setAgentMenuOpen(false); closeMobilePanel(); }
+            });
+        },
+    }));
+    const combinationActionById = new Map<string, ModelPickerAction>();
+    for (const action of combinationActions) combinationActionById.set(action.id, action);
+    const favoriteCombinationActions = favoriteCombinationIds.flatMap((id) => {
+        const action = combinationActionById.get(id);
+        return action ? [action] : [];
+    });
+    const combinationGroup = combinationActions.length ? { id: 'combinations', label: t('agents.combinations.group'), icon: <Icon name="stack" className="h-4 w-4 shrink-0" />, actions: combinationActions } : undefined;
+    const reorderCombinations = (active: string, over: string) => {
+        const state = useUIStore.getState();
+        const entries = orderPickerItems(useConfigStore.getState().nativeAgentCombinations, state.agentCombinationOrder, (entry) => entry.id);
+        const from = entries.findIndex((entry) => entry.id === active);
+        const to = entries.findIndex((entry) => entry.id === over);
+        if (from !== -1 && to !== -1 && from !== to) state.setAgentCombinationOrder(arrayMove(entries, from, to).map((entry) => entry.id));
+    };
+
     const getProviderDisplayName = () => {
         const provider = providers.find(p => p.id === currentProviderId);
         return provider?.name || currentProviderId;
@@ -1694,7 +1748,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         return getModelDisplayName(displayCurrentModel, currentModelId) || t('chat.modelControls.selectModel');
     };
 
-    const currentModelDisplayName = getCurrentModelDisplayName();
+    const currentModelDisplayName = agentCombinations.selectedCombination?.name ?? getCurrentModelDisplayName();
     const modelLabelRef = React.useRef<HTMLSpanElement>(null);
     const isModelLabelTruncated = useIsTextTruncated(modelLabelRef, [currentModelDisplayName, isCompact]);
 
@@ -1752,7 +1806,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             <MobileOverlayPanel
                 open={true}
                 onClose={closeMobileTooltip}
-                title={currentMetadata?.name || getCurrentModelDisplayName()}
+                title={agentCombinations.selectedCombination?.name ?? (currentMetadata?.name || getCurrentModelDisplayName())}
             >
                 <div className="flex flex-col gap-1.5">
                     {}
@@ -2023,6 +2077,9 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             }
             if (!selection) setLastSelectedModel(providerId, modelId);
 
+            agentCombinations.clearDraftSelection();
+            persistUnifiedSelection(true);
+
             setExpandedMobileModelKey(null);
             closeMobilePanel();
             requestAnimationFrame(focusColumnInput);
@@ -2036,7 +2093,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const renderMobileModelRow = (entry: ModelPickerEntry, showProviderLogo: boolean) => {
             const { model, providerID: providerId, modelID: modelId } = entry;
             const rowKey = buildModelRefKey(providerId, modelId);
-            const isSelected = providerId === currentProviderId && modelId === currentCatalogModelId;
+            const isSelected = !agentCombinations.selectedCombination && providerId === currentProviderId && modelId === currentCatalogModelId;
             const metadata = entry.kind === 'auto'
                 ? undefined
                 : mergeModelMetadataWithLiveModel(providerId, entry.model, getModelMetadata(providerId, modelId));
@@ -2206,7 +2263,25 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const mobileAutoEntry = autoEntry && (normalizedQuery.length === 0 || getModelDisplayName(autoEntry.model).toLowerCase().includes(normalizedQuery.toLowerCase()))
             ? autoEntry
             : null;
-        const hasResults = Boolean(mobileAutoEntry) || filteredFavorites.length > 0 || filteredRecents.length > 0 || filteredProviders.length > 0;
+        const filteredCombinations = combinationActions.filter((action) => matchesRankQuery([action.label, t('agents.combinations.group')], normalizedQuery));
+        const filteredFavoriteCombinations = favoriteCombinationActions.filter((action) => matchesRankQuery([action.label, t('agents.combinations.group')], normalizedQuery));
+        const mobileFavoriteItems = orderPickerItems([
+            ...filteredFavorites.map((entry) => ({ kind: 'model' as const, id: modelPickerModelKey(entry), label: getModelDisplayName(entry.model), entry })),
+            ...filteredFavoriteCombinations.map((action) => ({ kind: 'action' as const, id: modelPickerActionKey(action.id), label: action.label, action })),
+        ], favoritePickerOrder, (entry) => entry.id);
+        const hasResults = Boolean(mobileAutoEntry) || filteredCombinations.length > 0 || filteredFavoriteCombinations.length > 0 || filteredFavorites.length > 0 || filteredRecents.length > 0 || filteredProviders.length > 0;
+        const renderCombinationRow = (action: ModelPickerAction) => <div key={action.id} className="flex items-center gap-2">
+            <button type="button" disabled={action.disabled} onClick={action.onSelect}
+                className="min-w-0 flex-1 px-3 py-3 text-start typography-meta hover:bg-interactive-hover/50 disabled:cursor-not-allowed disabled:opacity-60">
+                <span className="flex items-center gap-2">{action.icon}<span dir="auto" className="oc-ui-start-align min-w-0 flex-1 truncate">{action.label}</span>{action.selected ? <Icon name="check" className="size-4 shrink-0" /> : null}</span>
+            </button>
+            <button type="button" disabled={action.disabled} onMouseDown={(event) => event.preventDefault()}
+                onClick={(event) => { event.preventDefault(); event.stopPropagation(); action.onToggleFavorite?.(); }}
+                className={cn('model-favorite-button me-2 flex size-7 shrink-0 items-center justify-center hover:text-primary/80 disabled:pointer-events-none', action.favorite ? 'text-primary' : 'text-muted-foreground')}
+                aria-label={action.favorite ? t('chat.modelControls.unfavoriteAria') : t('chat.modelControls.favoriteAria')}>
+                <Icon name={action.favorite ? 'star-fill' : 'star'} className="size-4" />
+            </button>
+        </div>;
 
         return (
             <MobileOverlayPanel
@@ -2257,15 +2332,19 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         </div>
                     ) : null}
 
+
+
                     {/* Favorites Section for Mobile */}
-                    {filteredFavorites.length > 0 && (
-                        <div className="rounded-xl border border-border/40 bg-[var(--surface-elevated)] overflow-hidden">
+                    {(filteredFavorites.length > 0 || filteredFavoriteCombinations.length > 0) && (
+                        <div role="group" aria-label={t('chat.modelControls.favorites')} className="rounded-xl border border-border/40 bg-[var(--surface-elevated)] overflow-hidden">
                             <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                                 <Icon name="star-fill" className="size-3 inline-block me-1.5 text-primary" />
                                 {t('chat.modelControls.favorites')}
                             </div>
                             <div className="flex flex-col border-t border-border/30">
-                                {filteredFavorites.map((entry) => renderMobileModelRow(entry, true))}
+                                <SortablePickerRows items={mobileFavoriteItems} onReorder={normalizedQuery ? undefined : reorderFavoritePickerItem}>
+                                    {(item) => item.kind === 'model' ? renderMobileModelRow(item.entry, true) : renderCombinationRow(item.action)}
+                                </SortablePickerRows>
                             </div>
                         </div>
                     )}
@@ -2282,6 +2361,16 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             </div>
                         </div>
                     )}
+
+                    {filteredCombinations.length > 0 ? <div role="group" aria-label={t('agents.combinations.group')} className="rounded-xl border border-border/40 bg-[var(--surface-elevated)] overflow-hidden">
+                        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider"><Icon name="stack" className="size-3 inline-block me-1.5" />{t('agents.combinations.group')}</div>
+                        <div className="flex flex-col border-t border-border/30">
+                            <SortablePickerRows items={filteredCombinations} onReorder={normalizedQuery ? undefined : reorderCombinations}>
+                                {renderCombinationRow}
+                            </SortablePickerRows>
+                        </div>
+                    </div> : null}
+                    {agentCombinations.error ? <p role="alert" className="typography-meta text-destructive">{agentCombinations.error}</p> : null}
 
                     {filteredProviders.map(({ provider, providerModels }) => {
                         if (providerModels.length === 0) {
@@ -2499,7 +2588,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 <div className="flex min-w-[240px] flex-col gap-3">
                     <div className="flex flex-col gap-0.5">
                         <span className="typography-micro font-semibold text-foreground">
-                            {currentMetadata.name || getCurrentModelDisplayName()}
+                            {agentCombinations.selectedCombination?.name ?? (currentMetadata.name || getCurrentModelDisplayName())}
                         </span>
                         <span className="typography-meta text-muted-foreground">{getProviderDisplayName()}</span>
                     </div>
@@ -2780,6 +2869,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             constrainToMain
                             collisionAvoidance={{ side: 'none', align: 'shift' }}
                             onKeyDownCapture={handleModelShortcutKeyDownCapture}
+                            onKeyDown={(event) => {
+                                // The sortable sensor owns keys on its handle, including Escape.
+                                if (event.target instanceof Element && event.target.closest('[data-model-picker-sort-handle]')) event.preventBaseUIHandler();
+                            }}
                         >
                             {!selection && <div className="p-1 border-b border-border/40">
                                 <button
@@ -2796,13 +2889,18 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             <ModelPickerList
                                 providers={pickableProviders}
                                 favoriteModels={favoriteModelsList}
+                                favoriteActions={favoriteCombinationActions}
+                                favoriteOrder={favoritePickerOrder}
+                                onReorderFavoriteItem={reorderFavoritePickerItem}
+                                onReorderAction={reorderCombinations}
                                 recentModels={recentModelsList}
                                 searchQuery={desktopModelQuery}
                                 onSearchQueryChange={setDesktopModelQuery}
                                 onSelect={handleSharedModelSelect}
                                 labels={modelPickerLabels}
-                                selectedModel={currentProviderId && currentModelId ? { providerID: currentProviderId, modelID: currentCatalogModelId } : null}
+                                selectedModel={!agentCombinations.selectedCombination && currentProviderId && currentModelId ? { providerID: currentProviderId, modelID: currentCatalogModelId } : null}
                                 leadingEntry={autoEntry}
+                                actionGroup={combinationGroup}
                                 leadingAction={onRunInParallel ? {
                                     label: t('chat.modelControls.runInParallel'),
                                     icon: <ArrowsMerge className="h-3.5 w-3.5 flex-shrink-0" />,
@@ -2819,14 +2917,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                 onToggleFavorite={(entry) => toggleFavoriteModel(entry.providerID, entry.modelID)}
                                 renderRowEnd={renderThinkingSlot}
                                 renderVersion={modelPickerRenderVersion}
-                                onReorderFavorite={(active, over) => reorderFavoriteModel(
-                                    active.providerID,
-                                    active.modelID,
-                                    over.providerID,
-                                    over.modelID,
-                                )}
-                                reorderFavoriteAriaLabel={t('chat.modelControls.reorderFavoriteAria')}
-                                reorderFavoriteTitle={t('chat.modelControls.reorderFavoriteTitle')}
                                 providerOrder={providerOrder}
                                 onReorderProvider={setProviderOrder}
                                 reorderProviderTitle={t('chat.modelControls.reorderProviderTitle')}
@@ -2835,13 +2925,14 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                         ? getModelVariantOptions(activeEntry.providerID, activeEntry.modelID).length > 0
                                         : false;
 
-                                    return (
+                                    return (<div className="space-y-1">
+                                        {agentCombinations.error ? <p role="alert" className="typography-meta text-destructive whitespace-normal">{agentCombinations.error}</p> : null}
                                         <div className="flex items-center gap-x-2 whitespace-nowrap overflow-hidden">
                                             <span>{t('chat.modelControls.keyboardHintNavigate')}</span>
                                             {!selection && <span>{t('chat.modelControls.keyboardHintSwitchAgent', { shortcut: 'Tab' })}</span>}
                                             {activeHasThinkingVariants ? <span>{t('chat.modelControls.keyboardHintThinking')}</span> : null}
                                         </div>
-                                    );
+                                    </div>);
                                 }}
                                 maxHeightClassName="max-h-[min(400px,calc(var(--available-height)-4rem))] flex-1"
                                 tooltipsEnabled={agentMenuOpen}

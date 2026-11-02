@@ -66,6 +66,17 @@ const mutableRecord = (value: object | undefined): Record<string, unknown> => {
 };
 
 describe('follow-up queue protocol parsing', () => {
+  test('preserves captured native subagents and distinguishes CLI default from uncaptured legacy items', () => {
+    const base = snapshot();
+    const item = base.items[0];
+    const choices = [null, { model: { providerID: 'codex-native', modelID: 'gpt-test' }, variant: 'max' }];
+    for (const subagentModel of choices) {
+      const value = { ...base, items: [{ ...item, sendConfig: { providerID: 'claude-native', modelID: 'opus', subagentModel } }] };
+      expect(parseFollowUpQueueSnapshot(value).items[0].sendConfig?.subagentModel).toEqual(subagentModel);
+    }
+    expect(parseFollowUpQueueSnapshot(base).items[0].sendConfig).toBeUndefined();
+    expect(() => parseFollowUpQueueSnapshot({ ...base, items: [{ ...item, sendConfig: { providerID: 'claude-native', modelID: 'opus', subagentModel: { model: { providerID: 'untrusted', modelID: 'remote' } } } }] })).toThrow();
+  });
   test('preserves retired executor metadata only for legacy snapshot and outbox replay', () => {
     for (const executionFramework of ['opencode', 'claude-code']) {
       const legacy = snapshot();

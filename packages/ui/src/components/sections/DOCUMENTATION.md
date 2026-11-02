@@ -4,6 +4,19 @@ One directory per Settings page. `shared/` holds the page chrome and controls
 every page is built from; see `.agents/skills/settings-ui-patterns/SKILL.md` for
 which primitive to reach for.
 
+Sessions includes `AgentCombinationsSettings` on web, Electron and mobile,
+including the compact Settings layout. It manages named main, subagent and
+plan execution model/effort snapshots through the profile field
+`nativeAgentCombinations`. Each combination has an explicit Save action;
+creating or editing it does not select a global default. A null subagent means
+the CLI default. Models come from the native catalog and use the shared model
+picker, filtered to native providers. Unavailable backends, old server
+capabilities and enterprise mode disable the controls with a reason. VS Code
+hides the section and its search entry `sessions.agent-combinations`.
+Remote writes are scoped to the runtime generation, so a former host's response
+cannot replace the current host's settings. Failed writes retain the editor
+for retry. Saved edits and deletion do not mutate existing session snapshots.
+
 General's Navigation section offers Workspace layout beside File tree side.
 The Classic and Editor choices apply to desktop web, PWA and Electron;
 the control and its `appearance.workspace-layout` search entry are hidden
@@ -155,42 +168,34 @@ runtime is ignored.
 
 ### DeepSeek Harness
 
-Selecting `deepseek-native` opens `DeepseekHarnessPage.tsx`. Authenticated
-remote clients can edit the connected server's DSH API key, endpoint and
-model IDs through `RuntimeAPIs.nativeAgents`. DSH owns persistence. Keys are
-write-only; blank retains the current key. Read-only credential sources stay
-disabled. A settings conflict requires reload; a credential failure retains
-the typed key and the committed settings revision for retry. Saving refreshes
-the model picker. The shared Settings save indicator reports persistence.
-`providers.deepseek-harness` prepares the page before highlighting its status
-section. The page and search entry are absent in VS Code; Web, desktop, hosted
-mobile and Capacitor configure their connected server. Enterprise mode disables
-the editor, and the server enforces the same refusal.
-The untitled status section contains the setup and reload buttons without a
-duplicate setup label. The endpoint placeholder explains that blank uses DSH’s
-default; saving blank removes the native override. DeepSeek uses a bundled local
-provider logo. The one-click setup action installs a missing CLI and opens the
-independent configuration form. It never reuses Claude Code credentials. Progress polling
-runs only while setup is active, stops on unmount or runtime changes, and
-retains an unconfirmed result on network failure. Completed setup reloads the
-configuration and model picker; an existing DSH credential is preserved.
+Selecting `deepseek-native` opens `DeepseekHarnessPage.tsx`. The page reads
+`RuntimeAPIs.nativeAgents` capabilities, setup status and catalog. It never
+edits DSH's provider configuration and does not list its models; the catalog
+check decides the status and surfaces errors for the model picker. Enterprise
+mode closes the page and the server refuses setup and DSH requests. The page
+and search entry are absent in VS Code; Web, desktop, hosted mobile and
+Capacitor view their connected server. The status section offers one-click
+setup only when `dsh` is missing, and reload in every state. Setup installs the
+CLI only; it does not ask for or store an endpoint, key or model list. Progress
+polling runs only while installation is active, stops on unmount or runtime
+changes, and keeps an unconfirmed result on failure. Completed setup reloads
+the status; the model picker gets DSH's catalog separately. The native
+catalog keeps the official `deepseek-official` models and hides duplicate
+DeepSeek entries from gateway providers; other gateway models stay visible.
 
 ### Antigravity CLI
 
 Selecting `antigravity-native` opens `AntigravityPage.tsx`. The page reads the
-existing native capabilities and catalog: a missing `cli` flag means the CLI is
-absent, an error partition with `reason: "unauthenticated"` means sign-in is
-required, a non-empty model catalog is ready, and every other read failure is an
-error with its diagnostic retained. An older server with no Antigravity
-partition produces the error state because its support is unknown. The page offers a
-reload action and shows the official Unix and Windows installation commands
-plus the interactive `agy` sign-in flow. It never installs the CLI or accepts
-credentials.
-
-The personal Google AI subscription policy warning and the headless full-access
-warning stay visible in every state. The card, `providers.antigravity` search
-entry and page are absent in VS Code. Web, desktop, hosted mobile and Capacitor
-show the status of their connected OpenChamber server.
+native capabilities and catalog: a missing `cli` flag means the CLI is absent,
+an error partition with `reason: "unauthenticated"` means the CLI is not
+authenticated, a non-empty model catalog is ready, and every other read failure
+is an error with its diagnostic retained. The page offers only status and a
+reload action. It does not show install commands or sign-in instructions.
+The server launches `agy` through the user's bash or zsh `agy` function when one
+is defined, so a wrapper's environment applies; otherwise it runs the binary
+directly. The card, `providers.antigravity` search entry and page are absent in
+VS Code. Web, desktop, hosted mobile and Capacitor show the status of their
+connected OpenChamber server.
 
 ### Claude Code connections
 
@@ -209,42 +214,6 @@ Missing selected models remain unavailable until the user selects another;
 connections never fall back to a different service. Failed reads retain the
 previous list, and stale reads cannot replace a newer mutation or another
 runtime's state.
-
-`CliProxyApiSection` holds ChatGPT and Antigravity sign-in rows inside the Claude
-Code connection list. The ChatGPT row is named after the gateway connection it writes; the page hides
-that connection from the ordinary list and keeps the row in place even before
-the connection exists. The CLIProxyAPI gateway behind it is a service
-OpenChamber runs itself, and the row keeps that out of the way: the sign-in
-button brings the gateway up (downloading the pinned build on first use),
-starts the browser sign-in through the gateway's management API, accepts a
-pasted callback address for browsers that cannot reach the gateway's localhost
-listener, and on success writes the Claude Code connection so the models appear
-in the picker; a failure after the account is stored stays a notice rather than
-a failed sign-in. The first signed-in account shares the row: its email and a
-sign-out button replace the sign-in button until that account is signed out,
-which brings the button back. Signing out also refreshes the native model
-catalog and the page's connection list after the server prunes models no
-remaining gateway account serves. The refresh is awaited, scoped to the
-current runtime, and still runs after a partial failure so a removed credential
-does not remain displayed as signed in. Failed cleanup keeps its error visible;
-an unavailable selected model never silently switches to another service.
-Further accounts sit under the row with their own
-sign-out, the row itself offers no edit or delete, and a failed attempt shows
-the gateway's own reason under the translated failure line. The gateway's own
-controls stay out of sight until something is wrong (an unsupported target, a
-crash, a rejected management key, a disabled management API): only then does an
-Advanced disclosure appear with the supervised process and Start and Stop, the
-upstream proxy (changing it restarts the gateway), and the connection block
-that imports the gateway's models or edits a single model row by hand.
-`providers.cliproxyapi` prepares the same page and highlights the section;
-its search keywords include Antigravity. Provider identity places each account
-under the correct sign-in row regardless of gateway order. Antigravity appears
-only when the server advertises it in `loginProviders`. A login attempt owns its
-provider; switching runtimes stops the flow before another mutation can land on
-the new server. Antigravity requires its own gateway login even when agy is
-already signed in. The gateway imports available Claude models with its declared
-limits, retaining existing model selections. Enterprise policy disables provider
-entry controls and independently refuses their server operations.
 
 ### Codex connections
 

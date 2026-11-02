@@ -31,6 +31,9 @@ import { z } from 'zod';
  * - Unified native conversations refuse creation, prompts, compaction and
  *   continuing question replies. Their context can cross between independently
  *   configured CLI providers (`native-agents/conversations/runtime.js`).
+ * - Native agent combination writes and cross-CLI subagent dispatch are refused,
+ *   including callbacks from already running CLIs. Role choices can reach
+ *   providers configured outside OpenCode (`native-agents/delegation.js`).
  * - DeepSeek Harness sessions, one-click setup and provider configuration are refused
  *   before launching or sending to the native DSH runtime, whose providers are
  *   configured outside OpenCode
@@ -41,10 +44,6 @@ import { z } from 'zod';
  *   server is refused, as is probing a custom provider's model endpoint
  *   (`opencode/routes.js`). OpenCode's `provider.use`
  *   policy is the real lock; this closes the way in through the app.
- *   The managed CLIProxyAPI service also refuses OAuth login and callback
- *   completion, model imports and connection writes, including automatic Antigravity
- *   family upgrades and unified Claude-to-Antigravity Opus/Sonnet routing. Unified
- *   gateway launches also refuse the mode before sending conversation content.
  *   Signing in to a remote MCP server from the OpenCode config uses the same
  *   routes and stays allowed.
  * - Jev classification is off, unless the administrator pinned their own

@@ -20,6 +20,7 @@ import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
 import { PROJECT_TODO_TEXT_MAX_LENGTH, type ProjectTodoChange, type ProjectTodoItem } from '@/lib/projectContextApi';
 import { cn } from '@/lib/utils';
+import { hasTextSelectionWithin } from '@/lib/textSelection';
 import { KnowledgeComposer } from './KnowledgeComposer';
 import { KNOWLEDGE_ICON_BUTTON_CLASS, useKnowledgeRevealClass } from './knowledgeRowStyle';
 import { KnowledgeMenu } from './KnowledgeActions';
@@ -321,11 +322,21 @@ export const TodosSection: React.FC<{
                             onSave={text => { void handleEditTodo(todo.id, text); }}
                             onCancel={() => setEditingTodoId(null)}
                           /> : <>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleTodoExpanded(todo.id)}
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            aria-expanded={isExpandedTodo}
+                            onClick={(event) => {
+                              if (!hasTextSelectionWithin(event.currentTarget)) handleToggleTodoExpanded(todo.id);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleToggleTodoExpanded(todo.id);
+                              }
+                            }}
                             className={cn(
-                              'block min-h-6 min-w-0 flex-1 bg-transparent p-0 text-start typography-ui-label leading-normal text-foreground',
+                              'block min-h-6 min-w-0 flex-1 cursor-text select-text bg-transparent p-0 text-start typography-ui-label leading-normal text-foreground',
                               isExpandedTodo ? 'whitespace-pre-wrap break-words' : 'overflow-hidden text-ellipsis whitespace-nowrap',
                               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                               todo.completed && 'text-muted-foreground line-through'
@@ -338,7 +349,7 @@ export const TodosSection: React.FC<{
                             }
                           >
                             {todo.text}
-                          </button>
+                          </div>
                           <div className="-me-1 flex h-6 items-center gap-0.5">
                             <button
                               type="button"

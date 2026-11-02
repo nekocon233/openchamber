@@ -31,16 +31,18 @@ interface SettingsSearchAvailabilityContext extends SettingsRuntimeContext {
   isLinux: boolean;
 }
 
+const isTunnelManagementAvailable = (ctx: SettingsSearchAvailabilityContext): boolean => !ctx.enterpriseMode;
+
 const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
   {
     id: 'providers.antigravity', page: 'providers',
     titleKey: 'settings.antigravity.title', descriptionKey: 'settings.antigravity.description',
-    keywords: ['antigravity', 'agy', 'gemini', 'google', 'cli', 'install', 'sign in'], isAvailable: (ctx) => !ctx.isVSCode,
+    keywords: ['antigravity', 'agy', 'gemini', 'google', 'cli'], isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'providers.deepseek-harness', page: 'providers',
     titleKey: 'settings.deepseekHarness.title', descriptionKey: 'settings.deepseekHarness.description',
-    keywords: ['deepseek', 'harness', 'dsh', 'cli', 'api key', 'endpoint', 'models', 'remote', 'one click', 'install', 'setup'], isAvailable: (ctx) => !ctx.isVSCode,
+    keywords: ['deepseek', 'harness', 'dsh', 'cli', 'models', 'install', 'setup'], isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'chat.work-status.section.taskChecklist',
@@ -62,13 +64,6 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'chat.nativeTasks.plan',
     keywords: ['codex', 'plan', 'work status'],
     isAvailable: (ctx) => !ctx.isMobile && !ctx.isVSCode,
-  },
-  {
-    id: 'providers.cliproxyapi',
-    page: 'providers',
-    titleKey: 'settings.cliproxyapi.title',
-    keywords: ['cliproxyapi', 'chatgpt', 'gpt', 'codex', 'claude code', 'gateway', 'oauth', 'antigravity', 'opus', 'sonnet', 'fallback', 'failover', 'quota', 'subscription'],
-    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'providers.claude-connections',
@@ -577,6 +572,11 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'sessions',
     titleKey: 'settings.openchamber.defaults.field.defaultModel',
     keywords: ['model', 'provider', 'new sessions'],
+  },
+  {
+    id: 'sessions.agent-combinations', page: 'sessions', titleKey: 'agents.combinations.title',
+    keywords: ['combination', 'preset', 'subagent', 'native', 'cli', 'opus', 'codex', 'deepseek'],
+    isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
     id: 'sessions.default-thinking',
@@ -1409,12 +1409,19 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['stt', 'dictation', 'voice input', 'transcribe', 'whisper', 'parakeet', 'microphone'],
   },
   {
+    id: 'tunnel.overview',
+    page: 'tunnel',
+    titleKey: 'settings.page.tunnel.title',
+    descriptionKey: 'settings.page.tunnel.description',
+    keywords: ['tunnel', 'remote access', 'cloudflare', 'frpc', 'frps', 'qr', 'share'],
+  },
+  {
     id: 'tunnel.provider',
     page: 'tunnel',
     titleKey: 'settings.openchamber.tunnel.field.provider',
     descriptionKey: 'settings.openchamber.tunnel.description',
     keywords: ['remote access', 'cloudflare', 'frpc', 'frps', 'ngrok'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+    isAvailable: isTunnelManagementAvailable,
   },
   {
     id: 'tunnel.frpc',
@@ -1422,14 +1429,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.tunnel.field.frpcProxyType',
     descriptionKey: 'settings.openchamber.tunnel.note.frpcProxyTypes',
     keywords: ['frpc', 'frps', 'server ip', 'control port', 'remote port', 'tcp mapping', 'http vhost', 'custom domain', 'public hostname', 'host trust', 'system trust store', 'tls certificate', 'server identity', 'caddy', 'reverse proxy', 'token'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+    isAvailable: isTunnelManagementAvailable,
   },
   {
     id: 'tunnel.type',
     page: 'tunnel',
     titleKey: 'settings.openchamber.tunnel.field.tunnelType',
     keywords: ['quick', 'managed remote', 'managed local'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+    isAvailable: isTunnelManagementAvailable,
   },
   {
     id: 'tunnel.ttl',
@@ -1437,14 +1444,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.tunnel.field.connectLinkTtl',
     descriptionKey: 'settings.openchamber.tunnel.field.tunnelSessionTtl',
     keywords: ['expiry', 'expiration', 'session ttl', 'connect link ttl'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+    isAvailable: isTunnelManagementAvailable,
   },
   {
     id: 'tunnel.managed-remote',
     page: 'tunnel',
     titleKey: 'settings.openchamber.tunnel.section.savedManagedRemoteTunnels',
     keywords: ['cloudflare', 'hostname', 'token', 'managed remote'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+    isAvailable: isTunnelManagementAvailable,
   },
   {
     id: 'tunnel.managed-local-config',
@@ -1452,7 +1459,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.tunnel.field.configurationFile',
     descriptionKey: 'settings.openchamber.tunnel.note.managedLocalUsesConfig',
     keywords: ['cloudflared', 'config', 'yaml', 'json', 'managed local'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+    isAvailable: isTunnelManagementAvailable,
   },
   {
     id: 'tunnel.start',
@@ -1460,7 +1467,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.openchamber.tunnel.actions.startTunnel',
     descriptionKey: 'settings.openchamber.tunnel.note.connectLinksOneTime',
     keywords: ['connect link', 'qr code', 'public url', 'remote access'],
-    isAvailable: (ctx) => !ctx.isVSCode && !ctx.enterpriseMode,
+    isAvailable: isTunnelManagementAvailable,
   },
   {
     id: 'notifications.delivery',

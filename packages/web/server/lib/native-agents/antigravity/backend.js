@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { prepareAgyDelegation } from './delegation-setup.js';
 
 import {
   decodeNativeSessionId,
@@ -20,6 +21,7 @@ import {
 import { signalCliProcess, spawnCliProcess } from '../process.js';
 import { unconfirmedSessionRecord, unknownError } from '../records.js';
 import { agyDiagnostic, agyProcessArgs, startAgyProcess } from './process.js';
+import { resolveAgyCommand } from './command.js';
 import { createAntigravityLiveProjection } from './projector.js';
 import { createAntigravityStore } from './store.js';
 import { createAntigravitySubagents } from './subagents.js';
@@ -53,7 +55,9 @@ const versionSupported = (version) => {
 const sameDirectory = (left, right) => path.resolve(left) === path.resolve(right);
 
 export const createAntigravityBackend = ({
+  toolConfiguration = () => null,
   resolveExecutable,
+  resolveCommand = resolveAgyCommand,
   buildEnv,
   registry,
   publisher,
@@ -72,16 +76,22 @@ export const createAntigravityBackend = ({
   // at launch; this map translates legacy selections without probing each turn.
   let modelAliases = null;
 
-  const requireExecutable = async () => {
-    const executable = await resolveExecutable();
-    if (!executable) throw cliMissingError('agy');
-    return executable;
+  let commandPromise = null;
+  const requireCommand = () => {
+    commandPromise ??= resolveCommand({ resolveExecutable, env: buildEnv() }).catch((error) => {
+      commandPromise = null;
+      throw error;
+    });
+    return commandPromise;
   };
 
-  const probe = async (args) => {
-    const executable = await requireExecutable();
+  const probe = async (args, { native = false } = {}) => {
+    const command = native
+      ? { executable: await resolveExecutable(), argsPrefix: [] }
+      : await requireCommand();
+    if (!command.executable) throw cliMissingError('agy');
     return new Promise((resolve, reject) => {
-      const child = spawnCliProcess(executable, args, { cwd: process.cwd(), env: buildEnv() });
+      const child = spawnCliProcess(command.executable, [...command.argsPrefix, ...args], { cwd: process.cwd(), env: buildEnv() });
       let stdout = '';
       let stderr = '';
       let outputExceeded = false;
@@ -118,7 +128,11 @@ export const createAntigravityBackend = ({
 
   const quota = createAntigravityQuota({
     resolveExecutable,
-    readUsage: () => probe(['--disable-slash-commands=false', '--print', '/usage', '--print-timeout', '10s']),
+    // /usage needs the native backend; shell wrappers can inject a gateway model.
+    readUsage: () => probe([
+      '--settings', JSON.stringify({ modelProvider: '', model: '' }),
+      '--disable-slash-commands=false', '--print', '/usage', '--print-timeout', '10s',
+    ], { native: true }),
   });
 
   const readCatalog = async () => {
@@ -126,7 +140,9 @@ export const createAntigravityBackend = ({
     if (!versionSupported(version)) {
       throw backendError(`Antigravity ${version || 'version'} is unsupported. Update agy to 1.1.15 or later.`, 'NATIVE_ANTIGRAVITY_VERSION');
     }
-    const models = parseAntigravityModels(await probe(['models']));
+    // Discovery ignores custom entries without changing saved CLI settings or prompt routing.
+    const settings = JSON.stringify({ customModelsConfig: { customModels: {} } });
+    const models = parseAntigravityModels(await probe(['--settings', settings, 'models']));
     modelAliases = new Map(models.flatMap((model) => model.aliases.map((alias) => [alias.id, model.id])));
     return models;
   };
@@ -327,25 +343,31 @@ export const createAntigravityBackend = ({
       if (session.process === previous) session.process = null;
       session.firstPrompt = true;
     }
-    if (session.process && (session.model !== model || session.agent !== agent || session.effort !== effort)) {
+    const tools = toolConfiguration(sessionId);
+    const toolKey = tools?.key ?? '';
+    if (session.process && (session.model !== model || session.agent !== agent || session.effort !== effort || (session.toolKey ?? '') !== toolKey)) {
       const previous = session.process;
       await previous.stop('close');
       if (session.process === previous) session.process = null;
       session.firstPrompt = true;
     }
     if (!session.process) {
-      const executable = await requireExecutable();
-      const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS].filter(Boolean).join('\n\n');
+      const command = await requireCommand();
+      if (tools) await prepareAgyDelegation(tools, buildEnv());
+      const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS,
+        tools?.child ? 'This is a delegated subagent task. Report your findings or plan to the parent. Do not request approval to execute a plan and do not create subagents.' : null,
+      ].filter(Boolean).join('\n\n');
       const process = startAgyProcess({
-        executable,
-        args: agyProcessArgs({ cwd: session.directory, model, conversationId: session.nativeId, agent, effort }),
+        executable: command.executable,
+        args: [...command.argsPrefix, ...agyProcessArgs({ cwd: session.directory, model, conversationId: session.nativeId, agent, effort })],
         cwd: session.directory,
-        env: buildEnv(),
+        env: { ...buildEnv(), ...tools?.env, OPENCHAMBER_DELEGATION_CHILD: tools?.child ? '1' : '0' },
         startupTimeoutMs,
         onFrame: (frame) => enqueue(session, process, () => handleFrame(session, process, frame)),
         onExit: (error) => enqueue(session, process, () => handleExit(session, process, error)),
       });
       session.process = process;
+      session.toolKey = toolKey;
       session.globalInstructions = globalInstructions;
       try {
         const init = await process.ready;
@@ -418,12 +440,12 @@ export const createAntigravityBackend = ({
     },
 
     async createSession({ directory, title }) {
-      const executable = await requireExecutable();
+      const command = await requireCommand();
       const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS].filter(Boolean).join('\n\n');
       const holder = { session: null };
       const process = startAgyProcess({
-        executable,
-        args: agyProcessArgs({ cwd: directory, agent: null }),
+        executable: command.executable,
+        args: [...command.argsPrefix, ...agyProcessArgs({ cwd: directory, agent: null })],
         cwd: directory,
         env: buildEnv(),
         startupTimeoutMs,
@@ -471,7 +493,14 @@ export const createAntigravityBackend = ({
           launchModel = modelAliases.get(launchModel) ?? launchModel;
           signal?.throwIfAborted();
         }
-        const session = await ensureSession(sessionId, request.directory, launchModel, request.agent, effort);
+        let session;
+        try {
+          session = await ensureSession(sessionId, request.directory, launchModel, request.agent, effort);
+        } catch (error) {
+          // Startup has accepted no prompt, so unified admission can roll back.
+          if (error instanceof NativeAgentError) throw error;
+          throw backendError(error instanceof Error ? error.message : String(error));
+        }
         signal?.throwIfAborted();
         const nativeText = session.firstPrompt && session.globalInstructions
           ? antigravityPromptText(withInstructions([{ type: 'text', text: userText }], session.globalInstructions))
@@ -536,6 +565,18 @@ export const createAntigravityBackend = ({
       const session = sessions.get(sessionId);
       if (!session?.turn) return;
       await new Promise((resolve) => session.idleWaiters.add(resolve));
+    },
+
+    /** Retire an idle unified source before another backend starts. */
+    async closeSession(sessionId) {
+      const session = sessions.get(sessionId);
+      if (!session) return;
+      if (session.turn || admissions.has(sessionId)) throw sessionBusyError();
+      clearTimeout(session.idleTimer);
+      const process = session.process;
+      if (process) await process.stop('close');
+      await session.queue;
+      if (session.process === process) session.process = null;
     },
 
     liveRecords(sessionId) {

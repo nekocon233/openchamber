@@ -5,8 +5,7 @@ import { NativeAgentError, invalidRequestError } from '../errors.js';
 
 const digest = (value) => createHash('sha256').update(value).digest('hex').slice(0, 32);
 export const conversationMessageId = (conversationId, segment, nativeId) => {
-  const send = /^(?:nc[lx]_u_|ndh_u_)/.test(nativeId)
-    ? segment.sends.find((entry) => entry.nativeMessageId === nativeId) : undefined;
+  const send = segment.sends.find((entry) => entry.nativeMessageId === nativeId);
   if (send && segment.ownerId === conversationId) return send.messageId;
   return `ncv_m_${digest(`${conversationId}:${segment.sessionId}:${nativeId}`)}`;
 };

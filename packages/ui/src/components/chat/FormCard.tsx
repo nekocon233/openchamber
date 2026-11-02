@@ -17,6 +17,8 @@ import { copyTextToClipboard } from '@/lib/clipboard';
 import { serializeFormAsJson, serializeFormAsMarkdown } from './formSerializers';
 import { FormFieldControl } from './FormFieldControl';
 import { WebSearchConsentCard } from './WebSearchConsent';
+import { PlanExecutionModelPicker } from './PlanExecutionModelPicker';
+import { usePlanExecutionModel } from './usePlanExecutionModel';
 import {
     type FormValues,
     buildFormAnswer,
@@ -49,6 +51,7 @@ export const FormCard: React.FC<FormCardProps> = ({ form }) => {
 
 const GenericFormCard: React.FC<FormCardProps> = ({ form }) => {
     const { t } = useI18n();
+    const planModel = usePlanExecutionModel(form);
     const isMobile = useUIStore((state) => state.isMobile);
     const { sessionId: currentSessionId, directory: currentSessionDirectory } = useChatSessionSelection();
     const sessions = useSessions(currentSessionDirectory ?? undefined);
@@ -83,38 +86,41 @@ const GenericFormCard: React.FC<FormCardProps> = ({ form }) => {
     const shown = React.useMemo(() => visibleFields(fields, values), [fields, values]);
     const missing = React.useMemo(() => missingRequiredKeys(fields, values), [fields, values]);
     const canSubmit = missing.length === 0;
+    const answer = buildFormAnswer(fields, values);
 
     const updateValue = React.useCallback((key: string, patch: Partial<FormValues[string]>) => {
         setValues((previous) => ({ ...previous, [key]: { ...valueOf(previous, key), ...patch } }));
     }, []);
 
     const handleSubmit = React.useCallback(async () => {
-        if (!canSubmit) {
+        if (!canSubmit || planModel.approving(answer) && !planModel.canApprove) {
             setShowErrors(true);
             return;
         }
         setIsResponding(true);
         try {
-            await sessionActions.replyToForm(form.sessionID, form.id, buildFormAnswer(fields, values));
+            await sessionActions.replyToForm(form.sessionID, form.id, answer, planModel.executionFor(answer));
+            planModel.clear();
             setHasResponded(true);
         } catch {
             toast.error(t('chat.formCard.submitFailed'), { description: t('chat.formCard.tryAgain') });
         } finally {
             setIsResponding(false);
         }
-    }, [canSubmit, fields, form.id, form.sessionID, t, values]);
+    }, [answer, canSubmit, form.id, form.sessionID, planModel, t]);
 
     const handleCancel = React.useCallback(async () => {
         setIsResponding(true);
         try {
             await sessionActions.cancelForm(form.sessionID, form.id);
+            planModel.clear();
             setHasResponded(true);
         } catch {
             toast.error(t('chat.formCard.cancelFailed'), { description: t('chat.formCard.tryAgain') });
         } finally {
             setIsResponding(false);
         }
-    }, [form.id, form.sessionID, t]);
+    }, [form.id, form.sessionID, planModel, t]);
 
     const handleKeyDown = React.useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -194,11 +200,12 @@ const GenericFormCard: React.FC<FormCardProps> = ({ form }) => {
 
                     <div className="px-2 py-2 space-y-1">{shown.map(renderField)}</div>
 
+                    <PlanExecutionModelPicker selection={planModel} disabled={isResponding} />
                     <div className="px-2 pb-1.5 pt-1 flex items-center gap-1.5 border-t border-border/20">
                         <button
                             type="button"
                             onClick={() => void handleSubmit()}
-                            disabled={isResponding}
+                            disabled={isResponding || planModel.approving(answer) && !planModel.canApprove}
                             className={cn(
                                 'flex items-center gap-1 px-2 py-1 typography-meta font-medium rounded transition-colors',
                                 'bg-[rgb(var(--status-success)/0.1)] text-[var(--status-success)] hover:bg-[rgb(var(--status-success)/0.2)]',

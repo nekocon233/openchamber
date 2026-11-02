@@ -119,7 +119,7 @@ const userRecord = ({ sessionId, id, created, send, text }) => {
     }),
     parts: [],
   };
-  if (text !== '') {
+  if (text !== '' && !send?.antigravity?.interactionReply) {
     record.parts.push(buildTextPart({
       id: userTextPartId(id, 0), sessionID: sessionId, messageID: id,
       text, start: created, end: created,

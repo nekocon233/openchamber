@@ -1,5 +1,6 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
+import { hasTextSelectionWithin } from '@/lib/textSelection';
 import { Icon } from '@/components/icon/Icon';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useUIStore } from '@/stores/useUIStore';
@@ -128,6 +129,7 @@ type RowProps = {
   iconColor?: string;
   leading?: React.ReactNode;
   label: React.ReactNode;
+  selectableLabel?: boolean;
   value?: React.ReactNode;
   muted?: boolean;
   /** Turns the row into a button; the caller decides what it opens. */
@@ -146,6 +148,7 @@ export const WorkStatusRow: React.FC<RowProps> = ({
   iconColor,
   leading,
   label,
+  selectableLabel,
   value,
   muted,
   onClick,
@@ -154,6 +157,7 @@ export const WorkStatusRow: React.FC<RowProps> = ({
   className,
 }) => {
   const labelId = React.useId();
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
   const body = (
     <>
       {leading ?? (icon ? (
@@ -163,7 +167,13 @@ export const WorkStatusRow: React.FC<RowProps> = ({
           style={iconColor ? { color: iconColor } : undefined}
         />
       ) : null)}
-      <span id={labelId} className={cn('min-w-0 flex-1 truncate text-[13px]', muted && 'text-muted-foreground')}>
+      <span
+        id={labelId}
+        className={cn('min-w-0 flex-1 truncate text-[13px]', muted && 'text-muted-foreground', selectableLabel && 'pointer-events-auto cursor-text select-text')}
+        onClick={selectableLabel && onClick ? (event) => {
+          if (!hasTextSelectionWithin(event.currentTarget)) buttonRef.current?.click();
+        } : undefined}
+      >
         {label}
       </span>
       {value !== undefined && value !== null ? (
@@ -183,6 +193,7 @@ export const WorkStatusRow: React.FC<RowProps> = ({
   const row = onClick ? (
     <div className={cn(shared, 'oc-ref-tint-scope relative transition-colors hover:text-foreground')}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={onClick}
         // The label no longer sits inside the button, so it names it here.

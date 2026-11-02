@@ -83,6 +83,10 @@
     ],
     "extraResources": [
       {
+        "from": "resources/native-delegation-mcp.mjs",
+        "to": "native-delegation-mcp.mjs"
+      },
+      {
         "from": "resources/native-memory-hook.mjs",
         "to": "native-memory-hook.mjs"
       },

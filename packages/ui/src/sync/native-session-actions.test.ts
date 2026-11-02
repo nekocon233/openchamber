@@ -3,9 +3,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { type Session } from "@/lib/opencode/model"
 
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
-import type { NativeCompactRequest, NativeSessionCreate, NativeSessionPatch } from "@/lib/api/types"
+import type { NativeCompactRequest, NativeSessionCreate, NativeSessionPatch, NativeSessionSelection } from "@/lib/api/types"
+import type { NativeAgentConfigurationWrite } from '@/lib/native-agents/combinations';
+import { captureAgentCombinationDraft, readAgentCombinationDraft, useAgentCombinationDrafts } from '@/lib/native-agents/combination-drafts';
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from "@/lib/native-agents/test-utils/runtime"
+import { NATIVE_BACKENDS, nativeProviderIdOf, type NativeBackend } from "@/lib/native-agents/ids"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
 import { ChildStoreManager } from "./child-store"
@@ -16,6 +19,8 @@ import {
   createNativeSession,
   deleteSession,
   patchSessionMetadata,
+  configureNativeAgents,
+  selectNativeConversationModel,
   setActionRefs,
   unarchiveSession,
   updateSessionTitle,
@@ -41,6 +46,8 @@ let deletes: string[] = []
 let compactions: Array<{ sessionId: string; request: NativeCompactRequest }> = []
 let createRequests: NativeSessionCreate[] = []
 let capabilityReads = 0
+let unifiedBackends: NativeBackend[] | undefined = undefined
+let unifiedSessions = true
 let deleteFailure: NativeAgentsRequestError | null = null
 let openChamberRequests: string[] = []
 let openCodeRequests: string[] = []
@@ -60,6 +67,8 @@ beforeEach(() => {
   compactions = []
   createRequests = []
   capabilityReads = 0
+  unifiedBackends = undefined
+  unifiedSessions = true
   deleteFailure = null
   openChamberRequests = []
   openCodeRequests = []
@@ -88,7 +97,8 @@ beforeEach(() => {
       capabilityReads += 1
       return {
         supported: true,
-        unifiedSessions: true,
+        unifiedSessions,
+        unifiedBackends,
         backends: { claude: { cli: true }, codex: { cli: true } },
         registry: { reset: false },
       }
@@ -115,15 +125,111 @@ afterEach(() => {
   opencodeClient.getSession = originalGetSession;
   registerRuntimeAPIs(null)
   childStores.disposeAll()
+  useAgentCombinationDrafts.setState({ drafts: new Map() });
 })
 
+describe('native combination identity', () => {
+  const id = 'ncv_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
+  const selection: NativeSessionSelection = { model: { providerID: 'claude-native', modelID: 'opus' }, agent: 'plan', variant: 'high' };
+  const configuration: NativeAgentConfigurationWrite = {
+    combination: { id: '11111111-1111-4111-8111-111111111111', name: 'Mixed team' },
+    subagent: { model: { providerID: 'codex-native', modelID: 'gpt-test' } },
+    execution: { model: { providerID: 'deepseek-native', modelID: 'deepseek-test' } },
+  };
+  const sessionOf = (agents: NativeAgentConfigurationWrite, revision: number) => nativeSession(id, {
+    model: { providerID: selection.model.providerID, id: selection.model.modelID, variant: selection.variant }, agent: 'plan',
+    metadata: { openchamber: { native: { kind: 'unified', backend: 'claude', revision, recordRevision: revision,
+      historyRevision: 0, sourceSessionID: SESSION, switchReady: true, preparing: false, agents: { ...agents, revision } } } },
+  });
+
+  test('explicitly choosing the same main model clears only combination identity', async () => {
+    let current = sessionOf(configuration, 3);
+    const writes: NativeAgentConfigurationWrite[] = [];
+    registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({
+      getSession: async () => current,
+      configureAgents: async (_id, _directory, next, expected, main, selectionRevision) => {
+        expect(expected).toBe(3);
+        expect(selectionRevision).toBe(3);
+        expect(main).toEqual(selection);
+        writes.push(next); current = sessionOf(next, 4); return current;
+      },
+    })));
+    expect(await selectNativeConversationModel(id, DIRECTORY, selection)).toBe(current);
+    expect(writes).toHaveLength(0);
+    const updated = await selectNativeConversationModel(id, DIRECTORY, selection, true);
+    expect(writes).toEqual([{ subagent: configuration.subagent, execution: configuration.execution }]);
+    expect(updated.metadata).toEqual(sessionOf(writes[0], 4).metadata);
+    await selectNativeConversationModel(id, DIRECTORY, selection, true);
+    expect(writes).toHaveLength(1);
+  });
+
+  test('reads the latest roles after a queued combination write before clearing its name', async () => {
+    let current = sessionOf({ subagent: null, execution: null }, 0);
+    const writes: NativeAgentConfigurationWrite[] = [];
+    registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({
+      getSession: async () => current,
+      configureAgents: async (_id, _directory, next, expected) => {
+        expect(expected).toBe(writes.length);
+        writes.push(next); current = sessionOf(next, writes.length); return current;
+      },
+    })));
+    const applied = configureNativeAgents(id, DIRECTORY, configuration, selection);
+    const individual = selectNativeConversationModel(id, DIRECTORY, selection, true);
+    await Promise.all([applied, individual]);
+    expect(writes).toEqual([configuration, { subagent: configuration.subagent, execution: configuration.execution }]);
+  });
+});
+
 describe('native session creation', () => {
-  test('Antigravity bypasses the unified default and always creates a single-CLI session', async () => {
+  test('carries a directory-free chat choice into creation and consumes only the captured draft', async () => {
+    const target = { draftId: 81 };
+    const configuration: NativeAgentConfigurationWrite = {
+      combination: { id: '11111111-1111-4111-8111-111111111111', name: 'Chat team' },
+      subagent: { model: { providerID: 'codex-native', modelID: 'gpt-test' } },
+      execution: { model: { providerID: 'deepseek-native', modelID: 'deepseek-test' } },
+    };
+    useAgentCombinationDrafts.getState().set(target, configuration);
+    useAgentCombinationDrafts.getState().set({ draftId: 82 }, { subagent: null, execution: null });
+    registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({
+      capabilities: async () => ({ supported: true, unifiedSessions: true, agentCombinations: true,
+        unifiedBackends: [...NATIVE_BACKENDS], backends: { claude: { cli: true }, codex: { cli: true } }, registry: { reset: false } }),
+      createSession: async (input) => { createRequests.push(input); return nativeSession('ncv_created'); },
+    })));
+    await createNativeSession('claude', '/managed/chat-just-created', undefined, {
+      model: { providerID: 'claude-native', id: 'opus', variant: 'high' }, agent: 'plan', combinationDraft: captureAgentCombinationDraft(target),
+    });
+    expect(createRequests[0]).toMatchObject({ directory: '/managed/chat-just-created', configuration });
+    expect(readAgentCombinationDraft(target)).toBeUndefined();
+    expect(readAgentCombinationDraft({ draftId: 82 })).toEqual({ subagent: null, execution: null });
+  });
+  test('an older server keeps Antigravity on a standalone session', async () => {
     await createNativeSession('antigravity', DIRECTORY, undefined, {
       model: { providerID: 'antigravity-native', id: 'gemini-3-pro' }, agent: 'plan',
     })
-    expect(capabilityReads).toBe(0)
+    expect(capabilityReads).toBe(1)
     expect(createRequests).toEqual([{ backend: 'antigravity', directory: DIRECTORY }])
+  })
+
+  for (const backend of NATIVE_BACKENDS) test(`creates a unified ${backend} draft when the server supports it`, async () => {
+    unifiedBackends = NATIVE_BACKENDS
+    await createNativeSession(backend, DIRECTORY, 'Unified work', {
+      model: { providerID: nativeProviderIdOf(backend), id: 'selected-model', variant: 'high' }, agent: 'plan',
+    })
+    expect(createRequests).toEqual([{
+      kind: 'unified', backend, directory: DIRECTORY, title: 'Unified work',
+      selection: { model: { providerID: nativeProviderIdOf(backend), modelID: 'selected-model' }, agent: 'plan', variant: 'high' },
+    }])
+  })
+
+  test('keeps utility creation and servers without unified sessions standalone', async () => {
+    await createNativeSession('codex', DIRECTORY, undefined)
+    expect(capabilityReads).toBe(0)
+    unifiedSessions = false
+    unifiedBackends = NATIVE_BACKENDS
+    await createNativeSession('antigravity', DIRECTORY, undefined, {
+      model: { providerID: 'antigravity-native', id: 'gemini-test' }, agent: 'build',
+    })
+    expect(createRequests).toEqual([{ backend: 'codex', directory: DIRECTORY }, { backend: 'antigravity', directory: DIRECTORY }])
   })
 
   test('other native providers keep the unified creation path', async () => {

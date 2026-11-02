@@ -486,15 +486,6 @@ export const isDesktopShell = (): boolean => {
   return isElectronShell();
 };
 
-export const isHostLocalOriginActive = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  if (isDesktopShell()) return isDesktopLocalOriginActive();
-  const runtimeApiUrl = parseUrl(getRuntimeApiBaseUrl());
-  const currentUrl = parseUrl(window.location.origin);
-  const targetUrl = runtimeApiUrl || currentUrl;
-  return Boolean(targetUrl && isLoopbackHost(targetUrl.hostname));
-};
-
 /**
  * Raises the desktop window.
  *

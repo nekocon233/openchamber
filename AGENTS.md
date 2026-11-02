@@ -38,6 +38,8 @@ Electron starts the OpenChamber backend in-process, never as a sidecar. Developm
 
 Shared contracts must define intentional behavior for every applicable runtime: web, desktop, VS Code, hosted mobile, and Capacitor mobile.
 
+Every native agent must support unified conversations when it is integrated. Read `packages/web/server/lib/native-agents/conversations/DOCUMENTATION.md`, including its backend admission and conformance requirements, before adding a native backend.
+
 ## Always-On Constraints
 
 - Do not modify `../opencode`; it is a separate repository.

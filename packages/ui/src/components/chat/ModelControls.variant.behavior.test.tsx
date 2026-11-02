@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import type { NativeAgentCombination } from '@/lib/native-agents/combinations';
 import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
@@ -74,6 +75,7 @@ const lastSelectedWrites: string[] = [];
 
 type ConfigState = {
   providers: typeof provider[];
+  nativeAgentCombinations: NativeAgentCombination[];
   agents: TestAgent[];
   providersLoaded: boolean;
   agentsLoaded: boolean;
@@ -103,6 +105,7 @@ type ConfigState = {
 
 const useConfigStore = create<ConfigState>((set, get) => ({
   providers: [provider],
+  nativeAgentCombinations: [],
   agents: [agent],
   providersLoaded: true,
   agentsLoaded: true,
@@ -219,9 +222,10 @@ const useSelectionStore = create<SelectionState>((set, get) => ({
   },
 }));
 
-type SessionUIState = { currentSessionId: string | null; getDirectoryForSession: () => string };
+type SessionUIState = { currentSessionId: string | null; getDirectoryForSession: () => string; newSessionDraft: { open: boolean; draftId: number } };
 const useSessionUIStore = create<SessionUIState>(() => ({
   currentSessionId: SESSION_ID,
+  newSessionDraft: { open: false, draftId: 0 },
   getDirectoryForSession: () => '/workspace/project',
 }));
 
@@ -230,12 +234,17 @@ const useUIStore = create(() => ({
   isModelSelectorOpen: false,
   hiddenModels: [],
   favoriteAgents: [],
+  favoriteAgentCombinations: [],
+  toggleFavoriteAgentCombination: () => undefined,
   toggleFavoriteAgent: () => undefined,
   providerOrder: [],
   shortcutOverrides: {},
   isFavoriteModel: () => false,
   toggleFavoriteModel: () => undefined,
-  reorderFavoriteModel: () => undefined,
+  favoritePickerOrder: [],
+  agentCombinationOrder: [],
+  reorderFavoritePickerItem: () => undefined,
+  setAgentCombinationOrder: () => undefined,
   setProviderOrder: () => undefined,
   setModelSelectorOpen: () => undefined,
   setSettingsDialogOpen: () => undefined,

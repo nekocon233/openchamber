@@ -106,7 +106,20 @@ its logical gutter, allowing adjacent Arabic and English items. Inline code
 and code widgets have explicit LTR attributes so they do not choose the
 containing item's direction. Direction changes preserve source and copy text.
 
-### Turn footer copy and image
+### Turn footer facts and actions
+
+For native Claude replies, an explicit effort suffix in the response model ID
+takes priority over the effort captured when sending. A gateway may fix a model
+at `high` while the send requested `max`. `modelDisplay` separates recognized
+Claude effort suffixes and removes routing prefixes: both
+`claude-opus-5-5-high` and `group/auto-claude-opus-5-5:high` show
+`Claude Opus 5.5` and `high`. Catalog display names remain user-owned.
+
+Without an explicit response-model effort, the footer uses the assistant's
+recorded effort, then the turn's first recorded effort. Missing catalogs keep
+those values visible; an effort absent from every source stays unknown.
+Other providers retain their recorded effort. This changes display only;
+native IDs, history, model selections and requests stay intact.
 
 The footer under a turn's last assistant message copies and saves the whole
 reply: the text parts of every assistant message in the turn, in order, with
@@ -266,6 +279,8 @@ consumers; the message role owns the current context-window boundary.
   parsing presentation strings. Older CLI output retains its existing parser.
 - Native plan choices retain their wire values and localize labels in the
   renderer. Answered historical rows never reopen the interactive form.
+  Optional `nativePlanExecutionModel` metadata records the approved execution
+  model and effort; actual execution messages retain the CLI-reported model.
 - An answered plan exit renders once. The server keeps the selection in its own
   store and, on a read, builds the question carrying the plan and that
   selection beside the tool call it came from; `filterVisibleParts` drops the

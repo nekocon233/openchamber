@@ -3,7 +3,6 @@ import type { Model } from '@/lib/opencode/model';
 import {
   DndContext,
   MouseSensor,
-  PointerSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -24,6 +23,8 @@ import { mergeModelMetadataWithLiveModel } from '@/lib/modelMetadata';
 import { getModelDisplayName as getSharedModelDisplayName } from '@/lib/modelDisplay';
 import { formatCompactNumber } from '@/lib/numberFormat';
 import { cn } from '@/lib/utils';
+import { modelPickerActionKey, modelPickerModelKey, orderPickerItems } from '@/lib/modelPickerOrder';
+import { SortablePickerRows } from './SortablePickerRows';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useModelPickerSectionsStore } from '@/stores/useModelPickerSectionsStore';
 import type { ModelMetadata } from '@/types';
@@ -232,10 +233,11 @@ const ModelPickerRowHighlight: React.FC<{
 // The leading action's place in the keyboard list: it is highlighted and
 // chosen like a row, but it is not a model entry.
 const LEADING_ACTION_SLOT = 'leading-action';
-type NavigationItem = ModelPickerEntry | typeof LEADING_ACTION_SLOT;
+export type ModelPickerAction = { id: string; label: string; onSelect: () => void; icon?: React.ReactNode; disabled?: boolean; selected?: boolean; favorite?: boolean; onToggleFavorite?: () => void };
+type NavigationItem = ModelPickerEntry | typeof LEADING_ACTION_SLOT | { kind: 'action'; action: ModelPickerAction };
 
 const entryOf = (item: NavigationItem | undefined): ModelPickerEntry | undefined => (
-  item === LEADING_ACTION_SLOT ? undefined : item
+  item === LEADING_ACTION_SLOT || item?.kind === 'action' ? undefined : item
 );
 
 const ModelPickerFooter: React.FC<{
@@ -252,46 +254,17 @@ const ModelPickerFooter: React.FC<{
   return <>{typeof footerContent === 'function' ? footerContent(activeEntry) : (footerContent ?? fallback)}</>;
 };
 
-type SortableFavoriteHandleProps = {
+type SortableSectionHandleProps = {
   attributes: ReturnType<typeof useSortable>['attributes'];
   listeners: ReturnType<typeof useSortable>['listeners'];
   setActivatorNodeRef: ReturnType<typeof useSortable>['setActivatorNodeRef'];
   isDragging: boolean;
 };
 
-const SortableFavoriteModelRow: React.FC<{
-  id: string;
-  disabled?: boolean;
-  children: (dragHandleProps: SortableFavoriteHandleProps) => React.ReactNode;
-}> = ({ id, disabled = false, children }) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    setActivatorNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id, disabled });
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        transform: DndCSS.Transform.toString(transform),
-        transition,
-      }}
-      className={cn(isDragging && 'opacity-60')}
-    >
-      {children({ attributes, listeners, setActivatorNodeRef, isDragging })}
-    </div>
-  );
-};
-
 const SortableProviderSection: React.FC<{
   id: string;
   disabled?: boolean;
-  children: (dragHandleProps: SortableFavoriteHandleProps) => React.ReactNode;
+  children: (dragHandleProps: SortableSectionHandleProps) => React.ReactNode;
 }> = ({ id, disabled = false, children }) => {
   const {
     attributes,
@@ -449,6 +422,10 @@ const scrollIntoView = (container: HTMLElement | null, node: HTMLElement | null)
 interface ModelPickerListProps {
   providers: ModelPickerProvider[];
   favoriteModels: ModelPickerFavoriteEntry[];
+  favoriteActions?: ModelPickerAction[];
+  favoriteOrder?: string[];
+  onReorderFavoriteItem?: (active: string, over: string) => void;
+  onReorderAction?: (active: string, over: string) => void;
   recentModels: ModelPickerFavoriteEntry[];
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
@@ -483,6 +460,8 @@ interface ModelPickerListProps {
    * search query is typed.
    */
   leadingAction?: { label: string; icon: React.ReactNode; onSelect: () => void } | null;
+  /** Named non-model selections share the model list's search and keyboard navigation. */
+  actionGroup?: { id: string; label: string; icon?: React.ReactNode; actions: ModelPickerAction[] };
   hiddenModels?: HiddenModel[];
   allowedProviderIds?: string[];
   /**
@@ -507,9 +486,6 @@ interface ModelPickerListProps {
   onActiveKeyDown?: (event: React.KeyboardEvent, entry: ModelPickerEntry | undefined) => void;
   onActiveEntryChange?: (entry: ModelPickerEntry | undefined) => void;
   onVariantKey?: (event: React.KeyboardEvent, entry: ModelPickerEntry) => boolean;
-  onReorderFavorite?: (active: ModelPickerEntry, over: ModelPickerEntry) => void;
-  reorderFavoriteAriaLabel?: string;
-  reorderFavoriteTitle?: string;
   providerOrder?: string[];
   onReorderProvider?: (orderedProviderIDs: string[]) => void;
   reorderProviderTitle?: string;
@@ -521,6 +497,10 @@ interface ModelPickerListProps {
 export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   providers,
   favoriteModels,
+  favoriteActions = [],
+  favoriteOrder = [],
+  onReorderFavoriteItem,
+  onReorderAction,
   recentModels,
   searchQuery,
   onSearchQueryChange,
@@ -529,6 +509,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   selectedModel,
   leadingEntry = null,
   leadingAction = null,
+  actionGroup,
   hiddenModels = [],
   allowedProviderIds,
   isModelAllowed,
@@ -549,9 +530,6 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   onActiveKeyDown,
   onActiveEntryChange,
   onVariantKey,
-  onReorderFavorite,
-  reorderFavoriteAriaLabel,
-  reorderFavoriteTitle,
   providerOrder,
   onReorderProvider,
   reorderProviderTitle,
@@ -582,9 +560,6 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   const collapsedSections = React.useMemo(
     () => new Set(Object.keys(collapsedRecord).filter((key) => collapsedRecord[key])),
     [collapsedRecord],
-  );
-  const favoriteRowSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
   // Desktop-only provider reordering: a MouseSensor (no TouchSensor) keeps the
   // section headers tappable/scrollable on touch devices while enabling
@@ -653,11 +628,16 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     })
     .filter((provider) => provider.models.length > 0), [allowedProviderSet, isHidden, isModelAllowed, matchesQuery, orderedProviders]);
 
+  const filteredActions = React.useMemo(() => actionGroup?.actions.filter((action) => matchesRankQuery([action.label, actionGroup.label], searchQuery)) ?? [], [actionGroup, searchQuery]);
+  const filteredFavoriteActions = React.useMemo(() => favoriteActions.filter((action) => matchesRankQuery([action.label, actionGroup?.label], searchQuery)), [favoriteActions, actionGroup?.label, searchQuery]);
+  const hasFavorites = filteredFavorites.length > 0 || filteredFavoriteActions.length > 0;
+
   const visibleSectionKeys = React.useMemo(() => [
-    ...(filteredFavorites.length > 0 ? ['favorites'] : []),
+    ...(hasFavorites ? ['favorites'] : []),
     ...(filteredRecents.length > 0 ? ['recent'] : []),
+    ...(actionGroup && filteredActions.length ? [actionGroup.id] : []),
     ...filteredProviders.map((provider) => `provider:${provider.id}`),
-  ], [filteredFavorites.length, filteredProviders, filteredRecents.length]);
+  ], [actionGroup, filteredActions.length, hasFavorites, filteredProviders, filteredRecents.length]);
 
   React.useEffect(() => {
     if (!stickyHeaders || !scrollRef.current) {
@@ -728,29 +708,35 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
 
   const showLeadingAction = Boolean(leadingAction) && !searchQuery.trim();
 
+  const favoriteItems = React.useMemo(() => orderPickerItems([
+    ...filteredFavorites.map((entry) => ({ kind: 'model' as const, id: modelPickerModelKey(entry), label: getModelDisplayName(entry.model), disabled, entry })),
+    ...filteredFavoriteActions.map((action) => ({ kind: 'action' as const, id: modelPickerActionKey(action.id), label: action.label, disabled: disabled || action.disabled, action })),
+  ], favoriteOrder, (item) => item.id), [filteredFavorites, filteredFavoriteActions, favoriteOrder, disabled]);
+
   const flatModelList = React.useMemo(() => {
     const items: NavigationItem[] = [];
     if (visibleLeadingEntry) items.push(visibleLeadingEntry);
     if (showLeadingAction) items.push(LEADING_ACTION_SLOT);
-    if (!collapsedSections.has('favorites')) filteredFavorites.forEach((entry) => items.push(entry));
+    if (!collapsedSections.has('favorites')) favoriteItems.forEach((item) => {
+      if (item.kind === 'model') items.push(item.entry);
+      else if (!item.action.disabled) items.push({ kind: 'action', action: item.action });
+    });
     if (!collapsedSections.has('recent')) filteredRecents.forEach((entry) => items.push(entry));
+    if (actionGroup && (!collapsedSections.has(actionGroup.id) || searchQuery.trim())) filteredActions.forEach((action) => { if (!action.disabled) items.push({ kind: 'action', action }); });
     filteredProviders.forEach((provider) => {
       if (collapsedSections.has(`provider:${provider.id}`)) return;
       provider.models.forEach((model) => items.push({ model, providerID: provider.id, modelID: model.id }));
     });
     return items;
-  }, [collapsedSections, filteredFavorites, filteredProviders, filteredRecents, showLeadingAction, visibleLeadingEntry]);
+  }, [actionGroup, collapsedSections, filteredActions, favoriteItems, filteredProviders, filteredRecents, searchQuery, showLeadingAction, visibleLeadingEntry]);
 
-  const hasResults = flatModelList.some((item) => item !== LEADING_ACTION_SLOT);
-  const favoriteSortingEnabled = Boolean(onReorderFavorite) && searchQuery.trim().length === 0 && filteredFavorites.length > 1;
+  const hasResults = filteredActions.length > 0 || filteredFavoriteActions.length > 0 || flatModelList.some((item) => item !== LEADING_ACTION_SLOT);
+  const favoriteSortingEnabled = Boolean(onReorderFavoriteItem) && searchQuery.trim().length === 0;
   const providerSortingEnabled = Boolean(onReorderProvider) && searchQuery.trim().length === 0 && !allowedProviderSet && filteredProviders.length > 1;
-  const favoriteLookup: Map<string, ModelPickerEntry> = React.useMemo(() => new Map(
-    filteredFavorites.map((entry) => [`${entry.providerID}:${entry.modelID}`, entry] as const),
-  ), [filteredFavorites]);
-
-  const selectedModelIndex = searchQuery.trim() || !selectedModel ? 0 : flatModelList.findIndex((item) => {
+  const selectedModelIndex = searchQuery.trim() ? 0 : flatModelList.findIndex((item) => {
+    if (item !== LEADING_ACTION_SLOT && item.kind === 'action') return item.action.selected;
     const entry = entryOf(item);
-    return entry?.providerID === selectedModel.providerID && entry.modelID === selectedModel.modelID;
+    return Boolean(selectedModel && entry?.providerID === selectedModel.providerID && entry.modelID === selectedModel.modelID);
   });
   const initialSelectionIndex = Math.max(0, selectedModelIndex);
   // Scrolling to the current model answers opening the list, a new query, or a
@@ -836,6 +822,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
       event.preventDefault();
       if (disabled) return;
       if (activeItem === LEADING_ACTION_SLOT) leadingAction?.onSelect();
+      else if (activeItem?.kind === 'action') activeItem.action.onSelect();
       else if (activeEntry) onSelect(activeEntry);
       return;
     }
@@ -865,39 +852,52 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     selectIndex(rowIndex);
   };
 
-  const rowHighlightClassName = (isHighlighted: boolean) => cn(
+  const rowHighlightClassName = (isHighlighted: boolean, rowDisabled = disabled) => cn(
     'w-full text-start px-2 py-1.5 rounded-md typography-meta flex items-center gap-2 cursor-pointer',
-    !disabled && (isHighlighted
+    !rowDisabled && (isHighlighted
       ? 'bg-interactive-selection text-interactive-selection-foreground'
       : 'hover:bg-interactive-hover/50'),
-    disabled && 'cursor-not-allowed opacity-60',
+    rowDisabled && 'cursor-not-allowed opacity-60',
     rowClassName,
   );
 
-  const renderLeadingAction = (action: NonNullable<typeof leadingAction>, rowIndex: number) => (
-    <ModelPickerRowHighlight key="leading-action" store={selectionStore} index={rowIndex} renderVersion={renderVersion}>
+  const renderAction = (action: Omit<ModelPickerAction, 'id'>, rowIndex: number, key: string) => (
+    <ModelPickerRowHighlight key={key} store={selectionStore} index={rowIndex} renderVersion={renderVersion}>
       {(isHighlighted) => (
         <div
-          ref={(el) => { itemRefs.current[rowIndex] = el; }}
+          ref={(el) => { if (rowIndex >= 0) itemRefs.current[rowIndex] = el; }}
           role="option"
-          aria-selected={false}
-          aria-disabled={disabled || undefined}
+          aria-selected={action.selected ?? false}
+          aria-disabled={disabled || action.disabled || undefined}
           tabIndex={-1}
-          onClick={() => { if (!disabled) action.onSelect(); }}
-          onMouseEnter={(event) => highlightOnPointer(event, rowIndex)}
-          onMouseMove={(event) => highlightOnPointer(event, rowIndex)}
-          className={rowHighlightClassName(isHighlighted)}
+          onClick={() => { if (!disabled && !action.disabled) action.onSelect(); }}
+          onMouseEnter={(event) => { if (!action.disabled) highlightOnPointer(event, rowIndex); }}
+          onMouseMove={(event) => { if (!action.disabled) highlightOnPointer(event, rowIndex); }}
+          className={rowHighlightClassName(isHighlighted, disabled || action.disabled)}
         >
           <div className="flex items-center gap-1.5 flex-1 min-w-0">
             {action.icon}
-            <span className="font-medium truncate">{action.label}</span>
+            <span dir="auto" className="oc-ui-start-align font-medium truncate">{action.label}</span>
           </div>
+          {action.selected ? <Icon name="check" className="size-3.5 shrink-0" /> : null}
+          {action.onToggleFavorite ? <button type="button" disabled={disabled || action.disabled}
+            onMouseDown={(event) => event.preventDefault()}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault(); event.stopPropagation();
+              searchInputRef.current?.focus(); action.onToggleFavorite?.();
+            }}
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (event.currentTarget === document.activeElement) searchInputRef.current?.focus(); action.onToggleFavorite?.(); }}
+            className={cn('model-favorite-button flex size-4 items-center justify-center hover:text-primary/80 shrink-0 disabled:pointer-events-none', action.favorite ? 'text-primary' : 'text-muted-foreground')}
+            aria-label={action.favorite ? labels.unfavorite : labels.favorite} title={action.favorite ? labels.unfavorite : labels.favorite}>
+            <Icon name={action.favorite ? 'star-fill' : 'star'} className="size-3.5" />
+          </button> : null}
         </div>
       )}
     </ModelPickerRowHighlight>
   );
 
-  const renderRow = (entry: ModelPickerEntry, keyPrefix: string, showProviderLogo: boolean, rowIndex: number, dragHandleProps?: SortableFavoriteHandleProps | null) => {
+  const renderRow = (entry: ModelPickerEntry, keyPrefix: string, showProviderLogo: boolean, rowIndex: number) => {
     const metadata = entry.kind === 'auto'
       ? undefined
       : mergeModelMetadataWithLiveModel(entry.providerID, entry.model, getModelMetadata(entry.providerID, entry.modelID));
@@ -933,11 +933,6 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
               className={rowHighlightClassName(isHighlighted)}
             >
               <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                {dragHandleProps ? (
-                  <button type="button" ref={dragHandleProps.setActivatorNodeRef} {...dragHandleProps.attributes} {...dragHandleProps.listeners} disabled={disabled} onClick={(event) => { event.preventDefault(); event.stopPropagation(); }} className="model-favorite-drag-handle flex size-4 flex-shrink-0 items-center justify-center text-muted-foreground hover:text-foreground disabled:pointer-events-none" aria-label={reorderFavoriteAriaLabel} title={reorderFavoriteTitle}>
-                    <Icon name="draggable" className="size-3.5" />
-                  </button>
-                ) : null}
                 {keyPrefix === 'leading' ? <Icon name="openchamber" className="h-3.5 w-3.5 flex-shrink-0" /> : null}
                 {showProviderLogo ? <ProviderLogo providerId={entry.providerID} className="h-3.5 w-3.5 flex-shrink-0" /> : null}
                 <span className="font-medium truncate">{getModelDisplayName(entry.model)}</span>
@@ -961,18 +956,6 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
         }}
       </ModelPickerRowHighlight>
     );
-  };
-
-  const handleFavoriteDragEnd = (event: DragEndEvent) => {
-    if (!onReorderFavorite) return;
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    const activeFavorite = favoriteLookup.get(String(active.id));
-    const overFavorite = favoriteLookup.get(String(over.id));
-    if (!activeFavorite || !overFavorite) return;
-
-    onReorderFavorite(activeFavorite, overFavorite);
   };
 
   const handleProviderDragEnd = (event: DragEndEvent) => {
@@ -1000,7 +983,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
     />
   ) : null;
 
-  const renderSectionHeader = (key: string, icon: React.ReactNode, label: React.ReactNode, headerDragProps?: SortableFavoriteHandleProps) => {
+  const renderSectionHeader = (key: string, icon: React.ReactNode, label: React.ReactNode, headerDragProps?: SortableSectionHandleProps) => {
     const collapsed = isSectionCollapsed(key);
     const toggleKeyDown = (event: React.KeyboardEvent) => {
       if (event.key === 'Enter' || event.key === ' ') {
@@ -1079,7 +1062,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   const renderProviderSection = (
     provider: (typeof filteredProviders)[number],
     providerIndex: number,
-    headerDragProps?: SortableFavoriteHandleProps,
+    headerDragProps?: SortableSectionHandleProps,
   ) => {
     const sectionKey = `provider:${provider.id}`;
     return (
@@ -1104,6 +1087,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   // showing its identity while the leading action is still visible.
   const leadingSectionKey = stuckSectionKey ?? (!includeNotSelected ? visibleSectionKeys[0] ?? null : null);
   const renderSectionIdentity = (sectionKey: string): React.ReactNode => {
+    if (sectionKey === actionGroup?.id) return <>{actionGroup.icon}<span className="min-w-0 truncate">{actionGroup.label}</span></>;
     if (sectionKey === 'favorites') {
       return <><Icon name="star-fill" className="h-4 w-4 flex-shrink-0 text-primary" /><span className="min-w-0 truncate">{labels.favorites}</span></>;
     }
@@ -1175,41 +1159,35 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
           {visibleLeadingEntry ? (
             <>
               {renderRow(visibleLeadingEntry, 'leading', false, currentFlatIndex++)}
-              {!showLeadingAction && (filteredFavorites.length > 0 || filteredRecents.length > 0 || filteredProviders.length > 0) ? <div className="h-px bg-border/40 my-1" /> : null}
+              {!showLeadingAction && (hasFavorites || filteredRecents.length > 0 || filteredProviders.length > 0) ? <div className="h-px bg-border/40 my-1" /> : null}
             </>
           ) : null}
 
           {leadingAction && showLeadingAction ? (
             <>
-              {renderLeadingAction(leadingAction, currentFlatIndex++)}
+              {renderAction(leadingAction, currentFlatIndex++, 'leading-action')}
               <div className="h-px bg-border/40 my-1" />
             </>
           ) : null}
 
-          {filteredFavorites.length > 0 ? (
-            <div className="relative">
+
+
+          {hasFavorites ? (
+            <div className="relative" role="group" aria-label={labels.favorites}>
               {renderSectionSentinel('favorites')}
               {renderSectionHeader('favorites', <Icon name="star-fill" className="h-4 w-4 text-primary" />, labels.favorites)}
-              {!isSectionCollapsed('favorites') && (favoriteSortingEnabled ? (
-                <DndContext sensors={favoriteRowSensors} collisionDetection={closestCenter} onDragEnd={handleFavoriteDragEnd}>
-                  <SortableContext items={filteredFavorites.map((entry) => `${entry.providerID}:${entry.modelID}`)} strategy={verticalListSortingStrategy}>
-                    {filteredFavorites.map((entry) => {
-                      const rowIndex = currentFlatIndex++;
-                      return (
-                        <SortableFavoriteModelRow key={`fav-sortable-${entry.providerID}-${entry.modelID}`} id={`${entry.providerID}:${entry.modelID}`} disabled={disabled}>
-                          {(dragHandleProps) => renderRow(entry, 'fav', true, rowIndex, dragHandleProps)}
-                        </SortableFavoriteModelRow>
-                      );
-                    })}
-                  </SortableContext>
-                </DndContext>
-              ) : filteredFavorites.map((entry) => renderRow(entry, 'fav', true, currentFlatIndex++)))}
+              {!isSectionCollapsed('favorites') ? <SortablePickerRows items={favoriteItems}
+                onReorder={favoriteSortingEnabled ? onReorderFavoriteItem : undefined}>
+                {(item) => item.kind === 'model'
+                  ? renderRow(item.entry, 'fav', true, currentFlatIndex++)
+                  : renderAction(item.action, item.action.disabled ? -1 : currentFlatIndex++, item.id)}
+              </SortablePickerRows> : null}
             </div>
           ) : null}
 
           {filteredRecents.length > 0 ? (
             <>
-              {filteredFavorites.length > 0 ? <div className="h-px bg-border/40 my-1" /> : null}
+              {hasFavorites ? <div className="h-px bg-border/40 my-1" /> : null}
               <div className="relative">
                 {renderSectionSentinel('recent')}
                 {renderSectionHeader('recent', <Icon name="time" className="h-4 w-4" />, labels.recent)}
@@ -1218,7 +1196,19 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
             </>
           ) : null}
 
-          {(filteredFavorites.length > 0 || filteredRecents.length > 0) && filteredProviders.length > 0 ? <div className="h-px bg-border/40 my-1" /> : null}
+          {actionGroup && filteredActions.length > 0 ? <>
+            {hasFavorites || filteredRecents.length > 0 ? <div className="h-px bg-border/40 my-1" /> : null}
+            <div className="relative" role="group" aria-label={actionGroup.label}>
+            {renderSectionSentinel(actionGroup.id)}
+            {renderSectionHeader(actionGroup.id, actionGroup.icon, actionGroup.label)}
+            {!isSectionCollapsed(actionGroup.id) ? <SortablePickerRows items={filteredActions.map((action) => ({ ...action, disabled: disabled || action.disabled }))}
+              onReorder={searchQuery.trim() ? undefined : onReorderAction}>
+              {(action) => renderAction(action, action.disabled ? -1 : currentFlatIndex++, action.id)}
+            </SortablePickerRows> : null}
+            </div>
+          </> : null}
+
+          {(hasFavorites || filteredRecents.length > 0 || filteredActions.length > 0) && filteredProviders.length > 0 ? <div className="h-px bg-border/40 my-1" /> : null}
 
           {providerSortingEnabled ? (
             <DndContext sensors={providerSectionSensors} collisionDetection={closestCenter} onDragEnd={handleProviderDragEnd}>

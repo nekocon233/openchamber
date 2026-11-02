@@ -63,12 +63,18 @@ Items are ordered FIFO records:
   agentMentionName?,
   createdAt,
   status: 'staged' | 'queued',
-  sendConfig?: { providerID, modelID, agent?, variant? },
+  sendConfig?: { providerID, modelID, agent?, variant?, subagentModel? },
   claim?: { id, expiresAt },
 }
 ```
 
 New items use `messageId: null`. The host assigns a time-sortable OpenCode message ID in the same authoritative mutation that acquires the first claim. That ID remains unchanged across release, claim expiry, restart, response-loss replay, and later claims, preventing both chronology inversion against the assistant that made the queue drainable and duplicate OpenCode messages after an ambiguous send. Stored version-1 items with an existing string ID retain it. Public `add` operations cannot supply `claim`.
+
+Native `subagentModel` captures `{ model: { providerID, modelID }, variant? }`
+from the native catalog or null for the CLI default. Its nested objects reject
+unknown fields and non-native providers. Absence preserves legacy queue
+behavior. Persisted snapshots and returned records clone the nested choice,
+so later composer edits cannot alter an already queued delegate selection.
 
 Attachment records allow exactly `id`, `dataUrl`, `mimeType`, `filename`, `size`, `source`, and optional `serverPath`, `vscodePath`, `vscodeSource`. `source` is `local`, `server`, or `vscode`; `vscodeSource` is `file` or `selection`. The browser-only `file` object is forbidden by strict extra-field validation. The same transport records may be attached to an additional part; primary and additional-part attachments share the per-item and per-queue count, byte, and identifier limits.
 

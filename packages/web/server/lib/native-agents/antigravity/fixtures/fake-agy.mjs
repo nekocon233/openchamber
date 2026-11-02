@@ -4,11 +4,15 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 
 const home = process.env.AGY_FIXTURE_HOME;
 if (!home) throw new Error('AGY_FIXTURE_HOME is required');
-const conversationId = process.env.AGY_FIXTURE_CONVERSATION_ID || 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const args = process.argv.slice(2);
+const option = (name) => {
+  const index = args.indexOf(name);
+  return index === -1 ? null : args[index + 1];
+};
 if (args.includes('--version')) {
   console.log('1.4.11');
   process.exit(0);
@@ -20,21 +24,42 @@ if (args.includes('models')) {
   }
   console.log('gemini-test-high\tGemini Test (High)');
   console.log('gemini-test-low\tGemini Test (Low)');
+  const settings = JSON.parse(option('--settings') ?? '{}');
+  const customModels = settings.customModelsConfig?.customModels;
+  if (!customModels || Object.keys(customModels).length !== 0) {
+    console.log('magpie/antigravity/gemini-test\tMagpie Gemini Test');
+    console.log('custom-model\tCustom Model');
+  }
   process.exit(0);
 }
 if (args.includes('/usage')) {
   if (!args.includes('--disable-slash-commands=false')) throw new Error('Quota probes must execute the CLI command');
+  const failure = process.env.AGY_FIXTURE_QUOTA_FAILURE;
+  if (failure === 'unsupported-settings') {
+    console.error('flag provided but not defined: -settings');
+    process.exit(1);
+  }
+  if (failure === 'unauthenticated') {
+    console.error('authentication required');
+    process.exit(1);
+  }
+  const settingsFile = path.join(home, 'settings.json');
+  const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {};
+  const overrides = option('--settings');
+  if (overrides) Object.assign(settings, JSON.parse(overrides));
+  if (failure === 'empty' || settings.modelProvider || settings.model || option('--model')) process.exit(0);
   console.log('Gemini Models\tWeekly Limit Remaining\t97%\t2026-11-06T08:26:27Z');
   console.log('Claude and GPT models\tFive Hour Limit Remaining\t75%\t2026-11-06T08:26:27Z');
   process.exit(0);
 }
-const option = (name) => {
-  const index = args.indexOf(name);
-  return index === -1 ? null : args[index + 1];
-};
 const cwd = option('--add-dir') || process.cwd();
 const resumed = option('--conversation');
+const conversationId = process.env.AGY_FIXTURE_CONVERSATION_ID || resumed || randomUUID();
 const model = option('--model');
+if (model === 'invalid-model') {
+  console.error('Unknown fixture model');
+  process.exit(1);
+}
 const mode = option('--mode');
 const effort = option('--effort');
 const modelEffort = /-(low|medium|high|xhigh|max)$/.exec(model ?? '')?.[1];
@@ -42,12 +67,8 @@ if (effort && modelEffort && effort !== modelEffort) {
   console.error(`--model ${model} conflicts with --effort=${effort}`);
   process.exit(1);
 }
-if (mode === 'plan') {
-  const settings = JSON.parse(option('--settings') ?? '{}');
-  if (args.includes('--dangerously-skip-permissions') || settings.toolPermission !== 'request-review'
-    || !['write_file(*)', 'command(*)', 'mcp(*)', 'execute_url(*)'].every((rule) => settings.permissions?.deny?.includes(rule))) {
-    throw new Error('Plan launched without native write protection');
-  }
+if (mode && (!args.includes('--dangerously-skip-permissions') || args.includes('--settings'))) {
+  throw new Error('Conversation launched without full tool access');
 }
 const root = path.join(home, 'brain', conversationId, '.system_generated', 'logs');
 fs.mkdirSync(root, { recursive: true });
@@ -169,7 +190,7 @@ const run = (text) => {
     return;
   }
   if (visible === 'mode-probe') {
-    const response = JSON.stringify({ mode, model, effort, resumed, nodeEnv: process.env.NODE_ENV ?? null });
+    const response = JSON.stringify({ mode, model, effort, resumed, nodeEnv: process.env.NODE_ENV ?? null, pid: process.pid });
     planner(response);
     finish('SUCCESS', response);
     return;

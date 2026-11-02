@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { I18nKey } from '@/lib/i18n/store';
 import { buildSettingsSearchResults } from './search';
+import { getSettingsPageMeta } from './metadata';
 
 const t = (key: I18nKey): string => key;
 
@@ -9,7 +10,6 @@ const runtimeCtx = {
   isWeb: true,
   isDesktop: false,
   isMobile: false,
-  isHostLocalOrigin: true,
   isDesktopLocalOrigin: false,
   isMac: false,
   isWindows: false,
@@ -43,21 +43,6 @@ describe('settings search', () => {
       }
     }
   });
-  test('finds the CLIProxyAPI gateway on providers, never in VS Code', () => {
-    for (const query of ['cliproxyapi', 'chatgpt']) {
-      for (const isVSCode of [false, true]) {
-        const results = buildSettingsSearchResults({
-          query,
-          runtimeCtx: { ...runtimeCtx, isVSCode },
-          t,
-          getPageTitle: (page) => page,
-        });
-
-        expect(results.some((result) => result.id === 'providers.cliproxyapi')).toBe(!isVSCode);
-      }
-    }
-  });
-
   test('finds Antigravity settings on native-agent runtimes, never in VS Code', () => {
     for (const query of ['antigravity', 'agy']) {
       for (const context of [runtimeCtx, { ...runtimeCtx, isDesktop: true }, { ...runtimeCtx, isMobile: true }, { ...runtimeCtx, isVSCode: true }]) {
@@ -168,9 +153,9 @@ describe('settings search', () => {
     expect(results.some((result) => result.id === 'integrations.linear.mapping')).toBe(false);
   });
 
-  const buildTunnelResults = (query: string, isHostLocalOrigin = true) => buildSettingsSearchResults({
+  const buildTunnelResults = (query: string) => buildSettingsSearchResults({
     query,
-    runtimeCtx: { ...runtimeCtx, isHostLocalOrigin },
+    runtimeCtx,
     visiblePageSlugs: ['tunnel'],
     t,
     getPageTitle: () => 'Tunnel',
@@ -184,8 +169,35 @@ describe('settings search', () => {
     expect(buildTunnelResults('caddy public hostname').some((result) => result.id === 'tunnel.frpc')).toBe(true);
   });
 
-  test('hides tunnel management results away from the host origin', () => {
-    expect(buildTunnelResults('frpc', false)).toEqual([]);
+  for (const { name, context } of [
+    { name: 'web', context: runtimeCtx },
+    { name: 'desktop', context: { ...runtimeCtx, isWeb: false, isDesktop: true } },
+    { name: 'hosted mobile', context: { ...runtimeCtx, isMobile: true } },
+    { name: 'Capacitor mobile', context: { ...runtimeCtx, isWeb: false, isMobile: true } },
+  ]) {
+    test(`keeps tunnel navigation and overview available on ${name} with either enterprise mode`, () => {
+      for (const enterpriseMode of [false, true]) {
+        const currentContext = { ...context, enterpriseMode };
+        const page = getSettingsPageMeta('tunnel');
+        expect(page).toBeDefined();
+        expect(page?.isAvailable?.(currentContext) ?? true).toBe(true);
+        const results = buildSettingsSearchResults({
+          query: 'tunnel', runtimeCtx: currentContext, visiblePageSlugs: ['tunnel'], t, getPageTitle: () => 'Tunnel',
+        });
+        expect(results.some((result) => result.id === 'tunnel.overview')).toBe(true);
+        expect(results.some((result) => result.id === 'tunnel.start')).toBe(!enterpriseMode);
+      }
+    });
+  }
+
+  test('takes the tunnel page out of Settings in VS Code, which has no tunnel backend', () => {
+    const vscodeContext = { ...runtimeCtx, isWeb: false, isVSCode: true };
+    const page = getSettingsPageMeta('tunnel');
+    expect(page?.isAvailable?.(vscodeContext) ?? true).toBe(false);
+    const results = buildSettingsSearchResults({
+      query: 'tunnel', runtimeCtx: vscodeContext, visiblePageSlugs: ['tunnel'], t, getPageTitle: () => 'Tunnel',
+    });
+    expect(results.some((result) => result.id === 'tunnel.overview')).toBe(false);
   });
 
   test('keeps repository controls out of Settings search and indexes account connection controls', () => {

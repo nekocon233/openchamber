@@ -108,6 +108,14 @@ button,
   -webkit-user-select: none !important;
 }
 
+/* Todo labels also act as keyboard controls while their text stays copyable. */
+button.select-text,
+[role="button"].select-text {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -webkit-touch-callout: default !important;
+}
+
 :root.oc-theme-switching *,
 :root.oc-theme-switching *::before,
 :root.oc-theme-switching *::after {

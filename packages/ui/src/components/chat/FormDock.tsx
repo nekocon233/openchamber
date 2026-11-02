@@ -21,6 +21,8 @@ import { useMobileAutocompleteMaxHeight } from './useMobileAutocompleteMaxHeight
 import { FormFieldControl } from './FormFieldControl';
 import { WebSearchConsentDock } from './WebSearchConsent';
 import { FormMarkdown } from './FormMarkdown';
+import { PlanExecutionModelPicker } from './PlanExecutionModelPicker';
+import { usePlanExecutionModel, type PlanComposerModel } from './usePlanExecutionModel';
 import { serializeFormAsJson, serializeFormAsMarkdown } from './formSerializers';
 import {
     type FormValues,
@@ -56,9 +58,12 @@ interface FormDockProps {
     sessionId: string | null;
     directory?: string;
     hidden: boolean;
+    providerID?: string;
+    modelID?: string;
+    variant?: string;
 }
 
-const FormDockView: React.FC<FormDockProps> = ({ sessionId, directory, hidden }) => {
+const FormDockView: React.FC<FormDockProps> = ({ sessionId, directory, hidden, providerID, modelID, variant }) => {
     const forms = useScopedBlockingForms(sessionId, directory);
     // The session's own forms come first; a location-scoped form (an MCP
     // elicitation, owned by no session) follows and shows in every session
@@ -71,7 +76,7 @@ const FormDockView: React.FC<FormDockProps> = ({ sessionId, directory, hidden })
         <AnimatePresence>
             {hidden || !form ? null : webSearchConsent
                 ? <WebSearchConsentDock key={form.id} form={form} consent={webSearchConsent} />
-                : <FormDockPanel key={form.id} form={form} forms={forms} />}
+                : <FormDockPanel key={form.id} form={form} forms={forms} composer={form.sessionID === sessionId ? { providerID, modelID, variant } : undefined} />}
         </AnimatePresence>
     );
 };
@@ -100,14 +105,17 @@ const isStepAnswered = (field: FormField, values: FormValues): boolean => {
     return !(Array.isArray(answer) && answer.length === 0);
 };
 
-const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ form, forms }) => {
+const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[]; composer?: PlanComposerModel }> = ({ form, forms, composer }) => {
     const { t } = useI18n();
     form = localizeNativeForm(form, t);
+    const planModel = usePlanExecutionModel(form, composer);
     const isMobile = useUIStore((state) => state.isMobile);
     // The sessions of the chat this dock belongs to, which may be a chat of
     // another project pinned in the side panel.
     const sessions = useSessions(useChatSessionSelection().directory ?? undefined);
     const bodyRef = React.useRef<HTMLDivElement | null>(null);
+    const modelPickerRef = React.useRef<HTMLDivElement | null>(null);
+    const [modelPickerHeight, setModelPickerHeight] = React.useState(0);
 
     const fields = form.fields;
     // A rebuilt pending list hands over a new object with the same content;
@@ -120,6 +128,15 @@ const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ 
     const [values, setValues] = React.useState<FormValues>(() => restored?.values ?? initialFormValues(fields));
     const [step, setStep] = React.useState(restored?.step ?? 0);
     const [collapsed, setCollapsed] = React.useState(false);
+    React.useLayoutEffect(() => {
+        const element = modelPickerRef.current;
+        if (!planModel.enabled || collapsed || !element) return;
+        const update = () => setModelPickerHeight(Math.ceil(element.getBoundingClientRect().height));
+        update();
+        const observer = globalThis.ResizeObserver ? new ResizeObserver(update) : null;
+        observer?.observe(element);
+        return () => observer?.disconnect();
+    }, [collapsed, planModel.enabled]);
     const [isResponding, setIsResponding] = React.useState(false);
     const [showErrors, setShowErrors] = React.useState(false);
     const waiting = forms.length - 1;
@@ -159,7 +176,8 @@ const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ 
     // the agent asked, so every question gets an answer or the form is
     // dismissed.
     const allAnswered = answered.every(Boolean);
-    const submitEnabled = !isResponding && allAnswered;
+    const answer = buildFormAnswer(fields, values);
+    const submitEnabled = !isResponding && allAnswered && (!planModel.approving(answer) || planModel.canApprove);
 
     const availableMaxHeight = useMobileAutocompleteMaxHeight(bodyRef, !collapsed, 320);
 
@@ -182,7 +200,7 @@ const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ 
     }, [currentFieldIsExternal, currentFieldKey]);
 
     const handleSubmit = React.useCallback(async () => {
-        if (!canSubmit) {
+        if (!canSubmit || planModel.approving(answer) && !planModel.canApprove) {
             // Jump to the first question that still needs an answer.
             setShowErrors(true);
             const firstMissing = shown.findIndex((field) => missing.includes(field.key));
@@ -191,26 +209,28 @@ const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ 
         }
         setIsResponding(true);
         try {
-            await sessionActions.replyToForm(form.sessionID, form.id, buildFormAnswer(fields, values));
+            await sessionActions.replyToForm(form.sessionID, form.id, answer, planModel.executionFor(answer));
+            planModel.clear();
             formDrafts.delete(form.id);
         } catch {
             toast.error(t('chat.formCard.submitFailed'), { description: t('chat.formCard.tryAgain') });
         } finally {
             setIsResponding(false);
         }
-    }, [canSubmit, fields, form.id, form.sessionID, missing, shown, t, values]);
+    }, [answer, canSubmit, form.id, form.sessionID, missing, planModel, shown, t]);
 
     const handleDismiss = React.useCallback(async () => {
         setIsResponding(true);
         try {
             await sessionActions.cancelForm(form.sessionID, form.id);
+            planModel.clear();
             formDrafts.delete(form.id);
         } catch {
             toast.error(t('chat.formCard.cancelFailed'), { description: t('chat.formCard.tryAgain') });
         } finally {
             setIsResponding(false);
         }
-    }, [form.id, form.sessionID, t]);
+    }, [form.id, form.sessionID, planModel, t]);
 
     const goNext = React.useCallback(() => {
         setStep(Math.min(currentStep + 1, lastStep));
@@ -325,7 +345,7 @@ const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ 
                     <div
                         ref={bodyRef}
                         className="max-h-[50vh] overflow-y-auto overscroll-contain px-1.5"
-                        style={availableMaxHeight === undefined ? undefined : { maxHeight: Math.max(120, availableMaxHeight - 96) }}
+                        style={availableMaxHeight === undefined ? undefined : { maxHeight: Math.max(120, availableMaxHeight - 96 - (planModel.enabled ? modelPickerHeight : 0)) }}
                     >
                         {currentField ? (
                             currentField.type === 'external' ? (
@@ -360,6 +380,7 @@ const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[] }> = ({ 
                         ) : null}
                     </div>
 
+                    <PlanExecutionModelPicker selection={planModel} disabled={isResponding} rootRef={modelPickerRef} />
                     <div className="flex items-center gap-1.5 px-3 pb-2 pt-1">
                         <Button variant="ghost" size="xs" disabled={isResponding} onClick={() => void handleDismiss()}>
                             {t('chat.questionCard.dismiss')}

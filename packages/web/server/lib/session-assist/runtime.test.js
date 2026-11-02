@@ -313,4 +313,42 @@ describe('session assist runtime', () => {
     // above suppresses.
     expect(buildOpenCodeUrl).toHaveBeenCalled();
   });
+
+  it('writes a recap and suggestion for a unified DeepSeek conversation', async () => {
+    const userRecord = {
+      info: { id: 'usr-1', role: 'user', time: { created: 1 } },
+      parts: [{ type: 'text', text: 'Investigate the issue' }],
+    };
+    const assistantRecord = {
+      info: {
+        id: 'asst-1', role: 'assistant', finish: 'stop', time: { created: 2, completed: 3 },
+        providerID: 'deepseek-native', modelID: 'deepseek-flash',
+      },
+      parts: [{ type: 'text', text: 'The issue is fixed.' }],
+    };
+    const setSessionAssist = vi.fn(async (sessionId, directory, assist) => ({ id: sessionId, directory, assist }));
+    const nativeSessions = {
+      isNativeSessionId: (id) => id.startsWith('ncv_'),
+      getSession: vi.fn(async (id, directory) => ({ id, directory, title: 'DeepSeek conversation' })),
+      loadMessages: vi.fn(async (id, directory, { limit }) => ({
+        records: limit === 1 ? [assistantRecord] : [userRecord, assistantRecord],
+        cursor: null,
+      })),
+      setSessionAssist,
+    };
+    const describeSmallModel = vi.fn(async () => ({ inputCharBudget: 20_000 }));
+    const generateSmallModelText = vi.fn(async () => ({ text: '{"recap":"Did the thing.","suggestion":"Check the diff"}' }));
+    const { runtime } = makeRuntime({
+      nativeSessions,
+      getSmallModelService: async () => ({ describeSmallModel, generateSmallModelText }),
+    });
+
+    runtime.processPayload(idle('ncv_15904795-9a69-414d-b0b7-60df45416bc5'), '/repo');
+    await vi.waitFor(() => expect(setSessionAssist).toHaveBeenCalledOnce());
+    expect(setSessionAssist).toHaveBeenCalledWith(
+      'ncv_15904795-9a69-414d-b0b7-60df45416bc5',
+      '/repo',
+      expect.objectContaining({ recap: 'Did the thing.', suggestion: 'Check the diff', forMessageID: 'asst-1', generatedAt: expect.any(Number) }),
+    );
+  });
 });

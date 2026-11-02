@@ -44,10 +44,9 @@ export interface SettingsRuntimeContext {
   isWeb: boolean;
   isDesktop: boolean;
   isMobile: boolean;
-  isHostLocalOrigin: boolean;
   /** Whether this runtime has Jev routing, which needs the OpenChamber server. */
   routingAvailable: boolean;
-  /** The server runs in enterprise mode: pages for what it refuses are hidden. */
+  /** Whether the connected server runs in enterprise mode. */
   enterpriseMode: boolean;
   /** Enterprise mode keeps Jev off (no administrator's endpoint), so pages that only configure Jev are hidden. */
   jevBlockedByEnterprise: boolean;
@@ -228,7 +227,15 @@ export const SETTINGS_PAGE_METADATA: readonly SettingsPageMeta[] = [
 
   { slug: 'notifications', title: 'Notifications', group: 'general', kind: 'single', keywords: ['alerts', 'native', 'summary', 'summarization'], },
   { slug: 'voice', title: 'Voice', group: 'general', kind: 'single', keywords: ['tts', 'speech', 'voice'], isAvailable: (ctx) => !ctx.isVSCode },
-  { slug: 'tunnel', title: 'External Tunnel', group: 'projects', kind: 'single', keywords: ['tunnel', 'external', 'cloudflare', 'frpc', 'frps', 'qr', 'remote', 'mobile', 'share'], isAvailable: (ctx) => !ctx.isVSCode && ctx.isHostLocalOrigin && !ctx.enterpriseMode },
+  {
+    slug: 'tunnel',
+    title: 'External Tunnel',
+    group: 'projects',
+    kind: 'single',
+    keywords: ['tunnel', 'external', 'cloudflare', 'frpc', 'frps', 'qr', 'remote', 'mobile', 'share'],
+    // The extension runs no OpenChamber server, so it has no tunnel backend to manage.
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
   {
     slug: 'isolated-spaces',
     title: 'Isolated spaces',

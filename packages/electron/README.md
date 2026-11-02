@@ -330,6 +330,14 @@ hook trust, enablement and runtime boundaries.
 
 The Claude Agent SDK ships in the app as JavaScript only. `build.files` excludes its per-platform Claude Code binaries (`@anthropic-ai/claude-agent-sdk-*`, 211 MB on macOS arm64): native sessions always start the user's own `claude` through `pathToClaudeCodeExecutable`, and the SDK looks for its bundled binary only when that option is absent. Keep the pattern while the backend passes the user's CLI. `packages/web/server/lib/native-agents/DOCUMENTATION.md` owns how the CLIs are found and started.
 
+Cross-CLI subagents use `resources/native-delegation-mcp.mjs`, staged from the
+web runtime by `build-web-assets.mjs`. The main process sets
+`OPENCHAMBER_DELEGATION_MCP_PATH` to that resource before starting the embedded
+server. This stdio helper imports only Node built-ins and runs with the user's
+Node executable. Its callback credential stays in the child environment. Keep
+the helper in `extraResources` so a packaged launch does not reference source
+paths inside the application archive.
+
 ## Common Env Vars
 
 | Variable | Use |

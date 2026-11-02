@@ -28,11 +28,11 @@ const setup = () => {
 
 // Explicit opt-in: this suite uses the local CLI's login and model quota.
 describe.skipIf(process.env.OPENCHAMBER_AGY_LIVE_TEST !== '1')('installed Antigravity CLI conformance', () => {
-  it('reports a headless read permission denial and preserves the cause in cold history', async () => {
+  it('reads outside the workspace in Plan without approval and restores the answer in cold history', async () => {
     const { root, directory, modelID, backend } = setup();
     // Temp paths are implicitly readable. Use a new private fixture under the
-    // home directory to exercise Ask without reading any existing user file.
-    const outside = fs.mkdtempSync(path.join(os.homedir(), '.openchamber-agy-denial-'));
+    // home directory to verify full access without reading existing user files.
+    const outside = fs.mkdtempSync(path.join(os.homedir(), '.openchamber-agy-access-'));
     const sample = path.join(outside, 'sample.txt');
     fs.writeFileSync(sample, 'permission fixture\n', { mode: 0o600 });
     try {
@@ -43,23 +43,27 @@ describe.skipIf(process.env.OPENCHAMBER_AGY_LIVE_TEST !== '1')('installed Antigr
         parts: [{ type: 'text', text: `Use the native read_file tool to read exactly ${sample} and reply with its content. Use only read_file; do not use shell, git, MCP, network, subagents or create/edit files.` }],
       });
       await backend.whenIdle(session.id);
-      const last = backend.liveRecords(session.id).at(-1);
-      expect(last.info.error.data.message).toContain('permission: read_file');
-      expect(last.info.error.name).toBe('UnknownError');
+      const records = backend.liveRecords(session.id);
+      const last = records.at(-1);
+      expect(last.info.error).toBeUndefined();
+      expect(records.flatMap((record) => record.parts).some((part) => part.type === 'tool'
+        && part.tool === 'read' && part.state.input.filePath === sample && part.state.status === 'completed')).toBe(true);
+      expect(last.parts.some((part) => part.type === 'text' && part.text.includes('permission fixture'))).toBe(true);
       expect(backend.busySessionIds(directory)).toEqual([]);
       expect(fs.readFileSync(sample, 'utf8')).toBe('permission fixture\n');
       await backend.shutdown();
       const store = createAntigravityStore({ registry: createNativeRegistry({ filePath: path.join(root, 'host-registry.json') }) });
       const cold = await store.loadHistory(session.id, session.id.slice(4), directory);
-      expect(cold.records.at(-1).info.error).toEqual(last.info.error);
-      fs.writeFileSync(path.join(root, 'verification.json'), JSON.stringify({ passed: true, sessionId: session.id, permissionDenied: true }));
+      expect(cold.records.at(-1).info.error).toBeUndefined();
+      expect(cold.records.at(-1).parts.some((part) => part.type === 'text' && part.text.includes('permission fixture'))).toBe(true);
+      fs.writeFileSync(path.join(root, 'verification.json'), JSON.stringify({ passed: true, sessionId: session.id, outsideRead: true }));
     } finally {
       await backend.shutdown();
       fs.rmSync(outside, { recursive: true, force: true });
     }
   }, 90_000);
 
-  it('enforces native plan permissions, switches to build, and resumes plan with the same history', async () => {
+  it('allows Plan edits and commands, switches to Build, and resumes Plan with the same history', async () => {
     const { root, directory, modelID, backend } = setup();
     const sample = path.join(directory, 'sample.txt');
     fs.writeFileSync(sample, 'original\n');
@@ -78,17 +82,17 @@ describe.skipIf(process.env.OPENCHAMBER_AGY_LIVE_TEST !== '1')('installed Antigr
         return records.flatMap((record) => record.parts).filter((part) => part.type === 'tool');
       };
       const clarification = await ask('plan', 'Before doing anything else, ask me whether I want a short summary or a detailed report, then stop and wait for my next message.');
-      expect(clarification.some((part) => part.tool === 'ask_question')).toBe(false);
+      expect(clarification.some((part) => part.tool === 'ask_question')).toBe(true);
       expect(fs.readFileSync(sample, 'utf8')).toBe('original\n');
-      const plan = await ask('plan', 'Read sample.txt. For a permission regression check, attempt once to replace original with changed using edit_file and once to create denied.txt using run_command. If denied, do not retry or use a different route. Report the denials and a short plan.');
-      expect(fs.readFileSync(sample, 'utf8')).toBe('original\n');
-      expect(fs.existsSync(path.join(directory, 'denied.txt'))).toBe(false);
-      expect(fs.readdirSync(directory)).toEqual(['sample.txt']);
+      const plan = await ask('plan', 'For this isolated permission regression check, I explicitly authorize these two actions in Plan mode: read sample.txt and replace original with plan-mode using edit_file, then use run_command to create command.txt containing command-ok. Perform each action once, report the results, and do not create a plan artifact or change any other files.');
+      expect(fs.readFileSync(sample, 'utf8')).toBe('plan-mode\n');
+      expect(fs.readFileSync(path.join(directory, 'command.txt'), 'utf8').trim()).toBe('command-ok');
+      expect(fs.readdirSync(directory).sort()).toEqual(['command.txt', 'sample.txt']);
       for (const tool of ['edit', 'bash']) {
-        expect(plan.some((part) => part.tool === tool && part.state.status === 'error' && /permission/i.test(part.state.error))).toBe(true);
+        expect(plan.some((part) => part.tool === tool && part.state.status === 'completed')).toBe(true);
       }
 
-      const build = await ask('build', 'Implement now: use edit_file once to replace original in sample.txt with build-mode. Then run a command to print NODE_ENV, or unset if it is absent. Make no other changes.');
+      const build = await ask('build', 'Implement now: use edit_file once to replace plan-mode in sample.txt with build-mode. Then run a command to print NODE_ENV, or unset if it is absent. Make no other changes.');
       expect(fs.readFileSync(sample, 'utf8')).toBe('build-mode\n');
       expect(build.some((part) => part.tool === 'bash' && part.state.output?.includes('unset'))).toBe(true);
 

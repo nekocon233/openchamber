@@ -19,7 +19,7 @@ describe('section registry', () => {
         query: 'claude work status',
         runtimeCtx: {
           isVSCode: platform === 'vscode', isWeb: platform === 'web', isDesktop: platform === 'desktop',
-          isMobile: platform === 'mobile', isHostLocalOrigin: true, isDesktopLocalOrigin: false,
+          isMobile: platform === 'mobile', isDesktopLocalOrigin: false,
           isMac: false, isWindows: false, isLinux: false, routingAvailable: false,
           enterpriseMode: false, jevBlockedByEnterprise: false,
         },
@@ -41,7 +41,7 @@ describe('section registry', () => {
         query: `${backend} checklist`,
         runtimeCtx: {
           isVSCode: false, isWeb: true, isDesktop: false, isMobile: false,
-          isHostLocalOrigin: true, isDesktopLocalOrigin: false,
+          isDesktopLocalOrigin: false,
           isMac: false, isWindows: false, isLinux: false, routingAvailable: false,
           enterpriseMode: false, jevBlockedByEnterprise: false,
         },

@@ -91,9 +91,9 @@ test('shows a missing CLI without reading its catalog, then reloads to ready', a
   });
   expect(catalogReads).toBe(0);
   expect(container?.textContent).toContain('agy was not found on the server');
-  expect(container?.textContent).toContain('Google does not support personal Google AI subscriptions');
-  expect(container?.textContent).toContain('OpenChamber starts agy with full access');
-  expect(container?.textContent).toContain('curl -fsSL https://antigravity.google/cli/install.sh | bash');
+  expect(container?.textContent).not.toContain('Install and sign in');
+  expect(container?.textContent).not.toContain('Before you use Antigravity');
+  expect(container?.textContent).not.toContain('curl -fsSL https://antigravity.google/cli/install.sh | bash');
 
   installed = true;
   const reload = [...(container?.querySelectorAll('button') ?? [])].find((button) => button.textContent === 'Reload');
@@ -113,9 +113,9 @@ test('distinguishes unauthenticated from other catalog failures', async () => {
       },
     }),
   });
-  expect(container?.textContent).toContain('agy is installed but is not signed in');
+  expect(container?.textContent).toContain('agy is installed but is not authenticated');
   expect(container?.textContent).toContain('Sign in with agy first');
-  expect(container?.textContent).toContain('Run these commands on the server that runs OpenChamber');
+  expect(container?.textContent).not.toContain('Run these commands on the server that runs OpenChamber');
 });
 
 test('keeps other catalog errors in the error state and shows their diagnostic', async () => {
@@ -129,5 +129,5 @@ test('keeps other catalog errors in the error state and shows their diagnostic',
   });
   expect(container?.textContent).toContain('Could not confirm agy status');
   expect(container?.textContent).toContain('agy models exited with status 2');
-  expect(container?.textContent).not.toContain('agy is installed but is not signed in');
+  expect(container?.textContent).not.toContain('agy is installed but is not authenticated');
 });

@@ -11,7 +11,33 @@
 - `registry-snapshot.ts` — renders the plain-JSON snapshot for the two consumers that cannot import the UI's TypeScript: the OpenChamber server (`packages/web/server/lib/opencode/settings-registry.json`) and the VS Code extension host (`packages/vscode/src/settings-registry.json`). Regenerate with `bun run settings-registry:generate`; `registry.test.ts` fails when a checked-in copy is stale.
 - `metadata.ts`, `search.ts` — Settings page metadata and the search index (unchanged by the registry; see `.agents/skills/settings-ui-patterns`).
 
+## External tunnel visibility
+
+The External Tunnel page stays in Settings navigation on web, desktop, hosted
+mobile and Capacitor, including remote connections. It renders for any origin
+that reaches the server: the host browser, a LAN address, a reverse proxy, or the
+tunnel's own public URL. The overview anchor belongs to the page description.
+The mobile page allowlist includes it, and `tunnel.overview` searches and opens
+the page in every runtime where the page renders. VS Code removes the page in
+`metadata.ts` because the extension runs no tunnel backend. Enterprise mode keeps
+the page and shows the tunnel policy explanation in place of the controls.
+Management controls and their search entries appear wherever the page renders
+outside enterprise mode. Server authorization still owns tunnel operations.
+
 ## Invariants
+
+`favoriteAgentCombinations` is a profile list of at most 100 unique combination
+UUIDs. The UI store persists it locally, and `modelPrefsAutoSave` owns its
+server writes alongside model favorites. It is separate from `favoriteModels`,
+so a combination never becomes a synthetic model/provider reference. Unknown
+or deleted preset IDs are not rendered. Renaming a preset preserves its star.
+`favoritePickerOrder` stores tagged model and action keys for the combined
+Favorites list. Membership remains in the two existing favorite lists.
+`agentCombinationOrder` stores preset UUIDs for the full Combinations group.
+Both are profile preferences, persist locally and flush through
+`modelPrefsAutoSave`; omitted fields preserve current state. Older settings
+without these keys retain their existing list order. Unavailable items keep
+their saved position, and searching disables reordering of partial lists.
 
 - **A key that is not in the registry does not persist.** `parseSettingsDocument` drops unknown keys on the way in; `updateDesktopSettings` sends only registry keys that are not `computed`; the server and the VS Code bridge drop anything the snapshot does not list.
 - **Every key has exactly one scope.** `instance` (a fact about the machine the server runs on, never synced), `profile` (the person's preference, shared by every client of the instance), `device` (state of this install/surface). `LOCAL_DEVICE_KEYS` are device fields that only ever lived in `useUIStore`'s persisted slice; `DESKTOP_SHELL_KEYS` are instance facts the Electron main process writes straight into `settings.json` and no client reads.

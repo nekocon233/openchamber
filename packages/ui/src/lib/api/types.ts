@@ -1,6 +1,5 @@
 import type {
   ClaudeConnection, ClaudeConnectionWrite, CodexConnection, CodexConnectionWrite,
-  CliproxyapiConnectionWrite, CliproxyapiImportResult, CliproxyapiLogin, CliproxyapiLoginStatus, CliproxyapiModels, CliproxyapiStatus,
 } from '@/lib/native-agents/connections';
 import type { SessionMetadataRecord } from '@/lib/sessionReviewMetadata';
 import type { WorktreeMetadata } from '@/types/worktree';
@@ -22,8 +21,9 @@ import type {
   nativeStatusSnapshotSchema,
 } from '@/lib/native-agents/schemas';
 import type { NativeBackend } from '@/lib/native-agents/ids';
+import type { NativeAgentConfigurationWrite, NativeAgentModel } from '@/lib/native-agents/combinations';
 import type { NativeStatistics, NativeStatisticsQuery } from '@/lib/native-agents/stats-schemas';
-import type { DeepseekConfiguration, DeepseekConfigurationWrite, DeepseekConfigurationSave, DeepseekSetupStatus } from '@/lib/native-agents/deepseek';
+import type { DeepseekSetupStatus } from '@/lib/native-agents/deepseek';
 import type { NativeChecklistSnapshot, NativePlanSnapshot, NativeTaskOutput, NativeTaskSnapshot, NativeTodosSnapshot } from '@/lib/native-agents/task-schemas';
 import type { GitIdentityProfile, GitIdentitySummary } from './git-identity';
 import type { GitHubPendingReviewInput, GitHubPendingReviewState } from '../source-control/pendingReview';
@@ -1411,6 +1411,7 @@ export interface FollowUpQueueAdditionalPart {
 }
 
 export interface FollowUpQueueSendConfig {
+  subagentModel?: NativeAgentModel | null;
   providerID: string;
   modelID: string;
   /** Legacy queue data only. Preserved for mutation replay; never selects an executor. */
@@ -2262,6 +2263,7 @@ export type NativeSessionPatch = { title?: string; archived?: boolean; metadata?
 
 /** Native prompts retain client identity; unified conversations map it to their source CLI. */
 export type NativePromptRequest = {
+  subagentModel?: NativeAgentModel | null;
   directory: string;
   messageID: string;
   parts: NativePromptPart[];
@@ -2275,15 +2277,17 @@ export type NativePromptRequest = {
 };
 
 export type NativeSessionSelection = Pick<NativePromptRequest, 'model' | 'variant' | 'agent'>;
+export type NativePlanExecutionChoice = Pick<NativePromptRequest, 'model' | 'variant'> & { expectedRevision?: number };
 export type NativeSessionCreate =
   | { backend: NativeBackend; directory: string; title?: string; kind?: 'single' }
-  | { backend: 'claude' | 'codex' | 'deepseek'; directory: string; title?: string; kind: 'unified'; selection: NativeSessionSelection };
+  | { backend: NativeBackend; directory: string; title?: string; kind: 'unified'; selection: NativeSessionSelection; configuration?: NativeAgentConfigurationWrite };
 
 /**
  * Native CLI sessions, read and driven by the OpenChamber
  * server. Every method throws on failure; none reports a failure as empty.
  */
 export interface NativeAgentsAPI {
+  configureAgents(sessionId: string, directory: string, configuration: NativeAgentConfigurationWrite, expectedRevision: number, main?: NativeSessionSelection, expectedSelectionRevision?: number): Promise<Session>;
   stats(query: NativeStatisticsQuery, options?: NativeReadOptions): Promise<NativeStatistics>;
   memoryStatus(directory?: string, options?: NativeReadOptions): Promise<NativeMemoryStatus>;
   connectMemory(backend: 'claude' | 'codex'): Promise<NativeMemoryConnection>;
@@ -2293,32 +2297,12 @@ export interface NativeAgentsAPI {
   supported: boolean;
   capabilities(): Promise<NativeCapabilities>;
   catalog(): Promise<NativeCatalog>;
-  /** The local CLIProxyAPI gateway OpenChamber runs itself: status, start, stop and accounts. */
-  cliproxyapiStatus(): Promise<CliproxyapiStatus>;
-  startCliproxyapiGateway(): Promise<CliproxyapiStatus>;
-  stopCliproxyapiGateway(): Promise<CliproxyapiStatus>;
-  setCliproxyapiProxy(input: { upstreamProxy: string | null }): Promise<CliproxyapiStatus>;
-  beginCliproxyapiLogin(provider?: 'codex' | 'antigravity' | 'claude'): Promise<CliproxyapiLogin>;
-  setCliproxyapiOpusRoute(enabled: boolean): Promise<CliproxyapiStatus>;
-  setCliproxyapiSonnetRoute(enabled: boolean): Promise<CliproxyapiStatus>;
-  cliproxyapiLoginStatus(state: string): Promise<CliproxyapiLoginStatus>;
-  cancelCliproxyapiLogin(state: string): Promise<boolean>;
-  /** Hands the browser callback the user pasted back to the gateway, which finishes the sign-in in the background. */
-  submitCliproxyapiLoginCallback(state: string, url: string): Promise<void>;
-  removeCliproxyapiAccount(name: string): Promise<void>;
-  saveCliproxyapiConnection(input: CliproxyapiConnectionWrite): Promise<ClaudeConnection>;
-  /** The gateway's models paired with this computer's metadata for them. */
-  cliproxyapiModels(): Promise<CliproxyapiModels>;
-  /** Writes every known gateway model into the gateway's connection. */
-  importCliproxyapiModels(): Promise<CliproxyapiImportResult>;
   listClaudeConnections(): Promise<ClaudeConnection[]>;
   saveClaudeConnection(id: string | null, connection: ClaudeConnectionWrite): Promise<ClaudeConnection>;
   deleteClaudeConnection(id: string): Promise<void>;
   listCodexConnections(): Promise<CodexConnection[]>;
   saveCodexConnection(id: string | null, connection: CodexConnectionWrite): Promise<CodexConnection>;
   deleteCodexConnection(id: string): Promise<void>;
-  deepseekConfiguration(): Promise<DeepseekConfiguration>;
-  saveDeepseekConfiguration(input: DeepseekConfigurationWrite): Promise<DeepseekConfigurationSave>;
   deepseekSetupStatus(options?: NativeReadOptions): Promise<DeepseekSetupStatus>;
   setupDeepseek(): Promise<DeepseekSetupStatus>;
   /** Claude's slash commands, Codex's enabled skills or DeepSeek's command list. */
@@ -2357,7 +2341,7 @@ export interface NativeAgentsAPI {
   /** Resolves once the CLI took the compaction; it streams in as a turn. */
   compact(sessionId: string, request: NativeCompactRequest): Promise<void>;
   /** One list of chosen labels per question. */
-  replyQuestion(requestId: string, answers: string[][]): Promise<void>;
+  replyQuestion(requestId: string, answers: string[][], execution?: NativePlanExecutionChoice): Promise<void>;
   rejectQuestion(requestId: string): Promise<void>;
   /**
    * Reverts a user message and everything after it. Files go back at once;

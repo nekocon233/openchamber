@@ -30,6 +30,8 @@ export const nativeSessionActionErrorKey = (error: NativeAgentsRequestError, ses
   if (error.code === 'NATIVE_CONVERSATION_SUMMARY_UNAVAILABLE' || error.code === 'NATIVE_CONVERSATION_SUMMARY_INCOMPLETE' || error.code === 'NATIVE_CONVERSATION_CONTEXT_TOO_LARGE') return 'chat.unified.handoffFailed';
   if (error.code === 'NATIVE_CONVERSATION_STORAGE_UNAVAILABLE' || error.code === 'NATIVE_CONVERSATION_HISTORY_UNAVAILABLE') return 'chat.unified.historyUnavailable';
   if (error.code === 'NATIVE_CONVERSATION_DELETE_INCOMPLETE') return 'chat.unified.cleanupFailed';
+  if (error.code === 'NATIVE_CONVERSATION_DELETE_UNSUPPORTED') return 'chat.unified.deleteUnavailable';
+  if (error.code === 'NATIVE_CONVERSATION_COMPACT_UNSUPPORTED') return 'chat.unified.compactUnavailable';
   if (error.code === 'NATIVE_CONVERSATION_OWNS_SESSION') return 'chat.unified.managedSource';
   if (sessionId && isUnifiedNativeSessionId(sessionId) && error.code === 'enterprise_mode') return 'chat.unified.enterprise';
   if (error.code === 'NATIVE_DEEPSEEK_MAINTENANCE_BUSY') return 'sessions.sidebar.session.action.deepseekBusy';

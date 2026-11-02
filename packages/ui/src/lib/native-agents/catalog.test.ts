@@ -68,6 +68,27 @@ describe('loadNativeProviders', () => {
     expect(runtime.reads()).toBe(1);
   });
 
+  test('keeps only the official DeepSeek models when a gateway repeats them', async () => {
+    useRuntime(async () => ({
+      backends: {
+        claude: { status: 'ok', models: [] },
+        codex: { status: 'ok', models: [] },
+        deepseek: { status: 'ok', models: [
+          model('deepseek-official/deepseek-flash'),
+          model('deepseek-official/deepseek-v4-pro'),
+          model('magpie/deepseek%2Fdeepseek-flash'),
+          model('magpie/other-model'),
+        ] },
+      },
+    }));
+    const deepseek = (await loadNativeProviders()).find((provider) => provider.id === 'deepseek-native');
+    expect(deepseek?.models.map((entry) => entry.id)).toEqual([
+      'deepseek-official/deepseek-flash',
+      'deepseek-official/deepseek-v4-pro',
+      'magpie/other-model',
+    ]);
+  });
+
   test('offers each effort again as a fast variant on a model with Codex\'s Fast tier', async () => {
     useRuntime(async () => ({
       backends: {

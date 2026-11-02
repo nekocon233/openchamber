@@ -621,16 +621,16 @@ describe('session goal on native CLI sessions', () => {
   });
 
   // The native runtime as the goal loop sees it; OpenCode must never be asked.
-  const createNativeHarness = ({ messages, goalOverrides = {}, pendingPlan = false }) => {
+  const createNativeHarness = ({ messages, goalOverrides = {}, pendingPlan = false, childSessions = [], statuses = {} }) => {
     const stored = { id: NATIVE_ID, directory: DIRECTORY, metadata: { openchamber: { goal: { ...goal, ...goalOverrides } } } };
     const prompts = [];
     const updates = [];
     const nativeSessions = {
       isNativeSessionId: (sessionId) => sessionId.startsWith('ncl_'),
       getSession: vi.fn(async () => stored),
-      statuses: vi.fn(async () => ({})),
+      statuses: vi.fn(async () => statuses),
       hasPendingPlanDecision: () => pendingPlan,
-      loadMessages: vi.fn(async () => ({ records: messages, cursor: null })),
+      loadMessages: vi.fn(async () => ({ records: messages, cursor: null, childSessions })),
       updateSession: vi.fn(async (_sessionId, _directory, patch) => {
         updates.push(patch);
         stored.metadata = patch.metadata;
@@ -669,6 +669,18 @@ describe('session goal on native CLI sessions', () => {
 
   it('waits for a native plan decision without auditing or sending a continuation', async () => {
     const { runtime, prompts, updates } = createNativeHarness({ messages: [], pendingPlan: true });
+    await idleNative(runtime);
+    expect(prompts).toEqual([]);
+    expect(updates).toEqual([]);
+    runtime.stop();
+  });
+
+  it('waits for a working native child session', async () => {
+    const { runtime, prompts, updates } = createNativeHarness({
+      messages: [],
+      childSessions: [{ id: 'ncl_child' }],
+      statuses: { ncl_child: { type: 'busy' } },
+    });
     await idleNative(runtime);
     expect(prompts).toEqual([]);
     expect(updates).toEqual([]);

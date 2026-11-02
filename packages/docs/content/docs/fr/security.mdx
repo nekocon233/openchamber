@@ -167,6 +167,7 @@ Pour vérifier que ça a marché, ouvrez Paramètres → Fournisseurs : un avis 
 
 - Les sessions, la configuration en un clic et la configuration des fournisseurs DeepSeek Harness sont indisponibles. Leurs modèles sont configurés séparément dans dsh, en dehors de la politique de fournisseurs OpenCode.
 - Les conversations natives unifiées ne peuvent être ni créées ni poursuivies en mode entreprise, y compris par compression du contexte ou réponse relançant un tour. Leurs passations peuvent atteindre des fournisseurs CLI configurés hors d'OpenCode. Les conversations enregistrées restent répertoriées ; la lecture et le nettoyage des sources suivent la politique de chaque CLI.
+- La modification des combinaisons d’agents natifs et les sous-agents entre CLI sont indisponibles, y compris les appels d’une CLI déjà en cours. Leurs modèles peuvent joindre des fournisseurs configurés hors d’OpenCode. Les combinaisons enregistrées ne contournent pas cette restriction.
 - Les fournisseurs de modèles viennent uniquement de votre configuration OpenCode. Connecter un fournisseur, s’y identifier, ajouter une clé ou créer un fournisseur personnalisé est désactivé dans OpenChamber ; supprimer ou changer de compte existant fonctionne toujours. Cela ferme seulement l’accès par l’application ; le verrou lui-même, c’est la politique OpenCode décrite plus bas. Se connecter à un serveur MCP de votre configuration OpenCode fonctionne toujours, car cela atteint ce serveur et non un fournisseur de modèles.
 - Les [Fournisseurs de classification (Jev)](/fr/classification-providers/) restent désactivés, y compris un point de terminaison personnalisé que quelqu’un saisit dans les Paramètres. Le filet de sécurité et Auto ne sont pas proposés, et les sessions en cours ne reçoivent pas l’indication « semble terminé ». Pour utiliser Jev via votre propre infrastructure, fixez un point de terminaison avec `jev` dans le fichier de politique, ou avec `OPENCHAMBER_JEV_URL` (plus `OPENCHAMBER_JEV_MODEL` et, s’il en faut une, `OPENCHAMBER_JEV_API_KEY`). Il devient le choix par défaut, on peut toujours le désactiver, et rien d’autre ne peut être choisi.
 - La lecture à voix haute via OpenAI est désactivée. Un serveur personnalisé de synthèse vocale ou de transcription doit tourner sur la même machine. Les voix locales et les modèles de dictée locaux continuent de fonctionner.
@@ -185,7 +186,7 @@ Les tâches du petit modèle (titres de session, récapitulatifs, messages de co
 
 Quels fournisseurs de modèles peuvent être utilisés, c’est OpenCode qui le décide, pas OpenChamber. Verrouillez-le avec les [politiques OpenCode](https://opencode.ai/v2/docs/policies/) : interdisez tous les fournisseurs, puis autorisez ceux que vous avez approuvés.
 
-Le mode entreprise bloque aussi la connexion à CLIProxyAPI, l'importation de modèles et les modifications de connexion. Les mises à niveau automatiques au sein des familles de modèles Antigravity sont également désactivées. Le relais automatique d’Opus/Sonnet de Claude vers Antigravity est également désactivé.
+Le mode entreprise bloque aussi la connexion aux fournisseurs et les modifications de connexion.
 
 ```jsonc
 {

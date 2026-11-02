@@ -8,6 +8,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "Could not prepare the context. Reconnect the source or target model, or choose a model with a larger context.",
     "chat.unified.unconfirmed": "The last send is unconfirmed. Reload the conversation before retrying.",
     "chat.unified.cleanupFailed": "Some native history could not be removed. Retry deletion to finish cleanup.",
+    "chat.unified.deleteUnavailable": "This conversation contains native history that cannot be deleted. Archive it instead.",
+    "chat.unified.compactUnavailable": "The active native agent does not support manual compaction. Switch to another agent and send a message, then retry.",
     "chat.unified.historyUnavailable": "Conversation history could not be read. Reload and retry.",
     "chat.unified.managedSource": "This session belongs to a unified conversation. Open that conversation to continue."
   },
@@ -20,6 +22,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "无法交接上下文，请重新连接当前或目标模型，或选择上下文更大的模型。",
     "chat.unified.unconfirmed": "上次发送结果尚未确认，请重新加载会话后再试。",
     "chat.unified.cleanupFailed": "部分原生历史未能删除，请重试删除以完成清理。",
+    "chat.unified.deleteUnavailable": "此会话包含无法删除的原生历史，请改为归档。",
+    "chat.unified.compactUnavailable": "当前原生代理不支持手动压缩。请切换到其他代理并发送一条消息后重试。",
     "chat.unified.historyUnavailable": "无法读取会话历史，请重新加载后重试。",
     "chat.unified.managedSource": "此会话属于统一会话，请打开对应的统一会话继续。"
   },
@@ -32,6 +36,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "無法交接上下文，請重新連接目前或目標模型，或選擇上下文更大的模型。",
     "chat.unified.unconfirmed": "上次傳送結果尚未確認，請重新載入會話後再試。",
     "chat.unified.cleanupFailed": "部分原生歷史未能刪除，請重試刪除以完成清理。",
+    "chat.unified.deleteUnavailable": "此會話包含無法刪除的原生歷史，請改為封存。",
+    "chat.unified.compactUnavailable": "目前的原生代理不支援手動壓縮。請切換至其他代理並傳送一則訊息後重試。",
     "chat.unified.historyUnavailable": "無法讀取會話歷史，請重新載入後再試。",
     "chat.unified.managedSource": "此會話屬於統一會話，請開啟對應的統一會話繼續。"
   },
@@ -44,6 +50,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "Der Kontext konnte nicht vorbereitet werden. Verbinde das bisherige oder das neue Modell erneut oder wähle ein Modell mit größerem Kontext.",
     "chat.unified.unconfirmed": "Die letzte Sendung ist unbestätigt. Lade das Gespräch vor einem erneuten Versuch neu.",
     "chat.unified.cleanupFailed": "Ein Teil des nativen Verlaufs konnte nicht entfernt werden. Wiederhole das Löschen, um die Bereinigung abzuschließen.",
+    "chat.unified.deleteUnavailable": "Diese Unterhaltung enthält native Verlaufsdaten, die nicht gelöscht werden können. Archiviere sie stattdessen.",
+    "chat.unified.compactUnavailable": "Der aktive native Agent unterstützt keine manuelle Komprimierung. Wechsle zu einem anderen Agenten, sende eine Nachricht und versuche es erneut.",
     "chat.unified.historyUnavailable": "Der Gesprächsverlauf konnte nicht gelesen werden. Lade ihn neu und versuche es erneut.",
     "chat.unified.managedSource": "Diese Sitzung gehört zu einem gemeinsamen Gespräch. Öffne dieses Gespräch, um fortzufahren."
   },
@@ -56,6 +64,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "Le contexte n'a pas pu être préparé. Reconnectez le modèle source ou cible, ou choisissez un modèle avec un contexte plus grand.",
     "chat.unified.unconfirmed": "Le dernier envoi n'est pas confirmé. Rechargez la conversation avant de réessayer.",
     "chat.unified.cleanupFailed": "Une partie de l'historique natif n'a pas pu être supprimée. Relancez la suppression pour terminer le nettoyage.",
+    "chat.unified.deleteUnavailable": "Cette conversation contient un historique natif qui ne peut pas être supprimé. Archivez-la.",
+    "chat.unified.compactUnavailable": "L'agent natif actif ne prend pas en charge la compression manuelle. Passez à un autre agent, envoyez un message, puis réessayez.",
     "chat.unified.historyUnavailable": "L'historique de la conversation est illisible. Rechargez et réessayez.",
     "chat.unified.managedSource": "Cette session appartient à une conversation unifiée. Ouvrez cette conversation pour continuer."
   },
@@ -68,6 +78,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "De context kon niet worden voorbereid. Verbind het bron- of doelmodel opnieuw of kies een model met meer context.",
     "chat.unified.unconfirmed": "De laatste verzending is niet bevestigd. Laad het gesprek opnieuw voordat je het nogmaals probeert.",
     "chat.unified.cleanupFailed": "Een deel van de native geschiedenis kon niet worden verwijderd. Probeer opnieuw te verwijderen om het opruimen af te ronden.",
+    "chat.unified.deleteUnavailable": "Dit gesprek bevat oorspronkelijke geschiedenis die niet kan worden verwijderd. Archiveer het gesprek.",
+    "chat.unified.compactUnavailable": "De actieve native agent ondersteunt geen handmatige compressie. Schakel over naar een andere agent, stuur een bericht en probeer het opnieuw.",
     "chat.unified.historyUnavailable": "De gespreksgeschiedenis kon niet worden gelezen. Laad opnieuw en probeer het nogmaals.",
     "chat.unified.managedSource": "Deze sessie hoort bij een verenigd gesprek. Open dat gesprek om verder te gaan."
   },
@@ -80,6 +92,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "Не вдалося підготувати контекст. Повторно підключіть поточну або цільову модель чи виберіть модель із більшим контекстом.",
     "chat.unified.unconfirmed": "Останнє надсилання не підтверджено. Перезавантажте розмову перед повторною спробою.",
     "chat.unified.cleanupFailed": "Частину нативної історії не вдалося видалити. Повторіть видалення, щоб завершити очищення.",
+    "chat.unified.deleteUnavailable": "Ця розмова містить історію нативного агента, яку неможливо видалити. Архівуйте розмову.",
+    "chat.unified.compactUnavailable": "Активний нативний агент не підтримує ручне стиснення. Перейдіть до іншого агента, надішліть повідомлення та повторіть спробу.",
     "chat.unified.historyUnavailable": "Не вдалося прочитати історію розмови. Перезавантажте та спробуйте ще раз.",
     "chat.unified.managedSource": "Цей сеанс належить до об'єднаної розмови. Відкрийте цю розмову, щоб продовжити."
   },
@@ -92,6 +106,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "No se pudo preparar el contexto. Vuelve a conectar el modelo actual o el de destino, o elige uno con más contexto.",
     "chat.unified.unconfirmed": "El último envío no está confirmado. Recarga la conversación antes de reintentarlo.",
     "chat.unified.cleanupFailed": "No se pudo eliminar parte del historial nativo. Repite la eliminación para terminar la limpieza.",
+    "chat.unified.deleteUnavailable": "Esta conversación contiene un historial nativo que no se puede eliminar. Archívala.",
+    "chat.unified.compactUnavailable": "El agente nativo activo no admite la compactación manual. Cambia a otro agente, envía un mensaje y vuelve a intentarlo.",
     "chat.unified.historyUnavailable": "No se pudo leer el historial de la conversación. Recarga e inténtalo de nuevo.",
     "chat.unified.managedSource": "Esta sesión pertenece a una conversación unificada. Abre esa conversación para continuar."
   },
@@ -104,6 +120,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "Não foi possível preparar o contexto. Reconecte o modelo atual ou o de destino, ou escolha um modelo com contexto maior.",
     "chat.unified.unconfirmed": "O último envio não foi confirmado. Recarregue a conversa antes de tentar novamente.",
     "chat.unified.cleanupFailed": "Parte do histórico nativo não pôde ser removida. Repita a exclusão para concluir a limpeza.",
+    "chat.unified.deleteUnavailable": "Esta conversa contém um histórico nativo que não pode ser excluído. Arquive a conversa.",
+    "chat.unified.compactUnavailable": "O agente nativo ativo não oferece compactação manual. Mude para outro agente, envie uma mensagem e tente novamente.",
     "chat.unified.historyUnavailable": "Não foi possível ler o histórico da conversa. Recarregue e tente novamente.",
     "chat.unified.managedSource": "Esta sessão pertence a uma conversa unificada. Abra essa conversa para continuar."
   },
@@ -116,6 +134,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "문맥을 준비하지 못했습니다. 현재 모델이나 대상 모델을 다시 연결하거나 문맥 길이가 더 긴 모델을 선택해 주세요.",
     "chat.unified.unconfirmed": "마지막 전송이 확인되지 않았습니다. 대화를 새로 불러온 후 다시 시도해 주세요.",
     "chat.unified.cleanupFailed": "일부 네이티브 기록을 삭제하지 못했습니다. 삭제를 다시 시도해 정리를 완료해 주세요.",
+    "chat.unified.deleteUnavailable": "이 대화에는 삭제할 수 없는 네이티브 기록이 포함되어 있습니다. 대신 대화를 보관하세요.",
+    "chat.unified.compactUnavailable": "현재 네이티브 에이전트는 수동 압축을 지원하지 않습니다. 다른 에이전트로 전환하여 메시지를 보낸 후 다시 시도하세요.",
     "chat.unified.historyUnavailable": "대화 기록을 읽지 못했습니다. 새로 불러온 후 다시 시도해 주세요.",
     "chat.unified.managedSource": "이 세션은 통합 대화에 속합니다. 해당 대화를 열어 계속해 주세요."
   },
@@ -128,6 +148,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "Nie udało się przygotować kontekstu. Połącz ponownie bieżący lub docelowy model albo wybierz model z większym kontekstem.",
     "chat.unified.unconfirmed": "Ostatnia wysyłka nie została potwierdzona. Odśwież rozmowę przed ponowną próbą.",
     "chat.unified.cleanupFailed": "Nie udało się usunąć części historii natywnej. Ponów usuwanie, aby dokończyć czyszczenie.",
+    "chat.unified.deleteUnavailable": "Ta rozmowa zawiera historię natywnego agenta, której nie można usunąć. Zarchiwizuj rozmowę.",
+    "chat.unified.compactUnavailable": "Aktywny natywny agent nie obsługuje ręcznej kompresji. Przełącz się na innego agenta, wyślij wiadomość i spróbuj ponownie.",
     "chat.unified.historyUnavailable": "Nie udało się odczytać historii rozmowy. Odśwież i spróbuj ponownie.",
     "chat.unified.managedSource": "Ta sesja należy do rozmowy ujednoliconej. Otwórz tę rozmowę, aby kontynuować."
   },
@@ -140,6 +162,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "コンテキストを準備できませんでした。現在または切り替え先のモデルを再接続するか、より長いコンテキストに対応したモデルを選択してください。",
     "chat.unified.unconfirmed": "前回の送信結果が確認できていません。会話を再読み込みしてからお試しください。",
     "chat.unified.cleanupFailed": "一部のネイティブ履歴を削除できませんでした。削除を再試行してクリーンアップを完了してください。",
+    "chat.unified.deleteUnavailable": "この会話には削除できないネイティブ履歴が含まれています。代わりに会話をアーカイブしてください。",
+    "chat.unified.compactUnavailable": "現在のネイティブエージェントは手動圧縮に対応していません。別のエージェントに切り替えてメッセージを送信し、再試行してください。",
     "chat.unified.historyUnavailable": "会話履歴を読み取れませんでした。再読み込みしてお試しください。",
     "chat.unified.managedSource": "このセッションは統合会話に属しています。その会話を開いて続行してください。"
   },
@@ -152,6 +176,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "Bağlam hazırlanamadı. Kaynak veya hedef modeli yeniden bağlayın ya da daha geniş bağlamlı bir model seçin.",
     "chat.unified.unconfirmed": "Son gönderim doğrulanmadı. Yeniden denemeden önce konuşmayı yükleyin.",
     "chat.unified.cleanupFailed": "Yerel geçmişin bir bölümü silinemedi. Temizliği tamamlamak için silmeyi yeniden deneyin.",
+    "chat.unified.deleteUnavailable": "Bu konuşma silinemeyen yerel geçmiş içeriyor. Bunun yerine konuşmayı arşivleyin.",
+    "chat.unified.compactUnavailable": "Etkin yerel aracı elle sıkıştırmayı desteklemiyor. Başka bir aracıya geçip bir mesaj gönderin, ardından yeniden deneyin.",
     "chat.unified.historyUnavailable": "Konuşma geçmişi okunamadı. Yeniden yükleyip tekrar deneyin.",
     "chat.unified.managedSource": "Bu oturum birleşik bir konuşmaya ait. Devam etmek için o konuşmayı açın."
   },
@@ -164,6 +190,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "تعذّر إعداد السياق. أعد ربط النموذج الحالي أو المستهدف، أو اختر نموذجًا بسياق أكبر.",
     "chat.unified.unconfirmed": "لم يتم تأكيد الإرسال الأخير. أعد تحميل المحادثة قبل المحاولة مجددًا.",
     "chat.unified.cleanupFailed": "تعذّر حذف جزء من السجل المحلي. أعد محاولة الحذف لإكمال التنظيف.",
+    "chat.unified.deleteUnavailable": "تحتوي هذه المحادثة على سجل أصلي لا يمكن حذفه. يمكنك أرشفة المحادثة بدلاً من ذلك.",
+    "chat.unified.compactUnavailable": "لا يدعم الوكيل الأصلي النشط الضغط اليدوي. انتقل إلى وكيل آخر وأرسل رسالة، ثم أعد المحاولة.",
     "chat.unified.historyUnavailable": "تعذّرت قراءة سجل المحادثة. أعد التحميل وحاول مجددًا.",
     "chat.unified.managedSource": "هذه الجلسة جزء من محادثة موحّدة. افتح تلك المحادثة للمتابعة."
   },
@@ -176,6 +204,8 @@ export const unifiedConversationsI18n = {
     "chat.unified.handoffFailed": "לא ניתן להכין את ההקשר. יש לחבר מחדש את מודל המקור או היעד, או לבחור מודל עם הקשר גדול יותר.",
     "chat.unified.unconfirmed": "השליחה האחרונה לא אושרה. יש לטעון מחדש את השיחה לפני ניסיון נוסף.",
     "chat.unified.cleanupFailed": "לא ניתן למחוק חלק מההיסטוריה המקומית. יש לנסות שוב כדי להשלים את הניקוי.",
+    "chat.unified.deleteUnavailable": "השיחה מכילה היסטוריה מקורית שלא ניתן למחוק. יש להעביר את השיחה לארכיון.",
+    "chat.unified.compactUnavailable": "הסוכן המקורי הפעיל אינו תומך בצמצום ידני. יש לעבור לסוכן אחר, לשלוח הודעה ולנסות שוב.",
     "chat.unified.historyUnavailable": "לא ניתן לקרוא את היסטוריית השיחה. יש לטעון מחדש ולנסות שוב.",
     "chat.unified.managedSource": "המפגש הזה שייך לשיחה מאוחדת. יש לפתוח אותה כדי להמשיך."
   }

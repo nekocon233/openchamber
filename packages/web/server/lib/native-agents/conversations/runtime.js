@@ -5,13 +5,18 @@ import { z } from 'zod';
 
 import { isEnterpriseMode } from '../../enterprise-mode.js';
 import { NativeAgentError, invalidRequestError, sessionBusyError } from '../errors.js';
-import { nativeBackendOfProviderId, newNativeClientUserMessageId, isUnifiedNativeSessionId as isConversationId } from '../ids.js';
+import { NATIVE_BACKENDS, nativeBackendSchema, nativeBackendOfProviderId, newNativeClientUserMessageId, isUnifiedNativeSessionId as isConversationId } from '../ids.js';
 import { JsonRpcError } from '../codex/rpc.js';
 import { createConversationStore, conversationSelectionSchema } from './store.js';
 import { conversationMessageId, conversationPartId, projectConversationRecord, projectConversationPart, readConversationHistory, readConversationSegment, readConversationPage, conversationPrefix } from './history.js';
 import { prepareConversationContext } from './context.js';
+import { agentConfigurationWriteSchema } from '../agent-configuration.js';
+import { conversationTitlePreview, createConversationAutoTitles } from './auto-title.js';
 
 const namespaceSchema = z.record(z.string(), z.json()).catch({});
+const lifecycleSchema = z.record(nativeBackendSchema, z.object({
+  stop: z.function(), retire: z.function(), delete: z.boolean(), compact: z.boolean(),
+}));
 const selectionOf = (request) => conversationSelectionSchema.parse({ model: request.model, agent: request.agent, variant: request.variant });
 const directoryKey = (directory) => {
   try { return fs.realpathSync.native(directory); }
@@ -25,9 +30,15 @@ const unknownAdmission = () => new NativeAgentError('The previous send is unconf
 });
 
 /** The conversation owns logical history; the native runtime owns every CLI operation. */
-export const createNativeConversations = ({ dataDir, native, registry, reverts, publishNativeEvent, stopSource, retireSource, smallModels, managedChatsRoots, now = Date.now }) => {
+export const createNativeConversations = ({ dataDir, native, registry, reverts, publishNativeEvent, sourceLifecycle, smallModels, managedChatsRoots, now = Date.now }) => {
+  for (const backend of NATIVE_BACKENDS) {
+    if (!sourceLifecycle[backend]) throw new Error(`Native backend ${backend} needs unified conversation lifecycle support`);
+  }
+  const lifecycles = lifecycleSchema.parse(sourceLifecycle);
   const store = createConversationStore({ directory: path.join(dataDir, 'native-agents', 'conversations'), now });
   const owned = new Set();
+  // Includes sources left in the registry after an interrupted preparation.
+  const undeletableOwners = new Set();
   const owners = new Map();
   const childRoots = new Map();
   const foreground = new Set();
@@ -53,7 +64,10 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
   const load = () => {
     ready ??= (async () => {
       await store.load();
-      for (const entry of await registry.listSessions()) if (entry.conversationId) owned.add(entry.sessionId);
+      for (const entry of await registry.listSessions()) if (entry.conversationId) {
+        owned.add(entry.sessionId);
+        if (!lifecycles[entry.backend].delete) undeletableOwners.add(entry.conversationId);
+      }
       for (const manifest of store.list()) index(manifest);
       for (const manifest of store.list()) if (manifest.admission?.phase === 'preparing') {
         try { await restorePreparation(manifest); }
@@ -83,14 +97,24 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
   };
   const activeOf = (manifest) => manifest.segments.find((segment) => segment.id === manifest.active);
   const sourceRoot = (id) => childRoots.get(id) ?? id;
-  const hasLiveWork = (manifest) => {
+  const hasLiveWork = (manifest, allowedForeground = null) => {
+    if (native.hasActiveDelegations?.(manifest.id)) return true;
     const active = activeOf(manifest);
     if (!active) return false;
-    if (foreground.has(active.sessionId) || (background.get(active.sessionId)?.length ?? 0) > 0) return true;
-    for (const child of foreground) if (sourceRoot(child) === active.sessionId) return true;
+    if ((active.sessionId !== allowedForeground && foreground.has(active.sessionId)) || (background.get(active.sessionId)?.length ?? 0) > 0) return true;
+    for (const child of childRoots.keys()) if (sourceRoot(child) === active.sessionId
+      && (foreground.has(child) || (background.get(child)?.length ?? 0) > 0 || (waiting.get(child)?.size ?? 0) > 0)) return true;
     return false;
   };
-  const blocked = (manifest) => hasLiveWork(manifest) || (waiting.get(activeOf(manifest)?.sessionId)?.size ?? 0) > 0;
+  const blocked = (manifest, approval = null) => {
+    if (hasLiveWork(manifest, approval?.allowedForeground)) return true;
+    const requests = waiting.get(activeOf(manifest)?.sessionId);
+    if (!approval) return Boolean(requests?.size);
+    for (const id of requests ?? []) if (id !== approval.requestId) return true;
+    return false;
+  };
+  const canDelete = (manifest) => (!native.canDeleteDelegations || native.canDeleteDelegations(manifest.id)) && !undeletableOwners.has(manifest.id)
+    && referencedSegments(manifest).every((segment) => lifecycles[segment.backend].delete && (!native.canDeleteSource || native.canDeleteSource(segment.backend)));
   const recordOf = (manifest) => {
     const active = activeOf(manifest);
     const backend = active?.backend ?? nativeBackendOfProviderId(manifest.selection.model.providerID);
@@ -101,14 +125,16 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       model: { providerID: manifest.selection.model.providerID, id: manifest.selection.model.modelID, ...(manifest.selection.variant ? { variant: manifest.selection.variant } : {}) },
       time: { created: manifest.createdAt, updated: manifest.updatedAt, ...(manifest.archivedAt === undefined ? {} : { archived: manifest.archivedAt }) },
       metadata: { ...manifest.metadata, openchamber: { ...namespace, native: {
-        kind: 'unified', backend, revision: manifest.selectionRevision, recordRevision: manifest.revision, historyRevision: manifest.historyRevision,
+        kind: 'unified', backend, unifiedBackends: NATIVE_BACKENDS,
+        revision: manifest.selectionRevision, recordRevision: manifest.revision, historyRevision: manifest.historyRevision,
         sourceSessionID: active?.sessionId ?? null,
         switchReady: !blocked(manifest) && !preparing.has(manifest.id) && !manifest.admission && !manifest.deletion,
         preparing: handoffs.has(manifest.id),
-        actions: { revert: !manifest.deletion, delete: true, fork: !manifest.deletion },
+        actions: { revert: !manifest.deletion, delete: canDelete(manifest), fork: !manifest.deletion, compact: lifecycles[backend].compact },
       } } },
     };
     if (manifest.parentID) record.parentID = manifest.parentID;
+    if (manifest.agents) record.metadata.openchamber.native.agents = manifest.agents;
     if (manifest.cut) record.revert = { messageID: manifest.cut };
     return record;
   };
@@ -120,6 +146,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     emit(manifest, created ? 'session.created' : 'session.updated', { info: recordOf(manifest) });
     return recordOf(manifest);
   };
+  const titles = createConversationAutoTitles({ store, native, smallModels, publish });
   const update = async (id, change) => {
     const manifest = await store.update(id, change);
     index(manifest);
@@ -164,13 +191,16 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       waiting.set(segment.sessionId, new Set(questions.filter((question) => question.sessionID === segment.sessionId).map((question) => question.id)));
     }
     for (const id of childRoots.keys()) {
+      background.set(id, tasks[id]?.tasks ?? []);
       if (statuses[id] && statuses[id].type !== 'idle') foreground.add(id);
       else foreground.delete(id);
     }
   };
-  const assertQuiet = async (manifest) => {
+  const assertQuiet = async (manifest, approval = null) => {
     await refreshActivity(manifest);
-    if (blocked(manifest)) throw sessionBusyError();
+    if (native.hasActiveDelegations?.(manifest.id)) throw sessionBusyError();
+    if (approval && activeOf(manifest) && await native.hasPendingDelegationTool?.(activeOf(manifest).sessionId)) throw sessionBusyError();
+    if (blocked(manifest, approval)) throw sessionBusyError();
   };
   const historyOf = async (manifest) => {
     const history = await readConversationHistory(native, manifest);
@@ -180,16 +210,20 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     return history;
   };
   const stop = async (manifest) => {
+    let delegationError;
+    try { await native.cancelDelegations?.(manifest.id); }
+    catch (error) { delegationError = error; }
     preparing.get(manifest.id)?.abort(new Error('Conversation preparation stopped'));
     const active = activeOf(manifest);
-    if (!active) return false;
-    try { await stopSource(active.sessionId); }
+    if (!active) { if (delegationError) throw delegationError; return false; }
+    try { await lifecycles[active.backend].stop(active.sessionId); }
     catch (error) {
       if (error instanceof NativeAgentError && error.status === 404) return false;
       throw error;
     }
     for (const [child, root] of childRoots) if (root === active.sessionId && foreground.has(child)) await native.abort(child);
     await refreshActivity(manifest);
+    if (delegationError) throw delegationError;
     if (blocked(manifest)) throw sessionBusyError();
     return true;
   };
@@ -216,7 +250,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     return false;
   };
 
-  const prompt = (id, request, signal, automaticSource = null, automaticMessageId = null) => locked(id, async () => {
+  const prompt = (id, request, signal, automaticSource = null, automaticMessageId = null, approval = null) => locked(id, async () => {
     checkPolicy();
     if (stopping) throw sessionBusyError();
     let manifest = get(id, request.directory);
@@ -244,8 +278,11 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     const backend = nativeBackendOfProviderId(target.model.providerID);
     const old = activeOf(manifest);
     if (automaticSource && (!old || old.sessionId !== automaticSource)) throw invalidRequestError('The original planning session is no longer active');
+    if (approval?.expectedRevision !== undefined && manifest.selectionRevision !== approval.expectedRevision) throw new NativeAgentError('The conversation selection changed. Reload and retry.', {
+      status: 409, code: 'NATIVE_CONVERSATION_SELECTION_CONFLICT',
+    });
     const switching = !old || old.backend !== backend || manifest.cut !== undefined || old.ownerId !== id || old.through !== undefined;
-    if (switching) await assertQuiet(manifest);
+    if (switching || approval) await assertQuiet(manifest, approval);
     if (!request.preserveSelection && !automaticSource && JSON.stringify(manifest.selection) !== JSON.stringify(target)) {
       manifest = await update(id, (current) => ({ ...current, selection: target, selectionRevision: current.selectionRevision + 1 }));
     }
@@ -258,7 +295,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     publish(manifest);
     const prior = { segments: structuredClone(manifest.segments), active: manifest.active, cut: manifest.cut, checkpoint: manifest.checkpoint };
     let segment = old;
-    let nativeMessageId = automaticMessageId;
+    let nativeMessageId = automaticSource && old?.backend !== backend ? null : automaticMessageId;
     let dispatched = false;
     let reverting = false;
     try {
@@ -279,7 +316,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
           signal: controller.signal, saveCheckpoint: (checkpoint) => update(id, (current) => ({ ...current, checkpoint })),
         });
         controller.signal.throwIfAborted();
-        if (old) await retireSource(old.sessionId);
+        if (old) await lifecycles[old.backend].retire(old.sessionId);
         if (manifest.cut) {
           reverting = true;
         }
@@ -293,6 +330,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
           beforePublish: async (source) => {
             owned.add(source.id);
             await registry.updateSession(source.id, { conversationId: id });
+            if (!lifecycles[backend].delete) undeletableOwners.add(id);
             segment = { id: randomUUID(), ownerId: id, sessionId: source.id, backend, createdAt: now(), sends: [] };
             nativeMessageId = newNativeClientUserMessageId(source.id);
             segment.sends.push({ messageId: request.messageID, nativeMessageId, createdAt: now(), state: 'pending', fingerprint, selection: target });
@@ -313,8 +351,9 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       controller.signal.throwIfAborted();
       nativeMessageId ??= newNativeClientUserMessageId(segment.sessionId);
       manifest = await update(id, (current) => {
-        if (!current.manualTitle && current.segments.length === 1 && current.segments[0].sends.length <= 1) {
-          const preview = request.parts.find((part) => part.type === 'text' && part.text.trim())?.text.trim().split('\n')[0].slice(0, 100);
+        if (!current.manualTitle && !current.generatedTitle && current.segments.length === 1
+          && current.segments[0].sends.every((send) => send.messageId === request.messageID)) {
+          const preview = conversationTitlePreview(request.parts);
           if (preview) current.title = preview;
         }
         if (!switching) {
@@ -330,7 +369,10 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       if (reverting) await reverts.beginCommit(id);
       await update(id, (current) => { current.admission.phase = 'dispatched'; return current; });
       controller.signal.throwIfAborted();
+      await approval?.onDispatched?.();
+      controller.signal.throwIfAborted();
       dispatched = true;
+      if (manifest.agents) await registry.updateSession(segment.sessionId, { agentConfiguration: manifest.agents });
       await native.prompt(segment.sessionId, {
         ...request, directory: manifest.directory, messageID: nativeMessageId,
         instructions: [request.instructions, instructions].filter(Boolean).join('\n\n') || undefined,
@@ -341,6 +383,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         return current;
       });
       if (reverting) await reverts.finishCommit(id);
+      if (!foreground.has(segment.sessionId)) void titles.generate(id);
     } catch (error) {
       const definitelyRefused = !dispatched || error instanceof JsonRpcError || (error instanceof NativeAgentError && !error.code.endsWith('_UNKNOWN'));
       if (definitelyRefused) {
@@ -361,7 +404,10 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         if (reverting) await reverts.cancelCommit(id);
         await registry.dropTurns(id, [request.messageID]);
         if (switching && segment && segment.id !== old?.id) {
-          try { await native.deleteSession(segment.sessionId, manifest.directory); }
+          try {
+            await lifecycles[segment.backend].retire(segment.sessionId);
+            if (lifecycles[segment.backend].delete) await native.deleteSession(segment.sessionId, manifest.directory);
+          }
           catch { /* The registry retains ownership for cleanup when the conversation is deleted. */ }
         }
       } else {
@@ -389,21 +435,22 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     ...native,
     async capabilities() {
       await load();
-      return { ...await native.capabilities(), unifiedSessions: !isEnterpriseMode() };
+      const capabilities = await native.capabilities();
+      for (const backend of Object.keys(capabilities.backends)) {
+        if (!lifecycles[backend]) throw new Error(`Native backend ${backend} needs unified conversation lifecycle support`);
+      }
+      const enabled = !isEnterpriseMode();
+      return { ...capabilities, unifiedSessions: enabled, unifiedBackends: enabled ? NATIVE_BACKENDS : [] };
     },
     async createSession(input) {
       await load();
       if (input.kind !== 'unified') return native.createSession(input);
-      if (input.backend === 'antigravity') {
-        throw new NativeAgentError('Antigravity does not support unified native conversations', {
-          status: 409, code: 'NATIVE_ANTIGRAVITY_UNIFIED_UNSUPPORTED',
-        });
-      }
       checkPolicy();
       if (stopping) throw sessionBusyError();
       const selection = conversationSelectionSchema.parse(input.selection);
+      const agents = input.configuration ? { ...await native.validateAgentConfiguration(input.configuration, selection), revision: 1 } : undefined;
       if (nativeBackendOfProviderId(selection.model.providerID) !== input.backend) throw invalidRequestError('The initial model does not match its native backend');
-      return publish(await store.create({ directory: directoryKey(input.directory), selection, manualTitle: Boolean(input.title), ...(input.title ? { title: input.title } : {}) }), true);
+      return publish(await store.create({ directory: directoryKey(input.directory), selection, agents, manualTitle: Boolean(input.title), ...(input.title ? { title: input.title } : {}) }), true);
     },
     async selectModel(id, directory, selection, expectedRevision) {
       await load(); checkPolicy(); get(id, directory);
@@ -414,6 +461,20 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         });
         current.selection = next;
         current.selectionRevision += 1;
+        return current;
+      }));
+    },
+    async configureAgents(id, directory, configuration, expectedRevision, main, expectedSelectionRevision) {
+      await load(); checkPolicy();
+      if (!isConversationId(id)) { assertStandalone(id); return native.configureAgents(id, directory, configuration, expectedRevision, main); }
+      get(id, directory);
+      const parsed = agentConfigurationWriteSchema.parse(configuration);
+      await native.validateAgentConfiguration(parsed, main);
+      const selection = main ? conversationSelectionSchema.parse(main) : null;
+      return publish(await update(id, (current) => {
+        if ((current.agents?.revision ?? 0) !== expectedRevision || selection && current.selectionRevision !== expectedSelectionRevision) throw new NativeAgentError('The conversation selection changed. Reload and retry.', { status: 409, code: 'NATIVE_CONVERSATION_SELECTION_CONFLICT' });
+        current.agents = { ...parsed, revision: expectedRevision + 1 };
+        if (selection) { current.selection = selection; current.selectionRevision += 1; }
         return current;
       }));
     },
@@ -464,6 +525,12 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       if (!isConversationId(id)) return native.loadMessages(id, directory, page);
       const manifest = get(id, directory);
       const result = await readConversationPage(native, manifest, page);
+      if (native.delegatedChildren) {
+        try {
+          const children = await native.delegatedChildren(id);
+          result.childSessions = [...result.childSessions, ...children.filter((child) => !result.childSessions.some((entry) => entry.id === child.id))];
+        } catch { result.metadataComplete = false; }
+      }
       if (get(id).historyRevision !== manifest.historyRevision) throw new NativeAgentError('Conversation history changed. Reload and retry.', { status: 409, code: 'NATIVE_HISTORY_CHANGED' });
       return result;
     },
@@ -501,22 +568,27 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         } } : {}) };
       }).filter((question) => !owned.has(question.sessionID));
     },
-    async replyQuestion(requestId, answers) {
+    async replyQuestion(requestId, answers, execution) {
       await load();
       const decision = questionOwners.get(requestId);
       const approves = answers.length === 1 && answers[0].length === 1 && answers[0][0] === 'build';
       if (decision && !(decision.plan && answers.length === 1 && answers[0].length === 1 && answers[0][0] === 'plan')) checkPolicy();
-      await native.replyQuestion(requestId, answers);
+      const result = await (execution ? native.replyQuestion(requestId, answers, execution) : native.replyQuestion(requestId, answers));
       if (decision?.plan && approves && store.peek(decision.id)) {
         const expected = JSON.stringify(decision.selection);
         publish(await update(decision.id, (current) => {
-          if (JSON.stringify(current.selection) === expected && current.selection.agent !== 'build') {
+          const applied = result?.execution ?? execution;
+          if (applied && current.selectionRevision === applied.expectedRevision) {
+            current.selection = { model: applied.model, variant: applied.variant, agent: 'build' };
+            current.selectionRevision += 1;
+          } else if (!applied && JSON.stringify(current.selection) === expected && current.selection.agent !== 'build') {
             current.selection = { ...current.selection, agent: 'build' };
             current.selectionRevision += 1;
           }
           return current;
         }));
       }
+      return result;
     },
     async abort(id) {
       await load();
@@ -529,6 +601,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     async updateSession(id, directory, patch) {
       await load();
       if (!isConversationId(id)) { assertStandalone(id); return native.updateSession(id, directory, patch); }
+      if (patch.title !== undefined || patch.archived) titles.cancel(id);
       if (patch.archived) preparing.get(id)?.abort(new Error('Conversation archived'));
       return locked(id, async () => {
         const manifest = get(id, directory);
@@ -549,6 +622,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     async revert(id, messageId, directory) {
       await load();
       if (!isConversationId(id)) { assertStandalone(id); return native.revert(id, messageId, directory); }
+      titles.cancel(id);
       preparing.get(id)?.abort(new Error('Conversation rewound'));
       return locked(id, async () => {
         const manifest = get(id, directory);
@@ -579,7 +653,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         const history = await historyOf(manifest);
         const child = await store.create({
           directory: manifest.directory, title: `${manifest.title} (fork)`, selection: manifest.selection,
-          segments: conversationPrefix(manifest, history, messageId), metadata: {}, manualTitle: true,
+          segments: conversationPrefix(manifest, history, messageId), agents: manifest.agents, metadata: {}, manualTitle: true,
         });
         index(child);
         return publish(child, true);
@@ -588,9 +662,13 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     async deleteSession(id, directory) {
       await load();
       if (!isConversationId(id)) { assertStandalone(id); return native.deleteSession(id, directory); }
+      await native.assertDelegatedDeletion?.(id);
       preparing.get(id)?.abort(new Error('Conversation deleted'));
       return locked(id, async () => {
         let manifest = get(id, directory);
+        if (!canDelete(manifest)) throw new NativeAgentError('A native source does not support deletion. Archive this conversation instead.', {
+          status: 409, code: 'NATIVE_CONVERSATION_DELETE_UNSUPPORTED',
+        });
         await stop(manifest);
         await retryUnavailable();
         if (store.unavailable().length > 0) throw new NativeAgentError('Unreadable conversation records prevent safe shared-history cleanup. Restore those records and retry.', {
@@ -599,6 +677,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         const sources = new Set(referencedSegments(manifest).map((segment) => segment.sessionId));
         for (const entry of await registry.listSessions()) if (entry.conversationId === id) sources.add(entry.sessionId);
         const retained = new Set(store.list().filter((entry) => entry.id !== id).flatMap((entry) => referencedSegments(entry).map((segment) => segment.sessionId)));
+        await native.removeDelegatedChildren?.(id, retained);
         manifest = await update(id, (current) => ({ ...current, deletion: current.deletion ?? [...sources].filter((source) => !retained.has(source)) }));
         for (const source of [...manifest.deletion]) {
           try { await native.deleteSession(source, manifest.directory); }
@@ -630,6 +709,9 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         const { manifest, segment } = await sourceFor(id, request.directory);
         checkPolicy();
         await assertQuiet(manifest);
+        if (segment && !lifecycles[segment.backend].compact) throw new NativeAgentError('This native source does not support manual compaction. Select and send to another backend before compacting.', {
+          status: 409, code: 'NATIVE_CONVERSATION_COMPACT_UNSUPPORTED',
+        });
         if (!segment) return;
         if (manifest.admission) throw unknownAdmission();
         if (manifest.cut || segment.ownerId !== id || segment.through !== undefined
@@ -689,7 +771,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       stopping = true;
       for (const controller of preparing.values()) controller.abort(new Error('Native conversations are shutting down'));
       const closing = native.shutdown();
-      await Promise.allSettled([closing, ...operations.values()]);
+      await Promise.allSettled([closing, titles.stop(), ...operations.values()]);
       await store.drain();
     },
   };
@@ -714,18 +796,60 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
 
   return {
     api,
-    async automaticPrompt(source, request, signal) {
+    delegationActivity(id) {
+      const manifest = store.peek(id);
+      if (manifest) publish(manifest);
+    },
+    async validatePlanExecution(source, directory, requestId, execution, handoff, approves = true) {
       await load();
       const owner = owners.get(source);
-      if (!owner) return native.prompt(source, request, signal);
-      return prompt(owner.id, { ...request, messageID: `ncv_u_${randomUUID()}` }, signal, source, request.messageID);
+      if (!owner) { assertStandalone(source); return false; }
+      checkPolicy();
+      const manifest = get(owner.id, directory);
+      if (activeOf(manifest)?.sessionId !== source) throw invalidRequestError('The original planning session is no longer active');
+      if (approves && execution.expectedRevision !== manifest.selectionRevision) throw new NativeAgentError('The conversation selection changed. Reload and retry.', {
+        status: 409, code: 'NATIVE_CONVERSATION_SELECTION_CONFLICT',
+      });
+      if (handoff) await assertQuiet(manifest, { requestId, allowedForeground: source });
+      return true;
+    },
+    async planExecutionConfirmed(source, directory, state) {
+      await load();
+      const owner = owners.get(source);
+      if (!owner) { assertStandalone(source); return null; }
+      let manifest = get(owner.id, directory);
+      try { await recoverAdmission(manifest, state.logicalMessageID); }
+      catch (error) { if (!(error instanceof NativeAgentError) || error.code !== 'NATIVE_PROMPT_OUTCOME_UNKNOWN') throw error; }
+      manifest = get(owner.id, directory);
+      return manifest.segments.some((segment) => segment.sends.some((send) => send.messageId === state.logicalMessageID && send.state === 'accepted'));
+    },
+    async automaticPrompt(source, request, signal, approval = null) {
+      await load();
+      const owner = owners.get(source);
+      if (!owner) { assertStandalone(source); await approval?.onDispatched?.(); return native.prompt(source, request, signal); }
+      return prompt(owner.id, { ...request, messageID: approval?.logicalMessageId ?? `ncv_u_${randomUUID()}` }, signal, source, request.messageID, approval);
+    },
+    publishInteraction(source, part) {
+      const owner = owners.get(source);
+      const manifest = owner && store.peek(owner.id);
+      const segment = manifest?.segments.find((entry) => entry.id === owner.segmentId);
+      if (!segment) return false;
+      emit(manifest, 'message.part.updated', {
+        sessionID: manifest.id,
+        part: projectConversationPart(manifest.id, { ...segment, timeOffset: segment.timeOffset ?? clocks.get(source) ?? 0 }, part),
+      });
+      return true;
     },
     publish(event) {
       const { payload } = event;
       const properties = payload.properties;
+      const questionId = payload.type === 'question.asked' ? properties.id
+        : payload.type === 'question.replied' || payload.type === 'question.rejected' ? properties.requestID : null;
+      const questionOwner = questionId ? questionOwners.get(questionId) : null;
       const source = properties.sessionID ?? properties.info?.sessionID ?? properties.part?.sessionID ?? properties.info?.id;
       if ((payload.type === 'session.created' || payload.type === 'session.updated') && properties.info?.parentID) {
-        const root = sourceRoot(properties.info.parentID);
+        const logicalParent = store.peek(properties.info.parentID);
+        const root = logicalParent ? activeOf(logicalParent)?.sessionId : sourceRoot(properties.info.parentID);
         if (owned.has(root)) {
           childRoots.set(properties.info.id, root);
           const owner = owners.get(root);
@@ -749,11 +873,17 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       const owner = owners.get(source);
       if (!owner) {
         if (!owned.has(source)) publishNativeEvent(event);
+        const parent = owners.get(childRoots.get(source));
+        const manifest = parent && store.peek(parent.id);
+        if (manifest && ['session.status', 'session.idle', 'session.background.updated', 'question.asked', 'question.replied', 'question.rejected'].includes(payload.type)) {
+          if (!hasLiveWork(manifest)) void reverts.afterTurn(manifest.id);
+          publish(manifest);
+        }
         return;
       }
       const manifest = store.peek(owner.id);
       const segment = manifest?.segments.find((entry) => entry.id === owner.segmentId);
-      if (!manifest || !segment || manifest.active !== segment.id) return;
+      if (!manifest || !segment || manifest.active !== segment.id && questionOwner?.id !== manifest.id) return;
       if (payload.type === 'question.asked') questionOwners.set(properties.id, { id: manifest.id, selection: manifest.selection, plan: properties.kind?.endsWith('-plan-exit') === true });
       if (payload.type === 'message.updated' && segment.timeOffset === undefined && !clocks.has(segment.sessionId)) {
         const offset = Math.max(0, segment.createdAt - properties.info.time.created);
@@ -766,11 +896,12 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       }
       const projection = { ...segment, timeOffset: segment.timeOffset ?? clocks.get(segment.sessionId) ?? 0 };
       if (payload.type === 'session.created' || payload.type === 'session.updated' || payload.type === 'session.deleted') {
-        if (payload.type === 'session.updated' && manifest.segments[0]?.id === segment.id && !manifest.manualTitle
+        if (payload.type === 'session.updated' && manifest.segments[0]?.id === segment.id && !manifest.manualTitle && !manifest.generatedTitle
           && properties.info.title && properties.info.title !== manifest.title
-          && properties.info.title !== 'New Codex session' && properties.info.title !== 'New Claude Code session') {
+          && properties.info.title !== 'New Codex session' && properties.info.title !== 'New Claude Code session'
+          && properties.info.title !== 'New Antigravity session') {
           void update(manifest.id, (current) => {
-            if (!current.manualTitle) current.title = properties.info.title;
+            if (!current.manualTitle && !current.generatedTitle) current.title = conversationTitlePreview([{ type: 'text', text: properties.info.title }]) || current.title;
             return current;
           }).then(publish).catch(() => undefined);
         }
@@ -791,7 +922,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       publishNativeEvent({ ...event, payload: { ...payload, properties: projected } });
       if (payload.type === 'session.idle') {
         if (!hasLiveWork(manifest)) void reverts.afterTurn(manifest.id);
-        void update(manifest.id, (current) => current).then(publish).catch(() => undefined);
+        void update(manifest.id, (current) => current).then((current) => { publish(current); void titles.generate(current.id); }).catch(() => undefined);
       } else if (payload.type === 'session.status' || payload.type === 'session.background.updated' || payload.type.startsWith('question.')) {
         if (!hasLiveWork(manifest) && !preparing.has(manifest.id)) void reverts.afterTurn(manifest.id);
         publish(manifest);
