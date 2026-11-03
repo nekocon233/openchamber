@@ -10,6 +10,7 @@ import { buildSessionRecord, buildUserMessage, buildAssistantMessage, buildTextP
 import { createQuestionRegistry } from '../questions.js';
 import { createNativePlanExecution } from '../plan-execution.js';
 import { NativeAgentError } from '../errors.js';
+import { JsonRpcError } from '../codex/rpc.js';
 import { createNativeConversations } from './runtime.js';
 import { NATIVE_BACKENDS as UI_BACKENDS, nativeProviderIdOf } from '@openchamber/ui/lib/native-agents/ids';
 import { nativeCapabilitiesSchema, nativeMessagePageSchema } from '@openchamber/ui/lib/native-agents/schemas';
@@ -307,7 +308,7 @@ describe('unified native backend contract', () => {
       readHistory: async () => h.sources.get(source).records,
       yieldSource: async () => h.complete(source),
       prompt: (...args) => h.controller.automaticPrompt(...args),
-      confirm: (...args) => h.controller.planExecutionConfirmed(...args),
+      confirm: (...args) => h.controller.planExecutionOutcome(...args),
       failed: (_directory, _id, error) => { throw error; },
     });
     cleanups.push(() => execution.shutdown());
@@ -491,6 +492,29 @@ describe('unified native backend contract', () => {
     await h.api.prompt(session.id, request);
     expect(h.requests).toHaveLength(1);
     expect((await h.history(session.id)).records[0].info.id).toBe(request.messageID);
+  });
+
+  it.each([
+    ['response', 'not-dispatched'], ['timeout', 'unknown'], ['transport', 'unknown'],
+  ])('reports a Codex %s to the approval owner as %s', async (kind, expected) => {
+    const h = await setup();
+    const session = await h.conversation('claude');
+    await h.send(session.id, 'claude');
+    const source = h.requests[0].id;
+    const callbacks = [];
+    const state = { logicalMessageID: `ncv_u_${randomUUID()}` };
+    h.refuse(new JsonRpcError('Scripted Codex refusal', -32600, kind));
+    await expect(h.controller.automaticPrompt(source, {
+      ...selection('codex'), directory: h.directory, messageID: `ncl_u_${randomUUID()}`,
+      parts: [], preserveSelection: true,
+    }, undefined, {
+      logicalMessageId: state.logicalMessageID,
+      onDispatched: async () => { callbacks.push('dispatched'); },
+      onRefused: async () => { callbacks.push('refused'); },
+    })).rejects.toThrow();
+    expect(callbacks).toEqual(expected === 'not-dispatched' ? ['dispatched', 'refused'] : ['dispatched']);
+    expect(await h.controller.planExecutionOutcome(source, h.directory, state)).toBe(expected);
+    if (expected === 'unknown') expect(h.operations.filter((entry) => entry.startsWith('delete:'))).toEqual([]);
   });
 
   it('rewinds and forks Antigravity history through logical retained boundaries', async () => {

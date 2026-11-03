@@ -24,6 +24,8 @@ export class NativeAgentsUnsupportedError extends Error {
 
 /** Stable server codes, translated by the surface that displays the failure. */
 export const nativeSessionActionErrorKey = (error: NativeAgentsRequestError, sessionId?: string | null): I18nKey | null => {
+  if (error.code === 'NATIVE_PLAN_EXECUTION_RETRYABLE') return 'chat.planExecution.retryable';
+  if (error.code === 'NATIVE_PLAN_EXECUTION_UNAVAILABLE') return 'chat.unified.historyUnavailable';
   if (sessionId && isUnifiedNativeSessionId(sessionId) && error.code === 'NATIVE_PROMPT_OUTCOME_UNKNOWN') return 'chat.unified.unconfirmed';
   if (error.code === 'NATIVE_CONVERSATION_MODEL_UNAVAILABLE') return 'chat.unified.modelUnavailable';
   if (error.code === 'NATIVE_CONVERSATION_SELECTION_CONFLICT') return 'chat.unified.selectionFailed';

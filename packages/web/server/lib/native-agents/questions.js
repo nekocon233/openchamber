@@ -25,6 +25,15 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined, e
   /** @type {Map<string, { request: QuestionRequest, directory: string, phase: 'open' | 'replying' | 'transferring', transferred: boolean, signal?: AbortSignal, onReply?: (outcome: QuestionOutcome) => Promise<void>, settle: (outcome: QuestionOutcome) => void }>} */
   const pending = new Map();
 
+  const updateExecutionPending = (requestId, executionPending) => {
+    const entry = pending.get(requestId);
+    if (!entry) return false;
+    if (executionPending) entry.request.executionPending = executionPending;
+    else delete entry.request.executionPending;
+    publish(entry.directory, { type: 'question.asked', properties: entry.request });
+    return true;
+  };
+
   const settle = (requestId, outcome) => {
     const entry = pending.get(requestId);
     if (!entry) throw questionNotFoundError(requestId);
@@ -56,8 +65,7 @@ export const createQuestionRegistry = ({ publish, onSettled = () => undefined, e
         isCurrent: () => pending.get(requestId) === entry,
         pending: (executionPending) => {
           if (pending.get(requestId) !== entry) return;
-          entry.request.executionPending = executionPending;
-          publish(entry.directory, { type: 'question.asked', properties: entry.request });
+          updateExecutionPending(requestId, executionPending);
         },
       })
       : entry.onReply;

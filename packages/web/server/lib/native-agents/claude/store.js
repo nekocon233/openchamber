@@ -179,6 +179,21 @@ const titleOf = (info) => {
   return title.length > MAX_TITLE_LENGTH ? `${title.slice(0, MAX_TITLE_LENGTH - 1)}…` : title;
 };
 
+// A transcript can hold CLI state records and no conversation, left behind by
+// a run that exited before writing a message. Nothing can be opened from it,
+// so it stays out of the list. The CLI stamps the first entry with a time,
+// which is where createdAt comes from, so the read that proves a transcript
+// empty runs only for the sessions the SDK could not date. An unreadable
+// transcript stays listed: a failed read is not an empty one.
+const transcriptHasConversation = async (sdk, info, directory) => {
+  if (info.createdAt !== undefined) return true;
+  try {
+    return (await sdk.getSessionMessages(info.sessionId, { dir: directory, limit: 1 })).length > 0;
+  } catch {
+    return true;
+  }
+};
+
 /**
  * @param {object} options
  * @param {() => Promise<import('@anthropic-ai/claude-agent-sdk')>} options.loadSdk
@@ -244,7 +259,13 @@ export const createClaudeSessionStore = ({ loadSdk, registry, connections = null
       const info = sessionInfoSchema.safeParse(raw);
       if (info.success) infos.set(info.data.sessionId, info.data);
     }
-    const records = Array.from(infos.values(), (info) => sessionRecord(info, directory ?? info.cwd ?? registryByUuid.get(info.sessionId)?.directory, registryByUuid.get(info.sessionId)));
+    const recordFor = async (info) => {
+      const target = directory ?? info.cwd ?? registryByUuid.get(info.sessionId)?.directory;
+      return await transcriptHasConversation(sdk, info, target)
+        ? sessionRecord(info, target, registryByUuid.get(info.sessionId))
+        : null;
+    };
+    const records = (await Promise.all(Array.from(infos.values(), recordFor))).filter((record) => record !== null);
     const listed = new Set(records.map((record) => record.id));
     for (const entry of unconfirmed) {
       if (!listed.has(entry.sessionId)) records.push(unconfirmedSessionRecord(entry));

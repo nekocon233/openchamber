@@ -32,6 +32,15 @@ const FULL_ACCESS_SANDBOX = 'danger-full-access';
 const DEFAULT_CODEX_PROVIDER = 'openai';
 const TURN_NOT_FOUND = /^turn not found/;
 
+export const codexThreadToolConfig = (tools) => {
+  if (!tools) return undefined;
+  const config = { 'features.multi_agent': false };
+  if (!tools.child) config['mcp_servers.openchamber_subagents'] = {
+    command: tools.command, args: tools.args, env: tools.env, tool_timeout_sec: 3600,
+  };
+  return config;
+};
+
 const turnParams = z.object({
   threadId: z.string(),
   turn: z.object({
@@ -192,11 +201,6 @@ export const createCodexLiveThreads = ({
   const ensureLoaded = async (live) => {
     if (live.loaded) return;
     const tools = toolConfiguration(live.sessionId);
-    const overrides = {};
-    if (tools) {
-      overrides['features.multi_agent'] = false;
-      if (!tools.child) overrides['mcp_servers.openchamber_subagents'] = { command: tools.command, args: tools.args, env: tools.env, tool_timeout_sec: 3600 };
-    }
     const resume = {
       threadId: live.threadId,
       excludeTurns: true,
@@ -205,11 +209,12 @@ export const createCodexLiveThreads = ({
     };
     const instructions = await readGlobalInstructions();
     if (instructions) resume.developerInstructions = instructions;
-    if (tools) resume.config = overrides;
+    if (tools) resume.config = codexThreadToolConfig(tools);
     const resumed = resumedThread.safeParse(await request('thread/resume', resume));
     live.serviceTier = resumed.success ? resumed.data.serviceTier ?? null : null;
     live.modelProvider = resumed.success ? resumed.data.modelProvider ?? null : null;
     live.loaded = true;
+    live.toolKey = tools?.key ?? '';
   };
 
   // A turn cannot choose its provider; only the thread's settings can. Codex
@@ -660,10 +665,11 @@ export const createCodexLiveThreads = ({
      * @param {string} directory
      * @param {string | null} [serviceTier] the tier the start reported
      */
-    threadStarted(sessionId, directory, serviceTier = null) {
+    threadStarted(sessionId, directory, serviceTier = null, toolKey = '') {
       const live = liveThread(sessionId, directory);
       live.loaded = true;
       live.serviceTier = serviceTier;
+      live.toolKey = toolKey;
     },
 
     async abort(sessionId) {

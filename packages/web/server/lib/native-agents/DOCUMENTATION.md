@@ -45,6 +45,13 @@ delegation. The runtime also rejects nested requests, so a prompt alone cannot
 lift that boundary. The helper requires Node.js and uses only Node built-ins;
 Electron stages it as `native-delegation-mcp.mjs`.
 
+New Codex sources capture their subagent or leaf tool configuration before
+`thread/start`. Launch credentials bind to the returned native source only
+after its registry ownership is saved, and callbacks remain unavailable until
+that source's prompt captures its turn. The live thread records the tool key
+actually used at startup, so its first turn never unloads an empty history to
+apply the same configuration. Failed launches revoke the staged credentials.
+
 The helper authenticates to an ephemeral IPv4 loopback endpoint using a
 process-only bearer token. The token binds the source session, native message,
 directory and captured model; callers cannot supply endpoints or credentials.
@@ -197,6 +204,11 @@ read. Its internal native sources are excluded from the backend root lists.
 - Claude: `listSessions({ includeProgrammatic: false })`, which matches the
   terminal's `/resume` picker, plus sessions the registry holds. SDK-created
   sessions of other clients, such as the old OpenCode plugin, stay hidden.
+  A transcript can hold CLI state records and no conversation, from a run
+  that exited before writing a message; nothing can be opened from it, so it
+  stays out of the list. The store proves that with the first message, read
+  only when the SDK reports no creation time, and keeps the session when the
+  read fails.
 - Codex: `thread/list` with `sourceKinds: ['cli', 'vscode']` and the
   directory as `cwd`. The old plugin's threads stay hidden: its SDK path is
   the `exec` source, never requested, and its app-server client has the
@@ -519,6 +531,10 @@ Codex (`codex/live.js`): turns on the shared app-server.
 - The app-server unloads a thread once its turn ends, so a prompt resumes the
   thread first (`thread/resume` with approval policy `never` and full access),
   except a thread the runtime just started, which has no rollout to resume.
+  Tool initialization is described under Agent combinations and cross-CLI
+  subagents above.
+  JSON-RPC response errors are definite refusals. Transport failures and
+  response timeouts retain uncertain admission until history confirms it.
 - A prompt starts a turn with the message id as `clientUserMessageId`, the
   model and effort, and `collaborationMode` `default` or `plan` with Codex's own
   instructions (`experimentalApi` is declared at initialize). A prompt sent

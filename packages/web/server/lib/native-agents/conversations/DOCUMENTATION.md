@@ -101,6 +101,14 @@ questions, children and background work retain their protection. Acceptance
 updates the next model and Build selection only at the captured revision.
 An application-owned answer can settle on a retained planning source after
 backend handoff; other events from inactive sources stay excluded.
+The conversation send owner reports a completed rollback to the plan approval
+owner, including numeric JSON-RPC refusals. The approval then reopens for a
+different model or effort. Timeout and disconnect failures retain the target
+source and admission instead. Confirmation distinguishes an accepted send,
+an admission that was rolled back, and an unresolved result. Restart recovery
+reopens a legacy dispatch only when the planning source is still active, its
+logical send and admission are absent, and no orphan source remains owned by
+the conversation. It never dispatches the recovered approval automatically.
 Antigravity completed-turn question and plan continuations enter through
 `automaticPrompt`, keeping source identity and logical send admission with this
 conversation. Execution metadata also carries `unifiedBackends`, allowing the

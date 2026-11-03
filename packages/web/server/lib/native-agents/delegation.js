@@ -108,7 +108,7 @@ export const createNativeDelegation = ({ dataDir, registry, native, createSessio
   };
   const assertActive = (context) => {
     checkPolicy();
-    if (closed || context.revoked) throw failure('The subagent turn is no longer active', 'NATIVE_DELEGATION_INTERRUPTED');
+    if (closed || context.revoked || !context.messageID) throw failure('The subagent turn is no longer active', 'NATIVE_DELEGATION_INTERRUPTED');
   };
   const performDispatch = async (context, input) => {
     const agent = context.agent;
@@ -136,6 +136,7 @@ export const createNativeDelegation = ({ dataDir, registry, native, createSessio
     try {
       assertActive(context);
       const child = await createSession({ backend, directory: context.directory, title: call.description || 'Subagent' }, {
+        toolLaunch: { child: true },
         beforePublish: async (record) => {
           job = await save({ ...job, childID: record.id, messageID: newNativeClientUserMessageId(record.id) });
           await registry.updateSession(record.id, { delegation: { parentID: job.parentID, jobID: job.id } });
@@ -214,6 +215,18 @@ export const createNativeDelegation = ({ dataDir, registry, native, createSessio
     })().finally(() => { opening = undefined; });
     return opening;
   };
+  const prepareTools = async (selection, child, held) => {
+    const node = await resolveNode();
+    if (!node) throw failure('Install Node.js to use cross-CLI subagents');
+    await open();
+    const token = held?.token ?? randomBytes(32).toString('hex');
+    const epoch = held?.epoch ?? randomUUID();
+    return { token, epoch, tools: {
+      child, key: `${epoch}:${child}:${selection ? JSON.stringify(selection) : ''}`,
+      command: node, args: [process.env.OPENCHAMBER_DELEGATION_MCP_PATH ?? fileURLToPath(new URL('./delegation-mcp.mjs', import.meta.url))],
+      env: { OPENCHAMBER_DELEGATION_URL: origin, OPENCHAMBER_DELEGATION_TOKEN: token },
+    } };
+  };
   return {
     async initialize() {
       await load();
@@ -250,6 +263,31 @@ export const createNativeDelegation = ({ dataDir, registry, native, createSessio
       }
     },
     validateModel,
+    async prepareLaunch({ directory, subagentModel = null, child = false }) {
+      if (!subagentModel && !child) return null;
+      checkPolicy();
+      if (subagentModel) await validateModel(subagentModel);
+      const context = { ...await prepareTools(subagentModel, child), directory, selection: subagentModel,
+        child, sourceID: null, parentID: null, messageID: null, revoked: false };
+      return {
+        tools: context.tools,
+        async bind(sourceID) {
+          checkPolicy();
+          if (closed || context.revoked) throw failure('The subagent launch was cancelled', 'NATIVE_DELEGATION_INTERRUPTED');
+          const entry = await registry.getSession(sourceID);
+          checkPolicy();
+          if (closed || context.revoked) throw failure('The subagent launch was cancelled', 'NATIVE_DELEGATION_INTERRUPTED');
+          if (!entry || entry.directory !== directory || Boolean(entry.delegation) !== child) throw invalidRequestError('The subagent launch does not match its native source');
+          context.sourceID = sourceID;
+          context.parentID = entry.conversationId ?? sourceID;
+          contexts.set(sourceID, context);
+        },
+        cancel() {
+          context.revoked = true;
+          if (contexts.get(context.sourceID) === context) contexts.delete(context.sourceID);
+        },
+      };
+    },
     async prepare(sourceID, request) {
       let entry = await registry.getSession(sourceID);
       const selection = request.subagentModel !== undefined ? request.subagentModel : entry?.agentConfiguration?.subagent;
@@ -269,16 +307,10 @@ export const createNativeDelegation = ({ dataDir, registry, native, createSessio
       if (!selection && !entry?.delegation) { contexts.delete(sourceID); return null; }
       checkPolicy();
       if (selection) await validateModel(selection);
-      const node = await resolveNode();
-      if (!node) throw failure('Install Node.js to use cross-CLI subagents');
-      await open();
-      const context = { sourceID, parentID: entry.conversationId ?? sourceID, directory: request.directory,
-        messageID: request.messageID, agent: request.agent, selection, child: Boolean(entry.delegation), token: held?.token ?? randomBytes(32).toString('hex'), epoch: held?.epoch ?? randomUUID() };
+      const child = Boolean(entry.delegation);
+      const context = { ...await prepareTools(selection, child, held), sourceID, parentID: entry.conversationId ?? sourceID, directory: request.directory,
+        messageID: request.messageID, agent: request.agent, selection, child };
       contexts.set(sourceID, context);
-      context.tools = { child: context.child, key: `${context.epoch}:${context.child}:${selection ? JSON.stringify(selection) : ''}`,
-        command: node, args: [process.env.OPENCHAMBER_DELEGATION_MCP_PATH ?? fileURLToPath(new URL('./delegation-mcp.mjs', import.meta.url))],
-        env: { OPENCHAMBER_DELEGATION_URL: origin, OPENCHAMBER_DELEGATION_TOKEN: context.token },
-      };
       return context.tools;
     },
     observe(event) {

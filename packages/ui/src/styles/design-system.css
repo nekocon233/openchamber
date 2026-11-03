@@ -322,6 +322,15 @@
     color: var(--foreground);
   }
 
+  /* The session column paints its sticky section bands with the column's own
+     surface. The framed editor card swaps that surface for the canvas while
+     keeping the same text context as the sidebar band it replaces. */
+  .oc-session-sidebar-surface {
+    background-color: var(--oc-session-sidebar-surface, var(--sidebar));
+    --foreground: var(--surface-foreground);
+    color: var(--foreground);
+  }
+
   .bg-interactive-selection {
     --foreground: var(--interactive-selection-foreground);
     color: var(--foreground);

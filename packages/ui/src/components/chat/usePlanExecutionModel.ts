@@ -52,7 +52,7 @@ export const usePlanExecutionModel = (form: FormRequest, composer?: PlanComposer
     variant: hasComposerModel ? composer?.variant : savedVariant === null ? undefined : savedVariant ?? record?.variant,
   } : undefined;
   const pending = metadata?.openchamberPlanExecutionPending;
-  const value = pending ?? (local.key === key ? local.value : drafts.get(key)) ?? nativeAgentConfigurationOf(configuration)?.execution ?? current;
+  const value = (local.key === key ? local.value : drafts.get(key)) ?? pending ?? nativeAgentConfigurationOf(configuration)?.execution ?? current;
   const allowed = (providerId: string): boolean => {
     if (blocked) return false;
     if (!isProviderPickableForSession(form.sessionID, providerId)) return false;
@@ -65,9 +65,20 @@ export const usePlanExecutionModel = (form: FormRequest, composer?: PlanComposer
     model.id === value.model.modelID || model.nativeAliases?.some((alias) => alias.id === value.model.modelID)
   )) : undefined;
   const available = Boolean(model);
+  const variants = listModelVariantIds(model?.variants);
+  const effortAvailable = !value?.variant || variants.includes(value.variant);
+  const saveDraft = (next: NativePlanExecutionChoice) => {
+    drafts.delete(key);
+    drafts.set(key, next);
+    if (drafts.size > 50) {
+      const oldest = drafts.keys().next().value;
+      if (oldest !== undefined) drafts.delete(oldest);
+    }
+    setLocal({ key, value: next });
+  };
   const choose = (providerId: string, modelId: string) => {
     const target = pickable.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);
-    if (!target || pending) return;
+    if (!target) return;
     const variants = listModelVariantIds(target.variants);
     const preference = useSelectionStore.getState().getAgentModelVariantForSession(form.sessionID, 'build', providerId, modelId);
     const configured = configuredVariantForModel({ defaultModel, defaultVariant, providerId, modelId, model: target });
@@ -78,19 +89,16 @@ export const usePlanExecutionModel = (form: FormRequest, composer?: PlanComposer
       : composerModel ? current?.variant ?? (aliasVariant && variants.includes(aliasVariant) ? aliasVariant : undefined)
       : preference === null ? undefined : preference && variants.includes(preference) ? preference
         : configured && variants.includes(configured) ? configured : preferredModelVariant(variants);
-    const next = { model: { providerID: providerId, modelID: modelId }, variant };
-    drafts.delete(key);
-    drafts.set(key, next);
-    if (drafts.size > 50) {
-      const oldest = drafts.keys().next().value;
-      if (oldest !== undefined) drafts.delete(oldest);
-    }
-    setLocal({ key, value: next });
+    saveDraft({ model: { providerID: providerId, modelID: modelId }, variant: variant && variants.includes(variant) ? variant : undefined });
+  };
+  const chooseVariant = (variant: string | undefined) => {
+    if (!value || !available || blocked || variant !== undefined && !variants.includes(variant)) return;
+    saveDraft({ model: value.model, variant });
   };
   return {
-    enabled, value, model, providers: pickable, available, blocked, pending: Boolean(pending), choose,
+    enabled, value, model, providers: pickable, available, variants, effortAvailable, blocked, pending: Boolean(pending), choose, chooseVariant,
     approving: (answer: FormAnswer) => enabled && isApproval(answer),
-    canApprove: !blocked && Boolean(value && (available || pending)),
+    canApprove: !blocked && Boolean(value && (available && effortAvailable || pending)),
     executionFor: (answer: FormAnswer): NativePlanExecutionChoice | undefined => {
       if (!enabled || !isApproval(answer) || !value) return undefined;
       if (pending) return pending;

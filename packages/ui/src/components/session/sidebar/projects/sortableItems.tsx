@@ -307,7 +307,7 @@ export const SortableProjectItem: React.FC<SortableProjectItemProps> = ({
                 <CrossfadeZoneHeader
                   className={cn(
                     '-ms-2.5 -me-2 text-start group/project select-none',
-                    stickyZoneHeaders && 'sticky top-0 z-20 bg-sidebar',
+                    stickyZoneHeaders && 'sticky top-0 z-20 oc-session-sidebar-surface',
                   )}
                   data-sidebar-sticky-header={stickyZoneHeaders ? 'true' : undefined}
                   onContextMenu={(event) => {

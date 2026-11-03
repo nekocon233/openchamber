@@ -59,7 +59,7 @@ describe('Codex JSON-RPC connection', () => {
     });
 
     await expect(connection.request('thread/read', { threadId: 't' })).resolves.toEqual({ thread: { id: 't' } });
-    await expect(connection.request('thread/delete', {})).rejects.toMatchObject({ code: -32600, message: 'nope' });
+    await expect(connection.request('thread/delete', {})).rejects.toMatchObject({ code: -32600, message: 'nope', kind: 'response' });
 
     child.send({ method: 'turn/started', params: { threadId: 't' } });
     child.send({ id: 'server-1', method: 'item/tool/requestUserInput', params: {} });
@@ -78,7 +78,15 @@ describe('Codex JSON-RPC connection', () => {
     child.stdout.end();
     await expect(pending).rejects.toBeInstanceOf(JsonRpcError);
     expect(closedWith).toBeInstanceOf(JsonRpcError);
+    expect(closedWith.kind).toBe('transport');
     expect(connection.isClosed()).toBe(true);
+  });
+
+  it('keeps a response timeout distinct from a backend rejection', async () => {
+    const child = createFakeChild(() => {});
+    const connection = createJsonRpcConnection({ child, onNotification() {}, onRequest: async () => ({}), onClose() {}, requestTimeoutMs: 5 });
+    await expect(connection.request('turn/start')).rejects.toMatchObject({ code: -32001, kind: 'timeout' });
+    connection.close(new Error('Fixture finished'));
   });
 });
 

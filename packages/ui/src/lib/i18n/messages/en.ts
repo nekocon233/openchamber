@@ -39,6 +39,10 @@ export const dict = {
   "agents.combinations.reset": "Reset",
 
   "chat.planExecution.model": "Execution model",
+  "chat.planExecution.effort": "Thinking effort",
+  "chat.planExecution.effortUnavailable": "This model no longer supports the selected thinking effort. Choose another effort.",
+  "chat.planExecution.unconfirmed": "Submit to check the previous execution. If it did not start, retry with your new selection.",
+  "chat.planExecution.retryable": "The previous execution did not start. Approve the plan again with your selected model and thinking effort.",
   "chat.nativeTranscriptTruncated": "Antigravity saved only part of this message.",
   "chat.workStatus.subagent.unknown": "Status unknown",
   "chat.toolPart.nativeOutputTruncated": "Antigravity saved only part of this tool output.",

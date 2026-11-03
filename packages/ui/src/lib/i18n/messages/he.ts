@@ -38,6 +38,10 @@ export const dict = {
   "agents.combinations.reset": "איפוס",
 
   "chat.planExecution.model": "מודל לביצוע",
+  "chat.planExecution.effort": "רמת חשיבה",
+  "chat.planExecution.effortUnavailable": "המודל הזה כבר לא תומך ברמת החשיבה שנבחרה. יש לבחור רמה אחרת.",
+  "chat.planExecution.unconfirmed": "יש לשלוח כדי לבדוק את הביצוע הקודם. אם הוא לא התחיל, אפשר לנסות שוב עם הבחירה החדשה.",
+  "chat.planExecution.retryable": "הביצוע הקודם לא התחיל. יש לאשר שוב את התוכנית עם המודל ורמת החשיבה שנבחרו.",
   "chat.nativeTranscriptTruncated": "Antigravity שמר רק חלק מההודעה הזו.",
   "chat.workStatus.subagent.unknown": "המצב לא ידוע",
   "chat.toolPart.nativeOutputTruncated": "Antigravity שמר רק חלק מהפלט של הכלי הזה.",

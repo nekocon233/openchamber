@@ -40,6 +40,10 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.reset": "초기화",
 
   "chat.planExecution.model": "실행 모델",
+  "chat.planExecution.effort": "추론 강도",
+  "chat.planExecution.effortUnavailable": "이 모델은 선택한 추론 강도를 더 이상 지원하지 않습니다. 다른 강도를 선택하세요.",
+  "chat.planExecution.unconfirmed": "제출하여 이전 실행 결과를 확인하세요. 실행이 시작되지 않았다면 새 설정으로 다시 시도하세요.",
+  "chat.planExecution.retryable": "이전 실행이 시작되지 않았습니다. 선택한 모델과 추론 강도로 계획을 다시 승인하세요.",
   "chat.nativeTranscriptTruncated": "Antigravity가 이 메시지의 일부만 저장했습니다.",
   "chat.workStatus.subagent.unknown": "상태 알 수 없음",
   "chat.toolPart.nativeOutputTruncated": "Antigravity가 이 도구 출력의 일부만 저장했습니다.",

@@ -19,9 +19,11 @@ interface SidebarProps {
     topBar?: React.ReactNode;
     /** The collapsed sidebar shown over the chat on hover (`useSidebarPeek`). */
     peek?: SidebarPeek;
+    /** Draws the column as a framed card like the editor layout's other panels. */
+    framed?: boolean;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, className, topBar, peek, overlay = false }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, className, topBar, peek, overlay = false, framed = false }) => {
     const { t, direction } = useI18n();
     const sidebarWidth = useUIStore((state) => state.sidebarWidth);
     const setSidebarWidth = useUIStore((state) => state.setSidebarWidth);
@@ -177,15 +179,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
             data-left-sidebar=""
             data-workspace-overlay={overlay || undefined}
             className={cn(
-                'flex h-full border-e border-border',
-                overlay ? 'absolute inset-s-0 inset-y-0 z-40 shadow-xl' : 'relative',
+                'flex h-full',
+                framed ? 'isolate bg-background' : 'border-e border-border bg-sidebar',
+                overlay ? 'absolute inset-s-0 inset-y-0 z-40' : 'relative',
+                overlay && !framed && 'shadow-xl',
                 !peeking && 'overflow-hidden',
                 // In the class, not the inline style: an inline transition
                 // outranked `motion-reduce:transition-none`, so the sidebar
                 // still animated for readers who asked for reduced motion.
                 isResizing ? 'transition-none' : 'transition-[width,min-width,max-width] motion-reduce:transition-none',
-                'bg-sidebar',
-                !isOpen && 'border-e-0',
+                !isOpen && !framed && 'border-e-0',
                 className,
             )}
             style={{
@@ -198,7 +201,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
                 transitionTimingFunction: LAYOUT_ANIMATION_EASING,
             }}
         >
-            {isOpen && (
+            {!framed && isOpen && (
                 <div
                     className={cn(
                         'pointer-events-none absolute inset-0 z-30',
@@ -210,9 +213,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
             {isOpen && (
                 <div
                     className={cn(
-                        'absolute top-0 z-20 h-full w-[3px] cursor-col-resize hover:bg-[var(--interactive-border)]/80 transition-colors',
-                        'inset-e-0',
-                        isResizing && 'bg-[var(--interactive-border)]'
+                        'absolute z-20 cursor-col-resize transition-colors',
+                        framed ? 'top-0 bottom-1 inset-e-0 w-[5px]' : 'top-0 h-full inset-e-0 w-[3px]',
+                        !framed && 'hover:bg-[var(--interactive-border)]/80',
+                        !framed && isResizing && 'bg-[var(--interactive-border)]'
                     )}
                     onPointerDown={handlePointerDown}
                     onPointerMove={handlePointerMove}
@@ -227,7 +231,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
                 ref={peek?.overlayRef}
                 data-sidebar-peek={peeking ? peekState : undefined}
                 className={cn(
-                    'flex h-full shrink-0 flex-col',
+                    'flex shrink-0 flex-col',
+                    framed
+                        ? 'ms-1 me-1 mb-1 h-[calc(100%-0.25rem)] oc-panel-edge overflow-clip rounded-[10px] bg-background'
+                        : 'h-full',
                     peeking
                         // Above the chat, the header and an expanded zone (z-20);
                         // under the titlebar controls (z-30).
@@ -237,11 +244,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, children, cl
                     !isOpen && !peeking && 'pointer-events-none select-none opacity-0'
                 )}
                 style={{
-                    width: 'var(--oc-left-sidebar-width)',
+                    width: framed ? 'calc(100% - 0.5rem)' : 'var(--oc-left-sidebar-width)',
                     transitionDuration: `${layoutAnimationMs}ms`,
-                    overflowX: 'hidden',
+                    ...(framed ? {} : { overflowX: 'hidden' }),
                     contentVisibility: contentSkipped && !peeking ? 'hidden' : undefined,
                     animation: peekAnimation,
+                    // Sticky headers paint this surface to cover the rows
+                    // scrolling under them: the classic column's own colour,
+                    // the framed card's canvas colour in editor layout.
+                    ['--oc-session-sidebar-surface' as string]: framed ? 'var(--background)' : 'var(--sidebar)',
                     // SAFETY: a CSS custom property, which `CSSProperties` has no key for.
                     ['--oc-peek-offset' as string]: direction === 'rtl' ? '100%' : '-100%',
                 }}

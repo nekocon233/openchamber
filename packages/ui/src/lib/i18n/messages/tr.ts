@@ -39,6 +39,10 @@ export const dict = {
   "agents.combinations.reset": "Sıfırla",
 
   "chat.planExecution.model": "Yürütme modeli",
+  "chat.planExecution.effort": "Akıl yürütme düzeyi",
+  "chat.planExecution.effortUnavailable": "Bu model artık seçilen akıl yürütme düzeyini desteklemiyor. Başka bir düzey seçin.",
+  "chat.planExecution.unconfirmed": "Önceki yürütmeyi kontrol etmek için gönderin. Başlamadıysa yeni seçiminizle tekrar deneyin.",
+  "chat.planExecution.retryable": "Önceki yürütme başlamadı. Planı seçtiğiniz model ve akıl yürütme düzeyiyle yeniden onaylayın.",
   "chat.nativeTranscriptTruncated": "Antigravity bu mesajın yalnızca bir bölümünü kaydetti.",
   "chat.workStatus.subagent.unknown": "Durum bilinmiyor",
   "chat.toolPart.nativeOutputTruncated": "Antigravity bu araç çıktısının yalnızca bir bölümünü kaydetti.",

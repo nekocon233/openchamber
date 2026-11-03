@@ -19,7 +19,7 @@ const CONFIG = { model: 'gpt-5.5', effort: 'low', fast: false, mode: 'default' }
 
 const notifications = fixture('gpt55-tools.notifications.json');
 
-const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, onPlanReady, onSessionClosed, instructions = null, resumeResponse = {}, now } = {}) => {
+const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, onPlanReady, onSessionClosed, instructions = null, resumeResponse = {}, now, toolConfiguration } = {}) => {
   const events = [];
   const requests = [];
   const publisher = createNativeEventPublisher({ publishNativeEvent: (event) => events.push(event) });
@@ -37,7 +37,7 @@ const createHarness = ({ replay = true, failures = {}, onIdle, onTurnFinished, o
     }
     return { turn: { id: TURN_ID, status: 'inProgress', items: [] } };
   };
-  live = createCodexLiveThreads({ request, publisher, questions, onIdle, onTurnFinished, onPlanReady, onSessionClosed, readGlobalInstructions: async () => instructions, now });
+  live = createCodexLiveThreads({ request, publisher, questions, onIdle, onTurnFinished, onPlanReady, onSessionClosed, readGlobalInstructions: async () => instructions, now, toolConfiguration });
   return { live, events, requests, questions };
 };
 
@@ -507,6 +507,17 @@ describe('Codex live threads', () => {
     live.threadStarted(SESSION_ID, DIRECTORY);
     await sendPrompt(live);
     expect(requests.map((entry) => entry.method)).toEqual(['turn/start']);
+  });
+
+  it('starts a new thread with its captured subagent tools without unloading its empty history', async () => {
+    const tools = { key: 'captured-tools', child: false, command: '/usr/bin/node', args: [], env: {} };
+    const { live, requests } = createHarness({ replay: false, toolConfiguration: () => tools,
+      failures: { 'thread/resume': new JsonRpcError('no rollout found for thread id', -32600) } });
+    live.threadStarted(SESSION_ID, DIRECTORY, null, tools.key);
+    await sendPrompt(live);
+    expect(requests.map((entry) => entry.method)).toEqual(['turn/start']);
+    live.handleNotification('turn/completed', { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed' } });
+    live.handleNotification('thread/status/changed', { threadId: THREAD_ID, status: { type: 'notLoaded' } });
   });
 
   it('steers a prompt sent while the turn runs, and resumes again after the thread unloads', async () => {

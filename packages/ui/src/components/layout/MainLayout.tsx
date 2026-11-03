@@ -88,6 +88,7 @@ const SessionsSidebar = React.memo<{ isMobile: boolean; editor?: boolean }>(({ i
             isOpen={isSidebarOpen}
             isMobile={isMobile}
             overlay={editor && floating}
+            framed={editor}
             className="border-border"
             topBar={editor ? undefined : <SidebarTopBar />}
             peek={peek}

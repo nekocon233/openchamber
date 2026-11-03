@@ -14,6 +14,11 @@ const OPENCHAMBER_UUID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const TASK_TOOL_USE = 'toolu_01VAnMEDHHeuo92ZtfbaNtwQ';
 const REWIND_UUID = '33333333-3333-4333-8333-333333333333';
 const POISON_UUID = '66666666-6666-4666-8666-666666666666';
+// A transcript the CLI left with state records only: no entry to date, no message.
+const GHOST_UUID = '77777777-7777-4777-8777-777777777777';
+// No createdAt, but the first page proves it has a conversation.
+const UNDATED_UUID = '88888888-8888-4888-8888-888888888888';
+const UNREADABLE_UUID = '99999999-9999-4999-8999-999999999999';
 // A chain holding a real Tool Search reference, a text mention of the type
 // string (not a block), and a sidechain reference a root resume never replays.
 const poisonedChain = [
@@ -63,6 +68,11 @@ const createHarness = async ({ importFails = false, replayChain = poisonedChain,
     [TERMINAL_UUID, { sessionId: TERMINAL_UUID, summary: 'Terminal work', lastModified: 2000, fileSize: 10, createdAt: 1000, customTitle: 'Terminal work' }],
     [OPENCHAMBER_UUID, { sessionId: OPENCHAMBER_UUID, summary: 'Tool workflow', lastModified: 3000, fileSize: 24802, createdAt: 2500 }],
   ]);
+  const messages = new Map([
+    [OPENCHAMBER_UUID, fixture('haiku-tools.session-messages.json')],
+    [REWIND_UUID, rewindChain],
+    [POISON_UUID, replayChain],
+  ]);
   const subagentMessages = [{
     type: 'user',
     uuid: 'sub-1',
@@ -72,13 +82,16 @@ const createHarness = async ({ importFails = false, replayChain = poisonedChain,
     message: { role: 'user', content: 'Run wc -l notes.txt' },
   }];
   const sdk = {
-    listSessions: async ({ includeProgrammatic }) => (includeProgrammatic === false ? [infos.get(TERMINAL_UUID)] : [...infos.values()]),
+    listSessions: async ({ includeProgrammatic }) => (
+      includeProgrammatic === false
+        ? [...infos.values()].filter((info) => info.sessionId !== OPENCHAMBER_UUID)
+        : [...infos.values()]
+    ),
     getSessionInfo: async (sessionId) => infos.get(sessionId),
     getSessionMessages: async (sessionId) => {
       calls.getSessionMessages += 1;
-      if (sessionId === REWIND_UUID) return rewindChain;
-      if (sessionId === POISON_UUID) return replayChain;
-      return sessionId === OPENCHAMBER_UUID ? fixture('haiku-tools.session-messages.json') : [];
+      if (sessionId === UNREADABLE_UUID) throw new Error('transcript unreadable');
+      return messages.get(sessionId) ?? [];
     },
     forkSession: async (sessionId, options) => {
       calls.forks.push({ sessionId, options });
@@ -93,7 +106,7 @@ const createHarness = async ({ importFails = false, replayChain = poisonedChain,
     },
   };
   const store = createClaudeSessionStore({ loadSdk: async () => sdk, registry, connections });
-  return { store, infos, calls, registry, allowImports: () => { importFails = false; } };
+  return { store, infos, calls, registry, messages, allowImports: () => { importFails = false; } };
 };
 
 describe('Claude session store', () => {
@@ -144,6 +157,28 @@ describe('Claude session store', () => {
       [`ncl_${OPENCHAMBER_UUID}`, 'Tool workflow'],
     ]);
     expect(sessions[0]).toMatchObject({ directory: DIRECTORY, time: { created: 1000, updated: 2000 } });
+  });
+
+  it('leaves a transcript with no conversation out of the list', async () => {
+    const { store, infos, messages, calls } = await createHarness();
+    infos.set(GHOST_UUID, { sessionId: GHOST_UUID, summary: 'Human: <system-reminder> Codebase…', lastModified: 4000, fileSize: 1041 });
+    infos.set(UNDATED_UUID, { sessionId: UNDATED_UUID, summary: 'Undated but real', lastModified: 4000, fileSize: 30 });
+    messages.set(UNDATED_UUID, [{ type: 'user', uuid: PROMPT_1 }]);
+    const sessions = await store.listRootSessions(DIRECTORY);
+    expect(sessions.map((session) => [session.id, session.title])).toEqual([
+      [`ncl_${TERMINAL_UUID}`, 'Terminal work'],
+      [`ncl_${UNDATED_UUID}`, 'Undated but real'],
+      [`ncl_${OPENCHAMBER_UUID}`, 'Tool workflow'],
+    ]);
+    // Only the two undated transcripts were read: createdAt already proves the rest.
+    expect(calls.getSessionMessages).toBe(2);
+  });
+
+  it('keeps a transcript whose first message cannot be read', async () => {
+    const { store, infos } = await createHarness();
+    infos.set(UNREADABLE_UUID, { sessionId: UNREADABLE_UUID, summary: 'Unreadable', lastModified: 4000 });
+    const sessions = await store.listRootSessions(DIRECTORY);
+    expect(sessions.map((session) => session.id)).toContain(`ncl_${UNREADABLE_UUID}`);
   });
 
   it('returns a session history with the subagent sessions it links to', async () => {

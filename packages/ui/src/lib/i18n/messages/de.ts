@@ -39,6 +39,10 @@ export const dict = {
   "agents.combinations.reset": "Zurücksetzen",
 
   "chat.planExecution.model": "Ausführungsmodell",
+  "chat.planExecution.effort": "Denkintensität",
+  "chat.planExecution.effortUnavailable": "Dieses Modell unterstützt die gewählte Denkintensität nicht mehr. Wähle eine andere.",
+  "chat.planExecution.unconfirmed": "Sende die Antwort, um die vorherige Ausführung zu prüfen. Falls sie nicht gestartet wurde, versuche es mit deiner neuen Auswahl erneut.",
+  "chat.planExecution.retryable": "Die vorherige Ausführung wurde nicht gestartet. Bestätige den Plan erneut mit dem gewählten Modell und der Denkintensität.",
   "chat.nativeTranscriptTruncated": "Antigravity hat nur einen Teil dieser Nachricht gespeichert.",
   "chat.workStatus.subagent.unknown": "Status unbekannt",
   "chat.toolPart.nativeOutputTruncated": "Antigravity hat nur einen Teil dieser Werkzeugausgabe gespeichert.",

@@ -5,6 +5,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/compon
 import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { Icon } from '@/components/icon/Icon';
 import { ProviderLogo } from '@/components/ui/ProviderLogo';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useUIStore } from '@/stores/useUIStore';
 import { useModelLists } from '@/hooks/useModelLists';
 import { useI18n } from '@/lib/i18n';
@@ -25,7 +26,7 @@ const ActivePlanExecutionModelPicker = ({ selection, disabled, rootRef }: Props)
       <span id={labelId} className="typography-meta text-muted-foreground">{t('chat.planExecution.model')}</span>
       <DropdownMenu disableGlobalShortcuts open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(''); }}>
         <DropdownMenuTrigger asChild>
-          <Button type="button" variant="outline" size="sm" className={dropdownTriggerVariants()} disabled={disabled || selection.pending || selection.blocked}
+          <Button type="button" variant="outline" size="sm" className={dropdownTriggerVariants()} disabled={disabled || selection.blocked}
             aria-labelledby={`${labelId} ${valueId}`}>
             {selection.value ? <ProviderLogo providerId={selection.value.model.providerID} className="size-3.5" /> : null}
             <span id={valueId} className="max-w-[14rem] truncate" dir="auto">{selection.model?.name ?? selection.value?.model.modelID ?? t('chat.planExecution.model')}</span>
@@ -42,10 +43,22 @@ const ActivePlanExecutionModelPicker = ({ selection, disabled, rootRef }: Props)
             maxHeightClassName="max-h-72" autoFocus onEscape={() => setOpen(false)} />
         </DropdownMenuContent>
       </DropdownMenu>
+      {selection.variants.length ? <Select disableGlobalShortcuts value={selection.value?.variant ?? '__default__'}
+        onValueChange={(variant) => selection.chooseVariant(variant === '__default__' ? undefined : variant)} disabled={disabled || selection.blocked}>
+        <SelectTrigger className="w-auto min-w-24" aria-label={t('chat.planExecution.effort')}>
+          <Icon name="brain-ai-3" className="size-3.5" />
+          <SelectValue>{selection.value?.variant ?? t('agents.combinations.nativeDefault')}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__default__">{t('agents.combinations.nativeDefault')}</SelectItem>
+          {selection.variants.map((variant) => <SelectItem key={variant} value={variant}>{variant}</SelectItem>)}
+        </SelectContent>
+      </Select> : null}
     </div>
     {selection.blocked ? <p className="typography-micro text-muted-foreground">{t('chat.unified.enterprise')}</p>
-      : selection.pending ? <p className="typography-micro text-muted-foreground">{t('chat.unified.unconfirmed')}</p>
-      : !selection.available ? <p className="typography-micro text-[var(--status-error)]">{t('chat.unified.modelUnavailable')}</p> : null}
+      : selection.pending ? <p className="typography-micro text-muted-foreground">{t('chat.planExecution.unconfirmed')}</p>
+      : !selection.available ? <p className="typography-micro text-[var(--status-error)]">{t('chat.unified.modelUnavailable')}</p>
+      : !selection.effortAvailable ? <p className="typography-micro text-[var(--status-error)]">{t('chat.planExecution.effortUnavailable')}</p> : null}
   </div>;
 };
 

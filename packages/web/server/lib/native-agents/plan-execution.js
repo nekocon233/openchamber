@@ -27,7 +27,6 @@ export const planExecutionStateSchema = z.object({
 }).or(z.object({ phase: z.literal('unavailable') }));
 const planInput = z.object({ plan: z.string().optional() });
 const questionInput = z.object({ questions: z.array(z.object({ question: z.string() })) });
-const errorCode = z.object({ code: z.string() });
 const sameModel = (left, right) => left.model.providerID === right.model.providerID
   && left.model.modelID === right.model.modelID && left.variant === right.variant;
 const unavailable = () => new NativeAgentError('The original plan is unavailable. Reload the conversation before retrying.', {
@@ -80,7 +79,15 @@ export const createNativePlanExecution = ({
     if (closed) throw new NativeAgentError('Native plan execution is shutting down', { status: 503, code: 'NATIVE_UNAVAILABLE' });
     const approves = outcome.answers.length === 1 && outcome.answers[0].length === 1 && outcome.answers[0][0] === 'build';
     if (state?.phase === 'dispatching') {
-      if (!outcome.execution || !sameModel(state.execution, outcome.execution) || !await confirm(request.sessionID, directory, state)) throw unknown();
+      const delivery = await confirm(request.sessionID, directory, state);
+      if (delivery === 'not-dispatched') {
+        await save(request.sessionID, { ...state, phase: 'open' });
+        actions.pending();
+        throw new NativeAgentError('The previous execution was not sent. Select the execution model and approve the plan again.', {
+          status: 409, code: 'NATIVE_PLAN_EXECUTION_RETRYABLE',
+        });
+      }
+      if (!outcome.execution || !sameModel(state.execution, outcome.execution) || delivery !== 'accepted') throw unknown();
       await save(request.sessionID, { ...state, phase: 'settled' });
       return { execution: state.execution };
     }
@@ -141,12 +148,15 @@ export const createNativePlanExecution = ({
           state = await save(request.sessionID, { ...state, phase: 'dispatching' });
           dispatched = true;
         },
+        onRefused: async () => {
+          state = await save(request.sessionID, { ...state, phase: 'open' });
+          dispatched = false;
+        },
       });
       await save(request.sessionID, { ...state, phase: 'settled' });
       return approves ? { execution } : undefined;
     } catch (error) {
-      const code = errorCode.safeParse(error).data?.code;
-      const uncertain = dispatched && (!code || code.endsWith('_UNKNOWN'));
+      const uncertain = dispatched;
       const cancelled = !closed && controller.signal.aborted || actions.isCurrent && !actions.isCurrent();
       try { await save(request.sessionID, { ...state, phase: uncertain ? 'dispatching' : cancelled ? 'settled' : 'open' }); }
       catch { actions.pending(execution); throw unknown(); }
@@ -161,12 +171,17 @@ export const createNativePlanExecution = ({
     execute,
     async restore(directory) {
       for (const entry of await registry.listSessions({ directory })) {
-        const state = entry.planExecution;
+        let state = entry.planExecution;
         if (state?.phase === 'unavailable') { failed(directory, entry.sessionId, unavailable()); continue; }
         if (!state || state.phase === 'settled' || active.has(entry.sessionId)) continue;
         try {
-          if (state.phase === 'preparing') await save(entry.sessionId, { ...state, phase: 'open' });
+          if (state.phase === 'preparing') state = await save(entry.sessionId, { ...state, phase: 'open' });
           if (questions.get(state.request.id)) continue;
+          if (state.phase === 'dispatching') {
+            const delivery = await confirm(entry.sessionId, directory, state);
+            if (active.has(entry.sessionId) || questions.get(state.request.id)) continue;
+            if (delivery === 'not-dispatched') state = await save(entry.sessionId, { ...state, phase: 'open' });
+          }
           const records = await readHistory(entry.sessionId, directory, state.request);
           const reference = readNativePlanReference(state.request, records);
           const input = {
@@ -174,6 +189,7 @@ export const createNativePlanExecution = ({
             questions: [{ question: reference.plan, header: 'Plan', options: [{ label: 'build', description: '' }, { label: 'plan', description: '' }], multiple: false }],
           };
           if (state.phase === 'dispatching') input.executionPending = state.execution;
+          if (active.has(entry.sessionId) || questions.get(state.request.id)) continue;
           void questions.ask(input).catch((error) => failed(directory, entry.sessionId, error));
         } catch (error) { failed(directory, entry.sessionId, error); }
       }

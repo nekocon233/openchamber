@@ -64,6 +64,42 @@ const setup = async (from, to) => {
 };
 
 describe('native cross-CLI delegation', () => {
+  it('binds launch tools to the real source and rejects callbacks until its turn starts', async () => {
+    const context = await setup('codex', 'codex');
+    const launch = await context.delegation.prepareLaunch({ directory: context.directory, subagentModel: modelOf('codex') });
+    const token = launch.tools.env.OPENCHAMBER_DELEGATION_TOKEN;
+    expect((await context.call('unbound', token)).status).toBe(403);
+    await launch.bind(context.root);
+    expect((await context.call('before-turn', token)).body.code).toBe('NATIVE_DELEGATION_INTERRUPTED');
+    const tools = await context.delegation.prepare(context.root, { directory: context.directory, messageID: 'first-turn', agent: 'build' });
+    expect(tools.key).toBe(launch.tools.key);
+    expect(tools.env.OPENCHAMBER_DELEGATION_TOKEN).toBe(token);
+    expect((await context.call('first-task', token)).status).toBe(200);
+  });
+  it('revokes a failed launch and rechecks enterprise policy before binding', async () => {
+    const context = await setup('codex', 'codex');
+    const launch = await context.delegation.prepareLaunch({ directory: context.directory, subagentModel: modelOf('codex') });
+    vi.stubEnv('OPENCHAMBER_ENTERPRISE_MODE', '1');
+    await expect(launch.bind(context.root)).rejects.toMatchObject({ code: 'enterprise_mode' });
+    vi.unstubAllEnvs();
+    launch.cancel();
+    await expect(launch.bind(context.root)).rejects.toMatchObject({ code: 'NATIVE_DELEGATION_INTERRUPTED' });
+    expect((await context.call('cancelled-launch', launch.tools.env.OPENCHAMBER_DELEGATION_TOKEN)).status).toBe(403);
+    expect(context.calls).toEqual([]);
+  });
+  it('does not bind credentials cancelled during the source ownership read', async () => {
+    const context = await setup('codex', 'codex');
+    const launch = await context.delegation.prepareLaunch({ directory: context.directory, subagentModel: modelOf('codex') });
+    const entry = await context.registry.getSession(context.root);
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    vi.spyOn(context.registry, 'getSession').mockImplementationOnce(async () => { await held; return entry; });
+    const binding = launch.bind(context.root);
+    launch.cancel();
+    release();
+    await expect(binding).rejects.toMatchObject({ code: 'NATIVE_DELEGATION_INTERRUPTED' });
+    expect((await context.call('cancelled-during-bind', launch.tools.env.OPENCHAMBER_DELEGATION_TOKEN)).status).toBe(403);
+  });
   it('coalesces simultaneous retries and renews callbacks after a stop', async () => {
     const context = await setup('claude', 'codex');
     context.pause();

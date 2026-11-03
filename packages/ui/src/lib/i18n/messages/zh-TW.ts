@@ -40,6 +40,10 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.reset": "重設",
 
   "chat.planExecution.model": "執行模型",
+  "chat.planExecution.effort": "思考強度",
+  "chat.planExecution.effortUnavailable": "此模型已不支援所選思考強度，請選擇其他強度。",
+  "chat.planExecution.unconfirmed": "提交以確認上次執行結果。確認未開始後，可用新選擇重試。",
+  "chat.planExecution.retryable": "上次執行未開始，請使用所選模型和思考強度重新核准計畫。",
   "chat.nativeTranscriptTruncated": "Antigravity 只儲存了此訊息的一部分。",
   "chat.workStatus.subagent.unknown": "狀態未知",
   "chat.toolPart.nativeOutputTruncated": "Antigravity 只儲存了此工具輸出的一部分。",

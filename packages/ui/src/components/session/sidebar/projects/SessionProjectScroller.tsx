@@ -281,7 +281,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
   const renderRow = React.useCallback((row: SessionSidebarRow): React.ReactNode => {
     if (row.kind === 'activity-header') {
       return <CrossfadeZoneHeader
-        className="sticky top-0 z-20 bg-sidebar"
+        className="sticky top-0 z-20 oc-session-sidebar-surface"
         data-sidebar-sticky-header="true"
       >
         <SessionSidebarActivityHeader

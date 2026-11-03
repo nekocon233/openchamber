@@ -16,10 +16,12 @@ const envelopeSchema = z.object({
 }).passthrough();
 
 export class JsonRpcError extends Error {
-  constructor(message, code) {
+  /** @param {'response' | 'transport' | 'timeout'} kind */
+  constructor(message, code, kind = 'response') {
     super(message);
     this.name = 'JsonRpcError';
     this.code = code;
+    this.kind = kind;
   }
 }
 
@@ -50,7 +52,7 @@ export const createJsonRpcConnection = ({ child, onNotification, onRequest, onCl
   };
 
   const send = (message) => {
-    if (closed) throw new JsonRpcError('Codex app-server connection is closed', -32000);
+    if (closed) throw new JsonRpcError('Codex app-server connection is closed', -32000, 'transport');
     child.stdin.write(`${JSON.stringify(message)}\n`);
   };
 
@@ -70,7 +72,7 @@ export const createJsonRpcConnection = ({ child, onNotification, onRequest, onCl
     try {
       parsed = envelopeSchema.parse(JSON.parse(line));
     } catch (error) {
-      close(new JsonRpcError(`Invalid Codex app-server message: ${error instanceof Error ? error.message : error}`, -32700));
+      close(new JsonRpcError(`Invalid Codex app-server message: ${error instanceof Error ? error.message : error}`, -32700, 'transport'));
       return;
     }
     if (parsed.method !== undefined && parsed.id !== undefined) {
@@ -94,7 +96,7 @@ export const createJsonRpcConnection = ({ child, onNotification, onRequest, onCl
   child.stdout.on('data', (text) => {
     buffer += text;
     if (buffer.length > MAX_BUFFERED_BYTES) {
-      close(new JsonRpcError('Codex app-server message exceeds the size limit', -32700));
+      close(new JsonRpcError('Codex app-server message exceeds the size limit', -32700, 'transport'));
       return;
     }
     let end;
@@ -104,7 +106,7 @@ export const createJsonRpcConnection = ({ child, onNotification, onRequest, onCl
       if (line) receiveLine(line);
     }
   });
-  child.stdout.on('end', () => close(new JsonRpcError('Codex app-server closed its output', -32000)));
+  child.stdout.on('end', () => close(new JsonRpcError('Codex app-server closed its output', -32000, 'transport')));
   child.stdout.on('error', (error) => close(error));
   child.stdin.on('error', (error) => close(error));
 
@@ -118,7 +120,7 @@ export const createJsonRpcConnection = ({ child, onNotification, onRequest, onCl
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(new JsonRpcError(`Codex app-server request timed out: ${method}`, -32001));
+          reject(new JsonRpcError(`Codex app-server request timed out: ${method}`, -32001, 'timeout'));
         }, requestTimeoutMs);
         timer.unref?.();
         pending.set(id, { resolve, reject, timer });

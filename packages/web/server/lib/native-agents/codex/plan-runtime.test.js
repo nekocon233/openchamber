@@ -14,7 +14,7 @@ afterEach(async () => {
   }
 });
 
-const createHarness = async () => {
+const createHarness = async ({ withCombination = false } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-codex-plan-'));
   const directory = path.join(root, 'project');
   fs.mkdirSync(directory);
@@ -26,8 +26,8 @@ const createHarness = async () => {
   const restored = [];
   const runtime = createNativeAgentsRuntime({
     dataDir: root,
-    resolveExecutable: async () => executable,
-    buildChildEnv: () => ({ PATH: process.env.PATH }),
+    resolveExecutable: async (cli) => cli === 'codex' ? executable : cli === 'node' ? process.execPath : null,
+    buildChildEnv: () => ({ PATH: process.env.PATH, HOME: root, CODEX_HOME: root }),
     clientVersion: 'test',
     publishNativeEvent: (event) => events.push(event),
     snapshots: {
@@ -38,10 +38,13 @@ const createHarness = async () => {
     },
   });
   runtimes.push({ runtime, root });
-  const session = await runtime.createSession({ backend: 'codex', directory, title: 'Plan test' });
   const selection = { model: { providerID: 'codex-native', modelID: 'gpt-5.5' }, variant: 'high-fast', agent: 'plan' };
+  const configuration = { subagent: { model: selection.model, variant: selection.variant }, execution: { model: selection.model, variant: 'high' } };
+  const input = { backend: 'codex', directory, title: 'Plan test' };
+  if (withCombination) Object.assign(input, { kind: 'unified', selection, configuration });
+  const session = await runtime.createSession(input);
   const prompt = (text = 'Plan a change', agent = 'plan') => runtime.prompt(session.id, {
-    ...selection, directory, messageID: `ncx_u_${randomUUID()}`, parts: [{ type: 'text', text }], agent,
+    ...selection, directory, messageID: `${withCombination ? 'ncv' : 'ncx'}_u_${randomUUID()}`, parts: [{ type: 'text', text }], agent,
   });
   const requests = () => fs.readFileSync(path.join(directory, 'requests.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const sends = () => requests().filter(request => request.method === 'turn/start').map(request => request.params);
@@ -56,10 +59,40 @@ const createHarness = async () => {
     [question] = await runtime.questions(directory);
     expect(question?.kind).toBe('codex-plan-exit');
   });
-  return { runtime, root, directory, session, selection, question, prompt, sends, registry, idle, captures, restored, events };
+  return { runtime, root, directory, session, selection, question, prompt, sends, requests, registry, idle, captures, restored, events };
 };
 
 describe('Codex plan decisions through the native runtime', () => {
+  it('runs the first unified turn with combination subagents configured at thread start', async () => {
+    const { runtime, directory, session, question, requests } = await createHarness({ withCombination: true });
+    const beforeTurn = requests().slice(0, requests().findIndex((request) => request.method === 'turn/start'));
+    expect(beforeTurn.some((request) => request.method === 'thread/resume' || request.method === 'thread/unsubscribe')).toBe(false);
+    expect(beforeTurn.find((request) => request.method === 'thread/start').params.config).toMatchObject({
+      'features.multi_agent': false,
+      'mcp_servers.openchamber_subagents': { command: process.execPath, env: { OPENCHAMBER_DELEGATION_TOKEN: '[redacted]' } },
+    });
+    expect(question.sessionID).toBe(session.id);
+    await runtime.replyQuestion(question.id, [['plan']]);
+    expect(await runtime.questions(directory)).toEqual([]);
+  });
+
+  it('retries an explicit execution approval after a definite Codex refusal', async () => {
+    const { runtime, root, directory, session, selection, question, registry, sends } = await createHarness({ withCombination: true });
+    const marker = path.join(directory, 'fail-build');
+    fs.writeFileSync(marker, '');
+    const execution = { model: selection.model, variant: 'high', expectedRevision: 0 };
+    await expect(runtime.replyQuestion(question.id, [['build']], execution)).rejects.toMatchObject({ kind: 'response' });
+    const source = Object.values(registry().sessions).find((entry) => entry.conversationId === session.id);
+    expect(source.planExecution.phase).toBe('open');
+    expect((await runtime.questions(directory))[0].executionPending).toBeUndefined();
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'native-agents', 'conversations', `${session.id}.json`), 'utf8')).admission).toBeUndefined();
+    fs.unlinkSync(marker);
+    await runtime.replyQuestion(question.id, [['build']], execution);
+    await vi.waitFor(async () => expect(await runtime.statuses(directory)).toEqual({}));
+    expect(sends()).toHaveLength(3);
+    expect((await runtime.getSession(session.id, directory)).model.variant).toBe('high');
+    expect(await runtime.questions(directory)).toEqual([]);
+  });
   it('continues with an ordinary recorded prompt and preserves file-revert snapshots', async () => {
     const { runtime, directory, session, question, sends, registry, idle, captures, restored, events } = await createHarness();
     expect(await runtime.statuses(directory)).toEqual({});
@@ -152,7 +185,9 @@ describe('Codex plan decisions through the native runtime', () => {
   it('reports execution-start failure and leaves the recorded session in plan mode', async () => {
     const { runtime, directory, session, question, events, sends, idle } = await createHarness();
     fs.writeFileSync(path.join(directory, 'fail-build'), '');
-    await runtime.replyQuestion(question.id, [['build']]);
+    await expect(runtime.replyQuestion(question.id, [['build']])).rejects.toThrow('Scripted execution start failed');
+    expect(await runtime.questions(directory)).toEqual([question]);
+    await runtime.replyQuestion(question.id, [['plan']]);
     await idle();
     expect(events.filter(event => event.payload.type === 'session.error')).toHaveLength(1);
     expect(events.find(event => event.payload.type === 'session.error').payload.properties.error.data.message).toBe('Scripted execution start failed');

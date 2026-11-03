@@ -38,6 +38,10 @@ export const dict = {
   "agents.combinations.reset": "إعادة تعيين",
 
   "chat.planExecution.model": "نموذج التنفيذ",
+  "chat.planExecution.effort": "مستوى التفكير",
+  "chat.planExecution.effortUnavailable": "لم يعد هذا النموذج يدعم مستوى التفكير المحدد. اختر مستوى آخر.",
+  "chat.planExecution.unconfirmed": "أرسل للتحقق من التنفيذ السابق. إذا لم يبدأ، فأعد المحاولة باختيارك الجديد.",
+  "chat.planExecution.retryable": "لم يبدأ التنفيذ السابق. وافق على الخطة مجددًا باستخدام النموذج ومستوى التفكير المحددين.",
   "chat.nativeTranscriptTruncated": "حفظ Antigravity جزءًا فقط من هذه الرسالة.",
   "chat.workStatus.subagent.unknown": "الحالة غير معروفة",
   "chat.toolPart.nativeOutputTruncated": "حفظ Antigravity جزءًا فقط من مخرجات هذه الأداة.",

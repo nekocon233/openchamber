@@ -28,6 +28,8 @@ const enterpriseError = () => new NativeAgentError('Unified native conversations
 const unknownAdmission = () => new NativeAgentError('The previous send is unconfirmed. Reload its history before sending again.', {
   status: 409, code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN',
 });
+const definiteRefusal = (error) => error instanceof JsonRpcError ? error.kind === 'response'
+  : error instanceof NativeAgentError && !error.code.endsWith('_UNKNOWN');
 
 /** The conversation owns logical history; the native runtime owns every CLI operation. */
 export const createNativeConversations = ({ dataDir, native, registry, reverts, publishNativeEvent, sourceLifecycle, smallModels, managedChatsRoots, now = Date.now }) => {
@@ -297,6 +299,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     let segment = old;
     let nativeMessageId = automaticSource && old?.backend !== backend ? null : automaticMessageId;
     let dispatched = false;
+    let accepted = false;
     let reverting = false;
     try {
       let instructions;
@@ -327,6 +330,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
           if (last && previous) previous.through = last.nativeMessageId;
         }
         await native.createSession({ backend, directory: manifest.directory, ...(manifest.manualTitle ? { title: manifest.title } : {}) }, {
+          toolLaunch: { subagentModel: request.subagentModel !== undefined ? request.subagentModel : manifest.agents?.subagent ?? null },
           beforePublish: async (source) => {
             owned.add(source.id);
             await registry.updateSession(source.id, { conversationId: id });
@@ -367,16 +371,17 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       await reverts.beforePrompt(id, manifest.directory, request.messageID);
       controller.signal.throwIfAborted();
       if (reverting) await reverts.beginCommit(id);
+      if (manifest.agents) await registry.updateSession(segment.sessionId, { agentConfiguration: manifest.agents });
       await update(id, (current) => { current.admission.phase = 'dispatched'; return current; });
       controller.signal.throwIfAborted();
       await approval?.onDispatched?.();
       controller.signal.throwIfAborted();
       dispatched = true;
-      if (manifest.agents) await registry.updateSession(segment.sessionId, { agentConfiguration: manifest.agents });
       await native.prompt(segment.sessionId, {
         ...request, directory: manifest.directory, messageID: nativeMessageId,
         instructions: [request.instructions, instructions].filter(Boolean).join('\n\n') || undefined,
       }, controller.signal);
+      accepted = true;
       await update(id, (current) => {
         current.segments.find((entry) => entry.id === segment.id).sends.find((entry) => entry.messageId === request.messageID).state = 'accepted';
         delete current.admission;
@@ -385,7 +390,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       if (reverting) await reverts.finishCommit(id);
       if (!foreground.has(segment.sessionId)) void titles.generate(id);
     } catch (error) {
-      const definitelyRefused = !dispatched || error instanceof JsonRpcError || (error instanceof NativeAgentError && !error.code.endsWith('_UNKNOWN'));
+      const definitelyRefused = !accepted && (!dispatched || definiteRefusal(error));
       if (definitelyRefused) {
         await update(id, (current) => {
           if (switching) {
@@ -410,6 +415,7 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
           }
           catch { /* The registry retains ownership for cleanup when the conversation is deleted. */ }
         }
+        await approval?.onRefused?.();
       } else {
         throw new NativeAgentError('The native send may have been accepted. Reload to confirm it before retrying.', {
           status: 502, code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN',
@@ -813,20 +819,33 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
       if (handoff) await assertQuiet(manifest, { requestId, allowedForeground: source });
       return true;
     },
-    async planExecutionConfirmed(source, directory, state) {
+    async planExecutionOutcome(source, directory, state) {
       await load();
       const owner = owners.get(source);
       if (!owner) { assertStandalone(source); return null; }
       let manifest = get(owner.id, directory);
       try { await recoverAdmission(manifest, state.logicalMessageID); }
-      catch (error) { if (!(error instanceof NativeAgentError) || error.code !== 'NATIVE_PROMPT_OUTCOME_UNKNOWN') throw error; }
+      catch (error) {
+        if (!(error instanceof NativeAgentError) || error.code !== 'NATIVE_PROMPT_OUTCOME_UNKNOWN') throw error;
+        return 'unknown';
+      }
       manifest = get(owner.id, directory);
-      return manifest.segments.some((segment) => segment.sends.some((send) => send.messageId === state.logicalMessageID && send.state === 'accepted'));
+      const send = manifest.segments.flatMap((segment) => segment.sends).find((send) => send.messageId === state.logicalMessageID);
+      if (send?.state === 'accepted') return 'accepted';
+      if (send || manifest.admission || activeOf(manifest)?.sessionId !== source) return 'unknown';
+      const retained = new Set(manifest.segments.map((segment) => segment.sessionId));
+      const orphan = (await registry.listSessions({ directory })).some((entry) => entry.conversationId === manifest.id && !retained.has(entry.sessionId));
+      return orphan ? 'unknown' : 'not-dispatched';
     },
     async automaticPrompt(source, request, signal, approval = null) {
       await load();
       const owner = owners.get(source);
-      if (!owner) { assertStandalone(source); await approval?.onDispatched?.(); return native.prompt(source, request, signal); }
+      if (!owner) {
+        assertStandalone(source);
+        await approval?.onDispatched?.();
+        try { return await native.prompt(source, request, signal); }
+        catch (error) { if (definiteRefusal(error)) await approval?.onRefused?.(); throw error; }
+      }
       return prompt(owner.id, { ...request, messageID: approval?.logicalMessageId ?? `ncv_u_${randomUUID()}` }, signal, source, request.messageID, approval);
     },
     publishInteraction(source, part) {

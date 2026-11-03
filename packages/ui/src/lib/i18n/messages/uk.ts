@@ -40,6 +40,10 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.reset": "Скинути",
 
   "chat.planExecution.model": "Модель виконання",
+  "chat.planExecution.effort": "Рівень міркування",
+  "chat.planExecution.effortUnavailable": "Ця модель більше не підтримує вибраний рівень міркування. Виберіть інший.",
+  "chat.planExecution.unconfirmed": "Надішліть відповідь, щоб перевірити попереднє виконання. Якщо воно не почалося, повторіть спробу з новими налаштуваннями.",
+  "chat.planExecution.retryable": "Попереднє виконання не почалося. Схваліть план знову з вибраними моделлю та рівнем міркування.",
   "chat.nativeTranscriptTruncated": "Antigravity зберіг лише частину цього повідомлення.",
   "chat.workStatus.subagent.unknown": "Стан невідомий",
   "chat.toolPart.nativeOutputTruncated": "Antigravity зберіг лише частину виводу цього інструмента.",

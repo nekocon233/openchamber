@@ -29,7 +29,8 @@ const setup = async (backend = 'claude', existing = null, restore = false) => {
   const calls = [];
   const sent = [];
   let refusal = null;
-  let confirmed = false;
+  let refusalOutcome = 'not-dispatched';
+  let confirmed = 'unknown';
   let execution;
   const questions = createQuestionRegistry({
     publish: (_directory, event) => events.push(event),
@@ -52,7 +53,10 @@ const setup = async (backend = 'claude', existing = null, restore = false) => {
       calls.push('prompt');
       sent.push({ source, request, approval });
       signal.throwIfAborted();
-      if (refusal) throw refusal;
+      if (refusal) {
+        if (refusalOutcome === 'not-dispatched') await approval.onRefused();
+        throw refusal;
+      }
     },
     confirm: async () => confirmed,
     failed: (_directory, _id, error) => { throw error; },
@@ -66,7 +70,9 @@ const setup = async (backend = 'claude', existing = null, restore = false) => {
   });
   const request = questions.list(directory)[0];
   return { id, directory, registry, questions, execution, request, events, calls, sent,
-    refuse: (error) => { refusal = error; }, confirm: () => { confirmed = true; } };
+    refuse: (error) => { refusal = error; refusalOutcome = 'not-dispatched'; },
+    uncertain: (error) => { refusal = error; refusalOutcome = 'unknown'; },
+    confirm: () => { confirmed = 'accepted'; }, notDispatched: () => { confirmed = 'not-dispatched'; } };
 };
 
 describe('native plan execution model', () => {
@@ -119,13 +125,40 @@ describe('native plan execution model', () => {
 
   it('confirms an unknown delivery before settling, without sending it again', async () => {
     const context = await setup();
-    context.refuse(new Error('response lost'));
+    context.uncertain(new Error('response lost'));
     await expect(context.questions.reply(context.request.id, [['build']], choice('codex'))).rejects.toMatchObject({ code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN' });
     expect(context.questions.get(context.request.id).executionPending).toEqual(choice('codex'));
     await expect(context.questions.reply(context.request.id, [['build']], choice('codex'))).rejects.toMatchObject({ code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN' });
     context.confirm();
     await context.questions.reply(context.request.id, [['build']], choice('codex'));
     expect(context.sent).toHaveLength(1);
+  });
+
+  it('reopens an unknown approval after its owner confirms rollback, keeping the next model editable', async () => {
+    const context = await setup();
+    context.uncertain(new Error('response lost'));
+    await expect(context.questions.reply(context.request.id, [['build']], choice('codex'))).rejects.toMatchObject({ code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN' });
+    context.notDispatched();
+    await expect(context.questions.reply(context.request.id, [['build']], choice('codex'))).rejects.toMatchObject({ code: 'NATIVE_PLAN_EXECUTION_RETRYABLE' });
+    expect(context.questions.get(context.request.id).executionPending).toBeUndefined();
+    expect((await context.registry.getSession(context.id)).planExecution.phase).toBe('open');
+    context.refuse(null);
+    await context.questions.reply(context.request.id, [['build']], choice('deepseek'));
+    expect(context.sent).toHaveLength(2);
+    expect(context.sent[1].request.model.providerID).toBe('deepseek-native');
+  });
+
+  it('restores a legacy rolled-back dispatch as an editable approval without sending it', async () => {
+    const original = await setup();
+    original.uncertain(new Error('response lost'));
+    await expect(original.questions.reply(original.request.id, [['build']], choice('codex'))).rejects.toMatchObject({ code: 'NATIVE_PROMPT_OUTCOME_UNKNOWN' });
+    const restored = await setup('claude', original);
+    restored.questions.withdraw(restored.request.id);
+    restored.notDispatched();
+    await restored.execution.restore(restored.directory);
+    expect(restored.questions.get(original.request.id).executionPending).toBeUndefined();
+    expect((await restored.registry.getSession(restored.id)).planExecution.phase).toBe('open');
+    expect(restored.sent).toHaveLength(0);
   });
 
   it('restores a yielded approval from its native plan after a server restart', async () => {

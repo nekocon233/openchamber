@@ -44,7 +44,15 @@ The saved profile orders survive reload and keep the same order on mobile.
 
 ExitPlanMode retains its execution model picker. Its initial choice comes from
 the applied combination, otherwise the current composer model; it contains no
-subagent selector. Approval continues on the execution model and makes it the
+subagent selector. The adjacent thinking-effort picker uses the selected
+model's catalog variants, including supported Fast variants and explicit CLI
+defaults. Manual model and effort edits belong to this approval and survive
+failed submissions and remounts; the next approval starts from the combination
+again. Unsupported captured efforts require another choice before approval.
+An unconfirmed execution keeps its original immutable submission while the
+picker can retain a new draft. Submitting first confirms that earlier attempt;
+an authoritative rollback reopens the draft for retry. A model change does not
+interrupt running work. Approval continues on the execution model and makes it the
 session's next model while retaining the subagent choice. Queued messages
 capture the selected subagent, including explicit CLI defaults, when enqueued.
 

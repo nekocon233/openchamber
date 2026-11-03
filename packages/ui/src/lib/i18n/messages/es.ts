@@ -40,6 +40,10 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.reset": "Restablecer",
 
   "chat.planExecution.model": "Modelo de ejecución",
+  "chat.planExecution.effort": "Esfuerzo de razonamiento",
+  "chat.planExecution.effortUnavailable": "Este modelo ya no admite el esfuerzo de razonamiento seleccionado. Elige otro.",
+  "chat.planExecution.unconfirmed": "Envía la respuesta para comprobar la ejecución anterior. Si no se inició, vuelve a intentarlo con tu nueva selección.",
+  "chat.planExecution.retryable": "La ejecución anterior no se inició. Vuelve a aprobar el plan con el modelo y el esfuerzo de razonamiento elegidos.",
   "chat.nativeTranscriptTruncated": "Antigravity solo guardó una parte de este mensaje.",
   "chat.workStatus.subagent.unknown": "Estado desconocido",
   "chat.toolPart.nativeOutputTruncated": "Antigravity solo guardó una parte de la salida de esta herramienta.",

@@ -38,6 +38,10 @@ export const dict = {
   "agents.combinations.reset": "Herstellen",
 
   "chat.planExecution.model": "Uitvoeringsmodel",
+  "chat.planExecution.effort": "Denkinspanning",
+  "chat.planExecution.effortUnavailable": "Dit model ondersteunt de gekozen denkinspanning niet meer. Kies een andere.",
+  "chat.planExecution.unconfirmed": "Verstuur om de vorige uitvoering te controleren. Als deze niet is gestart, probeer het dan opnieuw met je nieuwe keuze.",
+  "chat.planExecution.retryable": "De vorige uitvoering is niet gestart. Keur het plan opnieuw goed met het gekozen model en de denkinspanning.",
   "chat.nativeTranscriptTruncated": "Antigravity heeft slechts een deel van dit bericht opgeslagen.",
   "chat.workStatus.subagent.unknown": "Status onbekend",
   "chat.toolPart.nativeOutputTruncated": "Antigravity heeft slechts een deel van deze tooluitvoer opgeslagen.",

@@ -30,7 +30,7 @@ import { createCodexAutoTitles } from './codex/auto-title.js';
 import { createCodexCatalog } from './codex/catalog.js';
 import { createCodexCommands } from './codex/commands.js';
 import { createCodexConnections } from './codex/connections.js';
-import { createCodexLiveThreads } from './codex/live.js';
+import { createCodexLiveThreads, codexThreadToolConfig } from './codex/live.js';
 import { createCodexPlanDecisions } from './codex/plan-decisions.js';
 import { createCodexSessionStore } from './codex/store.js';
 import { createCodexUtility } from './codex/utility.js';
@@ -677,7 +677,7 @@ export const createNativeAgentsRuntime = ({
    * first turn; Codex starts the thread now.
    * @param {{ backend: 'claude' | 'codex' | 'deepseek' | 'antigravity', directory: string, title?: string }} input
    */
-  const createSession = async ({ backend, directory, title }, { beforePublish = async () => undefined } = {}) => {
+  const createSession = async ({ backend, directory, title }, { beforePublish = async () => undefined, toolLaunch } = {}) => {
     if (backend === NATIVE_BACKEND_DEEPSEEK) {
       const session = await deepseek.createSession(directory, title, beforePublish);
       publisher.session(session.directory, session, { created: true });
@@ -691,33 +691,48 @@ export const createNativeAgentsRuntime = ({
     }
     let sessionId;
     let nativeId;
-    if (backend === NATIVE_BACKEND_CLAUDE) {
-      nativeId = randomUUID();
-      sessionId = encodeClaudeSessionId(nativeId);
-    } else {
-      const started = threadResponseSchema.parse(await appServer.request('thread/start', {
-        cwd: directory,
-        approvalPolicy: 'never',
-        sandbox: 'danger-full-access',
-        developerInstructions: (await readGlobalInstructions()) ?? undefined,
-      }));
-      nativeId = started.thread.id;
-      sessionId = encodeCodexSessionId(nativeId);
-      codexLive.threadStarted(sessionId, directory, started.serviceTier ?? null);
-      // Codex keeps a name from before the first turn; a failed naming leaves the preview.
-      if (title !== undefined) {
-        await codex.rename(sessionId, title).catch((error) => {
-          console.warn('[native-agents] could not name the new Codex thread:', sessionId, errorMessage(error));
-        });
+    let serviceTier = null;
+    const launch = backend === NATIVE_BACKEND_CODEX && toolLaunch ? await delegation.prepareLaunch({ ...toolLaunch, directory }) : null;
+    try {
+      if (backend === NATIVE_BACKEND_CLAUDE) {
+        nativeId = randomUUID();
+        sessionId = encodeClaudeSessionId(nativeId);
+      } else {
+        const start = {
+          cwd: directory,
+          approvalPolicy: 'never',
+          sandbox: 'danger-full-access',
+          developerInstructions: (await readGlobalInstructions()) ?? undefined,
+        };
+        if (launch) start.config = codexThreadToolConfig(launch.tools);
+        const started = threadResponseSchema.parse(await appServer.request('thread/start', start));
+        nativeId = started.thread.id;
+        sessionId = encodeCodexSessionId(nativeId);
+        serviceTier = started.serviceTier ?? null;
+        // Codex keeps a name from before the first turn; a failed naming leaves the preview.
+        if (title !== undefined) {
+          await codex.rename(sessionId, title).catch((error) => {
+            console.warn('[native-agents] could not name the new Codex thread:', sessionId, errorMessage(error));
+          });
+        }
       }
+      const entry = { backend, nativeId, directory, origin: 'openchamber', createdAt: now() };
+      if (title !== undefined) entry.title = title;
+      await registry.registerSession(sessionId, entry);
+      const record = unconfirmedSessionRecord({ sessionId, ...entry });
+      await beforePublish(record);
+      if (launch) {
+        await launch.bind(sessionId);
+        sourceTools.set(sessionId, launch.tools);
+      }
+      if (backend === NATIVE_BACKEND_CODEX) codexLive.threadStarted(sessionId, directory, serviceTier, launch?.tools.key ?? '');
+      publisher.session(directory, record, { created: true });
+      return record;
+    } catch (error) {
+      launch?.cancel();
+      if (sessionId) sourceTools.delete(sessionId);
+      throw error;
     }
-    const entry = { backend, nativeId, directory, origin: 'openchamber', createdAt: now() };
-    if (title !== undefined) entry.title = title;
-    await registry.registerSession(sessionId, entry);
-    const record = unconfirmedSessionRecord({ sessionId, ...entry });
-    await beforePublish(record);
-    publisher.session(directory, record, { created: true });
-    return record;
   };
 
 
@@ -1521,9 +1536,9 @@ export const createNativeAgentsRuntime = ({
     },
     prompt: (sessionId, request, signal, approval) => conversations.automaticPrompt(sessionId, request, signal, approval),
     confirm: async (sessionId, directory, state) => {
-      const unified = await conversations.planExecutionConfirmed(sessionId, directory, state);
+      const unified = await conversations.planExecutionOutcome(sessionId, directory, state);
       if (unified !== null) return unified;
-      return (await readPlanHistory(sessionId, directory)).some((record) => record.info.role === 'user' && record.info.id === state.messageID);
+      return (await readPlanHistory(sessionId, directory)).some((record) => record.info.role === 'user' && record.info.id === state.messageID) ? 'accepted' : 'unknown';
     },
     failed: (directory, sessionId, error) => publisher.error(directory, sessionId, unknownError(error instanceof Error ? error.message : 'Could not recover plan execution')),
   });

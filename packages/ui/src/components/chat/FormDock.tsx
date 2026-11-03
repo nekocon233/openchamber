@@ -22,6 +22,7 @@ import { FormFieldControl } from './FormFieldControl';
 import { WebSearchConsentDock } from './WebSearchConsent';
 import { FormMarkdown } from './FormMarkdown';
 import { PlanExecutionModelPicker } from './PlanExecutionModelPicker';
+import { NativeAgentsRequestError, nativeSessionActionErrorKey } from '@/lib/native-agents/errors';
 import { usePlanExecutionModel, type PlanComposerModel } from './usePlanExecutionModel';
 import { serializeFormAsJson, serializeFormAsMarkdown } from './formSerializers';
 import {
@@ -212,8 +213,9 @@ const FormDockPanel: React.FC<{ form: FormRequest; forms: FormRequest[]; compose
             await sessionActions.replyToForm(form.sessionID, form.id, answer, planModel.executionFor(answer));
             planModel.clear();
             formDrafts.delete(form.id);
-        } catch {
-            toast.error(t('chat.formCard.submitFailed'), { description: t('chat.formCard.tryAgain') });
+        } catch (error) {
+            const key = error instanceof NativeAgentsRequestError ? nativeSessionActionErrorKey(error, form.sessionID) : null;
+            toast.error(t('chat.formCard.submitFailed'), { description: key ? t(key) : error instanceof NativeAgentsRequestError ? error.message : t('chat.formCard.tryAgain') });
         } finally {
             setIsResponding(false);
         }

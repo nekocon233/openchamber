@@ -39,6 +39,10 @@ export const dict = {
   "agents.combinations.reset": "Réinitialiser",
 
   "chat.planExecution.model": "Modèle d'exécution",
+  "chat.planExecution.effort": "Effort de réflexion",
+  "chat.planExecution.effortUnavailable": "Ce modèle ne prend plus en charge le niveau de réflexion choisi. Choisissez-en un autre.",
+  "chat.planExecution.unconfirmed": "Envoyez pour vérifier l'exécution précédente. Si elle n'a pas démarré, réessayez avec votre nouvelle sélection.",
+  "chat.planExecution.retryable": "L'exécution précédente n'a pas démarré. Approuvez de nouveau le plan avec le modèle et le niveau de réflexion choisis.",
   "chat.nativeTranscriptTruncated": "Antigravity n'a enregistré qu'une partie de ce message.",
   "chat.workStatus.subagent.unknown": "État inconnu",
   "chat.toolPart.nativeOutputTruncated": "Antigravity n'a enregistré qu'une partie de la sortie de cet outil.",

@@ -14,8 +14,17 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const { id, method, params = {} } = JSON.parse(line);
   if (method === 'initialized') return;
   if (method === 'thread/start') thread.cwd = params.cwd;
-  if (thread.cwd) fs.appendFileSync(path.join(thread.cwd, 'requests.jsonl'), `${JSON.stringify({ method, params })}\n`);
+  const captured = structuredClone(params);
+  const mcp = captured.config?.['mcp_servers.openchamber_subagents'];
+  if (mcp?.env) mcp.env = Object.fromEntries(Object.keys(mcp.env).map((key) => [key, '[redacted]']));
+  if (thread.cwd) fs.appendFileSync(path.join(thread.cwd, 'requests.jsonl'), `${JSON.stringify({ method, params: captured })}\n`);
   const reply = (result) => send({ id, result });
+  if (method === 'config/read') return reply({ config: {} });
+  if (method === 'model/list') return reply({ data: [{ id: 'gpt-5.5', supportedReasoningEfforts: [{ reasoningEffort: 'high' }], serviceTiers: [{ id: 'priority' }] }] });
+  if (method === 'thread/resume') {
+    if (!turns.length) return send({ id, error: { code: -32600, message: 'no rollout found for thread id' } });
+    return reply({ thread });
+  }
   if (method === 'thread/start' || method === 'thread/read') return reply({ thread });
   if (method === 'thread/turns/list') return reply({
     data: turns.map(turn => ({ ...turn, items: params.itemsView === 'full' ? turn.items : [] })), nextCursor: null,

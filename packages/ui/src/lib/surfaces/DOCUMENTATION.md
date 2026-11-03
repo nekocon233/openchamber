@@ -121,6 +121,12 @@ hides it: pressed while the column is open, and the one control left at the
 line's start once its width is zero. Classic keeps the rail at the end and gets
 no such button; the hover peek there stays as it was. The main chat frame cannot
 close or move into a tool zone.
+In editor layout the session column is a framed card like the editor and chat:
+the same hairline edge, 10 px radius and background, flush with the top and
+inset by 4 px on both inline sides and the bottom. Its saved width is the whole
+column, gutter included, and the fit controller keeps counting that width. A
+narrow window floats the same card over the chat and keeps its scrim and
+dismissal. Classic keeps its full-height divider.
 Adjacent editor-layout cards leave a 0.25 rem gap. The bottom tool aligns
 with the chat frame; classic layout keeps its existing gutters.
 
