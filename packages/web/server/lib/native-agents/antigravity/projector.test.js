@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createAntigravityLiveProjection, projectAntigravityHistory, resolveAntigravityBindings } from './projector.js';
-import { parseAgyTranscript } from './protocol.js';
+import { agyTokenUsage, parseAgyTranscript } from './protocol.js';
 import { createNativeEventPublisher } from '../publisher.js';
 import { antigravityPromptFingerprint } from '../prompt-parts.js';
 
@@ -10,6 +10,37 @@ const project = (steps, bindings = new Map()) => projectAntigravityHistory({
   entries: parseAgyTranscript(`${steps.map((step) => JSON.stringify({ status: 'DONE', created_at: '2026-10-31T02:00:00Z', ...step })).join('\n')}\n`).entries,
 });
 const completion = (nativeId, exit) => `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-31T02:01:00Z sender=${nativeId}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task id "${nativeId}/task-2" finished with result:\nCommand exited with code ${exit}.\n\nCommand output:\nBuild result\nLog: file:///untrusted/task-2.log\n</SYSTEM_MESSAGE>`;
+
+it('separates agy output from thinking without double-counting generated tokens', () => {
+  expect(agyTokenUsage({ input_tokens: 10415, output_tokens: 657, thinking_tokens: 616, cache_read_tokens: 8113, total_tokens: 11072 }))
+    .toEqual({ total: 11072, input: 10415, output: 41, reasoning: 616, cache: { read: 8113, write: 0 } });
+  expect(agyTokenUsage({ input_tokens: 10, output_tokens: 1, thinking_tokens: 2, cache_read_tokens: 0 })).toBeUndefined();
+});
+
+it('recovers generation starts before streamed delivery and keeps native tools within their owner', async () => {
+  const base = Date.parse('2026-10-31T02:00:00Z');
+  const send = { messageId: 'accepted', sentAt: base + 529, providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan' };
+  const projection = createAntigravityLiveProjection({ sessionId: `nag_${NATIVE_ID}`, nativeId: NATIVE_ID, directory: '/repo',
+    publisher: createNativeEventPublisher({ publishNativeEvent: () => {} }),
+    request: { messageID: send.messageId, sentAt: send.sentAt, model: send, agent: send.agent, parts: [] },
+  });
+  await projection.applyStep({ step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'Earlier work' }, base + 4000, async () => {});
+  await projection.applyStep({ step_index: 3, step_type: 'agent_response', state: 'DONE', text_delta: '' }, base + 5822, async () => {});
+  projection.finish({ outcome: 'success', response: '', error: '', time: base + 6000 });
+  const history = project([
+    { step_index: 0, type: 'USER_INPUT', content: 'Work' },
+    { step_index: 1, type: 'PLANNER_RESPONSE', content: 'Earlier work' },
+    { step_index: 3, type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'ask_question', args: {} }] },
+    { step_index: 4, type: 'GENERIC', content: 'User Skipped' },
+  ], new Map([[0, send]]));
+  projection.restoreMissingHistory(history);
+  const assistants = projection.records().filter((record) => record.info.role === 'assistant');
+  expect(assistants.map((record) => record.info.time.created)).toEqual([base + 530, base + 531]);
+  const question = assistants[1].parts.find((part) => part.type === 'tool');
+  expect(question.state.time).toEqual({ start: base + 531, end: base + 531 });
+  expect(assistants[0].parts[0].time.start).toBeGreaterThan(base + 4000);
+  expect(history[0].info.time.created).toBe(send.sentAt);
+});
 
 describe('Antigravity native plan prefix', () => {
   it('keeps reply parentage without duplicating question answers as user bubbles', () => {
@@ -167,7 +198,7 @@ describe('Antigravity final response reconciliation', () => {
     ]);
     const before = events.length;
     projection.restoreMissingHistory(history);
-    expect(assistants[0].info.tokens).toMatchObject({ input: 100, output: 30, reasoning: 10, cache: { read: 50, write: 0 } });
+    expect(assistants[0].info.tokens).toMatchObject({ input: 100, output: 20, reasoning: 10, cache: { read: 50, write: 0 } });
     expect(assistants[1].info.tokens).toEqual(original[1].info.tokens);
     expect(assistants.map((record) => record.info.time)).toEqual(original.map((record) => record.info.time));
     expect(assistants.map((record) => record.parts)).toEqual(original.map((record) => record.parts));

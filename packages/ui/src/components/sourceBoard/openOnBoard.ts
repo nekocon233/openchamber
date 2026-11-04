@@ -3,19 +3,22 @@ import * as React from 'react';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { isVSCodeRuntime } from '@/lib/desktop';
+import { resolveEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
 import { openExternalUrl } from '@/lib/url';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSourceBoardStore, type BoardLinkFailureBehavior } from '@/stores/useSourceBoardStore';
 import { useUIStore } from '@/stores/useUIStore';
+import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
 import { boardTargetOfUrl } from './boardLinkTarget';
 
 /**
- * Shows the issue, PR or Linear issue a link names on the issues and PRs
- * board, in the project of `directory`, selected. False, with nothing opened,
+ * Shows a GitHub PR in the desktop PR pane; other tracker links use the
+ * issues and PRs board in the project of `directory`. False, with nothing opened,
  * for anything the board cannot show here: another kind of link, VS Code, a
  * project that is not open, Linear while it is not connected.
  */
@@ -41,6 +44,21 @@ export function useShowOnBoard() {
                 directory ?? null,
             );
             if (!project) return false;
+            if (!mobile && !useUIStore.getState().isMobile && target.kind === 'pull'
+                && parseChangeRequestReference(url)?.identity?.provider === 'github') {
+                const workspaceDirectory = resolveEffectiveDirectory() ?? directory ?? project.path;
+                const opened = usePullRequestSelectionStore.getState().requestOpen({
+                    workspaceDirectory,
+                    sourceDirectory: directory ?? project.path,
+                    url,
+                    failureBehavior,
+                });
+                if (!opened) return false;
+                const ui = useUIStore.getState();
+                if (ui.isSourceBoardOpen) ui.setSourceBoardOpen(false);
+                ui.openContextPanelTab(workspaceDirectory, { mode: 'pr' });
+                return true;
+            }
             // The link itself is the search: it finds that one item, in its own repository.
             board.focusRepositoryItem(project.id, target.kind, url, failureBehavior);
         }
@@ -51,7 +69,7 @@ export function useShowOnBoard() {
 }
 
 /**
- * Opens an issue, PR or Linear issue a session is linked to on the board
+ * Opens an issue, PR or Linear issue a session is linked to in its tracker view
  * (`useShowOnBoard`). Cmd or Ctrl opens the link itself, as links do; so does
  * anything the board cannot show here.
  */

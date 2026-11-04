@@ -9,6 +9,7 @@ import { encodeAntigravitySessionId } from '../ids.js';
 import { antigravityPromptFingerprint } from '../prompt-parts.js';
 import { createNativeRegistry } from '../registry.js';
 import { createAntigravityStore } from './store.js';
+import { captureAntigravityMeasurements } from './measurements.js';
 
 const NATIVE_ID = 'f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const SESSION_ID = encodeAntigravitySessionId(NATIVE_ID);
@@ -52,6 +53,79 @@ const setup = ({ confirmed = true } = {}) => {
 const step = (value) => JSON.stringify({ created_at: '2026-10-01T12:00:00Z', status: 'DONE', ...value });
 
 describe('Antigravity native store', () => {
+  it('keeps stream-only reasoning and text timing across registry and backend restart', async () => {
+    const { home, registry, entry, filePath, directory, writeSummary, writeTranscript } = setup();
+    writeSummary();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Work' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', content: 'Answer', input_tokens: 100, output_tokens: 20, cache_read_tokens: 200 }),
+    ]);
+    await registry.registerSession(SESSION_ID, entry);
+    const sentAt = Date.parse('2026-10-01T12:00:00Z') + 529;
+    const send = { messageId: 'accepted', sentAt, providerID: 'antigravity-native', modelID: 'test', agent: 'build', antigravity: { stepIndex: 0 } };
+    await registry.recordSend(SESSION_ID, send);
+    const initial = await createAntigravityStore({ registry, home }).loadHistory(SESSION_ID, NATIVE_ID, directory);
+    const live = structuredClone(initial.records[1]);
+    live.info.tokens = { total: 120, input: 100, output: 5, reasoning: 15, cache: { read: 200, write: 0 } };
+    live.info.time.completed = sentAt + 5000;
+    live.parts[0].time = { start: sentAt + 3000, end: sentAt + 4800 };
+    const measurements = captureAntigravityMeasurements([live], send.messageId);
+    await registry.recordSend(SESSION_ID, { ...send, antigravity: { ...send.antigravity, measurements } });
+    const restarted = createAntigravityStore({ registry: createNativeRegistry({ filePath }), home });
+    const restored = await restarted.loadHistory(SESSION_ID, NATIVE_ID, directory);
+    expect(restored.records[1]).toEqual(live);
+    // Damaged optional measurements do not erase a valid send or native history.
+    const state = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    state.sends[SESSION_ID][0].antigravity.measurements = { version: 99 };
+    fs.writeFileSync(filePath, JSON.stringify(state));
+    const fallback = await createAntigravityStore({ registry: createNativeRegistry({ filePath }), home }).loadHistory(SESSION_ID, NATIVE_ID, directory);
+    expect(fallback.records[0].info.id).toBe(send.messageId);
+    expect(fallback.records[1].info.tokens).toMatchObject({ output: 20, reasoning: 0 });
+  });
+
+  it.each([
+    { status: 'RUNNING' },
+    { content: '' },
+    { error: 'Generation failed' },
+    { truncated_fields: ['content'] },
+    { truncated_fields: ['tool_calls'] },
+    { truncated_fields: ['error'] },
+    { tool_calls: [{ name: 'read_file', args: { Path: '/repo/file' } }] },
+  ])('rejects an incomplete final response as recovery evidence: %j', (extra) => {
+    const { home, registry, writeTranscript } = setup();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Continue' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', content: 'Retained response', ...extra }),
+    ]);
+    expect(createAntigravityStore({ registry, home }).finalResponse(NATIVE_ID, 0)).toBeNull();
+  });
+
+  it('never borrows another turn or an unbound step to establish a final response', () => {
+    const { home, registry, writeTranscript } = setup();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Earlier request' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', content: 'Earlier response' }),
+      step({ step_index: 2, type: 'USER_INPUT', content: 'New request' }),
+      step({ step_index: 3, type: 'PLANNER_RESPONSE', content: 'New response' }),
+      step({ step_index: 4, type: 'EPHEMERAL_MESSAGE', content: 'Transient status' }),
+    ]);
+    const store = createAntigravityStore({ registry, home });
+    expect(store.finalResponse(NATIVE_ID, 0)).toBeNull();
+    expect(store.finalResponse(NATIVE_ID, 1)).toBeNull();
+    expect(store.finalResponse(NATIVE_ID, null)).toBeNull();
+    expect(store.finalResponse(NATIVE_ID, 2)).toMatchObject({ step_index: 3, content: 'New response' });
+  });
+
+  it.each(['{invalid-record}', step({ step_index: 2, type: 'UNKNOWN_NATIVE_STEP' })])('withholds recovery evidence from incomplete native history: %s', (tail) => {
+    const { home, registry, writeTranscript } = setup();
+    writeTranscript([
+      step({ step_index: 0, type: 'USER_INPUT', content: 'Continue' }),
+      step({ step_index: 1, type: 'PLANNER_RESPONSE', content: 'Retained response' }),
+      tail,
+    ]);
+    expect(createAntigravityStore({ registry, home }).finalResponse(NATIVE_ID, 0)).toBeNull();
+  });
+
   it('withholds decision authority when a transcript loses a complete record', async () => {
     const { home, directory, registry, entry, writeSummary, writeTranscript } = setup();
     writeSummary();

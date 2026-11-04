@@ -24,6 +24,7 @@ import { deepseekHistorySchema, deepseekRewindSchema } from './deepseek/history.
 import { nativeBackendSchema } from './ids.js';
 import { planExecutionStateSchema } from './plan-execution.js';
 import { agentConfigurationSchema } from './agent-configuration.js';
+import { antigravityMeasurementsSchema } from './antigravity/measurements.js';
 
 const MAX_SENDS_PER_SESSION = 200;
 const MAX_TURNS_PER_SESSION = 200;
@@ -110,6 +111,7 @@ const sendRecordSchema = z.object({
       outcome: z.enum(['success', 'error', 'aborted']),
       time: z.number().nonnegative(),
     }).optional(),
+    measurements: antigravityMeasurementsSchema.optional().catch(undefined),
   }).optional(),
 });
 

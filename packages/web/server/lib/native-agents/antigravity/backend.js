@@ -29,6 +29,7 @@ import { createAntigravityQuota } from './quota.js';
 import { parseAntigravityModels } from './catalog.js';
 import { agyPermissionError } from './protocol.js';
 import { AGY_PLAN_QUESTION_PREFIX } from './interaction-signals.js';
+import { captureAntigravityMeasurements } from './measurements.js';
 
 const MINIMUM_VERSION = [1, 1, 15];
 const IDLE_CLOSE_MS = 5 * 60_000;
@@ -206,7 +207,10 @@ export const createAntigravityBackend = ({
       let completionSaved = false;
       try {
         await registry.recordSend(session.id, {
-          ...turn.send, antigravity: { ...turn.send.antigravity, completion: { outcome, time: now() } },
+          ...turn.send, antigravity: {
+            ...turn.send.antigravity, completion: { outcome, time: now() },
+            measurements: captureAntigravityMeasurements(turn.projection.records(), turn.send.messageId),
+          },
         });
         completionSaved = true;
       } catch (failure) { eventFailure(failure); }
@@ -249,8 +253,12 @@ export const createAntigravityBackend = ({
     // even if its last streamed frame was lost. A failed optional read cannot
     // replace an otherwise valid live result with a history error.
     let responseStep = null;
-    try { responseStep = store.finalResponse(session.nativeId, turn.projection.userStepIndex()); } catch { /* The history route reports read failures. */ }
-    if (outcome === 'error' && result.status === 'ERROR' && /stream was interrupted/i.test(result.error ?? '') && responseStep) outcome = 'success';
+    try { responseStep = store.finalResponse(session.nativeId, turn.projection.userStepIndex(), { allowTruncatedContent: result.status === 'SUCCESS' }); } catch { /* The history route reports read failures. */ }
+    // agy can keep an earlier generation error after its own continuation has
+    // completed, including on a later turn. Recover only these known results.
+    const recoverableError = /stream was interrupted/i.test(result.error ?? '')
+      || /^Your previous response was cut off because it exceeded the output token limit\r?\nPlease continue from where you left off, keeping your response shorter(?:\r?\nRetries remaining: \d+)?$/.test(result.error ?? '');
+    if (outcome === 'error' && result.status === 'ERROR' && recoverableError && responseStep) outcome = 'success';
     let error = result.error || (outcome === 'aborted' ? 'aborted' : 'Antigravity turn failed');
     // Headless agy can soft-deny an Ask action and report empty SUCCESS. It
     // never asked the user, and this is not a completed assistant response.

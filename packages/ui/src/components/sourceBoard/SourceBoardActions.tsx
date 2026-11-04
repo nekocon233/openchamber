@@ -26,6 +26,7 @@ import { formatChangeRequestReference } from '@/lib/source-control/identity';
 import { usePullRequestSelectionStore, type PullRequestReturnLocation } from '@/stores/usePullRequestSelectionStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useWalkthroughStore } from '@/stores/useWalkthroughStore';
+import { useEffectiveGitDirectory } from '@/stores/useGitStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSession } from '@/sync/sync-context';
 import { newMutationKey } from './mutationKey';
@@ -365,12 +366,19 @@ export const SourceBoardPullLinks: React.FC<{
 }> = ({ pull, project, context, projectOwnsDirectory, currentDirectory, onLeave, returnTo }) => {
     const { t } = useI18n();
     const mobile = useMobileAppActions();
+    const currentGitDirectory = useEffectiveGitDirectory(currentDirectory ?? null);
     const open = (surface: 'diff' | 'walkthrough') => {
         const source: PullRequestSource = { kind: 'pr', number: pull.number, sourceRepo: { owner: pull.sourceRepo.owner, repo: pull.sourceRepo.repo } };
         const ui = useUIStore.getState();
-        const directory = currentDirectory && projectOwnsDirectory(currentDirectory) ? currentDirectory : project.path;
+        const linkedDiff = !mobile && surface === 'diff' && returnTo?.tab === 'linked';
+        const directory = linkedDiff && normalizePath(currentGitDirectory) !== normalizePath(context.directory)
+            ? context.directory
+            : currentDirectory && projectOwnsDirectory(currentDirectory) ? currentDirectory : project.path;
+        const restoreWorkspace = linkedDiff && directory !== currentDirectory
+            ? useSessionUIStore.getState().captureNavigationReturn(returnTo.workspaceDirectory)
+            : undefined;
         if (directory === currentDirectory) ui.closeMainSurfaces();
-        else useSessionUIStore.getState().openNewSessionDraft({ selectedProjectId: project.id, directoryOverride: project.path });
+        else useSessionUIStore.getState().openNewSessionDraft({ selectedProjectId: project.id, directoryOverride: linkedDiff ? directory : project.path });
         if (surface === 'diff') {
             if (mobile) {
                 // The phone's Changes looks requests up by the normalized folder.
@@ -380,7 +388,7 @@ export const SourceBoardPullLinks: React.FC<{
                 return;
             }
             usePullRequestSelectionStore.getState().requestDiff(returnTo ? context.directory : directory, source,
-                returnTo ? { ...returnTo, reference: pull, context } : undefined);
+                returnTo ? { ...returnTo, reference: pull, context, restoreWorkspace } : undefined);
             ui.openContextPanelTab(directory, { mode: 'diff', diffScope: 'pr' });
             return;
         }

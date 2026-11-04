@@ -130,12 +130,14 @@ const segmentProposal = ({ entries, nativeId, readRoot, sessionId, directory, se
     proposal.plan = signal.plan;
   }
   const time = agyTime(final.created_at, completion?.time ?? send.sentAt);
+  const metadata = { openchamberToolSource: 'native-interaction' };
+  if (kind) metadata.nativeQuestionKind = kind;
   const part = buildToolPart({
     id: `${callID}_part`, sessionID: sessionId, messageID, callID,
     tool: kind ? 'plan_exit' : 'question',
     input: kind ? { plan: signal.plan } : { questions: signal.questions },
     title: '', start: time,
-    metadata: kind ? { nativeQuestionKind: kind } : {},
+    metadata,
     result: { status: 'completed', output: '', end: time },
   });
   return { proposal, part, messageID };

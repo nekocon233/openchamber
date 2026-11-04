@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
 const browser = new Window({ url: 'http://localhost/' });
@@ -11,13 +11,21 @@ Object.assign(globalThis, {
   getComputedStyle: browser.getComputedStyle.bind(browser),
   requestAnimationFrame: browser.requestAnimationFrame.bind(browser),
   cancelAnimationFrame: browser.cancelAnimationFrame.bind(browser),
+  IS_REACT_ACT_ENVIRONMENT: true,
 });
+const originalFetch = globalThis.fetch;
+globalThis.fetch = Object.assign(() => new Promise<Response>(() => {}), originalFetch);
 
 const { act } = await import('react');
 const { createRoot } = await import('react-dom/client');
 const { I18nProvider } = await import('@/lib/i18n');
 const { TooltipProvider } = await import('@/components/ui/tooltip');
 const { MessageFilesDisplay } = await import('./FileAttachment');
+const { useUIStore } = await import('@/stores/useUIStore');
+const { useProjectsStore } = await import('@/stores/useProjectsStore');
+const { useDirectoryStore } = await import('@/stores/useDirectoryStore');
+const { useSessionUIStore } = await import('@/sync/session-ui-store');
+const { usePullRequestSelectionStore } = await import('@/stores/usePullRequestSelectionStore');
 import type { FilePart } from '@/lib/opencode/model';
 import type { ToolPopupContent } from './message/types';
 
@@ -71,9 +79,50 @@ const clickChip = async (chip: Element) => {
   });
 };
 
+const external: string[] = [];
+Object.defineProperty(browser, 'open', { value: (url: string) => { external.push(url); return browser; } });
+beforeEach(async () => act(async () => {
+  external.length = 0;
+  useUIStore.setState({ isMobile: false, openTrackerLinksOnBoard: true, contextPanelByDirectory: {}, isSourceBoardOpen: false });
+  useProjectsStore.setState({ projects: [{ id: 'p1', path: '/repo', addedAt: 1 }] });
+  useDirectoryStore.setState({ currentDirectory: '/repo' });
+  useSessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: '/repo', newSessionDraft: { ...useSessionUIStore.getInitialState().newSessionDraft } });
+  usePullRequestSelectionStore.getState().resetOpenRequests();
+}));
+
 afterAll(async () => {
   await act(async () => root.unmount());
+  globalThis.fetch = originalFetch;
   browser.close();
+});
+
+describe('GitHub PR reference chips', () => {
+  const url = 'https://github.com/acme/project/pull/12/files#diff-1';
+  for (const compact of [false, true]) {
+    test(`opens the PR tool pane from a ${compact ? 'compact' : 'regular'} chip`, async () => {
+      await renderFiles([file({ mime: 'application/vnd.github.pull-request-link', filename: 'PR #12', url })], compact);
+      const chip = container.querySelector('button');
+      if (!chip) throw new Error('Missing PR chip');
+      await clickChip(chip);
+      expect(useUIStore.getState().contextPanelByDirectory['/repo']?.tabs).toMatchObject([{ mode: 'pr' }]);
+      expect(useUIStore.getState().isSourceBoardOpen).toBe(false);
+      expect(external).toEqual([]);
+    });
+  }
+
+  test('external preference, modifier clicks and mobile chips keep their existing destination', async () => {
+    await renderFiles([file({ mime: 'application/vnd.github.pull-request-link', filename: 'PR #12', url })], false);
+    const chip = container.querySelector('button');
+    if (!chip) throw new Error('Missing PR chip');
+    useUIStore.setState({ openTrackerLinksOnBoard: false });
+    await clickChip(chip);
+    useUIStore.setState({ openTrackerLinksOnBoard: true });
+    await act(async () => chip.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })));
+    await act(async () => useUIStore.setState({ isMobile: true }));
+    await clickChip(chip);
+    expect(external).toEqual([url, url, url]);
+    expect(usePullRequestSelectionStore.getState().openRequests.size).toBe(0);
+  });
 });
 
 describe('MessageFilesDisplay pasted text files', () => {

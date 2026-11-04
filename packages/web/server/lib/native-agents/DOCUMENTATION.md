@@ -1151,7 +1151,9 @@ agent of each OpenChamber send (at most 200 per session), the work-tree
 snapshots of each OpenChamber prompt (at most 200 per session), the revert
 in effect, the private captured Claude checklist config directory/list ID,
 bounded Antigravity headless permission-denial action names and completion time
-bound to an accepted send, AGY turn outcomes and application decision delivery
+bound to an accepted send, AGY stream-only token/timing measurements keyed by
+native message/part identity and text hashes (without conversation text or tool
+payloads), AGY turn outcomes and application decision delivery
 identity/state without question or plan text,
 and OpenChamber's own session metadata (btw and review links,
 goals, the session assist's recap and suggestion), which OpenCode keeps in its

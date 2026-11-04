@@ -1,6 +1,8 @@
 import React from 'react';
 
 import { useMobileAppActions } from '@/apps/mobileAppContext';
+import { useShowOnBoard } from '@/components/sourceBoard/openOnBoard';
+import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import type { PrVisualSummary } from '@/stores/useGitHubPrStatusStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { selectNativeTasksTab, type NativeTasksTab } from '../native-tasks/task-ui-store';
@@ -13,6 +15,7 @@ import { selectNativeTasksTab, type NativeTasksTab } from '../native-tasks/task-
  */
 export const useWorkStatusNavigation = (directory: string | null) => {
   const mobileActions = useMobileAppActions();
+  const showTrackerLink = useShowOnBoard();
   const openContextSurface = useUIStore((state) => state.openContextSurface);
   const openContextOverview = useUIStore((state) => state.openContextOverview);
   const openContextPanelTab = useUIStore((state) => state.openContextPanelTab);
@@ -44,7 +47,7 @@ export const useWorkStatusNavigation = (directory: string | null) => {
     openContextPanelTab(directory, { mode: 'diff', diffScope: 'working' });
   }, [directory, mobileActions, openContextPanelTab]);
 
-  const openChangeRequest = React.useCallback((summary: Pick<PrVisualSummary, 'number' | 'repo'>) => {
+  const openChangeRequest = React.useCallback((summary: Pick<PrVisualSummary, 'number' | 'repo' | 'url' | 'provider'>) => {
     if (!directory) return;
     if (mobileActions) {
       if (summary.repo) {
@@ -58,8 +61,16 @@ export const useWorkStatusNavigation = (directory: string | null) => {
       }
       return;
     }
+    const url = summary.url ?? (summary.provider === 'github' && summary.repo
+      ? `https://github.com/${summary.repo.owner}/${summary.repo.repo}/pull/${summary.number}` : null);
+    if (summary.provider === 'github' || (url && parseChangeRequestReference(url)?.identity?.provider === 'github')) {
+      if (!url || !showTrackerLink(url, directory)) {
+        openContextPanelTab(directory, { mode: 'pr' });
+      }
+      return;
+    }
     openContextSurface(directory, 'pr');
-  }, [directory, mobileActions, openContextSurface]);
+  }, [directory, mobileActions, openContextPanelTab, openContextSurface, showTrackerLink]);
 
   const openTasks = React.useCallback((tab: NativeTasksTab) => {
     selectNativeTasksTab(tab);

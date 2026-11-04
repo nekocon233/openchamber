@@ -248,6 +248,10 @@ chat/palette go through the `openContext*` actions in `useUIStore`.
   reopen or move without remounting it. Visited PR tabs in other projects stay
   mounted with their own explicit directories; an unvisited tab stays asleep.
   Closing a tab removes its view, and a runtime switch clears the retained set.
+  GitHub PR links reveal that same surface without toggling it closed. Its
+  linked preview retains the normal list and branch views, and may read from
+  a source directory different from the workspace hosting the pane. Opening
+  another project's PR leaves the current conversation and project selected.
   Singleton surfaces (git, notes, context) remount on switch. These
   surfaces must restore their state from stores or snapshots.
 - Portalled menus and dialogs handle their own Escape key. The panel's capture

@@ -12,10 +12,11 @@ import { useChatSurfaceMode } from './useChatSurfaceMode';
 
 /**
  * Where a plain click on a web link in chat content goes. With the settings
- * on, an issue, PR or Linear link opens on the issues and PRs board, and any
- * other link in the built-in browser panel of `directory`. Tracker links
+ * on, a GitHub PR opens in the desktop PR pane; other tracker links open on
+ * the issues and PRs board. Other links can open in the built-in browser
+ * panel of `directory`. Tracker links
  * explicitly set to external always use the system browser. A tracker that
- * cannot open on the board reports the failure with a manual external action.
+ * cannot open internally reports the failure with a manual external action.
  * Only the desktop panel can show any site: on the web it is an iframe, which
  * most sites refuse to load in, so links there keep opening in a new tab.
  * Modified clicks never come here: they keep the browser's own meaning, which

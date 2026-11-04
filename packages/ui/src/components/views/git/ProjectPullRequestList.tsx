@@ -2,16 +2,10 @@ import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { ReferenceBrowserList, ReferenceBrowserSearch } from '@/components/references/ReferenceBrowser';
-import { ReferencePreview } from '@/components/references/ReferencePreview';
 import { referencePickerItemKey } from '@/components/references/referencePickerItems';
 import { useGitHubReadContext } from '@/components/references/referenceSources';
-import { useReferenceBrowser, type ReferenceBrowser } from '@/components/references/useReferenceBrowser';
-import { SourceBoardActions, SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
-import { SourceBoardChecksDialog } from '@/components/sourceBoard/SourceBoardChecksDialog';
-import { SourceBoardLabels, SourceBoardReviewers } from '@/components/sourceBoard/SourceBoardMetaEditors';
-import { SourceBoardReply } from '@/components/sourceBoard/SourceBoardReply';
-import { usePullAttachments } from '@/components/sourceBoard/pullAttachments';
-import { useThreadActions } from '@/components/sourceBoard/threadActions';
+import { useReferenceBrowser } from '@/components/references/useReferenceBrowser';
+import { SourceBoardPullLinks } from '@/components/sourceBoard/SourceBoardActions';
 import { useBoardRevalidation } from '@/components/sourceBoard/useBoardRevalidation';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui';
@@ -19,63 +13,13 @@ import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
 import { useOpenSourceControlSettings } from '@/hooks/useOpenSourceControlSettings';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import type { GitHubPullReference, SourceControlReadContext } from '@/lib/api/types';
 import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
 import { isIMECompositionEvent } from '@/lib/ime';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { hasSameSourceControlReadContext } from '@/lib/source-control/identity';
 import { pullRequestNavigationKey, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
-
-const ProjectPullRequestDetail: React.FC<{
-  reference: GitHubPullReference;
-  browser: ReferenceBrowser;
-  context: SourceControlReadContext;
-  workspaceDirectory: string;
-}> = ({ reference, browser, context, workspaceDirectory }) => {
-  const { sourceControl } = useRuntimeAPIs();
-  const [checksOpen, setChecksOpen] = React.useState(false);
-  const attachments = usePullAttachments(reference);
-  const { retry } = browser.list;
-  const { refreshGithubDetail } = browser;
-  const refresh = React.useCallback(async () => {
-    await Promise.all([retry(), refreshGithubDetail()]);
-  }, [refreshGithubDetail, retry]);
-  const refreshFromHost = async () => {
-    await sourceControl.refreshProviderReads(context);
-    await refresh();
-  };
-  const threadActions = useThreadActions(reference, context, refresh);
-  const item = { source: 'github' as const, reference };
-
-  return (
-    <>
-      <ReferencePreview
-        item={item}
-        directory={context.directory}
-        pullStatus={browser.pullStatusOf(reference)}
-        linearDetail={{ status: 'idle' }}
-        githubDetail={browser.githubDetail}
-        purpose="attach"
-        pinned
-        includeDiff={false}
-        onIncludeDiffChange={() => undefined}
-        now={browser.now}
-        onRefresh={refreshFromHost}
-        footer={<SourceBoardActions item={item} project={null} context={context} onStartWorktree={() => undefined} onChanged={refresh} />}
-        onOpenChecks={() => setChecksOpen(true)}
-        commentAttachments={{ onAttach: attachments.attachComment, onAttachAll: attachments.attachComments }}
-        threadActions={threadActions}
-        labelsControl={<SourceBoardLabels reference={reference} context={context} onChanged={refresh} />}
-        reviewersControl={<SourceBoardReviewers pull={reference} detail={browser.githubDetail} context={context} onChanged={refresh} />}
-        reply={<SourceBoardReply key={reference.number} reference={reference} context={context} onRefresh={refresh} />}
-        pullLinks={<SourceBoardPullLinks pull={reference} project={{ id: '', path: workspaceDirectory }} context={context} projectOwnsDirectory={(directory) => directory === workspaceDirectory} currentDirectory={workspaceDirectory}
-          returnTo={{ workspaceDirectory, tab: 'project' }} />}
-      />
-      <SourceBoardChecksDialog pull={reference} context={context} open={checksOpen} onOpenChange={setChecksOpen} onAttachFailed={attachments.attachFailedChecks} />
-    </>
-  );
-};
+import { PullRequestDetail } from './PullRequestDetail';
 
 /** Single-repository PR list, retained across the panel's branch and detail views. */
 export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDirectory: string; active: boolean }> = ({ directory, workspaceDirectory, active }) => {
@@ -143,7 +87,18 @@ export const ProjectPullRequestList: React.FC<{ directory: string; workspaceDire
             </Button>
           </div>
           {active && selectedPull && context && context !== 'missing' ? (
-            <ProjectPullRequestDetail key={`${selectedPull.sourceRepo.owner}/${selectedPull.sourceRepo.repo}#${selectedPull.number}`} reference={selectedPull} browser={browser} context={context} workspaceDirectory={workspaceDirectory} />
+            <PullRequestDetail
+              key={`${selectedPull.sourceRepo.owner}/${selectedPull.sourceRepo.repo}#${selectedPull.number}`}
+              reference={selectedPull}
+              context={context}
+              githubDetail={browser.githubDetail}
+              pullStatus={browser.pullStatusOf(selectedPull)}
+              now={browser.now}
+              onChanged={browser.list.retry}
+              refreshDetail={browser.refreshGithubDetail}
+              pullLinks={<SourceBoardPullLinks pull={selectedPull} project={{ id: '', path: workspaceDirectory }} context={context} projectOwnsDirectory={(directory) => directory === workspaceDirectory} currentDirectory={workspaceDirectory}
+                returnTo={{ workspaceDirectory, tab: 'project' }} />}
+            />
           ) : null}
         </>
       ) : null}

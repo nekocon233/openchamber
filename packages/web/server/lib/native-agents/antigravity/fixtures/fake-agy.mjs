@@ -116,6 +116,7 @@ const append = (entry, preview = entry) => {
   writeSummary();
 };
 const usage = { input_tokens: 10, output_tokens: 4, thinking_tokens: 1, cache_read_tokens: 2, total_tokens: 14 };
+const outputLimitError = 'Your previous response was cut off because it exceeded the output token limit\nPlease continue from where you left off, keeping your response shorter\nRetries remaining: 3';
 frame({ event: 'init', conversation_id: conversationId, init: { cwd, model, permission_mode: 'always-proceed' } });
 let turns = 0;
 let active = false;
@@ -153,7 +154,7 @@ const run = (text) => {
   frame({ event: 'step_update', step_update: {
     conversation_id: conversationId, step_index: userIndex, state: 'DONE', step_type: 'user_input',
   } });
-  if (visible === 'decision-questions' || visible === 'decision-plan') {
+  if (['decision-questions', 'decision-plan', 'decision-questions-output-limit', 'decision-questions-stale-output-limit'].includes(visible)) {
     const questions = visible === 'decision-plan' ? [{
       question: '<openchamber-plan-v1>\n# Fixture implementation plan\n\n1. Preserve the API.\n2. Update the tests.',
       options: ['build', 'plan'], is_multi_select: false,
@@ -163,8 +164,25 @@ const run = (text) => {
     ];
     planner('Please review the next step.\n', [{ name: 'ask_question', args: { questions } }]);
     append({ step_index: stepIndex++, type: 'GENERIC', content: questions.map((_, index) => `A${index + 1}: User Skipped`).join('\n') });
+    if (visible === 'decision-questions-output-limit') {
+      planner('');
+      append({ step_index: stepIndex++, type: 'ERROR_MESSAGE', error: outputLimitError, content: outputLimitError });
+    }
     planner('Waiting for your answer.\n');
-    finish('SUCCESS', 'Waiting for your answer.\n');
+    const limited = visible.endsWith('output-limit');
+    finish(limited ? 'ERROR' : 'SUCCESS', 'Waiting for your answer.\n', limited ? outputLimitError : undefined);
+    return;
+  }
+  if (visible.startsWith('output-limit-')) {
+    if (visible !== 'output-limit-no-final') {
+      append({ step_index: stepIndex++, type: 'PLANNER_RESPONSE', content: 'Incomplete answer',
+        truncated_fields: visible === 'output-limit-truncated-final' ? ['content'] : [] });
+    }
+    if (visible === 'output-limit-unreadable-final') {
+      fs.unlinkSync(transcript);
+      fs.mkdirSync(transcript);
+    }
+    finish('ERROR', 'Incomplete answer', visible === 'output-limit-unrecognized' ? `${outputLimitError}\nAuthentication expired` : outputLimitError);
     return;
   }
   if (visible === 'sticky') {
@@ -195,8 +213,8 @@ const run = (text) => {
     finish('SUCCESS', response);
     return;
   }
-  if (visible === 'stop-after-commentary') {
-    interruptError = 'The stream was interrupted. Please continue the task.';
+  if (visible === 'stop-after-commentary' || visible === 'stop-after-output-limit') {
+    interruptError = visible === 'stop-after-output-limit' ? outputLimitError : 'The stream was interrupted. Please continue the task.';
     planner('Waiting for completion\n');
     return;
   }

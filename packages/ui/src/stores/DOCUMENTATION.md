@@ -20,8 +20,9 @@ Do not put high-frequency local component state here just because it is convenie
 `useSourceBoardStore` keeps per-runtime board choices and transient requests to
 show a link. Repository focus names its project; both repository and Linear
 focus retain the original URL and a failure behavior. Chat requests use
-`manual`, so a failed lookup remains on the board with an explicit external
-action. Other entry points use `automatic` for their existing fallback.
+`manual`, so a failed lookup remains in its tracker view with an explicit external
+action. Desktop GitHub PRs use `usePullRequestSelectionStore` and the PR tool pane;
+the other tracker requests use the board. Other entry points use `automatic` for their existing fallback.
 Focus requests are consumed once and are excluded from persisted choices.
 
 There are multiple store categories in this directory.
@@ -581,6 +582,16 @@ Invariants to preserve when editing:
 
 ## Git / PR Stores
 
+`usePullRequestSelectionStore.ts` also owns one-shot desktop GitHub PR open
+requests, keyed by runtime and hosting workspace. Each carries the source
+directory, original URL and existing failure behavior. The source directory
+owns provider authority; the workspace only owns the tool window. Requests
+are consumed by the visible PR pane and held in memory only, with at most 100
+pending workspaces. A repeated click creates a new request; taking or cancelling
+an older object cannot consume its replacement. A cancelled request cannot be
+captured later by the pane's activation effect. Runtime endpoint reset clears
+the pending map, and retained previews belong to their original runtime.
+
 `usePullRequestSelectionStore.ts` keeps optional return targets for PR-to-Changes
 navigation, keyed by runtime and diff directory. A target includes the exact PR,
 bound read context, originating workspace directory and project/branch tab.
@@ -588,6 +599,11 @@ Returning queues a request under that workspace and consumes the diff target.
 The PR view consumes the request after restoring its selection. These two maps
 are in memory only and each holds at most 100 entries. Repeated navigation
 replaces the old target; stale objects cannot consume a newer request.
+The destination is a project tab, branch tab or linked preview. A linked target
+keeps its original open request, and may carry the session owner's return action
+when Changes navigates to a different Git directory. A new explicit PR open
+retires a pending return for that workspace; a return retires a pending open.
+Source account/context and PR checks remain required before Back to PR is shown.
 
 `usePendingReviewDraftStore.ts` persists unsent GitHub review summaries, comment
 edits and uncertain mutation attempts under runtime, complete bound read context

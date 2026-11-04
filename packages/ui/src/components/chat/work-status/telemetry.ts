@@ -1,4 +1,4 @@
-import type { Message, Part } from '@/lib/opencode/model';
+import type { Message, Part, ToolPart } from '@/lib/opencode/model';
 import { isConversationRole } from '@/lib/opencode/model';
 import { computeCacheHitRate } from '@/stores/utils/tokenUtils';
 
@@ -147,10 +147,13 @@ const tokenRate = (tokens: number, durationMs: number): number | null => {
   return rate !== null && rate <= MAX_PLAUSIBLE_TOKENS_PER_SECOND ? rate : null;
 };
 
+const isApplicationInteraction = (part: ToolPart): boolean => part.state.status !== 'pending'
+  && part.state.metadata?.openchamberToolSource === 'native-interaction';
+
 /** Text delivery rate for the final reply, not throughput of the agent loop. */
 function calculateResponseTokenRate(record: SessionMessageRecord): number | null {
   const { info, parts } = record;
-  if (info.role !== 'assistant' || info.error || parts.some((part) => part.type === 'tool')) return null;
+  if (info.role !== 'assistant' || info.error || parts.some((part) => part.type === 'tool' && !isApplicationInteraction(part))) return null;
   const output = nonnegative(info.tokens?.output);
   const { created, completed } = info.time;
   if (output === null || completed === undefined || nonnegative(created) === null || nonnegative(completed) === null) return null;
@@ -186,7 +189,7 @@ function calculateCompletedStepStats(record: SessionMessageRecord): CompletedSte
   const rawToolIntervals: Array<[number, number]> = [];
   let validTools = validWindow;
   for (const part of parts) {
-    if (part.type !== 'tool') continue;
+    if (part.type !== 'tool' || isApplicationInteraction(part)) continue;
     if (part.state.status !== 'completed' && part.state.status !== 'error') {
       validTools = false;
       continue;
@@ -209,7 +212,7 @@ function calculateCompletedStepStats(record: SessionMessageRecord): CompletedSte
   // timestamp.
   let ttftMs: number | null = null;
   for (const part of parts) {
-    if (part.type === 'text' || part.type === 'reasoning') {
+    if ((part.type === 'text' || part.type === 'reasoning') && part.text) {
       const partStart = part.time?.start;
       if (validWindow && partStart !== undefined && Number.isFinite(partStart) && partStart > created && partStart <= completed) {
         const delta = partStart - created;

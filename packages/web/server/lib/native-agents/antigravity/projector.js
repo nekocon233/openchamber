@@ -160,8 +160,8 @@ export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entr
   let parentStep = null;
   let lastAssistant = null;
   let lastCreated = 0;
-  const created = (entry) => {
-    const time = agyTime(entry?.created_at, now());
+  const created = (entry, acceptedAt) => {
+    const time = acceptedAt ?? agyTime(entry?.created_at, now());
     lastCreated = Math.max(time, lastCreated + 1);
     return lastCreated;
   };
@@ -209,7 +209,7 @@ export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entr
       parentStep = entry.step_index;
       lastAssistant = null;
       records.push(userRecord({
-        sessionId, id, created: created(entry), send,
+        sessionId, id, created: created(entry, send?.sentAt), send,
         text: antigravityVisiblePromptText(entry.content ?? '', send?.agent === 'plan' ? send.antigravity?.fingerprint : undefined),
       }));
       continue;
@@ -272,10 +272,15 @@ export const projectAntigravityHistory = ({ sessionId, nativeId, directory, entr
         && (resultStep.content ?? '').split(/\r?\n/).includes(`Tool is running as a background task with task id: ${nativeId}/task-${stepIndex}`);
       const result = (background ? taskResults.get(stepIndex) : null) ?? resultStep;
       const output = resultStep?.type === 'GENERIC' ? result?.content ?? '' : undefined;
-      const resultTime = result ? agyTime(result.created_at, time) : time;
+      const nativeStart = agyTime(resultStep?.created_at, time);
+      const nativeEnd = result ? agyTime(result.created_at, nativeStart) : nativeStart;
+      // Native timestamps have second precision. Preserve the interval when
+      // ordered steps in the same second receive distinct message stamps.
+      const toolStart = Math.max(time, nativeStart);
+      const resultTime = toolStart + Math.max(0, nativeEnd - nativeStart);
       const part = toolPart({
         sessionId, nativeId, stepIndex,
-        call, output, created: agyTime(resultStep?.created_at, time), end: resultTime,
+        call, output, created: toolStart, end: resultTime,
         status: result?.status, error: result?.error,
         truncated: result?.truncated_fields?.includes('content') === true,
         inputTruncated: entry.truncated_fields?.includes('tool_calls') === true,
@@ -431,6 +436,13 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
           && !(part.state.status === 'error' && part.state.error === MISSING_TOOL_RESULT);
         const known = new Set(historical.parts.map((part) => part.id));
         let changed = false;
+        // The stream first exposes an assistant after generation has started.
+        // Native generation starts also enclose tools recovered from history.
+        if (live.info.role === 'assistant' && historical.info.role === 'assistant'
+          && historical.info.time.created < live.info.time.created) {
+          live.info.time.created = historical.info.time.created;
+          changed = true;
+        }
         // Some generation frames omit usage even though the completed native
         // step has it. Keep measured live timing and counters already received.
         if (live.info.role === 'assistant' && historical.info.role === 'assistant'

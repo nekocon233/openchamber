@@ -45,6 +45,21 @@ project.
   opens details, so the first row does not fetch a preview by itself. The
   selected PR is also retained as the opened item: revalidating the first page
   cannot discard a later-page preview or its unsent reply.
+- Desktop GitHub PR links open the PR tool pane through the shared tracker
+  entry point in `sourceBoard/openOnBoard.ts`. Chat, PR reference chips,
+  sidebar badges and work-status PR rows reveal a tab with
+  `openContextPanelTab`, so repeated clicks do not toggle it closed. A one-shot
+  request names the hosting workspace and the source directory separately;
+  the latter supplies the account and repository for the exact URL lookup and
+  every detail or action. Closed and merged PRs can be previewed directly
+  without widening the normal open-only list. The original list and branch
+  views remain retained underneath the linked preview. Chips honor the chat
+  link preference; their mobile, mini-chat, VS Code and modifier-click behavior
+  remains external. Explicit host links remain external on every surface.
+  Linked previews also record a return target when opening Changes. The existing
+  Back to PR control restores their exact preview, reply and reading position.
+  Cross-directory comparisons use the source binding and restore the original
+  conversation or draft before revealing its retained PR pane.
 - Each GitHub row in the project PR list shows its check result and count.
   Closed or merged results from a direct lookup or advanced query are excluded
   by the browser state owner before rows and checks consume them. Status batches supply these
@@ -142,7 +157,7 @@ preview's footer holds actions instead of what the agent gets.
   (`resolveLinearMappedProjectPath`), else the mapping's default, else the
   board's project; the user can pick another for that issue. Its state pill
   in the preview opens the team's states (`SourceBoardLinearStatus`).
-- An issue, PR or Linear issue a session links to opens on the board, selected:
+- An issue, GitLab merge request or Linear issue a session links to opens on the board, selected:
   from the work-status panel and from the sidebar's badges and their tooltips
   (`sourceBoard/openOnBoard.ts`), and from links in chat while
   `openTrackerLinksOnBoard` is on (`chat/useOpenChatLink.ts`). The board moves to the session's project and
@@ -160,7 +175,8 @@ preview's footer holds actions instead of what the agent gets.
   keeps the automatic behavior: an unknown repository link opens externally and
   an unreadable Linear identifier is searched for. The phone shows link feedback
   in its preview page too. Cmd or Ctrl-click and VS Code use the external link.
-  A chat whose project or integration cannot open the board shows a notice with
+  GitHub PRs use the desktop PR pane described above; mobile keeps the board.
+  A chat whose project or integration cannot open its tracker view shows a notice with
   a manual external action. A badge's `+N` does nothing; its tooltip lists the others.
 
 - General settings offers two destinations for chat tracker links, backed by

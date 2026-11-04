@@ -134,19 +134,43 @@ At turn completion, history fills records and tool parts absent from the
 stream, including skipped `ask_question` calls. Their native outcomes remain
 unchanged; separate application question/plan parts carry human decisions.
 Saved per-message token counters also fill live records whose generation
-frames omitted usage. Existing live counters and text timing remain intact;
+frames omitted usage. agy's output includes thinking; the shared projection
+subtracts thinking from output before exposing the separate reasoning counter.
+Inconsistent thinking/output counters remain unavailable. Existing live counters
+and text timing remain intact;
 absent saved usage stays unknown. Only changed records are republished, so
 the loaded-turn average can recover without a page reload. A tool first seen
 in a completed frame allocates its start before its end to keep its interval
 valid for turn timing.
+Native generation starts refine live message creation times when the stream
+arrived later. Accepted user sends retain their admission time, and ordered
+steps in one native second shift tool intervals together to preserve duration.
+Recovered tools therefore stay within their owning generation's window.
+`measurements.js` saves stream-only counters, completion times and part intervals
+with the accepted send. It stores IDs and text hashes, without text, inputs or
+outputs. Native parent/message identity and compatible usage gate restoration;
+text timing also requires a matching content hash. Changed native data remains
+authoritative. Invalid optional measurements fall back to native history without
+discarding the send. The existing 200-send registry bound applies. A failed
+measurement write does not discard the live result and follows completion-write
+failure handling.
+Post-turn application question and plan parts carry
+`openchamberToolSource: 'native-interaction'`; they are UI decisions and contribute
+no model tool time. Native `ask_question` calls retain their execution timing.
 Complete saved arguments also fill partial tool frames (denials can carry only
 a path), without replacing a known live error. Truncated saved arguments cannot
 replace live input. Completed checkpoints supply their full summary and settle
 stream placeholders; a missing completion does not leave a running spinner
 after the turn has ended.
-Only the known `ERROR` / `stream was interrupted` result is recovered against
-a complete final native planner step. Other errors remain failures even when
-the log contains partial assistant text. Unfinished tool frames do not become
+The known `ERROR` results for `stream was interrupted` and the output-token-limit
+continuation instruction can remain after agy has completed its own recovery,
+including on a subsequent turn without another saved error step. They recover
+only against a complete final native planner step bound to the current user
+step. A later user step, incomplete transcript, failed final step, truncated
+text/error/tool calls or outstanding tool call prevents recovery. Explicit stops
+and other errors remain failures even when the log contains assistant text.
+The successful completion is saved before publishing recovered questions; native
+error steps remain in the transcript. Unfinished tool frames do not become
 successful empty outputs; a later durable completion can replace that unknown
 result, including on a history read. Prompts are never resent to repair a stream.
 

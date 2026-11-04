@@ -23,9 +23,11 @@ import { useRepositoryBinding } from '@/lib/source-control/repository-binding';
 import { sourceControlReadContextParts, hasSameSourceControlReadContext } from '@/lib/source-control/identity';
 import type { SourceControlReadContext } from '@/lib/source-control/types';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
 import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
 import { ProjectPullRequestList } from './git/ProjectPullRequestList';
-import { pullRequestNavigationKey, usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
+import { pullRequestNavigationKey, usePullRequestSelectionStore, type PullRequestOpenRequest } from '@/stores/usePullRequestSelectionStore';
+import { LinkedPullRequestView } from './git/LinkedPullRequestView';
 
 const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string; context: SourceControlReadContext | null }> = ({ directory, workspaceDirectory, context }) => {
   const { t } = useI18n();
@@ -33,7 +35,7 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
   const runtimeKey = useGitStore(state => state.runtimeKey);
   const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(runtimeKey, workspaceDirectory)));
   React.useEffect(() => {
-    if (!returning || !context) return;
+    if (!returning || returning.tab === 'linked' || !context) return;
     if (!hasSameSourceControlReadContext(returning.context, context)) {
       usePullRequestSelectionStore.getState().settleReturnRequest(returning);
       return;
@@ -65,8 +67,47 @@ const PullRequestTabs: React.FC<{ directory: string; workspaceDirectory: string;
   );
 };
 
-/** Repository browsing stays available even when the checkout cannot create a PR. */
+/** A link temporarily previews its own repository without replacing the workspace's retained list. */
 export const PullRequestView: React.FC<{ directory: string; visible?: boolean }> = ({ directory, visible = true }) => {
+  const runtimeKey = useGitStore(state => state.runtimeKey);
+  const pending = usePullRequestSelectionStore(state => state.openRequests.get(pullRequestNavigationKey(runtimeKey, directory)));
+  const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)));
+  const [opened, setOpened] = React.useState<PullRequestOpenRequest | null>(null);
+  // Normal tabs consume their own return request when Activity reconnects.
+  // Drop the link before those child effects can remove the request.
+  if (visible && returning && returning.tab !== 'linked' && opened) setOpened(null);
+  const request = visible && returning
+    ? returning.tab === 'linked' ? returning.request : null
+    : (visible ? pending : null) ?? (opened?.runtimeKey === runtimeKey ? opened : null);
+  React.useEffect(() => {
+    if (!visible || !pending) return;
+    if (usePullRequestSelectionStore.getState().openRequests.get(pullRequestNavigationKey(runtimeKey, directory)) !== pending) return;
+    setOpened(pending);
+    usePullRequestSelectionStore.getState().settleOpenRequest(pending);
+  }, [directory, pending, runtimeKey, visible]);
+  React.useEffect(() => {
+    if (!visible || !returning || returning.tab !== 'linked') return;
+    if (usePullRequestSelectionStore.getState().returnRequests.get(pullRequestNavigationKey(runtimeKey, directory)) !== returning) return;
+    setOpened(returning.request);
+    usePullRequestSelectionStore.getState().settleReturnRequest(returning);
+  }, [directory, returning, runtimeKey, visible]);
+  const closeLink = React.useCallback(() => {
+    if (request) usePullRequestSelectionStore.getState().settleOpenRequest(request);
+    setOpened(null);
+  }, [request]);
+  const reference = request ? parseChangeRequestReference(request.url) : null;
+  const key = request ? JSON.stringify([runtimeKey, request.sourceDirectory,
+    reference?.project?.owner.toLowerCase(), reference?.project?.name.toLowerCase(), reference?.number]) : '';
+  return (
+    <>
+      <RepositoryPullRequestView directory={directory} visible={visible && !request} />
+      {request ? <LinkedPullRequestView key={key} request={request} visible={visible} onBack={closeLink} /> : null}
+    </>
+  );
+};
+
+/** Repository browsing stays available even when the checkout cannot create a PR. */
+const RepositoryPullRequestView: React.FC<{ directory: string; visible: boolean }> = ({ directory, visible }) => {
   const { sourceControl } = useRuntimeAPIs();
   const { rootIsGitRepo, gitDirectory, nestedRepos } = useNestedGitDirectory(directory, { enabled: visible });
   const isGitRepo = useIsGitRepo(gitDirectory ?? null);
@@ -74,7 +115,7 @@ export const PullRequestView: React.FC<{ directory: string; visible?: boolean }>
   const host = useRepositoryHost(gitDirectory ?? directory);
   const returning = usePullRequestSelectionStore(state => state.returnRequests.get(pullRequestNavigationKey(getRuntimeKey(), directory)));
   React.useEffect(() => {
-    if (host?.provider === 'gitlab' && returning) usePullRequestSelectionStore.getState().settleReturnRequest(returning);
+    if (host?.provider === 'gitlab' && returning && returning.tab !== 'linked') usePullRequestSelectionStore.getState().settleReturnRequest(returning);
   }, [host?.provider, returning]);
   const context = binding.contexts.find((candidate) => candidate.provider === 'github');
   const scopeKey = JSON.stringify([getRuntimeKey(), gitDirectory ?? directory, context ? sourceControlReadContextParts(context) : null]);

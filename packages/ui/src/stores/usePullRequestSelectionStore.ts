@@ -2,26 +2,37 @@ import { create } from 'zustand';
 import type { PullRequestSource } from '@/lib/diff/pullRequestDiff';
 import type { GitHubPullReference, SourceControlReadContext } from '@/lib/api/types';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { normalizePath } from '@/lib/pathNormalization';
+import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
+import type { BoardLinkFailureBehavior } from './useSourceBoardStore';
 
-export interface PullRequestReturnLocation {
+export interface PullRequestOpenRequest {
+  runtimeKey: string;
   workspaceDirectory: string;
-  tab: 'project' | 'branch';
+  sourceDirectory: string;
+  url: string;
+  failureBehavior: BoardLinkFailureBehavior;
 }
 
-interface PullRequestDiffOrigin extends PullRequestReturnLocation {
+export type PullRequestReturnLocation = {
+  workspaceDirectory: string;
+} & ({ tab: 'project' | 'branch' } | { tab: 'linked'; request: PullRequestOpenRequest });
+
+type PullRequestDiffOrigin = PullRequestReturnLocation & {
   reference: GitHubPullReference;
   context: SourceControlReadContext;
-}
+  restoreWorkspace?: () => void;
+};
 
-interface PullRequestReturnTarget extends PullRequestDiffOrigin {
+type PullRequestReturnTarget = PullRequestDiffOrigin & {
   runtimeKey: string;
   directory: string;
   source: PullRequestSource;
-}
+};
 
 export const pullRequestNavigationKey = (runtimeKey: string, directory: string) => JSON.stringify([runtimeKey, directory]);
 
-const rememberReturn = (entries: Map<string, PullRequestReturnTarget>, key: string, value: PullRequestReturnTarget) => {
+const rememberRequest = <T,>(entries: Map<string, T>, key: string, value: T) => {
   const next = new Map(entries);
   next.delete(key); next.set(key, value);
   if (next.size > 100) {
@@ -37,6 +48,10 @@ interface PullRequestSelection {
 }
 
 interface PullRequestSelectionState {
+  openRequests: Map<string, PullRequestOpenRequest>;
+  requestOpen: (request: Omit<PullRequestOpenRequest, 'runtimeKey'>) => boolean;
+  settleOpenRequest: (request: PullRequestOpenRequest) => void;
+  resetOpenRequests: () => void;
   selections: Map<string, PullRequestSelection>;
   /** A pull request another surface asked Changes to show, per directory. */
   diffRequests: Map<string, PullRequestSource>;
@@ -65,6 +80,30 @@ const remember = (state: PullRequestSelectionState, key: string, selection: Pull
 
 // Keys are runtime/directory/branch tuples supplied by usePullRequestComparison.
 export const usePullRequestSelectionStore = create<PullRequestSelectionState>((set, get) => ({
+  openRequests: new Map(),
+  requestOpen: (request) => {
+    const workspaceDirectory = normalizePath(request.workspaceDirectory);
+    const sourceDirectory = normalizePath(request.sourceDirectory);
+    const reference = parseChangeRequestReference(request.url);
+    if (!workspaceDirectory || !sourceDirectory || reference?.identity?.provider !== 'github' || !reference.project) return false;
+    const runtimeKey = getRuntimeKey();
+    const key = pullRequestNavigationKey(runtimeKey, workspaceDirectory);
+    set(state => {
+      const returnRequests = new Map(state.returnRequests);
+      returnRequests.delete(key);
+      return { returnRequests, openRequests: rememberRequest(state.openRequests,
+        key, { ...request, runtimeKey, workspaceDirectory, sourceDirectory }) };
+    });
+    return true;
+  },
+  settleOpenRequest: (request) => set(state => {
+    const key = pullRequestNavigationKey(request.runtimeKey, request.workspaceDirectory);
+    if (state.openRequests.get(key) !== request) return state;
+    const openRequests = new Map(state.openRequests);
+    openRequests.delete(key);
+    return { openRequests };
+  }),
+  resetOpenRequests: () => set({ openRequests: new Map() }),
   selections: new Map(),
   diffRequests: new Map(),
   diffReturnTargets: new Map(),
@@ -80,7 +119,7 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
     const runtimeKey = getRuntimeKey();
     const key = pullRequestNavigationKey(runtimeKey, directory);
     const diffReturnTargets = origin
-      ? rememberReturn(state.diffReturnTargets, key, { ...origin, runtimeKey, directory, source: request })
+      ? rememberRequest(state.diffReturnTargets, key, { ...origin, runtimeKey, directory, source: request })
       : new Map(state.diffReturnTargets);
     if (!origin) diffReturnTargets.delete(key);
     return { diffRequests, diffReturnTargets };
@@ -97,8 +136,10 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
     set(state => {
       const diffReturnTargets = new Map(state.diffReturnTargets);
       diffReturnTargets.delete(key);
-      return { diffReturnTargets, returnRequests: rememberReturn(state.returnRequests,
-        pullRequestNavigationKey(target.runtimeKey, target.workspaceDirectory), target) };
+      const workspaceKey = pullRequestNavigationKey(target.runtimeKey, target.workspaceDirectory);
+      const openRequests = new Map(state.openRequests);
+      openRequests.delete(workspaceKey);
+      return { diffReturnTargets, openRequests, returnRequests: rememberRequest(state.returnRequests, workspaceKey, target) };
     });
     return true;
   },

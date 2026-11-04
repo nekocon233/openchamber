@@ -11,6 +11,26 @@ the existing search applies within that category. It needs no checkout branch or
 its existing branch view; VS Code reports repository browsing as unsupported.
 The hosted and native mobile navigation stays unchanged.
 
+Desktop GitHub PR links from chat, reference chips, sidebar badges and work
+status reveal this same tool pane and preview the exact linked PR. Repeated
+clicks focus it without toggling the pane closed. The pane follows its saved
+zone and keeps the current conversation, composer and selected project.
+`LinkedPullRequestView` reads through the source directory's repository binding,
+even when another workspace hosts the pane. Its lookup checks the repository
+and number, accepts closed and merged PRs, and shares `PullRequestDetail` with
+the ordinary project list. URL suffixes and anchors do not create another
+preview of the same PR.
+
+The linked preview keeps the normal project and branch views hidden in Activity.
+Back restores their selection, filters, scroll and reply draft. Hiding, moving,
+closing and reopening the pane also retains the linked preview; its effects
+disconnect while hidden. A binding or account change replaces only the affected
+preview authority, and stale lookup responses cannot select another PR.
+Chat lookup failures remain in the pane with Retry and an explicit external
+action. Badge failures retain their existing automatic external fallback.
+GitLab, issues, Linear, mobile, VS Code and mini chat keep their existing routes;
+chat's external-link preference and modified clicks remain effective.
+
 PR previews share `SourceBoardActions` with the board. On GitHub, a host that
 advertises administrator merge adds a separate Force merge button beside the
 ordinary merge control, with the same selected method and a destructive
@@ -54,6 +74,16 @@ repository/account context and PR identity must still match the return target.
 Nested repositories keep the workspace destination separate from the repository
 whose diff is read. A new request without a PR origin clears the old return
 target. Mobile keeps its existing navigation.
+
+Linked previews register that same origin, with their original open request as
+the `linked` destination. Back to PR returns to the exact retained linked view,
+including its scroll and unsent reply. A newer explicit open replaces a queued
+return, and a normal project or branch return clears any link preview that was
+opened over Changes. Normal tabs never consume a linked-preview return.
+When a linked PR comes from another Git directory, Changes uses that exact
+source binding. Its return action restores the original conversation or draft
+and opens the original workspace's pane. Draft identity, prepared chat directory,
+attached context and directory-scoped model choices survive the round trip.
 
 ## Usage statistics
 

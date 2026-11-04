@@ -3,6 +3,7 @@ import { installRuntimeEndpointReset } from './runtimeEndpointReset';
 import { opencodeClient } from '@/lib/opencode/client';
 import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 const originalFetch = globalThis.fetch;
@@ -49,11 +50,14 @@ describe('installRuntimeEndpointReset', () => {
       expect(opencodeClient.getBaseUrl().startsWith('https://remote.example')).toBe(true);
 
       useConfigStore.setState({ isInitialized: true, isConnected: true });
+      usePullRequestSelectionStore.getState().requestOpen({ workspaceDirectory: '/repo', sourceDirectory: '/source', url: 'https://github.com/acme/app/pull/7', failureBehavior: 'manual' });
+      expect(usePullRequestSelectionStore.getState().openRequests.size).toBe(1);
       switchRuntimeEndpoint({ apiBaseUrl: 'http://127.0.0.1:4100', runtimeKey: 'local' });
 
       expect(opencodeClient.getBaseUrl().startsWith('http://127.0.0.1:4100')).toBe(true);
       expect(useConfigStore.getState().isInitialized).toBe(false);
       expect(useConfigStore.getState().isConnected).toBe(false);
+      expect(usePullRequestSelectionStore.getState().openRequests.size).toBe(0);
     } finally {
       uninstall();
     }

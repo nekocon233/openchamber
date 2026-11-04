@@ -26,6 +26,7 @@ export const PullRequestBackButton: React.FC<{
   const label = t(context.provider === 'gitlab' ? 'references.projectPulls.backToMerge' : 'references.projectPulls.backToPull', { number: source.number });
   return <Button variant="ghost" size="sm" className="shrink-0" title={label} aria-label={label} onClick={() => {
     if (usePullRequestSelectionStore.getState().requestReturn(target)) {
+      target.restoreWorkspace?.();
       useUIStore.getState().openContextPanelTab(target.workspaceDirectory, { mode: 'pr' });
     }
   }}>

@@ -69,9 +69,8 @@ export const createNativeInteractions = ({ dataDir, now = Date.now }) => {
           if (part.tool === 'question') return [{ ...part, state: { ...part.state, metadata } }];
           if (!value.kind) return [part];
           const plan = z.object({ plan: z.string().optional() }).safeParse(part.state.input).data?.plan ?? '';
-          // The approval row is an OpenChamber UI interaction, not model tool
-          // time. Stamp it with the plan tool's interval so turn telemetry
-          // never subtracts an interaction that settled after the reply.
+          // The approval row is an application interaction. Keep its origin
+          // explicit so telemetry does not count it as model tool execution.
           const planStart = part.state.time?.start;
           const planEnd = part.state.time?.end;
           const fallback = record.info.time?.completed ?? record.info.time?.created ?? value.settledAt;
@@ -81,7 +80,7 @@ export const createNativeInteractions = ({ dataDir, now = Date.now }) => {
           const question = buildToolPart({
             id, sessionID: sessionId, messageID: record.info.id, callID: value.id, tool: 'question',
             input: { questions: [{ question: plan, header: 'Plan', options: [{ label: 'build', description: '' }, { label: 'plan', description: '' }] }] },
-            title: 'Plan', start, metadata,
+            title: 'Plan', start, metadata: { ...metadata, openchamberToolSource: 'native-interaction' },
             result: value.status === 'answered' ? { status: 'completed', output: '', end }
               : { status: 'error', error: value.status === 'interrupted' ? 'Interrupted' : 'Dismissed', end },
           });

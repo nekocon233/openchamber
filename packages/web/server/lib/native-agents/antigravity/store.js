@@ -12,6 +12,7 @@ import { parseAgyTranscript } from './protocol.js';
 import { projectAntigravityHistory, resolveAntigravityBindings } from './projector.js';
 import { agySavedTasks } from './tasks.js';
 import { agyInteractionHistory } from './interaction-proposals.js';
+import { restoreAntigravityMeasurements } from './measurements.js';
 
 const SUMMARY_COLUMNS = 'conversation_id, parent_conversation_id, title, preview, last_modified_time, workspace_uris';
 const SELECT_ROOTS = `select ${SUMMARY_COLUMNS}
@@ -308,6 +309,7 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
         sessionId, nativeId, directory: session.directory,
         entries: transcript.entries, bindings, now,
       });
+      restoreAntigravityMeasurements(records, sends);
       const interactionHistory = !session.parentID && session.time.archived == null ? agyInteractionHistory({
         sessionId, nativeId, directory: session.directory, readRoot: root,
         entries: transcript.entries, bindings, sends, now,
@@ -330,17 +332,23 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
       };
     },
 
-    /** Used only to distinguish a final response from agy's sticky stream error. */
-    finalResponse(nativeId, userStepIndex) {
+    /** Final identity and text; only SUCCESS may retain a shortened content step. */
+    finalResponse(nativeId, userStepIndex, { allowTruncatedContent = false } = {}) {
       if (!hasTranscript(nativeId) || userStepIndex === null) return null;
       const transcript = readTranscript(nativeId);
+      if (transcript.malformed > 0 || transcript.unknownTypes.length > 0) return null;
       const current = transcript.entries.filter((entry) => (
         entry.step_index >= userStepIndex && entry.type !== 'EPHEMERAL_MESSAGE'
       ));
+      if (current[0]?.type !== 'USER_INPUT' || current[0].step_index !== userStepIndex
+        || current.slice(1).some((entry) => entry.type === 'USER_INPUT')) return null;
       const last = current.at(-1);
       return last?.type === 'PLANNER_RESPONSE'
         && last.status === 'DONE'
         && (last.content ?? '').trim() !== ''
+        && (last.error ?? '').trim() === ''
+        && !last.truncated_fields.some((field) => field === 'error' || field === 'tool_calls'
+          || field === 'content' && !allowTruncatedContent)
         && last.tool_calls.length === 0 ? last : null;
     },
   };

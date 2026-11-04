@@ -73,6 +73,12 @@ Tasks, a pinned message requests timeline focus, and a subagent switches to the
 child session. Every one of those closes the sheet first. Project actions are
 not offered on mobile because `ProjectActionsProvider` is not mounted there.
 
+On desktop, the GitHub PR row reveals the toolbar's PR pane and previews that
+exact PR through the shared tracker-link entry point. It uses the source
+directory's bound account while the current workspace hosts the window, and
+repeated clicks keep it open. Linked GitHub PR rows in the context section use
+the same route. GitLab and mobile retain their existing navigation.
+
 The desktop rows stay read-only for change requests, because the sidebar
 tracker owns discovery. The mobile sheet passes `prewarmPrStatus`, letting
 `useWorkStatusPrPrewarm` register the same active context and run one silent
@@ -249,7 +255,10 @@ Two rates answer different questions. Response speed uses the final assistant
 message's output tokens divided by the union of its nonempty text intervals.
 It excludes initial waiting, reasoning tokens and reasoning time, and earlier
 tool steps. It requires complete, valid text timing and a final message without
-tools, errors, synthetic text or ignored text. This measures text delivery from
+execution tools, errors, synthetic text or ignored text. Application-only native
+question/approval parts explicitly marked `openchamberToolSource: 'native-interaction'`
+do not suppress response speed and contribute no tool duration. Native CLI tool
+calls retain normal interval validation. This measures text delivery from
 stored timestamps, not provider-side decode speed. The header shows this rate
 when it is available and falls back to the average speed when it is not.
 
@@ -270,7 +279,8 @@ say that the value covers history loaded in the session and changes when older
 history is paged in. Invalid or missing inputs omit the dependent metric rather
 than becoming zero; reported zeros remain valid. TTFT averages the earliest
 text/reasoning start delay from every step of the newest turn, only when all
-steps have a valid sample.
+steps have a valid sample. Empty stream text/reasoning placeholders supply no
+first-token sample; their creation stamps cannot establish TTFT.
 
 Either rate above 5,000 tok/s is reported as unknown. No provider streams that
 fast, so such a value means the measured window is broken: a tool that runs
@@ -645,10 +655,9 @@ Stored in session metadata as a **snapshot** (`lib/linkedIssues.ts`, namespace
 pinned messages. Number, title, url, author and avatar only — the body,
 comments and state belong to GitHub, and mirroring them would mean owning their
 staleness. The stored title can drift; that is the price of a store that never
-needs refreshing. A GitHub row opens github.com. A Linear row opens the
-right-hand Linear panel when Linear is connected on desktop/web; otherwise it
-opens the Linear URL (no rail in VS Code or the phone shell, and none while
-disconnected).
+needs refreshing. Desktop GitHub PR rows preview the link in the PR tool pane.
+Other tracker links follow the board navigation described in
+`components/references/DOCUMENTATION.md`; VS Code uses external links.
 
 Writes happen **after** the send promise resolves and are deliberately
 swallowed on failure: the message went out, and a missing bookkeeping entry

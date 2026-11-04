@@ -15,10 +15,31 @@ const tool = (start: number, end: number): Part => ({
   id: `tool-${start}`, sessionID: user.sessionID, messageID: 'a1', type: 'tool', tool: 'bash', callID: 'call',
   state: { status: 'completed', input: {}, output: '', metadata: {}, time: { start, end } },
 });
-const text = (start: number): TextPart => ({ id: `text-${start}`, sessionID: user.sessionID, messageID: 'a1', type: 'text', text: '', time: { start } });
+const text = (start: number): TextPart => ({ id: `text-${start}`, sessionID: user.sessionID, messageID: 'a1', type: 'text', text: 'Measured text', time: { start } });
 const turn = (info = assistant(), parts: Part[] = []) => [{ info: user, parts: [] }, { info, parts }];
 
 describe('turn telemetry', () => {
+  test('application approval cards do not suppress response speed or invalidate tool timing', () => {
+    const approval: Part = {
+      id: 'approval', sessionID: user.sessionID, messageID: 'a1', type: 'tool', tool: 'question', callID: 'app-question',
+      state: { status: 'running', input: {}, time: { start: 900 }, metadata: { openchamberToolSource: 'native-interaction' } },
+    };
+    const stats = getLatestCompletedTurnStats(turn(assistant(), [
+      { ...text(2000), time: { start: 2000, end: 4000 } }, approval,
+    ]));
+    expect(stats?.totalToolDurationMs).toBe(0);
+    expect(stats?.totalLlmDurationMs).toBe(5000);
+    expect(stats?.responseTokensPerSecond).toBe(50);
+    const native = { ...approval, state: { ...approval.state, metadata: {} } };
+    expect(getLatestCompletedTurnStats(turn(assistant(), [native]))?.totalToolDurationMs).toBeNull();
+  });
+
+  test('empty stream placeholders do not supply a first-token sample', () => {
+    const empty = { ...text(1001), text: '' };
+    expect(getLatestCompletedTurnStats(turn(assistant(), [empty]))?.avgTtftMs).toBeNull();
+    expect(getLatestCompletedTurnStats(turn(assistant(), [empty, text(1800)]))?.avgTtftMs).toBe(800);
+  });
+
   test('merges unsorted parallel, nested, adjoining and invalid tool intervals', () => {
     expect(mergeTimeIntervals([])).toEqual([]);
     const merged = mergeTimeIntervals([[3000, 4000], [1000, 3000], [1500, 2500], [6000, 7000], [NaN, 1], [9, 8]]);
@@ -321,7 +342,7 @@ describe('turn telemetry', () => {
   test('includes failed tools and chooses the earliest text or reasoning timestamp', () => {
     const failed: Part = { id: 'failed', sessionID: user.sessionID, messageID: 'a1', type: 'tool', tool: 'bash', callID: 'failed',
       state: { status: 'error', input: {}, error: 'failed', time: { start: 2500, end: 4000 } } };
-    const reasoning: Part = { id: 'reasoning', sessionID: user.sessionID, messageID: 'a1', type: 'reasoning', text: '', time: { start: 1200 } };
+    const reasoning: Part = { id: 'reasoning', sessionID: user.sessionID, messageID: 'a1', type: 'reasoning', text: 'Thinking', time: { start: 1200 } };
     const stats = getLatestCompletedTurnStats(turn(assistant(), [text(1600), reasoning, tool(2000, 3000), failed]));
     expect(stats?.totalToolDurationMs).toBe(2000);
     expect(stats?.totalLlmDurationMs).toBe(3000);

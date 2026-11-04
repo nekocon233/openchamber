@@ -606,6 +606,8 @@ export type SessionUIState = {
     directoryHint?: string | null,
     transition?: "submitted-draft",
   ) => void
+  /** Capture a return action before a tool navigates to another workspace. */
+  captureNavigationReturn: (directory: string) => () => void
   clearMaterializedDraftSession: (sessionId: string) => void
   prepareForRuntimeSwitch: (apiBaseUrl?: string | null) => void
   restoreForRuntimeSwitch: (apiBaseUrl?: string | null, previousRuntimeKey?: string | null) => void
@@ -1662,6 +1664,46 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // openNewSessionDraft
   // ---------------------------------------------------------------------------
 
+
+  captureNavigationReturn: (directory) => {
+    const runtimeKey = getRuntimeKey()
+    const sessionId = get().currentSessionId
+    const draft = cloneDraft(get().newSessionDraft)
+    const projectId = useProjectsStore.getState().activeProjectId
+    return () => {
+      if (getRuntimeKey() !== runtimeKey) return
+      if (sessionId) {
+        get().setCurrentSession(sessionId, directory)
+        if (projectId) useProjectsStore.getState().setActiveProjectIdOnly(projectId)
+        return
+      }
+      if (draft.open) {
+        // Keep the draft id, prepared chat directory and attached context intact.
+        // Restore its directory's selections without reapplying project defaults.
+        draftDefaultsRevision += 1
+        const restored = cloneDraft(draft)
+        set({
+          newSessionDraft: restored,
+          currentSessionId: null,
+          currentSessionDirectory: null,
+          materializedDraftSessionId: null,
+          restoredSessionPendingValidation: false,
+          restoredSessionRuntimeKey: null,
+          error: null,
+        })
+        writeRuntimeSessionMemory(runtimeMemoryKey(), { sessionId: null, directory, draft: restored })
+        persistDraftTarget({ projectId: restored.selectedProjectId ?? null, directory: restored.directoryOverride, target: restored.target })
+        const selectedProject = useProjectsStore.getState().projects.find(project => project.id === restored.selectedProjectId)
+        void activateConfigForDirectory(restored.directoryOverride ?? selectedProject?.path ?? directory)
+      } else {
+        get().closeNewSessionDraft()
+        get().setCurrentSession(null, directory)
+      }
+      if (projectId) useProjectsStore.getState().setActiveProjectIdOnly(projectId)
+      useDirectoryStore.getState().setDirectory(directory, { showOverlay: false })
+      opencodeClient.setDirectory(directory)
+    }
+  },
 
   openNewSessionDraft: (options) => {
     const projectsState = useProjectsStore.getState()

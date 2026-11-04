@@ -18,6 +18,7 @@ import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useGitStore } from '@/stores/useGitStore';
 import { useGitIdentitiesStore } from '@/stores/useGitIdentitiesStore';
 import { useGitHubPrStatusStore } from '@/stores/useGitHubPrStatusStore';
+import { usePullRequestSelectionStore } from '@/stores/usePullRequestSelectionStore';
 import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import { repositoryBindingOwner } from '@/lib/source-control/repository-binding';
 import { useChangeRequestContextStore } from '@/stores/useChangeRequestContextStore';
@@ -113,6 +114,7 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   repositoryBindingOwner.reset();
   useChangeRequestContextStore.getState().resetForRuntimeSwitch();
   useGitHubPrStatusStore.getState().resetForRuntimeSwitch();
+  usePullRequestSelectionStore.getState().resetOpenRequests();
   useWalkthroughStore.getState().reset();
   useSessionFoldersStore.getState().resetForRuntimeSwitch(detail.runtimeKey);
   useFilesViewTabsStore.getState().resetForRuntimeSwitch(detail.runtimeKey);

@@ -15,6 +15,10 @@ import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import { Icon } from "@/components/icon/Icon";
 import { useI18n } from '@/lib/i18n';
+import { useMobileAppActions } from '@/apps/mobileAppContext';
+import { parseChangeRequestReference } from '@/lib/source-control/changeRequestReference';
+import { useOpenChatLink } from './useOpenChatLink';
+import { useChatSessionSelection } from './chatColumnSession';
 
 import type { ToolPopupContent } from './message/types';
 
@@ -656,6 +660,17 @@ interface MessageFilesDisplayProps {
 
 export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, className }: MessageFilesDisplayProps) => {
   const { t } = useI18n();
+  const mobile = useMobileAppActions();
+  const isMobile = useUIStore(state => state.isMobile);
+  const openChatLink = useOpenChatLink(useChatSessionSelection().directory ?? '');
+  const openReference = (url: string, event: React.MouseEvent) => {
+    if (!mobile && !isMobile && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+      && parseChangeRequestReference(url)?.identity?.provider === 'github') {
+      openChatLink(url);
+    } else {
+      void openExternalUrl(url);
+    }
+  };
 
   const fileItems = files.filter(f => f.type === 'file' && (f.mime || f.url));
 
@@ -774,9 +789,7 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
                     {issueLinkKind && file.url ? (
                       <button
                         type="button"
-                        onClick={() => {
-                          void openExternalUrl(file.url || '');
-                        }}
+                        onClick={(event) => openReference(file.url || '', event)}
                         className="inline-flex items-center bg-muted/30 border border-border/30 typography-meta gap-1 px-2 py-0.5 rounded-lg text-foreground hover:text-primary transition-colors"
                       >
                         <Icon name={issueLinkIcon(issueLinkKind)} className="text-muted-foreground h-3.5 w-3.5" />
@@ -902,9 +915,7 @@ export const MessageFilesDisplay = memo(({ files, onShowPopup, compact = false, 
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  onClick={() => {
-                    void openExternalUrl(file.url || '');
-                  }}
+                  onClick={(event) => openReference(file.url || '', event)}
                   className={cn(
                     "flex items-center gap-2 p-2 rounded-lg border border-border/40 bg-muted/10 hover:bg-muted/20 transition-colors text-start",
                     compact ? "text-xs" : "text-sm"

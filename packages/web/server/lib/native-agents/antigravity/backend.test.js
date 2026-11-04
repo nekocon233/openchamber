@@ -13,7 +13,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-const setup = async ({ decorateSession = async (session) => session, commandPrefix = [], quotaFailure = '' } = {}) => {
+const setup = async ({ decorateSession = async (session) => session, onInteraction = async () => undefined, commandPrefix = [], quotaFailure = '' } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-test-'));
   let conversationId = null;
   let unauthenticated = false;
@@ -36,6 +36,7 @@ const setup = async ({ decorateSession = async (session) => session, commandPref
     publisher,
     readGlobalInstructions: async () => 'GLOBAL FIXTURE RULES',
     decorateSession,
+    onInteraction,
     home,
   });
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -306,7 +307,7 @@ describe('Antigravity CLI adapter', () => {
     expect(live.at(-1).info.tokens).toMatchObject({ input: 14, output: 7 });
   });
   it('discovers models and completes live and persisted turns with stable user ids', async () => {
-    const { backend, directory, prompt } = await setup();
+    const { backend, directory, prompt, registry } = await setup();
     expect(await backend.catalog()).toEqual([
       expect.objectContaining({ id: 'gemini-test', name: 'Gemini Test', efforts: ['low', 'high'], input: { image: false, pdf: false } }),
     ]);
@@ -320,7 +321,9 @@ describe('Antigravity CLI adapter', () => {
     expect(history.records[0].parts[0].text).toBe('hello');
     expect(history.records[0].info.model).toMatchObject({ providerID: 'antigravity-native', modelID: 'gemini-test-high' });
     expect(history.records[1].parts[0].text).toBe('Reply to hello\n');
-    expect(history.records[1].info.tokens).toMatchObject({ total: 14, input: 10, output: 4, reasoning: 1, cache: { read: 2, write: 0 } });
+    expect(history.records[1].info.tokens).toMatchObject({ total: 14, input: 10, output: 3, reasoning: 1, cache: { read: 2, write: 0 } });
+    expect((await registry.sendRecords(session.id)).get(firstMessage).antigravity.measurements.records)
+      .toEqual([expect.objectContaining({ messageID: history.records[1].info.id, tokens: history.records[1].info.tokens })]);
     expect(JSON.stringify(history)).not.toContain('GLOBAL FIXTURE RULES');
     expect(JSON.stringify(history)).not.toContain('Interactive question replies are unavailable');
     expect(await backend.sessionExists(session.id, directory)).toBe(true);
@@ -365,13 +368,13 @@ describe('Antigravity CLI adapter', () => {
     expect((await backend.loadHistory(session.id, directory)).records.at(-1).parts[0].text).toBe('Reply to after stop\n');
   });
 
-  it('never treats an explicit stop after commentary as sticky-error recovery', async () => {
+  it.each(['stop-after-commentary', 'stop-after-output-limit'])('keeps an explicit stop after %s from recovering as success', async (text) => {
     const { backend, directory } = await setup();
     const session = await backend.createSession({ directory });
     await backend.prompt(session.id, {
       directory, messageID: `nag_u_${randomUUID()}`, agent: 'build',
       model: { providerID: 'antigravity-native', modelID: 'gemini-test-high' },
-      parts: [{ type: 'text', text: 'stop-after-commentary' }],
+      parts: [{ type: 'text', text }],
     });
     await vi.waitFor(() => expect(backend.liveRecords(session.id).some((record) => record.parts.some((part) => part.type === 'text' && part.text.includes('Waiting for completion')))).toBe(true));
     await backend.abort(session.id);
@@ -389,6 +392,73 @@ describe('Antigravity CLI adapter', () => {
     expect(events.some((event) => event.payload.type === 'session.error' && event.payload.properties.error.data.message.includes('stream was interrupted'))).toBe(false);
     await prompt(session, 'after sticky');
     expect((await backend.loadHistory(session.id, directory)).records.at(-1).parts[0].text).toBe('Reply to after sticky\n');
+  });
+
+  it('saves a recovered output-limit turn before publishing its questions and restores it after restart', async () => {
+    const proposals = [];
+    const { backend, directory, registry, prompt, events } = await setup({ onInteraction: async (proposal) => {
+      expect([...await registry.sendRecords(proposal.sessionId)].at(-1)[1].antigravity.completion.outcome).toBe('success');
+      proposals.push(proposal);
+    } });
+    const session = await backend.createSession({ directory });
+    const messageId = await prompt(session, 'decision-questions-output-limit', 'gemini-test', 'plan', 'high');
+    const final = backend.liveRecords(session.id).find((record) => record.parts.some((part) => part.type === 'text' && part.text === 'Waiting for your answer.\n'));
+    expect(final.info).toMatchObject({ parentID: messageId, finish: 'stop' });
+    expect(final.info.error).toBeUndefined();
+    expect((await registry.sendRecords(session.id)).get(messageId)).toMatchObject({ modelID: 'gemini-test', variant: 'high', agent: 'plan', antigravity: { completion: { outcome: 'success' } } });
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].questions).toHaveLength(2);
+    expect(events.some((event) => event.payload.type === 'session.error')).toBe(false);
+    const before = await backend.loadHistory(session.id, directory);
+    await backend.shutdown();
+    const restored = await backend.loadHistory(session.id, directory);
+    expect(restored.records.at(-1).info).toMatchObject({ id: before.records.at(-1).info.id, parentID: messageId, finish: 'stop' });
+    expect(restored.interactionProposal.callID).toBe(before.interactionProposal.callID);
+    expect(restored.records.flatMap((record) => record.parts).filter((part) => part.type === 'tool' && part.tool === 'question')).toHaveLength(1);
+    expect(restored.records.filter((record) => record.info.role === 'user')).toHaveLength(1);
+  });
+
+  it('recovers the next turn when agy retains the earlier output-limit error without another error step', async () => {
+    const { backend, directory, registry, prompt, events, home } = await setup();
+    const session = await backend.createSession({ directory });
+    await prompt(session, 'decision-questions-output-limit', 'gemini-test', 'plan', 'high');
+    const nextId = await prompt(session, 'decision-questions-stale-output-limit', 'gemini-test', 'plan', 'high');
+    const transcript = fs.readFileSync(path.join(home, 'brain', session.id.slice(4), '.system_generated/logs/transcript_full.jsonl'), 'utf8');
+    expect(transcript.split('\n').filter((line) => line.includes('"type":"ERROR_MESSAGE"'))).toHaveLength(1);
+    expect(backend.liveRecords(session.id).at(-1).info).toMatchObject({ parentID: nextId, finish: 'stop' });
+    expect(backend.liveRecords(session.id).at(-1).info.error).toBeUndefined();
+    expect([...await registry.sendRecords(session.id)].map(([, send]) => send.antigravity.completion.outcome)).toEqual(['success', 'success']);
+    const history = await backend.loadHistory(session.id, directory);
+    expect(history.records.filter((record) => record.info.role === 'user')).toHaveLength(2);
+    expect(history.interactionProposal.userStep).toBe((await registry.sendRecords(session.id)).get(nextId).antigravity.stepIndex);
+    expect(events.some((event) => event.payload.type === 'session.error')).toBe(false);
+  });
+
+  it.each(['output-limit-no-final', 'output-limit-truncated-final', 'output-limit-unreadable-final', 'output-limit-unrecognized'])('retains an output-limit failure for %s', async (text) => {
+    const { backend, directory, registry, prompt, events } = await setup();
+    const session = await backend.createSession({ directory });
+    const messageId = await prompt(session, text);
+    expect(backend.liveRecords(session.id).at(-1).info.error.data.message).toContain('exceeded the output token limit');
+    expect((await registry.sendRecords(session.id)).get(messageId).antigravity.completion.outcome).toBe('error');
+    expect(events.some((event) => event.payload.type === 'session.error')).toBe(true);
+  });
+
+  it('withholds recovered questions when completion persistence fails', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    cleanups.push(() => warning.mockRestore());
+    const proposals = [];
+    const { backend, directory, registry, prompt } = await setup({ onInteraction: async (proposal) => { proposals.push(proposal); } });
+    const recordSend = registry.recordSend.bind(registry);
+    const save = vi.spyOn(registry, 'recordSend').mockImplementation((id, record) => record.antigravity?.completion
+      ? Promise.reject(new Error('Fixture completion write failure')) : recordSend(id, record));
+    cleanups.push(() => save.mockRestore());
+    const session = await backend.createSession({ directory });
+    const messageId = await prompt(session, 'decision-questions-output-limit', 'gemini-test', 'plan', 'high');
+    expect((await registry.sendRecords(session.id)).get(messageId).antigravity.completion).toBeUndefined();
+    expect(proposals).toEqual([]);
+    expect((await backend.loadHistory(session.id, directory)).interactionProposal).toBeNull();
+    expect(backend.busySessionIds(directory)).toEqual([]);
+    expect(warning).toHaveBeenCalled();
   });
 
   it('reports an empty SUCCESS with denied actions and retains the cause after restart', async () => {

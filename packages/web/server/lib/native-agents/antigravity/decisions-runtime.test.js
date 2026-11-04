@@ -75,6 +75,29 @@ const setup = async ({ unified = false } = {}) => {
 const toolParts = (page) => page.records.flatMap((record) => record.parts).filter((part) => part.type === 'tool');
 
 describe('Antigravity decisions through the native runtime', () => {
+  it.each([false, true])('restores recovered output-limit questions once across restart with unified=%s', async (unified) => {
+    const harness = await setup({ unified });
+    const first = await harness.waiting('decision-questions-output-limit');
+    expect(first.sessionID).toBe(harness.session.id);
+    expect(harness.requests()).toHaveLength(1);
+    expect((await harness.history()).records.at(-1).info.error).toBeUndefined();
+    await harness.restart();
+    expect(await harness.runtime.questions(harness.directory)).toMatchObject([{ id: first.id, sessionID: harness.session.id }]);
+    expect(harness.requests()).toHaveLength(1);
+
+    const second = await harness.waiting('decision-questions-stale-output-limit');
+    expect(second.id).not.toBe(first.id);
+    const page = await harness.history();
+    expect(page.records.at(-1).info.error).toBeUndefined();
+    expect(page.records.filter((record) => record.info.role === 'user')).toHaveLength(2);
+    expect(toolParts(page).filter((part) => part.tool === 'question')).toHaveLength(2);
+    await harness.restart();
+    expect(await harness.runtime.questions(harness.directory)).toMatchObject([{ id: second.id, sessionID: harness.session.id }]);
+    expect(harness.requests()).toHaveLength(2);
+    expect(harness.requests().every((request) => request.model === 'gemini-test' && request.mode === 'plan' && request.effort === 'high')).toBe(true);
+    expect(harness.events.some((event) => event.payload.type === 'session.error')).toBe(false);
+  });
+
   it('continues an approved unified plan on its source while preserving the next selected model', async () => {
     const harness = await setup({ unified: true });
     const question = await harness.waiting('decision-plan');
