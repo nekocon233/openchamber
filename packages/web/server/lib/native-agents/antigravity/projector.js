@@ -26,7 +26,8 @@ import {
   agyPermissionError,
 } from './protocol.js';
 import { agyBackgroundResults } from './tasks.js';
-import { mapAgyTool } from './tools.js';
+import { mapAgyTool, agyEditMetadata } from './tools.js';
+import { antigravityChecklistSnapshot, AGY_CHECKLIST_PART_TOOL } from './checklist.js';
 
 const sessionKey = (nativeId) => nativeId.replaceAll('-', '');
 const userId = (nativeId, stepIndex) => `nag_u_${sessionKey(nativeId)}_${stepIndex}`;
@@ -139,7 +140,9 @@ const toolPart = ({ sessionId, nativeId, stepIndex, call, output, created, end, 
     : failed
       ? { status: 'error', error: error || output || 'Antigravity tool failed', end }
       : { status: 'completed', output, end };
-  const metadata = subagentMetadata(subagents);
+  const metadata = { nativeBackend: 'antigravity', ...mapped.metadata, ...subagentMetadata(subagents),
+    ...agyEditMetadata(call, { completed: result.status === 'completed', inputTruncated }),
+  };
   if (exit !== null) metadata.exit = exit;
   if (truncated || shortenedOutput(output ?? '')) metadata.nativeOutputTruncated = true;
   if (inputTruncated) metadata.nativeInputTruncated = true;
@@ -460,10 +463,14 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
           }
           if (!held) { changed = true; rememberHistoricalTool(part); return part; }
           if (part.type === 'tool' && held.type === 'tool' && !part.state.metadata?.nativeInputTruncated) {
-            const input = { ...held.state.input, ...part.state.input };
-            if (held.tool !== part.tool || JSON.stringify(input) !== JSON.stringify(held.state.input)) {
+            const input = held.tool !== part.tool ? part.state.input : { ...held.state.input, ...part.state.input };
+            const metadata = { ...held.state.metadata, nativeBackend: 'antigravity' };
+            if (held.state.status === 'completed' && part.state.status === 'completed') Object.assign(metadata, part.state.metadata);
+            if (JSON.stringify(input) !== JSON.stringify(held.state.input)) delete metadata.nativeInputTruncated;
+            if (held.tool !== part.tool || JSON.stringify(input) !== JSON.stringify(held.state.input)
+              || JSON.stringify(metadata) !== JSON.stringify(held.state.metadata)) {
               changed = true;
-              const enriched = { ...held, tool: part.tool, state: { ...held.state, input } };
+              const enriched = { ...held, tool: part.tool, state: { ...held.state, input, metadata } };
               tools.set(part.id, enriched);
               return enriched;
             }
@@ -530,7 +537,9 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
         : failed
           ? { status: 'error', error: info.error?.message ?? (info.output || 'Antigravity tool failed'), end: created(time) }
           : { status: 'completed', output: info.output, end: created(time) };
-      const metadata = subagentMetadata(step.subagent_info);
+      const metadata = { nativeBackend: 'antigravity', ...mapped.metadata, ...subagentMetadata(step.subagent_info),
+        ...agyEditMetadata(call, { completed: result?.status === 'completed' }),
+      };
       if (exit !== null) metadata.exit = exit;
       if (shortenedOutput(info.output)) metadata.nativeOutputTruncated = true;
       const part = buildToolPart({
@@ -545,6 +554,12 @@ export const createAntigravityLiveProjection = ({ sessionId, nativeId, directory
       else assistant.parts[index] = part;
       tools.set(id, part);
       publish(assistant);
+      if (part.tool === AGY_CHECKLIST_PART_TOOL && part.state.status === 'completed') {
+        try {
+          const snapshot = antigravityChecklistSnapshot({ sessionId, records: [assistant], observedAt: time });
+          if (snapshot.state === 'ready') publisher.checklist(directory, sessionId, snapshot);
+        } catch { /* Unconfirmed tool results cannot replace the last committed list. */ }
+      }
     },
 
     finish({ outcome, response, error, time, responseStep = null }) {

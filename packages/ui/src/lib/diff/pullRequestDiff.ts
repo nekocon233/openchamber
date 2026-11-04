@@ -11,6 +11,9 @@ export interface PullRequestDiffSnapshot {
   headSha: string | null;
 }
 
+/** Names an earlier revision beside the change request's number, so its diff never passes for the current one. */
+export const revisionSuffix = (source: PullRequestSource): string => (source.revision ? ` @${source.revision.slice(0, 7)}` : '');
+
 /** Keep each file's original patch bytes, including binary and metadata-only changes. */
 export function parsePullRequestDiff(patch: string) {
   if (!patch.trim()) return [];

@@ -1,12 +1,14 @@
 const WINDOWS_DRIVE_ROOT_PATTERN = /^[A-Za-z]:\/$/;
 const WINDOWS_DRIVE_ABSOLUTE_PATTERN = /^[A-Za-z]:\//;
 
-export const normalizeFilePath = (value: string | null | undefined): string => {
+type FilePathOptions = { preserveWhitespace?: boolean };
+
+export const normalizeFilePath = (value: string | null | undefined, options?: FilePathOptions): string => {
   if (typeof value !== 'string') {
     return '';
   }
 
-  const trimmed = value.trim();
+  const trimmed = options?.preserveWhitespace ? value : value.trim();
   if (!trimmed) {
     return '';
   }
@@ -33,8 +35,8 @@ export const normalizeFilePath = (value: string | null | undefined): string => {
   return normalized;
 };
 
-export const isAbsoluteFilePath = (value: string | null | undefined): boolean => {
-  const normalized = normalizeFilePath(value);
+export const isAbsoluteFilePath = (value: string | null | undefined, options?: FilePathOptions): boolean => {
+  const normalized = normalizeFilePath(value, options);
   return normalized.startsWith('/') || WINDOWS_DRIVE_ABSOLUTE_PATTERN.test(normalized);
 };
 
@@ -64,13 +66,13 @@ const applyRelativeParts = (baseParts: string[], relativePath: string): string[]
   return stack;
 };
 
-export const toAbsoluteFilePath = (basePath: string | null | undefined, targetPath: string | null | undefined): string => {
-  const normalizedTarget = normalizeFilePath(targetPath);
+export const toAbsoluteFilePath = (basePath: string | null | undefined, targetPath: string | null | undefined, options?: FilePathOptions): string => {
+  const normalizedTarget = normalizeFilePath(targetPath, options);
   if (!normalizedTarget) {
     return normalizeFilePath(basePath);
   }
 
-  if (isAbsoluteFilePath(normalizedTarget)) {
+  if (isAbsoluteFilePath(normalizedTarget, options)) {
     return normalizedTarget;
   }
 
@@ -133,6 +135,48 @@ export const getRelativeFilePath = (filePath: string | null | undefined, directo
   }
 
   return normalizedFilePath.slice(normalizedDirectory.length + 1);
+};
+
+const sameParts = (a: readonly string[], b: readonly string[]): boolean => (
+  a.length === b.length && a.every((part, index) => part === b[index])
+);
+
+/**
+ * Folders that tell apart open files sharing a name, keyed by the given path.
+ * Each path gets the shortest run of its closest folders no other same-named
+ * path ends with ("docs", "ui/src"). Files with a unique name, and a file that
+ * has no folders of its own (the project root), get no entry. Pass paths
+ * relative to the project, or the whole absolute path becomes the folder.
+ */
+export const getDisambiguatingFolders = (paths: readonly string[]): Map<string, string> => {
+  const byName = new Map<string, { path: string; folders: string[] }[]>();
+  for (const path of new Set(paths)) {
+    const parts = splitPathParts(normalizeFilePath(path));
+    const name = parts.pop();
+    if (!name) continue;
+    const group = byName.get(name) ?? [];
+    group.push({ path, folders: parts });
+    byName.set(name, group);
+  }
+
+  const result = new Map<string, string>();
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    for (const entry of group) {
+      const { folders } = entry;
+      let depth = 1;
+      while (depth < folders.length) {
+        const tail = folders.slice(-depth);
+        const clashes = group.some((other) => other !== entry && sameParts(other.folders.slice(-depth), tail));
+        if (!clashes) break;
+        depth += 1;
+      }
+      if (folders.length > 0) {
+        result.set(entry.path, folders.slice(-depth).join('/'));
+      }
+    }
+  }
+  return result;
 };
 
 export const getDirectoryForFilePath = (currentDirectory: string | null | undefined, filePath: string | null | undefined): string => {

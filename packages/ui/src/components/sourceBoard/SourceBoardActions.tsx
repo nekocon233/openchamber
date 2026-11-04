@@ -38,12 +38,14 @@ const MERGE_METHOD_LABELS = {
     squash: 'gitView.pr.mergeMethod.squash',
     merge: 'gitView.pr.mergeMethod.merge',
     rebase: 'gitView.pr.mergeMethod.rebase',
+    submit: 'gitView.pr.mergeMethod.merge',
 } as const;
 
 const MERGE_METHOD_KEYS = {
     merge: 'sourceBoard.merge.method.merge',
     squash: 'sourceBoard.merge.method.squash',
     rebase: 'sourceBoard.merge.method.rebase',
+    submit: 'sourceBoard.merge.method.merge',
 } as const;
 
 /** What a session started from the item gets: the item itself, as a composer chip. */

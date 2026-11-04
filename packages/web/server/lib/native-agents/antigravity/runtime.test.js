@@ -15,8 +15,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-const setup = async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-runtime-'));
+const setup = async ({ checklist = false } = {}) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-runtime-')));
   let unauthenticated = false;
   const directory = path.join(root, 'project');
   const home = path.join(root, 'home');
@@ -30,9 +30,9 @@ const setup = async () => {
   const events = [];
   const runtime = createNativeAgentsRuntime({
     dataDir: root,
-    resolveExecutable: async (cli) => cli === 'agy' ? executable : null,
+    resolveExecutable: async (cli) => cli === 'agy' ? executable : cli === 'node' && checklist ? process.execPath : null,
     resolveAntigravityCommand: async () => ({ executable, argsPrefix: [] }),
-    buildChildEnv: () => ({ ...process.env, AGY_FIXTURE_HOME: fixtureHome, ...(unauthenticated ? { AGY_FIXTURE_UNAUTHENTICATED: '1' } : {}) }),
+    buildChildEnv: () => ({ ...process.env, HOME: home, AGY_FIXTURE_HOME: fixtureHome, ...(unauthenticated ? { AGY_FIXTURE_UNAUTHENTICATED: '1' } : {}) }),
     clientVersion: 'test',
     publishNativeEvent: (event) => events.push(event),
     readGlobalInstructions: async () => 'RUNTIME RULES',
@@ -54,10 +54,25 @@ const prompt = async (runtime, session, directory, text = 'runtime') => {
 };
 
 describe('Antigravity native runtime', () => {
+  it('registers the checklist independently, publishes changes and restores them over HTTP after shutdown', async () => {
+    const { runtime, session, directory, events } = await setup({ checklist: true });
+    expect((await runtime.capabilities()).backends.antigravity.tasks.checklist).toBe(true);
+    expect(await runtime.checklist(session.id, directory)).toEqual({ state: 'unavailable', reason: 'source_unknown' });
+    await prompt(runtime, session, directory, 'checklist-pending');
+    expect(await runtime.checklist(session.id, directory)).toMatchObject({ state: 'ready', complete: true, items: [{ status: 'pending' }] });
+    expect(events.some((event) => event.payload.type === 'session.checklist.updated' && event.payload.properties.snapshot.items[0]?.id === 'verify')).toBe(true);
+    await prompt(runtime, session, directory, 'checklist-completed');
+    await runtime.shutdown();
+    const app = express();
+    registerNativeAgentRoutes(app, { runtime });
+    const restored = await request(app).get(`/api/native/sessions/${session.id}/checklist`).query({ directory }).expect(200);
+    expect(restored.body).toMatchObject({ state: 'ready', items: [{ id: 'verify', status: 'completed' }] });
+    await request(app).get(`/api/native/sessions/${session.id}/checklist`).query({ directory: '/another-project' }).expect(404);
+  });
   it('exposes saved tasks and output without claiming activity or accepting per-task stop', async () => {
     const { runtime, session, directory, events } = await setup();
     await prompt(runtime, session, directory, 'background-task');
-    expect((await runtime.capabilities()).backends.antigravity.tasks).toEqual({ background: true, output: true, stop: false });
+    expect((await runtime.capabilities()).backends.antigravity.tasks).toEqual({ checklist: false, background: true, output: true, stop: false });
     const snapshot = await runtime.sessionTasks(session.id, directory);
     expect(snapshot).toMatchObject({ state: 'history', tasks: [{ status: 'completed', active: false, canStop: false, outputAvailable: true }] });
     expect(await runtime.taskOutput(session.id, directory, snapshot.tasks[0].id, snapshot.generation)).toEqual({ state: 'ready', text: 'Complete saved background output\n', truncated: false });

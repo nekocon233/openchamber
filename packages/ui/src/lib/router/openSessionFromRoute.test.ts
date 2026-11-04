@@ -1,32 +1,80 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
 
+import { useBtwStore } from '@/stores/useBtwStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
-import { useSessionUIStore } from '@/sync/session-ui-store';
+import { useProjectsStore } from '@/stores/useProjectsStore';
+import { getRememberedSessionDirectory, useSessionUIStore } from '@/sync/session-ui-store';
 
-import { openSessionFromRoute } from './openSessionFromRoute';
+import { openSession, openSessionFromRoute } from './openSessionFromRoute';
 
 const SESSION_ID = 'ses_linear_open';
 const PROJECT_DIR = '/projects/linear-from-url';
 const OTHER_DIR = '/projects/linear-from-url-other';
+const WORKTREE_DIR = '/projects/linear-from-url-worktrees/feature';
+
+const _BTW_PARENT_ID = 'ses_btw_parent';
+const BTW_FORK_ID = 'ses_btw_fork';
 
 const buildSession = (id: string, directory: string): Session => ({
   id,
-  title: id,
+  projectID: 'project',
   directory,
+  title: id,
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 2 },
-} as Session);
+});
+
+const _buildBtwFork = (parentId: string, directory: string): Session => ({
+  ...buildSession(BTW_FORK_ID, directory),
+  parentID: parentId,
+  metadata: { openchamber: { kind: 'btw', originalSessionID: parentId } },
+});
+
+const useSessions = (sessions: Session[]): void => {
+  useGlobalSessionsStore.setState({
+    activeSessions: sessions,
+    archivedSessions: [],
+    entityById: new Map(sessions.map((session) => [session.id, session])),
+    hasLoaded: true,
+    status: 'ready',
+  });
+};
 
 describe('openSessionFromRoute', () => {
+  test('native jump-list entries ignore unknown sessions and open known sessions', async () => {
+    useSessions([buildSession(SESSION_ID, PROJECT_DIR)]);
+    useSessionUIStore.getState().setCurrentSession(SESSION_ID, PROJECT_DIR);
+    await openSession('ses_unknown', { requireKnownSession: true });
+    expect(useSessionUIStore.getState().currentSessionId).toBe(SESSION_ID);
+    useSessionUIStore.getState().setCurrentSession(null);
+    await openSession(SESSION_ID, { requireKnownSession: true });
+    expect(useSessionUIStore.getState().currentSessionId).toBe(SESSION_ID);
+  });
+
+  test('a jump-list lookup does not override a session selected while it waits', async () => {
+    const otherId = 'ses_selected_after_jump';
+    useSessions([buildSession(SESSION_ID, PROJECT_DIR), buildSession(otherId, OTHER_DIR)]);
+    useSessionUIStore.getState().setCurrentSession(null);
+    const opening = openSession(SESSION_ID, { requireKnownSession: true });
+    useSessionUIStore.getState().setCurrentSession(otherId, OTHER_DIR);
+    await opening;
+    expect(useSessionUIStore.getState().currentSessionId).toBe(otherId);
+    expect(useSessionUIStore.getState().currentSessionDirectory).toBe(OTHER_DIR);
+  });
   beforeEach(() => {
+    useProjectsStore.setState({ projects: [PROJECT_DIR, OTHER_DIR, WORKTREE_DIR].map((path) => ({ id: path, path })) });
     useSessionUIStore.getState().setCurrentSession(null);
     useGlobalSessionsStore.setState({
       activeSessions: [],
       archivedSessions: [],
+      entityById: new Map(),
       sessionsByDirectory: new Map(),
       hasLoaded: true,
       status: 'ready',
     });
+    useBtwStore.setState({ byParent: {} });
   });
 
   test('selects the routed session once the global list knows its directory', async () => {
@@ -41,6 +89,26 @@ describe('openSessionFromRoute', () => {
 
     expect(useSessionUIStore.getState().currentSessionId).toBe(SESSION_ID);
     expect(useSessionUIStore.getState().currentSessionDirectory).toBe(PROJECT_DIR);
+  });
+
+  // Scheduled tasks' "Open session" opens a run's session by id while the
+  // project root is active; a session in a linked worktree must open there.
+  test('opens a worktree session in its worktree while the project root is active', async () => {
+    const rootId = 'ses_linear_root';
+    const worktreeId = 'ses_linear_worktree';
+    useGlobalSessionsStore.setState({
+      activeSessions: [buildSession(rootId, PROJECT_DIR), buildSession(worktreeId, WORKTREE_DIR)],
+      archivedSessions: [],
+      hasLoaded: true,
+      status: 'ready',
+    });
+    useSessionUIStore.getState().setCurrentSession(rootId, PROJECT_DIR);
+
+    await openSessionFromRoute(worktreeId);
+
+    expect(useSessionUIStore.getState().currentSessionId).toBe(worktreeId);
+    expect(useSessionUIStore.getState().currentSessionDirectory).toBe(WORKTREE_DIR);
+    expect(getRememberedSessionDirectory(worktreeId).runtime).toBe(WORKTREE_DIR);
   });
 
   test('replaces a guessed directory once the global list knows the owner', async () => {

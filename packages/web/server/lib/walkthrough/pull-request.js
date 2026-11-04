@@ -175,3 +175,6 @@ export async function getPullRequestFileContents(directory, number, readContext,
   ]);
   return { original, modified };
 }
+
+export const supportsChangeRequestPatch = (provider) => provider === 'github' || provider === 'gitlab';
+export const supportsChangeRequestRevisions = (provider) => provider === 'github' || provider === 'gitlab';

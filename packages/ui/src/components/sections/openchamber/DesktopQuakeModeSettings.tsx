@@ -16,6 +16,7 @@ import { ShortcutRecordingDialog } from './ShortcutRecordingDialog';
 import type { DesktopQuakeMode } from './useDesktopQuakeMode';
 
 const QUAKE_HEIGHT_OPTIONS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 1];
+const formatHeight = (fraction: number) => `${Math.round(fraction * 100)}%`;
 
 type DesktopQuakeModeSettingsProps = {
   quake: DesktopQuakeMode;
@@ -99,7 +100,7 @@ export const DesktopQuakeModeSettings: React.FC<DesktopQuakeModeSettingsProps> =
             </span>
           ) : undefined}
         >
-          <kbd className="min-w-32 rounded-md border border-border bg-muted px-2 py-1 text-center typography-meta text-foreground">
+          <kbd className="min-w-32 oc-tile-inset rounded-md px-2 py-1 text-center typography-meta text-foreground">
             {quake.combo
               ? formatShortcutForDisplay(quake.combo)
               : t('settings.openchamber.keyboardShortcuts.unassigned')}
@@ -146,12 +147,12 @@ export const DesktopQuakeModeSettings: React.FC<DesktopQuakeModeSettingsProps> =
               className={SETTINGS_SELECT_ROW_TRIGGER_CLASS}
               aria-label={t('settings.openchamber.desktopNetwork.field.quakeModeHeightAria')}
             >
-              <SelectValue />
+              <SelectValue>{formatHeight(Number(heightValue))}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               {QUAKE_HEIGHT_OPTIONS.map((option) => (
                 <SelectItem key={option} value={String(option)}>
-                  {`${Math.round(option * 100)}%`}
+                  {formatHeight(option)}
                 </SelectItem>
               ))}
             </SelectContent>

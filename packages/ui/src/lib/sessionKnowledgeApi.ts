@@ -1,97 +1,63 @@
 /**
- * Project knowledge a session still owes, as decided by the server.
+ * Project knowledge for a session, as decided by the server.
  *
- * The client neither assembles this text nor tracks what it has sent. It used
- * to do both, which meant a session started without a UI got nothing, and a
- * conversation that was compacted kept a tab-local belief that the agent still
- * had context the summary had just removed.
+ * The client neither assembles project knowledge nor tracks what the session was told.
+ * Before a send it asks the server to write the knowledge into the session's
+ * OpenCode instruction entries; OpenCode tells the agent what changed and keeps
+ * it through compaction, revert and fork.
+ * VS Code writes the response-style entry through the SDK because it connects
+ * directly to OpenCode and has no OpenChamber knowledge route.
  *
  * Nothing here throws. A message must go out even when its background cannot
- * be fetched: sending without the block costs the agent some context, failing
- * the send costs the user their message.
+ * be written: sending without it costs the agent some context, failing the
+ * send costs the user their message.
  */
 
-import { runtimeFetch } from './runtime-fetch';
 import { z } from 'zod';
 
-interface SessionKnowledge {
-  /** Empty when the session already carries what it needs. */
-  text: string;
-  /** Reported back once the message carrying the text has actually gone out. */
-  signature: string;
+import { runtimeFetch } from './runtime-fetch';
+import { getRuntimeKey } from './runtime-switch';
+import { isVSCodeRuntime } from './desktop';
+import { opencodeClient } from './opencode/client';
+
+interface SessionKnowledgeSyncBody {
+  directory: string;
+  sessionId: string;
+  responseStyleInstruction?: string | null;
 }
 
-const EMPTY: SessionKnowledge = { text: '', signature: '' };
-
 /**
- * Delivery reports still on their way to the server, by session. Until one
- * lands the server still says the session owes the block, so a send right
- * behind the one that carried it would carry it a second time.
+ * Awaited before the prompt request, so the agent reads the knowledge with the
+ * message. Goes to the server that owns the session, which for a session in an
+ * isolated space is the one inside the space.
  */
-const deliveryReports = new Map<string, Promise<void>>();
-
-export const fetchSessionKnowledge = async (
-  directory: string | null,
-  sessionId: string | null,
-): Promise<SessionKnowledge> => {
-  if (!directory) {
-    return EMPTY;
-  }
-
-  if (sessionId) {
-    await deliveryReports.get(sessionId);
-  }
-
-  try {
-    const params = new URLSearchParams({ directory });
-    if (sessionId) {
-      params.set('sessionId', sessionId);
-    }
-    const response = await runtimeFetch(`/api/session-knowledge?${params.toString()}`, {
-      cache: 'no-store',
-    });
-    if (!response.ok) {
-      return EMPTY;
-    }
-    const payload = await response.json() as Partial<SessionKnowledge> | null;
-    return {
-      text: typeof payload?.text === 'string' ? payload.text : '',
-      signature: typeof payload?.signature === 'string' ? payload.signature : '',
-    };
-  } catch {
-    return EMPTY;
-  }
-};
-
-/**
- * Recorded after the send resolves, never before: a failed send must carry the
- * block again rather than assume the agent already saw it.
- */
-export const reportSessionKnowledgeDelivered = async (
-  directory: string | null,
-  sessionId: string | null,
-  signature: string,
+export const syncSessionKnowledge = async (
+  directory: string | null | undefined,
+  sessionId: string | null | undefined,
+  responseStyleInstruction?: string | null,
+  expectedRuntimeKey = getRuntimeKey(),
 ): Promise<void> => {
-  if (!directory || !sessionId || !signature) {
-    return;
-  }
-
+  if (!directory || !sessionId) return;
+  if (expectedRuntimeKey !== getRuntimeKey()) return;
   invalidateSummary(directory, sessionId);
-  const report = (async () => {
-    try {
-      await runtimeFetch('/api/session-knowledge/delivered', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory, sessionId, signature }),
-        directory,
-      });
-    } catch {
-      // Only means the block may be sent once more.
+  try {
+    if (isVSCodeRuntime()) {
+      if (responseStyleInstruction !== undefined) {
+        await opencodeClient.setResponseStyleInstruction(directory, sessionId, responseStyleInstruction);
+      }
+      return;
     }
-  })();
-  deliveryReports.set(sessionId, report);
-  await report;
-  if (deliveryReports.get(sessionId) === report) deliveryReports.delete(sessionId);
+    const body: SessionKnowledgeSyncBody = { directory, sessionId };
+    if (responseStyleInstruction !== undefined) body.responseStyleInstruction = responseStyleInstruction;
+    await runtimeFetch('/api/session-knowledge/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      directory,
+    });
+  } catch {
+    // Only means this message goes without its background.
+  }
 };
 
 export interface SessionKnowledgeSummary {
@@ -184,8 +150,27 @@ export const setSessionProjectContextPin = async (
       directory,
     });
     if (!response.ok) return null;
-    return sessionProjectContextPinsResponseSchema.parse(await response.json()).pins;
+  return sessionProjectContextPinsResponseSchema.parse(await response.json()).pins;
   } catch {
     return null;
   }
+};
+
+export const fetchSessionKnowledge = async (
+  directory: string | null | undefined,
+  sessionId: string | null | undefined,
+  responseStyleInstruction?: string | null,
+  expectedRuntimeKey = getRuntimeKey(),
+): Promise<{ text: string; signature: string }> => {
+  await syncSessionKnowledge(directory, sessionId, responseStyleInstruction, expectedRuntimeKey);
+  return { text: '', signature: '' };
+};
+
+export const reportSessionKnowledgeDelivered = async (
+  _directory?: string | null,
+  _sessionId?: string | null,
+  _signature?: string | null,
+  _expectedRuntimeKey?: string,
+): Promise<void> => {
+  // Handled by syncSessionKnowledge on the server in v2.6.1.
 };

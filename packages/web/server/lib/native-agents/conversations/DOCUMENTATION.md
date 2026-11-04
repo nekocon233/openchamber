@@ -124,6 +124,12 @@ cleanup retains registry ownership so conversation deletion can retry.
 
 ## Context and operations
 
+Antigravity checklist reads use the executing segment's retained history,
+including a frozen fork before its first new source. A rewind cuts checklist
+records before the same user message as chat; redo restores the retained list.
+Logical checklist identities include conversation, segment and rewind boundary.
+Events from a bounded or rewound source cannot update that logical list.
+
 `context.js` transfers user text, visible replies and plans, tool inputs and
 results, and attachment references through server-generated hidden instructions.
 It leaves native reasoning and tool protocol execution with the source CLI.

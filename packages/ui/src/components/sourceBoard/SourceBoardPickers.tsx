@@ -174,6 +174,8 @@ const ALL_TEAMS = '__all__';
  * Which Linear team the board lists, and which workspace when more than one
  * is connected: workspaces are few and switched rarely, so they share the menu.
  */
+export const SourceBoardContainerPicker: React.FC<Record<string, unknown>> = (props) => <SourceBoardTeamPicker teams={(props.teams ?? props.containers ?? []) as never} selectedTeamId={(props.selectedTeamId ?? props.selectedContainerId ?? null) as never} onSelectTeam={(props.onSelectTeam ?? props.onSelectContainer ?? (() => {})) as never} onWorkspaceSwitched={(props.onWorkspaceSwitched ?? props.onAccountSwitched ?? (() => {})) as never} />;
+
 export const SourceBoardTeamPicker: React.FC<{
     teams: readonly LinearTeamMapping[];
     selectedTeamId: string | null;
@@ -240,3 +242,5 @@ export const SourceBoardTeamPicker: React.FC<{
         </DropdownMenu>
     );
 };
+
+

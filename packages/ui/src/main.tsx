@@ -19,6 +19,7 @@ import type { RuntimeAPIs } from './lib/api/types'
 import { useSessionUIStore } from './sync/session-ui-store'
 import { shouldPrimePrimarySessionNavigation } from './sync/session-navigation'
 import { installRuntimeEndpointReset } from './apps/runtimeEndpointReset'
+import { forgetLayoutForSafeStart, isDesktopSafeStart } from './lib/desktopSafeStart'
 import { prefetchOpenCodeCompatibility } from './components/update/openCodeCompatibilityCheck'
 
 declare global {
@@ -39,6 +40,7 @@ if (typeof window !== 'undefined' && shouldPrimePrimarySessionNavigation()) {
 }
 
 initializeLocale();
+if (isDesktopSafeStart()) forgetLayoutForSafeStart();
 installRuntimeEndpointReset();
 prefetchOpenCodeCompatibility();
 

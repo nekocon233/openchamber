@@ -14,6 +14,16 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 import { isNativeSessionId } from '@/lib/native-agents/ids';
 
 /**
+ * The composer identity a `/btw` fork takes while the fork is still being
+ * created. Its text stays in memory until migration or discard; it must never
+ * be persisted because the next `/btw` for this parent reuses the key.
+ */
+export const btwPendingComposerKey = (parentSessionId: string): string => `btw-pending:${parentSessionId}`;
+
+export const isBtwPendingComposerKey = (sessionId: string | null | undefined): boolean =>
+  Boolean(sessionId?.startsWith('btw-pending:'));
+
+/**
  * `/btw <question>`: fork the main session into a temporary session and send
  * the question there.
  *
@@ -131,8 +141,7 @@ const btwBoundaryParts = (): Array<{ text: string; synthetic: true; systemContex
  * context. Anchoring the fork to the last completed turn instead means the
  * inherited transcript is always a settled conversation.
  *
- * Returns `null` when the parent has no completed assistant turn yet (a brand
- * new session); the caller then keeps the previous fork-at-HEAD behavior.
+ * Returns `null` when the parent has no completed assistant turn yet.
  */
 export const findLastCompletedAssistantMessageID = (messages: readonly Message[]): string | null => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -311,7 +320,12 @@ export async function startBtwSession(input: StartBtwInput): Promise<Session> {
           [...btwBoundaryParts(), ...(input.additionalParts ?? [])],
           input.variant ?? undefined,
           'normal',
-          { sessionId: forked.id, directory: sessionDirectory, skills: input.skills },
+          {
+            target: { runtimeKey: expectedRuntimeKey, sessionId: forked.id, directory: sessionDirectory },
+            sessionId: forked.id,
+            directory: sessionDirectory,
+            skills: input.skills,
+          },
         );
       } catch (error) {
         // A fork without its first question is not a usable btw session:

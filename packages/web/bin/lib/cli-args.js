@@ -78,7 +78,7 @@ const COMMAND_OWNED_FLAGS = new Map([
   ['goal', SESSION_OR_SCHEDULE], ['goal-token-budget', SESSION_OR_SCHEDULE], ['project', SESSION_OR_SCHEDULE],
   ['dir', SESSION_SCHEDULE_OR_MEMORY], ['directory', SESSION_SCHEDULE_OR_MEMORY],
   ['provider', TUNNEL], ['mode', TUNNEL], ['profile', TUNNEL], ['config', TUNNEL], ['token', TUNNEL],
-  ['token-file', TUNNEL], ['token-stdin', TUNNEL], ['connect-ttl', TUNNEL], ['session-ttl', TUNNEL],
+  ['token-file', TUNNEL], ['token-stdin', TUNNEL], ['connect-ttl', TUNNEL], ['session-ttl', TUNNEL], ['https-port', TUNNEL],
   ['show-secrets', TUNNEL], ['dry-run', TUNNEL], ['force', TUNNEL],
   ['lines', LOGS], ['no-follow', LOGS],
 ]);
@@ -116,6 +116,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     server: undefined,
     connectTtl: undefined,
     sessionTtl: undefined,
+    httpsPort: undefined,
     qr: false,
     explicitQr: false,
     force: false,
@@ -513,6 +514,15 @@ function parseArgs(argv = process.argv.slice(2)) {
         options.sessionTtl = typeof value === 'string' ? value : options.sessionTtl;
         break;
       }
+      case 'https-port': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        if (value === undefined || !/^\d+$/.test(value.trim())) {
+          throw new TunnelCliError('Missing or invalid value for --https-port.', EXIT_CODE.USAGE_ERROR);
+        }
+        options.httpsPort = Number(value.trim());
+        break;
+      }
       case 'json':
         options.json = true;
         break;
@@ -882,7 +892,8 @@ COMMON OPTIONS:
 
 START OPTIONS:
   --provider <id>         Tunnel provider id (default: cloudflare)
-  --mode <id>             Tunnel mode (default: quick)
+  --mode <id>             Tunnel mode (default: the provider's first mode)
+  --https-port <port>     Tailscale: HTTPS port of the tailnet address (443, 8443, 10000)
   --profile <name>        Start tunnel from saved profile name
   --config [path]         Managed-local config path (optional)
   --token <token>         Cloudflare token (visible in process list; FRPC rejects this form)

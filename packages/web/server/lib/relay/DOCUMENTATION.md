@@ -19,8 +19,8 @@ Traffic is modeled as three stacked layers. The relay understands only Layer 1; 
 ## Entrypoints and structure
 
 Host side (`packages/web/server/lib/relay/`):
-- `service.js` — thin entrypoint: relay config (enabled flag + relay URL), the management routes (`GET/POST /api/openchamber/relay/{status,enable,disable}`), a `getPairingCandidate()` accessor (the relay transport candidate folded into pairing-v2 links when enabled, consumed by the pairing-session route in `core-routes.js`), and lifecycle wiring. Started from `packages/web/server/index.js` only when the user has explicitly enabled the relay. The relay endpoint defaults to the OpenChamber-hosted relay but can be pinned to a self-hosted relay (`pinnedRelayUrl`: `relayUrl` in the machine policy file, else the `OPENCHAMBER_RELAY_URL` env var; see `../enterprise-mode.js`; must be `ws://`/`wss://`, an invalid value pins nothing); when set it overrides the stored setting for the host connection, the pairing candidate, and status, so paired clients inherit the endpoint automatically. In enterprise mode (`../enterprise-mode.js`) the relay runs only with that pin (`relayBlockedByEnterprise`): `start()` refuses otherwise (every path in passes through it), `enable` answers 403, `getPairingCandidate()` is null, `ensureEnabledForPairing()` throws (the pairing route drops the candidate and direct pairing still works), status carries `blockedByEnterprise`, and `resolvePairingTransports` in `index.js` reports `relayAvailable: false`.
-- `identity.js` — the host's stable identity: the long-lived signing keypair (shared with the push relay, defines the routing id) plus a long-lived encryption keypair (the E2EE trust anchor). Reused across restarts; never rotated implicitly.
+- `service.js` — thin entrypoint: relay config (enabled flag + relay URL), the management routes (`GET/POST /api/openchamber/relay/{status,enable,disable,reset-identity}`), a `getPairingCandidate()` accessor (the relay transport candidate folded into pairing-v2 links when enabled, consumed by the pairing-session route in `core-routes.js`), and lifecycle wiring. Started from `packages/web/server/index.js` only when the user has explicitly enabled the relay. The relay endpoint defaults to the OpenChamber-hosted relay but can be pinned to a self-hosted relay (`pinnedRelayUrl`: `relayUrl` in the machine policy file, else the `OPENCHAMBER_RELAY_URL` env var; see `../enterprise-mode.js`; must be `ws://`/`wss://`, an invalid value pins nothing); when set it overrides the stored setting for the host connection, the pairing candidate, and status, so paired clients inherit the endpoint automatically. In enterprise mode (`../enterprise-mode.js`) the relay runs only with that pin (`relayBlockedByEnterprise`): `start()` refuses otherwise (every path in passes through it), `enable` answers 403, `getPairingCandidate()` is null, `ensureEnabledForPairing()` throws (the pairing route drops the candidate and direct pairing still works), status carries `blockedByEnterprise`, and `resolvePairingTransports` in `index.js` reports `relayAvailable: false`.
+- `identity.js` — the host's stable identity: the long-lived signing keypair (shared with the push relay, defines the routing id) plus a long-lived encryption keypair (the E2EE trust anchor). Reused across restarts; never rotated implicitly. The only rotation is the user's: Settings shows a notice while the host reports `identityConflict` (two `4001` evictions within 10 minutes, so another copy of the data dir, usually on another machine, keeps taking the slot), and its button calls `reset-identity`. That drops both keypairs through `key-store.js`, restarts the host if it was running, and leaves the other copy with the old identity: devices paired through the relay keep reaching it until they are paired here again, and devices paired for the home network only are unaffected. Callers that cache derived keys (this runtime and the push relay's) compare the store's `generation()`, so the reset reaches both without a restart.
 - `signing-key.js` — the signing keypair and the routing id derivation, shared with the notifications runtime.
 - `key-store.js` — where both keypairs live: `<data-dir>/relay-identity.json` (`0600`), never `settings.json`, so the private keys do not travel with every copy of the settings file. Installs that kept them in `settings.json` (`relaySigningKey` / `relayEncryptionKey`) have them moved on first load, unchanged so `serverId` and the trust anchor survive, then stripped from settings; an older build sharing the data dir then mints its own identity. A key is minted only when neither file holds it, and both are read strictly so a corrupt or unreadable file fails instead of reading as first run. `index.js` builds one store for the push relay and the private relay, so their concurrent first loads mint one key.
 - `host-client.js` — the long-lived connection manager: one outbound control connection to the relay, a per-client data connection for each connected device, reconnect/backoff, and the E2EE responder handshake per connection. A data connection dial that never opens (refused, or no answer within 5 s, doubling to 15 s per failure) is retried after 1 s, doubling to 8 s, for as long as the relay still reports that client and the control connection is up. The relay sends no second `connected` for a waiting client, so without the retry the device waits for the relay's 15 s stuck-control reset or its own 30 s handshake timeout. A data connection that opened and then closed is not retried: the relay closes the client with it, and the client's reconnect arrives as a new `connected`.
@@ -57,7 +57,9 @@ request it can gunzip with `x-openchamber-tunnel-accept-encoding: gzip`
 `DecompressionStream` exists). For such a request the host gzips whole-body
 text responses (JSON, text, XML, SVG) of 1 KB or more and marks them with
 `x-openchamber-tunnel-content-encoding: gzip`; the client strips the marker and
-decodes, so callers see an ordinary response. Event streams, binary types and
+decodes, so callers see an ordinary response. The host compresses through a
+Node `zlib` stream pipeline: `CompressionStream` in Node threw an uncaught
+"Controller is already closed" whenever a client aborted a compressed request. Event streams, binary types and
 WebSocket messages cross as they are: gzip holds bytes back until its window
 fills, which would delay live events. The marker is stripped before the
 request reaches the server. Negotiation is per request, so a client or host
@@ -193,6 +195,22 @@ with `terminal: true` and the relay's `closeCode`, so callers can tell it apart
 from a pending reconnect, and `retry()` makes the same one fresh attempt on
 request.
 
+The relay may ask a peer to close instead of closing the socket itself: a
+plaintext `{ "type": "relay-retire", "code", "reason" }` frame
+(`parseRelayRetire` in `protocol.ts`, mirrored in `host-client.js`). A close the
+relay sends to a peer that is gone, such as a phone asleep or a laptop with its
+lid shut, holds the relay's handler until the closing handshake times out,
+minutes later, and the relay is billed for the wait; measured on 2026-10-17,
+six such closes cost ~900 s of Durable Object time and six retire frames ~1 s.
+The tunnel client treats a retire frame exactly like a relay close with that
+code, at any stage of the connection; a host data socket drops itself, and the
+host control socket closes and takes the frame's code as its close code, so a
+retire with `4001: Control replaced` keeps the 60 s hold-off and counts toward
+the identity conflict, and any other code reconnects as after any drop. Peers that predate
+the frame fail closed on unknown plaintext once the E2EE handshake is done,
+which ends in the same reconnect; before the handshake they ignore it and
+reconnect on their own handshake timeout.
+
 The limit refusal (4029: more than 16 clients at once, or more than 60 client
 connects a minute, per server) gets its own user-facing state, read from
 `closeCode` through `isRelayLimitReached`, never from the message text. A probe
@@ -220,6 +238,8 @@ live session. A probe dials its own tunnel only when the live one gives no
 answer.
 
 Relay mode plugs into the existing client transport layer rather than a parallel path: `runtime-switch` activates the tunnel singleton, `runtime-fetch` routes runtime requests through it, `runtime-url`/`runtime-socket` yield tunnel-backed URLs and sockets, and `runtime-auth` mints the URL-scoped token through the tunnel. Direct-URL connections and the Electron realtime-proxy path are unaffected.
+
+A URL the browser loads itself (`<img src>`, `<video src>`, an iframe) never enters the tunnel: in relay mode the runtime base is the page's own origin, so such a URL gets the desktop protocol's 503 or the phone's app shell. `runtimeAssetsNeedFetch` is true in relay mode, so chat images and Files previews read their bytes through `runtimeFetch`. Other browser-owned URLs stay unreachable over the relay, among them chat and document video and HTML previews.
 
 ## Design invariants (do not regress)
 

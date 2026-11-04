@@ -931,6 +931,13 @@ forwarded as prompts. Commands without an OpenChamber handler, including
 `/permissions`, also report unsupported; native sessions still use the fixed
 approval policy documented above.
 
+### Antigravity checklists
+
+Antigravity's transcript-owned MCP checklist uses the existing HTTP snapshot and
+event contracts. Receipt validation, missing-list semantics and local helper
+registration are owned by `antigravity/DOCUMENTATION.md`. Unified reads honor
+retained history boundaries and never admit later source writes into a fork.
+
 ### DeepSeek checklists
 
 DeepSeek advertises `tasks.checklist` and implements the existing checklist

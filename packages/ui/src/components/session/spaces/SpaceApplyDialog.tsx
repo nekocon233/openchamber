@@ -12,6 +12,7 @@
 import React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
+import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -26,6 +27,7 @@ import { previewSpaceApply, type SpaceApplyPreview, type SpaceReportedPaths } fr
 import { useSpacesStore } from '@/lib/spaces/spaces-store';
 import { useUIStore } from '@/stores/useUIStore';
 import { spaceFailureText } from './spaceFailureText';
+import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 
 type PreviewRead = { kind: 'reading' } | { kind: 'read'; preview: SpaceApplyPreview } | { kind: 'refused'; refusal: SpaceApplyRefusal };
 
@@ -146,9 +148,9 @@ const ApplyDialogFor: React.FC<{ spaceId: string }> = ({ spaceId }) => {
   const pathList = (label: string, reported: SpaceReportedPaths) => (
     <div className="space-y-1">
       <p className="typography-meta text-status-warning">{label}</p>
-      <ul className="max-h-24 overflow-y-auto typography-meta text-muted-foreground">
+      <ScrollableOverlay as="ul" outerClassName="max-h-24" className="typography-meta text-muted-foreground" disableHorizontal>
         {reported.paths.map((path) => <li key={path} className="truncate font-mono">{path}</li>)}
-      </ul>
+      </ScrollableOverlay>
       {reported.count > reported.paths.length ? <p className="typography-meta text-muted-foreground">{t('spaces.apply.morePaths', { count: reported.count - reported.paths.length })}</p> : null}
     </div>
   );
@@ -190,7 +192,7 @@ const ApplyDialogFor: React.FC<{ spaceId: string }> = ({ spaceId }) => {
 
       {read.kind === 'reading' ? (
         <p className="flex items-center gap-2 typography-meta text-muted-foreground">
-          <Icon name="loader-4" className="h-3.5 w-3.5 animate-spin" />
+          <Spinner className="h-3.5 w-3.5" />
           {t('spaces.apply.loading')}
         </p>
       ) : null}

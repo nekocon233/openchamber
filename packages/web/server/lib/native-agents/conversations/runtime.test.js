@@ -12,6 +12,7 @@ import { createNativePlanExecution } from '../plan-execution.js';
 import { NativeAgentError } from '../errors.js';
 import { JsonRpcError } from '../codex/rpc.js';
 import { createNativeConversations } from './runtime.js';
+import { checklistReceipt } from '../antigravity/checklist-protocol.mjs';
 import { NATIVE_BACKENDS as UI_BACKENDS, nativeProviderIdOf } from '@openchamber/ui/lib/native-agents/ids';
 import { nativeCapabilitiesSchema, nativeMessagePageSchema } from '@openchamber/ui/lib/native-agents/schemas';
 
@@ -143,6 +144,40 @@ const setup = async ({ smallModels = async () => { throw new Error('This fixture
 };
 
 describe('unified native backend contract', () => {
+  it('restores AGY checklists only inside a logical conversation retained prefix', async () => {
+    const h = await setup();
+    const session = await h.conversation('antigravity');
+    const firstUser = await h.send(session.id, 'antigravity');
+    const sourceId = h.requests[0].id;
+    const appendList = (revision, content, targetSource = sourceId) => {
+      const input = { todos: [{ id: 'verify', content, status: 'pending' }] };
+      const owner = h.sources.get(targetSource).records.at(-1);
+      const part = buildToolPart({ id: `tool_${revision}`, sessionID: targetSource, messageID: owner.info.id,
+        callID: `nag_t_fixture_${revision}`, tool: 'openchamber_checklist_update_checklist', input,
+        title: 'update_checklist', start: 1, metadata: { nativeBackend: 'antigravity', openchamberToolSource: 'mcp' },
+        result: { status: 'completed', output: checklistReceipt(input), end: 2 } });
+      owner.parts.push(part);
+    };
+    appendList(2, 'Retained checklist');
+    const initial = await h.api.checklist(session.id, h.directory);
+    expect(initial).toMatchObject({ state: 'ready', items: [{ subject: 'Retained checklist' }] });
+    const secondUser = await h.send(session.id, 'antigravity');
+    appendList(8, 'Later checklist');
+    const page = await h.history(session.id);
+    const fork = await h.api.fork(session.id, secondUser, h.directory);
+    expect(await h.api.checklist(fork.id, h.directory)).toMatchObject({ state: 'ready', items: [{ subject: 'Retained checklist' }] });
+    expect((await h.api.checklist(fork.id, h.directory)).identity).not.toBe(initial.identity);
+    await h.send(session.id, 'codex');
+    await h.send(session.id, 'antigravity');
+    appendList(20, 'Newest checklist', h.requests.at(-1).id);
+    await h.api.revert(session.id, secondUser, h.directory);
+    expect(await h.api.checklist(session.id, h.directory)).toMatchObject({ state: 'ready', items: [{ subject: 'Retained checklist' }] });
+    await h.api.unrevert(session.id, h.directory);
+    expect(await h.api.checklist(session.id, h.directory)).toMatchObject({ state: 'ready', items: [{ subject: 'Newest checklist' }] });
+    expect(page.records[0].info.id).toBe(firstUser);
+    await h.restart();
+    expect(await h.api.checklist(fork.id, h.directory)).toMatchObject({ items: [{ subject: 'Retained checklist' }] });
+  });
   it('summarizes the first AGY turn and keeps its title across source refreshes and restart', async () => {
     const generate = vi.fn(async () => ({ text: 'Improve tunnel reliability' }));
     const h = await setup({ smallModels: async () => ({ generateSmallModelText: generate }) });

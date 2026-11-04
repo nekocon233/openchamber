@@ -16,7 +16,9 @@ performs its own fresh safety reads through RuntimeAPIs, outside this UI owner.
   complete `read` as stale, along with the original Error and its metadata.
 - A read of a worktree whose checkout is still running waits for its `git-ready`
   phase first and stays `loading` meanwhile. Reading earlier fails, and that
-  error would stay until a manual retry. A failed checkout settles as `error`.
+  error would stay until a manual retry. A failed checkout is read at once: it
+  is still a repository, and its binding is what the recovery controls
+  (Remote, Download again) need to repair it.
 - `contexts` grants provider-read demand only while the owner read is ready and
   the selected association's readiness is `ready` with a matching approved fetch
   fingerprint. Aggregate `needs-attention` does not suppress healthy siblings.
@@ -99,7 +101,7 @@ Anonymous HTTPS is a transport an identity may carry; identity pickers label it 
 
 ## Managed SSH onboarding
 
-`ManagedSshCredentials.tsx` is the key picker inside the identity editor — the one place a managed SSH key is chosen — through the optional `GitAPI.managedSshCredentials` operation. It starts no inventory, discovery, import, or provider authentication on mount. Explicit inventory returns safe labels, public fingerprints and opaque managed references. Explicit discovery returns short-lived opaque candidates from the connected server. Ready candidates show their exact fingerprint, require a keyboard/touch-capable confirmation checkbox, and keep Import disabled until confirmation. Import selects the returned managed credential in the current local draft when a selector is present, but never saves a repository grant, binds a provider, or changes author identity. Transport Save or clone execution remains the separate authorization action.
+`ManagedSshCredentials.tsx` is the key picker inside the identity editor — the one place a managed SSH key is chosen — through the optional `GitAPI.managedSshCredentials` operation. The editor mounts it only while the SSH method is chosen, and mounting reads the inventory so the saved key can be named; it starts no discovery, import, or provider authentication on mount. The editor draws the field's label, so the picker renders only the control column. Inventory returns safe labels, public fingerprints and opaque managed references. Explicit discovery returns short-lived opaque candidates from the connected server. Ready candidates show their exact fingerprint, require a keyboard/touch-capable confirmation checkbox, and keep Import disabled until confirmation. Import selects the returned managed credential in the current local draft when a selector is present, but never saves a repository grant, binds a provider, or changes author identity. Transport Save or clone execution remains the separate authorization action.
 
 Reads distinguish failure from empty success. Failed operations retain data but disable stale inventory selection; explicit buttons remain available for retry. Typed expiry, source-change, mismatch, unavailable, and capacity rejections tell the user to rediscover or repair host state. Runtime-will-change and unmount invalidate pending inventory, discovery, and import results. Runtime changes clear candidates, confirmation, and selection without loading the new host automatically.
 
@@ -112,8 +114,8 @@ One repository works as one identity. `applyIdentity.ts` turns a chosen
 provider association through the exact-target mutation, writes the primary
 remote's transport grant from the identity's transport (`account`, `ssh`,
 `system`, or `anonymous`), and applies the author with
-`setGitIdentity(directory, profileId)`. A repository with no remote, and a
-runtime that holds no bindings (VS Code), receive the signature alone. The `global` profile is the System
+`setGitIdentity(directory, profileId)`. A repository with no remote receives the signature alone.
+VS Code mounts no identity surface, so it never applies an identity. The `global` profile is the System
 identity — it removes the provider association and clears the repository-local
 author so the person's own Git configuration answers, and OpenChamber never
 writes the machine's own (global or system) configuration. No choice asks for
@@ -127,7 +129,14 @@ unbinding removes those entries.
 an account identity whose instance host differs from the remote host, an
 account or anonymous identity on a non-HTTPS remote, or an SSH-key identity on a
 non-SSH remote is disabled with a localized reason (`describeIdentityApplicability`)
-and never proposed. `proposeIdentityForHost` proposes, among applicable identities,
+and never proposed. The instance's separate SSH address (`instanceSshUrl`) counts as
+its host for an SSH remote, so a Gitea or Forgejo instance whose `SSH_DOMAIN`
+differs from its web address still serves its own repositories.
+Remote recognition compares the separate SSH address only with SSH remotes,
+using normalized hostname and SSH port. SCP, omitted port and explicit port 22
+have the same default-port identity. An HTTP(S) remote on an SSH-only host
+produces neither a provider identity nor a repository link.
+`proposeIdentityForHost` proposes, among applicable identities,
 the one whose account answers for the remote host, then the default identity,
 then the System identity — the repository as it is. The add screen shows the
 repository as it is signed today, its own local author included, and writes
@@ -194,17 +203,32 @@ menu re-reads the accounts when it opens, the Git Settings row says why the
 identity cannot be used, and nothing binds a repository to a credential that
 is gone.
 
+`accountUsableByIdentity` decides which listed accounts count. The server uses
+a provider's CLI login for Git transport only where the descriptor says so
+(`auth.cliTransport`: the gh CLI), and only while it is the provider's active
+account in Integrations, so the identity editor offers it, and an identity
+naming it counts as connected, only while that account is current. The OAuth
+account and the CLI account of the same person are separate options told apart
+by their source label. An identity that names the CLI account while it is not
+in use, disabled or signed out is not offered. `unavailableAccountReason` picks
+its Git Settings note: switch to the CLI account in Integrations
+(`cliAccountInactive`) while no CLI account is in use, else `accountGone`,
+since a CLI login in use as another person is not fixed by switching. A CLI
+login of a provider without `cliTransport` (the glab login) is never offered:
+Git transport reads only the credentials OpenChamber stores. The account
+labels name the provider by its descriptor's `label`.
+
 An identity is complete when it has a signature and a way to push:
 `isCompleteIdentity` accepts `account` with an account, a managed SSH key,
 anonymous HTTPS, or `system` (this machine's Git). The account is optional
 except for the `account` transport, so identities for hosts OpenChamber has no
-provider for (Bitbucket, Gitea, a private server) work. The editor creates
+provider for (Bitbucket, a private server) work. The editor creates
 nothing else and the server refuses anything else from a client.
 
 Records written before identities carried a transport have none; they read as
 `system` identities: choosing one writes the repository's author and leaves
 Git to this machine's configuration. Git Settings marks an identity it cannot
-use (`incomplete`, `accountGone`) and says why.
+use (`incomplete`, `accountGone`, `cliAccountInactive`) and says why.
 
 Checkout repair first runs `checkout-hydration` against a user-selected ready parent fetch remote. The immutable public plan exposes bounded repository-relative submodule/LFS paths and redacted endpoints, never raw URLs, absolute paths, or credential references. Failed hydration stays visible through `GitOperationStatus`. The user selects one discovered endpoint, explicitly chooses System, anonymous HTTPS, managed HTTPS account, or managed SSH key, and saves or removes only that grant through the narrow CAS API. Retry plans a new inspection; it never reclones the retained repository. Missing `git-lfs` has a specific install-and-retry warning. Runtime and directory changes clear all repair drafts, and late mutation results reconcile through the captured binding owner scope.
 
@@ -309,8 +333,19 @@ additional requests or notifications for 10,000 warm snapshot reads.
 `applyIdentity.test.ts` covers the provider/transport/author writes an identity
 produces, that grants an earlier identity saved on other remotes are removed so
 they follow the new one, and instance and scheme applicability;
-`identity.test.ts` covers remote traits and host proposal. Account cases in
+`identity.test.ts` covers remote traits, host proposal, account options and
+the gh CLI account rules. Account cases in
 `sourceControlOAuthPolling.test.tsx` cover localized retry and runtime switching.
 These tests do not validate a packaged runtime, real credentials or browser paint.
 
 `SourceControlBindingSettings.test.tsx` covers the repository dialog's all-locale copy.
+
+`providers/descriptor.test.ts` covers id syntax and reserved ids, per-descriptor
+failure, forward-compatible values (the change-review features included), a
+change host's descriptor and the fallback; `providers/registry.test.ts`
+covers snapshot hydration, a corrupt snapshot, failure keeping the held list,
+shared requests and a runtime switch rejecting a late answer;
+`providers/urlMatchers.test.ts` covers github.com, GitHub Enterprise, nested
+GitLab namespaces, a provider the UI has no code for, known-instance precedence
+and the ambiguous case. The web adapter's 404 fallback and format-driven
+normalization are covered in `packages/web/src/api/source-control-providers.test.ts`.

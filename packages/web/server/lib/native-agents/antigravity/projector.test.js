@@ -113,6 +113,23 @@ describe('Antigravity native plan prefix', () => {
 });
 
 describe('Antigravity saved tool outcomes', () => {
+  it('shows recorded replacement excerpts and identifies their source after logical projection', () => {
+    const records = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Edit' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'edit_file', args: { Path: '/repo/a.txt', Target: 'before\n', Replacement: 'after\n' } }] },
+      { step_index: 2, type: 'GENERIC', content: 'Applied' },
+    ]);
+    expect(records[1].parts[0].state.metadata).toMatchObject({
+      nativeBackend: 'antigravity', nativeDiffScope: 'replacement',
+      files: [{ filePath: '/repo/a.txt', diff: expect.stringContaining('-before\n+after\n') }],
+    });
+    const failed = project([
+      { step_index: 0, type: 'USER_INPUT', content: 'Edit' },
+      { step_index: 1, type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'edit_file', args: { Path: '/repo/a.txt', Target: 'before', Replacement: 'after' } }] },
+      { step_index: 2, type: 'GENERIC', status: 'ERROR', content: 'Denied' },
+    ])[1].parts[0];
+    expect(failed.state.metadata.files).toBeUndefined();
+  });
   it('scopes a saved permission denial to its turn and accepts a later native final response', () => {
     const send = { messageId: 'client-message', providerID: 'antigravity-native', modelID: 'gemini-test', agent: 'plan',
       antigravity: { stepIndex: 0, denial: { actions: ['read_file'], time: 1000 } } };

@@ -5,7 +5,7 @@ description: リモートおよびモバイルアクセス向けに OpenChamber 
 
 # トンネル
 
-トンネルは OpenChamber への公開リンクです。別ネットワークの普通のブラウザからアクセスできます。実行中のインスタンスに対して作成するには `openchamber tunnel` を使います。
+トンネルは OpenChamber へのリンクです。別ネットワークの普通のブラウザから、または Tailscale Serve なら tailnet 内のどのデバイスからでもアクセスできます。実行中のインスタンスに対して作成するには `openchamber tunnel` を使います。
 
 > **自分のデバイス**（モバイルアプリ、別のデスクトップ）の接続には、通常トンネルは不要です。代わりに [ペアリング](/connect-devices/) して、エンドツーエンド暗号化の [Private Relay](/private-relay/) にセットアップ不要で外出先アクセスを任せましょう。
 
@@ -17,6 +17,8 @@ OpenChamber はあなたのマシン上でトンネルプロバイダー CLI を
 brew install cloudflared
 brew install ngrok
 ```
+
+Tailscale を使う場合は、[Tailscale アプリ](https://tailscale.com/download)をインストールしてサインインします。 Mac ではアプリだけで十分です。OpenChamber はアプリ内のコマンドラインツールを見つけます。
 
 Cloudflare quick tunnel は `cloudflared` で実行できます。Ngrok には ngrok アカウントと ngrok ダッシュボードの authtoken が必要です。
 
@@ -46,6 +48,12 @@ openchamber tunnel start --provider cloudflare --mode quick
 
 ```bash
 openchamber tunnel start --provider ngrok --mode quick
+```
+
+または、Tailscale Serve で tailnet 内のデバイスと共有します。
+
+```bash
+openchamber tunnel start --provider tailscale --mode serve
 ```
 
 3. 状態を確認します。

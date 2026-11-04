@@ -42,6 +42,8 @@ type UserTextPartProps = {
     onTruncationChange: (partIndex: number, truncated: boolean) => void;
     /** Names of the files attached to this message; `[name]` in the text renders as a file chip. */
     attachmentFilenames: readonly string[];
+    attachmentFiles?: readonly unknown[];
+    onShowPopup?: (content: unknown) => void;
 };
 
 const EMPTY_ATTACHMENT_LINKS: AttachmentCitationLink[] = [];

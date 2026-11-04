@@ -22,7 +22,7 @@ export type NativeChecklistState =
 const IDLE: NativeChecklistState = { status: 'idle' };
 const UNSUPPORTED: NativeChecklistState = { status: 'unsupported' };
 const REFRESH_MS = 45_000;
-const supportsChecklist = (backend: ReturnType<typeof nativeSessionBackend>) => backend === 'claude' || backend === 'deepseek';
+const supportsChecklist = (backend: ReturnType<typeof nativeSessionBackend>) => backend === 'claude' || backend === 'deepseek' || backend === 'antigravity';
 
 type Entry = {
   key: string;
@@ -184,7 +184,8 @@ const readSnapshot = (entry: Entry, api: NativeAgentsAPI): Promise<NativeCheckli
     const capabilities = await api.capabilities();
     if (controller.signal.aborted) throw new DOMException('Read cancelled', 'AbortError');
     const backend = nativeSessionBackend(entry.sessionId, entry.directory);
-    const supported = backend === 'deepseek' ? capabilities.backends.deepseek?.tasks?.checklist : capabilities.backends.claude.tasks?.checklist;
+    const supported = backend === 'claude' || backend === 'deepseek' || backend === 'antigravity'
+      ? capabilities.backends[backend]?.tasks?.checklist : false;
     if (!supported) return { state: 'unavailable', reason: 'unsupported' };
     return api.checklist(entry.sessionId, entry.directory, { signal: controller.signal });
   })().finally(() => {
@@ -254,6 +255,7 @@ const stopTimer = (entry: Entry): void => {
   entry.timer = null;
 };
 const schedule = (entry: Entry): void => {
+  if (nativeSessionBackend(entry.sessionId, entry.directory) === 'antigravity') return;
   if (entry.timer || entry.deleted || entry.visible === 0 || entry.state.status === 'unsupported' || globalThis.document?.visibilityState === 'hidden') return;
   entry.timer = setTimeout(() => {
     entry.timer = null;

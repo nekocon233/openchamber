@@ -2,7 +2,7 @@
 // client using the JS e2ee initiator. Verifies the full handshake and a tunneled
 // HTTP GET /health, and asserts only binary frames cross the relay post-handshake.
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'bun:test';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -476,6 +476,155 @@ class BunLikeFailingSocket extends EventEmitter {
 
   ping() {}
 }
+
+describe('relay host-client control reconnect', () => {
+  const fakeIdentity = {
+    serverId: 'fake-server-id',
+    hostEncPrivateKey: null,
+    signRelayAuth: () => ({ ts: 1, sig: 'sig', pk: 'pk' }),
+  };
+
+  // Opens the control socket, has the relay close it with `code`, and reports
+  // how many control dials follow within 1.5 s.
+  const redialsAfterClose = async (code) => {
+    const sockets = [];
+    const host = startRelayHost({
+      relayUrl: 'wss://relay.example.test/ws',
+      identity: fakeIdentity,
+      getLocalPort: () => 1,
+      logger: { warn: () => {} },
+      createSocket: (url) => {
+        const socket = new BunLikeFailingSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    try {
+      const control = sockets[0];
+      control.readyState = WebSocket.OPEN;
+      control.emit('open');
+      control.readyState = WebSocket.CLOSED;
+      control.emit('close', code, Buffer.from('reason'));
+      await sleep(1500);
+      return sockets.length - 1;
+    } finally {
+      host.stop();
+    }
+  };
+
+  it('reconnects after a dropped control socket on the short backoff', async () => {
+    expect(await redialsAfterClose(1006)).toBe(1);
+  });
+
+  it('holds off when another host with the same identity took the slot', async () => {
+    expect(await redialsAfterClose(4001)).toBe(0);
+  });
+
+  // The relay retires a replaced control socket with a frame; the host closes
+  // it with 1000, and the frame's code decides the reconnect.
+  const redialsAfterRetire = async (code) => {
+    const sockets = [];
+    const host = startRelayHost({
+      relayUrl: 'wss://relay.example.test/ws',
+      identity: fakeIdentity,
+      getLocalPort: () => 1,
+      logger: { warn: () => {} },
+      createSocket: (url) => {
+        const socket = new BunLikeFailingSocket(url);
+        socket.close = (closeCode) => {
+          socket.readyState = WebSocket.CLOSED;
+          socket.emit('close', closeCode, Buffer.from(''));
+        };
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    try {
+      const control = sockets[0];
+      control.readyState = WebSocket.OPEN;
+      control.emit('open');
+      control.emit('message', Buffer.from(JSON.stringify({ type: 'relay-retire', code, reason: 'retired' })), false);
+      await sleep(1500);
+      return sockets.length - 1;
+    } finally {
+      host.stop();
+    }
+  };
+
+  it('holds off when the relay retires the control socket as replaced', async () => {
+    expect(await redialsAfterRetire(4001)).toBe(0);
+  });
+
+  it('reconnects when the relay retires an unresponsive control socket', async () => {
+    expect(await redialsAfterRetire(4003)).toBe(1);
+  });
+
+  // The relay accepted the dial and never answered the upgrade: no error, no close.
+  it('redials a control socket whose opening handshake never completes', () => {
+    vi.useFakeTimers();
+    const sockets = [];
+    const host = startRelayHost({
+      relayUrl: 'wss://relay.example.test/ws',
+      identity: fakeIdentity,
+      getLocalPort: () => 1,
+      logger: { warn: () => {}, info: () => {} },
+      createSocket: (url) => {
+        const socket = new BunLikeFailingSocket(url);
+        socket.terminate = () => socket.fail('WebSocket is closed before the connection is established');
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    try {
+      vi.advanceTimersByTime(14_999);
+      expect(sockets).toHaveLength(1);
+
+      vi.advanceTimersByTime(1 + 1000);
+      expect(sockets).toHaveLength(2);
+      expect(host.getStatus()).toMatchObject({ state: 'reconnecting', lastError: 'control socket open timeout' });
+    } finally {
+      host.stop();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('relay host-client relay retire', () => {
+  it('drops a data socket the relay asks it to close', async () => {
+    const sockets = [];
+    const host = startRelayHost({
+      relayUrl: 'wss://relay.example.test/ws',
+      identity: { serverId: 'fake-server-id', hostEncPrivateKey: null, signRelayAuth: () => ({ ts: 1, sig: 'sig', pk: 'pk' }) },
+      getLocalPort: () => 1,
+      logger: { warn: () => {}, info: () => {} },
+      createSocket: (url) => {
+        const socket = new BunLikeFailingSocket(url);
+        socket.closedWith = null;
+        socket.close = (code) => { socket.closedWith = code; };
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    try {
+      const control = sockets[0];
+      control.readyState = WebSocket.OPEN;
+      control.emit('open');
+      control.emit('message', Buffer.from(JSON.stringify({ type: 'connected', connectionId: 'conn-1' })), false);
+      const data = sockets[1];
+      data.readyState = WebSocket.OPEN;
+      data.emit('open');
+      expect(host.getStatus().connectedClients).toBe(1);
+
+      data.emit('message', Buffer.from(JSON.stringify({ type: 'relay-retire', code: 1001, reason: 'Client disconnected' })), false);
+      await sleep(20);
+
+      expect(data.closedWith).toBe(1000);
+      expect(host.getStatus().connectedClients).toBe(0);
+    } finally {
+      host.stop();
+    }
+  });
+});
 
 describe('relay host-client error redaction', () => {
   const fakeIdentity = {

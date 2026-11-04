@@ -2,6 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { mapAgyTool } from './tools.js';
 
 describe('Antigravity tool presentation', () => {
+  it('retains read coordinates and describes native searches', () => {
+    expect(mapAgyTool({ name: 'read_file', argumentsEncoded: false, args: { Path: '/repo/a.txt', StartLine: 100, EndLine: 110 } }))
+      .toMatchObject({ tool: 'read', input: { filePath: '/repo/a.txt', offset: 100, limit: 11 } });
+    expect(mapAgyTool({ name: 'search_web', argumentsEncoded: false, args: { query: 'native tools', domain: 'example.org' } }))
+      .toMatchObject({ tool: 'websearch', input: { query: 'native tools', domain: 'example.org' }, title: 'native tools' });
+  });
+
+  it('normalizes every replacement chunk without discarding its text', () => {
+    expect(mapAgyTool({ name: 'multi_replace_file_content', argumentsEncoded: false, args: {
+      TargetFile: '/repo/a.txt', ReplacementChunks: [
+        { TargetContent: 'first', ReplacementContent: '', StartLine: 10, EndLine: 10 },
+        { TargetContent: 'second', ReplacementContent: 'changed', StartLine: 30, EndLine: 30 },
+      ],
+    } })).toMatchObject({ tool: 'edit', input: { filePath: '/repo/a.txt', edits: [
+      { oldString: 'first', newString: '' }, { oldString: 'second', newString: 'changed' },
+    ] } });
+  });
   it('keeps prototype-like tool names and keys as data', () => {
     expect(mapAgyTool({ name: 'constructor', argumentsEncoded: false, args: {} }).tool).toBe('constructor');
     const args = JSON.parse('{"__proto__":{"Path":"/outside"}}');

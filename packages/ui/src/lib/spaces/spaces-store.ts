@@ -6,7 +6,7 @@ import React from 'react';
 import { create } from 'zustand';
 import { z } from 'zod';
 
-import { listSpaces, readSpaceCustomProviders, type SpaceCustomProvider, type SpaceEntry, type SpaceFailure, type SpaceGrant } from './spaces-api';
+import { listSpaces, readSpaceCustomProviders, spaceTaskTitleSchema, type SpaceTaskTitle, type SpaceCustomProvider, type SpaceEntry, type SpaceFailure, type SpaceGrant } from './spaces-api';
 import { spaceIdOfDirectory } from './space-route';
 import { normalizePath } from '@/lib/pathNormalization';
 import type { SpaceProgress } from '@/sync/event-pipeline';
@@ -21,6 +21,7 @@ export type SpaceListState = 'complete' | 'partial' | 'stale' | 'unknown';
 export type SpaceMark = {
   id: string;
   name: string;
+  taskTitle?: SpaceTaskTitle | null;
   state: SpaceListState;
   /** The registered host project the space was made for, or null when the host no longer has it. */
   projectDirectory: string | null;
@@ -31,15 +32,11 @@ export type SpaceMark = {
 export const spaceMarkSchema = z.object({
   id: z.string().regex(/^[0-9a-f]{12}$/),
   name: z.string().default(''),
+  taskTitle: spaceTaskTitleSchema.nullish(),
   state: z.enum(['complete', 'partial', 'stale', 'unknown']),
   projectDirectory: z.string().nullable().default(null),
   directory: z.string().nullable().default(null),
 });
-
-export type SpaceAccessFailure = { provider: string; code: string; message: string };
-
-/** The model access a creation in this window gives once the space is ready, while and after it does. */
-type SpaceCreationAccess = { kind: 'giving' } | { kind: 'failed'; failures: readonly SpaceAccessFailure[] };
 
 /** The actions on a space the user can take from its group, from soft to hard; `setup` runs the project's setup commands again. */
 export type SpaceAction = 'start' | 'stop' | 'restart_opencode' | 'restart' | 'setup' | 'remove';
@@ -57,6 +54,7 @@ export type SpaceActionState =
 
 type SpacesState = {
   spaces: ReadonlyMap<string, SpaceMark>;
+  creationAccess: ReadonlyMap<string, { kind: string }>;
   /**
    * The journey route's list, the one source that knows a space still being made or one whose
    * making failed; null until it answered once for this runtime. The steps of a creation that
@@ -69,16 +67,9 @@ type SpacesState = {
   applyJourney: (entries: readonly SpaceEntry[], revision: number) => void;
   /** A creation step announced by the host. Resolves whether the space was known to the list. */
   noteProgress: (progress: SpaceProgress) => boolean;
+  noteTaskTitle: (spaceId: string, taskTitle: SpaceTaskTitle | null) => boolean;
   /** A creation this window started, shown at once, before the next read of the list. */
   addJourneyEntry: (entry: SpaceEntry) => void;
-  /**
-   * The model access a creation in this window is giving or could not give, per space. Only this
-   * window knows it: the host keeps no grant it could not deliver.
-   */
-  creationAccess: ReadonlyMap<string, SpaceCreationAccess>;
-  noteCreationAccess: (spaceId: string, access: SpaceCreationAccess | null) => void;
-  /** A provider the grant dialog gave: it no longer counts among the creation's failures. */
-  noteProviderGranted: (spaceId: string, providerId: string) => void;
   /**
    * A grant the host just accepted, entered into the space's entry at once and counted like a
    * step, so a read of the list that began before it cannot take it away; the next read that
@@ -150,6 +141,7 @@ const withState = (spaces: ReadonlyMap<string, SpaceMark>, spaceId: string, stat
 
 export const useSpacesStore = create<SpacesState>((set, get) => ({
   spaces: EMPTY,
+  creationAccess: new Map(),
   journey: null,
   progressRevision: 0,
   applyJourney: (entries, revision) => set((current) => {
@@ -168,22 +160,17 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
     journey.set(entry.id, entry);
     return { journey, progressRevision };
   }),
-  creationAccess: new Map(),
-  noteCreationAccess: (spaceId, access) => set((current) => {
-    const creationAccess = new Map(current.creationAccess);
-    if (access) creationAccess.set(spaceId, access);
-    else creationAccess.delete(spaceId);
-    return { creationAccess };
-  }),
-  noteProviderGranted: (spaceId, providerId) => set((current) => {
-    const access = current.creationAccess.get(spaceId);
-    if (access?.kind !== 'failed') return current;
-    const failures = access.failures.filter((failure) => failure.provider !== providerId);
-    const creationAccess = new Map(current.creationAccess);
-    if (failures.length > 0) creationAccess.set(spaceId, { kind: 'failed', failures });
-    else creationAccess.delete(spaceId);
-    return { creationAccess };
-  }),
+  noteTaskTitle: (spaceId, taskTitle) => {
+    const current = get();
+    const entry = current.journey?.get(spaceId);
+    const mark = current.spaces.get(spaceId);
+    const progressRevision = current.progressRevision + 1;
+    progressAt.set(spaceId, progressRevision);
+    const journey = entry ? new Map(current.journey).set(spaceId, { ...entry, taskTitle }) : current.journey;
+    const spaces = mark ? new Map(current.spaces).set(spaceId, { ...mark, taskTitle }) : current.spaces;
+    set({ journey, spaces, progressRevision });
+    return Boolean(entry);
+  },
   noteGrantGiven: (spaceId, grant) => set((current) => {
     const entry = current.journey?.get(spaceId);
     if (!entry) return current;
@@ -194,6 +181,8 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
       ...entry,
       grants: [...entry.grants.filter((known) => known.id !== grant.id), grant],
       needsAccess: entry.needsAccess.filter((id) => id !== grant.id),
+      // The host takes the provider's creation failure off its list with the grant; so does this copy.
+      accessFailures: grant.kind === 'domain' ? entry.accessFailures : entry.accessFailures.filter((failure) => failure.provider !== grant.provider),
     });
     return { journey, progressRevision };
   }),
@@ -255,7 +244,7 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
   resetForRuntimeSwitch: () => {
     progressAt.clear();
     journeyGeneration += 1;
-    set({ spaces: EMPTY, journey: null, progressRevision: 0, creationAccess: new Map(), customProviders: new Map(), accessDialog: null, actions: new Map(), applyDialog: null, deleteDialog: null, deleteUnsaved: null, archivedNotice: null, setupOutputDialog: null, actionsSheet: null });
+    set({ spaces: EMPTY, journey: null, progressRevision: 0, customProviders: new Map(), accessDialog: null, actions: new Map(), applyDialog: null, deleteDialog: null, deleteUnsaved: null, archivedNotice: null, setupOutputDialog: null, actionsSheet: null });
   },
   forgetForSwitchOff: () => get().resetForRuntimeSwitch(),
 }));
@@ -326,6 +315,29 @@ const spaceTakesNoNewSession = (entry: SpaceEntry | undefined): boolean => entry
 export const useSpaceTakesNoNewSession = (spaceId: string | null | undefined): boolean =>
   useSpacesStore((state) => spaceId != null && spaceTakesNoNewSession(state.journey?.get(spaceId)));
 
+/** The same outside React, by a directory: false for a host directory. */
+export const isSpaceDirectoryClosedToNewSessions = (directory: string | null | undefined): boolean => {
+  const spaceId = spaceIdOfDirectory(directory);
+  return spaceId !== null && spaceTakesNoNewSession(useSpacesStore.getState().journey?.get(spaceId));
+};
+
+/**
+ * The host project a space's directory belongs to: the registered project the space was made
+ * from, as the session list's mark or the journey list names it. Null for a host directory, for a
+ * space this window does not know yet, and for one whose project the host no longer has.
+ */
+export const spaceProjectDirectoryIn = (state: Pick<SpacesState, 'spaces' | 'journey'>, directory: string | null | undefined): string | null => {
+  const spaceId = spaceIdOfDirectory(directory);
+  if (spaceId === null) return null;
+  return state.spaces.get(spaceId)?.projectDirectory ?? state.journey?.get(spaceId)?.projectDirectory ?? null;
+};
+
+export const spaceProjectDirectoryOf = (directory: string | null | undefined): string | null => spaceProjectDirectoryIn(useSpacesStore.getState(), directory);
+
+/** The same for a render, which follows the space list as it arrives. */
+export const useSpaceProjectDirectory = (directory: string | null | undefined): string | null =>
+  useSpacesStore((state) => spaceProjectDirectoryIn(state, directory));
+
 export const isSpaceDirectoryStopped = (directory: string | null | undefined): boolean => {
   const spaceId = spaceIdOfDirectory(directory);
   return spaceId !== null && isSpaceStopped(spaceId);
@@ -364,17 +376,21 @@ export const useSpaceDirectoryStopped = (directory: string | null | undefined): 
  * appears the moment it exists. A journey-only space has no session list yet, so it is not stale.
  */
 const mergeSidebarSpaces = (marks: ReadonlyMap<string, SpaceMark>, journey: ReadonlyMap<string, SpaceEntry> | null): SpaceMark[] => {
-  const merged = Array.from(marks.values());
+  const merged = Array.from(marks.values(), (mark) => {
+    const entry = journey?.get(mark.id);
+    return entry ? { ...mark, taskTitle: entry.taskTitle ?? null } : mark;
+  });
   for (const entry of journey?.values() ?? []) {
     if (marks.has(entry.id) || entry.projectDirectory === null || entry.directory === null) continue;
-    merged.push({ id: entry.id, name: entry.name, state: 'complete', projectDirectory: entry.projectDirectory, directory: entry.directory });
+    merged.push({ id: entry.id, name: entry.name, taskTitle: entry.taskTitle ?? null, state: 'complete', projectDirectory: entry.projectDirectory, directory: entry.directory });
   }
   return merged;
 };
 
-export const useSidebarSpaces = (): SpaceMark[] => {
-  const marks = useSpacesStore((state) => state.spaces);
-  const journey = useSpacesStore((state) => state.journey);
+/** `enabled: false` reads nothing and returns no spaces, for a caller that needs them only some of the time. */
+export const useSidebarSpaces = (enabled = true): SpaceMark[] => {
+  const marks = useSpacesStore((state) => (enabled ? state.spaces : EMPTY));
+  const journey = useSpacesStore((state) => (enabled ? state.journey : null));
   return React.useMemo(() => mergeSidebarSpaces(marks, journey), [journey, marks]);
 };
 

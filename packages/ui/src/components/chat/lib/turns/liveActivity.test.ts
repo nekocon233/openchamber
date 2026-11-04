@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AssistantMessage, Part, ToolPart, ToolStateCompleted } from '@/lib/opencode/model';
 import { attachSyntheticContext } from '../attachSyntheticContext';
-import { getLiveFinalMessage, getTurnsWithLaterAssistant, hasLiveActivity } from './liveActivity';
+import { getLiveFinalMessage, getShownPages, getTurnsWithLaterAssistant, hasLiveActivity } from './liveActivity';
 import { projectTurnRecords } from './projectTurnRecords';
 import { summarizeLiveActivity } from './liveActivitySummary';
 import type { ChatMessageEntry } from './types';
@@ -90,6 +90,10 @@ describe('live turn boundaries', () => {
         expect(getLiveFinalMessage([assistant('form', [text('Which?'), tool('form', 'form', { status: 'running' })])])).toBeUndefined();
     });
 
+    test('a stop step whose only text is a zero-width space is not a final answer', () => {
+        expect(getLiveFinalMessage([assistant('blank', [text('\u200B')], { finish: 'stop' })])).toBeUndefined();
+    });
+
     test('plumbing messages after the final answer stay transparent', () => {
         const final = assistant('final', [text('Done')], { finish: 'stop' });
         const synthetic: ChatMessageEntry = {
@@ -130,6 +134,18 @@ describe('live turn boundaries', () => {
 
         expect(messages.map((message) => message.info.id)).toEqual(['user', 'a', 'next']);
         expect(projectTurnRecords(messages).turns.map((turn) => turn.turnId)).toEqual(['user', 'next']);
+    });
+
+    test('a notice row alone makes no fold, so it shows above the answer', () => {
+        const messages = attachSyntheticContext([
+            user(),
+            { info: { id: 'n1', sessionID: 'session', role: 'synthetic', time: { created: 1 }, text: 'wait', description: 'Waiting for quota reset' }, parts: [] },
+            assistant('a', [text('Done')], { finish: 'stop' }),
+        ]);
+        const turn = projectTurnRecords(messages).turns[0];
+
+        expect(turn.activityParts).toHaveLength(1);
+        expect(hasLiveActivity(turn, true)).toBe(false);
     });
 
     test('activity eligibility follows tools and visible reasoning rather than any assistant prose', () => {
@@ -314,5 +330,27 @@ describe('live activity report', () => {
             { file: '/project/noop', additions: 0, deletions: 0, status: 'modified' },
             { file: '/project/empty', additions: 0, deletions: 0, status: 'added' },
         ] } })])])).toMatchObject({ files: 1, additions: 0, deletions: 0, hasCompleteDiff: true });
+    });
+});
+
+describe('getShownPages', () => {
+    test('keeps text with a UI block in view, except the final answer and code samples', () => {
+        const block = text('Overview:\n```openui-lang\nroot = Stack([])\n```');
+        const sample = text('```openui-lang literal\nroot = Stack([])\n```');
+        const step = assistant('step', [block, sample], { finish: 'tool-calls' });
+        const answer = assistant('answer', [text('```openui-lang\nroot = Stack([])\n```')], { finish: 'stop' });
+        expect(getShownPages([step, answer], answer)).toEqual([block]);
+    });
+
+    test('a form stays in view while it waits and folds with Activity once it settles; a page that only shows stays', () => {
+        const form = { action: 'render.page', parameters: { ui: 'root = Stack([])', title: 'Scope', awaitAnswer: true } };
+        const page = { action: 'render.page', parameters: { html: '<p>a</p>', title: 'Mockup' } };
+        const waiting = tool('waiting', 'openchamber_render', { status: 'running', input: form });
+        const answered = tool('answered', 'openchamber_render', { input: form, metadata: { openchamber: { ok: true, answer: { answered: true, summary: 'Minimal', data: {} } } } });
+        const inChat = tool('in-chat', 'openchamber_render', { input: form, metadata: { openchamber: { ok: true, answer: { answered: false } } } });
+        const stopped = tool('stopped', 'openchamber_render', { status: 'error', input: form, error: 'aborted' });
+        const shown = tool('shown', 'openchamber_render', { input: page, metadata: { openchamber: { ok: true } } });
+        const step = assistant('step', [waiting, answered, inChat, stopped, shown], { finish: 'tool-calls' });
+        expect(getShownPages([step]).map((part) => part.id)).toEqual(['waiting', 'shown']);
     });
 });

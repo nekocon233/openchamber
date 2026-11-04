@@ -7,9 +7,13 @@ import path from 'node:path';
 import {
   GUEST_REQUEST_RESPONSE_MAX,
   GUEST_REQUEST_TIMEOUT_MS,
+  OPENCHAMBER_HOST_CALLBACK_URL,
   isGuestRequestPath,
+  serviceProvides,
 } from '@openchamber/sdk';
 
+import { isGuestPackageUnloaded } from './catalog.js';
+import { hostCallbackUrl } from './host-callback.js';
 import { readExtensionStore, updateExtensionStore } from './persist.js';
 import { readBoundedResponseText } from './response-body.js';
 import {
@@ -415,6 +419,7 @@ const startGuestService = async ({
   entry,
   socketBindings = [],
   socketOverrides = {},
+  hostCallback = false,
   epoch,
   lifecycle,
 }) => {
@@ -471,6 +476,11 @@ const startGuestService = async ({
   };
   if (Object.keys(socketEnv).length > 0) {
     env.OPENCHAMBER_SERVICE_SOCKETS = JSON.stringify(socketEnv);
+  }
+  // Only a service that stands in for a Git host may call OpenChamber back
+  // (`host-callback.js`); every other service never learns the listener.
+  if (hostCallback) {
+    env[OPENCHAMBER_HOST_CALLBACK_URL] = await hostCallbackUrl();
   }
   if (cancelled()) {
     throw stoppedError();
@@ -662,12 +672,18 @@ export const openGuestServiceRequest = async ({
 
   let runtime = runtimes.get(guestId);
   if (!runtime || runtime.status !== 'ready' || runtime.child.exitCode !== null || runtime.child.signalCode) {
+    // A folder mid-rebuild is listed from its last loaded manifest and grants; the new files are not what the user approved.
+    if (isGuestPackageUnloaded(packageRoot)) {
+      throw new GuestServiceError('The extension is being rebuilt; try again once its build finishes.', 'NO_SERVICE');
+    }
     runtime = await ensureGuestService({
       guestId,
       packageRoot,
       entry: service.entry,
       socketBindings,
       socketOverrides,
+      // A role that sends outbound through the callback listener learns its address; no other service does.
+      hostCallback: serviceProvides(service, 'source-control') || serviceProvides(service, 'notifications') || serviceProvides(service, 'tracker'),
       epoch,
       lifecycle,
     });

@@ -142,7 +142,7 @@ type RowProps = {
     item: ReferencePickerItem;
     pullStatus: CachedValue<GitHubPullStatus | null> | null;
     /** The project PR list also shows each PR's checks as text. */
-    showChecks: boolean;
+    showChecks?: boolean;
     highlighted: boolean;
     /** Null in single-choice mode, where rows have no checkbox. */
     checked: boolean | null;
@@ -156,7 +156,7 @@ type RowProps = {
 export const ReferencePickerRow = React.memo(function ReferencePickerRow({
     item,
     pullStatus,
-    showChecks,
+    showChecks = false,
     highlighted,
     checked,
     diffIncluded,

@@ -47,6 +47,7 @@ declare global {
           preload?: string;
           nodeintegration?: string;
           allowpopups?: string;
+          webpreferences?: string;
           ref?: React.Ref<WebviewElement>;
         },
         WebviewElement

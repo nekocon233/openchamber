@@ -24,11 +24,13 @@ import {
 } from '@/components/ui/command';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Icon } from "@/components/icon/Icon";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from '@/lib/utils';
 import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { rankByQuery } from '@/lib/search/fuzzySearch';
 import { useI18n } from '@/lib/i18n';
 import type { BranchIntegrationRemoteBranch, BranchIntegrationTarget } from './branchIntegration';
+import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 
 type OperationType = 'merge' | 'rebase';
 
@@ -77,7 +79,7 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
   const [branchDropdownOpen, setBranchDropdownOpen] = React.useState(false);
   const [branchSearch, setBranchSearch] = React.useState('');
   const searchInputRef = React.useRef<HTMLInputElement>(null);
-  const logContainerRef = React.useRef<HTMLDivElement>(null);
+  const logContainerRef = React.useRef<HTMLElement>(null);
 
   const isDisabled = disabled || isOperating;
   const targetBranchLabel = currentBranch || t('gitView.branch.currentBranchFallback');
@@ -175,16 +177,18 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
 
   const renderOperating = () => (
     <div className="space-y-3">
-      <div
+      <ScrollableOverlay
         ref={logContainerRef}
-        className="rounded-lg border border-border bg-muted/30 p-3 max-h-48 overflow-y-auto"
+        outerClassName="max-h-48 rounded-lg oc-tile"
+        className="p-3"
+        disableHorizontal
       >
         <div className="space-y-2">
           {operationLogs.map((log, index) => (
             <div key={index} className="flex items-start gap-2">
               <div className="mt-0.5 shrink-0">
                 {log.status === 'running' && (
-                  <Icon name="loader-4" className="size-3.5 animate-spin text-primary" />
+                  <Spinner className="size-3.5 text-primary" />
                 )}
                 {log.status === 'done' && (
                   <Icon name="check" className="size-3.5 text-success" />
@@ -210,7 +214,7 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
             </div>
           ))}
         </div>
-      </div>
+      </ScrollableOverlay>
 
       {operationCompleted ? (
         mode === 'dialog' ? (
@@ -240,10 +244,10 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
             type="button"
             onClick={() => setOperation('merge')}
             className={cn(
-              'flex flex-col items-start gap-1 rounded-lg border p-3 text-start transition-colors',
+              'flex flex-col items-start gap-1 rounded-lg p-3 text-start',
               operation === 'merge'
-                ? 'border-border bg-interactive-selection text-interactive-selection-foreground'
-                : 'border-border hover:border-border/80 hover:bg-interactive-hover'
+                ? 'bg-interactive-selection text-interactive-selection-foreground'
+                : 'oc-tile oc-tile-hover'
             )}
           >
             <div className="flex items-center gap-2">
@@ -268,10 +272,10 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
             type="button"
             onClick={() => setOperation('rebase')}
             className={cn(
-              'flex flex-col items-start gap-1 rounded-lg border p-3 text-start transition-colors',
+              'flex flex-col items-start gap-1 rounded-lg p-3 text-start',
               operation === 'rebase'
-                ? 'border-border bg-interactive-selection text-interactive-selection-foreground'
-                : 'border-border hover:border-border/80 hover:bg-interactive-hover'
+                ? 'bg-interactive-selection text-interactive-selection-foreground'
+                : 'oc-tile oc-tile-hover'
             )}
           >
             <div className="flex items-center gap-2">
@@ -362,7 +366,7 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
 
       {/* Summary */}
       {selectedBranch ? (
-        <div className="rounded-lg bg-muted/50 p-3">
+        <div className="rounded-lg oc-tile p-3">
           <p className="typography-meta text-muted-foreground">
             {operation === 'merge' ? (
               <>
@@ -425,7 +429,7 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
   if (mode === 'inline') {
     return (
       <section className="border-0 bg-transparent rounded-none">
-        <header className="border-b border-border/40 px-0 py-3">
+        <header className="border-b border-edge-muted px-0 py-3">
           <div className="space-y-1">
             <div className="typography-ui-header font-semibold text-foreground">{t('gitView.branch.updateTitle')}</div>
             <div className="typography-micro text-muted-foreground">
@@ -451,7 +455,7 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
             disabled={isDisabled}
           >
             {isOperating ? (
-              <Icon name="loader-4" className="size-4 animate-spin" />
+              <Spinner className="size-4" />
             ) : (
               <Icon name="git-merge" className="size-4" />
             )}

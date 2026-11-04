@@ -25,6 +25,7 @@ import { runtimeFetch } from '@/lib/runtime-fetch';
 import { themeSchema, themeListSchema, type ThemeDefinition } from '@/lib/theme/definition';
 import { ThemeImportError } from '@/lib/theme/importErrors';
 import { getRuntimeKey, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
+import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
 import {
   adoptThemePreferencesForRuntime,
   resolveThemePreferencesForRuntime,
@@ -260,6 +261,15 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
     void reloadCustomThemes();
   }, [reloadCustomThemes]);
 
+  // The server announces edits to its themes folder; a reconnect may have
+  // missed one, so the themes are read again then too.
+  useEffect(() => {
+    if (isVSCode) return;
+    return subscribeOpenchamberEvents((event) => {
+      if (event.type === 'themes-changed' || event.type === 'event-stream-ready') void reloadCustomThemes();
+    });
+  }, [isVSCode, reloadCustomThemes]);
+
   useEffect(() => {
     if (isVSCode || customThemesLoading) return;
     const missing = [preferences.lightThemeId, preferences.darkThemeId]
@@ -365,6 +375,11 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
     const root = document.documentElement;
     root.classList.remove('light', 'dark');
     root.classList.add(currentTheme.metadata.variant);
+    // The splash script sets an inline color-scheme for the theme it starts
+    // with; it has to follow a switch, or native controls keep the old scheme
+    // and an extension frame whose scheme no longer matches the page paints
+    // an opaque canvas instead of letting the panel show through.
+    root.style.setProperty('color-scheme', currentTheme.metadata.variant);
 
     return restoreTransitions;
   }, [applyVSCodeRuntimeClass, cssGenerator, currentTheme, isVSCode, updateBrowserChrome]);

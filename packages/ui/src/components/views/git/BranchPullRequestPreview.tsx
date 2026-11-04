@@ -28,7 +28,7 @@ function useListedPull(context: SourceControlReadContext, number: number, revisi
     React.useEffect(() => {
         if (context.provider !== 'github') return;
         let cancelled = false;
-        void sourceControl.githubReferences(context, { kind: 'pull', query: `#${number}` })
+        void sourceControl.references(context, { kind: 'pull', query: `#${number}` })
             .then((result) => {
                 if (cancelled || !result.connected) return;
                 const pull = result.items.find((item): item is GitHubPullReference => item.kind === 'pull' && item.number === number);
@@ -53,6 +53,7 @@ export const BranchPullRequestPreview: React.FC<{
     changeRequest: ChangeRequest;
     /** Asks the branch status again after a change. */
     onChanged: () => void;
+    statusStack?: unknown;
 }> = ({ directory, context, changeRequest, onChanged }) => {
     const rootDirectory = useEffectiveDirectory();
     const activeProjectId = useProjectsStore((state) => state.activeProjectId);

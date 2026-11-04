@@ -39,6 +39,7 @@ type QueuedAdditionalPart = Omit<FollowUpQueueAdditionalPart, 'attachments'> & {
 };
 
 export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | 'additionalParts'> {
+    goal?: QueuedMessageGoal | null;
     attachments?: AttachedFile[];
     additionalParts?: QueuedAdditionalPart[];
     /** Absent on a server projection item; a take brings it back. */
@@ -60,6 +61,17 @@ export interface QueuedMessage extends Omit<FollowUpQueueItem, 'attachments' | '
  * extension UI keeps the local fallback queue.
  */
 export const isServerOwnedMessageQueue = (): boolean => !isVSCodeRuntime();
+
+/**
+ * "Run as goal" captured with a queued message: the goal starts when this
+ * message is delivered, never with whichever message happens to go out first.
+ * `objective` is present only when the arming flow supplied one (the plan
+ * flow); otherwise the delivered text is the objective.
+ */
+export interface QueuedMessageGoal {
+    objective?: string;
+    tokenBudget: number | null;
+}
 
 /**
  * Context captured with a queued message: whatever the composer had attached
@@ -137,6 +149,7 @@ export type MessageQueueRuntimeContext = {
 
 interface MessageQueueState {
     queuedMessages: Record<string, QueuedMessage[]>;
+    sendingIds?: Record<string, boolean>;
     quarantinedLegacyMessages: Record<string, QueuedMessage[]>;
     followUpBehavior: FollowUpBehavior;
     runtimeKey: string;
@@ -188,6 +201,8 @@ interface MessageQueueActions {
     resync: () => Promise<void>;
     /** The follow-up queue only ever delivers through UI claims, so there is nothing to hold. */
     setServerHold: (sessionId: string, held: boolean) => Promise<void>;
+    refreshSpaceQueue: (spaceId: string) => Promise<void>;
+    takeForSend: (identity: MessageQueueIdentity) => Promise<QueuedMessage[]>;
     resetForRuntimeSwitch: (previousRuntimeKey: string | null | undefined) => void;
 }
 
@@ -1646,7 +1661,9 @@ export const createMessageQueueStore = (
 
             setServerHold: () => Promise.resolve(),
 
-            resetForRuntimeSwitch: (previousRuntimeKey) => {
+            refreshSpaceQueue: async () => {},
+        takeForSend: async () => [],
+        resetForRuntimeSwitch: (previousRuntimeKey) => {
                 const previous = typeof previousRuntimeKey === 'string' && previousRuntimeKey.trim().length > 0
                     ? normalizeRuntimeKey(previousRuntimeKey)
                     : null;

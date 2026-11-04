@@ -28,7 +28,7 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
   }, [provider, instance, accountId, repositoryId, bindingRevision, primaryRemote, directory, owner, repo, number]);
   const key = scope ? JSON.stringify([runtimeKey, scope]) : null;
   const read = React.useCallback(async () => {
-    if (!scope || getRuntimeKey() !== runtimeKey) throw new Error(t('pendingReview.loadFailed'));
+    if (!scope || getRuntimeKey() !== runtimeKey || !sourceControl.githubPendingReview) throw new Error(t('pendingReview.loadFailed'));
     return sourceControl.githubPendingReview(scope.context, scope.pull);
   }, [runtimeKey, scope, sourceControl, t]);
   const value = useCachedValue(cache, key, read, enabled);
@@ -68,6 +68,7 @@ export function usePendingReview(context: SourceControlReadContext | null, pull:
     }
     setFailure(null);
     try {
+      if (!sourceControl.githubPendingReviewAction) throw new Error(t('pendingReview.actionFailed'));
       await sourceControl.githubPendingReviewAction({ ...scope.context, idempotencyKey,
         target: { project: { owner: scope.pull.owner, name: scope.pull.repo }, number: scope.pull.number, headSha }, action: requestAction });
       usePendingReviewDraftStore.getState().clearAttempt(key, signature);

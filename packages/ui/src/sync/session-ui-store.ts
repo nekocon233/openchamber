@@ -304,7 +304,8 @@ export async function routeMessage(params: {
    * ahead of every other context item, and a prompt's message appears
    * without waiting for it. Resolves to '' when nothing is owed.
    */
-  sessionKnowledge?: Promise<string>
+  sessionKnowledge?: Promise<string | void>
+  ready?: Promise<unknown>
 }): Promise<'command' | 'prompt' | 'shell'> {
   assertExpectedRuntimeContext(params.expectedRuntime)
   if (params.delivery === 'queue') throw new Error('Queue delivery must be handled by the OpenChamber follow-up queue')
@@ -499,6 +500,7 @@ type CapturedSendTarget = {
 }
 
 type SendMessageOptions = {
+  queuedGoal?: unknown
   subagentModel?: NativeAgentModel | null
   preserveModelSelection?: boolean
   /** Explicit composer intent; automated continuations must not restore archives. */
@@ -561,6 +563,8 @@ type NewSessionDraftTarget = "chat" | "project"
 
 export type NewSessionDraftState = {
   draftId: number
+  workDraftId?: string | null
+  worktreeStartDirectory?: string | { worktreeRoot: string; directory: string | null } | null
   open: boolean
   selectedProjectId?: string | null
   directoryOverride: string | null
@@ -579,12 +583,46 @@ export type NewSessionDraftState = {
   preparedChatDirectory?: string | null
 }
 
+export type SetCurrentSessionOptions = {
+  /** The session materialized a submitted draft, which the chat announces as its own transition. */
+  transition?: "submitted-draft"
+  /** Launch restoration preserves the device's sidebar project selection. */
+  keepSingleProject?: boolean
+}
+
+export type PendingDraftSend = {
+  draftId: number
+  sessionCreated: boolean
+}
+
+export class DraftSendError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly directory: string,
+    readonly sessionCreated: boolean,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = "DraftSendError"
+  }
+}
+
+export function resolveGoalObjective(content: string, directory: string | null | undefined): string {
+  if (!content.startsWith("/")) return content
+  return expandSlashCommandGoalObjective(content, selectCommandsForDirectory(useCommandsStore.getState(), directory))
+}
+
+let admissionNavigationRevision = 0
+export const getAdmissionNavigationRevision = (): number => admissionNavigationRevision
+
 export type SessionUIState = {
   currentSessionId: string | null
   currentSessionDirectory: string | null
+  currentSessionKeepsSingleProject?: boolean
   restoredSessionPendingValidation: boolean
   restoredSessionRuntimeKey: string | null
   materializedDraftSessionId: string | null
+  pendingDraftSends: ReadonlyMap<string, PendingDraftSend>
   newSessionDraft: NewSessionDraftState
   abortPromptSessionId: string | null
   abortPromptExpiresAt: number | null
@@ -604,7 +642,7 @@ export type SessionUIState = {
   setCurrentSession: (
     id: string | null,
     directoryHint?: string | null,
-    transition?: "submitted-draft",
+    transitionOrOptions?: "submitted-draft" | SetCurrentSessionOptions,
   ) => void
   /** Capture a return action before a tool navigates to another workspace. */
   captureNavigationReturn: (directory: string) => () => void
@@ -627,10 +665,11 @@ export type SessionUIState = {
   markSessionAsOpenChamberCreated: (sessionId: string) => void
   isOpenChamberCreatedSession: (sessionId: string) => boolean
   initializeNewOpenChamberSession: (sessionId: string, agents: unknown[]) => void
-  setWorktreeMetadata: (sessionId: string, metadata: WorktreeMetadata | null) => void
+  setWorktreeMetadata: (sessionId: string, metadata: WorktreeMetadata | null, directoryOverride?: string | null) => void
   overrideNewSessionDraftTarget: (options: Record<string, unknown>) => void
   resolvePendingDraftWorktreeTarget: (requestId: string, directory: string | null, options?: Record<string, unknown>) => void
   setDraftBootstrapPendingDirectory: (directory: string | null) => void
+  setDraftWorktreeStartDirectory: (directoryOrDraftId: string | number | null, worktreeRoot?: string, directory?: string | null) => void
   setPendingDraftWorktreeRequest: (requestId: string | null) => void
   getWorktreeMetadata: (sessionId: string) => WorktreeMetadata | undefined
 
@@ -1386,9 +1425,11 @@ const PERSISTED_WORKTREE_MAP = readPersistedWorktreeTopology(runtimeMemoryKey())
 export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   currentSessionId: null,
   currentSessionDirectory: null,
+  currentSessionKeepsSingleProject: false,
   restoredSessionPendingValidation: false,
   restoredSessionRuntimeKey: null,
   materializedDraftSessionId: null,
+  pendingDraftSends: new Map(),
   newSessionDraft: { ...DEFAULT_DRAFT },
   abortPromptSessionId: null,
   abortPromptExpiresAt: null,
@@ -1406,7 +1447,9 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // ---------------------------------------------------------------------------
   // setCurrentSession
   // ---------------------------------------------------------------------------
-  setCurrentSession: (id, directoryHint?: string | null, transition?: "submitted-draft") => {
+  setCurrentSession: (id, directoryHint?: string | null, transitionOrOptions?: "submitted-draft" | SetCurrentSessionOptions) => {
+    admissionNavigationRevision += 1
+    const transition = typeof transitionOrOptions === "string" ? transitionOrOptions : transitionOrOptions?.transition
     const materializedDraftSessionId = id && transition === "submitted-draft" ? id : null
     // Publish the transition identity before closing the draft. Those are two
     // separate store updates, and ChatContainer must never observe a closed
@@ -2032,7 +2075,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     // Stub — was a no-op in old store
   },
 
-  setWorktreeMetadata: (sessionId, metadata) => {
+  setWorktreeMetadata: (sessionId, metadata, _directoryOverride) => {
     // Write to authoritative session-worktree-store
     if (metadata) {
       useSessionWorktreeStore.getState().setAttachment(sessionId, {
@@ -2087,6 +2130,15 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           preserveDirectoryOverride: ((options as Record<string, unknown> | undefined)?.preserveDirectoryOverride ?? true) as boolean,
         },
       }
+    }),
+
+  setDraftWorktreeStartDirectory: (directoryOrDraftId, worktreeRoot, directory) =>
+    set((s) => {
+      if (!s.newSessionDraft?.open) return s
+      const nextValue = typeof directoryOrDraftId === "number" && worktreeRoot !== undefined
+        ? { worktreeRoot, directory: directory ?? null }
+        : (typeof directoryOrDraftId === "string" ? directoryOrDraftId : null)
+      return { newSessionDraft: { ...s.newSessionDraft, worktreeStartDirectory: nextValue } }
     }),
 
   setDraftBootstrapPendingDirectory: (directory) =>

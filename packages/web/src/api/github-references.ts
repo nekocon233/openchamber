@@ -43,6 +43,7 @@ const referenceFields = {
   labels: z.array(z.object({ name: z.string(), color: z.string().optional() })),
   commentCount: z.number(),
   sourceRepo: z.object({ owner: z.string(), repo: z.string(), source: z.string() }),
+  provider: z.string().default('github'),
 };
 
 const referencesResultSchema = z.discriminatedUnion('connected', [

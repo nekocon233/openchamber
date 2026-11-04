@@ -16,7 +16,7 @@ on:
         default: false
         type: boolean
       finish_published_release:
-        description: 'Finish an already published release: build and add only macOS and iOS, skip npm, Windows, Linux and Android'
+        description: 'Finish a release whose macOS build failed: build and add only macOS, rebuild the Windows update manifests from the installers on the release, skip npm, Windows and Linux. Publishes only when everything succeeds'
         required: false
         default: false
         type: boolean
@@ -66,13 +66,12 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
-          # A release being finished is already public; keep it that way.
-          # Every later upload step sets draft: true. Without it the action
+          # Every upload step sets draft: true. Without it the action
           # publishes the draft after uploading, and updaters would see the
           # release before every platform and manifest is on it. Only
-          # finalize-release publishes. On a release that is already public,
-          # draft: true changes nothing.
-          draft: ${{ github.event.inputs.finish_published_release != 'true' }}
+          # finalize-release publishes. The action keeps the draft state of
+          # a release that exists, so a public one being finished stays public.
+          draft: true
           generate_release_notes: false
           body_path: artifacts/release-notes.md
           name: ${{ steps.release_notes.outputs.name }}
@@ -92,7 +91,7 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
@@ -157,7 +156,7 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -172,7 +171,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Cache bundled OpenCode CLI artifact
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/electron/.cache/opencode-cli
           key: opencode-cli-${{ runner.os }}-${{ matrix.arch }}-${{ steps.opencode_cli_version.outputs.version }}
@@ -213,6 +212,7 @@ jobs:
           bun run build:web-assets
           bun run prepare:opencode-cli
           bun run verify:opencode-cli
+          bun run prepare:ripgrep
           bun run bundle:main
           # npmRebuild=false in package.json, so electron-builder won't
           # recompile native deps on its own — we must rebuild against the
@@ -324,7 +324,7 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -339,7 +339,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Cache bundled OpenCode CLI artifact
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/electron/.cache/opencode-cli
           key: opencode-cli-${{ runner.os }}-${{ matrix.arch }}-${{ steps.opencode_cli_version.outputs.version }}
@@ -353,9 +353,13 @@ jobs:
       - name: Prepare bundled OpenCode CLI
         working-directory: packages/electron
         shell: bash
+        env:
+          # Windows arm64 builds on an x64 runner; OpenCode and ripgrep need the target arch.
+          OPENCHAMBER_TARGET_ARCH: ${{ matrix.arch }}
         run: |
           bun run prepare:opencode-cli
           bun run verify:opencode-cli
+          bun run prepare:ripgrep
 
       - name: Bundle main process
         working-directory: packages/electron
@@ -378,6 +382,9 @@ jobs:
       - name: Build Windows app
         working-directory: packages/electron
         shell: bash
+        env:
+          # verify:opencode-cli:packaged checks the CLI against the target arch.
+          OPENCHAMBER_TARGET_ARCH: ${{ matrix.arch }}
         run: |
           node ./scripts/package.mjs --win --${{ matrix.arch }} --publish=never \
             --config.publish.owner=${{ github.repository_owner }} \
@@ -432,7 +439,7 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -459,7 +466,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Cache bundled OpenCode CLI artifact
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/electron/.cache/opencode-cli
           key: opencode-cli-${{ runner.os }}-${{ matrix.arch }}-${{ steps.opencode_cli_version.outputs.version }}
@@ -483,6 +490,7 @@ jobs:
           bun run build:web-assets
           bun run prepare:opencode-cli
           bun run verify:opencode-cli
+          bun run prepare:ripgrep
           bun run bundle:main
           bun run rebuild:native
           node ./scripts/package.mjs --linux --${{ matrix.arch }} --publish=never \
@@ -578,7 +586,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -590,7 +598,9 @@ jobs:
 
       - name: Finalize combined manifests
         env:
-          MAC_ONLY: ${{ github.event.inputs.finish_published_release == 'true' && '1' || '' }}
+          WINDOWS_FROM_RELEASE: ${{ github.event.inputs.finish_published_release == 'true' && '1' || '' }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST_YML_DIR: ${{ github.workspace }}/artifacts
           GH_REPO: ${{ github.repository }}
           OPENCHAMBER_VERSION: ${{ needs.create-release.outputs.version }}

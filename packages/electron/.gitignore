@@ -6,6 +6,7 @@ dist/
 dist-bundle/
 
 # Generated packaging resources
+resources/native-agy-checklist-mcp.mjs
 resources/web-dist/
 resources/native-memory-hook.mjs
 resources/native-memory-cli.mjs
@@ -14,6 +15,8 @@ resources/deepseek-maintenance-plugin.mjs
 resources/sidecar/
 resources/opencode-cli/*
 !resources/opencode-cli/.gitkeep
+resources/ripgrep/*
+!resources/ripgrep/.gitkeep
 .cache/
 
 # OS-specific

@@ -9,13 +9,15 @@ interface ComposerFloatingPanelProps {
     compact?: boolean;
     role?: 'dialog' | 'region';
     ariaLabel?: string;
+    /** Bounds the entire surface; shrinkable children receive the remaining height. */
+    maxHeight?: number;
 }
 
 /** Shared dock for the mutually exclusive BTW, permission, and form panels. */
 /** Panels mounted per chat column, so the marker survives an overlap. */
 const mountedPanels = new WeakMap<HTMLElement, number>();
 
-export function ComposerFloatingPanel({ header, children, compact = false, role, ariaLabel }: ComposerFloatingPanelProps) {
+export function ComposerFloatingPanel({ header, children, compact = false, role, ariaLabel, maxHeight }: ComposerFloatingPanelProps) {
     const panelRef = React.useRef<HTMLDivElement | null>(null);
 
     React.useLayoutEffect(() => {
@@ -56,9 +58,9 @@ export function ComposerFloatingPanel({ header, children, compact = false, role,
         <div ref={panelRef} className="chat-input-column absolute bottom-full inset-s-0 inset-e-0 z-30 mb-3" role={role} aria-label={ariaLabel}>
             {/* Shadow on the wrapper, never on the glass: see "Floating composer"
                 in composer/DOCUMENTATION.md. */}
-            <GlassPopupMotion className="origin-bottom rounded-xl shadow-[0_4px_16px_-4px_rgb(0_0_0_/_0.12)]">
-            <div className="oc-glass-popover w-full min-w-0 overflow-hidden rounded-xl border border-[var(--interactive-border)]">
-                <div className={cn('flex items-center gap-2 px-3', compact ? 'min-h-8 py-0' : 'py-1.5')}>
+            <GlassPopupMotion className="origin-bottom rounded-xl">
+            <div className={cn('oc-glass-popover oc-glass-floating w-full min-w-0 overflow-hidden rounded-xl', maxHeight !== undefined && 'flex flex-col')} style={{ maxHeight }}>
+                <div className={cn('flex shrink-0 items-center gap-2 px-3', compact ? 'min-h-8 py-0' : 'py-1.5')}>
                     {header}
                 </div>
                 {children}

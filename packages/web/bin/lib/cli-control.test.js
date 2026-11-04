@@ -1,6 +1,52 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveControlTimeoutMs } from './cli-control.js';
+import { requestControlAction, resolveControlTimeoutMs } from './cli-control.js';
+
+const stubControlFetch = (status, body) => {
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  }));
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+};
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('requestControlAction', () => {
+  it('shows the retained worktree and a retry command without claiming a session exists', async () => {
+    const directory = "/fixture/someone's worktree";
+    stubControlFetch(503, {
+      error: 'Session selection is not ready', partial: true, partialAction: 'worktree-created', directory,
+    });
+    const error = await requestControlAction(3000, 'session.create', {
+      worktree: { name: 'task' }, prompt: 'Review this', agent: 'plan', model: 'example/model', variant: 'high',
+    }).catch((error) => error);
+    expect(error.message).toContain(`A worktree remains at ${directory}.`);
+    expect(error.message).toContain(`openchamber session create --directory '/fixture/someone'"'"'s worktree'`);
+    expect(error.message).toContain(`--port 3000 --prompt 'Review this' --model example/model --agent plan --variant high`);
+    expect(error.message).toContain('without --worktree');
+    expect(error.message).not.toMatch(/(?:Created|Forked) session/);
+  });
+
+  it('quotes apostrophes in the recovery command for Windows PowerShell', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'win32' });
+    stubControlFetch(503, {
+      error: 'Not ready', partial: true, partialAction: 'worktree-created', directory: "C:/someone's checkout",
+    });
+    const error = await requestControlAction(3000, 'session.create', { prompt: "Review someone's code" }).catch((error) => error);
+    expect(error.message).toContain("--directory 'C:/someone''s checkout'");
+    expect(error.message).toContain("--prompt 'Review someone''s code'");
+    expect(error.message).not.toContain(`'"'"'`);
+  });
+
+  it('keeps an existing-checkout retry alive through bootstrap and discovery', async () => {
+    const fetchMock = stubControlFetch(200, { sessionId: 'ses_retry' });
+    await requestControlAction(3000, 'session.create', { directory: '/fixture/checkout/ai', prompt: 'Review this' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/openchamber/control');
+  });
+});
 
 describe('resolveControlTimeoutMs', () => {
   it('keeps the short default HTTP timeout for instant control calls', () => {
@@ -26,6 +72,12 @@ describe('resolveControlTimeoutMs', () => {
 
   it('ignores a blank worktree name', () => {
     expect(resolveControlTimeoutMs({ worktree: '   ' }, {})).toBeUndefined();
+  });
+
+  it('covers bootstrap before a session wait in an existing checkout', () => {
+    expect(resolveControlTimeoutMs({ directory: '/fixture/checkout', wait: true, timeout: 30 }, {}, 'session.create')).toBe(180_000);
+    expect(resolveControlTimeoutMs({ projectId: 'project' }, {}, 'session.create')).toBe(120_000);
+    expect(resolveControlTimeoutMs({ directory: '/fixture/checkout' }, {}, 'session.status')).toBeUndefined();
   });
 
   it('covers provisioning and waiting in sequence when both are requested', () => {

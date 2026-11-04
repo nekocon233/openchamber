@@ -45,7 +45,7 @@ afterEach(() => {
   descriptors.clear();
 });
 
-const { beginLayoutAnimation, cancelWhenLayoutSettled, isLayoutAnimating, onLayoutAnimationStart, runWhenLayoutSettled } = await import('./layoutAnimation');
+const { beginLayoutAnimation, cancelWhenLayoutSettled, holdLayoutAnimation, isLayoutAnimating, onLayoutAnimationStart, onWidthDragStart, runWhenLayoutSettled } = await import('./layoutAnimation');
 
 describe('layoutAnimation', () => {
   test('runs a task at once when nothing animates', () => {
@@ -66,6 +66,7 @@ describe('layoutAnimation', () => {
     runWhenLayoutSettled(pin);
     runWhenLayoutSettled(pin);
     runWhenLayoutSettled(pin);
+    runFrame();
     await wait(10);
     expect(pins).toBe(0);
     expect(isLayoutAnimating()).toBe(true);
@@ -76,12 +77,27 @@ describe('layoutAnimation', () => {
     expect(attributes.has('data-panel-animating')).toBe(false);
   });
 
+  test('the duration counts from the next frame, when the transition starts', async () => {
+    let runs = 0;
+    beginLayoutAnimation(5);
+    runWhenLayoutSettled(() => { runs += 1; });
+    // A slow toggle frame: the duration has passed, the transition has not run.
+    await wait(10);
+    runFrame();
+    expect(runs).toBe(0);
+    await wait(10);
+    runFrame();
+    expect(runs).toBe(1);
+  });
+
   test('a second animation extends the first instead of settling in between', async () => {
     let runs = 0;
     beginLayoutAnimation(5);
     runWhenLayoutSettled(() => { runs += 1; });
+    runFrame();
     await wait(3);
     beginLayoutAnimation(15);
+    runFrame();
     await wait(8);
     runFrame();
     expect(runs).toBe(0);
@@ -90,11 +106,12 @@ describe('layoutAnimation', () => {
     expect(runs).toBe(1);
   });
 
-  test('with reduced motion the animation ends on the next frame', async () => {
+  test('with reduced motion the animation ends a frame after it starts', async () => {
     reducedMotion = true;
     let runs = 0;
     beginLayoutAnimation(500);
     runWhenLayoutSettled(() => { runs += 1; });
+    runFrame();
     await wait(2);
     runFrame();
     expect(runs).toBe(1);
@@ -106,13 +123,60 @@ describe('layoutAnimation', () => {
     beginLayoutAnimation(2);
     beginLayoutAnimation(2);
     expect(starts).toBe(1);
+    runFrame();
     await wait(5);
     runFrame();
     beginLayoutAnimation(2);
     expect(starts).toBe(2);
     release();
+    runFrame();
     await wait(5);
     runFrame();
+  });
+
+  test('a drag holds tasks until a frame after its release, through any animation inside it', async () => {
+    let runs = 0;
+    let starts = 0;
+    const stop = onLayoutAnimationStart(() => { starts += 1; });
+    const release = holdLayoutAnimation();
+    expect(starts).toBe(1);
+    runWhenLayoutSettled(() => { runs += 1; });
+    // An animation that starts and ends during the drag does not settle it.
+    beginLayoutAnimation(1);
+    runFrame();
+    await wait(5);
+    runFrame();
+    expect(runs).toBe(0);
+    expect(isLayoutAnimating()).toBe(true);
+
+    release();
+    release();
+    expect(runs).toBe(0);
+    runFrame();
+    expect(runs).toBe(1);
+    expect(isLayoutAnimating()).toBe(false);
+    expect(attributes.has('data-panel-animating')).toBe(false);
+    stop();
+  });
+
+  test('a width drag is announced also inside a running animation, a height drag never', async () => {
+    let drags = 0;
+    const stop = onWidthDragStart(() => { drags += 1; });
+    beginLayoutAnimation(1);
+    const width = holdLayoutAnimation();
+    expect(drags).toBe(1);
+    const height = holdLayoutAnimation('height');
+    expect(drags).toBe(1);
+    width();
+    height();
+    const again = holdLayoutAnimation();
+    expect(drags).toBe(2);
+    again();
+    stop();
+    runFrame();
+    await wait(5);
+    runFrame();
+    expect(isLayoutAnimating()).toBe(false);
   });
 
   test('a cancelled task does not run', async () => {
@@ -121,6 +185,7 @@ describe('layoutAnimation', () => {
     beginLayoutAnimation(1);
     runWhenLayoutSettled(task);
     cancelWhenLayoutSettled(task);
+    runFrame();
     await wait(5);
     runFrame();
     expect(runs).toBe(0);

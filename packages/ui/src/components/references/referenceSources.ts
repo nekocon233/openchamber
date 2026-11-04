@@ -221,14 +221,16 @@ export function useGitHubReferenceList(options: {
     enabled: boolean;
     active?: boolean;
     scope?: GitHubReferencesOptions['scope'];
-    directory: string | null;
+    directory?: string | null;
+    directories?: readonly string[];
     kind: GitHubReferenceKind;
     filter: RepositoryReferenceFilter;
     query: string;
 }) {
     const { sourceControl } = useRuntimeAPIs();
     const { t } = useI18n();
-    const { enabled, directory, kind, filter, query, active = true, scope: repositoryScope = 'network' } = options;
+    const { enabled, directory: rawDirectory, directories, kind, filter, query, active = true, scope: repositoryScope = 'network' } = options;
+    const directory = rawDirectory ?? directories?.[0] ?? null;
     const { state, people } = filter;
     const runtimeKey = getRuntimeKey();
     const context = useGitHubReadContext(enabled ? directory : null);
@@ -241,7 +243,7 @@ export function useGitHubReferenceList(options: {
         if (getRuntimeKey() !== runtimeKey) throw new Error(t('references.picker.error.runtimeChanged'));
         if (!context || context === 'missing') return { kind: 'unavailable', reason: 'no-repo' };
         if (context.provider === 'gitlab') return fetchGitLabReferencePage(sourceControl, context, kind, { state, people }, text, cursor);
-        const result = await sourceControl.githubReferences(context, { kind, scope: repositoryScope, state, people, query: text, cursor });
+        const result = await sourceControl.references(context, { kind, scope: repositoryScope, state, people, query: text, cursor });
         if (!result.connected) return { kind: 'unavailable', reason: 'disconnected' };
         if (repositoryScope === 'repository' && result.scope !== 'repository') {
             throw new Error(t('gitView.pullRequest.serverRestartRequired'));
@@ -304,7 +306,7 @@ export function useGitHubReferenceDetail(directory: string | null, reference: Gi
     const fetch = React.useCallback(async (): Promise<GitHubReferenceDetail> => {
         if (!context || context === 'missing' || !reference) throw new Error('GitHub is not available here');
         if (context.provider === 'gitlab') return fetchGitLabReferenceDetail(sourceControl, context, reference);
-        const result = await sourceControl.githubReferenceDetail(context, { owner, repo, number });
+        const result = await sourceControl.referenceDetail(context, { owner, repo, number });
         if (!result.connected) throw new Error('GitHub is not connected');
         if (!result.detail) throw new Error('Not found');
         return result.detail;
@@ -388,7 +390,7 @@ export function useGitHubPullStatuses(directory: string | null, references: read
         const byKey = new Map(pulls.map((pull) => [keyOf(pull), pull]));
         githubPullStatuses.ensureMany(keys, async (batch) => {
             const asked = batch.flatMap((key) => byKey.get(key) ?? []);
-            const result = await sourceControl.githubPullStatuses(
+            const result = await sourceControl.changeRequestListStatuses(
                 github,
                 asked.map((pull) => ({ owner: pull.sourceRepo.owner, repo: pull.sourceRepo.repo, number: pull.number })),
             );
@@ -442,3 +444,7 @@ export function useLinearIssueDetail(issueId: string | null, settled: boolean) {
     );
     return { detail: useCachedValue(linearDetails, key, fetch, settled), refresh };
 }
+
+export const useRepositoryAcrossReferenceList = (
+    ...args: Parameters<typeof useGitHubReferenceList>
+) => useGitHubReferenceList(...args);

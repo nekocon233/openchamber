@@ -17,6 +17,10 @@ import {
 } from 'jsonc-parser';
 import { resolveNpmRegistryRequest } from '../../web/server/lib/opencode/npm-registry-config.js';
 import { writeFileAtomic } from '../../web/server/lib/opencode/atomic-write.js';
+import { toLoadablePluginSpec } from '../../web/server/lib/opencode/loadable-plugin-spec.js';
+import { isGitSpec, isPluginControlSpec } from '../../web/server/lib/opencode/plugin-spec.js';
+import { mergeCustomProviderConfig, validateCustomProviderConfig } from '../../web/server/lib/opencode/providers.js';
+import { canonicalPluginPath, resolveLocalPluginPath } from '../../web/server/lib/opencode/plugin-paths.js';
 import {
   toAgentEntity,
   fromAgentEntity,
@@ -25,10 +29,7 @@ import {
   fromCommandEntity,
   isLegacyCommandFrontmatter,
   toMcpEntity,
-  toProviderEntity,
   readStoredProviderEntry,
-  toProviderPackage,
-  toNpmPackage,
   toPluginEntity,
   fromPluginEntity,
   readPluginList,
@@ -36,6 +37,7 @@ import {
   writeSectionEntry,
   deleteSectionEntry,
   readMcpEntry,
+  readMcpEntries,
   readLayeredMcpEntries,
   writeMcpEntry,
   deleteMcpEntry,
@@ -46,6 +48,9 @@ import {
   formatModelSelection,
   writeWebSearchSelection,
   writeWarmingEnabled,
+  writeCompactionSettings,
+  type CompactionUpdate,
+  writeSkillDisabled,
   findWebSearchProjectOverride,
   type AgentEntity,
   type CommandEntity,
@@ -103,7 +108,7 @@ export type Snippet = {
 };
 
 export type PluginScope = 'user' | 'project';
-type PluginParsedKind = 'npm' | 'path';
+type PluginParsedKind = 'control' | 'npm' | 'path' | 'git';
 
 export type PluginEntry = {
   id: string;
@@ -112,6 +117,7 @@ export type PluginEntry = {
   scope: PluginScope;
   kind: 'config';
   parsedKind: PluginParsedKind;
+  resolvedPath?: string;
 };
 
 export type PluginFile = {
@@ -119,6 +125,8 @@ export type PluginFile = {
   fileName: string;
   scope: PluginScope;
   kind: 'file';
+  absolutePath: string;
+  resolvedPath?: string;
 };
 
 export type PluginRegistryResult =
@@ -129,7 +137,8 @@ export type PluginRegistryResult =
   | { kind: 'npm-network'; spec: string; error: string }
   | { kind: 'path-ok'; spec: string; absolutePath: string }
   | { kind: 'path-missing'; spec: string; absolutePath: string }
-  | { kind: 'path-unreadable'; spec: string; absolutePath: string };
+  | { kind: 'path-unreadable'; spec: string; absolutePath: string }
+  | { kind: 'git-ok'; spec: string };
 
 export type ConfigSources = {
   /** `legacy` marks a file OpenCode still decodes through its v1 path. */
@@ -476,6 +485,32 @@ const findSnippetByName = (name: string, workingDirectory?: string): Snippet | n
   return loadSnippetRegistry(workingDirectory).get(name.toLowerCase()) ?? null;
 };
 
+// A name or alias that already triggers a snippet is taken: a second file
+// under it would shadow or be shadowed by the first.
+const assertSnippetNameFree = (name: string, registry: Map<string, Snippet>, owner: Snippet | null = null): void => {
+  const current = registry.get(name.toLowerCase());
+  if (current && current !== owner) throw new Error(`Snippet "${name}" already exists`);
+};
+
+const isSameFile = (a: string, b: string): boolean => {
+  const first = fs.statSync(a);
+  const second = fs.statSync(b);
+  return first.dev === second.dev && first.ino === second.ino;
+};
+
+// Rename and scope moves keep the file's bytes; a move across volumes (a
+// project on another disk than the global config) cannot rename.
+const moveSnippetFile = (from: string, to: string): void => {
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  try {
+    fs.renameSync(from, to);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'EXDEV') throw error;
+    fs.copyFileSync(from, to);
+    fs.unlinkSync(from);
+  }
+};
+
 const writeSnippetFile = (filePath: string, config: Record<string, unknown>): void => {
   const aliases = Array.isArray(config.aliases)
     ? config.aliases.map((alias) => String(alias).trim()).filter(Boolean)
@@ -765,6 +800,51 @@ const getAncestors = (startDir?: string, stopDir?: string): string[] => {
   return result;
 };
 
+const realPathOrResolved = (filePath: string): string => {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+};
+
+const isFile = (filePath: string): boolean => {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Every config file OpenCode 2 finds by walking up from the project folder to
+ * the filesystem root, lowest priority first, as `ConfigDiscovery.discover`
+ * and `Config.load` order them: each folder's `opencode.json` then
+ * `opencode.jsonc`, outermost folder first, followed by each folder's
+ * `.opencode/opencode.json(c)` in the same order. The global config files are
+ * left out, and there is no walk when the project folder is the global config
+ * folder itself. The web runtime reads them the same way.
+ */
+const getFolderConfigPaths = (workingDirectory?: string): string[] => {
+  if (!workingDirectory) return [];
+  const globalDirectory = realPathOrResolved(OPENCODE_CONFIG_DIR);
+  if (realPathOrResolved(workingDirectory) === globalDirectory) return [];
+  const globalFiles = ['opencode.json', 'opencode.jsonc']
+    .map((name) => realPathOrResolved(path.join(OPENCODE_CONFIG_DIR, name)));
+  const isGlobal = (filePath: string) => globalFiles.includes(realPathOrResolved(filePath));
+  const folders = getAncestors(workingDirectory).reverse();
+  const configFilesIn = (folder: string) => ['opencode.json', 'opencode.jsonc']
+    .map((name) => path.join(folder, name))
+    .filter((filePath) => isFile(filePath) && !isGlobal(filePath));
+  return [
+    ...folders.flatMap(configFilesIn),
+    ...folders
+      .map((folder) => path.join(folder, '.opencode'))
+      .filter((folder) => realPathOrResolved(folder) !== globalDirectory)
+      .flatMap(configFilesIn),
+  ];
+};
+
 const findWorktreeRoot = (startDir?: string): string | null => {
   if (!startDir) return null;
   let current = path.resolve(startDir);
@@ -847,6 +927,7 @@ const getConfigForPath = (layers: ReturnType<typeof readConfigLayers>, targetPat
   if (!targetPath) return layers.userConfig;
   if (layers.paths.customPath && targetPath === layers.paths.customPath) return layers.customConfig;
   if (layers.paths.projectPath && targetPath === layers.paths.projectPath) return layers.projectConfig;
+  if (layers.paths.userOverridePath && targetPath === layers.paths.userOverridePath) return layers.userOverrideConfig;
   return layers.userConfig;
 };
 
@@ -874,15 +955,31 @@ const deepEqualJsonValue = (a: JsonValue, b: JsonValue): boolean => {
 };
 
 // Structural diff between the parsed on-disk config and the desired config.
-// Object keys are compared per key (order-insensitive); arrays and scalars are
-// replaced whole. The desired config must already be JSON-normalized (no
-// `undefined` values), so absent keys are the only removal signal.
+// Equal-length arrays keep their indices unless a retained value moves between
+// changed positions. Resized arrays and scalars are replaced whole. The desired
+// config must already be JSON-normalized, so absent keys signal removals.
 const collectConfigEdits = (
   current: JsonValue,
   next: JsonValue,
   basePath: JSONPath,
   edits: ConfigEdit[],
 ): void => {
+  if (Array.isArray(current) && Array.isArray(next) && current.length === next.length) {
+    const changedIndices: number[] = [];
+    for (let index = 0; index < current.length; index += 1) {
+      if (!deepEqualJsonValue(current[index], next[index])) changedIndices.push(index);
+    }
+    const reordered = changedIndices.some((index) => changedIndices.some((otherIndex) => (
+      index !== otherIndex && deepEqualJsonValue(current[index], next[otherIndex])
+    )));
+    if (!reordered) {
+      for (const index of changedIndices) {
+        collectConfigEdits(current[index], next[index], [...basePath, index], edits);
+      }
+      return;
+    }
+  }
+
   if (!isJsonObject(current) || !isJsonObject(next)) {
     if (!deepEqualJsonValue(current, next)) {
       edits.push({ type: 'set', path: basePath, value: next });
@@ -1061,6 +1158,14 @@ const validatePluginSpec = (spec: unknown): string => {
   return spec.trim();
 };
 
+const requireLoadablePluginSpec = (spec: string): string => {
+  const loadable = toLoadablePluginSpec(spec);
+  if (loadable === null) {
+    throw codedError(`OpenCode cannot load plugin "${spec}"`, 'UNLOADABLE_SPEC');
+  }
+  return loadable;
+};
+
 const PLUGIN_FILE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_.]*\.(js|ts|mjs|cjs)$/;
 
 const validatePluginFileName = (fileName: unknown): string => {
@@ -1120,10 +1225,13 @@ const parsePluginRaw = (raw: unknown): { spec: string; options?: Record<string, 
 /** Always v2: a bare string, or `{package, options}`. Never a tuple. */
 const serializePluginEntry = (entry: { spec?: unknown; options?: unknown }): string | { package: string; options?: Record<string, unknown> } => {
   const spec = validatePluginSpec(entry.spec);
-  const serialized = fromPluginEntity({
-    package: spec,
-    options: isPlainObject(entry.options) && Object.keys(entry.options).length > 0 ? entry.options : undefined,
-  });
+  const options = isPlainObject(entry.options) && Object.keys(entry.options).length > 0 ? entry.options : undefined;
+  // OpenCode reads only a bare `-name` string as a control entry; written as
+  // `{package, options}` it becomes a package to install.
+  if (options && isPluginControlSpec(spec)) {
+    throw codedError(`Plugin control entry "${spec}" takes no options`, 'INVALID_SPEC');
+  }
+  const serialized = fromPluginEntity({ package: spec, options });
   if (serialized === null) {
     throw codedError('Plugin spec must be a non-empty string', 'INVALID_SPEC');
   }
@@ -1132,6 +1240,14 @@ const serializePluginEntry = (entry: { spec?: unknown; options?: unknown }): str
 
 const isPluginPathSpec = (spec: string): boolean =>
   spec.startsWith('/') || spec.startsWith('./') || spec.startsWith('../') || spec.startsWith('~') || path.win32.isAbsolute(spec);
+
+/** How a spec loads, by the server's rule (`plugin-spec.js`): a control entry, a path, a Git package, or npm. */
+const pluginParsedKind = (spec: string): PluginParsedKind => {
+  if (isPluginControlSpec(spec)) return 'control';
+  if (isPluginPathSpec(spec)) return 'path';
+  if (isGitSpec(spec)) return 'git';
+  return 'npm';
+};
 
 const parsePluginPathSpec = (spec: string, workingDirectory?: string | null): { absolutePath: string } => {
   if (spec === '~') return { absolutePath: path.resolve(os.homedir()) };
@@ -1169,18 +1285,13 @@ const isExactPluginSemver = (version: string): boolean => /^\d+\.\d+\.\d+([-+][\
 const getActiveCustomConfigPath = (): string | null =>
   process.env.OPENCODE_CONFIG ? path.resolve(process.env.OPENCODE_CONFIG) : null;
 
-const getActiveOpencodeConfigDir = (): string => {
-  const customConfigPath = getActiveCustomConfigPath();
-  return customConfigPath ? path.dirname(customConfigPath) : OPENCODE_CONFIG_DIR;
-};
-
-const getActiveUserConfigPaths = (): string[] => {
-  const configDir = getActiveOpencodeConfigDir();
-  return [
-    path.join(configDir, 'opencode.json'),
-    path.join(configDir, 'opencode.jsonc'),
-  ];
-};
+// `OPENCODE_CONFIG` is one more file OpenCode reads on top of the global
+// config; the global config folder stays where it is, and OpenCode never scans
+// a `plugins/` folder next to the `OPENCODE_CONFIG` file.
+const getActiveUserConfigPaths = (): string[] => [
+  path.join(OPENCODE_CONFIG_DIR, 'opencode.json'),
+  path.join(OPENCODE_CONFIG_DIR, 'opencode.jsonc'),
+];
 
 const getActivePrimaryUserConfigPath = (): string => {
   const [defaultPath, ...fallbackPaths] = getActiveUserConfigPaths();
@@ -1197,14 +1308,20 @@ const ensureProjectPluginConfigPath = (workingDirectory?: string | null): string
   return path.join(workingDirectory, '.opencode', 'opencode.json');
 };
 
+/**
+ * The config files OpenCode 2 takes plugins from, in its load order: the global
+ * file, then `OPENCODE_CONFIG`, then the project file. Each one adds its own
+ * entries; `OPENCODE_CONFIG` replaces none of the global ones.
+ */
 const getPluginConfigSources = (workingDirectory?: string | null): Array<{ scope: PluginScope; path: string; config: Record<string, unknown> }> => {
   const customPath = getActiveCustomConfigPath();
   const userPath = getActivePrimaryUserConfigPath();
   const projectPath = getProjectConfigPath(workingDirectory || undefined);
   return [
-    customPath
-      ? { scope: 'user', path: customPath, config: readConfigLayer(customPath).config }
-      : { scope: 'user', path: userPath, config: readConfigLayer(userPath).config },
+    { scope: 'user', path: userPath, config: readConfigLayer(userPath).config },
+    ...(customPath
+      ? [{ scope: 'user' as const, path: customPath, config: readConfigLayer(customPath).config }]
+      : []),
     ...(projectPath
       ? [{ scope: 'project' as const, path: projectPath, config: readConfigLayer(projectPath).config }]
       : []),
@@ -1265,7 +1382,11 @@ const getPluginTarget = (id: string, workingDirectory?: string | null): null | {
     throw codedError('Plugin entry id must use config prefix', 'INVALID_SPEC');
   }
   const { scope, rest: spec } = parsePluginIdValue(decoded.value);
-  const source = getPluginConfigSources(workingDirectory).find((candidate) => candidate.scope === scope);
+  // Two user files can both declare the spec; the later one is the entry the
+  // list shows, so it is the one edited.
+  const source = getPluginConfigSources(workingDirectory).reverse().find((candidate) => (
+    candidate.scope === scope && hasPluginSpec(readPluginArray(candidate.config), spec)
+  ));
   if (!source) return null;
   const plugin = readPluginArray(source.config);
   const index = plugin.findIndex((raw) => {
@@ -1281,36 +1402,42 @@ const getPluginTarget = (id: string, workingDirectory?: string | null): null | {
 
 export const listPluginEntries = (workingDirectory?: string): PluginEntry[] => {
   const entries: PluginEntry[] = [];
+  const seenSources = new Set<string>();
   for (const source of getPluginConfigSources(workingDirectory)) {
+    const sourcePath = canonicalPluginPath(source.path);
+    if (source.scope === 'project' && seenSources.has(sourcePath)) continue;
+    seenSources.add(sourcePath);
     for (const item of readPluginList(source.config)) {
       const entry: PluginEntry = {
         id: encodePluginId('config', `${source.scope}:${item.entry.package}`),
         spec: item.entry.package,
         scope: source.scope,
         kind: 'config',
-        parsedKind: isPluginPathSpec(item.entry.package) ? 'path' : 'npm',
+        parsedKind: pluginParsedKind(item.entry.package),
+        resolvedPath: resolveLocalPluginPath(item.entry.package, source.path),
       };
       if (item.entry.options) entry.options = item.entry.options;
       entries.push(entry);
     }
   }
-  return entries;
+  // A spec in both the global file and `OPENCODE_CONFIG` shares one id; the
+  // `OPENCODE_CONFIG` entry is listed, matching `getPluginTarget`.
+  return [...new Map(entries.map((entry) => [entry.id, entry])).values()];
 };
 
 export const getPluginEntry = (id: string, workingDirectory?: string): PluginEntry | null =>
   listPluginEntries(workingDirectory).find((entry) => entry.id === id) || null;
 
 export const createPluginEntry = (entry: { spec?: unknown; options?: unknown; scope?: unknown }, workingDirectory?: string): void => {
-  const spec = validatePluginSpec(entry.spec);
+  const spec = requireLoadablePluginSpec(validatePluginSpec(entry.spec));
   const scope = validatePluginScope(entry.scope || 'user');
   const sources = getPluginConfigSources(workingDirectory);
   if (sources.some((source) => source.scope === scope && hasPluginSpec(readPluginArray(source.config), spec))) {
     throw codedError(`Plugin "${spec}" already exists`, 'ENTRY_EXISTS');
   }
-  const userSource = sources.find((source) => source.scope === 'user');
   const targetPath = scope === 'project'
     ? ensureProjectPluginConfigPath(workingDirectory)
-    : userSource?.path ?? getActivePrimaryUserConfigPath();
+    : getActiveCustomConfigPath() ?? getActivePrimaryUserConfigPath();
   const config = fs.existsSync(targetPath) ? readConfigFile(targetPath) : {};
   const plugin = readPluginArray(config);
   writeConfig(writePluginArray(config, [...plugin, serializePluginEntry({ spec, options: entry.options })]), targetPath);
@@ -1320,7 +1447,10 @@ export const updatePluginEntry = (id: string, updates: { spec?: unknown; options
   const target = getPluginTarget(id, workingDirectory);
   if (!target) throw codedError('Plugin entry not found', 'NOT_FOUND');
   const existing = parsePluginRaw(target.plugin[target.index]);
-  const nextSpec = updates.spec === undefined ? existing.spec : validatePluginSpec(updates.spec);
+  let nextSpec = updates.spec === undefined ? existing.spec : validatePluginSpec(updates.spec);
+  // An entry already in the config keeps its spec as written; only a changed
+  // spec has to be one OpenCode loads.
+  if (nextSpec !== existing.spec) nextSpec = requireLoadablePluginSpec(nextSpec);
   const nextOptions = updates.options === undefined ? existing.options : updates.options;
   target.plugin[target.index] = serializePluginEntry({ spec: nextSpec, options: nextOptions });
   writeConfig(writePluginArray(target.config, target.plugin), target.path);
@@ -1338,7 +1468,7 @@ const getPluginDir = (scope: PluginScope, workingDirectory?: string | null): str
     if (!workingDirectory) throw codedError('Project plugin scope requires working directory', 'INVALID_SCOPE');
     return path.join(workingDirectory, '.opencode', 'plugins');
   }
-  return path.join(getActiveOpencodeConfigDir(), 'plugins');
+  return path.join(OPENCODE_CONFIG_DIR, 'plugins');
 };
 
 const getPluginFileTarget = (id: string, workingDirectory?: string): { scope: PluginScope; fileName: string; filePath: string } => {
@@ -1370,6 +1500,8 @@ export const listPluginDirFiles = (workingDirectory?: string): PluginFile[] => {
           fileName,
           scope,
           kind: 'file',
+          absolutePath: path.join(dir, fileName),
+          resolvedPath: canonicalPluginPath(path.join(dir, fileName)),
         });
       } catch {
         // Ignore unsupported files in the plugins directory.
@@ -1476,7 +1608,7 @@ export const queryPluginRegistry = async (
   const npmJobs = new Map<string, string[]>();
   const malformedSpecs = new Set<string>();
   for (const spec of uniqueSpecs) {
-    if (isPluginPathSpec(spec)) continue;
+    if (pluginParsedKind(spec) !== 'npm') continue;
     const parsed = parsePluginNpmSpec(spec);
     if ('malformed' in parsed) {
       malformedSpecs.add(spec);
@@ -1494,6 +1626,15 @@ export const queryPluginRegistry = async (
   for (const spec of uniqueSpecs) {
     if (malformedSpecs.has(spec)) {
       results.push({ kind: 'npm-malformed', spec, error: 'Spec syntax is malformed' });
+      continue;
+    }
+
+    // A control entry (`-name`, `*`) names no package or path to look up.
+    if (pluginParsedKind(spec) === 'control') continue;
+
+    // A Git package never reaches the npm registry; OpenCode resolves it itself.
+    if (pluginParsedKind(spec) === 'git') {
+      results.push({ kind: 'git-ok', spec });
       continue;
     }
 
@@ -1561,10 +1702,67 @@ export type McpConfigEntry = McpEntity & {
   legacy?: boolean;
 };
 
-const resolveMcpScopeFromPath = (layers: ReturnType<typeof readConfigLayers>, sourcePath?: string | null): AgentScope | null => {
-  if (!sourcePath) return null;
-  return sourcePath === layers.paths.projectPath ? AGENT_SCOPE.PROJECT : AGENT_SCOPE.USER;
+type McpSource = {
+  path: string;
+  config: Record<string, unknown>;
+  error: { code: string; message: string } | null;
+  required: boolean;
 };
+
+/**
+ * Every config file OpenCode 2 reads MCP servers from, lowest priority first:
+ * the global files, `OPENCODE_CONFIG`, then the files found walking up from the
+ * project folder. A later file's server replaces an earlier one of the same
+ * name, as in OpenCode's MCP config plugin. A broken global or
+ * `OPENCODE_CONFIG` file fails the lookup that reaches it; a broken folder
+ * file is skipped, as the project file always was.
+ */
+const readMcpSources = (layers: ReturnType<typeof readConfigLayers>, workingDirectory?: string): McpSource[] => {
+  const { userPath, userOverridePath, customPath } = layers.paths;
+  const required = (filePath: string, config: Record<string, unknown>): McpSource => ({
+    path: filePath,
+    config,
+    error: getLayerError(layers, filePath),
+    required: true,
+  });
+  return [
+    required(userPath, layers.userConfig),
+    ...(userOverridePath ? [required(userOverridePath, layers.userOverrideConfig)] : []),
+    ...(customPath ? [required(customPath, layers.customConfig)] : []),
+    ...getFolderConfigPaths(workingDirectory).map((filePath) => ({ path: filePath, ...readConfigLayer(filePath), required: false })),
+  ];
+};
+
+/** The file whose definition of `name` OpenCode uses, or null. */
+const findMcpSource = (sources: McpSource[], name: string) => {
+  for (const source of [...sources].reverse()) {
+    if (source.error) {
+      if (source.required) throw codedError(source.error.message, source.error.code);
+      continue;
+    }
+    const entry = readMcpEntries(source.config).get(name);
+    if (entry) {
+      return { ...source, section: entry.value, sectionKey: entry.key, legacy: entry.legacy };
+    }
+  }
+  return null;
+};
+
+const toMcpConfigEntry = (
+  name: string,
+  source: NonNullable<ReturnType<typeof findMcpSource>>,
+  workingDirectory?: string,
+): McpConfigEntry => ({
+  name,
+  ...toMcpEntity(source.section),
+  // Only the project folder's own files are "this project"; a parent
+  // folder's file reaches every project below it, like the global file.
+  scope: !source.required && getProjectConfigCandidates(workingDirectory).includes(source.path)
+    ? AGENT_SCOPE.PROJECT
+    : AGENT_SCOPE.USER,
+  sectionKey: source.sectionKey,
+  legacy: source.legacy,
+});
 
 const ensureProjectMcpConfigPath = (workingDirectory: string): string => {
   const projectConfigDir = path.join(workingDirectory, '.opencode');
@@ -1583,41 +1781,25 @@ const validateMcpName = (name: string): void => {
   }
 };
 
-/** Same precedence as `getJsonEntrySource`: custom > project > user override > user. */
-const readMcpEntriesAcrossLayers = (layers: ReturnType<typeof readConfigLayers>) =>
-  readLayeredMcpEntries([layers.userConfig, layers.userOverrideConfig, layers.projectConfig, layers.customConfig]);
-
 export const listMcpConfigs = (workingDirectory?: string): McpConfigEntry[] => {
   const layers = readConfigLayers(workingDirectory);
-  const entries = readMcpEntriesAcrossLayers(layers);
-  if (entries.size === 0) throwIfLayerError(layers, layers.paths.userOverridePath);
-  return Array.from(entries.entries()).map(([name, entry]) => {
-    const source = getJsonEntrySource(layers, 'mcp', name);
-    return {
-      name,
-      ...toMcpEntity(entry.value),
-      scope: resolveMcpScopeFromPath(layers, source.path),
-      sectionKey: source.sectionKey,
-      legacy: Boolean(source.legacy),
-    };
+  const sources = readMcpSources(layers, workingDirectory);
+  const names = Array.from(readLayeredMcpEntries(sources.map((source) => source.config)).keys());
+  if (names.length === 0) throwIfLayerError(layers, layers.paths.userOverridePath);
+  return names.flatMap((name) => {
+    const source = findMcpSource(sources, name);
+    return source ? [toMcpConfigEntry(name, source, workingDirectory)] : [];
   });
 };
 
 export const getMcpConfig = (name: string, workingDirectory?: string): McpConfigEntry | null => {
   const layers = readConfigLayers(workingDirectory);
-  const entry = readMcpEntriesAcrossLayers(layers).get(name);
-  if (!entry) {
+  const source = findMcpSource(readMcpSources(layers, workingDirectory), name);
+  if (!source) {
     throwIfLayerError(layers, layers.paths.userOverridePath);
     return null;
   }
-  const source = getJsonEntrySource(layers, 'mcp', name);
-  return {
-    name,
-    ...toMcpEntity(entry.value),
-    scope: resolveMcpScopeFromPath(layers, source.path),
-    sectionKey: source.sectionKey,
-    legacy: Boolean(source.legacy),
-  };
+  return toMcpConfigEntry(name, source, workingDirectory);
 };
 
 export const createMcpConfig = (
@@ -1629,8 +1811,7 @@ export const createMcpConfig = (
   validateMcpName(name);
 
   const layers = readConfigLayers(workingDirectory);
-  const source = getJsonEntrySource(layers, 'mcp', name);
-  if (source.exists) {
+  if (findMcpSource(readMcpSources(layers, workingDirectory), name)) {
     throw new Error(`MCP server "${name}" already exists`);
   }
 
@@ -1658,39 +1839,34 @@ export const createMcpConfig = (
 };
 
 /**
- * A server still stored under the v1 `mcp.<name>` key is rewritten into
- * `mcp.servers` in the same file.
+ * Edits the server in the file OpenCode reads it from, which may be a parent
+ * folder's config. A server still stored under the v1 `mcp.<name>` key is
+ * rewritten into `mcp.servers` in the same file.
  */
 export const updateMcpConfig = (name: string, updates: Record<string, unknown>, workingDirectory?: string) => {
-  const layers = readConfigLayers(workingDirectory);
-  const source = getJsonEntrySource(layers, 'mcp', name);
-  if (!source.exists) {
+  const source = findMcpSource(readMcpSources(readConfigLayers(workingDirectory), workingDirectory), name);
+  if (!source) {
     throw new Error(`MCP server "${name}" not found`);
   }
-  const targetPath = source.path || CONFIG_FILE;
-  const config = (source.config || readConfigFile(targetPath)) as Record<string, unknown>;
 
   const existing = toMcpEntity(source.section);
   const { name: _ignoredName, scope: _ignoredScope, ...updateData } = updates;
   void _ignoredName;
   void _ignoredScope;
-  writeMcpEntry(config, name, toMcpEntity({ ...existing, ...updateData }));
-  writeConfig(config, targetPath);
-  return { path: targetPath };
+  writeMcpEntry(source.config, name, toMcpEntity({ ...existing, ...updateData }));
+  writeConfig(source.config, source.path);
+  return { path: source.path };
 };
 
+/** Deletes the server from the file OpenCode reads it from. */
 export const deleteMcpConfig = (name: string, workingDirectory?: string) => {
-  const layers = readConfigLayers(workingDirectory);
-  const source = getJsonEntrySource(layers, 'mcp', name);
-  const targetPath = source.path || CONFIG_FILE;
-  const config = (source.config || readConfigFile(targetPath)) as Record<string, unknown>;
-
-  if (!deleteMcpEntry(config, name)) {
+  const source = findMcpSource(readMcpSources(readConfigLayers(workingDirectory), workingDirectory), name);
+  if (!source || !deleteMcpEntry(source.config, name)) {
     throw new Error(`MCP server "${name}" not found`);
   }
 
-  writeConfig(config, targetPath);
-  return { path: targetPath };
+  writeConfig(source.config, source.path);
+  return { path: source.path };
 };
 
 const getLayerError = (
@@ -1802,32 +1978,72 @@ export const setWarmingEnabled = (enabled: boolean): { changed: boolean } => {
   return { changed };
 };
 
+/** Mirror of the web server's `setCompactionSettings`: same target file as the web search choice. */
+export const setCompactionSettings = (update: CompactionUpdate) => {
+  const layers = readConfigLayers();
+  const target = getJsonWriteTarget(layers, AGENT_SCOPE.USER);
+  const changed = writeCompactionSettings(target.config, update);
+  if (changed) writeConfig(target.config, target.path);
+  return { changed };
+};
+
+/** A config file to clear a skill's deny from, or null when it cannot be parsed: it is skipped, never rewritten. */
+const readConfigFileForSkillSwitch = (filePath: string) => {
+  try {
+    return readConfigFile(filePath);
+  } catch (error) {
+    console.warn(`[skills] could not read ${filePath} to switch a skill on:`, error instanceof Error ? error.message : String(error));
+    return null;
+  }
+};
+
+/**
+ * Mirror of the web server's `setSkillEnabled`
+ * (`packages/web/server/lib/opencode/skill-switch.js`): off writes an exact
+ * deny where the skill lives, on removes the exact deny from every config file
+ * OpenCode reads for the directory. Returns the files it changed.
+ */
+export const setSkillEnabled = (input: {
+  id: string;
+  enabled: boolean;
+  scope: 'user' | 'project';
+  directory?: string;
+}) => {
+  const layers = readConfigLayers(input.directory);
+
+  if (!input.enabled) {
+    const target = getJsonWriteTarget(layers, input.scope === 'project' ? AGENT_SCOPE.PROJECT : AGENT_SCOPE.USER);
+    const changed = writeSkillDisabled(target.config, input.id, true);
+    if (changed) writeConfig(target.config, target.path);
+    return { changed: changed ? [target.path] : [] };
+  }
+
+  const { userPath, userOverridePath, customPath } = layers.paths;
+  const files = [...new Set([customPath, userPath, userOverridePath, ...getFolderConfigPaths(input.directory)])]
+    .filter((filePath): filePath is string => Boolean(filePath));
+  const changed = files.filter((filePath) => {
+    const config = readConfigFileForSkillSwitch(filePath);
+    if (!config || !writeSkillDisabled(config, input.id, false)) return false;
+    writeConfig(config, filePath);
+    return true;
+  });
+  return { changed };
+};
+
 /** Mirror of the web server's `getWebSearchSource`: the project config that overrides a Settings write, if any. */
 export const getWebSearchSource = (workingDirectory?: string) => ({
   projectPath: findWebSearchProjectOverride(readConfigLayers(workingDirectory), readProjectConfigFiles(workingDirectory)),
 });
 
-const PROJECT_CONFIG_NAMES = [
-  path.join('.opencode', 'opencode.jsonc'),
-  path.join('.opencode', 'opencode.json'),
-  'opencode.jsonc',
-  'opencode.json',
-];
 
-/** Mirror of the web server's `readProjectConfigFiles`: existing project configs, deepest first; unreadable ones skipped. */
+/** Mirror of the web server's `readProjectConfigFiles`: project configs, the winning one first; unreadable ones skipped. */
 const readProjectConfigFiles = (workingDirectory?: string): Array<{ path: string; config: Record<string, unknown> }> => {
-  if (!workingDirectory) return [];
-  const root = findWorktreeRoot(workingDirectory) || path.resolve(workingDirectory);
   const files: Array<{ path: string; config: Record<string, unknown> }> = [];
-  for (const base of getAncestors(workingDirectory, root)) {
-    for (const name of PROJECT_CONFIG_NAMES) {
-      const filePath = path.join(base, name);
-      if (!fs.existsSync(filePath)) continue;
-      try {
-        files.push({ path: filePath, config: readConfigFile(filePath) });
-      } catch {
-        // Skipped: an unreadable file can't be told apart from one without the key.
-      }
+  for (const filePath of getFolderConfigPaths(workingDirectory).reverse()) {
+    try {
+      files.push({ path: filePath, config: readConfigFile(filePath) });
+    } catch {
+      // Skipped: an unreadable file can't be told apart from one without the key.
     }
   }
   return files;
@@ -2424,8 +2640,14 @@ type ProviderSources = {
   custom: { exists: boolean; path: string | null };
 };
 
+const getUserProviderPath = (layers: ReturnType<typeof readConfigLayers>, providerId: string) => {
+  const { userPath, userOverridePath } = layers.paths;
+  return userOverridePath && providerExistsIn(layers.userOverrideConfig, providerId) ? userOverridePath : userPath;
+};
+
 export const getProviderSources = (providerId: string, workingDirectory?: string): ProviderSources => {
   const layers = readConfigLayers(workingDirectory);
+  const _userPath = getUserProviderPath(layers, providerId);
   return {
     auth: { exists: false, status: 'unavailable', canDisconnect: false },
     user: { exists: providerExistsIn(layers.userConfig, providerId), path: layers.paths.userPath },
@@ -2437,20 +2659,20 @@ export const getProviderSources = (providerId: string, workingDirectory?: string
 /** The stored entry the edit form starts from; custom > project > user, like the edit scope. */
 export const getStoredProviderConfig = (providerId: string, workingDirectory?: string) => {
   const layers = readConfigLayers(workingDirectory);
-  return readStoredProviderEntry([layers.customConfig, layers.projectConfig, layers.userConfig], providerId);
+  return readStoredProviderEntry([layers.customConfig, layers.projectConfig, layers.userOverrideConfig, layers.userConfig], providerId);
 };
 
 export const removeProviderConfig = (providerId: string, workingDirectory?: string, scope: 'user' | 'project' | 'custom' = 'user') => {
   if (!providerId) throw new Error('Provider ID is required');
 
   const layers = readConfigLayers(workingDirectory);
-  let targetPath: string | null | undefined = layers.paths.userPath;
+  let targetPath: string | null | undefined = getUserProviderPath(layers, providerId);
 
   if (scope === 'project') {
     if (!workingDirectory) {
       throw new Error('Working directory is required for project scope');
     }
-    targetPath = layers.paths.projectPath ?? targetPath;
+    targetPath = layers.paths.projectPath ?? layers.paths.userPath;
   }
 
   if (scope === 'custom') {
@@ -2469,165 +2691,8 @@ export const removeProviderConfig = (providerId: string, workingDirectory?: stri
   return true;
 };
 
-const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
-const BASE_URL_PATTERN = /^https?:\/\//;
-const OPENAI_COMPATIBLE_NPM = '@ai-sdk/openai-compatible';
-const CUSTOM_PROVIDER_NPM_PACKAGES = new Set([
-  OPENAI_COMPATIBLE_NPM,
-  '@ai-sdk/openai',
-  '@ai-sdk/anthropic',
-]);
-
 export type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
-type NormalizedCustomProviderConfig = {
-  package: string;
-  name: string;
-  settings: Record<string, unknown> & { baseURL: string };
-  headers?: Record<string, string>;
-  models: Record<string, { modelID: string; name: string }>;
-  env?: string[];
-};
-
-/**
- * Accepts the v2 spelling (`package`, `settings.baseURL`) and the v1 spelling
- * (`npm`, `options.baseURL`); the normalized value is always v2.
- */
-export const validateCustomProviderConfig = (
-  providerId: string,
-  config: unknown,
-  options: { hasStoredAuth?: boolean } = {},
-) => {
-  if (!providerId || typeof providerId !== 'string' || !PROVIDER_ID_PATTERN.test(providerId)) {
-    return { ok: false as const, error: 'Provider ID must match /^[a-z0-9][a-z0-9-_]*$/' };
-  }
-
-  if (!isPlainObject(config)) {
-    return { ok: false as const, error: 'Provider config must be an object' };
-  }
-
-  const name = typeof config.name === 'string' ? config.name.trim() : '';
-  if (!name) {
-    return { ok: false as const, error: 'Provider name is required' };
-  }
-
-  const npm = toNpmPackage(config.package ?? config.npm) || OPENAI_COMPATIBLE_NPM;
-  if (!CUSTOM_PROVIDER_NPM_PACKAGES.has(npm)) {
-    return {
-      ok: false as const,
-      error: 'Custom providers must use @ai-sdk/openai-compatible, @ai-sdk/openai, or @ai-sdk/anthropic',
-    };
-  }
-
-  const settingsBlock = isPlainObject(config.settings)
-    ? config.settings
-    : (isPlainObject(config.options) ? config.options : null);
-  if (!settingsBlock) {
-    return { ok: false as const, error: 'Provider settings are required' };
-  }
-
-  const baseURL = typeof settingsBlock.baseURL === 'string' ? settingsBlock.baseURL.trim() : '';
-  if (!baseURL) {
-    return { ok: false as const, error: 'Base URL is required' };
-  }
-  if (!BASE_URL_PATTERN.test(baseURL)) {
-    return { ok: false as const, error: 'Base URL must start with http:// or https://' };
-  }
-
-  const models = isPlainObject(config.models) ? config.models : null;
-  if (!models || Object.keys(models).length === 0) {
-    return { ok: false as const, error: 'At least one model is required' };
-  }
-
-  const normalizedModels: Record<string, { modelID: string; name: string }> = {};
-  for (const [modelId, modelValue] of Object.entries(models)) {
-    const trimmedId = typeof modelId === 'string' ? modelId.trim() : '';
-    if (!trimmedId) {
-      return { ok: false as const, error: 'Model id is required' };
-    }
-    if (!isPlainObject(modelValue)) {
-      return { ok: false as const, error: `Model "${trimmedId}" must be an object` };
-    }
-    const modelName = typeof modelValue.name === 'string' ? modelValue.name.trim() : '';
-    if (!modelName) {
-      return { ok: false as const, error: `Model "${trimmedId}" requires a name` };
-    }
-    normalizedModels[trimmedId] = { modelID: trimmedId, name: modelName };
-  }
-
-  const normalized: NormalizedCustomProviderConfig = {
-    package: toProviderPackage(npm) as string,
-    name,
-    settings: { baseURL },
-    models: normalizedModels,
-  };
-
-  let env: string[] = [];
-  if (Array.isArray(config.env)) {
-    env = config.env
-      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-      .map((entry) => entry.trim());
-    if (env.length > 0) {
-      normalized.env = env;
-    }
-  }
-
-  if (env.length === 0 && !options.hasStoredAuth) {
-    return { ok: false as const, error: 'API key or {env:VAR} credentials are required' };
-  }
-
-  const headerSource = isPlainObject(config.headers) ? config.headers : settingsBlock.headers;
-  if (isPlainObject(headerSource)) {
-    const headers: Record<string, string> = {};
-    for (const [headerKey, headerValue] of Object.entries(headerSource)) {
-      if (typeof headerKey !== 'string' || !headerKey.trim()) {
-        continue;
-      }
-      if (typeof headerValue !== 'string' || !headerValue.trim()) {
-        return { ok: false as const, error: `Header "${headerKey}" requires a non-empty value` };
-      }
-      headers[headerKey.trim()] = headerValue.trim();
-    }
-    if (Object.keys(headers).length > 0) {
-      normalized.headers = headers;
-    }
-  }
-
-  return { ok: true as const, value: { providerId, config: normalized } };
-};
-
-const mergeCustomProviderConfig = (
-  existingValue: unknown,
-  normalizedConfig: NormalizedCustomProviderConfig,
-) => {
-  // Read the existing entry through the v2 projection so a legacy
-  // `npm`/`api`/`options` block is carried forward in native shape.
-  const existing = toProviderEntity(existingValue);
-  const mergedSettings = { ...(existing.settings ?? {}), ...normalizedConfig.settings };
-
-  const existingModels = isPlainObject(existing.models) ? existing.models : {};
-  const mergedModels = Object.fromEntries(
-    Object.entries(normalizedConfig.models).map(([modelId, normalizedModel]) => {
-      const existingModel = isPlainObject(existingModels[modelId]) ? existingModels[modelId] : {};
-      return [modelId, { ...existingModel, ...normalizedModel }];
-    }),
-  );
-
-  const merged: Record<string, unknown> = {
-    ...existing,
-    ...normalizedConfig,
-    settings: mergedSettings,
-    models: mergedModels,
-  };
-  // Headers and env are explicit removals when the form omits them.
-  if (!Object.prototype.hasOwnProperty.call(normalizedConfig, 'headers')) {
-    delete merged.headers;
-  }
-  if (!Object.prototype.hasOwnProperty.call(normalizedConfig, 'env')) {
-    delete merged.env;
-  }
-  return toProviderEntity(merged);
-};
 
 export const upsertProviderConfig = (
   providerId: string,
@@ -2644,13 +2709,13 @@ export const upsertProviderConfig = (
   }
 
   const layers = readConfigLayers(workingDirectory);
-  let targetPath: string | null | undefined = layers.paths.userPath;
+  let targetPath: string | null | undefined = getUserProviderPath(layers, validated.value.providerId);
 
   if (scope === 'project') {
     if (!workingDirectory) {
       throw new Error('Working directory is required for project scope');
     }
-    targetPath = layers.paths.projectPath ?? targetPath;
+    targetPath = layers.paths.projectPath ?? layers.paths.userPath;
   } else if (scope === 'custom') {
     if (!layers.paths.customPath) {
       throw new Error('Custom config path (OPENCODE_CONFIG) is not set');
@@ -2675,6 +2740,18 @@ export const upsertProviderConfig = (
 
   const writePath = targetPath || CONFIG_FILE;
   writeConfig(targetConfig, writePath);
+
+  // Settings turns providers off in the primary user file, so saving one that
+  // lives in the override turns it back on there as well.
+  const { userConfig } = layers;
+  if (writePath === layers.paths.userOverridePath
+    && Array.isArray(userConfig.disabled_providers)
+    && userConfig.disabled_providers.includes(validated.value.providerId)) {
+    userConfig.disabled_providers = userConfig.disabled_providers.filter(
+      (entry) => entry !== validated.value.providerId,
+    );
+    writeConfig(userConfig, layers.paths.userPath);
+  }
 
   return {
     providerId: validated.value.providerId,
@@ -2728,6 +2805,7 @@ export const createSnippet = (
   scope: SnippetScope = 'global',
 ): Snippet | null => {
   assertValidSnippetName(name);
+  assertSnippetNameFree(name, loadSnippetRegistry(workingDirectory));
   const dir = getWritableSnippetDir(scope, workingDirectory);
   const filePath = path.join(dir, `${name}${SNIPPET_EXTENSION}`);
   if (fs.existsSync(filePath)) throw new Error(`Snippet "${name}" already exists`);
@@ -2735,11 +2813,35 @@ export const createSnippet = (
   return getSnippet(name, workingDirectory);
 };
 
+/**
+ * Writes the snippet's fields; `updates.name` renames it and `updates.scope`
+ * moves it between the global and the project folder.
+ */
 export const updateSnippet = (name: string, updates: Record<string, unknown>, workingDirectory?: string): Snippet | null => {
-  const existing = findSnippetByName(name, workingDirectory);
+  assertValidSnippetName(name);
+  const registry = loadSnippetRegistry(workingDirectory);
+  const existing = registry.get(name.toLowerCase());
   if (!existing) throw new Error(`Snippet "${name}" not found`);
-  writeSnippetFile(existing.filePath, { ...existing, ...(updates || {}) });
-  return getSnippet(name, workingDirectory);
+  const { name: nextNameInput, scope: nextScopeInput, ...fields } = updates || {};
+  const nextName = String(nextNameInput ?? '').trim() || existing.name;
+  const nextScope: SnippetScope = nextScopeInput === 'project' || nextScopeInput === 'global' ? nextScopeInput : existing.source;
+  assertValidSnippetName(nextName);
+
+  const targetPath = nextName === existing.name && nextScope === existing.source
+    ? existing.filePath
+    : path.join(getWritableSnippetDir(nextScope, workingDirectory), `${nextName}${SNIPPET_EXTENSION}`);
+  if (targetPath !== existing.filePath) {
+    assertSnippetNameFree(nextName, registry, existing);
+    // A case-only rename finds its own file on a case-insensitive disk; any
+    // other file there is a snippet the registry shadows, never overwritten.
+    if (fs.existsSync(targetPath) && !isSameFile(targetPath, existing.filePath)) {
+      throw new Error(`Snippet "${nextName}" already exists`);
+    }
+  }
+
+  writeSnippetFile(existing.filePath, { ...existing, ...fields });
+  if (targetPath !== existing.filePath) moveSnippetFile(existing.filePath, targetPath);
+  return getSnippet(nextName, workingDirectory);
 };
 
 export const deleteSnippet = (name: string, workingDirectory?: string): void => {
@@ -2753,6 +2855,22 @@ export const expandSnippets = (text: string, workingDirectory?: string): string 
   const collector = { prepend: [] as string[], append: [] as string[] };
   const expanded = expandSnippetText(text || '', registry, new Map(), collector).trim();
   return [...collector.prepend, expanded, ...collector.append].filter(Boolean).join('\n\n');
+};
+
+/**
+ * What a snippet body, saved or not, sends once used: its own prepend and
+ * append blocks placed, and the snippets it names expanded.
+ */
+export const previewSnippet = (content: string, workingDirectory?: string): string => {
+  const registry = loadSnippetRegistry(workingDirectory);
+  const collector = { prepend: [] as string[], append: [] as string[] };
+  const counts = new Map<string, number>();
+  const parsed = parseSnippetBlocks(content || '');
+  // The order `expandSnippetText` gives a used snippet: its blocks, then its text.
+  for (const block of parsed.prepend) collector.prepend.push(expandSnippetText(block, registry, counts, collector));
+  for (const block of parsed.append) collector.append.push(expandSnippetText(block, registry, counts, collector));
+  const inline = expandSnippetText(parsed.inline, registry, counts, collector).trim();
+  return [...collector.prepend, inline, ...collector.append].filter(Boolean).join('\n\n');
 };
 
 // ============== SKILL SCOPE HELPERS ==============
@@ -2793,6 +2911,8 @@ export type SkillConfigSources = {
 };
 
 export type DiscoveredSkill = {
+  /** OpenCode's id, sent for built-in skills, whose path does not carry it. */
+  id?: string;
   name: string;
   path: string;
   scope: SkillScope;

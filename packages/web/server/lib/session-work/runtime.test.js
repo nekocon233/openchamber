@@ -33,6 +33,7 @@ const stubOpenCode = ({ session = {}, records = answeredTurn } = {}) => {
 
 const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = {}, endpoint = ENDPOINT, lineage = null, nativeSessions = null } = {}) => {
   const records = new Map([['ses_1', metadata]]);
+  const readMetadata = vi.fn(async (id) => records.get(id) ?? {});
   const updateMetadata = vi.fn(async (id, decide) => {
     const current = records.get(id) ?? {};
     const patch = decide(current);
@@ -49,14 +50,19 @@ const makeRuntime = ({ metadata = {}, answers = {}, askError = null, settings = 
     getSettings: () => ({ enabled: true, reviewOffer: true, ...settings }),
     classifierEndpoint: async () => endpoint,
     jev,
-    readMetadata: async (id) => records.get(id) ?? {},
+    readMetadata,
     updateMetadata,
     lineage,
     nativeSessions,
     now: () => time++,
+    openRetryDelaysMs: [5, 5],
   });
-  return { runtime, jev, updateMetadata, records };
+  return { runtime, jev, readMetadata, updateMetadata, records };
 };
+
+const restored = { type: 'session.unarchived', properties: { sessionID: 'ses_1' } };
+const busy = { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'busy' } } };
+const workState = (records) => records.get('ses_1').openchamber?.work?.state;
 
 const sent = (id = 'msg_new', text = 'Now fix the header') => ({
   type: 'message.updated',

@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 const home = process.env.AGY_FIXTURE_HOME;
 if (!home) throw new Error('AGY_FIXTURE_HOME is required');
@@ -205,6 +205,21 @@ const run = (text) => {
   if (visible === 'failure-after-response') {
     planner('Partial answer\n');
     finish('ERROR', 'Partial answer\n', 'Authentication expired');
+    return;
+  }
+  if (visible.startsWith('checklist-')) {
+    if (process.env.OPENCHAMBER_AGY_CHECKLIST !== '1') throw new Error('Checklist helper was not enabled');
+    const input = { todos: visible === 'checklist-empty' ? [] : [{ id: 'verify', content: 'Verify checklist integration',
+      status: visible === 'checklist-completed' ? 'completed' : 'pending' }] };
+    const parameters = { ServerName: 'openchamber_checklist', ToolName: 'update_checklist', Arguments: input };
+    const output = JSON.stringify({ openchamberChecklist: 1, digest: createHash('sha256').update(JSON.stringify(input)).digest('hex') });
+    planner('', [{ name: 'call_mcp_tool', args: parameters }]);
+    const index = stepIndex++;
+    append({ step_index: index, type: 'GENERIC', content: output });
+    frame({ event: 'step_update', step_update: { conversation_id: conversationId, step_index: index, state: 'DONE', step_type: 'tool',
+      tool_info: { name: 'call_mcp_tool', parameters, output, error: null } } });
+    planner('Checklist recorded\n');
+    finish('SUCCESS', 'Checklist recorded\n');
     return;
   }
   if (visible === 'mode-probe') {

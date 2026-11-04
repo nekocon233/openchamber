@@ -12,6 +12,9 @@ const createRouteRegistry = () => {
       post(routePath, handler) {
         routes.set(`POST ${routePath}`, handler);
       },
+      patch(routePath, handler) {
+        routes.set(`PATCH ${routePath}`, handler);
+      },
     },
     getRoute(method, routePath) {
       return routes.get(`${method} ${routePath}`);

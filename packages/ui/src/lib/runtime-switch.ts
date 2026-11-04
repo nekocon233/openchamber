@@ -19,6 +19,7 @@ const RUNTIME_ENDPOINT_WILL_CHANGE_EVENT = 'openchamber:runtime-endpoint-will-ch
 let activeApiBaseUrl = '';
 let activeRuntimeKey = '';
 let runtimeEndpointGeneration = 0;
+let instanceGeneration = 0;
 
 export class RuntimeContextChangedError extends Error {
   constructor() {
@@ -149,6 +150,13 @@ export const getRuntimeKey = (): string => {
   return cachedRuntimeKey;
 };
 
+/** A read's owner survives transport changes, but never an instance round trip. */
+export const captureRuntimeInstance = (): (() => boolean) => {
+  const generation = instanceGeneration;
+  const runtimeKey = getRuntimeKey();
+  return () => generation === instanceGeneration && runtimeKey === getRuntimeKey();
+};
+
 export const initializeRuntimeEndpoint = (options: { apiBaseUrl?: string | null; runtimeKey?: string | null } = {}): void => {
   if (activeApiBaseUrl || activeRuntimeKey) {
     return;
@@ -188,6 +196,7 @@ export const switchRuntimeEndpoint = (options: { apiBaseUrl: string; clientToken
   runtimeEndpointGeneration += 1;
   activeApiBaseUrl = apiBaseUrl;
   activeRuntimeKey = runtimeKey;
+  if (runtimeKey !== previousRuntimeKey) instanceGeneration += 1;
   activeSshForwarded = sshForwarded;
   if (typeof window !== 'undefined') {
     const runtimeWindow = window as typeof window & {

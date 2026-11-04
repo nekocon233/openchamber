@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { OpenCode } from '@opencode/client';
-import type { ToolPart as ToolPartData } from '@/lib/opencode/model';
+import type { Metadata, ToolPart as ToolPartData } from '@/lib/opencode/model';
 import { SyncProvider, useChildStoreManager } from '@/sync/sync-context';
 import { I18nProvider } from '@/lib/i18n';
 import { ThemeSystemContext, type ThemeContextValue } from '@/contexts/theme-system-context';
@@ -186,13 +186,15 @@ test('a running subagent without the progress join resolves its child session fr
   });
 });
 
-test('an Antigravity task names each child and offers no unsupported stop or inferred single join', async () => {
+for (const sessionID of ['nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188', 'ncv_f1033b7a-88c5-4b77-bbec-6d63ec3a1188']) test(`an Antigravity task in ${sessionID} names each child without an inferred single join`, async () => {
+  const metadata: Metadata = { nativeSubagents: [
+    { sessionID: 'nag_01a0d2a6-b55b-7162-a837-c62053537e00', title: 'Inspect API', agent: 'explore' },
+    { sessionID: 'nag_01a0d2a6-b55b-7162-a837-c62053537e01', title: 'Inspect UI', agent: 'explore' },
+  ] };
+  if (sessionID.startsWith('ncv_')) metadata.nativeBackend = 'antigravity';
   const running: ToolPartData = {
-    ...parent, sessionID: 'nag_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
-    state: { status: 'running', input: {}, time: { start: 100 }, metadata: { nativeSubagents: [
-      { sessionID: 'nag_01a0d2a6-b55b-7162-a837-c62053537e00', title: 'Inspect API', agent: 'explore' },
-      { sessionID: 'nag_01a0d2a6-b55b-7162-a837-c62053537e01', title: 'Inspect UI', agent: 'explore' },
-    ] } },
+    ...parent, sessionID,
+    state: { status: 'running', input: {}, time: { start: 100 }, metadata },
   };
   await withHarness(running, true, async (_store, container) => {
     expect(container.textContent).toContain('Inspect API');
@@ -201,6 +203,17 @@ test('an Antigravity task names each child and offers no unsupported stop or inf
     expect(container.querySelector('button[aria-label="Open Inspect UI subtask"]')).not.toBeNull();
     expect(container.querySelector('button[aria-label="Stop subagent"]')).toBeNull();
     expect(openButton(container)).toBeNull();
+  });
+});
+
+test('a unified Antigravity tool preserves the unsupported per-child stop policy', async () => {
+  const running: ToolPartData = { ...parent, sessionID: 'ncv_f1033b7a-88c5-4b77-bbec-6d63ec3a1188',
+    state: { status: 'running', input: {}, time: { start: 100 }, metadata: {
+      nativeBackend: 'antigravity', sessionId: 'nag_01a0d2a6-b55b-7162-a837-c62053537e00',
+    } },
+  };
+  await withHarness(running, false, async (_store, container) => {
+    expect(container.querySelector('button[aria-label="Stop subagent"]')).toBeNull();
   });
 });
 

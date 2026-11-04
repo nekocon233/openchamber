@@ -163,6 +163,32 @@ self.addEventListener('push', (event) => {
   })());
 });
 
+// An older page may not understand the message, so only skip navigation after
+// the mounted app explicitly accepts it. Focus first to wake suspended pages.
+function _requestAppNavigation(client: WindowClient, url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const finish = (accepted: boolean) => {
+      clearTimeout(timeout);
+      channel.port1.close();
+      channel.port2.close();
+      resolve(accepted);
+    };
+    const timeout = setTimeout(() => finish(false), 1500);
+    channel.port1.onmessage = (event: MessageEvent<unknown>) => finish(event.data === true);
+    channel.port1.onmessageerror = () => finish(false);
+    try {
+      client.postMessage({
+        type: 'openchamber:notification-navigation',
+        url,
+        expiresAt: Date.now() + 1500,
+      }, [channel.port2]);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 

@@ -261,7 +261,7 @@ export const nativeCapabilitiesSchema = z.object({
     // Antigravity can read saved command tasks; it has no task-control protocol.
     antigravity: z.object({
       cli: z.boolean(),
-      tasks: z.object({ background: z.boolean(), output: z.boolean(), stop: z.literal(false) }).optional(),
+      tasks: z.object({ checklist: z.boolean().optional(), background: z.boolean(), output: z.boolean(), stop: z.literal(false) }).optional(),
     }).optional(),
   }),
   registry: z.object({ reset: z.boolean(), resetAt: z.number().optional() }),

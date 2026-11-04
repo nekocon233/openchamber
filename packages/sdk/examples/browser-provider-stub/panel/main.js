@@ -60,7 +60,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
 .oc-sdk-search[data-active="true"] .oc-sdk-search-clear { display: inline-flex; }
 
 .oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-trigger-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-trigger-chevron { flex: 0 0 auto; }
 .oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-width: calc(100vw - 16px); max-height: min(320px, calc(100vh - 16px)); overflow: auto; padding: 4px; border: 1px solid transparent; }
@@ -123,6 +123,8 @@ textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
 .oc-sdk-progress-label { display: flex; justify-content: space-between; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 .oc-sdk-progress-track { height: 6px; overflow: hidden; }
 .oc-sdk-progress-fill { height: 100%; transform-origin: left; transition: transform 200ms ease-out; }
+.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: 2px; }
+.oc-sdk-progress[data-done="true"] .oc-sdk-progress-value { font-weight: 600; }
 
 .oc-sdk-menu { position: relative; display: inline-flex; }
 

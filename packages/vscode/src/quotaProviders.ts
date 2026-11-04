@@ -3,7 +3,8 @@ import { OPENCODE_CONFIG_DIR } from './opencodeConfigPaths';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { fetchOpenCodeGoUsage, type OpenCodeGoApiKeyCredential, type OpenCodeGoConsoleCredential } from './opencodeGoQuota';
+import { fetchOpenCodeGoUsage, OPENCODE_GO_KEY_EXPIRED, type OpenCodeGoApiKeyCredential, type OpenCodeGoConsoleCredential } from './opencodeGoQuota';
+import { fetchOpenCodeZenUsage, type OpenCodeZenCredential } from '../../web/server/lib/quota/providers/opencode-zen.js';
 import { deleteLegacyOllamaCloudCredential, deleteLegacyOpenCodeGoCredential, readCredential } from './quotaCredentials';
 import { readOpenCodeCredentials } from './opencodeAuth';
 import { loadClaudeCredential } from './claudeAuth';
@@ -13,6 +14,10 @@ import type { ClaudeCredential } from './claudeAuth';
 import { readConfig } from './opencodeConfig';
 import { isRecord, toProviderEntity } from './opencode-config-v2';
 import { fetchExeDevUsage } from './exeDevQuota';
+import { refreshGoogleAccessToken } from '../../web/server/lib/quota/providers/google/oauth.js';
+import { readConsoleBudgets, withConsoleBudgets, type ConsoleBudgets } from '../../web/server/lib/quota/console-budgets.js';
+import { antigravityHeaders, warnIfGeminiGroupMissing } from '../../web/server/lib/quota/providers/antigravity/client.js';
+import { miniMaxStatusError } from '../../web/server/lib/quota/providers/minimax-status.js';
 
 type AuthEntry = Record<string, unknown> | string;
 type AuthFile = Record<string, AuthEntry>;
@@ -31,12 +36,15 @@ type UsageWindow = {
   resetAtFormatted: string | null;
   resetAfterFormatted: string | null;
   valueLabel?: string | null;
+  value?: { kind: 'requests'; count: number } | { kind: 'spend'; spent: number; limit: number | null };
+  creditsUsed?: number;
   giftReset?: UsageWindowGiftReset | null;
 };
 
 type ProviderUsage = {
   windows: Record<string, UsageWindow>;
   models?: Record<string, ProviderUsage>;
+  consoleBudgets?: ConsoleBudgets;
 };
 
 type OpenAiUsagePayload = {
@@ -282,20 +290,6 @@ const ANTIGRAVITY_ACCOUNTS_PATHS = [
   path.join(OPENCODE_DATA_DIR, 'antigravity-accounts.json'),
 ];
 
-// OAuth Secret value used to init client
-// Note: It's ok to save this in git because this is an installed application
-// as described here: https://developers.google.com/identity/protocols/oauth2#installed
-// "The process results in a client ID and, in some cases, a client secret,
-// which you embed in the source code of your application. (In this context,
-// the client secret is obviously not treated as a secret.)"
-// ref: https://github.com/opgginc/opencode-bar
-
-const ANTIGRAVITY_GOOGLE_CLIENT_ID =
-  '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
-const ANTIGRAVITY_GOOGLE_CLIENT_SECRET = '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';
-const GEMINI_GOOGLE_CLIENT_ID =
-  '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com';
-const GEMINI_GOOGLE_CLIENT_SECRET = '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';
 const DEFAULT_PROJECT_ID = 'rising-fact-p41fc';
 const GOOGLE_FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
 const GOOGLE_DAILY_WINDOW_SECONDS = 24 * 60 * 60;
@@ -478,6 +472,20 @@ const openCodeGoApiKey = (auth: AuthFile): OpenCodeGoApiKeyCredential | null => 
   return consoleKey ? { apiKey: consoleKey, consoleKey: true } : null;
 };
 
+// OpenCode Zen is the Console workspace behind the shared `opencode`
+// integration: the free models plus pay-as-you-go spend on the credits the
+// account holds. It answers with the workspace key or a Console sign-in.
+const openCodeZenCredential = (auth: AuthFile): OpenCodeZenCredential | null => {
+  const consoleCredential = openCodeGoConsoleCredential(auth);
+  if (consoleCredential) {
+    return { accessToken: consoleCredential.accessToken, orgID: consoleCredential.orgID };
+  }
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ['opencode']));
+  if (!entry || entry.type === 'oauth') return null;
+  const key = asNonEmptyString(entry.key) ?? asNonEmptyString(entry.token);
+  return key ? { apiKey: key } : null;
+};
+
 const formatResetTime = (timestamp: number) => {
   try {
     const resetDate = new Date(timestamp);
@@ -511,7 +519,7 @@ const calculateResetAfterSeconds = (resetAt: number | null) => {
   return delta < 0 ? 0 : delta;
 };
 
-const toUsageWindow = (data: { usedPercent: number | null; windowSeconds: number | null; resetAt: number | null; valueLabel?: string | null }) => {
+const toUsageWindow = (data: { usedPercent: number | null; windowSeconds: number | null; resetAt: number | null; valueLabel?: string | null; creditsUsed?: number }) => {
   const resetAfterSeconds = calculateResetAfterSeconds(data.resetAt);
   const resetFormatted = data.resetAt ? formatResetTime(data.resetAt) : null;
   return {
@@ -523,6 +531,7 @@ const toUsageWindow = (data: { usedPercent: number | null; windowSeconds: number
     resetAtFormatted: resetFormatted,
     resetAfterFormatted: resetFormatted,
     ...(data.valueLabel ? { valueLabel: data.valueLabel } : {}),
+    ...(data.creditsUsed !== undefined ? { creditsUsed: data.creditsUsed } : {}),
   } satisfies UsageWindow;
 };
 
@@ -817,16 +826,25 @@ const durationToSeconds = (duration?: number, unit?: string) => {
   return null;
 };
 
-// OpenCode stores the Kimi For Coding plans as `kimi-code-plan-cn` (kimi.com)
-// and `kimi-code-plan-global` (kimi.ai). The China plan comes first: its key
-// works at the api.kimi.com usage address, and a pre-split `kimi-for-coding`
-// key left behind with a dead credential must not shadow it. The global plan
-// stays last, as before, since its key is not known to work at that address.
+// Preserve the existing preference order across regional and pre-split plans.
 const KIMI_AUTH_ALIASES = ['kimi-code-plan-cn', 'kimi-for-coding', 'kimi', 'kimi-code-plan-global'];
 
-const getKimiApiKey = (auth: AuthFile) => {
-  const entry = normalizeAuthEntry(getAuthEntry(auth, KIMI_AUTH_ALIASES));
-  return asNonEmptyString(entry?.key) ?? asNonEmptyString(entry?.token);
+const collectKimiApiKeys = (auth: AuthFile): { apiKey: string; endpoint: string }[] => {
+  const keys: { apiKey: string; endpoint: string }[] = [];
+  const seen = new Set<string>();
+  for (const alias of KIMI_AUTH_ALIASES) {
+    const entry = normalizeAuthEntry(auth[alias] ?? null);
+    const apiKey = asNonEmptyString(entry?.key) ?? asNonEmptyString(entry?.token);
+    const endpoint = alias === 'kimi-code-plan-global'
+      ? 'https://api.kimi.ai/coding/v1/usages'
+      : 'https://api.kimi.com/coding/v1/usages';
+    const identity = JSON.stringify([endpoint, apiKey]);
+    if (apiKey && !seen.has(identity)) {
+      seen.add(identity);
+      keys.push({ apiKey, endpoint });
+    }
+  }
+  return keys;
 };
 
 /**
@@ -838,6 +856,7 @@ export const listConfiguredQuotaProviders = async () => {
   const auth = await readOpenCodeCredentials();
   const configured = new Set<string>();
   if (openCodeGoApiKey(auth) || openCodeGoConsoleCredential(auth)) configured.add('opencode-go');
+  if (openCodeZenCredential(auth)) configured.add('opencode');
   if (readCredential('cursor')) configured.add('cursor');
   if (readCredential('exe-dev')) configured.add('exe-dev');
 
@@ -878,7 +897,7 @@ export const listConfiguredQuotaProviders = async () => {
     configured.add('zhipuai-coding-plan');
   }
 
-  if (getKimiApiKey(auth)) {
+  if (collectKimiApiKeys(auth).length > 0) {
     configured.add('kimi-for-coding');
   }
 
@@ -953,15 +972,15 @@ export const listConfiguredQuotaProviders = async () => {
   return Array.from(configured);
 };
 
-// A 401 is not always an expired token: for a still-valid sign-in that may not
-// read usage (OpenCode's `chatgpt-token-sharing`) the endpoint answers with an
-// access-enforcement body. Same wording as the web server's Codex provider.
+// A 401 is not always an expired token: the usage endpoint refuses OpenCode's
+// `chatgpt-token-sharing` token with an access-enforcement body, and OpenAI has
+// no usage endpoint for that sign-in. Same wording as the web server's Codex provider.
 const codexErrorBodySchema = z.object({ error: z.object({ type: z.string() }) });
 
 const codexUnauthorizedMessage = async (response: Response): Promise<string> => {
   const body = codexErrorBodySchema.safeParse(await response.json().catch(() => null));
   return body.success && body.data.error.type === 'rejected_by_access_enforcement'
-    ? 'Usage is not available for this OpenAI sign-in method; chat still works'
+    ? 'OpenAI shows usage for Sign in with ChatGPT only at chatgpt.com/settings/usage. The legacy Codex sign-ins show it here.'
     : 'Session expired \u2014 please re-authenticate with OpenAI';
 };
 
@@ -1146,40 +1165,6 @@ const resolveGoogleAuthSources = (auth: AuthFile): GoogleAuthSource[] => {
   return sources;
 };
 
-const resolveGoogleOAuthClient = (sourceId: GoogleAuthSource['sourceId']) => {
-  if (sourceId === 'gemini') {
-    return {
-      clientId: GEMINI_GOOGLE_CLIENT_ID,
-      clientSecret: GEMINI_GOOGLE_CLIENT_SECRET,
-    };
-  }
-
-  return {
-    clientId: ANTIGRAVITY_GOOGLE_CLIENT_ID,
-    clientSecret: ANTIGRAVITY_GOOGLE_CLIENT_SECRET,
-  };
-};
-
-const refreshGoogleAccessToken = async (refreshToken: string, clientId: string, clientSecret: string) => {
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }),
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const data = await response.json() as Record<string, unknown>;
-  return typeof data?.access_token === 'string' ? data.access_token : null;
-};
-
 const fetchGoogleQuotaBuckets = async (accessToken: string, projectId?: string) => {
   const body = projectId ? { project: projectId } : {};
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -1213,6 +1198,7 @@ const fetchGoogleModels = async (
   accessToken: string,
   projectId?: string,
   endpoints: readonly string[] = GOOGLE_ENDPOINTS,
+  clientHeaders: Record<string, string> = GOOGLE_HEADERS,
 ) => {
   const body = projectId ? { project: projectId } : {};
 
@@ -1225,7 +1211,7 @@ const fetchGoogleModels = async (
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...GOOGLE_HEADERS,
+          ...clientHeaders,
         },
         body: JSON.stringify(body),
         signal: controller?.signal,
@@ -1270,13 +1256,12 @@ const fetchGoogleQuota = async (): Promise<ProviderResult> => {
         sourceErrors.push(`${source.sourceLabel}: Missing refresh token`);
         continue;
       }
-      const { clientId, clientSecret } = resolveGoogleOAuthClient(source.sourceId);
-      accessToken = (await refreshGoogleAccessToken(source.refreshToken, clientId, clientSecret)) ?? undefined;
-    }
-
-    if (!accessToken) {
-      sourceErrors.push(`${source.sourceLabel}: Failed to refresh OAuth token`);
-      continue;
+      const result = await refreshGoogleAccessToken(source.refreshToken, 'gemini', { fallbackToAntigravity: true });
+      if (!result.ok) {
+        sourceErrors.push(`${source.sourceLabel}: Failed to refresh OAuth token`);
+        continue;
+      }
+      accessToken = result.accessToken;
     }
 
     const projectId = source.projectId ?? DEFAULT_PROJECT_ID;
@@ -1403,7 +1388,7 @@ const fetchAntigravityQuotaSummary = async (accessToken: string, projectId?: str
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...GOOGLE_HEADERS,
+          ...antigravityHeaders(),
         },
         body: JSON.stringify(body),
         signal: controller?.signal,
@@ -1436,8 +1421,8 @@ const fetchAntigravityQuota = async (): Promise<ProviderResult> => {
     });
   }
 
-  const { clientId, clientSecret } = resolveGoogleOAuthClient('antigravity');
-  const accessToken = await refreshGoogleAccessToken(auth.refreshToken, clientId, clientSecret);
+  const result = await refreshGoogleAccessToken(auth.refreshToken, 'antigravity');
+  const accessToken = result.ok ? result.accessToken : null;
   if (!accessToken) {
     return buildResult({
       providerId: 'antigravity',
@@ -1452,8 +1437,10 @@ const fetchAntigravityQuota = async (): Promise<ProviderResult> => {
 
   const [summaryPayload, rawModelsPayload] = await Promise.all([
     fetchAntigravityQuotaSummary(accessToken, projectId),
-    fetchGoogleModels(accessToken, projectId, ANTIGRAVITY_ENDPOINTS),
+    fetchGoogleModels(accessToken, projectId, ANTIGRAVITY_ENDPOINTS, antigravityHeaders()),
   ]);
+
+  warnIfGeminiGroupMissing(summaryPayload);
 
   const modelGroupWindows: Array<{
     groupType: 'gemini' | '3p';
@@ -1607,8 +1594,48 @@ export const readCachedClaudeQuota = (
 
 export const resetClaudeQuotaCache = (): void => claudeTracker.reset();
 
-const buildCopilotWindows = (payload: Record<string, unknown>) => {
-  const quota = (payload.quota_snapshots as Record<string, unknown>) ?? {};
+type CopilotQuotaSnapshot = {
+  entitlement?: number | string;
+  remaining?: number | string;
+  quota_remaining?: number | string;
+  percent_remaining?: number | string;
+  unlimited?: boolean;
+  credits_used?: number | string;
+  has_quota?: boolean;
+};
+
+type CopilotUserPayload = {
+  access_type_sku?: string;
+  copilot_plan?: string;
+  can_signup_for_limited?: boolean;
+  quota_reset_date?: string | number;
+  quota_snapshots?: {
+    premium_interactions?: CopilotQuotaSnapshot;
+    chat?: CopilotQuotaSnapshot;
+    completions?: CopilotQuotaSnapshot;
+  };
+};
+
+const resolveCopilotPlanLabel = (payload: CopilotUserPayload | null | undefined): string | null => {
+  if (!payload) return null;
+  const sku = asNonEmptyString(payload.access_type_sku);
+  const plan = asNonEmptyString(payload.copilot_plan);
+  const canSignup = Boolean(payload.can_signup_for_limited);
+
+  if (sku === 'free_limited_copilot') return 'Copilot Free';
+  if (sku === 'free_educational_quota') return 'Copilot Student';
+  if (plan === 'individual_edu') return 'Copilot Student';
+  if (plan === 'individual') return 'Copilot Pro';
+  if (plan === 'individual_pro') return 'Copilot Pro+';
+  if (plan === 'individual_max') return 'Copilot Max';
+  if (plan === 'business') return 'Copilot Business';
+  if (plan === 'enterprise') return 'Copilot Enterprise';
+  if (canSignup) return 'Copilot Free';
+  return null;
+};
+
+const buildCopilotWindows = (payload: CopilotUserPayload) => {
+  const quota = payload.quota_snapshots;
   const resetAt = toTimestamp(payload.quota_reset_date);
   const windows: Record<string, UsageWindow> = {};
 
@@ -1616,21 +1643,45 @@ const buildCopilotWindows = (payload: Record<string, unknown>) => {
   // (CopilotUserQuotaInfo): each snapshot carries entitlement, remaining,
   // unlimited, and percent_remaining. Unlimited plans report no usable
   // entitlement; percent_remaining is a server-computed fallback.
-  const addWindow = (label: string, snapshot?: Record<string, unknown>) => {
+  // `usedPercent` is computed from remaining/entitlement, and the value label
+  // derives its credits from the same `entitlement - quota_remaining` axis
+  // GitHub's own Copilot panel uses, so the percent and the label agree.
+  // Premium interactions are credits rather than requests, and the endpoint
+  // reports them fractionally (`quota_remaining: 39078.5`), so the label keeps
+  // one decimal like GitHub's own panel ("20,836.9 / 60,000 used") instead of
+  // rounding the half credit away.
+  const formatCopilotCredits = (value: number): string => {
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded)
+      ? rounded.toLocaleString('en-US')
+      : rounded.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  };
+
+  const addWindow = (label: string, snapshot?: CopilotQuotaSnapshot) => {
     if (!snapshot) return;
 
     if (snapshot.unlimited === true) {
+      const creditsUsed = toNumber(typeof snapshot.credits_used === 'string'
+        ? asNonEmptyString(snapshot.credits_used)
+        : snapshot.credits_used);
+      const showCreditsUsed = snapshot.has_quota !== false && creditsUsed !== null && creditsUsed >= 0;
       windows[label] = toUsageWindow({
         usedPercent: null,
         windowSeconds: null,
         resetAt,
-        valueLabel: 'Unlimited',
+        valueLabel: showCreditsUsed ? null : 'Unlimited',
+        creditsUsed: showCreditsUsed ? creditsUsed : undefined,
       });
       return;
     }
 
     const entitlement = toNumber(snapshot.entitlement);
-    const remaining = toNumber(snapshot.remaining);
+    // `quota_remaining` is the precise twin of `remaining`: the endpoint sends it
+    // with one decimal (39078.5) and truncates it into `remaining` (39078).
+    // GitHub's own Copilot panel reports the used figure as
+    // `entitlement - quota_remaining` (60,000 - 39,078.5 = 20,921.5 used),
+    // so prefer it and fall back to the integer twin.
+    const remaining = toNumber(snapshot.quota_remaining) ?? toNumber(snapshot.remaining);
     let usedPercent = entitlement !== null && entitlement > 0 && remaining !== null
       ? Math.min(100, Math.max(0, 100 - (remaining / entitlement) * 100))
       : null;
@@ -1640,9 +1691,21 @@ const buildCopilotWindows = (payload: Record<string, unknown>) => {
         usedPercent = Math.min(100, Math.max(0, 100 - percentRemaining));
       }
     }
-    const valueLabel = entitlement !== null && entitlement > 0 && remaining !== null
-      ? `${remaining.toFixed(0)} / ${entitlement.toFixed(0)} left`
-      : null;
+    // `remaining` reports the axis opposite to everything else the quota UI
+    // renders (the percent above, the progress bar, the used/remaining toggle),
+    // so the old `remaining / entitlement left` label made OpenChamber state the
+    // opposite of GitHub's own Copilot panel for the same account. VS Code and
+    // GitHub both report `entitlement - quota_remaining` spent, so the label
+    // uses that axis and keeps the fractional credit rather than rounding it
+    // away, which also keeps it stable across the two twin fields.
+    const used = entitlement === null || entitlement <= 0
+      ? null
+      : remaining !== null
+        ? Math.max(0, Math.min(entitlement, entitlement - remaining))
+        : null;
+    const valueLabel = used === null || entitlement === null
+      ? null
+      : `${formatCopilotCredits(used)} / ${formatCopilotCredits(entitlement)} used`;
     windows[label] = toUsageWindow({
       usedPercent,
       windowSeconds: null,
@@ -1651,15 +1714,41 @@ const buildCopilotWindows = (payload: Record<string, unknown>) => {
     });
   };
 
-  addWindow('premium_interactions', quota.premium_interactions as Record<string, unknown> | undefined);
+  addWindow('premium_interactions', quota?.premium_interactions);
 
   return windows;
+};
+
+const INVALID_COPILOT_ENTERPRISE_URL = 'Invalid GitHub Copilot Enterprise URL';
+
+// A Copilot login on GitHub Enterprise Server carries `enterpriseUrl`, and that
+// server hosts its own quota endpoint. Only a bare origin with a plausible DNS
+// hostname is accepted, so a value that is not a usable host is refused here
+// rather than turned into a request that carries the credential.
+const COPILOT_ENTERPRISE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+const copilotUserUrl = (enterpriseUrl: string | undefined): string => {
+  const host = `${enterpriseUrl ?? ''}`.trim();
+  if (!host) return 'https://api.github.com/copilot_internal/user';
+
+  const url = new URL(host.includes('://') ? host : `https://${host}`);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(INVALID_COPILOT_ENTERPRISE_URL);
+  if (url.username || url.password || url.port || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error(INVALID_COPILOT_ENTERPRISE_URL);
+  }
+  if (!COPILOT_ENTERPRISE_HOST.test(url.hostname)) throw new Error(INVALID_COPILOT_ENTERPRISE_URL);
+
+  return `https://api.${url.hostname}/copilot_internal/user`;
 };
 
 const fetchCopilotQuota = async (): Promise<ProviderResult> => {
   const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['github-copilot', 'copilot'])) as Record<string, unknown> | null;
   const accessToken = (entry?.access as string | undefined) ?? (entry?.token as string | undefined);
+  // SAFETY: OpenCode stores `enterpriseUrl` on a Copilot credential as a string when the
+  // login targets GitHub Enterprise Server. A value that is not a usable host is refused by
+  // `copilotUserUrl` before any request is made, so it cannot redirect the credential.
+  const enterpriseUrl = entry?.enterpriseUrl as string | undefined;
 
   if (!accessToken) {
     return buildResult({
@@ -1672,7 +1761,7 @@ const fetchCopilotQuota = async (): Promise<ProviderResult> => {
   }
 
   try {
-    const response = await fetch('https://api.github.com/copilot_internal/user', {
+    const response = await fetch(copilotUserUrl(enterpriseUrl), {
       method: 'GET',
       headers: {
         Authorization: `token ${accessToken}`,
@@ -1692,13 +1781,15 @@ const fetchCopilotQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const payload = await response.json() as Record<string, unknown>;
+    const payload = await response.json() as CopilotUserPayload;
+    const planLabel = resolveCopilotPlanLabel(payload);
     return buildResult({
       providerId: 'github-copilot',
       providerName: 'GitHub Copilot',
       ok: true,
       configured: true,
       usage: { windows: buildCopilotWindows(payload) },
+      planLabel,
     });
   } catch (error) {
     return buildResult({
@@ -1715,6 +1806,10 @@ const fetchCopilotAddonQuota = async (): Promise<ProviderResult> => {
   const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['github-copilot', 'copilot'])) as Record<string, unknown> | null;
   const accessToken = (entry?.access as string | undefined) ?? (entry?.token as string | undefined);
+  // SAFETY: OpenCode stores `enterpriseUrl` on a Copilot credential as a string when the
+  // login targets GitHub Enterprise Server. A value that is not a usable host is refused by
+  // `copilotUserUrl` before any request is made, so it cannot redirect the credential.
+  const enterpriseUrl = entry?.enterpriseUrl as string | undefined;
 
   if (!accessToken) {
     return buildResult({
@@ -1727,7 +1822,7 @@ const fetchCopilotAddonQuota = async (): Promise<ProviderResult> => {
   }
 
   try {
-    const response = await fetch('https://api.github.com/copilot_internal/user', {
+    const response = await fetch(copilotUserUrl(enterpriseUrl), {
       method: 'GET',
       headers: {
         Authorization: `token ${accessToken}`,
@@ -1747,13 +1842,15 @@ const fetchCopilotAddonQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const payload = await response.json() as Record<string, unknown>;
+    const payload = await response.json() as CopilotUserPayload;
+    const planLabel = resolveCopilotPlanLabel(payload);
     return buildResult({
       providerId: 'github-copilot-addon',
       providerName: 'GitHub Copilot Add-on',
       ok: true,
       configured: true,
       usage: { windows: buildCopilotWindows(payload) },
+      planLabel,
     });
   } catch (error) {
     return buildResult({
@@ -1861,6 +1958,23 @@ type KimiQuotaDependencies = {
 
 const MOONSHOT_BALANCE_URL = 'https://api.moonshot.ai/v1/users/me/balance';
 
+// VS Code 1.85's Node 18.15 has no AbortSignal.any. Keep both deadlines
+// active through response body reads and detach listeners when either expires.
+const kimiRequestSignal = (refreshSignal: AbortSignal): AbortSignal => {
+  const controller = new AbortController();
+  for (const signal of [refreshSignal, AbortSignal.timeout(5_000)]) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener('abort', () => controller.abort(signal.reason), {
+      once: true,
+      signal: controller.signal,
+    });
+  }
+  return controller.signal;
+};
+
 type MoonshotBalancePayload = {
   data?: { available_balance?: number };
 };
@@ -1871,12 +1985,13 @@ type MoonshotBalancePayload = {
 const fetchMoonshotBalanceWindows = async (
   apiKey: string,
   fetchImpl: (url: string, options: RequestInit) => Promise<Response>,
+  refreshSignal: AbortSignal,
 ): Promise<Record<string, UsageWindow> | null> => {
   try {
     const response = await fetchImpl(MOONSHOT_BALANCE_URL, {
       method: 'GET',
       headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(15_000),
+      signal: kimiRequestSignal(refreshSignal),
     });
     if (!response.ok) return null;
     const balance = (await response.json() as MoonshotBalancePayload)?.data?.available_balance;
@@ -1895,9 +2010,9 @@ const fetchMoonshotBalanceWindows = async (
 };
 
 export const fetchKimiQuota = async ({ readAuth = readOpenCodeCredentials, fetchImpl = fetch }: KimiQuotaDependencies = {}): Promise<ProviderResult> => {
-  const apiKey = getKimiApiKey(await readAuth());
+  const apiKeys = collectKimiApiKeys(await readAuth());
 
-  if (!apiKey) {
+  if (apiKeys.length === 0) {
     return buildResult({
       providerId: 'kimi-for-coding',
       providerName: 'Kimi for Coding',
@@ -1908,17 +2023,38 @@ export const fetchKimiQuota = async ({ readAuth = readOpenCodeCredentials, fetch
   }
 
   try {
-    const response = await fetchImpl('https://api.kimi.com/coding/v1/usages', {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    const refreshSignal = AbortSignal.timeout(25_000);
+    let firstError: string | null = null;
+    for (const { apiKey, endpoint } of apiKeys) {
+      refreshSignal.throwIfAborted();
+      const response = await fetchImpl(endpoint, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: kimiRequestSignal(refreshSignal),
+      });
 
-    if (!response.ok) {
+      if (response.ok) {
+        const payload = asObject(await response.json());
+        // Kimi replaced the counted payload with a ratio-based `usages` map. Its own
+        // client reads only `usages`, so when that block is present the `limits[]`
+        // entry for the same 5-hour window is a coarser duplicate and is not read.
+        const usages = asObject(payload?.usages);
+        const windows = usages ? kimiRatioWindows(usages) : kimiLegacyWindows(payload);
+
+        return buildResult({
+          providerId: 'kimi-for-coding',
+          providerName: 'Kimi for Coding',
+          ok: true,
+          configured: true,
+          usage: { windows },
+        });
+      }
+
       if (response.status === 401 || response.status === 403) {
-        const balanceWindows = await fetchMoonshotBalanceWindows(apiKey, fetchImpl);
+        const balanceWindows = await fetchMoonshotBalanceWindows(apiKey, fetchImpl, refreshSignal);
         if (balanceWindows) {
           return buildResult({
             providerId: 'kimi-for-coding',
@@ -1928,7 +2064,10 @@ export const fetchKimiQuota = async ({ readAuth = readOpenCodeCredentials, fetch
             usage: { windows: balanceWindows },
           });
         }
+        firstError ??= `API error: ${response.status}`;
+        continue;
       }
+
       return buildResult({
         providerId: 'kimi-for-coding',
         providerName: 'Kimi for Coding',
@@ -1938,19 +2077,12 @@ export const fetchKimiQuota = async ({ readAuth = readOpenCodeCredentials, fetch
       });
     }
 
-    const payload = asObject(await response.json());
-    // Kimi replaced the counted payload with a ratio-based `usages` map. Its own
-    // client reads only `usages`, so when that block is present the `limits[]`
-    // entry for the same 5-hour window is a coarser duplicate and is not read.
-    const usages = asObject(payload?.usages);
-    const windows = usages ? kimiRatioWindows(usages) : kimiLegacyWindows(payload);
-
     return buildResult({
       providerId: 'kimi-for-coding',
       providerName: 'Kimi for Coding',
-      ok: true,
+      ok: false,
       configured: true,
-      usage: { windows },
+      error: firstError ?? 'Request failed',
     });
   } catch (error) {
     return buildResult({
@@ -2003,15 +2135,14 @@ const fetchMiniMaxQuota = async (data: {
     }
 
     const payload = await response.json() as Record<string, unknown>;
-    const baseResp = asObject(payload.base_resp);
-    const statusCode = toNumber(baseResp?.status_code);
-    if (baseResp && statusCode !== 0) {
+    const statusError = miniMaxStatusError(asObject(payload.base_resp));
+    if (statusError) {
       return buildResult({
         providerId: data.providerId,
         providerName: data.providerName,
         ok: false,
         configured: true,
-        error: asNonEmptyString(baseResp.status_msg) ?? `API error: ${statusCode}`,
+        error: statusError,
       });
     }
 
@@ -2484,7 +2615,7 @@ const fetchOpenRouterQuota = async (): Promise<ProviderResult> => {
         windowSeconds = PERIOD_SECONDS[data.limit_reset];
         resetAt = openRouterResetAt(data.limit_reset, nowMs);
       } else {
-        windowKey = 'credits';
+        windowKey = 'key_limit';
         windowSeconds = null;
         resetAt = null;
       }
@@ -3929,6 +4060,39 @@ type XaiQuotaDependencies = {
   fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
 };
 
+/** The Go meters: a Console sign-in first, its API key as the fallback. */
+const fetchOpenCodeGoQuota = async (): Promise<ProviderResult> => {
+  const providerId = 'opencode-go';
+  try {
+    deleteLegacyOpenCodeGoCredential();
+    const auth = await readOpenCodeCredentials();
+    // A Console sign-in serves OpenCode Go once it exists; the
+    // API key is the fallback for accounts without one, and for a Console
+    // read that fails (no Go in that org, an endpoint change, a hiccup).
+    const consoleCredential = openCodeGoConsoleCredential(auth);
+    const apiKey = openCodeGoApiKey(auth);
+    let consoleFailure: Error | null = null;
+    if (consoleCredential) {
+      try {
+        return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(consoleCredential) } });
+      } catch (consoleError) {
+        if (!apiKey) throw consoleError;
+        consoleFailure = consoleError instanceof Error ? consoleError : new Error('Request failed');
+      }
+    }
+    if (!apiKey) return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: false, error: 'Not configured' });
+    try {
+      return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(apiKey) } });
+    } catch (keyError) {
+      // The expired-key advice is to connect a Console account; with one
+      // already connected, its own failure is the actionable error.
+      throw consoleFailure && keyError instanceof Error && keyError.message === OPENCODE_GO_KEY_EXPIRED ? consoleFailure : keyError;
+    }
+  } catch (error) {
+    return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' });
+  }
+};
+
 export const fetchXaiQuota = async ({ readAuth = readOpenCodeCredentials, fetchImpl = fetch }: XaiQuotaDependencies = {}): Promise<ProviderResult> => {
   try {
     const entry = resolveXaiAuth(await readAuth());
@@ -4036,25 +4200,19 @@ const fetchQuotaForProviderUncoalesced = async (providerId: string): Promise<Pro
     case 'wafer':
       return fetchWaferQuota();
     case 'opencode-go': {
+      // The Console budgets of the same sign-in sit beside the Go meters.
+      const [result, consoleBudgets] = await Promise.all([fetchOpenCodeGoQuota(), readConsoleBudgets()]);
+      return withConsoleBudgets(result, consoleBudgets);
+    }
+    case 'opencode': {
       try {
-        deleteLegacyOpenCodeGoCredential();
         const auth = await readOpenCodeCredentials();
-        // A Console sign-in serves OpenCode Go once it exists; the
-        // API key is the fallback for accounts without one, and for a Console
-        // read that fails (no Go in that org, an endpoint change, a hiccup).
-        const consoleCredential = openCodeGoConsoleCredential(auth);
-        const apiKey = openCodeGoApiKey(auth);
-        if (consoleCredential) {
-          try {
-            return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(consoleCredential) } });
-          } catch (consoleError) {
-            if (!apiKey) throw consoleError;
-          }
-        }
-        if (!apiKey) return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: false, error: 'Not configured' });
-        return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(apiKey) } });
+        const credential = openCodeZenCredential(auth);
+        if (!credential) return buildResult({ providerId, providerName: 'OpenCode Zen', ok: false, configured: false, error: 'Not configured' });
+        const usage = await fetchOpenCodeZenUsage(credential);
+        return buildResult({ providerId, providerName: 'OpenCode Zen', ok: true, configured: true, usage });
       } catch (error) {
-        return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' });
+        return buildResult({ providerId, providerName: 'OpenCode Zen', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' });
       }
     }
     case 'cursor':

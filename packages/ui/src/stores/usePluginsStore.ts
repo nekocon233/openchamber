@@ -15,7 +15,8 @@ import { runtimeFetch } from '@/lib/runtime-fetch';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 
 export type PluginScope = 'user' | 'project';
-type PluginParsedKind = 'npm' | 'path';
+/** `control` is an OpenCode 2 entry such as `-name` or `*` that turns known plugins off or on. */
+export type PluginParsedKind = 'control' | 'npm' | 'path' | 'git';
 
 export interface PluginEntry {
   id: string;
@@ -26,6 +27,8 @@ export interface PluginEntry {
   parsedKind: PluginParsedKind;
   /** The config file that declares the entry; relative path specs resolve against its directory. */
   sourcePath?: string;
+  /** Host-resolved local target used only to filter duplicate discovery records. */
+  resolvedPath?: string;
 }
 
 export interface PluginFile {
@@ -35,6 +38,8 @@ export interface PluginFile {
   /** `file` is a `.ts`/`.js` OpenChamber can open; `package` is a plugin directory (or a v1 `plugin/` file) OpenCode loads but the page only lists. */
   kind: 'file' | 'package';
   absolutePath?: string;
+  /** Host-resolved local target used only to filter duplicate discovery records. */
+  resolvedPath?: string;
 }
 
 export interface PluginDraft {
@@ -52,6 +57,8 @@ export type PluginMutationResult = {
   message?: string;
   warning?: string;
   requiresManualRestart?: boolean;
+  /** The server refused the spec: OpenCode cannot load it. Nothing was written. */
+  invalidSpec?: boolean;
 };
 
 export type RegistryResult =
@@ -62,7 +69,9 @@ export type RegistryResult =
   | { kind: 'npm-network'; spec: string; error: string }
   | { kind: 'path-ok'; spec: string; absolutePath: string }
   | { kind: 'path-missing'; spec: string; absolutePath: string }
-  | { kind: 'path-unreadable'; spec: string; absolutePath: string };
+  | { kind: 'path-unreadable'; spec: string; absolutePath: string }
+  /** A Git package spec: OpenCode resolves it itself, so there is nothing to check. */
+  | { kind: 'git-ok'; spec: string };
 
 /**
  * What OpenCode reported for the plugins of one directory and runtime
@@ -129,6 +138,7 @@ type PluginMutationPayload = {
   reloadFailed?: boolean;
   warning?: string;
   error?: string;
+  code?: string;
 };
 
 type PluginFileContent = {
@@ -550,6 +560,7 @@ async function runPluginMutation(
     const payload = await readJson<PluginMutationPayload | null>(response).catch(() => null);
 
     if (!response.ok) {
+      if (payload?.code === 'UNLOADABLE_SPEC') return { ok: false, invalidSpec: true };
       throw new Error(payload?.error || 'Failed to update plugin configuration');
     }
 

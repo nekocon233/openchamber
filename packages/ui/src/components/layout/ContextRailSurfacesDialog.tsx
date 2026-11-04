@@ -1,12 +1,8 @@
 import React from 'react';
-import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type Announcements, type DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import { Icon } from '@/components/icon/Icon';
-import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
-import { SettingsCheckboxRow } from '@/components/sections/shared/SettingsSection';
+import { selectWorkflowsShown } from '@/lib/workflows/availability';
+import { SettingsSortableVisibilityList } from '@/components/sections/shared/SettingsSortableVisibilityList';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -16,44 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useGuestSurfaces } from '@/hooks/useGuestSurfaces';
-import { sortContextSurfaces } from '@/lib/surfaces/registry';
-
-const SortableSurfaceRow: React.FC<{
-  surfaceId: string;
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}> = ({ surfaceId, label, checked, onChange }) => {
-  const { t } = useI18n();
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: surfaceId });
-  return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn('relative flex items-center gap-2', isDragging && 'z-10 opacity-60')}
-    >
-      <Button
-        ref={setActivatorNodeRef}
-        variant="ghost"
-        size="icon"
-        {...attributes}
-        {...listeners}
-        aria-label={t('contextRail.configure.reorder', { label })}
-        className="shrink-0 touch-none select-none cursor-grab text-muted-foreground hover:bg-transparent active:cursor-grabbing"
-      >
-        <Icon name="draggable" className="size-4" />
-      </Button>
-      <SettingsCheckboxRow
-        settingsItem={`layout.context-rail.surface.${surfaceId}`}
-        checked={checked}
-        onChange={onChange}
-        label={label}
-        ariaLabel={label}
-        className="min-w-0 flex-1"
-      />
-    </div>
-  );
-};
+import { contextSurfaceGroup, sortContextSurfaces } from '@/lib/surfaces/registry';
 
 /**
  * Which surfaces the context rail shows. Everything is on by default and the
@@ -76,51 +35,31 @@ export const ContextRailSurfacesDialog: React.FC<{
   // The full registry in the user's rail order — including surfaces a runtime
   // filter currently drops, so a choice made on desktop is editable anywhere.
   const guestSurfaces = useGuestSurfaces();
+  // While workflows are not shown the surface is not offered.
+  const workflowsAvailable = useUIStore(selectWorkflowsShown);
   const surfaces = React.useMemo(
-    () => sortContextSurfaces(contextRailOrder, guestSurfaces),
-    [contextRailOrder, guestSurfaces],
+    () => sortContextSurfaces(contextRailOrder, guestSurfaces).filter((surface) => workflowsAvailable || surface.id !== 'workflows'),
+    [contextRailOrder, guestSurfaces, workflowsAvailable],
   );
 
   const allVisible = hidden.length === 0;
   const noneVisible = surfaces.every((surface) => hidden.includes(surface.id));
   const dragging = React.useRef(false);
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    dragging.current = false;
-    if (!over || active.id === over.id) return;
-    const from = surfaces.findIndex((surface) => surface.id === active.id);
-    const to = surfaces.findIndex((surface) => surface.id === over.id);
-    if (from < 0 || to < 0) return;
-    const next = arrayMove(surfaces, from, to).map((surface) => surface.id);
-    const shown = new Set<string>(next);
+  const items = React.useMemo(() => surfaces.map((surface, index) => ({
+    id: surface.id,
+    label: surface.label ?? t(surface.labelKey),
+    visible: !hidden.includes(surface.id),
+    groupStart: index > 0 && contextSurfaceGroup(surfaces[index - 1]) !== contextSurfaceGroup(surface),
+  })), [hidden, surfaces, t]);
+  // The rail's groups stay together: a surface dropped inside its own group
+  // moves there, and one dropped ahead of another group carries its whole
+  // group along (sortContextSurfaces). The saved order is that grouped order.
+  const handleReorder = (next: string[]) => {
+    const grouped = sortContextSurfaces(next, guestSurfaces).map((surface) => surface.id).filter((id) => next.includes(id));
+    const shown = new Set<string>(grouped);
     // Keep saved entries for extensions that are temporarily unavailable.
-    setSurfaceOrder([...next, ...contextRailOrder.filter((id) => !shown.has(id))]);
+    setSurfaceOrder([...grouped, ...contextRailOrder.filter((id) => !shown.has(id))]);
   };
-  const accessibility = React.useMemo(() => {
-    const position = (activeId: string | number, overId: string | number = activeId) => {
-      const surface = surfaces.find((item) => item.id === activeId);
-      if (!surface) return undefined;
-      return t('contextRail.configure.position', {
-        label: surface.label ?? t(surface.labelKey),
-        position: surfaces.findIndex((item) => item.id === overId) + 1,
-        count: surfaces.length,
-      });
-    };
-    const announcements: Announcements = {
-      onDragStart: ({ active }) => position(active.id),
-      onDragOver: ({ active, over }) => over ? position(active.id, over.id) : undefined,
-      onDragEnd: ({ active, over }) => over ? position(active.id, over.id) : t('contextRail.configure.dragCancelled'),
-      onDragCancel: () => t('contextRail.configure.dragCancelled'),
-    };
-    return {
-      screenReaderInstructions: { draggable: t('contextRail.configure.dragInstructions') },
-      announcements,
-    };
-  }, [surfaces, t]);
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen, details) => {
@@ -146,28 +85,14 @@ export const ContextRailSurfacesDialog: React.FC<{
           <DialogDescription>{t('contextRail.configure.dialogDescription')}</DialogDescription>
         </DialogHeader>
 
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={() => { dragging.current = true; }}
-          onDragCancel={() => { dragging.current = false; }}
-          onDragEnd={handleDragEnd}
-          accessibility={accessibility}
-        >
-          <SortableContext items={surfaces} strategy={verticalListSortingStrategy}>
-            <div className="flex flex-col">
-              {surfaces.map((surface) => (
-                <SortableSurfaceRow
-                  key={surface.id}
-                  surfaceId={surface.id}
-                  checked={!hidden.includes(surface.id)}
-                  onChange={(checked) => setSurfaceVisible(surface.id, checked)}
-                  label={surface.label ?? t(surface.labelKey)}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
+        <SettingsSortableVisibilityList
+          items={items}
+          onVisibleChange={setSurfaceVisible}
+          onReorder={handleReorder}
+          settingsItemPrefix="layout.context-rail.surface."
+          dragInstructions={t('contextRail.configure.dragInstructions')}
+          onDraggingChange={(next) => { dragging.current = next; }}
+        />
 
         {!allVisible ? (
           <div className="flex items-center justify-between border-t pt-3">

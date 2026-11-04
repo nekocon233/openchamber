@@ -190,7 +190,7 @@ export const useProjectRepoStatus = (args: Args): void => {
           return;
         }
 
-        const resolved = entries.filter((entry) => entry.branch);
+        const resolved = (entries ?? []).filter((entry) => entry.branch);
         if (resolved.length === 0) {
           return;
         }

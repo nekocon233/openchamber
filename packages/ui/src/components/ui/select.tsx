@@ -162,7 +162,7 @@ function SelectTrigger({
       className={cn(
         // Shared trigger chrome: one source of truth for every dropdown trigger.
         dropdownTriggerVariants(),
-        "w-fit data-[placeholder]:text-muted-foreground aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:truncate",
+        "w-fit data-[placeholder]:text-muted-foreground *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:truncate",
         className
       )}
       onPointerDownCapture={(event) => {
@@ -258,8 +258,10 @@ function SelectContent({
     });
   };
 
+  // `contents`: inside a dialog the portal node is one more flex child, and
+  // the dialog's gap grew the dialog by a row while the popup was open.
   return (
-    <BaseSelect.Portal container={portalToBody ? undefined : portalContainer || undefined}>
+    <BaseSelect.Portal className="contents" container={portalToBody ? undefined : portalContainer || undefined}>
       <BaseSelect.Positioner
         alignItemWithTrigger={alignItemWithTrigger}
         sideOffset={sideOffset}
@@ -276,7 +278,7 @@ function SelectContent({
             color: 'var(--surface-elevated-foreground)',
           }}
           className={cn(
-            "oc-glass-popover oc-glass-floating pointer-events-auto transition-all duration-150 ease-out data-[starting-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[ending-style]:scale-95 relative z-[120] max-h-[var(--available-height)] min-w-[8rem] origin-[var(--transform-origin)] overflow-x-hidden rounded-xl",
+            "oc-glass-popover oc-glass-floating pointer-events-auto oc-popup-motion data-[starting-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[ending-style]:scale-95 relative z-[120] max-h-[var(--available-height)] min-w-[8rem] origin-[var(--transform-origin)] overflow-x-hidden rounded-xl",
             !alignItemWithTrigger &&
               "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
             fitContent && "w-max min-w-0",

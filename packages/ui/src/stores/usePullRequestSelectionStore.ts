@@ -55,12 +55,14 @@ interface PullRequestSelectionState {
   selections: Map<string, PullRequestSelection>;
   /** A pull request another surface asked Changes to show, per directory. */
   diffRequests: Map<string, PullRequestSource>;
+  changesRepositories: Map<string, string>;
   diffReturnTargets: Map<string, PullRequestReturnTarget>;
   returnRequests: Map<string, PullRequestReturnTarget>;
   select: (key: string, source: PullRequestSource) => void;
   acceptHandoff: (key: string, source: PullRequestSource) => void;
   /** Each call is a new request, so asking for the same PR again shows it again. */
-  requestDiff: (directory: string, source: PullRequestSource, origin?: PullRequestDiffOrigin) => void;
+  requestDiff: (directory: string, source: PullRequestSource, originOrRepository?: PullRequestDiffOrigin | string | null) => void;
+  clearChangesRepository: (directory: string) => void;
   /** Drops `source` once Changes has taken it, so it never comes back on another branch. */
   settleDiffRequest: (directory: string, source: PullRequestSource) => void;
   requestReturn: (target: PullRequestReturnTarget) => boolean;
@@ -106,16 +108,25 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
   resetOpenRequests: () => set({ openRequests: new Map() }),
   selections: new Map(),
   diffRequests: new Map(),
+  changesRepositories: new Map(),
   diffReturnTargets: new Map(),
   returnRequests: new Map(),
   select: (key, source) => set((state) => remember(state, key, { source, handoff: state.selections.get(key)?.handoff ?? null })),
   // A retained request is consumed once even if the walkthrough tab remounts.
   acceptHandoff: (key, source) => set((state) => state.selections.get(key)?.handoff === source
     ? state : remember(state, key, { source, handoff: source })),
-  requestDiff: (directory, source, origin) => set((state) => {
+  requestDiff: (directory, source, originOrRepository) => set((state) => {
     const diffRequests = new Map(state.diffRequests);
     const request = { ...source };
     diffRequests.set(directory, request);
+    if (typeof originOrRepository === 'string' || originOrRepository === null) {
+      if (!originOrRepository && !state.changesRepositories.has(directory)) return { diffRequests };
+      const changesRepositories = new Map(state.changesRepositories);
+      if (originOrRepository) changesRepositories.set(directory, originOrRepository);
+      else changesRepositories.delete(directory);
+      return { diffRequests, changesRepositories };
+    }
+    const origin = originOrRepository;
     const runtimeKey = getRuntimeKey();
     const key = pullRequestNavigationKey(runtimeKey, directory);
     const diffReturnTargets = origin
@@ -123,6 +134,12 @@ export const usePullRequestSelectionStore = create<PullRequestSelectionState>((s
       : new Map(state.diffReturnTargets);
     if (!origin) diffReturnTargets.delete(key);
     return { diffRequests, diffReturnTargets };
+  }),
+  clearChangesRepository: (directory) => set((state) => {
+    if (!state.changesRepositories.has(directory)) return state;
+    const changesRepositories = new Map(state.changesRepositories);
+    changesRepositories.delete(directory);
+    return { changesRepositories };
   }),
   settleDiffRequest: (directory, source) => set((state) => {
     if (state.diffRequests.get(directory) !== source) return state;

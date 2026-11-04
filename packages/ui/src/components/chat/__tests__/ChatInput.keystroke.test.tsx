@@ -5,6 +5,9 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Window } from 'happy-dom';
 import type { RuntimeAPIs } from '@/lib/api/types';
+import type { Session } from '@/lib/opencode/model';
+import type { EditorView as CodeMirrorView } from '@codemirror/view';
+import type { Root } from 'react-dom/client';
 
 /**
  * Counts which components render per keystroke without instrumenting them.
@@ -114,9 +117,10 @@ Object.assign(globalThis, {
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 
-// Nothing typed here reaches a server; every request answers empty.
+// Nothing typed here reaches a server; settings retain the admitted project.
 spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
   const path = new URL(input instanceof Request ? input.url : input.toString(), 'http://localhost/').pathname;
+  if (path === '/api/config/settings') return Response.json({ projects: [{ id: 'project', path: '/workspace' }] });
   if (path.endsWith('/location')) {
     return Response.json({ directory: '/workspace', project: { id: 'project', directory: '/workspace', canonical: '/workspace' } });
   }
@@ -152,7 +156,9 @@ const { ThemeSystemProvider } = await import('@/contexts/ThemeSystemContext');
 const { RuntimeAPIContext } = await import('@/contexts/runtimeAPIContext');
 const { ChatInput } = await import('../ChatInput');
 const { SyncProvider } = await import('@/sync/sync-context');
-const { useDirectoryStore } = await import('@/stores/useDirectoryStore');
+const { useDirectoryStore, ensureHomeDirectoryResolved } = await import('@/stores/useDirectoryStore');
+const { updateDesktopSettings } = await import('@/lib/persistence');
+const { getSyncChildStores } = await import('@/sync/sync-refs');
 const { OpenCode } = await import('@opencode/client');
 
 const sdk = OpenCode.make({
@@ -175,6 +181,20 @@ const sdk = OpenCode.make({
 const runtimeAPIs = { runtime: { platform: 'web', isDesktop: false, isVSCode: false }, sourceControl: {} } as RuntimeAPIs;
 
 const { useSessionUIStore } = await import('@/sync/session-ui-store');
+const { useProjectsStore } = await import('@/stores/useProjectsStore');
+useProjectsStore.setState({ projects: [{ id: 'project', path: '/workspace' }] });
+const { dispatchPromptHistorySearch } = await import('../composer/state/promptHistorySearchRoute');
+const { createInputHistoryIdentity, useInputHistoryStore } = await import('@/stores/useInputHistoryStore');
+const { getRuntimeKey } = await import('@/lib/runtime-switch');
+
+// Stands in for the window keydown listener that useKeyboardShortcuts installs
+// for search_prompt_history: the combo match is the dispatcher's job, and the
+// route it hands the event to is the real one the composer registers.
+window.addEventListener('keydown', (event: KeyboardEvent) => {
+  if (event.key === 'ArrowUp' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+    dispatchPromptHistorySearch(event);
+  }
+});
 
 const KEYSTROKES = 20;
 
@@ -186,8 +206,18 @@ type TypingCost = {
   rendersByComponent: Map<string, number>;
 };
 
-/** Mounts a fresh composer, types KEYSTROKES characters, and reports the per-keystroke cost. */
-const measureTyping = async (scenario: 'session' | 'draft'): Promise<TypingCost> => {
+type ComposerRun = {
+  commits: number;
+  renderMs: number;
+  languageContextUpdates: number;
+  rendersByComponent: Map<string, number>;
+};
+
+/** Mounts a fresh composer, counts the renders `drive` causes, and unmounts it. */
+const countComposerRenders = async (
+  scenario: 'session' | 'draft',
+  drive: (view: InstanceType<typeof EditorView>) => Promise<void>,
+): Promise<ComposerRun> => {
   useDirectoryStore.setState({ currentDirectory: '/workspace' });
   useSessionUIStore.setState(scenario === 'session'
     ? { currentSessionId: 'ses_typing', currentSessionDirectory: '/workspace' }
@@ -217,7 +247,12 @@ const measureTyping = async (scenario: 'session' | 'draft'): Promise<TypingCost>
         </RuntimeAPIContext.Provider>,
       );
     });
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    await act(async () => {
+      // Home discovery queues a settings echo that can otherwise land during typing.
+      await ensureHomeDirectoryResolved();
+      await updateDesktopSettings({});
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
 
     const content = container.querySelector<HTMLElement>('.cm-content');
     const view = content ? EditorView.findFromDOM(content) : null;
@@ -236,30 +271,38 @@ const measureTyping = async (scenario: 'session' | 'draft'): Promise<TypingCost>
     renderMs = 0;
     renderedByName.clear();
     counting = true;
-    for (let index = 0; index < KEYSTROKES; index += 1) {
-      await act(async () => {
-        view.dispatch({ changes: { from: view.state.doc.length, insert: 'a' }, userEvent: 'input.type' });
-      });
-    }
+    await drive(view);
     counting = false;
-    // The instrument has to have fired: every keystroke reaches the editor.
-    expect(view.state.doc.length).toBe(KEYSTROKES);
-    const componentRenders = [...renderedByName.values()].reduce((sum, count) => sum + count, 0);
-    const cost: TypingCost = {
-      commits: commits / KEYSTROKES,
-      renderMs: renderMs / KEYSTROKES,
-      componentRenders: componentRenders / KEYSTROKES,
-      languageContextUpdates,
-      rendersByComponent: new Map(renderedByName),
-    };
-    console.log(`[${scenario}] commits/keystroke=${cost.commits} renderMs/keystroke=${cost.renderMs.toFixed(2)} componentRenders/keystroke=${cost.componentRenders} languageContextUpdates=${languageContextUpdates}`);
-    console.log([...renderedByName.entries()].map(([name, count]) => `${name}:${count / KEYSTROKES}`).sort().join(' '));
-    return cost;
+    return { commits, renderMs, languageContextUpdates, rendersByComponent: new Map(renderedByName) };
   } finally {
     counting = false;
     await act(async () => root.unmount());
     container.remove();
   }
+};
+
+/** Mounts a fresh composer, types KEYSTROKES characters, and reports the per-keystroke cost. */
+const measureTyping = async (scenario: 'session' | 'draft'): Promise<TypingCost> => {
+  const run = await countComposerRenders(scenario, async (view) => {
+    for (let index = 0; index < KEYSTROKES; index += 1) {
+      await act(async () => {
+        view.dispatch({ changes: { from: view.state.doc.length, insert: 'a' }, userEvent: 'input.type' });
+      });
+    }
+    // The instrument has to have fired: every keystroke reaches the editor.
+    expect(view.state.doc.length).toBe(KEYSTROKES);
+  });
+  const componentRenders = [...run.rendersByComponent.values()].reduce((sum, count) => sum + count, 0);
+  const cost: TypingCost = {
+    commits: run.commits / KEYSTROKES,
+    renderMs: run.renderMs / KEYSTROKES,
+    componentRenders: componentRenders / KEYSTROKES,
+    languageContextUpdates: run.languageContextUpdates,
+    rendersByComponent: run.rendersByComponent,
+  };
+  console.log(`[${scenario}] commits/keystroke=${cost.commits} renderMs/keystroke=${cost.renderMs.toFixed(2)} componentRenders/keystroke=${cost.componentRenders} languageContextUpdates=${cost.languageContextUpdates}`);
+  console.log([...run.rendersByComponent.entries()].map(([name, count]) => `${name}:${count / KEYSTROKES}`).sort().join(' '));
+  return cost;
 };
 
 afterAll(() => {
@@ -305,4 +348,182 @@ test('typing in an existing session re-renders only the composer shell and its e
 
 test('typing in a new-session draft re-renders only the composer shell and its editor', async () => {
   expectOnlyTheEditorFollowsTheText(await measureTyping('draft'));
+});
+
+const STREAMED_STEPS = 10;
+
+const streamedSession = (updated: number): Session => ({
+  id: 'ses_typing',
+  projectID: 'project',
+  directory: '/workspace',
+  title: 'Streaming',
+  time: { created: 1, updated },
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+});
+
+/**
+ * A streamed step replaces the directory's session list (`session.updated`
+ * moves `time.updated`); nothing the composer shows changes with it.
+ *
+ * Before this guard (same scenario, 10 steps): ChatInputComponent and the
+ * editor rendered once per step, through the session list read for the
+ * file-search directory.
+ */
+test('a streaming session updating its record does not re-render the composer', async () => {
+  const run = await countComposerRenders('session', async () => {
+    // The mounted provider's store, so read only once it is mounted.
+    const store = getSyncChildStores().ensureChild('/workspace', { bootstrap: false });
+    await act(async () => { store.setState({ session: [streamedSession(1)] }); });
+    renderedByName.clear();
+    for (let step = 2; step <= STREAMED_STEPS + 1; step += 1) {
+      await act(async () => { store.setState({ session: [streamedSession(step)] }); });
+    }
+    // The stimulus has to have landed: the store holds the last step.
+    expect(store.getState().session[0]?.time.updated).toBe(STREAMED_STEPS + 1);
+  });
+  expect(run.rendersByComponent.get('ChatInputComponent') ?? 0).toBe(0);
+  expect(run.rendersByComponent.get('ComposerEditor') ?? 0).toBe(0);
+});
+
+type MountedComposer = { container: HTMLDivElement; root: Root; view: CodeMirrorView };
+
+const SEARCH_SESSION_ID = 'ses_prompt_history_search';
+
+/** Mounts the composer on a fixed session and sets its draft text to `draftText`. */
+const mountComposer = async (draftText: string): Promise<MountedComposer> => {
+  useDirectoryStore.setState({ currentDirectory: '/workspace' });
+  useSessionUIStore.setState({ currentSessionId: SEARCH_SESSION_ID, currentSessionDirectory: '/workspace' });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <RuntimeAPIContext.Provider value={runtimeAPIs}>
+        <ThemeSystemProvider>
+          <I18nProvider>
+            <SyncProvider sdk={sdk} directory="/workspace">
+              <ChatInput />
+            </SyncProvider>
+          </I18nProvider>
+        </ThemeSystemProvider>
+      </RuntimeAPIContext.Provider>,
+    );
+  });
+  await flushFrames();
+  const content = container.querySelector<HTMLElement>('.cm-content');
+  const view = content ? EditorView.findFromDOM(content) : null;
+  if (!view) throw new Error('The composer editor did not mount');
+  await act(async () => {
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: draftText } });
+  });
+  return { container, root, view };
+};
+
+const unmountComposer = async (composer: MountedComposer) => {
+  await act(async () => composer.root.unmount());
+  composer.container.remove();
+};
+
+/** Lets pending animation frames and their scheduled focus work run. */
+const flushFrames = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+
+const keyEvent = (key: string, init: KeyboardEventInit = {}) => new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
+
+const pressKey = async (target: Element, key: string, init: KeyboardEventInit = {}) => {
+  await act(async () => {
+    target.dispatchEvent(keyEvent(key, init));
+  });
+};
+
+const openPromptHistorySearch = (composer: MountedComposer) => pressKey(composer.view.contentDOM, 'ArrowUp', { ctrlKey: true });
+
+const searchInput = (composer: MountedComposer) => composer.container.querySelector<HTMLInputElement>('[data-prompt-history-search-input]');
+
+/** Seeds the global bucket the composer reads for ordinary and searched recall; the newest entry is the last one. */
+const seedGlobalHistory = (text: string) => {
+  const identity = createInputHistoryIdentity(getRuntimeKey(), '/workspace', SEARCH_SESSION_ID);
+  if (!identity) throw new Error('No input history identity for the test runtime');
+  useInputHistoryStore.getState().applyScope('global');
+  useInputHistoryStore.getState().appendSubmissions(identity, [{ text, attachmentKeys: [], restorableAttachments: [] }]);
+};
+
+test('Escape closes the history search and returns focus to the composer', async () => {
+  const composer = await mountComposer('draft text');
+  try {
+    await openPromptHistorySearch(composer);
+    const input = searchInput(composer);
+    if (!input) throw new Error('The history search did not open');
+    expect(document.activeElement === input).toBe(true);
+    await pressKey(input, 'Escape');
+    await flushFrames();
+    expect(searchInput(composer) === null).toBe(true);
+    expect(composer.view.hasFocus).toBe(true);
+    expect(composer.view.state.doc.toString()).toBe('draft text');
+  } finally {
+    await unmountComposer(composer);
+  }
+});
+
+test('reopening the history search before the closing focus frame runs keeps the new search focused', async () => {
+  const composer = await mountComposer('draft text');
+  try {
+    await openPromptHistorySearch(composer);
+    const first = searchInput(composer);
+    if (!first) throw new Error('The history search did not open');
+    // Synchronous act: both commits land before any timer, so the close's
+    // deferred composer focus is still pending when the search reopens.
+    act(() => { first.dispatchEvent(keyEvent('Escape')); });
+    act(() => { composer.view.contentDOM.dispatchEvent(keyEvent('ArrowUp', { ctrlKey: true })); });
+    const reopened = searchInput(composer);
+    if (!reopened) throw new Error('The history search did not reopen');
+    await flushFrames();
+    // Identity checks, not toBe: a failing DOM-node diff prints the whole tree.
+    expect(searchInput(composer) === reopened).toBe(true);
+    expect(document.activeElement === reopened).toBe(true);
+    expect(composer.view.state.doc.toString()).toBe('draft text');
+  } finally {
+    await unmountComposer(composer);
+  }
+});
+
+test('reopening the history search after picking a prompt keeps the new search focused', async () => {
+  seedGlobalHistory('older prompt');
+  const composer = await mountComposer('');
+  try {
+    await openPromptHistorySearch(composer);
+    const input = searchInput(composer);
+    if (!input) throw new Error('The history search did not open');
+    act(() => { input.dispatchEvent(keyEvent('Enter')); });
+    expect(composer.view.state.doc.toString()).toBe('older prompt');
+    // Reopen in the same synchronous turn as the pick, before its focus frame.
+    act(() => { composer.view.contentDOM.dispatchEvent(keyEvent('ArrowUp', { ctrlKey: true })); });
+    const reopened = searchInput(composer);
+    if (!reopened) throw new Error('The history search did not reopen');
+    await flushFrames();
+    expect(searchInput(composer) === reopened).toBe(true);
+    expect(document.activeElement === reopened).toBe(true);
+    expect(composer.view.state.doc.toString()).toBe('older prompt');
+  } finally {
+    await unmountComposer(composer);
+  }
+});
+
+test('a picked prompt with CRLF line breaks leaves the caret at the end of the editor text', async () => {
+  seedGlobalHistory('first\r\nsecond');
+  const composer = await mountComposer('');
+  try {
+    await openPromptHistorySearch(composer);
+    const input = searchInput(composer);
+    if (!input) throw new Error('The history search did not open');
+    await pressKey(input, 'Enter');
+    await flushFrames();
+    const end = composer.view.state.doc.length;
+    expect(composer.view.state.doc.toString()).toBe('first\nsecond');
+    expect(composer.view.state.selection.main.head).toBe(end);
+    expect(composer.view.state.selection.main.empty).toBe(true);
+    expect(composer.view.hasFocus).toBe(true);
+  } finally {
+    await unmountComposer(composer);
+  }
 });

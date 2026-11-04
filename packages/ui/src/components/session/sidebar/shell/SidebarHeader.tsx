@@ -261,7 +261,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
         ['a-z', 'sessions.sidebar.header.projectSort.aToZ'],
       ] as const, worktreeSortOrder, (order) => {
         setWorktreeSortOrder(order);
-        void updateDesktopSettings({ sidebarWorktreeSortOrder: order });
+        void updateDesktopSettings({ sidebarWorktreeSortOrder: order } as Record<string, unknown>);
       }) : null}
       {showProjectDisplayControls ? choiceSubmenu('sessions.sidebar.header.projectDisplay.label', [
         ['all', 'sessions.sidebar.header.projectDisplay.all'],

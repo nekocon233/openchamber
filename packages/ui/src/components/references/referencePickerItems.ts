@@ -40,7 +40,10 @@ export const referenceNumberLabel = (reference: GitHubReference): string => (
     reference.kind === 'pull' && reference.provider === 'gitlab' ? `!${reference.number}` : `#${reference.number}`
 );
 
-export const referencePickerItemKey = (item: ReferencePickerItem | ReferencePickerSelection): string => {
+export const referencePickerItemKey = (
+    item: ReferencePickerItem | ReferencePickerSelection | { source: 'tracker'; provider?: string; item: { identifier: string } },
+): string => {
+    if (item.source === 'tracker') return `${item.provider ?? 'linear'}:${item.item.identifier.toUpperCase()}`;
     if (item.source === 'linear') return `linear:${item.issue.identifier.toUpperCase()}`;
     const { sourceRepo, number, kind, provider } = item.reference;
     // GitLab numbers issues (#1) and merge requests (!1) separately, so the
@@ -99,6 +102,7 @@ export const REPOSITORY_STATE_LABEL_KEYS = {
     open: 'references.picker.filter.open',
     closed: 'references.picker.filter.state.closed',
     merged: 'references.picker.filter.state.merged',
+    unanswered: 'references.picker.filter.state.unanswered',
     all: 'references.picker.filter.state.all',
 } as const satisfies Record<RepositoryReferenceState, I18nKey>;
 
@@ -121,6 +125,9 @@ type StateLook = StateGlyph & { labelKey: I18nKey };
  * (`prVisualStateOf`); until then it reads as open.
  */
 export const githubStateLook = (reference: GitHubReference, status: GitHubPullStatus | null): StateLook => {
+    if (reference.kind === 'discussion') {
+        return { icon: 'chat-1', color: 'var(--pr-open)', labelKey: 'references.picker.state.open' };
+    }
     if (reference.kind === 'issue') {
         switch (reference.state) {
             case 'open':
@@ -213,3 +220,12 @@ export const labelColor = (color: string | null | undefined): string | null => {
     const hex = color.startsWith('#') ? color.slice(1) : color;
     return /^[0-9a-f]{6}$/i.test(hex) ? `#${hex}` : null;
 };
+
+export const trackerOfSource = (source: string): string | null => {
+    if (source === 'linear' || source === 'tracker') return 'linear';
+    return source.startsWith('tracker:') ? source.slice('tracker:'.length) : null;
+};
+
+export const trackerReferenceSource = (_provider?: string): 'linear' => 'linear';
+export const TRACKER_PEOPLE_FILTERS = [...LINEAR_PEOPLE_FILTERS] as const;
+export const TRACKER_PRIORITY_FILTERS = [...LINEAR_PRIORITY_FILTERS] as const;

@@ -1,7 +1,16 @@
 import { createRealpathCache } from '../path-realpath-cache.js';
 import { redactGitText } from '../git/redaction.js';
 import { resolveByteRange } from './byte-range.js';
+import { injectPreviewBridge } from './preview-bridge.js';
 import { createWorkspaceFileNameIndex } from './workspace-file-names.js';
+import { createFsSearchRuntime, createGitCheckIgnoreTimeoutMs } from './search.js';
+import {
+  CONTENT_SEARCH_DEFAULT_LIMIT,
+  CONTENT_SEARCH_MAX_LIMIT,
+  CONTENT_SEARCH_MAX_QUERY_LENGTH,
+  createContentSearchRuntime,
+} from './content-search.js';
+import { isString } from '../shared/guards.js';
 import nodeFsPromises from 'node:fs/promises';
 import nodePath from 'node:path';
 
@@ -127,12 +136,6 @@ const createGitReadCacheTtlMs = () => {
   const raw = Number(process.env.OPENCHAMBER_GIT_READ_CACHE_TTL_MS);
   if (Number.isFinite(raw) && raw >= 0) return raw;
   return 30 * 1000;
-};
-
-const createGitCheckIgnoreTimeoutMs = () => {
-  const raw = Number(process.env.OPENCHAMBER_GIT_CHECK_IGNORE_TIMEOUT_MS);
-  if (Number.isFinite(raw) && raw >= 0) return raw;
-  return 2500;
 };
 
 const createUploadMaxBytes = () => {
@@ -410,7 +413,10 @@ const GIT_DIRS_SKIP_LIST = new Set(['node_modules', 'dist', 'build', '.venv', 't
 // Walks rootPath and returns every nested git repository path (a directory
 // containing a `.git` entry — a directory, a worktree pointer file, or a
 // symlink). A repository boundary stops descent: nested repos inside repos
-// are not reported. The root itself, when it is a repo, yields no results.
+// are not reported. The root's own `.git` is the exception and the walk goes
+// on below it, so a root repository's submodules and nested checkouts are
+// reported too; the client decides whether the root or a discovered repository
+// is the one a surface works in.
 // Symlinked directories are followed, the way the file tree follows them: a
 // parent folder of links to repositories kept elsewhere is a common way to
 // group them into one project. Each real directory is walked once, so a link
@@ -478,10 +484,8 @@ const findGitDirectories = async ({ rootPath, fsPromises, path: pathModule, maxD
       subdirectories.push(dirent.name);
     }
 
-    if (isRepoBoundary) {
-      if (dir !== rootPath) {
-        results.push(dir);
-      }
+    if (isRepoBoundary && dir !== rootPath) {
+      results.push(dir);
       return;
     }
 
@@ -507,8 +511,14 @@ const deriveCloneDirectoryName = (remoteUrl) => {
 };
 
 const resolveReadPathFromContext = async ({ req, targetPath, scope, resolveProjectDirectory, path, os, fsPromises, normalizeDirectoryPath, managedRoots, chatsRoots }) => {
+  // Resolved file targets are exact names, not pasted directory inputs.
+  const normalizeReadPath = (value) => (
+    value === targetPath && typeof value === 'string' && path.isAbsolute(value)
+      ? value
+      : normalizeDirectoryPath(value)
+  );
   if (req.query?.allowOutsideWorkspace === 'true') {
-    const normalized = normalizeDirectoryPath(targetPath);
+    const normalized = normalizeReadPath(targetPath);
     if (!normalized || typeof normalized !== 'string') {
       return { ok: false, error: 'Path is required' };
     }
@@ -523,7 +533,7 @@ const resolveReadPathFromContext = async ({ req, targetPath, scope, resolveProje
     path,
     os,
     fsPromises,
-    normalizeDirectoryPath,
+    normalizeDirectoryPath: normalizeReadPath,
     managedRoots,
     chatsRoots,
   });
@@ -607,6 +617,8 @@ export const registerFsRoutes = (app, dependencies) => {
     resolveProjectDirectory,
     buildAugmentedPath,
     resolveGitBinaryForSpawn,
+    // Content search needs ripgrep; without a resolver the route answers 501.
+    resolveRipgrepBinary = async () => null,
     openchamberUserConfigRoot,
     managedChatsRoot,
     cloneRepository,
@@ -1013,6 +1025,114 @@ export const registerFsRoutes = (app, dependencies) => {
     return res.json({ paths: await workspaceFileNames.find(project.directory, name) });
   });
 
+  app.get('/api/fs/search', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const query = isString(req.query.query) ? String(req.query.query) : '';
+    const requestedLimit = isString(req.query.limit) ? Number.parseInt(String(req.query.limit), 10) : Number.NaN;
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.min(Math.max(1, requestedLimit), 500)
+      : 60;
+    const includeHidden = req.query.includeHidden === 'true';
+    const respectGitignore = req.query.respectGitignore !== 'false';
+
+    const rawPath = typeof req.query.directory === 'string' && req.query.directory.trim().length > 0
+      ? req.query.directory.trim()
+      : '';
+    let requestedPath = '';
+    let resolvedPath = '';
+    try {
+      if (rawPath) {
+        requestedPath = path.resolve(normalizeDirectoryPath(rawPath));
+      } else {
+        const project = await resolveProjectDirectory(req);
+        if (!project.directory) {
+          return res.status(400).json({ error: project.error || 'Active workspace is required' });
+        }
+        requestedPath = path.resolve(normalizeDirectoryPath(project.requestedDirectory || project.directory));
+      }
+      resolvedPath = await realpathCache.resolve(requestedPath);
+      const stats = await fsPromises.stat(resolvedPath);
+      if (!stats.isDirectory()) {
+        return res.status(400).json({ error: 'Specified path is not a directory', reason: 'not-directory' });
+      }
+    } catch (error) {
+      const err = error;
+      const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
+      if (code === 'ENOENT') {
+        return res.status(404).json({ error: 'Directory not found', reason: 'not-found' });
+      }
+      if (isOsPermissionError(err)) {
+        return sendOsPermissionDenied(res, 'Access to directory denied');
+      }
+      return res.status(500).json({ error: (error && error.message) || 'Failed to search files' });
+    }
+
+    const fsSearch = createFsSearchRuntime({ fsPromises, path, spawn, resolveGitBinaryForSpawn, workspaceSearch: true });
+    const results = await fsSearch.searchFilesystemFiles(resolvedPath, {
+      query,
+      limit,
+      includeHidden,
+      respectGitignore,
+    });
+
+    const mapped = results.map((file) => ({
+      name: file.name,
+      path: path.join(requestedPath, file.relativePath),
+      relativePath: file.relativePath,
+      extension: file.extension,
+    }));
+
+    return res.json({ files: mapped });
+  });
+
+  // Find in files: lines of workspace files containing a text or a regex,
+  // searched by ripgrep (content-search.js). Hitting the limit is a normal
+  // answer with `stopped: 'limit'`; a failed search is never an empty one.
+  // This module loads with Node built-ins only (see the packaged-desktop
+  // module-load test), so the query is read with the shared guards.
+  const contentSearch = createContentSearchRuntime({ spawn, path, resolveRipgrepBinary });
+  app.get('/api/fs/find-in-files', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const query = isString(req.query.query) ? String(req.query.query) : '';
+    if (!query.trim() || query.length > CONTENT_SEARCH_MAX_QUERY_LENGTH) {
+      return res.status(400).json({ error: 'A search query is required' });
+    }
+    const requestedLimit = isString(req.query.limit) ? Number.parseInt(String(req.query.limit), 10) : Number.NaN;
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.min(Math.max(1, requestedLimit), CONTENT_SEARCH_MAX_LIMIT)
+      : CONTENT_SEARCH_DEFAULT_LIMIT;
+    const project = await resolveProjectDirectory(req);
+    if (!project.directory) {
+      return res.status(400).json({ error: project.error || 'Active workspace is required' });
+    }
+
+    // A client that moved on (a new keystroke, a closed panel) ends the
+    // ripgrep process instead of letting it finish for nobody.
+    const abort = new AbortController();
+    res.on('close', () => abort.abort());
+    const result = await contentSearch.searchFileContents(project.directory, {
+      resultRoot: project.requestedDirectory,
+      query,
+      regex: req.query.regex === 'true',
+      limit,
+      includeHidden: req.query.includeHidden === 'true',
+      respectGitignore: req.query.respectGitignore !== 'false',
+      signal: abort.signal,
+    });
+    switch (result.status) {
+      case 'ok':
+        return res.json({ matches: result.matches, stopped: result.stopped });
+      case 'unavailable':
+        return res.status(501).json({ error: 'ripgrep is not available on this server', reason: 'search-unavailable' });
+      case 'invalid-pattern':
+        return res.status(400).json({ error: result.message, reason: 'invalid-pattern' });
+      case 'aborted':
+        return undefined;
+      default:
+        return res.status(500).json({ error: result.message, reason: 'search-failed' });
+    }
+  });
+
   app.post('/api/fs/directory-stats', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const requested = Array.isArray(req.body?.paths) ? req.body.paths : null;
@@ -1057,7 +1177,7 @@ export const registerFsRoutes = (app, dependencies) => {
   });
 
   app.get('/api/fs/stat', async (req, res) => {
-    const filePath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+    const filePath = typeof req.query.path === 'string' ? req.query.path : '';
     const optional = req.query.optional === 'true';
     if (!filePath) {
       return res.status(400).json({ error: 'Path is required' });
@@ -1083,9 +1203,17 @@ export const registerFsRoutes = (app, dependencies) => {
         return res.status(400).json({ error: resolved.error });
       }
 
-      const canonicalPath = await fsPromises.realpath(resolved.resolved);
-
-      const stats = await fsPromises.stat(canonicalPath);
+      let canonicalPath;
+      let stats;
+      try {
+        canonicalPath = await fsPromises.realpath(resolved.resolved);
+        stats = await fsPromises.stat(canonicalPath);
+      } catch (error) {
+        if (optional && ['ENOENT', 'ENOTDIR', 'EINVAL', 'ENAMETOOLONG'].includes(error?.code)) {
+          return res.json({ path: filePath, exists: false });
+        }
+        throw error;
+      }
       if (!stats.isFile()) {
         return res.status(400).json({ error: 'Specified path is not a file' });
       }
@@ -1108,7 +1236,7 @@ export const registerFsRoutes = (app, dependencies) => {
   });
 
   app.get('/api/fs/read', async (req, res) => {
-    const filePath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+    const filePath = typeof req.query.path === 'string' ? req.query.path : '';
     const optional = req.query.optional === 'true';
     if (!filePath) {
       return res.status(400).json({ error: 'Path is required' });
@@ -1174,7 +1302,7 @@ export const registerFsRoutes = (app, dependencies) => {
   });
 
   app.get('/api/fs/raw', async (req, res) => {
-    const filePath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+    const filePath = typeof req.query.path === 'string' ? req.query.path : '';
     if (!filePath) {
       return res.status(400).json({ error: 'Path is required' });
     }
@@ -1354,7 +1482,9 @@ export const registerFsRoutes = (app, dependencies) => {
 
       const ext = path.extname(canonicalPath).toLowerCase();
       const mimeType = FILE_MIME_MAP[ext] || 'application/octet-stream';
-      const content = await fsPromises.readFile(canonicalPath);
+      const bytes = await fsPromises.readFile(canonicalPath);
+      // Lets the Files view annotate the page; see preview-bridge.js.
+      const content = mimeType === 'text/html' ? injectPreviewBridge(bytes) : bytes;
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       // Opened directly in a tab, the page is still an opaque-origin sandbox.

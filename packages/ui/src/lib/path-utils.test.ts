@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   getDirectoryForFilePath,
+  getDisambiguatingFolders,
   getRelativeFilePath,
   isAbsoluteFilePath,
   isFilePathWithinDirectory,
@@ -10,6 +11,16 @@ import {
 } from './path-utils';
 
 describe('path-utils', () => {
+  test('preserves filename whitespace only when requested', () => {
+    const options = { preserveWhitespace: true };
+    expect(normalizeFilePath('  report.md  ')).toBe('report.md');
+    expect(normalizeFilePath('  report.md  ', options)).toBe('  report.md  ');
+    expect(toAbsoluteFilePath('/repo', '  report.md  ', options)).toBe('/repo/  report.md  ');
+    expect(toAbsoluteFilePath('/repo', '/other/report.md  ', options)).toBe('/other/report.md  ');
+    expect(toAbsoluteFilePath('/repo', '  /other.md', options)).toBe('/repo/  /other.md');
+    expect(toAbsoluteFilePath('C:/repo', '../report.md  ', options)).toBe('C:/report.md  ');
+  });
+
   test('normalizes Windows paths without losing drive roots', () => {
     expect(normalizeFilePath('C:\\Users\\Bohdan Triapitsyn\\projects\\openchamber\\')).toBe('C:/Users/Bohdan Triapitsyn/projects/openchamber');
     expect(normalizeFilePath('C:/')).toBe('C:/');
@@ -67,5 +78,26 @@ describe('path-utils', () => {
       'C:/Users/Bohdan Triapitsyn/projects/openchamber/packages/ui/Button.tsx',
     )).toBe('C:/Users/Bohdan Triapitsyn/projects/openchamber/packages/ui');
     expect(getDirectoryForFilePath('', '/tmp/file.txt')).toBe('/tmp');
+  });
+
+  test('names the folders that tell same-named files apart', () => {
+    const folders = getDisambiguatingFolders([
+      'README.md',
+      'docs/README.md',
+      'packages/ui/src/index.ts',
+      'packages/web/src/index.ts',
+      'src/App.tsx',
+    ]);
+    expect(Object.fromEntries(folders)).toEqual({
+      'docs/README.md': 'docs',
+      'packages/ui/src/index.ts': 'ui/src',
+      'packages/web/src/index.ts': 'web/src',
+    });
+  });
+
+  test('shows all folders of a path that ends inside another', () => {
+    const folders = getDisambiguatingFolders(['a/README.md', 'x/a/README.md']);
+    expect(folders.get('a/README.md')).toBe('a');
+    expect(folders.get('x/a/README.md')).toBe('x/a');
   });
 });

@@ -9,8 +9,8 @@ import {
 } from './config-mutation-response.js';
 import { OPENCODE_CONFIG_DIR, readConfigLayers } from './shared.js';
 import { settingsSurfaceOf } from './settings-files.js';
-import { parseWebSearchSelection, readSectionEntry, toProviderEntity } from './config-v2.js';
-import { getWebSearchSource, setWarmingEnabled, setWebSearchSelection } from './websearch-config.js';
+import { compactionUpdateSchema, parseWebSearchSelection, readSectionEntry, toProviderEntity } from './config-v2.js';
+import { getWebSearchSource, setCompactionSettings, setWarmingEnabled, setWebSearchSelection } from './websearch-config.js';
 import {
   CREDENTIAL_LIST_ERROR,
   ENTERPRISE_MODE_ERROR,
@@ -21,6 +21,9 @@ import {
 import { discoverProviderModels } from './model-discovery.js';
 import { readDisabledProviders, setProviderDisabled } from './providers.js';
 import { vcsInitRefusal, vcsInitRefusalBody } from '../git/repository-root.js';
+
+// Version reads use the same short deadline as the health probe of `/api/info`.
+const OPENCODE_INFO_TIMEOUT_MS = 3_000;
 
 export const registerOpenCodeRoutes = (app, dependencies) => {
   const {
@@ -177,6 +180,7 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
         fetch(buildOpenCodeUrl('/api/info', ''), {
           method: 'GET',
           headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
+          signal: AbortSignal.timeout(OPENCODE_INFO_TIMEOUT_MS),
         }),
         fetchLatestOpenCodeVersion(),
       ]);
@@ -219,7 +223,7 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
       const healthResponse = await fetch(buildOpenCodeUrl('/api/info', ''), {
         method: 'GET',
         headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
-        signal: AbortSignal.timeout(3_000),
+        signal: AbortSignal.timeout(OPENCODE_INFO_TIMEOUT_MS),
       });
       const info = await healthResponse.json().catch(() => null);
       if (!healthResponse.ok) {
@@ -265,6 +269,7 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
       const healthResponse = await fetch(buildOpenCodeUrl('/api/info', ''), {
         method: 'GET',
         headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
+        signal: AbortSignal.timeout(OPENCODE_INFO_TIMEOUT_MS),
       });
       const info = await healthResponse.json().catch(() => null);
       if (!healthResponse.ok) {
@@ -537,6 +542,22 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     } catch (error) {
       console.error('Failed to save session warming:', error);
       return res.status(500).json({ error: error.message || 'Failed to save session warming' });
+    }
+  });
+
+  // Compaction settings (`compaction` and `experimental.background_compaction`
+  // in OpenCode config), written the same way. Settings reads them from OpenCode.
+  app.put('/api/config/compaction', (req, res) => {
+    const parsed = compactionUpdateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'buffer must be a token count, a share such as "20%" or null, keepTokens a token count or null, auto and background booleans' });
+    }
+    try {
+      const result = setCompactionSettings(parsed.data);
+      return res.json({ success: true, changed: result.changed });
+    } catch (error) {
+      console.error('Failed to save compaction settings:', error);
+      return res.status(500).json({ error: error.message || 'Failed to save compaction settings' });
     }
   });
 

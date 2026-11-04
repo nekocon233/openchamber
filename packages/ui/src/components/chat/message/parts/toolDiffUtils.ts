@@ -1,4 +1,5 @@
 import { carriesFileDiffs, isEditTool, isPatchTool, isWriteTool } from '@/lib/opencode/tools';
+import type { Metadata } from '@/lib/opencode/model';
 import { parsePatchFiles } from '@pierre/diffs';
 
 import { isToolDiffPreviewOversized } from './toolDiffPreview';
@@ -10,6 +11,11 @@ export type DiffPatchEntry = {
     patch: string;
     renderMode: 'diff' | 'text';
 };
+
+/** Native replacement arguments have no coordinates in the complete file. */
+export const isReplacementPreview = (metadata: Metadata | undefined): boolean => (
+    metadata?.nativeBackend === 'antigravity' && metadata.nativeDiffScope === 'replacement'
+);
 
 const APPLY_PATCH_ENVELOPE_PATTERN = /^\*\*\*\s+(?:Begin Patch|End Patch|Add File:|Update File:|Delete File:|Move to:)/m;
 const HUNK_HEADER_PATTERN = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/m;
@@ -229,10 +235,10 @@ const getMetadataFileForPath = (
 
 export const getPrimaryDiffFromMetadata = (
     toolName: string,
-    metadata?: Record<string, unknown>,
+    metadata?: Metadata,
     preferredPath?: string,
 ): string | undefined => {
-    if (!metadata || !supportsDiffMetadata(toolName)) {
+    if (!metadata || !supportsDiffMetadata(toolName) || isReplacementPreview(metadata)) {
         return undefined;
     }
 
@@ -292,10 +298,10 @@ export const extractFirstChangedLineFromDiff = (diffText: string): number | unde
 
 export const getFirstChangedLineFromMetadata = (
     toolName: string,
-    metadata?: Record<string, unknown>,
+    metadata?: Metadata,
     preferredPath?: string,
 ): number | undefined => {
-    if (!metadata || !supportsDiffMetadata(toolName)) {
+    if (!metadata || !supportsDiffMetadata(toolName) || isReplacementPreview(metadata)) {
         return undefined;
     }
 
@@ -332,12 +338,13 @@ export const getFirstChangedLineFromMetadata = (
 export const resolveToolQuickOpenTarget = (
     toolName: string,
     input: Record<string, unknown> | undefined,
-    metadata: Record<string, unknown> | undefined,
+    metadata: Metadata | undefined,
 ): { filePath: string; line?: number; patch?: string } | null => {
     const filePath = getPrimaryToolPath(toolName, input, metadata);
     if (!filePath) {
         return null;
     }
+    if (isReplacementPreview(metadata)) return { filePath };
 
     const entries = getDiffPatchEntries(metadata, getToolFallbackDiff(metadata), (path) => path);
     const matchedEntry = entries.find((entry) => entry.filePath === filePath)

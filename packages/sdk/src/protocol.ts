@@ -46,6 +46,7 @@ import {
   isGuestFilePath,
   isGuestRequestPath,
   resolveHostRequestErrorCode,
+  HOST_REQUEST_ERROR_CODES,
   type GuestMessage,
   type HostMessage,
 } from './contract.ts';
@@ -161,6 +162,17 @@ const fileStatResultPayloadSchema = z.object({
 const generateResultPayloadSchema = z.object({
   text: z.string().max(GUEST_GENERATE_TEXT_MAX),
 });
+
+const generateRequestSchema = z.object({
+  prompt: z.string().trim().min(1).max(GUEST_GENERATE_PROMPT_MAX),
+  system: z.string().trim().min(1).max(GUEST_GENERATE_SYSTEM_MAX).optional(),
+  maxOutputTokens: z.number().int().min(1).max(GUEST_GENERATE_OUTPUT_TOKENS_MAX).optional(),
+});
+
+const lateGenerateResultSchema = z.discriminatedUnion('ok', [
+  z.object({ request: generateRequestSchema, ok: z.literal(true), result: generateResultPayloadSchema }),
+  z.object({ request: generateRequestSchema, ok: z.literal(false), code: z.enum(HOST_REQUEST_ERROR_CODES), error: z.string().min(1) }),
+]);
 
 const shellOutputResultPayloadSchema = z.object({
   output: z.string(),
@@ -431,6 +443,7 @@ export const hostMessageSchema = z.union([
     type: z.literal('file-saved'),
     payload: z.object({ version: z.string().max(GUEST_FILE_EDITOR_VERSION_MAX) }),
   }),
+  z.object({ ...envelope, type: z.literal('generate-late'), payload: lateGenerateResultSchema }),
 ]);
 
 const filePathSchema = z.string().min(1).max(GUEST_FILE_PATH_MAX).refine(isGuestFilePath);
@@ -624,11 +637,7 @@ export const guestMessageSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('generate'),
     id: z.string().min(1),
-    payload: z.object({
-      prompt: z.string().trim().min(1).max(GUEST_GENERATE_PROMPT_MAX),
-      system: z.string().trim().min(1).max(GUEST_GENERATE_SYSTEM_MAX).optional(),
-      maxOutputTokens: z.number().int().min(1).max(GUEST_GENERATE_OUTPUT_TOKENS_MAX).optional(),
-    }),
+    payload: generateRequestSchema,
   }),
   z.object({
     ...envelope,
@@ -684,6 +693,7 @@ export const guestMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...envelope, type: z.literal('file-save') }),
   z.object({ ...envelope, type: z.literal('file-unsupported') }),
+  z.object({ ...envelope, type: z.literal('generate-late-listen') }),
 ]);
 
 type ParsedHostMessage = z.infer<typeof hostMessageSchema>;

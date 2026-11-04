@@ -25,6 +25,8 @@ const storedPolicySchema = z.object({
 const readStoredPolicy = (value) => storedPolicySchema.parse(value ?? {});
 
 const createdSessionSchema = z.object({ id: z.string().min(1), parentID: z.string().nullish() });
+const forkedSessionSchema = z.object({ sessionID: z.string().min(1), parentID: z.string().min(1) })
+  .refine(({ sessionID, parentID }) => sessionID !== parentID);
 
 const hasLegacyEntries = (stored) => Object.values(stored.sessions).some((entry) => entry === true || entry === false);
 
@@ -59,6 +61,9 @@ export function createPermissionAutoAcceptRuntime({
   // What a pre-modes `true` becomes: `safety` when the old global safety-net
   // switch was on, else `auto`. Asked only while converting such a policy.
   resolveLegacyEnabledMode = async () => 'auto',
+  // The mode a new top-level session starts in. The server inside an isolated space reads the
+  // file the host writes instead, since its own settings hold no default.
+  readDefaultMode = async () => (await readSettingsFromDiskMigrated())?.[DEFAULT_MODE_SETTINGS_KEY],
   fetchImpl = fetch,
   retryDelaysMs = RETRY_DELAYS_MS,
   requestTimeoutMs = REQUEST_TIMEOUT_MS,
@@ -68,6 +73,7 @@ export function createPermissionAutoAcceptRuntime({
   let loadPromise = null;
   let writePromise = Promise.resolve();
   const sessions = new Map();
+  const pendingForkModes = new Map();
   const inFlight = new Map();
   const reconcilePromises = new Map();
   // What the runtime did with each recent request, so notifications can tell a
@@ -115,7 +121,7 @@ export function createPermissionAutoAcceptRuntime({
   };
 
   const persistUpdate = (update) => {
-    writePromise = writePromise.then(async () => {
+    const result = writePromise.then(async () => {
       const next = update(policy);
       await persistSettings({ [SETTINGS_KEY]: next });
       policy = next;
@@ -126,7 +132,9 @@ export function createPermissionAutoAcceptRuntime({
       });
       return snapshot();
     });
-    return writePromise;
+    // Only this caller sees a failed save; the next update still writes.
+    writePromise = result.catch(() => {});
+    return result;
   };
 
   /**
@@ -247,6 +255,17 @@ export function createPermissionAutoAcceptRuntime({
       currentDirectory = info.directory ?? currentDirectory;
     }
     return DEFAULT_SESSION_MODE;
+  };
+
+  const inheritForkMode = async (sessionId, sourceId, directory) => {
+    await load();
+    if (Object.hasOwn(policy.sessions, sessionId)) return;
+    const mode = await resolveLineageMode(sourceId, directory);
+    await persistUpdate((current) => (Object.hasOwn(current.sessions, sessionId) ? current : {
+      ...current,
+      sessions: { ...current.sessions, [sessionId]: mode },
+      revision: current.revision + 1,
+    }));
   };
 
   /** The nearest explicit mode up the session's lineage; unknown lineage fails closed to `ask`. */
@@ -382,6 +401,20 @@ export function createPermissionAutoAcceptRuntime({
   const processEvent = (event) => {
     const directory = typeof event?.directory === 'string' && event.directory !== 'global' ? event.directory : undefined;
     for (const payload of event?.translated?.() ?? []) {
+      if (payload.type === 'session.forked') {
+        const fork = forkedSessionSchema.safeParse(payload.properties);
+        if (!fork.success || pendingForkModes.has(fork.data.sessionID)) continue;
+        const { sessionID, parentID } = fork.data;
+        // A fork is an independent session. Copy its source's effective mode
+        // once, without treating the fork event's parentID as subagent lineage.
+        const task = inheritForkMode(sessionID, parentID, directory)
+          .finally(() => { pendingForkModes.delete(sessionID); });
+        pendingForkModes.set(sessionID, task);
+        void task.catch((error) => {
+          console.warn('[permission-auto-accept] failed to inherit the fork mode:', error?.message ?? error);
+        });
+        continue;
+      }
       if (payload.type === 'session.created' || payload.type === 'session.updated') {
         const info = payload.properties?.info;
         rememberSession(info, directory ?? payload.properties?.directory, { complete: payload.type === 'session.created' });

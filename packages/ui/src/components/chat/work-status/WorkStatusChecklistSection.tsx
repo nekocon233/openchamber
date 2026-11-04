@@ -18,7 +18,7 @@ const ITEM_STATUS_TONES = { pending: 'muted', in_progress: 'info', completed: 's
 export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId: string | null; directory: string | null }) {
   const { t } = useI18n();
   const backend = useNativeSessionBackend(sessionId, directory);
-  const enabled = Boolean(sessionId && directory && (backend === 'claude' || backend === 'deepseek'));
+  const enabled = Boolean(sessionId && directory && (backend === 'claude' || backend === 'deepseek' || backend === 'antigravity'));
   const state = useSessionNativeChecklist(sessionId, directory, { enabled, visible: false });
   const { openTasks } = useWorkStatusNavigation(directory);
   const snapshot = 'snapshot' in state ? state.snapshot : null;
@@ -33,7 +33,7 @@ export function WorkStatusChecklistSection({ sessionId, directory }: { sessionId
   // With nothing to expand into, the section says why rather than disappearing:
   // it is the only place a reader is told the checklist could not be read.
   const empty = state.status === 'unsupported' ? t('chat.nativeTasks.unsupported')
-    : state.status === 'unavailable' ? t('chat.nativeTasks.checklistUnavailable')
+    : state.status === 'unavailable' ? t(backend === 'antigravity' ? 'chat.nativeTasks.checklistNotRecorded' : 'chat.nativeTasks.checklistUnavailable')
       : state.status === 'error' ? t('chat.nativeTasks.loadError')
         : state.status === 'idle' || state.status === 'loading' ? t('common.loading')
           : t('chat.nativeTasks.checklistEmpty');

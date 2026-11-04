@@ -1,3 +1,4 @@
+import { createTranscriptCorrector } from './transcript-correction.js';
 /**
  * Dictation runtime: registers the streaming dictation WebSocket endpoint and
  * the HTTP status/model routes.
@@ -5,7 +6,8 @@
  * WebSocket protocol (JSON text frames) on /api/dictation/ws:
  *   client -> server:
  *     { type: 'start',  dictationId, format, options? }
- *       options: { provider?, language?, localModel?, openaiCompatible? }
+ *       options: { provider?, language?, localModel?, openaiCompatible?, correct? }
+ *       correct: fix misheard words with the Small Model before `final`
  *     { type: 'chunk',  dictationId, seq, audio }   // audio: base64 PCM16LE
  *     { type: 'finish', dictationId, finalSeq }
  *     { type: 'cancel', dictationId }
@@ -51,6 +53,9 @@ export function createDictationRuntime({
   modelsDir,
 }) {
   const service = createDictationService({ modelsDir });
+  const correctTranscript = createTranscriptCorrector({
+    generate: async (args) => (await import('../small-model/index.js')).generateSmallModelText(args),
+  });
 
   // Local text-to-speech (Kokoro in the dictation worker). Returns WAV bytes;
   // 503 with a reason code while the model is still downloading.
@@ -146,6 +151,7 @@ export function createDictationRuntime({
     const manager = new DictationStreamManager({
       emit: ({ type, payload }) => send({ type, ...payload }),
       createSttSession: (options) => service.createSttSession(options),
+      correctTranscript,
     });
 
     send({ type: 'ready' });

@@ -6,6 +6,18 @@ import {
 import { buildExternalManualRestartResponse } from './config-mutation-response.js';
 import { ThemeImportStorageError } from './theme-runtime.js';
 import { registerThemeCatalogRoutes } from './theme-catalog.js';
+import { collectLocalFileDiagnostics } from '../diagnostics/local-files.js';
+import { serverDiagnosticJournal } from '../diagnostics/server-journal.js';
+
+// Install before any routes or body parsers so early 4xx responses are covered too.
+export const registerHttpResponseDiagnostics = (app, journal = serverDiagnosticJournal) => {
+  app.use((req, res, next) => {
+    res.once('finish', () => {
+      journal.recordHttpResponse(req.method, req.path, res.statusCode);
+    });
+    next();
+  });
+};
 
 const parseLoopbackUrl = (rawUrl) => {
   if (typeof rawUrl !== 'string') {
@@ -205,6 +217,9 @@ export const registerServerStatusRoutes = (app, dependencies) => {
     getServerId = async () => null,
     tunnelAuthController = null,
     uiAuthController = null,
+    // Loaded OpenCode directories and process counts for the diagnostic
+    // export (`../diagnostics/opencode-load.js`); older wiring omits it.
+    readOpenCodeLoad = null,
   } = dependencies;
 
   // The identity is immutable for the process lifetime; resolve once, and never
@@ -557,6 +572,8 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     getRelayPairingCandidate = async () => null,
     // Re-evaluate the relay lifecycle after pairing/device changes.
     reconcileRelay = async () => {},
+    // Drops the push registrations of the given clients' devices.
+    removeClientPushDevices = async () => {},
     // Returns { local, lan, relayAvailable } — the direct transport URLs the
     // server can actually be reached on (LAN derived from the server bind, not
     // the UI origin), for the create-device dialog.
@@ -819,9 +836,12 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
    */
   const selfAuthenticatedApiPaths = new Set(['/api/git/repository-credential']);
 
+  // An extension tracker's OAuth callback (`/tracker/ext-<id>/oauth/callback`)
+  // is the same kind of page: the tracker redirects the browser here with no
+  // UI bearer, and the route accepts only a `state` this process issued.
   const isGuestOauthCallback = (req) => (
     req.method === 'GET'
-    && /^\/guests\/[a-z][a-z0-9-]*\/oauth\/callback$/.test(req.path || '')
+    && /^\/(?:guests\/[a-z][a-z0-9-]*|tracker\/ext-[a-z][a-z0-9-]*)\/oauth\/callback$/.test(req.path || '')
   );
 
   // An HTML preview runs in an opaque-origin sandbox and carries no session.
@@ -831,10 +851,17 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     && /^\/fs\/preview\/[^/]+\/./.test(req.path || '')
   );
 
+  // An extension frame is sandboxed the same way and loads its package
+  // through a grant in the path; the guests route checks it.
+  const isGuestFrameFileRead = (req) => (
+    req.method === 'GET'
+    && /^\/guest-files\/[^/]+\/./.test(req.path || '')
+  );
+
   const requireApiAuth = async (req, res, next) => {
     const pathname = (req.originalUrl || '').split('?')[0];
     if (selfAuthenticatedApiPaths.has(pathname)) return next();
-    if (isGuestOauthCallback(req) || isFilePreviewRead(req)) {
+    if (isGuestOauthCallback(req) || isFilePreviewRead(req) || isGuestFrameFileRead(req)) {
       return next();
     }
     if (req.openchamberExternalAuthenticated === true) return next();
@@ -988,6 +1015,20 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     }
   });
 
+  app.patch('/api/passkeys/:id', express.json({ limit: '8kb' }), async (req, res, next) => {
+    const requestScope = tunnelAuthController.classifyRequestScope(req);
+    if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
+      return res.status(403).json({ error: 'Passkey management is disabled for tunnel scope', tunnelLocked: true });
+    }
+    try {
+      await uiAuthController.requireSessionAuth(req, res, async () => {
+        await uiAuthController.handlePasskeyRename(req, res);
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/auth/reset', async (req, res, next) => {
     const requestScope = tunnelAuthController.classifyRequestScope(req);
     if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
@@ -1064,6 +1105,10 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
           return res.status(403).json({ purged: 0, error: 'Client tokens cannot purge revoked devices' });
         }
       }
+      // Before the rows go: once a row is gone its registrations can no longer
+      // be told from a cookie session's. A failure keeps the rows for a retry.
+      const clients = await remoteClientAuthRuntime.listClients();
+      await removeClientPushDevices(clients.filter((client) => client.revokedAt).map((client) => client.id));
       const result = await remoteClientAuthRuntime.purgeRevokedClients();
       void reconcileRelay();
       res.json(result);
@@ -1394,9 +1439,12 @@ export const registerCommonRequestMiddleware = (app, dependencies) => {
       req.path.startsWith('/api/config/snippets') ||
       req.path.startsWith('/api/config/settings') ||
       req.path.startsWith('/api/config/skills') ||
+      req.path === '/api/config/skill-switch' ||
       req.path.startsWith('/api/config/plugins') ||
       req.path.startsWith('/api/config/websearch') ||
       req.path.startsWith('/api/config/warming') ||
+      req.path === '/api/config/compaction' ||
+      req.path.startsWith('/api/session-warming') ||
       req.path.startsWith('/api/projects') ||
       req.path.startsWith('/api/fs') ||
       req.path.startsWith('/api/git') ||

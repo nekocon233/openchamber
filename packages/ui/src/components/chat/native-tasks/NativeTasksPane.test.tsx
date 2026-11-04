@@ -188,6 +188,7 @@ describe('native tasks context surface', () => {
     let reads = 0;
     setup({ sessionTasks: async () => { reads += 1; return snapshot(); } });
     await render({ session: 'nag_fixture' });
+    await showBackground();
     expect(document.body.textContent).toContain('This server or CLI does not support this task view.');
     expect(reads).toBe(0);
   });
@@ -204,11 +205,28 @@ describe('native tasks context surface', () => {
       ] }),
     });
     await render({ session: 'nag_fixture' });
+    await showBackground();
     expect(document.body.textContent).toContain('Saved tasks and output');
     expect(document.body.textContent).toContain('Build saved');
     expect(document.body.textContent).toContain('Build unobserved');
     expect(document.querySelector('button[aria-label^="Stop"]')).toBeNull();
-    expect(document.body.textContent).not.toContain('Checklist');
+    expect(document.body.textContent).toContain('Checklist');
+  });
+
+  test('Antigravity shows recorded checklists and explains an older session without one', async () => {
+    const session = 'nag_checklist-fixture';
+    setup({ capabilities: async () => {
+      const base = await capabilities();
+      return { ...base, backends: { ...base.backends, antigravity: { cli: true, tasks: { checklist: true, background: true, output: true, stop: false } } } };
+    }, checklist: async () => ({ state: 'unavailable', reason: 'source_unknown' }) });
+    await render({ session, summaries: true });
+    expect(document.body.textContent).toContain('No checklist has been recorded yet');
+    await act(async () => applySessionNativeChecklistEvent(session, directory, { ...checklist(), source: 'history' }, getRuntimeKey()));
+    expect(document.body.textContent).toContain('Review changes');
+    api.checklist = async () => { throw new Error('Unavailable'); };
+    await click('Refresh');
+    expect(document.body.textContent).toContain('Review changes');
+    expect(document.body.textContent).toContain('may be out of date');
   });
 
   test('DeepSeek exposes the retained checklist in both the pane and Work status', async () => {

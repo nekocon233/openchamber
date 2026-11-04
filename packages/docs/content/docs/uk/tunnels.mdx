@@ -5,7 +5,7 @@ description: Безпечно відкрийте OpenChamber для віддал
 
 # Тунелі
 
-Тунель — це публічне посилання на ваш OpenChamber, щоб дістатися до нього зі звичайного браузера в іншій мережі. Скористайтеся `openchamber tunnel`, щоб створити його для запущеного інстансу.
+Тунель дає посилання на ваш OpenChamber, щоб дістатися до нього зі звичайного браузера в іншій мережі або, з Tailscale Serve, з будь-якого пристрою вашої tailnet-мережі. Скористайтеся `openchamber tunnel`, щоб створити його для запущеного інстансу.
 
 > Для підключення **власних пристроїв** (мобільного застосунку, іншого десктопа) тунель зазвичай не потрібен — краще [зв'яжіть їх](/uk/connect-devices/) і дозвольте наскрізно зашифрованому [Private Relay](/uk/private-relay/) забезпечити доступ поза домом без жодних налаштувань.
 
@@ -17,6 +17,8 @@ OpenChamber запускає CLI провайдера тунелю на ваші
 brew install cloudflared
 brew install ngrok
 ```
+
+Для Tailscale встановіть [застосунок Tailscale](https://tailscale.com/download) і увійдіть в акаунт. На Mac достатньо самого застосунку: OpenChamber знаходить його інструмент командного рядка всередині застосунку.
 
 Швидкі тунелі Cloudflare працюють через `cloudflared`. Для Ngrok потрібен акаунт ngrok і authtoken з dashboard ngrok:
 
@@ -46,6 +48,12 @@ openchamber tunnel start --provider cloudflare --mode quick
 
 ```bash
 openchamber tunnel start --provider ngrok --mode quick
+```
+
+Або поділіться ним із пристроями своєї tailnet-мережі через Tailscale Serve:
+
+```bash
+openchamber tunnel start --provider tailscale --mode serve
 ```
 
 3. Перевірте статус:

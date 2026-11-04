@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 import {
+  CANARY_UPDATER_FEED,
   PRODUCTION_UPDATER_FEED,
+  isCanaryVersion,
+  isUpdateChannel,
+  normalizeUpdateChannel,
   parseLoopbackUpdaterUrl,
   resolveUpdaterFeed,
 } from './updater-feed.mjs';

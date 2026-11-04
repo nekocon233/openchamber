@@ -1,7 +1,8 @@
 import { isEnterpriseMode } from '../enterprise-mode.js';
 
-// Tunnel providers terminate TLS at their edge and see every request in plain
-// text, so enterprise mode refuses them outright.
+// Cloudflare and ngrok terminate TLS at their edge and see every request in
+// plain text; Tailscale opens this machine to other devices. Enterprise mode
+// refuses them all.
 const TUNNEL_BLOCKED_ERROR = 'External tunnels are not available in enterprise mode. Pair devices on your network or through your own relay instead.';
 
 export const createTunnelRoutesRuntime = (dependencies) => {
@@ -222,6 +223,7 @@ export const createTunnelRoutesRuntime = (dependencies) => {
     hostname,
     token,
     configPath,
+    httpsPort,
     selectedPresetId,
     selectedPresetName,
     serverAddress,
@@ -977,6 +979,13 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           ? null
           : normalizeTunnelBootstrapTtlMs(settings?.tunnelBootstrapTtlMs));
         const sessionTtlMs = requestSessionTtlMs ?? normalizeTunnelSessionTtlMs(settings?.tunnelSessionTtlMs);
+        // The saved port applies only where the mode lists it, as Settings
+        // shows it; an explicit port still reaches validation and is refused
+        // when the mode does not allow it.
+        const allowedHttpsPorts = tunnelProviderRegistry.get(provider)?.capabilities?.modes
+          ?.find((entry) => entry.key === mode)?.httpsPorts ?? [];
+        const savedHttpsPort = allowedHttpsPorts.includes(settings?.tunnelHttpsPort) ? settings.tunnelHttpsPort : undefined;
+        const httpsPort = _req?.body?.httpsPort ?? savedHttpsPort;
 
         const previousTunnelId = tunnelAuthController.getActiveTunnelId();
         const previousMode = tunnelAuthController.getActiveTunnelMode();
@@ -997,6 +1006,7 @@ export const createTunnelRoutesRuntime = (dependencies) => {
           hostname,
           token,
           configPath: requestConfigPath,
+          httpsPort,
           selectedPresetId,
           selectedPresetName,
           serverAddress,
@@ -1101,7 +1111,12 @@ export const createTunnelRoutesRuntime = (dependencies) => {
             : (error.code === 'validation_error' || error.code === 'provider_unsupported' || error.code === 'mode_unsupported'
               ? 422
               : 500);
-          return res.status(status).json({ ok: false, error: error.message, code: error.code });
+          return res.status(status).json({
+            ok: false,
+            error: error.message,
+            code: error.code,
+            approvalUrl: error.details?.approvalUrl,
+          });
         }
         return res.status(500).json({ ok: false, error: 'Failed to start tunnel', code: 'startup_failed' });
       } finally {

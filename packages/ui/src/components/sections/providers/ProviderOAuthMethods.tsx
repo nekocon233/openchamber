@@ -25,6 +25,10 @@ import { ProviderFormFields } from './ProviderFormFields';
 import type { SignInMethod } from './providerAuth';
 
 interface ProviderOAuthMethodsProps {
+  autoStart?: boolean;
+  connectLabel?: string;
+  showStartButton?: boolean;
+  showMethodLabels?: boolean;
   /** The integration that owns these methods; it shares the provider's id. */
   integrationId: string;
   methods: SignInMethod[];

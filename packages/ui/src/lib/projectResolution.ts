@@ -2,6 +2,7 @@ import type { ProjectEntry } from "@/lib/api/types";
 import type { WorktreeMetadata } from "@/types/worktree";
 
 import { normalizePath } from "@/lib/pathNormalization";
+import { spaceProjectDirectoryOf } from "@/lib/spaces/spaces-store";
 export const normalizeProjectPath = normalizePath;
 
 /**
@@ -105,6 +106,11 @@ export const resolveProjectForSessionDirectory = (
   projects: ProjectEntry[],
   availableWorktreesByProject: Map<string, WorktreeMetadata[]>,
   directory: string | null,
+  /**
+   * The host project of the space `directory` lies in, when the caller subscribed to it (a
+   * render that must follow the space list arriving); read from the spaces store otherwise.
+   */
+  _spaceProjectDirectory: string | null = spaceProjectDirectoryOf(directory),
 ): ProjectEntry | null => {
   // A project registered at exactly this directory owns it, even a managed
   // worktree the registry has not published yet.

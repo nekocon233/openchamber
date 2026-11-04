@@ -12,12 +12,14 @@ import { conversationMessageId, conversationPartId, projectConversationRecord, p
 import { prepareConversationContext } from './context.js';
 import { agentConfigurationWriteSchema } from '../agent-configuration.js';
 import { conversationTitlePreview, createConversationAutoTitles } from './auto-title.js';
+import { antigravityChecklistSnapshot } from '../antigravity/checklist.js';
 
 const namespaceSchema = z.record(z.string(), z.json()).catch({});
 const lifecycleSchema = z.record(nativeBackendSchema, z.object({
   stop: z.function(), retire: z.function(), delete: z.boolean(), compact: z.boolean(),
 }));
 const selectionOf = (request) => conversationSelectionSchema.parse({ model: request.model, agent: request.agent, variant: request.variant });
+const checklistIdentity = (manifest, segment) => `antigravity:${manifest.id}:${segment.id}:${manifest.cut ?? 'full'}`;
 const directoryKey = (directory) => {
   try { return fs.realpathSync.native(directory); }
   catch { return path.resolve(directory); }
@@ -788,7 +790,32 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
     if (!segment) return empty;
     return native[method](segment.sessionId, directory, ...args);
   };
-  api.checklist = sourceRead('checklist', { state: 'unavailable', reason: 'unsupported' });
+  api.checklist = async (id, directory) => {
+    if (!isConversationId(id)) return native.checklist(id, directory);
+    const { manifest, segment: active } = await sourceFor(id, directory);
+    let segment = active ?? manifest.segments.at(-1);
+    if (!segment) return { state: 'unavailable', reason: nativeBackendOfProviderId(manifest.selection.model.providerID) === 'antigravity' ? 'source_unknown' : 'unsupported' };
+    if (segment.backend !== 'antigravity') return active
+      ? native.checklist(active.sessionId, directory) : { state: 'unavailable', reason: 'unsupported' };
+    let records;
+    let complete;
+    if (manifest.cut) {
+      const history = await historyOf(manifest);
+      const end = history.entries.findIndex((entry) => entry.record.info.id === manifest.cut);
+      if (end === -1) throw invalidRequestError('Unknown conversation rewind point');
+      const retained = history.entries.slice(0, end);
+      segment = manifest.segments.find((entry) => entry.id === retained.at(-1)?.segmentId);
+      if (segment?.backend !== 'antigravity') return { state: 'unavailable', reason: 'source_unknown' };
+      records = retained.filter((entry) => entry.segmentId === segment.id).map((entry) => entry.record);
+      complete = history.metadataComplete;
+    } else {
+      const history = await readConversationSegment(native, manifest, segment);
+      records = history.records;
+      complete = history.metadataComplete;
+    }
+    const snapshot = antigravityChecklistSnapshot({ sessionId: segment.sessionId, records, complete, observedAt: now() });
+    return snapshot.state === 'ready' ? { ...snapshot, identity: checklistIdentity(manifest, segment) } : snapshot;
+  };
   api.plan = sourceRead('plan', { state: 'empty' });
   api.codexTodos = sourceRead('codexTodos', { state: 'unsupported', generation: null, revision: 0, todos: [] });
   api.sessionTasks = sourceRead('sessionTasks', { state: 'unsupported', generation: null, revision: 0, tasks: [], omitted: 0 });
@@ -928,6 +955,10 @@ export const createNativeConversations = ({ dataDir, native, registry, reverts, 
         return;
       }
       const projected = { ...properties, sessionID: manifest.id };
+      if (payload.type === 'session.checklist.updated' && segment.backend === 'antigravity') {
+        if (manifest.cut || segment.through || segment.before) return;
+        if (properties.snapshot.state === 'ready') projected.snapshot = { ...properties.snapshot, identity: checklistIdentity(manifest, segment) };
+      }
       if (payload.type === 'message.updated') projected.info = projectConversationRecord(manifest.id, projection, { info: properties.info, parts: [] }).info;
       if (payload.type === 'message.part.updated') {
         const part = properties.part;

@@ -126,10 +126,32 @@ describe('settings registry', () => {
       useUIStore.setState(original, true);
     }
   });
+  test('round-trips the small model thinking variant', () => {
+    expect(parseSettingsDocument({ smallModelVariant: 'high' })).toEqual({ smallModelVariant: 'high' });
+    expect(parseSettingsDocument({ smallModelVariant: '' })).toEqual({});
+    expect(parseSettingsDocument({ smallModelVariant: 3 })).toEqual({});
+  });
+
   test('accepts only interface languages the UI ships', () => {
     expect(parseSettingsDocument({ locale: 'zh-CN' })).toEqual({ locale: 'zh-CN' });
     expect(parseSettingsDocument({ locale: 'xx' })).toEqual({});
     expect(parseSettingsDocument({ locale: 3 })).toEqual({});
+  });
+
+  test('round-trips last-used efforts with an explicit Default', () => {
+    const original = useUIStore.getState().lastUsedEfforts;
+    try {
+      const input = { 'anthropic/claude': 'high', 'openai/gpt-5': null };
+      const parsed = parseSettingsDocument({ lastUsedEfforts: input });
+      expect(parsed).toEqual({ lastUsedEfforts: input });
+      if (!parsed) throw new Error('Expected valid settings');
+      applySettingsToStores(parsed);
+      expect(useUIStore.getState().lastUsedEfforts).toEqual(input);
+      expect(parseSettingsDocument({ lastUsedEfforts: { 'anthropic/claude': 3 } })).toEqual({});
+      expect(parseSettingsDocument({ lastUsedEfforts: { 'anthropic/claude': '' } })).toEqual({});
+    } finally {
+      useUIStore.setState({ lastUsedEfforts: original });
+    }
   });
   test('project paths retain absolute Windows roots across parsing and serialization', () => {
     const parsed = parseSettingsDocument({ projects: [
@@ -139,6 +161,26 @@ describe('settings registry', () => {
       { path: '\\\\Server\\Share\\' },
     ] });
     expect(parsed?.projects?.map((project) => project.path)).toEqual(['C:/', 'C:/Users/Developer/Project', '//Server/Share']);
+    expect(parseSettingsDocument(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+  });
+
+  test('round-trips project label provenance and drops invalid or orphan sources', () => {
+    const parsed = parseSettingsDocument({ projects: [
+      { path: '/example', label: ' Example ', labelSource: 'manual' },
+      { path: '/auto', label: 'auto', labelSource: 'auto' },
+      { path: '/invalid', label: 'Keep me', labelSource: 'unknown' },
+      { path: '/orphan', labelSource: 'manual' },
+      { path: '/blank', label: '  ', labelSource: 'auto' },
+      { path: '/legacy', label: 'Legacy' },
+    ] });
+    expect(parsed?.projects?.map(({ path, label, labelSource }) => ({ path, label, labelSource }))).toEqual([
+      { path: '/example', label: 'Example', labelSource: 'manual' },
+      { path: '/auto', label: 'auto', labelSource: 'auto' },
+      { path: '/invalid', label: 'Keep me', labelSource: undefined },
+      { path: '/orphan', label: undefined, labelSource: undefined },
+      { path: '/blank', label: undefined, labelSource: undefined },
+      { path: '/legacy', label: 'Legacy', labelSource: undefined },
+    ]);
     expect(parseSettingsDocument(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
   });
 
@@ -333,5 +375,13 @@ describe('settings registry', () => {
     expect(keys.length).toBe(SETTINGS_KEYS.length + LOCAL_DEVICE_KEYS.length + DESKTOP_SHELL_KEYS.length);
     for (const key of LOCAL_DEVICE_KEYS) expect(snapshot.fields[key]).toEqual({ scope: 'device', local: true });
     for (const key of DESKTOP_SHELL_KEYS) expect(snapshot.fields[key].owner).toBe('desktop-shell');
+  });
+});
+
+describe('custom stt endpoint path setting', () => {
+  test('is an instance setting that trims and caps the path', () => {
+    expect(SETTINGS_REGISTRY.sttEndpointPath.scope).toBe('instance');
+    expect(parseSettingsDocument({ sttEndpointPath: ' /speech_to_text ' })).toEqual({ sttEndpointPath: '/speech_to_text' });
+    expect(parseSettingsDocument({ sttEndpointPath: `/${'a'.repeat(1024)}` })).toEqual({});
   });
 });

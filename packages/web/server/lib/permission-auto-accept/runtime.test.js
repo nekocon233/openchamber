@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createPermissionAutoAcceptRuntime } from './runtime.js';
+import { translateWireEvent, wireEventDirectory } from '../event-stream/translate-v2.js';
 
-const createRuntime = ({ stored, fetchImpl, retryDelaysMs = [0], evaluatePermission, onPermissionReplied, resolveLegacyEnabledMode, broadcastGlobalUiEvent } = {}) => {
+const createRuntime = ({ stored, fetchImpl, retryDelaysMs = [0], evaluatePermission, onPermissionReplied, resolveLegacyEnabledMode, broadcastGlobalUiEvent, beforePersist } = {}) => {
   let settings = stored ?? { permissionAutoAccept: { sessions: {} } };
   let eventHandler;
   let statusHandler;
@@ -13,7 +14,10 @@ const createRuntime = ({ stored, fetchImpl, retryDelaysMs = [0], evaluatePermiss
     buildOpenCodeUrl: (path) => `http://opencode.test${path}`,
     getOpenCodeAuthHeaders: () => ({}),
     readSettingsFromDiskMigrated: async () => settings,
-    persistSettings: async (changes) => { settings = { ...settings, ...changes }; },
+    persistSettings: async (changes) => {
+      await beforePersist?.(changes);
+      settings = { ...settings, ...changes };
+    },
     fetchImpl: fetchImpl ?? vi.fn(async () => new Response('[]')),
     retryDelaysMs,
     evaluatePermission,
@@ -27,6 +31,7 @@ const createRuntime = ({ stored, fetchImpl, retryDelaysMs = [0], evaluatePermiss
     getSettings: () => settings,
     // The hub hands server-side subscribers already-translated events.
     emit: (payload, directory = '/project') => eventHandler({ payload, directory, translated: () => [payload] }),
+    emitWire: (payload) => eventHandler({ payload, directory: wireEventDirectory(payload), translated: () => translateWireEvent(payload) }),
     connect: () => statusHandler({ type: 'connect' }),
   };
 };
@@ -41,6 +46,25 @@ const flush = async () => {
 };
 
 describe('permission auto-accept runtime', () => {
+  it.each(['ask', 'safety', 'auto'])('inherits %s through the real wire-event translator', async (mode) => {
+    const broadcastGlobalUiEvent = vi.fn();
+    const { runtime, emitWire } = createRuntime({
+      stored: { permissionAutoAccept: { sessions: { source: mode } }, permissionDefaultMode: 'auto' },
+      broadcastGlobalUiEvent,
+    });
+    emitWire({
+      id: 'evt_fork', created: 1000, type: 'session.forked',
+      data: { sessionID: 'fork', parentID: 'source' },
+      location: { directory: '/project' },
+    });
+    await expect(runtime.resolveSessionMode('fork', '/project')).resolves.toBe(mode);
+    expect((await runtime.load()).modes.fork).toBe(mode);
+    expect(broadcastGlobalUiEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'openchamber:permission-auto-accept.updated',
+      properties: expect.objectContaining({ modes: { source: mode, fork: mode } }),
+    }));
+  });
+
   it('persists explicit session modes across runtime restarts', async () => {
     const first = createRuntime();
     await first.runtime.setSessionPolicy('root', 'safety');
@@ -98,6 +122,23 @@ describe('permission auto-accept runtime', () => {
     emit({ type: 'session.created', properties: { info: { id: 'root' } } });
     await flush();
     await expect(runtime.resolveSessionMode('root', '/project')).resolves.toBe('ask');
+  });
+
+  it('saves the next mode change after one failed to persist', async () => {
+    let failNext = true;
+    const { runtime, getSettings } = createRuntime({
+      beforePersist: async () => {
+        if (!failNext) return;
+        failNext = false;
+        throw new Error('ENOSPC: no space left on device, write');
+      },
+    });
+
+    await expect(runtime.setSessionPolicy('root', 'auto')).rejects.toThrow('ENOSPC');
+    expect((await runtime.load()).modes).toEqual({});
+
+    await expect(runtime.setSessionPolicy('root', 'safety')).resolves.toMatchObject({ modes: { root: 'safety' }, revision: 1 });
+    expect(getSettings().permissionAutoAccept).toEqual({ sessions: { root: 'safety' }, revision: 1 });
   });
 
   it('increments the authoritative policy revision', async () => {

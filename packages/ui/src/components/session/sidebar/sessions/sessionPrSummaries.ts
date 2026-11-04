@@ -118,24 +118,24 @@ const ISSUE_STATE_LOOK = {
   not_planned: { color: 'var(--pr-closed)', statusKey: 'sessions.sidebar.group.issue.status.notPlanned', priority: 3 },
 } satisfies Record<GitHubIssueLiveSummary['state'], { color: string; statusKey: IssueStatusLabelKey; priority: number }>;
 /** How an issue in a known state looks: its PR-token colour and status line. */
-export const getIssueStateLook = (state: GitHubIssueLiveSummary['state']): { color: string; statusKey: IssueStatusLabelKey } => {
+export const getIssueStateLook = (state: GitHubIssueLiveSummary['state']) => {
   const { color, statusKey } = ISSUE_STATE_LOOK[state];
   return { color, statusKey };
 };
 
 // Linear names its states per team; their type is what maps onto the colours.
 // Not done yet reads as open, done as completed, dropped as not planned.
-const LINEAR_STATE_LOOK: Record<LinearStateType, keyof typeof ISSUE_STATE_LOOK> = {
+const LINEAR_STATE_LOOK = {
   triage: 'open',
   backlog: 'open',
   unstarted: 'open',
   started: 'open',
   completed: 'completed',
   canceled: 'not_planned',
-};
+} as const satisfies Record<LinearStateType, keyof typeof ISSUE_STATE_LOOK>;
 
 /** How a Linear issue in a known state looks: the GitHub issue colour of its type. */
-export const getLinearIssueStateLook = (type: LinearStateType): { color: string; priority: number } => {
+export const getLinearIssueStateLook = (type: LinearStateType) => {
   const { color, priority } = ISSUE_STATE_LOOK[LINEAR_STATE_LOOK[type]];
   return { color, priority };
 };
@@ -153,7 +153,7 @@ const UNKNOWN_ISSUE_PRIORITY = 1;
 export const buildSessionIssueItems = (
   issues: readonly LinkedSidebarIssue[],
   states: ReadonlyArray<GitHubIssueLiveSummary | null>,
-  linearStates: ReadonlyArray<LinearIssueLiveSummary | null> = [],
+  linearStates: ReadonlyArray<LinearIssueLiveSummary | { title: string; state: { name: string; type?: LinearStateType; category?: string } } | null> = [],
   gitlabStates: ReadonlyArray<GitHubIssueLiveSummary | null> = [],
 ): SessionIssueItem[] => {
   let githubIndex = 0;
@@ -179,7 +179,8 @@ export const buildSessionIssueItems = (
     if (issue.source === 'linear') {
       const state = linearStates[linearIndex] ?? null;
       linearIndex += 1;
-      const look = state ? getLinearIssueStateLook(state.state.type) : null;
+      const stateType = (state && ('type' in state.state && state.state.type ? state.state.type : ('category' in state.state ? state.state.category : undefined))) as LinearStateType | undefined;
+      const look = state && stateType ? getLinearIssueStateLook(stateType) : null;
       const item: SessionIssueItem = {
         key: issue.key,
         label: issue.identifier,
@@ -223,3 +224,5 @@ export const buildSessionIssueItems = (
   // Array sort is stable: equal priorities keep link order.
   return ranked.sort((left, right) => left.priority - right.priority).map((entry) => entry.item);
 };
+
+export const getTrackerItemStateLook = (_category: string) => ({ color: 'var(--pr-open)', priority: 0 });

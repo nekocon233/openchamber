@@ -37,6 +37,7 @@ interface SessionFoldersActions {
   removeSessionFromFolder: (scopeKey: string, sessionId: string) => void;
   removeSessionEverywhere: (runtimeKey: string, sessionId: string) => void;
   removeSessionsFromFolders: (scopeKey: string, sessionIds: string[]) => void;
+  forgetScopes: (scopeKeys: string[]) => void;
   toggleFolderCollapse: (folderId: string) => void;
   getSessionFolderId: (scopeKey: string, sessionId: string) => string | null;
   resetForRuntimeSwitch: (runtimeKey: string) => void;
@@ -767,3 +768,10 @@ const hydrateSessionFoldersFromDisk = async (): Promise<void> => {
 if (typeof window !== 'undefined') {
   void hydrateSessionFoldersFromDisk();
 }
+
+export const handleSessionFoldersChanged = (_updatedAt: number): void => {
+  void useSidebarStateStore.getState().refresh();
+};
+export const handleSessionFoldersStreamReady = (): void => {
+  void useSidebarStateStore.getState().refresh();
+};

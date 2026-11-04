@@ -12,13 +12,15 @@ import { cn } from '@/lib/utils';
  * command or a native CLI's background tasks, or a finished turn the user has
  * not seen. These are the kinds `useSessionTurnActivity` reports.
  */
-type SessionActivityIndicatorState = 'running' | 'subagent' | 'shell' | 'tasks' | 'unread';
+type SessionActivityIndicatorState = 'running' | 'workflow' | 'subagent' | 'shell' | 'tasks' | 'pullRequest' | 'unread';
 
 const PRESENTATION = {
   running: { icon: 'circle', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.active' },
+  workflow: { icon: 'flow-chart', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.workflowRunning' },
   subagent: { icon: 'robot', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.backgroundSubagent' },
   shell: { icon: 'terminal', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.backgroundCommand' },
   tasks: { icon: 'task', colorClass: 'text-status-info', labelKey: 'chat.nativeTasks.background' },
+  pullRequest: { icon: 'git-pull-request', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.waitingOnPullRequest' },
   unread: { icon: 'checkbox-circle', colorClass: 'text-status-success', labelKey: 'sessions.sidebar.session.status.unread' },
 } as const satisfies Record<SessionActivityIndicatorState, { icon: IconName; colorClass: string; labelKey: string }>;
 

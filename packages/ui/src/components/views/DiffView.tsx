@@ -837,12 +837,12 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
         const runtimeKey = getRuntimeKey();
         const contextLines = loadFullFiles ? FULL_CONTEXT_DIFF_LINES : DEFAULT_CONTEXT_DIFF_LINES;
         const displayRequest = isImageFile(file.path)
-            ? git.getGitFileDiff(directory, { path: file.path, staged })
+            ? git.getGitFileDiff!(directory, { path: file.path, staged })
             : !loadFullFiles && actionPatch !== null
                 ? Promise.resolve({ diff: actionPatch, submodule: actionSubmodule })
-            : git.getGitDiff(directory, { path: file.path, staged, contextLines });
+            : git.getGitDiff!(directory, { path: file.path, staged, contextLines });
         const canonicalRequest = hunkEligible && loadFullFiles && actionPatch === null
-            ? git.getGitDiff(directory, { path: file.path, staged, contextLines: DEFAULT_CONTEXT_DIFF_LINES }).then((response) => response.diff)
+            ? git.getGitDiff!(directory, { path: file.path, staged, contextLines: DEFAULT_CONTEXT_DIFF_LINES }).then((response) => response.diff)
             : Promise.resolve(actionPatch);
         const fetchPromise = Promise.all([displayRequest, canonicalRequest]);
         const timeoutMs = DIFF_REQUEST_TIMEOUT_MS;
@@ -1193,6 +1193,7 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
 });
 
 interface DiffViewProps {
+  directory?: string | null;
     /** In editor layout navigation remains in its tool zone while details occupy a document tab. */
     fileListHost?: { host: HTMLElement | null; visible: boolean; onSelect: () => void };
     visible?: boolean;
@@ -2215,7 +2216,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
 
             if (targetLine === null) {
                 try {
-                    const patchResponse = await git.getGitDiff(effectiveDirectory, {
+                    const patchResponse = await git.getGitDiff!(effectiveDirectory, {
                         path: filePath,
                         staged: activeDiffStaged,
                         contextLines: 3,
@@ -2228,7 +2229,7 @@ export const DiffView: React.FC<DiffViewProps> = ({
 
             let diffForNavigation = cachedDiffData;
             if (targetLine === null || !diffForNavigation) {
-                const response = await git.getGitFileDiff(effectiveDirectory, { path: filePath, staged: activeDiffStaged });
+                const response = await git.getGitFileDiff!(effectiveDirectory, { path: filePath, staged: activeDiffStaged });
                 const fetchedDiff = {
                     original: response.original ?? '',
                     modified: response.modified ?? '',

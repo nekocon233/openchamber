@@ -21,6 +21,8 @@ type ReconnectCandidateOptions = {
 
 type BootstrapSessionRevisionOptions = {
   baselineRevision: number
+  /** Pages add coverage; only the completed list may remove absent sessions. */
+  partial?: boolean
   eventRevision?: Record<string, number>
   deletedRevision?: Record<string, number>
 }

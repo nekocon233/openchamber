@@ -60,7 +60,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
 .oc-sdk-search[data-active="true"] .oc-sdk-search-clear { display: inline-flex; }
 
 .oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-trigger-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-trigger-chevron { flex: 0 0 auto; }
 .oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-width: calc(100vw - 16px); max-height: min(320px, calc(100vh - 16px)); overflow: auto; padding: 4px; border: 1px solid transparent; }
@@ -123,6 +123,8 @@ textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
 .oc-sdk-progress-label { display: flex; justify-content: space-between; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 .oc-sdk-progress-track { height: 6px; overflow: hidden; }
 .oc-sdk-progress-fill { height: 100%; transform-origin: left; transition: transform 200ms ease-out; }
+.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: 2px; }
+.oc-sdk-progress[data-done="true"] .oc-sdk-progress-value { font-weight: 600; }
 
 .oc-sdk-menu { position: relative; display: inline-flex; }
 
@@ -244,7 +246,7 @@ ${gT}`;var qT="oc-sdk-ui-style",fS=(S)=>{while(S.firstChild)S.removeChild(S.firs
 .example h1,.example h2,.example h3,.example p{margin:0}.example h1{font-size:clamp(25px,5vw,36px);font-weight:650;letter-spacing:-.04em;line-height:1.12}.example h2{font-size:15px;letter-spacing:-.015em}.example h3{font-size:13px;font-weight:600}
 .eyebrow{font:11px var(--oc-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--oc-muted)}.hero{display:flex;flex-direction:column;gap:12px;padding:8px 0 4px}.hero p{max-width:58ch;color:var(--oc-muted);font-size:13px}
 .row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}.row.between{justify-content:space-between}.stack{display:flex;flex-direction:column;gap:14px;min-width:0}.muted{color:var(--oc-muted);font-size:12px}.grow{flex:1;min-width:0}
-.card{min-width:0;border:1px solid var(--oc-border);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:16px}.card-heading{display:flex;flex-direction:column;gap:4px}.card-heading p{color:var(--oc-muted);font-size:12px}.soft{background:var(--oc-muted-surface)}
+.card{min-width:0;background:color-mix(in srgb,var(--oc-fg) 4%,transparent);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:16px}.card-heading{display:flex;flex-direction:column;gap:4px}.card-heading p{color:var(--oc-muted);font-size:12px}.soft{background:var(--oc-muted-surface)}
 .grid,.split,.metrics,.lanes{display:grid;gap:16px;grid-template-columns:minmax(0,1fr);align-items:start}.metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.metric{border-top:1px solid var(--oc-border);padding:12px 0}.metric strong{display:block;font-size:24px;font-weight:550;letter-spacing:-.04em;font-variant-numeric:tabular-nums}.metric span{color:var(--oc-muted);font-size:11px}
 .code{font:11px/1.65 var(--oc-mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;margin:0;padding:14px;border-radius:9px;background:var(--oc-muted-surface);color:var(--oc-fg);tab-size:2}.code:empty{display:none}.api{border-top:1px solid var(--oc-border);padding-top:12px;font-size:12px;color:var(--oc-muted)}.api summary{cursor:pointer;width:fit-content;margin-bottom:10px}.api summary:focus-visible{outline:2px solid var(--oc-focus);outline-offset:3px}
 .code:focus-visible{outline:2px solid var(--oc-focus);outline-offset:2px}

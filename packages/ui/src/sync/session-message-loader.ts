@@ -72,6 +72,7 @@ export type SessionMessageLoadState = {
   complete: boolean
   generation: number
   updatedAt: number | undefined
+  olderCompletedReplyIds: ReadonlySet<string>
 }
 
 type LoaderEntry = {
@@ -252,6 +253,7 @@ const createDefaultState = (generation = 0): SessionMessageLoadState => ({
   complete: false,
   generation,
   updatedAt: undefined,
+  olderCompletedReplyIds: new Set(),
 })
 
 export const EMPTY_SESSION_MESSAGE_LOAD_STATE = createDefaultState()
@@ -363,7 +365,11 @@ export class SessionMessageLoader {
   }
 
   /** Hold history for an imperative reader or a transcript still on screen. */
-  retainSessionHistory(target: SessionMessageTarget, reason: "read" | "rendered" = "read"): () => void {
+  trimHistory(_target: SessionMessageTarget): boolean {
+    return false
+  }
+
+  retainSessionHistory(target: SessionMessageTarget, reason: "read" | "rendered" | "browsing" = "read"): () => void {
     const normalized = this.normalizeTarget(target)
     if (!normalized) return () => undefined
     const key = this.keyFor(normalized)

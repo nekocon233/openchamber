@@ -29,7 +29,7 @@ type SourceBoardState = {
   linearFocus: BoardLinearFocus | null;
   update: (patch: Partial<SourceBoardChoice>) => void;
   /** Switches to Linear and previews the issue `identifier` names; the caller opens the board. */
-  focusLinearIssue: (identifier: string, url: string, failureBehavior?: BoardLinkFailureBehavior) => void;
+  focusLinearIssue: (identifier: string, url?: string, failureBehavior?: BoardLinkFailureBehavior) => void;
   clearLinearFocus: () => void;
   /** An issue or PR another surface asked the board to show: its tab and its link; taken once. */
   repositoryFocus: { projectId: string; kind: GitHubReferenceKind; query: string; failureBehavior: BoardLinkFailureBehavior } | null;
@@ -65,7 +65,7 @@ export const useSourceBoardStore = create<SourceBoardState>()(
       }),
       focusLinearIssue: (identifier, url, failureBehavior = 'automatic') => {
         get().update({ tab: 'linear', linearTeamId: null });
-        set({ linearFocus: { identifier, url, failureBehavior } });
+        set({ linearFocus: { identifier, url: url ?? "", failureBehavior } });
       },
       clearLinearFocus: () => set({ linearFocus: null }),
       repositoryFocus: null,

@@ -9,7 +9,7 @@
  */
 
 import type { ComposerReference } from '@/components/chat/composer/composerReferences';
-import type { ChangeRequestContext, Issue, IssueComment, LinearIssue, SourceControlAPI, SourceControlReadContext } from '@/lib/api/types';
+import type { ChangeRequestContext, Issue, IssueComment, LinearIssue, SourceControlAPI, SourceControlReadContext, TrackerItem } from '@/lib/api/types';
 import { buildIssueContextText as buildLinearContextText } from '@/lib/linearIssueContext';
 
 import { referencePickerItemKey, type ReferencePickerSelection } from './referencePickerItems';
@@ -19,7 +19,9 @@ export type ReferenceResolveDeps = {
     /** The GitHub read context of the project the items belong to. */
     context: SourceControlReadContext | null;
     /** A Linear issue with its comments, by Linear id; the preview's cache. */
-    readLinearDetail: (issueId: string) => Promise<LinearIssue>;
+    readLinearDetail?: (issueId: string) => Promise<LinearIssue>;
+    readTrackerDetail?: (provider: string, itemId: string) => Promise<LinearIssue | TrackerItem | null>;
+    trackerName?: (provider: string) => string;
 };
 
 export type ResolvedReferences = {
@@ -39,6 +41,7 @@ const selectionLabel = (selection: ReferencePickerSelection): string => (
 
 async function resolveOne(selection: ReferencePickerSelection, deps: ReferenceResolveDeps): Promise<ComposerReference> {
     if (selection.source === 'linear') {
+        if (!deps.readLinearDetail) throw new Error('Linear is not available here');
         const issue = await deps.readLinearDetail(selection.issue.id);
         const login = issue.assignee?.displayName || issue.assignee?.name;
         return {

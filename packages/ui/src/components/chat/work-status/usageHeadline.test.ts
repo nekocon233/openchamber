@@ -29,6 +29,9 @@ const group = (providerId: UsageProviderGroup['providerId'], rows: Array<{ key: 
 describe('resolveQuotaProviderId', () => {
   test('passes through ids that already match a quota provider', () => {
     expect(resolveQuotaProviderId('opencode-go')).toBe('opencode-go');
+    // The OpenCode Console workspace serves its models under `opencode`, and
+    // the Zen quota card carries that id.
+    expect(resolveQuotaProviderId('opencode')).toBe('opencode');
   });
 
   test('maps the known divergences', () => {

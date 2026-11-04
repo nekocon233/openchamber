@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { encodeAntigravitySessionId } from '../ids.js';
@@ -53,6 +55,30 @@ const setup = ({ confirmed = true } = {}) => {
 const step = (value) => JSON.stringify({ created_at: '2026-10-01T12:00:00Z', status: 'DONE', ...value });
 
 describe('Antigravity native store', () => {
+  it('reads the native index after a concurrent CLI writer commits', async () => {
+    const { home, registry, entry, directory, writeSummary } = setup();
+    writeSummary();
+    await registry.registerSession(SESSION_ID, entry);
+    const database = path.join(home, 'conversation_summaries.db');
+    const writer = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { DatabaseSync } from 'node:sqlite';
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec('BEGIN EXCLUSIVE');
+      process.stdout.write('locked\\n');
+      setTimeout(() => { db.exec('COMMIT'); db.close(); }, 200);
+    `, database], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const exited = once(writer, 'exit');
+    await once(writer.stdout, 'data');
+    const immediate = new DatabaseSync(database, { readOnly: true });
+    try {
+      expect(() => immediate.prepare('select * from conversation_summaries').all()).toThrow('locked');
+      const store = createAntigravityStore({ registry, home });
+      expect((await store.getSession(SESSION_ID, NATIVE_ID, directory)).id).toBe(SESSION_ID);
+    } finally {
+      immediate.close();
+      await exited;
+    }
+  });
   it('keeps stream-only reasoning and text timing across registry and backend restart', async () => {
     const { home, registry, entry, filePath, directory, writeSummary, writeTranscript } = setup();
     writeSummary();

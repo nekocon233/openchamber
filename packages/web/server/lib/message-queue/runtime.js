@@ -17,6 +17,7 @@ import { assertPromptResponse } from '../opencode/prompt-response.js';
 import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 import { createSessionActivityProbe } from '../opencode/session-activity.js';
 import { attachmentHint } from '../routing/runtime.js';
+import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
 
 import { isNativeSessionId } from '../native-agents/ids.js';
 
@@ -38,10 +39,6 @@ const ABORT_HOLD_MS = 2_000;
 const SUBAGENT_RECHECK_MS = 5_000;
 const RETRY_BASE_DELAY_MS = 2_000;
 const RETRY_MAX_DELAY_MS = 60_000;
-// A hold is asserted by a UI-driven process (auto-review) that dies with the
-// UI; it expires unless the UI keeps re-asserting it.
-const HOLD_DEFAULT_TTL_MS = 5 * 60 * 1000;
-const HOLD_MAX_TTL_MS = 10 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15_000;
 const MESSAGE_TAIL_LIMIT = 2;
 
@@ -82,6 +79,20 @@ const parseSendConfig = (value) => {
   return sendConfig;
 };
 
+// "Run as goal" captured with the message: `objective` only when the arming
+// flow supplied its own (the plan flow), otherwise the delivered text is it.
+const parseGoal = (value) => {
+  if (value === undefined) return null;
+  const raw = asRecord(value);
+  if (!raw) throw new TypeError('invalid goal');
+  const tokenBudget = raw.tokenBudget ?? null;
+  if (tokenBudget !== null && !(Number.isInteger(tokenBudget) && tokenBudget > 0)) throw new TypeError('invalid goal tokenBudget');
+  const goal = { tokenBudget };
+  const objective = asNonEmptyString(raw.objective);
+  if (objective) goal.objective = objective;
+  return goal;
+};
+
 const parseAttachment = (value) => {
   const raw = asRecord(value);
   if (!raw) return null;
@@ -98,6 +109,8 @@ const parseAttachment = (value) => {
   };
   const serverPath = asNonEmptyString(raw.serverPath);
   if (serverPath) attachment.serverPath = serverPath;
+  const agentPath = asNonEmptyString(raw.agentPath);
+  if (agentPath) attachment.agentPath = agentPath;
   attachment.dataUrl = dataUrl;
   return attachment;
 };
@@ -141,6 +154,8 @@ export const parseQueuedItemInput = (value) => {
   const taskId = asNonEmptyString(provenance?.taskId);
   if (provenance && (!projectId || !taskId)) throw new TypeError('invalid scheduledTask provenance');
   if (!sendConfig && !provenance) throw new TypeError('item sendConfig with providerID and modelID is required');
+  const goal = parseGoal(raw.goal);
+  if (goal && !text.trim()) throw new TypeError('a goal needs message text');
   const item = { content, text };
   const agentMention = asNonEmptyString(raw.agentMention);
   if (agentMention) item.agentMention = agentMention;
@@ -149,6 +164,7 @@ export const parseQueuedItemInput = (value) => {
   const contextPreview = asNonEmptyString(raw.contextPreview).slice(0, 103);
   if (contextPreview) item.contextPreview = contextPreview;
   item.sendConfig = sendConfig ?? {};
+  if (goal) item.goal = goal;
   if (provenance) {
     item.scheduledTask = { projectId, taskId };
     const agent = asNonEmptyString(raw.sendConfig?.agent);
@@ -189,6 +205,7 @@ const toPublicItem = (item) => {
       + (contextPreview.length > firstLine.length || firstLine.length > 100 ? '...' : '');
   }
   publicItem.sendConfig = { ...item.sendConfig };
+  if (item.goal) publicItem.goal = { ...item.goal };
   if (item.scheduledTask) publicItem.scheduledTask = { ...item.scheduledTask };
   return publicItem;
 };
@@ -247,6 +264,13 @@ export function createMessageQueueRuntime({
   // Resolves the `openchamber/auto` sentinel into a real model and agent right
   // before the send; absent means the queue never sees the sentinel.
   resolveAutoSelection = null,
+  // Saves the goal record of a message queued as a goal (the session metadata store).
+  persistSessionGoal = null,
+  // True while something else drives the session (an auto-review run), which
+  // calls `release` when it is done. `deliveryHoldReady` resolves once that
+  // owner knows which sessions it holds; the first dispatch waits for it.
+  isDeliveryHeld = () => false,
+  deliveryHoldReady = Promise.resolve(),
   dataDir,
   fetchImpl = fetch,
   now = Date.now,
@@ -275,7 +299,6 @@ export function createMessageQueueRuntime({
   const timers = new Map(); // sessionId → timeout
   const failures = new Map(); // sessionId → { itemId, failures, nextAttemptAt }
   const abortedAt = new Map(); // sessionId → timestamp
-  const holds = new Map(); // sessionId → expiresAt
   // sessionId → directory, kept after the queue empties: the UI keys its
   // projection by directory, so the broadcast that removes the last item must
   // still name it or the client cannot tell which queue just finished.
@@ -492,7 +515,7 @@ export function createMessageQueueRuntime({
   // v2 takes prompt attachments as URIs; a data URL is one.
   const toPromptFile = (attachment) => ({
     uri: attachment.dataUrl,
-    ...(attachment.filename ? { name: attachment.filename } : {}),
+    ...(attachment.agentPath || attachment.filename ? { name: attachment.agentPath || attachment.filename } : {}),
   });
 
   /**
@@ -550,25 +573,48 @@ export function createMessageQueueRuntime({
     // whole send, so a retry does not admit the context twice.
     const command = await resolveSlashCommand(item.text, directory);
 
-    // Standing project context rides the send exactly as a UI send would
-    // attach it; a failed lookup sends without it rather than not at all.
-    const knowledge = sessionKnowledgeRuntime
-      ? await sessionKnowledgeRuntime.resolvePendingForSession(sessionId, directory)
-        .catch(() => ({ text: '', signature: '' }))
-      : { text: '', signature: '' };
+    // Standing project context is written into the session first, exactly as
+    // a UI send does it; a failed write sends without it rather than not at all.
+    // The response style is left out: a queued message is the user's own, and
+    // this server delivery has no style text of its own, so the entry the
+    // session already holds stays as it is.
+    if (sessionKnowledgeRuntime) await sessionKnowledgeRuntime.sync(sessionId, directory);
+
+    // A message queued as a goal starts it now, as a direct send would. The
+    // goal is saved before anything is admitted, so a failed save leaves
+    // nothing in the session for the retry to duplicate.
+    if (item.goal) {
+      await createSessionGoal({
+        persistSessionGoal,
+        sessionID: sessionId,
+        directory,
+        objective: item.goal.objective || item.text,
+        tokenBudget: item.goal.tokenBudget,
+        providerID: model.providerID,
+        modelID: model.id,
+        onWarning: (message, error) => console.warn(`[message-queue] ${message}:`, error?.message || error),
+      });
+    }
 
     // Same order as a UI send: everything attached to the message is admitted
     // before the message itself, so the model reads it as background. This
     // holds for a command too: its route takes file attachments only, and
     // sending "/name args" as a prompt instead would skip the template
     // OpenCode 2.x expands only on the command route.
-    const preamble = [...contextMessages];
-    if (knowledge.text) preamble.push({ text: knowledge.text, resume: false });
-    for (const synthetic of preamble) {
+    for (const synthetic of contextMessages) {
       await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/synthetic`, {
         directory,
         method: 'POST',
         body: synthetic,
+      });
+    }
+
+    // The goal briefing goes last, right before the message the goal is about.
+    if (item.goal) {
+      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/synthetic`, {
+        directory,
+        method: 'POST',
+        body: { text: buildGoalIntroText(item.goal.tokenBudget), resume: false },
       });
     }
 
@@ -593,10 +639,6 @@ export function createMessageQueueRuntime({
           ...(item.agentMention ? { agents: [{ name: item.agentMention }] } : {}),
         },
       });
-    }
-    if (knowledge.text && sessionKnowledgeRuntime) {
-      // After the send is accepted, so a rejected dispatch carries it again.
-      await sessionKnowledgeRuntime.recordDelivered(sessionId, directory, knowledge.signature).catch(() => undefined);
     }
   };
 
@@ -623,18 +665,10 @@ export function createMessageQueueRuntime({
     timers.set(sessionId, timer);
   };
 
-  const isHeld = (sessionId) => {
-    const expiresAt = holds.get(sessionId);
-    if (expiresAt === undefined) return false;
-    if (expiresAt > now()) return true;
-    holds.delete(sessionId);
-    return false;
-  };
-
   async function tick(sessionId) {
     if (stopped) return;
     const queue = queues.get(sessionId);
-    if (!queue || queue.items.length === 0 || sending.has(sessionId) || isHeld(sessionId)) return;
+    if (!queue || queue.items.length === 0 || sending.has(sessionId) || isDeliveryHeld(sessionId)) return;
 
     const abortHoldUntil = (abortedAt.get(sessionId) ?? 0) + abortHoldMs;
     if (abortHoldUntil > now()) {
@@ -858,18 +892,9 @@ export function createMessageQueueRuntime({
     return commit(sessionId);
   };
 
-  const setHold = (sessionIdInput, held, ttlMs = HOLD_DEFAULT_TTL_MS) => {
-    const sessionId = requireSessionId(sessionIdInput);
-    if (held !== true && held !== false) throw new TypeError('held must be a boolean');
-    if (held) {
-      const ttl = Math.min(asCount(ttlMs) || HOLD_DEFAULT_TTL_MS, HOLD_MAX_TTL_MS);
-      holds.set(sessionId, now() + ttl);
-      clearTimer(sessionId);
-      return { held: true, expiresAt: holds.get(sessionId) };
-    }
-    holds.delete(sessionId);
+  /** What held the session's delivery let go: deliver whatever waited. */
+  const release = (sessionId) => {
     armDispatch(sessionId);
-    return { held: false, expiresAt: null };
   };
 
   // --- events --------------------------------------------------------------
@@ -922,8 +947,10 @@ export function createMessageQueueRuntime({
       if (status?.type === 'connect') reconcileAll();
     });
     void load()
-      .then(() => {
+      .then(async () => {
         if (queues.size > 0) console.log(`[message-queue] restored queues for ${queues.size} session(s)`);
+        // A tick that ran before this saw every session held and armed nothing.
+        await deliveryHoldReady;
         reconcileAll();
       })
       .catch((error) => {
@@ -963,7 +990,7 @@ export function createMessageQueueRuntime({
     takeAll,
     reorder,
     clear,
-    setHold,
+    release,
     processPayload,
     start,
     stop,
@@ -1010,15 +1037,6 @@ export function registerMessageQueueRoutes(app, runtime) {
       res.json(await runtime.reorder(req.params.sessionId, req.body?.itemIds));
     } catch (error) {
       respondError(res, error, 'Failed to reorder queue');
-    }
-  });
-
-  app.put('/api/message-queue/sessions/:sessionId/hold', async (req, res) => {
-    try {
-      await runtime.load();
-      res.json(runtime.setHold(req.params.sessionId, req.body?.held, req.body?.ttlMs));
-    } catch (error) {
-      respondError(res, error, 'Failed to update queue hold');
     }
   });
 

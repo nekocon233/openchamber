@@ -5,7 +5,14 @@ Own filesystem API behavior for the web server runtime, including workspace-boun
 
 ## Entrypoints and structure
 - `packages/web/server/lib/fs/routes.js`: route registration and runtime-owned state for `/api/fs/*` endpoints.
-- `packages/web/server/lib/fs/search.js`: fuzzy filesystem search runtime used by non-FS routes (for example project icon discovery).
+- `packages/web/server/lib/fs/search.js`: fuzzy filesystem search for workspace supplements and project icon discovery.
+- `packages/web/server/lib/fs/content-search.js`: find in files, run by ripgrep (`GET /api/fs/find-in-files`).
+- `packages/web/server/lib/fs/ripgrep.js`: where the ripgrep binary comes from.
+- `folder-change-watch.js` owns signal-driven fingerprint/settle scheduling for extension packages and custom themes. Each root has one watcher, one 30-second safety interval and at most one pending fast check. Its first fingerprint starts at creation; stop closes the watcher, cancels timers and suppresses in-flight results.
+
+### Why folder change checks retain a safety interval
+
+The interval reopens the watcher before checking, so Linux/Windows folder deletion and recreation recovers even when the old watcher emits nothing. A failed, errored or closed watcher uses the caller's fast cadence until a safety tick restores it; healthy roots read files only on signals, settling checks and safety ticks.
 
 ## Public exports
 - `registerFsRoutes(app, dependencies)` from `routes.js`
@@ -35,12 +42,21 @@ Own filesystem API behavior for the web server runtime, including workspace-boun
      - `POST /api/fs/clone`
      - `POST /api/fs/exec`
     - `GET /api/fs/exec/:jobId`
-    - `GET /api/fs/list`
+     - `GET /api/fs/list`
+     - `GET /api/fs/search` returns `{ files }` with name, absolute path,
+       relative path and extension. It accepts `directory` (active workspace
+       when omitted), `query`, `limit` (default 60, clamped to 1..500),
+       `includeHidden=true` and `respectGitignore=false`. Paths stay under the
+       requested root, including symlink aliases.
+    - `GET /api/fs/find-in-files` — find in files, see below.
     - `GET /api/fs/git-dirs` — shallow nested git repository discovery for the
       Git tab (breadth-first readdir walk, capped at depth 3 and 100 visited
       directories so shallow repositories are checked before deeper folders;
       `.git` directory, file, or
-      symlink marks a repository boundary; junk directories are skipped;
+      symlink marks a repository boundary, except the root's own `.git`,
+      which the walk goes past: a root repository's submodules and nested
+      checkouts are reported too, and the client decides whether the root or
+      a discovered repository is the one a surface works in; junk directories are skipped;
       symlinked directories are followed, each real directory walked once,
       and repositories are reported under the link path)
   - Owns exec job queue state (`execJobs`) and lifecycle/TTL pruning.
@@ -49,15 +65,96 @@ Own filesystem API behavior for the web server runtime, including workspace-boun
   - The active project directory is validated with `fs.realpath`, so when the project root is itself a symlink the workspace base no longer matches the paths the client sends. Workspace resolution therefore retries against the raw directory the client requested (`requestedDirectory` from `resolveProjectDirectory`) before falling back to worktree roots. Symlinks are still resolved afterwards, and write/exec routes keep their canonical containment check against the resolved base.
 - `createFsSearchRuntime({ fsPromises, path, spawn, resolveGitBinaryForSpawn })` from `search.js`
   - Returns `{ searchFilesystemFiles(rootPath, options) }`.
-  - Supports fuzzy matching, hidden-file handling, and optional `git check-ignore` filtering.
+   - Supports fuzzy matching, hidden-file handling, and optional Git ignore filtering.
+   - An empty query stops at `limit` candidates. A query walks the tree until it is exhausted or 10,000 files are inspected (`FILE_SEARCH_MAX_VISITED_FILES`): weak shallow matches would otherwise exhaust a candidate budget before exact deeper matches are ever visited. The ceiling mirrors `packages/vscode/src/bridge-fs-helpers-runtime.ts`, and both suites pin the two runtimes' agreement.
 
-Both search and directory listing discard `git check-ignore` stderr at spawn.
+### Why workspace search supplements OpenCode
+
+The shared file-search store keeps OpenCode's indexed hits in their original
+order, appends unique filesystem hits for non-default toggles, then applies the
+caller's result limit. Replacing the index with the icon-discovery walk would
+drop normal results. Web, desktop, hosted mobile and Capacitor use this endpoint;
+VS Code forwards the same flags to its extension-host search.
+
+Git ignore reads use NUL-delimited paths, preserving Unicode, whitespace and
+newlines. Git's quoted line output cannot be compared directly with filesystem
+names.
+
+`workspaceSearch: true` searches generated directories such as `build` and
+`dist`, excludes only `.git` and `node_modules`, and removes the icon walk's
+10,000-file ceiling. A 30-second deadline fails the search rather than returning
+an unmarked partial answer. Default icon discovery keeps its existing bounds.
+
+### Why workspace search reads ignored paths per repository
+
+Workspace search runs `git ls-files --others --ignored --exclude-standard
+--directory -z` once per repository in each query. Per-directory `check-ignore`
+spawned hundreds of Git processes in a copied checkout; batching its input still
+repeated path checks. Git's ignored-path listing keeps tracked files visible,
+applies nested ignore and negation rules, and collapses fully ignored directories
+so the filesystem walk can prune them. A nested `.git` file or directory starts
+a separate read in that repository's context. A wholly ignored search root can
+be reported as `./`; it excludes that root's contents. Git keeps directories with
+tracked descendants expanded, preserving their tracked exceptions.
+The reads live only for the current
+query, so later queries see changed ignore rules and cannot share state across
+requested roots. Icon discovery retains per-directory `check-ignore` and its
+bounded walk.
+
+### Find in files
+
+`GET /api/fs/find-in-files?query=…&regex=true|false&limit=…&includeHidden=true&respectGitignore=false`
+searches the active workspace (resolved like every other fs route, from the
+`x-opencode-directory` header) for lines containing `query`, as text unless
+`regex=true`. ripgrep runs the search (`content-search.js`), so what it covers
+is what the file tree shows: `.gitignore` rules apply unless
+`respectGitignore=false`, hidden entries stay out unless `includeHidden=true`,
+binary files are skipped, and `.git` and `node_modules` never take part. A
+lowercase query matches any case; one with a capital letter matches exactly
+(`--smart-case`). The user's ripgrep configuration is ignored (`--no-config`).
+
+The answer is `{ matches, stopped }`. Each match is one line:
+`{ path, relativePath, line, column, text, ranges, cutStart }`, where `column`
+is the 1-based position of the first match in the original line, `text` is the
+line without indentation, cut to at most 200 characters, and `ranges` are
+`[start, end)` offsets inside `text` (UTF-16 code units, converted from
+ripgrep's byte offsets). A match more than 48 characters into a line is shown
+with 24 characters before it and `cutStart: true`. ripgrep runs in the
+canonical project directory, but `path` is built under the directory the client
+requested (`requestedDirectory`), so a project opened through a symlink gets the
+same paths as its file tree. Matches are sorted by path,
+then line.
+
+`limit` defaults to 200 and is capped at 500; when it is reached the process
+is killed and `stopped` is `'limit'`. A search running for 30 seconds is killed
+too and answers what it found with `stopped: 'deadline'`. Neither is an error.
+When the client closes the response (a new keystroke aborted the request) the
+process is killed and nothing is sent. A failed search is never an empty one:
+an invalid regular expression answers `400` with `reason: 'invalid-pattern'`
+and ripgrep's reason as `error`; a server without ripgrep answers `501` with
+`reason: 'search-unavailable'`; any other failure answers `500` with
+`reason: 'search-failed'`. ripgrep exits with code 2 after a search that found
+matches but could not read every file, which counts as a success.
+
+ripgrep itself (`ripgrep.js`, composed in `feature-routes-runtime.js`) is taken
+from, in order: `Resources/ripgrep` in a packaged desktop build, staged for the
+target architecture by `packages/electron/scripts/prepare-ripgrep.mjs`; the
+`@vscode/ripgrep` platform package, an optional dependency of this package that
+npm and Bun install for the current platform; `rg` on the PATH user commands
+get. A found binary is kept for the process lifetime; a miss is looked up again
+on the next search. The stderr pipe is read to the end, for the reason below.
+
+Both search and directory listing discard Git ignore-read stderr at spawn.
 They consume stdout for ignore matches. Never create an unread stderr pipe:
 Git diagnostics can fill it and block the child indefinitely, so repeated
-searches accumulate live Git processes. `git-process.test.js` exercises both
+searches accumulate live Git processes. Both also kill a `check-ignore` child
+that has not exited within `OPENCHAMBER_GIT_CHECK_IGNORE_TIMEOUT_MS` (default
+2500 ms, `0` disables it) and continue with no ignored names.
+`git-process.test.js` exercises both
 paths with real OS pipes, twelve concurrent checks, and 2 MiB of diagnostics
 per child. Successful completion must preserve ignore filtering and reap all
-twelve children.
+twelve children. Workspace search applies the same timeout and fallback to its
+`ls-files` child.
 
 ## Composition contract with `index.js`
 - `index.js` provides composition-time dependencies only (platform primitives + callbacks such as `resolveProjectDirectory`, `normalizeDirectoryPath`, and `buildAugmentedPath`).
@@ -81,9 +178,12 @@ The Git service validates a selected commit identity before planning or spawning
 - Workspace authorization accepts both the configured managed paths and their filesystem-confirmed canonical roots. Canonical lookup runs only when lexical workspace/managed-root checks fail. One failed managed-root lookup cannot reject an independently authorized root or worktree. Path comparisons remain case-sensitive on POSIX: distinct Linux directories named `chats` and `Chats` never become aliases through string folding. Shared UI keeps exact root membership for classification and directory cleanup.
 - Filesystem `EPERM`/`EACCES` failures use the stable `reason: "os-permission"` response marker. Workspace-boundary policy denials must not use that marker because a native folder picker cannot remediate them.
 - `GET /api/fs/directory-stat?path=...` uses one `stat` without listing contents or resolving project topology. It follows the same authenticated directory-discovery path policy as `/api/fs/list`, including targets outside the active workspace. A directory returns `{ isDirectory: true }`; `ENOENT` returns `not-found`, and a file or `ENOTDIR` returns `not-directory`. Permission and other failures remain distinct from a missing path. VS Code explicitly returns 501, so the shared client treats its probe as unknown.
-- HTML previews are untrusted content. `POST /api/fs/preview` (normal API auth, body `{ path }`, workspace resolved like any read) mints a grant `{ grant, expiresAt }` for one page. `GET /api/fs/preview/<grant>/<absolute path>` serves the page and its files: the grant sits in the path, so the page's relative URLs carry it and no session credential appears in a URL the page can read. `core-routes.js` lets these GETs past API auth; the route itself rejects an unknown or expired grant with 403. A grant fixes the workspace base at mint time (the page's project, or the managed root it lives in) and lapses after ten idle minutes; every served file extends it. Every answer carries `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads`, so the page is an opaque-origin document even when opened in its own tab, and the Files view frame has no `allow-same-origin`. Embedding (images, stylesheets, classic scripts) works anywhere the grant's base allows. Reading bytes from script (`fetch`, fonts, module scripts) is a CORS request from origin `null`, answered with `Access-Control-Allow-Origin: null` only inside the grant's read root: the page's project, or for a page inside a managed root, the page's own folder. Other files under `~/.config/openchamber` stay unreadable to the page.
+- HTML previews are untrusted content. `POST /api/fs/preview` (normal API auth, body `{ path }`, workspace resolved like any read) mints a grant `{ grant, expiresAt }` for one page. A page outside the workspace is asked for with `allowOutsideWorkspace=true`, as the editor reads it; its grant's base and read root are the page's own folder. `GET /api/fs/preview/<grant>/<absolute path>` serves the page and its files: the grant sits in the path, so the page's relative URLs carry it and no session credential appears in a URL the page can read. `core-routes.js` lets these GETs past API auth; the route itself rejects an unknown or expired grant with 403. A grant fixes the workspace base at mint time (the page's project, or the managed root it lives in) and lapses after ten idle minutes; every served file extends it. Every answer carries `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads`, so the page is an opaque-origin document even when opened in its own tab, and the Files view frame has no `allow-same-origin`. Embedding (images, stylesheets, classic scripts) works anywhere the grant's base allows. Reading bytes from script (`fetch`, fonts, module scripts) is a CORS request from origin `null`, answered with `Access-Control-Allow-Origin: null` only inside the grant's read root: the page's project, or for a page inside a managed root, the page's own folder. Other files under `~/.config/openchamber` stay unreadable to the page. Every HTML file served this way carries `preview-bridge.js` as the first script of its head, so the Files view can run its annotation overlay in the page: the bridge evaluates code posted by the frame's parent and posts the result back. It runs in the page's own sandbox, so it can do only what the page's scripts already can. It is inserted into the bytes after `<head>`, `<html>` or the doctype, never before the doctype, which would switch the page to quirks mode; UTF-16 pages go out unchanged.
 - `GET /api/fs/raw` answers one `Range: bytes=…` span with `206`, `Content-Range` and a stream from disk (`byte-range.js` reduces the header to a span). Media elements send a span on every seek, and Chromium and WebKit refuse to seek without a `206`, so the viewer's audio and video players depend on this. A whole-file request streams from disk the same way, so a large PDF or recording never sits in server memory. The MIME table (`FILE_MIME_MAP`) is shared with `/api/fs/preview` and covers images, PDF, audio, video, fonts, CSV/TSV and Mermaid.
 - File read, raw and stat routes accept outside paths with `allowOutsideWorkspace=true` under the normal server authentication and OS permissions. They do not require a separate file grant. Legacy grant parameters are ignored. Workspace-scoped reads resolve symlinks after checking the requested path. Write routes keep canonical-target boundary checks.
+- Read, raw and stat preserve whitespace in absolute file targets. These paths are already resolved filenames; applying pasted-directory cleanup would read a different file. Relative and tilde inputs keep directory normalization, and workspace and symlink authorization remain unchanged.
+- `GET /api/fs/stat?optional=true` answers `{ path, exists: false }` without error logging for `ENOENT`, `ENOTDIR`, `EINVAL`, and `ENAMETOOLONG` from the target's `realpath` or `stat`. Chat-token probes can produce invalid paths or invalid ASAR names, so these expected misses stay quiet. Unexpected failures such as `EIO`, `EMFILE`, and internal errors still log and return `500`; OS permission errors remain `403`. Without `optional=true`, a missing path returns `404` and other non-permission failures log and return `500`. VS Code's local filesystem proxy is unchanged and retains its own error mapping.
 - If adding new `/api/fs/*` endpoints, add them in `routes.js` and extend this document.
+- `routes.js` and the sibling modules it imports (`byte-range.js`, `workspace-file-names.js`, `content-search.js`, `../shared/guards.js`, `../git/redaction.js`, `../path-realpath-cache.js`) load with Node built-ins only: `routes.test.js` imports a copy of them in a bare Node process without `node_modules`, the way a packaged desktop build once failed to load them. A new sibling module goes into that test's copy list and takes its value guards from `../shared/guards.js` rather than from a dependency.
 - `GET /api/fs/list` may resolve symlinks with `realpath` to read directory contents, but the response `path` and each entry `path` must stay in the caller's requested path space (`path.join(requestedPath, name)`). Returning real paths breaks file-tree expansion for directories reached through workspace symlinks.
 - `POST /api/fs/upload` accepts one `application/octet-stream` body with `path` and optional `overwrite=true` query parameters. The body streams into a same-directory temp file with a 100 MiB default cap configurable through `OPENCHAMBER_FS_UPLOAD_MAX_BYTES`; failed and oversized uploads clean up that temp file. New files commit through an atomic no-replace link, existing files return `409` unless overwrite is explicit, directory targets are rejected, and the destination parent resolves before writing so uploads cannot escape through workspace symlinks.

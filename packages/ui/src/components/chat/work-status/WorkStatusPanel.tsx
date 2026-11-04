@@ -209,7 +209,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       ? <WorkStatusTodosSection sessionId={sessionId} directory={directory} />
       : <WorkStatusChecklistSection sessionId={sessionId} directory={directory} />,
     taskBackground: <WorkStatusBackgroundTasksSection sessionId={sessionId} directory={directory} />,
-    mcp: <WorkStatusMcpSection directory={directory} />,
+    mcp: <WorkStatusMcpSection sessionId={sessionId} directory={directory} />,
     pinned: <WorkStatusPinnedSection sessionId={sessionId} directory={directory} />,
     contextSources: <WorkStatusContextSection sessionId={sessionId} directory={directory} />,
     taskPlan: <WorkStatusPlanSection sessionId={sessionId} directory={directory} />,

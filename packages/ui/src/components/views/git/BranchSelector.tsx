@@ -208,7 +208,7 @@ export const BranchSelector: React.FC<BranchSelectorProps> = ({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={t('gitView.branch.searchPlaceholder')}
-              className="oc-surface-elevated h-9 w-full rounded-lg border border-border bg-surface-elevated px-3 typography-meta outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="oc-surface-elevated oc-raised oc-field h-9 w-full rounded-lg bg-surface-elevated px-3 typography-meta outline-none placeholder:text-muted-foreground"
             />
             {switchBlockedNotice ? (
               <div className="flex items-start gap-2 px-2 py-1">
@@ -244,12 +244,19 @@ export const BranchSelector: React.FC<BranchSelectorProps> = ({
             <Button
               variant="ghost"
               size="sm"
-              className="min-w-0 max-w-full justify-start gap-1.5 px-2 py-1"
+              /* Keeps its width in a row; the Git panel header lets it
+                 shrink only once the repository picker is down to its icon
+                 (`branch-selector__trigger`, index.css). */
+              className="branch-selector__trigger max-w-full justify-start gap-1.5 px-2 py-1"
               disabled={disabled}
             >
               <Icon name="git-branch" className="size-4 text-primary" />
-              <span className="min-w-0 truncate font-medium text-start">
-                {currentBranch || t('gitView.branch.detachedHead')}
+              {/* Like the repository picker: the name truncates down to the
+                  icon and chevron, which stay. */}
+              <span className="grid min-w-0 grid-cols-[minmax(0,max-content)]">
+                <span className="truncate font-medium text-start">
+                  {currentBranch || t('gitView.branch.detachedHead')}
+                </span>
               </span>
               <Icon name="arrow-down-s" className="size-4 opacity-60" />
             </Button>
@@ -271,7 +278,7 @@ export const BranchSelector: React.FC<BranchSelectorProps> = ({
             onKeyDown={stopDropdownTypeahead}
           />
           {switchBlockedNotice ? (
-            <div className="flex items-start gap-2 border-b border-border/60 px-3 py-2">
+            <div className="flex items-start gap-2 border-b border-edge px-3 py-2">
               <Icon name="alert" className="mt-0.5 size-3.5 shrink-0 text-[var(--status-warning)]" aria-hidden="true" />
               <span className="typography-micro text-muted-foreground">{switchBlockedNotice}</span>
             </div>

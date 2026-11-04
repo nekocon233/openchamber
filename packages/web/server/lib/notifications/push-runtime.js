@@ -27,6 +27,8 @@ export const createPushRuntime = (deps) => {
     PUSH_SUBSCRIPTIONS_FILE_PATH,
     readSettingsFromDiskMigrated,
     writeSettingsToDisk,
+    // Session keys of revoked or expired clients (client-push-access.js).
+    getInvalidSessionKeys = async () => new Set(),
   } = deps;
 
   let persistPushSubscriptionsLock = Promise.resolve();
@@ -256,6 +258,27 @@ export const createPushRuntime = (deps) => {
     });
   };
 
+  // A browser can sit under several keys and a send reaches it through any of them, so it
+  // leaves every key except those in `keep`.
+  const removePushDevicesOfSessions = async (sessionKeys, keep) => {
+    await persistPushSubscriptionUpdate((current) => {
+      const subsBySession = { ...(current.subscriptionsBySession || {}) };
+      const endpoints = new Set(
+        sessionKeys.flatMap((key) => normalizePushSubscriptions(subsBySession[key]).map((entry) => entry.endpoint)),
+      );
+      for (const [token, entries] of Object.entries(subsBySession)) {
+        if (keep.has(token) || !Array.isArray(entries)) continue;
+        const filtered = entries.filter((entry) => !endpoints.has(entry?.endpoint));
+        if (filtered.length === 0) {
+          delete subsBySession[token];
+        } else {
+          subsBySession[token] = filtered;
+        }
+      }
+      return { version: PUSH_SUBSCRIPTIONS_VERSION, subscriptionsBySession: subsBySession };
+    });
+  };
+
   const sendPushToSubscription = async (sub, payload) => {
     await ensurePushInitialized();
     const body = JSON.stringify(payload);
@@ -434,6 +457,7 @@ export const createPushRuntime = (deps) => {
     getOrCreateVapidKeys,
     addOrUpdatePushSubscription,
     removePushSubscription,
+    removePushDevicesOfSessions,
     sendPushToAllUiSessions,
     updateUiVisibility,
     isAnyUiVisible,

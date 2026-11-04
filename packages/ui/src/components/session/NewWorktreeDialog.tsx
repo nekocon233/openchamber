@@ -525,7 +525,7 @@ export function NewWorktreeDialog({
     }
 
     const { reference } = choice;
-    if (reference.kind === 'issue') {
+    if (reference.kind !== 'pull') {
       linkItem(
         { kind: 'issue', number: reference.number, title: reference.title, url: reference.url, selection: choice },
         `issue-${reference.number}-${generateBranchSlug()}`,

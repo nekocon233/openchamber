@@ -40,8 +40,13 @@ import { setChatCovered } from './chatCoverage';
 import { useIsEditorWorkspaceLayout } from './workspaceLayout';
 
 import { ChatView } from '@/components/views/ChatView';
+import { DiagnosticDialogAvailableContext } from '@/lib/diagnostics/dialog-availability';
 
 const loadSettingsWindow = () => import('@/components/views/SettingsWindow').then(m => m.SettingsWindow);
+
+// Live motion knobs, development builds only: the import is dropped from
+// production bundles.
+const MotionTuningPanel = import.meta.env.DEV ? React.lazy(() => import('@/components/dev/MotionTuningPanel')) : null;
 
 // Surfaces that replace or cover the chat load the first time they open, so
 // the startup bundle carries only the chat. Each reads its own open state from
@@ -56,6 +61,7 @@ const loadArchiveView = () => import('@/components/views/ArchiveView').then((m) 
 const loadIntegrationsCatalogView = () => import('@/components/views/IntegrationsCatalogView').then((m) => m.IntegrationsCatalogView);
 const loadUsageStatsView = () => import('@/components/views/usage/UsageStatsView').then((m) => m.UsageStatsView);
 const loadSourceBoardView = () => import('@/components/sourceBoard/SourceBoardView').then((m) => m.SourceBoardView);
+const loadOverviewView = () => import('@/components/overview/OverviewView').then((m) => m.OverviewView);
 const loadWorktreesView = () => import('@/components/views/WorktreesView').then((m) => m.WorktreesView);
 const loadSpacesView = () => import('@/components/views/SpacesView').then((m) => m.SpacesView);
 const loadSpaceAccessDialog = () => import('@/components/session/spaces/SpaceAccessDialog').then((m) => m.SpaceAccessDialog);
@@ -130,6 +136,7 @@ export const MainLayout: React.FC = () => {
     const isIntegrationsCatalogOpen = useUIStore((state) => state.isIntegrationsCatalogOpen);
     const isUsageStatsPageOpen = useUIStore((state) => state.isUsageStatsPageOpen);
     const isSourceBoardOpen = useUIStore((state) => state.isSourceBoardOpen);
+    const isOverviewOpen = useUIStore((state) => state.isOverviewOpen);
     const worktreesPageProjectId = useUIStore((state) => state.worktreesPageProjectId);
     // The spaces page exists only while the feature's switch is on.
     const isSpacesPageOpen = useUIStore((state) => state.isolatedSpacesEnabled && state.spacesPageProjectId !== null);
@@ -184,7 +191,7 @@ export const MainLayout: React.FC = () => {
     }, [isMobile, setIsMobile]);
 
     return (
-        <DiffWorkerProvider>
+        <DiagnosticDialogAvailableContext.Provider value><DiffWorkerProvider>
             <ProjectActionsProvider>
             <div
                 data-page-scroll-lock="true"
@@ -243,6 +250,7 @@ export const MainLayout: React.FC = () => {
                                                 </div>
                                             )}
                                             <OnDemand needed={isSourceBoardOpen} load={loadSourceBoardView} onFailure={closeMainSurfaces} />
+                                            <ErrorBoundary><OnDemand needed={isOverviewOpen} load={loadOverviewView} onFailure={closeMainSurfaces} /></ErrorBoundary>
                                             <ErrorBoundary><OnDemand needed={Boolean(worktreesPageProjectId)} load={loadWorktreesView} onFailure={closeMainSurfaces} /></ErrorBoundary>
                                             {isSpacesPageOpen ? <ErrorBoundary><OnDemand needed load={loadSpacesView} onFailure={closeMainSurfaces} /></ErrorBoundary> : null}
                                             {guestPage && <div className="absolute inset-0 z-10 bg-background">
@@ -279,8 +287,11 @@ export const MainLayout: React.FC = () => {
                         onOpenChange={setSettingsDialogOpen}
                     />
                 ) : null}
+                {MotionTuningPanel ? (
+                    <React.Suspense fallback={null}><MotionTuningPanel /></React.Suspense>
+                ) : null}
             </div>
             </ProjectActionsProvider>
-        </DiffWorkerProvider>
+        </DiffWorkerProvider></DiagnosticDialogAvailableContext.Provider>
     );
 };

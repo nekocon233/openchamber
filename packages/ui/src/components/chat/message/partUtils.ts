@@ -1,3 +1,4 @@
+import { isInvisibleText } from '@/lib/invisibleText';
 import type { Part } from '@/lib/opencode/model';
 import { readPlanQuestion } from './planPart';
 
@@ -17,7 +18,7 @@ export const isEmptyTextPart = (part: Part): boolean => {
     if (part.type !== 'text') {
         return false;
     }
-    return part.text.trim().length === 0;
+    return isInvisibleText(part.text);
 };
 
 interface VisibleFilterOptions {

@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/icon/Icon';
+import { Spinner } from '@/components/ui/spinner';
+import { PauseClock } from '@/components/ui/pause-clock';
 import { useBtwStore } from '@/stores/useBtwStore';
 import { useSync } from '@/sync/use-sync';
 import {
@@ -17,9 +19,9 @@ import {
     useSessionStatus,
     useScopedBlockingPermissions,
     useScopedBlockingForms,
+    useRecoveredQuestions,
 } from '@/sync/sync-context';
 import { useStreamingStore } from '@/sync/streaming';
-import { ScrollShadow } from '@/components/ui/ScrollShadow';
 import { destroyBtwSession, filterBtwTailMessages, promoteBtwSession, type BtwSessionRef } from '@/lib/btw';
 import type { BtwPanelState } from './useBtwPanelState';
 import { ChatSurfaceProvider } from '../ChatSurfaceContext';
@@ -28,6 +30,7 @@ import ChatMessage from '../ChatMessage';
 import { PermissionCard } from '../PermissionCard';
 import { FormCard } from '../FormCard';
 import { SessionErrorNotice } from '../SessionErrorNotice';
+import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 
 const IDLE_SESSION_STATUS = { type: 'idle' as const };
 
@@ -45,9 +48,10 @@ const IDLE_SESSION_STATUS = { type: 'idle' as const };
  * and the app navigates to it), destroy (the fork is deleted; the main
  * conversation is never touched).
  */
-const BtwPanelView: React.FC<{ parentSessionId: string; panel: BtwPanelState; onExit: () => void }> = ({
+const BtwPanelView: React.FC<{ parentSessionId: string; panel: BtwPanelState; hidden?: boolean; onExit: () => void }> = ({
     parentSessionId,
     panel,
+    hidden,
     onExit,
 }) => {
     const { t } = useI18n();
@@ -99,7 +103,8 @@ const BtwPanelView: React.FC<{ parentSessionId: string; panel: BtwPanelState; on
         );
     }
 
-    return <AnimatePresence>{stage}</AnimatePresence>;
+    // `hidden`: collapsed while the parent's own request takes the dock.
+    return <AnimatePresence>{hidden ? null : stage}</AnimatePresence>;
 };
 
 const useBtwDestroy = (sessionRef: BtwSessionRef | null): (() => void) => {
@@ -119,6 +124,7 @@ type BtwSessionData = {
     activeStreamingPhase: 'streaming' | 'cooldown' | 'completed' | null;
     sessionPermissions: ReturnType<typeof useScopedBlockingPermissions>;
     sessionForms: ReturnType<typeof useScopedBlockingForms>;
+    sessionRecoveredQuestions: ReturnType<typeof useRecoveredQuestions>;
     isEmpty: boolean;
 };
 
@@ -152,6 +158,7 @@ const useBtwSessionData = (
     );
     const sessionPermissions = useScopedBlockingPermissions(sessionId, directory);
     const sessionForms = useScopedBlockingForms(sessionId, directory);
+    const sessionRecoveredQuestions = useRecoveredQuestions(sessionId, directory);
 
     const tailRecords = React.useMemo(
         () => filterBtwTailMessages(messageRecords, boundaryMessageID),
@@ -178,6 +185,7 @@ const useBtwSessionData = (
         activeStreamingPhase,
         sessionPermissions,
         sessionForms,
+        sessionRecoveredQuestions,
         isEmpty: tailRecords.length === 0,
     };
 };
@@ -253,7 +261,7 @@ const BtwFrame: React.FC<{
                     className="flex min-w-0 items-center gap-2 text-start text-muted-foreground transition-colors hover:text-foreground"
                 >
                     {headerSpinner ? (
-                        <Icon name="loader-4" className="size-3.5 shrink-0 animate-spin" />
+                        <Spinner className="size-3.5 shrink-0" />
                     ) : (
                         <Icon name="chat-ai-3" className="size-3.5 shrink-0" />
                     )}
@@ -432,14 +440,17 @@ const BtwMessages: React.FC<{
     }
 
     return (
-        <ScrollShadow
+        <ScrollableOverlay
             ref={bodyRef}
             onScroll={onBodyScroll}
-            size={32}
+            useScrollShadow
+            scrollShadowSize={32}
             data-scroll-shadow="true"
             data-selection-menu-boundary="true"
-            className="max-h-[min(55vh,520px)] min-h-0 overflow-y-auto px-3 py-1"
-            style={maxHeight !== undefined ? { maxHeight } : undefined}
+            outerClassName="max-h-[min(55vh,520px)] min-h-0"
+            outerStyle={maxHeight !== undefined ? { maxHeight } : undefined}
+            className="px-3 py-1"
+            disableHorizontal
         >
             <div ref={contentRef}>
                 {data.messageRecords.map((record, index) => (
@@ -453,10 +464,13 @@ const BtwMessages: React.FC<{
                         }
                     />
                 ))}
-                {data.sessionForms.length > 0 || data.sessionPermissions.length > 0 ? (
+                {data.sessionForms.length > 0 || data.sessionPermissions.length > 0 || data.sessionRecoveredQuestions.length > 0 ? (
                     <div>
                         {data.sessionForms.map((form) => (
                             <FormCard key={form.id} form={form} />
+                        ))}
+                        {data.sessionRecoveredQuestions.map((question) => (
+                            <FormCard key={question.form.id} form={question.form} recovered={question} />
                         ))}
                         {data.sessionPermissions.map((permission) => (
                             <PermissionCard key={permission.id} permission={permission} />
@@ -476,11 +490,14 @@ const BtwMessages: React.FC<{
                     )}
                     aria-hidden={!data.sessionIsWorking}
                 >
-                    <Icon name="loader-4" className="size-3.5 animate-spin" />
+                    {/* Hidden, not removed: it must not keep stepping then. */}
+                    <PauseClock paused={!data.sessionIsWorking}>
+                        <Spinner className="size-3.5" />
+                    </PauseClock>
                     <span>{t('chat.btw.working')}</span>
                 </div>
             </div>
-        </ScrollShadow>
+        </ScrollableOverlay>
     );
 };
 

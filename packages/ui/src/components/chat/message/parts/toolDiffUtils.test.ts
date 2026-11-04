@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { Metadata } from '@/lib/opencode/model';
 
 import {
     extractFirstChangedLineFromDiff,
@@ -20,6 +21,14 @@ import {
 const identity = (path: string) => path;
 
 describe('toolDiffUtils', () => {
+    test('renders replacement excerpts without exposing them as complete file patches or positions', () => {
+        const diff = '--- /repo/a.txt\n+++ /repo/a.txt\n@@ -1 +1 @@\n-before\n+after\n';
+        const metadata = { nativeBackend: 'antigravity', nativeDiffScope: 'replacement', files: [{ filePath: '/repo/a.txt', diff }], diff };
+        expect(getDiffPatchEntries(metadata, diff, identity)[0]?.patch).toContain('+after');
+        expect(getPrimaryDiffFromMetadata('edit', metadata)).toBeUndefined();
+        expect(getFirstChangedLineFromMetadata('edit', metadata)).toBeUndefined();
+        expect(resolveToolQuickOpenTarget('edit', { filePath: '/repo/a.txt' }, metadata)).toEqual({ filePath: '/repo/a.txt' });
+    });
     test('prefers the absolute patch path over its worktree-relative label', () => {
         expect(getPrimaryToolPath('patch', undefined, {
             files: [{
@@ -65,7 +74,7 @@ describe('toolDiffUtils', () => {
     test('selects the move patch and line from the same non-deleted file', () => {
         const deletedPatch = '@@ -3 +3 @@\n-old\n+deleted';
         const movedPatch = '@@ -42 +42 @@\n-before\n+after';
-        const metadata = {
+        const metadata: Metadata = {
             patch: deletedPatch,
             files: [
                 {

@@ -624,7 +624,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
         const scope = repositoryBindingOwner.scope(directory);
         const loading = runBackgroundNetworkTask(() => repositoryBindingOwner.read(scope, sourceControl)).then((load) => {
           if (cancelled || discoveryRuntimeKey !== getRuntimeKey()) return null;
-          const primaryContext = load.contexts[0];
+          const primaryContext = load?.contexts[0];
           const contexts = primaryContext && getSourceControlReadContextAuthState(
             useSourceControlAuthStore.getState().entries[getSourceControlAuthKey(primaryContext)],
             primaryContext,

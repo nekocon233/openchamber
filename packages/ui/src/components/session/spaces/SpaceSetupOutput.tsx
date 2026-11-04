@@ -23,6 +23,7 @@ import { useSpacesStore } from '@/lib/spaces/spaces-store';
 import { useUIStore } from '@/stores/useUIStore';
 import { failureOfError, spaceFailureText } from './spaceFailureText';
 import { useOpenSpaceDomain, useSpaceJournal } from './spaceNetwork';
+import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 
 type OutputRead = { kind: 'reading' } | { kind: 'read'; answer: SpaceSetupOutput } | { kind: 'failed'; reason: string };
 
@@ -40,7 +41,7 @@ const SetupBlockedDomains: React.FC<{ entry: SpaceEntry; span: { startedAt: stri
   if (blocked.length === 0) return null;
   const allowed = entry.network?.mode === 'allowlist' ? entry.network.domains : [];
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-border/60 px-2.5 py-2">
+    <div className="flex flex-col gap-1.5 rounded-md border border-edge px-2.5 py-2">
       <p className="typography-meta text-muted-foreground">{t('spaces.setup.output.blocked')}</p>
       <ul className="flex flex-col gap-1.5">
         {blocked.map((domain) => (
@@ -62,6 +63,12 @@ const SetupBlockedDomains: React.FC<{ entry: SpaceEntry; span: { startedAt: stri
       </ul>
     </div>
   );
+};
+
+/** The program a shell could not find, from its "name: command not found" line, or null. */
+const missingProgramOf = (output: string): string | null => {
+  const match = /(?:^|\n)(?:\S+: )?(?:line \d+: )?([^\s:]+): command not found/.exec(output);
+  return match?.[1] ?? null;
 };
 
 export const SpaceSetupOutputDialog: React.FC = () => {
@@ -92,7 +99,12 @@ export const SpaceSetupOutputDialog: React.FC = () => {
 
   const close = () => useSpacesStore.getState().closeSetupOutputDialog();
   const setup = read.kind === 'read' ? read.answer.setup : null;
-  const title = t('spaces.setup.output.title', { name: entry?.name ?? '' });
+  const output = read.kind === 'read' ? read.answer.output : null;
+  const name = entry?.name ?? '';
+  const title = t('spaces.setup.output.title');
+  // A shell that could not find the program says so in its last words, with exit code 127: the
+  // window names the program, since that is the one thing to install or change.
+  const missingProgram = setup?.state === 'failed' && setup.exitCode === 127 ? missingProgramOf(output ?? '') : null;
 
   const runAgain = () => {
     if (!spaceId) return;
@@ -102,12 +114,18 @@ export const SpaceSetupOutputDialog: React.FC = () => {
 
   const body = (
     <div className="flex min-w-0 flex-col gap-3">
+      <p className="typography-meta text-muted-foreground">
+        {missingProgram ? t('spaces.setup.output.notFound', { name, program: missingProgram }) : t('spaces.setup.output.description', { name })}
+      </p>
       {setup?.state === 'failed' ? (
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="typography-meta text-muted-foreground">
-            {t('spaces.setup.output.command', { current: setup.index + 1, total: setup.total })}
-          </p>
-          <code className="block min-w-0 whitespace-pre-wrap break-all rounded-md bg-[var(--surface-muted)] px-2 py-1 font-mono typography-meta text-foreground">{setup.command}</code>
+          {setup.total > 1 ? <p className="typography-micro text-muted-foreground">{t('spaces.setup.output.command', { current: setup.index + 1, total: setup.total })}</p> : null}
+          {/* The command and what it printed, as a terminal shows them; the project's own text, shown as is. */}
+          <ScrollableOverlay as="pre" dir="ltr" outerClassName="max-h-[50vh] min-w-0 rounded-md bg-[var(--surface-muted)]" className="whitespace-pre-wrap break-all p-2.5 font-mono text-[0.6875rem] leading-snug text-foreground" disableHorizontal>
+            <span className="text-muted-foreground">$ </span>{setup.command}
+            {output ? `\n${output}` : null}
+          </ScrollableOverlay>
+          {read.kind === 'read' && !output ? <p className="typography-meta text-muted-foreground">{t('spaces.setup.output.empty')}</p> : null}
           {setup.timedOut ? <p className="typography-meta text-muted-foreground">{t('spaces.setup.output.timedOut')}</p> : null}
         </div>
       ) : null}
@@ -117,16 +135,12 @@ export const SpaceSetupOutputDialog: React.FC = () => {
         : null}
       {read.kind === 'reading' ? <p className="typography-meta text-muted-foreground">{t('spaces.setup.output.reading')}</p> : null}
       {read.kind === 'failed' ? <p className="typography-meta text-[var(--status-error)]">{t('spaces.setup.output.readFailed', { reason: read.reason })}</p> : null}
-      {read.kind === 'read' && !read.answer.output ? <p className="typography-meta text-muted-foreground">{t('spaces.setup.output.empty')}</p> : null}
-      {read.kind === 'read' && read.answer.output ? (
-        <pre className="max-h-[50vh] min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--surface-muted)] p-2 font-mono text-[11px] leading-snug text-foreground">{read.answer.output}</pre>
-      ) : null}
     </div>
   );
   const buttons = (
     <div className="flex w-full justify-end gap-2">
-      <Button variant="outline" size="sm" onClick={close}>{t('spaces.setup.output.close')}</Button>
-      <Button size="sm" onClick={runAgain} disabled={entry?.state !== 'running' || entry.setup?.state === 'running'}>{t('spaces.actions.setup')}</Button>
+      <Button variant="outline" size="sm" onClick={runAgain} disabled={entry?.state !== 'running' || entry.setup?.state === 'running'}>{t('spaces.actions.setup')}</Button>
+      <Button size="sm" onClick={close}>{t('spaces.setup.output.close')}</Button>
     </div>
   );
 
@@ -142,7 +156,7 @@ export const SpaceSetupOutputDialog: React.FC = () => {
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription className="sr-only">{t('spaces.setup.output.description')}</DialogDescription>
+          <DialogDescription className="sr-only">{t('spaces.setup.output.description', { name: entry?.name ?? '' })}</DialogDescription>
         </DialogHeader>
         {body}
         <DialogFooter>{buttons}</DialogFooter>

@@ -14,21 +14,47 @@ import {
   serializePreferencesDocument,
 } from './settings-files.js';
 
-const DEFAULT_NOTIFICATION_TEMPLATES = {
+// An empty field means "no custom text": the notification uses the default for
+// the interface language (see notifications/template-locales.js), and the
+// settings page shows that default as the placeholder. Persisting English text
+// here is what made a Chinese interface send English notifications.
+const EMPTY_NOTIFICATION_TEMPLATES = {
+  completion: { title: '', message: '' },
+  error: { title: '', message: '' },
+  question: { title: '', message: '' },
+  subtask: { title: '', message: '' },
+};
+
+const emptyNotificationTemplates = () => Object.fromEntries(
+  Object.entries(EMPTY_NOTIFICATION_TEMPLATES).map(([event, template]) => [event, { ...template }]),
+);
+
+// Builds before the language-aware defaults wrote this English set into every
+// install. It is cleared once so those installs follow their interface
+// language; anything the user typed stays untouched.
+const LEGACY_SEEDED_NOTIFICATION_TEMPLATES = {
   completion: { title: '{agent_name} is ready', message: '{model_name} completed the task' },
   error: { title: 'Tool error', message: '{last_message}' },
   question: { title: 'Input needed', message: '{last_message}' },
   subtask: { title: '{agent_name} is ready', message: '{model_name} completed the task' },
 };
 
+const isLegacySeededNotificationTemplates = (templates) => (
+  Object.keys(LEGACY_SEEDED_NOTIFICATION_TEMPLATES).every((event) => {
+    const legacy = LEGACY_SEEDED_NOTIFICATION_TEMPLATES[event];
+    const candidate = templates?.[event];
+    return candidate?.title === legacy.title && candidate?.message === legacy.message;
+  })
+);
+
 const ensureNotificationTemplateShape = (templates) => {
   const input = templates && typeof templates === 'object' ? templates : {};
   let changed = false;
   const next = {};
 
-  for (const event of Object.keys(DEFAULT_NOTIFICATION_TEMPLATES)) {
+  for (const event of Object.keys(EMPTY_NOTIFICATION_TEMPLATES)) {
     const currentEntry = input[event];
-    const base = DEFAULT_NOTIFICATION_TEMPLATES[event];
+    const base = EMPTY_NOTIFICATION_TEMPLATES[event];
     const currentTitle = typeof currentEntry?.title === 'string' ? currentEntry.title : base.title;
     const currentMessage = typeof currentEntry?.message === 'string' ? currentEntry.message : base.message;
     if (!currentEntry || typeof currentEntry.title !== 'string' || typeof currentEntry.message !== 'string') {
@@ -43,13 +69,19 @@ const ensureNotificationTemplateShape = (templates) => {
 /** Settings that decide which OpenChamber plugins the managed OpenCode loads. */
 const MANAGED_PLUGIN_SETTINGS_KEYS = new Set([
   'agentControlToolEnabled',
+  'agentScheduleToolEnabled',
   'agentWebToolEnabled',
   'agentMemoryToolEnabled',
   'agentKnowledgeToolEnabled',
   'agentNotifyToolEnabled',
   'agentRenderToolEnabled',
+  'agentImageToolEnabled',
+  'agentSecretToolEnabled',
+  'agentWorkflowToolEnabled',
   'agentToolsCodeMode',
-  'agentWorktreeMoveWithoutAsking',
+  // The limit failover plugin loads only while one of these is set.
+  'fallbackModel',
+  'accountSwitchProviders',
 ]);
 
 export const createSettingsRuntime = (deps) => {
@@ -74,6 +106,8 @@ export const createSettingsRuntime = (deps) => {
     onManagedPluginSettingsChanged = async () => {},
     onMessageSearchEnabledChanged = () => {},
     onMessageSearchReasoningChanged = () => {},
+    onPermissionDefaultModeChanged = () => {},
+    onLastDirectoryChanged = () => {},
   } = deps;
 
   let persistSettingsLock = Promise.resolve();
@@ -949,6 +983,10 @@ export const createSettingsRuntime = (deps) => {
       next.notifyOnCompletion = true;
       changed = true;
     }
+    if (settings.notifyOnPullRequests !== true && settings.notifyOnPullRequests !== false) {
+      next.notifyOnPullRequests = true;
+      changed = true;
+    }
     if (typeof settings.notifyOnError !== 'boolean') {
       next.notifyOnError = true;
       changed = true;
@@ -959,8 +997,17 @@ export const createSettingsRuntime = (deps) => {
     }
 
     const { templates, changed: templatesChanged } = ensureNotificationTemplateShape(settings.notificationTemplates);
-    if (templatesChanged || !settings.notificationTemplates || typeof settings.notificationTemplates !== 'object') {
-      next.notificationTemplates = templates;
+    // Clearing the old English seed is what lets an install that never edited
+    // the templates send notification text in its own language.
+    const wasSeeded = isLegacySeededNotificationTemplates(templates);
+    const nextTemplates = wasSeeded ? emptyNotificationTemplates() : templates;
+    if (
+      templatesChanged
+      || wasSeeded
+      || !settings.notificationTemplates
+      || typeof settings.notificationTemplates !== 'object'
+    ) {
+      next.notificationTemplates = nextTemplates;
       changed = true;
     }
 
@@ -1041,6 +1088,17 @@ export const createSettingsRuntime = (deps) => {
     return { settings: next, changed: true };
   };
 
+  // Scheduled tasks used to be part of the agent control tool. Someone who had
+  // switched that tool off keeps them off after the split instead of getting a
+  // scheduling tool they never chose.
+  const migrateSettingsScheduleToolFromControl = (settings) => {
+    const chosen = settings.agentScheduleToolEnabled === true || settings.agentScheduleToolEnabled === false;
+    if (settings.agentControlToolEnabled !== false || chosen) {
+      return { settings, changed: false };
+    }
+    return { settings: { ...settings, agentScheduleToolEnabled: false }, changed: true };
+  };
+
   let hasCleanedOrphanedTempFiles = false;
 
   const cleanupSettingsTempFilesOnce = async () => {
@@ -1059,8 +1117,9 @@ export const createSettingsRuntime = (deps) => {
     const migration6 = normalizeSettingsPaths(migration5.settings);
     const migration7 = await migrateSettingsToDeterministicProjectIds(migration6.settings);
     const migration8 = migrateSettingsRemoveApprovedDirectories(migration7.settings);
-    if (migration1.changed || migration2.changed || migration3.changed || migration4.changed || migration5.changed || migration6.changed || migration7.changed || migration8.changed) {
-      await writeSettingsToDisk(migration8.settings);
+    const migration9 = migrateSettingsScheduleToolFromControl(migration8.settings);
+    if (migration1.changed || migration2.changed || migration3.changed || migration4.changed || migration5.changed || migration6.changed || migration7.changed || migration8.changed || migration9.changed) {
+      await writeSettingsToDisk(migration9.settings);
     }
     return migration8.settings;
   };
@@ -1082,7 +1141,7 @@ export const createSettingsRuntime = (deps) => {
   };
 
   const persistSettings = async (changes, { surface = null } = {}) => {
-    persistSettingsLock = persistSettingsLock.then(async () => {
+    const result = persistSettingsLock.then(async () => {
       // Log field names only — changes can carry credentials (UI password,
       // client tokens, tunnel tokens) that must never reach the log file.
       console.log('[persistSettings] Updating fields:', Object.keys(changes || {}).join(', ') || '(none)');
@@ -1178,10 +1237,37 @@ export const createSettingsRuntime = (deps) => {
       if (changedKeys.includes('messageSearchReasoningEnabled')) {
         onMessageSearchReasoningChanged(next.messageSearchReasoningEnabled === true);
       }
+      if (changedKeys.includes('permissionDefaultMode') && next.permissionDefaultMode !== current.permissionDefaultMode) {
+        onPermissionDefaultModeChanged(next.permissionDefaultMode);
+      }
+      if (changedKeys.includes('lastDirectory') && next.lastDirectory !== current.lastDirectory) {
+        onLastDirectoryChanged(next.lastDirectory);
+      }
       return formatSettingsResponse(next);
     });
+    // A failed write (a full disk) rejects only its own caller; the next
+    // save still runs instead of replaying that error until a restart.
+    persistSettingsLock = result.catch(() => {});
+    return result;
+  };
 
-    return persistSettingsLock;
+  // A background session may discover a project while another window saves
+  // settings. Resolve the append inside the settings queue, without activation.
+  const registerSessionProject = (resolveProject) => {
+    const result = persistSettingsLock.then(async () => {
+      const current = await readSettingsFromDiskStrict();
+      if (Array.isArray(current) || (current.projects !== undefined && !Array.isArray(current.projects))) {
+        throw new Error('Project registry is malformed');
+      }
+      const projects = sanitizeProjects(current.projects) || [];
+      const project = await resolveProject(projects);
+      if (!projects.some((entry) => entry.id === project.id)) {
+        await writeJsonFileAtomic(SETTINGS_FILE_PATH, JSON.stringify({ ...current, projects: [...(current.projects || []), project] }, null, 2));
+      }
+      return project;
+    });
+    persistSettingsLock = result.catch(() => {});
+    return result;
   };
 
   return {
@@ -1191,5 +1277,6 @@ export const createSettingsRuntime = (deps) => {
     readSettingsFromDiskMigratedStrict,
     writeSettingsToDisk,
     persistSettings,
+    registerSessionProject,
   };
 };

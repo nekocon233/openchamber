@@ -7,7 +7,9 @@ import {
   TUNNEL_PROVIDER_CLOUDFLARE,
   TUNNEL_PROVIDER_FRPC,
   TUNNEL_PROVIDER_NGROK,
+  TUNNEL_PROVIDER_TAILSCALE,
 } from './types.js';
+import { tailscaleTunnelProviderCapabilities } from './providers/tailscale.js';
 
 const createProvider = ({ provider, start, stop, resolvePublicUrl, checkAvailability }) => ({
   id: provider,

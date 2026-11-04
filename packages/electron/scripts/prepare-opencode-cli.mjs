@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetArchitecture } from './target-architecture.mjs';
-import { parseOpenCodeCliVersion, readPinnedOpenCodeCliVersion } from './opencode-cli-version.mjs';
+import { readPinnedOpenCodeCliVersion, runOpenCodeCliVersion } from './opencode-cli-version.mjs';
+import { readPeArchitecture } from './windows-executable.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const electronRoot = path.resolve(__dirname, '..');
@@ -57,14 +58,13 @@ const outputBinaryPath = (binaryName) => path.join(outputDir, binaryName);
 
 const readBinaryVersion = (binaryPath) => {
   if (!fs.existsSync(binaryPath)) return null;
-  const result = spawnSync(binaryPath, ['--version'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 15000,
-    windowsHide: true,
-  });
-  if (result.status !== 0) return null;
-  return parseOpenCodeCliVersion(result.stdout) || null;
+  return runOpenCodeCliVersion(binaryPath).version;
+};
+
+const readPackageVersion = (extractDir) => {
+  const manifestPath = path.join(extractDir, 'package', 'package.json');
+  if (!fs.existsSync(manifestPath)) return null;
+  return String(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).version ?? '');
 };
 
 const ensureExecutable = (filePath) => {
@@ -118,8 +118,14 @@ const main = async () => {
   const targetArchitecture = resolveTargetArchitecture();
   const artifact = artifactForPlatform(process.platform, targetArchitecture);
   const outputBinary = outputBinaryPath(artifact.binary);
-  const existingVersion = readBinaryVersion(outputBinary);
-  if (existingVersion === version) {
+  // A Windows build for another architecture is not run here: an x64 runner
+  // cannot start an arm64 executable, so the package manifest vouches for the version.
+  const runsOnHost = !(process.platform === 'win32' && targetArchitecture.node !== process.arch);
+  const existingVersion = runsOnHost ? readBinaryVersion(outputBinary) : null;
+  // Windows on arm64 also runs an x64 binary left from an earlier build.
+  const existingMatchesTarget = process.platform !== 'win32'
+    || (existingVersion !== null && readPeArchitecture(outputBinary) === targetArchitecture.node);
+  if (existingVersion === version && existingMatchesTarget) {
     console.log(`[electron] bundled OpenCode CLI already prepared: ${outputBinary} (${version})`);
     return;
   }
@@ -150,9 +156,18 @@ const main = async () => {
   fs.copyFileSync(extractedBinary, outputBinary);
   ensureExecutable(outputBinary);
 
-  const preparedVersion = readBinaryVersion(outputBinary);
-  if (preparedVersion !== version) {
-    throw new Error(`Prepared OpenCode CLI version mismatch: expected ${version}, got ${preparedVersion || 'unknown'}`);
+  if (!runsOnHost) {
+    const packageVersion = readPackageVersion(extractDir);
+    if (packageVersion !== version) {
+      throw new Error(`Prepared OpenCode CLI package version mismatch: expected ${version}, got ${packageVersion || 'unknown'}`);
+    }
+    console.log(`[electron] prepared OpenCode CLI ${version} (@opencode/cli-${artifact.target}, not run on this ${process.arch} host): ${outputBinary}`);
+    return;
+  }
+
+  const prepared = runOpenCodeCliVersion(outputBinary);
+  if (prepared.version !== version) {
+    throw new Error(`Prepared OpenCode CLI version mismatch: expected ${version}, got ${prepared.version || 'unknown'}\n${prepared.detail}`);
   }
 
   console.log(`[electron] prepared OpenCode CLI ${version}: ${outputBinary}`);

@@ -9,7 +9,7 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import type { WalkthroughBlockedState, WalkthroughModel } from '@/lib/walkthrough/types';
 
 interface WalkthroughBlockerProps {
-  directory: string;
+  directory?: string;
   reason: WalkthroughBlockedState;
   model?: WalkthroughModel;
   requiredChars?: number;
@@ -55,7 +55,8 @@ export const WalkthroughBlocker = ({
       try {
         // Scoped to this feature: fixing the walkthrough must not quietly
         // change the model used for commit messages and recaps.
-        await updateDesktopSettings({ walkthroughModelOverride: value });
+        // A level saved for the previous model does not carry over.
+        await updateDesktopSettings({ walkthroughModelOverride: value, walkthroughModelVariant: '' });
         onRetry();
       } catch (error) {
         console.warn('Failed to save small model override:', error);

@@ -103,7 +103,7 @@ const linkAttachmentPart = (part: TextPart): FilePart | null => {
     }
 };
 
-export const normalizeUserDisplayParts = (parts: Part[]): Part[] => {
+export const normalizeUserDisplayParts = (parts: Part[], _readProvider?: (id: string) => { id?: string } | string | null | undefined): Part[] => {
     const redundantFileUrls = redundantCommentFileUrls(parts);
     return parts
         .filter((part) => {

@@ -60,19 +60,6 @@ export const spaceConditionOf = (
 };
 
 /**
- * Whether the line under a space's group says what is wrong with it: being made, failed,
- * stopped, out of reach, not answering, or an action under way. The group's stale mark shows
- * only when it does not, so a stopped space gets no second warning that reads like a fault.
- * It follows the state lines of `SpaceGroupStatus` only: the access and setup lines below them
- * say nothing about the session list, so the mark may sit beside them.
- */
-export const spaceLineSaysState = (
-  entry: SpaceEntry | undefined,
-  mark: SpaceMark | undefined,
-  action: SpaceActionState | undefined,
-): boolean => entry?.state === 'preparing' || entry?.state === 'failed' || spaceConditionOf(entry, mark, action) !== null;
-
-/**
  * The actions the group's menu offers for a space, in order. A restart needs a running space
  * with a gatekeeper that a start can bring back; one whose gatekeeper is gone can only be stopped
  * or deleted. Nothing for a space that is being made or whose making failed, and nothing for one
@@ -206,7 +193,6 @@ export const forgetRemovedSpace = async (spaceId: string): Promise<void> => {
   const store = useSpacesStore.getState();
   const generation = spacesRuntimeGeneration();
   store.noteAction(spaceId, { kind: 'running', action: 'remove' });
-  store.noteCreationAccess(spaceId, null);
   if (store.accessDialog?.spaceId === spaceId) store.closeAccessDialog();
   if (store.actionsSheet === spaceId) store.closeActionsSheet();
   if (store.applyDialog === spaceId) store.closeApplyDialog();
@@ -219,3 +205,15 @@ export const forgetRemovedSpace = async (spaceId: string): Promise<void> => {
   await refreshGlobalSessions().then(() => {}, () => {});
   if (generation === spacesRuntimeGeneration()) useSpacesStore.getState().noteAction(spaceId, null);
 };
+
+export const spaceLineSaysState = (
+  status: SpaceEntry | string | undefined,
+  mark?: SpaceMark,
+  action?: SpaceActionState,
+): boolean => (
+  status === 'stopped' || status === 'broken'
+    ? true
+    : typeof status === 'object' && status !== null
+      ? Boolean(spaceConditionOf(status, mark, action))
+      : false
+);

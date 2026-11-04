@@ -80,6 +80,7 @@ interface QuotaStore extends QuotaSettingsState {
    * work-status panel until Settings -> Usage forced a fresh fetch.
    */
   ensureLoadedForRuntime: () => Promise<void>;
+  refreshAfterCredentialChange: () => Promise<void>;
   resetForRuntimeSwitch: () => void;
 }
 
@@ -345,6 +346,17 @@ export const useQuotaStore = create<QuotaStore>()(
         ? Promise.resolve(true)
         : requestProviderQuota({ source: 'cached', providerId: 'claude' }, set),
 
+      refreshAfterCredentialChange: async () => {
+        quotaGeneration += 1;
+        for (const request of quotaRequests.values()) request.controller.abort();
+        quotaRequests.clear();
+        inFlightRuntimeLoad = null;
+        set({ results: [], loadedRuntimeKey: null, isLoading: false, isFetchingProvider: {}, lastUpdated: null, refreshErrors: {}, error: null });
+        if (quotaAutoRefreshConsumers > 0) {
+          await get().ensureLoadedForRuntime();
+        }
+      },
+
       ensureLoadedForRuntime: async () => {
         const runtimeKey = getRuntimeKey();
         if (isTransientRuntimeKey(runtimeKey)) return;
@@ -467,8 +479,13 @@ export const useQuotaStore = create<QuotaStore>()(
   )
 );
 
-export const useQuotaAutoRefresh = () => {
+export const refreshTrayQuotas = (_initial = false) => {
+  void useQuotaStore.getState().refreshSelectedQuotas();
+};
+
+export const useQuotaAutoRefresh = (_visible = true, _allProviders = false) => {
   React.useEffect(() => {
+    if (!_visible) return;
     quotaAutoRefreshConsumers += 1;
     if (quotaAutoRefreshInterval === null) {
       quotaAutoRefreshInterval = window.setInterval(() => {
@@ -483,5 +500,5 @@ export const useQuotaAutoRefresh = () => {
         quotaAutoRefreshInterval = null;
       }
     };
-  }, []);
+  }, [_visible]);
 };

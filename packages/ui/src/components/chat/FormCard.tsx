@@ -30,6 +30,7 @@ import {
 } from './formCardState';
 
 interface FormCardProps {
+    recovered?: unknown;
     form: FormRequest;
 }
 

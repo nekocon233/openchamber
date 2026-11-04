@@ -15,6 +15,8 @@ import {
 import { countSyncPerformance } from './performance-diagnostics';
 import { hasRunningShell, useBackgroundShellsStore } from './background-shells';
 import { useSessionBackgroundTasksStore, useSessionHasBackgroundTasks } from './session-background-tasks';
+import { useWorkflowActivityStore } from './workflow-activity';
+import { usePrWatchStore } from './pr-watch';
 
 // Shared live busy/retry index for every directory. Events update it
 // incrementally and authoritative directory snapshots reconcile it, so each
@@ -106,7 +108,8 @@ export const hasActiveSubagent = (sessionId: string, activeSessionIds: ReadonlyS
 
 /**
  * Active sessions plus every session whose turn they keep open: ancestors of
- * running subagents, and sessions waiting on a background command.
+ * running subagents, and sessions waiting on a background command or a pull
+ * request.
  */
 const withBackgroundWork = (
   activeSessionIds: ReadonlySet<string>,
@@ -136,10 +139,11 @@ const hasBackgroundTasks = (sessionId: string): boolean => (
  * True when the session idles only while its background work runs: a subagent
  * below it, a command it started, or tasks a native CLI keeps running.
  */
-const hasBackgroundWork = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => (
+export const hasBackgroundWork = (sessionId: string, activeSessionIds: ReadonlySet<string>): boolean => (
   hasActiveSubagent(sessionId, activeSessionIds)
   || hasRunningShell(sessionId)
   || hasBackgroundTasks(sessionId)
+  || usePrWatchStore.getState().bySession.has(sessionId)
 );
 
 /**
@@ -171,30 +175,88 @@ export const getOpenTurnSessionIds = (
  * will wake it. The session's own run wins; a pause with both kinds of
  * background work reports the subagent.
  */
-type SessionTurnActivity = 'running' | 'subagent' | 'shell' | 'tasks';
+type SessionTurnActivity = 'running' | 'workflow' | 'subagent' | 'shell' | 'tasks' | 'pullRequest';
+
+export const resolveSessionTurnActivity = (
+  status: 'running' | 'subagent' | null,
+  workflowRunning: boolean,
+  waitingOnShell: boolean,
+  waitingOnPullRequest = false,
+): SessionTurnActivity | null => {
+  if (status === 'running') return status;
+  if (workflowRunning) return 'workflow';
+  if (status) return status;
+  if (waitingOnShell) return 'shell';
+  return waitingOnPullRequest ? 'pullRequest' : null;
+};
 
 export const useSessionTurnActivity = (sessionId: string): SessionTurnActivity | null => {
-  const status = useGlobalSessionStatusStore((state): SessionTurnActivity | null => {
+  const status = useGlobalSessionStatusStore((state): 'running' | 'subagent' | null => {
     if (state.activeSessionIds.has(sessionId)) return 'running';
     return hasActiveSubagent(sessionId, state.activeSessionIds) ? 'subagent' : null;
   });
+  const workflowRunning = useWorkflowActivityStore((state) => state.runningSessionIds.has(sessionId));
   const waitingOnShell = useBackgroundShellsStore((state) => state.sessionIds.has(sessionId));
   const waitingOnTasks = useSessionHasBackgroundTasks(sessionId);
-  return status ?? (waitingOnShell ? 'shell' : waitingOnTasks ? 'tasks' : null);
+  const waitingOnPullRequest = usePrWatchStore((state) => state.bySession.has(sessionId));
+  if (status === 'running') return 'running';
+  if (workflowRunning) return 'workflow';
+  if (status) return status;
+  if (waitingOnShell) return 'shell';
+  if (waitingOnTasks) return 'tasks';
+  return waitingOnPullRequest ? 'pullRequest' : null;
 };
 
-// The last background command of an idle session ending closes its turn,
-// the way the last subagent finishing does below.
-useBackgroundShellsStore.subscribe((state, previous) => {
-  if (state.sessionIds === previous.sessionIds) return;
+/** The first of the sessions `useSessionTurnActivity` reads as working, or null. */
+export const useFirstSessionWithOpenTurn = (sessionIds: readonly string[]): string | null => {
+  const inTurn = useGlobalSessionStatusStore((state) => (
+    sessionIds.find((id) => state.activeSessionIds.has(id) || hasActiveSubagent(id, state.activeSessionIds)) ?? null
+  ));
+  const inWorkflow = useWorkflowActivityStore((state) => sessionIds.find((id) => state.runningSessionIds.has(id)) ?? null);
+  const onShell = useBackgroundShellsStore((state) => sessionIds.find((id) => state.sessionIds.has(id)) ?? null);
+  const onPullRequest = usePrWatchStore((state) => sessionIds.find((id) => state.bySession.has(id)) ?? null);
+  return inTurn ?? inWorkflow ?? onShell ?? onPullRequest;
+};
+
+/**
+ * Every session `useSessionTurnActivity` reads as working, for a consumer that
+ * asks about many at once: the running ones, their ancestors, and the sessions
+ * waiting on work outside them (a workflow run, a command, a pull request).
+ */
+export const collectOpenTurnSessionIds = (
+  activeSessionIds: ReadonlySet<string>,
+  waitingSessionIds: readonly Iterable<string>[],
+): ReadonlySet<string> => {
+  const open = new Set(activeSessionIds);
+  for (const activeId of activeSessionIds) forEachAncestorId(activeId, (ancestorId) => open.add(ancestorId));
+  for (const sessionIds of waitingSessionIds) {
+    for (const sessionId of sessionIds) open.add(sessionId);
+  }
+  return open;
+};
+
+// The last thing an idle session waited on ending closes its turn, the way the
+// last subagent finishing does below. A wake reaches the session before its
+// watch ends, so the session then runs on inside the same turn.
+const settleSessionsWithoutBackgroundWork = (sessionIds: Iterable<string>, stillWaiting: (sessionId: string) => boolean): void => {
   const { activeSessionIds } = useGlobalSessionStatusStore.getState();
   const timingMutations: SessionActivityTimingMutation[] = [];
-  for (const sessionId of previous.sessionIds) {
-    if (state.sessionIds.has(sessionId)) continue;
+  for (const sessionId of sessionIds) {
+    if (stillWaiting(sessionId)) continue;
     if (turnStaysOpen(sessionId, activeSessionIds)) continue;
     timingMutations.push({ type: 'observe', sessionId, phase: 'settled' });
   }
   applySessionActivityTimingMutations(timingMutations);
+};
+
+useBackgroundShellsStore.subscribe((state, previous) => {
+  if (state.sessionIds === previous.sessionIds) return;
+  settleSessionsWithoutBackgroundWork(previous.sessionIds, (sessionId) => state.sessionIds.has(sessionId));
+});
+
+usePrWatchStore.subscribe((state, previous) => {
+  if (state.bySession === previous.bySession) return;
+  settleSessionsWithoutBackgroundWork(previous.bySession.keys(), (sessionId) => state.bySession.has(sessionId));
 });
 
 // The end of a session's background tasks settles the timer they held open,
@@ -757,4 +819,11 @@ export const applyGlobalSessionStatusSnapshot = (
     withOpenTurns(useGlobalSessionStatusStore.getState().activeSessionIds),
     (sessionId) => mode === 'authoritative' && orderingKnown.has(sessionId),
   );
+};
+
+type SessionStatusTransitionListener = (sessionId: string, activeSessionIds: ReadonlySet<string>) => void;
+const transitionListeners = new Set<SessionStatusTransitionListener>();
+export const subscribeSessionStatusTransitions = (listener: SessionStatusTransitionListener): (() => void) => {
+  transitionListeners.add(listener);
+  return () => { transitionListeners.delete(listener); };
 };

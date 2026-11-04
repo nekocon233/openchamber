@@ -1,4 +1,5 @@
 import React from 'react';
+import { defaultRangeExtractor, measureElement, useVirtualizer, type Range } from '@tanstack/react-virtual';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 
 import { toast } from '@/components/ui';
@@ -35,6 +36,9 @@ import { useInContextPanelHeader } from './contextPanelHeaderSlotContext';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
+import { panelContentDirectory } from '@/lib/spaces/space-creation-requests';
+import { SpacePreparing } from '@/components/session/spaces/SpacePreparing';
 import { useFileSearchStore } from '@/stores/useFileSearchStore';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 import { useUIStore } from '@/stores/useUIStore';
@@ -42,9 +46,13 @@ import { useGitStatus, useGitStore } from '@/stores/useGitStore';
 import { DirectoryRequests } from '@/components/views/files/directoryRequests';
 import { areDirectoryNodesEqual } from '@/components/views/files/fileTreeStatus';
 import { useFileTreeUpload } from '@/components/views/files/useFileTreeUpload';
+import { useFileTreeDisclosure } from '@/components/views/files/useFileTreeDisclosure';
 import { moveWorkspacePath } from '@/components/views/files/moveWorkspacePath';
 import { INTERNAL_FILE_PATH_TYPE } from '@/components/chat/composer/attachments/dataTransfer';
 import { AUTO_RELIST_MAX_ENTRIES, useFileTreeChanges, type FileTreeChangeBatch } from '@/components/views/files/useFileTreeChanges';
+import { FileContentSearchResults } from '@/components/views/files/FileContentSearchResults';
+import { fileContentMatchKey, useFileContentSearch } from '@/components/views/files/useFileContentSearch';
+import type { FileContentSearchMatch } from '@/lib/api/types';
 import { useDirectoryShowHidden } from '@/lib/directoryShowHidden';
 import { useFilesViewShowGitignored } from '@/lib/filesViewShowGitignored';
 import { copyTextToClipboard } from '@/lib/clipboard';
@@ -56,14 +64,16 @@ import {
   FileTreeFileMarkers,
   FileTreeFolderBadge,
   FileTreeIndentGuides,
+  FileTreeRowEnd,
 } from '@/components/views/files/FileTreeRowParts';
 import {
+  fileTreeRowMenuFillClassName,
   fileTreeRowPaddingLeft,
   fileTreeRowStateClassName,
   type FileTreeGitStatus,
 } from '@/components/views/files/fileTreeRow';
 import { Icon } from "@/components/icon/Icon";
-import { getContextFileOpenFailureMessage, validateContextFileOpen } from '@/lib/contextFileOpenGuard';
+import { toastContextFileOpenFailure, validateContextFileOpen } from '@/lib/contextFileOpenGuard';
 import { isBrowserClientRuntime, isDesktopLocalOriginActive, openDesktopPath } from '@/lib/desktop';
 import { useDeviceInfo } from '@/lib/device';
 import { useI18n } from '@/lib/i18n';
@@ -75,6 +85,7 @@ import {
   setFileTreeDragSource,
   type FileTreeEntry,
 } from './fileTreeMoveDrag';
+import { buildFileTreeRows, withPinnedRowIndexes, type FileTreeRow } from './fileTreeRows';
 
 type FileNode = {
   name: string;
@@ -83,6 +94,11 @@ type FileNode = {
   extension?: string;
   relativePath?: string;
 };
+
+// A row is one meta line plus its padding (FileRow's block size); rows are
+// measured once mounted, and every file and folder row then estimates at the
+// measured height.
+const FILE_TREE_ROW_ESTIMATE_PX = 28;
 
 const hasExternalFiles = (dataTransfer: DataTransfer): boolean => (
   Array.from(dataTransfer.types).includes('Files')
@@ -362,7 +378,7 @@ const FileRow: React.FC<FileRowProps> = ({
           toast.error(t('sidebarFilesTree.toast.copyFailed'));
         });
       }}>
-        <Icon name="file-copy" className="me-2 h-4 w-4" /> {t('sidebarFilesTree.menu.copyPath')}
+        <Icon name="link" className="me-2 h-4 w-4" /> {t('sidebarFilesTree.menu.copyPath')}
       </Item>
       {!isDir && downloadFile && (
         <Item onClick={(e: React.MouseEvent) => {
@@ -506,12 +522,7 @@ const FileRow: React.FC<FileRowProps> = ({
       <ContextMenuTrigger render={(
         <div
           className="group relative flex items-center typography-meta"
-          style={{
-            contentVisibility: 'auto',
-            // Keep skipped rows the same size after font changes. Expanded
-            // child lists remain outside this single-line row's containment.
-            blockSize: 'calc(max(1lh, 1rem) + 0.5rem)',
-          }}
+          style={{ blockSize: 'calc(max(1lh, 1rem) + 0.5rem)' }}
           onContextMenu={handleContextMenu}
           onDragEnter={handleRowDragOver}
           onDragOver={handleRowDragOver}
@@ -529,9 +540,9 @@ const FileRow: React.FC<FileRowProps> = ({
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         className={cn(
-          'flex w-full items-center gap-1.5 rounded-md py-1 pe-8 text-start transition-colors select-none',
+          'oc-file-tree-row flex w-full items-center gap-1.5 rounded-md py-1 text-start select-none',
           isDropTarget
-            ? 'bg-interactive-selection text-interactive-selection-foreground ring-2 ring-inset ring-primary'
+            ? 'bg-interactive-selection text-interactive-selection-foreground ring-2 ring-inset ring-primary [--oc-file-tree-row-fill:var(--interactive-selection)] [--oc-file-tree-row-ring:var(--primary)]'
             : fileTreeRowStateClassName(isActive),
           isDragSource && 'opacity-50'
         )}
@@ -542,14 +553,17 @@ const FileRow: React.FC<FileRowProps> = ({
         ) : (
           <FileTypeIcon filePath={node.path} extension={node.extension} className="ms-0.5 size-3.5" />
         )}
-        <span className="min-w-0 flex-1 truncate typography-meta" title={node.path}>
+        <span className="oc-file-tree-row-name typography-meta" title={node.path}>
           {node.name}
         </span>
-        {!isDir && <FileTreeFileMarkers isOpen={isOpen} status={status} />}
-        {isDir && badge && <FileTreeFolderBadge badge={badge} />}
+        <FileTreeRowEnd className="pe-2">
+          {!isDir && <FileTreeFileMarkers isOpen={isOpen} status={status} />}
+          {isDir && badge && <FileTreeFolderBadge badge={badge} />}
+        </FileTreeRowEnd>
       </button>
       {hasMenuActions && (
-        <div className="absolute inset-e-1 top-1/2 -translate-y-1/2 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
+        // Takes no width and fades in over the row's end lane, with its own fade over the name.
+        <div className={cn('oc-file-tree-row-end -ms-7 w-7 pe-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100', fileTreeRowMenuFillClassName(isActive || isDropTarget))}>
           <DropdownMenu
             open={contextMenuOpen}
             onOpenChange={setContextMenuOpen}
@@ -621,19 +635,27 @@ const MemoizedFileRow = React.memo(FileRow, areFileRowPropsEqual);
 
 export const SidebarFilesTree: React.FC<{ visible?: boolean }> = ({ visible = true }) => {
   const runtimeKey = useGitStore((state) => state.runtimeKey);
-  const directory = useEffectiveDirectory();
-  return <SidebarFilesTreeContent key={JSON.stringify([runtimeKey, directory])} visible={visible} />;
+  const panelDirectory = useEffectiveDirectory() ?? '';
+  // A draft waiting for a new space lists the space, and nothing of this computer's until it runs.
+  const draftSpace = useDraftSpaceTarget();
+  const directory = panelContentDirectory(draftSpace, panelDirectory) ?? '';
+  if (draftSpace?.kind === 'preparing') return <SpacePreparing />;
+  return <SidebarFilesTreeContent key={JSON.stringify([runtimeKey, directory])} visible={visible} currentDirectory={directory} panelDirectory={panelDirectory} />;
 };
 
-const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) => {
+/**
+ * `currentDirectory` is the folder listed; `panelDirectory` is the one the panel's tabs belong to,
+ * the same folder except in a draft waiting for a space.
+ */
+const SidebarFilesTreeContent: React.FC<{ visible: boolean; currentDirectory: string; panelDirectory: string }> = ({ visible, currentDirectory, panelDirectory }) => {
   const visibleRef = React.useRef(visible);
   visibleRef.current = visible;
   const { t } = useI18n();
   const { files, runtime } = useRuntimeAPIs();
   const inPanelHeader = useInContextPanelHeader();
   const isBrowserClient = isBrowserClientRuntime(runtime.platform);
-  const currentDirectory = useEffectiveDirectory() ?? '';
   const root = normalizePath(currentDirectory.trim());
+  const panelRoot = normalizePath(panelDirectory.trim());
   const cacheKey = fileTreeCacheKey(root);
   const showHidden = useDirectoryShowHidden();
   const showGitignored = useFilesViewShowGitignored();
@@ -646,6 +668,26 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const [searchResults, setSearchResults] = React.useState<FileNode[]>([]);
   const [searching, setSearching] = React.useState(false);
+  // Find in files: the menu on the search icon switches the field between
+  // names and contents, and `.*` makes the contents query a regular
+  // expression. Runtimes without the capability (VS Code) keep names only.
+  const canSearchContents = Boolean(files.searchContents);
+  const [searchMode, _setSearchMode] = React.useState<'names' | 'contents'>('names');
+  const [regexSearch, _setRegexSearch] = React.useState(false);
+  const contentSearchActive = canSearchContents && searchMode === 'contents';
+  const contentSearch = useFileContentSearch({
+    searchContents: files.searchContents,
+    directory: currentDirectory,
+    query: debouncedSearchQuery,
+    regex: regexSearch,
+    includeHidden: showHidden,
+    respectGitignore: !showGitignored,
+    active: visible && contentSearchActive,
+  });
+  const openContextFileAtLine = useUIStore((state) => state.openContextFileAtLine);
+  // The result last opened, so only that line is marked when one file has
+  // several; selecting the file another way clears the mark.
+  const [openedMatch, setOpenedMatch] = React.useState<{ path: string; key: string } | null>(null);
   const [dropTarget, setDropTarget] = React.useState<string | null>(null);
   // Drag-to-move: the row being dragged, the folder it would land in, and a
   // drop waiting for confirmation.
@@ -741,7 +783,6 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
   const expandedPathSet = React.useMemo(() => new Set(expandedPaths), [expandedPaths]);
   const selectedPath = useFilesViewTabsStore((state) => (root ? (state.byRoot[root]?.selectedPath ?? null) : null));
   const setSelectedPath = useFilesViewTabsStore((state) => state.setSelectedPath);
-  const treeSectionRef = React.useRef<HTMLElement>(null);
   // A newly selected file is revealed once, as soon as its row exists: its
   // ancestors may still be loading when the selection lands. After that the
   // tree scrolls only when the user scrolls it.
@@ -754,7 +795,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
   const toggleExpandedPath = useFilesViewTabsStore((state) => state.toggleExpandedPath);
   const expandPath = useFilesViewTabsStore((state) => state.expandPath);
   const collapseAllExpandedPaths = useFilesViewTabsStore((state) => state.collapseAllExpandedPaths);
-  const contextTabs = useUIStore((state) => (root ? (state.contextPanelByDirectory[root]?.tabs ?? EMPTY_CONTEXT_TABS) : EMPTY_CONTEXT_TABS));
+  const contextTabs = useUIStore((state) => (panelRoot ? (state.contextPanelByDirectory[panelRoot]?.tabs ?? EMPTY_CONTEXT_TABS) : EMPTY_CONTEXT_TABS));
   const openContextFilePaths = React.useMemo(() => new Set(
     contextTabs
       .map((tab) => (tab.mode === 'file' ? tab.targetPath : null))
@@ -1027,7 +1068,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
 
   React.useEffect(() => {
     if (!visible) return;
-    if (!currentDirectory) {
+    if (!currentDirectory || contentSearchActive) {
       setSearchResults([]);
       setSearching(false);
       return;
@@ -1077,7 +1118,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
     return () => {
       cancelled = true;
     };
-  }, [currentDirectory, debouncedSearchQuery, searchFiles, showHidden, showGitignored, visible]);
+  }, [contentSearchActive, currentDirectory, debouncedSearchQuery, searchFiles, showHidden, showGitignored, visible]);
 
   // --- Git status helpers (matching FilesView) ---
   //
@@ -1145,25 +1186,68 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
 
     const openValidation = await validateContextFileOpen(files, node.path, { directory: root });
     if (!openValidation.ok) {
-      toast.error(getContextFileOpenFailureMessage(openValidation.reason));
+      toastContextFileOpenFailure(node.path, openValidation);
       return;
     }
 
     setSelectedPath(root, node.path);
     addOpenPath(root, node.path);
     // Touch has no double-click to keep a preview, so it opens tabs outright.
-    openContextFile(root, node.path, { preview: !options?.pin && !useUIStore.getState().isMobile });
-  }, [addOpenPath, files, openContextFile, root, setSelectedPath]);
+    openContextFile(panelRoot, node.path, { preview: !options?.pin && !useUIStore.getState().isMobile });
+  }, [addOpenPath, files, openContextFile, panelRoot, root, setSelectedPath]);
 
+  // A find-in-files result opens its file at the matching line, as a preview
+  // on a click and as a pinned tab on a double-click, like a tree row.
+  const handleOpenMatch = React.useCallback(async (match: FileContentSearchMatch, options?: { pin?: boolean }) => {
+    if (!root) return;
+
+    const openValidation = await validateContextFileOpen(files, match.path, { directory: root });
+    if (!openValidation.ok) {
+      toastContextFileOpenFailure(match.path, openValidation);
+      return;
+    }
+
+    setSelectedPath(root, match.path);
+    addOpenPath(root, match.path);
+    setOpenedMatch({ path: match.path, key: fileContentMatchKey(match) });
+    openContextFileAtLine(panelRoot, match.path, match.line, match.column, { preview: !options?.pin && !useUIStore.getState().isMobile });
+  }, [addOpenPath, files, openContextFileAtLine, panelRoot, root, setSelectedPath]);
+
+  const handleMatchDragStart = React.useCallback((event: React.DragEvent<HTMLButtonElement>, match: FileContentSearchMatch) => {
+    recordFileTreeDragStart(event);
+    // Search results attach to the chat only; they never move.
+    setFileTreeDragSource(null);
+    event.dataTransfer.setData(INTERNAL_FILE_PATH_TYPE, match.relativePath);
+    event.dataTransfer.effectAllowed = 'copy';
+  }, []);
+
+  const handleMatchDragEnd = React.useCallback((event: React.DragEvent<HTMLButtonElement>, match: FileContentSearchMatch) => {
+    // A micro-drag suppressed the click this gesture was meant to be (#2368).
+    if (shouldTreatFileTreeDragEndAsClick(event)) {
+      void handleOpenMatch(match);
+    }
+  }, [handleOpenMatch]);
+
+  // Rows on screen below a folder that opens stay mounted while they slide
+  // down past the virtual range, so the list under the folder does not blank.
+  const [slidingRowPaths, setSlidingRowPaths] = React.useState<readonly string[] | null>(null);
+  const clearSlidingRowPaths = React.useCallback(() => setSlidingRowPaths(null), []);
+  const treeListRef = React.useRef<HTMLUListElement | null>(null);
+  const toggleWithMotion = useFileTreeDisclosure(treeListRef, { onSettled: clearSlidingRowPaths });
   const toggleDirectory = React.useCallback(async (dirPath: string) => {
     const normalized = normalizePath(dirPath);
     if (!root) return;
 
-    toggleExpandedPath(root, normalized);
+    const expanded = useFilesViewTabsStore.getState().byRoot[root]?.expandedPaths.includes(normalized) ?? false;
+    toggleWithMotion(dirPath, expanded, () => {
+      const mountedPaths = Array.from(treeListRef.current?.querySelectorAll<HTMLElement>('[data-tree-disclosure-path]') ?? [], (row) => row.dataset.treeDisclosurePath ?? '');
+      setSlidingRowPaths(expanded ? null : mountedPaths.slice(mountedPaths.indexOf(dirPath) + 1));
+      toggleExpandedPath(root, normalized);
+    });
     if (!loadedDirsRef.current.has(normalized)) {
       await loadDirectory(normalized);
     }
-  }, [loadDirectory, root, toggleExpandedPath]);
+  }, [loadDirectory, root, toggleExpandedPath, toggleWithMotion]);
 
   const {
     canUpload,
@@ -1197,7 +1281,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
 
   const moveEntry = React.useCallback(async (source: FileTreeEntry, targetDirectory: string) => {
     const toPath = getFileTreeMovedPath(source, targetDirectory);
-    const result = await moveWorkspacePath(files, root, source.path, toPath);
+    const result = await moveWorkspacePath(files, { tabs: panelRoot, files: root }, source.path, toPath);
     if (result === 'conflict') {
       toast.error(t('sidebarFilesTree.toast.nameTaken', {
         name: toPath.slice(toPath.lastIndexOf('/') + 1),
@@ -1214,7 +1298,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
       refreshDirectory(getParentPath(source.path)),
       refreshDirectory(targetDirectory),
     ]).catch(() => undefined);
-  }, [expandPath, files, refreshDirectory, root, t]);
+  }, [expandPath, files, panelRoot, refreshDirectory, root, t]);
 
   const handleMoveDrop = React.useCallback((source: FileTreeEntry, targetDirectory: string) => {
     if (useUIStore.getState().confirmFileTreeMove) {
@@ -1358,7 +1442,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
 
       // Open tabs and the editor, unsaved edits included, follow the new name.
       try {
-        const result = await moveWorkspacePath(files, root, oldPath, newPath);
+        const result = await moveWorkspacePath(files, { tabs: panelRoot, files: root }, oldPath, newPath);
         if (result === 'moved') {
           toast.success(t('sidebarFilesTree.toast.renamedSuccessfully'));
           await refreshDirectory(parentDir);
@@ -1405,84 +1489,195 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
     }
 
     done();
-  }, [activeDialog, dialogData, dialogInputValue, files, refreshDirectory, removeOpenPathsByPrefix, root, selectedPath, setSelectedPath, t]);
+  }, [activeDialog, dialogData, dialogInputValue, files, panelRoot, refreshDirectory, removeOpenPathsByPrefix, root, selectedPath, setSelectedPath, t]);
 
   // --- Tree rendering (matching FilesView with indent guides) ---
 
-  function renderTree(dirPath: string, depth: number): React.ReactNode {
-    const nodes = childrenByDir[dirPath] ?? [];
-
-    return nodes.map((node) => {
-      const isDir = node.type === 'directory';
-      const isExpanded = isDir && expandedPathSet.has(node.path);
-      const isActive = selectedPath === node.path;
-
-      return (
-        <li key={node.path} data-file-tree-path={isDir ? undefined : node.path}>
-          <MemoizedFileRow
-            node={node}
-            root={root}
-            isExpanded={isExpanded}
-            isActive={isActive}
-            isBrowserClient={isBrowserClient}
-            depth={depth}
-            isOpen={!isDir && openContextFilePaths.has(node.path)}
-            status={!isDir ? getFileStatus(node.path) : undefined}
-            badge={isDir ? getFolderBadge(node.path) : undefined}
-            isDropTarget={isDir && (dropIndicatorTarget === node.path || moveDropTarget === node.path)}
-            isDragSource={moveDragPath === node.path}
-            canUpload={canUpload && !isUploading}
-            canMove={canMove}
-            permissions={fileRowPermissions}
-            downloadFile={files.downloadFile}
-            onSelect={handleOpenFile}
-            onToggle={toggleDirectory}
-            onRevealPath={handleRevealPath}
-            onOpenDialog={handleOpenDialog}
-            onSetDropTarget={setDropTarget}
-            onDropFiles={handleDropFiles}
-            onPickFiles={pickFiles}
-            onMoveDragChange={handleMoveDragChange}
-            onSetMoveDropTarget={setMoveDropTarget}
-            onMoveDrop={handleMoveDrop}
-          />
-          {isDir && isExpanded && (
-            <ul className="flex flex-col">
-              {loadErrorsByDir[node.path] ? (
-                <li
-                  className="relative flex items-center gap-2 py-1 pe-2 typography-meta text-muted-foreground"
-                  style={{ paddingInlineStart: fileTreeRowPaddingLeft(depth + 1) }}
-                >
-                  <FileTreeIndentGuides depth={depth + 1} />
-                  <span className="min-w-0 flex-1 truncate text-[var(--status-error)]" title={loadErrorsByDir[node.path]}>{loadErrorsByDir[node.path]}</span>
-                  <Button variant="ghost" size="xs" className="h-6 gap-1" onClick={() => void refreshDirectory(node.path)}>
-                    <Icon name="refresh" className="h-3.5 w-3.5" />
-                    {t('sidebarFilesTree.actions.refreshTitle')}
-                  </Button>
-                </li>
-              ) : null}
-              {renderTree(node.path, depth + 1)}
-            </ul>
-          )}
-        </li>
-      );
+  // Virtualized: only the rows in and near view are in the document. With
+  // every expanded folder mounted, a large repository put thousands of
+  // elements under the context panel, and each open restyled all of them and
+  // added them to the accessibility tree inside the opening animation.
+  const treeRows = React.useMemo(
+    () => (root ? buildFileTreeRows({ root, childrenByDir, expandedPaths: expandedPathSet, loadErrorsByDir }) : []),
+    [childrenByDir, expandedPathSet, loadErrorsByDir, root],
+  );
+  const treeRowIndexByPath = React.useMemo(
+    () => new Map(treeRows.flatMap((row, index) => (row.kind === 'node' ? [[row.node.path, index] as const] : []))),
+    [treeRows],
+  );
+  const [treeScrollElement, setTreeScrollElement] = React.useState<HTMLElement | null>(null);
+  const [treeListElement, setTreeListElement] = React.useState<HTMLUListElement | null>(null);
+  const attachTreeList = React.useCallback((element: HTMLUListElement | null) => {
+    treeListRef.current = element;
+    setTreeListElement(element);
+  }, []);
+  const [focusedRowPath, setFocusedRowPath] = React.useState<string | null>(null);
+  const pinnedRowIndexes = React.useMemo(
+    () => [moveDragPath, focusedRowPath, ...(slidingRowPaths ?? [])].flatMap((path) => (path ? [treeRowIndexByPath.get(path) ?? -1] : [])),
+    [focusedRowPath, moveDragPath, slidingRowPaths, treeRowIndexByPath],
+  );
+  const rangeExtractor = React.useCallback(
+    (range: Range) => withPinnedRowIndexes(defaultRangeExtractor(range), pinnedRowIndexes, treeRows.length),
+    [pinnedRowIndexes, treeRows.length],
+  );
+  // The list starts below the scroller's own padding.
+  const [treeListOffset, setTreeListOffset] = React.useState(0);
+  React.useLayoutEffect(() => {
+    if (!treeScrollElement || !treeListElement) return;
+    const offset = treeListElement.getBoundingClientRect().top - treeScrollElement.getBoundingClientRect().top + treeScrollElement.scrollTop;
+    setTreeListOffset(Math.max(0, Math.round(offset)));
+  }, [treeListElement, treeScrollElement]);
+  const measuredRowHeightRef = React.useRef<number | null>(null);
+  // Only some rows are mounted, so the list keeps the width of every row seen
+  // wider than the pane, by path: every row's fill and end lane then span the
+  // scrolled width, and a wide row out of view keeps the list wide, or the
+  // sideways scroll would snap back. A row is as wide as the list or its whole
+  // name, so only a row wider than the list tells its own width. Mounted rows
+  // report it through the virtualizer's resize observer; the write waits a
+  // frame so it never resizes observed rows inside that observer's callback.
+  const treeRowWidthsRef = React.useRef(new Map<string, number>());
+  const treeWidthFrameRef = React.useRef<number | null>(null);
+  const writeTreeWidth = React.useCallback((list: HTMLElement) => {
+    const widest = Math.max(0, ...treeRowWidthsRef.current.values());
+    list.style.setProperty('--oc-file-tree-width', `${widest}px`);
+  }, []);
+  const recordTreeRowWidth = React.useCallback((element: HTMLElement, width: number) => {
+    const path = element.dataset.treeRowPath;
+    const list = treeListRef.current;
+    if (!path || !list || width <= list.clientWidth + 0.5) return;
+    if (treeRowWidthsRef.current.get(path) === width) return;
+    treeRowWidthsRef.current.set(path, width);
+    if (treeWidthFrameRef.current !== null) return;
+    treeWidthFrameRef.current = requestAnimationFrame(() => {
+      treeWidthFrameRef.current = null;
+      if (treeListRef.current) writeTreeWidth(treeListRef.current);
     });
-  }
+  }, [writeTreeWidth]);
+  React.useEffect(() => () => {
+    if (treeWidthFrameRef.current !== null) cancelAnimationFrame(treeWidthFrameRef.current);
+  }, []);
+  // When the rows change, rows that left the tree drop out, and mounted rows
+  // measure again from the pane's width, so a name that got shorter narrows
+  // the list. Measuring lays the list out narrower for a moment, which clamps
+  // the sideways scroll; it is restored before paint.
+  React.useLayoutEffect(() => {
+    if (!treeListElement) return;
+    const widths = treeRowWidthsRef.current;
+    for (const path of widths.keys()) {
+      if (!treeRowIndexByPath.has(path)) widths.delete(path);
+    }
+    const scrollLeft = treeScrollElement?.scrollLeft ?? 0;
+    treeListElement.style.removeProperty('--oc-file-tree-width');
+    const listWidth = treeListElement.clientWidth;
+    for (const row of treeListElement.children) {
+      const path = row instanceof HTMLElement ? row.dataset.treeRowPath : undefined;
+      if (!path) continue;
+      const width = row.getBoundingClientRect().width;
+      if (width > listWidth + 0.5) widths.set(path, width);
+      else widths.delete(path);
+    }
+    writeTreeWidth(treeListElement);
+    if (treeScrollElement) treeScrollElement.scrollLeft = scrollLeft;
+  }, [treeListElement, treeRowIndexByPath, treeScrollElement, writeTreeWidth]);
+  const treeVirtualizer = useVirtualizer<HTMLElement, HTMLLIElement>({
+    count: treeRows.length,
+    // Enabled before the scroller exists, the virtualizer would cache offset 0.
+    enabled: treeScrollElement !== null,
+    getScrollElement: () => treeScrollElement,
+    // Rows a folder just showed start at their real height: with a guess they
+    // moved once measured, and the rows sliding under an opening folder jumped
+    // at the end of the motion.
+    estimateSize: (index) => (treeRows[index]?.kind === 'node' ? measuredRowHeightRef.current : null) ?? FILE_TREE_ROW_ESTIMATE_PX,
+    measureElement: (element, entry, instance) => {
+      const size = measureElement(element, entry, instance);
+      if (element.dataset.treeRowPath) measuredRowHeightRef.current = size;
+      if (entry) recordTreeRowWidth(element, entry.borderBoxSize?.[0]?.inlineSize ?? element.getBoundingClientRect().width);
+      return size;
+    },
+    getItemKey: (index) => treeRows[index]?.key ?? index,
+    overscan: 12,
+    scrollMargin: treeListOffset,
+    rangeExtractor,
+  });
+
+  const renderTreeRow = (row: FileTreeRow<FileNode>): React.ReactNode => {
+    if (row.kind === 'error') {
+      return (
+        // As wide as the pane and held at its start, so a tree widened by a long
+        // name keeps the message and its button on screen.
+        <div
+          className="sticky inset-s-0 flex w-[100cqw] items-center gap-2 py-1 pe-2 typography-meta text-muted-foreground"
+          style={{ paddingInlineStart: fileTreeRowPaddingLeft(row.depth) }}
+        >
+          <FileTreeIndentGuides depth={row.depth} />
+          <span className="min-w-0 flex-1 truncate text-[var(--status-error)]" title={row.message}>{row.message}</span>
+          <Button variant="ghost" size="xs" className="h-6 gap-1" onClick={() => void refreshDirectory(row.directory)}>
+            <Icon name="refresh" className="h-3.5 w-3.5" />
+            {t('sidebarFilesTree.actions.refreshTitle')}
+          </Button>
+        </div>
+      );
+    }
+    const { node, depth, isExpanded } = row;
+    const isDir = node.type === 'directory';
+    return (
+      <MemoizedFileRow
+        node={node}
+        root={root}
+        isExpanded={isExpanded}
+        isActive={selectedPath === node.path}
+        isBrowserClient={isBrowserClient}
+        depth={depth}
+        isOpen={!isDir && openContextFilePaths.has(node.path)}
+        status={!isDir ? getFileStatus(node.path) : undefined}
+        badge={isDir ? getFolderBadge(node.path) : undefined}
+        isDropTarget={isDir && (dropIndicatorTarget === node.path || moveDropTarget === node.path)}
+        isDragSource={moveDragPath === node.path}
+        canUpload={canUpload && !isUploading}
+        canMove={canMove}
+        permissions={fileRowPermissions}
+        downloadFile={files.downloadFile}
+        onSelect={handleOpenFile}
+        onToggle={toggleDirectory}
+        onRevealPath={handleRevealPath}
+        onOpenDialog={handleOpenDialog}
+        onSetDropTarget={setDropTarget}
+        onDropFiles={handleDropFiles}
+        onPickFiles={pickFiles}
+        onMoveDragChange={handleMoveDragChange}
+        onSetMoveDropTarget={setMoveDropTarget}
+        onMoveDrop={handleMoveDrop}
+      />
+    );
+  };
+
+  // Follows focus inside the tree, so the focused row stays mounted.
+  const handleTreeFocus = React.useCallback((event: React.FocusEvent<HTMLUListElement>) => {
+    const row = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-tree-row-path]') : null;
+    setFocusedRowPath(row?.dataset.treeRowPath ?? null);
+  }, []);
+  const handleTreeBlur = React.useCallback((event: React.FocusEvent<HTMLUListElement>) => {
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    setFocusedRowPath(null);
+  }, []);
 
   React.useEffect(() => {
     const path = pendingRevealPathRef.current;
-    const section = treeSectionRef.current;
-    if (!path || !section) return;
-    const row = section.querySelector<HTMLElement>(`[data-file-tree-path="${CSS.escape(path)}"]`);
+    // Only the tree's own list: search results take its place while a query runs.
+    if (!path || !treeScrollElement || !treeListElement) return;
+    const index = treeRowIndexByPath.get(path);
     // A hidden tree has no layout to scroll; reveal once it is shown.
-    if (!row || row.offsetParent === null) return;
+    if (index === undefined || treeScrollElement.offsetParent === null) return;
     pendingRevealPathRef.current = null;
-    row.scrollIntoView({ block: 'nearest' });
+    treeVirtualizer.scrollToIndex(index, { align: 'auto' });
   });
 
   const hasTree = Boolean(root && childrenByDir[root]);
   const rootLoadError = root ? loadErrorsByDir[root] : null;
   const isSearchActive = debouncedSearchQuery.trim().length > 0;
+  // The same order of cases as the list below: the tree shows only when no
+  // search, search result or root error takes its place.
+  const showsTree = !searching && !isSearchActive && searchResults.length === 0 && !rootLoadError && hasTree && Boolean(root);
   const dropTargetLabel = dropIndicatorTarget ? getDropTargetLabel(root, dropIndicatorTarget) : '';
   const moveDropTargetLabel = moveDropTarget ? getDropTargetLabel(root, moveDropTarget) : '';
   const pendingMoveName = pendingMove ? pendingMove.source.path.slice(pendingMove.source.path.lastIndexOf('/') + 1) : '';
@@ -1516,7 +1711,7 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
   );
 
   return (
-    <section ref={treeSectionRef} className="flex h-full min-h-0 flex-col overflow-hidden">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden">
         <ContextPanelHeaderToolbar>
         <div className={cn('flex min-w-0 items-center justify-end gap-1', inPanelHeader ? 'flex-1 self-center' : 'h-8 shrink-0 border-t border-border/40 px-2')}>
         {inPanelHeader ? <span className="min-w-0 truncate ps-1.5 typography-ui-label text-foreground">{t('contextPanel.mode.files')}</span> : null}
@@ -1597,15 +1792,27 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
 
       <div className="relative flex-1 min-h-0">
         <ScrollableOverlay
+          ref={setTreeScrollElement}
           outerClassName="h-full min-h-0"
-          className={cn('px-1.5 py-1.5', (dropIndicatorTarget === root || moveDropTarget === root) && 'bg-interactive-selection/10')}
+          // The virtualizer keeps rows in place itself; browser scroll
+          // anchoring would fight it.
+          // A container, so an error row can take the pane's width in a wider tree.
+          className={cn('@container px-1.5 py-1.5 [overflow-anchor:none]', (dropIndicatorTarget === root || moveDropTarget === root) && 'bg-interactive-selection/10')}
           onDragEnter={handleRootDragOver}
           onDragOver={handleRootDragOver}
           onDragLeave={handleRootDragLeave}
           onDrop={handleRootDrop}
         >
         <ul className="flex flex-col">
-          {searching ? (
+          {contentSearchActive && contentSearch.status !== 'idle' ? (
+            <FileContentSearchResults
+              state={contentSearch}
+              activeMatchKey={openedMatch && openedMatch.path === selectedPath ? openedMatch.key : null}
+              onOpen={handleOpenMatch}
+              onDragStart={handleMatchDragStart}
+              onDragEnd={handleMatchDragEnd}
+            />
+          ) : searching ? (
             <li className="flex items-center gap-1.5 px-2 py-1 typography-meta text-muted-foreground">
               <Icon name="loader-4" className="h-4 w-4 animate-spin" />
               {t('sidebarFilesTree.state.searching')}
@@ -1663,12 +1870,40 @@ const SidebarFilesTreeContent: React.FC<{ visible: boolean }> = ({ visible }) =>
                 {t('sidebarFilesTree.actions.refreshTitle')}
               </Button>
             </li>
-          ) : hasTree && root ? (
-            renderTree(root, 0)
-          ) : (
+          ) : hasTree && root ? null : (
             <li className="px-2 py-1 typography-meta text-muted-foreground">{t('sidebarFilesTree.state.loading')}</li>
           )}
         </ul>
+        {showsTree ? (
+          <ul
+            ref={attachTreeList}
+            className="relative min-w-[max(100%,var(--oc-file-tree-width,0px))]"
+            style={{ height: treeVirtualizer.getTotalSize() }}
+            onFocus={handleTreeFocus}
+            onBlur={handleTreeBlur}
+          >
+            {treeVirtualizer.getVirtualItems().map((item) => {
+              const row = treeRows[item.index];
+              if (!row) return null;
+              const path = row.kind === 'node' ? row.node.path : undefined;
+              return (
+                <li
+                  key={item.key}
+                  ref={treeVirtualizer.measureElement}
+                  data-index={item.index}
+                  data-tree-row-path={path}
+                  data-tree-disclosure-path={row.kind === 'node' ? path : `${row.directory}/`}
+                  data-file-tree-path={row.kind === 'node' && row.node.type === 'file' ? path : undefined}
+                  // A node row grows past the list to its whole name; an error row truncates.
+                  className={cn('absolute inset-x-0 top-0', row.kind === 'node' && 'min-w-max')}
+                  style={{ transform: `translateY(${item.start - treeListOffset}px)` }}
+                >
+                  {renderTreeRow(row)}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
         </ScrollableOverlay>
         {dropIndicatorTarget ? (
           <div className="pointer-events-none absolute inset-s-2 inset-e-2 top-2 z-50 flex items-center gap-2 rounded-md border border-primary bg-background/95 px-2 py-1.5 shadow-sm">

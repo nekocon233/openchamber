@@ -1,18 +1,22 @@
 import { opencodeClient } from '@/lib/opencode/client';
+import { fetchResponseStyleInstruction } from '@/lib/responseStyle';
+import { syncSessionKnowledge } from '@/lib/sessionKnowledgeApi';
 import type { Session } from '@/lib/opencode/model';
 import type { GitWorktreeSnapshotResult } from '@/lib/api/types';
 import { getGitRangeDiff, snapshotGitWorktree } from '@/lib/gitApi';
-import { renderMagicPrompt } from '@/lib/magicPrompts';
+import { loadMagicPrompts } from '@/lib/magicPrompts';
 import { getWorktreeSetupWaitEnabled } from '@/lib/openchamberConfig';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { resolveWorktreeSetupCommands } from '@/lib/sharedTrustConfirmation';
 import { waitForWorktreeBootstrap } from '@/lib/worktrees/worktreeBootstrap';
+import { resolveCreatedWorktreeStartDirectory } from '@/lib/worktrees/worktreeStartDirectory';
 import { createWorktreeWithDefaults } from '@/lib/worktrees/worktreeCreate';
 import { registerMultiRunSession } from '@/stores/useMultiRunStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { createMultiRunSession } from './createSession';
 import { getMultiRunIdentity, type MultiRunIdentity } from './identity';
-import { resolveRunMemberLocation, runSnapshotRef, type RunMemberLocation } from './keep';
+import { resolveRunMemberLocation, runSnapshotRef } from './keep';
+import type { RunMemberLocation } from './memberLocation';
 import { loadLaneDiffStat, loadLaneFirstPrompt, loadLaneLastReply, type LaneDiffStat } from './laneData';
 import { multiRunVariantLabel, type MultiRunSummary } from './runs';
 
@@ -141,6 +145,8 @@ export async function startRunFusion(input: {
   const assertCurrent = () => {
     if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== client) throw new Error('Runtime changed');
   };
+  const responseStyleInstruction = await fetchResponseStyleInstruction().catch(() => undefined);
+  assertCurrent();
 
   const sources = await loadFusionSources(run, input.sourceIds, input.sessionById, assertCurrent);
   if (sources.length === 0) throw new NoFusionOutputsError();
@@ -153,6 +159,10 @@ export async function startRunFusion(input: {
   const project = sources.find((source) => source.location)?.location?.project ?? null;
   const first = sources[0];
   const projectDirectory = project?.path ?? first.session.directory;
+  // Read before any worktree exists, so a failed read leaves nothing behind.
+  // The fusion worktree belongs to the same project, so its prompts are the project's.
+  const magicPrompts = await loadMagicPrompts(projectDirectory);
+  assertCurrent();
 
   let directory = projectDirectory;
   const context: Array<{ text: string }> = [];
@@ -193,9 +203,10 @@ export async function startRunFusion(input: {
       await waitForWorktreeBootstrap(createdWorktree.path);
       assertCurrent();
     }
-    directory = createdWorktree.path;
+    directory = await resolveCreatedWorktreeStartDirectory(project, createdWorktree);
+    assertCurrent();
 
-    context.push({ text: await renderMagicPrompt('session.fusion.codeInstructions', {
+    context.push({ text: magicPrompts.render('session.fusion.codeInstructions', {
       baseCommit,
       attemptCount: String(sources.length),
     }) });
@@ -218,7 +229,7 @@ export async function startRunFusion(input: {
     });
     context.push({ text: '\n\n--- FUSION INPUTS END ---\nNow build the fused result in this worktree.' });
   } else {
-    context.push({ text: await renderMagicPrompt('session.fusion.instructions') });
+    context.push({ text: magicPrompts.render('session.fusion.instructions') });
     context.push(...taskBlocks(prompts).map((text) => ({ text })));
     sources.forEach((source, index) => {
       context.push({ text: `\n\n--- RESULT ${index + 1}: ${source.label} ---\n${source.reply}\n--- END RESULT ${index + 1} ---` });
@@ -227,8 +238,7 @@ export async function startRunFusion(input: {
   }
   assertCurrent();
 
-  const visiblePrompt = await renderMagicPrompt('session.fusion.visible');
-  assertCurrent();
+  const visiblePrompt = magicPrompts.render('session.fusion.visible');
   const fusionSession = await createMultiRunSession({
     title: `${run.title} · ${judge.modelName ?? judge.modelID}`,
     directory,
@@ -244,10 +254,11 @@ export async function startRunFusion(input: {
   }, assertCurrent);
   registerMultiRunSession(fusionSession, directory);
   if (createdWorktree && project) {
-    useSessionUIStore.getState().setWorktreeMetadata(fusionSession.id, { ...createdWorktree, kind: 'standard' });
+    useSessionUIStore.getState().setWorktreeMetadata(fusionSession.id, { ...createdWorktree, kind: 'standard' }, directory);
   }
 
   assertCurrent();
+  await syncSessionKnowledge(directory, fusionSession.id, responseStyleInstruction, runtimeKey);
   await opencodeClient.sendMessage({
     runtimeKey,
     id: fusionSession.id,

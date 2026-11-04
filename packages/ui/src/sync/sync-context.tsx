@@ -170,7 +170,8 @@ import { formatMessage, useI18nStore } from "@/lib/i18n"
 import { sessionEvents } from "@/lib/sessionEvents"
 import { fileTreeChanges } from "@/lib/fileTreeChanges"
 import { listGlobalSessionPages, splitGlobalSessionsByArchived, type SessionPageLister } from "@/stores/globalSessions"
-import { areRequestArraysReferentiallyEqual, collectScopedBlockingRequests } from "./scoped-blocking-requests"
+import { areRequestArraysReferentiallyEqual, collectScopedBlockingRequests, computeSubtreeIds } from "./scoped-blocking-requests"
+import { deriveRecoveredQuestions, useRecoverableQuestionsStore, type RecoveredQuestion } from "./recoverable-questions"
 import { EMPTY_USER_MESSAGE_HISTORY_SNAPSHOT, buildUserMessageHistorySnapshot, type TranscriptPrompt, type UserMessageHistorySnapshot } from "./user-message-history"
 import {
   EMPTY_SESSION_MESSAGE_LOAD_STATE,
@@ -1905,14 +1906,41 @@ function scheduleCatalogReload(
  */
 const MCP_STATUS_REFRESH_DEBOUNCE_MS = 250
 const mcpStatusRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const dormantLocations = new Set<string>()
 
 function scheduleMcpStatusRefresh(directory: string): void {
+  if (dormantLocations.has(directory)) return
   const pending = mcpStatusRefreshTimers.get(directory)
   if (pending) clearTimeout(pending)
   mcpStatusRefreshTimers.set(directory, setTimeout(() => {
     mcpStatusRefreshTimers.delete(directory)
     void useMcpStore.getState().refreshIfHeld(directory)
   }, MCP_STATUS_REFRESH_DEBOUNCE_MS))
+}
+
+function cancelMcpStatusRefresh(directory: string): void {
+  const pending = mcpStatusRefreshTimers.get(directory)
+  if (pending) clearTimeout(pending)
+  mcpStatusRefreshTimers.delete(directory)
+}
+
+function forgetMcpStatus(directory: string): void {
+  cancelMcpStatusRefresh(directory)
+  useMcpStore.getState().forgetDirectory(directory)
+}
+
+export function wakeDormantLocations(childStores: ChildStoreManager, currentDirectory: string | null | undefined): void {
+  for (const directory of dormantLocations) {
+    if (directory !== currentDirectory) {
+      forgetMcpStatus(directory)
+      continue
+    }
+    if (childStores.getChild(directory)) {
+      childStores.requestBootstrap({ directory, priority: "selected", reason: "location-shutdown", force: true })
+    }
+    void useMcpStore.getState().refreshIfHeld(directory)
+  }
+  dormantLocations.clear()
 }
 
 // Only top-level sessions raise notifications. The directory store knows the
@@ -2505,12 +2533,17 @@ export function handleEvent(
   }
   if (reducerChanged && payload.type === 'session.patched' && isUnifiedNativeSessionId(payload.properties.sessionID)) {
     const sessionId = payload.properties.sessionID
-    const previous = unifiedNativeSessionState(current.session.find((session) => session.id === sessionId)?.metadata)
+    const previousSession = current.session.find((session) => session.id === sessionId)
+    const previous = unifiedNativeSessionState(previousSession?.metadata)
     const next = unifiedNativeSessionState(payload.properties.patch.metadata)
-    if (previous && next && previous.sourceSessionID !== next.sourceSessionID) {
+    const sourceChanged = previous && next && previous.sourceSessionID !== next.sourceSessionID
+    const checklistPrefixChanged = next?.backend === 'antigravity' && payload.properties.patch.revert !== undefined
+      && previousSession?.revert?.messageID !== payload.properties.patch.revert?.messageID
+    if (sourceChanged || checklistPrefixChanged) {
       const runtimeKey = getRuntimeKey()
       queueMicrotask(() => {
         resetSessionNativeChecklistSource(sessionId, resolvedDirectory, runtimeKey)
+        if (!sourceChanged) return
         resetSessionNativePlanSource(sessionId, resolvedDirectory, runtimeKey)
         resetSessionNativeTodosSource(sessionId, resolvedDirectory, runtimeKey)
         resetSessionNativeTaskSource(sessionId, resolvedDirectory, runtimeKey)
@@ -4035,6 +4068,42 @@ export function useSessions(directory?: string) {
   )
 }
 
+const sessionStartTimesCache = new WeakMap<State["session"], ReadonlyMap<string, number>>()
+
+const readSessionStartTimes = (sessions: State["session"]): ReadonlyMap<string, number> => {
+  let startTimes = sessionStartTimesCache.get(sessions)
+  if (!startTimes) {
+    startTimes = new Map(sessions.map((session) => [session.id, session.time.created]))
+    sessionStartTimesCache.set(sessions, startTimes)
+  }
+  return startTimes
+}
+
+const haveSameStartTimes = (left: ReadonlyMap<string, number>, right: ReadonlyMap<string, number>): boolean => {
+  if (left === right) return true
+  if (left.size !== right.size) return false
+  for (const [sessionID, created] of left) {
+    if (right.get(sessionID) !== created) return false
+  }
+  return true
+}
+
+export function useSessionStartTimes(directory?: string): ReadonlyMap<string, number> {
+  const store = useDirectoryStore(directory)
+  const cacheRef = useRef<ReadonlyMap<string, number> | null>(null)
+  const getSnapshot = useCallback(() => {
+    const next = readSessionStartTimes(store.getState().session)
+    const cached = cacheRef.current
+    if (cached && haveSameStartTimes(cached, next)) return cached
+    cacheRef.current = next
+    return next
+  }, [store])
+  const subscribe = useCallback((notify: () => void) => store.subscribe((state, previous) => {
+    if (state.session !== previous.session) notify()
+  }), [store])
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
 const selectPermissionRequestsBySession = (state: State) => state.permission
 const selectFormRequestsBySession = (state: State) => state.form
 
@@ -4115,6 +4184,19 @@ export function useScopedBlockingPermissions(sessionID: string | null, directory
 
 export function useScopedBlockingForms(sessionID: string | null, directory?: string): FormRequest[] {
   return useScopedBlockingRequests(sessionID, directory, selectFormRequestsBySession, EMPTY_FORM_REQUESTS, collectComposerForms)
+}
+
+export function useRecoveredQuestions(sessionID: string | null, directory?: string): RecoveredQuestion[] {
+  const store = useDirectoryStore(directory)
+  const sessions = useStore(store, (state) => state.session)
+  const form = useStore(store, (state) => state.form)
+  const part = useStore(store, (state) => state.part)
+  const recovery = useRecoverableQuestionsStore()
+  return useMemo(() => deriveRecoveredQuestions(
+    { form, part },
+    recovery,
+    sessionID ? computeSubtreeIds(sessions, sessionID) : new Set<string>(),
+  ), [form, part, recovery, sessionID, sessions])
 }
 
 const sessionsByIdCache = new WeakMap<State["session"], Map<string, Session>>()
@@ -4484,6 +4566,38 @@ export function buildSessionMessageRecordsSnapshot(
     list: nextList,
     byId: nextById,
   }
+}
+
+export function readSessionMessageRecordsSnapshot(
+  store: StoreApi<DirectoryStore>,
+  sessionID: string,
+  current: SessionMessageRecordsSnapshot,
+  suspendPartUpdates: boolean,
+  suspendedPartUpdatesMessageID?: string,
+): SessionMessageRecordsSnapshot {
+  const state = store.getState()
+  const sameSession = current.sessionID === sessionID
+  const suspensionChanged = sameSession && (
+    current.suspendPartUpdates !== suspendPartUpdates
+    || current.suspendedPartUpdatesMessageID !== suspendedPartUpdatesMessageID
+  )
+  const reusableSnapshot = suspensionChanged
+    ? undefined
+    : getReusableSessionMessageRecordsSnapshot(store, state, sessionID, suspendPartUpdates, suspendedPartUpdatesMessageID)
+  if (reusableSnapshot) return reusableSnapshot
+
+  const previousSnapshot = sameSession
+    ? current
+    : readCachedSessionMessageRecordsSnapshot(store, sessionID, suspendPartUpdates, suspendedPartUpdatesMessageID)
+  const nextSnapshot = buildSessionMessageRecordsSnapshot(
+    state,
+    sessionID,
+    previousSnapshot,
+    suspendPartUpdates,
+    suspendedPartUpdatesMessageID,
+  )
+  rememberSessionMessageRecordsSnapshot(store, nextSnapshot)
+  return nextSnapshot
 }
 
 export function useSessionRenderable(sessionID: string, directory?: string): boolean {

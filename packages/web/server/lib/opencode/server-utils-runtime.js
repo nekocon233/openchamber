@@ -25,9 +25,12 @@ export const createServerUtilsRuntime = (dependencies) => {
     getLoginShellPath,
     readAuthoritativeProjects,
     getArchivedSessions = null,
+    getUnreadBaseline = null,
     getMergeSpaceSessionList = null,
     getSpaceEventHub = null,
     getStoredSessionMetadata = null,
+    openCodeTrust = null,
+    readWorktreeBootstrapStatus,
   } = dependencies;
 
   const setOpenCodePort = (port) => {
@@ -201,10 +204,13 @@ export const createServerUtilsRuntime = (dependencies) => {
       onSessionDeleted: dependencies.onSessionDeleted,
       subscribeNativeEvents: dependencies.subscribeNativeEvents,
       getArchivedSessions,
+      getUnreadBaseline,
       getStoredSessionMetadata,
       // Read when the proxy is set up, after `main` decided whether the spaces host exists.
       mergeSpaceSessionList: typeof getMergeSpaceSessionList === 'function' ? getMergeSpaceSessionList() : null,
       spaceEventHub: typeof getSpaceEventHub === 'function' ? getSpaceEventHub() : null,
+      openCodeTrust,
+      readWorktreeBootstrapStatus,
     });
   };
 

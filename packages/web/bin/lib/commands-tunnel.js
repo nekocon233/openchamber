@@ -1979,6 +1979,7 @@ async function tunnelCommand(options, subcommand, action, deps) {
             configPath: options.configPath || null,
             connectTtlMs: connectTtlMs ?? null,
             sessionTtlMs: sessionTtlMs ?? null,
+            httpsPort: options.httpsPort ?? null,
           };
           if (isJsonMode(options)) {
             printJson(dryRunResult);

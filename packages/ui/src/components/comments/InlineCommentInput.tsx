@@ -21,6 +21,12 @@ export interface InlineCommentInputProps {
   maxWidth?: number;
   /** Fill of the selected lines the comment belongs to, when the host knows it. */
   bandColor?: string;
+  floating?: boolean;
+  band?: boolean;
+  wholeFile?: boolean;
+  saveLabel?: string;
+  saving?: boolean;
+  review?: unknown;
   reviewAction?: {
     label: string;
     disabled: boolean;

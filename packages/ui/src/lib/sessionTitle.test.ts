@@ -247,7 +247,7 @@ describe('bounded history loading', () => {
     const error = new Error('offline');
     const loader = {
       ensure: async () => {}, loadOlder: async () => {},
-      getSnapshot: (): ReturnType<SessionMessageLoader['getSnapshot']> => ({ status: 'error', loadingKind: null, error, resolved: true, limit: 50, cursor: 'older', complete: false, generation: 0, updatedAt: 1 }),
+      getSnapshot: (): ReturnType<SessionMessageLoader['getSnapshot']> => ({ status: 'error', loadingKind: null, error, resolved: true, limit: 50, cursor: 'older', complete: false, generation: 0, updatedAt: 1, olderCompletedReplyIds: new Set() }),
     };
     await expect(loadSessionTitleTurns({ loader, target: { sessionID: 'session', directory: '/project' }, getRecords: () => pair('cached'), signal: new AbortController().signal })).rejects.toThrow('offline');
   });
@@ -256,6 +256,7 @@ describe('bounded history loading', () => {
     let state: ReturnType<SessionMessageLoader['getSnapshot']> = {
       status: 'error', loadingKind: null, error: new Error('offline'), resolved: true,
       limit: 50, cursor: undefined, complete: true, generation: 0, updatedAt: 1,
+      olderCompletedReplyIds: new Set(),
     };
     const loader = {
       ensure: async (_target: { directory: string; sessionID: string }, options?: { force?: boolean }) => {
@@ -285,6 +286,11 @@ describe('generation lifecycle', () => {
       });
       const { prompt } = z.object({ prompt: z.string() }).parse(body);
       expect(prompt.startsWith('**Current title:** Original\n\n---\n\n**User**')).toBe(true);
+      const { system } = z.object({ system: z.string() }).parse(body);
+      expect(system).toContain('only the user message decides the language');
+      expect(system).toContain('Most titles are two or three words');
+      expect(system).toContain('Leave out the name of the project');
+      expect(system).toContain('检查项目的 git 记录和未完成的计划 → 项目进度检查');
       calls += 1;
       return calls === 1 ? Response.json({ text: 'A useful title' }) : new Response('Unavailable', { status: 503 });
     };
@@ -301,13 +307,14 @@ describe('generation lifecycle', () => {
     const paths: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
-      paths.push(new URL(new Request(input, init).url).pathname);
+      const request = new Request(input, init);
+      paths.push(`${new URL(request.url).pathname} ${request.headers.get('x-opencode-directory')}`);
       return Response.json({ text: 'A useful title' });
     };
     configureRuntimeUrlResolver({ apiBaseUrl: 'http://session-title.test' });
     try {
       await generateSessionTitle({ turns, currentTitle: 'Original', directory: '/spaces/a1b2c3d4e5f6/repo', signal: new AbortController().signal });
-      expect(paths).toEqual(['/api/spaces/a1b2c3d4e5f6/small-model/generate']);
+      expect(paths).toEqual([`/api/small-model/generate ${encodeURIComponent('/spaces/a1b2c3d4e5f6/repo')}`]);
     } finally { globalThis.fetch = originalFetch; configureRuntimeUrlResolver({ apiBaseUrl: '' }); }
   });
 

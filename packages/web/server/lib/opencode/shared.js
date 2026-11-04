@@ -200,6 +200,51 @@ function getConfigPaths(workingDirectory) {
   };
 }
 
+function realPathOrResolved(filePath) {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+function isFile(filePath) {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every config file OpenCode 2 finds by walking up from the project folder to
+ * the filesystem root, lowest priority first, as `ConfigDiscovery.discover`
+ * and `Config.load` order them: each folder's `opencode.json` then
+ * `opencode.jsonc`, outermost folder first, followed by each folder's
+ * `.opencode/opencode.json(c)` in the same order. The global config files are
+ * left out, and there is no walk when the project folder is the global config
+ * folder itself.
+ */
+function getFolderConfigPaths(workingDirectory) {
+  if (!workingDirectory) return [];
+  const globalDirectory = realPathOrResolved(OPENCODE_CONFIG_DIR);
+  if (realPathOrResolved(workingDirectory) === globalDirectory) return [];
+  const globalFiles = ['opencode.json', 'opencode.jsonc']
+    .map((name) => realPathOrResolved(path.join(OPENCODE_CONFIG_DIR, name)));
+  const isGlobal = (filePath) => globalFiles.includes(realPathOrResolved(filePath));
+  const folders = getAncestors(workingDirectory).reverse();
+  const configFilesIn = (folder) => ['opencode.json', 'opencode.jsonc']
+    .map((name) => path.join(folder, name))
+    .filter((filePath) => isFile(filePath) && !isGlobal(filePath));
+  return [
+    ...folders.flatMap(configFilesIn),
+    ...folders
+      .map((folder) => path.join(folder, '.opencode'))
+      .filter((folder) => realPathOrResolved(folder) !== globalDirectory)
+      .flatMap(configFilesIn),
+  ];
+}
+
 function getPrimaryUserConfigPath(userPaths) {
   for (const userPath of userPaths) {
     if (fs.existsSync(userPath)) {
@@ -375,6 +420,9 @@ function getConfigForPath(layers, targetPath) {
   if (layers.paths.projectPath && targetPath === layers.paths.projectPath) {
     return layers.projectConfig;
   }
+  if (layers.paths.userOverridePath && targetPath === layers.paths.userOverridePath) {
+    return layers.userOverrideConfig;
+  }
   return layers.userConfig;
 }
 
@@ -394,10 +442,26 @@ function deepEqualJsonValue(a, b) {
 }
 
 // Structural diff between the parsed on-disk config and the desired config.
-// Object keys are compared per key (order-insensitive); arrays and scalars are
-// replaced whole. The desired config must already be JSON-normalized (no
-// `undefined` values), so absent keys are the only removal signal.
+// Equal-length arrays keep their indices unless a retained value moves between
+// changed positions. Resized arrays and scalars are replaced whole. The desired
+// config must already be JSON-normalized, so absent keys signal removals.
 function collectConfigEdits(current, next, basePath, edits) {
+  if (Array.isArray(current) && Array.isArray(next) && current.length === next.length) {
+    const changedIndices = [];
+    for (let index = 0; index < current.length; index += 1) {
+      if (!deepEqualJsonValue(current[index], next[index])) changedIndices.push(index);
+    }
+    const reordered = changedIndices.some((index) => changedIndices.some((otherIndex) => (
+      index !== otherIndex && deepEqualJsonValue(current[index], next[otherIndex])
+    )));
+    if (!reordered) {
+      for (const index of changedIndices) {
+        collectConfigEdits(current[index], next[index], [...basePath, index], edits);
+      }
+      return;
+    }
+  }
+
   if (!isPlainObject(current) || !isPlainObject(next)) {
     if (!deepEqualJsonValue(current, next)) {
       edits.push({ type: 'set', path: basePath, value: next });
@@ -960,12 +1024,16 @@ export {
   writeConfig,
   getJsonEntrySource,
   getJsonWriteTarget,
+  getLayerError,
+  getProjectConfigCandidates,
+  getFolderConfigPaths,
   getAncestors,
   findWorktreeRoot,
   isPromptFileReference,
   resolvePromptFilePath,
   writePromptFile,
   walkSkillMdFiles,
+  pathExists,
   addSkillFromMdFile,
   resolveSkillSearchDirectories,
   listSkillSupportingFiles,

@@ -1,14 +1,16 @@
 import { create } from 'zustand';
 import type { Session } from '@/lib/opencode/model';
-import { routeMessage, useSessionUIStore } from '@/sync/session-ui-store';
+import { resolveGoalObjective, routeMessage, useSessionUIStore } from '@/sync/session-ui-store';
 import { devtools } from 'zustand/middleware';
-import type { CreateMultiRunParams, CreateMultiRunResult } from '@/types/multirun';
+import type { CreateMultiRunParams, CreateMultiRunResult, MultiRunGoal } from '@/types/multirun';
 import { opencodeClient } from '@/lib/opencode/client';
-import { fetchSessionKnowledge, reportSessionKnowledgeDelivered } from '@/lib/sessionKnowledgeApi';
+import { clearSessionGoal, sessionGoalIntro, setSessionGoal } from '@/lib/sessionGoalActions';
+import { syncSessionKnowledge } from '@/lib/sessionKnowledgeApi';
 import { getWorktreeSetupWaitEnabled, saveWorktreeSetupCommands } from '@/lib/openchamberConfig';
 import type { ProjectRef } from '@/lib/worktrees/worktreeManager';
 import { createWorktreeWithDefaults, resolveRootTrackingRemote } from '@/lib/worktrees/worktreeCreate';
 import { waitForWorktreeBootstrap } from '@/lib/worktrees/worktreeBootstrap';
+import { resolveCreatedWorktreeStartDirectory } from '@/lib/worktrees/worktreeStartDirectory';
 import { getRootBranch } from '@/lib/worktrees/worktreeStatus';
 import { normalizePath as normalizePathImpl } from '@/lib/pathNormalization';
 import { checkIsGitRepository } from '@/lib/gitApi';
@@ -95,30 +97,44 @@ export async function dispatchRunPrompt(input: {
   variant?: string;
   agent?: string;
   files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>;
+  goal?: MultiRunGoal;
 }): Promise<void> {
   input.assertCurrent();
   const expandText = useSnippetsStore.getState().expandText;
-  const [text, knowledge] = await Promise.all([
-    expandText(input.prompt).catch(() => input.prompt),
-    fetchSessionKnowledge(input.directory, input.sessionId),
-  ]);
+  const knowledgeSync = syncSessionKnowledge(input.directory, input.sessionId, null, input.runtimeKey);
+  const text = await expandText(input.prompt).catch(() => input.prompt);
   input.assertCurrent();
-  const route = await routeMessage({
-    runtimeKey: input.runtimeKey,
-    sessionId: input.sessionId,
-    directory: input.directory,
-    content: text,
-    providerID: input.providerID,
-    modelID: input.modelID,
-    variant: input.variant,
-    agent: input.agent,
-    files: input.files,
-    additionalParts: knowledge.text
-      ? [{ text: knowledge.text, synthetic: true, systemContext: 'session-knowledge' }]
-      : undefined,
-  });
-  if (knowledge.text && route !== 'shell') {
-    void reportSessionKnowledgeDelivered(input.directory, input.sessionId, knowledge.signature);
+  if (input.goal) {
+    // Before the prompt, as on an ordinary send: a lane that cannot get its
+    // goal stays unstarted instead of running as a plain session.
+    await setSessionGoal(
+      input.sessionId,
+      input.directory,
+      { objective: resolveGoalObjective(text, input.directory), tokenBudget: input.goal.tokenBudget },
+      null,
+      input.runtimeKey,
+    );
+    input.assertCurrent();
+  }
+  try {
+    await routeMessage({
+      runtimeKey: input.runtimeKey,
+      sessionId: input.sessionId,
+      directory: input.directory,
+      content: text,
+      providerID: input.providerID,
+      modelID: input.modelID,
+      variant: input.variant,
+      agent: input.agent,
+      files: input.files,
+      additionalParts: input.goal ? [{ text: sessionGoalIntro(input.goal.tokenBudget), synthetic: true }] : undefined,
+      sessionKnowledge: knowledgeSync,
+    });
+  } catch (error) {
+    // With no turn the server never settles the goal, and an active goal
+    // keeps the lane working and holds auto-fusion for good.
+    if (input.goal) await clearSessionGoal(input.sessionId, input.directory).catch(() => undefined);
+    throw error;
   }
 }
 
@@ -213,7 +229,8 @@ export const useMultiRunStore = create<MultiRunStore>()(
 
           const createdRuns: Array<{
             sessionId: string;
-            worktreePath: string;
+            /** Where the run's session starts: the worktree root, or the project's folder inside it. */
+            directory: string;
             providerID: string;
             modelID: string;
             variant?: string;
@@ -272,7 +289,7 @@ export const useMultiRunStore = create<MultiRunStore>()(
 
                   createdRuns.push({
                     sessionId: session.id,
-                    worktreePath: directory,
+                    directory,
                     providerID: model.providerID,
                     modelID: model.modelID,
                     variant: model.variant,
@@ -309,14 +326,17 @@ export const useMultiRunStore = create<MultiRunStore>()(
                   assertCurrent();
                 }
 
-                const session = await createRun(worktreeMetadata.path);
-                registerMultiRunSession(session, worktreeMetadata.path);
+                // A checkout that never populated is removed with its branch; the lane counts as failed.
+                const startDirectory = await resolveCreatedWorktreeStartDirectory(project, worktreeMetadata);
+                assertCurrent();
+                const session = await createRun(startDirectory);
+                registerMultiRunSession(session, startDirectory);
 
-                useSessionUIStore.getState().setWorktreeMetadata(session.id, enrichedMetadata);
+                useSessionUIStore.getState().setWorktreeMetadata(session.id, enrichedMetadata, startDirectory);
 
                 createdRuns.push({
                   sessionId: session.id,
-                  worktreePath: worktreeMetadata.path,
+                  directory: startDirectory,
                   providerID: model.providerID,
                   modelID: model.modelID,
                   variant: model.variant,
@@ -359,13 +379,14 @@ export const useMultiRunStore = create<MultiRunStore>()(
                 runtimeKey,
                 assertCurrent,
                 sessionId: run.sessionId,
-                directory: run.worktreePath,
+                directory: run.directory,
                 prompt: run.prompt,
                 providerID: run.providerID,
                 modelID: run.modelID,
                 variant: run.variant,
                 agent,
                 files: [...(filesForMessage ?? []), ...(run.files ?? []).map((f) => ({ type: 'file' as const, mime: f.mime, filename: f.filename, url: f.url }))],
+                goal: params.goal,
               });
             } catch (err) {
               console.warn('[MultiRun] Failed to start run:', err);

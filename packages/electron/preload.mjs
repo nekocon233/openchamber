@@ -12,6 +12,10 @@ const readArgValue = (name) => {
 };
 
 const localOrigin = readArgValue('--openchamber-local-origin');
+// Desktop dev renders from Vite on its own origin while the local server keeps
+// another. Both main.mjs (isLocalSender) and this preload treat only the exact
+// HMR origin as local, and only in development.
+const devUiOrigin = readArgValue('--openchamber-dev-ui-origin');
 const apiBaseUrl = readArgValue('--openchamber-api-base-url');
 const clientToken = readArgValue('--openchamber-client-token');
 const runtimeHeadersRaw = readArgValue('--openchamber-runtime-headers');
@@ -34,7 +38,8 @@ const nativeFrame = readArgValue('--openchamber-native-frame') === '1';
 //    title bar offsets, etc.). Expose unconditionally.
 //  - __OPENCHAMBER_DESKTOP__ is the IPC channel to the main process. It is
 //    exposed broadly, but privileged commands are gated in main.mjs.
-//    Local-only globals below stay limited to packaged UI / exact localOrigin.
+//    Local-only globals below stay limited to packaged UI, the exact localOrigin,
+//    or the exact HMR UI origin in development (main.mjs trusts it too).
 // Everything driven by localOrigin (home dir, macOS hints) also stays
 // local-only since it leaks info about the Electron host machine.
 const currentOrigin = (() => {
@@ -46,7 +51,8 @@ const currentOrigin = (() => {
 })();
 const isLocalPage = currentOrigin !== 'null'
   && (currentOrigin === 'openchamber-ui://app'
-  || (localOrigin && currentOrigin === localOrigin));
+  || (localOrigin && currentOrigin === localOrigin)
+  || (devUiOrigin && currentOrigin === devUiOrigin));
 
 // Remote pages need __OPENCHAMBER_LOCAL_ORIGIN__ so the HostSwitcher knows
 // the URL of the Local entry (isDesktopLocalOriginActive() falls back to
@@ -70,6 +76,12 @@ if (runtimeKey) {
 
 if (clientToken && isLocalPage) {
   contextBridge.exposeInMainWorld('__OPENCHAMBER_CLIENT_TOKEN__', clientToken);
+}
+
+// A window created before startup resolved has none of the values above in its
+// arguments, so the packaged document asks main for them (packaged-runtime-config.mjs).
+if (currentOrigin === 'openchamber-ui://app') {
+  contextBridge.exposeInMainWorld('__OPENCHAMBER_READ_RUNTIME_CONFIG__', () => ipcRenderer.sendSync('openchamber:read-runtime-config'));
 }
 
 // Which saved host this window should connect to over the relay-capable path
@@ -120,6 +132,22 @@ contextBridge.exposeInMainWorld('__OPENCHAMBER_ELECTRON__', {
 });
 
 contextBridge.exposeInMainWorld('__OPENCHAMBER_PLATFORM__', process.platform);
+
+// Main reloads a window that crashed several times in a row once without its
+// saved layout (expanded folders, open panels), so a layout that crashes the
+// window on load cannot loop forever. The startup splash (a data: page in
+// development, /__splash in packaged UI) loads before main.mjs listens and is
+// never the page that crashed, so it does not ask.
+const isStartupSplash = (() => {
+  try {
+    return location.protocol === 'data:' || location.pathname === '/__splash';
+  } catch {
+    return false;
+  }
+})();
+if (!isStartupSplash && ipcRenderer.sendSync('openchamber:take-safe-start') === true) {
+  contextBridge.exposeInMainWorld('__OPENCHAMBER_SAFE_START__', true);
+}
 
 // Note: bootOutcome must stay writable from the main world's initScript so
 // re-navigations (host switch via deep link) can refresh it. contextBridge-
@@ -216,6 +244,14 @@ const desktopBridge = {
 
 if (isLocalPage) {
   desktopBridge.pickThemeFile = () => ipcRenderer.invoke('openchamber:invoke', 'desktop_pick_theme_file', {});
+  // PRIMARY is not reachable from the web Clipboard API; expose it only to the
+  // local Linux page. Remote pages never receive this bridge.
+  if (process.platform === 'linux') {
+    desktopBridge.clipboard = {
+      readSelection: () => ipcRenderer.invoke('openchamber:invoke', 'desktop_clipboard_read_selection', {}),
+      writeSelection: (text) => ipcRenderer.invoke('openchamber:invoke', 'desktop_clipboard_write_selection', { text }),
+    };
+  }
   desktopBridge.relayDevTunnelListen = (handler) => {
     relayDevTunnelHandler = typeof handler === 'function' ? handler : null;
   };

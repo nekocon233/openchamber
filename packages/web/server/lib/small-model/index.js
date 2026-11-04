@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import os from 'os';
 import path from 'path';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { asNonEmptyString } from '../shared/guards.js';
 import { nativeBackendOfProviderId } from '../native-agents/ids.js';
 import {
   findModelInfo,
@@ -15,6 +16,13 @@ import {
 } from './client.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+const TIMEOUT_PER_TOKEN_MS = 40;
+const TIMEOUT_MAX_MS = 900_000;
+
+export const generationBudgetMs = (promptChars) => Math.min(
+  TIMEOUT_MAX_MS,
+  DEFAULT_TIMEOUT_MS + Math.max(0, Math.ceil(Number(promptChars) / 4)) * TIMEOUT_PER_TOKEN_MS,
+);
 
 let nativeRuntimes = new Map();
 
@@ -29,6 +37,14 @@ export const configureNativeSmallModels = (runtimes) => {
 const UNAVAILABLE_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 16_000];
 let unavailableRetryDelaysMs = UNAVAILABLE_RETRY_DELAYS_MS;
 
+// Generation waits up to 5 s for the location's plugins, then answers that
+// they are still activating; after them it answers the model missing.
+const isCatalogNotReady = (error, model) => (
+  (error?._tag === 'ModelNotFoundError'
+    && error.providerID === model.providerID && error.modelID === model.modelID)
+  || (error?._tag === 'ServiceUnavailableError' && error.service === 'plugin')
+);
+
 /** Test hook: replace the backoff schedule; no argument restores the default. */
 export const setUnavailableRetryDelaysForTest = (delays = UNAVAILABLE_RETRY_DELAYS_MS) => {
   unavailableRetryDelaysMs = delays;
@@ -41,13 +57,20 @@ const OPENCHAMBER_SETTINGS_FILE = path.join(
   'settings.json',
 );
 
-// OpenChamber's own settings: when the user unchecks "use default small model"
-// their explicit override outranks the model OpenCode would pick.
+/**
+ * OpenChamber's own settings: when the user unchecks "use default small model"
+ * their explicit override outranks the model OpenCode would pick. The chosen
+ * thinking variant belongs to that override, and is ignored with the rest of
+ * it while "use default" is on.
+ */
 const readSmallModelSettingsOverride = () => {
   const settings = readMergedSettingsSync({ fs, path, settingsFilePath: OPENCHAMBER_SETTINGS_FILE });
   if (settings.smallModelUseDefault !== false) return null;
-  const override = typeof settings.smallModelOverride === 'string' ? settings.smallModelOverride.trim() : '';
-  return override || null;
+  const model = parseModelRef(asNonEmptyString(settings.smallModelOverride));
+  if (!model) return null;
+  const variant = asNonEmptyString(settings.smallModelVariant);
+  if (variant) model.variant = variant;
+  return model;
 };
 
 export function parseModelRef(value) {
@@ -60,6 +83,23 @@ export function parseModelRef(value) {
     modelID: trimmed.slice(slash + 1),
   };
 }
+
+/**
+ * The variant to actually send for a resolved model. A model the catalog does
+ * not know yet keeps the saved variant, so a discovery gap does not silently
+ * lose the user's choice. A model it knows uses only listed variants, the same
+ * rule session defaults apply.
+ */
+const resolveModelVariant = (modelInfo, variant) => {
+  const normalized = asNonEmptyString(variant);
+  if (!normalized) return undefined;
+  // An unlisted model is not evidence either way. A known model must list the
+  // variant; a missing or malformed list counts as no levels, the same rule
+  // session defaults and the VS Code bridge apply.
+  if (!modelInfo) return normalized;
+  const variants = Array.isArray(modelInfo.variants) ? modelInfo.variants : [];
+  return variants.some((entry) => entry?.id === normalized) ? normalized : undefined;
+};
 
 // Rough safety clamp so a huge input never blows the model's context window.
 // Token estimate is ~4 chars/token; when OpenCode reports no limit for the
@@ -85,7 +125,7 @@ export const getModelInputCharBudget = ({ modelInfo, outputReserveTokens }) => {
  * The output budget to actually request: what the caller asked for, capped by
  * what the model admits it can emit.
  *
- * `/api/experimental/generate` takes no output budget of its own, so this number only
+ * `/api/experimental/generate/text` takes no output budget of its own, so this number only
  * shapes the input reserve — but it has to stay the same number on both sides
  * or a caller that asks for a large answer overruns the context.
  */
@@ -116,45 +156,57 @@ const clampPromptToModelLimit = ({ prompt, system, modelInfo, providerID, modelI
 };
 
 /**
- * The model families that count as "small", most preferred first. The same
- * list OpenCode uses for its own session titles (`Catalog.model.small` in
+ * The tiers that count as "small", most preferred first. The tiers are the
+ * ones OpenCode uses for its own session titles (`Catalog.model.small` in
  * `packages/core/src/catalog.ts`); OpenCode does not expose that lookup over
- * HTTP, so the scan is repeated here on `GET /api/model`.
+ * HTTP, so the scan is repeated here on `GET /api/model`. A tier is a name,
+ * not one lab's family: every lab's flash (`deepseek-flash`, `glm-flash`,
+ * `mimo-v2.6-flash`) is a flash. Flash ranks before luna, unlike OpenCode's
+ * list: on gateways a flash is the open model with the larger allowance,
+ * where luna sends the content to OpenAI. `flash-lite` stays ahead of
+ * `flash`, which is also how `smallModelTierOf` tells the two apart.
  */
-export const SMALL_MODEL_FAMILY_PRIORITY = ['gpt-luna', 'gemini-flash-lite', 'gemini-flash', 'claude-haiku'];
+export const SMALL_MODEL_TIER_PRIORITY = ['flash-lite', 'flash', 'luna', 'haiku'];
 
 /**
- * A model's family: the catalog's `family` (models.dev) when it has one,
- * else read from the id. A custom provider or a subscription outside the
- * catalog has no `family`, yet its `gemini-3.6-flash` is still a flash.
+ * A model's small tier, read from the catalog's `family` (models.dev) and its
+ * id together: a catalog family can be a whole line (`mimo`, `qwen`) while
+ * the id names the flash, and a custom provider has no `family` at all.
  */
-export const familyOf = (model) => {
-  if (model?.family) return String(model.family);
-  const id = String(model?.id ?? '').toLowerCase();
-  if (id.includes('luna')) return 'gpt-luna';
-  if (id.includes('flash-lite') || id.includes('flash_lite')) return 'gemini-flash-lite';
-  if (id.includes('flash')) return 'gemini-flash';
-  if (id.includes('haiku')) return 'claude-haiku';
-  return null;
+export const smallModelTierOf = (model) => {
+  const name = `${model?.family ?? ''} ${model?.id ?? ''}`.toLowerCase().replaceAll('_', '-');
+  return SMALL_MODEL_TIER_PRIORITY.find((tier) => name.includes(tier)) ?? null;
 };
 
 /**
  * The small model within one provider: the newest enabled, active, text-in
- * text-out model of the first family in `SMALL_MODEL_FAMILY_PRIORITY` that the
- * provider has. Null when the provider has none of those families.
+ * text-out model of the first tier in `SMALL_MODEL_TIER_PRIORITY` that the
+ * provider has. Null when the provider has none of those tiers.
  */
 export const pickSmallModelInProvider = (models, providerID) => pickSmallModel(models, (model) => model.providerID === providerID);
 
+// Without a zen login OpenCode gives zen this placeholder instead of a key and
+// trims it to the free models. Those serve OpenCode's own sessions only:
+// `/api/experimental/generate/text` answers every one of them with "Free usage
+// limit reached", so this module never resolves to one, whichever step names it.
+// A zen login or key removes the placeholder.
+const ZEN_ANONYMOUS_API_KEY = 'public';
+const isAnonymousZenModel = (model) => model?.providerID === 'opencode'
+  && model.settings?.apiKey === ZEN_ANONYMOUS_API_KEY;
+
+/** Enabled, active, text in and text out; a field OpenCode does not report counts as fine. */
+const isUsableTextModel = (model) => model.enabled !== false
+  && !isAnonymousZenModel(model)
+  && (model.status === undefined || model.status === 'active')
+  && (model.capabilities?.input ?? ['text']).some((item) => String(item).startsWith('text'))
+  && (model.capabilities?.output ?? ['text']).some((item) => String(item).startsWith('text'));
+
 const pickSmallModel = (models, accept) => {
   const candidates = models
-    .filter((model) => model && accept(model)
-      && model.enabled !== false
-      && (model.status === undefined || model.status === 'active')
-      && (model.capabilities?.input ?? ['text']).some((item) => String(item).startsWith('text'))
-      && (model.capabilities?.output ?? ['text']).some((item) => String(item).startsWith('text')))
+    .filter((model) => model && accept(model) && isUsableTextModel(model))
     .sort((a, b) => (Number(b.time?.released) || 0) - (Number(a.time?.released) || 0));
-  for (const family of SMALL_MODEL_FAMILY_PRIORITY) {
-    const found = candidates.find((model) => familyOf(model) === family);
+  for (const tier of SMALL_MODEL_TIER_PRIORITY) {
+    const found = candidates.find((model) => smallModelTierOf(model) === tier);
     if (found) return { providerID: found.providerID, modelID: found.id };
   }
   return null;
@@ -163,14 +215,16 @@ const pickSmallModel = (models, accept) => {
 /**
  * Which model this call runs on, in order:
  *
- * 1. An explicit request model.
- * 2. OpenChamber's settings override (Settings → Sessions → Small Model).
+ * 1. An explicit request model, with the thinking variant the caller names.
+ * 2. OpenChamber's settings override (Settings → Sessions → Small Model),
+ *    including the thinking variant chosen beside the model.
  * 3. The small model configured for OpenCode itself: the `title` agent's
- *    model (`agents.title.model`, or v1 `small_model`) — `config`.
- * 4. The small model of the caller's provider — the session's, or the one
- *    in the composer (family scan above) — `session-provider-small`. Without
- *    one the caller's own model (`session-model`): costlier, but never
- *    someone else's subscription.
+ *    model and variant (`agents.title.model`, or v1 `small_model`) — `config`.
+ * 4. The caller's own model when it is already a small one (`session-model`).
+ *    Otherwise the small model of the caller's provider — the session's, or
+ *    the one in the composer (tier scan above) — `session-provider-small`.
+ *    Without one the caller's own model (`session-model`): costlier, but
+ *    never someone else's subscription.
  * 5. `GET /api/model/default`: OpenCode's default model — `default`, only
  *    when the caller named no provider or it is on that provider. This is
  *    the chat default, not a small model; OpenCode's own family scan is not
@@ -180,31 +234,54 @@ const pickSmallModel = (models, accept) => {
  * happens to be connected: the content (diffs, replies, session text) goes
  * only where the user sent their own work or configured on purpose.
  */
-const resolveSmallModel = async ({ client, directory, model, preferredProviderID, preferredModelID }) => {
-  const explicit = parseModelRef(model);
-  if (explicit) return { ...explicit, source: 'request' };
+const resolveSmallModel = async ({ client, directory, model, variant, preferredProviderID, preferredModelID }) => {
+  const models = await listModelInfos(client, directory);
+  // A free zen model saved or configured anywhere counts as not set: the
+  // resolution moves on as it would without it.
+  const isCallable = ({ providerID, modelID }) => !isAnonymousZenModel(findModelInfo(models, providerID, modelID));
 
-  const fromSettings = parseModelRef(readSmallModelSettingsOverride());
-  if (fromSettings) return { ...fromSettings, source: 'settings' };
+  const explicit = parseModelRef(model);
+  if (explicit && isCallable(explicit)) {
+    // A caller naming its model may name its thinking level with it.
+    const explicitVariant = asNonEmptyString(variant);
+    if (explicitVariant) explicit.variant = explicitVariant;
+    return { ...explicit, source: 'request' };
+  }
+
+  const fromSettings = readSmallModelSettingsOverride();
+  if (fromSettings && isCallable(fromSettings)) return { ...fromSettings, source: 'settings' };
 
   // A config can outlive the login behind it. OpenCode's own titles then move
   // on to another model, so a model it lists as disabled is skipped here too;
   // one it does not list (a plugin model still loading) is kept.
   const fromConfig = await getConfiguredSmallModelRef(client);
   if (fromConfig) {
-    const info = findModelInfo(await listModelInfos(client, directory), fromConfig.providerID, fromConfig.modelID);
-    if (info?.enabled !== false) return { ...fromConfig, source: 'config' };
+    const info = findModelInfo(models, fromConfig.providerID, fromConfig.modelID);
+    if (info?.enabled !== false && isCallable(fromConfig)) return { ...fromConfig, source: 'config' };
   }
 
   if (preferredProviderID) {
-    const small = pickSmallModelInProvider(await listModelInfos(client, directory), preferredProviderID);
+    // A session already on a small model keeps the side work there: another
+    // small model of the same gateway can be another lab the user did not
+    // pick, with its own retention terms. One OpenCode reports unusable (its
+    // login gone, retired) falls through to the scan below.
+    if (preferredModelID) {
+      const sessionModel = findModelInfo(models, preferredProviderID, preferredModelID) ?? { id: preferredModelID };
+      if (smallModelTierOf(sessionModel) && isUsableTextModel(sessionModel)) {
+        return { providerID: preferredProviderID, modelID: preferredModelID, source: 'session-model' };
+      }
+    }
+    const small = pickSmallModelInProvider(models, preferredProviderID);
     if (small) return { ...small, source: 'session-provider-small' };
     // OpenCode's own titles end here too: the model the user works with.
-    if (preferredModelID) return { providerID: preferredProviderID, modelID: preferredModelID, source: 'session-model' };
+    if (preferredModelID && isCallable({ providerID: preferredProviderID, modelID: preferredModelID })) {
+      return { providerID: preferredProviderID, modelID: preferredModelID, source: 'session-model' };
+    }
   }
 
   const fallback = await getDefaultModelInfo(client);
-  if (!fallback) return null;
+  // Without a login OpenCode's default is a free zen model.
+  if (!fallback || isAnonymousZenModel(fallback)) return null;
   // Without a configured default, OpenCode answers with its first available
   // model, from any provider. A caller that named its provider stays on it.
   if (preferredProviderID && fallback.providerID !== preferredProviderID) return null;
@@ -283,7 +360,7 @@ const isLocalModelEndpoint = (modelInfo) => {
 const JSON_FENCE = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/;
 
 /**
- * `/api/experimental/generate` has no structured-output mode, so the schema travels in the
+ * `/api/experimental/generate/text` has no structured-output mode, so the schema travels in the
  * prompt and the reply is parsed here.
  */
 const buildSchemaInstruction = (responseSchema) =>
@@ -302,18 +379,23 @@ const extractJsonText = (raw) => {
   }
 };
 
-const requestOptions = ({ timeoutMs, signal }) => {
-  const timeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS;
-  const signals = [AbortSignal.timeout(timeout)];
-  if (signal) signals.push(signal);
-  return { signal: AbortSignal.any(signals) };
+const requestOptions = ({ timeoutMs, promptChars, signal }) => {
+  // An explicit caller timeout (e.g. the walkthrough's per-hunk budget) wins;
+  // otherwise the deadline derives from the prompt actually sent.
+  const budgetMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : generationBudgetMs(promptChars);
+  const deadline = AbortSignal.timeout(budgetMs);
+  return {
+    budgetMs,
+    deadline,
+    signal: signal ? AbortSignal.any([deadline, signal]) : deadline,
+  };
 };
 
 /**
  * Generates text with the user's small model through the running OpenCode.
  * Credentials stay inside OpenCode; this server only sends a prompt.
  */
-export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, directory, preferredProviderID, preferredModelID, responseSchema, timeoutMs, signal, onOverflow = 'truncate' }) {
+export async function generateSmallModelText({ prompt, system, maxOutputTokens, model, variant: requestVariant, directory, preferredProviderID, preferredModelID, responseSchema, timeoutMs, signal, onOverflow = 'truncate' }) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
     throw Object.assign(new Error('prompt is required'), { statusCode: 400 });
   }
@@ -321,6 +403,7 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
   const context = await resolveModelContext({
     directory,
     model,
+    variant: requestVariant,
     preferredProviderID,
     preferredModelID,
   });
@@ -378,11 +461,24 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
   if (responseSchema) sections.push(buildSchemaInstruction(responseSchema));
   const fullPrompt = sections.join('\n\n');
 
-  const generationOptions = requestOptions({ timeoutMs, signal });
+  const generationOptions = requestOptions({ timeoutMs, promptChars: fullPrompt.length, signal });
   const unavailableMessage = `Model unavailable: ${resolved.providerID}/${resolved.modelID}`;
+
+  // A blown deadline is a budget problem the user can act on (shorter diff,
+  // faster model), not a bad model choice, so it gets its own code and message.
+  // Detection reads the deadline signal itself: its reason is always the
+  // timeout, while the composed signal's reason propagation varies by runtime.
+  const deadlineError = (cause) => Object.assign(
+    new Error(`${resolved.providerID}/${resolved.modelID} did not finish within the ${Math.round(generationOptions.budgetMs / 1000)}s budget for this prompt size`, { cause }),
+    { statusCode: 504, code: 'generation-timeout', providerID: resolved.providerID, modelID: resolved.modelID },
+  );
+
+  const variant = resolveModelVariant(modelInfo, resolved.variant);
   const send = async () => {
-    const result = await client.generate.text(
-      { prompt: fullPrompt, model: { id: resolved.modelID, providerID: resolved.providerID } },
+    const model = { id: resolved.modelID, providerID: resolved.providerID };
+    if (variant) model.variant = variant;
+    const result = await client.experimental.generate.text(
+      { prompt: fullPrompt, model },
       generationOptions,
     );
     return typeof result?.text === 'string' ? result.text : '';
@@ -393,11 +489,15 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
       try {
         return await send();
       } catch (error) {
-        if (error?._tag !== 'InvalidRequestError' || error.message !== unavailableMessage) throw error;
+        if (generationOptions.deadline.aborted) throw deadlineError(error);
+        if (!isCatalogNotReady(error, resolved)) throw error;
         // OpenCode 2 can resolve a cold catalog before its models arrive.
         // This rejection precedes provider dispatch; other failures must not retry.
         if (attempt < unavailableRetryDelaysMs.length) {
-          await delay(unavailableRetryDelaysMs[attempt], undefined, { signal: generationOptions.signal });
+          await delay(unavailableRetryDelaysMs[attempt], undefined, { signal: generationOptions.signal })
+            .catch((delayError) => {
+              throw generationOptions.deadline.aborted ? deadlineError(delayError) : delayError;
+            });
           continue;
         }
         throw Object.assign(new Error(unavailableMessage), {
@@ -440,7 +540,8 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
 /**
  * Provider ids the small model can actually call. A provider counts when
  * OpenCode has at least one enabled model for it — that is the same test
- * OpenCode applies before letting a chat turn use it. The model list is
+ * OpenCode applies before letting a chat turn use it — other than the free zen
+ * models it lists without a login, which this module never calls. The model list is
  * directory-scoped, so `directory` scopes this answer the same way
  * `describeSmallModel` scopes its own; without one the server default applies.
  *
@@ -458,7 +559,7 @@ export async function listAuthenticatedProviders(directory) {
     ]) : [[], []];
     const enabled = new Set();
     for (const model of models) {
-      if (model?.enabled === false) continue;
+      if (model?.enabled === false || isAnonymousZenModel(model)) continue;
       if (typeof model?.providerID === 'string' && model.providerID) enabled.add(model.providerID);
     }
     for (const provider of providers) {
@@ -491,19 +592,20 @@ const resolveReserveTokens = (outputReserveTokens, limits) => (
 );
 
 /**
- * Reports which model would be used, without calling it.
+ * Reports which model and thinking variant would be used, without calling it.
  *
- * `structuredOutput` stays `null`: `/api/experimental/generate` has no structured-output
+ * `structuredOutput` stays `null`: `/api/experimental/generate/text` has no structured-output
  * mode for any model, and this module emulates it through the prompt. Callers
  * must read `null` as "try it", which is exactly right here — the verdict
  * comes from the reply, not from a capability flag.
  */
-export async function describeSmallModel({ directory, preferredProviderID, preferredModelID, outputReserveTokens, overrideModel } = {}) {
+export async function describeSmallModel({ directory, preferredProviderID, preferredModelID, outputReserveTokens, overrideModel, overrideVariant } = {}) {
   // A caller with its own model setting (the diff walkthrough) outranks the
   // small-model chain entirely — it asked for this model on purpose.
   const context = await resolveModelContext({
     directory,
     model: overrideModel,
+    variant: overrideVariant,
     preferredProviderID,
     preferredModelID,
   });
@@ -526,8 +628,10 @@ export async function describeSmallModel({ directory, preferredProviderID, prefe
   // way, so it counts as usable.
   const hasLogin = nativeModel ? nativeModel.hasLogin : modelInfo ? modelInfo.enabled !== false : true;
 
+  const variant = resolveModelVariant(modelInfo, resolved.variant);
   return {
     ...resolved,
+    variant,
     hasLogin,
     localEndpoint: isLocalModelEndpoint(modelInfo),
     inputCharBudget: maxChars,

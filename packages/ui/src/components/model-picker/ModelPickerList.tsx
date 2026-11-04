@@ -29,7 +29,7 @@ import { useConfigStore } from '@/stores/useConfigStore';
 import { useModelPickerSectionsStore } from '@/stores/useModelPickerSectionsStore';
 import type { ModelMetadata } from '@/types';
 
-type ProviderModel = Model;
+type ProviderModel = Pick<Model, 'id' | 'name'> & Partial<Model>;
 
 export type ModelPickerProvider = {
   id: string;

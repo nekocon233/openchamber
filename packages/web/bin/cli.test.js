@@ -35,6 +35,7 @@ import {
   TUNNEL_PROVIDER_CLOUDFLARE,
   TUNNEL_PROVIDER_FRPC,
   TUNNEL_PROVIDER_NGROK,
+  TUNNEL_PROVIDER_TAILSCALE,
 } from '../server/lib/tunnels/types.js';
 import {
   assertAuthenticatedNetworkExposure,
@@ -311,6 +312,7 @@ describe('cli args', () => {
       TUNNEL_PROVIDER_CLOUDFLARE,
       TUNNEL_PROVIDER_FRPC,
       TUNNEL_PROVIDER_NGROK,
+      TUNNEL_PROVIDER_TAILSCALE,
     ]);
   });
 

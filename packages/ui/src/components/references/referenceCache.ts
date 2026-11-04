@@ -427,3 +427,7 @@ export function useCachedValue<T>(
 
     return snapshot ?? { status: 'idle' };
 }
+
+export type ListSkip = { reason: string; provider?: string; instanceId?: string };
+export type ReadStamp = { revision: number; fetchedAt: number };
+export type PageRead<T> = { items: T[]; hasMore: boolean; nextCursor?: string | null; skips?: ListSkip[] };

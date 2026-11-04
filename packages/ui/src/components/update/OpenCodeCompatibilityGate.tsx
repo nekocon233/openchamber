@@ -1,12 +1,14 @@
 import * as React from 'react';
 import { OpenChamberLogo } from '@/components/ui/OpenChamberLogo';
 import { Icon } from '@/components/icon/Icon';
+import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { DesktopHostSwitcherInline } from '@/components/desktop/DesktopHostSwitcher';
 import { useI18n } from '@/lib/i18n';
 import { subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
 import { recoverOpenCode, type OpenCodeCompatibility } from '@/lib/opencode/compatibility';
 import { runCompatibilityCheck, takeCompatibilityCheck, type CompatibilityCheck } from './openCodeCompatibilityCheck';
+import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 
 /**
  * The app mounts at once and keeps starting while the check runs; only a
@@ -85,7 +87,7 @@ export const OpenCodeCompatibilityGate: React.FC<React.PropsWithChildren<{ enabl
       ? external ? 'opencodeCompatibility.outdatedExternal' : 'opencodeCompatibility.outdatedLocal'
       : external ? 'opencodeCompatibility.external' : 'opencodeCompatibility.local';
   return (
-    <section className="app-region-drag flex h-full min-h-0 items-center justify-center overflow-y-auto bg-background px-6 py-10 text-foreground select-none" aria-labelledby={titleId}>
+    <ScrollableOverlay as="section" outerClassName="h-full min-h-0 bg-background" className="app-region-drag flex items-center justify-center px-6 py-10 text-foreground select-none" aria-labelledby={titleId} disableHorizontal>
       <div className="flex w-full max-w-sm flex-col items-center text-center">
         <OpenChamberLogo width={48} height={48} />
         <h1 id={titleId} className="mt-6 text-xl font-semibold tracking-tight">{t(outdated ? 'opencodeCompatibility.outdatedTitle' : 'opencodeCompatibility.title')}</h1>
@@ -108,12 +110,12 @@ export const OpenCodeCompatibilityGate: React.FC<React.PropsWithChildren<{ enabl
         <div className="app-region-no-drag mt-7 flex flex-wrap items-center justify-center gap-2">
           {compatibility.canInstall && (
             <Button disabled={operation !== null} onClick={() => void recover('install-v2')}>
-              <Icon name={operation === 'install-v2' ? 'refresh' : 'download'} className={operation === 'install-v2' ? 'size-4 animate-spin' : 'size-4'} />
+              {operation === 'install-v2' ? <Spinner className="size-4" /> : <Icon name="download" className="size-4" />}
               <span role={operation === 'install-v2' ? 'status' : undefined}>{t(operation === 'install-v2' ? 'opencodeCompatibility.installing' : outdated ? 'opencodeCompatibility.update' : 'opencodeCompatibility.install')}</span>
             </Button>
           )}
           <Button variant={compatibility.canInstall ? 'ghost' : 'default'} disabled={operation !== null} onClick={() => void recover('reconnect')}>
-            <Icon name="refresh" className={operation === 'reconnect' ? 'size-4 animate-spin' : 'size-4'} />
+            {operation === 'reconnect' ? <Spinner className="size-4" /> : <Icon name="refresh" className="size-4" />}
             <span role={operation === 'reconnect' ? 'status' : undefined}>{t(operation === 'reconnect' ? 'opencodeCompatibility.reconnecting' : 'opencodeCompatibility.reconnect')}</span>
           </Button>
         </div>
@@ -130,6 +132,6 @@ export const OpenCodeCompatibilityGate: React.FC<React.PropsWithChildren<{ enabl
           <DesktopHostSwitcherInline />
         </div>
       </div>
-    </section>
+    </ScrollableOverlay>
   );
 };

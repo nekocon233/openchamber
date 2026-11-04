@@ -77,10 +77,10 @@ const EnterpriseProvidersNotice: React.FC<{ directory: string | null; integratio
   return (
     <div
       className={cn(
-        'mb-4 flex items-start gap-2 rounded-lg border p-3',
+        'mb-4 flex items-start gap-2 rounded-lg p-3',
         warning
-          ? 'border-[var(--status-warning)]/30 bg-[var(--status-warning)]/5'
-          : 'border-[var(--status-info-border)] bg-[var(--status-info-background)]/30',
+          ? 'bg-[var(--status-warning)]/10'
+          : 'bg-[var(--status-info-background)]/60',
       )}
     >
       <Icon
@@ -209,10 +209,11 @@ const StatusPill: React.FC<{ status: ProviderCardStatus }> = ({ status }) => {
     case 'reauthNeeded': label = t('settings.providers.card.status.reauthNeeded'); break;
     case 'accounts': label = t('settings.providers.card.status.accounts', { count: status.count }); break;
     case 'connected': label = t('settings.providers.card.status.connected'); break;
+    case 'noModels': label = t('settings.providers.card.status.noModels'); break;
     case 'environment': label = t('settings.providers.card.status.environment'); break;
     case 'signInNeeded': label = t('settings.providers.card.status.signInNeeded'); break;
   }
-  const tone: SettingsCardTone = status.kind === 'signInNeeded' || status.kind === 'reauthNeeded'
+  const tone: SettingsCardTone = status.kind === 'signInNeeded' || status.kind === 'reauthNeeded' || status.kind === 'noModels'
     ? 'warning'
     : status.kind === 'environment'
       ? 'neutral'
@@ -279,6 +280,7 @@ export const ProviderGrid: React.FC<ProviderGridProps> = ({ providers, integrati
             providerId: provider.id,
             optionsApiKey: readProviderApiKeySetting(provider),
             machineCredentials: usesMachineCredentials(provider),
+            noModels: provider.models.length === 0,
           });
           return (
             <SettingsCard

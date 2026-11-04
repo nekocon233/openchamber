@@ -9,14 +9,22 @@ export type IntegrationCatalogStatusTone = 'success' | 'warning' | 'neutral';
 const STATUS_TONE_CLASS = {
   success: 'bg-[var(--status-success)]/15 text-[var(--status-success)]',
   warning: 'bg-[var(--status-warning)]/15 text-[var(--status-warning)]',
-  neutral: 'bg-[var(--surface-muted)] text-muted-foreground',
+  neutral: 'oc-tile-inset text-muted-foreground',
 } satisfies Record<IntegrationCatalogStatusTone, string>;
 
 type IntegrationCatalogCardProps = {
-  settingsItem: string;
+  settingsItem?: string;
   logo: React.ReactNode;
   name: string;
   description: string;
+  /**
+   * Keep the description on a phone-width pane, where the Integrations page
+   * leaves it out: there it adds little to the name, while a sign-in method's
+   * description says what the method does.
+   */
+  keepDescriptionWhenNarrow?: boolean;
+  /** Pills shown before the status pill (bundled, update available). */
+  badges?: React.ReactNode;
   status: string;
   statusTone: IntegrationCatalogStatusTone;
   open: boolean;
@@ -25,12 +33,18 @@ type IntegrationCatalogCardProps = {
   children: React.ReactNode;
 };
 
-/** One collapsible card on the Integrations page: logo, name, one-line description, status pill. */
+/**
+ * One collapsible card on the Integrations page: logo, name,
+ * one-line description, status pill. Every integration, built-in or from an
+ * extension, renders through it, so the cards stay identical.
+ */
 export const IntegrationCatalogCard: React.FC<IntegrationCatalogCardProps> = ({
   settingsItem,
   logo,
   name,
   description,
+  keepDescriptionWhenNarrow = false,
+  badges,
   status,
   statusTone,
   open,
@@ -38,23 +52,29 @@ export const IntegrationCatalogCard: React.FC<IntegrationCatalogCardProps> = ({
   children,
 }) => (
   <Collapsible open={open} onOpenChange={onOpenChange}>
-    <div
-      data-settings-item={settingsItem}
-      className="overflow-hidden rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-elevated)]"
-    >
+    <div data-settings-item={settingsItem} className="oc-tile overflow-hidden rounded-xl">
       <CollapsibleTrigger
-        className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-start hover:bg-[var(--interactive-hover)]/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--interactive-focus-ring)]"
+        className="oc-tile-hover flex w-full min-w-0 items-center gap-3 px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--interactive-focus-ring)]"
       >
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-[var(--surface-muted)]">
+        <div className="oc-tile-inset flex size-10 shrink-0 items-center justify-center rounded-[10px]">
           {logo}
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-foreground">{name}</div>
-          <p className="mt-0.5 line-clamp-1 text-xs leading-snug text-muted-foreground">{description}</p>
+          {/* A phone-width pane leaves room for only a few characters of it. */}
+          <p
+            className={cn(
+              'mt-0.5 truncate text-xs leading-snug text-muted-foreground',
+              !keepDescriptionWhenNarrow && 'hidden @md:block',
+            )}
+          >
+            {description}
+          </p>
         </div>
+        {badges}
         <span
           aria-live="polite"
-          className={cn('max-w-36 shrink-0 truncate rounded-full px-2 py-0.5 text-[10px] font-medium', STATUS_TONE_CLASS[statusTone])}
+          className={cn('max-w-36 shrink-0 truncate rounded-full px-2 py-0.5 text-[0.625rem] font-medium', STATUS_TONE_CLASS[statusTone])}
         >
           {status}
         </span>
@@ -66,7 +86,9 @@ export const IntegrationCatalogCard: React.FC<IntegrationCatalogCardProps> = ({
           )}
         />
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-[var(--interactive-border)] px-4 py-4">
+      {/* The header's own padding plus pt-3 keeps the body clear of the
+          header's hover fill. */}
+      <CollapsibleContent className="px-4 pb-4 pt-3">
         {children}
       </CollapsibleContent>
     </div>

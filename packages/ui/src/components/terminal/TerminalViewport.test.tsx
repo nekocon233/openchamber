@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { act } from 'react';
+import { act, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { toast } from 'sonner';
 
+import type { ClipboardAPI } from '@/lib/api/types';
 import { I18nProvider } from '@/lib/i18n';
 import { useTerminalStore, type TerminalChunk } from '@/stores/useTerminalStore';
 
-import type { TerminalSurface, TerminalSurfaceFactory } from './TerminalViewport';
+import type { TerminalController, TerminalSurface, TerminalSurfaceFactory } from './TerminalViewport';
 
 // Base UI determines DOM availability when its modules load.
 const initialWindow = new Window({ url: 'http://localhost/' });
@@ -24,6 +25,7 @@ const terminalEvents: TerminalEvent[] = [];
 let selectedText = '';
 let reportMouse = false;
 let focusCount = 0;
+let surfaceOptions: Parameters<TerminalSurfaceFactory>[1] | null = null;
 
 class TerminalSurfaceDouble implements TerminalSurface {
   write(data: string) {
@@ -67,6 +69,7 @@ class TerminalSurfaceDouble implements TerminalSurface {
 }
 
 const createSurface: TerminalSurfaceFactory = (mount, options) => {
+  surfaceOptions = options;
   const canvas = document.createElement('canvas');
   canvas.addEventListener('contextmenu', (event) => {
     if (reportMouse && !event.shiftKey) event.preventDefault();
@@ -109,6 +112,12 @@ const flushSurfaceLoad = async () => {
   });
 };
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => { resolve = complete; });
+  return { promise, resolve };
+};
+
 const TERMINAL_BUFFER_CAP = 512 * 1024;
 
 const buildReplacedBufferChunks = (content: string): TerminalChunk[] => {
@@ -121,10 +130,20 @@ const buildReplacedBufferChunks = (content: string): TerminalChunk[] => {
   return [...useTerminalStore.getState().getBuffer(directory, tabId).chunks];
 };
 
-const renderViewport = (root: Root, chunks: TerminalChunk[], isVisible = true, sessionKey = 'session-1', enableTouchScroll = false) => act(async () => {
+const controller = createRef<TerminalController>();
+
+const renderViewport = (
+  root: Root,
+  chunks: TerminalChunk[],
+  isVisible = true,
+  sessionKey = 'session-1',
+  enableTouchScroll = false,
+  clipboard?: ClipboardAPI,
+) => act(async () => {
   root.render(
     <I18nProvider>
       <TerminalViewport
+        ref={controller}
         sessionKey={sessionKey}
         chunks={chunks}
         onInput={() => undefined}
@@ -135,6 +154,7 @@ const renderViewport = (root: Root, chunks: TerminalChunk[], isVisible = true, s
         fontSize={14}
         isVisible={isVisible}
         enableTouchScroll={enableTouchScroll}
+        clipboard={clipboard}
         createSurface={createSurface}
       />
     </I18nProvider>,
@@ -151,6 +171,7 @@ describe('TerminalViewport integration', () => {
     selectedText = '';
     reportMouse = false;
     focusCount = 0;
+    surfaceOptions = null;
     useTerminalStore.getState().clearAll();
     windowInstance = new Window({ url: 'http://localhost/' });
     Object.assign(globalThis, {
@@ -211,6 +232,91 @@ describe('TerminalViewport integration', () => {
     expect(await navigator.clipboard.readText()).toBe('terminal output\n');
     expect(host.querySelectorAll('canvas')).toHaveLength(1);
     expect(terminalEvents.filter((event) => event.type === 'dispose')).toHaveLength(0);
+  });
+
+  test('writes the latest terminal selection once the previous PRIMARY write finishes', async () => {
+    const writes: string[] = [];
+    const firstWrite = deferred();
+    const clipboard: ClipboardAPI = {
+      selection: {
+        readText: async () => '',
+        writeText: async (text) => {
+          writes.push(text);
+          if (writes.length === 1) await firstWrite.promise;
+        },
+      },
+    };
+    await renderViewport(root, [], true, 'session-1', false, clipboard);
+    await flushSurfaceLoad();
+
+    selectedText = 'first selection';
+    await act(async () => { surfaceOptions?.onSelectionChange?.(); });
+    selectedText = 'second selection';
+    await act(async () => { surfaceOptions?.onSelectionChange?.(); });
+    selectedText = 'latest selection';
+    await act(async () => {
+      surfaceOptions?.onSelectionChange?.();
+      await Promise.resolve();
+    });
+    // A click clears the terminal selection, but the latest text is still what
+    // PRIMARY should receive.
+    selectedText = '';
+    await act(async () => { surfaceOptions?.onSelectionChange?.(); });
+    expect(writes).toEqual(['first selection']);
+
+    await act(async () => {
+      firstWrite.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(writes).toEqual(['first selection', 'latest selection']);
+  });
+
+  test('middle click waits for the pending PRIMARY write before reading', async () => {
+    const operations: string[] = [];
+    const firstWrite = deferred();
+    let writes = 0;
+    const clipboard: ClipboardAPI = {
+      selection: {
+        readText: async () => {
+          operations.push('read');
+          return 'latest selection';
+        },
+        writeText: async (text) => {
+          writes += 1;
+          operations.push(`write:${text}`);
+          if (writes === 1) await firstWrite.promise;
+        },
+      },
+    };
+    await renderViewport(root, [], true, 'session-1', false, clipboard);
+    await flushSurfaceLoad();
+
+    selectedText = 'first selection';
+    await act(async () => { surfaceOptions?.onSelectionChange?.(); });
+    selectedText = 'latest selection';
+    await act(async () => { surfaceOptions?.onSelectionChange?.(); });
+
+    await act(async () => {
+      surfaceOptions?.onMiddleClickPaste?.();
+      await Promise.resolve();
+    });
+    expect(operations).toEqual(['write:first selection']);
+
+    await act(async () => {
+      firstWrite.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(operations).toEqual([
+      'write:first selection',
+      'write:latest selection',
+      'read',
+    ]);
+    expect(terminalEvents.filter((event) => event.type === 'paste')).toEqual([
+      { type: 'paste', data: 'latest selection' },
+    ]);
   });
 
   test('supports arrow and Ctrl+N/P menu navigation and returns focus on Escape', async () => {
@@ -293,6 +399,29 @@ describe('TerminalViewport integration', () => {
     expect(terminalEvents.filter((event) => event.type === 'paste')).toHaveLength(0);
     expect(toast.getHistory().some((entry) => 'title' in entry
       && entry.title === 'Could not read the clipboard. Use the paste keyboard shortcut.')).toBe(true);
+  });
+
+  test('pastes through the controller on touch terminals, the path of the toolbar Paste button', async () => {
+    await navigator.clipboard.writeText('echo from the toolbar');
+    await renderViewport(root, [], true, 'session-1', true);
+    await flushSurfaceLoad();
+    await act(async () => controller.current?.pasteClipboard());
+    expect(terminalEvents.filter((event) => event.type === 'paste')).toEqual([
+      { type: 'paste', data: 'echo from the toolbar' },
+    ]);
+  });
+
+  test('reports a refused toolbar paste without naming a keyboard shortcut', async () => {
+    Object.defineProperty(navigator.clipboard, 'readText', {
+      configurable: true,
+      value: () => Promise.reject(new Error('NotAllowedError')),
+    });
+    await renderViewport(root, [], true, 'session-1', true);
+    await flushSurfaceLoad();
+    await act(async () => controller.current?.pasteClipboard());
+    expect(terminalEvents.filter((event) => event.type === 'paste')).toHaveLength(0);
+    expect(toast.getHistory().some((entry) => 'title' in entry
+      && entry.title === 'Could not read the clipboard.')).toBe(true);
   });
 
   test('drops a pending clipboard read even if the terminal is hidden and shown again', async () => {

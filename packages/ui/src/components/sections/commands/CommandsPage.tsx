@@ -281,7 +281,7 @@ export const CommandsPage: React.FC = () => {
       <div className="flex h-full items-center justify-center">
         <div className="text-center text-muted-foreground">
           <Icon name="terminal-box" className="mx-auto mb-3 h-12 w-12 opacity-50" />
-          <p className="typography-body">{t('settings.commands.page.empty.title')}</p>
+          <p className="typography-ui-label">{t('settings.commands.page.empty.title')}</p>
           <p className="typography-meta mt-1 opacity-75">{t('settings.commands.page.empty.description')}</p>
         </div>
       </div>
@@ -318,7 +318,9 @@ export const CommandsPage: React.FC = () => {
             </div>
             <Select value={draftScope} onValueChange={(v) => setDraftScope(v as CommandScope)}>
               <SelectTrigger className="w-fit min-w-[100px]">
-                <SelectValue placeholder={t('settings.agents.page.field.scopePlaceholder')} />
+                <SelectValue>
+                  {draftScope === 'project' ? t('settings.common.scope.project') : t('settings.common.scope.global')}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent align="end">
                 <SelectItem value="user">

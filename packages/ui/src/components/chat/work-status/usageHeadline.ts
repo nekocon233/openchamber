@@ -24,6 +24,7 @@ const QUOTA_PROVIDER_ALIASES = new Map<string, string>([
   ['openai', 'codex'],
   ['chatgpt', 'codex'],
   ['anthropic', 'claude'],
+  ['claude-agent', 'claude'],
   ['claude-code', 'claude'],
   ['claude-native', 'claude'],
   ['codex-native', 'codex'],

@@ -11,7 +11,7 @@ import {
     type PermissionPolicySnapshot,
 } from "./utils/permissionAutoAccept";
 import { getAllSyncSessionMap } from "@/sync/sync-refs";
-import { runtimeFetch } from "@/lib/runtime-fetch";
+import { runtimeFetch, type RuntimeFetchOptions } from "@/lib/runtime-fetch";
 import { isVSCodeRuntime } from "@/lib/desktop";
 import { createDeferredSafeJSONStorage } from "./utils/safeStorage";
 import {
@@ -24,6 +24,7 @@ import { opencodeClient } from "@/lib/opencode/client";
 import { getRuntimeKey } from "@/lib/runtime-switch";
 
 interface PermissionStore {
+    /** The host's policy: every session that is not in an isolated space. */
     modes: PermissionModeMap;
     /** What the authority answers for a session outside the policy. */
     defaultEnabled: boolean;
@@ -33,7 +34,10 @@ interface PermissionStore {
     legacyCandidate: Record<string, boolean> | null;
     legacyRuntimeKey: string | null;
     hydrate: () => Promise<void>;
-    applySnapshot: (snapshot: PermissionPolicySnapshot, expectedRuntimeKey?: string) => void;
+    /** Applies a policy from its owner: the host (`''`, the default) or the space with that id. */
+    applySnapshot: (snapshot: PermissionPolicySnapshot, expectedRuntimeKey?: string, owner?: string) => void;
+    /** Reads one isolated space's policy from that space; a space that cannot be read keeps what was known. */
+    refreshSpaceModes: (spaceId: string) => Promise<boolean>;
     reset: () => void;
     getSessionMode: (sessionId: string) => PermissionMode;
     setSessionMode: (
@@ -50,16 +54,18 @@ const readSnapshot = async (response: Response): Promise<PermissionPolicySnapsho
     return policySnapshotFromWire(parsed.data);
 };
 
-const requestSnapshot = async (path: string, init?: RequestInit) => readSnapshot(await runtimeFetch(path, init));
+const requestSnapshot = async (path: string, init?: RuntimeFetchOptions) => readSnapshot(await runtimeFetch(path, init));
 
 // `enabled` rides along for servers from before the modes and for VS Code's
-// bridge, which know only on/off.
+// bridge, which know only on/off. The directory also picks the server: a
+// space's session has its mode in that space.
 const putSessionMode = (sessionId: string, mode: PermissionMode, directory?: string) => requestSnapshot(
     `/api/permission-auto-accept/sessions/${encodeURIComponent(sessionId)}`,
     {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, enabled: mode !== "ask", directory }),
+        directory: directory ?? null,
     },
 );
 
@@ -165,7 +171,7 @@ export const usePermissionStore = create<PermissionStore>()(persist((set, get) =
         set({ modes: {}, defaultEnabled: false, loaded: false, saving: false, lastAppliedRevision: -1 });
     },
 
-    applySnapshot: (snapshot, expectedRuntimeKey) => {
+    applySnapshot: (snapshot, expectedRuntimeKey, _owner = "") => {
         if (expectedRuntimeKey && expectedRuntimeKey !== getRuntimeKey()) return;
         const { revision, defaultEnabled } = snapshot;
         const applied = { modes: snapshot.modes, defaultEnabled, loaded: true };
@@ -176,6 +182,18 @@ export const usePermissionStore = create<PermissionStore>()(persist((set, get) =
             if (revision < state.lastAppliedRevision) return state;
             return { ...applied, lastAppliedRevision: revision };
         });
+    },
+
+    refreshSpaceModes: async (spaceId) => {
+        const runtimeKey = getRuntimeKey();
+        let snapshot: PermissionPolicySnapshot;
+        try {
+            snapshot = await requestSnapshot("/api/permission-auto-accept", { directory: `/spaces/${spaceId}` });
+        } catch {
+            return false;
+        }
+        get().applySnapshot(snapshot, runtimeKey, spaceId);
+        return true;
     },
 
     getSessionMode: (sessionId) => {

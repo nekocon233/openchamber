@@ -68,6 +68,13 @@ const edit = toolPart('prt_edit', 'edit', {
   time: { start: 1, end: 2 },
 });
 
+const nativeEdit = toolPart('prt_native_edit', 'edit', {
+  status: 'completed', input: { filePath: 'hello.txt' }, output: 'Edit applied.', title: 'hello.txt',
+  metadata: { nativeBackend: 'antigravity', nativeDiffScope: 'replacement',
+    diff: '--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-hello\n+hello there\n' },
+  time: { start: 1, end: 2 },
+});
+
 const failed = toolPart('prt_failed', 'bash', {
   status: 'error',
   input: { command: 'ls /missing' },
@@ -171,6 +178,14 @@ test('the concise transcript shows a call as Name(argument) over one result line
     // What the edit did shows under it, line by line.
     expect(container.textContent).toContain('1-hello');
     expect(container.textContent).toContain('1+hello there');
+
+    await render(nativeEdit);
+    expect(container.textContent).toContain('Replacement preview without file line numbers.');
+    expect(container.textContent).toContain('-hello');
+    expect(container.textContent).toContain('+hello there');
+    expect(container.textContent).not.toContain('1-hello');
+    expect(container.textContent).not.toContain('1+hello there');
+    expect(row()?.textContent).not.toContain('+1-1');
 
     await render(failed);
     expect(row()?.textContent).toBe('Bash(ls /missing)ls: /missing: No such file or directory');

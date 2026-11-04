@@ -30,8 +30,8 @@ import {
  * Navigation layer for {@link DeepLinkIntent}s — the only place that knows how to *apply* a
  * deep link. Producers (notification taps, widget `widgetURL`, Live Activities) feed intents
  * in via {@link useDeepLinkSource}; the surfaces that can satisfy them register imperative
- * handlers via {@link useDeepLinkHandlers}. Session/new-session navigation goes straight to
- * the session store (always available), so those resolve even before the shell has mounted.
+ * handlers via {@link useDeepLinkHandlers}. Session opens use the shared opener; new-session
+ * navigation uses the session store. Both are available before the shell has mounted.
  *
  * Intents that need connection state or shell handlers are stashed in a module-level holder
  * that survives the connect flow and SyncProvider remount. A session intent with an explicit

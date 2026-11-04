@@ -47,7 +47,7 @@ MCP tools and browser actions. Plan selects the native planning workflow and
 has full tool permissions. Session discovery requests no mode or full-access
 override before the first prompt.
 
-When a session selects an OpenChamber-managed subagent, `delegation-setup.js`
+When a session selects an OpenChamber-managed subagent, `mcp-setup.js`
 registers `openchamber_subagents` in `~/.gemini/config/mcp_config.json` and the
 `openchamber-delegation` hook in `hooks.json`. Both entries contain only helper
 paths and timeouts. Existing JSONC comments and unrelated entries are retained;
@@ -207,7 +207,9 @@ prompt-parts conversion. Authentication failure is reported separately as
 ## Identity, history and live state
 
 `store.js` opens `~/.gemini/antigravity-cli/conversation_summaries.db` read-only
-through Node's built-in SQLite module. Root rows are filtered by workspace and
+through Node's built-in SQLite module. Readers allow up to one second for the
+CLI's concurrent index writes to release their lock; a persistent lock remains
+an error. Root rows are filtered by workspace and
 `parent_conversation_id = ''`. Histories prefer
 `brain/<conversation uuid>/.system_generated/logs/transcript_full.jsonl`.
 The adjacent `transcript.jsonl` is a shortened preview. It supplies missing
@@ -256,6 +258,63 @@ a completion has an unrecorded outcome, never proof of live activity. Native
 tool errors and nonzero command exit codes remain errors in both live and
 historical records. `tools.js` maps native read/edit/write/command arguments
 to the shared tool cards, including file paths and replacement text.
+
+Completed edits carry replacement excerpts as `files`/`diff`, marked
+`nativeDiffScope: 'replacement'`. Their line numbers are relative to the
+excerpt, so the UI suppresses file-line navigation and full-file change counts.
+Failed or truncated inputs supply no successful edit preview. Multiple
+replacement chunks retain separate excerpts. Read ranges become the shared
+one-based offset and inclusive limit; web searches retain their query. Native
+MCP `call_mcp_tool` wrappers preserve server/tool identity, arguments and MCP
+provenance. Tool metadata carries `nativeBackend: 'antigravity'`, including
+after logical conversation projection.
+
+### Conversation checklist
+
+`checklist-mcp.mjs` is a stateless local stdio helper with no network or file
+operations. `mcp-setup.js` registers `openchamber_checklist` in the CLI's global
+MCP configuration, preserving JSONC comments and unrelated entries. A reserved
+name collision, including a workspace override, fails before prompt admission.
+Only the managed CLI's process environment enables `update_checklist`; ordinary
+terminal launches expose no tools. Checklist setup leaves delegation and
+permission hooks unchanged. A missing system Node leaves the checklist
+capability unavailable while ordinary chat remains usable.
+
+The tool replaces a complete `todos` list of stable IDs, content and
+`pending`/`in_progress`/`completed` states, bounded at 2,000 entries and 256 KiB.
+It validates input and returns a versioned digest receipt. The CLI's completed
+tool record owns the list, including an explicit empty write. No checklist text
+is copied into the registry or another task database. Only a matching server,
+tool, complete input and receipt can commit a snapshot. Failed calls retain the
+previous list. Incomplete history remains partial or throws when no valid list
+can be recovered; absence of a call is `source_unknown`, never an inferred
+empty list. `manage_task` continues to describe background commands.
+
+`checklist.js` owns live/history interpretation. Native step indexes order
+revisions; successful live tool completion publishes the existing
+`session.checklist.updated` event. Reads, reconnect and turn completion recover
+retained history without starting a CLI. The UI refreshes on open and manual
+request, without idle polling. Child lists belong to their own native IDs.
+Unified reads and events carry logical list identities; rewind and frozen fork
+reads honor their retained prefix, and inactive source events stay excluded.
+
+### Why the checklist stays in the CLI transcript
+
+A stateless MCP receipt makes the CLI's accepted tool record sufficient for
+live updates and restart recovery. A second persisted checklist would require
+ordering and rollback between two stores and could outlive a rewound history.
+
+### Why the executable and protocol are separate
+
+The host imports only `checklist-protocol.mjs`. Bundlers can collapse module
+URLs into their entrypoint, so an executable's URL guard cannot reliably keep
+stdio listeners out of a bundled host. Electron bundles the helper separately.
+
+### Why replacements are excerpts
+
+The CLI records target and replacement text without the original file position
+or complete previous file. Comparing those fragments preserves the recorded
+edit; reading today's file would invent a historical diff and coordinates.
 
 `tasks.js` also projects saved commands through the existing task-view API.
 API task ids use `<conversation>_task-<step>` so they remain a single route
@@ -333,8 +392,8 @@ Small Model runtime, memory hook or Electron helper.
 
 Global AGENTS.md is injected into the first prompt of each agy process and
 hidden from the transcript projection. Feature instructions use the existing
-`<openchamber-instructions>` block. Unified conversation creation explicitly
-rejects agy; existing unified manifests remain unchanged.
+`<openchamber-instructions>` block. Unified creation and source ownership follow
+the parent conversation controller.
 
 ## Execution model on plan approval
 

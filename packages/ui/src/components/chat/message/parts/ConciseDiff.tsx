@@ -22,7 +22,7 @@ const SIGN_COLOR = {
 
 export type ConciseDiffFile = { id: string; title: string; patch: string };
 
-const DiffRow: React.FC<{ row: ConciseDiffRow }> = ({ row }) => {
+const DiffRow: React.FC<{ row: ConciseDiffRow; showLineNumbers: boolean }> = ({ row, showLineNumbers }) => {
     if (row.kind === 'gap') {
         return <div aria-hidden="true" className="px-2 leading-5" style={{ color: 'var(--tools-edit-line-number)' }}>⋯</div>;
     }
@@ -30,9 +30,9 @@ const DiffRow: React.FC<{ row: ConciseDiffRow }> = ({ row }) => {
     // and its logical sides resolve as physical inside it.
     return (
         <div dir="ltr" className="flex min-w-0 leading-5" style={{ backgroundColor: ROW_BACKGROUND[row.kind] }}>
-            <span className="w-10 shrink-0 select-none pe-2 text-end tabular-nums" style={{ color: 'var(--tools-edit-line-number)' }}>
+            {showLineNumbers ? <span className="w-10 shrink-0 select-none pe-2 text-end tabular-nums" style={{ color: 'var(--tools-edit-line-number)' }}>
                 {row.line}
-            </span>
+            </span> : null}
             <span className="w-3 shrink-0 select-none" style={{ color: SIGN_COLOR[row.kind] }}>{SIGN[row.kind]}</span>
             <span className="min-w-0 flex-1 whitespace-pre-wrap break-words pe-2">{row.text}</span>
         </div>
@@ -44,7 +44,7 @@ const DiffRow: React.FC<{ row: ConciseDiffRow }> = ({ row }) => {
  * changed lines on green and red, folded after a screenful. A file is named
  * when there are several, or when the row above names none (a command).
  */
-export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?: boolean }> = ({ files, alwaysNameFiles = false }) => {
+export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?: boolean; showLineNumbers?: boolean }> = ({ files, alwaysNameFiles = false, showLineNumbers = true }) => {
     const { t } = useI18n();
     const [unfolded, setUnfolded] = React.useState(false);
     const parsed = React.useMemo(
@@ -68,12 +68,13 @@ export const ConciseDiff: React.FC<{ files: ConciseDiffFile[]; alwaysNameFiles?:
             className="mt-0.5 mb-1 ms-5 overflow-hidden rounded-md typography-code !text-[length:var(--text-meta)]"
             style={{ backgroundColor: 'var(--syntax-background)', color: 'var(--syntax-foreground)' }}
         >
+            {!showLineNumbers ? <div className="px-2 py-1 typography-meta text-muted-foreground">{t('chat.toolPart.replacementPreview')}</div> : null}
             {shown.map((file) => (
                 <div key={file.id}>
                     {namesFiles ? (
                         <div className="truncate px-2 pt-1 typography-meta" style={{ color: 'var(--tools-description)' }}>{file.title}</div>
                     ) : null}
-                    {file.rows.map((row, index) => <DiffRow key={index} row={row} />)}
+                    {file.rows.map((row, index) => <DiffRow key={index} row={row} showLineNumbers={showLineNumbers} />)}
                 </div>
             ))}
             {hiddenRows > 0 || unfolded ? (

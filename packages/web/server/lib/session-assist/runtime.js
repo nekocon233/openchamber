@@ -7,6 +7,7 @@ import path from 'path';
 import { OpenCode } from '@opencode/client';
 import { z } from 'zod';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
+import { isString } from '../shared/guards.js';
 import { loadAssistContext, newestContentId } from './context.js';
 import { buildAssistPrompt, buildAssistSystemPrompt } from './prompt.js';
 
@@ -53,6 +54,28 @@ const normalizeSuggestion = (value) => {
   if (/^(thanks?\b|thank you\b|looks good\b|sounds good\b|nice\b|great\b|perfect\b|谢谢|謝謝|看起来不错|看起來不錯|太好了)/iu.test(text)) return '';
   if (/^(let me\b|i(?:['’]ll|['’]ve|['’]m| will\b| can\b| would\b| think\b)|here(?:['’]s| is\b| are\b)|you (?:can|should|could)\b|让我(?!们)|我来|我会|我将)/iu.test(text)) return '';
   return text;
+};
+
+/**
+ * A one-line cause for a generation failure: the status, code, and a bounded
+ * message. A bare "generation failed" hides whether this was a cold-start 503,
+ * a provider rejection, or a bug, which is what tells a transient startup
+ * failure from a permanent one.
+ */
+const describeGenerationFailure = (error) => {
+  const parts = [];
+  const status = Number(error?.statusCode);
+  if (Number.isFinite(status)) parts.push(`status ${status}`);
+  const code = isString(error?.code) ? error.code.trim() : '';
+  if (code) parts.push(`code ${code}`);
+  // The small-model service rethrows raw SDK rejections, which are tagged
+  // objects rather than Errors. Read the message from either shape, and keep
+  // the tag when the SDK only carries that.
+  const message = isString(error?.message) ? error.message.trim() : '';
+  if (message) parts.push(message.replace(/\s+/g, ' ').slice(0, 300));
+  const tag = isString(error?._tag) ? error._tag.trim() : '';
+  if (tag) parts.push(`tag ${tag}`);
+  return parts.join(' | ');
 };
 
 const extractJsonObject = (value) => {
@@ -126,6 +149,11 @@ export const createSessionAssistRuntime = ({
   // `../session-lineage.js`: a known subsession never gets an assist, so its
   // turn end arms nothing and reads nothing.
   lineage = null,
+  // Called with `{ sessionId, directory, pending }` when a session's assist
+  // starts waiting (turn end) and when it is written, skipped, failed or
+  // dropped. Clients keep a chat's OpenCode location until then: the assist
+  // reads the session's directory, and reading a stopped one starts it again.
+  onPendingChange = () => {},
 }) => {
   const timers = new Map();
   // Turn ends waiting for `evaluateTurn`; a newer event replaces or drops the entry.
@@ -134,7 +162,20 @@ export const createSessionAssistRuntime = ({
   const ready = new Map();
   // Sessions holding an assist this process wrote, keyed to their directory.
   const persisted = new Map();
+  // Sessions announced as waiting for an assist, keyed to their directory.
+  const announced = new Map();
   let stopped = false;
+
+  // Announces only transitions, after every change to the four maps above.
+  const announce = (sessionId, directory = '') => {
+    const pending = !stopped && (gates.has(sessionId) || timers.has(sessionId)
+      || inflight.has(sessionId) || ready.has(sessionId));
+    if (pending === announced.has(sessionId)) return;
+    const announcedDirectory = pending ? directory : announced.get(sessionId);
+    if (pending) announced.set(sessionId, directory);
+    else announced.delete(sessionId);
+    onPendingChange({ sessionId, directory: announcedDirectory, pending });
+  };
 
   const clearTimer = (sessionId) => {
     const existing = timers.get(sessionId);
@@ -149,6 +190,7 @@ export const createSessionAssistRuntime = ({
     gates.delete(sessionId);
     ready.delete(sessionId);
     inflight.get(sessionId)?.controller.abort();
+    announce(sessionId);
   };
 
   // A new turn makes the stored recap and suggestion describe an older turn:
@@ -254,7 +296,10 @@ export const createSessionAssistRuntime = ({
       });
     } catch (error) {
       if (!signal.aborted && Number(error?.statusCode) !== 404 && !QUIET_FAILURE_CODES.has(error?.code)) {
-        console.warn('[session-assist] generation failed');
+        // Keep the cause: a bare "generation failed" hides whether this was a
+        // cold-start 503, a provider rejection, or a bug, which is exactly what
+        // the operator needs to tell a transient startup from a permanent one.
+        console.warn('[session-assist] generation failed', describeGenerationFailure(error));
       }
       return;
     }
@@ -311,6 +356,7 @@ export const createSessionAssistRuntime = ({
           ready.delete(sessionId);
           startGeneration(sessionId, next.directory, next.armedAt, next.allowed);
         }
+        announce(sessionId);
       });
   };
 
@@ -319,9 +365,11 @@ export const createSessionAssistRuntime = ({
     const timer = setTimeout(() => {
       timers.delete(sessionId);
       startGeneration(sessionId, directory, armedAt, allowed);
+      announce(sessionId);
     }, quietMs);
     timer.unref?.();
     timers.set(sessionId, { timer, armedAt });
+    announce(sessionId, directory);
   };
 
   const ALL_FIELDS = { recap: true, suggestion: true };
@@ -331,21 +379,29 @@ export const createSessionAssistRuntime = ({
   const onTurnEnd = (sessionId, directory) => {
     clearTimer(sessionId);
     const armedAt = Date.now();
+    // Both fields off: nothing to generate, so nothing waits.
+    const enabled = getTargets();
+    if (!enabled.recap && !enabled.suggestion) {
+      gates.delete(sessionId);
+      announce(sessionId);
+      return;
+    }
     if (typeof evaluateTurn !== 'function') {
       armTimer(sessionId, directory, armedAt, ALL_FIELDS);
       return;
     }
     const gate = { armedAt };
     gates.set(sessionId, gate);
+    announce(sessionId, directory);
     Promise.resolve()
-      .then(() => evaluateTurn({ sessionId, directory, assist: getTargets() }))
+      .then(() => evaluateTurn({ sessionId, directory, assist: enabled }))
       .catch(() => null)
       .then((allowed) => {
         if (stopped || gates.get(sessionId) !== gate) return;
         gates.delete(sessionId);
         const fields = allowed ?? ALL_FIELDS;
-        if (!fields.recap && !fields.suggestion) return;
-        armTimer(sessionId, directory, armedAt, fields);
+        if (fields.recap || fields.suggestion) armTimer(sessionId, directory, armedAt, fields);
+        announce(sessionId);
       });
   };
 

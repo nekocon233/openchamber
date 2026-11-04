@@ -130,6 +130,7 @@ const SortableQueuedMessageRow = memo((props: Omit<QueuedMessageRowProps, 'lead'
 SortableQueuedMessageRow.displayName = 'SortableQueuedMessageRow';
 
 interface QueuedMessagesStripProps {
+    composerAgentName?: string;
     target: MessageQueueTarget | null;
     /** The message was taken from the queue in full; the composer restores it. */
     onEditMessage: (message: QueuedMessage) => void;

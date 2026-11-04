@@ -49,7 +49,8 @@ import { formatTimestampForDisplay } from './timeFormat';
 import { ToolRevealOnMount } from './parts/ToolRevealOnMount';
 import { StaticToolRow } from './parts/ProgressiveGroup';
 import { isExpandableTool, showsWithFileChangesOnly } from './parts/toolRenderUtils';
-import { HtmlRenderFrame, ShownPage } from './parts/HtmlRenderFrame';
+import { HtmlRenderFrame } from './parts/HtmlRenderFrame';
+import { ShownPartCard } from './parts/ShownToolCard';
 import { renderedPage } from '@/lib/opencode/tools';
 import { LiveActivityCollapse } from '../components/LiveActivityCollapse';
 import { ActivityRowSkipContext, isActivityRowPart, isToolRowShown } from '../lib/turns/activityRows';
@@ -1702,7 +1703,7 @@ const AssistantMessageBody = React.memo(({
                 }
                 if (splitLiveActivity && !hasRenderedAnswerText) {
                     for (const pagePart of liveFinalActivity?.pages ?? []) {
-                        rendered.push(<ShownPage key={`page-${pagePart.id}`} part={pagePart} />);
+                        rendered.push(<ShownPartCard key={`page-${pagePart.id}`} part={pagePart} />);
                     }
                 }
                 hasRenderedAnswerText = true;
@@ -1848,7 +1849,7 @@ const AssistantMessageBody = React.memo(({
         if (splitLiveActivity && liveFinalActivity) {
             return [
                 <LiveActivityCollapse key="final-message-activity" expanded={liveFinalActivity.expanded}
-                    id={liveFinalActivity.contentId} animateOnMount={liveFinalActivity.animateCollapse}>
+                    id={liveFinalActivity.contentId}>
                     {activityRendered}
                 </LiveActivityCollapse>,
                 ...answerRendered,

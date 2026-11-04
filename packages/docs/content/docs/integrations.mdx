@@ -7,9 +7,46 @@ description: Connect the services and subscriptions OpenChamber works with.
 
 **Settings → Integrations** is where you sign in to the services OpenChamber works with. The sign-in is stored on the OpenChamber server, so web, desktop, and a paired phone share it.
 
+## Integrations catalog
+
+The integrations catalog lists over 150 services you can give the agent in one click: Linear, Notion, Sentry, Supabase, Figma, observability tools, CRMs, meeting notes and more. Installing one usually adds the service's MCP server (the connection the agent uses to read and change things there), and sometimes skills or a plugin that come with it. It installs for your user, so every project gets it.
+
+1. Choose the store icon in the sidebar header.
+2. Find a service: search by name, or narrow the list with a category such as **Code** or **Quality and ops**. **OpenChamber** lists our own extensions and plugins.
+3. Choose **+** on its row, or open it and choose **Install**.
+4. Sign in the way the service asks:
+   - **OAuth**: the service's sign-in page opens in your browser. Approve access there.
+   - **Token**: paste an API token into **API token**. **Get a token** opens the page where the service hands one out.
+   - **No sign-in**: nothing to do.
+
+When it's done, the service shows a check mark and appears under **Installed** on the left, and its tools are available in your next message. A yellow dot or **Sign-in required** means the sign-in didn't finish; open the service and sign in again.
+
+Some entries need more than a sign-in:
+
+- **Local servers** run on the machine OpenCode runs on and may need Node.js, Python with uv, or Docker. The first start can take a while.
+- **Plugins** are code that runs inside OpenCode, so the catalog asks you to confirm and shows the plugin's license first.
+- **Skills** that come with a service install with it. If one is missing, its own **Install** appears on the service's page.
+
+To remove a service, open it, choose **More actions** (**⋯**), then **Uninstall**. This removes only what the catalog added; your account on the service stays as it is. You can also manage MCP servers, plugins and skills in Settings as usual.
+
+The catalog is in the web app and desktop app. It's hidden in [enterprise mode](/security/#enterprise-mode).
+
 ## GitHub
 
-Expand the **GitHub** card and choose **Connect GitHub** to sign in with a short device code. Once connected, OpenChamber can start sessions from issues and pull requests, attach them to messages, and open or update PRs. Everything GitHub can do is on [GitHub Issues & PRs](/github/).
+Expand the **GitHub** card and choose **Connect GitHub** to sign in with a short device code. Once connected, OpenChamber can start sessions from issues and pull requests, attach them to messages, and open or update PRs. Everything the git hosts can do is on [Git hosts](/github/).
+
+## GitLab, Gitea, Forgejo and Gerrit
+
+GitLab, Gitea, Forgejo and Gerrit each have their own card next to GitHub. Once connected, their issues and pull requests (merge requests on GitLab, changes on Gerrit) show on the [Issues and PRs](/issues-and-prs/) board and in the chat's **+** menu, like GitHub's.
+
+- **GitLab**: on gitlab.com, sign in with a short device code, a personal access token, or the `glab` login on the server. For a self-managed GitLab, add its address and paste a personal access token with the `api` scope. Device-code sign-in works there only when the server sets `OPENCHAMBER_GITLAB_CLIENT_ID` to an application registered on that instance.
+- **Gitea**: add your instance's address, such as `https://gitea.example.com`, and paste a personal access token with the `write:repository`, `write:issue` and `read:user` scopes. The card links to the page on your instance that creates one. Gitea has no device-code or CLI sign-in. It needs Gitea 1.21 or newer, served from the root of its address.
+- **Forgejo**: Codeberg is already on the card, so connecting it takes only a personal access token with the `write:repository`, `write:issue` and `read:user` scopes; the card links to the page on Codeberg that creates one. For another Forgejo server, add its address, such as `https://forgejo.example.com`, and paste a token with the same scopes. It needs Forgejo 7.0 or newer, served from the root of its address. A Forgejo server connects on this card and a Gitea server on the Gitea card.
+- **Gerrit**: add your instance's address, such as `https://gerrit.example.com`, then your Gerrit username and an HTTP password. Generate the password in Gerrit under **Settings → HTTP Credentials**; the card links there. Your sign-in password won't work, and an account without a username can't connect. It needs Gerrit 3.8 or newer, served from the root of its address. Sites whose review address differs from the Git address, such as googlesource.com with `.gitcookies`, aren't supported.
+
+On Gerrit you review changes. Each upload of a change is a patchset, and the change's preview lets you pick an earlier one to read. You review by voting on the project's labels, such as Code-Review and Verified, and land a change with **Submit** once its submit requirements are met. Gerrit has no issues, so only changes show. To create a change, or upload a new patchset to one, use **Push for review** in the Git panel; see [Git](/git/#push-for-review-on-gerrit).
+
+The project's remote decides which card's account OpenChamber uses, and an account on any of these cards can be a project's [Git identity](/git-identities/). An [extension](/extensions/#an-extension-as-a-git-host) can add another host with a card of its own.
 
 ## Linear
 
@@ -54,6 +91,18 @@ Turn on **Session comments** in the Linear card and a session started from an is
 
 Integrations install for your user, so they work in every project. You can update or remove them from the same card at any time.
 
+## Extension notification channels
+
+An [extension](/extensions/) can deliver your notifications to Slack, Matrix or a server of its own. Once you allow it in **Settings → Extensions**, it gets a card under **Extension accounts** on this page. Enter the account's token there, and the server's address when the card asks for one, and connect: from then on the extension gets the same notifications your phone would, following your [notification toggles](/notifications/). The token stays in OpenChamber; the extension's service sends through OpenChamber and never sees it.
+
+If the server refuses the token later, the card says the account needs attention; connect again with a new token. Disconnect to stop deliveries without removing the extension, or pause the extension. Removing the extension forgets the account.
+
+## Extension trackers
+
+An [extension](/extensions/) can add a work item tracker next to Linear. Once you allow it in **Settings → Extensions**, it gets a card under **Extension accounts** on this page. Enter the server's address when the card asks for one, then connect an account: paste a token, or save the client id of the app you registered with the tracker and sign in in the browser. Where the tracker keeps several accounts, **Add account** connects another and **Switch to** changes the one in use. Project mapping and session comments appear on the card when the tracker offers them, as they do for Linear.
+
+Its items then appear in the picker, the chat's **+** menu, New Worktree, the linked items of a session and the live states of items you follow. Tokens stay in OpenChamber; the extension's service reaches the tracker through OpenChamber and never sees them. If the tracker refuses a credential later, the card says the account needs attention; connect it again. Pausing the extension takes the tracker out of every surface and keeps the accounts; removing it forgets them.
+
 ## Claude Code
 
 Claude Code uses your Claude Pro or Max plan through the Claude Code CLI on your machine — no API keys.
@@ -82,5 +131,5 @@ The card updates the extension when a new version is out, turns it back on if yo
 
 ## Related
 
-- [GitHub Issues & PRs](/github/) — everything GitHub can do in OpenChamber
+- [Git hosts](/github/) — everything GitHub, GitLab, Gitea, Forgejo and Gerrit can do in OpenChamber
 - [Worktree Sessions](/worktrees/) — where issue sessions can start

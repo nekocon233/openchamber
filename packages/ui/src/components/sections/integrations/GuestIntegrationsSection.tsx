@@ -5,9 +5,12 @@ import { GuestIcon } from '@/components/layout/GuestRailIcon';
 import { SettingsSection, SettingsStackedField } from '@/components/sections/shared/SettingsSection';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
+import { IntegrationCatalogCard } from './IntegrationCatalogCard';
+import { NotificationChannelCard } from './NotificationChannelCard';
+import { TrackerSettings } from './TrackerSettings';
 import { focusDesktopWindow, isDesktopShell, isVSCodeRuntime } from '@/lib/desktop';
+import { loadNotificationChannels, type NotificationChannel } from '@/lib/notifications/channels';
 import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { useI18n } from '@/lib/i18n';
@@ -26,12 +29,13 @@ import {
 import { useGuestOauthStore } from '@/lib/guests/oauth-store';
 import { useGuestsStore } from '@/lib/guests/store';
 import type { InstalledGuest } from '@/lib/guests/types';
+import { extensionTrackerGuest } from '@/lib/trackers/extension';
+import { useTrackerDescriptors } from '@/lib/trackers/registry';
 import { reportSettingsSaveState } from '@/lib/persistence';
 import { guestPackageIconSrc, resolveGuestIconName } from '@/lib/guests/icon';
 import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { openExternalUrl } from '@/lib/url';
-import { cn } from '@/lib/utils';
 
 type GuestIntegrationCardProps = {
   guest: InstalledGuest;
@@ -98,11 +102,7 @@ export const GuestIntegrationCard: React.FC<GuestIntegrationCardProps> = ({ gues
     : connected
       ? (account || t('settings.integrations.guests.status.connected'))
       : t('settings.integrations.guests.status.notConnected');
-  const statusClassName = isWaiting
-    ? 'bg-[var(--status-warning)]/15 text-[var(--status-warning)]'
-    : connected
-      ? 'bg-[var(--status-success)]/15 text-[var(--status-success)]'
-      : 'bg-[var(--surface-muted)] text-muted-foreground';
+  const statusTone = isWaiting ? 'warning' : connected ? 'success' : 'neutral';
   const expanded = isWaiting || open;
   const name = integration.name;
 
@@ -279,7 +279,18 @@ export const GuestIntegrationCard: React.FC<GuestIntegrationCardProps> = ({ gues
   };
 
   return (
-    <Collapsible
+    <IntegrationCatalogCard
+      logo={(
+        <GuestIcon
+          icon={resolveGuestIconName(guest.icon)}
+          iconSrc={iconSrc}
+          className="size-5 text-foreground"
+        />
+      )}
+      name={name}
+      description={integration.description}
+      status={statusLabel}
+      statusTone={statusTone}
       open={expanded}
       onOpenChange={(nextOpen) => {
         if (isWaiting) {
@@ -289,38 +300,6 @@ export const GuestIntegrationCard: React.FC<GuestIntegrationCardProps> = ({ gues
         setOpen(nextOpen);
       }}
     >
-      <div className="overflow-hidden rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-elevated)]">
-        <CollapsibleTrigger
-          className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-start hover:bg-[var(--interactive-hover)]/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--interactive-focus-ring)]"
-        >
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-[var(--surface-muted)]">
-            <GuestIcon
-              icon={resolveGuestIconName(guest.icon)}
-              iconSrc={iconSrc}
-              className="size-5 text-foreground"
-            />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-foreground">{name}</div>
-            <p className="mt-0.5 line-clamp-1 text-xs leading-snug text-muted-foreground">
-              {integration.description}
-            </p>
-          </div>
-          <span
-            aria-live="polite"
-            className={cn('max-w-36 shrink-0 truncate rounded-full px-2 py-0.5 text-[10px] font-medium', statusClassName)}
-          >
-            {statusLabel}
-          </span>
-          <Icon
-            name="arrow-down-s"
-            className={cn(
-              'size-4 shrink-0 text-muted-foreground transition-transform duration-150 ease-out motion-reduce:transition-none',
-              expanded && 'rotate-180',
-            )}
-          />
-        </CollapsibleTrigger>
-        <CollapsibleContent className="border-t border-[var(--interactive-border)] px-4 py-4">
           <div className="space-y-3">
             {auth === 'oauth' ? (
               <>
@@ -452,9 +431,7 @@ export const GuestIntegrationCard: React.FC<GuestIntegrationCardProps> = ({ gues
               )}
             </div>
           </div>
-        </CollapsibleContent>
-      </div>
-    </Collapsible>
+    </IntegrationCatalogCard>
   );
 };
 
@@ -462,17 +439,47 @@ export const GuestIntegrationsSection: React.FC<{ divider?: boolean }> = ({ divi
   const { t } = useI18n();
   const guests = useGuestsStore((state) => state.guests);
   const runtimeKey = useGuestsStore((state) => state.runtimeKey);
+  // The trackers extensions serve: the server lists them beside the built-ins, the catalog says which extension each is.
+  const trackerDescriptors = useTrackerDescriptors();
+  const extensionTrackers = React.useMemo(() => trackerDescriptors.flatMap((descriptor) => {
+    const guest = extensionTrackerGuest(descriptor, guests);
+    return guest?.tracker ? [{ descriptor, extension: { guest, tracker: guest.tracker } }] : [];
+  }), [guests, trackerDescriptors]);
+  const [channels, setChannels] = React.useState<NotificationChannel[]>([]);
+  const [ownerRuntimeKey] = React.useState(getRuntimeKey);
+  // Whether the last channel load failed: the section refreshes on every catalog change, and one failure is told once.
+  const channelsLoadFailedRef = React.useRef(false);
+
+  // The channels an approved extension serves, with their accounts; a load that
+  // fails keeps the last list, never an empty one.
+  const refreshChannels = React.useCallback(async () => {
+    const loaded = await loadNotificationChannels();
+    if (getRuntimeKey() !== ownerRuntimeKey) return;
+    if (loaded === null) {
+      if (!channelsLoadFailedRef.current) toast.error(t('settings.integrations.channels.toast.loadFailed'));
+      channelsLoadFailedRef.current = true;
+      return;
+    }
+    channelsLoadFailedRef.current = false;
+    setChannels(loaded);
+  }, [ownerRuntimeKey, t]);
 
   React.useEffect(() => {
     void loadGuestCatalog();
   }, []);
+
+  React.useEffect(() => {
+    if (isVSCodeRuntime() || isMobileSurfaceRuntime()) return;
+    void refreshChannels();
+    // Approving or pausing an extension changes which channels exist.
+  }, [refreshChannels, guests]);
 
   if (isVSCodeRuntime() || isMobileSurfaceRuntime()) {
     return null;
   }
 
   const cards = guests.filter((guest) => guest.source !== 'bundled' && guest.integration && isGuestActive(guest));
-  if (cards.length === 0) {
+  if (cards.length === 0 && channels.length === 0 && extensionTrackers.length === 0) {
     return null;
   }
 
@@ -486,6 +493,17 @@ export const GuestIntegrationsSection: React.FC<{ divider?: boolean }> = ({ divi
     >
       {cards.map((guest) => (
         <GuestIntegrationCard key={`${runtimeKey}:${guest.id}`} guest={guest} />
+      ))}
+      {channels.map((channel) => (
+        <NotificationChannelCard
+          key={`${runtimeKey}:${channel.providerId}`}
+          channel={channel}
+          guest={guests.find((guest) => guest.id === channel.guestId) ?? null}
+          onChanged={refreshChannels}
+        />
+      ))}
+      {extensionTrackers.map(({ descriptor, extension }) => (
+        <TrackerSettings key={`${runtimeKey}:${descriptor.id}`} descriptor={descriptor} extension={extension} />
       ))}
     </SettingsSection>
   );
