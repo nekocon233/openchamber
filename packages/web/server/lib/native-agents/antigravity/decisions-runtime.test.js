@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 const setup = async ({ unified = false } = {}) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-decisions-runtime-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-agy-decisions-runtime-')));
   const directory = path.join(root, 'project');
   const home = path.join(root, 'home');
   const fixtureHome = path.join(home, '.gemini', 'antigravity-cli');

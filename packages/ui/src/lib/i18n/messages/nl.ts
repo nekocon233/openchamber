@@ -3909,6 +3909,8 @@ export const dict = {
   'chat.nativeTasks.checklist': 'Checklist',
   'chat.nativeTasks.checklistEmpty': "Er zijn nog geen checklistitems vastgelegd voor deze sessie.",
   'chat.nativeTasks.checklistUnavailable': 'The checklist location could not be confirmed for this session.',
+  "chat.nativeTasks.checklistNotRecorded": "Er is nog geen takenlijst vastgelegd. De agent kan er in de volgende beurt een maken.",
+  "chat.toolPart.replacementPreview": "Voorbeeld van de vervanging zonder regelnummers van het bestand.",
   'chat.nativeTasks.cliChecklist': 'Checklist',
   'chat.nativeTasks.description': 'Checklists, background tasks and plans for this session.',
   'chat.nativeTasks.detail.duration': 'Duration',

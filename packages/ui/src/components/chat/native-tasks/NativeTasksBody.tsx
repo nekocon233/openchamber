@@ -18,7 +18,7 @@ const TABS: Record<string, readonly NativeTasksTab[]> = {
   claude: ['checklist', 'background'],
   codex: ['plan', 'todos'],
   deepseek: ['checklist'],
-  antigravity: ['background'],
+  antigravity: ['checklist', 'background'],
 };
 const TAB_LABELS: Record<NativeTasksTab, I18nKey> = {
   checklist: 'chat.nativeTasks.checklist',
@@ -29,6 +29,7 @@ const TAB_LABELS: Record<NativeTasksTab, I18nKey> = {
 
 function Checklist({ scope }: { scope: Scope }) {
   const { t } = useI18n();
+  const backend = useNativeSessionBackend(scope.sessionId, scope.directory);
   const state = useSessionNativeChecklist(scope.sessionId, scope.directory, { visible: true });
   const snapshot = 'snapshot' in state ? state.snapshot : null;
   return (
@@ -41,7 +42,7 @@ function Checklist({ scope }: { scope: Scope }) {
       </div>
       {state.status === 'idle' || state.status === 'loading' ? <p role="status">{t('common.loading')}</p> : null}
       {state.status === 'unsupported' ? <p role="status">{t('chat.nativeTasks.unsupported')}</p> : null}
-      {state.status === 'unavailable' ? <p role="status">{t('chat.nativeTasks.checklistUnavailable')}</p> : null}
+      {state.status === 'unavailable' ? <p role="status">{t(backend === 'antigravity' ? 'chat.nativeTasks.checklistNotRecorded' : 'chat.nativeTasks.checklistUnavailable')}</p> : null}
       {state.status === 'error' ? <p role="alert" className="text-[var(--status-error-text)]">{t('chat.nativeTasks.loadError')}</p> : null}
       {state.status === 'stale' ? <p role="status" className="text-[var(--status-warning-text)]">{t('chat.nativeTasks.stale')}</p> : null}
       {snapshot && !snapshot.complete ? <p role="status" className="text-[var(--status-warning-text)]">{t('chat.nativeTasks.partial')}</p> : null}

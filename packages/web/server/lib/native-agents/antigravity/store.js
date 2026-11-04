@@ -65,7 +65,12 @@ export const createAntigravityStore = ({ registry, home = null, now = Date.now }
     (await registry.listSessions({ backend: 'antigravity', directory }))
       .map((entry) => [entry.nativeId, entry]),
   );
-  const open = () => new DatabaseSync(summaries, { readOnly: true });
+  const open = () => {
+    const db = new DatabaseSync(summaries, { readOnly: true });
+    // The CLI updates this index while history and checklist reads run.
+    db.exec('PRAGMA busy_timeout = 1000');
+    return db;
+  };
   const hasSummaries = () => fs.existsSync(summaries);
   const hasTranscript = (nativeId) => fs.existsSync(transcriptPath(nativeId, 'transcript_full.jsonl'))
     || fs.existsSync(transcriptPath(nativeId));

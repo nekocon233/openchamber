@@ -340,6 +340,12 @@ paths inside the application archive.
 
 ## Common Env Vars
 
+Antigravity checklists use the stateless `native-agy-checklist-mcp.mjs` extra
+resource. `build-web-assets.mjs` bundles it from the server adapter and packaged
+startup supplies `OPENCHAMBER_AGY_CHECKLIST_MCP_PATH`. The system Node executable
+runs the helper outside ASAR. It opens no listener and stores no checklist;
+the CLI transcript owns successful updates.
+
 | Variable | Use |
 |----------|-----|
 | `OPENCHAMBER_ELECTRON_DEV=1` | Marks the runtime as desktop development mode |

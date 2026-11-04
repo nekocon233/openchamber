@@ -63,6 +63,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.unsupported": "Este servidor ou CLI não oferece suporte a esta visualização de tarefas.",
   "chat.nativeTasks.notNative": "As tarefas estão disponíveis para sessões nativas da CLI.",
   "chat.nativeTasks.checklistUnavailable": "Não foi possível confirmar a localização da lista desta sessão.",
+  "chat.nativeTasks.checklistNotRecorded": "Nenhuma lista de tarefas foi registrada. O agente pode criar uma no próximo turno.",
+  "chat.toolPart.replacementPreview": "Prévia da substituição sem números de linha do arquivo.",
   "chat.nativeTasks.loadError": "Não foi possível carregar as tarefas. Atualize para tentar novamente.",
   "chat.nativeTasks.stale": "Estas tarefas podem estar desatualizadas. Atualize para tentar novamente.",
   "chat.nativeTasks.partial": "Não foi possível ler algumas entradas. As entradas anteriores são mantidas e podem estar desatualizadas.",

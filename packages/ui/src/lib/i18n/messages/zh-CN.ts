@@ -63,6 +63,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.unsupported": "此服务器或 CLI 不支持此任务视图。",
   "chat.nativeTasks.notNative": "原生 CLI 会话可以使用任务视图。",
   "chat.nativeTasks.checklistUnavailable": "无法确认此会话的待办清单位置。",
+  "chat.nativeTasks.checklistNotRecorded": "尚未创建待办清单，模型可在下一轮创建。",
+  "chat.toolPart.replacementPreview": "替换内容预览，未记录文件行号。",
   "chat.nativeTasks.loadError": "无法加载任务，请刷新重试。",
   "chat.nativeTasks.stale": "这些任务可能已过期，请刷新重试。",
   "chat.nativeTasks.partial": "部分待办条目读取失败。已保留之前的条目，但内容可能已过期。",

@@ -63,6 +63,8 @@ export const dict = {
   'chat.nativeTasks.unsupported': 'This server or CLI does not support this task view.',
   'chat.nativeTasks.notNative': 'Tasks are available for native CLI sessions.',
   'chat.nativeTasks.checklistUnavailable': 'The checklist location could not be confirmed for this session.',
+  "chat.nativeTasks.checklistNotRecorded": "No checklist has been recorded yet. The agent can create one on its next turn.",
+  "chat.toolPart.replacementPreview": "Replacement preview without file line numbers.",
   'chat.nativeTasks.loadError': 'Could not load tasks. Refresh to try again.',
   'chat.nativeTasks.stale': 'These tasks may be out of date. Refresh to try again.',
   'chat.nativeTasks.partial': 'Some checklist entries could not be read. Previously known entries are kept and may be out of date.',

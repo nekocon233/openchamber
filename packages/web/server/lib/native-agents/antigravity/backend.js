@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { prepareAgyDelegation } from './delegation-setup.js';
+import { fileURLToPath } from 'node:url';
+import { prepareAgyDelegation, prepareAgyChecklist } from './mcp-setup.js';
 
 import {
   decodeNativeSessionId,
@@ -30,6 +31,7 @@ import { parseAntigravityModels } from './catalog.js';
 import { agyPermissionError } from './protocol.js';
 import { AGY_PLAN_QUESTION_PREFIX } from './interaction-signals.js';
 import { captureAntigravityMeasurements } from './measurements.js';
+import { antigravityChecklistSnapshot } from './checklist.js';
 
 const MINIMUM_VERSION = [1, 1, 15];
 const IDLE_CLOSE_MS = 5 * 60_000;
@@ -58,6 +60,7 @@ const sameDirectory = (left, right) => path.resolve(left) === path.resolve(right
 export const createAntigravityBackend = ({
   toolConfiguration = () => null,
   resolveExecutable,
+  resolveNodeExecutable = async () => null,
   resolveCommand = resolveAgyCommand,
   buildEnv,
   registry,
@@ -76,6 +79,17 @@ export const createAntigravityBackend = ({
   // Updated only by successful discovery. The CLI still validates availability
   // at launch; this map translates legacy selections without probing each turn.
   let modelAliases = null;
+
+  const checklistLaunch = async (directory) => {
+    const env = buildEnv();
+    const command = await resolveNodeExecutable();
+    if (!command) return { env, instructions: '' };
+    const helper = process.env.OPENCHAMBER_AGY_CHECKLIST_MCP_PATH ?? fileURLToPath(new URL('./checklist-mcp.mjs', import.meta.url));
+    await prepareAgyChecklist({ command, args: [helper] }, env, directory);
+    return { env: { ...env, OPENCHAMBER_AGY_CHECKLIST: '1' },
+      instructions: 'For multi-step work, maintain this conversation\'s checklist with the openchamber_checklist update_checklist tool. Send the complete list each time and keep stable ids. Update it as work progresses and verify a step before marking it completed. This checklist is separate from manage_task background commands.',
+    };
+  };
 
   let commandPromise = null;
   const requireCommand = () => {
@@ -218,6 +232,13 @@ export const createAntigravityBackend = ({
       try {
         history = await store.loadHistory(session.id, session.nativeId, session.directory);
         if (history) turn.projection.restoreMissingHistory(history.records);
+        if (history) {
+          try {
+            const checklist = antigravityChecklistSnapshot({ sessionId: session.id, records: history.records,
+              complete: history.metadataComplete !== false, observedAt: now() });
+            if (checklist.state === 'ready') publisher.checklist(session.directory, session.id, checklist);
+          } catch { /* An incomplete checklist cannot hide unrelated saved tasks. */ }
+        }
         const tasks = await store.taskSnapshot(session.id, session.nativeId, session.directory);
         if (tasks) publisher.tasks(session.directory, session.id, tasks);
       } catch { /* Optional recovery must not discard the live result; history reads report failures. */ }
@@ -361,15 +382,16 @@ export const createAntigravityBackend = ({
     }
     if (!session.process) {
       const command = await requireCommand();
+      const checklist = await checklistLaunch(session.directory);
       if (tools) await prepareAgyDelegation(tools, buildEnv());
-      const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS,
+      const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS, checklist.instructions,
         tools?.child ? 'This is a delegated subagent task. Report your findings or plan to the parent. Do not request approval to execute a plan and do not create subagents.' : null,
       ].filter(Boolean).join('\n\n');
       const process = startAgyProcess({
         executable: command.executable,
         args: [...command.argsPrefix, ...agyProcessArgs({ cwd: session.directory, model, conversationId: session.nativeId, agent, effort })],
         cwd: session.directory,
-        env: { ...buildEnv(), ...tools?.env, OPENCHAMBER_DELEGATION_CHILD: tools?.child ? '1' : '0' },
+        env: { ...checklist.env, ...tools?.env, OPENCHAMBER_DELEGATION_CHILD: tools?.child ? '1' : '0' },
         startupTimeoutMs,
         onFrame: (frame) => enqueue(session, process, () => handleFrame(session, process, frame)),
         onExit: (error) => enqueue(session, process, () => handleExit(session, process, error)),
@@ -426,6 +448,17 @@ export const createAntigravityBackend = ({
       return snapshot;
     },
 
+    async checklist(sessionId, directory) {
+      const decoded = decodeNativeSessionId(sessionId);
+      if (decoded?.backend !== 'antigravity') throw sessionNotFoundError(sessionId);
+      const history = await store.loadHistory(sessionId, decoded.conversationId, directory);
+      if (!history) throw sessionNotFoundError(sessionId);
+      const session = sessions.get(sessionId);
+      const live = session?.turn?.projection ?? session?.lastProjection;
+      return antigravityChecklistSnapshot({ sessionId, records: [...history.records, ...(live?.records() ?? [])],
+        complete: history.metadataComplete !== false, observedAt: now() });
+    },
+
     taskOutput(sessionId, directory, taskId, generation) {
       const decoded = decodeNativeSessionId(sessionId);
       if (decoded?.backend !== 'antigravity') throw sessionNotFoundError(sessionId);
@@ -449,13 +482,14 @@ export const createAntigravityBackend = ({
 
     async createSession({ directory, title }) {
       const command = await requireCommand();
-      const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS].filter(Boolean).join('\n\n');
+      const checklist = await checklistLaunch(directory);
+      const globalInstructions = [await readGlobalInstructions(), HEADLESS_INSTRUCTIONS, checklist.instructions].filter(Boolean).join('\n\n');
       const holder = { session: null };
       const process = startAgyProcess({
         executable: command.executable,
         args: [...command.argsPrefix, ...agyProcessArgs({ cwd: directory, agent: null })],
         cwd: directory,
-        env: buildEnv(),
+        env: checklist.env,
         startupTimeoutMs,
         onFrame: (frame) => holder.session ? enqueue(holder.session, process, () => handleFrame(holder.session, process, frame)) : undefined,
         onExit: (error) => holder.session ? enqueue(holder.session, process, () => handleExit(holder.session, process, error)) : undefined,

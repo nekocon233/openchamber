@@ -62,6 +62,8 @@ export const dict = {
   "chat.nativeTasks.unsupported": "Dieser Server oder diese CLI unterstützt diese Aufgabenansicht nicht.",
   "chat.nativeTasks.notNative": "Aufgaben sind für native CLI-Sitzungen verfügbar.",
   "chat.nativeTasks.checklistUnavailable": "Der Speicherort der Checkliste für diese Sitzung konnte nicht bestätigt werden.",
+  "chat.nativeTasks.checklistNotRecorded": "Es wurde noch keine Checkliste erfasst. Der Agent kann im nächsten Durchgang eine erstellen.",
+  "chat.toolPart.replacementPreview": "Vorschau der Ersetzung ohne Dateizeilennummern.",
   "chat.nativeTasks.loadError": "Aufgaben konnten nicht geladen werden. Zum erneuten Versuch aktualisieren.",
   "chat.nativeTasks.stale": "Diese Aufgaben sind möglicherweise veraltet. Zum erneuten Versuch aktualisieren.",
   "chat.nativeTasks.partial": "Einige Einträge konnten nicht gelesen werden. Bekannte Einträge bleiben erhalten und sind möglicherweise veraltet.",

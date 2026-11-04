@@ -73,6 +73,24 @@ beforeEach(() => {
   api = createTestNativeAgentsAPI({ capabilities: async () => capabilities, checklist: async () => snapshot(1) });
 });
 
+for (const supported of [true, false]) test(`Antigravity advertises checklist support independently: ${supported}`, async () => {
+  const session = 'nag_checklist';
+  let calls = 0;
+  const tasks: NonNullable<NativeCapabilities['backends']['antigravity']>['tasks'] = { background: true, output: true, stop: false };
+  if (supported) tasks.checklist = true;
+  api = createTestNativeAgentsAPI({
+    capabilities: async () => ({ ...capabilities, backends: { ...capabilities.backends,
+      antigravity: { cli: true, tasks },
+    } }),
+    checklist: async () => { calls += 1; return { ...snapshot(1), source: 'history' }; },
+  });
+  await render(<Probe session={session} visible />);
+  await pause();
+  if (supported) expect(heldSnapshot(session).source).toBe('history');
+  else expect(held(session).status).toBe('unsupported');
+  expect(calls).toBe(supported ? 1 : 0);
+});
+
 for (const supported of [true, false]) test(`DeepSeek checklist capability controls reads: ${supported}`, async () => {
   const session = `ndh_${'b'.repeat(64)}`;
   const deepseek: NonNullable<NativeCapabilities['backends']['deepseek']> = { cli: true, blockedByEnterprise: false, actions: { revert: true, delete: true, fork: true } };

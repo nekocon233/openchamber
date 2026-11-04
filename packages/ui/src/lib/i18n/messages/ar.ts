@@ -3931,6 +3931,8 @@ export const dict = {
   'chat.nativeTasks.checklist': 'Checklist',
   'chat.nativeTasks.checklistEmpty': "لم يتم تسجيل أي عناصر في قائمة مهام هذه الجلسة بعد.",
   'chat.nativeTasks.checklistUnavailable': 'The checklist location could not be confirmed for this session.',
+  "chat.nativeTasks.checklistNotRecorded": "لم تُسجّل قائمة مهام بعد. يمكن للوكيل إنشاؤها في الجولة التالية.",
+  "chat.toolPart.replacementPreview": "معاينة الاستبدال دون أرقام أسطر الملف.",
   'chat.nativeTasks.cliChecklist': 'Checklist',
   'chat.nativeTasks.description': 'Checklists, background tasks and plans for this session.',
   'chat.nativeTasks.detail.duration': 'Duration',

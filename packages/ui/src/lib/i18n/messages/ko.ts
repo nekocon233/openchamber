@@ -63,6 +63,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.unsupported": "이 서버 또는 CLI는 이 작업 보기를 지원하지 않습니다.",
   "chat.nativeTasks.notNative": "네이티브 CLI 세션에서 작업을 사용할 수 있습니다.",
   "chat.nativeTasks.checklistUnavailable": "이 세션의 체크리스트 위치를 확인할 수 없습니다.",
+  "chat.nativeTasks.checklistNotRecorded": "아직 기록된 체크리스트가 없습니다. 에이전트가 다음 응답에서 만들 수 있습니다.",
+  "chat.toolPart.replacementPreview": "파일 줄 번호가 없는 교체 내용 미리보기입니다.",
   "chat.nativeTasks.loadError": "작업을 불러올 수 없습니다. 새로고침하여 다시 시도하세요.",
   "chat.nativeTasks.stale": "작업 정보가 오래되었을 수 있습니다. 새로고침하여 다시 시도하세요.",
   "chat.nativeTasks.partial": "일부 항목을 읽을 수 없습니다. 이전 항목은 유지되지만 오래된 정보일 수 있습니다.",

@@ -58,3 +58,22 @@ export const prepareAgyDelegation = async (tools, env) => {
     throw new NativeAgentError('Could not register the Antigravity subagent tools. Check the CLI configuration and retry.', { status: 503, code: 'NATIVE_DELEGATION_SETUP_FAILED' });
   }
 };
+
+/** This registration carries no credentials and leaves native delegation intact. */
+export const prepareAgyChecklist = async (tools, env, workspace) => {
+  const directory = path.join(env.HOME || os.homedir(), '.gemini', 'config');
+  try {
+    if (workspace) {
+      const local = await read(path.join(workspace, '.agents', 'mcp_config.json'));
+      if (local.document.mcpServers && Object.hasOwn(object.parse(local.document.mcpServers), 'openchamber_checklist')) throw new Error('Workspace MCP name collision');
+    }
+    const file = path.join(directory, 'mcp_config.json');
+    const { document } = await read(file);
+    const servers = document.mcpServers === undefined ? {} : object.parse(document.mcpServers);
+    const existing = servers.openchamber_checklist;
+    if (existing && !JSON.stringify(existing).includes('checklist-mcp.mjs')) throw new Error('MCP name collision');
+    await update(file, ['mcpServers', 'openchamber_checklist'], { command: tools.command, args: tools.args });
+  } catch {
+    throw new NativeAgentError('Could not register the Antigravity checklist tool. Check the CLI MCP configuration and retry.', { status: 503, code: 'NATIVE_ANTIGRAVITY_CHECKLIST_SETUP_FAILED' });
+  }
+};

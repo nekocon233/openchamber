@@ -817,6 +817,12 @@ what the stores hold for native sessions and never blocks OpenCode's:
   DeepSeek uses this same owner with its own advertised checklist capability
   and committed native `todo/write` list. Source changes on a unified
   conversation reset the reader before loading its new executing backend.
+  Antigravity advertises an optional checklist capability and uses accepted
+  structured MCP calls retained in its transcript. It shares this owner and
+  receives updates on tool completion. Opening, manual refresh and reconnect
+  read its snapshot without idle polling. Rewind and redo reset its reader even
+  when the physical source stays the same; the server applies retained-prefix
+  boundaries and gives that prefix its own list identity.
   Claude sends the plan the list still shows, so a list that gained a task
   arrives without the finished tasks before it, and the UI never filters
   completed items itself.

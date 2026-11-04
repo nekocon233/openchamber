@@ -1717,6 +1717,9 @@ const spawnLocalServer = async () => {
     OPENCHAMBER_DELEGATION_MCP_PATH: app.isPackaged
       ? path.join(process.resourcesPath, 'native-delegation-mcp.mjs')
       : undefined,
+    OPENCHAMBER_AGY_CHECKLIST_MCP_PATH: app.isPackaged
+      ? path.join(process.resourcesPath, 'native-agy-checklist-mcp.mjs')
+      : undefined,
     // OpenCode uses process cwd as a fallback directory; app userData would make
     // packaged desktop look like a separate empty workspace.
     OPENCHAMBER_OPENCODE_CWD: resolveManagedOpenCodeCwd({

@@ -63,6 +63,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.unsupported": "Цей сервер або CLI не підтримує цей перегляд завдань.",
   "chat.nativeTasks.notNative": "Завдання доступні для нативних сеансів CLI.",
   "chat.nativeTasks.checklistUnavailable": "Не вдалося підтвердити розташування списку для цього сеансу.",
+  "chat.nativeTasks.checklistNotRecorded": "Список завдань ще не записано. Агент може створити його наступного ходу.",
+  "chat.toolPart.replacementPreview": "Попередній перегляд заміни без номерів рядків файлу.",
   "chat.nativeTasks.loadError": "Не вдалося завантажити завдання. Оновіть, щоб спробувати ще раз.",
   "chat.nativeTasks.stale": "Ці завдання можуть бути застарілими. Оновіть, щоб спробувати ще раз.",
   "chat.nativeTasks.partial": "Деякі записи не вдалося прочитати. Попередні записи збережено, але вони можуть бути застарілими.",

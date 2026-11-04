@@ -3931,6 +3931,8 @@ export const dict = {
   'chat.nativeTasks.checklist': 'Checklist',
   'chat.nativeTasks.checklistEmpty': "עדיין לא נרשמו משימות ברשימת המשימות של השיחה הזו.",
   'chat.nativeTasks.checklistUnavailable': 'The checklist location could not be confirmed for this session.',
+  "chat.nativeTasks.checklistNotRecorded": "עדיין לא נרשמה רשימת משימות. הסוכן יכול ליצור אחת בסבב הבא.",
+  "chat.toolPart.replacementPreview": "תצוגה מקדימה של ההחלפה ללא מספרי שורות בקובץ.",
   'chat.nativeTasks.cliChecklist': 'Checklist',
   'chat.nativeTasks.description': 'Checklists, background tasks and plans for this session.',
   'chat.nativeTasks.detail.duration': 'Duration',

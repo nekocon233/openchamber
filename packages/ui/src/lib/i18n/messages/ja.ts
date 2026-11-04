@@ -63,6 +63,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.unsupported": "このサーバーまたは CLI はこのタスク表示に対応していません。",
   "chat.nativeTasks.notNative": "ネイティブ CLI セッションでタスクを利用できます。",
   "chat.nativeTasks.checklistUnavailable": "このセッションのチェックリストの場所を確認できませんでした。",
+  "chat.nativeTasks.checklistNotRecorded": "チェックリストはまだ記録されていません。エージェントは次のターンで作成できます。",
+  "chat.toolPart.replacementPreview": "ファイルの行番号を含まない置換プレビュー。",
   "chat.nativeTasks.loadError": "タスクを読み込めませんでした。更新して再試行してください。",
   "chat.nativeTasks.stale": "タスクの情報が古い可能性があります。更新して再試行してください。",
   "chat.nativeTasks.partial": "一部の項目を読み取れませんでした。以前の項目は保持されていますが、古い可能性があります。",

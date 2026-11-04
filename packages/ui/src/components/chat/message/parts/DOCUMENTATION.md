@@ -91,6 +91,16 @@ Use this doc when you ask an agent to change tool/header/description behavior.
 
 ## Current important behavior
 
+### Native replacement previews
+
+Antigravity tools retain `nativeBackend` after unified conversation projection,
+so historical native details do not depend on the current model or ID prefix.
+`nativeDiffScope: 'replacement'` identifies excerpts built from recorded target
+and replacement arguments. The concise and expanded previews omit file line
+numbers and complete-file totals. They may open the file, while exact-line
+navigation and sending the excerpt as a complete editor patch stay unavailable.
+Native full-file diffs keep the ordinary diff controls.
+
 ### Bidirectional prose
 
 Shared chat CSS applies `unicode-bidi: plaintext` to prose blocks, including

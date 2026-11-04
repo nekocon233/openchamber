@@ -62,6 +62,8 @@ export const dict = {
   "chat.nativeTasks.unsupported": "Bu sunucu veya CLI bu görev görünümünü desteklemiyor.",
   "chat.nativeTasks.notNative": "Görevler yerel CLI oturumlarında kullanılabilir.",
   "chat.nativeTasks.checklistUnavailable": "Bu oturumun kontrol listesi konumu doğrulanamadı.",
+  "chat.nativeTasks.checklistNotRecorded": "Henüz bir görev listesi kaydedilmedi. Aracı bir sonraki turda oluşturabilir.",
+  "chat.toolPart.replacementPreview": "Dosya satır numaraları olmadan değiştirme önizlemesi.",
   "chat.nativeTasks.loadError": "Görevler yüklenemedi. Yeniden denemek için yenileyin.",
   "chat.nativeTasks.stale": "Bu görevler güncel olmayabilir. Yeniden denemek için yenileyin.",
   "chat.nativeTasks.partial": "Bazı kayıtlar okunamadı. Önceki kayıtlar korunur ancak güncel olmayabilir.",

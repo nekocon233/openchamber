@@ -63,6 +63,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeTasks.unsupported": "Ten serwer lub CLI nie obsługuje tego widoku zadań.",
   "chat.nativeTasks.notNative": "Zadania są dostępne w natywnych sesjach CLI.",
   "chat.nativeTasks.checklistUnavailable": "Nie można potwierdzić położenia listy dla tej sesji.",
+  "chat.nativeTasks.checklistNotRecorded": "Nie zapisano jeszcze listy zadań. Agent może utworzyć ją w następnej turze.",
+  "chat.toolPart.replacementPreview": "Podgląd zastąpienia bez numerów wierszy pliku.",
   "chat.nativeTasks.loadError": "Nie można wczytać zadań. Odśwież, aby spróbować ponownie.",
   "chat.nativeTasks.stale": "Te zadania mogą być nieaktualne. Odśwież, aby spróbować ponownie.",
   "chat.nativeTasks.partial": "Nie można odczytać części wpisów. Poprzednie wpisy zostają zachowane, ale mogą być nieaktualne.",

@@ -131,6 +131,12 @@ or keyboard activation still does.
 
 ### Native task surface
 
+Antigravity also uses the checklist pane and summary when the server advertises
+`tasks.checklist`. Completed structured calls own the list; an older session
+without a call explains that no checklist has been recorded. Updates follow
+events, opening and manual refresh, with no Antigravity idle polling. Checklist
+rows remain read-only. Its CLI adapter owns receipt and history validation.
+
 Antigravity exposes saved background commands in the same task pane and
 background section. These `history` snapshots show recorded outcomes and
 bounded output, with unknown status when completion was not retained. They

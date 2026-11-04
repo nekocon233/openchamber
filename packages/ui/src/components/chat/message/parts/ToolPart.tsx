@@ -80,6 +80,7 @@ import {
     getPrimaryToolPath,
     getToolFallbackDiff,
     resolveToolQuickOpenTarget,
+    isReplacementPreview,
     type DiffPatchEntry,
 } from './toolDiffUtils';
 import { useChatColumnActions } from '@/components/chat/chatColumnSession';
@@ -137,6 +138,11 @@ const TOOL_ROW_TITLE_CLASS = cn('typography-meta font-medium', TOOL_ROW_TEXT_CLA
 const TOOL_ROW_DESCRIPTION_CLASS = cn('typography-meta', TOOL_ROW_TEXT_CLASS);
 
 type ToolStateWithMetadata = ToolStateUnion & { metadata?: Metadata; input?: ToolInput; output?: string; error?: string; time?: { start: number; end?: number }; attachments?: Array<FilePart> };
+
+const isAntigravityToolPart = (part: ToolPartType): boolean => (
+    nativeBackendOfSessionId(part.sessionID) === 'antigravity'
+    || ('metadata' in part.state && part.state.metadata?.nativeBackend === 'antigravity')
+);
 
 interface ToolPartProps {
     part: ToolPartType;
@@ -1072,7 +1078,7 @@ const useSubagentChildSessionId = (part: ToolPartType, directory: string): strin
             ?? readTaskSessionIdFromOutput(state.status === 'running' ? undefined : state.output)
             ?? readTaskSessionIdFromRecord({ sessionID: state.input.sessionID });
     }, [state]);
-    const inferred = useRunningTaskChildSessionId(!authoritative && state.status === 'running' && nativeBackendOfSessionId(part.sessionID) !== 'antigravity' ? part : undefined, directory);
+    const inferred = useRunningTaskChildSessionId(!authoritative && state.status === 'running' && !isAntigravityToolPart(part) ? part : undefined, directory);
     return authoritative ?? inferred;
 };
 
@@ -1398,6 +1404,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     const stateWithData = state as ToolStateWithMetadata;
     const metadata = stateWithData.metadata;
     const input = stateWithData.input;
+    const replacementPreview = isReplacementPreview(metadata);
     const rawOutput = getToolOutput(part.tool, stateWithData.output, metadata?.output, state.status);
     const hasStringOutput = typeof rawOutput === 'string' && rawOutput.length > 0;
     const rawOutputString = typeof rawOutput === 'string' ? rawOutput : '';
@@ -1502,13 +1509,15 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     const getEntryAbsolutePath = (entry: DiffPatchEntry) => toAbsoluteFilePath(currentDirectory, entry.filePath ?? entry.title);
     const openEntryFile = (entry: DiffPatchEntry, event: React.MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
-        const line = extractFirstChangedLineFromDiff(entry.patch);
+        const line = replacementPreview ? undefined : extractFirstChangedLineFromDiff(entry.patch);
         const absolutePath = getEntryAbsolutePath(entry);
         if (runtime?.editor && runtime.runtime.isVSCode) {
             void runtime.editor.openFile(absolutePath, line);
             return;
         }
-        useUIStore.getState().openContextFileAtLine(currentDirectory, absolutePath, line ?? 1, 1);
+        const store = useUIStore.getState();
+        if (line === undefined) store.openContextFile(currentDirectory, absolutePath);
+        else store.openContextFileAtLine(currentDirectory, absolutePath, line, 1);
         // Dedicated mobile app: the pending file navigation is consumed by
         // the FilesView pane — surface it (workspace drawer Files tab).
         mobileActions?.openFiles();
@@ -1540,8 +1549,8 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                     size="icon"
                     className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
                     onClick={(event) => openEntryFile(entry, event)}
-                    aria-label={t('chat.toolPart.openFileAtFirstChange')}
-                    title={t('chat.toolPart.openFileAtFirstChange')}
+                    aria-label={t(replacementPreview ? 'chat.toolPart.openFile' : 'chat.toolPart.openFileAtFirstChange')}
+                    title={t(replacementPreview ? 'chat.toolPart.openFile' : 'chat.toolPart.openFileAtFirstChange')}
                 >
                     <Icon name="file-edit" className="h-3.5 w-3.5" />
                 </Button>
@@ -1550,19 +1559,23 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                     size="icon"
                     className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
                     onClick={(event) => openEntryDiff(entry, event)}
+                    disabled={replacementPreview}
                     aria-label={t('chat.toolPart.openFileDiff')}
                     title={t('chat.toolPart.openFileDiff')}
                 >
                     <Icon name="git-pull-request" className="h-3.5 w-3.5" />
                 </Button>
             </div>
-            {entry.renderMode === 'diff' ? (
+            {replacementPreview && entry.renderMode === 'diff' ? <ConciseDiff files={[entry]} showLineNumbers={false} /> : entry.renderMode === 'diff' ? (
                 <DiffPreview
                     diff={entry.patch}
                     diffViewMode={diffViewMode}
                 />
             ) : (
-                <PlainDiffFallback diff={entry.patch} />
+                <>
+                    {replacementPreview ? <div className="typography-meta text-muted-foreground">{t('chat.toolPart.replacementPreview')}</div> : null}
+                    <PlainDiffFallback diff={entry.patch} />
+                </>
             )}
         </div>
     );
@@ -2154,16 +2167,17 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
     // (see resolveRunningTaskChildSessionId); recover it from the child
     // session records until the authoritative id arrives.
     const inferredTaskSessionId = useRunningTaskChildSessionId(
-        isTaskTool && !authoritativeTaskSessionId && state.status === 'running' && nativeBackendOfSessionId(part.sessionID) !== 'antigravity' ? part : undefined,
+        isTaskTool && !authoritativeTaskSessionId && state.status === 'running' && !isAntigravityToolPart(part) ? part : undefined,
         currentDirectory,
     );
     const taskSessionId = authoritativeTaskSessionId ?? inferredTaskSessionId ?? subagentSessionId;
-    const nativeDetails = React.useMemo(() => nativeBackendOfSessionId(part.sessionID) === 'antigravity'
+    const antigravityPart = isAntigravityToolPart(part);
+    const nativeDetails = React.useMemo(() => antigravityPart
         ? z.object({
             nativeOutputTruncated: z.boolean().optional(),
             nativeSubagents: z.array(z.object({ sessionID: z.string(), title: z.string(), agent: z.string() })).optional(),
         }).safeParse(metadata).data
-        : undefined, [metadata, part.sessionID]);
+        : undefined, [metadata, antigravityPart]);
 
     // The file changes a command's CLI recorded; null for every other call.
     const recordedChanges = React.useMemo(() => recordedFileChanges(part.tool, metadata), [metadata, part.tool]);
@@ -2172,6 +2186,7 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
         [currentDirectory, recordedChanges],
     );
     const diffStats = React.useMemo(() => {
+        if (isReplacementPreview(metadata)) return null;
         // A total that leaves out files without a diff would read as complete.
         if (recordedChanges) return recordedChanges.complete ? parseDiffStats(metadata) : null;
         return (isEditTool(normalizedPartTool) || isPatchTool(normalizedPartTool))
@@ -2468,7 +2483,7 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
                     }}
                     actions={quickOpenButton}
                 />
-                {!isExpanded && conciseDiffFiles.length > 0 ? <ConciseDiff files={conciseDiffFiles} alwaysNameFiles={recordedChanges !== null} /> : null}
+                {!isExpanded && conciseDiffFiles.length > 0 ? <ConciseDiff files={conciseDiffFiles} alwaysNameFiles={recordedChanges !== null} showLineNumbers={!isReplacementPreview(metadata)} /> : null}
                 {!isExpanded && recordedChanges ? (
                     <ChangedFilesWithoutDiff
                         changes={recordedChanges}
@@ -2840,7 +2855,7 @@ const SubagentToolPartContent: React.FC<ToolPartProps> = (props) => {
         // "in background" describes a call still running; a finished one is just finished.
         label: stopped ? 'stopped' : backgroundPhase?.kind === 'running' ? 'background' : undefined,
         durationUnknown: backgroundPhase?.kind === 'unknown',
-        stop: isRunning && childSessionID && !stopping && nativeBackendOfSessionId(props.part.sessionID) !== 'antigravity'
+        stop: isRunning && childSessionID && !stopping && !isAntigravityToolPart(props.part)
             ? { onStop: stop, ariaLabel: t('chat.toolPart.subagent.stop') }
             : undefined,
     };

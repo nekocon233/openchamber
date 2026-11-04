@@ -62,6 +62,8 @@ export const dict = {
   "chat.nativeTasks.unsupported": "Ce serveur ou cette CLI ne prend pas en charge cette vue des tâches.",
   "chat.nativeTasks.notNative": "Les tâches sont disponibles pour les sessions CLI natives.",
   "chat.nativeTasks.checklistUnavailable": "Impossible de confirmer l'emplacement de la liste pour cette session.",
+  "chat.nativeTasks.checklistNotRecorded": "Aucune liste n'a encore été enregistrée. L'agent peut en créer une au prochain tour.",
+  "chat.toolPart.replacementPreview": "Aperçu du remplacement sans numéros de ligne du fichier.",
   "chat.nativeTasks.loadError": "Impossible de charger les tâches. Actualisez pour réessayer.",
   "chat.nativeTasks.stale": "Ces tâches sont peut-être obsolètes. Actualisez pour réessayer.",
   "chat.nativeTasks.partial": "Certaines entrées sont illisibles. Les entrées précédentes sont conservées et peuvent être obsolètes.",

@@ -2505,12 +2505,17 @@ export function handleEvent(
   }
   if (reducerChanged && payload.type === 'session.patched' && isUnifiedNativeSessionId(payload.properties.sessionID)) {
     const sessionId = payload.properties.sessionID
-    const previous = unifiedNativeSessionState(current.session.find((session) => session.id === sessionId)?.metadata)
+    const previousSession = current.session.find((session) => session.id === sessionId)
+    const previous = unifiedNativeSessionState(previousSession?.metadata)
     const next = unifiedNativeSessionState(payload.properties.patch.metadata)
-    if (previous && next && previous.sourceSessionID !== next.sourceSessionID) {
+    const sourceChanged = previous && next && previous.sourceSessionID !== next.sourceSessionID
+    const checklistPrefixChanged = next?.backend === 'antigravity' && payload.properties.patch.revert !== undefined
+      && previousSession?.revert?.messageID !== payload.properties.patch.revert?.messageID
+    if (sourceChanged || checklistPrefixChanged) {
       const runtimeKey = getRuntimeKey()
       queueMicrotask(() => {
         resetSessionNativeChecklistSource(sessionId, resolvedDirectory, runtimeKey)
+        if (!sourceChanged) return
         resetSessionNativePlanSource(sessionId, resolvedDirectory, runtimeKey)
         resetSessionNativeTodosSource(sessionId, resolvedDirectory, runtimeKey)
         resetSessionNativeTaskSource(sessionId, resolvedDirectory, runtimeKey)

@@ -83,6 +83,8 @@ run(bunExe, ['run', 'build'], webDir);
 console.log('[electron] staging packaged resources...');
 await fs.mkdir(resourcesDir, { recursive: true });
 await fs.copyFile(path.join(webDir, 'server/lib/native-agents/delegation-mcp.mjs'), path.join(resourcesDir, 'native-delegation-mcp.mjs'));
+run(bunExe, ['build', 'server/lib/native-agents/antigravity/checklist-mcp.mjs', '--target=node', '--format=esm',
+  '--outfile', path.join(resourcesDir, 'native-agy-checklist-mcp.mjs')], webDir);
 console.log('[electron] bundling the native memory hook...');
 run(bunExe, ['build', 'server/lib/agent-memory/native-hook.js', '--target=node', '--format=esm',
   '--outfile', path.join(resourcesDir, 'native-memory-hook.mjs')], webDir);

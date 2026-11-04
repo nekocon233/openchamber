@@ -459,6 +459,7 @@ export const createNativeAgentsRuntime = ({
   const antigravity = createAntigravityBackend({
     toolConfiguration: (id) => sourceTools.get(id),
     resolveExecutable: () => resolveExecutable('agy'), buildEnv: buildChildEnv,
+    resolveNodeExecutable: () => resolveExecutable('node'),
     resolveCommand: resolveAntigravityCommand,
     registry, publisher, readGlobalInstructions, decorateSession: decorate, now,
     onInteraction: async (proposal) => {
@@ -820,7 +821,7 @@ export const createNativeAgentsRuntime = ({
           [NATIVE_BACKEND_CLAUDE]: { cli: claudeCli !== null, tasks: { checklist: true, background: true, output: true, stop: true } },
           [NATIVE_BACKEND_CODEX]: { cli: codexCli !== null, tasks: { plan: true, todos: true } },
           [NATIVE_BACKEND_DEEPSEEK]: { cli: deepseekCli !== null, blockedByEnterprise: isEnterpriseMode(), tasks: { checklist: true }, actions: { revert: true, delete: deepseekCli !== null && await deepseekPackage(deepseekCli) !== null && await resolveExecutable('node') !== null, fork: true } },
-          [NATIVE_BACKEND_ANTIGRAVITY]: { cli: agyCli !== null, blockedByEnterprise: false, tasks: { background: true, output: true, stop: false }, actions: { revert: false, delete: false, fork: false, compact: false } },
+          [NATIVE_BACKEND_ANTIGRAVITY]: { cli: agyCli !== null, blockedByEnterprise: false, tasks: { checklist: nodeCli !== null, background: true, output: true, stop: false }, actions: { revert: false, delete: false, fork: false, compact: false } },
         },
         registry: registry.status(),
         agentCombinations: !isEnterpriseMode() && nodeCli !== null && delegationReady,
@@ -1329,6 +1330,7 @@ export const createNativeAgentsRuntime = ({
 
     async checklist(sessionId, directory) {
       const decoded = decode(sessionId);
+      if (decoded.backend === NATIVE_BACKEND_ANTIGRAVITY) return antigravity.checklist(sessionId, directory);
       if (decoded.backend === NATIVE_BACKEND_DEEPSEEK) return deepseek.checklist(sessionId, directory);
       if (decoded.backend !== NATIVE_BACKEND_CLAUDE) return { state: 'unavailable', reason: 'unsupported' };
       const rootId = encodeClaudeSessionId(decoded.sessionUuid);
