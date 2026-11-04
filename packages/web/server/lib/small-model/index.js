@@ -292,7 +292,7 @@ const resolveSmallModel = async ({ client, directory, model, variant, preferredP
 // An unavailable OpenCode connection must not prevent a selected CLI from running.
 const resolveModelContext = async (options) => {
   const requested = parseModelRef(options.model);
-  const settings = parseModelRef(readSmallModelSettingsOverride());
+  const settings = readSmallModelSettingsOverride();
   const explicit = requested
     ? { ...requested, source: 'request' }
     : settings ? { ...settings, source: 'settings' } : null;

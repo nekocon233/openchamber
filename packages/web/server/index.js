@@ -23,7 +23,6 @@ import { createFrpcTunnelProvider } from './lib/tunnels/providers/frpc.js';
 import { createNgrokTunnelProvider } from './lib/tunnels/providers/ngrok.js';
 import { createTailscaleTunnelProvider } from './lib/tunnels/providers/tailscale.js';
 import { isAgentMemoryFeatureAvailable } from './lib/agent-memory/feature-flag.js';
-import { NOTIFICATION_CHANNEL_OUTBOUND_PATH } from '@openchamber/sdk';
 import {
   normalizeFrpcCustomDomain,
   normalizeFrpcPublicHostname,
@@ -1049,7 +1048,7 @@ notificationTemplateRuntime = createNotificationTemplateRuntime({
 });
 
 const notificationChannelHandles = createOutboundHandles();
-setHostCallbackRoute(NOTIFICATION_CHANNEL_OUTBOUND_PATH, {
+setHostCallbackRoute(NOTIFICATIONS_OUTBOUND_PATH, {
   refusal: notificationChannelHandles.refusal,
   serve: notificationChannelHandles.serve,
 });
