@@ -71,6 +71,10 @@ Recovery therefore needs no operator: a crashed desktop backend or a killed serv
 
 Snapshot writes use unique same-directory temporary files, mode `0600` before rename, and atomic rename. They do **not** fsync the temporary file or parent directory. Persistence here supports process-restart recovery, not a power-loss durability guarantee. A failed pre-rename write leaves the previous snapshot intact and cleans the temporary file when filesystem access permits. A hard crash may leave both a temporary file and a lock. Mutation completion-lock errors retain their actionable status and warn that the outcome could not be recorded; retry only with the same idempotency key for reconciliation, never a new key. Existing terminal retention and capacity eviction still bound how long resolved keys replay.
 
+## Reference picker reads
+
+Reference-picker reads validate `scope=repository|network` before resolving the read context, then pass it to the provider. Omission keeps `network`. The web adapter retains the provider's scope echo so a project-only list can reject an unscoped response. Disabled reference-picker capabilities still answer the existing unsupported response.
+
 ## Repository binding routes
 
 - `GET /api/source-control/repository-context?directory=...` returns canonical repository identity, config revision, and redacted remotes.

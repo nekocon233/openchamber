@@ -876,13 +876,19 @@ export function registerProviderRoutes(app, {
       return res.json(await read({
         session, directory, context: trustedContext, remote: trustedContext.primaryRemote,
         kind,
+        scope: requestText(req.query?.scope) || 'network',
         ...readListFilter(req.query),
         query: requestText(req.query?.query),
         cursor: requestText(req.query?.cursor) || null,
       }));
     }, {
-      validate: (req) => (!requestText(req.query?.directory) || !['issue', 'pull', 'discussion'].includes(requestText(req.query?.kind))
-        ? 'directory and kind (issue, pull or discussion) are required' : null),
+      validate: (req) => {
+        if (!requestText(req.query?.directory) || !['issue', 'pull', 'discussion'].includes(requestText(req.query?.kind))) {
+          return 'directory and kind (issue, pull or discussion) are required';
+        }
+        return req.query?.scope !== undefined && !['repository', 'network'].includes(req.query.scope)
+          ? 'scope must be repository or network' : null;
+      },
     });
 
     // Every folder's context is validated, and read with its own account, by the provider.

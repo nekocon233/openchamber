@@ -95,6 +95,7 @@ const referencesResultSchema = z.discriminatedUnion('connected', [
     cursor: z.string().nullable(),
     hasMore: z.boolean(),
     total: z.number(),
+    scope: z.enum(['repository', 'network']).optional(),
   }),
 ]);
 
@@ -232,6 +233,7 @@ export const fetchRepositoryReferences = async (
 ): Promise<RepositoryReferencePage> => {
   const query = readContextQuery(context);
   query.set('kind', options.kind);
+  if (options.scope) query.set('scope', options.scope);
   if (options.state) query.set('state', options.state);
   if (options.people) query.set('people', options.people);
   if (options.query?.trim()) query.set('query', options.query.trim());

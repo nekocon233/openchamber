@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
-import { registerGitHubRoutes } from './routes.js';
+import { registerGitHubRoutes } from '../source-control/provider-routes.github.test-support.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-repository-prs-'));
 const previousDataDir = process.env.OPENCHAMBER_DATA_DIR;
@@ -113,6 +113,7 @@ describe('single-repository PR references', () => {
       return { data: { search: { nodes: [node(1, 'OPEN', 'upstream')], issueCount: 1, pageInfo: { endCursor: null, hasNextPage: false } } } };
     });
     const { body } = await request(app).get('/api/source-control/github/references').query({ ...context(), kind: 'pull' }).expect(200);
+    expect(body.scope).toBe('network');
     expect(body.items[0].sourceRepo.owner).toBe('upstream');
     expect(resolveNetwork).toHaveBeenCalledOnce();
   });
@@ -141,6 +142,21 @@ describe('single-repository PR references', () => {
     const { body } = await get({ query: 'https://github.com/upstream/project/pull/4' }).expect(200);
     expect(body.items).toEqual([]);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps repository scope when a linked read names an upstream PR', async () => {
+    const fetch = serve(() => { throw new Error('Unexpected lookup'); });
+    const { body } = await get({ query: 'https://github.com/upstream/project/pull/4', linked: '1' }).expect(200);
+    expect(body).toMatchObject({ scope: 'repository', items: [] });
+    expect(resolveNetwork).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('confirms repository scope when the primary remote has no repository', async () => {
+    resolveRepo.mockResolvedValueOnce({ repo: null });
+    const { body } = await get().expect(200);
+    expect(body).toMatchObject({ connected: true, repo: null, scope: 'repository', items: [], total: 0 });
+    expect(resolveNetwork).not.toHaveBeenCalled();
   });
 
   it.each(['repo:upstream/project', 'org:upstream', 'user:someone'])('rejects scope-changing search %s', async (query) => {

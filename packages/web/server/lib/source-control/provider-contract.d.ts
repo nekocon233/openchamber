@@ -340,7 +340,7 @@ export interface ProviderImplementation {
       expectedHeadSha: string; requestedRemoteName: string;
     }): Promise<Json>;
     /** Capability `referencePicker`: one searched page of issues, change requests or (`discussions`) discussions. */
-    references?(input: ReadInput & { kind: 'issue' | 'pull' | 'discussion'; state: string; people: string; query: string; cursor: string | null }): Promise<Json>;
+    references?(input: ReadInput & { kind: 'issue' | 'pull' | 'discussion'; scope?: 'repository' | 'network'; state: string; people: string; query: string; cursor: string | null }): Promise<Json>;
     /** The same search across folders; each folder's context goes through `validateReadContext` and its own account. */
     referencesAcross?(input: { body: Json; validateReadContext(context: Json): Promise<Json> }): Promise<Json>;
     /** `kind: 'discussion'` reads a discussion's detail; otherwise the issue or change request the number names. */

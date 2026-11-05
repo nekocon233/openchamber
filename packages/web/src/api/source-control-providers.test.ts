@@ -92,4 +92,21 @@ describe('web source-control providers', () => {
     await expect(api.referencesAcross?.([context, { ...context, provider: 'gitlab', instance: 'https://gitlab.com' }], { kind: 'issue' }))
       .rejects.toThrow('one provider');
   });
+
+  it.each(['repository', 'network'] as const)('preserves %s reference scope in the request and response', async (scope) => {
+    const api = createWebSourceControlAPI({ fetch: runtimeFetchMock });
+    const context: SourceControlReadContext = {
+      provider: 'github', instance: 'github.com', directory: '/repo', repositoryId: 'repo',
+      accountId: 'github.com#7', bindingRevision: 1, primaryRemote: 'origin',
+    };
+    runtimeFetchMock.mockResolvedValueOnce(Response.json({
+      connected: true, scope, repo: null, items: [], cursor: null, hasMore: false, total: 0,
+    }));
+
+    const page = await api.references(context, { kind: 'pull', scope });
+
+    const query = runtimeFetchMock.mock.calls.at(-1)?.[1]?.query;
+    expect(query instanceof URLSearchParams && query.get('scope')).toBe(scope);
+    expect(page).toMatchObject({ connected: true, scope });
+  });
 });

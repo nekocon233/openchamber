@@ -326,6 +326,10 @@ The client's branch PR state is `useGitHubPrStatusStore`, a provider-neutral sto
 
 ## Decisions
 
+### Why repository scope is confirmed by the provider
+
+The web adapter sends the selected scope through the shared route shell and preserves the provider's response echo. The GitHub resource enforces repository scope even on a linked read; only network-scoped linked reads can leave the project's repository. Inferring an echo from the request would let an older server's unscoped results appear in the project PR list. Repository-scope tests use the shared route shell that production runs.
+
 ### Why a refused merge can enable auto-merge
 
 The asynchronous merge runs first with the existing `bypass_rules: true`, so an actor permitted to bypass keeps that behavior. After a refusal or a failed asynchronous result, `merge-when-ready.js` reads GitHub's authoritative state. An open, unchanged, non-conflicting PR in `BLOCKED` or `UNSTABLE`, whose target branch has no merge queue, enables auto-merge with the selected method and `expectedHeadOid`. A queue branch keeps the asynchronous queue path. Authentication failures, moved heads, conflicts and unreadable state never become auto-merge requests. GitHub refusing auto-merge, including a repository where it is disabled, remains a visible refusal.

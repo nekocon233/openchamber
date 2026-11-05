@@ -27,6 +27,7 @@ import {
   fetchDiscussionDetail,
   fetchPullStack,
   fetchReferenceDetail,
+  listRepositoryPullRequests,
   mapReferencesAcross,
   readPullStatusRefs,
   readReferencePeople,
@@ -693,20 +694,24 @@ export function createGitHubResources({
 
     /**
      * One page of issues or PRs for the reference picker, or the item a
-     * pasted link or number names, across the repository network. A `linked`
-     * read answers the one item its link names, wherever the repository is.
+     * pasted link or number names, in the selected repository scope. A
+     * network-scoped `linked` read can answer an item outside that network.
      */
-    references: ({ session, context, directory, remote, kind, state, people, query, cursor }) => pickerRead(async () => {
+    references: ({ session, context, directory, remote, kind, scope = 'network', state, people, query, cursor }) => pickerRead(async () => {
+      const text = query ?? '';
+      if (scope === 'repository' && /(?:^|[\s(])-?(?:repo|org|user):/i.test(text)) {
+        throw responseError(400, { error: 'Repository search is limited to this project; remove repo:, org: or user: qualifiers' });
+      }
       const { octokit } = accountOf(session);
       const { rateLimit } = await load();
       const { repo } = await resolveRepo(directory, remote);
       // The gate short-circuits only this host.
       if (rateLimit.isGitHubRateLimited(repo?.host)) throw responseError(503, { error: 'GitHub rate limited' });
-      if (!repo) return { connected: true, repo: null, items: [], cursor: null, hasMore: false, total: 0 };
-      if (context?.linked) {
-        const link = parseReferenceLink(query ?? '', repo.host || GITHUB_COM);
-        if (!link) return { connected: true, repo, items: [], cursor: null, hasMore: false, total: 0 };
-        return { connected: true, repo, ...(await searchGitHubReferences({
+      if (!repo) return { connected: true, repo: null, scope, items: [], cursor: null, hasMore: false, total: 0 };
+      if (context?.linked && scope === 'network') {
+        const link = parseReferenceLink(text, repo.host || GITHUB_COM);
+        if (!link) return { connected: true, repo, scope, items: [], cursor: null, hasMore: false, total: 0 };
+        return { connected: true, repo, scope, ...(await searchGitHubReferences({
           octokit,
           repos: [{ owner: link.owner, repo: link.repo, source: 'origin' }],
           kind,
@@ -716,17 +721,24 @@ export function createGitHubResources({
           cursor: null,
         })) };
       }
-      const network = requireGitHubRepoNetwork(await resolveNetwork(octokit, directory, remote, { strictErrors: true }), repo);
-      const page = await searchGitHubReferences({
-        octokit,
-        repos: network ?? [{ ...repo, source: 'origin' }],
-        kind,
-        state: readReferenceState(state),
-        people: readReferencePeople(people),
-        text: query ?? '',
-        cursor: cursor || null,
-      });
-      return { connected: true, repo, ...page };
+      const network = scope === 'network'
+        ? requireGitHubRepoNetwork(await resolveNetwork(octokit, directory, remote, { strictErrors: true }), repo)
+        : null;
+      const selectedState = readReferenceState(state);
+      const selectedPeople = readReferencePeople(people);
+      const page = scope === 'repository' && kind === 'pull' && !text.trim() && selectedPeople === 'any'
+        ? await listRepositoryPullRequests({ octokit, repo, state: selectedState, cursor })
+        : await searchGitHubReferences({
+          octokit,
+          repos: network ?? [{ ...repo, source: 'origin' }],
+          kind,
+          state: selectedState,
+          people: selectedPeople,
+          text,
+          cursor: cursor || null,
+          scope,
+        });
+      return { connected: true, repo, scope, ...page };
     }),
 
     /**
@@ -884,7 +896,7 @@ export function createGitHubResources({
         const octokit = await github.getOctokitOrNull(refHost);
         if (!octokit) continue;
         try {
-          const { summaries } = await summaryReads.fetchPrSummaries({ octokit, refs: hostRefs });
+          const { summaries } = await summaryReads.fetchPrSummaries({ octokit, refs: hostRefs, includeClosedChecks: true });
           for (const summary of summaries) {
             statuses.push({
               owner: summary.owner, repo: summary.repo, number: summary.number,
