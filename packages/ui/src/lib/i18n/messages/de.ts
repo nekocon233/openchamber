@@ -55,6 +55,8 @@ export const dict = {
   "agents.combinations.loadFailed": "Kombinationen konnten nicht geladen werden. Öffne die Einstellungen erneut und versuche es noch einmal.",
   "agents.combinations.saveFailed": "Kombinationen konnten nicht gespeichert werden. Versuche es erneut.",
   "agents.combinations.group": "Kombinationen",
+  "agents.combinations.defaultThinking": "Aus Kombination",
+  "agents.combinations.defaultUnavailable": "Die Standardkombination ist nicht verfügbar. Wähle ein anderes Modell oder eine andere Kombination.",
   "agents.combinations.title": "Agentenkombinationen",
   "agents.combinations.name": "Name",
   "agents.combinations.main": "Hauptagent",

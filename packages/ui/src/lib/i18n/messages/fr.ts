@@ -55,6 +55,8 @@ export const dict = {
   "agents.combinations.loadFailed": "Impossible de charger les combinaisons. Rouvrez les paramètres et réessayez.",
   "agents.combinations.saveFailed": "Impossible d'enregistrer les combinaisons. Réessayez.",
   "agents.combinations.group": "Combinaisons",
+  "agents.combinations.defaultThinking": "Selon la combinaison",
+  "agents.combinations.defaultUnavailable": "La combinaison par défaut est indisponible. Choisissez un autre modèle ou une autre combinaison.",
   "agents.combinations.title": "Combinaisons d'agents",
   "agents.combinations.name": "Nom",
   "agents.combinations.main": "Agent principal",

@@ -23,6 +23,14 @@ import { renderSettingsRegistrySnapshot, SETTINGS_REGISTRY_SNAPSHOT_PATHS } from
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..');
 
 describe('settings registry', () => {
+  test('round-trips default combination references globally and on projects', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const parsed = parseSettingsDocument({ defaultAgentCombinationId: id, projects: [{ path: '/repo', defaultAgentCombinationId: id }] });
+    expect(parsed?.defaultAgentCombinationId).toBe(id);
+    expect(parsed?.projects?.[0].defaultAgentCombinationId).toBe(id);
+    expect(parseSettingsDocument({ defaultAgentCombinationId: '' })?.defaultAgentCombinationId).toBe('');
+    expect(parseSettingsDocument({ defaultAgentCombinationId: 'bad' })).toEqual({});
+  });
   test('persists mixed favorite ordering without changing model or combination membership', () => {
     const original = useUIStore.getState();
     const id = '11111111-1111-4111-8111-111111111111';

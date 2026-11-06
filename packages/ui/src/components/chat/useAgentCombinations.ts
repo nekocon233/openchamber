@@ -26,6 +26,7 @@ export const useAgentCombinations = ({ enabled, sessionId, directory, agent, cur
   const { t } = useI18n();
   const { nativeAgents } = useRuntimeAPIs();
   const blocked = useEnterpriseMode();
+  const defaultId = useConfigStore((state) => enabled && !sessionId && state.selectionSource === 'auto' ? state.currentDefaultAgentCombinationId : undefined);
   const combinations = useConfigStore((state) => state.nativeAgentCombinations);
   const combinationOrder = useUIStore((state) => state.agentCombinationOrder);
   const providers = useConfigStore((state) => state.providers);
@@ -84,7 +85,7 @@ export const useAgentCombinations = ({ enabled, sessionId, directory, agent, cur
     const configuration = useAgentCombinationDrafts.getState().drafts.get(agentCombinationDraftKey(draftTarget));
     if (configuration?.combination) useAgentCombinationDrafts.getState().set(draftTarget, { subagent: configuration.subagent, execution: configuration.execution });
   };
-  return { combinations: eligible ? orderPickerItems(combinations, combinationOrder, (entry) => entry.id) : [], selectedCombination: eligible ? (sessionId ? saved : draft)?.combination : undefined,
+  return { combinations: eligible ? orderPickerItems(combinations, combinationOrder, (entry) => entry.id) : [], selectedCombination: eligible ? (sessionId ? saved : draft)?.combination ?? (defaultId ? { id: defaultId, name: combinations.find((entry) => entry.id === defaultId)?.name ?? t('agents.combinations.defaultUnavailable') } : undefined) : undefined,
     clearDraftSelection,
-    disabled: blocked || !supported || busy || (sessionId ? !directory : !draftTarget), error: eligible ? error ?? (saved?.unavailable ? t('chat.unified.selectionFailed') : null) : null, apply };
+    disabled: blocked || !supported || busy || (sessionId ? !directory : !draftTarget), error: defaultId && (!eligible || blocked || !supported || !combinations.some((entry) => entry.id === defaultId)) ? t('agents.combinations.defaultUnavailable') : eligible ? error ?? (saved?.unavailable ? t('chat.unified.selectionFailed') : null) : null, apply };
 };

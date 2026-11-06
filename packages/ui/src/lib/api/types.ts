@@ -1499,6 +1499,7 @@ export interface ProjectEntry {
   color?: string | null;
   defaultAgent?: string;
   defaultModel?: string;
+  defaultAgentCombinationId?: string;
   /** Variant of `defaultModel`, when that model exposes any. */
   defaultVariant?: string;
   addedAt?: number;
@@ -1533,6 +1534,7 @@ export type SidebarProjectPatch = Partial<{
   iconBackground: string | null;
   color: string | null;
   defaultModel: string | null;
+  defaultAgentCombinationId: string | null;
   addedAt: number | null;
 }>;
 

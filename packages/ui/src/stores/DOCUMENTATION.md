@@ -573,7 +573,8 @@ names one, so a saved Antigravity low slug stays low after its catalog is
 grouped into families. The stored id stays valid; choosing another effort uses
 the existing variant override, including explicit Default.
 
-Project defaults include `defaultAgent`, `defaultModel`, and `defaultVariant`.
+Project defaults include `defaultAgent`, `defaultModel`, `defaultVariant` and
+`defaultAgentCombinationId`.
 The project agent precedes the global agent, then OpenCode's default and the
 primary-agent fallback. Settings parsers retain all three fields on every read
 and save echo. The project editor loads agents, models, and effort options for
@@ -1293,3 +1294,14 @@ After meaningful Git/PR store changes, verify manually:
 4. Worktree sessions still show branch labels in header.
 5. Expanded sidebar projects/worktrees can show PR state without requiring prior selection.
 6. Hidden surfaces do not reintroduce live background work.
+
+### Why default combinations are resolved into draft snapshots
+
+A default combination references its preset by UUID, while a new draft captures
+its main, subagent and execution choices. A preset edit affects subsequent
+drafts and never rewrites a held draft or existing conversation. A project model
+choice suppresses the global combination as a whole. `settingsDefaultModel`
+and `settingsDefaultVariant` expose the resolved main choice to existing model
+consumers; the persisted settings keep the combination reference separate.
+Missing preset references remain visible and block materialization before any
+directory or session is created. Manual composer choices outrank default edits.

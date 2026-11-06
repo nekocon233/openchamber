@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export const createSettingsNormalizationRuntime = (dependencies) => {
   const {
     os,
@@ -221,6 +223,7 @@ export const createSettingsNormalizationRuntime = (dependencies) => {
       const color = typeof candidate.color === 'string' ? candidate.color.trim() : '';
       const defaultAgent = typeof candidate.defaultAgent === 'string' ? candidate.defaultAgent.trim() : '';
       const defaultModel = typeof candidate.defaultModel === 'string' ? candidate.defaultModel.trim() : '';
+      const defaultAgentCombinationId = z.string().uuid().safeParse(candidate.defaultAgentCombinationId).data;
       const defaultVariant = typeof candidate.defaultVariant === 'string' ? candidate.defaultVariant.trim() : '';
       const addedAt = Number.isFinite(candidate.addedAt) ? Number(candidate.addedAt) : null;
       const lastOpenedAt = Number.isFinite(candidate.lastOpenedAt)
@@ -249,6 +252,7 @@ export const createSettingsNormalizationRuntime = (dependencies) => {
         ...(Number.isFinite(lastOpenedAt) && lastOpenedAt >= 0 ? { lastOpenedAt } : {}),
       };
 
+      if (defaultAgentCombinationId) project.defaultAgentCombinationId = defaultAgentCombinationId;
       if (label && labelSource) project.labelSource = labelSource;
 
       if (candidate.iconImage === null) {

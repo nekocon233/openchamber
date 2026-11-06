@@ -56,6 +56,8 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.loadFailed": "無法載入組合，請重新開啟設定後重試。",
   "agents.combinations.saveFailed": "無法儲存組合，請重試。",
   "agents.combinations.group": "組合",
+  "agents.combinations.defaultThinking": "由組合控制",
+  "agents.combinations.defaultUnavailable": "預設組合無法使用，請重新選擇模型或組合。",
   "agents.combinations.title": "代理組合",
   "agents.combinations.name": "名稱",
   "agents.combinations.main": "主代理",

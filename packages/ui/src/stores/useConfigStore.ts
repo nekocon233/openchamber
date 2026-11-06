@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { NativeAgentCombination } from '@/lib/native-agents/combinations';
+import { resolveCombinationModelDefault, type NativeAgentCombination, type NativeAgentModel } from '@/lib/native-agents/combinations';
+import { readAgentCombinationDraft, useAgentCombinationDrafts } from '@/lib/native-agents/combination-drafts';
 import { configuredVariantForModel, preferredModelVariant, listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
@@ -58,6 +59,8 @@ const PROVIDERS_RETRY_SOURCE = "loadProviders:retryAfterFailure";
 const PROVIDERS_RETRY_DELAY_MS = 3000;
 
 interface OpenChamberDefaults {
+    nativeAgentCombinations?: NativeAgentCombination[];
+    defaultAgentCombinationId?: string;
     defaultModel?: string;
     defaultVariant?: string;
     defaultAgent?: string;
@@ -141,13 +144,16 @@ const fetchOpenChamberDefaults = (context: ConfigRuntimeContext): Promise<OpenCh
 };
 
 const toOpenChamberDefaults = (data: DesktopSettings): OpenChamberDefaults => {
-    const defaultModel = data.defaultModel?.trim() ?? '';
-    const defaultVariant = data.defaultVariant?.trim() ?? '';
+    const resolved = resolveCombinationModelDefault(data, data.nativeAgentCombinations ?? []);
+    const defaultModel = resolved.defaultModel?.trim() ?? '';
+    const defaultVariant = resolved.defaultVariant?.trim() ?? '';
     const defaultAgent = data.defaultAgent?.trim() ?? '';
     const zenModel = data.zenModel ?? '';
 
     return {
         defaultModel: defaultModel.length > 0 ? defaultModel : undefined,
+        defaultAgentCombinationId: data.defaultAgentCombinationId || undefined,
+        nativeAgentCombinations: data.nativeAgentCombinations,
         defaultVariant: defaultVariant.length > 0 ? defaultVariant : undefined,
         defaultAgent: defaultAgent.length > 0 ? defaultAgent : undefined,
         autoCreateWorktree: data.autoCreateWorktree,
@@ -296,6 +302,7 @@ const resolveProviderModelSelection = ({
     currentModelId,
     currentVariant,
     preserveCurrent = false,
+    defaultCombinationMain,
     settingsDefaultModel,
     settingsDefaultVariant,
     allowFallback,
@@ -306,6 +313,7 @@ const resolveProviderModelSelection = ({
     currentModelId?: string;
     currentVariant?: string;
     preserveCurrent?: boolean;
+    defaultCombinationMain?: NativeAgentModel;
     settingsDefaultModel?: string;
     settingsDefaultVariant?: string;
     allowFallback: boolean;
@@ -320,6 +328,9 @@ const resolveProviderModelSelection = ({
     };
 
     const preserveManual = preserveCurrent && !isStaleAutoSelection(currentProviderId, currentModelId);
+    if (!preserveManual && defaultCombinationMain) {
+        return { providerId: defaultCombinationMain.model.providerID, modelId: defaultCombinationMain.model.modelID, variant: defaultCombinationMain.variant ?? null };
+    }
     if (currentProviderId && currentModelId && (preserveManual || hasProviderModel(providers, currentProviderId, currentModelId))) {
         const model = findProviderModel(providers, currentProviderId, currentModelId);
         return {
@@ -452,9 +463,13 @@ const resolveDefaultAgentModelSelection = ({
     providers,
     projectDefaultAgent,
     projectDefaultModel,
+    projectDefaultAgentCombinationId,
+    projectDefaultCombinationMain,
     projectDefaultVariant,
     settingsDefaultAgent,
     settingsDefaultModel,
+    settingsDefaultAgentCombinationId,
+    settingsDefaultCombinationMain,
     settingsDefaultVariant,
     opencodeDefaultAgent,
     opencodeDefaultModel,
@@ -465,9 +480,13 @@ const resolveDefaultAgentModelSelection = ({
     providers: ProviderWithModelList[];
     projectDefaultAgent?: string;
     projectDefaultModel?: string;
+    projectDefaultAgentCombinationId?: string;
+    projectDefaultCombinationMain?: NativeAgentModel;
     projectDefaultVariant?: string;
     settingsDefaultAgent?: string;
     settingsDefaultModel?: string;
+    settingsDefaultAgentCombinationId?: string;
+    settingsDefaultCombinationMain?: NativeAgentModel;
     settingsDefaultVariant?: string;
     opencodeDefaultAgent?: string;
     opencodeDefaultModel?: string;
@@ -519,6 +538,13 @@ const resolveDefaultAgentModelSelection = ({
     let providerId: string | undefined;
     let modelId: string | undefined;
     let variant: string | null | undefined;
+
+    const combinationId = projectDefaultAgentCombinationId || (projectDefaultModel ? undefined : settingsDefaultAgentCombinationId);
+    if (combinationId) {
+        const main = projectDefaultAgentCombinationId ? projectDefaultCombinationMain : settingsDefaultCombinationMain;
+        return { agentName: resolvedAgent?.name ?? projectDefaultAgent ?? settingsDefaultAgent,
+            providerId: main?.model.providerID, modelId: main?.model.modelID, variant: main?.variant ?? null };
+    }
 
     const effectiveDefaultModel = projectDefaultModel || settingsDefaultModel;
 
@@ -998,7 +1024,26 @@ const getFallbackProjectDirectory = (): string | null => {
     }
 };
 
-type ProjectDefaults = { projectDefaultAgent?: string; projectDefaultModel?: string; projectDefaultVariant?: string };
+const readDefaultCombinationMain = (id: string | undefined, directory?: string | null): NativeAgentModel | undefined => {
+    if (!id) return undefined;
+    const state = useConfigStore.getState();
+    const session = useSessionUIStore.getState();
+    if (!session.currentSessionId && session.newSessionDraft.open
+        && (!directory || toDirectoryKey(directory) === state.activeDirectoryKey)) {
+        const held = readAgentCombinationDraft({ draftId: session.newSessionDraft.draftId });
+        if (held?.combination?.id === id && held.inheritedMain) return held.inheritedMain;
+    }
+    return state.nativeAgentCombinations.find((entry) => entry.id === id)?.main;
+};
+
+const readGlobalModelDefaults = (state: Pick<ConfigStore, 'settingsDefaultAgentCombinationId' | 'settingsDefaultModel' | 'settingsDefaultVariant'>, directory?: string | null) => ({
+    settingsDefaultModel: state.settingsDefaultModel,
+    settingsDefaultVariant: state.settingsDefaultVariant,
+    settingsDefaultAgentCombinationId: state.settingsDefaultAgentCombinationId,
+    settingsDefaultCombinationMain: readDefaultCombinationMain(state.settingsDefaultAgentCombinationId, directory),
+});
+
+type ProjectDefaults = { projectDefaultAgent?: string; projectDefaultModel?: string; projectDefaultVariant?: string; projectDefaultAgentCombinationId?: string; projectDefaultCombinationMain?: NativeAgentModel };
 
 const getProjectDefaultsForConfigDirectory = (directory: string | null | undefined): ProjectDefaults => {
     const configDirectory = normalizeConfigPath(directory);
@@ -1014,10 +1059,15 @@ const getProjectDefaultsForConfigDirectory = (directory: string | null | undefin
 const readProjectDefaults = (configDirectory: string): ProjectDefaults => {
     const projectDirectory = resolveProjectDirectory(configDirectory);
     const project = useProjectsStore.getState().projects.find((entry) => normalizeConfigPath(entry.path) === projectDirectory);
+    const main = readDefaultCombinationMain(project?.defaultAgentCombinationId, configDirectory);
+    const resolved = main ? { defaultModel: `${main.model.providerID}/${main.model.modelID}`, defaultVariant: main.variant }
+        : resolveCombinationModelDefault(project ?? {}, useConfigStore.getState().nativeAgentCombinations);
     return {
         projectDefaultAgent: normalizeOptionalString(project?.defaultAgent),
-        projectDefaultModel: normalizeOptionalString(project?.defaultModel),
-        projectDefaultVariant: normalizeOptionalString(project?.defaultVariant),
+        projectDefaultAgentCombinationId: project?.defaultAgentCombinationId,
+        projectDefaultCombinationMain: main,
+        projectDefaultModel: normalizeOptionalString(resolved.defaultModel),
+        projectDefaultVariant: normalizeOptionalString(resolved.defaultVariant),
     };
 };
 
@@ -1248,6 +1298,8 @@ subscribeRuntimeEndpointChanged((detail) => {
         opencodeDefaultModel: undefined,
         nativeAgentCombinations: [],
         settingsDefaultModel: undefined,
+        settingsDefaultAgentCombinationId: undefined,
+        currentDefaultAgentCombinationId: undefined,
         settingsDefaultVariant: undefined,
         settingsDefaultAgent: undefined,
         settingsDefaultsLoaded: false,
@@ -1523,7 +1575,9 @@ interface ConfigStore {
     modelsMetadata: Map<string, ModelMetadata>;
     // OpenChamber settings-based defaults (take precedence over agent preferences)
     nativeAgentCombinations: NativeAgentCombination[];
-    settingsDefaultModel: string | undefined; // format: "provider/model"
+    settingsDefaultModel: string | undefined; // Resolved main model, in provider/model format.
+    settingsDefaultAgentCombinationId: string | undefined;
+    currentDefaultAgentCombinationId?: string;
     settingsDefaultsLoaded: boolean;
     settingsDefaultVariant: string | undefined;
     settingsDefaultAgent: string | undefined;
@@ -1644,7 +1698,7 @@ interface ConfigStore {
      * does not run on (and would replace Auto).
      */
     setAgent: (agentName: string | undefined, options?: { keepModel?: boolean }) => void;
-    applyDefaultModelAgentSelection: (options?: { projectDefaultAgent?: string; projectDefaultModel?: string; projectDefaultVariant?: string }) => void;
+    applyDefaultModelAgentSelection: (options?: ProjectDefaults) => void;
     /**
      * What a new session in `directory` starts on, from that directory's own
      * catalogs and defaults. The composer's pick and the active directory play
@@ -1657,6 +1711,7 @@ interface ConfigStore {
     applyOpenCodeConfigDefaults: (directory?: string | null, source?: string, config?: Config) => void;
     setSelectedProvider: (providerId: string) => void;
     setSettingsDefaultModel: (model: string | undefined) => void;
+    setSettingsDefaultAgentCombinationId: (id: string | undefined) => void;
     setSettingsDefaultVariant: (variant: string | undefined) => void;
     setSettingsDefaultAgent: (agent: string | undefined) => void;
     setSettingsAutoCreateWorktree: (enabled: boolean) => void;
@@ -1858,6 +1913,8 @@ export const useConfigStore = create<ConfigStore>()(
                 modelsMetadata: new Map<string, ModelMetadata>(),
                 nativeAgentCombinations: [],
                 settingsDefaultModel: undefined,
+                settingsDefaultAgentCombinationId: undefined,
+                currentDefaultAgentCombinationId: undefined,
                 settingsDefaultsLoaded: false,
                 settingsDefaultVariant: undefined,
                 settingsDefaultAgent: undefined,
@@ -2445,6 +2502,7 @@ export const useConfigStore = create<ConfigStore>()(
                                     currentProviderId,
                                     currentModelId,
                                     currentVariant,
+                                    defaultCombinationMain: readDefaultCombinationMain(projectDefaults.projectDefaultAgentCombinationId || (projectDefaults.projectDefaultModel ? undefined : state.settingsDefaultAgentCombinationId), fromDirectoryKey(directoryKey)),
                                     preserveCurrent: (state.activeDirectoryKey === directoryKey ? state.selectionSource : baseSnapshot.selectionSource) === 'manual',
                                     settingsDefaultModel: projectDefaults.projectDefaultModel || state.settingsDefaultModel,
                                     settingsDefaultVariant: projectDefaults.projectDefaultModel ? projectDefaults.projectDefaultVariant : state.settingsDefaultVariant,
@@ -2795,8 +2853,7 @@ export const useConfigStore = create<ConfigStore>()(
                         ...(configDirectory
                             ? readProjectDefaults(configDirectory)
                             : getProjectDefaultsForConfigDirectory(fromDirectoryKey(state.activeDirectoryKey))),
-                        settingsDefaultModel: state.settingsDefaultModel,
-                        settingsDefaultVariant: state.settingsDefaultVariant,
+                        ...readGlobalModelDefaults(state, configDirectory),
                     }, providerId, modelId);
                 },
 
@@ -2905,6 +2962,7 @@ export const useConfigStore = create<ConfigStore>()(
                 loadSessionDefaults: async () => {
                     const runtimeContext = captureConfigRuntimeContext();
                     const revision = openChamberDefaultsUserRevision;
+                    const combinationsAtLoad = get().nativeAgentCombinations;
                     const defaults = await fetchOpenChamberDefaults(runtimeContext);
                     if (!isConfigRuntimeContextCurrent(runtimeContext) || !defaults) return false;
 
@@ -2913,7 +2971,9 @@ export const useConfigStore = create<ConfigStore>()(
                         const next: Partial<ConfigStore> = {
                             configRuntimeKey: runtimeContext.runtimeKey,
                             settingsDefaultsLoaded: true,
+                            nativeAgentCombinations: state.nativeAgentCombinations === combinationsAtLoad ? defaults.nativeAgentCombinations ?? state.nativeAgentCombinations : state.nativeAgentCombinations,
                             settingsDefaultModel: edited ? state.settingsDefaultModel : defaults.defaultModel,
+                            settingsDefaultAgentCombinationId: edited ? state.settingsDefaultAgentCombinationId : defaults.defaultAgentCombinationId,
                             settingsDefaultVariant: edited ? state.settingsDefaultVariant : defaults.defaultVariant,
                             settingsDefaultAgent: edited ? state.settingsDefaultAgent : defaults.defaultAgent,
                             settingsAutoCreateWorktree: defaults.autoCreateWorktree ?? false,
@@ -2942,7 +3002,7 @@ export const useConfigStore = create<ConfigStore>()(
                     // is a choice too; re-applying the defaults would clear it.
                     if (!useSessionUIStore.getState().currentSessionId && state.selectionSource === 'auto' && state.agentSelectionSource === 'auto'
                         && state.currentVariantSelection.override === undefined
-                        && (projectDefaults.projectDefaultModel || state.settingsDefaultModel)) {
+                        && (projectDefaults.projectDefaultModel || projectDefaults.projectDefaultAgentCombinationId || state.settingsDefaultModel || state.settingsDefaultAgentCombinationId)) {
                         state.applyDefaultModelAgentSelection(projectDefaults);
                     }
                     markStartupTrace('config.defaults:published');
@@ -3179,8 +3239,7 @@ export const useConfigStore = create<ConfigStore>()(
                                 providers,
                                 ...getProjectDefaultsForConfigDirectory(configDirectoryPath),
                                 settingsDefaultAgent: get().settingsDefaultAgent,
-                                settingsDefaultModel: get().settingsDefaultModel,
-                                settingsDefaultVariant: get().settingsDefaultVariant,
+                                ...readGlobalModelDefaults(get(), configDirectoryPath),
                                 opencodeDefaultAgent,
                                 opencodeDefaultModel,
                                 allowFallback: get().settingsDefaultsLoaded,
@@ -3677,6 +3736,7 @@ export const useConfigStore = create<ConfigStore>()(
                     const projectDefaults = getProjectDefaultsForConfigDirectory(fromDirectoryKey(current.activeDirectoryKey));
                     const resolved = resolveProviderModelSelection({
                         providers: current.providers,
+                        defaultCombinationMain: readDefaultCombinationMain(projectDefaults.projectDefaultAgentCombinationId || (projectDefaults.projectDefaultModel ? undefined : current.settingsDefaultAgentCombinationId), fromDirectoryKey(current.activeDirectoryKey)),
                         settingsDefaultModel: projectDefaults.projectDefaultModel || current.settingsDefaultModel,
                         settingsDefaultVariant: projectDefaults.projectDefaultModel ? projectDefaults.projectDefaultVariant : current.settingsDefaultVariant,
                         allowFallback: true,
@@ -3725,11 +3785,30 @@ export const useConfigStore = create<ConfigStore>()(
 
                 applyDefaultModelAgentSelection: (options) => {
                     const projectDefaults = options ?? getProjectDefaultsForConfigDirectory(fromDirectoryKey(get().activeDirectoryKey));
+                    const state = get();
+                    const defaultId = projectDefaults.projectDefaultAgentCombinationId
+                        || (projectDefaults.projectDefaultModel ? undefined : state.settingsDefaultAgentCombinationId);
+                    const entry = state.nativeAgentCombinations.find((entry) => entry.id === defaultId);
+                    const draft = useSessionUIStore.getState().newSessionDraft;
+                    const target = draft.open ? { draftId: draft.draftId } : null;
+                    const held = target ? readAgentCombinationDraft(target) : undefined;
+                    const main = defaultId && held?.combination?.id === defaultId && held.inheritedMain ? held.inheritedMain : entry?.main;
+                    if (target && !useSessionUIStore.getState().currentSessionId) {
+                        if (entry && main && (!held?.inheritedMain || held.combination?.id !== defaultId)) {
+                            useAgentCombinationDrafts.getState().set(target, {
+                                subagent: entry.subagent, execution: entry.execution,
+                                combination: { id: entry.id, name: entry.name }, inheritedMain: main,
+                            });
+                        } else if (!defaultId && held?.inheritedMain) useAgentCombinationDrafts.getState().clear(target, held);
+                    }
+                    const resolvedDefaults = main ? { defaultModel: `${main.model.providerID}/${main.model.modelID}`, defaultVariant: main.variant }
+                        : resolveCombinationModelDefault({ defaultModel: state.settingsDefaultModel, defaultVariant: state.settingsDefaultVariant, defaultAgentCombinationId: state.settingsDefaultAgentCombinationId }, state.nativeAgentCombinations);
+                    const effectiveProjectDefaults = projectDefaults.projectDefaultAgentCombinationId ? {
+                        ...projectDefaults, projectDefaultModel: resolvedDefaults.defaultModel, projectDefaultVariant: resolvedDefaults.defaultVariant, projectDefaultCombinationMain: main,
+                    } : projectDefaults;
                     const {
                         agents,
                         providers,
-                        settingsDefaultModel,
-                        settingsDefaultVariant,
                         settingsDefaultAgent,
                         opencodeDefaultAgent,
                         opencodeDefaultModel,
@@ -3743,10 +3822,12 @@ export const useConfigStore = create<ConfigStore>()(
                     } = resolveDefaultAgentModelSelection({
                         agents,
                         providers,
-                        ...projectDefaults,
+                        ...effectiveProjectDefaults,
                         settingsDefaultAgent,
-                        settingsDefaultModel,
-                        settingsDefaultVariant,
+                        settingsDefaultModel: resolvedDefaults.defaultModel,
+                        settingsDefaultVariant: resolvedDefaults.defaultVariant,
+                        settingsDefaultAgentCombinationId: state.settingsDefaultAgentCombinationId,
+                        settingsDefaultCombinationMain: main,
                         opencodeDefaultAgent,
                         opencodeDefaultModel,
                         allowFallback: get().settingsDefaultsLoaded,
@@ -3780,6 +3861,7 @@ export const useConfigStore = create<ConfigStore>()(
 
                         const nextState: Partial<ConfigStore> = {
                             currentAgentName: resolvedAgentName,
+                            currentDefaultAgentCombinationId: defaultId,
                             currentProviderId: nextSnapshot.currentProviderId,
                             currentModelId: nextSnapshot.currentModelId,
                             currentVariant: resolvedVariant ?? undefined,
@@ -3896,9 +3978,10 @@ export const useConfigStore = create<ConfigStore>()(
                             projectDefaultAgent: projectDefaults.projectDefaultAgent,
                             projectDefaultModel: projectDefaults.projectDefaultModel,
                             projectDefaultVariant: projectDefaults.projectDefaultVariant,
+                            projectDefaultAgentCombinationId: projectDefaults.projectDefaultAgentCombinationId,
+                            projectDefaultCombinationMain: projectDefaults.projectDefaultCombinationMain,
                             settingsDefaultAgent: state.settingsDefaultAgent,
-                            settingsDefaultModel: state.settingsDefaultModel,
-                            settingsDefaultVariant: state.settingsDefaultVariant,
+                            ...readGlobalModelDefaults(state, fromDirectoryKey(directoryKey)),
                             opencodeDefaultAgent,
                             opencodeDefaultModel,
                             allowFallback: state.settingsDefaultsLoaded,
@@ -3991,22 +4074,29 @@ export const useConfigStore = create<ConfigStore>()(
                     });
                 },
 
+                 setSettingsDefaultAgentCombinationId: (id: string | undefined) => {
+                     recordOpenChamberDefaultsChange();
+                     const resolved = resolveCombinationModelDefault({ defaultAgentCombinationId: id }, get().nativeAgentCombinations);
+                     set({ settingsDefaultAgentCombinationId: id, settingsDefaultModel: resolved.defaultModel, settingsDefaultVariant: resolved.defaultVariant });
+                     if (!useSessionUIStore.getState().currentSessionId && get().selectionSource === 'auto' && get().agentSelectionSource === 'auto' && get().currentVariantSelection.override === undefined) get().applyDefaultModelAgentSelection();
+                 },
+
                  setSettingsDefaultModel: (model: string | undefined) => {
                      recordOpenChamberDefaultsChange();
-                     set({ settingsDefaultModel: model });
-                     if (!useSessionUIStore.getState().currentSessionId) get().applyDefaultModelAgentSelection();
+                     set({ settingsDefaultModel: model, settingsDefaultAgentCombinationId: undefined });
+                     if (!useSessionUIStore.getState().currentSessionId && get().selectionSource === 'auto' && get().agentSelectionSource === 'auto' && get().currentVariantSelection.override === undefined) get().applyDefaultModelAgentSelection();
                  },
 
                  setSettingsDefaultVariant: (variant: string | undefined) => {
                      recordOpenChamberDefaultsChange();
                      set({ settingsDefaultVariant: variant });
-                     if (!useSessionUIStore.getState().currentSessionId) get().applyDefaultModelAgentSelection();
+                     if (!useSessionUIStore.getState().currentSessionId && get().selectionSource === 'auto' && get().agentSelectionSource === 'auto' && get().currentVariantSelection.override === undefined) get().applyDefaultModelAgentSelection();
                  },
  
                  setSettingsDefaultAgent: (agent: string | undefined) => {
                      recordOpenChamberDefaultsChange();
                      set({ settingsDefaultAgent: agent });
-                     if (!useSessionUIStore.getState().currentSessionId) get().applyDefaultModelAgentSelection();
+                     if (!useSessionUIStore.getState().currentSessionId && get().selectionSource === 'auto' && get().agentSelectionSource === 'auto' && get().currentVariantSelection.override === undefined) get().applyDefaultModelAgentSelection();
                  },
 
                 setSettingsAutoCreateWorktree: (enabled: boolean) => {
@@ -4649,6 +4739,7 @@ export const useConfigStore = create<ConfigStore>()(
                     agentModelSelections: state.agentModelSelections,
                     defaultProviders: state.defaultProviders,
                     settingsDefaultModel: state.settingsDefaultModel,
+                    settingsDefaultAgentCombinationId: state.settingsDefaultAgentCombinationId,
                     settingsDefaultVariant: state.settingsDefaultVariant,
                     settingsDefaultAgent: state.settingsDefaultAgent,
                     settingsAutoCreateWorktree: state.settingsAutoCreateWorktree,

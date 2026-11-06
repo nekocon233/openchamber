@@ -18,6 +18,7 @@ import { isPrimaryMode } from '@/components/chat/mobileControlsUtils';
 import { updateSharedProjectSetup, type ProjectRef } from '@/lib/openchamberConfig';
 import { ensureSharedSetupTrusted, resetSharedSetupTrust } from '@/lib/sharedTrustConfirmation';
 import { useI18n } from '@/lib/i18n';
+import { isVSCodeRuntime } from '@/lib/desktop';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/icon/Icon';
 import type { useProjectIdentityForm } from './useProjectIdentityForm';
@@ -71,18 +72,20 @@ const ChatDefaultsSection: React.FC<{ form: ProjectIdentityFormState }> = ({ for
           onChange={form.handleDefaultModelChange}
           className={SETTINGS_CUSTOM_TRIGGER_CLASS}
           allowNativeModels
+          agentCombination={isVSCodeRuntime() ? undefined : { id: form.defaultAgentCombinationId, onSelect: form.handleDefaultCombinationChange }}
         />
       </SettingsFieldRow>
 
-      {availableVariants.length > 0 ? (
+      {availableVariants.length > 0 || form.defaultAgentCombinationId ? (
         <SettingsFieldRow settingsItem="projects.default-thinking" label={t('settings.projects.page.field.projectThinking')}>
           <Select
+            disabled={Boolean(form.defaultAgentCombinationId)}
             value={defaultVariant ?? NO_VARIANT_VALUE}
             onValueChange={(value) => form.handleDefaultVariantChange(value === NO_VARIANT_VALUE ? undefined : value)}
           >
             <SelectTrigger className={SETTINGS_SELECT_ROW_TRIGGER_CLASS} aria-label={t('settings.projects.page.field.projectThinking')}>
               <SelectValue>
-                {defaultVariant ? formatVariantLabel(defaultVariant) : t('settings.projects.page.option.thinkingDefault')}
+                {form.defaultAgentCombinationId ? t('agents.combinations.defaultThinking') : defaultVariant ? formatVariantLabel(defaultVariant) : t('settings.projects.page.option.thinkingDefault')}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>

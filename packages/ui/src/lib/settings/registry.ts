@@ -18,7 +18,7 @@
  *   only ever lived in the local store are in `LOCAL_DEVICE_KEYS`.
  */
 import type { ProjectEntry, TerminalShell } from '@/lib/api/types';
-import { favoriteAgentCombinationIdsSchema, nativeAgentCombinationsSchema } from '@/lib/native-agents/combinations';
+import { agentCombinationIdSchema, favoriteAgentCombinationIdsSchema, nativeAgentCombinationsSchema } from '@/lib/native-agents/combinations';
 import type { DesktopWindowControlsPosition, DesktopWindowControlsStyle } from '@/lib/desktop';
 import { getDirectoryShowHidden, setDirectoryShowHidden } from '@/lib/directoryShowHidden';
 import type { DraftStarterRef } from '@/lib/draftStarters';
@@ -597,6 +597,7 @@ export const SETTINGS_REGISTRY = {
 
   // ── Models and agents (profile) ──
   defaultModel: field({ scope: 'profile', parse: parseNonEmptyString }),
+  defaultAgentCombinationId: field({ scope: 'profile', surfaces: ['web', 'desktop', 'mobile'], parse: fromSchema(z.union([agentCombinationIdSchema, z.literal('')])) }),
   defaultVariant: field({ scope: 'profile', parse: parseNonEmptyString }),
   defaultAgent: field({ scope: 'profile', parse: parseNonEmptyString }),
   smallModelUseDefault: field({ scope: 'profile', parse: parseBoolean }),

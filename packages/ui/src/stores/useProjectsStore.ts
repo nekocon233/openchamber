@@ -1,3 +1,4 @@
+import { agentCombinationIdSchema } from '@/lib/native-agents/combinations';
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { opencodeClient } from '@/lib/opencode/client';
@@ -83,6 +84,7 @@ interface ProjectsStore {
     iconBackground?: string | null;
     defaultAgent?: string | null;
     defaultModel?: string | null;
+    defaultAgentCombinationId?: string | null;
     defaultVariant?: string | null;
   }) => void;
   uploadProjectIcon: (id: string, file: File) => Promise<{ ok: boolean; error?: string }>;
@@ -316,6 +318,8 @@ const sanitizeProjects = (value: unknown): ProjectEntry[] => {
     if (defaultAgent) {
       project.defaultAgent = defaultAgent;
     }
+    const combinationId = agentCombinationIdSchema.safeParse(candidate.defaultAgentCombinationId).data;
+    if (combinationId) project.defaultAgentCombinationId = combinationId;
     const defaultModel = normalizeDefaultModel(candidate.defaultModel);
     if (defaultModel) {
       project.defaultModel = defaultModel;
@@ -579,6 +583,7 @@ const vscodeWorkspaceProjectsEqual = (left: ProjectEntry[], right: ProjectEntry[
       && leftProject.iconBackground === rightProject.iconBackground
       && leftProject.defaultAgent === rightProject.defaultAgent
       && leftProject.defaultModel === rightProject.defaultModel
+      && leftProject.defaultAgentCombinationId === rightProject.defaultAgentCombinationId
       && leftProject.defaultVariant === rightProject.defaultVariant
       && leftProject.addedAt === rightProject.addedAt
       && leftProject.lastOpenedAt === rightProject.lastOpenedAt
@@ -925,6 +930,7 @@ export const useProjectsStore = create<ProjectsStore>()(
       iconBackground?: string | null;
       defaultAgent?: string | null;
       defaultModel?: string | null;
+      defaultAgentCombinationId?: string | null;
       defaultVariant?: string | null;
     }) => {
       if (isVSCodeProjectsRuntime) {
@@ -953,6 +959,10 @@ export const useProjectsStore = create<ProjectsStore>()(
           } else {
             delete updated.defaultAgent;
           }
+        }
+        if (meta.defaultAgentCombinationId !== undefined) {
+          if (meta.defaultAgentCombinationId) updated.defaultAgentCombinationId = meta.defaultAgentCombinationId;
+          else delete updated.defaultAgentCombinationId;
         }
         if (meta.defaultModel !== undefined) {
           const normalized = normalizeDefaultModel(meta.defaultModel);
@@ -985,6 +995,7 @@ export const useProjectsStore = create<ProjectsStore>()(
       if (meta.color !== undefined) patch.color = meta.color;
       if (meta.iconBackground !== undefined) patch.iconBackground = normalizeIconBackground(meta.iconBackground);
       if (meta.defaultModel !== undefined) patch.defaultModel = normalizeDefaultModel(meta.defaultModel) ?? null;
+      if (meta.defaultAgentCombinationId !== undefined) patch.defaultAgentCombinationId = meta.defaultAgentCombinationId || null;
       if (Object.keys(patch).length > 0) {
         void submitSidebarOperation({ type: 'project.update', projectId: id, patch }).catch(() => {});
       }
@@ -1265,6 +1276,7 @@ const sidebarProjectMatchesLocal = (local: ProjectEntry, shared: SidebarProjectE
   && local.iconBackground === shared.iconBackground
   && local.color === shared.color
   && local.defaultModel === shared.defaultModel
+  && local.defaultAgentCombinationId === shared.defaultAgentCombinationId
   && local.addedAt === shared.addedAt
   && local.iconImage?.mime === shared.iconImage?.mime
   && local.iconImage?.updatedAt === shared.iconImage?.updatedAt

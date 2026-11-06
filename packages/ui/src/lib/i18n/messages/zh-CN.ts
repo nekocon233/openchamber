@@ -56,6 +56,8 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.loadFailed": "无法加载组合，请重新打开设置后重试。",
   "agents.combinations.saveFailed": "无法保存组合，请重试。",
   "agents.combinations.group": "组合",
+  "agents.combinations.defaultThinking": "由组合控制",
+  "agents.combinations.defaultUnavailable": "默认组合不可用，请重新选择模型或组合。",
   "agents.combinations.title": "代理组合",
   "agents.combinations.name": "名称",
   "agents.combinations.main": "主代理",

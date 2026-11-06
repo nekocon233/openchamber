@@ -54,6 +54,8 @@ export const dict = {
   "agents.combinations.loadFailed": "לא ניתן לטעון שילובים. יש לפתוח את ההגדרות מחדש ולנסות שוב.",
   "agents.combinations.saveFailed": "לא ניתן לשמור שילובים. יש לנסות שוב.",
   "agents.combinations.group": "שילובים",
+  "agents.combinations.defaultThinking": "מהשילוב",
+  "agents.combinations.defaultUnavailable": "שילוב ברירת המחדל אינו זמין. יש לבחור מודל או שילוב אחר.",
   "agents.combinations.title": "שילובי סוכנים",
   "agents.combinations.name": "שם",
   "agents.combinations.main": "סוכן ראשי",

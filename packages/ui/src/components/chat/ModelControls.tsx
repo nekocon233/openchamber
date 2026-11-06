@@ -928,6 +928,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     const resolveInheritedVariantForModel = React.useCallback((providerId: string, modelId: string, agentName?: string | null) => {
         const variantOptions = getModelVariantOptions(providerId, modelId);
         if (variantOptions.length === 0) return undefined;
+        if (!currentSessionId && currentProviderId === providerId && currentModelId === modelId && currentVariantSelection.inherited === null) return undefined;
 
         let currentInherited: string | undefined;
         if (currentProviderId === providerId && currentModelId === modelId) {
@@ -1522,7 +1523,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         if (!currentSessionId) {
             if (currentVariantSelection.override === undefined && !manualVariantSelectionRef.current) {
                 const desired = resolveInheritedVariantForModel(currentProviderId, currentModelId);
-                setCurrentVariantOverride(undefined, desired);
+                setCurrentVariantOverride(undefined, currentVariantSelection.inherited === null ? null : desired);
             }
             return;
         }
@@ -1554,6 +1555,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         currentModelId,
         currentVariant,
         currentVariantSelection.override,
+        currentVariantSelection.inherited,
         effectiveCurrentVariant,
         getAgentModelVariantForSession,
         providersResolved,
