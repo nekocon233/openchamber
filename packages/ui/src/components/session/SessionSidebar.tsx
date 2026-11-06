@@ -344,6 +344,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     iconBackground: string | null;
     defaultAgent: string | null;
     defaultModel: string | null;
+    defaultAgentCombinationId?: string | null;
     defaultVariant: string | null;
   }) => {
     if (!editingProjectDialogId) {
@@ -356,6 +357,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       iconBackground: data.iconBackground,
       defaultAgent: data.defaultAgent ?? null,
       defaultModel: data.defaultModel ?? null,
+      defaultAgentCombinationId: data.defaultAgentCombinationId ?? null,
       defaultVariant: data.defaultVariant ?? null,
     });
   }, [editingProjectDialogId, updateProjectMeta]);

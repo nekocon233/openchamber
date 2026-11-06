@@ -5,10 +5,12 @@ import { type Session } from "@/lib/opencode/model"
 import { registerRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import type { NativeCompactRequest, NativeSessionCreate, NativeSessionPatch, NativeSessionSelection } from "@/lib/api/types"
 import type { NativeAgentConfigurationWrite } from '@/lib/native-agents/combinations';
+import { buildNativeProvider } from '@/lib/native-agents/providers';
 import { captureAgentCombinationDraft, readAgentCombinationDraft, useAgentCombinationDrafts } from '@/lib/native-agents/combination-drafts';
 import { NativeAgentsRequestError } from "@/lib/native-agents/errors"
 import { createTestNativeAgentsAPI, createTestRuntimeAPIs } from "@/lib/native-agents/test-utils/runtime"
 import { NATIVE_BACKENDS, nativeProviderIdOf, type NativeBackend } from "@/lib/native-agents/ids"
+import { materializeOpenDraftSession, useSessionUIStore } from './session-ui-store';
 import { useConfigStore } from "@/stores/useConfigStore"
 import { useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
 import { ChildStoreManager } from "./child-store"
@@ -181,6 +183,19 @@ describe('native combination identity', () => {
 });
 
 describe('native session creation', () => {
+  test('a deleted default combination stops before materializing a draft', async () => {
+    const configBefore = useConfigStore.getState();
+    const sessionBefore = useSessionUIStore.getState();
+    try {
+      useConfigStore.setState({ selectionSource: 'auto', currentDefaultAgentCombinationId: '11111111-1111-4111-8111-111111111111', nativeAgentCombinations: [] });
+      useSessionUIStore.setState({ currentSessionId: null, newSessionDraft: { ...sessionBefore.newSessionDraft, open: true, draftId: 885, target: 'chat' } });
+      await expect(materializeOpenDraftSession({ providerID: 'claude-native', modelID: 'opus' })).rejects.toThrow('Default combination is unavailable');
+      expect(createRequests).toEqual([]);
+      expect(openChamberRequests).toEqual([]);
+      expect(openCodeRequests).toEqual([]);
+    } finally { useConfigStore.setState(configBefore); useSessionUIStore.setState(sessionBefore); }
+  });
+
   test('carries a directory-free chat choice into creation and consumes only the captured draft', async () => {
     const target = { draftId: 81 };
     const configuration: NativeAgentConfigurationWrite = {
@@ -188,7 +203,7 @@ describe('native session creation', () => {
       subagent: { model: { providerID: 'codex-native', modelID: 'gpt-test' } },
       execution: { model: { providerID: 'deepseek-native', modelID: 'deepseek-test' } },
     };
-    useAgentCombinationDrafts.getState().set(target, configuration);
+    useAgentCombinationDrafts.getState().set(target, { ...configuration, inheritedMain: { model: { providerID: 'claude-native', modelID: 'opus' }, variant: 'high' } });
     useAgentCombinationDrafts.getState().set({ draftId: 82 }, { subagent: null, execution: null });
     registerRuntimeAPIs(createTestRuntimeAPIs(createTestNativeAgentsAPI({
       capabilities: async () => ({ supported: true, unifiedSessions: true, agentCombinations: true,
@@ -199,9 +214,25 @@ describe('native session creation', () => {
       model: { providerID: 'claude-native', id: 'opus', variant: 'high' }, agent: 'plan', combinationDraft: captureAgentCombinationDraft(target),
     });
     expect(createRequests[0]).toMatchObject({ directory: '/managed/chat-just-created', configuration });
+    expect(createRequests[0].kind === 'unified' && createRequests[0].configuration).not.toHaveProperty('inheritedMain');
     expect(readAgentCombinationDraft(target)).toBeUndefined();
     expect(readAgentCombinationDraft({ draftId: 82 })).toEqual({ subagent: null, execution: null });
   });
+  test('an unavailable captured main effort stops before creating a session', async () => {
+    const configBefore = useConfigStore.getState();
+    const sessionBefore = useSessionUIStore.getState();
+    const main = { model: { providerID: 'claude-native' as const, modelID: 'opus' }, variant: 'ultra' };
+    const entry = { id: '11111111-1111-4111-8111-111111111111', name: 'Stale effort', main, subagent: null, execution: main };
+    try {
+      useConfigStore.setState({ selectionSource: 'auto', currentDefaultAgentCombinationId: entry.id, nativeAgentCombinations: [entry],
+        currentVariantSelection: { override: undefined, inherited: 'ultra' }, providers: [buildNativeProvider('claude', [{ id: 'opus', name: 'Opus', efforts: ['max'], fast: false, defaultEffort: null, contextWindow: 64000, outputLimit: 8192, input: { image: false, pdf: false } }])] });
+      useSessionUIStore.setState({ currentSessionId: null, newSessionDraft: { ...sessionBefore.newSessionDraft, open: true, draftId: 886, target: 'chat' } });
+      useAgentCombinationDrafts.getState().set({ draftId: 886 }, { combination: { id: entry.id, name: entry.name }, inheritedMain: main, subagent: null, execution: main });
+      await expect(materializeOpenDraftSession({ providerID: 'claude-native', modelID: 'opus' })).rejects.toThrow('Default combination is unavailable');
+      expect(createRequests).toEqual([]);
+    } finally { useConfigStore.setState(configBefore); useSessionUIStore.setState(sessionBefore); }
+  });
+
   test('an older server keeps Antigravity on a standalone session', async () => {
     await createNativeSession('antigravity', DIRECTORY, undefined, {
       model: { providerID: 'antigravity-native', id: 'gemini-3-pro' }, agent: 'plan',

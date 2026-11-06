@@ -108,6 +108,8 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.loadFailed": "Nie udało się wczytać kombinacji. Otwórz ponownie ustawienia i spróbuj jeszcze raz.",
   "agents.combinations.saveFailed": "Nie udało się zapisać kombinacji. Spróbuj ponownie.",
   "agents.combinations.group": "Kombinacje",
+  "agents.combinations.defaultThinking": "Z kombinacji",
+  "agents.combinations.defaultUnavailable": "Domyślna kombinacja jest niedostępna. Wybierz inny model lub kombinację.",
   "agents.combinations.title": "Kombinacje agentów",
   "agents.combinations.name": "Nazwa",
   "agents.combinations.main": "Główny agent",

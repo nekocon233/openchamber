@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Agent, Config } from '@/lib/opencode/model';
 import type { ModelMetadata } from '@/types';
+import { readAgentCombinationDraft, useAgentCombinationDrafts } from '@/lib/native-agents/combination-drafts';
+import { buildNativeProvider } from '@/lib/native-agents/providers';
+import type { NativeAgentCombination } from '@/lib/native-agents/combinations';
 import type { DesktopSettings } from '@/lib/desktop';
 import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 
@@ -31,7 +34,7 @@ let probeHealthOptions: Array<{ waitMs?: number } | undefined> = [];
 let loadSettingsImpl: (() => Promise<DesktopSettings | null>) | null = null;
 let projectsState: {
   activeProjectId: string | null;
-  projects: Array<{ id: string; path: string; label: string; defaultAgent?: string; defaultModel?: string; defaultVariant?: string }>;
+  projects: Array<{ id: string; path: string; label: string; defaultAgent?: string; defaultModel?: string; defaultAgentCombinationId?: string; defaultVariant?: string }>;
 } = {
   activeProjectId: 'project',
   projects: [
@@ -313,7 +316,8 @@ describe('useConfigStore provider persistence', () => {
       sessionAgentModelSelections: new Map(),
       lastUsedProvider: null,
     });
-    useSessionUIStore.setState({ currentSessionId: null, availableWorktreesByProject: new Map() });
+    useSessionUIStore.setState({ currentSessionId: null, availableWorktreesByProject: new Map(), newSessionDraft: { ...useSessionUIStore.getState().newSessionDraft, open: false } });
+    useAgentCombinationDrafts.setState({ drafts: new Map() });
     useUIStore.setState({ hiddenModels: [], lastSelectedModel: undefined, lastUsedEfforts: {} });
     useConfigStore.setState({
       activeDirectoryKey: DIRECTORY,
@@ -330,6 +334,9 @@ describe('useConfigStore provider persistence', () => {
       currentAgentName: undefined,
       settingsDefaultAgent: undefined,
       settingsDefaultModel: undefined,
+      settingsDefaultAgentCombinationId: undefined,
+      currentDefaultAgentCombinationId: undefined,
+      nativeAgentCombinations: [],
       settingsDefaultVariant: undefined,
       agents: [],
       agentModelSelections: {},
@@ -337,6 +344,7 @@ describe('useConfigStore provider persistence', () => {
       opencodeDefaultModel: undefined,
       settingsDefaultsLoaded: true,
       selectionSource: 'auto',
+      agentSelectionSource: 'auto',
       isConnected: true,
       isInitialized: false,
       projectConfigErrors: {},
@@ -1740,6 +1748,53 @@ describe('useConfigStore provider persistence', () => {
 
     expect(listAgentsCalls).toBe(1);
     expect(getConfigCalls).toBe(0);
+  });
+
+  test('a default combination captures all roles and only new drafts see preset edits', async () => {
+    const pick = (modelID: string) => ({ model: { providerID: 'codex-native' as const, modelID }, variant: 'max' });
+    const entry: NativeAgentCombination = { id: '11111111-1111-4111-8111-111111111111', name: 'Default team', main: pick('main'), subagent: pick('child'), execution: pick('execute') };
+    const catalog = buildNativeProvider('codex', ['main', 'child', 'execute', 'next'].map((id) => ({ id, name: id, efforts: ['max'], fast: false, defaultEffort: null, contextWindow: 64000, outputLimit: 8192, input: { image: false, pdf: false } })));
+    useSessionUIStore.setState({ newSessionDraft: { ...useSessionUIStore.getState().newSessionDraft, open: true, draftId: 701, target: 'chat' } });
+    persistedOpenChamberSettings = { defaultAgentCombinationId: entry.id, nativeAgentCombinations: [entry] };
+    useConfigStore.setState({ providers: [catalog] });
+    await useConfigStore.getState().loadSessionDefaults();
+    expect(useConfigStore.getState().currentModelId).toBe('main');
+    expect(readAgentCombinationDraft({ draftId: 701 })).toMatchObject({ subagent: entry.subagent, execution: entry.execution, combination: { id: entry.id } });
+    useConfigStore.setState({ nativeAgentCombinations: [{ ...entry, main: pick('next'), execution: pick('next') }] });
+    useConfigStore.getState().applyDefaultModelAgentSelection();
+    expect(useConfigStore.getState().currentModelId).toBe('main');
+    expect(readAgentCombinationDraft({ draftId: 701 })?.execution).toEqual(entry.execution);
+    useConfigStore.setState({ agents: [testAgent('build')] });
+    useConfigStore.getState().applyOpenCodeConfigDefaults(DIRECTORY, 'test:refresh-default-combination', { default_agent: 'build', model: 'codex-native/next' });
+    expect(useConfigStore.getState().currentModelId).toBe('main');
+    useSessionUIStore.setState({ newSessionDraft: { ...useSessionUIStore.getState().newSessionDraft, draftId: 702 } });
+    useConfigStore.getState().applyDefaultModelAgentSelection();
+    expect(useConfigStore.getState().currentModelId).toBe('next');
+    expect(readAgentCombinationDraft({ draftId: 702 })?.execution).toEqual(pick('next'));
+    useConfigStore.getState().applyDefaultModelAgentSelection({ projectDefaultModel: 'codex-native/child' });
+    expect(useConfigStore.getState().currentModelId).toBe('child');
+    expect(readAgentCombinationDraft({ draftId: 702 })).toBeUndefined();
+    expect(useConfigStore.getState().currentDefaultAgentCombinationId).toBeUndefined();
+    useConfigStore.getState().applyDefaultModelAgentSelection({});
+    expect(readAgentCombinationDraft({ draftId: 702 })?.combination?.id).toBe(entry.id);
+  });
+
+  test('project combination overrides global defaults and a settings edit preserves a manual pick', () => {
+    const entry: NativeAgentCombination = { id: '11111111-1111-4111-8111-111111111111', name: 'Project team', main: { model: { providerID: 'codex-native', modelID: 'project-main' }, variant: 'max' }, subagent: null, execution: { model: { providerID: 'claude-native', modelID: 'opus' } } };
+    useSessionUIStore.setState({ newSessionDraft: { ...useSessionUIStore.getState().newSessionDraft, open: true, draftId: 703 } });
+    useConfigStore.setState({ nativeAgentCombinations: [entry], settingsDefaultModel: 'global/default' });
+    useConfigStore.getState().applyDefaultModelAgentSelection({ projectDefaultAgentCombinationId: entry.id });
+    expect(useConfigStore.getState().currentModelId).toBe('project-main');
+    expect(readAgentCombinationDraft({ draftId: 703 })?.execution).toEqual(entry.execution);
+    useConfigStore.setState({ selectionSource: 'manual', currentProviderId: 'manual', currentModelId: 'picked' });
+    useConfigStore.getState().setSettingsDefaultAgentCombinationId(entry.id);
+    expect(useConfigStore.getState().currentModelId).toBe('picked');
+    useConfigStore.setState({ selectionSource: 'auto', currentVariantSelection: { override: 'high', inherited: 'max' } });
+    useConfigStore.getState().setSettingsDefaultAgentCombinationId(entry.id);
+    expect(useConfigStore.getState().currentVariantSelection.override).toBe('high');
+    useConfigStore.setState({ currentVariantSelection: { override: undefined, inherited: undefined }, agentSelectionSource: 'manual', currentAgentName: 'review' });
+    useConfigStore.getState().setSettingsDefaultAgentCombinationId(entry.id);
+    expect(useConfigStore.getState().currentAgentName).toBe('review');
   });
 
   test('refreshes cached OpenChamber defaults after the default model changes', async () => {

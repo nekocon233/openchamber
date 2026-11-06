@@ -649,7 +649,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'sessions.default-model',
     page: 'sessions',
     titleKey: 'settings.openchamber.defaults.field.defaultModel',
-    keywords: ['model', 'provider', 'new sessions', 'thinking', 'reasoning', 'variant'],
+    keywords: ['model', 'provider', 'new sessions', 'thinking', 'reasoning', 'variant', 'combination', 'preset'],
   },
   {
     id: 'sessions.agent-combinations', page: 'sessions', titleKey: 'agents.combinations.title',
@@ -1142,7 +1142,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'projects.default-model',
     page: 'projects',
     titleKey: 'settings.projects.page.field.projectModel',
-    keywords: ['model', 'default', 'new chat', 'project metadata'],
+    keywords: ['model', 'default', 'new chat', 'project metadata', 'combination', 'preset'],
   },
   {
     id: 'projects.default-thinking',

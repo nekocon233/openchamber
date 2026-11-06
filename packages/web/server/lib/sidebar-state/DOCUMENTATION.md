@@ -46,7 +46,7 @@ The public snapshot is:
 }
 ```
 
-Project array position is authoritative project order. Shared project fields are `id`, normalized absolute `path`, `label`, `icon`, `iconImage`, `iconBackground`, `color`, `defaultModel`, and `addedAt`. Optional fields are omitted or use their documented nullable form.
+Project array position is authoritative project order. Shared project fields are `id`, normalized absolute `path`, `label`, `icon`, `iconImage`, `iconBackground`, `color`, `defaultModel`, `defaultAgentCombinationId`, and `addedAt`. Optional fields are omitted or use their documented nullable form.
 
 The snapshot intentionally excludes:
 

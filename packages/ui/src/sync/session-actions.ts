@@ -1241,7 +1241,7 @@ export async function createNativeSession(backend: NativeBackend, directory: str
         variant: selection.model.variant ?? undefined,
       },
     }
-    if (configuration) input.configuration = configuration
+    if (configuration) input.configuration = { subagent: configuration.subagent, execution: configuration.execution, combination: configuration.combination }
     const session = await nativeAgents.createSession(input)
     assertSessionActionRuntimeCurrent(runtime)
     if (combinationDraft) useAgentCombinationDrafts.getState().clear(combinationDraft.target, combinationDraft.configuration)

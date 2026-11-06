@@ -55,6 +55,8 @@ export const dict = {
   "agents.combinations.loadFailed": "Could not load combinations. Reopen settings and retry.",
   "agents.combinations.saveFailed": "Could not save combinations. Retry.",
   "agents.combinations.group": "Combinations",
+  "agents.combinations.defaultThinking": "From combination",
+  "agents.combinations.defaultUnavailable": "Default combination is unavailable. Choose another model or combination.",
   "agents.combinations.title": "Agent combinations",
   "agents.combinations.name": "Name",
   "agents.combinations.main": "Main agent",

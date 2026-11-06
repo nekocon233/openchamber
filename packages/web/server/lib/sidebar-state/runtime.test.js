@@ -91,6 +91,19 @@ describe('sidebar state runtime', () => {
     });
   });
 
+  it('round-trips and clears a project default combination reference', async () => {
+    const { runtime } = await createHarness();
+    const id = '11111111-1111-4111-8111-111111111111';
+    await runtime.initialize({ legacyProjects: [project('project-a', '/workspace/a')] });
+    const saved = await apply(runtime, 0, 'set-default-combination', { type: 'project.update', projectId: 'project-a', patch: { defaultAgentCombinationId: id, defaultModel: null } });
+    expect(saved.snapshot.projects[0].defaultAgentCombinationId).toBe(id);
+    expect((await runtime.readSnapshot()).projects[0].defaultAgentCombinationId).toBe(id);
+    const cleared = await apply(runtime, 1, 'clear-default-combination', { type: 'project.update', projectId: 'project-a', patch: { defaultAgentCombinationId: null } });
+    expect(cleared.snapshot.projects[0]).not.toHaveProperty('defaultAgentCombinationId');
+    await expect(apply(runtime, 2, 'bad-default-combination', { type: 'project.update', projectId: 'project-a', patch: { defaultAgentCombinationId: 'invalid' } })).rejects.toBeInstanceOf(SidebarStateValidationError);
+    expect((await runtime.readSnapshot()).revision).toBe(2);
+  });
+
   it('initializes from sanitized legacy projects without device-local fields', async () => {
     const { runtime } = await createHarness();
 

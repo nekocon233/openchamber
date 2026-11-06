@@ -25,12 +25,13 @@ export type ProjectIdentitySaveData = {
   iconBackground: string | null;
   defaultAgent: string | null;
   defaultModel: string | null;
+  defaultAgentCombinationId?: string | null;
   defaultVariant: string | null;
 };
 
 type EditableProject = Pick<
   ProjectEntry,
-  'id' | 'label' | 'icon' | 'color' | 'iconBackground' | 'defaultAgent' | 'defaultModel' | 'defaultVariant' | 'iconImage' | 'path'
+  'id' | 'label' | 'icon' | 'color' | 'iconBackground' | 'defaultAgent' | 'defaultModel' | 'defaultAgentCombinationId' | 'defaultVariant' | 'iconImage' | 'path'
 >;
 
 /** The editable identity fields, in the shape the form state holds them. */
@@ -41,10 +42,11 @@ type ProjectIdentity = {
   iconBackground: string | null;
   defaultAgent: string | undefined;
   defaultModel: string | undefined;
+  defaultAgentCombinationId: string | undefined;
   defaultVariant: string | undefined;
 };
 
-const EMPTY_IDENTITY: ProjectIdentity = { label: '', icon: null, color: null, iconBackground: null, defaultAgent: undefined, defaultModel: undefined, defaultVariant: undefined };
+const EMPTY_IDENTITY: ProjectIdentity = { label: '', icon: null, color: null, iconBackground: null, defaultAgent: undefined, defaultModel: undefined, defaultAgentCombinationId: undefined, defaultVariant: undefined };
 
 const identityOf = (project: EditableProject): ProjectIdentity => ({
   label: project.label ?? '',
@@ -53,6 +55,7 @@ const identityOf = (project: EditableProject): ProjectIdentity => ({
   iconBackground: project.iconBackground ?? null,
   defaultAgent: project.defaultAgent,
   defaultModel: project.defaultModel,
+  defaultAgentCombinationId: project.defaultAgentCombinationId,
   defaultVariant: project.defaultVariant,
 });
 
@@ -63,6 +66,7 @@ const sameIdentity = (left: ProjectIdentity, right: ProjectIdentity): boolean =>
   && left.iconBackground === right.iconBackground
   && left.defaultAgent === right.defaultAgent
   && left.defaultModel === right.defaultModel
+  && left.defaultAgentCombinationId === right.defaultAgentCombinationId
   && left.defaultVariant === right.defaultVariant
 );
 
@@ -80,6 +84,7 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
   const [color, setColor] = React.useState<string | null>(null);
   const [iconBackground, setIconBackground] = React.useState<string | null>(null);
   const [defaultAgent, setDefaultAgent] = React.useState<string | undefined>(undefined);
+  const [defaultAgentCombinationId, setDefaultAgentCombinationId] = React.useState<string | undefined>();
   const [defaultModel, setDefaultModel] = React.useState<string | undefined>(undefined);
   const [defaultVariant, setDefaultVariant] = React.useState<string | undefined>(undefined);
   const [isUploadingIcon, setIsUploadingIcon] = React.useState(false);
@@ -110,7 +115,7 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
   // form's own auto-save, and re-seeding on each of those wiped the name
   // mid-typing (#3552).
   const formIdentityRef = React.useRef<ProjectIdentity>(EMPTY_IDENTITY);
-  formIdentityRef.current = { label: name, icon, color, iconBackground, defaultAgent, defaultModel, defaultVariant };
+  formIdentityRef.current = { label: name, icon, color, iconBackground, defaultAgent, defaultModel, defaultAgentCombinationId, defaultVariant };
   const seededRef = React.useRef<{ projectId: string | null; identity: ProjectIdentity }>({ projectId: null, identity: EMPTY_IDENTITY });
 
   React.useEffect(() => {
@@ -122,6 +127,7 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
       setIconBackground(null);
       setDefaultAgent(undefined);
       setDefaultModel(undefined);
+      setDefaultAgentCombinationId(undefined);
       setDefaultVariant(undefined);
       return;
     }
@@ -146,6 +152,7 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
     setIconBackground(incoming.iconBackground);
     setDefaultAgent(incoming.defaultAgent);
     setDefaultModel(incoming.defaultModel);
+    setDefaultAgentCombinationId(incoming.defaultAgentCombinationId);
     setDefaultVariant(incoming.defaultVariant);
     if (switchedProject) {
       setPendingRemoveImageIcon(false);
@@ -180,12 +187,14 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
     || iconBackground !== (project?.iconBackground ?? null)
     || (defaultAgent ?? undefined) !== (project?.defaultAgent ?? undefined)
     || (defaultModel ?? undefined) !== (project?.defaultModel ?? undefined)
+    || (defaultAgentCombinationId ?? undefined) !== (project?.defaultAgentCombinationId ?? undefined)
     || (defaultVariant ?? undefined) !== (project?.defaultVariant ?? undefined)
     || pendingRemoveImageIcon
     || Boolean(pendingUploadIconFile)
   );
 
   const handleDefaultModelChange = React.useCallback((providerId: string, modelId: string) => {
+    setDefaultAgentCombinationId(undefined);
     setDefaultModel(providerId && modelId ? `${providerId}/${modelId}` : undefined);
     // Variants belong to a model. Carrying the old one over would pin a name
     // the new model may not have.
@@ -325,6 +334,7 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
       iconBackground: normalizeProjectIconBackground(willRemoveImageIcon ? null : iconBackground),
       defaultAgent: defaultAgent ?? null,
       defaultModel: defaultModel ?? null,
+      defaultAgentCombinationId: defaultAgentCombinationId ?? null,
       defaultVariant: defaultModel ? defaultVariant ?? null : null,
     };
   }, [
@@ -332,6 +342,7 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
     color,
     defaultAgent,
     defaultModel,
+    defaultAgentCombinationId,
     defaultVariant,
     icon,
     iconBackground,
@@ -361,8 +372,10 @@ export const useProjectIdentityForm = (project: EditableProject | null) => {
     defaultAgent,
     setDefaultAgent,
     defaultModel,
+    defaultAgentCombinationId,
     defaultVariant,
     parsedDefaultModel,
+    handleDefaultCombinationChange: (id: string) => { setDefaultAgentCombinationId(id); setDefaultModel(undefined); setDefaultVariant(undefined); },
     handleDefaultModelChange,
     handleDefaultVariantChange,
     isUploadingIcon,

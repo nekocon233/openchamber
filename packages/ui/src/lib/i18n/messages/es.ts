@@ -56,6 +56,8 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.loadFailed": "No se pudieron cargar las combinaciones. Vuelve a abrir los ajustes e inténtalo de nuevo.",
   "agents.combinations.saveFailed": "No se pudieron guardar las combinaciones. Inténtalo de nuevo.",
   "agents.combinations.group": "Combinaciones",
+  "agents.combinations.defaultThinking": "De la combinación",
+  "agents.combinations.defaultUnavailable": "La combinación predeterminada no está disponible. Elige otro modelo o combinación.",
   "agents.combinations.title": "Combinaciones de agentes",
   "agents.combinations.name": "Nombre",
   "agents.combinations.main": "Agente principal",

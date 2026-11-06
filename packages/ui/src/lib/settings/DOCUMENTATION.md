@@ -78,3 +78,12 @@ Badges and acknowledgment use the search registry's page and item availability p
 ### Why the first baseline comes from the build and not from a list of announcements
 
 A client with no baseline seeds every anchor the build has, so a fresh install sees nothing new. The alternative, listing the anchors this release announces, cannot tell a fresh install from an upgrade that predates the feature, and it lights up a new install that has nothing to compare against. The cost is that controls shipped in the same release as the badge are never announced. The seed runs when the client first renders Settings, which keeps the search table out of the startup path; a client whose first render comes after an update therefore seeds past that update's anchors too.
+
+## Default model combinations
+
+`defaultAgentCombinationId` is an optional profile UUID referencing
+`nativeAgentCombinations`. Selecting a combination clears `defaultModel` and
+`defaultVariant`; selecting a model clears the reference. Project defaults use
+the same optional reference in the authoritative sidebar project record.
+Existing model-only documents need no migration. Native-unsupported surfaces
+keep their existing capability restrictions.

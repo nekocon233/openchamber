@@ -48,6 +48,7 @@ export const ProjectsPage: React.FC = () => {
       iconBackground: data.iconBackground,
       defaultAgent: data.defaultAgent ?? null,
       defaultModel: data.defaultModel ?? null,
+      defaultAgentCombinationId: data.defaultAgentCombinationId ?? null,
       defaultVariant: data.defaultVariant ?? null,
     });
   }, [selectedProject, updateProjectMeta]);

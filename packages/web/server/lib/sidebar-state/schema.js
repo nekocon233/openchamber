@@ -33,6 +33,7 @@ const PROJECT_KEYS = new Set([
   'iconBackground',
   'color',
   'defaultModel',
+  'defaultAgentCombinationId',
   'addedAt',
 ]);
 const LEGACY_PROJECT_KEYS = new Set([...PROJECT_KEYS, 'lastOpenedAt', 'sidebarCollapsed']);
@@ -44,6 +45,7 @@ const PROJECT_PATCH_KEYS = new Set([
   'iconBackground',
   'color',
   'defaultModel',
+  'defaultAgentCombinationId',
   'addedAt',
 ]);
 
@@ -518,6 +520,15 @@ const normalizeDefaultModel = (value, field, options = {}) => {
   return normalized;
 };
 
+const normalizeDefaultAgentCombinationId = (value, field, options = {}) => {
+  if (value === null && options.nullable === true) return null;
+  const normalized = normalizeText(value, field, 36, options);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)) {
+    throw new SidebarStateValidationError(`${field} must be a UUID`);
+  }
+  return normalized;
+};
+
 const normalizeIconImage = (value, field, options = {}) => {
   if (value === null) return null;
   const image = requireRecord(value, field);
@@ -557,6 +568,9 @@ const normalizeProject = (value, options = {}) => {
   }
   if (hasOwn(project, 'color')) {
     normalized.color = normalizeText(project.color, `${field}.color`, MAX_COLOR_LENGTH, { canonical, nullable: true });
+  }
+  if (hasOwn(project, 'defaultAgentCombinationId')) {
+    normalized.defaultAgentCombinationId = normalizeDefaultAgentCombinationId(project.defaultAgentCombinationId, `${field}.defaultAgentCombinationId`, { canonical });
   }
   if (hasOwn(project, 'defaultModel')) {
     normalized.defaultModel = normalizeDefaultModel(project.defaultModel, `${field}.defaultModel`, { canonical });
@@ -606,6 +620,10 @@ const normalizeLegacyProject = (value, field) => {
       { nullable: true },
     ));
     if (color !== undefined) normalized.color = color;
+  }
+  if (hasOwn(value, 'defaultAgentCombinationId')) {
+    const combinationId = tryNormalizeLegacyValue(() => normalizeDefaultAgentCombinationId(value.defaultAgentCombinationId, `${field}.defaultAgentCombinationId`));
+    if (combinationId !== undefined) normalized.defaultAgentCombinationId = combinationId;
   }
   if (hasOwn(value, 'defaultModel')) {
     const defaultModel = tryNormalizeLegacyValue(() => normalizeDefaultModel(
@@ -689,6 +707,9 @@ const normalizeProjectPatch = (value) => {
   }
   if (hasOwn(patch, 'color')) {
     normalized.color = normalizeText(patch.color, 'operation.patch.color', MAX_COLOR_LENGTH, { nullable: true });
+  }
+  if (hasOwn(patch, 'defaultAgentCombinationId')) {
+    normalized.defaultAgentCombinationId = normalizeDefaultAgentCombinationId(patch.defaultAgentCombinationId, 'operation.patch.defaultAgentCombinationId', { nullable: true });
   }
   if (hasOwn(patch, 'defaultModel')) {
     normalized.defaultModel = normalizeDefaultModel(patch.defaultModel, 'operation.patch.defaultModel', { nullable: true });

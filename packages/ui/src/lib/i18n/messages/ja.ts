@@ -56,6 +56,8 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.loadFailed": "組み合わせを読み込めませんでした。設定を開き直して再試行してください。",
   "agents.combinations.saveFailed": "組み合わせを保存できませんでした。再試行してください。",
   "agents.combinations.group": "組み合わせ",
+  "agents.combinations.defaultThinking": "組み合わせの設定",
+  "agents.combinations.defaultUnavailable": "既定の組み合わせは利用できません。別のモデルまたは組み合わせを選択してください。",
   "agents.combinations.title": "エージェントの組み合わせ",
   "agents.combinations.name": "名前",
   "agents.combinations.main": "メインエージェント",

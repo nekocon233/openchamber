@@ -1,3 +1,4 @@
+import { listModelVariantIds } from '@/lib/modelVariants'
 /**
  * Session UI Store — live UI state with minimal navigation continuity.
  *
@@ -917,6 +918,7 @@ const applyDraftTargetSelectionDefaults = (
     path?: string | null
     defaultAgent?: string | null
     defaultModel?: string | null
+    defaultAgentCombinationId?: string | null
     defaultVariant?: string | null
   } | null,
   previousDraft?: NewSessionDraftState,
@@ -958,6 +960,7 @@ const applyDraftTargetSelectionDefaults = (
     useConfigStore.getState().applyDefaultModelAgentSelection({
       projectDefaultAgent: currentProject?.defaultAgent,
       projectDefaultModel: currentProject?.defaultModel,
+      projectDefaultAgentCombinationId: currentProject?.defaultAgentCombinationId,
       projectDefaultVariant: currentProject?.defaultVariant,
     })
   }
@@ -1243,6 +1246,23 @@ export function materializeOpenDraftSession(selection: {
   if (existing) return existing.promise
   if (!draft?.open) return Promise.resolve(null)
   const combinationDraft = captureAgentCombinationDraft({ draftId: draft.draftId })
+  const config = useConfigStore.getState()
+  const inheritedId = combinationDraft?.configuration.inheritedMain ? combinationDraft.configuration.combination?.id
+    : config.selectionSource === 'auto' ? config.currentDefaultAgentCombinationId : undefined
+  const inherited = combinationDraft?.configuration.inheritedMain
+  const validChoice = (choice: typeof inherited) => {
+    if (!choice) return true
+    const model = config.providers.find((provider) => provider.id === choice.model.providerID)?.models.find((model) => model.id === choice.model.modelID || model.nativeAliases?.some((alias) => alias.id === choice.model.modelID))
+    return Boolean(model && (!choice.variant || listModelVariantIds(model.variants).includes(choice.variant)))
+  }
+  const mainToValidate = inherited && config.currentVariantSelection.override !== undefined
+    ? { ...inherited, variant: selection.variant } : inherited
+  const rolesAvailable = !inherited || [mainToValidate, combinationDraft?.configuration.subagent ?? undefined, combinationDraft?.configuration.execution ?? undefined].every(validChoice)
+  if (inheritedId && (!combinationDraft || !rolesAvailable || !config.nativeAgentCombinations.some((entry) => entry.id === inheritedId))) {
+    return import('@/lib/i18n').then(({ formatMessage, useI18nStore }) => {
+      throw new Error(formatMessage(useI18nStore.getState().dictionary, 'agents.combinations.defaultUnavailable'))
+    })
+  }
 
   const materialization = (async () => {
     // Only an explicit choice is written: without one the server applies its own

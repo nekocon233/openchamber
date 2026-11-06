@@ -431,3 +431,8 @@ validation.
 This check covers the control actions only. Agent and variant validation,
 the UI editor, loop-file validation and changes to target-session pinning
 remain outside this fix for #5950.
+
+Session-control creation targets OpenCode. A configured native default combination
+returns 503 when the caller needs a default model; an explicit OpenCode model,
+an explicitly selected agent's model and a project single-model default retain
+their existing precedence. Empty sessions without a prompt remain unchanged.

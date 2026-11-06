@@ -55,6 +55,8 @@ export const dict = {
   "agents.combinations.loadFailed": "Kombinasyonlar yüklenemedi. Ayarları yeniden açıp tekrar deneyin.",
   "agents.combinations.saveFailed": "Kombinasyonlar kaydedilemedi. Tekrar deneyin.",
   "agents.combinations.group": "Birleşimler",
+  "agents.combinations.defaultThinking": "Kombinasyondan",
+  "agents.combinations.defaultUnavailable": "Varsayılan kombinasyon kullanılamıyor. Başka bir model veya kombinasyon seçin.",
   "agents.combinations.title": "Aracı kombinasyonları",
   "agents.combinations.name": "Ad",
   "agents.combinations.main": "Ana aracı",

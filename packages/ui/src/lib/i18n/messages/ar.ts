@@ -54,6 +54,8 @@ export const dict = {
   "agents.combinations.loadFailed": "تعذر تحميل المجموعات. أعد فتح الإعدادات وحاول مجددًا.",
   "agents.combinations.saveFailed": "تعذر حفظ المجموعات. حاول مجددًا.",
   "agents.combinations.group": "التركيبات",
+  "agents.combinations.defaultThinking": "من التركيبة",
+  "agents.combinations.defaultUnavailable": "التركيبة الافتراضية غير متاحة. اختر نموذجًا أو تركيبة أخرى.",
   "agents.combinations.title": "مجموعات الوكلاء",
   "agents.combinations.name": "الاسم",
   "agents.combinations.main": "الوكيل الرئيسي",

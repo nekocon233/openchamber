@@ -62,6 +62,27 @@ const fixture = (overrides = {}) => {
 const request = { projectId: 'test', worktree: { name: 'task' }, prompt: 'Only the test double receives this' };
 
 describe('session creation preconditions', () => {
+  it.each(['global', 'project'])('refuses a %s default combination before creating an OpenCode session', async (scope) => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const f = fixture({ readSettingsFromDiskMigrated: async () => scope === 'global'
+      ? { defaultAgentCombinationId: id }
+      : { defaultModel: 'example/recent-model', projects: [{ id: 'checkout', path: directory, defaultAgentCombinationId: id }] } });
+    await expect(f.service.create({ directory, prompt: request.prompt })).rejects.toMatchObject({ statusCode: 503, message: expect.stringContaining('native conversation') });
+    expect(f.records.size).toBe(0);
+    expect(f.delivered).toEqual([]);
+  });
+
+  it('honors a project model and explicit model or agent over a global combination', async () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const f = fixture({ readSettingsFromDiskMigrated: async () => ({ defaultAgentCombinationId: id, projects: [{ id: 'checkout', path: directory, defaultModel: 'example/recent-model' }] }) });
+    await f.service.create({ directory, prompt: request.prompt });
+    expect(f.delivered[0].model).toEqual(recent);
+    const explicit = fixture({ readSettingsFromDiskMigrated: async () => ({ defaultAgentCombinationId: id }) });
+    await explicit.service.create({ directory, model: 'example/recent-model', prompt: request.prompt });
+    await explicit.service.create({ directory, agent: 'build', prompt: request.prompt });
+    expect(explicit.delivered.map((session) => session.model)).toEqual([recent, bound]);
+  });
+
   it('uses the configured model for an explicit agent even when the saved default agent is missing', async () => {
     const f = fixture({
       readSettingsFromDiskMigrated: async () => ({ defaultAgent: 'deleted-agent', defaultModel: 'example/recent-model' }),

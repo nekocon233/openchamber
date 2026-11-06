@@ -2161,3 +2161,8 @@ const useInputStore = create(() => ({ pendingInput: "" }))
 ## Sends before OpenCode is ready
 
 The app shell and composer are usable before OpenCode answers its first health check. `opencode-startup-gate.ts` holds a send made in that window: `sendMessage` and `waitForConnectionOrThrow` await `waitForOpenCodeStartup`, which resolves when the page first connects, and rejects after three minutes or on a runtime switch so the composer restores the text. Only the page's first connection waits this way; after OpenCode has connected once, a disconnect keeps the short reconnect grace and fails a send quickly. `useOpenCodeStartupStore().waitingSends` counts the held sends; while it is above zero the composer footer shows a quiet "Waiting for OpenCode…" note beside the send button. `sendMessage` runs through `runAfterOpenCodeStartup`, which releases held sends one at a time in the order they were made: each starts only after the one before it was handed to OpenCode or failed, and a send made while held sends are still going out queues behind them. Released together, a later message could reach OpenCode first.
+
+Default combinations use the same draft capture and atomic unified creation as
+manual combinations. `inheritedMain` belongs only to the runtime-scoped draft;
+creation strips it from the native configuration request. The captured object
+is consumed only after successful creation, preserving a newer draft edit.

@@ -674,6 +674,14 @@
     "defaultModel": {
       "scope": "profile"
     },
+    "defaultAgentCombinationId": {
+      "scope": "profile",
+      "surfaces": [
+        "web",
+        "desktop",
+        "mobile"
+      ]
+    },
     "defaultVariant": {
       "scope": "profile"
     },

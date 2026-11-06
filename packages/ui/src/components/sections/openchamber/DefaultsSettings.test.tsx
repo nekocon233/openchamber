@@ -11,6 +11,8 @@ type ProviderState = {
 
 type ConfigState = {
   providers: ProviderState[];
+  nativeAgentCombinations: [];
+  setSettingsDefaultAgentCombinationId: () => void;
   modelsMetadata: Map<string, never>;
   setProvider: () => void;
   setModel: () => void;
@@ -28,6 +30,8 @@ type ConfigState = {
 
 const configState: ConfigState = {
   providers: [],
+  nativeAgentCombinations: [],
+  setSettingsDefaultAgentCombinationId: () => undefined,
   modelsMetadata: new Map<string, never>(),
   setProvider: () => undefined,
   setModel: () => undefined,
@@ -74,7 +78,9 @@ mock.module('@/stores/useDirectoryStore', () => ({
     selector({ currentDirectory: '/test/project' }),
 }));
 const runtimeFetchCalls: string[] = [];
+const realRuntimeFetch = await import('@/lib/runtime-fetch');
 mock.module('@/lib/runtime-fetch', () => ({
+  ...realRuntimeFetch,
   runtimeFetch: async (url: string) => {
     runtimeFetchCalls.push(url);
     return new Response(JSON.stringify({ authenticatedProviders: [] }), {

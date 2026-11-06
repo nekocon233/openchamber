@@ -1,3 +1,4 @@
+import { getRuntimeKey, getRuntimeEndpointGeneration } from '@/lib/runtime-switch';
 import React from 'react';
 import { ModelSelector } from '@/components/sections/agents/ModelSelector';
 import { AgentSelector } from '@/components/sections/commands/AgentSelector';
@@ -25,7 +26,6 @@ import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useI18n } from '@/lib/i18n';
 import { parseModelIdentifier } from '@/lib/modelIdentifier';
-import { isAutoModel } from '@/lib/routing/autoModel';
 import { useCallableModelProviders } from '@/hooks/useCallableModelProviders';
 import { isPrimaryMode } from '@/components/chat/mobileControlsUtils';
 import { listModelVariantIds, type ModelVariantSource } from '@/lib/modelVariants';
@@ -43,11 +43,13 @@ const getDisplayModel = (
 
 export const DefaultsSettings: React.FC = () => {
   const { t } = useI18n();
-  const setProvider = useConfigStore((state) => state.setProvider);
-  const setModel = useConfigStore((state) => state.setModel);
+  const defaultSelectionRevision = React.useRef(0);
   const setAgent = useConfigStore((state) => state.setAgent);
-  const setCurrentVariant = useConfigStore((state) => state.setCurrentVariant);
   const setCurrentVariantOverride = useConfigStore((state) => state.setCurrentVariantOverride);
+  const setSettingsDefaultAgentCombinationId = useConfigStore((state) => state.setSettingsDefaultAgentCombinationId);
+  const combinations = useConfigStore((state) => state.nativeAgentCombinations);
+  const [defaultAgentCombinationId, setDefaultAgentCombinationId] = React.useState<string | undefined>();
+  const selectedCombination = combinations.find((entry) => entry.id === defaultAgentCombinationId);
   const setSettingsDefaultModel = useConfigStore((state) => state.setSettingsDefaultModel);
   const setSettingsDefaultVariant = useConfigStore((state) => state.setSettingsDefaultVariant);
   const setSettingsDefaultAgent = useConfigStore((state) => state.setSettingsDefaultAgent);
@@ -68,7 +70,7 @@ export const DefaultsSettings: React.FC = () => {
     return Boolean(agent?.model?.providerID && agent.model.id);
   });
   const chatHasOwnModel = Boolean(
-    pickedAgentPinsModel
+    (!currentSessionId && selectionIsManual) || pickedAgentPinsModel
     || (selectionIsManual && currentSessionId && getSessionModelSelection(currentSessionId)),
   );
   const chatHasOwnAgent = Boolean(
@@ -104,6 +106,7 @@ export const DefaultsSettings: React.FC = () => {
           const agent = data.defaultAgent?.trim() || undefined;
 
           if (model !== undefined) setDefaultModel(model);
+          setDefaultAgentCombinationId(data.defaultAgentCombinationId || undefined);
           if (variant !== undefined) setDefaultVariant(variant);
           if (agent !== undefined) setDefaultAgent(agent);
           if (data.smallModelUseDefault !== undefined) setSmallModelUseDefault(data.smallModelUseDefault);
@@ -127,33 +130,40 @@ export const DefaultsSettings: React.FC = () => {
 
   const handleModelChange = React.useCallback(
     async (providerId: string, modelId: string) => {
+      const revision = ++defaultSelectionRevision.current;
+      const runtime = { key: getRuntimeKey(), generation: getRuntimeEndpointGeneration() };
       const newValue = providerId && modelId ? `${providerId}/${modelId}` : undefined;
+      try {
+        const result = await updateDesktopSettings({ defaultModel: newValue ?? '', defaultVariant: '', defaultAgentCombinationId: '' });
+        if (!result.ok || revision !== defaultSelectionRevision.current || runtime.key !== getRuntimeKey() || runtime.generation !== getRuntimeEndpointGeneration()) return;
+      } catch (error) {
+        console.warn('Failed to save default model:', error);
+        return;
+      }
+      setDefaultAgentCombinationId(undefined);
       setDefaultModel(newValue);
       setDefaultVariant(undefined);
       setSettingsDefaultVariant(undefined);
       setSettingsDefaultModel(newValue);
 
-      if (!chatHasOwnModel) {
-        setCurrentVariant(undefined);
-
-        if (providerId && modelId) {
-          const provider = providers.find((p) => p.id === providerId);
-          // Auto is not a provider OpenCode lists; the picker only offers it while the server can honour it.
-          if (provider || isAutoModel(providerId, modelId)) {
-            setProvider(providerId);
-            setModel(modelId);
-          }
-        }
-      }
-
-      try {
-        await updateDesktopSettings({ defaultModel: newValue ?? '', defaultVariant: '' });
-      } catch (error) {
-        console.warn('Failed to save default model:', error);
-      }
     },
-    [chatHasOwnModel, providers, setCurrentVariant, setModel, setProvider, setSettingsDefaultModel, setSettingsDefaultVariant]
+    [setSettingsDefaultModel, setSettingsDefaultVariant]
   );
+
+  const handleCombinationChange = React.useCallback(async (id: string) => {
+    const revision = ++defaultSelectionRevision.current;
+    const runtime = { key: getRuntimeKey(), generation: getRuntimeEndpointGeneration() };
+    try {
+      const result = await updateDesktopSettings({ defaultAgentCombinationId: id, defaultModel: '', defaultVariant: '' });
+      if (!result.ok || revision !== defaultSelectionRevision.current || runtime.key !== getRuntimeKey() || runtime.generation !== getRuntimeEndpointGeneration()) return;
+      setDefaultAgentCombinationId(id);
+      setDefaultModel(undefined);
+      setDefaultVariant(undefined);
+      setSettingsDefaultAgentCombinationId(id);
+    } catch (error) {
+      console.warn('Failed to save default combination:', error);
+    }
+  }, [setSettingsDefaultAgentCombinationId]);
 
   const DEFAULT_VARIANT_VALUE = '__default__';
 
@@ -278,7 +288,7 @@ export const DefaultsSettings: React.FC = () => {
           <div className="mt-0 mb-4 typography-meta text-muted-foreground">
             {t('settings.openchamber.defaults.summaryPrefix')}
             {' '}
-            {parsedModel.providerId ? (
+            {defaultAgentCombinationId ? <span className="text-foreground">{selectedCombination?.name ?? t('agents.combinations.defaultUnavailable')}</span> : parsedModel.providerId ? (
               <span className="text-foreground">
                 {parsedModel.providerId}/{parsedModel.modelId}
                 {supportsVariants ? ` (${defaultVariant ?? t('settings.openchamber.defaults.option.defaultLowercase')})` : ''}
@@ -306,6 +316,7 @@ export const DefaultsSettings: React.FC = () => {
                 className={SETTINGS_CUSTOM_TRIGGER_CLASS}
                 allowNativeModels
                 offerAuto
+                agentCombination={isVSCode ? undefined : { id: defaultAgentCombinationId, onSelect: handleCombinationChange }}
               />
             </SettingsFieldRow>
 
@@ -313,10 +324,10 @@ export const DefaultsSettings: React.FC = () => {
               settingsItem="sessions.default-thinking"
               label={t('settings.openchamber.defaults.field.defaultThinking')}
             >
-              <Select value={defaultVariant ?? DEFAULT_VARIANT_VALUE} onValueChange={handleVariantChange} disabled={!supportsVariants}>
+              <Select value={defaultVariant ?? DEFAULT_VARIANT_VALUE} onValueChange={handleVariantChange} disabled={Boolean(defaultAgentCombinationId) || !supportsVariants}>
                 <SelectTrigger className={SETTINGS_SELECT_ROW_TRIGGER_CLASS}>
                   <SelectValue placeholder={t('settings.openchamber.defaults.field.thinkingPlaceholder')}>
-                    {formatVariantLabel(defaultVariant ?? DEFAULT_VARIANT_VALUE)}
+                    {defaultAgentCombinationId ? t('agents.combinations.defaultThinking') : formatVariantLabel(defaultVariant ?? DEFAULT_VARIANT_VALUE)}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>

@@ -69,7 +69,7 @@ let forcePreserveManualOverride: boolean | null = null;
 /** Every effort written for the session, in order, including `undefined`. */
 const variantWrites: VariantChoice[] = [];
 /** Every `(override, inherited)` pair pushed into the config store. */
-const overrideWrites: Array<{ override: VariantChoice; inherited: string | undefined }> = [];
+const overrideWrites: Array<{ override: VariantChoice; inherited: string | null | undefined }> = [];
 /** Every model remembered as the last chat pick. */
 const lastSelectedWrites: string[] = [];
 
@@ -84,7 +84,7 @@ type ConfigState = {
   currentProviderId: string;
   currentModelId: string;
   currentVariant: string | undefined;
-  currentVariantSelection: { override: VariantChoice; inherited: string | undefined };
+  currentVariantSelection: { override: VariantChoice; inherited: string | null | undefined };
   currentAgentName: string | undefined;
   settingsDefaultVariant: string | undefined;
   settingsDefaultModel: string | undefined;
@@ -95,7 +95,7 @@ type ConfigState = {
   setModel: (modelId: string) => void;
   setAgent: (agentName: string, options?: { keepModel?: boolean }) => void;
   setCurrentVariant: (variant: string | undefined) => void;
-  setCurrentVariantOverride: (override: VariantChoice, inherited: string | undefined) => void;
+  setCurrentVariantOverride: (override: VariantChoice, inherited: string | null | undefined) => void;
   getCurrentProvider: () => typeof provider | undefined;
   getCurrentAgent: () => TestAgent;
   getVisibleAgents: () => TestAgent[];
@@ -137,7 +137,7 @@ const useConfigStore = create<ConfigState>((set, get) => ({
   },
   setCurrentVariantOverride: (override, inherited) => {
     set((state) => {
-      const currentVariant = override === null ? undefined : override ?? inherited;
+      const currentVariant = override === null ? undefined : override ?? inherited ?? undefined;
       if (
         state.currentVariant === currentVariant
         && state.currentVariantSelection.override === override
@@ -807,6 +807,16 @@ describe('ModelControls effort restore', () => {
     } finally {
       await cleanup();
     }
+  });
+
+  test('a captured combination CLI default remains Default in the composer', async () => {
+    useSessionUIStore.setState({ currentSessionId: null });
+    useConfigStore.setState({ currentVariant: undefined, currentVariantSelection: { override: undefined, inherited: null } });
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useConfigStore.getState().currentVariant).toBeUndefined();
+      expect(useConfigStore.getState().currentVariantSelection).toEqual({ override: undefined, inherited: null });
+    } finally { await cleanup(); }
   });
 
   test('a draft runs the model at its highest level when nothing names one', async () => {

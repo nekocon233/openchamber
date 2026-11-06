@@ -54,6 +54,8 @@ export const dict = {
   "agents.combinations.loadFailed": "Combinaties konden niet worden geladen. Open de instellingen opnieuw en probeer het nogmaals.",
   "agents.combinations.saveFailed": "Combinaties konden niet worden opgeslagen. Probeer het opnieuw.",
   "agents.combinations.group": "Combinaties",
+  "agents.combinations.defaultThinking": "Uit combinatie",
+  "agents.combinations.defaultUnavailable": "De standaardcombinatie is niet beschikbaar. Kies een ander model of een andere combinatie.",
   "agents.combinations.title": "Agentcombinaties",
   "agents.combinations.name": "Naam",
   "agents.combinations.main": "Hoofdagent",

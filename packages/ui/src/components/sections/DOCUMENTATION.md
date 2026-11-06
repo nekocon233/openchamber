@@ -8,7 +8,9 @@ Sessions includes `AgentCombinationsSettings` on web, Electron and mobile,
 including the compact Settings layout. It manages named main, subagent and
 plan execution model/effort snapshots through the profile field
 `nativeAgentCombinations`. Each combination has an explicit Save action;
-creating or editing it does not select a global default. A null subagent means
+creating or editing it does not select a global default. Global and project
+default-model pickers can select a saved combination. They show the preset
+name, and its own role efforts control the disabled default-thinking row. A null subagent means
 the CLI default. Models come from the native catalog and use the shared model
 picker, filtered to native providers. Unavailable backends, old server
 capabilities and enterprise mode disable the controls with a reason. VS Code

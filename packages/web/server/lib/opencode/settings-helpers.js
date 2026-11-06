@@ -903,6 +903,9 @@ export const createSettingsHelpers = (dependencies) => {
       const combinations = agentCombinationsSchema.safeParse(candidate.nativeAgentCombinations);
       if (combinations.success) result.nativeAgentCombinations = combinations.data;
     }
+    if (candidate.defaultAgentCombinationId === '' || z.string().uuid().safeParse(candidate.defaultAgentCombinationId).success) {
+      result.defaultAgentCombinationId = candidate.defaultAgentCombinationId || undefined;
+    }
     if (typeof candidate.defaultModel === 'string') {
       const trimmed = candidate.defaultModel.trim();
       result.defaultModel = trimmed.length > 0 ? trimmed : undefined;

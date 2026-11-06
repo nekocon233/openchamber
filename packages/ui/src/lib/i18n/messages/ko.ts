@@ -56,6 +56,8 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.loadFailed": "조합을 불러오지 못했습니다. 설정을 다시 열고 재시도하세요.",
   "agents.combinations.saveFailed": "조합을 저장하지 못했습니다. 다시 시도하세요.",
   "agents.combinations.group": "조합",
+  "agents.combinations.defaultThinking": "조합 설정 사용",
+  "agents.combinations.defaultUnavailable": "기본 조합을 사용할 수 없습니다. 다른 모델이나 조합을 선택하세요.",
   "agents.combinations.title": "에이전트 조합",
   "agents.combinations.name": "이름",
   "agents.combinations.main": "주 에이전트",

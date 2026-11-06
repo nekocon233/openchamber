@@ -56,6 +56,8 @@ export const dict: Record<I18nKey, string> = {
   "agents.combinations.loadFailed": "Не вдалося завантажити комбінації. Відкрийте налаштування знову та повторіть спробу.",
   "agents.combinations.saveFailed": "Не вдалося зберегти комбінації. Повторіть спробу.",
   "agents.combinations.group": "Комбінації",
+  "agents.combinations.defaultThinking": "Із комбінації",
+  "agents.combinations.defaultUnavailable": "Типова комбінація недоступна. Виберіть іншу модель або комбінацію.",
   "agents.combinations.title": "Комбінації агентів",
   "agents.combinations.name": "Назва",
   "agents.combinations.main": "Головний агент",

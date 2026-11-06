@@ -17,6 +17,9 @@ import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { selectProvidersForDirectory, useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { ModelPickerList, type ModelPickerEntry, type ModelPickerProvider } from '@/components/model-picker/ModelPickerList';
+import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
+import { useEnterpriseMode } from '@/stores/useEnterprisePolicyStore';
+import { orderPickerItems } from '@/lib/modelPickerOrder';
 import { isNativeProviderId } from '@/lib/native-agents/ids';
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
@@ -51,6 +54,7 @@ interface ModelSelectorProps {
      * Defaults); a routing category or fallback must name a real model.
      */
     offerAuto?: boolean;
+    agentCombination?: { id?: string; onSelect: (id: string) => void };
 }
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
@@ -68,8 +72,23 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     compact = false,
     directory,
     offerAuto = false,
+    agentCombination,
 }) => {
     const { t } = useI18n();
+    const { nativeAgents } = useRuntimeAPIs();
+    const enterprise = useEnterpriseMode();
+    const combinations = useConfigStore((state) => state.nativeAgentCombinations);
+    const combinationOrder = useUIStore((state) => state.agentCombinationOrder);
+    const [combinationsReady, setCombinationsReady] = React.useState(false);
+    const offerCombinations = Boolean(agentCombination && allowNativeModels && nativeAgents.supported && !enterprise);
+    React.useEffect(() => {
+        let active = true;
+        setCombinationsReady(false);
+        if (offerCombinations) void nativeAgents.capabilities().then((value) => { if (active) setCombinationsReady(value.agentCombinations === true); }).catch(() => {});
+        return () => { active = false; };
+    }, [nativeAgents, offerCombinations]);
+    const selectedCombination = combinations.find((entry) => entry.id === agentCombination?.id);
+    const triggerProviderId = selectedCombination?.main.model.providerID ?? providerId;
     const autoReady = useRoutingStore(selectAutoReady);
     const autoEntry = React.useMemo<ModelPickerEntry | null>(() => (offerAuto && autoReady
         ? { kind: 'auto', providerID: AUTO_PROVIDER_ID, modelID: AUTO_MODEL_ID, model: { id: AUTO_MODEL_ID, name: t('chat.modelControls.autoModel') } }
@@ -81,7 +100,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const nativeReady = allowNativeModels && Boolean(allowedProviderIds?.length)
         && allowedProviderIds?.every(isNativeProviderId)
         && providers.some((provider) => allowedProviderIds?.includes(provider.id) && (provider.models?.length ?? 0) > 0);
-    const isReady = !disabled && (openCodeReady || nativeReady);
+    const isReady = !disabled && (openCodeReady || nativeReady || combinationsReady);
     const loadProviders = useConfigStore((state) => state.loadProviders);
     React.useEffect(() => {
         if (directory !== undefined) void loadProviders({ directory });
@@ -137,10 +156,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         costPerMillion: t('chat.modelControls.costPerMillion'),
     }), [placeholder, t]);
 
-    const selectedModel = providerId && modelId ? { providerID: providerId, modelID: modelId } : null;
-    const displayReady = isReady || Boolean(selectedModel);
+    const selectedModel = !agentCombination?.id && providerId && modelId ? { providerID: providerId, modelID: modelId } : null;
+    const displayReady = isReady || Boolean(selectedModel || agentCombination?.id);
     // Show the model's display name (as in the picker list), not the raw provider/model id.
     const triggerLabel = React.useMemo(() => {
+        if (agentCombination?.id) return selectedCombination?.name ?? t('agents.combinations.defaultUnavailable');
         if (!providerId || !modelId) {
             return placeholder || t('settings.agents.modelSelector.notSelected');
         }
@@ -148,7 +168,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         const provider = providers.find((entry) => entry.id === providerId);
         const model = provider?.models?.find((entry) => entry.id === modelId);
         return (typeof model?.name === 'string' && model.name.trim()) || modelId;
-    }, [isAutoSelected, modelId, placeholder, providerId, providers, t]);
+    }, [agentCombination?.id, selectedCombination?.name, isAutoSelected, modelId, placeholder, providerId, providers, t]);
 
     const allowModel = React.useCallback((pickedProviderId: string, pickedModelId: string) => (
         (allowNativeModels || !isNativeProviderId(pickedProviderId))
@@ -166,6 +186,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             onSelect={handleSelect}
             labels={labels}
             selectedModel={selectedModel}
+            actionGroup={offerCombinations ? {
+                id: 'combinations', label: t('agents.combinations.group'),
+                actions: orderPickerItems(combinations, combinationOrder, (entry) => entry.id).map((entry) => ({
+                    id: entry.id, label: entry.name,
+                    icon: <ProviderLogo providerId={entry.main.model.providerID} className="size-3.5 shrink-0" />,
+                    selected: agentCombination?.id === entry.id, disabled: !combinationsReady,
+                    onSelect: () => { agentCombination?.onSelect(entry.id); closePicker(); },
+                })),
+            } : undefined}
             leadingEntry={autoEntry}
             hiddenModels={hiddenModels}
             allowedProviderIds={allowedProviderIds}
@@ -200,8 +229,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                             </>
                         ) : isAutoSelected ? (
                             <Icon name="openchamber" className="h-3.5 w-3.5 flex-shrink-0" />
-                        ) : providerId ? (
-                            <ProviderLogo providerId={providerId} className="h-3.5 w-3.5 flex-shrink-0" />
+                        ) : triggerProviderId ? (
+                            <ProviderLogo providerId={triggerProviderId} className="h-3.5 w-3.5 flex-shrink-0" />
                         ) : (
                             <Icon name="pencil-ai" className="h-3 w-3 text-muted-foreground" />
                         )}
@@ -247,8 +276,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         <>
                             {isAutoSelected
                                 ? <Icon name="openchamber" className="h-3.5 w-3.5 flex-shrink-0" />
-                                : providerId
-                                    ? <ProviderLogo providerId={providerId} className="h-3.5 w-3.5 flex-shrink-0" />
+                                : triggerProviderId
+                                    ? <ProviderLogo providerId={triggerProviderId} className="h-3.5 w-3.5 flex-shrink-0" />
                                     : <Icon name="pencil-ai" className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />}
                             {!compact && (
                                 <span className="typography-ui-label min-w-0 flex-1 truncate text-start font-normal text-foreground">{triggerLabel}</span>

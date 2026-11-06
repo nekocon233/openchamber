@@ -197,6 +197,7 @@ const resolveProjectDefaults = (settings, directory, projectId) => {
   return {
     defaultAgent: asNonEmptyString(matchedProject?.defaultAgent),
     defaultModel: asNonEmptyString(matchedProject?.defaultModel),
+    defaultAgentCombinationId: asNonEmptyString(matchedProject?.defaultAgentCombinationId),
     defaultVariant: asNonEmptyString(matchedProject?.defaultVariant),
   };
 };
@@ -825,6 +826,12 @@ export const createOpenChamberSessionService = (dependencies) => {
         }
       }
       if (!model || !agent) {
+        const projectDefaults = resolveProjectDefaults(inputs.settings, directory, projectId);
+        const combinationId = projectDefaults.defaultAgentCombinationId
+          || (!projectDefaults.defaultModel && asNonEmptyString(inputs.settings?.defaultAgentCombinationId));
+        if (!model && combinationId) {
+          throw new OpenChamberControlError('The configured default agent combination requires a native conversation. Pass an explicit OpenCode model for this session.', 503);
+        }
         // Asked only when the last chat pick is Auto; an unanswerable question
         // skips that pick rather than refusing the request.
         const autoAvailable = isAutoModel(splitModel(inputs.settings?.lastSelectedModel))
@@ -832,7 +839,7 @@ export const createOpenChamberSessionService = (dependencies) => {
           && await isAutoReady().catch(() => false);
         const defaults = resolveDefaultSelection({
           ...inputs,
-          projectDefaults: resolveProjectDefaults(inputs.settings, directory, projectId),
+          projectDefaults,
           autoAvailable,
           requireDefaultAgent: !agent,
         });
