@@ -202,7 +202,7 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
   // Keep these elements owned by the panel so primary readout updates do not
   // rerender unrelated sections through the composition callback.
   const secondarySections = {
-    usage: <WorkStatusUsageSection />,
+    usage: <WorkStatusUsageSection visible={visible} />,
     telemetry: <WorkStatusTelemetrySection sessionId={sessionId} directory={directory} />,
     subagents: <WorkStatusSubagentsSection sessionId={sessionId} directory={directory} />,
     taskChecklist: nativeBackend === 'codex'

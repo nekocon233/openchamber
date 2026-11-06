@@ -1,5 +1,7 @@
 import React from 'react';
 import { UsageCard } from './UsageCard';
+import { MagpieUsage } from '@/components/usage/MagpieUsage';
+import { formatMagpieError } from '@/lib/quota/magpie';
 import { QuotaCredentials } from './QuotaCredentials';
 import { ClaudeCodeSignIn } from './ClaudeCodeSignIn';
 import { QUOTA_PROVIDERS, getQuotaProviderList } from '@/lib/quota';
@@ -48,8 +50,8 @@ export const UsagePage: React.FC = () => {
   const loadSettings = useQuotaStore((state) => state.loadSettings);
   const fetchAllQuotas = useQuotaStore((state) => state.fetchAllQuotas);
   const invalidateProviderQuota = useQuotaStore((state) => state.invalidateProviderQuota);
-  const isLoading = useQuotaStore((state) => selectedProviderId === 'claude'
-    ? state.isFetchingProvider.claude === true
+  const isLoading = useQuotaStore((state) => selectedProviderId === 'claude' || selectedProviderId === 'magpie'
+    ? state.isFetchingProvider[selectedProviderId] === true
     : state.isLoading);
   const lastUpdated = useQuotaStore((state) => state.lastUpdated);
   const refreshErrors = useQuotaStore((state) => state.refreshErrors);
@@ -59,7 +61,7 @@ export const UsagePage: React.FC = () => {
   const toggleModelSelected = useQuotaStore((state) => state.toggleModelSelected);
   const applyDefaultSelections = useQuotaStore((state) => state.applyDefaultSelections);
 
-  useQuotaAutoRefresh();
+  useQuotaAutoRefresh(true, true);
 
   React.useEffect(() => {
     void loadSettings();
@@ -84,7 +86,9 @@ export const UsagePage: React.FC = () => {
   const usage = selectedResult?.usage;
   const refreshError = selectedProviderId ? refreshErrors[selectedProviderId] : undefined;
   const refreshStatus = formatQuotaRefreshStatus(selectedResult, t, refreshError);
-  const selectedProviderError = selectedResult?.refresh
+  const selectedProviderError = selectedProviderId === 'magpie'
+    ? refreshStatus ?? (refreshError ? formatMagpieError(refreshError, t) : null)
+    : selectedResult?.refresh
     ? (!selectedResult.ok || refreshError ? refreshStatus : null)
     : refreshError
     ? usage
@@ -181,6 +185,8 @@ export const UsagePage: React.FC = () => {
       description={
         isLoading ? (
           <span className="animate-pulse typography-settings-description text-muted-foreground">{t('settings.usage.page.header.refreshing')}</span>
+        ) : selectedProviderId === 'magpie' ? (
+          t('settings.usage.card.bar.remaining')
         ) : selectedProviderId === 'claude' ? (
           selectedResult?.planLabel
         ) : selectedResult?.planLabel ? (
@@ -220,7 +226,7 @@ export const UsagePage: React.FC = () => {
       )}
 
       {/* Providers with an inline credentials form don't need the "go to Providers" banner — the form IS the fix. */}
-      {selectedResult && !selectedResult.configured && !hasCredentialsForm && (
+      {selectedResult && !selectedResult.configured && !hasCredentialsForm && selectedProviderId !== 'magpie' && (
         <div className="mb-8 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-background)] px-4 py-3">
           {/* Claude usage comes from Claude Code's own login, which Providers cannot add. */}
           {selectedProviderId === 'claude' ? (
@@ -242,6 +248,8 @@ export const UsagePage: React.FC = () => {
       {credentialProviderId && (
         <QuotaCredentials providerId={credentialProviderId} providerName={providerName} />
       )}
+
+      {selectedProviderId === 'magpie' && usage?.accounts && <MagpieUsage accounts={usage.accounts} />}
 
       {usage?.windows && Object.keys(usage.windows).length > 0 && (
         <SettingsSection settingsItem="usage.model-quotas">
@@ -365,7 +373,7 @@ export const UsagePage: React.FC = () => {
       )}
 
       {selectedResult?.configured && usage && Object.keys(usage.windows ?? {}).length === 0 &&
-        providerModels.length === 0 && (
+        providerModels.length === 0 && !usage.accounts && (
         <div className="pb-8">
           <p className="typography-ui-label text-foreground">{t('settings.usage.page.state.noQuotaWindowsTitle')}</p>
           <p className="typography-meta text-muted-foreground mt-1">{t('settings.usage.page.state.noQuotaWindowsDescription')}</p>

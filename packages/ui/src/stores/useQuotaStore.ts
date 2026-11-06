@@ -11,6 +11,8 @@ import { loadDesktopSettings, updateDesktopSettings } from '@/lib/persistence';
 import { fetchQuota, readCachedClaudeQuota } from '@/lib/quota/fetchQuota';
 import { getRuntimeKey, isTransientRuntimeKey } from '@/lib/runtime-switch';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { getDesktopWindowVisibility } from '@/lib/desktop';
+import { isCapacitorApp } from '@/lib/platform';
 
 const QUOTA_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
 // Quotas and their display settings are read from the connected OpenChamber
@@ -26,6 +28,7 @@ let inFlightRuntimeLoad: Promise<void> | null = null;
 const quotaRequests = new Map<QuotaProviderId, { controller: AbortController; promise: Promise<boolean>; source: 'live' | 'cached' }>();
 let claudeCacheLoaded = false;
 let quotaAutoRefreshConsumers = 0;
+let quotaAllProviderConsumers = 0;
 let quotaAutoRefreshInterval: number | null = null;
 
 interface QuotaSettingsState {
@@ -86,7 +89,7 @@ interface QuotaStore extends QuotaSettingsState {
 
 type QuotaRequest =
   | { source: 'live'; providerId: QuotaProviderId; invalidate: boolean }
-  | { source: 'cached'; providerId: 'claude' };
+  | { source: 'cached'; providerId: 'claude' | 'magpie' };
 
 const hasLiveQuotaRequests = () => {
   for (const request of quotaRequests.values()) if (request.source === 'live') return true;
@@ -106,11 +109,11 @@ const requestProviderQuota = (request: QuotaRequest, set: StoreApi<QuotaStore>['
   const controller = new AbortController();
   const promise = Promise.resolve().then(async () => {
     try {
-      const result = source === 'cached'
+      const result = source === 'cached' && providerId === 'claude'
         ? await readCachedClaudeQuota({ signal: controller.signal })
-        : await fetchQuota(providerId, { signal: controller.signal });
+        : await fetchQuota(providerId, { signal: controller.signal, manual: source === 'live' });
       if (generation !== quotaGeneration || quotaRequests.get(providerId)?.controller !== controller) return false;
-      if (source === 'cached') claudeCacheLoaded = true;
+      if (source === 'cached' && providerId === 'claude') claudeCacheLoaded = true;
       if (result === null) {
         set(state => {
           const refreshErrors = { ...state.refreshErrors };
@@ -125,7 +128,9 @@ const requestProviderQuota = (request: QuotaRequest, set: StoreApi<QuotaStore>['
         set(state => {
           const previous = state.results.find(entry => entry.providerId === providerId);
           const keepPrevious = previous?.configured && !invalidate && !result.refresh;
-          const results = keepPrevious ? state.results
+          const results = providerId === 'magpie' && previous?.usage && !invalidate
+            ? [...state.results.filter(entry => entry.providerId !== providerId), { ...result, usage: previous.usage }]
+            : keepPrevious ? state.results
             : [...state.results.filter(entry => entry.providerId !== providerId), result];
           return { results, refreshErrors: { ...state.refreshErrors, [providerId]: message }, error: message };
         });
@@ -304,7 +309,9 @@ export const useQuotaStore = create<QuotaStore>()(
           ? [get().loadCachedClaudeQuota()] : [];
         try {
           const answered = await Promise.all(
-            [...targets.map((providerId) => get().fetchProviderQuota(providerId, invalidate)), ...cached]
+            [...targets.map((providerId) => providerId === 'magpie' && !manual
+              ? requestProviderQuota({ source: 'cached', providerId }, set)
+              : get().fetchProviderQuota(providerId, invalidate)), ...cached]
           );
           if (generation !== quotaGeneration) return false;
           return answered.some(Boolean);
@@ -483,22 +490,33 @@ export const refreshTrayQuotas = (_initial = false) => {
   void useQuotaStore.getState().refreshSelectedQuotas();
 };
 
+const hasVisibleQuotaReadout = () => quotaAutoRefreshConsumers > 0 && document.visibilityState !== 'hidden';
+
 export const useQuotaAutoRefresh = (_visible = true, _allProviders = false) => {
   React.useEffect(() => {
     if (!_visible) return;
     quotaAutoRefreshConsumers += 1;
+    if (_allProviders) quotaAllProviderConsumers += 1;
     if (quotaAutoRefreshInterval === null) {
-      quotaAutoRefreshInterval = window.setInterval(() => {
-        void useQuotaStore.getState().refreshSelectedQuotas();
+      quotaAutoRefreshInterval = window.setInterval(async () => {
+        if (!hasVisibleQuotaReadout()) return;
+        try {
+          if (await getDesktopWindowVisibility() === false) return;
+          if (isCapacitorApp() && !(await (await import('@capacitor/app')).App.getState()).isActive) return;
+        } catch { return; }
+        if (!hasVisibleQuotaReadout()) return;
+        if (quotaAllProviderConsumers > 0) void useQuotaStore.getState().fetchAllQuotas();
+        else void useQuotaStore.getState().refreshSelectedQuotas();
       }, QUOTA_REFRESH_INTERVAL_MS);
     }
 
     return () => {
       quotaAutoRefreshConsumers -= 1;
+      if (_allProviders) quotaAllProviderConsumers -= 1;
       if (quotaAutoRefreshConsumers === 0 && quotaAutoRefreshInterval !== null) {
         window.clearInterval(quotaAutoRefreshInterval);
         quotaAutoRefreshInterval = null;
       }
     };
-  }, [_visible]);
+  }, [_visible, _allProviders]);
 };

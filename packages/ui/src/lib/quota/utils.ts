@@ -43,6 +43,11 @@ export const formatQuotaWindowValueLabel = (
 ): string => {
   const value = window.value;
   if (!value) return formatQuotaValueLabel(window, percent, translate);
+  if (value.kind === 'unlimited') return translate('quota.magpie.unlimited');
+  if (value.kind === 'remaining') {
+    const amount = new Intl.NumberFormat(getCurrentIntlLocale(), { maximumFractionDigits: 2 }).format(value.amount);
+    return `${amount} ${value.unit}`.trim();
+  }
   if (value.kind === 'requests') {
     return translate('quota.value.requests', { count: new Intl.NumberFormat(getCurrentIntlLocale()).format(value.count) });
   }

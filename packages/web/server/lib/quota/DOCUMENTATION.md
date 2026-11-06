@@ -86,6 +86,44 @@ All providers should return results via shared helpers to preserve API shape:
 Provider modules must export `providerId`, `providerName`, `aliases`, `isConfigured(auth?)`, and `fetchQuota()`.
 `fetchQuota()` should return a quota result with `usage.windows` keyed by window name (for example `5h`, `7d`, `daily`) and optional provider-specific `usage.models` data.
 
+## Magpie account allowances
+
+`GET /api/quota/magpie` reads the connected server's local Magpie through
+`GET /v1/magpie/quotas?kept=1`. It never asks a vendor. The explicit
+`POST /api/quota/magpie/refresh` asks Magpie's
+`POST /v1/magpie/quotas/refresh`, then reads the kept report. The shared reader
+in `providers/magpie.js` also runs inside the VS Code extension host. Both
+runtimes return unsupported for an external OpenCode before reading local files.
+
+The endpoint uses the port in `$XDG_CONFIG_HOME/magpie/settings.json` or
+`~/.config/magpie/settings.json`, defaulting to 3425. It always connects to
+loopback and refuses redirects. A missing settings file permits the default
+only when Magpie's providers file exists. Malformed or unreadable settings
+are failures. The reader neither loads keys nor changes Magpie configuration.
+This is local quota reading, with no conversation content or telemetry egress.
+
+`usage.accounts` carries each account's identity, provider/name, account label,
+plan, sample timestamp, shared-balance reference, windows and error. Its IDs
+hash the provider/kind/account/source tuple. Every usable window is retained;
+one malformed card or window marks that account and does not discard others.
+Balances retain their currency/credit labels. Text-only, unlimited and wallet
+windows have no percentage; counted allowances carry a numeric remaining
+amount and unit. A shared balance is a reference, not another wallet amount.
+
+Concurrent operations share a pending refresh per local configuration directory.
+A manual refresh supersedes a pending cache read; later cache reads join the
+refresh. Read and manual deadlines are 5 and 38 seconds, including bodies.
+Whole-request failures are explicit failed results. The UI retains the same
+runtime's previous snapshot on such failures, while a successful empty report
+clears it. Magpie owns upstream freshness, account removal and vendor backoff.
+
+### Why accounts are separate from model windows
+
+A gateway can have several accounts and currencies for one provider. Treating
+them as model rows would hide secondary windows and could merge unrelated
+balances. Account groups preserve Magpie's independent readings without
+guessing which account its routing will select next.
+
 exe.dev, Cursor, and ZenMux credentials are explicitly managed through Settings. exe.dev usage uses a separately generated HTTPS API token restricted to `billing credits usage` and aggregates every `exe-*` model provider into one monthly credit window. Generate the token with `ssh exe.dev "ssh-key generate-api-key --label=openchamber --exp=30d --cmds='billing credits usage'"`. ZenMux usage uses an optional Platform API key pasted on the Usage page; the OpenCode chat key is never used, and a missing Platform API key means ZenMux quota is not fetched. The server validates managed credentials before atomic `0600` writes and never returns secrets through its API. OpenChamber never scans browser cookie stores or automatically reads Cursor storage; Cursor import is an explicit one-time user action and never modifies Cursor's database.
 
 Command Code usage resolves account scope through `GET /alpha/whoami`, then reads server-backed credit balances and five-hour/weekly limits from `GET /alpha/billing/credits?orgId=...`. Personal accounts return `org: null` and use `/alpha/billing/credits` without an `orgId`; organization accounts include their organization id. Web/Electron and VS Code read the standard `command-code` OpenCode auth entry (including OAuth `access`) or `COMMAND_CODE_API_KEY`; credentials remain in the owning runtime and are never returned to shared UI.

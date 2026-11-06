@@ -4,6 +4,7 @@ export type QuotaProviderId =
   | 'codex'
   | 'cursor'
   | 'claude'
+  | 'magpie'
   | 'cline-pass'
   | 'github-copilot'
   | 'github-copilot-addon'
@@ -37,6 +38,8 @@ export interface UsageWindowGiftReset {
 
 export type UsageWindowValue =
   | { kind: 'requests'; count: number }
+  | { kind: 'remaining'; amount: number; unit: string }
+  | { kind: 'unlimited' }
   | { kind: 'spend'; spent: number; limit: number | null };
 
 export interface UsageWindow {
@@ -83,7 +86,20 @@ export interface ConsoleBudgets {
   budgets: ConsoleBudget[];
 }
 
+/** A Magpie account keeps all its windows and its own failure state. */
+export interface QuotaAccount extends UsageWindows {
+  id: string;
+  providerId: string;
+  providerName: string;
+  accountLabel: string | null;
+  planLabel: string | null;
+  sampledAt: number | null;
+  error: string | null;
+  sharedBalance?: string;
+}
+
 interface ProviderUsage extends UsageWindows {
+  accounts?: QuotaAccount[];
   models?: Record<string, UsageWindows>;
   /** OpenCode Go only: the Console budgets of the same sign-in, shown on its usage page. */
   consoleBudgets?: ConsoleBudgets;

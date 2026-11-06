@@ -54,6 +54,18 @@ import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
   ...settingsDict,
+  "quota.magpie.error.unsupported": "Limity Magpie są niedostępne przy połączeniu z zewnętrzną instancją OpenCode.",
+  "quota.magpie.unlimited": "Bez limitu",
+  "quota.magpie.unknown": "Nieznany limit",
+  "quota.magpie.empty": "Brak zapisanych limitów. Odśwież, aby odpytać Magpie.",
+  "quota.magpie.sharedBalance": "Współdzieli saldo z {account}",
+  "quota.magpie.error.notConfigured": "Uruchom Magpie na tym serwerze, aby zobaczyć limity.",
+  "quota.magpie.error.settings": "Nie można odczytać ustawień Magpie. Sprawdź konfigurację lokalną.",
+  "quota.magpie.error.unavailable": "Nie można połączyć się z Magpie na tym serwerze. Sprawdź, czy działa.",
+  "quota.magpie.error.forbidden": "Magpie odmówił dostępu do limitów. Sprawdź uprawnienia bramy.",
+  "quota.magpie.error.request": "Magpie nie mógł odświeżyć limitów. Spróbuj ponownie.",
+  "quota.magpie.error.invalid": "Magpie zwrócił nieczytelne dane limitów.",
+  "quota.magpie.error.timeout": "Magpie nie odpowiedział na czas. Spróbuj ponownie.",
   ...linearIssuePickerI18n['pl'],
   ...referencePickerI18n['pl'],
   ...repositoryDiscussionsI18n['pl'],

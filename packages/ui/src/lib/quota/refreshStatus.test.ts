@@ -12,6 +12,10 @@ const result = (): ProviderResult => ({
 });
 
 describe('quota refresh status', () => {
+  test('Magpie explicitly explains unsupported external runtimes', () => {
+    expect(formatQuotaRefreshStatus({ providerId: 'magpie', providerName: 'Magpie', ok: false, configured: false,
+      usage: null, fetchedAt: 1, availability: 'unsupported' }, translate)).toBe(translate('quota.magpie.error.unsupported'));
+  });
   test('successful and cached samples add no timing hint', () => {
     for (const state of ['fresh', 'cached'] as const) {
       const value = { ...result(), ok: true, refresh: { state, sampledAt: 100_000, nextAttemptAt: 400_000 } };

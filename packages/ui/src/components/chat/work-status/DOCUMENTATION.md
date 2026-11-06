@@ -828,6 +828,11 @@ per repository.
 
 ## Loading data the header used to own
 
+Magpie appears as one selected quota source with nested provider/account
+groups, using `components/usage/MagpieUsage`. Every window shows its remaining
+value and reset. Vendor errors remain within their account group, and the
+collapsed headline does not infer Magpie's eventual upstream routing.
+
 Two readouts had no loader of their own and appeared only after the user opened
 the matching header dropdown:
 

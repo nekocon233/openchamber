@@ -85,3 +85,25 @@ it('does not inspect host credentials for an unsupported external runtime cache'
   expect(response.body).toMatchObject({ providerId: 'claude', configured: false, availability: 'unsupported' });
   expect(getQuotaProviders).not.toHaveBeenCalled();
 });
+
+it('separates Magpie cache reads from explicit refresh without loading OpenCode credentials', async () => {
+  const app = express();
+  const quota = { providerId: 'magpie', ok: true, configured: true, usage: { windows: {}, accounts: [] }, fetchedAt: 1 };
+  const magpieQuota = vi.fn(async () => quota);
+  const getQuotaProviders = vi.fn();
+  registerQuotaRoutes(app, { getQuotaProviders, magpieQuota });
+  expect((await request(app).get('/api/quota/magpie').expect(200)).body).toEqual(quota);
+  expect((await request(app).post('/api/quota/magpie/refresh').expect(200)).body).toEqual(quota);
+  expect(magpieQuota.mock.calls).toEqual([[{ refresh: false }], [{ refresh: true }]]);
+  expect(getQuotaProviders).not.toHaveBeenCalled();
+});
+
+it('refuses both Magpie operations for an external runtime before reading local state', async () => {
+  const app = express();
+  const magpieQuota = vi.fn();
+  registerQuotaRoutes(app, { getQuotaProviders: vi.fn(), magpieQuota, isExternalOpenCode: () => true });
+  for (const response of [await request(app).get('/api/quota/magpie'), await request(app).post('/api/quota/magpie/refresh')]) {
+    expect(response.body).toMatchObject({ providerId: 'magpie', availability: 'unsupported', configured: false, usage: null });
+  }
+  expect(magpieQuota).not.toHaveBeenCalled();
+});

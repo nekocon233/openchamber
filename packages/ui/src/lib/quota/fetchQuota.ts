@@ -13,6 +13,8 @@ const windowSchema = z.object({
   valueLabel: z.string().nullable().optional(),
   value: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('requests'), count: z.number().finite().nonnegative() }),
+    z.object({ kind: z.literal('remaining'), amount: z.number().finite(), unit: z.string() }),
+    z.object({ kind: z.literal('unlimited') }),
     z.object({ kind: z.literal('spend'), spent: z.number().finite().nonnegative(), limit: z.number().finite().positive().nullable() }),
   ]).optional(),
   creditsUsed: z.number().finite().nonnegative().optional(),
@@ -42,6 +44,7 @@ export type QuotaGiftResetType = 'FIVE_HOUR' | 'WEEK';
 interface QuotaReadOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  manual?: boolean;
 }
 
 function requestQuota(providerId: QuotaProviderId, options: QuotaReadOptions, cached: false): Promise<ProviderResult>;
@@ -49,7 +52,7 @@ function requestQuota(providerId: 'claude', options: QuotaReadOptions, cached: t
 /** The deadline covers response bodies too, including transports that ignore abort. */
 async function requestQuota(
   providerId: QuotaProviderId,
-  { signal, timeoutMs = 30_000 }: QuotaReadOptions,
+  { signal, manual = false, timeoutMs = providerId === 'magpie' && manual ? 40_000 : 30_000 }: QuotaReadOptions,
   cached: boolean,
 ): Promise<ProviderResult | null> {
   const controller = new AbortController();
@@ -65,8 +68,12 @@ async function requestQuota(
   });
   const readResult = async () => {
     controller.signal.throwIfAborted();
-    const route = cached ? '/api/quota/claude/cached' : `/api/quota/${encodeURIComponent(providerId)}`;
-    const response = await runtimeFetch(route, { signal: controller.signal });
+    const refreshMagpie = providerId === 'magpie' && manual;
+    const route = cached ? '/api/quota/claude/cached'
+      : `/api/quota/${encodeURIComponent(providerId)}${refreshMagpie ? '/refresh' : ''}`;
+    const init: RequestInit = { signal: controller.signal };
+    if (refreshMagpie) init.method = 'POST';
+    const response = await runtimeFetch(route, init);
     const payload = await response.json();
     if (!response.ok) {
       const failure = z.object({ error: z.string() }).safeParse(payload);
@@ -84,6 +91,12 @@ async function requestQuota(
         windows: windowsSchema,
         models: z.record(z.string(), z.object({ windows: windowsSchema })).optional(),
         consoleBudgets: consoleBudgetsSchema.optional(),
+        accounts: z.array(z.object({
+          id: z.string(), providerId: z.string(), providerName: z.string(),
+          accountLabel: z.string().nullable(), planLabel: z.string().nullable(),
+          sampledAt: z.number().nullable(), error: z.string().nullable(),
+          sharedBalance: z.string().optional(), windows: windowsSchema,
+        })).optional(),
       }).nullable(),
       fetchedAt: z.number(),
       refresh: z.object({

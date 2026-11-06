@@ -9,7 +9,7 @@ import { deleteLegacyOllamaCloudCredential, deleteLegacyOpenCodeGoCredential, re
 import { readOpenCodeCredentials } from './opencodeAuth';
 import { loadClaudeCredential } from './claudeAuth';
 import { createClaudeQuotaTracker } from '../../web/server/lib/quota/providers/claude/tracker.js';
-import type { QuotaRefresh } from '../../ui/src/types/quota';
+import type { QuotaRefresh, UsageWindow, UsageWindowGiftReset } from '../../ui/src/types/quota';
 import type { ClaudeCredential } from './claudeAuth';
 import { readConfig } from './opencodeConfig';
 import { isRecord, toProviderEntity } from './opencode-config-v2';
@@ -21,25 +21,6 @@ import { miniMaxStatusError } from '../../web/server/lib/quota/providers/minimax
 
 type AuthEntry = Record<string, unknown> | string;
 type AuthFile = Record<string, AuthEntry>;
-
-type UsageWindowGiftReset = {
-  recordId: number;
-  expireAt: number;
-};
-
-type UsageWindow = {
-  usedPercent: number | null;
-  remainingPercent: number | null;
-  windowSeconds: number | null;
-  resetAfterSeconds: number | null;
-  resetAt: number | null;
-  resetAtFormatted: string | null;
-  resetAfterFormatted: string | null;
-  valueLabel?: string | null;
-  value?: { kind: 'requests'; count: number } | { kind: 'spend'; spent: number; limit: number | null };
-  creditsUsed?: number;
-  giftReset?: UsageWindowGiftReset | null;
-};
 
 type ProviderUsage = {
   windows: Record<string, UsageWindow>;

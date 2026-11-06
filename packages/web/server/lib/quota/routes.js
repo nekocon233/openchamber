@@ -1,4 +1,5 @@
 import express from 'express';
+import { fetchMagpieQuota } from './providers/magpie.js';
 import { deleteManagedCredential, getManagedCredentialStatus, normalizers, readManagedCredential, writeManagedCredential } from './credentials/providers.js';
 import { importCursorCredential, validateCursorCredential } from './providers/cursor.js';
 import { fetchExeDevUsage } from './providers/exe-dev.js';
@@ -34,7 +35,17 @@ const claudeCacheScopeFor = (req) => process.env.OPENCHAMBER_RUNTIME === 'deskto
   ? 'desktop'
   : `web:${req.socket.localPort}`;
 
-export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode = () => false, nativeConnections, nativeAntigravity }) {
+export function registerQuotaRoutes(app, { getQuotaProviders, isExternalOpenCode = () => false, nativeConnections, nativeAntigravity, magpieQuota = fetchMagpieQuota }) {
+  const readMagpie = async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (isExternalOpenCode()) {
+      return res.json({ providerId: 'magpie', providerName: 'Magpie', ok: false, configured: false,
+        usage: null, fetchedAt: Date.now(), availability: 'unsupported' });
+    }
+    res.json(await magpieQuota({ refresh: req.method === 'POST' }));
+  };
+  app.get('/api/quota/magpie', readMagpie);
+  app.post('/api/quota/magpie/refresh', readMagpie);
   app.get('/api/quota/providers', async (_req, res) => {
     if (isExternalOpenCode()) {
       return res.json({ providers: [], availability: 'unsupported' });
