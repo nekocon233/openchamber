@@ -159,7 +159,8 @@ describe('native records in the shared v2 domain', () => {
     ]);
     expect(field.custom).toBe(true);
     const values = initialFormValues(translated.fields);
-    expect(missingRequiredKeys(translated.fields, values)).toEqual(['question-0']);
+    expect(missingRequiredKeys(translated.fields, values)).toEqual([]);
+    expect(nativeQuestionAnswers(buildFormAnswer(translated.fields, values))).toEqual([['build']]);
     const feedback = 'Revise the plan before changing files.\nKeep the existing API.';
     values['question-0'] = { ...values['question-0'], custom: true, text: feedback };
     expect(missingRequiredKeys(translated.fields, values)).toEqual([]);

@@ -329,6 +329,7 @@ export const nativeQuestionSchema = z.object({
     header: z.string(),
     options: z.array(z.object({ label: z.string(), description: z.string() })),
     multiple: z.boolean().optional(),
+    planApproval: z.boolean().optional(),
   })),
   tool: z.object({ messageID: z.string(), callID: z.string() }).optional(),
 });

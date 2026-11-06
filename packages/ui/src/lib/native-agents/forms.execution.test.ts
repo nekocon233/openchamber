@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { nativeQuestionSchema } from './schemas';
 import { projectNativeQuestion, readNativePlanExecution, nativeQuestionAnswers } from './forms';
+import { buildFormAnswer, initialFormValues } from '@/components/chat/formCardState';
 
 const sessionID = 'ncl_f1033b7a-88c5-4b77-bbec-6d63ec3a1188';
 const question = {
@@ -9,6 +10,29 @@ const question = {
 };
 
 describe('plan execution form contract', () => {
+  for (const kind of ['claude-plan-exit', 'codex-plan-exit', 'deepseek-plan-exit', 'antigravity-plan-exit']) {
+    test(`${kind} starts with approval selected`, () => {
+      const form = projectNativeQuestion(nativeQuestionSchema.parse({ ...question, kind }));
+      if (!form) throw new Error('Expected a plan form');
+      expect(nativeQuestionAnswers(buildFormAnswer(form.fields, initialFormValues(form.fields)))).toEqual([['build']]);
+    });
+  }
+
+  test('ordinary questions do not preselect a build option', () => {
+    const form = projectNativeQuestion(nativeQuestionSchema.parse({ ...question, kind: undefined }));
+    if (!form) throw new Error('Expected a question form');
+    expect(buildFormAnswer(form.fields, initialFormValues(form.fields))).toEqual({});
+  });
+
+  test('a batched DeepSeek approval seeds only the field marked as a plan review', () => {
+    const form = projectNativeQuestion(nativeQuestionSchema.parse({ ...question, kind: 'deepseek-plan-exit', questions: [
+      { ...question.questions[0], header: 'Workflow', planApproval: false },
+      { ...question.questions[0], planApproval: true },
+    ] }));
+    if (!form) throw new Error('Expected a plan form');
+    expect(buildFormAnswer(form.fields, initialFormValues(form.fields))).toEqual({ 'question-1': 'build' });
+  });
+
   test('older servers keep the original approval with no model selection capability', () => {
     const form = projectNativeQuestion(nativeQuestionSchema.parse(question));
     if (!form) throw new Error('Expected a plan form');

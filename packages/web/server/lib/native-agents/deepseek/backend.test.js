@@ -379,6 +379,19 @@ describe('DeepSeek Harness Web adapter', () => {
     expect((await fixture('answers'))[1]).toEqual({ kind: 'result', value: { answers: [{ id: 'choice-id', selected: ['A', 'B'], custom: 'Custom answer' }] } });
   });
 
+  it('keeps the plan review identity in a mixed question batch', async () => {
+    const { backend, directory, fixture, questions } = await setup();
+    await backend.listRootSessions(directory);
+    await fixture('question', { sessionId: 'session-existing', questions: [
+      { id: 'workflow', question: 'Workflow?', options: [{ label: 'build' }, { label: 'test' }] },
+      { id: 'approval', question: 'Approve?', options: [{ label: 'Yes' }, { label: 'Revise' }], intent: { kind: 'plan-review', approve: 'Yes' } },
+    ] });
+    await expect.poll(() => questions.list(directory).length).toBe(1);
+    expect(questions.list(directory)[0]).toMatchObject({ kind: 'deepseek-plan-exit', questions: [
+      { planApproval: false }, { planApproval: true, options: [{ label: 'build' }, { label: 'Revise' }] },
+    ] });
+  });
+
   it('delivers a continued timed-question answer through the native question API', async () => {
     const { backend, directory, fixture, questions } = await setup();
     await backend.listRootSessions(directory);

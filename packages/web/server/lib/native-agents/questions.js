@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 
 import { NativeAgentError } from './errors.js';
 
-/** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean }} QuestionInfo */
+/** @typedef {{ question: string, header: string, options: Array<{ label: string, description: string }>, multiple?: boolean, planApproval?: boolean }} QuestionInfo */
 /** @typedef {{ id: string, sessionID: string, questions: QuestionInfo[], kind?: 'claude-plan-exit' | 'codex-plan-exit' | 'deepseek-plan-exit' | 'antigravity-plan-exit', tool?: { messageID: string, callID: string }, canSelectExecutionModel?: boolean, executionPending?: import('./plan-execution.js').PlanExecutionChoice }} QuestionRequest */
 /** @typedef {{ status: 'replied' | 'transferred', answers: string[][], execution?: import('./plan-execution.js').PlanExecutionChoice } | { status: 'rejected', reason?: 'interrupted' }} QuestionOutcome */
 
