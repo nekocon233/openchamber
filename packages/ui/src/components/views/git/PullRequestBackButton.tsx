@@ -11,10 +11,11 @@ import { useUIStore } from '@/stores/useUIStore';
 
 /** Returns to the PR panel that handed this exact comparison to Changes. */
 export const PullRequestBackButton: React.FC<{
+  compact?: boolean;
   directory: string | null;
   source: PullRequestSource | null;
   context: SourceControlReadContext | null;
-}> = ({ directory, source, context }) => {
+}> = ({ directory, source, context, compact = false }) => {
   const { t } = useI18n();
   const runtimeKey = useGitStore(state => state.runtimeKey);
   const target = usePullRequestSelectionStore(state => directory
@@ -31,6 +32,6 @@ export const PullRequestBackButton: React.FC<{
     }
   }}>
     <Icon name="arrow-left" className="size-4" />
-    <span>{label}</span>
+    <span className={compact ? 'sr-only' : undefined}>{label}</span>
   </Button>;
 };

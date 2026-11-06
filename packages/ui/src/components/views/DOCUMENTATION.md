@@ -658,3 +658,12 @@ browser WebSocket also never sees the upgrade's 401 or 403, so a refused token
 cannot be told apart from a server that is down. Five attempts span a typical
 server restart, so a short outage shows nothing, and an outage that lasts shows
 the error while the retry goes on underneath.
+
+## Changes PR controls in split windows
+
+In Editor layout the PR selector, refresh and compact return action belong to
+the Changes file-list window's titlebar. Its header host follows the owning tool
+zone. Closing the list moves the same selector instance into the details toolbar;
+a host without a header slot renders it above the list. A `MovablePane` retains
+the selector's state through these moves without creating another comparison
+hook or another PR list request. Scope and diff-view controls stay with details.
